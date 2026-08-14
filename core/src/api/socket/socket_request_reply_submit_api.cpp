@@ -134,6 +134,12 @@ zlink_submit_result_t request_part_common (void *handle_,
         zlink::part_helper_internal::consume_send_part (part_);
         return zlink::submit_result_internal::from_errno (errno);
     }
+    if (part_flag_ == ZLINK_PART_MORE
+        && (timeout_ms_ != 0 || handler_ != NULL || userdata_ != NULL)) {
+        zlink::part_helper_internal::consume_send_part (part_);
+        errno = EINVAL;
+        return zlink::submit_result_internal::from_errno (errno);
+    }
 
     socket_handle_t handle = as_socket_handle (handle_);
     if (!handle.socket) {
@@ -374,6 +380,33 @@ zlink_submit_result_t zlink_dealer_request_part (void *dealer_,
                                 0, 0);
 }
 
+zlink_submit_result_t zlink_dealer_request_transport_pair_part (
+  void *dealer_, const zlink_routed_submit_target_t *target_,
+  zlink_msg_t *part_, zlink_send_flags_t flags_,
+  zlink_part_flag_t part_flag_, uint32_t timeout_ms_,
+  zlink_reply_handler_fn handler_, void *userdata_)
+{
+    if (!target_ || !zlink::valid_routing_id (&target_->peer_rid)
+        || target_->transport_pair_id == 0
+        || target_->transport_pair_generation == 0
+        || (!handler_ && part_flag_ == ZLINK_PART_FINAL)) {
+        zlink::part_helper_internal::consume_send_part (part_);
+        errno = EINVAL;
+        return zlink::submit_result_internal::from_errno (errno);
+    }
+    if (reqrep::validate_socket_type (dealer_, ZLINK_CORE_SOCKET_DEALER)
+        != 0) {
+        zlink::part_helper_internal::consume_send_part (part_);
+        return zlink::submit_result_internal::from_errno (errno);
+    }
+
+    return request_part_common (
+      dealer_, &target_->peer_rid, part_, flags_, part_flag_, timeout_ms_,
+      handler_, userdata_,
+      zlink::part_helper_internal::send_family_dealer_request,
+      target_->transport_pair_id, target_->transport_pair_generation);
+}
+
 zlink_submit_result_t zlink_router_request_part (void *router_,
                                                  const zlink_routing_id_t *peer_rid_,
                                                  zlink_msg_t *part_,
@@ -493,158 +526,6 @@ zlink_submit_result_t zlink_router_reply_part (void *router_,
 
     zlink::request_reply::close_built_parts (&payload);
     zlink::part_helper_internal::complete_send_step (state, part_flag_);
-    return ZLINK_SUBMIT_OK;
-}
-
-zlink_submit_result_t zlink_router_completion_control_part (
-  void *router_,
-  const zlink_routing_id_t *peer_rid_,
-  zlink_msg_t *part_,
-  zlink_part_flag_t part_flag_)
-{
-    if (zlink::part_helper_internal::validate_part_flag (part_flag_) != 0
-        || !zlink::valid_routing_id (peer_rid_)) {
-        zlink::part_helper_internal::consume_send_part (part_);
-        errno = EINVAL;
-        return zlink::submit_result_internal::from_errno (errno);
-    }
-    if (reqrep::validate_socket_type (router_, ZLINK_CORE_SOCKET_ROUTER) != 0) {
-        zlink::part_helper_internal::consume_send_part (part_);
-        return zlink::submit_result_internal::from_errno (errno);
-    }
-
-    socket_handle_t handle = as_socket_handle (router_);
-    zlink::part_helper_internal::send_sequence_spec_t spec;
-    spec.family = zlink::part_helper_internal::send_family_router_completion_control;
-    spec.has_rid1 = true;
-    zlink::part_helper_internal::copy_routing_id (peer_rid_, &spec.rid1);
-
-    std::shared_ptr<zlink::part_helper_internal::handle_state_t> state;
-    bool first_part = false;
-    if (zlink::part_helper_internal::prepare_send_step (
-          router_, spec, handle.socket, &state, &first_part)
-        != 0) {
-        zlink::part_helper_internal::consume_send_part (part_);
-        return zlink::submit_result_internal::from_errno (errno);
-    }
-
-    if (part_flag_ == ZLINK_PART_MORE) {
-        if (reqrep::stage_request_payload_part (state.get (), part_) != 0) {
-            const int saved_errno = errno;
-            zlink::part_helper_internal::abort_send_step (state);
-            zlink::part_helper_internal::consume_send_part (part_);
-            errno = saved_errno;
-            return zlink::submit_result_internal::from_errno (saved_errno);
-        }
-        return ZLINK_SUBMIT_OK;
-    }
-
-    const size_t payload_count = state->send.buffered_parts.size () + 1;
-    std::vector<zlink_msg_t> payload (payload_count);
-    for (size_t i = 0; i < payload_count; ++i)
-        zlink_msg_init (&payload[i]);
-    for (size_t i = 0; i < state->send.buffered_parts.size (); ++i)
-        zlink_msg_move (&payload[i], &state->send.buffered_parts[i]);
-    zlink_msg_move (&payload[payload_count - 1], part_);
-
-    if (reqrep::send_request_reply_message (
-          handle.socket, peer_rid_, &payload[0], payload_count,
-          ZLINK_SEND_FLAGS_NONE, zlink::request_reply::completion_control_type, 0)
-        != 0) {
-        const int saved_errno = errno;
-        zlink::request_reply::close_built_parts (&payload);
-        zlink::part_helper_internal::abort_send_step (state);
-        errno = saved_errno;
-        return zlink::submit_result_internal::from_errno (saved_errno);
-    }
-
-    zlink::request_reply::close_built_parts (&payload);
-    zlink::part_helper_internal::complete_send_step (state, part_flag_);
-    return ZLINK_SUBMIT_OK;
-}
-
-zlink_submit_result_t zlink_router_completion_control_transport_pair_part (
-  void *router_,
-  const zlink_routing_id_t *peer_rid_,
-  uint64_t transport_pair_id_,
-  uint64_t transport_pair_generation_,
-  zlink_msg_t *part_,
-  zlink_part_flag_t part_flag_)
-{
-    if (zlink::part_helper_internal::validate_part_flag (part_flag_) != 0
-        || !zlink::valid_routing_id (peer_rid_)
-        || transport_pair_id_ == 0 || transport_pair_generation_ == 0) {
-        zlink::part_helper_internal::consume_send_part (part_);
-        errno = EINVAL;
-        return zlink::submit_result_internal::from_errno (errno);
-    }
-    if (reqrep::validate_socket_type (router_, ZLINK_CORE_SOCKET_ROUTER) != 0) {
-        zlink::part_helper_internal::consume_send_part (part_);
-        return zlink::submit_result_internal::from_errno (errno);
-    }
-
-    socket_handle_t handle = as_socket_handle (router_);
-    zlink::part_helper_internal::send_sequence_spec_t spec;
-    spec.family = zlink::part_helper_internal::send_family_router_completion_control;
-    spec.has_rid1 = true;
-    spec.transport_pair_id = transport_pair_id_;
-    spec.transport_pair_generation = transport_pair_generation_;
-    zlink::part_helper_internal::copy_routing_id (peer_rid_, &spec.rid1);
-
-    std::shared_ptr<zlink::part_helper_internal::handle_state_t> state;
-    bool first_part = false;
-    if (zlink::part_helper_internal::prepare_send_step (
-          router_, spec, handle.socket, &state, &first_part)
-        != 0) {
-        zlink::part_helper_internal::consume_send_part (part_);
-        return zlink::submit_result_internal::from_errno (errno);
-    }
-    if (part_flag_ == ZLINK_PART_MORE) {
-        if (reqrep::stage_request_payload_part (state.get (), part_) != 0) {
-            const int saved_errno = errno;
-            zlink::part_helper_internal::abort_send_step (state);
-            zlink::part_helper_internal::consume_send_part (part_);
-            errno = saved_errno;
-            return zlink::submit_result_internal::from_errno (saved_errno);
-        }
-        return ZLINK_SUBMIT_OK;
-    }
-
-    const size_t payload_count = state->send.buffered_parts.size () + 1;
-    std::vector<zlink_msg_t> payload (payload_count);
-    for (size_t i = 0; i < payload_count; ++i)
-        zlink_msg_init (&payload[i]);
-    for (size_t i = 0; i < state->send.buffered_parts.size (); ++i)
-        zlink_msg_move (&payload[i], &state->send.buffered_parts[i]);
-    zlink_msg_move (&payload[payload_count - 1], part_);
-
-    const size_t total_part_count = zlink::request_reply::control_part_count + payload_count;
-    std::vector<zlink_msg_t> combined (total_part_count);
-    for (size_t i = 0; i < total_part_count; ++i)
-        zlink_msg_init (&combined[i]);
-    if (zlink::request_reply::init_envelope_control_parts (
-          combined.data (), zlink::request_reply::completion_control_type, 0) != 0) {
-        const int saved_errno = errno;
-        zlink::request_reply::close_built_parts (&payload);
-        zlink::request_reply::close_built_parts (&combined);
-        zlink::part_helper_internal::abort_send_step (state);
-        errno = saved_errno;
-        return zlink::submit_result_internal::from_errno (saved_errno);
-    }
-    for (size_t i = 0; i < payload_count; ++i)
-        zlink_msg_move (&combined[zlink::request_reply::control_part_count + i], &payload[i]);
-    const int rc = reqrep::send_completion_frames_for_transport_pair (
-      handle.socket, transport_pair_id_, transport_pair_generation_,
-      combined.data (), combined.size ());
-    const int saved_errno = errno;
-    zlink::request_reply::close_built_parts (&combined);
-    if (rc != 0) {
-        zlink::part_helper_internal::abort_send_step (state);
-        errno = saved_errno;
-        return zlink::submit_result_internal::from_errno (saved_errno);
-    }
-    zlink::part_helper_internal::complete_send_step (state, part_flag_);
-    errno = 0;
     return ZLINK_SUBMIT_OK;
 }
 

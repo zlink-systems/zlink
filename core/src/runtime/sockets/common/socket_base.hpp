@@ -22,6 +22,7 @@
 #include "core/i_mailbox.hpp"
 #include "core/thread.hpp"
 #include "core/auto_hwm_policy.hpp"
+#include "core/ctx_physical_queue_registry.hpp"
 #include "utils/clock.hpp"
 #include "core/pipe.hpp"
 #include "core/endpoint.hpp"
@@ -41,6 +42,7 @@ namespace zlink
 class ctx_t;
 class msg_t;
 class pipe_t;
+class retained_credit_token_t;
 class io_thread_t;
 class socket_base_t;
 
@@ -170,6 +172,14 @@ class socket_base_t : public own_t,
                      socket_public_send_scope_t &scope_,
                      zlink::pipe_t **pipe_out_ = NULL);
     int send_routed (const zlink_routing_id_t *target_rid_, zlink::msg_t *msg_, int flags_);
+    // Submit to the exact transport pair selected by
+    // select_routed_submit_target(). A replacement peer with the same RID
+    // must not receive an operation parked for the previous generation.
+    int send_routed_transport_pair (const zlink_routing_id_t *target_rid_,
+                                    uint64_t transport_pair_id_,
+                                    uint64_t transport_pair_generation_,
+                                    zlink::msg_t *msg_,
+                                    int flags_);
     int send_routed_scoped (const zlink_routing_id_t *target_rid_,
                             zlink::msg_t *msg_,
                             int flags_,
@@ -179,17 +189,34 @@ class socket_base_t : public own_t,
                             zlink::pipe_t **pipe_out_ = NULL,
                             uint64_t expected_transport_pair_id_ = 0,
                             uint64_t expected_transport_pair_generation_ = 0);
+    int select_routed_submit_target (
+      const zlink_routing_id_t *router_rid_or_null_,
+      zlink_routed_submit_target_t *target_out_);
+    bool transport_pair_application_ready (const zlink::pipe_t *pipe_) const;
     std::unique_ptr<socket_public_send_scope_t> begin_public_send_scope (bool force_sync_);
     std::unique_ptr<socket_public_api_scope_t> begin_public_api_scope ();
     int rollback ();
     int rollback_scoped (socket_public_send_scope_t &scope_);
     int recv (zlink::msg_t *msg_, int flags_);
+    int recv_retained (zlink::msg_t *msg_,
+                       retained_credit_token_t *token_out_,
+                       int flags_);
     int recv_pipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_out_, int flags_);
+    int recv_pipe_retained (zlink::msg_t *msg_,
+                            zlink::pipe_t **pipe_out_,
+                            retained_credit_token_t *token_out_,
+                            int flags_);
     int recv_routed (zlink::msg_t *msg_,
                      zlink_routing_id_t *source_rid_out_,
                      int flags_,
                      uint64_t *connection_id_out_ = NULL,
                      zlink::pipe_t **source_pipe_out_ = NULL);
+    int recv_routed_retained (zlink::msg_t *msg_,
+                              zlink_routing_id_t *source_rid_out_,
+                              retained_credit_token_t *token_out_,
+                              int flags_,
+                              uint64_t *connection_id_out_ = NULL,
+                              zlink::pipe_t **source_pipe_out_ = NULL);
     //  These three return a pipe whose lifetime is PINNED: they take a
     //  lifetime ref while the transport-pair table is locked, because the
     //  table slot is the only thing that proves the pipe is still alive and
@@ -221,11 +248,6 @@ class socket_base_t : public own_t,
     void complete_close_handoff ();
     int socket_msg_dispatch_from_io (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
     int peer_command_from_io (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
-    int socket_set_msg_handler (zlink_socket_msg_handler_fn handler_);
-    int socket_set_msg_handler_ex (zlink_socket_msg_handler_fn handler_, void *subject_);
-    int socket_set_msg_handler_with_userdata (zlink_socket_msg_handler_fn handler_,
-                                              void *subject_,
-                                              void *userdata_);
     int socket_msg_dispatch_stop ();
     void socket_msg_dispatch_drain_pending ();
     int socket_set_send_ready_handler (zlink_send_ready_handler_fn handler_);
@@ -233,10 +255,13 @@ class socket_base_t : public own_t,
     int socket_set_send_ready_handler_with_userdata (zlink_send_ready_handler_fn handler_,
                                                      void *subject_,
                                                      void *userdata_);
+    int socket_set_routed_send_ready_handler_with_userdata (
+      zlink_routed_send_ready_handler_fn handler_, void *userdata_);
     bool socket_msg_dispatch_active () const;
     bool send_ready_handler_active () const;
+    bool routed_send_ready_handler_active () const;
+    int ensure_async_command_processing ();
     int ensure_completion_processing ();
-    void release_completion_processing ();
     void acquire_completion_poller ();
     void release_completion_poller ();
     bool acquire_poller_registration ();
@@ -257,7 +282,7 @@ class socket_base_t : public own_t,
     void process_ready_completion_pipes ();
     void resume_completion_processing_if_needed ();
     void notify_request_completion ();
-    int drain_request_completion_controls ();
+    int drain_request_completions ();
     void acknowledge_request_completion_notification ();
     static socket_base_t *current_socket_msg_dispatch_socket ();
     static socket_base_t *current_send_ready_dispatch_socket ();
@@ -319,7 +344,11 @@ class socket_base_t : public own_t,
     void pipe_peer_terminated (pipe_t *pipe_) ZLINK_FINAL;
     void pipe_terminated (pipe_t *pipe_) ZLINK_FINAL;
 
-    int monitor (const char *endpoint_, uint64_t events_, int event_version_, int type_);
+    int monitor (const char *endpoint_,
+                 uint64_t events_,
+                 int event_version_,
+                 int type_,
+                 uint64_t monitor_hwm_bytes_);
 
     void event_connected (const endpoint_uri_pair_t &endpoint_uri_pair_, zlink::fd_t fd_);
     void event_connect_delayed (const endpoint_uri_pair_t &endpoint_uri_pair_, int err_);
@@ -361,27 +390,18 @@ class socket_base_t : public own_t,
     virtual int get_peer_state (const void *routing_id_, size_t routing_id_size_) const;
 
     int monitor_snapshot (zlink_monitor_status_t *out_);
-    bool auto_hwm_policy_enabled () const;
     auto_hwm_socket_plan_t prepare_auto_hwm_socket_plan (const auto_hwm_context_plan_t &context_);
-    void apply_auto_hwm_socket_plan (const auto_hwm_context_plan_t &context_,
-                                     const auto_hwm_socket_plan_t &plan_,
-                                     bool force_apply_,
-                                     uint32_t recalc_reason_);
-    void record_auto_hwm_socket_plan (const auto_hwm_context_plan_t &context_,
-                                      const auto_hwm_socket_plan_t &plan_,
-                                      uint32_t recalc_reason_);
+    void collect_auto_hwm_queue_policies (
+      std::vector<physical_queue_endpoint_policy_t> *out_);
+    physical_queue_endpoint_policy_t make_auto_hwm_queue_policy (
+      const std::shared_ptr<physical_queue_record_t> &queue_,
+      bool writer_) const;
+    void apply_physical_auto_hwm_plan (const auto_hwm_context_plan_t &context_,
+                                       uint32_t recalc_reason_);
     void refresh_auto_hwm_policy (bool force_apply_ = false);
     void set_auto_hwm_role (auto_hwm_role_t role_);
-    void set_auto_hwm_scope (auto_hwm_scope_t scope_, size_t scope_count_);
-    void clear_auto_hwm_manual_overrides (bool sndhwm_, bool rcvhwm_, bool sndbuf_, bool rcvbuf_);
-    bool auto_hwm_connection_bucket_state (uint32_t *bucket_index_out_,
-                                           zlink_auto_hwm_profile_t *profile_out_,
-                                           uint64_t *effective_message_bytes_out_) const;
-    void set_auto_hwm_connection_bucket_state (uint32_t bucket_index_,
-                                               zlink_auto_hwm_profile_t profile_,
-                                               uint64_t effective_message_bytes_);
-    void clear_auto_hwm_connection_bucket_state ();
     void set_auto_hwm_policy_enabled (bool enabled_);
+    int configure_internal_monitor_queue (uint64_t hwm_bytes_);
     bool monitor_has_attached_pipes () const;
     void socket_peer_remote_endpoints (std::vector<std::string> *out_);
     void socket_bound_endpoints (std::set<std::string> *out_) const;
@@ -439,26 +459,45 @@ class socket_base_t : public own_t,
 
     //  The default implementation assumes that send is not supported.
     virtual bool xhas_out ();
-    virtual int xsend (zlink::msg_t *msg_);
-    virtual int xsend_pipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_out_);
+    virtual int xsend (
+      zlink::msg_t *msg_,
+      pipe_message_admission_t *admission_out_ = NULL);
+    virtual int xsend_pipe (
+      zlink::msg_t *msg_, zlink::pipe_t **pipe_out_,
+      pipe_message_admission_t *admission_out_ = NULL);
     virtual int xsend_routed (const zlink_routing_id_t *target_rid_,
                               zlink::msg_t *msg_,
                               uint64_t *connection_id_out_,
                               uint64_t expected_connection_id_,
                               zlink::pipe_t **pipe_out_,
                               uint64_t expected_transport_pair_id_ = 0,
-                              uint64_t expected_transport_pair_generation_ = 0);
+                              uint64_t expected_transport_pair_generation_ = 0,
+                              pipe_message_admission_t *admission_out_ = NULL);
+    virtual int xselect_routed_submit_target (
+      const zlink_routing_id_t *router_rid_or_null_,
+      zlink_routed_submit_target_t *target_out_);
     virtual bool xsubmit_retry_allowed (const zlink_routing_id_t *target_rid_, int err_) const;
     virtual int xrollback ();
 
     //  The default implementation assumes that recv in not supported.
     virtual bool xhas_in ();
     virtual int xrecv (zlink::msg_t *msg_);
+    virtual int xrecv_retained (zlink::msg_t *msg_,
+                                retained_credit_token_t *token_out_);
     virtual int xrecv_pipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_out_);
+    virtual int xrecv_pipe_retained (zlink::msg_t *msg_,
+                                     zlink::pipe_t **pipe_out_,
+                                     retained_credit_token_t *token_out_);
     virtual int xrecv_routed (zlink::msg_t *msg_,
                               zlink_routing_id_t *source_rid_out_,
                               uint64_t *connection_id_out_,
                               zlink::pipe_t **source_pipe_out_ = NULL);
+    virtual int xrecv_routed_retained (
+      zlink::msg_t *msg_,
+      zlink_routing_id_t *source_rid_out_,
+      uint64_t *connection_id_out_,
+      zlink::pipe_t **source_pipe_out_,
+      retained_credit_token_t *token_out_);
     virtual int xterm_peer_rid (const zlink_routing_id_t *peer_rid_);
     int xterm_transport_pair (uint64_t transport_pair_id_,
                               uint64_t transport_pair_generation_);
@@ -485,7 +524,8 @@ class socket_base_t : public own_t,
                                     const zlink_routing_id_t *source_rid_,
                                     zlink_msg_t *parts_,
                                     size_t part_count_);
-    static void store_socket_msg_part (std::vector<zlink_msg_t> *parts_, zlink::msg_t *msg_);
+    static void store_socket_msg_part (std::vector<zlink_msg_t> *parts_,
+                                       zlink::msg_t *msg_);
     static int init_peer_weight_command (zlink::msg_t *msg_, uint32_t weight_);
     static bool decode_peer_weight_command (const zlink::msg_t &msg_, uint32_t *weight_out_);
     void broadcast_local_peer_weight ();
@@ -519,6 +559,14 @@ class socket_base_t : public own_t,
     void arm_send_ready_after_backpressure ();
 
   protected:
+    int recv_common (zlink::msg_t *msg_,
+                     retained_credit_token_t *token_out_,
+                     bool retained_,
+                     int flags_,
+                     zlink::socket_receive_runtime_t::mode_t mode_,
+                     zlink::pipe_t **pipe_out_,
+                     zlink_routing_id_t *source_rid_out_,
+                     uint64_t *connection_id_out_);
     typedef std::unique_lock<std::recursive_mutex> socket_msg_dispatch_lock_t;
     socket_msg_dispatch_lock_t lock_socket_msg_dispatch ()
     {
@@ -526,6 +574,13 @@ class socket_base_t : public own_t,
     }
     void arm_send_ready_notification ();
     void notify_send_ready_if_armed ();
+    bool enqueue_routed_send_ready (pipe_t *pipe_,
+                                    zlink_routed_send_ready_state_t state_,
+                                    int terminal_errno_);
+    bool enqueue_routed_send_ready_exact (
+      const zlink_routing_id_t *peer_rid_, uint64_t transport_pair_id_,
+      uint64_t transport_pair_generation_,
+      zlink_routed_send_ready_state_t state_, int terminal_errno_);
     void emit_socket_monitor_value_event (uint64_t event_,
                                           uint64_t value_,
                                           const endpoint_uri_pair_t &endpoint_uri_pair_);
@@ -554,11 +609,11 @@ class socket_base_t : public own_t,
                                 bool report_multipart_abort_ = false,
                                 zlink::pipe_t **pipe_out_ = NULL,
                                 uint64_t expected_transport_pair_id_ = 0,
-                                uint64_t expected_transport_pair_generation_ = 0);
+                                uint64_t expected_transport_pair_generation_ = 0,
+                                bool record_context_admission_ = true);
 
     enum
     {
-        monitor_queue_hwm = 4096,
         monitor_max_values = zlink::socket_monitor_max_values
     };
 
@@ -568,6 +623,7 @@ class socket_base_t : public own_t,
     typedef zlink::socket_inprocs_t inprocs_t;
     typedef zlink::socket_endpoint_runtime_t endpoint_runtime_t;
     typedef zlink::socket_command_runtime_t command_runtime_t;
+    typedef zlink::socket_receive_runtime_t receive_runtime_t;
     typedef zlink::socket_monitor_runtime_t monitor_runtime_t;
     typedef zlink::socket_dispatch_bridge_t dispatch_bridge_t;
     typedef zlink::socket_lifecycle_coordinator_t lifecycle_coordinator_t;
@@ -577,6 +633,8 @@ class socket_base_t : public own_t,
     const endpoint_runtime_t &endpoint_runtime () const { return _runtime.endpoint_runtime; }
     command_runtime_t &command_runtime () { return _runtime.command_runtime; }
     const command_runtime_t &command_runtime () const { return _runtime.command_runtime; }
+    receive_runtime_t &receive_runtime () { return _runtime.receive_runtime; }
+    const receive_runtime_t &receive_runtime () const { return _runtime.receive_runtime; }
     monitor_runtime_t &monitor_runtime () { return _runtime.monitor_runtime; }
     const monitor_runtime_t &monitor_runtime () const { return _runtime.monitor_runtime; }
     dispatch_bridge_t &dispatch_runtime () { return _runtime.dispatch_bridge; }
@@ -670,6 +728,21 @@ class socket_base_t : public own_t,
     void dec_mailbox_ref ();
     void finalize_destroy ();
     void process_async_mailbox ();
+    void notify_receive_progress_locked ();
+    void notify_receive_progress ();
+    int wait_receive_progress (uint64_t observed_epoch_, int timeout_ms_);
+    bool async_mailbox_owns_commands () const;
+#ifdef ZLINK_BUILD_TESTS
+  public:
+    void test_receive_owner_snapshot (uint64_t *progress_epoch_out_,
+                                      uint64_t *public_mailbox_drains_out_,
+                                      uint64_t *async_mailbox_drains_out_);
+    void test_set_receive_wait_hook (receive_runtime_t::wait_hook_fn hook_,
+                                     void *userdata_);
+  private:
+#endif
+    void enqueue_all_routed_send_terminals (int terminal_errno_);
+    void dispatch_routed_send_ready_events (bool closing_ = false);
     static void reaper_mailbox_handler (void *arg_);
     static void reaper_mailbox_pre_post (void *arg_);
     static void async_mailbox_handler (void *arg_);
@@ -707,30 +780,20 @@ class socket_base_t : public own_t,
     mutable socket_runtime_t _runtime;
     socket_request_reply_bridge_t _request_reply_bridge;
     auto_hwm_role_t _auto_hwm_role;
-    auto_hwm_scope_t _auto_hwm_scope;
-    size_t _auto_hwm_scope_count;
     bool _auto_hwm_role_override;
     bool _auto_hwm_policy_enabled;
-    bool _auto_hwm_msg_unit_override;
     bool _manual_sndhwm;
     bool _manual_rcvhwm;
-    bool _manual_sndbuf;
-    bool _manual_rcvbuf;
-    bool _completion_async_owned;
+    //  Serializes completion drains and the async-worker/public-poller owner
+    //  transition. It is recursive because a reply callback may re-enter a
+    //  poller registration API on the same socket.
+    mutable mutex_t _completion_owner_sync;
     std::atomic<uint32_t> _completion_poller_refs;
     std::atomic<bool> _request_completion_pending;
     auto_hwm_context_plan_t _auto_hwm_context_plan;
     auto_hwm_socket_plan_t _auto_hwm_socket_plan;
-    bool _auto_hwm_connection_bucket_state_valid;
-    uint32_t _auto_hwm_connection_bucket_index;
-    zlink_auto_hwm_profile_t _auto_hwm_connection_bucket_profile;
-    uint64_t _auto_hwm_connection_bucket_message_bytes;
     uint64_t _auto_hwm_last_recalc_ms;
     uint32_t _auto_hwm_last_recalc_reason;
-    uint64_t _auto_hwm_deferred_sndhwm;
-    uint64_t _auto_hwm_deferred_rcvhwm;
-    bool _auto_hwm_deferred_sndhwm_valid;
-    bool _auto_hwm_deferred_rcvhwm_valid;
     alignas (64) std::atomic<uint64_t> _auto_hwm_send_attempts;
     alignas (64) std::atomic<uint64_t> _auto_hwm_send_blocked_attempts;
     uint32_t _local_peer_weight;

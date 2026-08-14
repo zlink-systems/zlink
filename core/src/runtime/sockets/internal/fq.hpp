@@ -10,6 +10,7 @@ namespace zlink
 {
 class msg_t;
 class pipe_t;
+class retained_credit_token_t;
 
 //  Class manages a set of inbound pipes. On receive it performs fair
 //  queueing so that senders gone berserk won't cause denial of
@@ -31,6 +32,8 @@ class fq_t
 
     int recv (msg_t *msg_);
     int recvpipe (msg_t *msg_, pipe_t **pipe_);
+    int recvpipe_retained (msg_t *msg_, pipe_t **pipe_,
+                           retained_credit_token_t *token_out_);
     bool has_in ();
 
 #ifdef ZLINK_BUILD_TESTS
@@ -41,6 +44,8 @@ class fq_t
 
   private:
     bool try_get_pipe_index (pipe_t *pipe_, pipes_t::size_type *index_out_);
+    int recvpipe_internal (msg_t *msg_, pipe_t **pipe_,
+                           retained_credit_token_t *token_out_);
     void normalize_state ();
     pipes_t _pipes;
 

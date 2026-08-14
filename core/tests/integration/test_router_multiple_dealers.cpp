@@ -53,6 +53,18 @@ void close_sync_socket (void *socket_)
 {
     TEST_ASSERT_SUCCESS_ERRNO (zlink_close (socket_));
 }
+
+zlink_auto_hwm_budget_snapshot_t read_budget_snapshot ()
+{
+    zlink_auto_hwm_budget_snapshot_t snapshot;
+    memset (&snapshot, 0, sizeof (snapshot));
+    snapshot.abi_version = ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1;
+    snapshot.struct_size = sizeof (snapshot);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_ctx_get_auto_hwm_budget_snapshot (get_test_context (), &snapshot));
+    return snapshot;
+}
 }
 
 void test_router_multiple_dealers_tcp ()
@@ -593,7 +605,8 @@ void test_empty_pipe_incomplete_multipart_stops_at_max_message_size ()
     const uint64_t hwms[] = {frame_bytes * 3, frame_bytes * 3};
     const bool conflate[] = {false, false};
     zlink::pipe_t *pipes[2];
-    TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (parents, pipes, hwms, conflate));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflate));
     pipes[0]->set_max_message_bytes (3);
 
     pipe_cleanup_sink_t cleanup_sink;
@@ -676,16 +689,143 @@ void test_empty_pipe_oversize_exception_applies_only_to_complete_message ()
     close_sync_socket (owner_handle);
 }
 
-void test_completion_pipe_hwm_is_capped_by_internal_lane_policy ()
+void test_physical_queue_snapshot_accounts_multipart_once ()
 {
     void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
     zlink::object_t *owner = static_cast<zlink::object_t *> (owner_handle);
     zlink::object_t *parents[] = {owner, owner};
-    const uint64_t configured_hwm = 4u * 1024u * 1024u;
+    const uint64_t hwms[] = {4096, 4096};
+    const bool conflate[] = {false, false};
+    zlink::pipe_t *pipes[2];
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflate));
+    pipes[0]->set_transport_pair (zlink::transport_lane_application, 1, 1);
+    pipes[1]->set_transport_pair (zlink::transport_lane_application, 1, 1);
+
+    pipe_cleanup_sink_t cleanup_sink;
+    pipes[0]->set_event_sink (&cleanup_sink);
+    pipes[1]->set_event_sink (&cleanup_sink);
+
+    zlink::msg_t first;
+    TEST_ASSERT_SUCCESS_ERRNO (first.init_size (5));
+    first.set_flags (zlink::msg_t::more);
+    TEST_ASSERT_TRUE (pipes[0]->write (&first));
+    const zlink_auto_hwm_budget_snapshot_t provisional = read_budget_snapshot ();
+    TEST_ASSERT_GREATER_THAN_UINT64 (0,
+                                     provisional.provisional_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (provisional.provisional_accounted_bytes,
+                              provisional.current_accounted_bytes);
+    pipes[0]->rollback ();
+    const zlink_auto_hwm_budget_snapshot_t rolled_back = read_budget_snapshot ();
+    TEST_ASSERT_EQUAL_UINT64 (0, rolled_back.provisional_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (0, rolled_back.current_accounted_bytes);
+    TEST_ASSERT_TRUE (pipes[0]->write (&first));
+
+    zlink::msg_t final;
+    TEST_ASSERT_SUCCESS_ERRNO (final.init_size (7));
+    TEST_ASSERT_TRUE (pipes[0]->write_and_flush (&final));
+    const zlink_auto_hwm_budget_snapshot_t committed = read_budget_snapshot ();
+    TEST_ASSERT_EQUAL_UINT64 (0, committed.provisional_accounted_bytes);
+    TEST_ASSERT_GREATER_THAN_UINT64 (provisional.current_accounted_bytes,
+                                     committed.current_accounted_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (committed.current_accounted_bytes,
+                              committed.core_queue_accounted_bytes);
+
+    zlink::msg_t received;
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    TEST_ASSERT_TRUE ((received.flags () & zlink::msg_t::more) != 0);
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    const zlink_auto_hwm_budget_snapshot_t partial = read_budget_snapshot ();
+    TEST_ASSERT_GREATER_THAN_UINT64 (0, partial.current_accounted_bytes);
+    TEST_ASSERT_LESS_THAN_UINT64 (committed.current_accounted_bytes,
+                                  partial.current_accounted_bytes);
+
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    TEST_ASSERT_FALSE ((received.flags () & zlink::msg_t::more) != 0);
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    const zlink_auto_hwm_budget_snapshot_t drained = read_budget_snapshot ();
+    TEST_ASSERT_EQUAL_UINT64 (0, drained.current_accounted_bytes);
+    TEST_ASSERT_GREATER_THAN_UINT64 (0, drained.peak_accounted_bytes);
+
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_ctx_reset_auto_hwm_budget_metrics (get_test_context ()));
+    const zlink_auto_hwm_budget_snapshot_t reset = read_budget_snapshot ();
+    TEST_ASSERT_EQUAL_UINT64 (0, reset.peak_accounted_bytes);
+
+    TEST_ASSERT_SUCCESS_ERRNO (first.close ());
+    TEST_ASSERT_SUCCESS_ERRNO (final.close ());
+    pipes[0]->terminate (false);
+    pipes[1]->terminate (false);
+    int events = 0;
+    size_t events_size = sizeof (events);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (owner_handle, ZLINK_OPT_EVENTS, &events, &events_size));
+    TEST_ASSERT_EQUAL_INT (2, cleanup_sink.terminated_count);
+    close_sync_socket (owner_handle);
+}
+
+void test_physical_queue_deferred_shrink_applies_on_drain ()
+{
+    void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (owner_handle);
+    zlink::object_t *parents[] = {owner, owner};
+    const uint64_t initial_hwm = 4096;
+    const uint64_t hwms[] = {initial_hwm, initial_hwm};
+    const bool conflate[] = {false, false};
+    zlink::pipe_t *pipes[2];
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflate));
+    pipes[0]->set_transport_pair (zlink::transport_lane_application, 1, 1);
+    pipes[1]->set_transport_pair (zlink::transport_lane_application, 1, 1);
+
+    pipe_cleanup_sink_t cleanup_sink;
+    pipes[0]->set_event_sink (&cleanup_sink);
+    pipes[1]->set_event_sink (&cleanup_sink);
+
+    zlink::msg_t first;
+    TEST_ASSERT_SUCCESS_ERRNO (first.init_size (256));
+    TEST_ASSERT_TRUE (pipes[0]->write_and_flush (&first));
+
+    const uint64_t shrink_target = 64;
+    pipes[0]->set_hwms (shrink_target, shrink_target);
+    TEST_ASSERT_EQUAL_UINT64 (shrink_target, pipes[0]->planned_out_hwm ());
+    TEST_ASSERT_EQUAL_UINT64 (initial_hwm, pipes[0]->applied_out_hwm ());
+
+    zlink::msg_t blocked;
+    TEST_ASSERT_SUCCESS_ERRNO (blocked.init_size (1));
+    TEST_ASSERT_FALSE (pipes[0]->write_and_flush (&blocked));
+
+    zlink::msg_t received;
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    TEST_ASSERT_EQUAL_UINT64 (shrink_target, pipes[0]->applied_out_hwm ());
+
+    TEST_ASSERT_SUCCESS_ERRNO (blocked.close ());
+    pipes[0]->terminate (false);
+    pipes[1]->terminate (false);
+    int events = 0;
+    size_t events_size = sizeof (events);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (owner_handle, ZLINK_OPT_EVENTS, &events, &events_size));
+    TEST_ASSERT_EQUAL_INT (2, cleanup_sink.terminated_count);
+    close_sync_socket (owner_handle);
+}
+
+void test_completion_pipe_does_not_apply_hwm_admission ()
+{
+    void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (owner_handle);
+    zlink::object_t *parents[] = {owner, owner};
+    const uint64_t configured_hwm = 64u * 1024u;
     const uint64_t hwms[] = {configured_hwm, configured_hwm};
     const bool conflate[] = {false, false};
     zlink::pipe_t *pipes[2];
-    TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (parents, pipes, hwms, conflate));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflate, false,
+                       zlink::transport_lane_completion));
     pipes[0]->set_transport_pair (zlink::transport_lane_completion, 1, 1);
     pipes[1]->set_transport_pair (zlink::transport_lane_completion, 1, 1);
     pipes[0]->set_hwms (configured_hwm, configured_hwm);
@@ -704,8 +844,7 @@ void test_completion_pipe_hwm_is_capped_by_internal_lane_policy ()
             break;
         }
     }
-    TEST_ASSERT_TRUE (admitted > 0);
-    TEST_ASSERT_TRUE (admitted < 8);
+    TEST_ASSERT_EQUAL_UINT64 (8, admitted);
 
     for (size_t i = 0; i < admitted; ++i) {
         zlink::msg_t received;
@@ -714,6 +853,59 @@ void test_completion_pipe_hwm_is_capped_by_internal_lane_policy ()
         TEST_ASSERT_SUCCESS_ERRNO (received.close ());
     }
 
+    pipes[0]->terminate (false);
+    pipes[1]->terminate (false);
+    int events = 0;
+    size_t events_size = sizeof (events);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (owner_handle, ZLINK_OPT_EVENTS, &events, &events_size));
+    TEST_ASSERT_EQUAL_INT (2, cleanup_sink.terminated_count);
+    close_sync_socket (owner_handle);
+}
+
+void test_conflate_replacement_releases_physical_queue_charge ()
+{
+    void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (owner_handle);
+    zlink::object_t *parents[] = {owner, owner};
+    const uint64_t hwms[] = {0, 0};
+    const bool conflate[] = {true, true};
+    zlink::pipe_t *pipes[2];
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflate));
+    pipes[0]->set_transport_pair (zlink::transport_lane_application, 1, 1);
+    pipes[1]->set_transport_pair (zlink::transport_lane_application, 1, 1);
+
+    pipe_cleanup_sink_t cleanup_sink;
+    pipes[0]->set_event_sink (&cleanup_sink);
+    pipes[1]->set_event_sink (&cleanup_sink);
+
+    zlink::msg_t first;
+    TEST_ASSERT_SUCCESS_ERRNO (first.init_size (5));
+    TEST_ASSERT_TRUE (pipes[0]->write_and_flush (&first));
+    const uint64_t first_accounted =
+      read_budget_snapshot ().current_accounted_bytes;
+    TEST_ASSERT_GREATER_THAN_UINT64 (0, first_accounted);
+
+    zlink::msg_t replacement;
+    TEST_ASSERT_SUCCESS_ERRNO (replacement.init_size (19));
+    TEST_ASSERT_TRUE (pipes[0]->write_and_flush (&replacement));
+    const uint64_t replacement_accounted =
+      read_budget_snapshot ().current_accounted_bytes;
+    TEST_ASSERT_GREATER_THAN_UINT64 (first_accounted, replacement_accounted);
+    TEST_ASSERT_EQUAL_UINT64 (sizeof (zlink::msg_t) + 19,
+                              replacement_accounted);
+
+    zlink::msg_t received;
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    TEST_ASSERT_EQUAL_UINT64 (19, received.size ());
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+    TEST_ASSERT_EQUAL_UINT64 (0,
+                              read_budget_snapshot ().current_accounted_bytes);
+
+    TEST_ASSERT_SUCCESS_ERRNO (first.close ());
+    TEST_ASSERT_SUCCESS_ERRNO (replacement.close ());
     pipes[0]->terminate (false);
     pipes[1]->terminate (false);
     int events = 0;
@@ -971,7 +1163,10 @@ int main ()
     RUN_TEST (test_pipe_rejects_multipart_before_partial_bytes_exceed_hwm);
     RUN_TEST (test_empty_pipe_incomplete_multipart_stops_at_max_message_size);
     RUN_TEST (test_empty_pipe_oversize_exception_applies_only_to_complete_message);
-    RUN_TEST (test_completion_pipe_hwm_is_capped_by_internal_lane_policy);
+    RUN_TEST (test_physical_queue_snapshot_accounts_multipart_once);
+    RUN_TEST (test_physical_queue_deferred_shrink_applies_on_drain);
+    RUN_TEST (test_completion_pipe_does_not_apply_hwm_admission);
+    RUN_TEST (test_conflate_replacement_releases_physical_queue_charge);
     RUN_TEST (test_weighted_selection_spreads_consecutive_picks);
     RUN_TEST (test_equal_weights_alternate_through_the_same_procedure);
     RUN_TEST (test_weighted_selection_ignores_attach_order);

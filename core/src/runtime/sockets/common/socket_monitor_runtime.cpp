@@ -16,15 +16,19 @@ std::string make_monitor_ready_key (const zlink::endpoint_uri_pair_t &endpoint_u
     if (key.empty ())
         key = endpoint_uri_pair_.remote;
     key.push_back ('\0');
-    if (routing_id_ && routing_id_size_ > 0)
-        key.append (reinterpret_cast<const char *> (routing_id_), routing_id_size_);
-    key.push_back ('\0');
     if (transport_pair_id_ != 0) {
+        // Application and Completion are two physical lanes of one public
+        // ready transport.  They can learn the peer RID at different times,
+        // so a pair key must not split when one lane reports an empty RID.
         key.append (reinterpret_cast<const char *> (&transport_pair_id_),
                     sizeof (transport_pair_id_));
         key.append (reinterpret_cast<const char *> (&transport_pair_generation_),
                     sizeof (transport_pair_generation_));
     } else {
+        if (routing_id_ && routing_id_size_ > 0)
+            key.append (reinterpret_cast<const char *> (routing_id_),
+                        routing_id_size_);
+        key.push_back ('\0');
         key.append (reinterpret_cast<const char *> (
                       &endpoint_uri_pair_.connection_id),
                     sizeof (endpoint_uri_pair_.connection_id));
@@ -177,10 +181,14 @@ void zlink::socket_monitor_runtime_t::erase_transport_pair_readiness_for_endpoin
 }
 
 
-void zlink::socket_monitor_runtime_t::reset_worker_state ()
+void zlink::socket_monitor_runtime_t::reset_worker_state (
+  uint64_t hwm_bytes_, uint64_t event_accounted_bytes_)
 {
     queue_sync.lock ();
     queue.clear ();
+    queue_hwm_bytes = hwm_bytes_;
+    queue_accounted_bytes = 0;
+    event_accounted_bytes = event_accounted_bytes_;
     queue_stop = false;
     task_running = false;
     queue_sync.unlock ();
@@ -208,7 +216,6 @@ bool zlink::socket_monitor_runtime_t::dequeue_worker_event_nowait (
 
     *out_ = queue.front ();
     queue.pop_front ();
-    queue_cv.broadcast ();
     queue_sync.unlock ();
     return true;
 }
@@ -224,14 +231,33 @@ void zlink::socket_monitor_runtime_t::requeue_worker_event_front (
     queue_sync.unlock ();
 }
 
-void zlink::socket_monitor_runtime_t::enqueue_worker_event (
-  const socket_monitor_event_record_t &record_, size_t hwm_)
+void zlink::socket_monitor_runtime_t::complete_worker_event ()
 {
     queue_sync.lock ();
-    while (!queue_stop && !lossy && queue.size () >= hwm_)
+    zlink_assert (queue_accounted_bytes >= event_accounted_bytes);
+    queue_accounted_bytes -= event_accounted_bytes;
+    queue_cv.broadcast ();
+    queue_sync.unlock ();
+}
+
+void zlink::socket_monitor_runtime_t::enqueue_worker_event (
+  const socket_monitor_event_record_t &record_)
+{
+    queue_sync.lock ();
+    bool has_capacity = queue_accounted_bytes == 0
+                        || (event_accounted_bytes <= queue_hwm_bytes
+                            && queue_accounted_bytes
+                                 <= queue_hwm_bytes - event_accounted_bytes);
+    while (!queue_stop && !lossy && !has_capacity) {
         (void) queue_cv.wait (&queue_sync, -1);
-    if (!queue_stop && queue.size () < hwm_) {
+        has_capacity = queue_accounted_bytes == 0
+                       || (event_accounted_bytes <= queue_hwm_bytes
+                           && queue_accounted_bytes
+                                <= queue_hwm_bytes - event_accounted_bytes);
+    }
+    if (!queue_stop && has_capacity) {
         queue.push_back (record_);
+        queue_accounted_bytes += event_accounted_bytes;
         queue_cv.broadcast ();
     }
     queue_sync.unlock ();
@@ -242,6 +268,7 @@ void zlink::socket_monitor_runtime_t::stop_task ()
     queue_sync.lock ();
     queue_stop = true;
     queue.clear ();
+    queue_accounted_bytes = 0;
     queue_cv.broadcast ();
     task_running = false;
     task_id = 0;

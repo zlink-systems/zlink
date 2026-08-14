@@ -27,6 +27,14 @@ zlink::socket_poller_t::socket_poller_t () :
     ,
     _windows_signaler (true),
     _windows_signaler_active (false)
+#else
+    ,
+    _socket_signaler (true),
+    _socket_signaler_active (false)
+#if defined ZLINK_POLL_BASED_ON_POLL
+    ,
+    _socket_signaler_pollfd_index (-1)
+#endif
 #endif
 #if defined ZLINK_POLL_BASED_ON_POLL
     ,
@@ -51,6 +59,9 @@ zlink::socket_poller_t::~socket_poller_t ()
         _windows_signaler_active = false;
     }
     _windows_signaler.reset_event ();
+#else
+    unregister_socket_signaler ();
+    drain_socket_signaler ();
 #endif
 
     //  Mark the socket_poller as dead
@@ -198,6 +209,10 @@ int zlink::socket_poller_t::remove_item (items_t::iterator it_)
     if (_windows_signaler_active && it_->socket)
         static_cast<mailbox_t *> (it_->socket->get_mailbox ())->remove_signaler (
           &_windows_signaler);
+#else
+    if (_socket_signaler_active && it_->socket)
+        static_cast<mailbox_t *> (it_->socket->get_mailbox ())->remove_signaler (
+          &_socket_signaler);
 #endif
 
     _items.erase (it_);
@@ -218,6 +233,9 @@ int zlink::socket_poller_t::rebuild ()
         _windows_signaler_active = false;
         _windows_signaler.reset_event ();
     }
+#else
+    unregister_socket_signaler ();
+    drain_socket_signaler ();
 #endif
 
     _pollset_size = 0;
@@ -245,6 +263,35 @@ int zlink::socket_poller_t::rebuild ()
 
     // The platform-specific fallback below rebuilds the complete pollset.
     _pollset_size = 0;
+#else
+    bool has_socket_items = false;
+    for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
+        if (!it->events)
+            continue;
+        if (it->socket)
+            has_socket_items = true;
+        else
+            ++_pollset_size;
+    }
+    if (has_socket_items) {
+        if (!_socket_signaler.valid ()) {
+            errno = EMFILE;
+            _need_rebuild = true;
+            return -1;
+        }
+        for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
+            if (it->socket && it->events) {
+                mailbox_t *const mailbox = static_cast<mailbox_t *> (it->socket->get_mailbox ());
+                // Keep the primary signaler assigned to the mailbox command
+                // owner. Only the poller-owned secondary descriptor enters
+                // the platform pollset below.
+                (void) mailbox->get_fd ();
+                mailbox->add_signaler (&_socket_signaler);
+            }
+        }
+        _socket_signaler_active = true;
+        ++_pollset_size;
+    }
 #endif
 
 #if defined ZLINK_POLL_BASED_ON_POLL
@@ -254,10 +301,12 @@ int zlink::socket_poller_t::rebuild ()
         _pollfds = NULL;
     }
 
+#if defined ZLINK_HAVE_WINDOWS
     for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
         if (it->events)
             _pollset_size++;
     }
+#endif
 
     if (_pollset_size == 0)
         return 0;
@@ -272,9 +321,22 @@ int zlink::socket_poller_t::rebuild ()
 
     int item_nbr = 0;
 
+#if !defined ZLINK_HAVE_WINDOWS
+    _socket_signaler_pollfd_index = -1;
+    if (_socket_signaler_active) {
+        _socket_signaler_pollfd_index = item_nbr;
+        _pollfds[item_nbr].fd = _socket_signaler.get_fd ();
+        _pollfds[item_nbr].events = POLLIN;
+        ++item_nbr;
+    }
+#endif
+
     for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
         if (it->events) {
             if (it->socket) {
+#if !defined ZLINK_HAVE_WINDOWS
+                continue;
+#else
                 size_t fd_size = sizeof (zlink::fd_t);
                 const int rc =
                   it->socket->getsockopt (ZLINK_INTERNAL_OPT_FD, &_pollfds[item_nbr].fd, &fd_size);
@@ -290,6 +352,7 @@ int zlink::socket_poller_t::rebuild ()
 
                 _pollfds[item_nbr].events = POLLIN;
                 item_nbr++;
+#endif
             } else {
                 _pollfds[item_nbr].fd = it->fd;
                 _pollfds[item_nbr].events = (it->events & ZLINK_POLLIN ? POLLIN : 0)
@@ -317,12 +380,24 @@ int zlink::socket_poller_t::rebuild ()
 
     _max_fd = 0;
 
+#if !defined ZLINK_HAVE_WINDOWS
+    if (_socket_signaler_active) {
+        const zlink::fd_t socket_signaler_fd = _socket_signaler.get_fd ();
+        FD_SET (socket_signaler_fd, _pollset_in.get ());
+        if (_max_fd < socket_signaler_fd)
+            _max_fd = socket_signaler_fd;
+    }
+#endif
+
     //  Build the fd_sets for passing to select ().
     for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
         if (it->events) {
             //  If the poll item is a 0MQ socket we are interested in input on the
             //  notification file descriptor retrieved by the ZLINK_INTERNAL_OPT_FD socket option.
             if (it->socket) {
+#if !defined ZLINK_HAVE_WINDOWS
+                continue;
+#else
                 zlink::fd_t notify_fd;
                 size_t fd_size = sizeof (zlink::fd_t);
                 int rc = it->socket->getsockopt (ZLINK_INTERNAL_OPT_FD, &notify_fd, &fd_size);
@@ -338,6 +413,7 @@ int zlink::socket_poller_t::rebuild ()
                     _max_fd = notify_fd;
 
                 _pollset_size++;
+#endif
             }
             //  Else, the poll item is a raw file descriptor. Convert the poll item
             //  events to the appropriate fd_sets.
@@ -351,7 +427,9 @@ int zlink::socket_poller_t::rebuild ()
                 if (_max_fd < it->fd)
                     _max_fd = it->fd;
 
+#if defined ZLINK_HAVE_WINDOWS
                 _pollset_size++;
+#endif
             }
         }
     }
@@ -360,6 +438,26 @@ int zlink::socket_poller_t::rebuild ()
 
     return 0;
 }
+
+#if !defined ZLINK_HAVE_WINDOWS
+void zlink::socket_poller_t::unregister_socket_signaler ()
+{
+    if (!_socket_signaler_active)
+        return;
+    for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
+        if (it->socket)
+            static_cast<mailbox_t *> (it->socket->get_mailbox ())
+              ->remove_signaler (&_socket_signaler);
+    }
+    _socket_signaler_active = false;
+}
+
+void zlink::socket_poller_t::drain_socket_signaler ()
+{
+    while (_socket_signaler.recv_failable () == 0) {
+    }
+}
+#endif
 
 void zlink::socket_poller_t::zero_trail_events (zlink::socket_poller_t::event_t *events_,
                                                 int n_events_,
@@ -620,6 +718,12 @@ int zlink::socket_poller_t::wait (zlink::socket_poller_t::event_t *events_,
         }
         errno_assert (rc >= 0);
 
+#if !defined ZLINK_HAVE_WINDOWS
+        if (_socket_signaler_pollfd_index >= 0
+            && (_pollfds[_socket_signaler_pollfd_index].revents & POLLIN))
+            drain_socket_signaler ();
+#endif
+
         //  Check for the events.
         const int found = check_events (events_, n_events_);
         if (found) {
@@ -693,6 +797,11 @@ int zlink::socket_poller_t::wait (zlink::socket_poller_t::event_t *events_,
             errno_assert (errno == EINTR || errno == EBADF);
             return -1;
         }
+#endif
+
+#if !defined ZLINK_HAVE_WINDOWS
+        if (_socket_signaler_active && FD_ISSET (_socket_signaler.get_fd (), inset.get ()))
+            drain_socket_signaler ();
 #endif
 
         //  Check for the events.

@@ -3,6 +3,7 @@
 #include "testutil.hpp"
 #include "testutil_monitoring.hpp"
 #include "testutil_unity.hpp"
+#include "api/monitoring/monitor_api_internal.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -26,6 +27,18 @@ SETUP_TEARDOWN_TESTCONTEXT
 namespace
 {
 static const size_t stream_routing_id_size = 4;
+
+zlink_auto_hwm_budget_snapshot_t read_auto_hwm_budget_snapshot ()
+{
+    zlink_auto_hwm_budget_snapshot_t snapshot;
+    memset (&snapshot, 0, sizeof (snapshot));
+    snapshot.abi_version = ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1;
+    snapshot.struct_size = sizeof (snapshot);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_ctx_get_auto_hwm_budget_snapshot (get_test_context (), &snapshot));
+    return snapshot;
+}
 
 enum monitor_mode_t
 {
@@ -1236,6 +1249,48 @@ size_t count_extra_ready_events (void *monitor_)
     return extra;
 }
 
+void test_monitor_context_snapshot_tracks_one_pending_event_exactly ()
+{
+    void *server = test_context_socket (ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_NOT_NULL (server);
+
+    const uint64_t event_charge = socket_monitor_event_accounted_bytes ();
+    zlink_socket_monitor_open_options_t monitor_opts;
+    memset (&monitor_opts, 0, sizeof (monitor_opts));
+    monitor_opts.events = ZLINK_EVENT_LISTENING;
+    monitor_opts.monitor_hwm_bytes = event_charge * 4;
+    void *monitor = zlink_socket_monitor_open (server, &monitor_opts);
+    TEST_ASSERT_NOT_NULL (monitor);
+
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+
+    zlink_auto_hwm_budget_snapshot_t pending;
+    TEST_ASSERT_TRUE (zlink_test_wait_until (3000, [&] {
+        pending = read_auto_hwm_budget_snapshot ();
+        return pending.monitor_queue_accounted_bytes == event_charge;
+    }));
+    TEST_ASSERT_EQUAL_UINT64 (monitor_opts.monitor_hwm_bytes * 2,
+                              pending.monitor_queue_applied_hwm_bytes);
+    TEST_ASSERT_EQUAL_UINT64 (
+      pending.total_messaging_accounted_bytes + event_charge,
+      pending.total_instance_accounted_bytes);
+
+    zlink_monitor_event_t event;
+    TEST_ASSERT_TRUE (zlink_test_wait_until (3000, [&] {
+        return recv_monitor_event_from_socket (monitor, &event, ZLINK_DONTWAIT)
+               == 0;
+    }));
+    TEST_ASSERT_EQUAL_UINT64 (ZLINK_EVENT_LISTENING, event.event);
+    TEST_ASSERT_TRUE (zlink_test_wait_until (3000, [&] {
+        return read_auto_hwm_budget_snapshot ().monitor_queue_accounted_bytes
+               == 0;
+    }));
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
+    test_context_socket_close_zero_linger (server);
+}
+
 //  A caller compiled with the pre-identity event layout supplies only the
 //  stable prefix.  The legacy entry point must not write the fields appended
 //  by the current header.
@@ -1651,7 +1706,6 @@ void test_pubsub_delivery_ready_snapshot_and_reopen_after_ready ()
     TEST_ASSERT_EQUAL_UINT (1u, status.auto_hwm_enabled);
     TEST_ASSERT_TRUE ((status.detail_flags & ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUDGET) != 0);
     TEST_ASSERT_TRUE ((status.detail_flags & ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUFFERS) != 0);
-    TEST_ASSERT_GREATER_THAN_UINT64 (0, status.auto_hwm_effective_message_bytes);
     TEST_ASSERT_EQUAL_INT (-1, status.auto_hwm_effective_sndbuf);
     TEST_ASSERT_EQUAL_INT (-1, status.auto_hwm_effective_rcvbuf);
 
@@ -1829,6 +1883,7 @@ int main ()
     setup_test_environment (120);
 
     UNITY_BEGIN ();
+    RUN_TEST (test_monitor_context_snapshot_tracks_one_pending_event_exactly);
     RUN_TEST (test_pair_ready_with_monitor_recv_and_socket_recv);
     RUN_TEST (test_pair_ready_with_monitor_recv_and_socket_callback);
     RUN_TEST (test_dealer_router_ready_with_monitor_recv_and_socket_recv);

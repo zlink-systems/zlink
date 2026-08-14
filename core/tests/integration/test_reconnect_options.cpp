@@ -5,6 +5,7 @@
 #include "testutil_unity.hpp"
 
 #include <unity.h>
+#include <atomic>
 #include <chrono>
 #include <thread>
 
@@ -72,6 +73,20 @@ void init_string_msg (zlink_msg_t *msg_, const char *value_)
     const size_t size = strlen (value_);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (msg_, size));
     memcpy (zlink_msg_data (msg_), value_, size);
+}
+
+struct send_ready_probe_t
+{
+    send_ready_probe_t () : count (0) {}
+
+    std::atomic<int> count;
+};
+
+void capture_send_ready (void *, void *userdata_)
+{
+    send_ready_probe_t *probe = static_cast<send_ready_probe_t *> (userdata_);
+    if (probe)
+        probe->count.fetch_add (1, std::memory_order_release);
 }
 
 }
@@ -388,6 +403,48 @@ void submit_retry_does_not_wait_for_unknown_route ()
     test_context_socket_close_zero_linger (router);
 }
 
+void dontwait_local_admission_wakes_when_first_target_attaches ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    const char endpoint[] = "inproc://dontwait-first-target-ready";
+
+    int one = 1;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (dealer, ZLINK_OPT_IMMEDIATE, &one, sizeof (one)));
+    send_ready_probe_t probe;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_send_ready_handler (dealer, &capture_send_ready, &probe));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
+
+    zlink_test_set_submit_retry_fault (1, ECONNREFUSED);
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (-1,
+                           zlink_send (dealer, "before", 6, ZLINK_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (ECONNREFUSED, errno);
+
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (router, endpoint));
+    for (int i = 0; i < 300
+                    && probe.count.load (std::memory_order_acquire) == 0;
+         ++i)
+        msleep (10);
+    TEST_ASSERT_GREATER_THAN (
+      0, probe.count.load (std::memory_order_acquire));
+
+    bool submitted = false;
+    for (int i = 0; i < 100 && !submitted; ++i) {
+        submitted = zlink_send (dealer, "after", 5, ZLINK_DONTWAIT) == 5;
+        if (!submitted)
+            msleep (10);
+    }
+    TEST_ASSERT_TRUE (submitted);
+    recv_router_payload_expect_success (router, "after");
+
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
 void setUp ()
 {
     setup_test_context ();
@@ -413,5 +470,6 @@ int main (void)
     RUN_TEST (submit_retry_does_not_wait_for_passive_router_route);
     RUN_TEST (submit_retry_does_not_wait_for_dontwait);
     RUN_TEST (submit_retry_does_not_wait_for_unknown_route);
+    RUN_TEST (dontwait_local_admission_wakes_when_first_target_attaches);
     return UNITY_END ();
 }

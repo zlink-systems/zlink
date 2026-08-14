@@ -133,7 +133,7 @@ zlink::asio_ws_engine_t::asio_ws_engine_t (fd_t fd_,
     _metadata (NULL),
     _plugged (false),
     _handshaking (true),
-    _input_stopped (false),
+    _input_stop_reason (input_running),
     _output_stopped (false),
     _io_error (false),
     _read_pending (false),
@@ -222,7 +222,7 @@ zlink::asio_ws_engine_t::asio_ws_engine_t (
     _metadata (NULL),
     _plugged (false),
     _handshaking (true),
-    _input_stopped (false),
+    _input_stop_reason (input_running),
     _output_stopped (false),
     _io_error (false),
     _read_pending (false),
@@ -445,7 +445,8 @@ void zlink::asio_ws_engine_t::start_zmp_handshake ()
 
 void zlink::asio_ws_engine_t::start_async_read ()
 {
-    if (_read_pending || _input_stopped || _io_error || !_ws_handshake_complete)
+    if (_read_pending || _input_stop_reason != input_running || _io_error
+        || !_ws_handshake_complete)
         return;
 
     WS_ENGINE_DBG ("start_async_read");
@@ -560,6 +561,8 @@ void zlink::asio_ws_engine_t::on_read_complete (const boost::system::error_code 
         if (_session) {
             _session->set_peer_routing_id (_peer_routing_id, _peer_routing_id_size);
             _session->engine_ready ();
+            _session->configure_zmp_decoder (
+              static_cast<zmp_decoder_t *> (_decoder));
         }
 
         if (_options.recv_routing_id && _session) {
@@ -965,7 +968,11 @@ bool zlink::asio_ws_engine_t::process_input ()
             error (protocol_error);
             return false;
         }
-        _input_stopped = true;
+        zmp_decoder_t *const decoder = dynamic_cast<zmp_decoder_t *> (_decoder);
+        _input_stop_reason =
+          decoder && decoder->allocation_backpressured ()
+            ? input_decoder_allocation_backpressure
+            : input_decoded_message_backpressure;
     }
 
     //  Flush any messages to the socket
@@ -1491,9 +1498,45 @@ bool zlink::asio_ws_engine_t::restart_input ()
 {
     WS_ENGINE_DBG ("restart_input");
 
-    _input_stopped = false;
+    if (_input_stop_reason == input_running)
+        return true;
 
-    if (!_read_pending) {
+    int rc = 0;
+    if (_input_stop_reason == input_decoder_allocation_backpressure) {
+        zmp_decoder_t *const decoder = dynamic_cast<zmp_decoder_t *> (_decoder);
+        zlink_assert (decoder);
+        rc = decoder->retry_frame_admission ();
+        if (rc == -1) {
+            if (errno == EAGAIN)
+                return true;
+            error (protocol_error);
+            return false;
+        }
+        _input_stop_reason = input_running;
+        if (rc == 1)
+            rc = (this->*_process_msg) (_decoder->msg ());
+    } else {
+        rc = (this->*_process_msg) (_decoder->msg ());
+    }
+
+    if (rc == -1) {
+        if (errno != EAGAIN) {
+            error (protocol_error);
+            return false;
+        }
+        zmp_decoder_t *const decoder = dynamic_cast<zmp_decoder_t *> (_decoder);
+        _input_stop_reason =
+          decoder && decoder->allocation_backpressured ()
+            ? input_decoder_allocation_backpressure
+            : input_decoded_message_backpressure;
+        return true;
+    }
+
+    _input_stop_reason = input_running;
+    if (_insize > 0 && !process_input ())
+        return false;
+
+    if (_input_stop_reason == input_running && !_read_pending) {
         start_async_read ();
     }
 
@@ -1605,6 +1648,8 @@ int zlink::asio_ws_engine_t::decode_and_push (msg_t *msg_)
     }
 
     if ((msg_->flags () & msg_t::routing_id) && !_options.recv_routing_id) {
+        static_cast<zmp_decoder_t *> (_decoder)
+          ->discard_frame_reservation ();
         int rc = msg_->close ();
         errno_assert (rc == 0);
         rc = msg_->init ();
@@ -1612,7 +1657,10 @@ int zlink::asio_ws_engine_t::decode_and_push (msg_t *msg_)
         return 0;
     }
 
-    if (push_msg_to_session (msg_) == -1) {
+    zmp_decoder_t *const decoder = static_cast<zmp_decoder_t *> (_decoder);
+    if (_session->push_msg_with_decoder_reservation (
+          msg_, decoder->frame_reservation_slot ())
+        == -1) {
         if (errno == EAGAIN)
             _process_msg = &asio_ws_engine_t::push_one_then_decode_and_push;
         return -1;
@@ -1622,7 +1670,12 @@ int zlink::asio_ws_engine_t::decode_and_push (msg_t *msg_)
 
 int zlink::asio_ws_engine_t::push_one_then_decode_and_push (msg_t *msg_)
 {
-    return push_msg_to_session (msg_);
+    zmp_decoder_t *const decoder = static_cast<zmp_decoder_t *> (_decoder);
+    const int rc = _session->push_msg_with_decoder_reservation (
+      msg_, decoder->frame_reservation_slot ());
+    if (rc == 0)
+        _process_msg = &asio_ws_engine_t::decode_and_push;
+    return rc;
 }
 
 int zlink::asio_ws_engine_t::process_command_message (msg_t *msg_)

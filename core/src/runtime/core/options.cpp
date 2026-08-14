@@ -93,7 +93,6 @@ const int default_batch_size = 8192; // 32768;// //16384;
 zlink::options_t::options_t () :
     sndhwm (default_hwm_bytes),
     rcvhwm (default_hwm_bytes),
-    auto_hwm_msg_unit_bytes (0),
     affinity (0),
     routing_id_size (0),
     rate (100),
@@ -130,6 +129,7 @@ zlink::options_t::options_t () :
     tcp_nodelay (1),
     zmp_metadata (false),
     transport_lane (transport_lane_application),
+    physical_queue_class (physical_queue_class_application),
     transport_pair_id (0),
     transport_pair_generation (0),
     transport_pair_initiator (false),

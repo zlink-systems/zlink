@@ -251,6 +251,10 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
         errno = EFAULT;
         return zlink::recv_result_internal::from_errno (errno);
     }
+    if (topic_id_capacity_ > 0 && !topic_id_buf_) {
+        errno = EFAULT;
+        return zlink::recv_result_internal::from_errno (errno);
+    }
     if (validate_recv_flags (flags_) != 0)
         return zlink::recv_result_internal::from_errno (errno);
 
@@ -348,39 +352,7 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
             std::lock_guard<std::mutex> lock (helper_state->mutex);
             helper_state->recv.topic_id.swap (topic_id);
             helper_state->recv.buffered_parts.swap (buffered_parts);
-            helper_state->recv.next_part_index = 1;
-        }
-        if (zlink_msg_move (part_out_, &helper_state->recv.buffered_parts[0]) != 0) {
-            zlink::part_helper_internal::abort_recv_step (helper_state);
-            errno = EFAULT;
-            return zlink::recv_result_internal::from_errno (errno);
-        }
-    } else {
-        bool range_failed = false;
-        bool move_failed = false;
-        {
-            std::lock_guard<std::mutex> lock (helper_state->mutex);
-            if (helper_state->recv.next_part_index >= helper_state->recv.buffered_parts.size ()) {
-                range_failed = true;
-            } else {
-                move_failed =
-                  zlink_msg_move (
-                    part_out_,
-                    &helper_state->recv.buffered_parts[helper_state->recv.next_part_index])
-                  != 0;
-                if (!move_failed)
-                    ++helper_state->recv.next_part_index;
-            }
-        }
-        if (range_failed) {
-            zlink::part_helper_internal::abort_recv_step (helper_state);
-            errno = EPROTO;
-            return zlink::recv_result_internal::from_errno (errno);
-        }
-        if (move_failed) {
-            zlink::part_helper_internal::abort_recv_step (helper_state);
-            errno = EFAULT;
-            return zlink::recv_result_internal::from_errno (errno);
+            helper_state->recv.next_part_index = 0;
         }
     }
 
@@ -388,31 +360,26 @@ zlink_recv_result_t zlink_subscribe_part (void *subject_,
     {
         std::lock_guard<std::mutex> lock (helper_state->mutex);
         *topic_id_len_out_ = helper_state->recv.topic_id.size ();
-        if (topic_id_capacity_ > 0) {
-            if (!topic_id_buf_) {
-                copy_errno = EFAULT;
-            } else if (topic_id_capacity_ < helper_state->recv.topic_id.size ()) {
-                copy_errno = EMSGSIZE;
-            } else if (!helper_state->recv.topic_id.empty ()) {
-                memcpy (topic_id_buf_, helper_state->recv.topic_id.data (),
-                        helper_state->recv.topic_id.size ());
-            }
-        }
+        if (topic_id_capacity_ == 0
+            || topic_id_capacity_ < helper_state->recv.topic_id.size ())
+            copy_errno = ENOBUFS;
+        else if (!helper_state->recv.topic_id.empty ())
+            memcpy (topic_id_buf_, helper_state->recv.topic_id.data (),
+                    helper_state->recv.topic_id.size ());
     }
-
-    if (source_rid_out_)
-        *source_rid_out_ = NULL;
-    {
-        std::lock_guard<std::mutex> lock (helper_state->mutex);
-        *has_more_out_ =
-          (helper_state->recv.next_part_index < helper_state->recv.buffered_parts.size ())
-            ? ZLINK_PART_MORE
-            : ZLINK_PART_FINAL;
-    }
-    zlink::part_helper_internal::complete_recv_step (helper_state, *has_more_out_);
     if (copy_errno != 0) {
         errno = copy_errno;
         return zlink::recv_result_internal::from_errno (errno);
     }
+
+    if (zlink::part_helper_internal::take_recv_part (
+          helper_state, part_out_, has_more_out_)
+        != 0) {
+        zlink::part_helper_internal::abort_recv_step (helper_state);
+        return zlink::recv_result_internal::from_errno (errno);
+    }
+    if (source_rid_out_)
+        *source_rid_out_ = NULL;
+    zlink::part_helper_internal::complete_recv_step (helper_state, *has_more_out_);
     return ZLINK_RECV_OK;
 }

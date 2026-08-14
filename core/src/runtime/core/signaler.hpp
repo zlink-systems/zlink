@@ -14,10 +14,10 @@
 
 namespace zlink
 {
-//  This is a cross-platform equivalent to signal_fd. However, as opposed
-//  to signal_fd there can be at most one signal in the signaler at any
-//  given moment. Attempt to send a signal before receiving the previous
-//  one will result in undefined behaviour.
+//  This is a cross-platform equivalent to signal_fd. By default there can be
+//  at most one signal in the signaler at any given moment. The bool
+//  constructor enables coalescing for a shared notification signaler (and an
+//  event-only implementation on Windows).
 
 class signaler_t
 {
@@ -58,6 +58,9 @@ class signaler_t
     std::atomic<bool> _signaled;
     bool _event_only;
     HANDLE _event;
+#else
+    std::atomic<bool> _signaled;
+    bool _coalescing;
 #endif
 
 #ifdef HAVE_FORK

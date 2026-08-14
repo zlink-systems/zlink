@@ -104,6 +104,9 @@ zlink::signaler_t::signaler_t (bool event_only_)
         _event = CreateEventW (NULL, FALSE, FALSE, NULL);
         win_assert (_event != NULL);
     }
+#else
+    _signaled.store (false, std::memory_order_relaxed);
+    _coalescing = event_only_;
 #endif
 
     //  Create the socketpair for signaling.
@@ -192,12 +195,18 @@ void zlink::signaler_t::send ()
         return; // do not send anything in forked child context
     }
 #endif
+#if !defined ZLINK_HAVE_WINDOWS
+    if (_coalescing && _signaled.exchange (true, std::memory_order_acq_rel))
+        return;
+#endif
 #if defined ZLINK_HAVE_EVENTFD
     const uint64_t inc = 1;
     ssize_t sz;
     do {
         sz = write (_w, &inc, sizeof (inc));
     } while (sz == -1 && errno == EINTR);
+    if (_coalescing && sz == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        return;
     errno_assert (sz == sizeof (inc));
 #elif defined ZLINK_HAVE_WINDOWS
     if (_event_only) {
@@ -224,6 +233,8 @@ void zlink::signaler_t::send ()
         ssize_t nbytes = ::send (_w, (char *) &dummy, sizeof (dummy), 0);
         if (unlikely (nbytes == -1 && errno == EINTR))
             continue;
+        if (_coalescing && nbytes == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            return;
 #if defined(HAVE_FORK)
         if (unlikely (pid != getpid ())) {
             errno = EINTR;
@@ -239,6 +250,8 @@ void zlink::signaler_t::send ()
         ssize_t nbytes = ::send (_w, &dummy, sizeof (dummy), 0);
         if (unlikely (nbytes == -1 && errno == EINTR))
             continue;
+        if (_coalescing && nbytes == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            return;
 #if defined(HAVE_FORK)
         if (unlikely (pid != getpid ())) {
             errno = EINTR;
@@ -393,6 +406,10 @@ void zlink::signaler_t::recv ()
 
 int zlink::signaler_t::recv_failable ()
 {
+#if !defined ZLINK_HAVE_WINDOWS
+    if (_coalescing)
+        _signaled.store (false, std::memory_order_release);
+#endif
 //  Attempt to read a signal.
 #if defined ZLINK_HAVE_EVENTFD
     uint64_t dummy;

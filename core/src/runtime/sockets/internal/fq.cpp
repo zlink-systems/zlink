@@ -6,6 +6,7 @@
 
 #include "sockets/internal/fq.hpp"
 #include "core/pipe.hpp"
+#include "core/ctx_physical_queue_registry.hpp"
 #include "utils/err.hpp"
 #include "core/msg.hpp"
 
@@ -159,6 +160,23 @@ int zlink::fq_t::recv (msg_t *msg_)
 
 int zlink::fq_t::recvpipe (msg_t *msg_, pipe_t **pipe_)
 {
+    return recvpipe_internal (msg_, pipe_, NULL);
+}
+
+int zlink::fq_t::recvpipe_retained (msg_t *msg_, pipe_t **pipe_,
+                                    retained_credit_token_t *token_out_)
+{
+    if (!token_out_) {
+        errno = EFAULT;
+        return -1;
+    }
+    token_out_->reset ();
+    return recvpipe_internal (msg_, pipe_, token_out_);
+}
+
+int zlink::fq_t::recvpipe_internal (msg_t *msg_, pipe_t **pipe_,
+                                    retained_credit_token_t *token_out_)
+{
     normalize_state ();
 
     //  Deallocate old content of the message.
@@ -184,7 +202,9 @@ int zlink::fq_t::recvpipe (msg_t *msg_, pipe_t **pipe_)
             return -1;
         }
 #endif
-        const bool fetched = current_pipe->read (msg_);
+        const bool fetched = token_out_
+                               ? current_pipe->read_retained (msg_, token_out_)
+                               : current_pipe->read (msg_);
 
         //  Note that when message is not fetched, current pipe is deactivated
         //  and replaced by another active pipe. Thus we don't have to increase

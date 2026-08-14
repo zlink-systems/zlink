@@ -24,7 +24,14 @@ zlink::zmp_decoder_t::zmp_decoder_t (size_t bufsize_, int64_t maxmsgsize_) :
     decoder_base_t<zmp_decoder_t, shared_message_memory_allocator> (bufsize_),
     _msg_flags (0),
     _error_code (0),
-    _max_msg_size_effective (compute_effective_max (maxmsgsize_))
+    _max_msg_size_effective (compute_effective_max (maxmsgsize_)),
+    _frame_admission_handler (NULL),
+    _frame_reservation_release_handler (NULL),
+    _frame_admission_subject (NULL),
+    _frame_reservation (NULL),
+    _pending_msg_size (0),
+    _pending_read_from (NULL),
+    _allocation_backpressured (false)
 {
     int rc = _in_progress.init ();
     errno_assert (rc == 0);
@@ -34,8 +41,53 @@ zlink::zmp_decoder_t::zmp_decoder_t (size_t bufsize_, int64_t maxmsgsize_) :
 
 zlink::zmp_decoder_t::~zmp_decoder_t ()
 {
+    release_frame_reservation ();
     const int rc = _in_progress.close ();
     errno_assert (rc == 0);
+}
+
+void zlink::zmp_decoder_t::set_frame_admission_handler (
+  frame_admission_handler_t handler_,
+  frame_reservation_release_handler_t release_handler_, void *subject_)
+{
+    zlink_assert (!_frame_reservation);
+    _frame_admission_handler = handler_;
+    _frame_reservation_release_handler = release_handler_;
+    _frame_admission_subject = subject_;
+}
+
+bool zlink::zmp_decoder_t::allocation_backpressured () const
+{
+    return _allocation_backpressured;
+}
+
+int zlink::zmp_decoder_t::retry_frame_admission ()
+{
+    if (!_allocation_backpressured) {
+        errno = EINVAL;
+        return -1;
+    }
+    return size_ready (_pending_msg_size, _pending_read_from);
+}
+
+void **zlink::zmp_decoder_t::frame_reservation_slot ()
+{
+    return &_frame_reservation;
+}
+
+void zlink::zmp_decoder_t::discard_frame_reservation ()
+{
+    release_frame_reservation ();
+}
+
+void zlink::zmp_decoder_t::release_frame_reservation ()
+{
+    if (!_frame_reservation)
+        return;
+    if (_frame_reservation_release_handler)
+        _frame_reservation_release_handler (_frame_admission_subject,
+                                            _frame_reservation);
+    _frame_reservation = NULL;
 }
 
 int zlink::zmp_decoder_t::header_ready (unsigned char const *read_from_)
@@ -123,6 +175,23 @@ int zlink::zmp_decoder_t::size_ready (uint32_t msg_size_, unsigned char const *r
         return -1;
     }
 
+    if ((_msg_flags & msg_t::command) == 0 && _frame_admission_handler
+        && _frame_admission_handler (_frame_admission_subject, msg_size_,
+                                     _msg_flags, &_frame_reservation)
+             != 0) {
+        zlink_assert (!_frame_reservation);
+        if (errno == EAGAIN) {
+            _pending_msg_size = msg_size_;
+            _pending_read_from = read_from_;
+            _allocation_backpressured = true;
+        }
+        return -1;
+    }
+
+    _allocation_backpressured = false;
+    _pending_msg_size = 0;
+    _pending_read_from = NULL;
+
     int rc = _in_progress.close ();
     errno_assert (rc == 0);
 
@@ -151,6 +220,7 @@ int zlink::zmp_decoder_t::size_ready (uint32_t msg_size_, unsigned char const *r
 
     if (unlikely (rc)) {
         errno_assert (errno == ENOMEM);
+        release_frame_reservation ();
         rc = _in_progress.init ();
         errno_assert (rc == 0);
         errno = ENOMEM;
@@ -158,6 +228,10 @@ int zlink::zmp_decoder_t::size_ready (uint32_t msg_size_, unsigned char const *r
     }
 
     _in_progress.set_flags (_msg_flags);
+    if (_in_progress.size () == 0) {
+        next_step (_tmpbuf, zmp_header_size, &zmp_decoder_t::header_ready);
+        return 1;
+    }
     next_step (_in_progress.data (), _in_progress.size (), &zmp_decoder_t::body_ready);
 
     return 0;

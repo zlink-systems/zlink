@@ -40,6 +40,17 @@ enum transport_lane_t
     transport_lane_completion = 1
 };
 
+//  Internal classification of physical queues for context-wide budgeting and
+//  accounting. This is deliberately separate from the wire transport lane:
+//  monitor PAIRs carry ordinary application-format messages but do not belong
+//  to the application Auto HWM planner.
+enum physical_queue_class_t
+{
+    physical_queue_class_application = 0,
+    physical_queue_class_completion,
+    physical_queue_class_monitor
+};
+
 struct transport_pair_state_t
 {
     transport_pair_state_t () :
@@ -107,9 +118,6 @@ struct options_t
     //  High-water marks for message pipes, in bytes. 0 is unlimited.
     uint64_t sndhwm;
     uint64_t rcvhwm;
-
-    // Raw auto-HWM planning-unit byte override. 0 means socket-type default.
-    uint64_t auto_hwm_msg_unit_bytes;
 
     //  I/O thread affinity.
     uint64_t affinity;
@@ -234,6 +242,7 @@ struct options_t
 
     // Internal request/reply connection-pair metadata.
     transport_lane_t transport_lane;
+    physical_queue_class_t physical_queue_class;
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
     bool transport_pair_initiator;

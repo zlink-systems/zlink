@@ -215,7 +215,8 @@ These values are fixed as internal constants and not controlled by STREAM env kn
 ### 7.2 Effective socket/listener defaults
 
 - backlog: `65536`
-- `sndhwm` / `rcvhwm`: start from the routed-role auto-HWM floor
+- `sndhwm` / `rcvhwm`: per-physical-queue applied HWM produced by
+  water-filling the Core memory budget within the STREAM role bounds
 - `sndbuf` / `rcvbuf`: default `-1`, leaving OS buffer defaults and TCP
   autotuning in control
 - accept concurrency (STREAM only): default `4`, max `128`

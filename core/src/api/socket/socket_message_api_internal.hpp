@@ -6,6 +6,25 @@
 #include "zlink.h"
 
 #if defined(__cplusplus)
+#include <vector>
+#include "core/ctx_physical_queue_registry.hpp"
+namespace zlink
+{
+int socket_recv_internal_retained (
+  void *socket_, zlink_routing_id_t *source_rid_out_,
+  zlink_msg_t **parts_out_, size_t *part_count_out_,
+  zlink_send_flags_t flags_,
+  std::vector<retained_credit_token_t> *credits_out_);
+int socket_subscribe_recv_internal_retained (
+  void *socket_, zlink_routing_id_t *source_rid_out_,
+  zlink_msg_t **parts_out_, size_t *part_count_out_,
+  char *topic_id_out_, size_t *topic_id_len_out_,
+  zlink_send_flags_t flags_,
+  std::vector<retained_credit_token_t> *credits_out_);
+}
+#endif
+
+#if defined(__cplusplus)
 extern "C" {
 #endif
 

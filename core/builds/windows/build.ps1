@@ -17,27 +17,19 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..\\..\\..")).Path
 
-# Load version information from VERSION file or parameters
+# Load version information from the repository VERSION source.
 $VERSION_FILE = Join-Path $RepoRoot "VERSION"
-
-if (Test-Path $VERSION_FILE) {
-    Write-Host "Reading VERSION file..."
-    $VersionContent = Get-Content $VERSION_FILE
-    foreach ($line in $VersionContent) {
-        if ($line -match '^LIBZLINK_VERSION=(.+)$') {
-            $FILE_LIBZLINK_VERSION = $matches[1]
-        }
-    }
+if (-not (Test-Path -LiteralPath $VERSION_FILE -PathType Leaf)) {
+    throw "Repository VERSION file not found: $VERSION_FILE"
 }
-
-# Parameters override VERSION file
-if ($LibzlinkVersion) {
-    $LIBZLINK_VERSION = $LibzlinkVersion
-} elseif ($FILE_LIBZLINK_VERSION) {
-    $LIBZLINK_VERSION = $FILE_LIBZLINK_VERSION
-} else {
-    $LIBZLINK_VERSION = "6.0.3"
+$FILE_LIBZLINK_VERSION = (Select-String -LiteralPath $VERSION_FILE -Pattern '^LIBZLINK_VERSION=(.+)$').Matches.Groups[1].Value
+if ($FILE_LIBZLINK_VERSION -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+    throw "Repository VERSION has no valid LIBZLINK_VERSION: $VERSION_FILE"
 }
+if ($LibzlinkVersion -and $LibzlinkVersion -ne $FILE_LIBZLINK_VERSION) {
+    throw "LibzlinkVersion $LibzlinkVersion must match repository VERSION $FILE_LIBZLINK_VERSION"
+}
+$LIBZLINK_VERSION = $FILE_LIBZLINK_VERSION
 
 # Set architecture-specific configurations
 if ($Architecture -eq "arm64") {

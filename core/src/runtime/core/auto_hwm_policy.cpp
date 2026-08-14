@@ -3,59 +3,24 @@
 #include "utils/precompiled.hpp"
 
 #include "core/auto_hwm_policy.hpp"
-#include "core/internal_defs.hpp"
-#include "utils/err.hpp"
 #include "zlink.h"
 
 #include <algorithm>
-#include <limits.h>
+#include <vector>
 
 namespace
 {
-const uint64_t auto_hwm_stream_message_bytes = 1024ull;
-const uint64_t auto_hwm_message_bytes = 4096ull;
+const uint64_t kib = 1024ull;
+const uint64_t mib = 1024ull * kib;
 
-struct profile_hwm_t
+struct profile_budget_t
 {
-    uint32_t message_hwm;
-    uint32_t stream_hwm;
-    uint32_t control_hwm;
-    uint32_t message_cap;
-    uint32_t stream_cap;
+    uint32_t percent;
+    uint64_t data_minimum;
+    uint64_t data_maximum;
+    uint64_t stream_minimum;
+    uint64_t stream_maximum;
 };
-
-struct connection_bucket_hwm_t
-{
-    uint32_t max_peers;
-    uint32_t compact_hwm;
-    uint32_t low_latency_hwm;
-    uint32_t balanced_hwm;
-    uint32_t throughput_hwm;
-};
-
-const uint32_t unlimited_peer_bucket = UINT32_MAX;
-
-const connection_bucket_hwm_t connection_buckets[] = {
-  {64, 64, 128, 256, 512},
-  {128, 64, 64, 128, 256},
-  {512, 32, 32, 64, 128},
-  {2048, 16, 16, 32, 64},
-  {unlimited_peer_bucket, 8, 8, 16, 32}};
-
-const uint32_t connection_bucket_count =
-  sizeof connection_buckets / sizeof connection_buckets[0];
-
-uint32_t clamp_size_to_u32 (size_t value_)
-{
-    return value_ > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t> (value_);
-}
-
-uint64_t saturating_multiply_u64 (uint64_t left_, uint64_t right_)
-{
-    if (left_ != 0 && right_ > UINT64_MAX / left_)
-        return UINT64_MAX;
-    return left_ * right_;
-}
 
 zlink_auto_hwm_profile_t normalize_profile (zlink_auto_hwm_profile_t profile_)
 {
@@ -70,238 +35,131 @@ zlink_auto_hwm_profile_t normalize_profile (zlink_auto_hwm_profile_t profile_)
     }
 }
 
-profile_hwm_t profile_hwm (zlink_auto_hwm_profile_t profile_)
+profile_budget_t profile_budget (zlink_auto_hwm_profile_t profile_)
 {
     switch (normalize_profile (profile_)) {
         case ZLINK_AUTO_HWM_PROFILE_COMPACT:
-            return profile_hwm_t{64, 8, 8, 256, 32};
+            return profile_budget_t{2, 32 * kib, 1 * mib, 8 * kib, 32 * kib};
         case ZLINK_AUTO_HWM_PROFILE_LOW_LATENCY:
-            return profile_hwm_t{128, 16, 16, 512, 64};
+            return profile_budget_t{5, 32 * kib, 2 * mib, 16 * kib, 64 * kib};
         case ZLINK_AUTO_HWM_PROFILE_THROUGHPUT:
-            return profile_hwm_t{512, 256, 32, 4096, 512};
+            return profile_budget_t{20, 128 * kib, 16 * mib, 256 * kib, 512 * kib};
         case ZLINK_AUTO_HWM_PROFILE_BALANCED:
         default:
-            return profile_hwm_t{256, 64, 16, 1024, 128};
+            return profile_budget_t{10, 64 * kib, 4 * mib, 64 * kib, 128 * kib};
     }
 }
 
-bool stream_policy_class (zlink::auto_hwm_policy_class_t policy_class_)
+bool stream_role (zlink::auto_hwm_role_t role_)
 {
-    return policy_class_ == zlink::auto_hwm_policy_stream;
+    return role_ == zlink::auto_hwm_role_stream;
 }
 
-uint32_t basis_hwm_for_class (zlink_auto_hwm_profile_t profile_,
-                              zlink::auto_hwm_policy_class_t policy_class_)
+uint64_t saturating_add (uint64_t left_, uint64_t right_, bool *overflow_)
 {
-    const profile_hwm_t hwm = profile_hwm (profile_);
-    switch (policy_class_) {
-        case zlink::auto_hwm_policy_fanout:
-        case zlink::auto_hwm_policy_connection_data:
-        case zlink::auto_hwm_policy_routed:
-        case zlink::auto_hwm_policy_recv_ingress:
-        case zlink::auto_hwm_policy_peer_queue:
-            return hwm.message_hwm;
-        case zlink::auto_hwm_policy_stream:
-            return hwm.stream_hwm;
-        case zlink::auto_hwm_policy_control:
-            return hwm.control_hwm;
-        default:
-            return 0;
+    if (UINT64_MAX - left_ < right_) {
+        if (overflow_)
+            *overflow_ = true;
+        return UINT64_MAX;
     }
+    return left_ + right_;
 }
 
-uint32_t size_cap_for_class (zlink_auto_hwm_profile_t profile_,
-                             zlink::auto_hwm_policy_class_t policy_class_)
+uint64_t saturating_multiply (uint64_t left_, uint64_t right_, bool *overflow_)
 {
-    if (policy_class_ == zlink::auto_hwm_policy_none)
-        return 0;
-    const profile_hwm_t hwm = profile_hwm (profile_);
-    return stream_policy_class (policy_class_) ? hwm.stream_cap : hwm.message_cap;
-}
-
-uint32_t routed_small_message_cap_for_profile (zlink_auto_hwm_profile_t profile_)
-{
-    switch (normalize_profile (profile_)) {
-        case ZLINK_AUTO_HWM_PROFILE_COMPACT:
-            return 32;
-        case ZLINK_AUTO_HWM_PROFILE_LOW_LATENCY:
-            return 64;
-        case ZLINK_AUTO_HWM_PROFILE_THROUGHPUT:
-            return 128;
-        case ZLINK_AUTO_HWM_PROFILE_BALANCED:
-        default:
-            return 128;
+    if (left_ != 0 && right_ > UINT64_MAX / left_) {
+        if (overflow_)
+            *overflow_ = true;
+        return UINT64_MAX;
     }
+    return left_ * right_;
 }
 
-bool connection_bucket_policy_class (zlink::auto_hwm_policy_class_t policy_class_)
+uint64_t apply_profile_percent (uint64_t memory_bytes_, uint32_t percent_)
 {
-    return policy_class_ == zlink::auto_hwm_policy_connection_data
-           || policy_class_ == zlink::auto_hwm_policy_recv_ingress
-           || policy_class_ == zlink::auto_hwm_policy_routed;
+    return (memory_bytes_ / 100u) * percent_
+           + ((memory_bytes_ % 100u) * percent_) / 100u;
 }
 
-uint32_t bucket_hwm_for_profile (const connection_bucket_hwm_t &bucket_,
-                                 zlink_auto_hwm_profile_t profile_)
+uint64_t resolved_memory_limit (const zlink::auto_hwm_budget_input_t &input_)
 {
-    switch (normalize_profile (profile_)) {
-        case ZLINK_AUTO_HWM_PROFILE_COMPACT:
-            return bucket_.compact_hwm;
-        case ZLINK_AUTO_HWM_PROFILE_LOW_LATENCY:
-            return bucket_.low_latency_hwm;
-        case ZLINK_AUTO_HWM_PROFILE_THROUGHPUT:
-            return bucket_.throughput_hwm;
-        case ZLINK_AUTO_HWM_PROFILE_BALANCED:
-        default:
-            return bucket_.balanced_hwm;
+    if (input_.configured_memory_limit_bytes > 0)
+        return input_.configured_memory_limit_bytes;
+
+    if (input_.runtime_memory_limit_bytes > 0 && input_.detected_hard_limit_bytes > 0) {
+        return std::min (input_.runtime_memory_limit_bytes,
+                         input_.detected_hard_limit_bytes);
     }
+    if (input_.runtime_memory_limit_bytes > 0)
+        return input_.runtime_memory_limit_bytes;
+    if (input_.detected_hard_limit_bytes > 0)
+        return input_.detected_hard_limit_bytes;
+    return input_.detected_physical_memory_bytes;
 }
 
-uint32_t connection_bucket_hwm_4k (zlink_auto_hwm_profile_t profile_, uint32_t connections_)
+struct direction_plan_ref_t
 {
-    const uint32_t peers = std::max<uint32_t> (connections_, 1u);
-    for (uint32_t i = 0; i != connection_bucket_count; ++i) {
-        if (peers <= connection_buckets[i].max_peers)
-            return bucket_hwm_for_profile (connection_buckets[i], profile_);
-    }
-    return bucket_hwm_for_profile (
-      connection_buckets[connection_bucket_count - 1],
-      profile_);
-}
+    uint64_t *hwm;
+    uint64_t queue_count;
+    uint64_t maximum;
+};
 
-uint32_t connection_bucket_index_for_connections (uint32_t connections_)
+void append_direction (std::vector<direction_plan_ref_t> *directions_,
+                       uint64_t *hwm_,
+                       uint64_t queue_count_,
+                       uint64_t maximum_)
 {
-    const uint32_t peers = std::max<uint32_t> (connections_, 1u);
-    for (uint32_t i = 0; i != connection_bucket_count; ++i) {
-        if (peers <= connection_buckets[i].max_peers)
-            return i;
-    }
-    return connection_bucket_count - 1;
+    if (directions_ && hwm_ && queue_count_ > 0 && *hwm_ < maximum_)
+        directions_->push_back (direction_plan_ref_t{hwm_, queue_count_, maximum_});
+}
 }
 
-uint32_t connection_bucket_hwm_4k_by_index (zlink_auto_hwm_profile_t profile_,
-                                            uint32_t bucket_index_)
+zlink::auto_hwm_budget_input_t::auto_hwm_budget_input_t () :
+    enabled (false),
+    profile (ZLINK_AUTO_HWM_PROFILE_BALANCED),
+    configured_memory_limit_bytes (0),
+    runtime_memory_limit_bytes (0),
+    configured_core_budget_bytes (0),
+    detected_hard_limit_bytes (0),
+    detected_physical_memory_bytes (0)
 {
-    if (bucket_index_ >= connection_bucket_count)
-        bucket_index_ = connection_bucket_count - 1;
-    return bucket_hwm_for_profile (connection_buckets[bucket_index_], profile_);
-}
-
-uint32_t connection_bucket_upper_hysteresis_threshold (uint32_t bucket_index_)
-{
-    if (bucket_index_ >= connection_bucket_count
-        || connection_buckets[bucket_index_].max_peers == unlimited_peer_bucket) {
-        return unlimited_peer_bucket;
-    }
-    const uint32_t max_peers = connection_buckets[bucket_index_].max_peers;
-    return max_peers + ((max_peers + 3u) / 4u);
-}
-
-uint32_t connection_bucket_lower_hysteresis_threshold (uint32_t bucket_index_)
-{
-    if (bucket_index_ == 0 || bucket_index_ >= connection_bucket_count)
-        return 0;
-    const uint32_t previous_max_peers = connection_buckets[bucket_index_ - 1].max_peers;
-    return (previous_max_peers * 3u) / 4u;
-}
-
-uint32_t connection_bucket_index_with_hysteresis (uint32_t connections_,
-                                                 uint32_t previous_bucket_index_,
-                                                 bool *retained_out_)
-{
-    if (retained_out_)
-        *retained_out_ = false;
-
-    const uint32_t peers = std::max<uint32_t> (connections_, 1u);
-    const uint32_t normal_index = connection_bucket_index_for_connections (peers);
-    if (previous_bucket_index_ >= connection_bucket_count)
-        return normal_index;
-    if (previous_bucket_index_ == normal_index)
-        return normal_index;
-
-    bool retain_previous = false;
-    if (normal_index > previous_bucket_index_) {
-        const uint32_t threshold =
-          connection_bucket_upper_hysteresis_threshold (previous_bucket_index_);
-        retain_previous = peers < threshold;
-    } else {
-        const uint32_t threshold =
-          connection_bucket_lower_hysteresis_threshold (previous_bucket_index_);
-        retain_previous = peers > threshold;
-    }
-
-    if (!retain_previous)
-        return normal_index;
-    if (retained_out_)
-        *retained_out_ = true;
-    return previous_bucket_index_;
-}
-
-uint64_t effective_message_bytes (int socket_type_, uint64_t override_)
-{
-    if (override_ > 0)
-        return override_;
-    return socket_type_ == ZLINK_CORE_SOCKET_STREAM ? auto_hwm_stream_message_bytes
-                                                    : auto_hwm_message_bytes;
-}
-
-uint64_t ceil_div (uint64_t numerator_, uint64_t denominator_)
-{
-    if (denominator_ == 0)
-        return 0;
-    return (numerator_ + denominator_ - 1) / denominator_;
-}
-
-uint64_t clamp_hwm_to_cap (uint64_t slots_, uint32_t size_cap_)
-{
-    if (size_cap_ == 0)
-        return 0;
-    uint64_t hwm = std::min<uint64_t> (slots_, size_cap_);
-    if (hwm == 0)
-        return 1;
-    return hwm;
-}
-
 }
 
 zlink::auto_hwm_context_plan_t::auto_hwm_context_plan_t () :
-    enabled (false), profile (ZLINK_AUTO_HWM_PROFILE_BALANCED), message_unit_bytes (0)
+    enabled (false),
+    profile (ZLINK_AUTO_HWM_PROFILE_BALANCED),
+    configured_memory_limit_bytes (0),
+    runtime_memory_limit_bytes (0),
+    resolved_memory_limit_bytes (0),
+    configured_core_budget_bytes (0),
+    effective_core_budget_bytes (0),
+    total_planned_hwm_bytes (0),
+    total_applied_hwm_bytes (0),
+    manual_reserved_hwm_bytes (0),
+    active_directional_queue_count (0),
+    active_send_queue_count (0),
+    active_receive_queue_count (0),
+    unlimited_manual_queue_count (0),
+    budget_insufficient (false),
+    aggregate_hwm_valid (true),
+    aggregate_overflow (false)
 {
 }
 
 zlink::auto_hwm_socket_plan_t::auto_hwm_socket_plan_t () :
     role (auto_hwm_role_none),
     policy_class (auto_hwm_policy_none),
-    scope (auto_hwm_scope_none),
-    scope_count (1),
-    socket_message_slots (0),
-    effective_message_bytes (auto_hwm_message_bytes),
-    unit_budget_bytes (0),
-    size_cap (0),
-    pending_messages (0),
+    planning_enabled (false),
+    send_queue_count (0),
+    receive_queue_count (0),
+    minimum_hwm_bytes (0),
+    maximum_hwm_bytes (0),
     pending_bytes (0),
-    connection_bucket_enabled (false),
-    connection_bucket_count (1),
-    connection_bucket_hwm_4k (0),
-    connection_bucket_index (auto_hwm_connection_bucket_none),
-    connection_bucket_hysteresis_enabled (false),
-    previous_connection_bucket_index (auto_hwm_connection_bucket_none),
-    connection_bucket_hysteresis_retained (false),
+    manual_sndhwm (false),
+    manual_rcvhwm (false),
     sndhwm (0),
-    rcvhwm (0),
-    manual_sndbuf (false),
-    manual_rcvbuf (false),
-    requested_sndbuf (-1),
-    requested_rcvbuf (-1),
-    effective_sndbuf (-1),
-    effective_rcvbuf (-1)
+    rcvhwm (0)
 {
-}
-
-zlink_auto_hwm_profile_t
-zlink::auto_hwm_normalize_profile (zlink_auto_hwm_profile_t profile_)
-{
-    return normalize_profile (profile_);
 }
 
 bool zlink::auto_hwm_valid_profile (int profile_)
@@ -312,42 +170,28 @@ bool zlink::auto_hwm_valid_profile (int profile_)
            || profile_ == ZLINK_AUTO_HWM_PROFILE_THROUGHPUT;
 }
 
-uint32_t zlink::auto_hwm_profile_message_hwm (zlink_auto_hwm_profile_t profile_)
+uint64_t zlink::auto_hwm_profile_minimum_bytes (zlink_auto_hwm_profile_t profile_,
+                                                auto_hwm_role_t role_)
 {
-    return profile_hwm (profile_).message_hwm;
+    if (role_ == auto_hwm_role_none)
+        return 0;
+    const profile_budget_t budget = profile_budget (profile_);
+    return stream_role (role_) ? budget.stream_minimum : budget.data_minimum;
 }
 
-uint32_t zlink::auto_hwm_profile_stream_hwm (zlink_auto_hwm_profile_t profile_)
+uint64_t zlink::auto_hwm_profile_maximum_bytes (zlink_auto_hwm_profile_t profile_,
+                                                auto_hwm_role_t role_)
 {
-    return profile_hwm (profile_).stream_hwm;
-}
-
-uint32_t zlink::auto_hwm_profile_control_hwm (zlink_auto_hwm_profile_t profile_)
-{
-    return profile_hwm (profile_).control_hwm;
-}
-
-uint32_t zlink::auto_hwm_profile_message_cap (zlink_auto_hwm_profile_t profile_)
-{
-    return profile_hwm (profile_).message_cap;
-}
-
-uint32_t zlink::auto_hwm_profile_stream_cap (zlink_auto_hwm_profile_t profile_)
-{
-    return profile_hwm (profile_).stream_cap;
-}
-
-uint32_t
-zlink::auto_hwm_profile_routed_small_message_cap (zlink_auto_hwm_profile_t profile_)
-{
-    return routed_small_message_cap_for_profile (profile_);
+    if (role_ == auto_hwm_role_none)
+        return 0;
+    const profile_budget_t budget = profile_budget (profile_);
+    return stream_role (role_) ? budget.stream_maximum : budget.data_maximum;
 }
 
 zlink::auto_hwm_role_t zlink::auto_hwm_default_role_for_socket_type (int socket_type_)
 {
     switch (socket_type_) {
         case ZLINK_CORE_SOCKET_PAIR:
-            return auto_hwm_role_peer_queue;
         case ZLINK_CORE_SOCKET_DEALER:
             return auto_hwm_role_peer_queue;
         case ZLINK_CORE_SOCKET_ROUTER:
@@ -365,8 +209,8 @@ zlink::auto_hwm_role_t zlink::auto_hwm_default_role_for_socket_type (int socket_
     }
 }
 
-zlink::auto_hwm_policy_class_t zlink::auto_hwm_policy_class_for_role (auto_hwm_role_t role_,
-                                                                      int socket_type_)
+zlink::auto_hwm_policy_class_t zlink::auto_hwm_policy_class_for_role (
+  auto_hwm_role_t role_, int socket_type_)
 {
     switch (role_) {
         case auto_hwm_role_control:
@@ -388,167 +232,234 @@ zlink::auto_hwm_policy_class_t zlink::auto_hwm_policy_class_for_role (auto_hwm_r
             break;
     }
 
-    switch (socket_type_) {
-        case ZLINK_CORE_SOCKET_PUB:
-        case ZLINK_CORE_SOCKET_XPUB:
-            return auto_hwm_policy_fanout;
-        case ZLINK_CORE_SOCKET_SUB:
-        case ZLINK_CORE_SOCKET_XSUB:
-            return auto_hwm_policy_recv_ingress;
-        case ZLINK_CORE_SOCKET_ROUTER:
-            return auto_hwm_policy_routed;
-        case ZLINK_CORE_SOCKET_DEALER:
-        case ZLINK_CORE_SOCKET_PAIR:
-            return auto_hwm_policy_peer_queue;
-        case ZLINK_CORE_SOCKET_STREAM:
-            return auto_hwm_policy_stream;
-        default:
-            return auto_hwm_policy_none;
-    }
+    const auto_hwm_role_t default_role =
+      auto_hwm_default_role_for_socket_type (socket_type_);
+    if (default_role == auto_hwm_role_none)
+        return auto_hwm_policy_none;
+    return auto_hwm_policy_class_for_role (default_role, 0);
 }
 
-void zlink::auto_hwm_context_plan_make (bool enabled_,
-                                        zlink_auto_hwm_profile_t profile_,
-                                        auto_hwm_context_plan_t *out_,
-                                        uint64_t message_unit_bytes_)
+void zlink::auto_hwm_context_plan_make (const auto_hwm_budget_input_t &input_,
+                                        auto_hwm_context_plan_t *out_)
 {
     if (!out_)
         return;
 
     *out_ = auto_hwm_context_plan_t ();
-    out_->enabled = enabled_;
-    out_->profile = normalize_profile (profile_);
-    out_->message_unit_bytes = message_unit_bytes_;
+    out_->enabled = input_.enabled;
+    out_->profile = normalize_profile (input_.profile);
+    out_->configured_memory_limit_bytes = input_.configured_memory_limit_bytes;
+    out_->runtime_memory_limit_bytes = input_.runtime_memory_limit_bytes;
+    out_->configured_core_budget_bytes = input_.configured_core_budget_bytes;
+    out_->resolved_memory_limit_bytes = resolved_memory_limit (input_);
+    out_->effective_core_budget_bytes =
+      input_.configured_core_budget_bytes > 0
+        ? input_.configured_core_budget_bytes
+        : apply_profile_percent (out_->resolved_memory_limit_bytes,
+                                 profile_budget (out_->profile).percent);
 }
 
 void zlink::auto_hwm_socket_plan_prepare (auto_hwm_role_t role_,
-                                          int socket_type_,
-                                          size_t managed_connections_,
-                                          size_t active_hwm_connections_,
-                                          auto_hwm_socket_plan_t *out_,
-                                          uint64_t message_unit_bytes_,
-                                          int sndbuf_,
-                                          int rcvbuf_,
-                                          bool manual_sndbuf_,
-                                          bool manual_rcvbuf_,
-                                          auto_hwm_scope_t scope_,
-                                          size_t scope_count_,
-                                          bool buffer_cost_enabled_,
-                                          bool connection_bucket_enabled_,
-                                          bool connection_bucket_hysteresis_enabled_,
-                                          uint32_t previous_connection_bucket_index_)
+                                          uint64_t send_queue_count_,
+                                          uint64_t receive_queue_count_,
+                                          bool manual_sndhwm_,
+                                          uint64_t sndhwm_,
+                                          bool manual_rcvhwm_,
+                                          uint64_t rcvhwm_,
+                                          bool planning_enabled_,
+                                          auto_hwm_socket_plan_t *out_)
 {
     if (!out_)
         return;
 
     *out_ = auto_hwm_socket_plan_t ();
     out_->role = role_;
-    out_->policy_class = auto_hwm_policy_class_for_role (role_, socket_type_);
-    out_->scope = scope_;
-    out_->connection_bucket_enabled = connection_bucket_enabled_;
-    out_->connection_bucket_hysteresis_enabled = connection_bucket_hysteresis_enabled_;
-    out_->previous_connection_bucket_index = previous_connection_bucket_index_;
-    out_->manual_sndbuf = manual_sndbuf_;
-    out_->manual_rcvbuf = manual_rcvbuf_;
-    out_->effective_message_bytes = effective_message_bytes (socket_type_, message_unit_bytes_);
-    const uint32_t buffer_connections = std::max<uint32_t> (
-      clamp_size_to_u32 (std::max (managed_connections_, active_hwm_connections_)), 1u);
-    out_->connection_bucket_count = buffer_connections;
-
-    out_->requested_sndbuf = manual_sndbuf_ ? sndbuf_ : -1;
-    out_->requested_rcvbuf = manual_rcvbuf_ ? rcvbuf_ : -1;
-    out_->effective_sndbuf = out_->requested_sndbuf;
-    out_->effective_rcvbuf = out_->requested_rcvbuf;
-
-    out_->scope_count = clamp_size_to_u32 (scope_count_ > 0 ? scope_count_ : 1);
-    out_->unit_budget_bytes = static_cast<uint64_t> (basis_hwm_for_class (
-                                ZLINK_AUTO_HWM_PROFILE_BALANCED, out_->policy_class))
-                              * effective_message_bytes (socket_type_, 0);
-    out_->size_cap = size_cap_for_class (ZLINK_AUTO_HWM_PROFILE_BALANCED, out_->policy_class);
-    if (!buffer_cost_enabled_ || !connection_bucket_policy_class (out_->policy_class)) {
-        out_->connection_bucket_enabled = false;
-        out_->connection_bucket_hysteresis_enabled = false;
-        out_->previous_connection_bucket_index = auto_hwm_connection_bucket_none;
-    }
+    out_->policy_class = auto_hwm_policy_class_for_role (role_, 0);
+    out_->planning_enabled = planning_enabled_ && role_ != auto_hwm_role_none;
+    out_->send_queue_count = send_queue_count_;
+    out_->receive_queue_count = receive_queue_count_;
+    out_->manual_sndhwm = manual_sndhwm_;
+    out_->manual_rcvhwm = manual_rcvhwm_;
+    out_->sndhwm = sndhwm_;
+    out_->rcvhwm = rcvhwm_;
 }
 
 void zlink::auto_hwm_context_finalize (auto_hwm_context_plan_t *context_,
                                        auto_hwm_socket_plan_t *plans_,
                                        size_t plan_count_)
 {
-    if (!context_ || !plans_)
+    if (!context_ || (!plans_ && plan_count_ != 0))
         return;
+
+    context_->total_planned_hwm_bytes = 0;
+    context_->total_applied_hwm_bytes = 0;
+    context_->manual_reserved_hwm_bytes = 0;
+    context_->active_directional_queue_count = 0;
+    context_->active_send_queue_count = 0;
+    context_->active_receive_queue_count = 0;
+    context_->unlimited_manual_queue_count = 0;
+    context_->budget_insufficient = false;
+    context_->aggregate_hwm_valid = true;
+    context_->aggregate_overflow = false;
+
+    uint64_t auto_minimum_total = 0;
+    std::vector<direction_plan_ref_t> auto_directions;
+    auto_directions.reserve (plan_count_ * 2);
 
     for (size_t i = 0; i != plan_count_; ++i) {
         auto_hwm_socket_plan_t &plan = plans_[i];
-        const uint32_t basis_hwm = basis_hwm_for_class (context_->profile, plan.policy_class);
-        uint32_t budget_hwm = basis_hwm;
-        plan.connection_bucket_hwm_4k = 0;
-        plan.connection_bucket_index = auto_hwm_connection_bucket_none;
-        plan.connection_bucket_hysteresis_retained = false;
-        if (plan.connection_bucket_enabled && !stream_policy_class (plan.policy_class)) {
-            const uint32_t bucket_index =
-              plan.connection_bucket_hysteresis_enabled
-                  ? connection_bucket_index_with_hysteresis (
-                      plan.connection_bucket_count, plan.previous_connection_bucket_index,
-                      &plan.connection_bucket_hysteresis_retained)
-                  : connection_bucket_index_for_connections (plan.connection_bucket_count);
-            plan.connection_bucket_index = bucket_index;
-            plan.connection_bucket_hwm_4k =
-              connection_bucket_hwm_4k_by_index (context_->profile, bucket_index);
-            budget_hwm = std::min<uint32_t> (basis_hwm, plan.connection_bucket_hwm_4k);
-        }
-        const uint64_t planning_unit_bytes =
-          plan.effective_message_bytes > 0
-            ? plan.effective_message_bytes
-            : (stream_policy_class (plan.policy_class) ? auto_hwm_stream_message_bytes
-                                                       : auto_hwm_message_bytes);
-        plan.unit_budget_bytes = saturating_multiply_u64 (
-          static_cast<uint64_t> (budget_hwm), planning_unit_bytes);
-        plan.size_cap = size_cap_for_class (context_->profile, plan.policy_class);
-        if (!plan.manual_sndbuf) {
-            plan.requested_sndbuf = -1;
-            plan.effective_sndbuf = plan.requested_sndbuf;
-        }
-        if (!plan.manual_rcvbuf) {
-            plan.requested_rcvbuf = -1;
-            plan.effective_rcvbuf = plan.requested_rcvbuf;
-        }
-        plan.socket_message_slots =
-          clamp_hwm_to_cap (static_cast<uint64_t> (budget_hwm), plan.size_cap);
+        plan.minimum_hwm_bytes =
+          auto_hwm_profile_minimum_bytes (context_->profile, plan.role);
+        plan.maximum_hwm_bytes =
+          auto_hwm_profile_maximum_bytes (context_->profile, plan.role);
 
-        plan.sndhwm = plan.unit_budget_bytes;
-        plan.rcvhwm = plan.unit_budget_bytes;
+        if (!plan.planning_enabled)
+            continue;
+
+        context_->active_send_queue_count = saturating_add (
+          context_->active_send_queue_count, plan.send_queue_count,
+          &context_->aggregate_overflow);
+        context_->active_receive_queue_count = saturating_add (
+          context_->active_receive_queue_count, plan.receive_queue_count,
+          &context_->aggregate_overflow);
+        context_->active_directional_queue_count = saturating_add (
+          context_->active_directional_queue_count,
+          saturating_add (plan.send_queue_count, plan.receive_queue_count,
+                          &context_->aggregate_overflow),
+          &context_->aggregate_overflow);
+
+        if (!plan.manual_sndhwm) {
+            plan.sndhwm = plan.minimum_hwm_bytes;
+            const uint64_t minimum = saturating_multiply (
+              plan.minimum_hwm_bytes, plan.send_queue_count,
+              &context_->aggregate_overflow);
+            auto_minimum_total = saturating_add (
+              auto_minimum_total, minimum, &context_->aggregate_overflow);
+            append_direction (&auto_directions, &plan.sndhwm,
+                              plan.send_queue_count, plan.maximum_hwm_bytes);
+        } else if (plan.send_queue_count > 0) {
+            const uint64_t reservation =
+              plan.sndhwm == 0 ? plan.maximum_hwm_bytes : plan.sndhwm;
+            context_->manual_reserved_hwm_bytes = saturating_add (
+              context_->manual_reserved_hwm_bytes,
+              saturating_multiply (reservation, plan.send_queue_count,
+                                   &context_->aggregate_overflow),
+              &context_->aggregate_overflow);
+            if (plan.sndhwm == 0) {
+                context_->aggregate_hwm_valid = false;
+                context_->unlimited_manual_queue_count = saturating_add (
+                  context_->unlimited_manual_queue_count, plan.send_queue_count,
+                  &context_->aggregate_overflow);
+            }
+        }
+
+        if (!plan.manual_rcvhwm) {
+            plan.rcvhwm = plan.minimum_hwm_bytes;
+            const uint64_t minimum = saturating_multiply (
+              plan.minimum_hwm_bytes, plan.receive_queue_count,
+              &context_->aggregate_overflow);
+            auto_minimum_total = saturating_add (
+              auto_minimum_total, minimum, &context_->aggregate_overflow);
+            append_direction (&auto_directions, &plan.rcvhwm,
+                              plan.receive_queue_count, plan.maximum_hwm_bytes);
+        } else if (plan.receive_queue_count > 0) {
+            const uint64_t reservation =
+              plan.rcvhwm == 0 ? plan.maximum_hwm_bytes : plan.rcvhwm;
+            context_->manual_reserved_hwm_bytes = saturating_add (
+              context_->manual_reserved_hwm_bytes,
+              saturating_multiply (reservation, plan.receive_queue_count,
+                                   &context_->aggregate_overflow),
+              &context_->aggregate_overflow);
+            if (plan.rcvhwm == 0) {
+                context_->aggregate_hwm_valid = false;
+                context_->unlimited_manual_queue_count = saturating_add (
+                  context_->unlimited_manual_queue_count, plan.receive_queue_count,
+                  &context_->aggregate_overflow);
+            }
+        }
     }
-}
 
-void zlink::auto_hwm_socket_plan_for_role (const auto_hwm_context_plan_t &context_,
-                                           auto_hwm_role_t role_,
-                                           int socket_type_,
-                                           size_t managed_connections_,
-                                           size_t active_hwm_connections_,
-                                           auto_hwm_socket_plan_t *out_,
-                                           uint64_t message_unit_bytes_,
-                                           int sndbuf_,
-                                           int rcvbuf_,
-                                           bool manual_sndbuf_,
-                                           bool manual_rcvbuf_,
-                                           auto_hwm_scope_t scope_,
-                                           size_t scope_count_,
-                                           bool buffer_cost_enabled_,
-                                           bool connection_bucket_enabled_,
-                                           bool connection_bucket_hysteresis_enabled_,
-                                           uint32_t previous_connection_bucket_index_)
-{
-    if (!out_)
-        return;
+    const uint64_t data_budget =
+      context_->manual_reserved_hwm_bytes >= context_->effective_core_budget_bytes
+        ? 0
+        : context_->effective_core_budget_bytes
+            - context_->manual_reserved_hwm_bytes;
 
-    auto_hwm_socket_plan_prepare (
-      role_, socket_type_, managed_connections_, active_hwm_connections_, out_, message_unit_bytes_,
-      sndbuf_, rcvbuf_, manual_sndbuf_, manual_rcvbuf_, scope_, scope_count_, buffer_cost_enabled_,
-      connection_bucket_enabled_, connection_bucket_hysteresis_enabled_,
-      previous_connection_bucket_index_);
+    if (context_->manual_reserved_hwm_bytes > context_->effective_core_budget_bytes
+        || auto_minimum_total > data_budget || context_->aggregate_overflow) {
+        context_->budget_insufficient = true;
+    } else if (context_->enabled) {
+        uint64_t remaining = data_budget - auto_minimum_total;
+        while (remaining > 0) {
+            uint64_t unsaturated_count = 0;
+            for (size_t i = 0; i != auto_directions.size (); ++i) {
+                if (*auto_directions[i].hwm < auto_directions[i].maximum) {
+                    unsaturated_count = saturating_add (
+                      unsaturated_count, auto_directions[i].queue_count,
+                      &context_->aggregate_overflow);
+                }
+            }
+            if (unsaturated_count == 0 || context_->aggregate_overflow)
+                break;
 
-    auto_hwm_context_plan_t adjusted_context = context_;
-    auto_hwm_context_finalize (&adjusted_context, out_, 1);
+            const uint64_t share = remaining / unsaturated_count;
+            bool granted = false;
+            if (share > 0) {
+                for (size_t i = 0; i != auto_directions.size (); ++i) {
+                    direction_plan_ref_t &direction = auto_directions[i];
+                    if (*direction.hwm >= direction.maximum)
+                        continue;
+                    const uint64_t headroom = direction.maximum - *direction.hwm;
+                    const uint64_t grant_per_queue = std::min (
+                      std::min (share, headroom),
+                      remaining / direction.queue_count);
+                    if (grant_per_queue == 0)
+                        continue;
+                    *direction.hwm += grant_per_queue;
+                    remaining -= grant_per_queue * direction.queue_count;
+                    granted = true;
+                }
+            } else {
+                for (size_t i = 0; i != auto_directions.size (); ++i) {
+                    direction_plan_ref_t &direction = auto_directions[i];
+                    if (*direction.hwm >= direction.maximum
+                        || remaining < direction.queue_count) {
+                        continue;
+                    }
+                    ++*direction.hwm;
+                    remaining -= direction.queue_count;
+                    granted = true;
+                }
+            }
+            if (!granted)
+                break;
+        }
+    }
+
+    uint64_t planned_auto_total = 0;
+    for (size_t i = 0; i != plan_count_; ++i) {
+        const auto_hwm_socket_plan_t &plan = plans_[i];
+        if (!plan.planning_enabled)
+            continue;
+        if (!plan.manual_sndhwm) {
+            planned_auto_total = saturating_add (
+              planned_auto_total,
+              saturating_multiply (plan.sndhwm, plan.send_queue_count,
+                                   &context_->aggregate_overflow),
+              &context_->aggregate_overflow);
+        }
+        if (!plan.manual_rcvhwm) {
+            planned_auto_total = saturating_add (
+              planned_auto_total,
+              saturating_multiply (plan.rcvhwm, plan.receive_queue_count,
+                                   &context_->aggregate_overflow),
+              &context_->aggregate_overflow);
+        }
+    }
+    context_->total_planned_hwm_bytes = saturating_add (
+      planned_auto_total, context_->manual_reserved_hwm_bytes,
+      &context_->aggregate_overflow);
+    context_->total_applied_hwm_bytes = context_->total_planned_hwm_bytes;
+    if (context_->aggregate_overflow)
+        context_->budget_insufficient = true;
 }

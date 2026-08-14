@@ -4,6 +4,7 @@
 #include "utils/macros.hpp"
 #include "sockets/dealer/dealer.hpp"
 #include "sockets/common/socket_dispatch_loop_internal.hpp"
+#include "core/c_api_copy_internal.hpp"
 #include "core/pipe.hpp"
 #include "utils/err.hpp"
 #include "core/msg.hpp"
@@ -30,32 +31,18 @@ zlink::dealer_t::~dealer_t ()
         close_socket_msg_parts (&it->second);
 }
 
-int zlink::dealer_t::sendpipe_to (pipe_t *pipe_, msg_t *msg_, int flags_)
+int zlink::dealer_t::sendpipe_to (
+  pipe_t *pipe_, msg_t *msg_, int flags_,
+  pipe_message_admission_t *admission_out_)
 {
     if (!pipe_ || !msg_ || !msg_->check ()) {
         errno = EFAULT;
         return -1;
     }
-    if (!_lb.contains (pipe_)) {
-        errno = EHOSTUNREACH;
-        return -1;
-    }
-
     msg_->reset_flags (msg_t::more);
     if ((flags_ & ZLINK_SNDMORE) != 0)
         msg_->set_flags (msg_t::more);
-
-    const bool more = (msg_->flags () & msg_t::more) != 0;
-    const bool ok = more ? pipe_->write (msg_) : pipe_->write_and_flush (msg_);
-    if (!ok) {
-        if (errno != EMSGSIZE)
-            errno = EAGAIN;
-        return -1;
-    }
-
-    const int rc = msg_->init ();
-    errno_assert (rc == 0);
-    return 0;
+    return _lb.sendpipe_to (pipe_, msg_, admission_out_);
 }
 
 void zlink::dealer_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool locally_initiated_)
@@ -130,14 +117,90 @@ int zlink::dealer_t::xgetsockopt (int option_, void *optval_, size_t *optvallen_
     return socket_base_t::xgetsockopt (option_, optval_, optvallen_);
 }
 
-int zlink::dealer_t::xsend (msg_t *msg_)
+int zlink::dealer_t::xsend (
+  msg_t *msg_, pipe_message_admission_t *admission_out_)
 {
-    return sendpipe (msg_, NULL);
+    return sendpipe (msg_, NULL, admission_out_);
 }
 
-int zlink::dealer_t::xsend_pipe (msg_t *msg_, pipe_t **pipe_out_)
+int zlink::dealer_t::xsend_pipe (
+  msg_t *msg_, pipe_t **pipe_out_,
+  pipe_message_admission_t *admission_out_)
 {
-    return sendpipe (msg_, pipe_out_);
+    return sendpipe (msg_, pipe_out_, admission_out_);
+}
+
+int zlink::dealer_t::xsend_routed (
+  const zlink_routing_id_t *target_rid_, msg_t *msg_,
+  uint64_t *connection_id_out_, uint64_t expected_connection_id_,
+  pipe_t **pipe_out_, uint64_t expected_transport_pair_id_,
+  uint64_t expected_transport_pair_generation_,
+  pipe_message_admission_t *admission_out_)
+{
+    if (admission_out_)
+        *admission_out_ = pipe_message_admission_invalid;
+    if (connection_id_out_)
+        *connection_id_out_ = 0;
+    if (pipe_out_)
+        *pipe_out_ = NULL;
+    if (!target_rid_ || expected_transport_pair_id_ == 0
+        || expected_transport_pair_generation_ == 0) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    pipe_t *pipe = _lb.find_connected_pipe (
+      target_rid_->data, target_rid_->size, expected_transport_pair_id_,
+      expected_transport_pair_generation_);
+    if (!pipe || !transport_pair_application_ready (pipe)) {
+        errno = EHOSTUNREACH;
+        return -1;
+    }
+    const uint64_t connection_id = pipe->get_transport_connection_id ();
+    if (expected_connection_id_ != 0
+        && connection_id != expected_connection_id_) {
+        errno = EHOSTUNREACH;
+        return -1;
+    }
+
+    if (connection_id_out_)
+        *connection_id_out_ = connection_id;
+    if (pipe_out_)
+        *pipe_out_ = pipe;
+    return sendpipe_to (
+      pipe, msg_,
+      (msg_->flags () & msg_t::more) != 0 ? ZLINK_SNDMORE : 0,
+      admission_out_);
+}
+
+int zlink::dealer_t::xselect_routed_submit_target (
+  const zlink_routing_id_t *router_rid_or_null_,
+  zlink_routed_submit_target_t *target_out_)
+{
+    if (router_rid_or_null_ || !target_out_) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    pipe_t *selected = NULL;
+    const int rc = _lb.select_connected_pipe (
+      &selected,
+      [] (pipe_t *pipe_, void *userdata_) -> bool {
+          dealer_t *dealer = static_cast<dealer_t *> (userdata_);
+          return dealer && pipe_ && pipe_->get_routing_id ().size () != 0
+                 && dealer->transport_pair_application_ready (pipe_);
+      },
+      this);
+    if (rc != 0)
+        return -1;
+
+    const blob_t &routing_id = selected->get_routing_id ();
+    copy_routing_id_from_bytes (routing_id.data (), routing_id.size (),
+                                &target_out_->peer_rid);
+    target_out_->transport_pair_id = selected->get_transport_pair_id ();
+    target_out_->transport_pair_generation =
+      selected->get_transport_pair_generation ();
+    return 0;
 }
 
 int zlink::dealer_t::xrecv (msg_t *msg_)
@@ -146,9 +209,22 @@ int zlink::dealer_t::xrecv (msg_t *msg_)
     return recvpipe (msg_, &pipe);
 }
 
+int zlink::dealer_t::xrecv_retained (msg_t *msg_,
+                                     retained_credit_token_t *token_out_)
+{
+    pipe_t *pipe = NULL;
+    return recvpipe_retained (msg_, &pipe, token_out_);
+}
+
 int zlink::dealer_t::xrecv_pipe (msg_t *msg_, pipe_t **pipe_out_)
 {
     return recvpipe (msg_, pipe_out_);
+}
+
+int zlink::dealer_t::xrecv_pipe_retained (
+  msg_t *msg_, pipe_t **pipe_out_, retained_credit_token_t *token_out_)
+{
+    return recvpipe_retained (msg_, pipe_out_, token_out_);
 }
 
 bool zlink::dealer_t::xhas_in ()
@@ -197,14 +273,22 @@ void zlink::dealer_t::xpipe_terminated (pipe_t *pipe_)
     _lb.pipe_terminated (pipe_);
 }
 
-int zlink::dealer_t::sendpipe (msg_t *msg_, pipe_t **pipe_)
+int zlink::dealer_t::sendpipe (
+  msg_t *msg_, pipe_t **pipe_,
+  pipe_message_admission_t *admission_out_)
 {
-    return _lb.sendpipe (msg_, pipe_);
+    return _lb.sendpipe (msg_, pipe_, admission_out_);
 }
 
 int zlink::dealer_t::recvpipe (msg_t *msg_, pipe_t **pipe_)
 {
     return _fq.recvpipe (msg_, pipe_);
+}
+
+int zlink::dealer_t::recvpipe_retained (
+  msg_t *msg_, pipe_t **pipe_, retained_credit_token_t *token_out_)
+{
+    return _fq.recvpipe_retained (msg_, pipe_, token_out_);
 }
 
 int zlink::dealer_t::xsocket_msg_dispatch (msg_t *msg_, pipe_t *pipe_)

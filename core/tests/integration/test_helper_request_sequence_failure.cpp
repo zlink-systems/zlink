@@ -150,12 +150,22 @@ void test_router_request_part_failure_discards_pending_sequence_and_allows_fresh
     peer_a.size = 5;
 
     reply_probe_t *failed_probe = new reply_probe_t ();
+    zlink_msg_t invalid_first_part;
+    init_part (&invalid_first_part, "invalid-multipart-first");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_INVALID_ARGUMENT,
+      zlink_router_request_part (client, &peer_a, &invalid_first_part,
+                                 static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE,
+                                 3000, &capture_reply, failed_probe));
+    TEST_ASSERT_EQUAL_INT (EINVAL, zlink_errno ());
+    TEST_ASSERT_FALSE (wait_for_reply (failed_probe, 50));
+
     zlink_msg_t first_part;
     init_part (&first_part, "multipart-first");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_router_request_part (client, &peer_a, &first_part, static_cast<zlink_send_flags_t> (0),
-                                 ZLINK_PART_MORE, 3000, &capture_reply, failed_probe));
+                                 ZLINK_PART_MORE, 0, NULL, NULL));
 
     zlink_msg_t final_part;
     init_part (&final_part, "multipart-final");
@@ -194,12 +204,98 @@ void test_router_request_part_failure_discards_pending_sequence_and_allows_fresh
     test_context_socket_close_zero_linger (client);
 }
 
+void test_router_dontwait_final_failure_leaves_no_request_or_wire_state ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_NOT_NULL (router);
+
+    const int mandatory = 1;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_router_option (router, ZLINK_ROUTER_OPT_MANDATORY, &mandatory,
+                              sizeof (mandatory)));
+
+    zlink_routing_id_t peer;
+    memset (&peer, 0, sizeof (peer));
+    memcpy (peer.data, "missing", 7);
+    peer.size = 7;
+
+    reply_probe_t probe;
+    zlink_msg_t part;
+    init_part (&part, "not-published");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_NOT_CONNECTED,
+      zlink_router_request_part (router, &peer, &part, ZLINK_SEND_FLAGS_DONTWAIT,
+                                 ZLINK_PART_FINAL, 1, &capture_reply, &probe));
+    TEST_ASSERT_EQUAL_INT (EHOSTUNREACH, zlink_errno ());
+
+    msleep (20);
+    TEST_ASSERT_FALSE (wait_for_reply_with_router_progress (router, &probe, 100));
+    {
+        std::lock_guard<std::mutex> lock (probe.mutex);
+        TEST_ASSERT_FALSE (probe.done);
+        TEST_ASSERT_EQUAL_INT (0, probe.callback_count);
+    }
+
+    test_context_socket_close_zero_linger (router);
+}
+
+void test_router_dontwait_accepted_request_times_out_once ()
+{
+    void *client = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *server = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_NOT_NULL (client);
+    TEST_ASSERT_NOT_NULL (server);
+
+    const int mandatory = 1;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_router_option (client, ZLINK_ROUTER_OPT_MANDATORY, &mandatory,
+                              sizeof (mandatory)));
+    set_router_id_and_connect_target (client, "client-dw", "server-dw");
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (server, "server-dw", 9));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, "inproc://helper-request-dontwait"));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, "inproc://helper-request-dontwait"));
+    msleep (SETTLE_TIME);
+
+    zlink_routing_id_t peer;
+    memset (&peer, 0, sizeof (peer));
+    memcpy (peer.data, "server-dw", 9);
+    peer.size = 9;
+
+    reply_probe_t probe;
+    zlink_msg_t part;
+    init_part (&part, "accepted-dontwait");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_router_request_part (client, &peer, &part, ZLINK_SEND_FLAGS_DONTWAIT,
+                                 ZLINK_PART_FINAL, 20, &capture_reply, &probe));
+    wait_for_request_from_router (server, "accepted-dontwait");
+
+    TEST_ASSERT_TRUE (wait_for_reply_with_router_progress (client, &probe, 1000));
+    {
+        std::lock_guard<std::mutex> lock (probe.mutex);
+        TEST_ASSERT_EQUAL_INT (1, probe.callback_count);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_TIMED_OUT, probe.result);
+    }
+
+    msleep (20);
+    (void) wait_for_reply_with_router_progress (client, &probe, 50);
+    {
+        std::lock_guard<std::mutex> lock (probe.mutex);
+        TEST_ASSERT_EQUAL_INT (1, probe.callback_count);
+    }
+
+    test_context_socket_close_zero_linger (server);
+    test_context_socket_close_zero_linger (client);
+}
+
 int main (void)
 {
     setup_test_environment (120);
 
     UNITY_BEGIN ();
     RUN_TEST (test_router_request_part_failure_discards_pending_sequence_and_allows_fresh_request);
+    RUN_TEST (test_router_dontwait_final_failure_leaves_no_request_or_wire_state);
+    RUN_TEST (test_router_dontwait_accepted_request_times_out_once);
     const int rc = UNITY_END ();
     fflush (NULL);
     std::_Exit (rc);

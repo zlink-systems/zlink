@@ -49,6 +49,11 @@ int zlink::socket_base_t::monitor_snapshot (zlink_monitor_status_t *out_)
     out_->detail_flags =
       ZLINK_MONITOR_STATUS_DETAIL_SND_PENDING_MSGS | ZLINK_MONITOR_STATUS_DETAIL_RCV_PENDING_MSGS
       | ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUDGET | ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUFFERS;
+    out_->auto_hwm_deferred_sndhwm_bytes = 0;
+    out_->auto_hwm_deferred_rcvhwm_bytes = 0;
+    out_->auto_hwm_deferred_sndhwm_valid = 0;
+    out_->auto_hwm_deferred_rcvhwm_valid = 0;
+    bool application_pipe_seen = false;
     {
         scoped_lock_t lock (monitor_runtime ().sync);
         if (monitor_ready_count () > 0)
@@ -56,6 +61,10 @@ int zlink::socket_base_t::monitor_snapshot (zlink_monitor_status_t *out_)
 
         for (size_t i = 0, size = endpoint_runtime ().attached_pipe_count (); i != size; ++i) {
             pipe_t *pipe = endpoint_runtime ().attached_pipe (i);
+            if (!pipe
+                || pipe->get_transport_lane () == transport_lane_completion)
+                continue;
+            application_pipe_seen = true;
             if (!add_snapshot_counter (
                   &out_->snd_pending_msgs, pipe->get_snd_pending_msgs ())
                 || !add_snapshot_counter (
@@ -72,27 +81,47 @@ int zlink::socket_base_t::monitor_snapshot (zlink_monitor_status_t *out_)
             out_->oversize_message_admission_max_bytes =
               std::max (out_->oversize_message_admission_max_bytes,
                         pipe->get_oversize_message_admission_max_bytes ());
+
+            const uint64_t planned_send = pipe->planned_out_hwm ();
+            const uint64_t planned_receive = pipe->planned_in_hwm ();
+            const uint64_t applied_send = pipe->applied_out_hwm ();
+            const uint64_t applied_receive = pipe->applied_in_hwm ();
+            out_->auto_hwm_planned_sndhwm_bytes = std::max (
+              out_->auto_hwm_planned_sndhwm_bytes, planned_send);
+            out_->auto_hwm_planned_rcvhwm_bytes = std::max (
+              out_->auto_hwm_planned_rcvhwm_bytes, planned_receive);
+            out_->auto_hwm_applied_sndhwm_bytes = std::max (
+              out_->auto_hwm_applied_sndhwm_bytes, applied_send);
+            out_->auto_hwm_applied_rcvhwm_bytes = std::max (
+              out_->auto_hwm_applied_rcvhwm_bytes, applied_receive);
+            if (planned_send != applied_send) {
+                out_->auto_hwm_deferred_sndhwm_valid = 1;
+                out_->auto_hwm_deferred_sndhwm_bytes =
+                  out_->auto_hwm_deferred_sndhwm_bytes == 0
+                    ? planned_send
+                    : std::min (out_->auto_hwm_deferred_sndhwm_bytes,
+                                planned_send);
+            }
+            if (planned_receive != applied_receive) {
+                out_->auto_hwm_deferred_rcvhwm_valid = 1;
+                out_->auto_hwm_deferred_rcvhwm_bytes =
+                  out_->auto_hwm_deferred_rcvhwm_bytes == 0
+                    ? planned_receive
+                    : std::min (out_->auto_hwm_deferred_rcvhwm_bytes,
+                                planned_receive);
+            }
         }
     }
     out_->auto_hwm_enabled = _auto_hwm_context_plan.enabled ? 1u : 0u;
     out_->auto_hwm_profile = static_cast<uint32_t> (_auto_hwm_context_plan.profile);
     out_->auto_hwm_role = static_cast<uint32_t> (_auto_hwm_socket_plan.role);
     out_->auto_hwm_policy_class = static_cast<uint32_t> (_auto_hwm_socket_plan.policy_class);
-    out_->auto_hwm_unit_budget_bytes = _auto_hwm_socket_plan.unit_budget_bytes;
-    out_->auto_hwm_size_cap = _auto_hwm_socket_plan.size_cap;
-    out_->auto_hwm_socket_message_slots = _auto_hwm_socket_plan.socket_message_slots;
-    out_->auto_hwm_connection_bucket_enabled =
-      _auto_hwm_socket_plan.connection_bucket_enabled ? 1u : 0u;
-    out_->auto_hwm_connection_bucket_count = _auto_hwm_socket_plan.connection_bucket_count;
-    out_->auto_hwm_connection_bucket_index = _auto_hwm_socket_plan.connection_bucket_index;
-    out_->auto_hwm_connection_bucket_hwm_4k = _auto_hwm_socket_plan.connection_bucket_hwm_4k;
-    out_->auto_hwm_connection_bucket_hysteresis_retained =
-      _auto_hwm_socket_plan.connection_bucket_hysteresis_retained ? 1u : 0u;
-    out_->auto_hwm_effective_message_bytes = _auto_hwm_socket_plan.effective_message_bytes;
-    out_->auto_hwm_planned_sndhwm_bytes = _auto_hwm_socket_plan.sndhwm;
-    out_->auto_hwm_planned_rcvhwm_bytes = _auto_hwm_socket_plan.rcvhwm;
-    out_->auto_hwm_applied_sndhwm_bytes = options.sndhwm;
-    out_->auto_hwm_applied_rcvhwm_bytes = options.rcvhwm;
+    if (!application_pipe_seen) {
+        out_->auto_hwm_planned_sndhwm_bytes = _auto_hwm_socket_plan.sndhwm;
+        out_->auto_hwm_planned_rcvhwm_bytes = _auto_hwm_socket_plan.rcvhwm;
+        out_->auto_hwm_applied_sndhwm_bytes = options.sndhwm;
+        out_->auto_hwm_applied_rcvhwm_bytes = options.rcvhwm;
+    }
     out_->auto_hwm_effective_sndbuf = options.sndbuf;
     out_->auto_hwm_effective_rcvbuf = options.rcvbuf;
     out_->auto_hwm_last_recalc_ms = _auto_hwm_last_recalc_ms;
@@ -100,13 +129,9 @@ int zlink::socket_base_t::monitor_snapshot (zlink_monitor_status_t *out_)
     out_->auto_hwm_send_blocked_ratio_ppm = compute_blocked_ratio_ppm_local (
       _auto_hwm_send_attempts.load (std::memory_order_relaxed),
       _auto_hwm_send_blocked_attempts.load (std::memory_order_relaxed));
-    out_->auto_hwm_deferred_sndhwm_bytes = _auto_hwm_deferred_sndhwm;
-    out_->auto_hwm_deferred_rcvhwm_bytes = _auto_hwm_deferred_rcvhwm;
-    out_->auto_hwm_deferred_sndhwm_valid =
-      _auto_hwm_deferred_sndhwm_valid ? 1u : 0u;
-    out_->auto_hwm_deferred_rcvhwm_valid =
-      _auto_hwm_deferred_rcvhwm_valid ? 1u : 0u;
     out_->minimum_core_message_charge_bytes = sizeof (msg_t);
+    out_->snd_pending_bytes = out_->snd_bytes_in_flight;
+    out_->rcv_pending_bytes = out_->rcv_bytes_in_flight;
 
     return 0;
 }
@@ -160,7 +185,8 @@ void zlink::socket_base_t::snapshot_attached_pipes (std::vector<pipe_t *> *out_)
 int zlink::socket_base_t::monitor (const char *endpoint_,
                                    uint64_t events_,
                                    int event_version_,
-                                   int type_)
+                                   int type_,
+                                   uint64_t monitor_hwm_bytes_)
 {
     monitor_runtime_t &monitor = monitor_runtime ();
     scoped_lock_t lock (monitor.sync);
@@ -199,31 +225,43 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
 
     monitor.events = events_;
     monitor.lossy = event_version_ <= 3;
-    lifecycle_coordinator ().set_monitor_async_mailbox_owned (false);
     monitor.socket = static_cast<void *> (get_ctx ()->create_socket (type_));
     if (monitor.socket == NULL)
         return -1;
 
-    int linger = 0;
-    int rc = static_cast<socket_base_t *> (monitor.socket)
-               ->setsockopt (ZLINK_INTERNAL_OPT_LINGER, &linger, sizeof (linger));
-    if (rc == -1)
+    socket_base_t *monitor_socket = static_cast<socket_base_t *> (monitor.socket);
+    int rc =
+      monitor_socket->configure_internal_monitor_queue (monitor_hwm_bytes_);
+    if (rc == -1) {
         stop_monitor (false);
+        return -1;
+    }
+
+    int linger = 0;
+    rc = monitor_socket->setsockopt (ZLINK_INTERNAL_OPT_LINGER, &linger,
+                                     sizeof (linger));
+    if (rc == -1) {
+        stop_monitor (false);
+        return -1;
+    }
 
     // The monitor worker retries non-lossy deliveries in user space. Keep the
     // underlying PAIR socket non-blocking so shutdown can stop the worker even
     // if the peer disappears mid-send.
     const int sndtimeo = 0;
-    rc = static_cast<socket_base_t *> (monitor.socket)
-           ->setsockopt (ZLINK_INTERNAL_OPT_SNDTIMEO, &sndtimeo, sizeof (sndtimeo));
-    if (rc == -1)
+    rc = monitor_socket->setsockopt (ZLINK_INTERNAL_OPT_SNDTIMEO, &sndtimeo,
+                                     sizeof (sndtimeo));
+    if (rc == -1) {
         stop_monitor (false);
+        return -1;
+    }
 
     rc = zlink_bind (monitor.socket, endpoint_);
     if (rc == -1)
         stop_monitor (false);
     else {
-        monitor.reset_worker_state ();
+        monitor.reset_worker_state (monitor_hwm_bytes_,
+                                    socket_monitor_event_accounted_bytes ());
         control_runtime_t *runtime = get_ctx ()->control_runtime ();
         const uint64_t task_id =
           runtime ? runtime->add_periodic_task (&socket_base_t::monitor_task_main, this, 10, true)
@@ -234,7 +272,16 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
         }
         monitor.start_task (task_id);
         monitor.events_atomic.store (monitor.events, std::memory_order_release);
-
+        // A raw monitor is an independent consumer.  Once it is open, source
+        // connection commands must keep progressing even when the application
+        // is only polling or receiving from the monitor socket.  Reuse the
+        // socket-wide command owner also used by retained-credit processing;
+        // it remains active for the source socket lifetime, so closing one
+        // monitor cannot strand another asynchronous consumer.
+        if (ensure_async_command_processing () != 0) {
+            stop_monitor (false);
+            return -1;
+        }
     }
     return rc;
 }
@@ -546,16 +593,21 @@ void zlink::socket_base_t::pump_monitor_events ()
         bool delivered = true;
         if (monitor_socket)
             delivered = dispatch_monitor_event (monitor_socket, record);
-        if (!delivered && !monitor.lossy) {
+        // Admission to the worker queue transfers ownership of this record to
+        // the monitor runtime.  A transiently unready internal PAIR must not
+        // become a second loss point; lossy policy applies only when admitting
+        // later records to the bounded worker queue.
+        if (!delivered) {
             monitor.requeue_worker_event_front (record);
             break;
         }
+        monitor.complete_worker_event ();
     }
 }
 
 void zlink::socket_base_t::enqueue_monitor_event (const monitor_event_record_t &record_)
 {
-    monitor_runtime ().enqueue_worker_event (record_, static_cast<size_t> (monitor_queue_hwm));
+    monitor_runtime ().enqueue_worker_event (record_);
 }
 
 bool zlink::socket_base_t::build_monitor_event_record (
@@ -643,10 +695,6 @@ zlink::socket_base_t::detach_monitor_socket (bool send_monitor_stopped_event_)
         monitor.events_atomic.store (0, std::memory_order_release);
         socket_base_t *monitor_socket = static_cast<socket_base_t *> (monitor.socket);
         bool can_emit_monitor_stopped = false;
-        const bool stop_async_mailbox = lifecycle_coordinator ().is_monitor_async_mailbox_owned ()
-                                        && !socket_msg_dispatch_active () && !sub_dispatch_active ()
-                                        && !xpub_dispatch_active () && !stream_dispatch_active ();
-
         if ((monitor.events & ZLINK_EVENT_MONITOR_STOPPED) && send_monitor_stopped_event_) {
             monitor_socket->process_commands (0, false);
             can_emit_monitor_stopped = monitor_socket->endpoint_runtime ().has_attached_pipes ();
@@ -669,11 +717,6 @@ zlink::socket_base_t::detach_monitor_socket (bool send_monitor_stopped_event_)
         monitor.socket = NULL;
         monitor.events = 0;
         monitor.lossy = true;
-        if (stop_async_mailbox) {
-            stop_async_mailbox_processing ();
-            wait_async_quiesced (10000);
-        }
-        lifecycle_coordinator ().set_monitor_async_mailbox_owned (false);
         return monitor_socket;
     }
     return NULL;

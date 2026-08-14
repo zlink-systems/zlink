@@ -38,6 +38,7 @@ void zlink::ctx_t::flush_pending_inproc_locked ()
 
 bool zlink::ctx_t::begin_shutdown_locked (bool allow_fork_cleanup_)
 {
+    _physical_queue_registry.stop_retained_transfers ();
     if (_starting) {
         _terminating = true;
         return false;

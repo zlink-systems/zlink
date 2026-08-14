@@ -328,8 +328,11 @@ void zlink::xpub_t::mark_last_pipe_as_matching (pipe_t *pipe_, xpub_t *self_)
         self_->_dist.match (pipe_);
 }
 
-int zlink::xpub_t::xsend (msg_t *msg_)
+int zlink::xpub_t::xsend (
+  msg_t *msg_, pipe_message_admission_t *admission_out_)
 {
+    if (admission_out_)
+        *admission_out_ = pipe_message_admission_ready;
     const bool msg_more = (msg_->flags () & msg_t::more) != 0;
 
     if (_send_all_data && !_manual && !options.invert_matching) {
@@ -343,6 +346,7 @@ int zlink::xpub_t::xsend (msg_t *msg_)
           admission == pipe_message_admission_ready
           || (_lossy
               && (admission == pipe_message_admission_hwm_full
+                  || admission == pipe_message_admission_transport_wait
                   || admission == pipe_message_admission_inactive));
         int rc = -1;
         if (admitted) {
@@ -350,8 +354,11 @@ int zlink::xpub_t::xsend (msg_t *msg_)
                 _more_send = msg_more;
                 rc = 0;
             }
-        } else
+        } else {
+            if (admission_out_)
+                *admission_out_ = admission;
             errno = admission == pipe_message_admission_too_large ? EMSGSIZE : EAGAIN;
+        }
         return rc;
     }
 
@@ -380,6 +387,7 @@ int zlink::xpub_t::xsend (msg_t *msg_)
       admission == pipe_message_admission_ready
       || (_lossy
           && (admission == pipe_message_admission_hwm_full
+              || admission == pipe_message_admission_transport_wait
               || admission == pipe_message_admission_inactive));
     int rc = -1; //  Assume we fail
     if (admitted) {
@@ -391,8 +399,11 @@ int zlink::xpub_t::xsend (msg_t *msg_)
             _more_send = msg_more;
             rc = 0; //  Yay, sent successfully
         }
-    } else
+    } else {
+        if (admission_out_)
+            *admission_out_ = admission;
         errno = admission == pipe_message_admission_too_large ? EMSGSIZE : EAGAIN;
+    }
     return rc;
 }
 

@@ -53,11 +53,7 @@ int zlink::ctx_t::set (int option_, const void *optval_, size_t optvallen_)
             break;
 
         case ZLINK_CTX_OPT_AUTO_HWM_PROFILE:
-            if (is_int
-                && (value == ZLINK_AUTO_HWM_PROFILE_COMPACT
-                    || value == ZLINK_AUTO_HWM_PROFILE_LOW_LATENCY
-                    || value == ZLINK_AUTO_HWM_PROFILE_BALANCED
-                    || value == ZLINK_AUTO_HWM_PROFILE_THROUGHPUT)) {
+            if (is_int && auto_hwm_valid_profile (value)) {
                 scoped_lock_t locker (_opt_sync);
                 _auto_hwm.set_profile (static_cast<zlink_auto_hwm_profile_t> (value));
                 refresh_auto_hwm = true;
@@ -65,12 +61,36 @@ int zlink::ctx_t::set (int option_, const void *optval_, size_t optvallen_)
             }
             break;
 
-        case ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES:
+        case ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES:
             if (optvallen_ == sizeof (uint64_t)) {
-                uint64_t msg_unit_bytes = 0;
-                memcpy (&msg_unit_bytes, optval_, sizeof (msg_unit_bytes));
+                uint64_t memory_limit_bytes = 0;
+                memcpy (&memory_limit_bytes, optval_, sizeof (memory_limit_bytes));
                 scoped_lock_t locker (_opt_sync);
-                _auto_hwm.set_msg_unit_bytes (msg_unit_bytes);
+                if (!_auto_hwm.set_memory_limit_bytes (memory_limit_bytes))
+                    break;
+                refresh_auto_hwm = true;
+                break;
+            }
+            break;
+
+        case ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES:
+            if (optvallen_ == sizeof (uint64_t)) {
+                uint64_t memory_limit_bytes = 0;
+                memcpy (&memory_limit_bytes, optval_, sizeof (memory_limit_bytes));
+                scoped_lock_t locker (_opt_sync);
+                _auto_hwm.set_runtime_memory_limit_bytes (memory_limit_bytes);
+                refresh_auto_hwm = true;
+                break;
+            }
+            break;
+
+        case ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES:
+            if (optvallen_ == sizeof (uint64_t)) {
+                uint64_t budget_bytes = 0;
+                memcpy (&budget_bytes, optval_, sizeof (budget_bytes));
+                scoped_lock_t locker (_opt_sync);
+                if (!_auto_hwm.set_core_budget_bytes (budget_bytes))
+                    break;
                 refresh_auto_hwm = true;
                 break;
             }
@@ -167,11 +187,29 @@ int zlink::ctx_t::get (int option_, void *optval_, const size_t *optvallen_)
             }
             break;
 
-        case ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES:
+        case ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES:
             if (*optvallen_ == sizeof (uint64_t)) {
                 scoped_lock_t locker (_opt_sync);
-                const uint64_t msg_unit_bytes = _auto_hwm.msg_unit_bytes ();
-                memcpy (optval_, &msg_unit_bytes, sizeof (msg_unit_bytes));
+                const uint64_t value = _auto_hwm.memory_limit_bytes ();
+                memcpy (optval_, &value, sizeof (value));
+                return 0;
+            }
+            break;
+
+        case ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES:
+            if (*optvallen_ == sizeof (uint64_t)) {
+                scoped_lock_t locker (_opt_sync);
+                const uint64_t value = _auto_hwm.runtime_memory_limit_bytes ();
+                memcpy (optval_, &value, sizeof (value));
+                return 0;
+            }
+            break;
+
+        case ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES:
+            if (*optvallen_ == sizeof (uint64_t)) {
+                scoped_lock_t locker (_opt_sync);
+                const uint64_t value = _auto_hwm.core_budget_bytes ();
+                memcpy (optval_, &value, sizeof (value));
                 return 0;
             }
             break;

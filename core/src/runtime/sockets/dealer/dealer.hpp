@@ -24,7 +24,9 @@ class dealer_t : public socket_base_t
     dealer_t (zlink::ctx_t *parent_, uint32_t tid_, int sid_);
     ~dealer_t () ZLINK_OVERRIDE;
 
-    int sendpipe_to (zlink::pipe_t *pipe_, zlink::msg_t *msg_, int flags_);
+    int sendpipe_to (
+      zlink::pipe_t *pipe_, zlink::msg_t *msg_, int flags_,
+      pipe_message_admission_t *admission_out_ = NULL);
 
   protected:
     //  Overrides of functions from socket_base_t.
@@ -33,10 +35,29 @@ class dealer_t : public socket_base_t
                        bool locally_initiated_) ZLINK_FINAL;
     int xsetsockopt (int option_, const void *optval_, size_t optvallen_) ZLINK_OVERRIDE;
     int xgetsockopt (int option_, void *optval_, size_t *optvallen_) ZLINK_OVERRIDE;
-    int xsend (zlink::msg_t *msg_) ZLINK_OVERRIDE;
-    int xsend_pipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_out_) ZLINK_OVERRIDE;
+    int xsend (zlink::msg_t *msg_,
+               pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
+    int xsend_pipe (
+      zlink::msg_t *msg_, zlink::pipe_t **pipe_out_,
+      pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
+    int xsend_routed (const zlink_routing_id_t *target_rid_,
+                      zlink::msg_t *msg_,
+                      uint64_t *connection_id_out_,
+                      uint64_t expected_connection_id_,
+                      zlink::pipe_t **pipe_out_,
+                      uint64_t expected_transport_pair_id_ = 0,
+                      uint64_t expected_transport_pair_generation_ = 0,
+                      pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
+    int xselect_routed_submit_target (
+      const zlink_routing_id_t *router_rid_or_null_,
+      zlink_routed_submit_target_t *target_out_) ZLINK_OVERRIDE;
     int xrecv (zlink::msg_t *msg_) ZLINK_OVERRIDE;
+    int xrecv_retained (zlink::msg_t *msg_,
+                        retained_credit_token_t *token_out_) ZLINK_OVERRIDE;
     int xrecv_pipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_out_) ZLINK_OVERRIDE;
+    int xrecv_pipe_retained (zlink::msg_t *msg_,
+                             zlink::pipe_t **pipe_out_,
+                             retained_credit_token_t *token_out_) ZLINK_OVERRIDE;
     bool xhas_in () ZLINK_OVERRIDE;
     bool xhas_out () ZLINK_OVERRIDE;
     int xrollback () ZLINK_OVERRIDE;
@@ -48,8 +69,11 @@ class dealer_t : public socket_base_t
     void xdispatch_io () ZLINK_OVERRIDE;
 
     //  Send and recv - knowing which pipe was used.
-    int sendpipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_);
+    int sendpipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_,
+                  pipe_message_admission_t *admission_out_ = NULL);
     int recvpipe (zlink::msg_t *msg_, zlink::pipe_t **pipe_);
+    int recvpipe_retained (zlink::msg_t *msg_, zlink::pipe_t **pipe_,
+                           retained_credit_token_t *token_out_);
 
   private:
     int apply_peer_weight (pipe_t *pipe_, uint32_t weight_) ZLINK_OVERRIDE;

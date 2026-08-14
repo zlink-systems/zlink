@@ -146,13 +146,39 @@ int drain_controls (zlink::request_completion::queue_state_t *state_,
 
 int zlink::request_completion::drain (queue_state_t *state_, void *owner_handle_)
 {
+    if (!state_ || !owner_handle_) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    std::deque<control_t> controls;
+    std::unique_lock<std::mutex> lock (state_->mutex);
+    if (state_->controls.empty ()) {
+        errno = 0;
+        return 0;
+    }
+
     socket_callback_scope_t callback_scope (
       static_cast<socket_base_t *> (owner_handle_));
     if (!callback_scope.acquired ()) {
         errno = ESHUTDOWN;
         return -1;
     }
-    return drain_controls (state_, owner_handle_);
+
+    state_->owner_thread = std::this_thread::get_id ();
+    state_->owner_thread_valid = true;
+    controls.swap (state_->controls);
+    lock.unlock ();
+
+    for (std::deque<control_t>::iterator it = controls.begin ();
+         it != controls.end (); ++it) {
+        invoke_callback (owner_handle_, it->handler, it->errnum, NULL, 0,
+                         it->userdata);
+        release_reservation (state_);
+    }
+
+    errno = 0;
+    return static_cast<int> (controls.size ());
 }
 
 int zlink::request_completion::drain_while_closing (queue_state_t *state_,

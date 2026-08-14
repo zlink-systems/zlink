@@ -12,6 +12,7 @@
 #include "core/recv_internal.hpp"
 #include "core/recv_tls_view.hpp"
 #include "core/scoped_msg.hpp"
+#include "core/ctx_physical_queue_registry.hpp"
 
 namespace
 {
@@ -38,7 +39,8 @@ int recv_socket_subscribe_parts (socket_handle_t handle_,
                                  size_t *part_count_out_,
                                  char *topic_id_out_,
                                  size_t *topic_id_len_out_,
-                                 zlink_send_flags_t flags_)
+                                 zlink_send_flags_t flags_,
+                                 std::vector<zlink::retained_credit_token_t> *credits_out_)
 {
     if (!handle_.socket) {
         errno = EFAULT;
@@ -68,9 +70,21 @@ int recv_socket_subscribe_parts (socket_handle_t handle_,
     }
 
     zlink::scoped_msg_t topic_frame;
-    if (handle_.socket->recv (reinterpret_cast<zlink::msg_t *> (topic_frame.get ()), flags_) < 0) {
+    zlink::retained_credit_token_t topic_credit;
+    const int topic_rc = credits_out_
+                           ? handle_.socket->recv_retained (
+                               reinterpret_cast<zlink::msg_t *> (
+                                 topic_frame.get ()),
+                               &topic_credit, flags_)
+                           : handle_.socket->recv (
+                               reinterpret_cast<zlink::msg_t *> (
+                                 topic_frame.get ()),
+                               flags_);
+    if (topic_rc < 0) {
         return -1;
     }
+    // Topic metadata is consumed by Core and is never caller-visible.
+    topic_credit.reset ();
 
     if (zlink::copy_bytes_to_sized_output (
           static_cast<const char *> (zlink_msg_data (topic_frame.get ())),
@@ -84,13 +98,56 @@ int recv_socket_subscribe_parts (socket_handle_t handle_,
         return 0;
     }
 
-    if (zlink::recv_followup_msg_socket (handle_.socket, first_slot) < 0) {
+    zlink::retained_credit_token_t first_credit;
+    const int first_rc = credits_out_
+                           ? zlink::recv_followup_msg_socket_retained (
+                               handle_.socket, first_slot, &first_credit)
+                           : zlink::recv_followup_msg_socket (
+                               handle_.socket, first_slot);
+    if (first_rc < 0) {
         zlink::recv_tls_view::abort ();
         return -1;
     }
 
-    if (!zlink::msg_frame_has_more (*first_slot))
-        return zlink::recv_tls_view::commit_reserved_single (parts_out_, part_count_out_);
+    if (!zlink::msg_frame_has_more (*first_slot)) {
+        const int commit_rc = zlink::recv_tls_view::commit_reserved_single (
+          parts_out_, part_count_out_);
+        if (commit_rc == 0 && credits_out_)
+            credits_out_->push_back (std::move (first_credit));
+        return commit_rc;
+    }
+
+    if (credits_out_) {
+        if (zlink::recv_tls_view::reserve_first_slot () != 0) {
+            zlink::recv_tls_view::abort ();
+            return -1;
+        }
+        credits_out_->push_back (std::move (first_credit));
+        while (true) {
+            zlink_msg_t next;
+            zlink_msg_init (&next);
+            zlink::retained_credit_token_t next_credit;
+            if (zlink::recv_followup_msg_socket_retained (
+                  handle_.socket, &next, &next_credit)
+                < 0) {
+                zlink_msg_close (&next);
+                zlink::recv_tls_view::abort ();
+                credits_out_->clear ();
+                return -1;
+            }
+            const bool more = zlink::msg_frame_has_more (next);
+            if (zlink::recv_tls_view::push (&next) != 0) {
+                zlink_msg_close (&next);
+                zlink::recv_tls_view::abort ();
+                credits_out_->clear ();
+                return -1;
+            }
+            credits_out_->push_back (std::move (next_credit));
+            if (!more)
+                return zlink::recv_tls_view::commit (parts_out_,
+                                                     part_count_out_);
+        }
+    }
 
     return zlink::export_reserved_followup_msg_sequence (handle_.socket, parts_out_,
                                                          part_count_out_, false);
@@ -100,7 +157,8 @@ int recv_socket_parts (socket_handle_t handle_,
                        zlink_routing_id_t *source_rid_out_,
                        zlink_msg_t **parts_out_,
                        size_t *part_count_out_,
-                       zlink_send_flags_t flags_)
+                       zlink_send_flags_t flags_,
+                       std::vector<zlink::retained_credit_token_t> *credits_out_)
 {
     // Hot path: PAIR/DEALER single-part public recv reaches here on every
     // message in with_zmq single. Keep single-part export lean and do not
@@ -143,11 +201,58 @@ int recv_socket_parts (socket_handle_t handle_,
             return -1;
         }
 
-        if (handle_.socket->recv (reinterpret_cast<zlink::msg_t *> (first_slot), flags_) < 0)
+        zlink::retained_credit_token_t first_credit;
+        const int recv_rc = credits_out_
+                              ? handle_.socket->recv_retained (
+                                  reinterpret_cast<zlink::msg_t *> (
+                                    first_slot),
+                                  &first_credit, flags_)
+                              : handle_.socket->recv (
+                                  reinterpret_cast<zlink::msg_t *> (
+                                    first_slot),
+                                  flags_);
+        if (recv_rc < 0)
             return -1;
 
-        if (!zlink::msg_frame_has_more (*first_slot))
-            return zlink::recv_tls_view::commit_reserved_single (parts_out_, part_count_out_);
+        if (!zlink::msg_frame_has_more (*first_slot)) {
+            const int commit_rc = zlink::recv_tls_view::commit_reserved_single (
+              parts_out_, part_count_out_);
+            if (commit_rc == 0 && credits_out_)
+                credits_out_->push_back (std::move (first_credit));
+            return commit_rc;
+        }
+
+        if (credits_out_) {
+            if (zlink::recv_tls_view::reserve_first_slot () != 0) {
+                zlink::recv_tls_view::abort ();
+                return -1;
+            }
+            credits_out_->push_back (std::move (first_credit));
+            while (true) {
+                zlink_msg_t next;
+                zlink_msg_init (&next);
+                zlink::retained_credit_token_t next_credit;
+                if (zlink::recv_followup_msg_socket_retained (
+                      handle_.socket, &next, &next_credit)
+                    < 0) {
+                    zlink_msg_close (&next);
+                    zlink::recv_tls_view::abort ();
+                    credits_out_->clear ();
+                    return -1;
+                }
+                const bool more = zlink::msg_frame_has_more (next);
+                if (zlink::recv_tls_view::push (&next) != 0) {
+                    zlink_msg_close (&next);
+                    zlink::recv_tls_view::abort ();
+                    credits_out_->clear ();
+                    return -1;
+                }
+                credits_out_->push_back (std::move (next_credit));
+                if (!more)
+                    return zlink::recv_tls_view::commit (parts_out_,
+                                                         part_count_out_);
+            }
+        }
 
         return zlink::export_reserved_followup_msg_sequence (handle_.socket, parts_out_,
                                                              part_count_out_, false);
@@ -159,12 +264,28 @@ int recv_socket_parts (socket_handle_t handle_,
 
     zlink_msg_t first;
     zlink_msg_init (&first);
-    if (type == ZLINK_CORE_SOCKET_ROUTER && source_rid_out_) {
+    zlink::retained_credit_token_t first_credit;
+    if (credits_out_ && type == ZLINK_CORE_SOCKET_ROUTER
+        && source_rid_out_) {
+        if (handle_.socket->recv_routed_retained (
+              reinterpret_cast<zlink::msg_t *> (&first), source_rid_out_,
+              &first_credit, flags_)
+            < 0) {
+            zlink_msg_close (&first);
+            return -1;
+        }
+    } else if (type == ZLINK_CORE_SOCKET_ROUTER && source_rid_out_) {
         if (zlink::recv_msg_routed_socket (handle_.socket, &first, source_rid_out_, flags_) < 0) {
             zlink_msg_close (&first);
             return -1;
         }
-    } else if (zlink::recv_msg_socket (handle_.socket, type, &first, flags_) < 0) {
+    } else if (credits_out_
+                 ? zlink::recv_msg_socket_retained (
+                     handle_.socket, type, &first, &first_credit, flags_)
+                     < 0
+                 : zlink::recv_msg_socket (
+                     handle_.socket, type, &first, flags_)
+                     < 0) {
         zlink_msg_close (&first);
         return -1;
     }
@@ -178,7 +299,11 @@ int recv_socket_parts (socket_handle_t handle_,
             errno = 0;
             return 0;
         }
-        return zlink::recv_tls_view::export_single (&first, parts_out_, part_count_out_);
+        const int export_rc = zlink::recv_tls_view::export_single (
+          &first, parts_out_, part_count_out_);
+        if (export_rc == 0 && credits_out_)
+            credits_out_->push_back (std::move (first_credit));
+        return export_rc;
     }
 
     if (strip_recv_routing_id) {
@@ -190,17 +315,50 @@ int recv_socket_parts (socket_handle_t handle_,
 
             zlink_msg_t payload;
             zlink_msg_init (&payload);
-            if (zlink::recv_followup_msg_socket (handle_.socket, &payload) < 0) {
+            zlink::retained_credit_token_t payload_credit;
+            const int payload_rc = credits_out_
+                                     ? zlink::recv_followup_msg_socket_retained (
+                                         handle_.socket, &payload,
+                                         &payload_credit)
+                                     : zlink::recv_followup_msg_socket (
+                                         handle_.socket, &payload);
+            if (payload_rc < 0) {
                 zlink_msg_close (&payload);
                 return -1;
             }
-            return zlink::export_payload_msg_sequence (handle_.socket, &payload, parts_out_,
-                                                       part_count_out_, true);
+            if (credits_out_ && !zlink::msg_frame_has_more (payload)) {
+                const int export_rc = zlink::recv_tls_view::export_single (
+                  &payload, parts_out_, part_count_out_);
+                if (export_rc == 0)
+                    credits_out_->push_back (std::move (payload_credit));
+                return export_rc;
+            }
+            if (credits_out_) {
+                payload_credit.reset ();
+                zlink_msg_close (&payload);
+                errno = EPROTO;
+                return -1;
+            }
+            return zlink::export_payload_msg_sequence (
+              handle_.socket, &payload, parts_out_, part_count_out_, true);
         }
     }
 
-    return zlink::export_payload_msg_sequence (handle_.socket, &first, parts_out_, part_count_out_,
-                                               true);
+    if (credits_out_ && !zlink::msg_frame_has_more (first)) {
+        const int export_rc = zlink::recv_tls_view::export_single (
+          &first, parts_out_, part_count_out_);
+        if (export_rc == 0)
+            credits_out_->push_back (std::move (first_credit));
+        return export_rc;
+    }
+    if (credits_out_) {
+        // Routed multipart is consumed by typed ROUTER receive, not this raw
+        // helper. STREAM payloads are single-frame by contract.
+        errno = ENOTSUP;
+        return -1;
+    }
+    return zlink::export_payload_msg_sequence (
+      handle_.socket, &first, parts_out_, part_count_out_, true);
 }
 
 } // namespace
@@ -302,7 +460,7 @@ extern "C" int zlink_socket_recv_internal (void *socket_,
     socket_handle_t handle = as_socket_handle (socket_);
     if (!handle.socket)
         return -1;
-    return recv_socket_parts (handle, source_rid_out_, parts_out_, part_count_out_, flags_);
+    return recv_socket_parts (handle, source_rid_out_, parts_out_, part_count_out_, flags_, NULL);
 }
 
 extern "C" int zlink_socket_subscribe_recv_internal (void *socket_,
@@ -317,5 +475,35 @@ extern "C" int zlink_socket_subscribe_recv_internal (void *socket_,
     if (!handle.socket)
         return -1;
     return recv_socket_subscribe_parts (handle, source_rid_out_, parts_out_, part_count_out_,
-                                        topic_id_out_, topic_id_len_out_, flags_);
+                                        topic_id_out_, topic_id_len_out_, flags_, NULL);
+}
+
+int zlink::socket_recv_internal_retained (
+  void *socket_, zlink_routing_id_t *source_rid_out_,
+  zlink_msg_t **parts_out_, size_t *part_count_out_,
+  zlink_send_flags_t flags_,
+  std::vector<retained_credit_token_t> *credits_out_)
+{
+    socket_handle_t handle = as_socket_handle (socket_);
+    if (!handle.socket || !credits_out_)
+        return -1;
+    credits_out_->clear ();
+    return recv_socket_parts (handle, source_rid_out_, parts_out_,
+                              part_count_out_, flags_, credits_out_);
+}
+
+int zlink::socket_subscribe_recv_internal_retained (
+  void *socket_, zlink_routing_id_t *source_rid_out_,
+  zlink_msg_t **parts_out_, size_t *part_count_out_,
+  char *topic_id_out_, size_t *topic_id_len_out_,
+  zlink_send_flags_t flags_,
+  std::vector<retained_credit_token_t> *credits_out_)
+{
+    socket_handle_t handle = as_socket_handle (socket_);
+    if (!handle.socket || !credits_out_)
+        return -1;
+    credits_out_->clear ();
+    return recv_socket_subscribe_parts (
+      handle, source_rid_out_, parts_out_, part_count_out_, topic_id_out_,
+      topic_id_len_out_, flags_, credits_out_);
 }

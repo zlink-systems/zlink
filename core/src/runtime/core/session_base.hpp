@@ -17,6 +17,7 @@ namespace zlink
 class io_thread_t;
 struct i_engine;
 struct address_t;
+class zmp_decoder_t;
 
 class session_base_t : public own_t, public io_object_t, public i_pipe_events
 {
@@ -51,6 +52,9 @@ class session_base_t : public own_t, public io_object_t, public i_pipe_events
     //  Delivers a message. Returns 0 if successful; -1 otherwise.
     //  The function takes ownership of the message.
     virtual int push_msg (msg_t *msg_);
+    int push_msg_with_decoder_reservation (msg_t *msg_,
+                                           void **reservation_);
+    void configure_zmp_decoder (zmp_decoder_t *decoder_);
 
     //  Fetches a message. Returns 0 if successful; -1 otherwise.
     //  The caller is responsible for freeing the message when no
@@ -78,6 +82,12 @@ class session_base_t : public own_t, public io_object_t, public i_pipe_events
     ~session_base_t () ZLINK_OVERRIDE;
 
   private:
+    static int reserve_decoder_frame (void *subject_,
+                                      uint32_t payload_bytes_,
+                                      unsigned char msg_flags_,
+                                      void **reservation_out_);
+    static void release_decoder_frame (void *subject_, void *reservation_);
+    int push_msg_internal (msg_t *msg_, void **reservation_);
     void start_connecting (bool wait_);
 
     void reconnect ();

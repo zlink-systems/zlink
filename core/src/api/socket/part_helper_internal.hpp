@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "sockets/common/socket_runtime.hpp"
+#include "core/ctx_physical_queue_registry.hpp"
 #include <zlink.h>
 
 namespace zlink
@@ -28,7 +29,6 @@ enum send_family_t
     send_family_router_request,
     send_family_dealer_request,
     send_family_router_reply,
-    send_family_router_completion_control,
     send_family_dealer_request_frame,
     send_family_dealer_reply
 };
@@ -93,6 +93,7 @@ struct recv_sequence_state_t
     uint8_t message_type;
     std::string topic_id;
     std::vector<zlink_msg_t> buffered_parts;
+    std::vector<retained_credit_token_t> buffered_credits;
     size_t next_part_index;
 };
 
@@ -127,20 +128,26 @@ int stage_recv_sequence (const std::shared_ptr<handle_state_t> &state_,
                          uint64_t request_seq_,
                          zlink_msg_t *parts_,
                          size_t part_count_,
-                         std::thread::id owner_thread_);
+                         std::thread::id owner_thread_,
+                         std::vector<retained_credit_token_t> *credits_ = NULL);
 void set_recv_metadata (recv_sequence_state_t *recv_,
                         const zlink_routing_id_t *source_node_rid_,
                         uint64_t request_seq_);
 void set_recv_transport_pair (recv_sequence_state_t *recv_,
                                uint64_t transport_pair_id_,
                                uint64_t transport_pair_generation_);
-int buffer_recv_parts (recv_sequence_state_t *recv_, zlink_msg_t *parts_, size_t part_count_);
+int buffer_recv_parts (recv_sequence_state_t *recv_,
+                       zlink_msg_t *parts_,
+                       size_t part_count_,
+                       std::vector<retained_credit_token_t> *credits_ = NULL);
 int take_recv_part (recv_sequence_state_t *recv_,
                     zlink_msg_t *part_out_,
-                    zlink_part_flag_t *has_more_out_);
+                    zlink_part_flag_t *has_more_out_,
+                    retained_credit_token_t *credit_out_ = NULL);
 int take_recv_part (const std::shared_ptr<handle_state_t> &state_,
                     zlink_msg_t *part_out_,
-                    zlink_part_flag_t *has_more_out_);
+                    zlink_part_flag_t *has_more_out_,
+                    retained_credit_token_t *credit_out_ = NULL);
 void export_recv_metadata (const std::shared_ptr<handle_state_t> &state_,
                            const zlink_routing_id_t **source_node_rid_out_,
                            uint64_t *request_seq_out_);

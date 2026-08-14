@@ -28,6 +28,10 @@ void zlink::socket_base_t::finish_close_handoff (int handoff_timeout_ms_)
     lifecycle_coordinator ().complete_deferred_close_handoff (static_cast<mailbox_t *> (_mailbox),
                                                               handoff_timeout_ms_);
 
+    enqueue_all_routed_send_terminals (_ctx_terminated ? ETERM : ECANCELED);
+    dispatch_routed_send_ready_events (true);
+    static_cast<mailbox_t *> (_mailbox)->clear_signalers ();
+
     _tag = 0xdeadbeef;
     send_reap (this);
 }
@@ -79,6 +83,8 @@ int zlink::socket_base_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
         return -1;
     }
 
+    (void) enqueue_routed_send_ready (
+      match, ZLINK_ROUTED_SEND_TERMINAL, ENOTCONN);
     match->terminate (false);
     return 0;
 }
@@ -102,6 +108,8 @@ int zlink::socket_base_t::xterm_transport_pair (
             if (it->second.transport_pair_state)
                 it->second.transport_pair_state->disable_reconnect ();
         }
+        (void) enqueue_routed_send_ready (
+          pipe, ZLINK_ROUTED_SEND_TERMINAL, ENOTCONN);
         pipe->terminate (false);
         ++match_count;
     }
@@ -206,8 +214,14 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
 
     if (attach_application) {
         pipe_t *application = pair_id == 0 ? pipe_ : pair_application;
-        xattach_pipe (application, subscribe_to_all_,
-                      locally_initiated_ || application->is_locally_initiated ());
+        {
+            receive_runtime_t &receive = receive_runtime ();
+            scoped_lock_t receive_lock (receive.sync);
+            xattach_pipe (
+              application, subscribe_to_all_,
+              locally_initiated_ || application->is_locally_initiated ());
+            notify_receive_progress_locked ();
+        }
         if (dispatch_runtime ().send_recovery_pending () && transport_has_out ()) {
             dispatch_runtime ().mark_send_recovery_ready ();
             static_cast<mailbox_t *> (_mailbox)->signal ();
@@ -245,8 +259,12 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
                 notify_request_completion ();
             }
         }
-        if (ready_application && ready_application->check_read ())
+        if (ready_application && ready_application->check_read ()) {
+            receive_runtime_t &receive = receive_runtime ();
+            scoped_lock_t receive_lock (receive.sync);
             xread_activated (ready_application);
+            notify_receive_progress_locked ();
+        }
     } else if (completion) {
         bool pair_ready = false;
         {
@@ -264,8 +282,15 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
             }
         }
     }
-    if (get_ctx ())
-        get_ctx ()->schedule_auto_hwm_recalculate ();
+    if (get_ctx ()) {
+        const bool recalculate_application_attach =
+          attach_application
+          && pipe_->get_transport_lane () == transport_lane_application;
+        if (recalculate_application_attach && _auto_hwm_policy_enabled)
+            (void) get_ctx ()->auto_hwm_recalculate_now ();
+        else
+            get_ctx ()->schedule_auto_hwm_recalculate ();
+    }
 
     if (is_terminating ()) {
         if (_term_pipes.insert (pipe_).second) {
@@ -305,18 +330,6 @@ int zlink::socket_base_t::setsockopt (int option_, const void *optval_, size_t o
                 _manual_sndhwm = true;
             else if (option_ == ZLINK_INTERNAL_OPT_RCVHWM)
                 _manual_rcvhwm = true;
-            else if (option_ == ZLINK_INTERNAL_OPT_SNDBUF)
-                _manual_sndbuf = true;
-            else if (option_ == ZLINK_INTERNAL_OPT_RCVBUF)
-                _manual_rcvbuf = true;
-            else if (option_ == ZLINK_INTERNAL_OPT_AUTO_HWM_MSG_UNIT_BYTES)
-                _auto_hwm_msg_unit_override = options.auto_hwm_msg_unit_bytes > 0;
-
-            if (option_ == ZLINK_INTERNAL_OPT_AUTO_HWM_MSG_UNIT_BYTES
-                || option_ == ZLINK_INTERNAL_OPT_SNDBUF || option_ == ZLINK_INTERNAL_OPT_RCVBUF) {
-                _auto_hwm_last_recalc_reason = ZLINK_AUTO_HWM_RECALC_REASON_REFRESH;
-                refresh_auto_hwm_policy ();
-            }
 
             if (option_ == ZLINK_INTERNAL_OPT_PEER_WEIGHT) {
                 _local_peer_weight = static_cast<uint32_t> (options.peer_weight);
@@ -401,20 +414,21 @@ int zlink::socket_base_t::get_events (int events_, uint32_t *out_)
         //  Only a caller that asks for ZLINK_POLLCOMPLETION owns the
         //  completion drain, so only that caller runs reply handlers.
         bool completion_notified = false;
-        int completion_controls = 0;
+        int drained_completions = 0;
         if (events_ & ZLINK_POLLCOMPLETION) {
+            scoped_lock_t owner_lock (_completion_owner_sync);
             const completion_drain_scope_t drain_scope (this);
             completion_notified =
               _request_completion_pending.exchange (false, std::memory_order_acq_rel);
             process_ready_completion_pipes ();
-            completion_controls = drain_request_completion_controls ();
-            if (completion_controls < 0)
+            drained_completions = drain_request_completions ();
+            if (drained_completions < 0)
                 return -1;
         }
 
         uint32_t events = 0;
         if ((events_ & ZLINK_POLLCOMPLETION)
-            && (completion_notified || completion_controls > 0))
+            && (completion_notified || drained_completions > 0))
             events |= ZLINK_POLLCOMPLETION;
         if ((events_ & ZLINK_POLLOUT) && has_out ())
             events |= ZLINK_POLLOUT;
@@ -442,20 +456,21 @@ int zlink::socket_base_t::get_events_internal (int events_, uint32_t *out_)
     errno_assert (rc == 0);
 
     bool completion_notified = false;
-    int completion_controls = 0;
+    int drained_completions = 0;
     if (events_ & ZLINK_POLLCOMPLETION) {
+        scoped_lock_t owner_lock (_completion_owner_sync);
         const completion_drain_scope_t drain_scope (this);
         completion_notified =
           _request_completion_pending.exchange (false, std::memory_order_acq_rel);
         process_ready_completion_pipes ();
-        completion_controls = drain_request_completion_controls ();
-        if (completion_controls < 0)
+        drained_completions = drain_request_completions ();
+        if (drained_completions < 0)
             return -1;
     }
 
     uint32_t events = 0;
     if ((events_ & ZLINK_POLLCOMPLETION)
-        && (completion_notified || completion_controls > 0))
+        && (completion_notified || drained_completions > 0))
         events |= ZLINK_POLLCOMPLETION;
     if ((events_ & ZLINK_POLLIN) && has_in ())
         events |= ZLINK_POLLIN;
@@ -477,7 +492,7 @@ int zlink::socket_base_t::get_events_for_poller (int events_, uint32_t *out_)
     return get_events_internal (events_, out_);
 }
 
-int zlink::socket_base_t::drain_request_completion_controls ()
+int zlink::socket_base_t::drain_request_completions ()
 {
     int drained = 0;
     std::shared_ptr<socket_reqrep_internal::socket_request_reply_state_t> socket_state =
@@ -502,6 +517,19 @@ void zlink::socket_base_t::resume_completion_processing_if_needed ()
 {
     if (_completion_poller_refs.load (std::memory_order_acquire) != 0)
         return;
+
+    if (lifecycle_coordinator ().is_async_mailbox_active ()) {
+        // The existing owner may already have consumed the earlier coalesced
+        // completion wake while a public poller was active. Queue a real
+        // command so a concurrent handler/reschedule boundary cannot lose the
+        // 1 -> 0 ownership-transfer wake.
+        command_t wake;
+        memset (&wake, 0, sizeof (wake));
+        wake.destination = this;
+        wake.type = command_t::request_completion;
+        static_cast<mailbox_t *> (_mailbox)->send (wake);
+        return;
+    }
 
     std::shared_ptr<socket_reqrep_internal::socket_request_reply_state_t> socket_state =
       request_reply_state ();
@@ -532,6 +560,7 @@ int zlink::socket_base_t::socket_type () const
 
 bool zlink::socket_base_t::has_in ()
 {
+    scoped_lock_t lock (receive_runtime ().sync);
     return xhas_in ();
 }
 
@@ -654,7 +683,10 @@ void zlink::socket_base_t::read_activated (pipe_t *pipe_)
         if (it == _transport_pairs.end () || !it->second.ready)
             return;
     }
+    receive_runtime_t &receive = receive_runtime ();
+    scoped_lock_t receive_lock (receive.sync);
     xread_activated (pipe_);
+    notify_receive_progress_locked ();
 }
 
 void zlink::socket_base_t::write_activated (pipe_t *pipe_)
@@ -662,8 +694,12 @@ void zlink::socket_base_t::write_activated (pipe_t *pipe_)
     const bool completion =
       pipe_ && pipe_->get_transport_pair_id () != 0
       && pipe_->get_transport_lane () == transport_lane_completion;
-    if (!completion)
+    if (!completion) {
         xwrite_activated (pipe_);
+        if (pipe_ && pipe_->take_hwm_credit_recovery ())
+            (void) enqueue_routed_send_ready (
+              pipe_, ZLINK_ROUTED_SEND_WRITABLE, 0);
+    }
     if (dispatch_runtime ().send_recovery_pending ()
         && !dispatch_runtime ().send_recovery_ready ()) {
         dispatch_runtime ().mark_send_recovery_ready ();
@@ -734,8 +770,14 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
         }
     }
 
-    if (!completion && application_attached)
+    if (!completion && application_attached) {
+        (void) enqueue_routed_send_ready (
+          pipe_, ZLINK_ROUTED_SEND_TERMINAL, ENOTCONN);
+        receive_runtime_t &receive = receive_runtime ();
+        scoped_lock_t receive_lock (receive.sync);
         xpipe_terminated (pipe_);
+        notify_receive_progress_locked ();
+    }
     if (!completion)
         socket_reqrep_internal::forget_router_reply_targets_for_pipe (
           request_reply_state (), pipe_);
@@ -881,6 +923,22 @@ zlink::pipe_t *zlink::socket_base_t::completion_pipe_for_transport_pair (
     return it == _transport_pairs.end () || !it->second.ready
              ? NULL
              : it->second.completion;
+}
+
+bool zlink::socket_base_t::transport_pair_application_ready (
+  const pipe_t *pipe_) const
+{
+    if (!pipe_ || pipe_->get_transport_lane () != transport_lane_application
+        || pipe_->get_transport_pair_id () == 0
+        || pipe_->get_transport_pair_generation () == 0)
+        return false;
+
+    const transport_pair_key_t key (pipe_->get_transport_pair_id (),
+                                    pipe_->get_transport_pair_generation ());
+    scoped_lock_t lock (_transport_pairs_sync);
+    const transport_pairs_t::const_iterator it = _transport_pairs.find (key);
+    return it != _transport_pairs.end () && it->second.ready
+           && it->second.application == pipe_;
 }
 
 int zlink::socket_base_t::socket_id () const

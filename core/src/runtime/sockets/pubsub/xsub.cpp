@@ -234,8 +234,11 @@ int zlink::xsub_t::xgetsockopt (int option_, void *optval_, size_t *optvallen_)
     return -1;
 }
 
-int zlink::xsub_t::xsend (msg_t *msg_)
+int zlink::xsub_t::xsend (
+  msg_t *msg_, pipe_message_admission_t *admission_out_)
 {
+    if (admission_out_)
+        *admission_out_ = pipe_message_admission_ready;
     size_t size = msg_->size ();
     unsigned char *data = static_cast<unsigned char *> (msg_->data ());
 
@@ -310,11 +313,27 @@ bool zlink::xsub_t::xhas_out ()
 
 int zlink::xsub_t::xrecv (msg_t *msg_)
 {
+    return xrecv_with_credit (msg_, NULL);
+}
+
+int zlink::xsub_t::xrecv_retained (msg_t *msg_,
+                                   retained_credit_token_t *token_out_)
+{
+    return xrecv_with_credit (msg_, token_out_);
+}
+
+int zlink::xsub_t::xrecv_with_credit (
+  msg_t *msg_, retained_credit_token_t *token_out_)
+{
     //  If there's already a message prepared by a previous call to zlink_poll,
     //  return it straight ahead.
     if (_has_message) {
         const int rc = msg_->move (_message);
         errno_assert (rc == 0);
+        if (token_out_)
+            *token_out_ = std::move (_message_credit);
+        else
+            _message_credit.reset ();
         _has_message = false;
         _more_recv = (msg_->flags () & msg_t::more) != 0;
         return 0;
@@ -326,7 +345,9 @@ int zlink::xsub_t::xrecv (msg_t *msg_)
     while (true) {
         //  Get a message using fair queueing algorithm.
         pipe_t *pipe = NULL;
-        int rc = _fq.recvpipe (msg_, &pipe);
+        int rc = token_out_
+                   ? _fq.recvpipe_retained (msg_, &pipe, token_out_)
+                   : _fq.recvpipe (msg_, &pipe);
 
         //  If there's no message available, return immediately.
         //  The same when error occurs.
@@ -346,9 +367,13 @@ int zlink::xsub_t::xrecv (msg_t *msg_)
         //  Message doesn't match. Pop any remaining parts of the message
         //  from the pipe.
         while (msg_->flags () & msg_t::more) {
-            rc = _fq.recvpipe (msg_, &pipe);
+            rc = token_out_
+                   ? _fq.recvpipe_retained (msg_, &pipe, token_out_)
+                   : _fq.recvpipe (msg_, &pipe);
             errno_assert (rc == 0);
         }
+        if (token_out_)
+            token_out_->reset ();
 
         ++skipped_non_matching;
         if (unlikely (skipped_non_matching >= xsub_non_matching_skip_budget)) {
@@ -374,7 +399,9 @@ bool zlink::xsub_t::xhas_in ()
     unsigned int skipped_non_matching = 0;
     while (true) {
         //  Get a message using fair queueing algorithm.
-        int rc = _fq.recv (&_message);
+        pipe_t *pipe = NULL;
+        int rc = _fq.recvpipe_retained (&_message, &pipe,
+                                        &_message_credit);
 
         //  If there's no message available, return immediately.
         //  The same when error occurs.
@@ -392,9 +419,11 @@ bool zlink::xsub_t::xhas_in ()
         //  Message doesn't match. Pop any remaining parts of the message
         //  from the pipe.
         while (_message.flags () & msg_t::more) {
-            rc = _fq.recv (&_message);
+            rc = _fq.recvpipe_retained (&_message, &pipe,
+                                        &_message_credit);
             errno_assert (rc == 0);
         }
+        _message_credit.reset ();
 
         ++skipped_non_matching;
         if (unlikely (skipped_non_matching >= xsub_non_matching_skip_budget))

@@ -90,6 +90,7 @@ zlink::ctx_t::~ctx_t ()
 {
     //  Check that there are no remaining _sockets.
     zlink_assert (_socket_registry.empty ());
+    _physical_queue_registry.force_release_retained_credit ();
     stop_auto_hwm_recalc_task ();
     teardown_runtime ();
 

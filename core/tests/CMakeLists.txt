@@ -86,6 +86,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_capabilities
   ${INTEGRATION_TEST_ROOT}/test_ctx_destroy
   ${INTEGRATION_TEST_ROOT}/test_ctx_options
+  ${INTEGRATION_TEST_ROOT}/test_retained_hwm_credit
   ${INTEGRATION_TEST_ROOT}/test_socket_null
   ${INTEGRATION_TEST_ROOT}/test_multi_socket_contract_regressions
   ${INTEGRATION_TEST_ROOT}/test_backpressure_matrix
@@ -112,6 +113,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_zmp_request_reply_router_recv_surface
   ${INTEGRATION_TEST_ROOT}/test_router_concurrent_routed_recv
   ${INTEGRATION_TEST_ROOT}/test_router_mandatory_hwm
+  ${INTEGRATION_TEST_ROOT}/test_routed_submit_target
   ${INTEGRATION_TEST_ROOT}/test_zmp_metadata
   ${INTEGRATION_TEST_ROOT}/test_stream_socket
   ${INTEGRATION_TEST_ROOT}/test_stream_threadsafe
@@ -369,6 +371,12 @@ foreach(test_source ${tests})
         ${test}
         PROPERTIES
           TIMEOUT 120)
+    endif()
+    if(${test} STREQUAL "test_routed_submit_target")
+      set_tests_properties(
+        ${test}
+        PROPERTIES
+          TIMEOUT 60)
     endif()
     if(${test} STREQUAL "test_zmp_request_reply_router_recv_surface")
       set_tests_properties(

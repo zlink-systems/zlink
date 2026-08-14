@@ -11,6 +11,7 @@
 
 #include "sockets/common/socket_base.hpp"
 #include "sockets/internal/fq.hpp"
+#include "core/ctx_physical_queue_registry.hpp"
 #include "utils/fast_mutex.hpp"
 #include "utils/stdint.hpp"
 
@@ -39,9 +40,23 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
     void xattach_pipe (zlink::pipe_t *pipe_,
                        bool subscribe_to_all_,
                        bool locally_initiated_) ZLINK_FINAL;
-    int xsend (zlink::msg_t *msg_) ZLINK_OVERRIDE;
+    int xsend (zlink::msg_t *msg_,
+               pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
+    int xsend_routed (const zlink_routing_id_t *target_rid_,
+                      zlink::msg_t *msg_,
+                      uint64_t *connection_id_out_,
+                      uint64_t expected_connection_id_,
+                      zlink::pipe_t **pipe_out_,
+                      uint64_t expected_transport_pair_id_ = 0,
+                      uint64_t expected_transport_pair_generation_ = 0,
+                      pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
+    int xselect_routed_submit_target (
+      const zlink_routing_id_t *router_rid_or_null_,
+      zlink_routed_submit_target_t *target_out_) ZLINK_OVERRIDE;
     int xterm_peer_rid (const zlink_routing_id_t *peer_rid_) ZLINK_OVERRIDE;
     int xrecv (zlink::msg_t *msg_) ZLINK_OVERRIDE;
+    int xrecv_retained (zlink::msg_t *msg_,
+                        retained_credit_token_t *token_out_) ZLINK_OVERRIDE;
     bool xhas_in () ZLINK_OVERRIDE;
     bool xhas_out () ZLINK_OVERRIDE;
     int xsocket_msg_dispatch (zlink::msg_t *msg_, zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
@@ -101,12 +116,15 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
     void stop_dispatch_from_callback ();
     void clear_packet_dispatch_state ();
     bool stream_dispatch_owns_tls () const;
+    int xrecv_with_credit (zlink::msg_t *msg_,
+                           retained_credit_token_t *token_out_);
     fq_t _fq;
 
     bool _prefetched;
     bool _routing_id_sent;
     zlink::msg_t _prefetched_id;
     zlink::msg_t _prefetched_msg;
+    retained_credit_token_t _prefetched_credit;
     zlink::pipe_t *_current_in;
     bool _more_in;
 

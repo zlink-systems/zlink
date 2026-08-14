@@ -382,16 +382,6 @@ bool zlink::socket_lifecycle_coordinator_t::take_deferred_close ()
     return close_deferred.exchange (false, std::memory_order_acq_rel);
 }
 
-void zlink::socket_lifecycle_coordinator_t::set_monitor_async_mailbox_owned (bool owned_)
-{
-    monitor_async_mailbox_owned = owned_;
-}
-
-bool zlink::socket_lifecycle_coordinator_t::is_monitor_async_mailbox_owned () const
-{
-    return monitor_async_mailbox_owned;
-}
-
 void zlink::socket_lifecycle_coordinator_t::mark_destroy_pending ()
 {
     destroy_pending = true;

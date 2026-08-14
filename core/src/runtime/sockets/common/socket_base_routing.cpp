@@ -160,6 +160,8 @@ int zlink::routing_socket_base_t::terminate_out_pipe_by_routing_id (
         return -1;
     }
 
+    (void) enqueue_routed_send_ready (
+      outpipe->pipe, ZLINK_ROUTED_SEND_TERMINAL, ENOTCONN);
     outpipe->pipe->terminate (false);
     return 0;
 }

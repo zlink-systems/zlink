@@ -258,6 +258,8 @@ bool zlink::asio_zmp_engine_t::handshake ()
     if (_has_handshake_stage) {
         session ()->set_peer_routing_id (_peer_routing_id, _peer_routing_id_size);
         session ()->engine_ready ();
+        session ()->configure_zmp_decoder (
+          static_cast<zmp_decoder_t *> (_decoder));
         _has_handshake_stage = false;
     } else {
         session ()->set_peer_routing_id (_peer_routing_id, _peer_routing_id_size);
@@ -506,6 +508,8 @@ int zlink::asio_zmp_engine_t::decode_and_push (msg_t *msg_)
     }
 
     if ((msg_flags & msg_t::routing_id) && !_options.recv_routing_id) {
+        static_cast<zmp_decoder_t *> (_decoder)
+          ->discard_frame_reservation ();
         int rc = msg_->close ();
         errno_assert (rc == 0);
         rc = msg_->init ();
@@ -513,7 +517,10 @@ int zlink::asio_zmp_engine_t::decode_and_push (msg_t *msg_)
         return 0;
     }
 
-    if (session ()->push_msg (msg_) == -1) {
+    zmp_decoder_t *const decoder = static_cast<zmp_decoder_t *> (_decoder);
+    if (session ()->push_msg_with_decoder_reservation (
+          msg_, decoder->frame_reservation_slot ())
+        == -1) {
         if (errno == EAGAIN)
             _process_msg = static_cast<int (asio_engine_t::*) (msg_t *)> (
               &asio_zmp_engine_t::push_one_then_decode);
@@ -578,7 +585,9 @@ bool zlink::asio_zmp_engine_t::build_gather_header (const msg_t &msg_,
 
 int zlink::asio_zmp_engine_t::push_one_then_decode (msg_t *msg_)
 {
-    const int rc = session ()->push_msg (msg_);
+    zmp_decoder_t *const decoder = static_cast<zmp_decoder_t *> (_decoder);
+    const int rc = session ()->push_msg_with_decoder_reservation (
+      msg_, decoder->frame_reservation_slot ());
     if (rc == 0)
         _process_msg =
           static_cast<int (asio_engine_t::*) (msg_t *)> (&asio_zmp_engine_t::decode_and_push);

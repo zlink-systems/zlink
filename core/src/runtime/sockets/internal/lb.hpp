@@ -12,6 +12,7 @@ namespace zlink
 {
 class msg_t;
 class pipe_t;
+enum pipe_message_admission_t : int;
 
 //  This class manages a set of outbound pipes. On send it load balances
 //  messages fairly among the pipes.
@@ -30,13 +31,33 @@ class lb_t
     bool has_positive_weight_pipe () const;
     bool contains (pipe_t *pipe_) const;
 
-    int send (msg_t *msg_);
+    //  Commits one weighted choice across every connected positive-weight
+    //  pipe, including pipes that are temporarily inactive because of HWM.
+    //  The returned pointer is only an identity snapshot; no lifetime or
+    //  credit reservation is retained for the caller.
+    typedef bool (*connected_pipe_filter_fn) (pipe_t *pipe_, void *userdata_);
+    int select_connected_pipe (pipe_t **pipe_out_,
+                               connected_pipe_filter_fn filter_ = NULL,
+                               void *filter_userdata_ = NULL);
+    pipe_t *find_connected_pipe (const unsigned char *peer_rid_,
+                                 size_t peer_rid_size_,
+                                 uint64_t transport_pair_id_,
+                                 uint64_t transport_pair_generation_) const;
+
+    //  Sends the first frame to an already selected exact pipe. Multipart
+    //  continuation then follows the ordinary _weighted_multipart_pipe fence.
+    int sendpipe_to (pipe_t *pipe_, msg_t *msg_,
+                     pipe_message_admission_t *admission_out_ = NULL);
+
+    int send (msg_t *msg_,
+              pipe_message_admission_t *admission_out_ = NULL);
 
     //  Sends a message and stores the pipe that was used in pipe_.
     //  It is possible for this function to return success but keep pipe_
     //  unset if the rest of a multipart message to a terminated pipe is
     //  being dropped. For the first frame, this will never happen.
-    int sendpipe (msg_t *msg_, pipe_t **pipe_);
+    int sendpipe (msg_t *msg_, pipe_t **pipe_,
+                  pipe_message_admission_t *admission_out_ = NULL);
 
     //  Removes an unfinished multipart message and resets send sequencing.
     void rollback ();
@@ -104,6 +125,7 @@ class lb_t
     pipe_t *_weighted_multipart_pipe;
 
     void deactivate (pipe_t *pipe_);
+    bool any_hwm_blocked_pipe ();
     void mark_selection_dirty ();
     void rebuild_selection_order ();
 

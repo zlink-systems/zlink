@@ -13,12 +13,12 @@ NORMALIZE_TIMESTAMPS_SH="$REPO_ROOT/core/tools/normalize_build_timestamps.sh"
 export TMPDIR=/tmp
 MAKE_BIN="$(command -v gmake || command -v make)"
 
-# Read VERSION file
-if [ -f "$REPO_ROOT/VERSION" ]; then
-    LIBZLINK_VERSION=$(grep '^LIBZLINK_VERSION=' "$REPO_ROOT/VERSION" | cut -d'=' -f2)
-else
-    LIBZLINK_VERSION="5.3.3"
-fi
+# Read the only release-version source.
+[ -f "$REPO_ROOT/VERSION" ] || {
+    echo "Repository VERSION file not found: $REPO_ROOT/VERSION" >&2
+    exit 2
+}
+LIBZLINK_VERSION=$(grep '^LIBZLINK_VERSION=' "$REPO_ROOT/VERSION" | cut -d'=' -f2)
 
 # Parse arguments: ARCH RUN_TESTS
 ARCH="${1:-$(uname -m)}"

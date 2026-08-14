@@ -58,7 +58,8 @@ void set_dispatch_source_rid (socket_msg_dispatch_tls_t &context_,
 }
 
 zlink::socket_msg_dispatch_context_t::socket_msg_dispatch_context_t (
-  socket_base_t *socket_, pipe_t *pipe_, void *subject_, const zlink_routing_id_t *source_rid_) :
+  socket_base_t *socket_, pipe_t *pipe_, void *subject_,
+  const zlink_routing_id_t *source_rid_) :
     _previous_socket (socket_msg_dispatch_tls ().socket),
     _previous_pipe (socket_msg_dispatch_tls ().pipe),
     _previous_subject (socket_msg_dispatch_tls ().subject),

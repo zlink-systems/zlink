@@ -190,15 +190,33 @@ void zlink::router_t::xread_activated (pipe_t *pipe_)
 
 int zlink::router_t::xrecv (msg_t *msg_)
 {
+    return xrecv_with_credit (msg_, NULL);
+}
+
+int zlink::router_t::xrecv_retained (msg_t *msg_,
+                                     retained_credit_token_t *token_out_)
+{
+    return xrecv_with_credit (msg_, token_out_);
+}
+
+int zlink::router_t::xrecv_with_credit (
+  msg_t *msg_, retained_credit_token_t *token_out_)
+{
     socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
     if (_prefetched) {
         if (!_routing_id_sent) {
+            if (token_out_)
+                token_out_->reset ();
             const int rc = msg_->move (_prefetched_id);
             errno_assert (rc == 0);
             _routing_id_sent = true;
         } else {
             const int rc = msg_->move (_prefetched_msg);
             errno_assert (rc == 0);
+            if (token_out_)
+                *token_out_ = std::move (_prefetched_credit);
+            else
+                _prefetched_credit.reset ();
             _prefetched = false;
         }
         _more_in = (msg_->flags () & msg_t::more) != 0;
@@ -214,9 +232,11 @@ int zlink::router_t::xrecv (msg_t *msg_)
     }
 
     pipe_t *pipe = NULL;
-    int rc = _fq.recvpipe (msg_, &pipe);
+    int rc = token_out_ ? _fq.recvpipe_retained (msg_, &pipe, token_out_)
+                        : _fq.recvpipe (msg_, &pipe);
     while (rc == 0 && msg_->is_routing_id ())
-        rc = _fq.recvpipe (msg_, &pipe);
+        rc = token_out_ ? _fq.recvpipe_retained (msg_, &pipe, token_out_)
+                        : _fq.recvpipe (msg_, &pipe);
 
     if (rc != 0)
         return -1;
@@ -236,6 +256,8 @@ int zlink::router_t::xrecv (msg_t *msg_)
     } else {
         rc = _prefetched_msg.move (*msg_);
         errno_assert (rc == 0);
+        if (token_out_)
+            _prefetched_credit = std::move (*token_out_);
         _prefetched = true;
         _current_in = pipe;
 
@@ -255,6 +277,25 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
                                   uint64_t *connection_id_out_,
                                   pipe_t **source_pipe_out_)
 {
+    return xrecv_routed_with_credit (
+      msg_, source_rid_out_, connection_id_out_, source_pipe_out_, NULL);
+}
+
+int zlink::router_t::xrecv_routed_retained (
+  msg_t *msg_, zlink_routing_id_t *source_rid_out_,
+  uint64_t *connection_id_out_, pipe_t **source_pipe_out_,
+  retained_credit_token_t *token_out_)
+{
+    return xrecv_routed_with_credit (
+      msg_, source_rid_out_, connection_id_out_, source_pipe_out_,
+      token_out_);
+}
+
+int zlink::router_t::xrecv_routed_with_credit (
+  msg_t *msg_, zlink_routing_id_t *source_rid_out_,
+  uint64_t *connection_id_out_, pipe_t **source_pipe_out_,
+  retained_credit_token_t *token_out_)
+{
     socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
     if (connection_id_out_)
         *connection_id_out_ = 0;
@@ -271,6 +312,10 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
 
         const int rc = msg_->move (_prefetched_msg);
         errno_assert (rc == 0);
+        if (token_out_)
+            *token_out_ = std::move (_prefetched_credit);
+        else
+            _prefetched_credit.reset ();
         _prefetched = false;
         _routing_id_sent = true;
         _more_in = (msg_->flags () & msg_t::more) != 0;
@@ -286,10 +331,12 @@ int zlink::router_t::xrecv_routed (msg_t *msg_,
     }
 
     pipe_t *pipe = NULL;
-    int rc = _fq.recvpipe (msg_, &pipe);
+    int rc = token_out_ ? _fq.recvpipe_retained (msg_, &pipe, token_out_)
+                        : _fq.recvpipe (msg_, &pipe);
 
     while (rc == 0 && msg_->is_routing_id ())
-        rc = _fq.recvpipe (msg_, &pipe);
+        rc = token_out_ ? _fq.recvpipe_retained (msg_, &pipe, token_out_)
+                        : _fq.recvpipe (msg_, &pipe);
 
     if (rc != 0)
         return -1;
@@ -350,10 +397,12 @@ bool zlink::router_t::xhas_in ()
         return true;
 
     pipe_t *pipe = NULL;
-    int rc = _fq.recvpipe (&_prefetched_msg, &pipe);
+    int rc = _fq.recvpipe_retained (&_prefetched_msg, &pipe,
+                                    &_prefetched_credit);
 
     while (rc == 0 && _prefetched_msg.is_routing_id ())
-        rc = _fq.recvpipe (&_prefetched_msg, &pipe);
+        rc = _fq.recvpipe_retained (&_prefetched_msg, &pipe,
+                                    &_prefetched_credit);
 
     if (rc != 0)
         return false;

@@ -8,6 +8,8 @@
 #include "utils/err.hpp"
 #include "utils/ip.hpp"
 
+#include <algorithm>
+
 int zlink_ctx_set_ext (void *ctx_, int option_, const void *optval_, size_t optvallen_);
 
 namespace
@@ -34,7 +36,9 @@ static const public_ctx_option_descriptor_t public_ctx_options[] = {
   {ZLINK_CTX_OPT_AUTO_HWM_ENABLE, true, true},
   {ZLINK_CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS, true, true},
   {ZLINK_CTX_OPT_AUTO_HWM_PROFILE, true, true},
-  {ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES, true, true},
+  {ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES, true, true},
+  {ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES, true, true},
+  {ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES, true, true},
 };
 
 static const public_ctx_option_descriptor_t *find_public_ctx_option (int option_)
@@ -56,6 +60,19 @@ static bool is_public_ctx_get_option (int option_)
 {
     const public_ctx_option_descriptor_t *descriptor = find_public_ctx_option (option_);
     return descriptor && descriptor->can_get;
+}
+
+static bool is_auto_hwm_u64_option (int option_)
+{
+    return option_ == ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES
+           || option_ == ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES
+           || option_ == ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES;
+}
+
+static bool is_ctx_data_option (int option_)
+{
+    return option_ == ZLINK_THREAD_NAME_PREFIX
+           || is_auto_hwm_u64_option (option_);
 }
 }
 
@@ -127,8 +144,7 @@ zlink_close_result_t zlink_ctx_shutdown (void *ctx_)
 
 zlink_config_result_t zlink_ctx_set (void *ctx_, zlink_ctx_option_t option_, int optval_)
 {
-    if (!is_public_ctx_set_option (option_)
-        || option_ == ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES) {
+    if (!is_public_ctx_set_option (option_) || is_auto_hwm_u64_option (option_)) {
         errno = EINVAL;
         return ZLINK_CONFIG_INVALID_ARGUMENT;
     }
@@ -139,7 +155,10 @@ zlink_config_result_t zlink_ctx_set (void *ctx_, zlink_ctx_option_t option_, int
 zlink_config_result_t
 zlink_ctx_set_data (void *ctx_, zlink_ctx_option_t option_, const void *optval_, size_t optvallen_)
 {
-    if (!is_public_ctx_set_option (option_)) {
+    if (!is_public_ctx_set_option (option_) || !is_ctx_data_option (option_)
+        || !optval_
+        || (is_auto_hwm_u64_option (option_)
+            && optvallen_ != sizeof (uint64_t))) {
         errno = EINVAL;
         return ZLINK_CONFIG_INVALID_ARGUMENT;
     }
@@ -150,8 +169,8 @@ zlink_ctx_set_data (void *ctx_, zlink_ctx_option_t option_, const void *optval_,
 zlink_config_result_t
 zlink_ctx_get_data (void *ctx_, zlink_ctx_option_t option_, void *optval_, size_t *optvallen_)
 {
-    if (!is_public_ctx_get_option (option_)
-        || option_ != ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES || !optval_ || !optvallen_) {
+    if (!is_public_ctx_get_option (option_) || !is_auto_hwm_u64_option (option_)
+        || !optval_ || !optvallen_) {
         errno = EINVAL;
         return ZLINK_CONFIG_INVALID_ARGUMENT;
     }
@@ -190,8 +209,7 @@ int zlink_ctx_set_ext (void *ctx_, int option_, const void *optval_, size_t optv
 
 int zlink_ctx_get (void *ctx_, zlink_ctx_option_t option_, zlink_config_result_t *error_out_)
 {
-    if (!is_public_ctx_get_option (option_)
-        || option_ == ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES) {
+    if (!is_public_ctx_get_option (option_) || is_auto_hwm_u64_option (option_)) {
         errno = EINVAL;
         if (error_out_)
             *error_out_ = ZLINK_CONFIG_INVALID_ARGUMENT;
@@ -229,4 +247,43 @@ zlink_config_result_t zlink_ctx_auto_hwm_recalculate (void *ctx_)
         errno = ENOMEM;
         return ZLINK_CONFIG_INTERNAL_ERROR;
     }
+}
+
+zlink_config_result_t zlink_ctx_get_auto_hwm_budget_snapshot (
+  void *ctx_, zlink_auto_hwm_budget_snapshot_t *snapshot_)
+{
+    if (!snapshot_ || snapshot_->struct_size < sizeof (uint32_t) * 2u) {
+        errno = EINVAL;
+        return ZLINK_CONFIG_INVALID_ARGUMENT;
+    }
+    if (snapshot_->abi_version != ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1) {
+        errno = ENOTSUP;
+        return ZLINK_CONFIG_NOT_SUPPORTED;
+    }
+    if (!ctx_ || !(static_cast<zlink::ctx_t *> (ctx_))->check_tag ()) {
+        errno = EFAULT;
+        return ZLINK_CONFIG_INVALID_HANDLE;
+    }
+
+    zlink_auto_hwm_budget_snapshot_t current;
+    const uint32_t caller_size = snapshot_->struct_size;
+    const int rc =
+      (static_cast<zlink::ctx_t *> (ctx_))->auto_hwm_budget_snapshot (&current);
+    if (rc != 0)
+        return zlink::config_result_internal::from_errno (errno);
+
+    const size_t copy_size =
+      std::min<size_t> (caller_size, sizeof (zlink_auto_hwm_budget_snapshot_t));
+    memcpy (snapshot_, &current, copy_size);
+    return ZLINK_CONFIG_OK;
+}
+
+zlink_config_result_t zlink_ctx_reset_auto_hwm_budget_metrics (void *ctx_)
+{
+    if (!ctx_ || !(static_cast<zlink::ctx_t *> (ctx_))->check_tag ()) {
+        errno = EFAULT;
+        return ZLINK_CONFIG_INVALID_HANDLE;
+    }
+    return zlink::config_result_internal::from_rc (
+      (static_cast<zlink::ctx_t *> (ctx_))->reset_auto_hwm_budget_metrics ());
 }

@@ -37,12 +37,15 @@ int zlink::sub_t::xsetsockopt (int option_, const void *optval_, size_t optvalle
     errno_assert (rc == 0);
 
     //  Pass it further on in the stack.
-    rc = xsub_t::xsend (&msg);
+    rc = xsub_t::xsend (&msg, NULL);
     return close_and_return (&msg, rc);
 }
 
-int zlink::sub_t::xsend (msg_t *)
+int zlink::sub_t::xsend (
+  msg_t *, pipe_message_admission_t *admission_out_)
 {
+    if (admission_out_)
+        *admission_out_ = pipe_message_admission_invalid;
     //  Override the XSUB's send.
     errno = ENOTSUP;
     return -1;

@@ -103,6 +103,15 @@ class socket_poller_t
     // WSAPoll path below.
     signaler_t _windows_signaler;
     bool _windows_signaler_active;
+#else
+    // Socket readiness has its own wakeup channel. The mailbox's primary
+    // signaler remains owned by the command executor when async dispatch is
+    // active, so a poller must never compete for that descriptor.
+    signaler_t _socket_signaler;
+    bool _socket_signaler_active;
+#if defined ZLINK_POLL_BASED_ON_POLL
+    int _socket_signaler_pollfd_index;
+#endif
 #endif
 
     //  List of sockets
@@ -116,6 +125,10 @@ class socket_poller_t
     int modify_item_user_data (items_t::iterator it_, void *user_data_);
     int remove_item (items_t::iterator it_);
     static int collect_socket_event (item_t &item_, event_t *event_);
+#if !defined ZLINK_HAVE_WINDOWS
+    void unregister_socket_signaler ();
+    void drain_socket_signaler ();
+#endif
 
     //  Does the pollset needs rebuilding?
     bool _need_rebuild;

@@ -1,5 +1,5 @@
-zlink (0.9.0-0.1) UNRELEASED; urgency=low
+zlink (0.11.1-0.1) UNRELEASED; urgency=low
 
-  * Package the RouteMesh 11 raw ABI as release 0.9.0.
+  * Package the zlink 0.11.1 public ABI.
 
  -- zlink Developers <ulalax@kairoscode.dev>  Sun, 19 Jul 2026 00:00:00 +0900

@@ -10,6 +10,7 @@
 
 #include "core/mailbox.hpp"
 #include "core/ctx_auto_hwm_state.hpp"
+#include "core/ctx_physical_queue_registry.hpp"
 #include "core/ctx_inproc_registry.hpp"
 #include "core/ctx_runtime_resources.hpp"
 #include "core/ctx_socket_registry.hpp"
@@ -117,12 +118,33 @@ class ctx_t ZLINK_FINAL
     const thread_ctx_t &thread_context () const;
     void schedule_auto_hwm_recalculate ();
     int auto_hwm_recalculate_now ();
-    zlink_auto_hwm_profile_t auto_hwm_profile () const;
-    bool auto_hwm_enabled () const;
-    uint64_t auto_hwm_msg_unit_bytes () const;
+    auto_hwm_budget_input_t auto_hwm_budget_input () const;
+    int create_pipepair_queues (
+      uint64_t first_direction_hwm_,
+      uint64_t second_direction_hwm_,
+      physical_queue_class_t queue_class_,
+      auto_hwm_role_t role_,
+      bool planning_enabled_,
+      physical_queue_handle_t *first_direction_,
+      physical_queue_handle_t *second_direction_);
+    void record_auto_hwm_endpoint_policy (
+      const physical_queue_endpoint_policy_t &policy_);
+    void record_auto_hwm_admission_attempt (bool blocked_by_target_hwm_);
+    int auto_hwm_budget_snapshot (zlink_auto_hwm_budget_snapshot_t *out_);
+    int reset_auto_hwm_budget_metrics ();
 
   private:
     friend class ctx_termination_test_access_t;
+    friend class pipe_t;
+    friend int pipepair (object_t *parents_[2],
+                         pipe_t *pipes_[2],
+                         const uint64_t hwms_[2],
+                         const bool conflate_[2],
+                         bool session_pipe_,
+                         transport_lane_t lane_,
+                         auto_hwm_role_t role_,
+                         bool planning_enabled_,
+                         physical_queue_class_t queue_class_);
 
     bool start ();
     bool start_runtime_locked ();
@@ -178,6 +200,7 @@ class ctx_t ZLINK_FINAL
     int _io_thread_count;
 
     ctx_auto_hwm_state_t _auto_hwm;
+    ctx_physical_queue_registry_t _physical_queue_registry;
 
     //  Does context wait (possibly forever) on termination?
     bool _blocky;

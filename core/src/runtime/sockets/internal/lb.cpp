@@ -177,6 +177,144 @@ bool zlink::lb_t::contains (pipe_t *pipe_) const
     return false;
 }
 
+int zlink::lb_t::select_connected_pipe (pipe_t **pipe_out_,
+                                        connected_pipe_filter_fn filter_,
+                                        void *filter_userdata_)
+{
+    if (!pipe_out_) {
+        errno = EFAULT;
+        return -1;
+    }
+    *pipe_out_ = NULL;
+
+    std::vector<candidate_t> connected;
+    bool has_positive_weight = false;
+    connected.reserve (_pipes.size ());
+    for (pipes_t::size_type i = 0; i < _pipes.size (); ++i) {
+        entries_t::iterator entry = _entries.find (_pipes[i]);
+        if (entry == _entries.end () || entry->second.weight == 0)
+            continue;
+        has_positive_weight = true;
+        if (filter_ && !filter_ (_pipes[i], filter_userdata_))
+            continue;
+        connected.push_back (candidate_t (_pipes[i], &entry->second));
+    }
+    if (connected.empty ()) {
+        errno = has_positive_weight || _pipes.empty () ? ENOTCONN
+                                                       : ECONNREFUSED;
+        return -1;
+    }
+
+    candidate_t *selected = NULL;
+    int64_t selected_value = 0;
+    uint32_t total_weight = 0;
+    for (std::vector<candidate_t>::iterator it = connected.begin ();
+         it != connected.end (); ++it) {
+        total_weight += it->entry->weight;
+        const int64_t value =
+          it->entry->running_value + static_cast<int64_t> (it->entry->weight);
+        if (!selected || value > selected_value
+            || (value == selected_value
+                && candidate_order_t () (*it, *selected))) {
+            selected = &(*it);
+            selected_value = value;
+        }
+    }
+
+    for (std::vector<candidate_t>::iterator it = connected.begin ();
+         it != connected.end (); ++it)
+        it->entry->running_value += static_cast<int64_t> (it->entry->weight);
+    selected->entry->running_value -= static_cast<int64_t> (total_weight);
+    *pipe_out_ = selected->pipe;
+    return 0;
+}
+
+zlink::pipe_t *zlink::lb_t::find_connected_pipe (
+  const unsigned char *peer_rid_, size_t peer_rid_size_,
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_) const
+{
+    if (!peer_rid_ || peer_rid_size_ == 0 || transport_pair_id_ == 0
+        || transport_pair_generation_ == 0)
+        return NULL;
+
+    for (pipes_t::size_type i = 0; i < _pipes.size (); ++i) {
+        pipe_t *pipe = _pipes[i];
+        if (!pipe || pipe->get_transport_pair_id () != transport_pair_id_
+            || pipe->get_transport_pair_generation ()
+                 != transport_pair_generation_)
+            continue;
+        const blob_t &routing_id = pipe->get_routing_id ();
+        if (routing_id.size () == peer_rid_size_
+            && memcmp (routing_id.data (), peer_rid_, peer_rid_size_) == 0)
+            return pipe;
+    }
+    return NULL;
+}
+
+int zlink::lb_t::sendpipe_to (
+  pipe_t *pipe_, msg_t *msg_, pipe_message_admission_t *admission_out_)
+{
+    if (admission_out_)
+        *admission_out_ = pipe_message_admission_invalid;
+    if (!pipe_ || !msg_ || !msg_->check ()) {
+        errno = EFAULT;
+        return -1;
+    }
+    entries_t::iterator entry = _entries.find (pipe_);
+    if (entry == _entries.end ()) {
+        errno = EHOSTUNREACH;
+        return -1;
+    }
+    if (entry->second.weight == 0) {
+        errno = ECONNREFUSED;
+        return -1;
+    }
+    if (_more) {
+        errno = EFSM;
+        return -1;
+    }
+
+    const pipe_message_admission_t initial_admission =
+      pipe_->check_write_admission ();
+    if (initial_admission != pipe_message_admission_ready) {
+        deactivate (pipe_);
+        if (admission_out_)
+            *admission_out_ = initial_admission;
+        errno = initial_admission == pipe_message_admission_hwm_full
+                    || initial_admission == pipe_message_admission_transport_wait
+                  ? EAGAIN
+                  : EHOSTUNREACH;
+        return -1;
+    }
+
+    const bool more = (msg_->flags () & msg_t::more) != 0;
+    pipe_message_admission_t write_admission =
+      pipe_message_admission_invalid;
+    const bool ok = more ? pipe_->write (msg_, &write_admission)
+                         : pipe_->write_and_flush (msg_, &write_admission);
+    if (!ok) {
+        if (admission_out_)
+            *admission_out_ = write_admission;
+        if (write_admission != pipe_message_admission_too_large) {
+            deactivate (pipe_);
+            errno = write_admission == pipe_message_admission_hwm_full
+                        || write_admission
+                             == pipe_message_admission_transport_wait
+                      ? EAGAIN
+                      : EHOSTUNREACH;
+        }
+        return -1;
+    }
+
+    _more = more;
+    _weighted_multipart_pipe = more ? pipe_ : NULL;
+    const int rc = msg_->init ();
+    errno_assert (rc == 0);
+    if (admission_out_)
+        *admission_out_ = pipe_message_admission_ready;
+    return 0;
+}
+
 void zlink::lb_t::deactivate (pipe_t *pipe_)
 {
     const pipes_t::size_type index = _pipes.index (pipe_);
@@ -255,13 +393,18 @@ void zlink::lb_t::commit_weighted_selection (pipe_entry_t *selected_, uint32_t t
         selected_->running_value -= static_cast<int64_t> (total_weight_);
 }
 
-int zlink::lb_t::send (msg_t *msg_)
+int zlink::lb_t::send (
+  msg_t *msg_, pipe_message_admission_t *admission_out_)
 {
-    return sendpipe (msg_, NULL);
+    return sendpipe (msg_, NULL, admission_out_);
 }
 
-int zlink::lb_t::sendpipe (msg_t *msg_, pipe_t **pipe_)
+int zlink::lb_t::sendpipe (
+  msg_t *msg_, pipe_t **pipe_,
+  pipe_message_admission_t *admission_out_)
 {
+    if (admission_out_)
+        *admission_out_ = pipe_message_admission_ready;
     //  Drop the message if required. If we are at the end of the message
     //  switch back to non-dropping mode.
     if (_dropping) {
@@ -277,14 +420,20 @@ int zlink::lb_t::sendpipe (msg_t *msg_, pipe_t **pipe_)
 
     if (_more && _weighted_multipart_pipe) {
         const bool more = (msg_->flags () & msg_t::more) != 0;
-        const bool ok = more ? _weighted_multipart_pipe->write (msg_)
-                             : _weighted_multipart_pipe->write_and_flush (msg_);
+        pipe_message_admission_t write_admission =
+          pipe_message_admission_invalid;
+        const bool ok =
+          more ? _weighted_multipart_pipe->write (msg_, &write_admission)
+               : _weighted_multipart_pipe->write_and_flush (
+                   msg_, &write_admission);
         if (!ok) {
+            if (admission_out_)
+                *admission_out_ = write_admission;
             _weighted_multipart_pipe->rollback ();
             _weighted_multipart_pipe = NULL;
             _dropping = more;
             _more = false;
-            if (errno != EMSGSIZE)
+            if (write_admission != pipe_message_admission_too_large)
                 errno = EAGAIN;
             return -2;
         }
@@ -303,18 +452,23 @@ int zlink::lb_t::sendpipe (msg_t *msg_, pipe_t **pipe_)
     if (_active == 1 && _current == 0) {
         pipe_t *pipe = _pipes[0];
         const bool more = (msg_->flags () & msg_t::more) != 0;
-        const bool ok = more ? pipe->write (msg_) : pipe->write_and_flush (msg_);
+        pipe_message_admission_t write_admission =
+          pipe_message_admission_invalid;
+        const bool ok = more ? pipe->write (msg_, &write_admission)
+                             : pipe->write_and_flush (msg_, &write_admission);
         if (!ok) {
+            if (admission_out_)
+                *admission_out_ = write_admission;
             if (_more) {
                 pipe->rollback ();
                 _weighted_multipart_pipe = NULL;
                 _dropping = more;
                 _more = false;
-                if (errno != EMSGSIZE)
+                if (write_admission != pipe_message_admission_too_large)
                     errno = EAGAIN;
                 return -2;
             }
-            if (errno != EMSGSIZE) {
+            if (write_admission != pipe_message_admission_too_large) {
                 _active = 0;
                 mark_selection_dirty ();
                 errno = EAGAIN;
@@ -346,7 +500,10 @@ int zlink::lb_t::sendpipe (msg_t *msg_, pipe_t **pipe_)
             pipe_entry_t *entry = candidate->entry;
 
             const bool more = (msg_->flags () & msg_t::more) != 0;
-            const bool ok = more ? pipe->write (msg_) : pipe->write_and_flush (msg_);
+            pipe_message_admission_t write_admission =
+              pipe_message_admission_invalid;
+            const bool ok = more ? pipe->write (msg_, &write_admission)
+                                 : pipe->write_and_flush (msg_, &write_admission);
             if (ok) {
                 //  Running values move only for a write that happened, so a
                 //  retried selection never applies the same step twice.
@@ -362,8 +519,16 @@ int zlink::lb_t::sendpipe (msg_t *msg_, pipe_t **pipe_)
 
             //  An oversized message is rejected by every candidate, so trying
             //  the next one would only drop healthy pipes.
-            if (errno == EMSGSIZE)
+            if (write_admission == pipe_message_admission_too_large)
+            {
+                if (admission_out_)
+                    *admission_out_ = pipe_message_admission_too_large;
                 return -1;
+            }
+
+            if (admission_out_
+                && write_admission == pipe_message_admission_hwm_full)
+                *admission_out_ = pipe_message_admission_hwm_full;
 
             // A failed write changes current writability, not the peer's
             // advertised routing policy. Preserve the configured weight so
@@ -372,14 +537,20 @@ int zlink::lb_t::sendpipe (msg_t *msg_, pipe_t **pipe_)
             rebuild_selection_order ();
         }
 
+        if (admission_out_ && any_hwm_blocked_pipe ())
+            *admission_out_ = pipe_message_admission_hwm_full;
         errno = has_positive_weight_pipe () ? EAGAIN : ECONNREFUSED;
         return -1;
     }
 
     while (_active > 0) {
         const bool more = (msg_->flags () & msg_t::more) != 0;
-        const bool ok =
-          more ? _pipes[_current]->write (msg_) : _pipes[_current]->write_and_flush (msg_);
+        pipe_message_admission_t write_admission =
+          pipe_message_admission_invalid;
+        const bool ok = more
+                          ? _pipes[_current]->write (msg_, &write_admission)
+                          : _pipes[_current]->write_and_flush (
+                              msg_, &write_admission);
         if (ok) {
             if (pipe_)
                 *pipe_ = _pipes[_current];
@@ -390,6 +561,8 @@ int zlink::lb_t::sendpipe (msg_t *msg_, pipe_t **pipe_)
         // parts sent earlier and return EAGAIN.
         // Application should handle this as suitable
         if (_more) {
+            if (admission_out_)
+                *admission_out_ = write_admission;
             _pipes[_current]->rollback ();
             // At this point the pipe is already being deallocated and the
             // frames written earlier cannot be recovered. Enter dropping mode
@@ -398,13 +571,20 @@ int zlink::lb_t::sendpipe (msg_t *msg_, pipe_t **pipe_)
             // retry this frame immediately in blocking mode.
             _dropping = (msg_->flags () & msg_t::more) != 0;
             _more = false;
-            if (errno != EMSGSIZE)
+            if (write_admission != pipe_message_admission_too_large)
                 errno = EAGAIN;
             return -2;
         }
 
-        if (errno == EMSGSIZE)
+        if (write_admission == pipe_message_admission_too_large) {
+            if (admission_out_)
+                *admission_out_ = pipe_message_admission_too_large;
             return -1;
+        }
+
+        if (admission_out_
+            && write_admission == pipe_message_admission_hwm_full)
+            *admission_out_ = pipe_message_admission_hwm_full;
 
         _active--;
         if (_current < _active)
@@ -416,6 +596,8 @@ int zlink::lb_t::sendpipe (msg_t *msg_, pipe_t **pipe_)
 
     //  If there are no pipes we cannot send the message.
     if (_active == 0) {
+        if (admission_out_ && any_hwm_blocked_pipe ())
+            *admission_out_ = pipe_message_admission_hwm_full;
         errno = has_positive_weight_pipe () ? EAGAIN : ECONNREFUSED;
         return -1;
     }
@@ -433,6 +615,18 @@ int zlink::lb_t::sendpipe (msg_t *msg_, pipe_t **pipe_)
     errno_assert (rc == 0);
 
     return 0;
+}
+
+bool zlink::lb_t::any_hwm_blocked_pipe ()
+{
+    for (pipes_t::size_type i = 0; i < _pipes.size (); ++i) {
+        const entries_t::const_iterator entry = _entries.find (_pipes[i]);
+        if (entry != _entries.end () && entry->second.weight > 0
+            && _pipes[i]->check_write_admission ()
+                 == pipe_message_admission_hwm_full)
+            return true;
+    }
+    return false;
 }
 
 void zlink::lb_t::rollback ()

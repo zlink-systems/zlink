@@ -49,10 +49,10 @@ socket_request_reply_state_t::socket_request_reply_state_t (zlink::socket_base_t
     socket (socket_),
     socket_type (socket_type_),
     reply_target_slots (0),
+    reply_target_reservations (0),
+    reply_target_checkouts (0),
     dealer_next_reply_token (1),
-    closing (false),
-    completion_control_handler (NULL),
-    completion_control_userdata (NULL)
+    closing (false)
 {
 }
 

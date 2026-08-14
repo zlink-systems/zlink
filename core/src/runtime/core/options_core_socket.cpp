@@ -30,15 +30,6 @@ int zlink::options_setsockopt_core_socket (
             }
             break;
 
-        case ZLINK_INTERNAL_OPT_AUTO_HWM_MSG_UNIT_BYTES:
-            if (optvallen_ == sizeof (uint64_t)) {
-                uint64_t value = 0;
-                memcpy (&value, optval_, sizeof (value));
-                self_->auto_hwm_msg_unit_bytes = value;
-                return 0;
-            }
-            break;
-
         case ZLINK_INTERNAL_OPT_AFFINITY:
             return options_do_setsockopt_value (optval_, optvallen_, &self_->affinity);
 
@@ -171,14 +162,6 @@ int zlink::options_getsockopt_core_socket (
             if (*optvallen_ == sizeof (uint64_t)) {
                 memcpy (optval_, &self_->rcvhwm, sizeof (self_->rcvhwm));
                 *optvallen_ = sizeof (self_->rcvhwm);
-                return 0;
-            }
-            break;
-        case ZLINK_INTERNAL_OPT_AUTO_HWM_MSG_UNIT_BYTES:
-            if (*optvallen_ == sizeof (uint64_t)) {
-                memcpy (optval_, &self_->auto_hwm_msg_unit_bytes,
-                        sizeof (self_->auto_hwm_msg_unit_bytes));
-                *optvallen_ = sizeof (self_->auto_hwm_msg_unit_bytes);
                 return 0;
             }
             break;

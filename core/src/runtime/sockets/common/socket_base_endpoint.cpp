@@ -38,19 +38,6 @@
 
 namespace
 {
-bool combined_hwm_bytes (uint64_t first_, uint64_t second_, uint64_t *out_)
-{
-    if (!out_)
-        return false;
-    if (first_ == 0 || second_ == 0)
-        *out_ = 0;
-    else if (UINT64_MAX - first_ < second_)
-        return false;
-    else
-        *out_ = first_ + second_;
-    return true;
-}
-
 //  ZLINK_OPT_MAXMSGSIZE is an inbound limit where -1 means unlimited. pipe_t
 //  expresses "no bound" as 0, so only a positive value becomes a bound.
 uint64_t finite_max_message_bytes (int64_t maxmsgsize_)
@@ -186,37 +173,65 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
         const uint64_t pair_generation = paired_transport ? 1 : 0;
         const size_t lane_count = paired_transport ? 2 : 1;
 
-        uint64_t sndhwm = options.sndhwm;
-        uint64_t rcvhwm = options.rcvhwm;
-        if (peer.socket != NULL
-            && (!combined_hwm_bytes (options.sndhwm, peer.options.rcvhwm, &sndhwm)
-                || !combined_hwm_bytes (options.rcvhwm, peer.options.sndhwm, &rcvhwm))) {
-            errno = EOVERFLOW;
-            return -1;
-        }
+        const uint64_t sndhwm = options.sndhwm;
+        const uint64_t rcvhwm = options.rcvhwm;
 
         const bool conflate = get_effective_conflate_option (options);
         for (size_t lane_index = 0; lane_index < lane_count; ++lane_index) {
+            const transport_lane_t lane =
+              lane_index == 0 ? transport_lane_application
+                              : transport_lane_completion;
+            const physical_queue_class_t queue_class =
+              options.physical_queue_class == physical_queue_class_monitor
+                  || (peer.socket
+                      && peer.socket->options.physical_queue_class
+                           == physical_queue_class_monitor)
+                ? physical_queue_class_monitor
+                : physical_queue_class_application;
             object_t *parents[2] = {this, peer.socket == NULL ? this : peer.socket};
             pipe_t *new_pipes[2] = {NULL, NULL};
             uint64_t hwms[2] = {conflate ? 0 : sndhwm, conflate ? 0 : rcvhwm};
             bool conflates[2] = {conflate, conflate};
-            rc = pipepair (parents, new_pipes, hwms, conflates);
-            errno_assert (rc == 0);
+            const physical_queue_endpoint_policy_t local_attach_policy =
+              make_auto_hwm_queue_policy (
+                std::shared_ptr<physical_queue_record_t> (), true);
+            physical_queue_endpoint_policy_t peer_attach_policy;
+            if (peer.socket)
+                peer_attach_policy = peer.socket->make_auto_hwm_queue_policy (
+                  std::shared_ptr<physical_queue_record_t> (), false);
+            const bool planning_enabled =
+              local_attach_policy.planning_enabled
+              || peer_attach_policy.planning_enabled;
+            const auto_hwm_role_t reservation_role =
+              local_attach_policy.role != auto_hwm_role_none
+                ? local_attach_policy.role
+                : peer_attach_policy.role;
+            rc = pipepair (parents, new_pipes, hwms, conflates, false, lane,
+                           reservation_role, planning_enabled, queue_class);
+            if (rc != 0)
+                return -1;
 
-            const transport_lane_t lane =
-              lane_index == 0 ? transport_lane_application : transport_lane_completion;
             if (lane == transport_lane_completion) {
-                hwms[0] = transport_pair_policy::completion_hwm (hwms[0]);
-                hwms[1] = transport_pair_policy::completion_hwm (hwms[1]);
+                hwms[0] = 0;
+                hwms[1] = 0;
                 new_pipes[0]->set_hwms (hwms[1], hwms[0]);
                 new_pipes[1]->set_hwms (hwms[0], hwms[1]);
             }
             new_pipes[0]->set_transport_pair (lane, pair_id, pair_generation);
             new_pipes[1]->set_transport_pair (lane, pair_id, pair_generation);
-            if (!conflate) {
-                new_pipes[0]->set_hwms_boost (peer.options.sndhwm, peer.options.rcvhwm);
-                new_pipes[1]->set_hwms_boost (options.sndhwm, options.rcvhwm);
+            if (lane == transport_lane_application && peer.socket) {
+                get_ctx ()->record_auto_hwm_endpoint_policy (
+                  make_auto_hwm_queue_policy (
+                    new_pipes[0]->out_physical_queue (), true));
+                get_ctx ()->record_auto_hwm_endpoint_policy (
+                  peer.socket->make_auto_hwm_queue_policy (
+                    new_pipes[1]->in_physical_queue (), false));
+                get_ctx ()->record_auto_hwm_endpoint_policy (
+                  peer.socket->make_auto_hwm_queue_policy (
+                    new_pipes[1]->out_physical_queue (), true));
+                get_ctx ()->record_auto_hwm_endpoint_policy (
+                  make_auto_hwm_queue_policy (
+                    new_pipes[0]->in_physical_queue (), false));
             }
             //  inproc has no decoder to reject an oversize message, so each
             //  direction carries the reader's inbound maximum. It bounds the
@@ -317,10 +332,8 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
             lane_options.transport_pair_initiator = true;
             lane_options.transport_pair_state = pair_state;
             if (lane_options.transport_lane == transport_lane_completion) {
-                lane_options.sndhwm =
-                  transport_pair_policy::completion_hwm (lane_options.sndhwm);
-                lane_options.rcvhwm =
-                  transport_pair_policy::completion_hwm (lane_options.rcvhwm);
+                lane_options.sndhwm = 0;
+                lane_options.rcvhwm = 0;
                 lane_options.sndbuf =
                   transport_pair_policy::completion_socket_buffer (lane_options.sndbuf);
                 lane_options.rcvbuf =
@@ -347,8 +360,24 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
             uint64_t hwms[2] = {conflate ? 0 : lane_options.sndhwm,
                                 conflate ? 0 : lane_options.rcvhwm};
             bool conflates[2] = {conflate, conflate};
-            rc = pipepair (parents, new_pipes, hwms, conflates, true);
-            errno_assert (rc == 0);
+            const physical_queue_endpoint_policy_t attach_policy =
+              make_auto_hwm_queue_policy (
+                std::shared_ptr<physical_queue_record_t> (), true);
+            rc = pipepair (parents, new_pipes, hwms, conflates, true,
+                           lane_options.transport_lane, attach_policy.role,
+                           attach_policy.planning_enabled);
+            if (rc != 0) {
+                const int pipepair_errno = errno;
+                std::string failed_endpoint;
+                paddr->to_string (failed_endpoint);
+                event_connect_delayed (
+                  make_unconnected_connect_endpoint_pair (failed_endpoint),
+                  pipepair_errno);
+                launch_child (session);
+                term_child (session);
+                errno = pipepair_errno;
+                return -1;
+            }
             new_pipes[0]->set_transport_pair (
               lane_options.transport_lane, pair_id, pair_generation);
             new_pipes[1]->set_transport_pair (

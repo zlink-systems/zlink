@@ -149,6 +149,9 @@ struct socket_monitor_runtime_t
         events (0),
         events_atomic (0),
         lossy (true),
+        queue_hwm_bytes (0),
+        queue_accounted_bytes (0),
+        event_accounted_bytes (0),
         queue_stop (false),
         task_id (0),
         task_running (false)
@@ -179,11 +182,12 @@ struct socket_monitor_runtime_t
       uint64_t generation_);
     void erase_transport_pair_readiness_for_endpoint (
       const endpoint_uri_pair_t &endpoint_uri_pair_);
-    void reset_worker_state ();
+    void reset_worker_state (uint64_t hwm_bytes_, uint64_t event_accounted_bytes_);
     void start_task (uint64_t task_id_);
     bool dequeue_worker_event_nowait (socket_monitor_event_record_t *out_);
     void requeue_worker_event_front (const socket_monitor_event_record_t &record_);
-    void enqueue_worker_event (const socket_monitor_event_record_t &record_, size_t hwm_);
+    void complete_worker_event ();
+    void enqueue_worker_event (const socket_monitor_event_record_t &record_);
     void stop_task ();
 
     void *socket;
@@ -194,11 +198,102 @@ struct socket_monitor_runtime_t
     mutex_t queue_sync;
     condition_variable_t queue_cv;
     std::deque<socket_monitor_event_record_t> queue;
+    uint64_t queue_hwm_bytes;
+    uint64_t queue_accounted_bytes;
+    uint64_t event_accounted_bytes;
     bool queue_stop;
     uint64_t task_id;
     bool task_running;
     std::set<std::string> ready_connections;
     std::map<std::string, uint8_t> transport_pair_ready_lanes;
+};
+
+// A socket can have a long-lived asynchronous mailbox executor while a public
+// receive is blocking on the same socket.  The executor owns command delivery;
+// this runtime provides the separate hand-off used to wake the public receiver
+// after an application pipe has actually been activated.
+struct socket_receive_runtime_t
+{
+    enum mode_t
+    {
+        mode_plain,
+        mode_pipe,
+        mode_routed
+    };
+
+    socket_receive_runtime_t () :
+        async_command_handoff_pending (false),
+        progress_epoch (0),
+        waiters (0)
+#ifdef ZLINK_BUILD_TESTS
+        ,
+        public_mailbox_drains (0),
+        async_mailbox_drains (0),
+        wait_hook (NULL),
+        wait_hook_userdata (NULL)
+#endif
+    {
+    }
+
+    mutex_t command_owner_sync;
+    std::atomic<bool> async_command_handoff_pending;
+    mutex_t sync;
+    condition_variable_t progress_cv;
+    uint64_t progress_epoch;
+    uint32_t waiters;
+#ifdef ZLINK_BUILD_TESTS
+    typedef void (*wait_hook_fn) (void *userdata_);
+    std::atomic<uint64_t> public_mailbox_drains;
+    std::atomic<uint64_t> async_mailbox_drains;
+    wait_hook_fn wait_hook;
+    void *wait_hook_userdata;
+#endif
+};
+
+struct routed_send_target_key_t
+{
+    routed_send_target_key_t () : transport_pair_id (0), transport_pair_generation (0) {}
+    routed_send_target_key_t (const void *routing_id_,
+                              size_t routing_id_size_,
+                              uint64_t transport_pair_id_,
+                              uint64_t transport_pair_generation_) :
+        peer_rid (routing_id_ && routing_id_size_
+                    ? std::string (static_cast<const char *> (routing_id_), routing_id_size_)
+                    : std::string ()),
+        transport_pair_id (transport_pair_id_),
+        transport_pair_generation (transport_pair_generation_)
+    {
+    }
+
+    bool operator< (const routed_send_target_key_t &other_) const
+    {
+        if (peer_rid != other_.peer_rid)
+            return peer_rid < other_.peer_rid;
+        if (transport_pair_id != other_.transport_pair_id)
+            return transport_pair_id < other_.transport_pair_id;
+        return transport_pair_generation < other_.transport_pair_generation;
+    }
+
+    std::string peer_rid;
+    uint64_t transport_pair_id;
+    uint64_t transport_pair_generation;
+};
+
+struct routed_send_ready_record_t
+{
+    routed_send_ready_record_t () : state (ZLINK_ROUTED_SEND_WRITABLE), terminal_errno (0) {}
+    routed_send_ready_record_t (const routed_send_target_key_t &key_,
+                                zlink_routed_send_ready_state_t state_,
+                                int terminal_errno_) :
+        key (key_),
+        state (state_),
+        terminal_errno (terminal_errno_)
+    {
+    }
+
+    routed_send_target_key_t key;
+    zlink_routed_send_ready_state_t state;
+    int terminal_errno;
 };
 
 struct socket_dispatch_bridge_t
@@ -213,7 +308,9 @@ struct socket_dispatch_bridge_t
         send_ready_seq (0),
         send_ready_armed (false),
         send_ready_recovery_pending (false),
-        send_ready_recovery_ready (false)
+        send_ready_recovery_ready (false),
+        routed_send_ready_handler (NULL),
+        routed_send_ready_userdata (NULL)
     {
     }
 
@@ -231,6 +328,15 @@ struct socket_dispatch_bridge_t
     void clear_send_recovery_ready ();
     bool send_recovery_pending () const;
     bool send_recovery_ready () const;
+    bool routed_send_ready_handler_active () const;
+    void store_routed_send_ready_handler (zlink_routed_send_ready_handler_fn handler_,
+                                          void *userdata_);
+    bool load_routed_send_ready_handler (zlink_routed_send_ready_handler_fn *handler_out_,
+                                         void **userdata_out_) const;
+    bool enqueue_routed_send_ready (const routed_send_target_key_t &key_,
+                                    zlink_routed_send_ready_state_t state_,
+                                    int terminal_errno_);
+    bool take_routed_send_ready (routed_send_ready_record_t *out_);
 
     std::atomic<zlink_socket_msg_handler_fn> socket_msg_handler;
     std::atomic<void *> socket_msg_handler_subject;
@@ -243,6 +349,12 @@ struct socket_dispatch_bridge_t
     std::atomic<bool> send_ready_armed;
     std::atomic<bool> send_ready_recovery_pending;
     std::atomic<bool> send_ready_recovery_ready;
+    mutable mutex_t routed_send_ready_sync;
+    zlink_routed_send_ready_handler_fn routed_send_ready_handler;
+    void *routed_send_ready_userdata;
+    std::map<routed_send_target_key_t, routed_send_ready_record_t>
+      routed_send_ready_pending;
+    std::set<routed_send_target_key_t> routed_send_ready_terminal;
     std::recursive_mutex socket_msg_dispatch_sync;
 };
 
@@ -257,7 +369,6 @@ class socket_lifecycle_coordinator_t
         destroy_pending (false),
         reaper_poller_value (NULL),
         destroyed (false),
-        monitor_async_mailbox_owned (false),
         async_mailbox_active (false),
         async_quiesce_pending (false),
         async_processing_done (true),
@@ -298,8 +409,6 @@ class socket_lifecycle_coordinator_t
     void complete_deferred_close_handoff (mailbox_t *mailbox_, int timeout_ms_);
     void clear_deferred_close ();
     bool take_deferred_close ();
-    void set_monitor_async_mailbox_owned (bool owned_);
-    bool is_monitor_async_mailbox_owned () const;
     void mark_destroy_pending ();
     void clear_destroy_pending ();
     bool is_destroy_pending () const;
@@ -318,7 +427,6 @@ class socket_lifecycle_coordinator_t
     bool destroy_pending;
     poller_t *reaper_poller_value;
     bool destroyed;
-    bool monitor_async_mailbox_owned;
     std::atomic<bool> async_mailbox_active;
     std::atomic<bool> async_quiesce_pending;
     std::atomic<bool> async_processing_done;
@@ -420,6 +528,7 @@ struct socket_runtime_t
 {
     socket_endpoint_runtime_t endpoint_runtime;
     socket_command_runtime_t command_runtime;
+    socket_receive_runtime_t receive_runtime;
     socket_monitor_runtime_t monitor_runtime;
     socket_dispatch_bridge_t dispatch_bridge;
     socket_lifecycle_coordinator_t lifecycle_coordinator;

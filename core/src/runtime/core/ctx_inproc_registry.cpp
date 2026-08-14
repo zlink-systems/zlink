@@ -5,6 +5,7 @@
 #include "core/ctx_inproc_registry.hpp"
 
 #include "core/command.hpp"
+#include "core/ctx.hpp"
 #include "core/msg.hpp"
 #include "core/pipe.hpp"
 #include "sockets/common/socket_base.hpp"
@@ -228,12 +229,29 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
           sizeof (connect_instance));
     }
 
-    if (!get_effective_conflate_option (pending_connection_.endpoint.options)) {
-        pending_connection_.connect_pipe->set_hwms_boost (bind_options_.sndhwm,
-                                                          bind_options_.rcvhwm);
-        pending_connection_.bind_pipe->set_hwms_boost (pending_connection_.endpoint.options.sndhwm,
-                                                       pending_connection_.endpoint.options.rcvhwm);
-
+    const bool completion =
+      pending_connection_.connect_pipe->get_transport_pair_id () != 0
+      && pending_connection_.connect_pipe->get_transport_lane ()
+           == transport_lane_completion;
+    if (!completion) {
+        ctx_t *const ctx = bind_socket_->get_ctx ();
+        ctx->record_auto_hwm_endpoint_policy (
+          pending_connection_.endpoint.socket->make_auto_hwm_queue_policy (
+            pending_connection_.connect_pipe->out_physical_queue (), true));
+        ctx->record_auto_hwm_endpoint_policy (
+          bind_socket_->make_auto_hwm_queue_policy (
+            pending_connection_.bind_pipe->in_physical_queue (), false));
+        ctx->record_auto_hwm_endpoint_policy (
+          bind_socket_->make_auto_hwm_queue_policy (
+            pending_connection_.bind_pipe->out_physical_queue (), true));
+        ctx->record_auto_hwm_endpoint_policy (
+          pending_connection_.endpoint.socket->make_auto_hwm_queue_policy (
+            pending_connection_.connect_pipe->in_physical_queue (), false));
+    }
+    if (completion) {
+        pending_connection_.connect_pipe->set_hwms (0, 0);
+        pending_connection_.bind_pipe->set_hwms (0, 0);
+    } else if (!get_effective_conflate_option (pending_connection_.endpoint.options)) {
         pending_connection_.connect_pipe->set_hwms (pending_connection_.endpoint.options.rcvhwm,
                                                     pending_connection_.endpoint.options.sndhwm);
         pending_connection_.bind_pipe->set_hwms (bind_options_.rcvhwm, bind_options_.sndhwm);
