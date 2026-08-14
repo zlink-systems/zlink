@@ -6,7 +6,6 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.atomic.AtomicBoolean;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 
 /**
@@ -30,50 +29,39 @@ final class ZLinkStandaloneActorRelocationScheduler {
         }
 
         var request = source.stageRequest();
-        var committed = new AtomicBoolean();
         CompletionStage<Void> operation = client.stage(
                 request.targetNodeRid(), request, timeout)
-            .thenCompose(ignored -> source.freezeAndPrepare(cancellation))
-            .thenCompose(ignored -> source.commitAuthority(cancellation))
-            .thenCompose(published -> {
-                committed.set(true);
-                return source.commitSourceQueue(published, cancellation)
-                    .thenCompose(activated -> client.publish(
-                            request.targetNodeRid(), request.fence(), timeout)
-                        .thenRun(source::completeSourceQueueCommit)
-                        .thenCompose(ignored -> source.cleanupLocal())
-                        .thenCompose(ignored -> source.completeSourceCleanup(
-                            activated, cancellation))
-                        .thenCompose(completed -> client.finalizeAfterCompletion(
-                            request.targetNodeRid(), request.fence(), timeout))
-                        .thenCompose(ignored ->
-                            source.discardInitialAfterCommit())
-                        .thenRun(() -> {
-                            source.releasePermitAfterCompletion();
-                            systems.zlink.framework.runtime.internal.metrics
-                                .ZLinkRuntimeMetrics.increment(
-                                    "zlink.drain.actors.handed_off",
-                                    Map.of());
-                        }));
-            });
+            .thenCompose(ignored -> source.relayCapturedIngress(
+                client, timeout))
+            .thenCompose(ignored -> client.publish(
+                    request.targetNodeRid(), request.fence(), timeout)
+                .thenRun(source::completeSourceQueueCommit)
+                .thenCompose(cleaned -> source.cleanupLocal())
+                .thenCompose(cleaned -> source.discardInitialAfterCommit())
+                .thenRun(() -> {
+                    systems.zlink.framework.runtime.internal.metrics
+                        .ZLinkRuntimeMetrics.increment(
+                            "zlink.drain.actors.handed_off",
+                            Map.of());
+                }));
         return operation.exceptionallyCompose(failure -> {
             Throwable original = unwrap(failure);
-            if (committed.get()) {
+            if (source.relayBoundaryCommitted()) {
                 return CompletableFuture.failedFuture(original);
             }
             return client.abort(
                     request.targetNodeRid(), request.fence(), timeout)
                 .handle((ignored, abortFailure) -> abortFailure)
-                .thenCompose(abortFailure -> source.abort()
+                .thenCompose(abortFailure -> abortFailure == null
+                    ? source.abort()
                     .handle((ignored, sourceFailure) -> {
-                        if (abortFailure != null) {
-                            original.addSuppressed(unwrap(abortFailure));
-                        }
                         if (sourceFailure != null) {
                             original.addSuppressed(unwrap(sourceFailure));
                         }
                         throw new CompletionException(original);
-                    }));
+                    })
+                    : CompletableFuture.failedFuture(
+                        withSuppressed(original, unwrap(abortFailure))));
         });
     }
 
@@ -84,5 +72,12 @@ final class ZLinkStandaloneActorRelocationScheduler {
             current = current.getCause();
         }
         return current;
+    }
+
+    private static CompletionException withSuppressed(
+        Throwable original,
+        Throwable suppressed) {
+        original.addSuppressed(suppressed);
+        return new CompletionException(original);
     }
 }

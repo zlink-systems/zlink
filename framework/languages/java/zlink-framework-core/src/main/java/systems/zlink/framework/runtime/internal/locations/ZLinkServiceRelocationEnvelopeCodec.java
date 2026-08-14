@@ -1,6 +1,5 @@
 package systems.zlink.framework.runtime.internal.locations;
 
-import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.CharacterCodingException;
@@ -14,12 +13,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import systems.zlink.contracts.core.RoutingId;
 
 /**
- * Decodes the shared {@code relocation-envelope-v1} logical stream and emits
- * immutable successor roots. Journal and timer bytes remain byte-identical;
- * only durable replay progress and terminal delivery state may change.
+ * Decodes the shared immutable {@code relocation-envelope-v1} handoff root.
  */
 public final class ZLinkServiceRelocationEnvelopeCodec {
     private static final int MAX_RECORDS = 65_536;
@@ -66,41 +62,11 @@ public final class ZLinkServiceRelocationEnvelopeCodec {
                 participantId, hasState, payload));
         }
 
-        int progressOffset = reader.position();
-        int progressCount = reader.count(
-            MAX_RECORDS, "participant progress");
-        if (progressCount > reader.remaining() / 24) {
-            throw invalid("participant progress count exceeds remaining bytes");
-        }
-        if (progressCount != stateCount) {
-            throw invalid("participant progress coverage");
-        }
-        List<Progress> progress = new ArrayList<>(progressCount);
-        Map<Long, Progress> byParticipant = new HashMap<>();
-        previousId = 0;
-        for (int index = 0; index < progressCount; index++) {
-            long participantId = reader.nonzeroU64("progress participant id");
-            long acceptedBoundary = reader.u64();
-            long replayCursor = reader.u64();
-            if (Long.compareUnsigned(participantId, previousId) <= 0
-                || !states.contains(participantId)
-                || Long.compareUnsigned(replayCursor, acceptedBoundary) > 0) {
-                throw invalid("participant progress");
-            }
-            previousId = participantId;
-            Progress value = new Progress(
-                participantId, acceptedBoundary, replayCursor);
-            progress.add(value);
-            byParticipant.put(participantId, value);
-        }
-        List<JournalEntry> journal = readJournal(reader, byParticipant);
-        int journalEnd = reader.position();
+        List<SavedWorkEntry> savedWork = readSavedWork(reader, states);
         TimerSection timers = readTimerRegistrations(
             reader, states);
         List<PendingTimerTick> pendingTicks = readPendingTimerTicks(
             reader, states, timers.names());
-        int completionOffset = reader.position();
-        List<Completion> completions = readTerminalCompletions(reader, states);
         reader.end("relocation envelope");
 
         byte[] canonical = Objects.requireNonNull(encoded, "encoded").clone();
@@ -110,251 +76,36 @@ public final class ZLinkServiceRelocationEnvelopeCodec {
             object,
             applicationVersion,
             applicationStates,
-            progress,
-            completions,
+            savedWork,
             timers.registrations(),
             pendingTicks,
-            canonical,
-            Arrays.copyOfRange(canonical, 0, progressOffset),
-            journal,
-            Arrays.copyOfRange(canonical, journalEnd, completionOffset));
+            canonical);
     }
 
-    public static byte[] encodeSuccessor(
-        Envelope envelope,
-        List<Progress> progress,
-        List<Completion> completions) {
-        Objects.requireNonNull(envelope, "envelope");
-        Writer writer = new Writer();
-        writer.bytes(envelope.canonicalPrefix());
-        writer.u32(progress.size());
-        for (Progress value : progress) {
-            writer.u64(value.participantId());
-            writer.u64(value.acceptedBoundary());
-            writer.u64(value.replayCursor());
-        }
-        Map<Long, Progress> progressByParticipant = new HashMap<>();
-        progress.forEach(value -> progressByParticipant.put(
-            value.participantId(), value));
-        List<JournalEntry> retained = envelope.journal().stream()
-            .filter(entry -> {
-                Progress value = progressByParticipant.get(
-                    entry.participantId());
-                return value != null
-                    && Long.compareUnsigned(
-                        entry.sequence(), value.replayCursor()) > 0;
-            })
-            .toList();
-        writer.u32(retained.size());
-        retained.forEach(value -> writer.bytes(value.rawEntry()));
-        writer.bytes(envelope.canonicalAfterJournal());
-        writer.u32(completions.size());
-        for (Completion value : completions) {
-            writer.u64(value.operationHigh());
-            writer.u64(value.operationLow());
-            writer.text8(value.sourceOwnerId());
-            writer.u64(value.sourceOwnerLeaseGeneration());
-            writer.text8(value.sourceNodeRid());
-            writer.u64(value.sourceNodeGeneration());
-            writer.u64(value.participantId());
-            writer.u64(value.sequence());
-            writer.u32(value.terminalResult());
-            writer.u32(value.failureCode());
-            writer.u8(value.deliveryState());
-            writer.u8(value.payload() == null ? 0 : 1);
-            if (value.payload() != null) {
-                writeApplicationPayload(writer, value.payload());
-            }
-        }
-        byte[] encoded = writer.toByteArray();
-        Envelope verified = decode(encoded);
-        if (verified.relocationHigh() != envelope.relocationHigh()
-            || verified.relocationLow() != envelope.relocationLow()
-            || verified.applicationVersion() != envelope.applicationVersion()) {
-            throw invalid("successor identity");
-        }
-        return encoded;
-    }
-
-    public static Envelope advanceReplay(
-        Envelope envelope,
-        long participantId,
-        long sequence,
-        Completion completion) {
-        Objects.requireNonNull(envelope, "envelope");
-        List<Progress> progress = envelope.participantProgress().stream()
-            .map(value -> value.participantId() == participantId
-                ? new Progress(
-                    participantId,
-                    value.acceptedBoundary(),
-                    Long.compareUnsigned(value.replayCursor(), sequence) >= 0
-                        ? value.replayCursor()
-                        : sequence)
-                : value)
-            .toList();
-        Progress selected = progress.stream()
-            .filter(value -> value.participantId() == participantId)
-            .findFirst()
-            .orElseThrow(() -> invalid("replay participant"));
-        if (Long.compareUnsigned(sequence, selected.acceptedBoundary()) > 0) {
-            throw invalid("replay sequence");
-        }
-        List<Completion> completions = new ArrayList<>(
-            envelope.terminalCompletions());
-        if (completion != null && completions.stream().noneMatch(value ->
-                sameCompletion(value, completion))) {
-            completions.add(completion);
-        }
-        completions.sort((left, right) -> {
-            int participant = Long.compareUnsigned(
-                left.participantId(), right.participantId());
-            return participant != 0
-                ? participant
-                : Long.compareUnsigned(left.sequence(), right.sequence());
-        });
-        return decode(encodeSuccessor(envelope, progress, completions));
-    }
-
-    public static Envelope completeDelivery(
-        Envelope envelope,
-        long operationHigh,
-        long operationLow,
-        String sourceOwnerId,
-        long sourceOwnerLeaseGeneration,
-        RoutingId sourceNodeRid,
-        long sourceNodeGeneration,
-        int deliveryState) {
-        if (deliveryState < 1 || deliveryState > 3) {
-            throw invalid("terminal delivery state");
-        }
-        boolean[] found = {false};
-        List<Completion> completions = envelope.terminalCompletions().stream()
-            .map(value -> {
-                if (value.operationHigh() == operationHigh
-                    && value.operationLow() == operationLow
-                    && value.sourceOwnerId().equals(sourceOwnerId)
-                    && value.sourceOwnerLeaseGeneration()
-                        == sourceOwnerLeaseGeneration
-                    && value.sourceNodeRid().equals(sourceNodeRid.toString())
-                    && value.sourceNodeGeneration() == sourceNodeGeneration) {
-                    found[0] = true;
-                    return new Completion(
-                        value.operationHigh(), value.operationLow(),
-                        value.sourceOwnerId(),
-                        value.sourceOwnerLeaseGeneration(),
-                        value.sourceNodeRid(), value.sourceNodeGeneration(),
-                        value.participantId(), value.sequence(),
-                        value.terminalResult(), value.failureCode(),
-                        deliveryState, value.payload());
-                }
-                return value;
-            })
-            .toList();
-        if (!found[0]) {
-            throw invalid("terminal completion identity");
-        }
-        return decode(encodeSuccessor(
-            envelope, envelope.participantProgress(), completions));
-    }
-
-    public static Envelope putTerminalCompletion(
-        Envelope envelope,
-        Completion completion) {
-        Objects.requireNonNull(envelope, "envelope");
-        Objects.requireNonNull(completion, "completion");
-        List<Completion> completions = new ArrayList<>(
-            envelope.terminalCompletions());
-        int existing = -1;
-        for (int index = 0; index < completions.size(); index++) {
-            if (sameCompletion(completions.get(index), completion)) {
-                existing = index;
-                break;
-            }
-        }
-        if (existing >= 0) {
-            Completion current = completions.get(existing);
-            if (current.participantId() != completion.participantId()
-                || current.sequence() != completion.sequence()
-                || current.terminalResult() != completion.terminalResult()
-                || current.failureCode() != completion.failureCode()
-                || current.payload() == null != (completion.payload() == null)
-                || current.payload() != null
-                    && (!current.payload().packetName().equals(
-                            completion.payload().packetName())
-                        || !current.payload().contentType().equals(
-                            completion.payload().contentType())
-                        || !Arrays.equals(
-                            current.payload().bytes(),
-                            completion.payload().bytes()))) {
-                throw invalid("terminal completion identity conflict");
-            }
-            if (completion.deliveryState() < current.deliveryState()
-                || completion.deliveryState() > current.deliveryState() + 1) {
-                throw invalid("terminal completion delivery transition");
-            }
-            completions.set(existing, completion);
-        } else {
-            completions.add(completion);
-        }
-        completions.sort((left, right) -> {
-            int participant = Long.compareUnsigned(
-                left.participantId(), right.participantId());
-            return participant != 0
-                ? participant
-                : Long.compareUnsigned(left.sequence(), right.sequence());
-        });
-        return decode(encodeSuccessor(
-            envelope, envelope.participantProgress(), completions));
-    }
-
-    private static boolean sameCompletion(
-        Completion left, Completion right) {
-        return left.operationHigh() == right.operationHigh()
-            && left.operationLow() == right.operationLow()
-            && left.sourceOwnerId().equals(right.sourceOwnerId())
-            && left.sourceOwnerLeaseGeneration()
-                == right.sourceOwnerLeaseGeneration()
-            && left.sourceNodeRid().equals(right.sourceNodeRid())
-            && left.sourceNodeGeneration() == right.sourceNodeGeneration();
-    }
-
-    private static void writeApplicationPayload(Writer writer, Payload value) {
-        Writer body = new Writer();
-        body.text8(value.packetName());
-        body.text8(value.contentType());
-        body.bytes32(value.bytes());
-        writer.u8(1);
-        writer.u32(body.size());
-        writer.bytes(body.toByteArray());
-    }
-
-    private static List<JournalEntry> readJournal(
+    private static List<SavedWorkEntry> readSavedWork(
         Reader reader,
-        Map<Long, Progress> progress) {
-        int count = reader.count(MAX_RECORDS, "journal");
+        Set<Long> participants) {
+        int count = reader.count(MAX_RECORDS, "saved work");
         if (count > reader.remaining()) {
-            throw invalid("journal count exceeds remaining bytes");
+            throw invalid("saved work count exceeds remaining bytes");
         }
-        List<JournalEntry> entries = new ArrayList<>(count);
+        List<SavedWorkEntry> entries = new ArrayList<>(count);
         long previousParticipant = 0;
         long previousSequence = 0;
         for (int index = 0; index < count; index++) {
             int entryStart = reader.position();
-            long participantId = reader.nonzeroU64("journal participant id");
-            long sequence = reader.nonzeroU64("journal sequence");
-            Progress participant = progress.get(participantId);
-            if (participant == null
+            long participantId = reader.nonzeroU64("saved-work participant id");
+            long sequence = reader.nonzeroU64("saved-work order");
+            if (!participants.contains(participantId)
                 || Long.compareUnsigned(participantId, previousParticipant) < 0
                 || participantId == previousParticipant
-                    && Long.compareUnsigned(sequence, previousSequence) <= 0
-                || Long.compareUnsigned(sequence, participant.replayCursor()) <= 0
-                || Long.compareUnsigned(sequence, participant.acceptedBoundary()) > 0) {
-                throw invalid("journal order");
+                    && Long.compareUnsigned(sequence, previousSequence) <= 0) {
+                throw invalid("saved work order");
             }
             previousParticipant = participantId;
             previousSequence = sequence;
             readFrozenRecord(reader);
-            entries.add(new JournalEntry(
+            entries.add(new SavedWorkEntry(
                 participantId,
                 sequence,
                 reader.copy(entryStart, reader.position())));
@@ -508,80 +259,15 @@ public final class ZLinkServiceRelocationEnvelopeCodec {
         return values;
     }
 
-    private static List<Completion> readTerminalCompletions(
-        Reader reader,
-        Set<Long> participants) {
-        int count = reader.count(MAX_RECORDS, "terminal completion");
-        if (count > reader.remaining()) {
-            throw invalid(
-                "terminal completion count exceeds remaining bytes");
-        }
-        List<Completion> values = new ArrayList<>(count);
-        Set<OperationKey> operations = new HashSet<>();
-        long previousParticipant = 0;
-        long previousSequence = 0;
-        for (int index = 0; index < count; index++) {
-            long operationHigh = reader.u64();
-            long operationLow = reader.u64();
-            String sourceOwnerId = reader.text8();
-            long sourceOwnerLease = reader.nonzeroU64("request source lease");
-            String sourceNodeRid = reader.text8();
-            long sourceNodeGeneration = reader.nonzeroU64(
-                "request source node generation");
-            long participantId = reader.nonzeroU64(
-                "completion participant id");
-            long sequence = reader.nonzeroU64("completion sequence");
-            int result = terminalResult(reader.u32());
-            int failureCode = reader.u32();
-            int deliveryState = reader.u8();
-            if (deliveryState > 3) {
-                throw invalid("completion delivery state");
-            }
-            Payload payload = reader.bool() ? readApplicationPayload(reader) : null;
-            OperationKey key = new OperationKey(
-                sourceOwnerId,
-                sourceOwnerLease,
-                sourceNodeRid,
-                sourceNodeGeneration,
-                operationHigh,
-                operationLow);
-            if (!participants.contains(participantId)
-                || Long.compareUnsigned(participantId, previousParticipant) < 0
-                || participantId == previousParticipant
-                    && Long.compareUnsigned(sequence, previousSequence) <= 0
-                || !operations.add(key)) {
-                throw invalid("terminal completion order");
-            }
-            previousParticipant = participantId;
-            previousSequence = sequence;
-            values.add(new Completion(
-                operationHigh,
-                operationLow,
-                sourceOwnerId,
-                sourceOwnerLease,
-                sourceNodeRid,
-                sourceNodeGeneration,
-                participantId,
-                sequence,
-                result,
-                failureCode,
-                deliveryState,
-                payload));
-        }
-        return values;
-    }
-
-    private static Payload readApplicationPayload(Reader reader) {
+    private static void readApplicationPayload(Reader reader) {
         if (reader.u8() != 1) {
             throw invalid("application payload version");
         }
         Reader body = reader.body32();
-        Payload value = new Payload(
-            body.text8(),
-            body.text8(),
-            body.bytes32());
+        body.text8();
+        body.text8();
+        body.bytes32();
         body.end("application payload");
-        return value;
     }
 
     private static void readMetadata(Reader reader) {
@@ -659,100 +345,32 @@ public final class ZLinkServiceRelocationEnvelopeCodec {
         return value;
     }
 
-    public record Progress(long participantId, long acceptedBoundary, long replayCursor) {
-        public Progress {
-            if (participantId == 0
-                || Long.compareUnsigned(replayCursor, acceptedBoundary) > 0) {
-                throw invalid("participant progress");
-            }
-        }
-    }
-
-    public record Payload(String packetName, String contentType, byte[] bytes) {
-        public Payload {
-            Objects.requireNonNull(packetName, "packetName");
-            Objects.requireNonNull(contentType, "contentType");
-            bytes = Objects.requireNonNull(bytes, "bytes").clone();
-        }
-
-        @Override public byte[] bytes() { return bytes.clone(); }
-    }
-
-    public record Completion(
-        long operationHigh,
-        long operationLow,
-        String sourceOwnerId,
-        long sourceOwnerLeaseGeneration,
-        String sourceNodeRid,
-        long sourceNodeGeneration,
-        long participantId,
-        long sequence,
-        int terminalResult,
-        int failureCode,
-        int deliveryState,
-        Payload payload) {
-        public Completion {
-            Objects.requireNonNull(sourceOwnerId, "sourceOwnerId");
-            Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
-            if (sourceOwnerLeaseGeneration == 0 || sourceNodeGeneration == 0
-                || participantId == 0 || sequence == 0
-                || deliveryState < 0 || deliveryState > 3) {
-                throw invalid("terminal completion");
-            }
-            ZLinkServiceRelocationEnvelopeCodec.terminalResult(
-                terminalResult);
-        }
-    }
-
     public record Envelope(
         long relocationHigh,
         long relocationLow,
         ObjectIdentity object,
         long applicationVersion,
         List<ApplicationState> applicationStates,
-        List<Progress> participantProgress,
-        List<Completion> terminalCompletions,
+        List<SavedWorkEntry> savedWork,
         List<TimerRegistration> timerRegistrations,
         List<PendingTimerTick> pendingTimerTicks,
-        byte[] canonicalBytes,
-        byte[] canonicalPrefix,
-        List<JournalEntry> journal,
-        byte[] canonicalAfterJournal) {
+        byte[] canonicalBytes) {
         public Envelope {
-            participantProgress = List.copyOf(participantProgress);
             applicationStates = List.copyOf(applicationStates);
-            terminalCompletions = List.copyOf(terminalCompletions);
+            savedWork = List.copyOf(savedWork);
             timerRegistrations = List.copyOf(timerRegistrations);
             pendingTimerTicks = List.copyOf(pendingTimerTicks);
             canonicalBytes = canonicalBytes.clone();
-            canonicalPrefix = canonicalPrefix.clone();
-            journal = List.copyOf(journal);
-            canonicalAfterJournal = canonicalAfterJournal.clone();
         }
 
         @Override public byte[] canonicalBytes() { return canonicalBytes.clone(); }
-        @Override public byte[] canonicalPrefix() { return canonicalPrefix.clone(); }
-        @Override public byte[] canonicalAfterJournal() {
-            return canonicalAfterJournal.clone();
-        }
-
-        public int pendingRelayCount() {
-            return (int) terminalCompletions.stream()
-                .filter(value -> value.deliveryState() == 0)
-                .count();
-        }
-
-        public boolean recoveryReleaseEligible() {
-            return terminalCompletions.stream().allMatch(value ->
-                value.deliveryState() == 2 || value.deliveryState() == 3);
-        }
     }
 
-    public record JournalEntry(
+    public record SavedWorkEntry(
         long participantId,
         long sequence,
         byte[] rawEntry) {
-        public JournalEntry {
+        public SavedWorkEntry {
             rawEntry = rawEntry.clone();
         }
 
@@ -766,7 +384,7 @@ public final class ZLinkServiceRelocationEnvelopeCodec {
         public byte[] frozenRecord() {
             if (rawEntry.length <= 16) {
                 throw new IllegalStateException(
-                    "journal entry does not contain a frozen operation");
+                    "saved-work entry does not contain a frozen operation");
             }
             return Arrays.copyOfRange(
                 rawEntry, 16, rawEntry.length);
@@ -814,15 +432,6 @@ public final class ZLinkServiceRelocationEnvelopeCodec {
     private record TimerSection(
         Map<Long, Set<String>> names,
         List<TimerRegistration> registrations) {
-    }
-
-    private record OperationKey(
-        String sourceOwnerId,
-        long sourceOwnerLeaseGeneration,
-        String sourceNodeRid,
-        long sourceNodeGeneration,
-        long operationHigh,
-        long operationLow) {
     }
 
     private static final class Reader {
@@ -919,38 +528,6 @@ public final class ZLinkServiceRelocationEnvelopeCodec {
             return result;
         }
         int remaining() { return source.length - offset; }
-    }
-
-    private static final class Writer {
-        private final ByteArrayOutputStream output = new ByteArrayOutputStream();
-        int size() { return output.size(); }
-        void u8(int value) {
-            if (value < 0 || value > 0xff) throw invalid("u8");
-            output.write(value);
-        }
-        void u32(int value) {
-            output.writeBytes(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN)
-                .putInt(value).array());
-        }
-        void u64(long value) {
-            output.writeBytes(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
-                .putLong(value).array());
-        }
-        void text8(String value) {
-            byte[] encoded = Objects.requireNonNull(value, "value")
-                .getBytes(StandardCharsets.UTF_8);
-            if (encoded.length < 1 || encoded.length > 255) {
-                throw invalid("text8");
-            }
-            u8(encoded.length);
-            bytes(encoded);
-        }
-        void bytes32(byte[] value) {
-            u32(value.length);
-            bytes(value);
-        }
-        void bytes(byte[] value) { output.writeBytes(value); }
-        byte[] toByteArray() { return output.toByteArray(); }
     }
 
     private static IllegalArgumentException invalid(String field) {

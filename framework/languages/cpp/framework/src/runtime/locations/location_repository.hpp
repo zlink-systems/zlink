@@ -141,19 +141,14 @@ struct authority_scan_expired_t
 using authority_scan_result_t =
   std::variant<authority_page_t, authority_scan_expired_t>;
 
-struct relocation_capacity_fence_t
-{
-    std::string value;
-};
-
 struct authority_put_t
 {
     std::vector<std::byte> payload;
-    authority_generation_transition_t generation_transition =
-      authority_generation_transition_t::preserve;
-    std::optional<location_owner_token_t> target_owner;
-    std::optional<relocation_capacity_fence_t>
-      relocation_capacity_fence;
+};
+struct authority_retarget_t
+{
+    std::vector<std::byte> payload;
+    object_creation_target_t target;
 };
 struct authority_restore_t
 {
@@ -164,7 +159,10 @@ struct authority_delete_t
 {
 };
 using authority_mutation_t =
-  std::variant<authority_put_t, authority_restore_t, authority_delete_t>;
+  std::variant<authority_put_t,
+               authority_retarget_t,
+               authority_restore_t,
+               authority_delete_t>;
 
 struct authority_stored_t
 {
@@ -384,51 +382,6 @@ using object_abort_result_t = std::variant<
   object_abort_conflict_t,
   authority_generation_exhausted_t>;
 
-struct relocation_capacity_reserve_request_t
-{
-    std::array<std::byte, 16> reservation_id{};
-    authority_key_t key;
-    std::string expected_store_version;
-    placement_object_kind_t object_kind =
-      placement_object_kind_t::actor;
-    std::string stable_type;
-    object_creation_target_t source;
-    object_creation_target_t target;
-    placement_capacity_bundle_t capacity_bundle;
-};
-struct relocation_capacity_reserved_t
-{
-    relocation_capacity_fence_t fence;
-};
-struct relocation_capacity_already_reserved_t
-{
-    relocation_capacity_fence_t fence;
-};
-struct relocation_capacity_conflict_t
-{
-    authority_read_result_t current;
-};
-struct relocation_capacity_target_unavailable_t
-{
-};
-struct relocation_capacity_exhausted_t
-{
-};
-using relocation_capacity_reserve_result_t = std::variant<
-  relocation_capacity_reserved_t,
-  relocation_capacity_already_reserved_t,
-  relocation_capacity_conflict_t,
-  relocation_capacity_target_unavailable_t,
-  relocation_capacity_exhausted_t>;
-
-enum class relocation_capacity_abort_result_t : std::uint8_t
-{
-    aborted = 1,
-    already_aborted = 2,
-    already_committed = 3,
-    stale = 4
-};
-
 struct aggregate_id_t
 {
     std::array<std::byte, 16> value{};
@@ -445,7 +398,6 @@ struct aggregate_participant_t
       authority_generation_transition_t::new_owner;
     std::vector<std::byte> authority_payload;
     std::vector<std::byte> membership_mutation;
-    std::optional<relocation_capacity_fence_t> capacity_fence;
 };
 struct aggregate_prepare_request_t
 {
@@ -457,7 +409,6 @@ struct aggregate_prepare_request_t
     std::uint64_t target_descriptor_lifecycle_generation = 0;
     placement_capacity_bundle_t capacity_bundle;
     location_owner_token_t target_owner;
-    std::vector<relocation_capacity_fence_t> capacity_fences;
 };
 struct aggregate_fence_t
 {
@@ -603,14 +554,6 @@ class location_repository_t
       std::stop_token cancellation = {}) = 0;
     virtual task_t<object_abort_result_t> abort (
       object_abort_request_t request,
-      std::stop_token cancellation = {}) = 0;
-    virtual task_t<relocation_capacity_reserve_result_t>
-    reserve_relocation_capacity (
-      relocation_capacity_reserve_request_t request,
-      std::stop_token cancellation = {}) = 0;
-    virtual task_t<relocation_capacity_abort_result_t>
-    abort_relocation_capacity (
-      relocation_capacity_fence_t fence,
       std::stop_token cancellation = {}) = 0;
     virtual task_t<aggregate_prepare_result_t> prepare_aggregate (
       aggregate_prepare_request_t request,

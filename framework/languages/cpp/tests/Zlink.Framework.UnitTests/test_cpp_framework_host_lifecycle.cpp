@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include <zlink/framework.hpp>
+#include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 
 #include <algorithm>
@@ -177,6 +178,86 @@ class configuration_actor_factory_t final :
     }
 };
 
+class remote_create_entry_spot_t final
+    : public zlink::framework::entry_spot_t<configuration_actor_t>
+{
+  public:
+    explicit remote_create_entry_spot_t (
+      zlink::framework::entry_spot_context_t context) :
+        _context (std::move (context))
+    {
+    }
+
+    zlink::framework::entry_spot_context_t &context () noexcept override
+    {
+        return _context;
+    }
+
+    const zlink::framework::entry_spot_context_t &
+    context () const noexcept override
+    {
+        return _context;
+    }
+
+    void configure () override
+    {
+        _context.handlers ().add_actor_send<
+          &remote_create_entry_spot_t::on_probe> (
+            "remote-create-probe");
+    }
+
+    zlink::framework::task_t<zlink::framework::actor_create_response_t>
+    on_create_actor (
+      configuration_actor_t &,
+      const zlink::framework::message_t &) override
+    {
+        created_count.fetch_add (1, std::memory_order_acq_rel);
+        co_return zlink::framework::actor_create_response_t::accept ();
+    }
+
+    zlink::framework::task_t<zlink::framework::spot_actor_join_result_t>
+    on_actor_join (
+      std::string_view,
+      const zlink::framework::message_t &) override
+    {
+        co_return zlink::framework::spot_actor_join_result_t::accept ();
+    }
+
+    zlink::framework::task_t<void>
+    on_actor_joined (configuration_actor_t &) override
+    {
+        joined_count.fetch_add (1, std::memory_order_acq_rel);
+        co_return;
+    }
+
+    zlink::framework::task_t<void>
+    on_leave_actor (configuration_actor_t &) override
+    {
+        co_return;
+    }
+
+    zlink::framework::task_t<void>
+    on_disconnect_actor (configuration_actor_t &) override
+    {
+        co_return;
+    }
+
+    zlink::framework::task_t<void>
+    on_probe (
+      configuration_actor_t &,
+      zlink::framework::message_context_t &,
+      const relocation_ready_message_t &)
+    {
+        co_return;
+    }
+
+    static inline std::atomic_int created_count{0};
+    static inline std::atomic_int joined_count{0};
+
+  private:
+    zlink::framework::entry_spot_context_t _context;
+};
+
 class configuration_instance_spot_t final : public zlink::framework::instance_spot_t
 {
   public:
@@ -307,6 +388,169 @@ bool wait_until (
         std::this_thread::sleep_for (
           std::chrono::milliseconds (1));
     return condition ();
+}
+
+void configure_remote_actor_create_app (
+  zlink::framework::app_t &app,
+  const std::shared_ptr<
+    zlink::framework::runtime::in_memory_location_store_t>
+    &location_store,
+  std::string routing_id,
+  bool actor_target)
+{
+    app.add_zlink_framework (
+      [location_store, routing_id = std::move (routing_id), actor_target] (
+        zlink::framework::zlink_framework_options_t &options) {
+          options.add_location_store (location_store);
+          options.configure_locations ().polling_interval =
+            std::chrono::milliseconds (10);
+          auto mesh = options.add_route_mesh (
+            "host-remote-actor-create-mesh");
+          mesh.set_object_role (
+                zlink::framework::object_role_t::server)
+            .set_routing_id (
+              zlink::routing_id_t::from (routing_id))
+            .listen ("tcp://127.0.0.1:0");
+          if (actor_target) {
+              mesh.add_entry_spot<remote_create_entry_spot_t> (
+                    [] (zlink::framework::entry_spot_context_t context) {
+                        return std::make_shared<remote_create_entry_spot_t> (
+                          std::move (context));
+                    })
+                .add_actor_factory<
+                  configuration_actor_t,
+                  configuration_actor_factory_t> (
+                  "remote-create-actor",
+                  std::make_shared<configuration_actor_factory_t> (),
+                  [] (auto &factory) { factory.disable_relocation (); });
+          }
+      });
+}
+
+bool verify_remote_actor_create_completion_reaches_source ()
+{
+    remote_create_entry_spot_t::created_count.store (
+      0, std::memory_order_release);
+    remote_create_entry_spot_t::joined_count.store (
+      0, std::memory_order_release);
+    auto location_store = std::make_shared<
+      zlink::framework::runtime::in_memory_location_store_t> ();
+
+    auto target = zlink::framework::app_t::create ();
+    configure_remote_actor_create_app (
+      target, location_store, "host-remote-create-target", true);
+    char target_program[] = "host-remote-create-target";
+    char *target_arguments[] = {target_program, nullptr};
+    int target_exit_code = -1;
+    std::thread target_thread ([&] {
+        target_exit_code = target.run (1, target_arguments);
+    });
+    if (!wait_until ([&] { return target.is_ready (); },
+                     std::chrono::seconds (3))) {
+        target.request_stop ();
+        target_thread.join ();
+        std::cerr << "remote Actor create target must reach Serving\n";
+        return false;
+    }
+
+    auto source = zlink::framework::app_t::create ();
+    configure_remote_actor_create_app (
+      source, location_store, "host-remote-create-source", false);
+    char source_program[] = "host-remote-create-source";
+    char *source_arguments[] = {source_program, nullptr};
+    int source_exit_code = -1;
+    std::thread source_thread ([&] {
+        source_exit_code = source.run (1, source_arguments);
+    });
+    if (!wait_until ([&] { return source.is_ready (); },
+                     std::chrono::seconds (3))) {
+        source.request_stop ();
+        target.request_stop ();
+        source_thread.join ();
+        target_thread.join ();
+        std::cerr << "remote Actor create source must reach Serving\n";
+        return false;
+    }
+
+    auto source_services = source.advanced ().services ().build_provider ();
+    auto &routes = source_services.get_required<
+      zlink::framework::route_mesh_runtime_t> ();
+    const auto route_ready = wait_until (
+      [&] {
+          return routes.snapshot (
+                   "host-remote-actor-create-mesh")
+                   .ready_peer_count
+                 == 1;
+      },
+      std::chrono::seconds (5));
+
+    auto &actors = source_services.get_required<
+      zlink::framework::actor_manager_t> ();
+    const auto created =
+      actors
+        .get_or_create (
+          zlink::framework::actor_id_t ("host-remote-created-actor"),
+          "remote-create-actor")
+        .timeout (std::chrono::seconds (5))
+        .submit ()
+        .result ();
+    auto &location_repository = source_services.get_required<
+      zlink::framework::location_repository_t> ();
+    const auto authority =
+      location_repository
+        .read_authority (
+          zlink::framework::runtime::actor_authority_key (
+            "host-remote-created-actor"))
+        .result ()
+        .value ();
+    const auto *authority_snapshot = std::get_if<
+      zlink::framework::authority_snapshot_t> (
+        &authority);
+    const bool authority_active =
+      authority_snapshot
+      && authority_snapshot->allocation.state
+           == zlink::framework::placement_allocation_state_t::active
+      && authority_snapshot->allocation.target.node_rid.value ()
+           == "host-remote-create-target"
+      && !authority_snapshot->pending_creation;
+
+    const auto source_stopped =
+      source.shutdown (std::chrono::seconds (2)).result ().value ();
+    const auto target_stopped =
+      target.shutdown (std::chrono::seconds (2)).result ().value ();
+    source_thread.join ();
+    target_thread.join ();
+
+    const bool passed =
+      route_ready && created && authority_active
+      && std::holds_alternative<
+           zlink::framework::actor_create_created_t> (created.value ())
+      && remote_create_entry_spot_t::created_count.load (
+           std::memory_order_acquire)
+           == 1
+      && remote_create_entry_spot_t::joined_count.load (
+           std::memory_order_acquire)
+           == 0
+      && source_stopped.outcome
+           == zlink::framework::termination_outcome_t::stopped
+      && target_stopped.outcome
+           == zlink::framework::termination_outcome_t::stopped
+      && source_exit_code == 0 && target_exit_code == 0;
+    if (!passed) {
+        std::cerr
+          << "remote Actor create completion must reach the source after "
+             "target creation: route-ready="
+          << route_ready << " created-callback="
+          << remote_create_entry_spot_t::created_count.load ()
+          << " joined-callback="
+          << remote_create_entry_spot_t::joined_count.load ()
+          << " created=" << static_cast<bool> (created)
+          << " authority-active=" << authority_active
+          << " error="
+          << (created.error () ? created.error ()->what () : "-")
+          << '\n';
+    }
+    return passed;
 }
 
 bool expect_not_configured (
@@ -802,7 +1046,19 @@ bool verify_relocating_status_closes_admission ()
                   << " observed=" << observed_relocating
                   << " accepting=" << relocating_status.accepting_work
                   << " outcome=" << static_cast<int> (result.outcome)
-                  << " reason=" << static_cast<int> (result.reason) << '\n';
+                  << " reason=" << static_cast<int> (result.reason)
+                  << " serving-state="
+                  << static_cast<int> (serving_status.state)
+                  << " serving-ready=" << serving_status.is_ready
+                  << " serving-accepting=" << serving_status.accepting_work
+                  << " target-stop="
+                  << static_cast<int> (target_stopped.outcome)
+                  << ":" << static_cast<int> (target_stopped.reason)
+                  << " source-stop="
+                  << static_cast<int> (source_stopped.outcome)
+                  << ":" << static_cast<int> (source_stopped.reason)
+                  << " target-exit=" << target_exit_code
+                  << " source-exit=" << source_exit_code << '\n';
     }
     return passed;
 }
@@ -960,6 +1216,9 @@ bool verify_application_signaled_relocation ()
 int main ()
 {
     if (!verify_object_store_configuration_preflight ())
+        return EXIT_FAILURE;
+
+    if (!verify_remote_actor_create_completion_reaches_source ())
         return EXIT_FAILURE;
 
     if (!verify_relocation_retry_after_target_unavailable ())

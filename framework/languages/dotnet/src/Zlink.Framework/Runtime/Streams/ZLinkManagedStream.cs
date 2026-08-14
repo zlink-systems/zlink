@@ -51,6 +51,13 @@ internal sealed class ZLinkManagedStream : IZLinkStream
         return _socket.Send(_routingId, payload, flags);
     }
 
+    internal ValueTask SubmitRawAsync(
+        Message payload,
+        CancellationToken cancellationToken)
+    {
+        return _socket.SendAsync(_routingId, payload, cancellationToken);
+    }
+
     public void UpdateAddresses(string? localAddr, string? remoteAddr)
     {
         LocalAddr = localAddr;

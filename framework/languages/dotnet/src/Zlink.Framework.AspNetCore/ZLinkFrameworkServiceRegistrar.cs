@@ -141,10 +141,12 @@ internal static class ZLinkFrameworkServiceRegistrar
                 provider.GetRequiredService<ZLinkFrameworkRuntime>().PreflightRetireAsync,
                 provider.GetRequiredService<ZLinkFrameworkRuntime>().PublishRetiringAsync,
                 registration.ApplicationVersion,
-                inboundDispatchSnapshot: provider.GetRequiredService<
-                    ZLinkFrameworkRuntime>().SnapshotInboundDispatch,
                 acceptingWorkSnapshot: () => provider.GetRequiredService<
                     ZLinkFrameworkRuntime>().IsAcceptingApplicationWork,
+                capacitySnapshot: () => provider.GetRequiredService<
+                    ZLinkFrameworkRuntime>().GetHostCapacityStatus(),
+                resetCapacityMetrics: () => provider.GetRequiredService<
+                    ZLinkFrameworkRuntime>().ResetCapacityMetrics(),
                 logger: provider.GetService<ILogger<ZLinkFrameworkMaintenanceRuntime>>()));
         services.TryAddSingleton<IZLinkFrameworkRuntime>(static provider =>
             provider.GetRequiredService<ZLinkFrameworkMaintenanceRuntime>());

@@ -8,7 +8,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMeshBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationReceiver;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
 public final class ZLinkMeshNodeRuntime implements AutoCloseable {
     private final ZLinkInternalMeshNode node;
@@ -21,20 +21,21 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
         MeshNodeRegistration registration,
         ZLinkMeshBackendAdapter adapter,
         ZLinkBackendContext context) {
-        return start(registration, adapter, context, null, false, null);
+        return start(registration, adapter, context, false, null);
     }
 
     static ZLinkMeshNodeRuntime start(
         MeshNodeRegistration registration,
         ZLinkMeshBackendAdapter adapter,
         ZLinkBackendContext context,
-        ZLinkInboundDispatchBudget applicationDispatchBudget) {
+        boolean deferServiceReadyPublication,
+        Consumer<ZLinkMeshDispatchRecord> receiver) {
         return start(
             registration,
             adapter,
             context,
-            applicationDispatchBudget,
-            false,
+            deferServiceReadyPublication,
+            receiver,
             null);
     }
 
@@ -42,13 +43,16 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
         MeshNodeRegistration registration,
         ZLinkMeshBackendAdapter adapter,
         ZLinkBackendContext context,
-        ZLinkInboundDispatchBudget applicationDispatchBudget,
         boolean deferServiceReadyPublication,
-        Consumer<ZLinkMeshDispatchRecord> receiver) {
+        Consumer<ZLinkMeshDispatchRecord> receiver,
+        ZLinkApplicationJobQueue applicationJobQueue) {
         ZLinkInternalMeshNode node =
             adapter.createMeshNode(context, registration.meshName());
         boolean started = false;
         try {
+            if (applicationJobQueue != null) {
+                node.setApplicationJobQueue(applicationJobQueue);
+            }
             if (registration.routingId() != null) {
                 node.setRoutingId(registration.routingId());
             }
@@ -76,13 +80,6 @@ public final class ZLinkMeshNodeRuntime implements AutoCloseable {
             node.setRouterSendTimeout(
                 registration.configureRouterSocket().sendTimeout()
                     .orElse(Duration.ofSeconds(1)));
-            node.setMailboxMessageBudget(
-                registration.configureRouterSocket().mailboxMessageBudget());
-            node.setMailboxByteBudget(
-                registration.configureRouterSocket().mailboxByteBudget());
-            if (applicationDispatchBudget != null) {
-                node.setApplicationDispatchBudget(applicationDispatchBudget);
-            }
             if (receiver instanceof ZLinkMeshApplicationReceiver applicationReceiver) {
                 node.setApplicationReceiver(applicationReceiver);
             }

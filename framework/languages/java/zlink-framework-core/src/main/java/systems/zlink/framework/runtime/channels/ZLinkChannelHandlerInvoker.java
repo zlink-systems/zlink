@@ -19,6 +19,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -129,9 +130,13 @@ final class ZLinkChannelHandlerInvoker {
         Supplier<CompletionStage<T>> operation) {
         CompletableFuture<T> result = new CompletableFuture<>();
         var flow = ZLinkFlowContext.current();
+        var applicationJob = ZLinkApplicationJobContext.transferToQueuedJob();
         try {
             handlerExecutor.execute(() -> {
-                try {
+                try (var ignored =
+                         ZLinkApplicationJobContext.enterQueued(applicationJob)) {
+                    ZLinkApplicationJobContext
+                        .beforeFirstApplicationInstruction();
                     operation.get().whenComplete((value, error) -> {
                         ZLinkFlowContext.run(flow, () -> {
                             if (error != null) {
@@ -143,9 +148,16 @@ final class ZLinkChannelHandlerInvoker {
                     });
                 } catch (RuntimeException ex) {
                     result.completeExceptionally(ex);
+                } finally {
+                    if (applicationJob != null) {
+                        applicationJob.close();
+                    }
                 }
             });
         } catch (RuntimeException ex) {
+            if (applicationJob != null) {
+                applicationJob.close();
+            }
             result.completeExceptionally(ex);
         }
         return result;

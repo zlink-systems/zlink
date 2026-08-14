@@ -57,9 +57,8 @@ internal sealed class ZLinkStreamRuntimeManager(
                     actorDispatchEnabled: streamNodeRegistration.ActorDispatchEnabled,
                     boundEndpoint: boundEndpoint,
                     advertisedEndpoint: advertisedEndpoint,
-                    inboundDispatchBudget: state.InboundDispatchBudget,
-                    completionAdmission: state.CompletionAdmission,
-                    maxMessageSize: streamNodeRegistration.SocketConfig.MaxMessageSize);
+                    maxMessageSize: streamNodeRegistration.SocketConfig.MaxMessageSize,
+                    applicationJobQueue: state.ApplicationJobQueue);
                 state.StreamNodes.Add(streamNodeRegistration.StreamNodeName, runtime);
                 runtime.Start();
             }

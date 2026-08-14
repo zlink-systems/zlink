@@ -31,13 +31,6 @@ export interface PublicHostStatus {
   readonly state: number;
   readonly isReady: boolean;
   readonly acceptingWork: boolean;
-  readonly inboundDispatch: {
-    readonly applicationHwmBytes: string;
-    readonly pendingPayloadBytes: string;
-    readonly queuedPayloadBytes: string;
-    readonly activePayloadBytes: string;
-    readonly applicationReceivePaused: boolean;
-  };
   readonly sequence: string;
   readonly observedAt: string;
 }

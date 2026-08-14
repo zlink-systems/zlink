@@ -5,8 +5,6 @@ namespace Zlink.Framework.Runtime.Host;
 
 internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 {
-    private const int DefaultPendingRequestLimit = 65_536;
-    private const int DefaultCompletionSendLimit = 65_536;
     private readonly object _disposeGate = new();
     private Task? _disposeTask;
     private int _operationFenced;
@@ -16,18 +14,19 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         ZLinkFrameworkRegistration registration,
         IServiceProvider services,
         ZLinkRuntimeErrorSink errorSink,
-        object executionOwner)
+        object executionOwner,
+        ZLinkApplicationJobQueueCapacity applicationJobQueueCapacity)
     {
         Context = context;
         Registration = registration;
         ErrorSink = errorSink;
-        InboundDispatchBudget = new ZLinkInboundDispatchBudget(
-            registration.InboundDispatchOptions.EffectiveApplicationHwmBytes,
-            registration.ResolveMaximumApplicationMessageBytes());
-        CompletionAdmission = new ZLinkCompletionAdmissionOwner(
-            DefaultPendingRequestLimit,
-            DefaultCompletionSendLimit,
-            registration.InboundDispatchOptions.EffectiveApplicationHwmBytes);
+        ApplicationJobQueue = new ZLinkApplicationJobQueue(
+            applicationJobQueueCapacity);
+        context.ConfigureApplicationJobQueue(ApplicationJobQueue);
+        Capacity = new ZLinkHostCapacityProjection(
+            context,
+            registration.InboundDispatchOptions,
+            ApplicationJobQueue);
         TimerScheduler = new ZLinkTimerScheduler();
         TaskRunner = new ZLinkRuntimeTaskRunner(
             ErrorSink,
@@ -40,13 +39,15 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
     public ZLinkFrameworkRegistration Registration { get; }
 
+    internal ZLinkApplicationJobQueue ApplicationJobQueue { get; }
+
+    internal ZLinkHostCapacityProjection Capacity { get; }
+
     public object SyncRoot { get; } = new();
 
     public CancellationTokenSource StopTokenSource { get; } = new();
 
-    public ZLinkInboundDispatchBudget InboundDispatchBudget { get; }
-
-    public ZLinkCompletionAdmissionOwner CompletionAdmission { get; }
+    internal CancellationTokenSource ForceStopTokenSource { get; } = new();
 
     public ZLinkTimerScheduler TimerScheduler { get; }
 
@@ -190,7 +191,10 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
                     .ConfigureAwait(false);
         }
 
+        if (forceStopToken.CanBeCanceled)
+            Capture(ForceStopTokenSource.Cancel);
         Capture(StopTokenSource.Cancel);
+        Capture(ApplicationJobQueue.Dispose);
         foreach (var node in resources.SpotNodes) Capture(node.RequestStop);
         foreach (var stream in resources.StreamNodes) Capture(stream.RequestStop);
 
@@ -228,9 +232,9 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
         await CaptureAsync(() => WaitForListenerTasksAsync(resources.ListenerTasks)).ConfigureAwait(false);
 
-        Capture(CompletionAdmission.Dispose);
         await CaptureAsync(TimerScheduler.DisposeAsync).ConfigureAwait(false);
         Capture(ErrorSink.Dispose);
+        Capture(ForceStopTokenSource.Dispose);
         Capture(StopTokenSource.Dispose);
         await CaptureAsync(() => DisposeSafelyAsync(Context)).ConfigureAwait(false);
 

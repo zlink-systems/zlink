@@ -30,20 +30,9 @@ bool pending_actor_admission_t::matches_prepare (
 
 bool actor_transfer_coordinator_t::try_reserve_source (
   const std::string &actor_key,
-  std::string transfer_id,
-  std::chrono::milliseconds terminal_wait)
+  std::string transfer_id)
 {
-    std::unique_lock lock (_mutex);
-    if (terminal_wait > std::chrono::milliseconds::zero ()
-        && has_pending_session_route_terminal_unlocked (actor_key)) {
-        (void) _changed.wait_for (
-          lock, terminal_wait, [this, &actor_key] {
-              return !has_pending_session_route_terminal_unlocked (
-                actor_key);
-          });
-    }
-    if (has_pending_session_route_terminal_unlocked (actor_key))
-        return false;
+    std::lock_guard lock (_mutex);
     return _moves.emplace (
                    actor_key,
                    move_state_t{actor_move_phase_t::source_reserved, std::move (transfer_id)})
@@ -554,6 +543,34 @@ actor_transfer_coordinator_t::transfer_id (const std::string &actor_key) const
              : std::make_optional (found->second.transfer_id);
 }
 
+bool actor_transfer_coordinator_t::try_submit_source_leave (
+  const std::string &actor_key,
+  const std::string &transfer_id)
+{
+    std::lock_guard lock (_mutex);
+    const auto found = _moves.find (actor_key);
+    if (found == _moves.end ()
+        || found->second.phase != actor_move_phase_t::source_remote
+        || found->second.transfer_id != transfer_id
+        || found->second.source_leave_submitted) {
+        return false;
+    }
+    found->second.source_leave_submitted = true;
+    return true;
+}
+
+bool actor_transfer_coordinator_t::source_leave_submitted (
+  const std::string &actor_key,
+  const std::string &transfer_id) const
+{
+    std::lock_guard lock (_mutex);
+    const auto found = _moves.find (actor_key);
+    return found != _moves.end ()
+           && found->second.phase == actor_move_phase_t::source_remote
+           && found->second.transfer_id == transfer_id
+           && found->second.source_leave_submitted;
+}
+
 bool actor_transfer_coordinator_t::try_add_admission (std::string transfer_id,
                                                       pending_actor_admission_t admission)
 {
@@ -687,8 +704,6 @@ actor_transfer_coordinator_t::complete_commit_and_take_backlog (
         backlog = std::move (queued->second);
         _backlogs.erase (queued);
     }
-    stage_session_route_terminal_gate_unlocked (
-      transfer_id, found->second);
     _moves.erase (moving);
     _completed_admissions.insert_or_assign (transfer_id, found->second);
     _admissions.erase (found);
@@ -750,77 +765,6 @@ bool actor_transfer_coordinator_t::commit_session_relocation_route_authority (
     return true;
 }
 
-void actor_transfer_coordinator_t::stage_session_route_terminal_gate_unlocked (
-  const std::string &transfer_id,
-  const pending_actor_admission_t &admission)
-{
-    if (admission.session_relocation_route.empty ()
-        || admission.session_relocation_actor_type.empty ()
-        || admission.session_relocation_target_owner_lease_generation == 0
-        || admission
-             .session_relocation_committed_authority_owner_generation
-             == 0) {
-        return;
-    }
-    const session_route_terminal_fingerprint_t fingerprint{
-      admission.actor_key,
-      transfer_id,
-      admission.session_relocation_actor_type,
-      admission.session_relocation_route,
-      admission.session_relocation_target_owner_lease_generation,
-      admission.deadline};
-    const auto completed = _completed_session_route_terminals.find (
-      transfer_id);
-    if (completed != _completed_session_route_terminals.end ())
-        return;
-    _pending_session_route_terminals.insert_or_assign (
-      transfer_id, fingerprint);
-}
-
-bool actor_transfer_coordinator_t::has_pending_session_route_terminal_unlocked (
-  const std::string &actor_key) const
-{
-    return std::ranges::any_of (
-      _pending_session_route_terminals,
-      [&actor_key] (const auto &entry) {
-          return entry.second.actor_key == actor_key;
-      });
-}
-
-bool actor_transfer_coordinator_t::complete_session_relocation_route_terminal (
-  const std::string &transfer_id,
-  const std::string &actor_type,
-  const std::vector<std::uint8_t> &route,
-  std::uint64_t target_owner_lease_generation)
-{
-    if (transfer_id.empty () || actor_type.empty () || route.empty ()
-        || target_owner_lease_generation == 0)
-        return false;
-    std::lock_guard lock (_mutex);
-    const auto exact = [&] (const auto &fingerprint) {
-        return fingerprint.transfer_id == transfer_id
-               && fingerprint.actor_type == actor_type
-               && fingerprint.route == route
-               && fingerprint.target_owner_lease_generation
-                    == target_owner_lease_generation;
-    };
-    if (const auto completed = _completed_session_route_terminals.find (
-          transfer_id);
-        completed != _completed_session_route_terminals.end ()) {
-        return exact (completed->second);
-    }
-    const auto pending = _pending_session_route_terminals.find (
-      transfer_id);
-    if (pending == _pending_session_route_terminals.end ()
-        || !exact (pending->second))
-        return false;
-    _completed_session_route_terminals.emplace (
-      transfer_id, pending->second);
-    _pending_session_route_terminals.erase (pending);
-    _changed.notify_all ();
-    return true;
-}
-
 std::optional<pending_actor_admission_t>
 actor_transfer_coordinator_t::session_relocation_admission (
   const std::string &transfer_id) const
@@ -860,64 +804,10 @@ void actor_transfer_coordinator_t::complete_commit (const std::string &transfer_
     if (found == _admissions.end ()) {
         return;
     }
-    stage_session_route_terminal_gate_unlocked (
-      transfer_id, found->second);
     _moves.erase (found->second.actor_key);
     _completed_admissions.insert_or_assign (
       transfer_id, found->second);
     _admissions.erase (found);
-}
-
-bool actor_transfer_coordinator_t::mark_commit_finalized (const std::string &transfer_id)
-{
-    std::lock_guard lock (_mutex);
-    const auto found = _admissions.find (transfer_id);
-    if (found == _admissions.end ()) {
-        return false;
-    }
-    const auto moving = _moves.find (found->second.actor_key);
-    if (moving == _moves.end () || moving->second.transfer_id != transfer_id
-        || moving->second.phase != actor_move_phase_t::target_committing) {
-        return false;
-    }
-    found->second.commit_finalized = true;
-    return true;
-}
-
-std::vector<deferred_actor_completion_t>
-actor_transfer_coordinator_t::due_deferred_completions (
-  std::chrono::steady_clock::time_point now)
-{
-    std::lock_guard lock (_mutex);
-    std::vector<deferred_actor_completion_t> due;
-    for (auto &[transfer_id, admission] : _admissions) {
-        if (!admission.commit_finalized) {
-            continue;
-        }
-        const auto moving = _moves.find (admission.actor_key);
-        if (moving == _moves.end () || moving->second.transfer_id != transfer_id
-            || moving->second.phase != actor_move_phase_t::target_committing) {
-            continue;
-        }
-        if (!admission.completion_poll_due) {
-            if (admission.deadline > now) {
-                continue;
-            }
-            // The join window elapsed without the completion-only leg. Keep
-            // the admission visible past its original deadline so a late leg
-            // still terminates on the completed commit, then let this target
-            // process finish the retained completion.
-            admission.completion_poll_due = true;
-            admission.deadline = now + actor_deferred_completion_retention;
-        }
-        if (admission.next_completion_poll_at > now) {
-            continue;
-        }
-        admission.next_completion_poll_at =
-          now + actor_deferred_completion_retry_interval;
-        due.push_back (deferred_actor_completion_t{transfer_id, admission});
-    }
-    return due;
 }
 
 std::vector<expired_actor_admission_t>
@@ -941,13 +831,6 @@ actor_transfer_coordinator_t::cleanup_expired (std::chrono::steady_clock::time_p
          found != _completed_admissions.end ();) {
         if (found->second.deadline <= now)
             found = _completed_admissions.erase (found);
-        else
-            ++found;
-    }
-    for (auto found = _completed_session_route_terminals.begin ();
-         found != _completed_session_route_terminals.end ();) {
-        if (found->second.admission_deadline <= now)
-            found = _completed_session_route_terminals.erase (found);
         else
             ++found;
     }

@@ -69,7 +69,7 @@ public sealed class MessagePayloadOwnershipConvergenceTests
     }
 
     [Fact]
-    public void AcceptedFrameAndAdmissionLeaseReleaseExactlyOnce()
+    public void AcceptedFrameReleaseExactlyOnce()
     {
         using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(
             Common.FrameworkTestEnvironment.GetRepoRoot(),
@@ -85,10 +85,6 @@ public sealed class MessagePayloadOwnershipConvergenceTests
                 == "accepted-handler-success")
             .GetProperty("frameworkReleases")
             .GetInt32();
-        var budget = new ZLinkInboundDispatchBudget(
-            applicationHwmBytes: 1024);
-        var lease = Assert.IsType<ZLinkInboundDispatchLease>(budget.Track(5));
-        lease.StartDispatch();
         var actor = new ZLinkBackendActorRef(
             RoutingId.From("node"),
             "actor",
@@ -115,17 +111,17 @@ public sealed class MessagePayloadOwnershipConvergenceTests
                 ZlinkStreamMetadata.Empty),
             Message.From("owned"));
         var releases = 0;
+        var creditOwner = new DisposeProbe();
         var batch = new ZLinkSpotActorFrameBatch(
             [frame],
             () => releases++,
-            lease);
+            creditOwner: creditOwner);
 
         batch.Dispose();
         batch.Dispose();
 
         Assert.Equal(expectedReleases, releases);
-        Assert.Equal(0UL, budget.Snapshot().PendingPayloadBytes);
-        Assert.Equal(0UL, budget.Snapshot().ActivePayloadBytes);
+        Assert.Equal(1, creditOwner.DisposeCount);
         Assert.Throws<ObjectDisposedException>(() => _ = frame.Body);
     }
 
@@ -308,6 +304,13 @@ public sealed class MessagePayloadOwnershipConvergenceTests
     private sealed record Probe(string Value);
 
     private sealed record OtherProbe(string Value);
+
+    private sealed class DisposeProbe : IDisposable
+    {
+        internal int DisposeCount { get; private set; }
+
+        public void Dispose() => DisposeCount++;
+    }
 
     private sealed class CountingSerializer : IZLinkMessageSerializer
     {

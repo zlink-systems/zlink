@@ -46,9 +46,10 @@ internal static class ServiceHostFactory
             //  This E2E host is not started inside a memory-limited
             //  container. Supply a deterministic finite limit so the
             //  default Auto HWM contract does not depend on the host.
-            var inboundDispatch = framework.ConfigureInboundDispatch();
-            inboundDispatch.ProcessMemoryLimitBytes = 1UL * 1024 * 1024 * 1024;
-            inboundDispatch.ApplicationHwmBytes = options.ApplicationHwmBytes;
+            var coreHwm = framework.ConfigureCoreHwm();
+            coreHwm.CoreHwmMemoryLimitBytes = 1UL * 1024 * 1024 * 1024;
+            if (options.CoreHwmBudgetBytes is { } budgetBytes)
+                coreHwm.CoreHwmBudgetBytes = budgetBytes;
             if (!string.IsNullOrWhiteSpace(options.RedisEndpoint))
             {
                 var redisConfiguration = ConfigurationOptions.Parse(options.RedisEndpoint);
@@ -115,12 +116,7 @@ internal static class ServiceHostFactory
                 status.State.ToString(),
                 status.IsReady,
                 status.AcceptingWork,
-                status.Sequence,
-                status.InboundDispatch.ApplicationHwmBytes,
-                status.InboundDispatch.PendingPayloadBytes,
-                status.InboundDispatch.QueuedPayloadBytes,
-                status.InboundDispatch.ActivePayloadBytes,
-                status.InboundDispatch.ApplicationReceivePaused));
+                status.Sequence));
         });
         app.MapPost("/runtime/observer/start/{meshName}", (
             string meshName,

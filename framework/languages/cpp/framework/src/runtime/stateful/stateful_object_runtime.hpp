@@ -4,6 +4,8 @@
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 
+#include <zlink/framework/contracts/dispatch/task.hpp>
+
 #include <array>
 #include <condition_variable>
 #include <cstddef>
@@ -199,6 +201,40 @@ struct aggregate_relocation_seal_t
     std::vector<frozen_object_state_t> participants;
 };
 
+struct relocation_seal_attempt_t
+{
+    stateful_error_t error = stateful_error_t::invalid;
+    relocation_seal_t seal;
+};
+
+struct aggregate_relocation_seal_attempt_t
+{
+    stateful_error_t error = stateful_error_t::invalid;
+    aggregate_relocation_seal_t seal;
+};
+
+// The source owns this state under its aggregate mutex.  It deliberately
+// describes only post-capture ingress; the saved prefix remains in the
+// relocation payload and is never a relay batch.
+enum class relocation_ingress_phase_t
+{
+    holding,
+    post_boundary,
+    follow_only
+};
+
+struct relocation_ingress_batch_t
+{
+    struct participant_t
+    {
+        object_ref_t owner;
+        std::vector<turn_record_t> records;
+    };
+
+    std::uint64_t token = 0;
+    std::vector<participant_t> participants;
+};
+
 class stateful_object_runtime_t
 {
   public:
@@ -209,6 +245,17 @@ class stateful_object_runtime_t
       bool (
         const frozen_object_state_t &, const object_ref_t &,
         std::stop_token)>;
+    // Application materialization is a second, internal boundary from the
+    // persisted state machine.  Aggregate restore supplies the target Spot to
+    // member Actors and invokes this callback in Spot-before-Actor order.
+    using relocation_state_materialize_t = std::function<
+      bool (
+        const frozen_object_state_t &, const object_ref_t &,
+        const std::optional<object_ref_t> &, std::stop_token)>;
+    using relocation_state_commit_t =
+      std::function<bool (const std::vector<object_ref_t> &)>;
+    using relocation_state_abort_t =
+      std::function<void (const std::vector<object_ref_t> &)>;
 
     explicit stateful_object_runtime_t (
       std::size_t application_capacity =
@@ -223,6 +270,10 @@ class stateful_object_runtime_t
     void configure_relocation_state (
       relocation_state_capture_t capture,
       relocation_state_restore_t restore);
+    void configure_relocation_materialization (
+      relocation_state_materialize_t materialize,
+      relocation_state_commit_t commit,
+      relocation_state_abort_t abort);
 
     void replace_placement_candidates (
       std::vector<placement_candidate_t> candidates);
@@ -294,14 +345,21 @@ class stateful_object_runtime_t
     std::optional<std::vector<object_inventory_t>>
     try_begin_maintenance_inventory ();
     void end_maintenance_inventory () noexcept;
-    std::pair<stateful_error_t, relocation_seal_t>
-    try_seal_relocation (
-      const object_ref_t &owner,
-      std::stop_token cancellation = {});
-    std::pair<stateful_error_t, aggregate_relocation_seal_t>
+    task_t<aggregate_relocation_seal_attempt_t>
     try_seal_relocation_aggregate (
       const std::vector<object_ref_t> &participants,
-      std::stop_token cancellation = {});
+      std::stop_token cancellation = {},
+      const std::function<task_t<bool> ()> &before_capture = {});
+    // Atomically separates the ingress accepted since capture from ingress
+    // that arrives afterwards.  The caller must perform transport work after
+    // this method returns; no callback runs while the aggregate mutex is held.
+    std::pair<stateful_error_t, relocation_ingress_batch_t>
+    begin_relocation_boundary (std::uint64_t token);
+    // Only an exact target abort before Cutover may reopen source dispatch.
+    stateful_error_t abort_relocation_before_cutover (std::uint64_t token);
+    // Makes the source permanently follow-only once Cutover has been queued
+    // (or its enqueue outcome is uncertain).
+    stateful_error_t finalize_relocation_cutover (std::uint64_t token);
     stateful_error_t abort_relocation (std::uint64_t token);
     std::pair<stateful_error_t, object_ref_t>
     commit_relocation (std::uint64_t token, std::string target_node_id);
@@ -381,6 +439,9 @@ class stateful_object_runtime_t
         std::vector<object_key_t> keys;
         std::vector<object_ref_t> sources;
         std::vector<frozen_object_state_t> frozen;
+        relocation_ingress_phase_t ingress_phase =
+          relocation_ingress_phase_t::holding;
+        std::vector<std::vector<turn_record_t>> boundary_application;
     };
 
     struct relocation_hold_state_t
@@ -425,6 +486,9 @@ class stateful_object_runtime_t
       _relocation_restore_reservations;
     relocation_state_capture_t _relocation_state_capture;
     relocation_state_restore_t _relocation_state_restore;
+    relocation_state_materialize_t _relocation_state_materialize;
+    relocation_state_commit_t _relocation_state_commit;
+    relocation_state_abort_t _relocation_state_abort;
     bool _maintenance_inventory_active = false;
     std::uint64_t _next_attempt = 1;
     std::uint64_t _next_membership_token = 1;

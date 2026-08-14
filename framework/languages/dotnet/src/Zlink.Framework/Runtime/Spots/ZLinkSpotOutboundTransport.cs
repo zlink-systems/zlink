@@ -1,25 +1,13 @@
-using Zlink.Framework.Runtime.Dispatch;
 namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkSpotOutboundTransport(
     IZLinkBackendSpot nativeSpot,
     TimeSpan? sendTimeout,
-    CancellationToken stopToken,
-    ZLinkCompletionAdmissionOwner? completionAdmission = null) : IAsyncDisposable
+    CancellationToken stopToken) : IAsyncDisposable
 {
-    private readonly ZLinkAsyncSubmitter _submitter = new(
-        nativeSpot.OnSendReady,
-        sendTimeout,
-        stopToken,
+    private readonly TimeSpan _sendTimeout = ValidateTimeout(sendTimeout);
 
-        completionAdmission: completionAdmission);
-    internal ZLinkAsyncSubmitter Submitter => _submitter;
-
-
-    public ValueTask DisposeAsync()
-    {
-        return _submitter.DisposeAsync();
-    }
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     internal void PublishCurrent(
         string channelName,
@@ -61,7 +49,7 @@ internal sealed class ZLinkSpotOutboundTransport(
             $"SPOT '{targetSpotId}' on node '{targetNodeRid}'");
     }
 
-    public ValueTask<ZLinkOneWaySubmitResult> SendToSpotAsync(
+    public async ValueTask<ZLinkOneWaySubmitResult> SendToSpotAsync(
         RoutingId targetNodeRid,
         string targetSpotId,
         ulong targetSpotGeneration,
@@ -79,21 +67,30 @@ internal sealed class ZLinkSpotOutboundTransport(
             targetNodeGeneration,
             authorityOwnerGeneration,
             ownerLeaseGeneration);
-        return _submitter.SubmitAsync(
-            parts,
-            pending => ZLinkSubmitFailureMapper.AcceptOrThrow(
-                nativeSpot.SendToSpot(
+        try
+        {
+            await nativeSpot.SendToSpotAsync(
                     targetNodeRid,
                     targetSpotId,
                     targetSpotGeneration,
-                    pending,
-                    SendFlags.DontWait,
-                    metadata),
-                $"SPOT '{targetSpotId}' on node '{targetNodeRid}'"),
-            cancellationToken);
+                    parts,
+                    SendFlags.None,
+                    cancellationToken,
+                    metadata)
+                .ConfigureAwait(false);
+            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
+        }
+        catch (ZlinkSubmitException failure)
+        {
+            return DirectSubmitFailure(failure);
+        }
+        catch (ObjectDisposedException)
+        {
+            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown);
+        }
     }
 
-    internal ValueTask<ZLinkOneWaySubmitResult> SendMessageFollowToSpotAsync(
+    internal async ValueTask<ZLinkOneWaySubmitResult> SendMessageFollowToSpotAsync(
         RoutingId targetNodeRid,
         string targetSpotId,
         ulong targetSpotGeneration,
@@ -106,26 +103,55 @@ internal sealed class ZLinkSpotOutboundTransport(
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default)
     {
-        return _submitter.SubmitAsync(
-            parts,
-            pending => ZLinkSubmitFailureMapper.AcceptOrThrow(
-                nativeSpot is IZLinkBackendSpotMessageFollower relay
-                    ? relay.MessageFollowSendToSpot(
-                        targetNodeRid,
-                        targetSpotId,
-                        targetSpotGeneration,
-                        operationId,
-                        targetNodeGeneration,
-                        authorityOwnerGeneration,
-                        ownerLeaseGeneration,
-                        messageFollowHopCount,
-                        pending,
-                        SendFlags.DontWait,
-                        metadata)
-                    : throw new InvalidOperationException(
-                        "The Spot backend does not support Message Follow."),
-                $"Message Follow to SPOT '{targetSpotId}' on node '{targetNodeRid}'"),
-            cancellationToken);
+        try
+        {
+            if (nativeSpot is not IZLinkBackendSpotMessageFollower relay)
+                throw new InvalidOperationException(
+                    "The Spot backend does not support Message Follow.");
+
+            using var terminal = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                stopToken);
+            terminal.CancelAfter(_sendTimeout);
+            await relay.MessageFollowSendToSpotAsync(
+                    targetNodeRid,
+                    targetSpotId,
+                    targetSpotGeneration,
+                    operationId,
+                    targetNodeGeneration,
+                    authorityOwnerGeneration,
+                    ownerLeaseGeneration,
+                    messageFollowHopCount,
+                    parts,
+                    metadata,
+                    terminal.Token)
+                .ConfigureAwait(false);
+            return new ZLinkOneWaySubmitResult(
+                ZLinkOneWaySubmitStatus.Submitted);
+        }
+        catch (OperationCanceledException) when (stopToken.IsCancellationRequested)
+        {
+            return new ZLinkOneWaySubmitResult(
+                ZLinkOneWaySubmitStatus.Shutdown);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new ZLinkOneWaySubmitResult(
+                ZLinkOneWaySubmitStatus.TimedOut);
+        }
+        catch (ZlinkSubmitException failure)
+        {
+            return DirectSubmitFailure(failure);
+        }
+        catch (ObjectDisposedException)
+        {
+            return new ZLinkOneWaySubmitResult(
+                ZLinkOneWaySubmitStatus.Shutdown);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
     }
 
     private void ObserveSpotAuthority(
@@ -164,54 +190,56 @@ internal sealed class ZLinkSpotOutboundTransport(
             ownerLeaseGeneration);
     }
 
-    public ValueTask<ZLinkOneWaySubmitResult> SendToChannelAsync(
+    public async ValueTask<ZLinkOneWaySubmitResult> SendToChannelAsync(
         string channelName,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default)
     {
-        return _submitter.SubmitAsync(
-            parts,
-            pending => ZLinkSubmitFailureMapper.AcceptOrThrow(
-                nativeSpot.SendToChannel(channelName, pending, SendFlags.DontWait, metadata),
-                $"channel '{channelName}'"),
-            cancellationToken);
+        try
+        {
+            await nativeSpot.SendToChannelAsync(
+                    channelName, parts, SendFlags.None, cancellationToken, metadata)
+                .ConfigureAwait(false);
+            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
+        }
+        catch (ZlinkSubmitException failure)
+        {
+            return DirectSubmitFailure(failure);
+        }
+        catch (ObjectDisposedException)
+        {
+            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown);
+        }
     }
 
-    public ValueTask<IReadOnlyList<Message>> RequestToChannelAsync(
+    public async ValueTask<IReadOnlyList<Message>> RequestToChannelAsync(
         string channelName,
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata = default)
     {
-        return _submitter.SubmitRequestAsync<IReadOnlyList<Message>>(
-            parts,
-            (pending, complete, fail) => nativeSpot.RequestToChannel(
-                channelName,
-                pending,
-                (result, reply) =>
-                {
-                    if (result == RequestResult.Ok)
-                    {
-                        complete(reply);
-                        return;
-                    }
-
-                    fail(ZLinkRequestFailureMapper.CreateChannelCompletionException(
-                        result,
-                        $"Channel request to '{channelName}' failed with result '{result}'."));
-                    ZLinkMessageParts.DisposeAll(reply);
-                },
-                SendFlags.None,
-                timeout,
-                metadata),
-            cancellationToken,
-            ZLinkMessageParts.DisposeAll,
-            timeout);
+        try
+        {
+            return await nativeSpot.RequestToChannelAsync(
+                    channelName, parts, SendFlags.None, timeout, cancellationToken, metadata)
+                .ConfigureAwait(false);
+        }
+        catch (ZlinkRequestException failure)
+        {
+            throw ZLinkRequestFailureMapper.CreateChannelCompletionException(
+                (RequestResult)(int)failure.Result,
+                $"Channel request to '{channelName}' failed with result '{failure.Result}'.");
+        }
+        catch (ZlinkSubmitException failure)
+        {
+            throw ZLinkRequestFailureMapper.CreateSubmitException(
+                failure, $"Channel request to '{channelName}'");
+        }
     }
 
-    public ValueTask<IReadOnlyList<Message>> RequestToSpotAsync(
+    public async ValueTask<IReadOnlyList<Message>> RequestToSpotAsync(
         RoutingId targetNodeRid,
         string targetSpotId,
         ulong targetSpotGeneration,
@@ -230,32 +258,60 @@ internal sealed class ZLinkSpotOutboundTransport(
             targetNodeGeneration,
             authorityOwnerGeneration,
             ownerLeaseGeneration);
-        return _submitter.SubmitRequestAsync<IReadOnlyList<Message>>(
-            parts,
-            (pending, complete, fail) => nativeSpot.RequestToSpot(
-                targetNodeRid,
-                targetSpotId,
-                targetSpotGeneration,
-                pending,
-                (result, reply) =>
-                {
-                    if (result == RequestResult.Ok)
-                    {
-                        complete(reply);
-                        return;
-                    }
+        try
+        {
+            return await nativeSpot.RequestToSpotAsync(
+                    targetNodeRid,
+                    targetSpotId,
+                    targetSpotGeneration,
+                    parts,
+                    SendFlags.None,
+                    timeout,
+                    cancellationToken,
+                    metadata)
+                .ConfigureAwait(false);
+        }
+        catch (ZlinkRequestException failure)
+        {
+            throw ZLinkRequestFailureMapper.CreateCompletionException(
+                (RequestResult)(int)failure.Result,
+                $"SPOT request to '{targetSpotId}' on node '{targetNodeRid}' failed with result '{failure.Result}'.");
+        }
+        catch (ZlinkSubmitException failure)
+        {
+            throw ZLinkRequestFailureMapper.CreateSubmitException(
+                failure, $"SPOT request to '{targetSpotId}' on node '{targetNodeRid}'");
+        }
+    }
 
-                    fail(ZLinkRequestFailureMapper.CreateCompletionException(
-                        result,
-                        $"SPOT request to '{targetSpotId}' on node '{targetNodeRid}' failed with result '{result}'."));
-                    ZLinkMessageParts.DisposeAll(reply);
-                },
-                SendFlags.None,
-                timeout,
-                metadata),
-            cancellationToken,
-            ZLinkMessageParts.DisposeAll,
-            timeout);
+    private static ZLinkOneWaySubmitResult DirectSubmitFailure(
+        ZlinkSubmitException failure) =>
+        failure.Result switch
+        {
+            ZlinkSubmitException.ErrorCode.NotConnected =>
+                new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.RouteNotConnected),
+            ZlinkSubmitException.ErrorCode.NotFound =>
+                new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.TargetNotFound),
+            ZlinkSubmitException.ErrorCode.Terminated =>
+                new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown),
+            ZlinkSubmitException.ErrorCode.Backpressured =>
+                new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Backpressured),
+            _ => throw ZLinkRequestFailureMapper.CreateSubmitException(
+                failure, "Direct Spot send")
+        };
+
+    private static TimeSpan ValidateTimeout(TimeSpan? timeout)
+    {
+        try
+        {
+            return ZLinkSocketConfig.NormalizeSendTimeout(timeout)
+                   ?? TimeSpan.FromSeconds(1);
+        }
+        catch (ZLinkConfigurationException error)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(timeout), timeout, error.Message);
+        }
     }
 
 }

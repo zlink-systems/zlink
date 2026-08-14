@@ -85,6 +85,34 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         RecvFlags flags = RecvFlags.None) =>
         _socket.RecvPart(out sourceRoutingId, out part, out hasMore, flags);
 
+    public bool RecvRetained(
+        out ZLinkBackendStreamReceive? received,
+        RecvFlags flags = RecvFlags.None)
+    {
+        var envelope = Received.Create();
+        try
+        {
+            if (!_socket.RecvRetained(envelope, flags))
+            {
+                envelope.Dispose();
+                received = null;
+                return false;
+            }
+
+            received = new ZLinkBackendStreamReceive(
+                envelope.RoutingId,
+                envelope.Parts,
+                hasMore: false,
+                envelope);
+            return true;
+        }
+        catch
+        {
+            envelope.Dispose();
+            throw;
+        }
+    }
+
     public void OnSendReady(Action handler)
     {
         _socket.OnSendReady(handler);
@@ -93,13 +121,24 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
     public bool Send(RoutingId routingId, Message payload, SendFlags flags)
     {
         lock (_sendGate)
-            return _socket.Send(routingId).Message(payload).Flags(flags).Submit();
+            return _socket.TrySend(routingId).Message(payload).Flags(flags).Submit();
+    }
+
+    public async ValueTask SendAsync(
+        RoutingId routingId,
+        Message payload,
+        CancellationToken cancellationToken)
+    {
+        await _socket.Send(routingId)
+            .Message(payload)
+            .Async(cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public bool Send(RoutingId routingId, IReadOnlyList<Message> parts, SendFlags flags)
     {
         lock (_sendGate)
-            return _socket.Send(routingId).Messages(parts).Flags(flags).Submit();
+            return _socket.TrySend(routingId).Messages(parts).Flags(flags).Submit();
     }
 
     public void DisconnectPeer(RoutingId routingId)

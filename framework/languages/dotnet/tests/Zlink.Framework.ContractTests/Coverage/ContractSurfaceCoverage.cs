@@ -1720,7 +1720,9 @@ using System.Threading.Tasks;
         var current = new DirectoryInfo(AppContext.BaseDirectory);
         while (current is not null)
         {
-            if (File.Exists(Path.Combine(current.FullName, "AGENTS.md")))
+            if (File.Exists(Path.Combine(current.FullName, "AGENTS.md"))
+                && Directory.Exists(Path.Combine(current.FullName, "framework"))
+                && Directory.Exists(Path.Combine(current.FullName, "core")))
                 return current.FullName;
             current = current.Parent;
         }

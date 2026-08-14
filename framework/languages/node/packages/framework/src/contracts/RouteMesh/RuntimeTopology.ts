@@ -1,5 +1,9 @@
 import type { RoutingId } from '../Common';
 import type {
+  ZLinkApplicationJobQueueProfile,
+  ZLinkCoreHwmProfile
+} from '../Dispatch';
+import type {
   ZLinkPeerState,
   ZLinkTopologyReason,
   ZLinkTopologyState,
@@ -70,27 +74,67 @@ export interface ZLinkFrameworkRuntimeStatus {
   readonly state: ZLinkFrameworkRuntimeState;
   readonly isReady: boolean;
   readonly acceptingWork: boolean;
+  readonly capacity: ZLinkHostCapacityStatus;
   readonly deadline?: Date;
   readonly relocationResult?: ZLinkFrameworkRelocationResult;
   readonly terminationResult?: ZLinkFrameworkTerminationResult;
-  readonly inboundDispatch: ZLinkInboundDispatchStatus;
   readonly sequence: bigint;
   readonly observedAt: Date;
 }
 
-export interface ZLinkInboundDispatchStatus {
-  readonly applicationHwmBytes: bigint;
-  readonly pendingPayloadBytes: bigint;
-  readonly queuedPayloadBytes: bigint;
-  readonly activePayloadBytes: bigint;
-  readonly applicationReceivePaused: boolean;
-  readonly pendingCompletionSends: bigint;
-  readonly completionSendLimit: bigint;
+export interface ZLinkCoreHwmStatus {
+  readonly configuredMemoryLimitBytes?: bigint;
+  readonly configuredBudgetBytes?: bigint;
+  readonly configuredProfile: ZLinkCoreHwmProfile;
+  readonly effectiveBudgetBytes: bigint;
+  readonly totalAppliedHwmBytes: bigint;
+  readonly coreQueueAccountedBytes: bigint;
+  readonly applicationAccountedBytes: bigint;
+  readonly currentAccountedBytes: bigint;
+  readonly provisionalAccountedBytes: bigint;
+  readonly peakAccountedBytes: bigint;
+  readonly completionCurrentAccountedBytes: bigint;
+  readonly completionPeakAccountedBytes: bigint;
+  readonly completionPendingMessageCount: bigint;
+  readonly totalMessagingAccountedBytes: bigint;
+  readonly monitorQueueAppliedHwmBytes: bigint;
+  readonly monitorQueueAccountedBytes: bigint;
+  readonly totalInstanceAppliedHwmBytes: bigint;
+  readonly totalInstanceAccountedBytes: bigint;
+  readonly blockedRatioPpm: bigint;
+  readonly activeDirectionalQueueCount: bigint;
+  readonly activeCompletionDirectionalQueueCount: bigint;
+  readonly activeSendQueueCount: bigint;
+  readonly activeReceiveQueueCount: bigint;
+  readonly outstandingApplicationLeaseCount: bigint;
+  readonly retiredQueueCount: bigint;
+  readonly deferredOriginCreditBytes: bigint;
+}
+
+export interface ZLinkApplicationJobQueueStatus {
+  readonly configuredProfile: ZLinkApplicationJobQueueProfile;
+  readonly configuredManualMax?: bigint;
+  readonly effectiveProcessorCount: bigint;
+  readonly effectiveMaxQueuedApplicationJobs: bigint;
+  readonly reservedSupplyPermits: bigint;
+  readonly queuedApplicationJobs: bigint;
+  readonly permitsInUse: bigint;
+  readonly peakPermitsInUse: bigint;
+  readonly capacityWaiters: bigint;
+  readonly capacityWaitCount: bigint;
+  readonly capacityWaitDurationSeconds: number;
+}
+
+export interface ZLinkHostCapacityStatus {
+  readonly measurementEpoch: bigint;
+  readonly coreHwm: ZLinkCoreHwmStatus;
+  readonly applicationJobQueue: ZLinkApplicationJobQueueStatus;
 }
 
 export interface ZLinkFrameworkRuntime {
   readonly status: ZLinkFrameworkRuntimeStatus;
   observe(signal?: AbortSignal): AsyncIterable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>>;
+  resetCapacityMetrics(): void;
   relocate(options: ZLinkFrameworkRelocationOptions): Promise<ZLinkFrameworkRelocationResult>;
   shutdown(options?: ZLinkFrameworkLifecycleOptions): Promise<ZLinkFrameworkTerminationResult>;
 }

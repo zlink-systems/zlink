@@ -38,8 +38,6 @@ public abstract class ZLinkLocationStoreTestAdapter implements ZLinkLocationRepo
     @Override public CompletionStage<ZLinkObjectAbortResult> abort(ZLinkObjectReservation reservation, ZLinkStoreCancellation cancellation) { return unsupported(); }
     @Override public CompletionStage<ZLinkObjectAbortResult> abort(ZLinkObjectReservation reservation, ZLinkCreationOperationTerminal terminal, ZLinkStoreCancellation cancellation) { return unsupported(); }
     @Override public CompletionStage<ZLinkCreationTerminalReadResult> readCreationTerminal(ZLinkCreationOperationIdentity operation, ZLinkStoreCancellation cancellation) { return unsupported(); }
-    @Override public CompletionStage<ZLinkRelocationCapacityReserveResult> reserveRelocationCapacity(ZLinkRelocationCapacityReservationRequest request, ZLinkStoreCancellation cancellation) { return unsupported(); }
-    @Override public CompletionStage<ZLinkRelocationCapacityAbortResult> abortRelocationCapacity(ZLinkRelocationCapacityFence fence, ZLinkStoreCancellation cancellation) { return unsupported(); }
     @Override public CompletionStage<ZLinkAggregatePrepareResult> prepareAggregate(ZLinkAggregatePrepareRequest request, ZLinkStoreCancellation cancellation) { return unsupported(); }
     @Override public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) { return unsupported(); }
     @Override public CompletionStage<ZLinkAggregateAbortResult> abortAggregate(ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) { return unsupported(); }

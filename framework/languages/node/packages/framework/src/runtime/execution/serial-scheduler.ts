@@ -6,6 +6,7 @@ export interface ZLinkSerialWorkOptions {
   readonly metadataBytes?: number;
 }
 
+/** Internal per-owner reservation limits, never a shared ingress budget. */
 export interface ZLinkSerialSchedulerOptions {
   readonly applicationMessageCapacity?: number;
   readonly applicationByteCapacity?: number;
@@ -31,65 +32,7 @@ export const ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS: Required<
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 
-export type ZLinkSerialAdmissionRecord = ZLinkSerialWorkRecord<unknown> & {
-  acceptedSequence: bigint;
-};
-
-export class ZLinkSerialAdmissionLane {
-  //  Dequeued with a head index instead of shift(): the application lane
-  //  admits up to 1024 records, and shift() memmoves the whole backlog on
-  //  every turn. Same pattern as the waiter queue below.
-  readonly records: Array<ZLinkSerialAdmissionRecord | undefined>;
-  readonly waiters: Array<SerialCapacityWaiter | undefined> = [];
-  readonly waiterCapacity: number;
-  messageCount = 0;
-  byteCount = 0;
-  recordHead = 0;
-  waiterHead = 0;
-  waiterCount = 0;
-
-  constructor(
-    readonly messageCapacity: number,
-    readonly byteCapacity: number,
-    records: Array<ZLinkSerialAdmissionRecord | undefined> = []
-  ) {
-    this.records = records;
-    this.waiterCapacity = messageCapacity;
-  }
-
-  /** Commits reservation, sequence, and FIFO visibility as one sync turn. */
-  commit(record: ZLinkSerialAdmissionRecord, acceptedSequence: bigint): boolean {
-    if (!reserve(this, record.byteCost)) return false;
-    const previousLength = this.records.length;
-    let assigned = false;
-    try {
-      record.acceptedSequence = acceptedSequence;
-      assigned = true;
-      this.records.push(record);
-      return true;
-    } catch (error) {
-      if (this.records.length > previousLength) this.records.length = previousLength;
-      if (assigned) record.acceptedSequence = 0n;
-      releaseReservation(this, record.byteCost);
-      throw error;
-    }
-  }
-}
-
-interface SerialCapacityWaiter {
-  readonly byteCost: number;
-  admit(): void;
-}
-
-export interface ZLinkSerialAdmissionWaitOptions {
-  readonly timeoutMs: number;
-  readonly signal?: AbortSignal;
-  readonly timeoutError: () => unknown;
-  readonly abortError: () => unknown;
-}
-
 export interface ZLinkSerialWorkRecord<T> {
-  /** Monotonic admission order allocated only after the reservation commits. */
   readonly acceptedSequence: bigint;
   readonly lane: ZLinkSerialWorkLane;
   readonly byteCost: number;
@@ -97,32 +40,27 @@ export interface ZLinkSerialWorkRecord<T> {
   readonly context?: unknown;
   resolve(value: T): void;
   reject(reason: unknown): void;
+  /** Releases this owner's reservation exactly once after the real terminal. */
   release(): void;
   fail(reason: unknown): void;
 }
 
-type SerialWorkRecord<T> = ZLinkSerialWorkRecord<T> & {
+type SerialWorkRecord<T> = Omit<ZLinkSerialWorkRecord<T>, 'acceptedSequence'> & {
   acceptedSequence: bigint;
-  readonly _settled: () => boolean;
 };
 
-export class ZLinkSerialAdmissionLedger {
-  private nextAcceptedSequence = 1n;
-
-  constructor(private readonly capacityError: (lane: ZLinkSerialWorkLane) => unknown) {}
-
-  commit(target: ZLinkSerialAdmissionLane, record: ZLinkSerialAdmissionRecord): void {
-    if (!target.commit(record, this.nextAcceptedSequence)) {
-      throw this.capacityError(record.lane);
-    }
-    this.nextAcceptedSequence += 1n;
-  }
+interface ZLinkSerialAdmissionLane {
+  readonly records: Array<SerialWorkRecord<unknown>>;
+  readonly messageCapacity: number;
+  readonly byteCapacity: number;
+  messageCount: number;
+  byteCount: number;
 }
 
 /**
- * One event-loop serial scheduler shared by Spot and Actor execution owners.
- * Reservations include pending and running records until the operation owner
- * explicitly releases the record after handler completion.
+ * One event-loop serial scheduler per Spot, Actor mailbox, or Stream session.
+ * Its reservations are owner-local and span queued plus running work until the
+ * execution owner reaches its terminal transition.
  */
 export class ZLinkBoundedSerialScheduler {
   private readonly application: ZLinkSerialAdmissionLane;
@@ -131,11 +69,11 @@ export class ZLinkBoundedSerialScheduler {
   private readonly lifecycleBurstLimit: number;
   private readonly fixedWorkByteCost: number;
   private readonly capacityError: (lane: ZLinkSerialWorkLane) => unknown;
+  private nextAcceptedSequence = 1n;
   private draining = false;
   private drainScheduled = false;
   private lifecycleStreak = 0;
   private lifecycleDebt = false;
-  private readonly admission: ZLinkSerialAdmissionLedger;
   private claimStartedAt?: number;
   private readonly idleWaiters: Array<() => void> = [];
 
@@ -143,10 +81,7 @@ export class ZLinkBoundedSerialScheduler {
     private readonly executeRecord: (record: ZLinkSerialWorkRecord<unknown>) => Promise<void>,
     options: ZLinkSerialSchedulerOptions = {}
   ) {
-    const configured = {
-      ...ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS,
-      ...options
-    };
+    const configured = { ...ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS, ...options };
     validatePositive(configured.applicationMessageCapacity, 'applicationMessageCapacity');
     validatePositive(configured.applicationByteCapacity, 'applicationByteCapacity');
     validatePositive(configured.lifecycleMessageCapacity, 'lifecycleMessageCapacity');
@@ -165,9 +100,8 @@ export class ZLinkBoundedSerialScheduler {
     this.ownerTimeBudgetMs = configured.ownerTimeBudgetMs;
     this.lifecycleBurstLimit = configured.lifecycleBurstLimit;
     this.fixedWorkByteCost = configured.fixedWorkByteCost;
-    this.capacityError = options.capacityError ?? ((lane) =>
-      new Error(`The ${lane} execution queue is full.`));
-    this.admission = new ZLinkSerialAdmissionLedger(this.capacityError);
+    this.capacityError = options.capacityError
+      ?? (lane => new Error(`The ${lane} execution queue is full.`));
   }
 
   submit<T>(
@@ -188,141 +122,35 @@ export class ZLinkBoundedSerialScheduler {
     options: ZLinkSerialWorkOptions = {},
     context?: unknown
   ): void {
-    void this.admit(operation, options, context).catch(onError);
+    void this.submit(operation, options, context).catch(onError);
   }
 
-  waitAndSubmitDetached<T>(
+  /**
+   * Enqueues a continuation for an already-reserved owner turn. It preserves
+   * application FIFO order without taking a second owner-local reservation.
+   */
+  submitContinuation<T>(
     operation: () => Promise<T> | T,
-    onError: (error: unknown) => void,
-    options: ZLinkSerialWorkOptions,
-    context: unknown,
-    wait: ZLinkSerialAdmissionWaitOptions
-  ): Promise<void> {
-    if (!Number.isSafeInteger(wait.timeoutMs) || wait.timeoutMs < 1) {
-      return Promise.reject(new RangeError('Serial admission timeout must be a positive safe integer.'));
-    }
-    if (wait.signal?.aborted === true) return Promise.reject(wait.abortError());
-    const lane = options.lane ?? 'application';
-    const byteCost = this.byteCost(options);
-    const target = lane === 'application' ? this.application : this.lifecycle;
-    if (canReserve(target, byteCost)) {
-      void this.admit(operation, options, context).catch(onError);
-      return Promise.resolve();
-    }
-    if (target.waiterCount >= target.waiterCapacity) {
-      return Promise.reject(wait.timeoutError());
-    }
-
-    return new Promise<void>((resolve, reject) => {
-      let settled = false;
-      let index = -1;
-      const cleanup = () => {
-        clearTimeout(timer);
-        wait.signal?.removeEventListener('abort', onAbort);
-      };
-      const remove = () => {
-        if (index < target.waiterHead || target.waiters[index] === undefined) return;
-        target.waiters[index] = undefined;
-        target.waiterCount -= 1;
-        advanceWaiterHead(target);
-        compactWaiters(target);
-      };
-      const fail = (error: unknown) => {
-        if (settled) return;
-        settled = true;
-        remove();
-        this.promoteCapacityWaiter(target);
-        cleanup();
-        reject(error);
-      };
-      const onAbort = () => fail(wait.abortError());
-      const waiter: SerialCapacityWaiter = {
-        byteCost,
-        admit: () => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          void this.admit(operation, options, context).catch(onError);
-          resolve();
-        }
-      };
-      index = target.waiters.length;
-      target.waiters.push(waiter);
-      target.waiterCount += 1;
-      const timer = setTimeout(() => fail(wait.timeoutError()), wait.timeoutMs);
-      wait.signal?.addEventListener('abort', onAbort, { once: true });
-      if (wait.signal?.aborted === true) onAbort();
-    });
-  }
-
-  private admit<T>(
-    operation: () => Promise<T> | T,
-    options: ZLinkSerialWorkOptions,
     context?: unknown
   ): Promise<T> {
-    const lane = options.lane ?? 'application';
-    const byteCost = this.byteCost(options);
-    const target = lane === 'application' ? this.application : this.lifecycle;
-    if (!canReserve(target, byteCost)) {
-      throw this.capacityError(lane);
+    try {
+      return this.admit(operation, { lane: 'application' }, context, false);
+    } catch (error) {
+      return Promise.reject(error);
     }
-
-    let settled = false;
-    let released = false;
-    let resolveResult!: (value: T | PromiseLike<T>) => void;
-    let rejectResult!: (reason?: unknown) => void;
-    const result = new Promise<T>((resolve, reject) => {
-      resolveResult = resolve;
-      rejectResult = reject;
-    });
-    const release = () => {
-      if (released) return;
-      released = true;
-      releaseReservation(target, byteCost);
-      this.promoteCapacityWaiter(target);
-      this.scheduleDrain();
-    };
-    const resolve = (value: T) => {
-      if (settled) return;
-      settled = true;
-      resolveResult(value);
-    };
-    const reject = (reason: unknown) => {
-      if (settled) return;
-      settled = true;
-      rejectResult(reason);
-    };
-    const record: SerialWorkRecord<T> = {
-      acceptedSequence: 0n,
-      lane,
-      byteCost,
-      operation,
-      context,
-      resolve,
-      reject,
-      release,
-      fail: (reason) => {
-        reject(reason);
-        release();
-      },
-      _settled: () => settled
-    };
-    this.commitAccepted(target, record as SerialWorkRecord<unknown>);
-    this.scheduleDrain();
-    return result;
   }
 
-  /** Commits reservation, sequence, and FIFO visibility as one sync turn. */
-  private commitAccepted(
-    target: ZLinkSerialAdmissionLane,
-    record: SerialWorkRecord<unknown>
-  ): void {
-    try {
-      this.admission.commit(target, record);
-    } catch (error) {
-      this.promoteCapacityWaiter(target);
-      throw error;
-    }
+  /**
+   * Enqueues work that already owns the host-wide application job permit.
+   * The shared permit is the capacity authority, so an owner-local reservation
+   * must not reject or double-charge the same job before its handler starts.
+   */
+  submitPreAdmitted<T>(
+    operation: () => Promise<T> | T,
+    options: ZLinkSerialWorkOptions = {},
+    context?: unknown
+  ): Promise<T> {
+    return this.admit(operation, options, context, false);
   }
 
   snapshot(): {
@@ -340,12 +168,77 @@ export class ZLinkBoundedSerialScheduler {
   }
 
   get hasPendingWork(): boolean {
-    return this.draining || this.hasReady();
+    return this.draining
+      || this.application.records.length > 0
+      || this.lifecycle.records.length > 0;
   }
 
   whenIdle(): Promise<void> {
     if (!this.hasPendingWork) return Promise.resolve();
     return new Promise(resolve => this.idleWaiters.push(resolve));
+  }
+
+  private admit<T>(
+    operation: () => Promise<T> | T,
+    options: ZLinkSerialWorkOptions,
+    context?: unknown,
+    reserveCapacity = true
+  ): Promise<T> {
+    const lane = options.lane ?? 'application';
+    const byteCost = reserveCapacity ? this.byteCost(options) : 0;
+    const target = lane === 'application' ? this.application : this.lifecycle;
+    if (reserveCapacity && !reserve(target, byteCost)) throw this.capacityError(lane);
+
+    let settled = false;
+    let released = false;
+    let resolveResult!: (value: T | PromiseLike<T>) => void;
+    let rejectResult!: (reason?: unknown) => void;
+    const result = new Promise<T>((resolve, reject) => {
+      resolveResult = resolve;
+      rejectResult = reject;
+    });
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      if (reserveCapacity) releaseReservation(target, byteCost);
+    };
+    const resolve = (value: T): void => {
+      if (settled) return;
+      settled = true;
+      resolveResult(value);
+    };
+    const reject = (reason: unknown): void => {
+      if (settled) return;
+      settled = true;
+      rejectResult(reason);
+    };
+    const record: SerialWorkRecord<T> = {
+      acceptedSequence: 0n,
+      lane,
+      byteCost,
+      operation,
+      context,
+      resolve,
+      reject,
+      release,
+      fail: (reason) => {
+        reject(reason);
+        release();
+      }
+    };
+    const previousLength = target.records.length;
+    try {
+      record.acceptedSequence = this.nextAcceptedSequence;
+      target.records.push(record as SerialWorkRecord<unknown>);
+      this.nextAcceptedSequence += 1n;
+    } catch (error) {
+      target.records.length = previousLength;
+      record.acceptedSequence = 0n;
+      release();
+      throw error;
+    }
+    this.scheduleDrain();
+    return result;
   }
 
   private byteCost(options: ZLinkSerialWorkOptions): number {
@@ -390,121 +283,73 @@ export class ZLinkBoundedSerialScheduler {
     } finally {
       this.draining = false;
       this.claimStartedAt = undefined;
-      if (this.hasReady()) this.scheduleDrain();
-      else this.resolveIdleWaiters();
+      if (this.application.records.length > 0 || this.lifecycle.records.length > 0) {
+        this.scheduleDrain();
+      } else {
+        this.resolveIdleWaiters();
+      }
     }
   }
 
   private takeNext(): ZLinkSerialWorkRecord<unknown> | undefined {
-    const applicationReady = pendingRecordCount(this.application) > 0;
-    const lifecycleReady = pendingRecordCount(this.lifecycle) > 0;
+    const applicationReady = this.application.records.length > 0;
+    const lifecycleReady = this.lifecycle.records.length > 0;
     if (!applicationReady && !lifecycleReady) return undefined;
-
-    let lane: ZLinkSerialWorkLane;
-    if (!applicationReady) {
-      lane = 'lifecycle';
-    } else if (!lifecycleReady) {
-      lane = 'application';
-    } else if (!this.lifecycleDebt && this.lifecycleStreak < this.lifecycleBurstLimit) {
-      lane = 'lifecycle';
-    } else {
-      lane = 'application';
+    if (!applicationReady) return this.takeLifecycle();
+    if (!lifecycleReady) return this.takeApplication();
+    if (!this.lifecycleDebt && this.lifecycleStreak < this.lifecycleBurstLimit) {
+      return this.takeLifecycle();
     }
+    return this.takeApplication();
+  }
 
-    if (lane === 'lifecycle') {
-      this.lifecycleStreak += 1;
-      if (applicationReady && this.lifecycleStreak >= this.lifecycleBurstLimit) {
-        this.lifecycleDebt = true;
-      }
-      return takeRecord(this.lifecycle);
+  private takeLifecycle(): ZLinkSerialWorkRecord<unknown> {
+    this.lifecycleStreak += 1;
+    if (
+      this.application.records.length > 0
+      && this.lifecycleStreak >= this.lifecycleBurstLimit
+    ) {
+      this.lifecycleDebt = true;
     }
+    return this.lifecycle.records.shift()!;
+  }
 
+  private takeApplication(): ZLinkSerialWorkRecord<unknown> {
     this.lifecycleStreak = 0;
     this.lifecycleDebt = false;
-    return takeRecord(this.application);
+    return this.application.records.shift()!;
   }
 
   private shouldYield(): boolean {
-    if (this.ownerTimeBudgetMs === 0 || !this.hasReady()) return false;
+    if (this.ownerTimeBudgetMs === 0 || !this.hasPendingWork) return false;
     return performance.now() - (this.claimStartedAt ?? performance.now()) >= this.ownerTimeBudgetMs;
-  }
-
-  private hasReady(): boolean {
-    return pendingRecordCount(this.application) > 0
-      || pendingRecordCount(this.lifecycle) > 0;
   }
 
   private resolveIdleWaiters(): void {
     for (const resolve of this.idleWaiters.splice(0)) resolve();
   }
-
-  private promoteCapacityWaiter(lane: ZLinkSerialAdmissionLane): void {
-    advanceWaiterHead(lane);
-    const waiter = lane.waiters[lane.waiterHead];
-    if (waiter === undefined || !canReserve(lane, waiter.byteCost)) return;
-    lane.waiters[lane.waiterHead] = undefined;
-    lane.waiterHead += 1;
-    lane.waiterCount -= 1;
-    advanceWaiterHead(lane);
-    compactWaiters(lane);
-    waiter.admit();
-  }
 }
 
 function createLane(messageCapacity: number, byteCapacity: number): ZLinkSerialAdmissionLane {
-  return new ZLinkSerialAdmissionLane(messageCapacity, byteCapacity);
-}
-
-function canReserve(lane: ZLinkSerialAdmissionLane, byteCost: number): boolean {
-  return lane.messageCount < lane.messageCapacity
-    && byteCost <= lane.byteCapacity - lane.byteCount;
+  return {
+    records: [],
+    messageCapacity,
+    byteCapacity,
+    messageCount: 0,
+    byteCount: 0
+  };
 }
 
 function reserve(lane: ZLinkSerialAdmissionLane, byteCost: number): boolean {
-  if (!canReserve(lane, byteCost)) return false;
+  if (
+    lane.messageCount >= lane.messageCapacity
+    || byteCost > lane.byteCapacity - lane.byteCount
+  ) {
+    return false;
+  }
   lane.messageCount += 1;
   lane.byteCount += byteCost;
   return true;
-}
-
-function pendingRecordCount(lane: ZLinkSerialAdmissionLane): number {
-  return lane.records.length - lane.recordHead;
-}
-
-function takeRecord(lane: ZLinkSerialAdmissionLane): SerialWorkRecord<unknown> | undefined {
-  if (lane.recordHead >= lane.records.length) return undefined;
-  const record = lane.records[lane.recordHead];
-  lane.records[lane.recordHead] = undefined;
-  lane.recordHead += 1;
-  if (lane.recordHead >= lane.records.length) {
-    lane.records.length = 0;
-    lane.recordHead = 0;
-  } else if (lane.recordHead >= 1024 && lane.recordHead * 2 >= lane.records.length) {
-    lane.records.splice(0, lane.recordHead);
-    lane.recordHead = 0;
-  }
-  return record as SerialWorkRecord<unknown> | undefined;
-}
-
-function advanceWaiterHead(lane: ZLinkSerialAdmissionLane): void {
-  while (
-    lane.waiterHead < lane.waiters.length
-    && lane.waiters[lane.waiterHead] === undefined
-  ) {
-    lane.waiterHead += 1;
-  }
-}
-
-function compactWaiters(lane: ZLinkSerialAdmissionLane): void {
-  if (lane.waiterCount === 0) {
-    lane.waiters.length = 0;
-    lane.waiterHead = 0;
-    return;
-  }
-  if (lane.waiterHead >= 1024 && lane.waiterHead * 2 >= lane.waiters.length) {
-    lane.waiters.splice(0, lane.waiterHead);
-    lane.waiterHead = 0;
-  }
 }
 
 function releaseReservation(lane: ZLinkSerialAdmissionLane, byteCost: number): void {

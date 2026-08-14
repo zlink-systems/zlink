@@ -120,8 +120,7 @@ internal static class ZLinkSessionRelocationWire
                 route.AuthorityOwnerGeneration,
                 pending.TargetAuthorityOwnerGeneration,
                 target.NodeRid,
-                pending.TargetNodeGeneration,
-                route.AcceptedHighWater));
+                pending.TargetNodeGeneration));
     }
 
     internal static ZLinkServiceWireCodec.SessionRelocationRouteRecord

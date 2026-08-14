@@ -136,6 +136,11 @@ struct serial_work_options_t
     // This is the complete reservation cost: payload, metadata, envelope and
     // queue-node overhead. A zero value uses the fixed minimum reservation.
     std::size_t byte_cost = dispatch_limits::fixed_work_byte_cost;
+    // Ordinary host ingress that already owns one Application Job Queue
+    // permit must not be rejected by a second per-owner structural cap. The
+    // host-wide owner bounds the aggregate queued work while this marker is
+    // carried through Spot/Actor serialization.
+    bool host_application_capacity_reserved = false;
 };
 
 using serial_submission_id_t = std::uint64_t;

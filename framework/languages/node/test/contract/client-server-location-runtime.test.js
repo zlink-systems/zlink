@@ -9,6 +9,10 @@ const {
 const {
   ZLinkChannelReceiveLoop
 } = require('../../packages/framework/dist/runtime/channels/channel-receive-loops');
+const {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} = require('../../packages/framework/dist/runtime/host/application-job-queue');
 const clientServerWire = require(
   '../../packages/framework/dist/runtime/channels/client-server-service-wire'
 );
@@ -225,10 +229,9 @@ test('same-process ClientServer uses local bound endpoint without a Location Sto
     const requests = [];
     let dealerMonitor;
     dealer.connect = endpoint => { dealer.connected = endpoint; };
-    dealer.request = (message, callback) => {
-      requests.push({ frame: Buffer.from(message.data()), callback });
-      return true;
-    };
+    dealer.request = message => new Promise((resolve, reject) => {
+      requests.push({ frame: Buffer.from(message.data()), resolve, reject });
+    });
     const sockets = new ZLinkChannelSocketRegistry(
       registration,
       {
@@ -269,7 +272,7 @@ test('same-process ClientServer uses local bound endpoint without a Location Sto
       clientServerWire.decodeClientServerControl(local.requests[0].frame).kind,
       'hello'
     );
-    local.requests[0].callback(0, [
+    local.requests[0].resolve([
       zlink.Message.from(clientServerWire.encodeClientServerAdmit({
         ...descriptor({ token: { ownerId: 'local', leaseGeneration: 1n } }),
         serverRid: identity.serverRid,
@@ -491,10 +494,9 @@ test('manual ClientServer endpoints use dedicated monitored admission and reconn
         const dealer = fakeDealer(`manual-${dealers.length}`);
         dealer.requests = [];
         dealer.connect = value => { dealer.connected = value; };
-        dealer.request = (message, callback) => {
-          dealer.requests.push({ frame: Buffer.from(message.data()), callback });
-          return true;
-        };
+        dealer.request = message => new Promise((resolve, reject) => {
+          dealer.requests.push({ frame: Buffer.from(message.data()), resolve, reject });
+        });
         dealers.push(dealer);
         return dealer;
       },
@@ -524,7 +526,7 @@ test('manual ClientServer endpoints use dedicated monitored admission and reconn
   });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(clientServerWire.decodeClientServerControl(dealers[0].requests[0].frame).kind, 'hello');
-  dealers[0].requests[0].callback(0, [
+  dealers[0].requests[0].resolve([
     zlink.Message.from(clientServerWire.encodeClientServerAdmit({
       ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
       securityIdentity: 'default'
@@ -556,10 +558,9 @@ test('manual ClientServer reconnect fences a late admission from the previous ph
   });
   const dealer = fakeDealer('manual-race');
   const requests = [];
-  dealer.request = (message, callback) => {
-    requests.push({ frame: Buffer.from(message.data()), callback });
-    return true;
-  };
+  dealer.request = message => new Promise((resolve, reject) => {
+    requests.push({ frame: Buffer.from(message.data()), resolve, reject });
+  });
   let monitorHandler;
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
@@ -604,13 +605,13 @@ test('manual ClientServer reconnect fences a late admission from the previous ph
     ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
     securityIdentity: 'default'
   };
-  requests[0].callback(0, [
+  requests[0].resolve([
     zlink.Message.from(clientServerWire.encodeClientServerAdmit(admitted, 4096))
   ]);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
 
-  requests[1].callback(0, [
+  requests[1].resolve([
     zlink.Message.from(clientServerWire.encodeClientServerAdmit(admitted, 4096))
   ]);
   await new Promise(resolve => setImmediate(resolve));
@@ -629,14 +630,12 @@ test('ClientServer liveness ACK is fenced to the current probe and application t
   const sent = [];
   const diagnostics = [];
   dealer.recv = () => inbound.shift();
-  dealer.send = message => {
+  dealer.send = async message => {
     sent.push(Buffer.from(message.data()));
-    return true;
   };
-  dealer.request = (message, callback) => {
-    requests.push({ frame: Buffer.from(message.data()), callback });
-    return true;
-  };
+  dealer.request = message => new Promise((resolve, reject) => {
+    requests.push({ frame: Buffer.from(message.data()), resolve, reject });
+  });
   const sockets = new ZLinkChannelSocketRegistry(
     registration,
     {
@@ -661,23 +660,24 @@ test('ClientServer liveness ACK is fenced to the current probe and application t
 
   const base = performance.now();
   inbound.push(receivedControl(clientServerWire.encodeClientServerLivenessProbe(91n)));
-  sockets.tickClientServerLiveness(base);
+  await sockets.tickClientServerLiveness(base);
   const serverProbeAck = clientServerWire.decodeClientServerControl(sent[0]);
   assert.equal(serverProbeAck.kind, 'livenessAck');
   assert.equal(serverProbeAck.probeId, 91n);
-  sockets.tickClientServerLiveness(base + 5_001);
+  await sockets.tickClientServerLiveness(base + 5_001);
   const probe = clientServerWire.decodeClientServerControl(requests[0].frame);
   assert.equal(probe.kind, 'livenessProbe');
-  sockets.tickClientServerLiveness(base + 10_002);
+  await sockets.tickClientServerLiveness(base + 10_002);
   const retransmit = clientServerWire.decodeClientServerControl(requests[1].frame);
   assert.equal(retransmit.kind, 'livenessProbe');
   assert.equal(retransmit.probeId, probe.probeId);
-  requests[0].callback(0, [
+  requests[0].resolve([
     zlink.Message.from(clientServerWire.encodeClientServerLivenessAck(probe.probeId + 1n))
   ]);
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(diagnostics.length, 1);
   assert.match(diagnostics[0].message, /stale or duplicate liveness ACK/);
-  sockets.tickClientServerLiveness(base + 15_001);
+  await sockets.tickClientServerLiveness(base + 15_001);
   assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
   await sockets.dispose();
 });
@@ -716,7 +716,7 @@ test('ClientServer pushed descriptor updates reject stale and conflicting revisi
     weight: 25,
     securityIdentity: 'cluster-a'
   }, 1024)));
-  sockets.tickClientServerLiveness();
+  await sockets.tickClientServerLiveness();
   assert.equal(sockets.clientServerActiveTargets('orders')[0].weight, 25);
 
   const connection = sockets.clientServerConnections.get('connection-a');
@@ -806,8 +806,8 @@ test('ClientServer reserved hello is consumed before application dispatch and re
     undefined,
     (record, socket) =>
       sockets.tryHandleClientServerControl('orders', record, socket),
-    undefined,
-    readyPoller()
+    readyPoller(),
+    new ApplicationJobQueue(resolveApplicationJobQueueConfiguration())
   );
   const controller = new AbortController();
   const running = loop.run(controller.signal);
@@ -838,7 +838,6 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
   const sent = [];
   const disconnected = [];
   const diagnostics = [];
-  let acceptSend = true;
   const router = {
     nativeInstance: {},
     lastEndpoint: 'tcp://127.0.0.1:9401',
@@ -851,9 +850,8 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
     setRoutingId() {},
     onSendReady() {},
     bind() {},
-    send(routingId, message) {
+    async send(routingId, message) {
       sent.push({ routingId, frame: Buffer.from(message.data()) });
-      return acceptSend;
     },
     disconnectPeer(routingId) { disconnected.push(routingId); },
     reply() {},
@@ -888,11 +886,10 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
   hello.close();
 
   const base = performance.now();
-  sockets.tickClientServerLiveness(base + 5_001);
+  await sockets.tickClientServerLiveness(base + 5_001);
   const probe = clientServerWire.decodeClientServerControl(sent.at(-1).frame);
   assert.equal(probe.kind, 'livenessProbe');
-  acceptSend = false;
-  sockets.tickClientServerLiveness(base + 10_002);
+  await sockets.tickClientServerLiveness(base + 10_002);
   const retransmit = clientServerWire.decodeClientServerControl(sent.at(-1).frame);
   assert.equal(retransmit.kind, 'livenessProbe');
   assert.equal(retransmit.probeId, probe.probeId);
@@ -907,7 +904,7 @@ test('ClientServer server probes each admitted client and fences ACK by routing 
   wrongAck.close();
   assert.equal(diagnostics.length, 1);
   assert.match(diagnostics[0].message, /stale or duplicate liveness ACK/);
-  sockets.tickClientServerLiveness(base + 15_001);
+  await sockets.tickClientServerLiveness(base + 15_001);
   assert.deepEqual(disconnected, ['client-a']);
 
   const beforeUpdate = sent.length;
@@ -1318,10 +1315,6 @@ test('ClientServer outbound reports no selectable target as RequestTargetNotFoun
   );
 
   assert.deepEqual(
-    manager.trySend('orders', 'Notice', { id: 1 }),
-    { status: submissionResult.ZLinkSubmitStatus.TargetNotFound }
-  );
-  assert.deepEqual(
     await manager.send('orders', 'Notice', { id: 1 }),
     { status: submissionResult.ZLinkSubmitStatus.TargetNotFound }
   );
@@ -1351,11 +1344,6 @@ test('ClientServer outbound reports a missing Client role as NotConfigured', asy
     { nativeInstance: {}, shutdown() {}, async dispose() {} }
   );
 
-  assert.throws(
-    () => manager.trySend('orders', 'Notice', { id: 1 }),
-    (error) => error instanceof framework.ZLinkFrameworkException
-      && error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
-  );
   await assert.rejects(
     () => manager.send('orders', 'Notice', { id: 1 }),
     (error) => error instanceof framework.ZLinkFrameworkException
@@ -1379,11 +1367,13 @@ function automaticClientServerSockets() {
     openClientServerConnection(channelName, connectionId, endpoint, callbacks) {
       const dealer = {
         maxMessageSize: 0x7fff_ffff,
-        request(message, callback) {
+        request(message) {
           const connection = connections.get(connectionId);
           connection.hello = Buffer.from(message.data());
-          connection.reply = callback;
-          return true;
+          return new Promise((resolve, reject) => {
+            connection.reply = resolve;
+            connection.reject = reject;
+          });
         }
       };
       connections.set(connectionId, {
@@ -1426,7 +1416,7 @@ function automaticClientServerSockets() {
         ...value,
         ...overrides
       }, 0x7fff_ffff));
-      connection.reply(0, [reply]);
+      connection.reply([reply]);
       await new Promise(resolve => setImmediate(resolve));
     },
     terminate(lifecycleGeneration) {
@@ -1452,8 +1442,8 @@ function fakeDealer(id) {
     onSendReady() {},
     connect() {},
     disconnect() {},
-    send() { return true; },
-    request() { return true; },
+    async send() {},
+    async request() { return []; },
     recv() { return undefined; },
     async dispose() {}
   };

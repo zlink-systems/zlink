@@ -7,6 +7,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 
 /** Process-wide infrastructure and application lanes shared by all topologies. */
 final class ZLinkProcessExecutionLanes {
@@ -42,8 +43,27 @@ final class ZLinkProcessExecutionLanes {
 
         @Override
         public void execute(Runnable command) {
-            pending.add(Objects.requireNonNull(command, "command"));
-            schedule();
+            Runnable accepted = Objects.requireNonNull(command, "command");
+            var applicationJob = ZLinkApplicationJobContext.transferToQueuedJob();
+            Runnable carried = () -> {
+                try (var ignored =
+                         ZLinkApplicationJobContext.enterQueued(applicationJob)) {
+                    accepted.run();
+                } finally {
+                    if (applicationJob != null) {
+                        applicationJob.close();
+                    }
+                }
+            };
+            pending.add(carried);
+            try {
+                schedule();
+            } catch (RuntimeException rejected) {
+                if (pending.remove(carried) && applicationJob != null) {
+                    applicationJob.close();
+                }
+                throw rejected;
+            }
         }
 
         private void schedule() {

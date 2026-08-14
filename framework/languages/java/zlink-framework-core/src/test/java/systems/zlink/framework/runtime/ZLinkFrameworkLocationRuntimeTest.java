@@ -2,7 +2,6 @@ package systems.zlink.framework.runtime.host;
 import java.util.concurrent.atomic.AtomicInteger;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 
@@ -185,11 +184,7 @@ class ZLinkFrameworkLocationRuntimeTest {
             repository(store).compareExchange(
                     key,
                     new ZLinkAuthorityExpectFound(snapshot.storeVersion()),
-                    new ZLinkAuthorityPut(
-                        closing,
-                        ZLinkAuthorityGenerationTransition.PRESERVE,
-                        Optional.empty(),
-                        Optional.empty()),
+                    new ZLinkAuthorityPut(closing),
                     () -> false)
                 .toCompletableFuture()
                 .get();

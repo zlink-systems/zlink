@@ -51,6 +51,27 @@ import systems.zlink.framework.streams.ZLinkStreamError;
 
 final class DefaultZLinkFrameworkOptionsTest {
     @Test
+    void coreHwmOptionsAreAHostWideSingleContextConfiguration() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+
+        options.configureInboundDispatch().setCoreHwmProfile(
+            systems.zlink.framework.configuration.ZLinkCoreHwmProfile.THROUGHPUT);
+        options.configureInboundDispatch()
+            .setCoreHwmMemoryLimitBytes(8L * 1024 * 1024);
+        options.configureInboundDispatch()
+            .setCoreHwmBudgetBytes(4L * 1024 * 1024);
+
+        var configured = options.registration().inboundDispatch();
+        assertEquals(
+            systems.zlink.framework.configuration.ZLinkCoreHwmProfile.THROUGHPUT,
+            configured.coreHwmProfile());
+        assertEquals(8L * 1024 * 1024,
+            configured.coreHwmMemoryLimitBytes().orElseThrow());
+        assertEquals(4L * 1024 * 1024,
+            configured.coreHwmBudgetBytes().orElseThrow());
+    }
+
+    @Test
     void networkDefaultsConfigureMeshListenerAndAdvertisedEndpoint() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.configureNetwork().setBindHost("0.0.0.0");
@@ -933,6 +954,27 @@ final class DefaultZLinkFrameworkOptionsTest {
             stream.enableActorDispatch();
             stream.registerSession(GameSession.class); }
         assertThrows(ZLinkConfigurationException.class, missing::validate);
+    }
+
+    @Test
+    void actorDispatchStreamsUseTheRootCanonicalSessionSealTimeout() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations()
+            .setSessionRelocationSealTimeout(Duration.ofMillis(17));
+        options.addRouteMesh("game").listen("inproc://play-mesh");
+        { var stream = options.addStreamNode("gateway-a");
+            stream.bind("inproc://gateway-a");
+            stream.enableActorDispatch();
+            stream.registerSession(GameSession.class); }
+        { var stream = options.addStreamNode("gateway-b");
+            stream.bind("inproc://gateway-b");
+            stream.enableActorDispatch();
+            stream.registerSession(GameSession.class); }
+
+        assertDoesNotThrow(options::validate);
+        assertEquals(
+            Duration.ofMillis(17),
+            options.configureLocations().sessionRelocationSealTimeout());
     }
 
     @Test

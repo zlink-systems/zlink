@@ -96,10 +96,6 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
             stateBody.bytes64(applicationState);
         }
         writer.body64(stateBody);
-        writer.u32(1);
-        writer.u64(1);
-        writer.u64(acceptedBoundary);
-        writer.u64(0);
         //  Only a canonical service-wire-v1 frozen record can be replayed:
         //  `ZLinkActorAcceptedJournal.decode` rejects everything else. Turns
         //  whose accepted-journal bytes are not canonical - an empty array
@@ -148,7 +144,6 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
             writer.u64(tick.scheduledAtUnixMilliseconds());
             writer.u64(tick.skippedTicks());
         }
-        writer.u32(0);
         byte[] encoded = writer.bytes();
         ZLinkServiceRelocationEnvelopeCodec.decode(encoded);
         return encoded;
@@ -164,21 +159,18 @@ public final class ZLinkCanonicalActorRelocationEnvelope {
             || root.relocationLow() != relocationId.getLeastSignificantBits()
             || root.object().kind() != 1
             || !root.object().objectId().equals(actorId)
-            || root.applicationStates().size() != 1
-            || root.participantProgress().size() != 1) {
+            || root.applicationStates().size() != 1) {
             throw new IllegalArgumentException(
                 "canonical Actor relocation identity or inventory differs");
         }
         var state = root.applicationStates().getFirst();
-        var progress = root.participantProgress().getFirst();
         if (state.participantId() != 1
-            || state.hasState() != restoreSnapshot
-            || progress.participantId() != 1) {
+            || state.hasState() != restoreSnapshot) {
             throw new IllegalArgumentException(
                 "canonical Actor relocation state policy differs");
         }
         List<ZLinkAsyncSerialQueue.QueuedRecord> journal =
-            root.journal().stream()
+            root.savedWork().stream()
                 .map(value -> {
                     if (value.participantId() != 1) {
                         throw new IllegalArgumentException(

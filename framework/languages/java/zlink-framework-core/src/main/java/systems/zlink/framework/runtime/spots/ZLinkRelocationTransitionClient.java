@@ -13,6 +13,12 @@ interface ZLinkRelocationTransitionClient {
         ZLinkSpotRetireControl.StageRequest request,
         Duration timeout);
 
+    CompletionStage<Void> relay(
+        RoutingId targetNodeRid,
+        ZLinkSpotRetireControl.Fence fence,
+        byte[] frozenRecord,
+        Duration timeout);
+
     CompletionStage<Void> publish(
         RoutingId targetNodeRid,
         ZLinkSpotRetireControl.Fence fence,
@@ -23,8 +29,4 @@ interface ZLinkRelocationTransitionClient {
         ZLinkSpotRetireControl.Fence fence,
         Duration timeout);
 
-    CompletionStage<Void> finalizeAfterCompletion(
-        RoutingId targetNodeRid,
-        ZLinkSpotRetireControl.Fence fence,
-        Duration timeout);
 }

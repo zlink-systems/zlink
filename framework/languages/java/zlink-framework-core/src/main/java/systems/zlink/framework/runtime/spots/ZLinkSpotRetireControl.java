@@ -24,8 +24,6 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
-import systems.zlink.framework.runtime.internal.locations
-    .ZLinkRelocationStartupScanner;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 
 /**
@@ -39,7 +37,6 @@ final class ZLinkSpotRetireControl {
     private static final int STAGE = 1;
     private static final int PUBLISH = 2;
     private static final int ABORT = 3;
-    private static final int FINALIZE = 4;
     private static final int RELAY_REPLY = 5;
     private static final int RELAY_ACK = 126;
     private static final int ACK = 127;
@@ -82,6 +79,17 @@ final class ZLinkSpotRetireControl {
         }
 
         @Override
+        public CompletionStage<Void> relay(
+            RoutingId targetNodeRid,
+            Fence fence,
+            byte[] frozenRecord,
+            Duration timeout) {
+            return CompletableFuture.failedFuture(
+                new UnsupportedOperationException(
+                    "legacy relocation control has no command 31 relay"));
+        }
+
+        @Override
         public CompletionStage<Void> publish(
             RoutingId targetNodeRid,
             Fence fence,
@@ -102,18 +110,6 @@ final class ZLinkSpotRetireControl {
                 targetNodeRid,
                 fence,
                 encodeFence(ABORT, fence),
-                timeout);
-        }
-
-        @Override
-        public CompletionStage<Void> finalizeAfterCompletion(
-            RoutingId targetNodeRid,
-            Fence fence,
-            Duration timeout) {
-            return invoke(
-                targetNodeRid,
-                fence,
-                encodeFence(FINALIZE, fence),
                 timeout);
         }
 
@@ -194,9 +190,6 @@ final class ZLinkSpotRetireControl {
             if (command instanceof PublishCommand) {
                 return publish(slot);
             }
-            if (command instanceof FinalizeCommand) {
-                return finalizeAfterCompletion(slot);
-            }
             return abort(slot);
         }
 
@@ -269,48 +262,49 @@ final class ZLinkSpotRetireControl {
                 .thenApply(ignored -> encodeAck(slot.request.fence()));
         }
 
-        private CompletionStage<byte[]> finalizeAfterCompletion(Slot slot) {
-            synchronized (slot) {
-                if (slot.aborted) {
-                    return failed(new IllegalStateException(
-                        "aborted relocation cannot be finalized"));
-                }
-                if (slot.published == null) {
-                    return failed(new IllegalStateException(
-                        "unpublished relocation cannot be finalized"));
-                }
-                if (slot.finalized != null) {
-                    return slot.finalized;
-                }
-                slot.finalized = slot.published
-                    .thenCompose(ignored -> endpoint.finalizeAfterCompletion(
-                        slot.request))
-                    .thenApply(ignored -> encodeAck(slot.request.fence()));
-                return slot.finalized;
-            }
-        }
     }
 
     interface TargetEndpoint {
+        /** Applies an admitted target-only profile before authority prepare. */
+        default TargetProfile applyTargetProfile(
+            StageRequest request,
+            long defaultActorSpotGeneration) {
+            return new TargetProfile(request, defaultActorSpotGeneration, 1);
+        }
+
         CompletionStage<Void> stage(StageRequest request);
 
         CompletionStage<Void> publish(StageRequest request);
 
-        CompletionStage<Void> abort(StageRequest request);
-
-        CompletionStage<Void> finalizeAfterCompletion(StageRequest request);
-
-        default CompletionStage<Void> recoverRetainedSessionAbort(
-            ZLinkRelocationStartupScanner.RetainedSessionAbort retained) {
+        /** Stages one command 31 frozen application record in arrival order. */
+        default CompletionStage<Void> stageRelayedRecord(
+            StageRequest request,
+            byte[] frozenRecord) {
             return CompletableFuture.failedFuture(new IllegalStateException(
-                "retained Session abort recovery is unavailable"));
+                "relocation data staging is unavailable"));
         }
+
+        CompletionStage<Void> abort(StageRequest request);
 
         default CompletionStage<ZLinkSpotRelocationReplyRoutes.Ack> relayReply(
             RoutingId transportSource,
             ZLinkSpotRelocationReplyRoutes.Relay relay) {
             return CompletableFuture.failedFuture(new IllegalStateException(
                 "relocation reply relay is unavailable"));
+        }
+    }
+
+    record TargetProfile(
+        StageRequest request,
+        long actorSpotGeneration,
+        int actorSpotKind) {
+        TargetProfile {
+            Objects.requireNonNull(request, "request");
+            if (actorSpotGeneration <= 0
+                || (actorSpotKind != 1 && actorSpotKind != 2)) {
+                throw new IllegalArgumentException(
+                    "canonical target Actor membership is invalid");
+            }
         }
     }
 
@@ -452,8 +446,7 @@ final class ZLinkSpotRetireControl {
         String sessionOwnerId,
         long sessionOwnerLeaseGeneration,
         RoutingId sessionRid,
-        long bindingGeneration,
-        long lastAcceptedSessionSequence) {
+        long bindingGeneration) {
         SessionRouteFence {
             requireText(actorId, "actorId");
             requireText(
@@ -473,10 +466,6 @@ final class ZLinkSpotRetireControl {
                 sessionOwnerLeaseGeneration,
                 "sessionOwnerLeaseGeneration");
             positive(bindingGeneration, "bindingGeneration");
-            if (lastAcceptedSessionSequence < 0) {
-                throw new IllegalArgumentException(
-                    "lastAcceptedSessionSequence must not be negative");
-            }
         }
     }
 
@@ -504,7 +493,7 @@ final class ZLinkSpotRetireControl {
     }
 
     private sealed interface Command permits
-        StageCommand, PublishCommand, AbortCommand, FinalizeCommand,
+        StageCommand, PublishCommand, AbortCommand,
         RelayReplyCommand {
         Fence fence();
     }
@@ -519,9 +508,6 @@ final class ZLinkSpotRetireControl {
     private record AbortCommand(Fence fence) implements Command {
     }
 
-    private record FinalizeCommand(Fence fence) implements Command {
-    }
-
     private record RelayReplyCommand(
         Fence fence,
         ZLinkSpotRelocationReplyRoutes.Relay relay) implements Command {
@@ -532,7 +518,6 @@ final class ZLinkSpotRetireControl {
         private final byte[] stageDigest;
         private final CompletableFuture<Void> staged = new CompletableFuture<>();
         private CompletionStage<byte[]> published;
-        private CompletionStage<byte[]> finalized;
         private boolean aborted;
 
         private Slot(StageRequest request, byte[] stageDigest) {
@@ -582,7 +567,6 @@ final class ZLinkSpotRetireControl {
                 output.writeLong(route.sessionOwnerLeaseGeneration());
                 writeRid(output, route.sessionRid());
                 output.writeLong(route.bindingGeneration());
-                output.writeLong(route.lastAcceptedSessionSequence());
             }
         });
     }
@@ -701,10 +685,7 @@ final class ZLinkSpotRetireControl {
                             input.readLong(),
                             "sessionOwnerLeaseGeneration"),
                         readRid(input),
-                        positive(input.readLong(), "bindingGeneration"),
-                        nonnegative(
-                            input.readLong(),
-                            "lastAcceptedSessionSequence")));
+                        positive(input.readLong(), "bindingGeneration")));
                 }
                 command = new StageCommand(new StageRequest(
                     fence,
@@ -729,8 +710,6 @@ final class ZLinkSpotRetireControl {
                 command = new PublishCommand(readFence(input));
             } else if (kind == ABORT) {
                 command = new AbortCommand(readFence(input));
-            } else if (kind == FINALIZE) {
-                command = new FinalizeCommand(readFence(input));
             } else if (kind == RELAY_REPLY) {
                 Fence fence = readFence(input);
                 var operation = new ZLinkSpotRelocationReplyRoutes.OperationId(

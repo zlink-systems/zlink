@@ -30,7 +30,7 @@ export interface ZLinkAutoConnectTarget {
 }
 
 export interface IZLinkAutoConnectExecutor {
-  connect(target: ZLinkAutoConnectTarget): boolean;
+  connect(target: ZLinkAutoConnectTarget): Promise<boolean>;
   disconnect(target: ZLinkAutoConnectTarget): void;
   disconnectStalePeers?(targets: readonly ZLinkAutoConnectTarget[]): void;
   isDisconnected?(target: ZLinkAutoConnectTarget): boolean;

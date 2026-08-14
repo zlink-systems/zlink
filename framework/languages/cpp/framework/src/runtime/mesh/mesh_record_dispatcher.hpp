@@ -8,6 +8,7 @@
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 #include <zlink/framework/contracts/handlers/handler_registry.hpp>
 
+#include <functional>
 #include <vector>
 
 namespace zlink::framework::detail
@@ -20,7 +21,9 @@ class mesh_record_dispatcher_t
                               serializer_registry_t &serializers,
                               const route_handler_registry_t &handlers,
                               const handler_registry_t &filters,
-                              dispatch_options_t dispatch_options = {});
+                              dispatch_options_t dispatch_options = {},
+                              std::function<void ()>
+                                before_application_handler = {});
 
     result_t<void> dispatch (
       const runtime::host::receive_record_t &record,
@@ -33,6 +36,7 @@ class mesh_record_dispatcher_t
     const handler_registry_t *_filters;
     dispatch_options_t _dispatch_options;
     no_route_internal_packet_dispatcher_t _no_internal_packets;
+    std::function<void ()> _before_application_handler;
 };
 
 } // namespace zlink::framework::detail

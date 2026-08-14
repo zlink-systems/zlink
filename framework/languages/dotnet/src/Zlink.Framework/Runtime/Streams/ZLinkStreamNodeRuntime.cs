@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Messaging;
-using Zlink.Framework.Runtime.Dispatch;
 
 namespace Zlink.Framework.Runtime.Streams;
 
@@ -9,12 +8,10 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 {
     internal static readonly TimeSpan SessionShutdownUpperBound = TimeSpan.FromMilliseconds(900);
     internal static readonly TimeSpan SessionForceCleanupUpperBound = TimeSpan.FromMilliseconds(100);
-    private const int ControlIngressCapacity = 256;
     private const int ReceiveBatchSize = 64;
     private static readonly TimeSpan ReceivePollInterval =
         TimeSpan.FromMilliseconds(100);
     private readonly ZLinkStreamSessionTable _sessions;
-    private readonly ZLinkAsyncSubmitter _sendSubmitter;
     private readonly ZLinkStreamSessionSerialExecutor _sessionIngress;
     private readonly ZLinkStreamSessionSerialExecutor _controlIngress;
     private readonly CancellationTokenSource _stopSource = new();
@@ -23,7 +20,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     private readonly TimeProvider _timeProvider;
     private readonly string _transport;
     private readonly long _maxMessageSize;
-    private readonly ZLinkInboundDispatchBudget? _inboundDispatchBudget;
+    private readonly ZLinkApplicationJobQueue _applicationJobQueue;
+    private readonly bool _ownsApplicationJobQueue;
     private readonly object _receiveStateGate = new();
     private readonly Dictionary<RoutingId, ZLinkStreamReceiveState> _receiveStates = [];
     private readonly Dictionary<RoutingId, LinkedListNode<RoutingId>>
@@ -43,6 +41,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     // the part flag is final. This loop is the sole RecvPart caller, so the
     // boundary can remain private to the receive owner.
     private RoutingId? _multipartRoutingId;
+    private ZLinkApplicationJobQueueLease? _multipartAdmission;
 
     public ZLinkStreamNodeRuntime(
         string nodeName,
@@ -56,9 +55,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         bool actorDispatchEnabled = false,
         string? boundEndpoint = null,
         string? advertisedEndpoint = null,
-        ZLinkInboundDispatchBudget? inboundDispatchBudget = null,
-        ZLinkCompletionAdmissionOwner? completionAdmission = null,
-        long maxMessageSize = 64L * 1024L)
+        long maxMessageSize = 64L * 1024L,
+        ZLinkApplicationJobQueue? applicationJobQueue = null)
     {
         NodeName = nodeName;
         Socket = socket;
@@ -66,21 +64,22 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         BoundEndpoint = boundEndpoint;
         AdvertisedEndpoint = advertisedEndpoint;
         _taskRunner = taskRunner;
+        _ownsApplicationJobQueue = applicationJobQueue is null;
+        _applicationJobQueue = applicationJobQueue
+            ?? new ZLinkApplicationJobQueue(
+                ZLinkApplicationJobQueueCapacityResolver.Resolve(
+                    ZLinkApplicationJobQueueProfile.Balanced,
+                    int.MaxValue,
+                    1));
         _timeProvider = timeProvider ?? TimeProvider.System;
         _transport = transport;
         _maxMessageSize = maxMessageSize;
-        _inboundDispatchBudget = inboundDispatchBudget;
         var runtime = services.GetRequiredService<ZLinkFrameworkRuntime>();
         _errorSink = runtime.ErrorSink;
         _sessionIngress = new ZLinkStreamSessionSerialExecutor(runtime.ExecutionOwner, runtime.ErrorSink);
         _controlIngress = new ZLinkStreamSessionSerialExecutor(
             runtime.ExecutionOwner,
-            runtime.ErrorSink,
-            ControlIngressCapacity);
-        _sendSubmitter = new ZLinkAsyncSubmitter(
-            socket.OnSendReady,
-            runtime.Registration.DefaultSocketSendTimeout,
-            _stopSource.Token);
+            runtime.ErrorSink);
         _sessions = new ZLinkStreamSessionTable(
             services,
             socket,
@@ -88,9 +87,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             runtime.DrainAdmission,
             transport,
             _timeProvider,
-            actorDispatchEnabled,
-            _sendSubmitter,
-            completionAdmission);
+            actorDispatchEnabled);
     }
 
     public string NodeName { get; }
@@ -130,6 +127,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         var sessions = _sessions.Stop();
         var failures = new List<Exception>();
         Capture(RequestStop);
+        await CaptureAsync(() => DisposeSessionsAsync(sessions)).ConfigureAwait(false);
         await CaptureAsync(_sessionIngress.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_controlIngress.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(Monitor.DisposeAsync).ConfigureAwait(false);
@@ -183,9 +181,9 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             }
 
         Capture(DisposeReceiveStates);
-
-        await CaptureAsync(() => DisposeSessionsAsync(sessions)).ConfigureAwait(false);
-        await CaptureAsync(_sendSubmitter.DisposeAsync).ConfigureAwait(false);
+        Capture(() => Interlocked.Exchange(
+            ref _multipartAdmission,
+            null)?.Dispose());
         Capture(() => _receivePoller?.Dispose());
 
         var socketDisposed = false;
@@ -201,6 +199,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         if (socketDisposed)
             foreach (var session in sessions) session.ConfirmNodeTransportDisposed();
         Capture(_stopSource.Dispose);
+        if (_ownsApplicationJobQueue)
+            Capture(_applicationJobQueue.Dispose);
         if (failures.Count == 1)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
         if (failures.Count > 1) throw new AggregateException(failures);
@@ -322,7 +322,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             try
             {
                 if (_multipartRoutingId is null)
-                    FlushReceiveStates();
+                    await FlushReceiveStatesAsync(stop.Token)
+                        .ConfigureAwait(false);
 
                 backoff.Reset();
                 var readiness = _receivePoller!.Wait(ReceivePollInterval);
@@ -333,7 +334,6 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
                 var batchStartedAt = Stopwatch.GetTimestamp();
                 long batchBytes = 0;
-                ZLinkInboundReceivePermit? receivePermit = null;
                 for (var receivedCount = 0;
                      receivedCount < ReceiveBatchSize
                      && !stop.IsCancellationRequested;
@@ -344,40 +344,39 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                             batchBytes,
                             batchStartedAt))
                         break;
-                    // A transport multipart already started before the HWM
-                    // became full must be consumed to preserve Core's part
-                    // boundary. The receive reservation also permits a
-                    // bounded raw receive when the binding cannot expose the
-                    // complete frame length before RecvPart.
                     if (_multipartRoutingId is null)
-                        FlushReceiveStates();
-                    if (_multipartRoutingId is null
-                        && _inboundDispatchBudget is { } receiveBudget)
-                    {
-                        // Do not wait for application HWM capacity in the
-                        // stream receive worker. Returning to the poller
-                        // keeps infrastructure frames eligible for receive.
-                        if (!receiveBudget.TryAcquireReceive(
-                                out receivePermit))
-                            break;
-                    }
+                        await FlushReceiveStatesAsync(stop.Token)
+                            .ConfigureAwait(false);
                     RoutingId? routingId = null;
-                    Message? part = null;
-                    var hasMore = false;
+                    ZLinkBackendStreamReceive? received = null;
+                    ZLinkApplicationJobQueueLease? suppliedAdmission = null;
                     try
                     {
-                        if (!Socket.RecvPart(
-                                out routingId,
-                                out part,
-                                out hasMore,
+                        if (_multipartRoutingId is null)
+                            suppliedAdmission = await _applicationJobQueue
+                                .AcquireAsync(stop.Token)
+                                .ConfigureAwait(false);
+                        if (!Socket.RecvRetained(
+                                out received,
                                 RecvFlags.DontWait))
+                        {
+                            suppliedAdmission?.Dispose();
                             break;
+                        }
 
-                        using (part)
+                        routingId = received?.SourceRoutingId;
+                        var hasMore = received?.HasMore == true;
+                        if (routingId is not { } sourceRoutingId
+                            || received is null
+                            || received.Parts.Count == 0)
                         {
-                        if (routingId is not { } sourceRoutingId || part is null)
-                        {
+                            received?.Dispose();
+                            received = null;
                             _multipartRoutingId = null;
+                            suppliedAdmission?.Dispose();
+                            Interlocked.Exchange(
+                                ref _multipartAdmission,
+                                null)?.Dispose();
                             _errorSink.ReportRuntimeTaskException(
                                 $"stream-recv:{NodeName}",
                                 new InvalidDataException(
@@ -388,39 +387,56 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                             && expectedRoutingId != sourceRoutingId)
                         {
                             _multipartRoutingId = null;
+                            suppliedAdmission?.Dispose();
+                            Interlocked.Exchange(
+                                ref _multipartAdmission,
+                                null)?.Dispose();
+                            received.Dispose();
+                            received = null;
                             throw new InvalidDataException(
                                 "STREAM multipart receive changed its source routing id.");
                         }
-                        _multipartRoutingId = hasMore ? sourceRoutingId : null;
-                        ProcessReceived(
-                            sourceRoutingId,
-                            part,
-                            ref receivePermit);
-                        batchBytes = checked(batchBytes + Math.Max(part.Size, 0));
+                        if (_multipartRoutingId is null)
+                        {
+                            _multipartAdmission = suppliedAdmission;
+                            suppliedAdmission = null;
                         }
+                        _multipartRoutingId = hasMore ? sourceRoutingId : null;
+                        var completedAdmission = Interlocked.Exchange(
+                            ref _multipartAdmission,
+                            null);
+                        var receivedBytes = received.Parts.Aggregate(
+                            0L,
+                            static (total, receivedPart) =>
+                                checked(total + Math.Max(receivedPart.Size, 0)));
+                        var processing = received;
+                        received = null;
+                        await ProcessReceivedAsync(
+                                sourceRoutingId,
+                                processing,
+                                completedAdmission,
+                                drain: true,
+                                stop.Token)
+                            .ConfigureAwait(false);
+                        batchBytes = checked(batchBytes + receivedBytes);
                     }
                     catch (Exception exception)
                     {
+                        received?.Dispose();
                         if (routingId is { } sourceRoutingId)
                         {
                             if (_multipartRoutingId == sourceRoutingId)
                                 _multipartRoutingId = null;
+                            suppliedAdmission?.Dispose();
+                            Interlocked.Exchange(
+                                ref _multipartAdmission,
+                                null)?.Dispose();
                             HandlePeerReceiveFailure(sourceRoutingId, exception);
                         }
                         else
                             throw;
                     }
-                    finally
-                    {
-                        if (_multipartRoutingId is null)
-                        {
-                            _inboundDispatchBudget?.CompleteReceiveAttempt(
-                                receivePermit);
-                            receivePermit = null;
-                        }
-                    }
                 }
-                _inboundDispatchBudget?.CompleteReceiveAttempt(receivePermit);
                 failureBackoff.Reset();
             }
             catch (OperationCanceledException) when (stop.IsCancellationRequested)
@@ -459,24 +475,45 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         }
     }
 
-    private void ProcessReceived(
+    private async ValueTask ProcessReceivedAsync(
         RoutingId routingId,
-        Message receivedPart,
-        ref ZLinkInboundReceivePermit? receivePermit)
+        ZLinkBackendStreamReceive received,
+        ZLinkApplicationJobQueueLease? admission,
+        bool drain,
+        CancellationToken cancellationToken)
     {
-        var state = GetOrCreateReceiveState(routingId);
-        if (state is null) return;
-        var blocked = false;
-        lock (state.Gate)
+        IDisposable? receivedOwner = received;
+        try
         {
-            if (state.Removed) return;
-            state.Buffer.Append(receivedPart.AsReadOnlySpan());
-            blocked = DrainReceiveState(
+            var state = GetOrCreateReceiveState(routingId);
+            if (state is null)
+                return;
+            lock (state.Gate)
+            {
+                if (state.Removed)
+                    return;
+                state.Buffer.Append(received.Parts, receivedOwner);
+                receivedOwner = null;
+            }
+
+            if (!drain)
+                return;
+
+            var ownedAdmission = admission;
+            admission = null;
+            var result = await DrainReceiveStateAsync(
                     state,
-                    ref receivePermit)
-                != ZLinkReceiveStateDrainResult.Empty;
+                    ownedAdmission,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (result != ZLinkReceiveStateDrainResult.Empty)
+                MarkReceiveStateBlocked(state);
         }
-        if (blocked) MarkReceiveStateBlocked(state);
+        finally
+        {
+            receivedOwner?.Dispose();
+            admission?.Dispose();
+        }
     }
 
     private void HandlePeerReceiveFailure(RoutingId routingId, Exception exception)
@@ -497,7 +534,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             $"stream-recv-peer:{NodeName}", exception);
     }
 
-    private bool FlushReceiveStates()
+    private async ValueTask FlushReceiveStatesAsync(
+        CancellationToken cancellationToken)
     {
         lock (_receiveStateGate)
         {
@@ -511,25 +549,27 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             RotateReceiveStateSnapshot();
         }
 
-        var anyBlocked = false;
         foreach (var state in _receiveStateSnapshot)
         {
             Exception? failure = null;
             var result = ZLinkReceiveStateDrainResult.Empty;
-            ZLinkInboundReceivePermit? receivePermit = null;
-            lock (state.Gate)
+            try
             {
-                if (state.Removed) continue;
-                try
-                {
-                    result = DrainReceiveState(state, ref receivePermit);
-                }
-                catch (Exception exception)
-                {
-                    failure = exception;
-                }
+                result = await DrainReceiveStateAsync(
+                        state,
+                        suppliedAdmission: null,
+                        cancellationToken)
+                    .ConfigureAwait(false);
             }
-            _inboundDispatchBudget?.CompleteReceiveAttempt(receivePermit);
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
 
             if (failure is not null)
             {
@@ -538,60 +578,106 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             }
 
             _receiveStateCursor = state.RoutingId.ToHex();
-            if (result == ZLinkReceiveStateDrainResult.AdmissionBlocked)
-                anyBlocked = true;
             if (result != ZLinkReceiveStateDrainResult.Empty)
-            {
                 MarkReceiveStateBlocked(state);
-            }
         }
-
-        return !anyBlocked;
     }
 
-    private ZLinkReceiveStateDrainResult DrainReceiveState(
+    private async ValueTask<ZLinkReceiveStateDrainResult> DrainReceiveStateAsync(
         ZLinkStreamReceiveState state,
-        ref ZLinkInboundReceivePermit? receivePermit)
+        ZLinkApplicationJobQueueLease? suppliedAdmission,
+        CancellationToken cancellationToken)
     {
         var startedAt = Stopwatch.GetTimestamp();
         var count = 0;
         long bytes = 0;
-        while (true)
+        try
         {
-            if (state.Pending is { } pending)
+            while (true)
             {
-                var pendingBytes = pending.ByteLength;
-                if (!TryAdmitFrame(
-                        state.RoutingId,
-                        pending,
-                        ref receivePermit))
-                    return ZLinkReceiveStateDrainResult.AdmissionBlocked;
-                state.Pending = null;
-                count++;
-                bytes = checked(bytes + pendingBytes);
-            }
+                var acquireAdmission = false;
+                lock (state.Gate)
+                {
+                    if (state.Removed)
+                        return ZLinkReceiveStateDrainResult.Empty;
 
-            if (!state.Buffer.TryGetCompleteFrameSize(out var frameBytes))
-                return ZLinkReceiveStateDrainResult.Empty;
-            if (ZLinkReceiveBatchBudget.WouldExceed(
-                    count,
-                    bytes,
-                    frameBytes,
-                    startedAt))
-                return ZLinkReceiveStateDrainResult.BatchExhausted;
-            if (!state.Buffer.TryTakeFrame(out var frame))
-                return ZLinkReceiveStateDrainResult.Empty;
-            var admittedBytes = frame!.ByteLength;
-            if (!TryAdmitFrame(
-                    state.RoutingId,
-                    frame!,
-                    ref receivePermit))
-            {
-                state.Pending = frame;
-                return ZLinkReceiveStateDrainResult.AdmissionBlocked;
+                    if (state.Pending is { } pending)
+                    {
+                        var pendingBytes = pending.ByteLength;
+                        if (!TryAdmitFrame(state.RoutingId, pending))
+                            return ZLinkReceiveStateDrainResult.AdmissionBlocked;
+                        state.Pending = null;
+                        count++;
+                        bytes = checked(bytes + pendingBytes);
+                        continue;
+                    }
+
+                    if (!state.Buffer.TryGetCompleteFrameSize(out var frameBytes))
+                    {
+                        // No application job materialized from this supply
+                        // record. Core HWM owns the retained raw bytes; the Job
+                        // Queue reservation ends after this finite parse turn.
+                        suppliedAdmission?.Dispose();
+                        suppliedAdmission = null;
+                        return ZLinkReceiveStateDrainResult.Empty;
+                    }
+                    else if (ZLinkReceiveBatchBudget.WouldExceed(
+                                 count,
+                                 bytes,
+                                 frameBytes,
+                                 startedAt))
+                    {
+                        return ZLinkReceiveStateDrainResult.BatchExhausted;
+                    }
+                    else
+                    {
+                        var frameAdmission = suppliedAdmission;
+                        suppliedAdmission = null;
+                        if (frameAdmission is null)
+                        {
+                            acquireAdmission = true;
+                        }
+                        else
+                        {
+                            if (!state.Buffer.TryTakeFrame(out var frame))
+                            {
+                                suppliedAdmission = frameAdmission;
+                                return ZLinkReceiveStateDrainResult.Empty;
+                            }
+
+                            frame!.ApplicationJobAdmission = frameAdmission;
+                            var admittedBytes = frame.ByteLength;
+                            if (!TryAdmitFrame(state.RoutingId, frame))
+                            {
+                                state.Pending = frame;
+                                return ZLinkReceiveStateDrainResult.AdmissionBlocked;
+                            }
+                            count++;
+                            bytes = checked(bytes + admittedBytes);
+                        }
+                    }
+                }
+
+                if (!acquireAdmission)
+                    continue;
+
+                var acquired = await _applicationJobQueue
+                    .AcquireAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                lock (state.Gate)
+                {
+                    if (state.Removed)
+                    {
+                        acquired.Dispose();
+                        return ZLinkReceiveStateDrainResult.Empty;
+                    }
+                    suppliedAdmission = acquired;
+                }
             }
-            count++;
-            bytes = checked(bytes + admittedBytes);
+        }
+        finally
+        {
+            suppliedAdmission?.Dispose();
         }
     }
 
@@ -620,8 +706,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
     private bool TryAdmitFrame(
         RoutingId routingId,
-        ZLinkStreamInboundFrame frame,
-        ref ZLinkInboundReceivePermit? receivePermit)
+        ZLinkStreamInboundFrame frame)
     {
         var header = frame.Header
             ?? throw new InvalidOperationException("STREAM frame header ownership was lost.");
@@ -642,8 +727,13 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                     frame,
                     header,
                     payload,
-                    ref receivePermit)
-                : AdmitControlPacket(routingId, header, payload);
+                    frame.ApplicationJobAdmission)
+                : AdmitControlPacket(
+                    routingId,
+                    header,
+                    payload,
+                    frame.ApplicationJobAdmission,
+                    frame.CoreCreditOwner);
             if (admitted) frame.Detach();
             return admitted;
         }
@@ -665,51 +755,26 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         ZLinkStreamInboundFrame frame,
         Message header,
         Message payload,
-        ref ZLinkInboundReceivePermit? receivePermit)
+        ZLinkApplicationJobQueueLease? applicationJobAdmission)
     {
-        ZLinkInboundDispatchLease? lease = frame.TakeDispatchLease();
-        if (_inboundDispatchBudget is { } budget)
-        {
-            var payloadBytes = checked((ulong)payload.Size);
-            if (lease is null && receivePermit is not null)
+        applicationJobAdmission?.MarkQueued();
+        var coreCreditOwner = frame.CoreCreditOwner;
+        if (_sessions.TryGet(routingId, out var existing))
             {
-                lease = budget.TrackReceived(receivePermit, payloadBytes);
-                budget.CompleteReceiveAttempt(receivePermit);
-                receivePermit = null;
-            }
-            else if (lease is null && !budget.TryTrack(payloadBytes, out lease))
-                return false;
-        }
-
-        try
-        {
-            if (_sessions.TryGet(routingId, out var existing))
-            {
-                var admission = existing.TryEnqueuePacket(header, payload, lease);
+                var admission = existing.TryEnqueuePacket(
+                    header,
+                    payload,
+                    applicationJobAdmission,
+                    coreCreditOwner);
                 if (admission == ZLinkSerialPostAdmission.Accepted)
                 {
-                    lease = null;
                     return true;
-                }
-                if (admission == ZLinkSerialPostAdmission.QueueFull)
-                {
-                    if (lease is not null)
-                    {
-                        frame.AttachDispatchLease(lease);
-                        lease = null;
-                    }
-                    return false;
                 }
                 throw new ZLinkStreamPeerAdmissionException(
                     "STREAM peer session queue is closed.");
             }
 
-            var queuedLease = lease;
-            var retainedBytes = ZLinkStreamSessionRuntime.RetainedPacketBytes(
-                header,
-                payload);
             var ingressAdmission = _sessionIngress.EnqueueApplication(
-                retainedBytes,
                 async cancellationToken =>
                 {
                     var ownershipTransferred = false;
@@ -721,51 +786,44 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                             ownershipTransferred = session.TryEnqueuePacket(
                                     header,
                                     payload,
-                                    queuedLease)
+                                    applicationJobAdmission,
+                                    coreCreditOwner)
                                 == ZLinkSerialPostAdmission.Accepted;
                     }
                     finally
                     {
                         if (!ownershipTransferred)
-                            DisposeRejectedPacket(header, payload, queuedLease);
+                        {
+                            DisposeRejectedPacket(header, payload);
+                            applicationJobAdmission?.Dispose();
+                            coreCreditOwner?.Dispose();
+                        }
                     }
                 });
             if (ingressAdmission == ZLinkSerialPostAdmission.Accepted)
             {
-                lease = null;
                 return true;
             }
 
-            if (ingressAdmission == ZLinkSerialPostAdmission.QueueFull)
-            {
-                if (lease is not null)
-                {
-                    frame.AttachDispatchLease(lease);
-                    lease = null;
-                }
-                return false;
-            }
-
-            throw new ZLinkStreamPeerAdmissionException(
-                "STREAM session ingress queue is closed.");
-        }
-        catch
-        {
-            lease?.Dispose();
-            throw;
-        }
+        throw new ZLinkStreamPeerAdmissionException(
+            "STREAM session ingress queue is closed.");
     }
 
     private bool AdmitControlPacket(
         RoutingId routingId,
         Message header,
-        Message payload)
+        Message payload,
+        ZLinkApplicationJobQueueLease? applicationJobAdmission,
+        IDisposable? coreCreditOwner)
     {
         if (_sessions.TryGet(routingId, out var existing))
         {
-            var admission = existing.TryEnqueueControlPacket(header, payload);
+            var admission = existing.TryEnqueueControlPacket(
+                header,
+                payload,
+                applicationJobAdmission,
+                coreCreditOwner);
             if (admission == ZLinkSerialPostAdmission.Accepted) return true;
-            if (admission == ZLinkSerialPostAdmission.QueueFull) return false;
             throw new ZLinkStreamPeerAdmissionException(
                 "STREAM peer control queue is closed.");
         }
@@ -778,13 +836,21 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 var session = await _sessions.GetOrCreateAsync(routingId)
                     .ConfigureAwait(false);
                 if (session is not null)
-                    ownershipTransferred = session.TryEnqueueControlPacket(header, payload)
+                    ownershipTransferred = session.TryEnqueueControlPacket(
+                            header,
+                            payload,
+                            applicationJobAdmission,
+                            coreCreditOwner)
                         == ZLinkSerialPostAdmission.Accepted;
             }
             finally
             {
                 if (!ownershipTransferred)
-                    DisposeRejectedPacket(header, payload, null);
+                {
+                    DisposeRejectedPacket(header, payload);
+                    applicationJobAdmission?.Dispose();
+                    coreCreditOwner?.Dispose();
+                }
             }
         }) == ZLinkSerialPostAdmission.Accepted)
             return true;
@@ -797,15 +863,13 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         try
         {
             var bytes = header.AsReadOnlySpan();
-            if (bytes.Length < 2) return true;
-            return (ZlinkStreamMessageKind)bytes[1]
-                != ZlinkStreamMessageKind.Control;
+            if (bytes.Length < 2) return false;
+            return (ZlinkStreamMessageKind)bytes[1] is
+                ZlinkStreamMessageKind.Send or ZlinkStreamMessageKind.Request;
         }
         catch
         {
-            // A malformed header still consumes application ingress and must
-            // be released through the same terminal path as a decoded packet.
-            return true;
+            return false;
         }
     }
 
@@ -871,12 +935,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         _errorSink.ReportRuntimeTaskException(
             operation,
             new ZLinkFrameworkException(
-                admission == ZLinkSerialPostAdmission.Closed
-                    ? ZLinkFrameworkErrorKind.ShuttingDown
-                    : ZLinkFrameworkErrorKind.CapacityExceeded,
-                admission == ZLinkSerialPostAdmission.Closed
-                    ? "The STREAM control queue closed before the monitor event was admitted."
-                    : "The STREAM control queue reached its configured capacity."));
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "The STREAM control queue closed before the monitor event was admitted."));
     }
 
     private ZLinkStreamReceiveState? GetOrCreateReceiveState(RoutingId routingId)
@@ -992,17 +1052,9 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
     private static void DisposeRejectedPacket(
         Message header,
-        Message payload,
-        ZLinkInboundDispatchLease? inboundDispatchLease)
+        Message payload)
     {
-        try
-        {
-            header.Dispose();
-            payload.Dispose();
-        }
-        finally
-        {
-            inboundDispatchLease?.Dispose();
-        }
+        header.Dispose();
+        payload.Dispose();
     }
 }

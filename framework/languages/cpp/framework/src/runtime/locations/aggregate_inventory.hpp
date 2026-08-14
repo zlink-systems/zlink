@@ -103,8 +103,6 @@ inline json_t encode_participant (const aggregate_participant_t &participant)
                    {"ownerTransition", static_cast<int> (participant.owner_transition)},
                    {"authorityPayload", hex (participant.authority_payload)},
                    {"membershipMutation", hex (participant.membership_mutation)}};
-    if (participant.capacity_fence)
-        result["capacityFence"] = participant.capacity_fence->value;
     return result;
 }
 
@@ -117,9 +115,6 @@ inline aggregate_participant_t decode_participant (const json_t &value)
         value.at ("ownerTransition").get<int> ()),
       unhex (value.at ("authorityPayload").get<std::string> ()),
       unhex (value.at ("membershipMutation").get<std::string> ())};
-    if (value.contains ("capacityFence") && !value.at ("capacityFence").is_null ())
-        result.capacity_fence = relocation_capacity_fence_t{
-          value.at ("capacityFence").get<std::string> ()};
     return result;
 }
 

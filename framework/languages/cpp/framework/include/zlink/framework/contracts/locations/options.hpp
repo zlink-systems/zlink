@@ -20,6 +20,9 @@ struct location_options_t
     std::chrono::milliseconds owner_lease_renew_timeout{3000};
     std::chrono::milliseconds route_cache_max_age{15000};
     std::chrono::milliseconds message_follow_duration{30000};
+    /* Startup-only upper bound for an exact Session relocation route update.
+     * The value must be a positive whole-millisecond duration. */
+    std::chrono::milliseconds session_relocation_seal_timeout{3000};
     std::size_t max_active_outbound_relocations = 64;
     std::size_t max_active_inbound_relocations = 64;
     std::size_t max_concurrent_relocation_captures = 8;

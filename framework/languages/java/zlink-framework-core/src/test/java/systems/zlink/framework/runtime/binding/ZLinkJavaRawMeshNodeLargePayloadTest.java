@@ -58,13 +58,11 @@ final class ZLinkJavaRawMeshNodeLargePayloadTest {
                 new CompletableFuture<>();
             try (Message packet = Message.from("request");
                  Message payload = Message.from(payloadBytes)) {
-                boolean submitted = source.spotNode().requestToNode(
-                    targetRid,
-                    List.of(packet, payload),
-                    completed::complete,
-                    SendFlags.DONT_WAIT,
-                    Duration.ofSeconds(5));
-                assertTrue(submitted);
+                completed = source.spotNode().requestToNode(
+                        targetRid,
+                        List.of(packet, payload),
+                        Duration.ofSeconds(5))
+                    .toCompletableFuture();
             }
 
             try (ZLinkBackendReceived reply =

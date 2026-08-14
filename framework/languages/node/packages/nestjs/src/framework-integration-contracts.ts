@@ -3,8 +3,9 @@ import type {
   Type,
   ZLinkActor,
   ZLinkActorFactory,
+  ZLinkApplicationJobQueueOptions,
+  ZLinkCoreHwmOptions,
   ZLinkDispatchOptions,
-  ZLinkApplicationHwmProfile,
   ZLinkEntrySpot,
   ZLinkHandlerFilter,
   ZLinkLocationOptions,
@@ -24,13 +25,6 @@ import type {
   ZLinkStreamCompressionOptions,
   ZLinkTimerOptions
 } from '@zlink-systems/framework';
-
-/** Private composition values; not part of the framework public barrel. */
-export interface ZLinkInboundDispatchOptionValues {
-  applicationHwmBytes?: bigint;
-  applicationHwmProfile: ZLinkApplicationHwmProfile;
-  processMemoryLimitBytes?: bigint;
-}
 
 /** Private composition bridge used only by the Nest companion package. */
 export interface ZLinkProviderResolver {
@@ -92,7 +86,8 @@ export interface ZLinkFrameworkRegistration {
   readonly spotPublisherClients: ReadonlySet<string>;
   readonly filterTypes: readonly Type<ZLinkHandlerFilter>[];
   readonly worker?: ZLinkWorkerOptions;
-  readonly inboundDispatch?: Partial<ZLinkInboundDispatchOptionValues>;
+  readonly coreHwm?: ZLinkCoreHwmOptions;
+  readonly applicationJobQueue?: ZLinkApplicationJobQueueOptions;
   readonly dispatch?: ZLinkDispatchOptions;
   readonly metrics?: ZLinkMetricsOptions;
   readonly locations: ZLinkLocationRegistration;
@@ -143,7 +138,8 @@ export interface ZLinkFrameworkRegistrationOptions {
   readonly spotPublisherClients?: readonly string[];
   readonly filters?: readonly Type<ZLinkHandlerFilter>[];
   readonly worker?: ZLinkWorkerOptions;
-  readonly inboundDispatch?: Partial<ZLinkInboundDispatchOptionValues>;
+  readonly coreHwm?: ZLinkCoreHwmOptions;
+  readonly applicationJobQueue?: ZLinkApplicationJobQueueOptions;
   readonly dispatch?: ZLinkDispatchOptions;
   readonly metrics?: ZLinkMetricsOptions;
   readonly locations?: {

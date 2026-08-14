@@ -1,4 +1,4 @@
-// SA-E2E-02: HWM이 회복되면 pending send를 수락한다 시나리오를 검증한다.
+// SA-E2E-02: Shared job capacity가 회복되면 pending send를 수락한다 시나리오를 검증한다.
 import {
   closeGate,
   emit,

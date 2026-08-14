@@ -119,6 +119,48 @@ bool has_route_channel (const std::shared_ptr<channel_runtime_state_t> &state,
     return state->route_channels.find (channel_name) != state->route_channels.end ();
 }
 
+using route_reply_result_t =
+  result_t<runtime::messaging::message_parts_t>;
+
+task_t<route_reply_result_t> offload_route_reply (
+  const std::shared_ptr<runtime::offload_executor_t> &executor,
+  std::function<route_reply_result_t ()> work)
+{
+    auto source =
+      std::make_shared<task_completion_source_t<route_reply_result_t>> ();
+    auto output = source->task ();
+    const auto complete = [source] (route_reply_result_t reply) {
+        source->complete (
+          result_t<route_reply_result_t>::success (std::move (reply)));
+    };
+    if (!executor
+        || !executor->try_submit (
+          [complete, work = std::move (work)] () mutable {
+              try {
+                  complete (work ());
+              }
+              catch (const framework_exception_t &error) {
+                  complete (result_access_t::failure<
+                            runtime::messaging::message_parts_t> (error));
+              }
+              catch (const std::exception &error) {
+                  complete (route_reply_result_t::failure (
+                    framework_error_kind_t::internal_failure,
+                    error.what ()));
+              }
+              catch (...) {
+                  complete (route_reply_result_t::failure (
+                    framework_error_kind_t::internal_failure,
+                    "route request failed"));
+              }
+          })) {
+        complete (route_reply_result_t::failure (
+          framework_error_kind_t::internal_failure,
+          "route client executor is stopped"));
+    }
+    return output;
+}
+
 } // namespace
 
 route_client_state_t::route_client_state_t (std::shared_ptr<channel_runtime_state_t> runtime,
@@ -357,6 +399,25 @@ zlink_builder_state_t::~zlink_builder_state_t ()
     drain_zlink_builder_state_runtime (*this);
 }
 
+std::shared_ptr<zlink::context_t>
+zlink_builder_access_t::shared_core_context (const zlink_builder_t &builder)
+{
+    return builder._state->core_context;
+}
+
+void zlink_builder_access_t::bind_shared_core_context (
+  zlink_builder_t &builder,
+  std::shared_ptr<zlink::context_t> context)
+{
+    if (!context) {
+        throw std::invalid_argument ("shared Core context is required");
+    }
+    if (builder._state->core_context) {
+        throw std::logic_error ("shared Core context is already configured");
+    }
+    builder._state->core_context = std::move (context);
+}
+
 void drain_zlink_builder_runtime (zlink_builder_t &builder) noexcept
 {
     if (!builder._state) {
@@ -448,6 +509,21 @@ result_t<void> channel_runtime_t::dispatch_send (std::string channel_name,
     return result_t<void>::success ();
 }
 
+task_t<void> channel_runtime_t::dispatch_send_async (
+  std::string channel_name,
+  std::string topic,
+  std::string packet_name,
+  service_provider_t &services,
+  serializer_registry_t &serializers,
+  const handler_registry_t &handlers,
+  zlink::message_t message,
+  detail::inbound_message_context_t inbound) const
+{
+    static_cast<void> (co_await handlers.invoke_async (
+      channel_name, topic, packet_name, services, serializers, message, inbound));
+    co_return;
+}
+
 result_t<std::uint64_t> channel_runtime_t::reserve_outbound_request (std::string channel_name)
 {
     std::lock_guard lock (_state->mutex);
@@ -534,6 +610,24 @@ void channel_runtime_t::bind_listener_statuses (
 {
     std::lock_guard lock (_state->mutex);
     _state->listener_statuses = std::move (statuses);
+}
+
+void channel_runtime_t::bind_core_context (std::shared_ptr<zlink::context_t> context)
+{
+    if (!context) {
+        throw std::invalid_argument ("shared Core context is required");
+    }
+    std::lock_guard lock (_state->mutex);
+    if (_state->core_context && _state->core_context != context) {
+        throw std::logic_error ("shared Core context is already configured");
+    }
+    _state->core_context = std::move (context);
+}
+
+std::shared_ptr<zlink::context_t> channel_runtime_t::core_context () const
+{
+    std::lock_guard lock (_state->mutex);
+    return _state->core_context;
 }
 
 void channel_runtime_t::bind_fanout_advertise_hosts (
@@ -806,22 +900,6 @@ capability_builder_t &capability_builder_t::set_routing_id (zlink::routing_id_t 
     return *this;
 }
 
-capability_builder_t &capability_builder_t::send_high_water_mark (zlink::byte_count_t value)
-{
-    auto &snapshot = capability_snapshot (*_state);
-    snapshot.enabled = true;
-    snapshot.send_high_water_mark = value;
-    return *this;
-}
-
-capability_builder_t &capability_builder_t::receive_high_water_mark (zlink::byte_count_t value)
-{
-    auto &snapshot = capability_snapshot (*_state);
-    snapshot.enabled = true;
-    snapshot.receive_high_water_mark = value;
-    return *this;
-}
-
 capability_builder_t &capability_builder_t::max_message_size (zlink::byte_size_t value)
 {
     auto &snapshot = capability_snapshot (*_state);
@@ -992,19 +1070,6 @@ route_channel_builder_t::add_handler (route_handler_registration_t registration)
     return *this;
 }
 
-message_bus_t::erased_request_result_t::erased_request_result_t (framework_exception_t error) :
-    _error (std::move (error))
-{
-}
-
-message_bus_t::erased_request_result_t::erased_request_result_t (
-  zlink::message_t reply, serializer_registry_t &serializers) :
-    _error (framework_error_kind_t::internal_failure, ""),
-    _reply (std::move (reply)),
-    _serializers (&serializers)
-{
-}
-
 message_bus_t::message_bus_t () : _state (std::make_shared<detail::channel_runtime_state_t> ())
 {
 }
@@ -1043,19 +1108,6 @@ serializer_registry_t *message_bus_t::serializers () const noexcept
     return _state ? _state->serializers : nullptr;
 }
 
-message_bus_t::erased_request_result_t
-message_bus_t::submit_request (std::string channel_name,
-                               std::string packet_name,
-                               std::type_index request_type,
-                               payload_encoder_t encode_payload,
-                               std::chrono::milliseconds timeout,
-                               const channel_request_call_t::metadata_map_t &metadata)
-{
-    return detail::channel_outbound_exchange_t (_state).submit_request (
-      std::move (channel_name), std::move (packet_name), request_type, std::move (encode_payload),
-      timeout, metadata);
-}
-
 task_t<zlink::message_t>
 message_bus_t::submit_request_message_async (std::string channel_name,
                                              std::string packet_name,
@@ -1064,26 +1116,24 @@ message_bus_t::submit_request_message_async (std::string channel_name,
                                              std::chrono::milliseconds timeout,
                                              channel_request_call_t::metadata_map_t metadata)
 {
-    auto result =
-      submit_request (std::move (channel_name), std::move (packet_name), request_type,
-                      std::move (encode_payload), timeout, metadata)
-        .message ();
-    return task_t<zlink::message_t> (std::move (result));
+    return detail::channel_outbound_exchange_t (_state).submit_request (
+      std::move (channel_name), std::move (packet_name), request_type,
+      std::move (encode_payload), timeout, metadata);
 }
 
-result_t<void> message_bus_t::submit_send (std::string channel_name,
-                                           std::string packet_name,
-                                           std::type_index message_type,
-                                           payload_encoder_t encode_payload,
-                                           std::chrono::milliseconds timeout,
-                                           const send_call_t::metadata_map_t &metadata)
+task_t<void> message_bus_t::submit_send (std::string channel_name,
+                                         std::string packet_name,
+                                         std::type_index message_type,
+                                         payload_encoder_t encode_payload,
+                                         std::chrono::milliseconds timeout,
+                                         const send_call_t::metadata_map_t &metadata)
 {
     return detail::channel_outbound_exchange_t (_state).submit_send (
       std::move (channel_name), std::move (packet_name), message_type, std::move (encode_payload),
       timeout, metadata);
 }
 
-result_t<void> message_bus_t::submit_publish (std::string channel_name,
+task_t<void> message_bus_t::submit_publish (std::string channel_name,
                                               std::string topic,
                                               std::string packet_name,
                                               std::type_index event_type,
@@ -1212,6 +1262,11 @@ route_send_call_t::route_send_call_t (std::string packet_name, submit_fn_t submi
 {
 }
 
+route_send_call_t::route_send_call_t (std::string packet_name, async_submit_fn_t submit) :
+    _packet_name (std::move (packet_name)), _async_submit (std::move (submit))
+{
+}
+
 route_send_call_t &route_send_call_t::metadata (std::string key, std::string value)
 {
     _metadata[std::move (key)] = std::move (value);
@@ -1230,11 +1285,25 @@ result_t<void> route_send_call_t::submit_now ()
 task_t<void> route_send_call_t::submit ()
 {
     if (!_submission->try_claim ()) {
-        return task_t<void> (result_t<void>::failure (
+        throw framework_exception_t (
           framework_error_kind_t::protocol_error,
-          "route send call has already been submitted"));
+          "route send call has already been submitted");
     }
-    return detail::submit_one_way_task (
+    if (_async_submit) {
+        auto pending = _async_submit (_packet_name, _metadata);
+        if (auto turn_plan = detail::prepare_serial_turn_await (false)) {
+            pending = detail::reschedule_task (std::move (pending),
+                                               std::move (turn_plan->scheduler));
+        }
+        const auto submitted = co_await pending;
+        if (!submitted)
+            throw submitted.error () ? *submitted.error ()
+                                    : framework_exception_t (
+                                        framework_error_kind_t::internal_failure,
+                                        "route send failed without an error");
+        co_return;
+    }
+    co_await detail::submit_one_way_task (
       [packet_name = _packet_name, metadata = _metadata, submit = _submit] () {
           if (!submit) {
               return result_t<void>::failure (
@@ -1243,6 +1312,7 @@ task_t<void> route_send_call_t::submit ()
           }
           return submit (packet_name, metadata);
       });
+    co_return;
 }
 
 route_client_t::route_client_t () = default;
@@ -1259,7 +1329,7 @@ route_client_t::route_client_t (route_client_t &&) noexcept = default;
 
 route_client_t &route_client_t::operator= (route_client_t &&) noexcept = default;
 
-result_t<void>
+task_t<result_t<void>>
 route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_state_t> &state,
                                     const std::string &router_channel_id,
                                     const zlink::routing_id_t &target_node_rid,
@@ -1274,8 +1344,8 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
         ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
         : message_flow_log_mode_t::off);
     if (!state || !state->runtime || state->serializers == nullptr) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "route client is not configured");
+        co_return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                           "route client is not configured");
     }
     runtime::messaging::message_parts_t parts;
     const auto use_route_channel = detail::has_route_channel (state->runtime, router_channel_id);
@@ -1283,7 +1353,7 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
                                ? std::nullopt
                                : detail::mesh_node_sender (state->runtime, router_channel_id);
     if (!use_route_channel && !mesh_sender) {
-        return result_t<void>::failure (
+        co_return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "route channel or SPOT mesh '" + router_channel_id + "' is not registered");
     }
@@ -1310,25 +1380,25 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
                                             *state->serializers);
     }
     catch (const framework_exception_t &error) {
-        return detail::result_access_t::failure<void> (error);
+        co_return detail::result_access_t::failure<void> (error);
     }
     try {
         if (mesh_sender) {
-            return (*mesh_sender) (target_node_rid, std::move (parts));
+            co_return co_await (*mesh_sender) (target_node_rid, std::move (parts));
         }
         detail::channel_runtime_manager_t manager (state->runtime);
         auto &runtime = manager.get_route_channel (router_channel_id);
-        return runtime.submit_send_parts (target_node_rid, std::move (parts));
+        co_return runtime.submit_send_parts (target_node_rid, std::move (parts));
     }
     catch (const framework_exception_t &error) {
-        return detail::result_access_t::failure<void> (error);
+        co_return detail::result_access_t::failure<void> (error);
     }
     catch (const std::exception &error) {
-        return result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ());
+        co_return result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ());
     }
 }
 
-result_t<void> route_client_t::submit_channel_send_erased (
+task_t<result_t<void>> route_client_t::submit_channel_send_erased (
   const std::shared_ptr<detail::route_client_state_t> &state,
   const std::string &channel_name,
   const std::string &packet_name,
@@ -1342,12 +1412,12 @@ result_t<void> route_client_t::submit_channel_send_erased (
         ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
         : message_flow_log_mode_t::off);
     if (!state || !state->runtime || state->serializers == nullptr) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "route client is not configured");
+        co_return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                           "route client is not configured");
     }
     const auto sender = detail::mesh_channel_sender (state->runtime, channel_name);
     if (!sender) {
-        return result_t<void>::failure (
+        co_return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "RouteMesh channel '" + channel_name + "' is not registered");
     }
@@ -1373,13 +1443,13 @@ result_t<void> route_client_t::submit_channel_send_erased (
         auto parts = encode_route_payload_parts (std::move (header), message_type,
                                                  std::move (encode_payload),
                                                  *state->serializers);
-        return (*sender) (std::move (parts));
+        co_return co_await (*sender) (std::move (parts));
     }
     catch (const framework_exception_t &error) {
-        return detail::result_access_t::failure<void> (error);
+        co_return detail::result_access_t::failure<void> (error);
     }
     catch (const std::exception &error) {
-        return result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ());
+        co_return result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ());
     }
 }
 
@@ -1450,7 +1520,7 @@ route_client_t::submit_request_erased (const std::shared_ptr<detail::route_clien
     }
 }
 
-result_t<void>
+task_t<result_t<void>>
 route_client_t::submit_spot_send_erased (const std::shared_ptr<detail::route_client_state_t> &state,
                                          const std::string &router_channel_id,
                                          const zlink::routing_id_t &target_node_rid,
@@ -1467,8 +1537,8 @@ route_client_t::submit_spot_send_erased (const std::shared_ptr<detail::route_cli
         ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
         : message_flow_log_mode_t::off);
     if (!state || !state->runtime || state->serializers == nullptr) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "route client is not configured");
+        co_return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                           "route client is not configured");
     }
     runtime::messaging::message_parts_t parts;
     const auto &spot_id = target_spot_id;
@@ -1477,7 +1547,7 @@ route_client_t::submit_spot_send_erased (const std::shared_ptr<detail::route_cli
                                ? std::nullopt
                                : detail::spot_mesh_sender (state->runtime, router_channel_id);
     if (!use_route_channel && !mesh_sender) {
-        return result_t<void>::failure (
+        co_return result_t<void>::failure (
           framework_error_kind_t::unavailable,
           "route channel or SPOT mesh '" + router_channel_id + "' is not registered");
     }
@@ -1504,22 +1574,22 @@ route_client_t::submit_spot_send_erased (const std::shared_ptr<detail::route_cli
                                             *state->serializers);
     }
     catch (const framework_exception_t &error) {
-        return detail::result_access_t::failure<void> (error);
+        co_return detail::result_access_t::failure<void> (error);
     }
     try {
         if (mesh_sender) {
-            return (*mesh_sender) (target_node_rid, spot_id,
-                                   target_spot_generation, std::move (parts));
+            co_return co_await (*mesh_sender) (target_node_rid, spot_id,
+                                                target_spot_generation, std::move (parts));
         }
         detail::channel_runtime_manager_t manager (state->runtime);
         auto &runtime = manager.get_route_channel (router_channel_id);
-        return runtime.submit_spot_send_parts (target_node_rid, spot_id, std::move (parts));
+        co_return runtime.submit_spot_send_parts (target_node_rid, spot_id, std::move (parts));
     }
     catch (const framework_exception_t &error) {
-        return detail::result_access_t::failure<void> (error);
+        co_return detail::result_access_t::failure<void> (error);
     }
     catch (const std::exception &error) {
-        return result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ());
+        co_return result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ());
     }
 }
 
@@ -1609,8 +1679,8 @@ task_t<zlink::message_t> route_client_t::submit_request_reply_message_erased (
         : message_flow_log_mode_t::off);
     const auto ambient_context = detail::capture_ambient_context ();
     if (!state || !state->runtime || state->serializers == nullptr) {
-        return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
-          framework_error_kind_t::protocol_error, "route client is not configured"));
+        co_return result_t<zlink::message_t>::failure (
+          framework_error_kind_t::protocol_error, "route client is not configured");
     }
     runtime::messaging::message_parts_t parts;
     const auto use_route_channel =
@@ -1620,10 +1690,10 @@ task_t<zlink::message_t> route_client_t::submit_request_reply_message_erased (
                         : detail::mesh_node_requester (state->runtime,
                                                       router_channel_id);
     if (!use_route_channel && !mesh_requester) {
-        return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
+        co_return result_t<zlink::message_t>::failure (
           framework_error_kind_t::unavailable,
           "route channel or MeshNode '" + router_channel_id
-            + "' is not registered"));
+            + "' is not registered");
     }
     auto effective_timeout = timeout;
     try {
@@ -1658,93 +1728,69 @@ task_t<zlink::message_t> route_client_t::submit_request_reply_message_erased (
                                             *state->serializers);
     }
     catch (const framework_exception_t &error) {
-        return task_t<zlink::message_t> (detail::result_access_t::failure<zlink::message_t> (error));
+        co_return detail::result_access_t::failure<zlink::message_t> (error);
     }
-    auto source = std::make_shared<detail::task_completion_source_t<zlink::message_t>> ();
-    auto output = source->task ();
-    auto runtime_state = state->runtime;
-    auto executor = state->executor;
-    if (!executor
-        || !executor->try_submit ([runtime_state, source,
-                                   router_channel_id = std::move (router_channel_id),
-                                   target_node_rid = std::move (target_node_rid),
-                                   packet_name = std::move (packet_name), parts = std::move (parts),
-                                   effective_timeout, mesh_requester,
-                                   ambient_context] () mutable {
-              const auto ambient_guard = detail::enter_ambient_context (ambient_context);
-              try {
-                  runtime::messaging::envelope_codec_t envelope;
-                  result_t<runtime::messaging::message_parts_t> reply =
-                    mesh_requester
-                      ? (*mesh_requester) (target_node_rid, std::move (parts),
-                                           effective_timeout)
-                      : [&] {
-                            detail::channel_runtime_manager_t manager (
-                              runtime_state);
-                            auto &runtime =
-                              manager.get_route_channel (router_channel_id);
-                            return runtime.request_reply_parts (
-                              target_node_rid, std::move (parts),
-                              effective_timeout);
-                        } ();
-                  if (!reply) {
-                      source->complete (detail::propagate_failure<zlink::message_t> (reply, "route request failed"));
-                      return;
-                  }
-                  auto reply_header = envelope.decode_header (reply.value ());
-                  if (!reply_header) {
-                      source->complete (result_t<zlink::message_t>::failure (
-                        reply_header.error_kind (),
-                        reply_header.error () ? reply_header.error ()->what ()
-                                              : "route reply header decode failed"));
-                      return;
-                  }
-                  if (reply_header.value ().kind == runtime::messaging::message_kind_t::error) {
-                      runtime::messaging::request_failure_mapper_t failure_mapper;
-                      source->complete (detail::result_access_t::failure<zlink::message_t> (
-                        failure_mapper.error_header_exception (
-                          reply_header.value ().error_code.value_or ("request_failed"),
-                          reply_header.value ().error_message.value_or ("route request failed"),
-                          "route request")));
-                      return;
-                  }
-                  auto body = envelope.decode_body (reply.value ());
-                  if (!body) {
-                      source->complete (detail::propagate_failure<zlink::message_t> (body, "route reply body decode failed"));
-                      return;
-                  }
-                  detail::message_flow_tracer_t (runtime_state->dispatch)
-                    .trace (message_flow_outcome_t::reply_received, [&] {
-                        return message_flow_event_t{message_flow_outcome_t::reply_received,
-                                                    dispatch_error_surface_t::route_mesh_channel,
-                                                    dispatch_message_kind_t::response,
-                                                    packet_name,
-                                                    router_channel_id,
-                                                    std::nullopt,
-                                                    reply_header.value ().correlation_id,
-                                                    target_node_rid.to_string (),
-                                                    std::nullopt,
-                                                    std::nullopt,
-                                                    std::nullopt};
-                    });
-                  source->complete (result_t<zlink::message_t>::success (body.value ()));
-              }
-              catch (const framework_exception_t &error) {
-                  source->complete (detail::result_access_t::failure<zlink::message_t> (error));
-              }
-              catch (const std::exception &error) {
-                  source->complete (result_t<zlink::message_t>::failure (
-                    framework_error_kind_t::internal_failure, error.what ()));
-              }
-              catch (...) {
-                  source->complete (result_t<zlink::message_t>::failure (
-                    framework_error_kind_t::internal_failure, "route request failed"));
-              }
-          })) {
-        source->complete (result_t<zlink::message_t>::failure (
-          framework_error_kind_t::internal_failure, "route client executor is stopped"));
+    const auto ambient_guard = detail::enter_ambient_context (ambient_context);
+    try {
+        runtime::messaging::envelope_codec_t envelope;
+        auto reply_task = [&] () -> task_t<result_t<
+          runtime::messaging::message_parts_t>> {
+            if (mesh_requester)
+                return (*mesh_requester) (
+                  target_node_rid, std::move (parts), effective_timeout);
+            return detail::offload_route_reply (
+              state->executor,
+              [runtime_state = state->runtime, router_channel_id,
+               target_node_rid, parts = std::move (parts), effective_timeout,
+               ambient_context] () mutable {
+                  const auto worker_context =
+                    detail::enter_ambient_context (ambient_context);
+                  detail::channel_runtime_manager_t manager (runtime_state);
+                  auto &runtime =
+                    manager.get_route_channel (router_channel_id);
+                  return runtime.request_reply_parts (
+                    target_node_rid, std::move (parts), effective_timeout);
+              });
+        } ();
+        const auto reply = co_await reply_task;
+        if (!reply)
+            co_return detail::propagate_failure<zlink::message_t> (reply, "route request failed");
+        auto reply_header = envelope.decode_header (reply.value ());
+        if (!reply_header) {
+            co_return result_t<zlink::message_t>::failure (
+              reply_header.error_kind (), reply_header.error () ? reply_header.error ()->what ()
+                                                                : "route reply header decode failed");
+        }
+        if (reply_header.value ().kind == runtime::messaging::message_kind_t::error) {
+            runtime::messaging::request_failure_mapper_t failure_mapper;
+            co_return detail::result_access_t::failure<zlink::message_t> (
+              failure_mapper.error_header_exception (
+                reply_header.value ().error_code.value_or ("request_failed"),
+                reply_header.value ().error_message.value_or ("route request failed"),
+                "route request"));
+        }
+        auto body = envelope.decode_body (reply.value ());
+        if (!body)
+            co_return detail::propagate_failure<zlink::message_t> (body, "route reply body decode failed");
+        detail::message_flow_tracer_t (state->runtime->dispatch)
+          .trace (message_flow_outcome_t::reply_received, [&] {
+              return message_flow_event_t{message_flow_outcome_t::reply_received,
+                                          dispatch_error_surface_t::route_mesh_channel,
+                                          dispatch_message_kind_t::response,
+                                          packet_name, router_channel_id, std::nullopt,
+                                          reply_header.value ().correlation_id,
+                                          target_node_rid.to_string (), std::nullopt,
+                                          std::nullopt, std::nullopt};
+          });
+        co_return body.value ();
     }
-    return output;
+    catch (const framework_exception_t &error) {
+        co_return detail::result_access_t::failure<zlink::message_t> (error);
+    }
+    catch (const std::exception &error) {
+        co_return result_t<zlink::message_t>::failure (
+          framework_error_kind_t::internal_failure, error.what ());
+    }
 }
 
 task_t<zlink::message_t> route_client_t::submit_channel_request_reply_message_erased (
@@ -1763,14 +1809,14 @@ task_t<zlink::message_t> route_client_t::submit_channel_request_reply_message_er
         : message_flow_log_mode_t::off);
     const auto ambient_context = detail::capture_ambient_context ();
     if (!state || !state->runtime || state->serializers == nullptr) {
-        return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
-          framework_error_kind_t::protocol_error, "route client is not configured"));
+        co_return result_t<zlink::message_t>::failure (
+          framework_error_kind_t::protocol_error, "route client is not configured");
     }
     const auto requester = detail::mesh_channel_requester (state->runtime, channel_name);
     if (!requester) {
-        return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
+        co_return result_t<zlink::message_t>::failure (
           framework_error_kind_t::unavailable,
-          "RouteMesh channel '" + channel_name + "' is not registered"));
+          "RouteMesh channel '" + channel_name + "' is not registered");
     }
     const auto effective_timeout = timeout > std::chrono::milliseconds::zero ()
                                      ? timeout
@@ -1799,93 +1845,55 @@ task_t<zlink::message_t> route_client_t::submit_channel_request_reply_message_er
                                             std::move (encode_payload), *state->serializers);
     }
     catch (const framework_exception_t &error) {
-        return task_t<zlink::message_t> (
-          detail::result_access_t::failure<zlink::message_t> (error));
+        co_return detail::result_access_t::failure<zlink::message_t> (error);
     }
 
-    auto source = std::make_shared<detail::task_completion_source_t<zlink::message_t>> ();
-    auto output = source->task ();
-    auto runtime_state = state->runtime;
-    auto executor = state->executor;
-    if (!executor) {
-        source->complete (result_t<zlink::message_t>::failure (
-          framework_error_kind_t::internal_failure, "route client executor is stopped"));
-        return output;
-    }
+    const auto ambient_guard = detail::enter_ambient_context (ambient_context);
     try {
-        executor->submit (
-          [runtime_state, source, requester, channel_name = std::move (channel_name),
-           packet_name = std::move (packet_name), parts = std::move (parts),
-           effective_timeout, ambient_context] () mutable {
-              const auto ambient_guard = detail::enter_ambient_context (ambient_context);
-              try {
-                  runtime::messaging::envelope_codec_t envelope;
-                  auto reply = (*requester) (std::move (parts), effective_timeout);
-                  if (!reply) {
-                      source->complete (detail::propagate_failure<zlink::message_t> (
-                        reply, "RouteMesh channel request failed"));
-                      return;
-                  }
-                  auto reply_header = envelope.decode_header (reply.value ());
-                  if (!reply_header) {
-                      source->complete (result_t<zlink::message_t>::failure (
-                        reply_header.error_kind (),
-                        reply_header.error () ? reply_header.error ()->what ()
-                                              : "RouteMesh channel reply header decode failed"));
-                      return;
-                  }
-                  if (reply_header.value ().kind == runtime::messaging::message_kind_t::error) {
-                      runtime::messaging::request_failure_mapper_t failure_mapper;
-                      source->complete (detail::result_access_t::failure<zlink::message_t> (
-                        failure_mapper.error_header_exception (
-                          reply_header.value ().error_code.value_or ("request_failed"),
-                          reply_header.value ().error_message.value_or (
-                            "RouteMesh channel request failed"),
-                          "RouteMesh channel request")));
-                      return;
-                  }
-                  auto body = envelope.decode_body (reply.value ());
-                  if (!body) {
-                      source->complete (detail::propagate_failure<zlink::message_t> (
-                        body, "RouteMesh channel reply body decode failed"));
-                      return;
-                  }
-                  detail::message_flow_tracer_t (runtime_state->dispatch)
-                    .trace (message_flow_outcome_t::reply_received, [&] {
-                        return message_flow_event_t{
-                          message_flow_outcome_t::reply_received,
-                          dispatch_error_surface_t::route_mesh_channel,
-                          dispatch_message_kind_t::response,
-                          packet_name,
-                          channel_name,
-                          std::nullopt,
-                          reply_header.value ().correlation_id,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt,
-                          std::nullopt};
-                    });
-                  source->complete (result_t<zlink::message_t>::success (body.value ()));
-              }
-              catch (const framework_exception_t &error) {
-                  source->complete (detail::result_access_t::failure<zlink::message_t> (error));
-              }
-              catch (const std::exception &error) {
-                  source->complete (result_t<zlink::message_t>::failure (
-                    framework_error_kind_t::internal_failure, error.what ()));
-              }
-              catch (...) {
-                  source->complete (result_t<zlink::message_t>::failure (
-                    framework_error_kind_t::internal_failure,
-                    "RouteMesh channel request failed"));
-              }
+        runtime::messaging::envelope_codec_t envelope;
+        auto reply = co_await (*requester) (std::move (parts), effective_timeout);
+        if (!reply) {
+            co_return detail::propagate_failure<zlink::message_t> (
+              reply, "RouteMesh channel request failed");
+        }
+        auto reply_header = envelope.decode_header (reply.value ());
+        if (!reply_header) {
+            co_return result_t<zlink::message_t>::failure (
+              reply_header.error_kind (), reply_header.error () ? reply_header.error ()->what ()
+                                                                : "RouteMesh channel reply header decode failed");
+        }
+        if (reply_header.value ().kind == runtime::messaging::message_kind_t::error) {
+            runtime::messaging::request_failure_mapper_t failure_mapper;
+            co_return detail::result_access_t::failure<zlink::message_t> (
+              failure_mapper.error_header_exception (
+                reply_header.value ().error_code.value_or ("request_failed"),
+                reply_header.value ().error_message.value_or ("RouteMesh channel request failed"),
+                "RouteMesh channel request"));
+        }
+        auto body = envelope.decode_body (reply.value ());
+        if (!body) {
+            co_return detail::propagate_failure<zlink::message_t> (
+              body, "RouteMesh channel reply body decode failed");
+        }
+        detail::message_flow_tracer_t (state->runtime->dispatch)
+          .trace (message_flow_outcome_t::reply_received, [&] {
+              return message_flow_event_t{message_flow_outcome_t::reply_received,
+                                          dispatch_error_surface_t::route_mesh_channel,
+                                          dispatch_message_kind_t::response,
+                                          packet_name, channel_name, std::nullopt,
+                                          reply_header.value ().correlation_id,
+                                          std::nullopt, std::nullopt, std::nullopt,
+                                          std::nullopt};
           });
+        co_return body.value ();
+    }
+    catch (const framework_exception_t &error) {
+        co_return detail::result_access_t::failure<zlink::message_t> (error);
     }
     catch (const std::exception &error) {
-        source->complete (result_t<zlink::message_t>::failure (
-          framework_error_kind_t::internal_failure, error.what ()));
+        co_return result_t<zlink::message_t>::failure (
+          framework_error_kind_t::internal_failure, error.what ());
     }
-    return output;
 }
 
 task_t<zlink::message_t> route_client_t::submit_spot_request_reply_message_erased (
@@ -1908,8 +1916,8 @@ task_t<zlink::message_t> route_client_t::submit_spot_request_reply_message_erase
         : message_flow_log_mode_t::off);
     const auto ambient_context = detail::capture_ambient_context ();
     if (!state || !state->runtime || state->serializers == nullptr) {
-        return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
-          framework_error_kind_t::protocol_error, "route client is not configured"));
+        co_return result_t<zlink::message_t>::failure (
+          framework_error_kind_t::protocol_error, "route client is not configured");
     }
     runtime::messaging::message_parts_t parts;
     auto effective_timeout = timeout;
@@ -1919,9 +1927,9 @@ task_t<zlink::message_t> route_client_t::submit_spot_request_reply_message_erase
                                   ? std::nullopt
                                   : detail::spot_mesh_requester (state->runtime, router_channel_id);
     if (!use_route_channel && !mesh_requester) {
-        return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
+        co_return result_t<zlink::message_t>::failure (
           framework_error_kind_t::unavailable,
-          "route channel or SPOT mesh '" + router_channel_id + "' is not registered"));
+          "route channel or SPOT mesh '" + router_channel_id + "' is not registered");
     }
     try {
         if (use_route_channel) {
@@ -1955,146 +1963,92 @@ task_t<zlink::message_t> route_client_t::submit_spot_request_reply_message_erase
                                             *state->serializers);
     }
     catch (const framework_exception_t &error) {
-        return task_t<zlink::message_t> (detail::result_access_t::failure<zlink::message_t> (error));
+        co_return detail::result_access_t::failure<zlink::message_t> (error);
     }
-    auto source = std::make_shared<detail::task_completion_source_t<zlink::message_t>> ();
-    auto output = source->task ();
-    auto runtime_state = state->runtime;
-    auto executor = state->executor;
-    if (!executor
-        || !executor->try_submit ([runtime_state, source,
-                                   router_channel_id = std::move (router_channel_id),
-                                   target_node_rid = std::move (target_node_rid),
-                                   spot_id = std::move (spot_id),
-                                   target_spot_generation,
-                                   packet_name = std::move (packet_name), parts = std::move (parts),
-                                   effective_timeout, mesh_requester,
-                                   ambient_context] () mutable {
-              const auto ambient_guard = detail::enter_ambient_context (ambient_context);
-              try {
-                  runtime::messaging::envelope_codec_t envelope;
-                  auto reply = [&] () -> result_t<runtime::messaging::message_parts_t> {
-                      if (mesh_requester) {
-                          return (*mesh_requester) (
-                            target_node_rid, spot_id, target_spot_generation,
-                            std::move (parts), effective_timeout);
-                      }
-                      detail::channel_runtime_manager_t manager (runtime_state);
-                      auto &runtime = manager.get_route_channel (router_channel_id);
-                      return detail::is_internal_spot_route_packet (packet_name)
-                               ? runtime.request_reply_parts (
-                                   target_node_rid, std::move (parts), effective_timeout)
-                               : runtime.request_reply_spot_parts (
-                                   target_node_rid, spot_id, std::move (parts), effective_timeout);
-                  } ();
-                  if (!reply) {
-                      if (reply.error_kind ()
-                          == framework_error_kind_t::not_found) {
-                          detail::dispatch_error_reporter_t (runtime_state->dispatch).report (
-                            message_dispatch_error_event_t{
-                              dispatch_error_surface_t::spot_route,
-                              dispatch_message_kind_t::request,
-                              dispatch_error_reason_t::handler_missing,
-                              dispatch_error_action_t::reply_error,
-                              packet_name,
-                              router_channel_id,
-                              std::nullopt,
-                              spot_id,
-                              std::nullopt,
-                              target_node_rid.to_string (),
-                              std::nullopt,
-                              reply.error () ? std::make_exception_ptr (*reply.error ())
-                                             : std::exception_ptr {}});
-                      }
-                      source->complete (detail::propagate_failure<zlink::message_t> (reply, "route spot request failed"));
-                      return;
-                  }
-                  auto reply_header = envelope.decode_header (reply.value ());
-                  if (!reply_header) {
-                      source->complete (result_t<zlink::message_t>::failure (
-                        reply_header.error_kind (),
-                        reply_header.error () ? reply_header.error ()->what ()
-                                              : "route spot reply header decode failed"));
-                      return;
-                  }
-                  if (reply_header.value ().kind == runtime::messaging::message_kind_t::error) {
-                      runtime::messaging::request_failure_mapper_t failure_mapper;
-                      source->complete (detail::result_access_t::failure<zlink::message_t> (
-                        failure_mapper.error_header_exception (
-                          reply_header.value ().error_code.value_or ("request_failed"),
-                          reply_header.value ().error_message.value_or (
-                            "route spot request failed"),
-                          "route spot request")));
-                      return;
-                  }
-                  auto body = envelope.decode_body (reply.value ());
-                  if (!body) {
-                      source->complete (result_t<zlink::message_t>::failure (
-                        body.error_kind (),
-                        body.error () ? body.error ()->what ()
-                                      : "route spot reply body decode failed"));
-                      return;
-                  }
-                  detail::message_flow_tracer_t (runtime_state->dispatch)
-                    .trace (message_flow_outcome_t::reply_received, [&] {
-                        return message_flow_event_t{message_flow_outcome_t::reply_received,
-                                                    dispatch_error_surface_t::spot_route,
-                                                    dispatch_message_kind_t::response,
-                                                    packet_name,
-                                                    router_channel_id,
-                                                    std::nullopt,
-                                                    reply_header.value ().correlation_id,
-                                                    target_node_rid.to_string (),
-                                                    spot_id,
-                                                    std::nullopt,
-                                                    std::nullopt};
-                    });
-                  source->complete (result_t<zlink::message_t>::success (body.value ()));
-              }
-              catch (const framework_exception_t &error) {
-                  source->complete (detail::result_access_t::failure<zlink::message_t> (error));
-              }
-              catch (const std::exception &error) {
-                  source->complete (result_t<zlink::message_t>::failure (
-                    framework_error_kind_t::internal_failure, error.what ()));
-              }
-              catch (...) {
-                  source->complete (result_t<zlink::message_t>::failure (
-                    framework_error_kind_t::internal_failure, "route spot request failed"));
-              }
-          })) {
-        source->complete (result_t<zlink::message_t>::failure (
-          framework_error_kind_t::internal_failure, "route client executor is stopped"));
-    }
-    if (state->runtime && state->runtime->monitoring) {
-        runtime::runtime_metrics_t metrics (state->runtime->monitoring);
-        if (metrics.enabled ()) {
-            const auto started = std::chrono::steady_clock::now ();
-            metrics.updown ("zlink.channel.request.inflight", "{request}", 1,
-                            {{"channel", metrics_channel}});
-            detail::observe_task_completion (
-              output, [metrics, started, metrics_channel] (
-                        const result_t<zlink::message_t> &completed) mutable {
-                  metrics.updown ("zlink.channel.request.inflight", "{request}", -1,
-                                  {{"channel", metrics_channel}});
-                  const auto elapsed = std::chrono::duration<double> (
-                                         std::chrono::steady_clock::now () - started)
-                                         .count ();
-                  metrics.histogram ("zlink.channel.request.duration", "s", elapsed,
-                                     {{"channel", metrics_channel}});
-                  if (!completed && completed.error () != nullptr
-                      && detail::boundary_state (*completed.error ())
-                           == detail::boundary_error_t::timed_out) {
-                      metrics.counter ("zlink.channel.request.timeouts", "{request}", 1,
-                                       {{"channel", metrics_channel}});
-                  }
+    const auto ambient_guard = detail::enter_ambient_context (ambient_context);
+    try {
+        runtime::messaging::envelope_codec_t envelope;
+        auto reply_task = [&] () -> task_t<result_t<
+          runtime::messaging::message_parts_t>> {
+            if (mesh_requester)
+                return (*mesh_requester) (
+                  target_node_rid, spot_id, target_spot_generation,
+                  std::move (parts), effective_timeout);
+            return detail::offload_route_reply (
+              state->executor,
+              [runtime_state = state->runtime, router_channel_id,
+               target_node_rid, spot_id = std::string (spot_id), packet_name,
+               parts = std::move (parts), effective_timeout,
+               ambient_context] () mutable {
+                  const auto worker_context =
+                    detail::enter_ambient_context (ambient_context);
+                  detail::channel_runtime_manager_t manager (runtime_state);
+                  auto &runtime =
+                    manager.get_route_channel (router_channel_id);
+                  return detail::is_internal_spot_route_packet (packet_name)
+                           ? runtime.request_reply_parts (
+                               target_node_rid, std::move (parts),
+                               effective_timeout)
+                           : runtime.request_reply_spot_parts (
+                               target_node_rid, spot_id, std::move (parts),
+                               effective_timeout);
               });
+        } ();
+        const auto reply = co_await reply_task;
+        if (!reply) {
+            if (reply.error_kind () == framework_error_kind_t::not_found) {
+                detail::dispatch_error_reporter_t (state->runtime->dispatch).report (
+                  message_dispatch_error_event_t{dispatch_error_surface_t::spot_route,
+                    dispatch_message_kind_t::request, dispatch_error_reason_t::handler_missing,
+                    dispatch_error_action_t::reply_error, packet_name, router_channel_id,
+                    std::nullopt, spot_id, std::nullopt, target_node_rid.to_string (),
+                    std::nullopt, reply.error () ? std::make_exception_ptr (*reply.error ())
+                                                  : std::exception_ptr {}});
+            }
+            co_return detail::propagate_failure<zlink::message_t> (reply, "route spot request failed");
         }
+        auto reply_header = envelope.decode_header (reply.value ());
+        if (!reply_header) {
+            co_return result_t<zlink::message_t>::failure (
+              reply_header.error_kind (), reply_header.error () ? reply_header.error ()->what ()
+                                                                : "route spot reply header decode failed");
+        }
+        if (reply_header.value ().kind == runtime::messaging::message_kind_t::error) {
+            runtime::messaging::request_failure_mapper_t failure_mapper;
+            co_return detail::result_access_t::failure<zlink::message_t> (
+              failure_mapper.error_header_exception (
+                reply_header.value ().error_code.value_or ("request_failed"),
+                reply_header.value ().error_message.value_or ("route spot request failed"),
+                "route spot request"));
+        }
+        auto body = envelope.decode_body (reply.value ());
+        if (!body) {
+            co_return result_t<zlink::message_t>::failure (
+              body.error_kind (), body.error () ? body.error ()->what ()
+                                                : "route spot reply body decode failed");
+        }
+        detail::message_flow_tracer_t (state->runtime->dispatch)
+          .trace (message_flow_outcome_t::reply_received, [&] {
+              return message_flow_event_t{message_flow_outcome_t::reply_received,
+                                          dispatch_error_surface_t::spot_route,
+                                          dispatch_message_kind_t::response,
+                                          packet_name, router_channel_id, std::nullopt,
+                                          reply_header.value ().correlation_id,
+                                          target_node_rid.to_string (), spot_id,
+                                          std::nullopt, std::nullopt};
+          });
+        co_return body.value ();
     }
-    return output;
+    catch (const framework_exception_t &error) {
+        co_return detail::result_access_t::failure<zlink::message_t> (error);
+    }
+    catch (const std::exception &error) {
+        co_return result_t<zlink::message_t>::failure (
+          framework_error_kind_t::internal_failure, error.what ());
+    }
 }
 
-result_t<void> route_client_t::submit_spot_id_send_erased (
+task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
   const std::shared_ptr<detail::route_client_state_t> &state,
   const spot_id_t &target,
   const detail::spot_activation_intent_t &intent,
@@ -2104,16 +2058,15 @@ result_t<void> route_client_t::submit_spot_id_send_erased (
   const route_send_call_t::metadata_map_t &metadata)
 {
     if (!state || !state->runtime || state->runtime->spot_resolver == nullptr) {
-        return result_t<void>::failure (framework_error_kind_t::not_configured,
-                                        "Spot location resolver is not configured");
+        co_return result_t<void>::failure (framework_error_kind_t::not_configured,
+                                           "Spot location resolver is not configured");
     }
     if (intent.mesh_name && !intent.instance) {
-        return result_t<void>::failure (
+        co_return result_t<void>::failure (
           framework_error_kind_t::not_configured,
           "in_mesh requires Instance Spot intent");
     }
-    auto address = state->runtime->spot_resolver
-                     ->resolve_spot_address ({}, target).result ().value ();
+    auto address = co_await state->runtime->spot_resolver->resolve_spot_address ({}, target);
     if (!address && intent.instance) {
         detail::channel_runtime_state_t::instance_spot_send_t activate;
         {
@@ -2121,18 +2074,18 @@ result_t<void> route_client_t::submit_spot_id_send_erased (
             activate = state->runtime->instance_spot_sender;
         }
         if (!activate) {
-            return result_t<void>::failure (
+            co_return result_t<void>::failure (
               framework_error_kind_t::not_configured,
               "Instance Spot activation runtime is not configured");
         }
-        return activate (target, intent, packet_name, message_type,
-                         std::move (encode_payload), metadata);
+        co_return co_await activate (target, intent, packet_name, message_type,
+                                     std::move (encode_payload), metadata);
     }
     if (!address) {
-        return result_t<void>::failure (framework_error_kind_t::not_found,
-                                        "Spot route was not found");
+        co_return result_t<void>::failure (framework_error_kind_t::not_found,
+                                           "Spot route was not found");
     }
-    auto submitted = submit_spot_send_erased (
+    auto submitted = co_await submit_spot_send_erased (
       state, address->mesh_name, address->node_rid, spot_id_t (address->spot_id),
       address->spot_generation, packet_name, message_type, std::move (encode_payload), metadata);
     if (!submitted
@@ -2140,7 +2093,7 @@ result_t<void> route_client_t::submit_spot_id_send_erased (
             || submitted.error_kind () == framework_error_kind_t::unavailable)) {
         state->runtime->spot_resolver->invalidate_spot_address (target);
     }
-    return submitted;
+    co_return submitted;
 }
 
 task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_message_erased (
@@ -2161,8 +2114,7 @@ task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_message_er
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "in_mesh requires Instance Spot intent");
     }
-    auto address = state->runtime->spot_resolver
-                     ->resolve_spot_address ({}, target).result ().value ();
+    auto address = co_await state->runtime->spot_resolver->resolve_spot_address ({}, target);
     if (!address && intent.instance) {
         detail::channel_runtime_state_t::instance_spot_request_t activate;
         {

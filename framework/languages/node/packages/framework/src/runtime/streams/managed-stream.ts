@@ -1,7 +1,6 @@
 import {
   ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException,
-  internalFrameworkErrorKind
+  createInternalFrameworkException
 } from '../framework-errors-internal';
 import type {
   ActorRef,
@@ -10,7 +9,6 @@ import type {
   ZLinkMessageSerializer,
   ZLinkStream
 } from '../../contracts';
-import { ZLinkFrameworkException } from '../../contracts';
 import {
   ZLinkSubmitStatus,
   type ZLinkSubmitResult
@@ -38,7 +36,6 @@ import {
   encodeStreamControlFrame,
   ZLinkStreamCloseReasonCode
 } from './protocol';
-import { ZLinkAsyncSubmitter } from '../messaging';
 
 const ZLINK_SEND_DONT_WAIT = 1;
 const NO_ACCEPTED_TERMINAL_RESULTS: ReadonlySet<number> = new Set();
@@ -61,7 +58,6 @@ export class ZLinkManagedStream implements ZLinkStream {
     readonly bindingGeneration: bigint;
     readonly route?: ZLinkNativeSessionRoute;
   }>();
-  private readonly submitter: ZLinkAsyncSubmitter;
 
   constructor(
     private readonly socket: ZLinkBackendStreamSocket,
@@ -69,20 +65,11 @@ export class ZLinkManagedStream implements ZLinkStream {
     private readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>,
     private readonly nativeSessionService?: StreamSessionService,
     private readonly meshCompletions?: ZLinkMeshCompletionTable,
-    submitter?: ZLinkAsyncSubmitter,
     private readonly publicSessionId = streamSessionIdFromRoutingId(backendSessionRoutingId),
     private readonly nativeSessionRouteForMesh?: (
       meshName: string
     ) => ZLinkNativeSessionRoute | undefined
-  ) {
-    this.submitter = submitter ?? new ZLinkAsyncSubmitter(
-      (handler) => socket.onSendReady(handler),
-      {
-        timeoutMs: socket.sendTimeoutMs > 0 ? socket.sendTimeoutMs : 1000,
-        capacity: Math.max(1, socket.sendHighWaterMark)
-      }
-    );
-  }
+  ) {}
 
   get sessionId(): string {
     return this.publicSessionId;
@@ -126,11 +113,14 @@ export class ZLinkManagedStream implements ZLinkStream {
     signal?: AbortSignal,
     timeoutMs?: number
   ): Promise<ZLinkSubmitResult> {
-    return this.submitOperation(
-      () => this.socket.send(this.backendRoutingId(), payload, ZLINK_SEND_DONT_WAIT),
-      signal,
-      timeoutMs
-    );
+    try {
+      throwIfAborted(signal);
+      await this.socket.sendAsync(this.backendRoutingId(), payload, timeoutMs);
+      return { status: ZLinkSubmitStatus.Submitted };
+    } catch (error) {
+      if (isBackendNotConnectedError(error)) return { status: ZLinkSubmitStatus.Backpressured };
+      throw error;
+    }
   }
 
   async submitBoundActor(
@@ -138,43 +128,12 @@ export class ZLinkManagedStream implements ZLinkStream {
     parts: readonly Message[],
     signal?: AbortSignal
   ): Promise<ZLinkSubmitResult> {
-    return this.submitOperation(
-      () => this.sendBoundActor(actorId, parts, ZLINK_SEND_DONT_WAIT),
-      signal
-    );
+    throwIfAborted(signal);
+    return await this.sendBoundActor(actorId, parts, ZLINK_SEND_DONT_WAIT)
+      ? { status: ZLinkSubmitStatus.Submitted }
+      : { status: ZLinkSubmitStatus.Backpressured };
   }
 
-  private async submitOperation(
-    attempt: () => boolean,
-    signal?: AbortSignal,
-    timeoutMs?: number
-  ): Promise<ZLinkSubmitResult> {
-    try {
-      const socketTimeoutMs = this.socket.sendTimeoutMs > 0
-        ? this.socket.sendTimeoutMs
-        : undefined;
-      const admissionTimeoutMs = timeoutMs === undefined
-        ? undefined
-        : socketTimeoutMs === undefined
-          ? timeoutMs
-          : Math.min(timeoutMs, socketTimeoutMs);
-      await this.submitter.submitCommand(attempt, signal, undefined, admissionTimeoutMs);
-      return { status: ZLinkSubmitStatus.Submitted };
-    } catch (error) {
-      if (error instanceof ZLinkFrameworkException) {
-        switch (internalFrameworkErrorKind(error)) {
-          case ZLinkFrameworkInternalErrorKind.DeadlineExceeded:
-          case ZLinkFrameworkInternalErrorKind.WorkerTimedOut:
-            return { status: ZLinkSubmitStatus.TimedOut };
-          case ZLinkFrameworkInternalErrorKind.WorkerQueueFull:
-            return { status: ZLinkSubmitStatus.Backpressured };
-          case ZLinkFrameworkInternalErrorKind.RuntimeShutdown:
-            return { status: ZLinkSubmitStatus.Shutdown };
-        }
-      }
-      throw error;
-    }
-  }
 
   async close(signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
@@ -353,12 +312,16 @@ export class ZLinkManagedStream implements ZLinkStream {
     await this.socket.unbindActor(this.backendRoutingId(), actorId, timeoutMs, signal);
   }
 
-  sendBoundActor(actorId: string, parts: readonly Message[], flags?: ZLinkBackendSendFlags): boolean {
+  async sendBoundActor(
+    actorId: string,
+    parts: readonly Message[],
+    flags?: ZLinkBackendSendFlags
+  ): Promise<boolean> {
     const binding = this.nativeActorBindings.get(actorId);
     if (binding?.route !== undefined) {
       const nativeParts = parts.map((part) => NativeMessage.from(part.data()));
       try {
-        return binding.route.service.sendToActor(
+        return await binding.route.service.sendToActor(
           this.backendRoutingId(),
           binding.actor as never,
           nativeParts,
@@ -370,7 +333,12 @@ export class ZLinkManagedStream implements ZLinkStream {
         }
       }
     }
-    return this.socket.sendBoundActor(this.backendRoutingId(), actorId, parts, flags ?? 0);
+    return this.socket.sendBoundActor(
+      this.backendRoutingId(),
+      actorId,
+      parts,
+      flags ?? 0
+    );
   }
 
   updateAddresses(localAddr: string | undefined, remoteAddr: string | undefined): void {

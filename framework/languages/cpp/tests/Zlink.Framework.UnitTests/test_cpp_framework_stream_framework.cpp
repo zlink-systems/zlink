@@ -5,7 +5,6 @@
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
-#include "runtime/messaging/async_submit_runtime.hpp"
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
@@ -1106,10 +1105,13 @@ int main ()
     std::size_t failed_reply_attempts = 0;
     runtime.attach_transport_writer (
       failed_reply_stream,
-      [&failed_reply_attempts] (const auto &, const auto &) {
+      [&failed_reply_attempts] (
+        const auto &, const auto &, std::optional<std::chrono::milliseconds>) {
           ++failed_reply_attempts;
-          return zlink::framework::result_t<void>::failure (
-            framework_error_kind_t::internal_failure, "stream transport rejected reply");
+          return zlink::framework::task_t<void> (
+            zlink::framework::result_t<void>::failure (
+              framework_error_kind_t::internal_failure,
+              "stream transport rejected reply"));
       });
     failed_reply_session_t failed_reply_session;
     if (!runtime.dispatch_packet (
@@ -1339,78 +1341,9 @@ int main ()
         return 23;
     }
 
-    auto timeout_stream = runtime.open_session ("client-stream");
-    int timeout_owner = 0;
-    std::atomic_size_t timeout_attempts{0};
-    zlink::framework::runtime::messaging::reset_async_submit_runtime_for_tests ();
-    runtime.attach_transport_writer (
-      timeout_stream,
-      [&] (const auto &, const auto &) {
-          ++timeout_attempts;
-          zlink::framework::runtime::messaging::note_submit_attempt (
-            "stream:timeout", &timeout_owner, std::chrono::seconds (1), 1);
-          return zlink::framework::result_t<void>::failure (
-            framework_error_kind_t::capacity_exceeded,
-            "test STREAM writer is backpressured");
-      });
-    const auto timeout_started = std::chrono::steady_clock::now ();
-    const auto timeout_result =
-      timeout_stream.write_packet (zlink::message_t::from (std::string ("bounded")))
-        .timeout (std::chrono::milliseconds (20))
-        .submit ()
-        .result ();
-    const auto timeout_elapsed = std::chrono::steady_clock::now () - timeout_started;
-    if (timeout_result
-        || timeout_result.error_kind () != framework_error_kind_t::deadline_exceeded
-        || timeout_attempts != 1
-        || timeout_elapsed >= std::chrono::milliseconds (500)) {
-        return 239;
-    }
-    std::this_thread::sleep_for (std::chrono::milliseconds (30));
-    if (timeout_attempts != 1
-        || zlink::framework::runtime::messaging::pending_submit_count_for_tests () != 0) {
-        return 240;
-    }
-
-    auto retry_stream = runtime.open_session ("client-stream");
-    int retry_owner = 0;
-    std::atomic_size_t retry_attempts{0};
-    runtime.attach_transport_writer (
-      retry_stream,
-      [&] (const auto &, const auto &) {
-          const auto attempt = ++retry_attempts;
-          zlink::framework::runtime::messaging::note_submit_attempt (
-            "stream:retry", &retry_owner, std::chrono::seconds (1), 1);
-          return attempt == 1
-                   ? zlink::framework::result_t<void>::failure (
-                       framework_error_kind_t::capacity_exceeded,
-                       "test STREAM writer is initially backpressured")
-                   : zlink::framework::result_t<void>::success ();
-      });
-    auto retry_task =
-      retry_stream.write_packet (zlink::message_t::from (std::string ("retry-on-ready")))
-        .timeout (std::chrono::milliseconds (200))
-        .submit ();
-    if (retry_attempts != 1
-        || zlink::framework::runtime::messaging::pending_submit_count_for_tests () != 1) {
-        return 242;
-    }
-    zlink::framework::runtime::messaging::notify_submit_ready (
-      "stream:retry", &retry_owner);
-    if (!retry_task.result () || retry_attempts != 2) {
-        return 243;
-    }
-    zlink::framework::runtime::messaging::notify_submit_ready (
-      "stream:retry", &retry_owner);
-    std::this_thread::sleep_for (std::chrono::milliseconds (10));
-    if (retry_attempts != 2
-        || zlink::framework::runtime::messaging::pending_submit_count_for_tests () != 0) {
-        return 244;
-    }
-
     const auto rejects_stream_timeout = [&] (std::chrono::milliseconds timeout) {
         try {
-            (void) timeout_stream
+            (void) failed_reply_stream
               .write_packet (zlink::message_t::from (std::string ("invalid-timeout")))
               .timeout (timeout);
             return false;
@@ -1425,8 +1358,6 @@ int main ()
           static_cast<std::int64_t> (std::numeric_limits<int>::max ()) + 1))) {
         return 241;
     }
-    zlink::framework::runtime::messaging::reset_async_submit_runtime_for_tests ();
-
     const auto close_result = fluent_stream.close ().result ();
     const auto write_rejected_disconnected = [] (auto &&write_fn) {
         try {
@@ -1906,6 +1837,8 @@ int main ()
     zlink::framework::handler_registry_t core_handlers;
     zlink::framework::serializer_registry_t core_serializers;
     zlink::framework::zlink_builder_t core_zlink;
+    zlink::framework::detail::zlink_builder_access_t::bind_shared_core_context (
+      core_zlink, std::make_shared<zlink::context_t> ());
     core_services.add_singleton<
       zlink::framework::detail::actor_gateway_runtime_t> ();
     core_services.add_factory<zlink::framework::session_actor_manager_t> (
@@ -1927,6 +1860,12 @@ int main ()
       .bind ("tcp://127.0.0.1:" + std::to_string (core_stream_port))
       .register_session ("core-session");
     core_options.apply ();
+    for (const auto &registration :
+         zlink::framework::detail::mesh_node_runtime_t::registrations (core_zlink)) {
+        registration->core_context =
+          zlink::framework::detail::zlink_builder_access_t::shared_core_context (
+            core_zlink);
+    }
     auto shutdown_session_control =
       std::make_shared<shutdown_session_control_t> ();
     core_services.add_factory<shutdown_failure_session_t> (

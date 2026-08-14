@@ -8,10 +8,10 @@ import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from '../framework-errors-internal';
-
-interface ZLinkStreamSerialWorkContext {
-  releaseIngressReservation(): void;
-}
+import {
+  bindApplicationJobPermit,
+  hasApplicationJobPermit
+} from '../application-jobs/application-job-queue-scope';
 
 export class ZLinkStreamSessionSerialExecutor {
   private readonly scheduler = new ZLinkBoundedSerialScheduler(
@@ -30,26 +30,16 @@ export class ZLinkStreamSessionSerialExecutor {
     work: () => Promise<void>,
     lane: ZLinkSerialWorkLane,
     options: Omit<ZLinkSerialWorkOptions, 'lane'> = {},
-    onRejected?: () => void,
-    onReservationReleased?: () => void
+    onRejected?: (error?: unknown) => void
   ): boolean {
     if (this.closed) return false;
-    let ingressReservationReleased = false;
-    const releaseIngressReservation = (): void => {
-      if (ingressReservationReleased) return;
-      ingressReservationReleased = true;
-      onReservationReleased?.();
-    };
-    void this.scheduler.submit(work, { ...options, lane }, {
-      releaseIngressReservation
-    } satisfies ZLinkStreamSerialWorkContext).catch(() => {
-      try {
-        onRejected?.();
-      } finally {
-        // Admission failures do not produce a record for execute() to release.
-        releaseIngressReservation();
-      }
-    });
+    const serialOptions = { ...options, lane };
+    const boundWork = bindApplicationJobPermit(work);
+    const submitted = hasApplicationJobPermit()
+      ? this.scheduler.submitPreAdmitted(boundWork, serialOptions)
+      : this.scheduler.submit(boundWork, serialOptions);
+    void submitted
+      .catch(error => onRejected?.(error));
     return true;
   }
 
@@ -60,7 +50,10 @@ export class ZLinkStreamSessionSerialExecutor {
         'Session execution queue is closed.'
       ));
     }
-    return this.scheduler.submit(work, { lane: 'lifecycle' });
+    const boundWork = bindApplicationJobPermit(work);
+    return hasApplicationJobPermit()
+      ? this.scheduler.submitPreAdmitted(boundWork, { lane: 'lifecycle' })
+      : this.scheduler.submit(boundWork, { lane: 'lifecycle' });
   }
 
   async dispose(): Promise<void> {
@@ -74,12 +67,7 @@ export class ZLinkStreamSessionSerialExecutor {
     } catch (error) {
       record.reject(error);
     } finally {
-      try {
-        record.release();
-      } finally {
-        (record.context as ZLinkStreamSerialWorkContext | undefined)
-          ?.releaseIngressReservation();
-      }
+      record.release();
     }
   }
 }

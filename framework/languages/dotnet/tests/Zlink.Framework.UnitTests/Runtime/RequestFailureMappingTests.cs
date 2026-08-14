@@ -222,6 +222,20 @@ public sealed class RequestFailureMappingTests
         Assert.Equal(expected, result);
     }
 
+    [Theory]
+    [InlineData(true, RequestResult.NotConnected)]
+    [InlineData(false, RequestResult.Terminated)]
+    public void Native_Terminated_Request_Is_Unavailable_Only_While_Source_Is_Serving(
+        bool sourceAcceptsApplicationOperations,
+        RequestResult expected)
+    {
+        var result = ZLinkManagedMeshNode.NormalizeNativeRequestFailure(
+            ZlinkRequestException.ErrorCode.Terminated,
+            sourceAcceptsApplicationOperations);
+
+        Assert.Equal(expected, result);
+    }
+
     [Fact]
     public async Task SpotRouteNativeReply_CancellationDisposesLateOkReply()
     {
@@ -270,38 +284,4 @@ public sealed class RequestFailureMappingTests
         Assert.Throws<ObjectDisposedException>(() => duplicate.AsReadOnlySpan());
     }
 
-    [Fact]
-    public async Task SubmitRequestAsync_Fails_NotConnected_Without_Timeout()
-    {
-        await using var submitter = new ZLinkAsyncSubmitter(
-            _ => { },
-            TimeSpan.FromSeconds(30),
-            CancellationToken.None,
-            failFastNotConnected: static () => true);
-
-        var task = submitter.SubmitRequestAsync<string>(
-            Message.From("payload"),
-            (_, _, _) => throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected));
-
-        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () => await task.AsTask());
-        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
-        Assert.IsType<ZlinkSubmitException>(error.InnerException);
-    }
-
-    [Fact]
-    public async Task SubmitRequestAsync_Maps_Backpressure_Timeout_To_DeadlineExceeded()
-    {
-        await using var submitter = new ZLinkAsyncSubmitter(
-            _ => { },
-            TimeSpan.FromMilliseconds(20),
-            CancellationToken.None);
-
-        var task = submitter.SubmitRequestAsync<string>(
-            Message.From("payload"),
-            (_, _, _) => throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.Backpressured));
-
-        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () => await task.AsTask());
-        Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
-        Assert.IsType<ZlinkSubmitException>(error.InnerException);
-    }
 }

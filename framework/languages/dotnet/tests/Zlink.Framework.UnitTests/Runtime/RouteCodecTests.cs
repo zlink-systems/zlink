@@ -290,7 +290,9 @@ public sealed class RouteCodecTests
             {
                 try
                 {
-                    _ = sender.Send(targetRid).Message(message).Submit();
+                    await sender.Send(targetRid)
+                        .Message(message)
+                        .Async(CancellationToken.None);
                 }
                 catch (ZlinkException)
                 {

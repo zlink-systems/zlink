@@ -154,17 +154,6 @@ public final class StreamNodeRegistration {
     }
 
     /** Validates the finite listener bound required by a process-wide HWM. */
-    public void validateApplicationHwm(long applicationHwmBytes) {
-        if (applicationHwmBytes == 0) {
-            return;
-        }
-        if (socketConfig.maxMessageSize() <= 0) {
-            throw new ZLinkConfigurationException(
-                "Application HWM requires a finite positive MaxMessageSize on STREAM node: "
-                    + name);
-        }
-    }
-
     private static final class StreamSocketConfig implements ZLinkStreamSocketConfig {
         private long maxMessageSize = 64L * 1024L;
 

@@ -142,7 +142,7 @@ class session_actor_binding_context_t
     std::string session_id;
     stream_codec_t codec = stream_codec_t::message_pack;
     std::map<std::string, std::uint64_t> actor_tokens;
-    std::function<result_t<void> (const actor_ref_t &)> native_binder;
+    std::function<task_t<void> (const actor_ref_t &)> native_binder;
 };
 
 class session_actor_manager_access_t
@@ -151,7 +151,7 @@ class session_actor_manager_access_t
     static void attach (session_actor_manager_t &manager, stream_t stream);
     static void set_codec (session_actor_manager_t &manager, stream_codec_t codec);
     static void bind_native (session_actor_manager_t &manager,
-                             std::function<result_t<void> (const actor_ref_t &)> binder);
+                             std::function<task_t<void> (const actor_ref_t &)> binder);
     static void disconnect (session_actor_manager_t &manager) noexcept;
 };
 
@@ -168,16 +168,16 @@ class actor_gateway_state_t
     mutable std::recursive_mutex mutex;
     using create_dispatcher_t = std::function<result_t<actor_ref_t> (
       std::string, std::string, const std::optional<zlink::message_t> &)>;
-    using join_spot_dispatcher_t = std::function<result_t<actor_join_reply_t> (
+    using join_spot_dispatcher_t = std::function<task_t<actor_join_reply_t> (
       const actor_ref_t &, spot_id_t, const zlink::message_t &, std::chrono::milliseconds)>;
     using join_entry_spot_dispatcher_t = std::function<result_t<actor_join_reply_t> (
       const actor_ref_t &, const zlink::message_t &, std::chrono::milliseconds)>;
-    using relay_dispatcher_t = std::function<result_t<std::optional<zlink::message_t>> (
+    using relay_dispatcher_t = std::function<task_t<std::optional<zlink::message_t>> (
       const actor_ref_t &, actor_context_t, const stream_header_t &, const zlink::message_t &,
       std::optional<bound_session_relay_source_t>)>;
-    using disconnect_dispatcher_t = std::function<result_t<void> (const actor_ref_t &)>;
+    using disconnect_dispatcher_t = std::function<task_t<void> (const actor_ref_t &)>;
     using bound_session_registrar_t = std::function<result_t<void> (const actor_ref_t &)>;
-    using bound_session_sender_t = std::function<result_t<void> (
+    using bound_session_sender_t = std::function<task_t<result_t<void>> (
       const actor_ref_t &, std::uint64_t, const stream_header_t &, const zlink::message_t &)>;
     using membership_query_t = std::function<std::optional<spot_id_t> (const actor_ref_t &)>;
     using join_barrier_reserver_t =
@@ -185,7 +185,7 @@ class actor_gateway_state_t
 
     struct pending_session_relay_t
     {
-        std::function<result_t<void> ()> dispatch;
+        std::function<task_t<void> ()> dispatch;
         std::shared_ptr<task_completion_source_t<void>> completion;
     };
 
@@ -306,8 +306,7 @@ class actor_gateway_runtime_t
     bool commit_session_relocation_route (
       const runtime::protocol::session_relocation_route_t &route,
       const runtime::stateful::stream_binding_t &previous,
-      const runtime::stateful::stream_binding_t &target,
-      std::uint64_t sealed_high_water);
+      const runtime::stateful::stream_binding_t &target);
     void unbind_session_stream (std::string actor_id,
                                 std::string session_id = {},
                                 std::uint64_t binding_token = 0);

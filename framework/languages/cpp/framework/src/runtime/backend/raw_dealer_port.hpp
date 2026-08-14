@@ -25,10 +25,13 @@ class raw_dealer_port_t
       zlink::poller_t *shared_poller = nullptr,
       std::uintptr_t poller_slot = 1);
 
-    bool send (const raw_message_t &parts);
-    bool request (const raw_message_t &parts,
-                  std::chrono::milliseconds timeout,
-                  raw_route_port_t::request_callback_t callback);
+    task_t<bool> send (const raw_message_t &parts);
+    task_t<zlink::submit_result_t> send (
+      const raw_message_t &parts,
+      std::chrono::milliseconds timeout);
+    task_t<raw_request_completion_t> request (
+      const raw_message_t &parts,
+      std::chrono::milliseconds timeout);
     std::optional<raw_message_t> try_receive ();
     void close () noexcept;
 

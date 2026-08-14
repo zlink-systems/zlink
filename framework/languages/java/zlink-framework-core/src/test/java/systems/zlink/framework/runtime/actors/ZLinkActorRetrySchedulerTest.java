@@ -11,8 +11,6 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
-import systems.zlink.contracts.sockets.SubmitResult;
 
 final class ZLinkActorRetrySchedulerTest {
     @Test
@@ -57,56 +55,6 @@ final class ZLinkActorRetrySchedulerTest {
                 () -> false)
             .toCompletableFuture()
             .join();
-    }
-
-    @Test
-    void submitRelayUntilAcceptedRetriesFalseSubmitResult() {
-        AtomicInteger attempts = new AtomicInteger();
-
-        ZLinkActorRetryScheduler.submitRelayUntilAccepted(
-                Duration.ofMillis(100),
-                () -> attempts.incrementAndGet() >= 2,
-                IllegalStateException::new)
-            .toCompletableFuture()
-            .join();
-
-        assertTrue(attempts.get() >= 2);
-    }
-
-    @Test
-    void submitRelayUntilAcceptedFailsNonRetryableSubmitException() {
-        CompletionException failure = Assertions.assertThrows(
-            CompletionException.class,
-            () -> ZLinkActorRetryScheduler.submitRelayUntilAccepted(
-                    Duration.ofMillis(100),
-                    () -> {
-                        throw new ZlinkSubmitException(SubmitResult.INVALID_ARGUMENT);
-                    },
-                    IllegalStateException::new)
-                .toCompletableFuture()
-                .join());
-
-        assertInstanceOf(ZlinkSubmitException.class, failure.getCause());
-    }
-
-    @Test
-    void storedRelayRetriesTransientNotConnectedResult() {
-        AtomicInteger attempts = new AtomicInteger();
-
-        ZLinkActorRetryScheduler.submitStoredRelayUntilAccepted(
-                Duration.ofMillis(100),
-                () -> {
-                    if (attempts.incrementAndGet() == 1) {
-                        throw new ZlinkSubmitException(
-                            SubmitResult.NOT_CONNECTED);
-                    }
-                    return true;
-                },
-                IllegalStateException::new)
-            .toCompletableFuture()
-            .join();
-
-        assertTrue(attempts.get() >= 2);
     }
 
     @Test

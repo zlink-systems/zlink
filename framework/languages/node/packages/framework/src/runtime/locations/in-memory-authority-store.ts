@@ -28,11 +28,7 @@ import type {
   ZLinkCreationTerminalPublication,
   ZLinkCreationTerminalReadResult,
   ZLinkCreationTerminalRecord,
-  ZLinkPlacementAllocation,
-  ZLinkRelocationCapacityAbortResult,
-  ZLinkRelocationCapacityFence,
-  ZLinkRelocationCapacityReservationRequest,
-  ZLinkRelocationCapacityReserveResult
+  ZLinkPlacementAllocation
 } from './internal-location-contracts';
 import { encodeAuthorityKey } from './authority-key-codec';
 
@@ -73,17 +69,9 @@ interface CreationTarget {
   readonly owner: ZLinkLocationOwnerToken;
 }
 
-interface CapacityReservation {
-  readonly request: ZLinkRelocationCapacityReservationRequest;
-  readonly fence: ZLinkRelocationCapacityFence;
-  state: 'reserved' | 'prepared' | 'committed' | 'aborted';
-  aggregate?: string;
-}
-
 interface AggregateRecord {
   readonly request: ZLinkAggregatePrepareRequest;
   readonly fence: ZLinkAggregateFence;
-  readonly capacityReservationId?: string;
   state: 'prepared' | 'committed' | 'aborted';
 }
 
@@ -96,7 +84,6 @@ export class ZLinkInMemoryAuthorityStore {
   private readonly creationTerminals =
     new Map<string, 'committed' | 'rejected' | 'failed' | 'aborted'>();
   private readonly operationTerminals = new Map<string, ZLinkCreationTerminalRecord>();
-  private readonly capacityReservations = new Map<string, CapacityReservation>();
   private readonly aggregates = new Map<string, AggregateRecord>();
   private readonly activeCapacity = new Map<string, number>();
   private readonly pendingCapacity = new Map<string, number>();
@@ -195,48 +182,16 @@ export class ZLinkInMemoryAuthorityStore {
       this.scanRevision++;
       return this.stored(row.snapshot);
     }
-    if (mutation.generationTransition === 'preserve') {
-      if (!this.isOwnerLive(row.snapshot)) {
-        return { kind: 'conflict', current: this.read(keyValue) };
-      }
-      const nextVersion = this.tryNextStoreVersion();
-      if (nextVersion === undefined) return { kind: 'generationExhausted' };
-      row.snapshot = {
-        ...row.snapshot,
-        storeVersion: version(nextVersion),
-        payload: Buffer.from(mutation.payload)
-      };
-      this.scanRevision++;
-      return this.stored(row.snapshot);
-    }
-
-    const targetOwner = mutation.targetOwner!;
-    const reservation = this.capacityReservations.get(mutation.relocationCapacityFence!.value);
-    if (
-      reservation === undefined
-      || reservation.state !== 'reserved'
-      || !sameFenceAuthority(reservation.request, keyValue, expectedStoreVersion, row.snapshot)
-      || !sameOwner(reservation.request.targetOwner, targetOwner)
-      || !this.targetLive(reservation.request)
-    ) {
+    if (!this.isOwnerLive(row.snapshot)) {
       return { kind: 'conflict', current: this.read(keyValue) };
     }
-    if (this.storeVersion >= MAX_GENERATION || this.ownerGeneration >= MAX_GENERATION) {
-      return { kind: 'generationExhausted' };
-    }
-    const nextVersion = ++this.storeVersion;
-    const nextOwnerGeneration = ++this.ownerGeneration;
-    this.moveCapacity(row.snapshot.allocation, reservation.request);
+    const nextVersion = this.tryNextStoreVersion();
+    if (nextVersion === undefined) return { kind: 'generationExhausted' };
     row.snapshot = {
+      ...row.snapshot,
       storeVersion: version(nextVersion),
-      payload: Buffer.from(mutation.payload),
-      objectGeneration: row.snapshot.objectGeneration,
-      authorityOwnerGeneration: nextOwnerGeneration,
-      ownerId: targetOwner.ownerId,
-      ownerLeaseGeneration: targetOwner.leaseGeneration,
-      allocation: targetAllocation(reservation.request)
+      payload: Buffer.from(mutation.payload)
     };
-    reservation.state = 'committed';
     this.scanRevision++;
     return this.stored(row.snapshot);
   }
@@ -562,58 +517,6 @@ export class ZLinkInMemoryAuthorityStore {
     return { kind: 'aborted' };
   }
 
-  async reserveRelocationCapacity(
-    request: ZLinkRelocationCapacityReservationRequest,
-    signal?: AbortSignal
-  ): Promise<ZLinkRelocationCapacityReserveResult> {
-    signal?.throwIfAborted();
-    validateRelocationReservation(request);
-    const existing = this.capacityReservations.get(request.reservationId);
-    if (existing !== undefined) {
-      return sameRelocationRequest(existing.request, request)
-        ? { kind: 'alreadyReserved', fence: existing.fence }
-        : { kind: 'conflict', current: this.read(request.authorityKey.value) };
-    }
-    const row = this.rows.get(request.authorityKey.value);
-    if (
-      row === undefined
-      || row.snapshot.allocation.state !== 'active'
-      || !sameFenceAuthority(request, request.authorityKey.value, request.expectedStoreVersion, row.snapshot)
-    ) {
-      return { kind: 'conflict', current: this.read(request.authorityKey.value) };
-    }
-    if (!this.targetLive(request)) return { kind: 'targetUnavailable' };
-    const target = targetAllocation(request);
-    if (!this.hasPendingCapacity(target)) return { kind: 'placementCapacityExhausted' };
-    const fence = capacityFence(request.reservationId);
-    this.capacityReservations.set(request.reservationId, {
-      request: cloneRelocationRequest(request),
-      fence,
-      state: 'reserved'
-    });
-    this.adjustCapacity(this.pendingCapacity, target, 1);
-    return { kind: 'reserved', fence };
-  }
-
-  async abortRelocationCapacity(
-    fence: ZLinkRelocationCapacityFence,
-    signal?: AbortSignal
-  ): Promise<ZLinkRelocationCapacityAbortResult> {
-    signal?.throwIfAborted();
-    const reservation = this.capacityReservations.get(fence.value);
-    if (reservation === undefined) return 'stale';
-    if (reservation.state === 'aborted') return 'alreadyAborted';
-    if (reservation.state === 'committed') return 'alreadyCommitted';
-    if (reservation.state === 'prepared') return 'stale';
-    reservation.state = 'aborted';
-    this.adjustCapacity(
-      this.pendingCapacity,
-      targetAllocation(reservation.request),
-      -1
-    );
-    return 'aborted';
-  }
-
   async prepareAggregate(
     request: ZLinkAggregatePrepareRequest,
     signal?: AbortSignal
@@ -638,18 +541,7 @@ export class ZLinkInMemoryAuthorityStore {
       return { kind: 'conflict' };
     }
     const target = aggregateTargetAllocation(request);
-    const capacityReservation = this.capacityReservations.get(request.aggregateId.value);
-    const adoptsCapacityReservation = capacityReservation !== undefined
-      && capacityReservation.state === 'reserved'
-      && sameOwner(capacityReservation.request.targetOwner, request.targetOwner)
-      && sameDescriptor(
-        capacityReservation.request.targetDescriptor,
-        request.targetDescriptor
-      )
-      && capacityReservation.request.targetNodeLifecycleGeneration
-        === request.targetDescriptorLifecycleGeneration
-      && sameCapacity(capacityReservation.request.capacity, request.capacity);
-    if (!adoptsCapacityReservation && !this.hasPendingCapacity(target)) {
+    if (!this.hasPendingCapacity(target)) {
       return { kind: 'conflict' };
     }
     let sourceCapacity: ZLinkCapacityVector = { actors: 0, spots: 0 };
@@ -673,18 +565,10 @@ export class ZLinkInMemoryAuthorityStore {
       aggregateId: request.aggregateId,
       aggregateGeneration: request.aggregateGeneration
     };
-    if (adoptsCapacityReservation) {
-      capacityReservation.state = 'prepared';
-      capacityReservation.aggregate = aggregateKey;
-    } else {
-      this.adjustCapacity(this.pendingCapacity, target, 1);
-    }
+    this.adjustCapacity(this.pendingCapacity, target, 1);
     this.aggregates.set(aggregateKey, {
       request: cloneAggregateRequest(request),
       fence,
-      ...(adoptsCapacityReservation
-        ? { capacityReservationId: request.aggregateId.value }
-        : {}),
       state: 'prepared'
     });
     return { kind: 'prepared', fence };
@@ -769,11 +653,6 @@ export class ZLinkInMemoryAuthorityStore {
     this.adjustCapacity(this.pendingCapacity, aggregateTarget, -1);
     this.adjustCapacity(this.activeCapacity, aggregateTarget, 1);
     aggregate.state = 'committed';
-    if (aggregate.capacityReservationId !== undefined) {
-      const capacityReservation =
-        this.capacityReservations.get(aggregate.capacityReservationId);
-      if (capacityReservation !== undefined) capacityReservation.state = 'committed';
-    }
     this.scanRevision++;
     return { kind: 'committed' };
   }
@@ -794,11 +673,6 @@ export class ZLinkInMemoryAuthorityStore {
       -1
     );
     aggregate.state = 'aborted';
-    if (aggregate.capacityReservationId !== undefined) {
-      const capacityReservation =
-        this.capacityReservations.get(aggregate.capacityReservationId);
-      if (capacityReservation !== undefined) capacityReservation.state = 'aborted';
-    }
     return { kind: 'aborted' };
   }
 
@@ -841,14 +715,6 @@ export class ZLinkInMemoryAuthorityStore {
     );
   }
 
-  private targetLive(request: ZLinkRelocationCapacityReservationRequest): boolean {
-    return this.validation.isTargetLive(
-      request.targetDescriptor,
-      request.targetNodeLifecycleGeneration,
-      request.targetOwner
-    );
-  }
-
   private hasPendingCapacity(allocation: ZLinkPlacementAllocation): boolean {
     return this.validation.placementCapacityAvailable?.(
       allocation.descriptor,
@@ -856,16 +722,6 @@ export class ZLinkInMemoryAuthorityStore {
       this.capacityVectorUsage(this.pendingCapacity, allocation),
       this.capacityVectorUsage(this.activeCapacity, allocation)
     ) ?? true;
-  }
-
-  private moveCapacity(
-    source: ZLinkPlacementAllocation,
-    request: ZLinkRelocationCapacityReservationRequest
-  ): void {
-    this.adjustCapacity(this.activeCapacity, source, -1);
-    const target = targetAllocation(request);
-    this.adjustCapacity(this.pendingCapacity, target, -1);
-    this.adjustCapacity(this.activeCapacity, target, 1);
   }
 
   private adjustCapacity(
@@ -948,10 +804,11 @@ function validateAuthorityMutation(mutation: ZLinkAuthorityMutation): void {
     }
     return;
   }
-  const hasOwner = mutation.targetOwner !== undefined;
-  const hasFence = mutation.relocationCapacityFence !== undefined;
-  if (mutation.generationTransition === 'preserve' ? (hasOwner || hasFence) : (!hasOwner || !hasFence)) {
-    throw new TypeError('Authority owner and relocation fence do not match the generation transition.');
+  const generationTransition = (
+    mutation as { readonly generationTransition?: unknown }
+  ).generationTransition;
+  if (generationTransition !== 'preserve') {
+    throw new TypeError('Authority owner transitions require an aggregate CAS.');
   }
 }
 
@@ -1062,12 +919,6 @@ function copyTerminalRecord(record: ZLinkCreationTerminalRecord): ZLinkCreationT
   };
 }
 
-function validateRelocationReservation(request: ZLinkRelocationCapacityReservationRequest): void {
-  requireText(request.reservationId, 'relocation reservation ID');
-  requireText(request.stableType, 'stable type');
-  validateCapacityVector(request.capacity);
-}
-
 function validateAggregateRequest(request: ZLinkAggregatePrepareRequest): void {
   requireText(request.aggregateId.value, 'aggregate ID');
   if (request.aggregateGeneration < 1n || request.participants.length < 1) {
@@ -1097,37 +948,6 @@ function validateCapacityVector(value: ZLinkCapacityVector): void {
     || value.spotType !== undefined && value.spotType.count === 0) {
     throw new RangeError('Placement capacity vector is invalid.');
   }
-}
-
-function sameFenceAuthority(
-  request: ZLinkRelocationCapacityReservationRequest,
-  key: string,
-  expectedVersion: ZLinkAuthorityStoreVersion,
-  current: StoredSnapshot
-): boolean {
-  return request.authorityKey.value === key
-    && request.expectedStoreVersion.value === expectedVersion.value
-    && current.storeVersion.value === expectedVersion.value
-    && current.allocation.state === 'active'
-    && current.allocation.objectKind === request.objectKind
-    && current.allocation.stableType === request.stableType
-    && sameDescriptor(current.allocation.descriptor, request.sourceDescriptor)
-    && current.allocation.descriptorLifecycleGeneration === request.sourceNodeLifecycleGeneration
-    && current.ownerId === request.sourceOwner.ownerId
-    && current.ownerLeaseGeneration === request.sourceOwner.leaseGeneration;
-}
-
-function targetAllocation(
-  request: ZLinkRelocationCapacityReservationRequest
-): ZLinkPlacementAllocation {
-  return {
-    state: 'active',
-    objectKind: request.objectKind,
-    stableType: request.stableType,
-    descriptor: { ...request.targetDescriptor },
-    descriptorLifecycleGeneration: request.targetNodeLifecycleGeneration,
-    capacity: cloneCapacity(request.capacity)
-  };
 }
 
 function aggregateTargetAllocation(
@@ -1264,10 +1084,6 @@ function version(value: bigint): ZLinkAuthorityStoreVersion {
   return { value: value.toString() } as ZLinkAuthorityStoreVersion;
 }
 
-function capacityFence(value: string): ZLinkRelocationCapacityFence {
-  return { value } as ZLinkRelocationCapacityFence;
-}
-
 function scanCursor(revision: bigint, offset: number, prefix: string): ZLinkAuthorityScanCursor {
   const encoded = Buffer.from(JSON.stringify({
     revision: revision.toString(),
@@ -1297,47 +1113,6 @@ function decodeCursor(encoded: string): { revision: bigint; offset: number; pref
   } catch {
     throw new TypeError('Authority scan cursor is invalid.');
   }
-}
-
-function sameRelocationRequest(
-  left: ZLinkRelocationCapacityReservationRequest,
-  right: ZLinkRelocationCapacityReservationRequest
-): boolean {
-  return JSON.stringify(relocationComparable(left)) === JSON.stringify(relocationComparable(right));
-}
-
-function relocationComparable(request: ZLinkRelocationCapacityReservationRequest): unknown {
-  return {
-    ...request,
-    expectedStoreVersion: request.expectedStoreVersion.value,
-    sourceNodeLifecycleGeneration: request.sourceNodeLifecycleGeneration.toString(),
-    targetNodeLifecycleGeneration: request.targetNodeLifecycleGeneration.toString(),
-    sourceOwner: { ...request.sourceOwner, leaseGeneration: request.sourceOwner.leaseGeneration.toString() },
-    targetOwner: { ...request.targetOwner, leaseGeneration: request.targetOwner.leaseGeneration.toString() },
-    sourceDescriptor: {
-      meshName: request.sourceDescriptor.meshName,
-      rid: String(request.sourceDescriptor.rid)
-    },
-    targetDescriptor: {
-      meshName: request.targetDescriptor.meshName,
-      rid: String(request.targetDescriptor.rid)
-    }
-  };
-}
-
-function cloneRelocationRequest(
-  request: ZLinkRelocationCapacityReservationRequest
-): ZLinkRelocationCapacityReservationRequest {
-  return {
-    ...request,
-    authorityKey: { ...request.authorityKey },
-    expectedStoreVersion: { ...request.expectedStoreVersion },
-    sourceOwner: { ...request.sourceOwner },
-    targetOwner: { ...request.targetOwner },
-    sourceDescriptor: { ...request.sourceDescriptor },
-    targetDescriptor: { ...request.targetDescriptor },
-    capacity: cloneCapacity(request.capacity)
-  };
 }
 
 function aggregateRecordKey(id: string, generation: bigint): string {

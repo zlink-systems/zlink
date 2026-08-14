@@ -1148,16 +1148,35 @@ int main ()
     ok &= require_exists (root / "framework/src/runtime/messaging");
     ok &= require_exists (root / "framework/src/runtime/messaging/client_call_codec.cpp");
     ok &= require_exists (root / "framework/src/runtime/messaging/client_call_codec.hpp");
+    ok &= require_exists (root / "framework/src/runtime/messaging/call_facade_runtime.cpp");
     ok &= require_exists (root / "framework/src/runtime/messaging/envelope_codec.cpp");
     ok &= require_exists (root / "framework/src/runtime/messaging/envelope_codec.hpp");
-    ok &= require_exists (root / "framework/src/runtime/messaging/pending_operation.cpp");
-    ok &= require_exists (root / "framework/src/runtime/messaging/pending_operation_state.hpp");
-    ok &= require_exists (root / "framework/src/runtime/messaging/pending_submit.cpp");
-    ok &= require_exists (root / "framework/src/runtime/messaging/pending_submit.hpp");
+    ok &= require_exists (root / "framework/src/runtime/messaging/logical_multicast_runtime.cpp");
+    ok &= require_absent (
+      root / "framework/src/runtime/messaging/logical_multicast_runtime.hpp",
+      "logical multicast runtime must not expose production test hooks");
+    const auto legacy_submit_owner_reason =
+      "binding-owned async admission must not leave a Framework retry owner";
+    ok &= require_absent (root / "framework/src/runtime/messaging/async_submit_runtime.cpp",
+                          legacy_submit_owner_reason);
+    ok &= require_absent (root / "framework/src/runtime/messaging/async_submit_runtime.hpp",
+                          legacy_submit_owner_reason);
+    ok &= require_absent (root / "framework/src/runtime/messaging/pending_operation.cpp",
+                          legacy_submit_owner_reason);
+    ok &= require_absent (root / "framework/src/runtime/messaging/pending_operation.hpp",
+                          legacy_submit_owner_reason);
+    ok &= require_absent (root / "framework/src/runtime/messaging/pending_operation_state.hpp",
+                          legacy_submit_owner_reason);
+    ok &= require_absent (root / "framework/src/runtime/messaging/pending_submit.cpp",
+                          legacy_submit_owner_reason);
+    ok &= require_absent (root / "framework/src/runtime/messaging/pending_submit.hpp",
+                          legacy_submit_owner_reason);
     ok &= require_exists (root / "framework/src/runtime/messaging/request_failure_mapper.cpp");
     ok &= require_exists (root / "framework/src/runtime/messaging/request_failure_mapper.hpp");
-    ok &= require_exists (root / "framework/src/runtime/messaging/submit_queue.cpp");
-    ok &= require_exists (root / "framework/src/runtime/messaging/submit_queue.hpp");
+    ok &= require_absent (root / "framework/src/runtime/messaging/submit_queue.cpp",
+                          legacy_submit_owner_reason);
+    ok &= require_absent (root / "framework/src/runtime/messaging/submit_queue.hpp",
+                          legacy_submit_owner_reason);
     ok &= require_exists (root / "framework/src/runtime/channels/channel_runtime_bundle.cpp");
     ok &= require_exists (root / "framework/src/runtime/channels/channel_runtime_bundle.hpp");
     ok &= require_exists (root / "framework/src/runtime/channels/channel_bundle_factory.cpp");

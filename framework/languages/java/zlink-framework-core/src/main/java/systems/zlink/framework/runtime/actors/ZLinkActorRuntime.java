@@ -25,7 +25,9 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutc
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations
-    .ZLinkDeferredJoinCompletionAuthority;
+    .ZLinkDirectJoinRelocationAuthority;
+import systems.zlink.framework.runtime.internal.relocation
+    .ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.spots.SpotRef;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
@@ -72,6 +74,7 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
@@ -80,7 +83,6 @@ import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -263,20 +265,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     //  The Actor lane is already sealed when this runs. If the Session owner
     //  cannot return exact command-43 evidence before this deadline, the move
     //  fails closed; it must never infer a high-water or continue unsealed.
-    private static final Duration SESSION_SEAL_DEADLINE = Duration.ofSeconds(5);
+    private final Duration sessionRelocationSealTimeout;
     private volatile ZLinkSessionRelocationPeerClient sessionRelocationSealer;
     private final ConcurrentMap<
         ZLinkServiceM6BWireCodec.RelocationIdentity,
         DirectJoinSessionAbortFlight> directJoinSessionAborts =
             new ConcurrentHashMap<>();
-    private final ConcurrentMap<
-        ZLinkServiceM6BWireCodec.RelocationIdentity,
-        DirectJoinCompletionRelease> directJoinCompletionReleases =
-            new ConcurrentHashMap<>();
-    private final ConcurrentMap<ZLinkBackendActorRef,
-        DirectJoinCompletionRelease> directJoinPredecessors =
-            new ConcurrentHashMap<>();
-    private volatile ZLinkDeferredJoinAcceptedRecovery deferredJoinAcceptedRecovery;
+    private volatile ZLinkDirectJoinRelocation directJoinRelocation;
+    private volatile ZLinkActorJoinRelocationPort actorJoinRelocationPort;
     private volatile MessageFollowNoticeSender messageFollowNoticeSender;
 
     public void beginDrain() {
@@ -297,32 +293,47 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         relocating = false;
     }
 
-    public void setDeferredJoinAcceptedRecovery(
+    public void setDirectJoinRelocationStores(
         ZLinkLocationRepository authority,
         systems.zlink.framework.runtime.internal.locations
             .ZLinkRelocationStore store) {
-        deferredJoinAcceptedRecovery = authority == null || store == null
+        directJoinRelocation = authority == null || store == null
             ? null
-            : new ZLinkDeferredJoinAcceptedRecovery(
+            : new ZLinkDirectJoinRelocation(
                 authority,
                 store,
                 serializer);
     }
 
-    CompletionStage<ZLinkDeferredJoinAcceptedRecovery.Manifest>
-        prepareDeferredJoinAccepted(
-            ZLinkActorJoinOperationId operationId,
-            ZLinkBackendActorRef actor,
-            byte[] rawReply) {
-        ZLinkDeferredJoinAcceptedRecovery recovery = deferredJoinAcceptedRecovery;
-        if (recovery == null) {
-            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
-                "cross-node deferred Actor Join requires a Relocation Store"));
-        }
-        return recovery.prepare(operationId, actor, rawReply);
+    public void setActorJoinRelocationPort(
+        ZLinkActorJoinRelocationPort port) {
+        actorJoinRelocationPort = Objects.requireNonNull(port, "port");
     }
 
-    CompletionStage<ZLinkDeferredJoinAcceptedRecovery.Manifest>
+    CompletionStage<ZLinkActorJoinRelocationPort.Submission>
+        relocateActorJoin(
+            ZLinkActorJoinRelocationPort.Goal goal,
+            Duration timeout) {
+        ZLinkActorJoinRelocationPort port = actorJoinRelocationPort;
+        if (port == null) {
+            return CompletableFuture.failedFuture(
+                new ZLinkConfigurationException(
+                    "canonical Actor Join relocation is not installed"));
+        }
+        return port.relocate(goal, timeout);
+    }
+
+    public void admitActorJoin(
+        ZLinkActorJoinRelocationPort.Admission admission) {
+        ZLinkActorJoinRelocationPort port = actorJoinRelocationPort;
+        if (port == null) {
+            throw new ZLinkConfigurationException(
+                "canonical Actor Join relocation is not installed");
+        }
+        port.admit(admission);
+    }
+
+    CompletionStage<ZLinkDirectJoinRelocation.Manifest>
         prepareDeferredJoinRelocation(
             UUID relocationId,
             ZLinkActorJoinOperationId operationId,
@@ -335,16 +346,15 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             List<
                 ZLinkAsyncSerialQueue.QueuedRecord>
                 acceptedJournal,
-            byte[] rawReply,
-            byte[] sessionRouteCommand44) {
-        ZLinkDeferredJoinAcceptedRecovery recovery =
-            deferredJoinAcceptedRecovery;
-        if (recovery == null) {
+            byte[] rawReply) {
+        ZLinkDirectJoinRelocation relocation =
+            directJoinRelocation;
+        if (relocation == null) {
             return CompletableFuture.failedFuture(
                 new ZLinkConfigurationException(
                     "cross-node deferred Actor Join requires Location and Relocation Stores"));
         }
-        return recovery.prepareRelocation(
+        return relocation.prepareRelocation(
             relocationId,
             operationId,
             actor,
@@ -354,448 +364,120 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             restoreSnapshot,
             applicationState,
             acceptedJournal,
-            rawReply,
-            sessionRouteCommand44);
+            rawReply);
     }
 
-    public CompletionStage<ZLinkDeferredJoinCompletionAuthority.CommittedActorTenure>
+    public CompletionStage<ZLinkDirectJoinRelocationAuthority.CommittedActorTenure>
         commitDeferredJoinRelocation(
         ZLinkActorSpotRoutePackets.TransferRequest request) {
-        ZLinkDeferredJoinAcceptedRecovery recovery =
-            deferredJoinAcceptedRecovery;
-        if (request.completionManifest() == null) {
+        ZLinkDirectJoinRelocation relocation =
+            directJoinRelocation;
+        if (request.relocationManifest() == null) {
             return CompletableFuture.completedFuture(null);
         }
-        if (recovery == null) {
+        if (relocation == null) {
             return CompletableFuture.failedFuture(
                 new ZLinkConfigurationException(
-                    "deferred Actor Join relocation recovery is unavailable"));
+                    "direct Actor Join relocation authority is unavailable"));
         }
-        return recovery.commitPrepared(
-                request.completionManifest(),
-                request.actorRef())
-            .thenApply(tenure -> {
-                if (request.sessionRouteCommand44().length > 0) {
-                    retainDirectJoinCompletionRelease(
-                        request, tenure);
-                }
-                return tenure;
-            });
-    }
-
-    CompletionStage<Void> awaitDeferredJoinTargetCommit(
-        ZLinkDeferredJoinAcceptedRecovery.Manifest manifest,
-        ZLinkBackendActorRef actor,
-        Duration timeout) {
-        ZLinkDeferredJoinAcceptedRecovery recovery =
-            deferredJoinAcceptedRecovery;
-        if (recovery == null || manifest == null) {
-            return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "deferred Actor Join relocation recovery is unavailable"));
-        }
-        return recovery.awaitTargetCommit(manifest, actor, timeout);
-    }
-
-    CompletionStage<Void> awaitDeferredJoinTargetCompletion(
-        ZLinkDeferredJoinAcceptedRecovery.Manifest manifest,
-        ZLinkBackendActorRef actor,
-        Duration timeout) {
-        ZLinkDeferredJoinAcceptedRecovery recovery =
-            deferredJoinAcceptedRecovery;
-        if (recovery == null || manifest == null) {
-            return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "deferred Actor Join relocation recovery is unavailable"));
-        }
-        return recovery.awaitTargetCompletion(manifest, actor, timeout);
-    }
-
-    CompletionStage<Void> awaitDeferredJoinTargetLifecycleCompleted(
-        ZLinkDeferredJoinAcceptedRecovery.Manifest manifest,
-        ZLinkBackendActorRef actor,
-        Duration timeout) {
-        ZLinkDeferredJoinAcceptedRecovery recovery =
-            deferredJoinAcceptedRecovery;
-        if (recovery == null || manifest == null) {
-            return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "deferred Actor Join relocation recovery is unavailable"));
-        }
-        return recovery.awaitTargetLifecycleCompleted(manifest, actor, timeout);
-    }
-
-    CompletionStage<Void> markDeferredJoinSourceLeaveSubmitted(
-        ZLinkDeferredJoinAcceptedRecovery.Manifest manifest,
-        ZLinkBackendActorRef actor) {
-        ZLinkDeferredJoinAcceptedRecovery recovery =
-            deferredJoinAcceptedRecovery;
-        if (recovery == null || manifest == null) {
-            return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "deferred Actor Join relocation recovery is unavailable"));
-        }
-        return recovery.markSourceLeaveSubmitted(manifest, actor);
-    }
-
-    public CompletionStage<Void> awaitDeferredJoinSourceCleanup(
-        ZLinkActorSpotRoutePackets.TransferRequest request,
-        ZLinkBackendActorRef actor,
-        Duration timeout) {
-        if (request.completionManifest() == null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        ZLinkDeferredJoinAcceptedRecovery recovery =
-            deferredJoinAcceptedRecovery;
-        if (recovery == null) {
-            return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "deferred Actor Join relocation recovery is unavailable"));
-        }
-        return recovery.renewCompletionRoot(
-                request.completionManifest(), actor)
-            .thenCompose(ignored -> recovery.awaitSourceCleanup(
-                request.completionManifest(), actor, timeout))
-            .thenRun(() -> retainDirectJoinCompletionRelease(request, actor));
-    }
-
-    public CompletionStage<Void> renewDeferredJoinCompletion(
-        ZLinkActorSpotRoutePackets.TransferRequest request) {
-        Objects.requireNonNull(request, "request");
-        ZLinkDeferredJoinAcceptedRecovery recovery =
-            deferredJoinAcceptedRecovery;
-        if (recovery == null || request.completionManifest() == null) {
-            return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "deferred Actor Join relocation recovery is unavailable"));
-        }
-        return recovery.renewCompletionRoot(
-            request.completionManifest(), request.actorRef());
-    }
-
-    private void retainDirectJoinCompletionRelease(
-        ZLinkActorSpotRoutePackets.TransferRequest request,
-        ZLinkDeferredJoinCompletionAuthority.CommittedActorTenure tenure) {
-        retainDirectJoinCompletionRelease(request, tenure.actor(), tenure);
-    }
-
-    private void retainDirectJoinCompletionRelease(
-        ZLinkActorSpotRoutePackets.TransferRequest request,
-        ZLinkBackendActorRef actor) {
-        retainDirectJoinCompletionRelease(request, actor, null);
-    }
-
-    private void retainDirectJoinCompletionRelease(
-        ZLinkActorSpotRoutePackets.TransferRequest request,
-        ZLinkBackendActorRef actor,
-        ZLinkDeferredJoinCompletionAuthority.CommittedActorTenure tenure) {
-        byte[] encoded = request.sessionRouteCommand44();
-        if (encoded.length == 0 || request.completionManifest() == null) {
-            throw new ZLinkConfigurationException(
-                "direct-Join Session completion release context is missing");
-        }
-        ZLinkServiceM6BWireCodec.SessionRelocationRouteIntent intent =
-            new ZLinkServiceM6BWireCodec()
-                .decodeSessionRelocationRouteIntent(encoded);
-        DirectJoinCompletionRelease candidate =
-            new DirectJoinCompletionRelease(
-                request.completionManifest(), actor, intent, tenure);
-        DirectJoinCompletionRelease existing =
-            directJoinCompletionReleases.putIfAbsent(
-                intent.relocation(), candidate);
-        if (existing != null && !existing.sameContext(candidate)) {
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                "direct-Join completion release conflicts with the retained "
-                    + "Session relocation context");
-        }
-        DirectJoinCompletionRelease retained = existing == null
-            ? candidate
-            : existing;
-        DirectJoinCompletionRelease actorExisting =
-            directJoinPredecessors.putIfAbsent(actor, retained);
-        if (actorExisting != null && actorExisting != retained) {
-            if (existing == null) {
-                directJoinCompletionReleases.remove(
-                    intent.relocation(), candidate);
-            }
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                "Actor already has a different direct-Join predecessor");
-        }
-    }
-
-    LocalCommittedTargetTenure localCommittedTargetTenure(
-        ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
-        Objects.requireNonNull(command, "command");
-        DirectJoinCompletionRelease release =
-            directJoinCompletionReleases.get(command.relocation());
-        if (release == null) {
-            return LocalCommittedTargetTenure.absent();
-        }
-        return release.localCommittedTargetTenure(command, this);
-    }
-
-    enum LocalCommittedTargetTenureStatus {
-        ABSENT,
-        ACCEPTED,
-        CONFLICT
-    }
-
-    record LocalCommittedTargetTenure(
-        LocalCommittedTargetTenureStatus status,
-        ZLinkDeferredJoinCompletionAuthority.CommittedActorTenure tenure) {
-        private static LocalCommittedTargetTenure absent() {
-            return new LocalCommittedTargetTenure(
-                LocalCommittedTargetTenureStatus.ABSENT, null);
-        }
-
-        private static LocalCommittedTargetTenure accepted(
-            ZLinkDeferredJoinCompletionAuthority.CommittedActorTenure tenure) {
-            return new LocalCommittedTargetTenure(
-                LocalCommittedTargetTenureStatus.ACCEPTED,
-                Objects.requireNonNull(tenure, "tenure"));
-        }
-
-        private static LocalCommittedTargetTenure conflict() {
-            return new LocalCommittedTargetTenure(
-                LocalCommittedTargetTenureStatus.CONFLICT, null);
-        }
-    }
-
-    CompletionStage<Void> awaitDirectJoinPredecessor(
-        ZLinkBackendActorRef actor,
-        Duration timeout) {
-        Objects.requireNonNull(actor, "actor");
-        Objects.requireNonNull(timeout, "timeout");
-        DirectJoinCompletionRelease predecessor =
-            directJoinPredecessors.get(actor);
-        if (predecessor == null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        CompletableFuture<Void> bounded = new CompletableFuture<>();
-        predecessor.routeTerminal().whenComplete((ignored, failure) -> {
-            if (failure == null) {
-                bounded.complete(null);
-            } else {
-                bounded.completeExceptionally(failure);
-            }
-        });
-        ZLinkActorRetryScheduler.scheduleRouteAfter(
-            () -> bounded.completeExceptionally(
-                new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                    "predecessor Session route terminal was not received")),
-            timeout);
-        return bounded;
-    }
-
-    void onDirectJoinSessionRouteTerminal(
-        ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
-        ZLinkServiceM6BWireCodec.SessionRelocationRouted ack) {
-        if (ack == null) {
-            return;
-        }
-        DirectJoinCompletionRelease release =
-            directJoinCompletionReleases.get(command.relocation());
-        if (release == null || !release.matches(command, ack)) {
-            return;
-        }
-        directJoinPredecessors.remove(release.actor(), release);
-        release.routeTerminal().complete(null);
-        attemptDirectJoinCompletionRelease(release);
-    }
-
-    private void attemptDirectJoinCompletionRelease(
-        DirectJoinCompletionRelease release) {
-        var key = release.intent().relocation();
-        if (draining || directJoinCompletionReleases.get(key) != release) {
-            return;
-        }
-        if (!release.releasing().compareAndSet(false, true)) {
-            return;
-        }
-        if (draining || directJoinCompletionReleases.get(key) != release) {
-            release.releasing().set(false);
-            return;
-        }
-        ZLinkDeferredJoinAcceptedRecovery recovery =
-            deferredJoinAcceptedRecovery;
-        if (recovery == null) {
-            release.releasing().set(false);
-            scheduleDirectJoinCompletionRelease(release);
-            return;
-        }
-        recovery.completeSourceCleanup(release.manifest(), release.actor())
-            .whenComplete((ignored, failure) -> {
-                if (failure == null) {
-                    directJoinCompletionReleases.remove(
-                        key, release);
-                    return;
-                }
-                release.releasing().set(false);
-                scheduleDirectJoinCompletionRelease(release);
-            });
-    }
-
-    private void scheduleDirectJoinCompletionRelease(
-        DirectJoinCompletionRelease release) {
-        if (draining) {
-            //  The canonical root remains referenced by authority and is the
-            //  restart recovery input. Do not delete it during shutdown.
-            return;
-        }
-        ZLinkActorRetryScheduler.scheduleRouteAfter(
-            () -> attemptDirectJoinCompletionRelease(release),
-            Duration.ofSeconds(1));
+        return relocation.commitPrepared(
+            request.relocationManifest(), request.actorRef());
     }
 
     public CompletionStage<DeferredJoinRelocationRoot>
         loadDeferredJoinRelocation(
             ZLinkActorSpotRoutePackets.TransferRequest request) {
-        ZLinkDeferredJoinAcceptedRecovery recovery =
-            deferredJoinAcceptedRecovery;
-        if (request.completionManifest() == null || recovery == null) {
+        ZLinkDirectJoinRelocation relocation =
+            directJoinRelocation;
+        if (request.relocationManifest() == null || relocation == null) {
             return CompletableFuture.failedFuture(
                 new ZLinkConfigurationException(
-                    "direct Actor Join relocation recovery is unavailable"));
+                    "direct Actor Join relocation authority is unavailable"));
         }
-        return recovery.loadPrepared(
-                request.completionManifest(),
+        return relocation.loadPrepared(
+                request.relocationManifest(),
                 request.actorRef(),
                 request.adapterKey() != null)
             .thenApply(root -> new DeferredJoinRelocationRoot(
                 root.applicationState(),
-                root.acceptedJournal(),
-                root.sessionRouteCommand44()));
+                root.acceptedJournal()));
     }
 
     public CompletionStage<Void> abortDeferredJoinRelocation(
         ZLinkActorSpotRoutePackets.TransferRequest request) {
-        ZLinkDeferredJoinAcceptedRecovery recovery =
-            deferredJoinAcceptedRecovery;
-        if (request.completionManifest() == null || recovery == null) {
+        ZLinkDirectJoinRelocation relocation =
+            directJoinRelocation;
+        if (request.relocationManifest() == null || relocation == null) {
             return CompletableFuture.completedFuture(null);
         }
-        return request.sessionRouteCommand44().length == 0
-            ? recovery.abortPrepared(request.completionManifest())
-            : recovery.abortPreparedRetainingRoot(request.completionManifest())
-                .thenApply(ignored -> null);
+        return relocation.abortPrepared(request.relocationManifest());
     }
 
-    CompletionStage<ZLinkDeferredJoinCompletionAuthority.RetainedAbort>
-        retainDeferredJoinAbort(
-            ZLinkDeferredJoinAcceptedRecovery.Manifest manifest) {
-        ZLinkDeferredJoinAcceptedRecovery recovery =
-            deferredJoinAcceptedRecovery;
-        return manifest == null || recovery == null
+    CompletionStage<Void> abortDeferredJoinRelocation(
+            ZLinkDirectJoinRelocation.Manifest manifest) {
+        ZLinkDirectJoinRelocation relocation =
+            directJoinRelocation;
+        return manifest == null || relocation == null
             ? CompletableFuture.failedFuture(
                 new ZLinkConfigurationException(
-                    "direct-Join Session abort has no durable completion root"))
-            : recovery.abortPreparedRetainingRoot(manifest);
-    }
-
-    CompletionStage<Void> completeDeferredJoinAbort(
-        ZLinkDeferredJoinCompletionAuthority.RetainedAbort retained) {
-        ZLinkDeferredJoinAcceptedRecovery recovery =
-            deferredJoinAcceptedRecovery;
-        return recovery == null
-            ? CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "direct-Join Session abort recovery is unavailable"))
-            : recovery.completeRetainedAbort(retained);
-    }
-
-    private CompletionStage<Void> renewDeferredJoinAbort(
-        ZLinkDeferredJoinCompletionAuthority.RetainedAbort retained) {
-        ZLinkDeferredJoinAcceptedRecovery recovery =
-            deferredJoinAcceptedRecovery;
-        return recovery == null
-            ? CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "direct-Join Session abort recovery is unavailable"))
-            : recovery.renewRetainedAbort(retained);
+                    "direct-Join abort has no relocation authority"))
+            : relocation.abortPrepared(manifest);
     }
 
     public record DeferredJoinRelocationRoot(
         byte[] applicationState,
-        List<
-            ZLinkAsyncSerialQueue.QueuedRecord>
-            acceptedJournal,
-        byte[] sessionRouteCommand44) {
+        List<ZLinkAsyncSerialQueue.QueuedRecord> acceptedJournal) {
         public DeferredJoinRelocationRoot {
             applicationState = applicationState.clone();
             acceptedJournal = List.copyOf(acceptedJournal);
-            sessionRouteCommand44 = sessionRouteCommand44.clone();
         }
         @Override public byte[] applicationState() {
             return applicationState.clone();
-        }
-        @Override public byte[] sessionRouteCommand44() {
-            return sessionRouteCommand44.clone();
         }
     }
 
     public CompletionStage<Void> deliverDeferredJoinAccepted(
         ZLinkActorSpotRoutePackets.TransferRequest request,
         ZLinkBackendActorRef actor) {
-        if (request.completionManifest() == null) {
+        if (request.relocationManifest() == null) {
             return CompletableFuture.completedFuture(null);
         }
-        ZLinkDeferredJoinAcceptedRecovery recovery = deferredJoinAcceptedRecovery;
-        if (recovery == null) {
+        ZLinkDirectJoinRelocation relocation = directJoinRelocation;
+        if (relocation == null) {
             return CompletableFuture.failedFuture(new ZLinkConfigurationException(
-                "deferred Actor Join completion recovery is unavailable"));
+                "direct Actor Join relocation authority is unavailable"));
         }
-        Duration timeout = request.timeoutMillis() > 0
-            ? Duration.ofMillis(request.timeoutMillis())
-            : defaultRequestTimeout;
-        return recovery.markTargetLifecycleCompleted(
-                request.completionManifest(), actor)
-            .thenCompose(ignored -> recovery.awaitSourceLeaveSubmitted(
-                request.completionManifest(),
+        return deliverDeferredJoinAcceptedWithRetry(
+                relocation,
+                request.relocationManifest(),
                 actor,
-                timeout))
-            .thenCompose(ignored -> deliverDeferredJoinAcceptedWithRetry(
-                recovery,
-                request.completionManifest(),
-                actor,
-                0))
-            .thenCompose(ignored -> {
-                ZLinkActor target = actorRegistry.actor(request.actorId());
-                return target == null || isMoving(target)
-                    ? CompletableFuture.completedFuture(null)
-                    : recovery.publishTargetReady(
-                        request.completionManifest(), actor);
-            });
+                0);
     }
 
-    CompletionStage<Void> completeDeferredJoinAcceptedSourceCleanup(
-        ZLinkDeferredJoinAcceptedRecovery.Manifest manifest,
+    public CompletionStage<Void> publishDeferredJoinTargetReady(
+        ZLinkActorSpotRoutePackets.TransferRequest request,
         ZLinkBackendActorRef actor) {
-        ZLinkDeferredJoinAcceptedRecovery recovery =
-            deferredJoinAcceptedRecovery;
-        return recovery == null || manifest == null
+        if (request.relocationManifest() == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        ZLinkDirectJoinRelocation relocation = directJoinRelocation;
+        if (relocation == null) {
+            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
+                "deferred Actor Join relocation authority is unavailable"));
+        }
+        ZLinkActor target = actorRegistry.actor(request.actorId());
+        return target == null || isMoving(target)
             ? CompletableFuture.completedFuture(null)
-            : recovery.completeSourceCleanup(manifest, actor);
-    }
-
-    CompletionStage<Void> markDeferredJoinAcceptedSourceCleanup(
-        ZLinkDeferredJoinAcceptedRecovery.Manifest manifest,
-        ZLinkBackendActorRef actor) {
-        ZLinkDeferredJoinAcceptedRecovery recovery =
-            deferredJoinAcceptedRecovery;
-        return recovery == null || manifest == null
-            ? CompletableFuture.completedFuture(null)
-            : recovery.markSourceCleanup(manifest, actor);
+            : relocation.publishTargetReady(
+                request.relocationManifest(), actor);
     }
 
     private CompletionStage<Void> deliverDeferredJoinAcceptedWithRetry(
-        ZLinkDeferredJoinAcceptedRecovery recovery,
-        ZLinkDeferredJoinAcceptedRecovery.Manifest manifest,
+        ZLinkDirectJoinRelocation relocation,
+        ZLinkDirectJoinRelocation.Manifest manifest,
         ZLinkBackendActorRef actor,
         int attempt) {
-        return recovery.deliver(manifest, actor, this)
+        return relocation.deliver(manifest, actor, this)
             .exceptionallyCompose(error -> {
                 if (attempt >= 2 || draining) {
                     return CompletableFuture.failedFuture(error);
@@ -807,7 +489,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     .execute(() -> delay.complete(null));
                 return delay.thenCompose(ignored ->
                     deliverDeferredJoinAcceptedWithRetry(
-                        recovery,
+                        relocation,
                         manifest,
                         actor,
                         attempt + 1));
@@ -888,6 +570,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 context,
                 routeChannelName,
                 targetNodeRid,
+                ZLinkActorSpotJoinCall.newOperationId(),
                 System.nanoTime() + defaultRequestTimeout.toNanos());
         });
     }
@@ -902,6 +585,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         DefaultActorContext context,
         String routeChannelName,
         RoutingId targetNodeRid,
+        ZLinkActorJoinOperationId operationId,
         long deadlineNanos) {
         Message request = Message.from(new byte[0]);
         CompletionStage<Boolean> attempt = new ZLinkActorSpotJoinCall(
@@ -911,7 +595,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 request,
                 defaultRequestTimeout,
                 context.spotJoinServices())
-            .execute()
+            .execute(operationId, deadlineNanos)
             .thenApply(result -> result instanceof ZLinkActorJoinOutcome.Accepted);
         return attempt.whenComplete((moved, failure) -> request.close())
             .exceptionallyCompose(failure -> {
@@ -925,7 +609,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 CompletableFuture<Boolean> retry = new CompletableFuture<>();
                 CompletableFuture.delayedExecutor(25L, TimeUnit.MILLISECONDS)
                     .execute(() -> submitDrainHandoff(
-                            context, routeChannelName, targetNodeRid, deadlineNanos)
+                            context, routeChannelName, targetNodeRid,
+                            operationId, deadlineNanos)
                         .whenComplete((moved, retryFailure) -> {
                             if (retryFailure != null) {
                                 retry.completeExceptionally(retryFailure);
@@ -1023,6 +708,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             transferAdapters,
             defaultRequestTimeout,
             messageFollowDuration,
+            new ZLinkLocationOptions(),
             serializer,
             handlerFactory,
             defaultStreamCodec,
@@ -1036,6 +722,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         Map<String, Class<? extends ZLinkActorRelocationAdapter<?>>> transferAdapters,
         Duration defaultRequestTimeout,
         Duration messageFollowDuration,
+        ZLinkLocationOptions locationOptions,
         ZLinkMessageSerializer serializer,
         ZLinkHandlerActivator handlerFactory,
         ZLinkStreamCodec defaultStreamCodec,
@@ -1064,6 +751,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         this.messageFollowDuration = messageFollowDuration == null
             ? Duration.ofSeconds(5)
             : messageFollowDuration;
+        this.sessionRelocationSealTimeout = Objects.requireNonNull(
+            locationOptions,
+            "locationOptions").sessionRelocationSealTimeout();
         this.serializer = serializer;
         this.handlerFactory = handlerFactory;
         this.actorTransfers = new ZLinkActorTransferRegistry(
@@ -1071,7 +761,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             handlerFactory);
         this.defaultStreamCodec =
             defaultStreamCodec == null ? ZLinkStreamCodec.JSON : defaultStreamCodec;
-        this.oneWayCalls = new ZLinkOneWayCalls(admission);
+        this.oneWayCalls = new ZLinkOneWayCalls();
     }
 
     public ZLinkActorRuntime(
@@ -1531,13 +1221,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             return CompletableFuture.failedFuture(
                 new ZLinkConfigurationException(
                     "direct Actor Join payload differs from canonical relocation root"));
-        }
-        if (!Arrays.equals(
-                request.sessionRouteCommand44(),
-                root.sessionRouteCommand44())) {
-            return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "direct Actor Join Session route differs from canonical relocation root"));
         }
         String actorId = request.actorId();
         String actorType = request.actorType();
@@ -3147,35 +2830,24 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 route.sessionOwnerNodeRid(),
                 route.sessionRid(),
                 route.bindingGeneration(),
-                route.lastAcceptedSessionSequence()));
+                0));
     }
 
     /** Installs the command 42 sender for exact bound-Session relocation. */
     public void setSessionRelocationSealer(
         ZLinkSessionRelocationPeerClient sealer) {
         this.sessionRelocationSealer = sealer;
-        if (sealer != null) {
-            sealer.setRouteTerminalObserver(
-                this::onDirectJoinSessionRouteTerminal);
-        }
     }
 
     CompletionStage<DirectJoinSessionRouteCommand> directJoinSessionRouteCommand(
         ZLinkActor actor,
         ZLinkBackendActorRef actorRef,
         RoutingId targetNodeRid,
-        UUID relocationId,
-        boolean durableCompletionAvailable) {
+        UUID relocationId) {
         BoundSessionRouteSnapshot session = boundSessionRoute(actor).orElse(null);
         if (session == null) {
             return CompletableFuture.completedFuture(
                 DirectJoinSessionRouteCommand.empty());
-        }
-        if (!durableCompletionAvailable) {
-            return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "StateIncompatible: bound-Session direct Join requires "
-                        + "durable source-cleanup completion evidence"));
         }
         return locations.directJoinSessionFence(
                 actor.context().actorId(),
@@ -3190,25 +2862,17 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                             actorRef,
                             targetNodeRid,
                             relocationId,
-                            route,
-                            sealed.lastAcceptedSessionSequence()),
+                            route),
                         sealed.seal(),
-                        sealed.lastAcceptedSessionSequence(),
                         sealed.peer()));
             });
     }
 
     /**
      * Runs the spec 20 §5 step 1 seal against the bound Session owner:
-     * command 42 carries the exact source fence, and the owner answers with
-     * the accepted bound-Session high-water it recorded at that point
-     * (command 43). That number - not the source's own ingress count - is what
-     * travels in the relocation and comes back in command 44, which is what
-     * makes the owner's step 7 comparison an equality.
-     *
-     * <p>A missing or failed seal has no durable high-water evidence, so the
-     * relocation fails instead of constructing command 44 from a local
-     * estimate.</p>
+     * command 42 carries the exact source fence and command 43 echoes it
+     * field-for-field. The Session owner keeps message ordering state locally;
+     * command 44 does not carry a duplicated high-water value.
      */
     private CompletionStage<SealedDirectJoinSessionRoute> sealBoundSessionRoute(
         ZLinkBackendActorRef actorRef,
@@ -3262,24 +2926,18 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         //  transfer out, manifest prepare - must not run there or it stalls
         //  every other inbound record on this node, so the continuation is
         //  handed to the default async pool before the caller chains on it.
-        return sealer.sealRouteUntilAck(seal, SESSION_SEAL_DEADLINE)
+        return sealer.sealRouteUntilAck(seal, sessionRelocationSealTimeout)
             .thenApplyAsync(sealed -> new SealedDirectJoinSessionRoute(
-                seal, sealed.lastAcceptedSessionSequence(), sealer))
+                seal, sealer))
             .exceptionallyCompose(failure -> CompletableFuture.failedFuture(
                 new ZLinkConfigurationException(
-                    "RelocationFailed: command 42/43 did not produce durable "
-                        + "bound-Session high-water evidence for "
+                    "RelocationFailed: command 42/43 did not seal the "
+                        + "bound Session for "
                         + actorRef.actorId(), failure)));
     }
 
     CompletionStage<Void> abortDirectJoinSessionRoute(
         DirectJoinSessionRouteCommand context) {
-        return abortDirectJoinSessionRoute(context, null);
-    }
-
-    CompletionStage<Void> abortDirectJoinSessionRoute(
-        DirectJoinSessionRouteCommand context,
-        ZLinkDeferredJoinCompletionAuthority.RetainedAbort retained) {
         Objects.requireNonNull(context, "context");
         if (context.seal() == null) {
             return CompletableFuture.completedFuture(null);
@@ -3294,14 +2952,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             new DirectJoinSessionAbortFlight(
                 context,
                 directJoinSessionAbortCommand(context),
-                retained,
                 new CompletableFuture<>());
         DirectJoinSessionAbortFlight existing =
             directJoinSessionAborts.putIfAbsent(key, candidate);
         if (existing != null) {
             if (!sameDirectJoinSessionRouteContext(
-                    existing.context(), context)
-                || !sameRetainedAbort(existing.retained(), retained)) {
+                    existing.context(), context)) {
                 return CompletableFuture.failedFuture(
                     new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
@@ -3328,19 +2984,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 flight.context().seal().relocation()) != flight) {
             return;
         }
-        CompletionStage<Void> renewed = flight.retained() == null
-            ? CompletableFuture.completedFuture(null)
-            : renewDeferredJoinAbort(flight.retained());
-        renewed.thenCompose(ignored ->
-            flight.context().peer().abortRouteUntilAck(
-                    flight.abort(),
-                    flight.context().lastAcceptedSessionSequence(),
-                    SESSION_SEAL_DEADLINE,
-                    () -> draining
-                        || flight.completion().isDone()
-                        || directJoinSessionAborts.get(
-                            flight.context().seal().relocation()) != flight)
-                .thenApply(ack -> (Void) null))
+        flight.context().peer().sendRoute(flight.abort())
             .whenComplete((ack, failure) -> {
                 if (failure != null) {
                     scheduleDirectJoinSessionAbortRetry(flight);
@@ -3369,22 +3013,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         DirectJoinSessionRouteCommand left,
         DirectJoinSessionRouteCommand right) {
         return left.seal().equals(right.seal())
-            && left.lastAcceptedSessionSequence()
-                == right.lastAcceptedSessionSequence()
             && Arrays.equals(left.command44(), right.command44())
             && left.peer() == right.peer();
-    }
-
-    private static boolean sameRetainedAbort(
-        ZLinkDeferredJoinCompletionAuthority.RetainedAbort left,
-        ZLinkDeferredJoinCompletionAuthority.RetainedAbort right) {
-        if (left == right) {
-            return true;
-        }
-        return left != null && right != null
-            && left.snapshot().fence().equals(right.snapshot().fence())
-            && left.reference().equals(right.reference())
-            && left.checksumCrc32c() == right.checksumCrc32c();
     }
 
     private static ZLinkServiceM6BWireCodec.SessionRelocationRoute
@@ -3408,7 +3038,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             0,
             command42.actor().authorityOwnerGeneration(),
             null,
-            0,
             0);
     }
 
@@ -3416,16 +3045,19 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         ZLinkBackendActorRef actorRef,
         RoutingId targetNodeRid,
         UUID relocationId,
-        DirectJoinSessionRoute route,
-        long lastAcceptedSessionSequence) {
+        DirectJoinSessionRoute route) {
         var authority = route.authority();
         var session = route.session();
         var source = authority.sourceActorOwner();
         var sessionOwner = authority.sessionOwner();
         var target = authority.targetActorOwner();
-        var intent =
+        if (authority.sourceAuthorityOwnerGeneration() == Long.MAX_VALUE) {
+            throw new ZLinkConfigurationException(
+                "bound Session authority generation is exhausted");
+        }
+        var command =
                     new systems.zlink.framework.runtime.internal.service
-                        .ZLinkServiceM6BWireCodec.SessionRelocationRouteIntent(
+                        .ZLinkServiceM6BWireCodec.SessionRelocationRoute(
                             new systems.zlink.framework.runtime.internal.service
                                 .ZLinkServiceM6BWireCodec.RelocationIdentity(
                                     relocationId.getMostSignificantBits(),
@@ -3457,12 +3089,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                 .ZLinkServiceM6BWireCodec
                                 .SessionRelocationRouteAction.COMMIT,
                             authority.sourceAuthorityOwnerGeneration(),
+                            authority.sourceAuthorityOwnerGeneration() + 1,
                             targetNodeRid,
-                            target.lifecycleGeneration(),
-                            lastAcceptedSessionSequence);
+                            target.lifecycleGeneration());
         return new systems.zlink.framework.runtime.internal.service
             .ZLinkServiceM6BWireCodec()
-            .encodeSessionRelocationRouteIntent(intent);
+            .encodeSessionRelocationRoute(command);
     }
 
     record DirectJoinSessionRoute(
@@ -3474,14 +3106,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     record DirectJoinSessionRouteCommand(
         byte[] command44,
         ZLinkServiceM6BWireCodec.SessionRelocationSeal seal,
-        long lastAcceptedSessionSequence,
         ZLinkSessionRelocationPeerClient peer) {
         DirectJoinSessionRouteCommand {
             command44 = Objects.requireNonNull(command44, "command44").clone();
             if ((seal == null && (command44.length != 0
-                    || lastAcceptedSessionSequence != 0 || peer != null))
-                || (seal != null && (command44.length == 0 || peer == null))
-                || lastAcceptedSessionSequence < 0) {
+                    || peer != null))
+                || (seal != null && (command44.length == 0 || peer == null))) {
                 throw new IllegalArgumentException(
                     "direct-Join Session relocation context is invalid");
             }
@@ -3489,7 +3119,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
         static DirectJoinSessionRouteCommand empty() {
             return new DirectJoinSessionRouteCommand(
-                new byte[0], null, 0, null);
+                new byte[0], null, null);
         }
 
         @Override public byte[] command44() {
@@ -3500,139 +3130,15 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     private record DirectJoinSessionAbortFlight(
         DirectJoinSessionRouteCommand context,
         ZLinkServiceM6BWireCodec.SessionRelocationRoute abort,
-        ZLinkDeferredJoinCompletionAuthority.RetainedAbort retained,
         CompletableFuture<Void> completion) {
-    }
-
-    private static final class DirectJoinCompletionRelease {
-        private final ZLinkDeferredJoinAcceptedRecovery.Manifest manifest;
-        private final ZLinkBackendActorRef actor;
-        private final ZLinkServiceM6BWireCodec.SessionRelocationRouteIntent intent;
-        private final ZLinkDeferredJoinCompletionAuthority.CommittedActorTenure
-            tenure;
-        private final AtomicBoolean releasing = new AtomicBoolean();
-        private final CompletableFuture<Void> routeTerminal =
-            new CompletableFuture<>();
-
-        private DirectJoinCompletionRelease(
-            ZLinkDeferredJoinAcceptedRecovery.Manifest manifest,
-            ZLinkBackendActorRef actor,
-            ZLinkServiceM6BWireCodec.SessionRelocationRouteIntent intent,
-            ZLinkDeferredJoinCompletionAuthority.CommittedActorTenure tenure) {
-            this.manifest = Objects.requireNonNull(manifest, "manifest");
-            this.actor = Objects.requireNonNull(actor, "actor");
-            this.intent = Objects.requireNonNull(intent, "intent");
-            this.tenure = tenure;
-        }
-
-        private ZLinkDeferredJoinAcceptedRecovery.Manifest manifest() {
-            return manifest;
-        }
-
-        private ZLinkBackendActorRef actor() {
-            return actor;
-        }
-
-        private ZLinkServiceM6BWireCodec.SessionRelocationRouteIntent intent() {
-            return intent;
-        }
-
-        private AtomicBoolean releasing() {
-            return releasing;
-        }
-
-        private CompletableFuture<Void> routeTerminal() {
-            return routeTerminal;
-        }
-
-        private boolean sameContext(DirectJoinCompletionRelease other) {
-            return manifest.equals(other.manifest)
-                && actor.equals(other.actor)
-                && intent.equals(other.intent)
-                && (other.tenure == null
-                    || tenure != null && tenure.equals(other.tenure));
-        }
-
-        private LocalCommittedTargetTenure localCommittedTargetTenure(
-            ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
-            ZLinkActorRuntime runtime) {
-            if (!matchesIntent(command)) {
-                return LocalCommittedTargetTenure.conflict();
-            }
-            if (tenure == null) {
-                return LocalCommittedTargetTenure.absent();
-            }
-            if (!tenure.actor().equals(actor)
-                || !tenure.actor().nodeRid().equals(command.targetNodeRid())
-                || !tenure.actor().actorId().equals(command.actor().actorId())
-                || tenure.actor().generation() != command.actor().generation()
-                || tenure.targetNodeGeneration()
-                    != command.targetNodeGeneration()
-                || tenure.authorityOwnerGeneration()
-                    != command.currentAuthorityOwnerGeneration()) {
-                return LocalCommittedTargetTenure.conflict();
-            }
-            ZLinkActor local = runtime.actorRegistry.actor(actor.actorId());
-            if (local == null || !tenure.actor().equals(runtime.currentRef(local))) {
-                return LocalCommittedTargetTenure.conflict();
-            }
-            return LocalCommittedTargetTenure.accepted(tenure);
-        }
-
-        private boolean matchesIntent(
-            ZLinkServiceM6BWireCodec.SessionRelocationRoute command) {
-            return command.senderRole()
-                    == ZLinkServiceM6BWireCodec.RelocationRole.TARGET
-                && command.action()
-                    == ZLinkServiceM6BWireCodec
-                        .SessionRelocationRouteAction.COMMIT
-                && command.relocation().equals(intent.relocation())
-                && command.coordinator().equals(intent.coordinator())
-                && command.actor().equals(intent.actor())
-                && command.session().equals(intent.session())
-                && command.previousAuthorityOwnerGeneration()
-                    == intent.previousAuthorityOwnerGeneration()
-                && command.targetNodeRid().equals(intent.targetNodeRid())
-                && command.targetNodeGeneration()
-                    == intent.targetNodeGeneration()
-                && command.lastAcceptedSessionSequence()
-                    == intent.lastAcceptedSessionSequence();
-        }
-
-        private boolean matches(
-            ZLinkServiceM6BWireCodec.SessionRelocationRoute command,
-            ZLinkServiceM6BWireCodec.SessionRelocationRouted ack) {
-            return matchesIntent(command)
-                && (tenure == null
-                    || command.currentAuthorityOwnerGeneration()
-                        == tenure.authorityOwnerGeneration())
-                && ack.relocation().equals(command.relocation())
-                && ack.coordinator().equals(command.coordinator())
-                && ack.actor().equals(command.actor())
-                && ack.session().equals(command.session())
-                && ack.action().equals(command.action())
-                && ack.currentAuthorityOwnerGeneration()
-                    == command.currentAuthorityOwnerGeneration()
-                && ack.lastAcceptedSessionSequence()
-                    == command.lastAcceptedSessionSequence()
-                && (ack.result() == ZLinkServiceM6BWireCodec
-                        .SessionRelocationRouteResult.APPLIED
-                    || ack.result() == ZLinkServiceM6BWireCodec
-                        .SessionRelocationRouteResult.ALREADY_APPLIED);
-        }
     }
 
     private record SealedDirectJoinSessionRoute(
         ZLinkServiceM6BWireCodec.SessionRelocationSeal seal,
-        long lastAcceptedSessionSequence,
         ZLinkSessionRelocationPeerClient peer) {
         private SealedDirectJoinSessionRoute {
             Objects.requireNonNull(seal, "seal");
             Objects.requireNonNull(peer, "peer");
-            if (lastAcceptedSessionSequence < 0) {
-                throw new IllegalArgumentException(
-                    "sealed Session sequence must be nonnegative");
-            }
         }
     }
 
@@ -3718,9 +3224,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         byte[] acceptedJournalRecord,
         List<Message> parts,
         String contentType,
-        ZLinkInboundDispatchBudget.Lease inboundDispatchLease,
         Consumer<List<Message>> reply,
-        Consumer<Throwable> failure) {
+        Consumer<Throwable> failure,
+        Runnable terminalRelease) {
         if (sourceNodeRid == null
             || sourceNodeGeneration <= 0
             || header == null
@@ -3743,9 +3249,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 != staleActor.generation()) {
             return rejectRetainedMessageFollowIngress(
                 parts,
-                inboundDispatchLease,
                 failure,
-                "Message Follow source fence is unavailable or stale");
+                "Message Follow source fence is unavailable or stale",
+                terminalRelease);
         }
         ZLinkStreamHeader streamHeader;
         try {
@@ -3757,16 +3263,16 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         .equals(header.correlation()))) {
                 return rejectRetainedMessageFollowIngress(
                     parts,
-                    inboundDispatchLease,
                     failure,
-                    "Message Follow request fence is invalid");
+                    "Message Follow request fence is invalid",
+                    terminalRelease);
             }
         } catch (RuntimeException invalidHeader) {
             return rejectRetainedMessageFollowIngress(
                 parts,
-                inboundDispatchLease,
                 failure,
-                "Message Follow stream header is invalid");
+                "Message Follow stream header is invalid",
+                terminalRelease);
         }
 
         Message payload;
@@ -3775,9 +3281,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         } catch (RuntimeException invalidPayload) {
             return rejectRetainedMessageFollowIngress(
                 parts,
-                inboundDispatchLease,
                 failure,
-                "Message Follow payload is invalid");
+                "Message Follow payload is invalid",
+                terminalRelease);
         }
         parts.get(0).close();
 
@@ -3790,9 +3296,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 ZLinkFrameworkErrorKind.UNAVAILABLE,
                 "Message Follow hop limit exceeded"));
             payload.close();
-            if (inboundDispatchLease != null) {
-                inboundDispatchLease.close();
-            }
+            terminalRelease.run();
             return true;
         }
         MessageFollowNoticeSender noticeSender = messageFollowNoticeSender;
@@ -3858,9 +3362,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 }
             } finally {
                 payload.close();
-                if (inboundDispatchLease != null) {
-                    inboundDispatchLease.close();
-                }
+                terminalRelease.run();
             }
         });
         return true;
@@ -3868,9 +3370,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     private static boolean rejectRetainedMessageFollowIngress(
         List<Message> parts,
-        ZLinkInboundDispatchBudget.Lease inboundDispatchLease,
         Consumer<Throwable> failure,
-        String message) {
+        String message,
+        Runnable terminalRelease) {
         try {
             if (failure != null) {
                 try {
@@ -3883,9 +3385,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             }
         } finally {
             parts.forEach(Message::close);
-            if (inboundDispatchLease != null) {
-                inboundDispatchLease.close();
-            }
+            terminalRelease.run();
         }
         return true;
     }
@@ -4571,6 +4071,15 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return renewActorJoinedLocation(actor, spotId);
     }
 
+    /** Applies the membership already selected by the canonical target CAS. */
+    public void markRelocatedActorJoined(
+        ZLinkActor actor,
+        ZLinkBackendActorRef actorRef,
+        String spotId,
+        ZLinkSpot<?> spot) {
+        markJoinedState(actor, actorRef, spotId, spot);
+    }
+
     public long bindNativeSession(
         ZLinkActor actor,
         ZLinkInternalSpotNode spotNode,
@@ -4815,19 +4324,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 flight.completion().completeExceptionally(pendingAbortClosed);
             }
         });
-        //  Completion roots are intentionally not deleted here. Authority
-        //  still references them, so a replacement runtime can recover a
-        //  command 44 that had not reached command 45 before shutdown.
-        ZLinkConfigurationException predecessorClosed =
-            new ZLinkConfigurationException(
-                "Actor runtime stopped with a pending predecessor route terminal");
-        directJoinPredecessors.forEach((actor, release) -> {
-            if (directJoinPredecessors.remove(actor, release)) {
-                release.routeTerminal().completeExceptionally(
-                    predecessorClosed);
-            }
-        });
-        directJoinCompletionReleases.clear();
     }
 
     /** Removes a committed relocation source without releasing its published

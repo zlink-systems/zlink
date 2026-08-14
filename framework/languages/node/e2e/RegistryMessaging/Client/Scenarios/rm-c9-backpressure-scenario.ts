@@ -1,4 +1,4 @@
-// RM-C9: Application HWM 도달 뒤 수신을 재개한다 시나리오를 검증한다.
+// RM-C9: Application job queue capacity 뒤 수신을 재개한다 시나리오를 검증한다.
 import type { ProfileRes } from '../../Shared/messages';
 import { postJson } from '../../../http-client';
 import { ensure, uniqueMarker } from '../Support/scenario-assert';

@@ -11,13 +11,16 @@ import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from '../framework-errors-internal';
-import { createAbortError } from '../abort';
 import {
   ZLinkBoundedSerialScheduler,
   type ZLinkSerialSchedulerOptions,
   type ZLinkSerialWorkOptions,
   type ZLinkSerialWorkRecord
 } from '../execution/serial-scheduler';
+import {
+  bindApplicationJobPermit,
+  hasApplicationJobPermit
+} from '../application-jobs/application-job-queue-scope';
 
 export class ZLinkSpotSerialExecutor {
   private readonly scheduler: ZLinkBoundedSerialScheduler;
@@ -115,15 +118,14 @@ export class ZLinkSpotSerialExecutor {
   }
 
   /**
-   * Admits a one-way turn and returns after the bounded queue owns it. Handler
-   * completion is reported through `onError` and never blocks the sender turn.
+   * Queues a one-way turn in serial order. Handler completion is reported
+   * through `onError` and never blocks the sender turn.
    */
   async postOneWay(
     operation: () => Promise<unknown> | unknown,
     onError: (error: unknown) => void,
     workOptions: ZLinkSerialWorkOptions = {},
     admission: {
-      readonly timeoutMs?: number;
       readonly signal?: AbortSignal;
     } = {}
   ): Promise<void> {
@@ -131,25 +133,24 @@ export class ZLinkSpotSerialExecutor {
     let barrierClaim: ZLinkExecutionBarrierClaim | undefined;
     try {
       barrierClaim = await this.executionBarrier?.enter();
-      await this.scheduler.waitAndSubmitDetached(
-        operation,
-        onError,
-        {
-          ...workOptions,
-          lane: workOptions.lane ?? 'application'
-        },
-        barrierClaim,
-        {
-          timeoutMs: admission.timeoutMs ?? 1_000,
-          signal: admission.signal,
-          timeoutError: () => createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-            'Spot one-way admission timed out while waiting for execution queue capacity.',
-            true
-          ),
-          abortError: createAbortError
-        }
-      );
+      if (admission.signal?.aborted === true) {
+        throw new DOMException('The operation was aborted.', 'AbortError');
+      }
+      const options = {
+        ...workOptions,
+        lane: workOptions.lane ?? 'application'
+      };
+      const boundOperation = bindApplicationJobPermit(operation);
+      const submitted = hasApplicationJobPermit()
+        ? this.scheduler.submitPreAdmitted(boundOperation, options, barrierClaim)
+        : this.scheduler.submit(boundOperation, options, barrierClaim);
+      void submitted.catch(error => {
+        barrierClaim?.release();
+        onError(error);
+      });
+      // Let an empty owner queue begin its terminal handler turn before the
+      // ingress record is allowed to advance to the next owner.
+      await Promise.resolve();
     } catch (error) {
       barrierClaim?.release();
       throw error;
@@ -195,15 +196,27 @@ export class ZLinkSpotSerialExecutor {
     return await this.submitQueuedTurn(operation, workOptions);
   }
 
+  private async enqueueContinuationTurn<T>(
+    operation: () => Promise<T> | T
+  ): Promise<T> {
+    this.lastActivityAtMs = Date.now();
+    await Promise.resolve();
+    return await this.scheduler.submitContinuation(operation);
+  }
+
   private submitQueuedTurn<T>(
     operation: () => Promise<T> | T,
     workOptions: ZLinkSerialWorkOptions,
     barrierClaim?: ZLinkExecutionBarrierClaim
   ): Promise<T> {
-    return this.scheduler.submit(operation, {
+    const options = {
       ...workOptions,
       lane: workOptions.lane ?? 'application'
-    }, barrierClaim);
+    };
+    const boundOperation = bindApplicationJobPermit(operation);
+    return hasApplicationJobPermit()
+      ? this.scheduler.submitPreAdmitted(boundOperation, options, barrierClaim)
+      : this.scheduler.submit(boundOperation, options, barrierClaim);
   }
 
   private runQueuedRecord(record: ZLinkSerialWorkRecord<unknown>): Promise<void> {
@@ -283,7 +296,7 @@ export class ZLinkSpotSerialExecutor {
       return true;
     }
     turn.bindExecutionClaim(resumeClaim);
-    void this.enqueueFrameworkTurn(async () => {
+    void this.enqueueContinuationTurn(async () => {
       this.resumedOwnerTurn = turn;
       try {
         turn.resetSuspension();

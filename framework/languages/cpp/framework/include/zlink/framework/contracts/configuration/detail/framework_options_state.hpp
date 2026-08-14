@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -36,7 +37,15 @@ namespace zlink::framework
 
 class mesh_channel_server_builder_t;
 
-enum class application_hwm_profile_t
+enum class core_hwm_profile_t
+{
+    compact = 0,
+    low_latency = 1,
+    balanced = 2,
+    throughput = 3
+};
+
+enum class application_job_queue_profile_t
 {
     compact = 0,
     low_latency = 1,
@@ -444,10 +453,12 @@ struct framework_options_state_t
     message_metadata_policy_t metadata_policy;
     dispatch_options_t dispatch;
     worker_options_t worker;
-    std::optional<std::uint64_t> application_hwm_bytes;
-    application_hwm_profile_t application_hwm_profile =
-      application_hwm_profile_t::balanced;
-    std::optional<std::uint64_t> process_memory_limit_bytes;
+    std::uint64_t core_hwm_memory_limit_bytes = 0;
+    std::uint64_t core_hwm_budget_bytes = 0;
+    core_hwm_profile_t core_hwm_profile = core_hwm_profile_t::balanced;
+    application_job_queue_profile_t application_job_queue_profile =
+      application_job_queue_profile_t::balanced;
+    std::optional<std::uint32_t> max_queued_application_jobs;
     bool applied = false;
 
     void add_zlink_action (std::function<void (zlink_builder_t &)> action)

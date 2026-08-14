@@ -2,15 +2,14 @@ package systems.zlink.framework.runtime.binding;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.DealerSocket;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestCallback;
 
 final class ZLinkJavaDealerSocket
     implements ZLinkBackendDealerSocket, ZLinkJavaSocketBacked {
@@ -19,7 +18,7 @@ final class ZLinkJavaDealerSocket
 
     ZLinkJavaDealerSocket(DealerSocket socket) {
         this.socket = socket;
-        this.receivePoller = new ZLinkJavaSocketReceivePoller(socket, true);
+        this.receivePoller = new ZLinkJavaSocketReceivePoller(socket);
     }
 
     @Override public Socket nativeSocket() { return socket; }
@@ -33,20 +32,19 @@ final class ZLinkJavaDealerSocket
     }
 
     @Override
-    public synchronized boolean send(List<Message> parts, SendFlags flags) {
+    public synchronized CompletionStage<Void> send(List<Message> parts) {
         synchronized (socket) {
-            return ZLinkJavaSocketSupport.submit(socket.send(), parts, flags);
+            return ZLinkJavaSocketSupport.submit(socket.send(), parts);
         }
     }
 
     @Override
-    public synchronized boolean request(
+    public synchronized CompletionStage<ZLinkBackendReceived> request(
         List<Message> parts,
-        ZLinkBackendRequestCallback callback,
-        SendFlags flags,
         Duration timeout) {
         synchronized (socket) {
-            return ZLinkJavaSocketSupport.submitRequest(socket.request(), parts, callback, flags, timeout);
+            return ZLinkJavaSocketSupport.submitRequest(
+                socket.request(), parts, timeout);
         }
     }
 
@@ -65,7 +63,6 @@ final class ZLinkJavaDealerSocket
     @Override
     public synchronized void close() {
         synchronized (socket) {
-            notifyAdmissionShutdown();
             receivePoller.close();
             socket.close();
         }

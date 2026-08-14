@@ -12,16 +12,15 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
 final class ZLinkChannelReceiveLoops implements AutoCloseable {
     private static final Duration RECEIVE_POLL_TIMEOUT = Duration.ofMillis(250);
     private final BooleanSupplier running;
-    private final ZLinkInboundDispatchBudget inboundDispatchBudget;
+    private final ZLinkApplicationJobQueue applicationJobQueue;
     private final Object capacityLock = new Object();
-    private final AutoCloseable capacityRegistration;
-    private boolean capacitySignal;
     private boolean closed;
     private final ExecutorService executor =
         Executors.newCachedThreadPool(task -> {
@@ -30,17 +29,12 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
             return thread;
         });
 
-    ZLinkChannelReceiveLoops(BooleanSupplier running) {
-        this(running, new ZLinkInboundDispatchBudget(0));
-    }
-
     ZLinkChannelReceiveLoops(
         BooleanSupplier running,
-        ZLinkInboundDispatchBudget inboundDispatchBudget) {
+        ZLinkApplicationJobQueue applicationJobQueue) {
         this.running = running;
-        this.inboundDispatchBudget = inboundDispatchBudget;
-        this.capacityRegistration = inboundDispatchBudget.onCapacityAvailable(
-            this::signalCapacity);
+        this.applicationJobQueue = java.util.Objects.requireNonNull(
+            applicationJobQueue, "applicationJobQueue");
     }
 
     void startRequest(
@@ -55,19 +49,26 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
                 }
                 ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
                 boolean dispatched = false;
-                while (batch.canReceiveNext()
-                    && inboundDispatchBudget.canStartApplicationReceive()) {
-                    ZLinkBackendReceived received = router.recv(
-                        ZLinkBackendRecvMode.DONT_WAIT);
-                    if (received == null) {
+                while (batch.canReceiveNext()) {
+                    ZLinkApplicationJobQueue.Permit permit = reserveBeforeReceive();
+                    if (permit == null) {
                         break;
                     }
-                    batch.record(ZLinkReceiveBatchBudget.bytesOf(
-                        received.parts(),
-                        received.applicationMetadataSize(),
-                        received.acceptedJournalRecordSize()));
-                    dispatch.accept(received);
-                    dispatched = true;
+                    try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+                        ZLinkBackendReceived received = router.recv(
+                            ZLinkBackendRecvMode.DONT_WAIT);
+                        if (received == null) {
+                            break;
+                        }
+                        batch.record(ZLinkReceiveBatchBudget.bytesOf(
+                            received.parts(),
+                            received.applicationMetadataSize(),
+                            received.acceptedJournalRecordSize()));
+                        dispatch.accept(received);
+                        dispatched = true;
+                    } finally {
+                        permit.abandonReservation();
+                    }
                 }
                 return dispatched;
             }
@@ -86,19 +87,26 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
                 }
                 ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
                 boolean dispatched = false;
-                while (batch.canReceiveNext()
-                    && inboundDispatchBudget.canStartApplicationReceive()) {
-                    ZLinkBackendTopicMessage received = subscriber.subscribe(
-                        ZLinkBackendRecvMode.DONT_WAIT);
-                    if (received == null) {
+                while (batch.canReceiveNext()) {
+                    ZLinkApplicationJobQueue.Permit permit = reserveBeforeReceive();
+                    if (permit == null) {
                         break;
                     }
-                    batch.record(ZLinkReceiveBatchBudget.bytesOf(
-                        received.parts(),
-                        received.applicationMetadataSize(),
-                        received.topic().getBytes(StandardCharsets.UTF_8).length));
-                    dispatch.accept(received);
-                    dispatched = true;
+                    try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+                        ZLinkBackendTopicMessage received = subscriber.subscribe(
+                            ZLinkBackendRecvMode.DONT_WAIT);
+                        if (received == null) {
+                            break;
+                        }
+                        batch.record(ZLinkReceiveBatchBudget.bytesOf(
+                            received.parts(),
+                            received.applicationMetadataSize(),
+                            received.topic().getBytes(StandardCharsets.UTF_8).length));
+                        dispatch.accept(received);
+                        dispatched = true;
+                    } finally {
+                        permit.abandonReservation();
+                    }
                 }
                 return dispatched;
             }
@@ -120,21 +128,28 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
                 ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
                 boolean dispatched = false;
                 drainBridge.run();
-                while (batch.canReceiveNext()
-                    && inboundDispatchBudget.canStartApplicationReceive()) {
-                    ZLinkBackendReceived received;
-                    synchronized (socketLock.get()) {
-                        received = router.recv(ZLinkBackendRecvMode.DONT_WAIT);
-                    }
-                    if (received == null) {
+                while (batch.canReceiveNext()) {
+                    ZLinkApplicationJobQueue.Permit permit = reserveBeforeReceive();
+                    if (permit == null) {
                         break;
                     }
-                    batch.record(ZLinkReceiveBatchBudget.bytesOf(
-                        received.parts(),
-                        received.applicationMetadataSize(),
-                        received.acceptedJournalRecordSize()));
-                    dispatch.accept(received);
-                    dispatched = true;
+                    try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+                        ZLinkBackendReceived received;
+                        synchronized (socketLock.get()) {
+                            received = router.recv(ZLinkBackendRecvMode.DONT_WAIT);
+                        }
+                        if (received == null) {
+                            break;
+                        }
+                        batch.record(ZLinkReceiveBatchBudget.bytesOf(
+                            received.parts(),
+                            received.applicationMetadataSize(),
+                            received.acceptedJournalRecordSize()));
+                        dispatch.accept(received);
+                        dispatched = true;
+                    } finally {
+                        permit.abandonReservation();
+                    }
                 }
                 drainBridge.run();
                 return dispatched;
@@ -146,12 +161,7 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
     public void close() {
         synchronized (capacityLock) {
             closed = true;
-            capacitySignal = true;
             capacityLock.notifyAll();
-        }
-        try {
-            capacityRegistration.close();
-        } catch (Exception ignored) {
         }
         executor.shutdownNow();
     }
@@ -176,6 +186,9 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
             while (running.getAsBoolean() && !isClosed()) {
                 try {
                     if (!receiveAndDispatch()) {
+                        if (Thread.currentThread().isInterrupted()) {
+                            return;
+                        }
                         awaitCapacity();
                     }
                 } catch (RuntimeException error) {
@@ -190,36 +203,29 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
         abstract boolean receiveAndDispatch();
     }
 
-    private void signalCapacity() {
-        synchronized (capacityLock) {
-            capacitySignal = true;
-            capacityLock.notifyAll();
-        }
-    }
-
     private void awaitCapacity() {
         synchronized (capacityLock) {
-            while (!closed
-                && running.getAsBoolean()
-                && !inboundDispatchBudget.canStartApplicationReceive()) {
-                if (capacitySignal) {
-                    capacitySignal = false;
-                    continue;
-                }
-                try {
-                    capacityLock.wait();
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-            }
-            capacitySignal = false;
+            // Socket poll timeout handles idle receive without a Framework pause waiter.
         }
     }
 
     private boolean isClosed() {
         synchronized (capacityLock) {
             return closed;
+        }
+    }
+
+    private ZLinkApplicationJobQueue.Permit reserveBeforeReceive() {
+        try {
+            return applicationJobQueue.acquireBlocking();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (java.util.concurrent.CancellationException closedQueue) {
+            if (isClosed()) {
+                return null;
+            }
+            throw closedQueue;
         }
     }
 }

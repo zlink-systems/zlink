@@ -55,10 +55,7 @@ export interface ZLinkActorHandoffPacket {
     readonly bindingGeneration?: string;
     readonly previousAuthorityOwnerGeneration?: string;
     readonly previousOwnerLeaseGeneration?: string;
-    readonly acceptedHighWater?: string;
     readonly relocationSealId?: string;
-    readonly acceptedJournalReference?: string;
-    readonly acceptedJournalChecksumCrc32c?: number;
   };
   readonly fallbackActorRef?: {
     readonly actorId: string;
@@ -629,6 +626,19 @@ export class ZLinkActorHandoffCoordinator {
     }
     handoff.snapshotIndex = snapshotIndex;
     return handoff.pending.slice(0, snapshotIndex + 1).map((entry) => entry.packet);
+  }
+
+  /**
+   * Freezes the post-capture ingress segment immediately before the caller
+   * appends the one-way cutover on the same relocation lane. Records returned
+   * here become part of the transferred prefix and are therefore excluded
+   * from the later Message Follow tail.
+   */
+  takeRelocationRelay(actorId: string): readonly ZLinkActorHandoffPacket[] {
+    const handoff = this.requireActive(actorId);
+    const first = handoff.snapshotIndex + 1;
+    handoff.snapshotIndex = handoff.pending.length - 1;
+    return handoff.pending.slice(first).map(entry => entry.packet);
   }
 
   complete(
@@ -1280,10 +1290,7 @@ export function decodeHandoffPacket(packet: ZLinkActorHandoffPacket): {
             optionalBigInt(packet.remoteBoundSessionTarget.previousAuthorityOwnerGeneration),
           previousOwnerLeaseGeneration:
             optionalBigInt(packet.remoteBoundSessionTarget.previousOwnerLeaseGeneration),
-          acceptedHighWater: optionalBigInt(packet.remoteBoundSessionTarget.acceptedHighWater),
-          relocationSealId: packet.remoteBoundSessionTarget.relocationSealId,
-          acceptedJournalReference: packet.remoteBoundSessionTarget.acceptedJournalReference,
-          acceptedJournalChecksumCrc32c: packet.remoteBoundSessionTarget.acceptedJournalChecksumCrc32c
+          relocationSealId: packet.remoteBoundSessionTarget.relocationSealId
         },
     fallbackActorRef: packet.fallbackActorRef === undefined
       ? undefined
@@ -1371,10 +1378,7 @@ function encodePacket(
             remoteBoundSessionTarget.previousAuthorityOwnerGeneration?.toString(),
           previousOwnerLeaseGeneration:
             remoteBoundSessionTarget.previousOwnerLeaseGeneration?.toString(),
-          acceptedHighWater: remoteBoundSessionTarget.acceptedHighWater?.toString(),
-          relocationSealId: remoteBoundSessionTarget.relocationSealId,
-          acceptedJournalReference: remoteBoundSessionTarget.acceptedJournalReference,
-          acceptedJournalChecksumCrc32c: remoteBoundSessionTarget.acceptedJournalChecksumCrc32c
+          relocationSealId: remoteBoundSessionTarget.relocationSealId
         },
     fallbackActorRef: fallbackActorRef === undefined
       ? undefined

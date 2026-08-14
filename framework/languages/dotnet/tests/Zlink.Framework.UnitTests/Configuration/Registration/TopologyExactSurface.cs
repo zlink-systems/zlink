@@ -10,7 +10,9 @@ public sealed class TopologyExactSurfaceTests
     {
         var frameworkMethods = MethodNames<IZLinkFrameworkOptions>();
         Assert.Contains(nameof(IZLinkFrameworkOptions.ConfigureNetwork), frameworkMethods);
-        Assert.Contains(nameof(IZLinkFrameworkOptions.ConfigureInboundDispatch), frameworkMethods);
+        Assert.Contains(
+            nameof(IZLinkFrameworkOptions.ConfigureInboundDispatch),
+            frameworkMethods);
         Assert.DoesNotContain("ActorTransferTimeout", PropertyNames<IZLinkFrameworkOptions>());
         Assert.DoesNotContain("ActorTransferForwardWindow", PropertyNames<IZLinkFrameworkOptions>());
 

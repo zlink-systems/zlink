@@ -366,46 +366,18 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     ASSERT_NE (stored, nullptr);
     EXPECT_EQ (stored->snapshot.payload, bytes ("restored"));
 
-    relocation_capacity_reserve_request_t relocation;
-    relocation.reservation_id[15] = std::byte{1};
-    relocation.key = actor_key;
-    relocation.expected_store_version = stored->snapshot.store_version;
-    relocation.object_kind = placement_object_kind_t::actor;
-    relocation.stable_type = "player";
-    relocation.source = target;
-    relocation.target = target;
-    relocation.capacity_bundle.actor_slots = 1;
-    const auto relocation_reserved =
-      reopened.reserve_relocation_capacity (relocation).result ().value ();
-    const auto *relocation_fence =
-      std::get_if<relocation_capacity_reserved_t> (&relocation_reserved);
-    ASSERT_NE (relocation_fence, nullptr);
-    nodes = reopened.list_mesh_nodes ("play").result ().value ();
-    EXPECT_EQ (nodes.items.front ().capacity.actors.reserved, 1u);
-    EXPECT_EQ (reopened.abort_relocation_capacity (relocation_fence->fence).result ().value (),
-               relocation_capacity_abort_result_t::aborted);
-    nodes = reopened.list_mesh_nodes ("play").result ().value ();
-    EXPECT_EQ (nodes.items.front ().capacity.actors.reserved, 0u);
-
-    relocation.reservation_id[15] = std::byte{2};
-    const auto relocation_commit_reservation =
-      reopened.reserve_relocation_capacity (relocation).result ().value ();
-    const auto *commit_fence =
-      std::get_if<relocation_capacity_reserved_t> (&relocation_commit_reservation);
-    ASSERT_NE (commit_fence, nullptr);
     const auto moved =
       reopened
         .compare_exchange_authority (actor_key, stored->snapshot.store_version,
-                                     authority_put_t{bytes ("moved"),
-                                                     authority_generation_transition_t::new_owner,
-                                                     claimed->token, commit_fence->fence})
+                                     authority_retarget_t{bytes ("moved"), target})
         .result ()
         .value ();
     const auto *moved_authority = std::get_if<authority_stored_t> (&moved);
     ASSERT_NE (moved_authority, nullptr);
     EXPECT_EQ (moved_authority->snapshot.payload, bytes ("moved"));
-    EXPECT_EQ (reopened.abort_relocation_capacity (commit_fence->fence).result ().value (),
-               relocation_capacity_abort_result_t::already_committed);
+    nodes = reopened.list_mesh_nodes ("play").result ().value ();
+    EXPECT_EQ (nodes.items.front ().capacity.actors.reserved, 0u);
+    EXPECT_EQ (nodes.items.front ().capacity.actors.active, 1u);
 
     object_reserve_request_t spot_request;
     spot_request.key = {placement_object_kind_t::user_spot, "spot-1"};
@@ -465,49 +437,16 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
       std::get<authority_snapshot_t> (reopened.read_authority (actor_key).result ().value ());
     const auto current_spot =
       std::get<authority_snapshot_t> (reopened.read_authority (spot_key).result ().value ());
-    const auto reserve_move = [&] (std::byte id,
-                                   std::string key,
-                                   placement_object_kind_t kind,
-                                   std::string stable_type,
-                                   placement_capacity_bundle_t capacity,
-                                   std::string expected_store_version) {
-        relocation_capacity_reserve_request_t request;
-        request.reservation_id[15] = id;
-        request.key = {std::move (key)};
-        request.expected_store_version = std::move (expected_store_version);
-        request.object_kind = kind;
-        request.stable_type = std::move (stable_type);
-        request.source = target;
-        request.target = target;
-        request.capacity_bundle = std::move (capacity);
-        const auto result = reopened.reserve_relocation_capacity (request).result ().value ();
-        const auto *reserved = std::get_if<relocation_capacity_reserved_t> (&result);
-        EXPECT_NE (reserved, nullptr);
-        return reserved ? reserved->fence : relocation_capacity_fence_t{};
-    };
-    placement_capacity_bundle_t actor_capacity;
-    actor_capacity.actor_slots = 1;
-    const auto actor_fence = reserve_move (std::byte{3}, actor_key.value,
-                                           placement_object_kind_t::actor, "player",
-                                           actor_capacity, current_actor.store_version);
-    placement_capacity_bundle_t spot_capacity;
-    spot_capacity.spot_slots = 1;
-    spot_capacity.spot_type =
-      spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1};
-    const auto spot_fence = reserve_move (std::byte{4}, spot_key.value,
-                                          placement_object_kind_t::user_spot, "room",
-                                          spot_capacity, current_spot.store_version);
-
     aggregate_prepare_request_t fenced_aggregate;
     fenced_aggregate.aggregate_id.value[15] = std::byte{3};
     fenced_aggregate.aggregate_generation = 1;
     fenced_aggregate.participants = {
       {actor_key, current_actor.store_version,
        authority_generation_transition_t::new_owner, bytes ("fenced-actor"),
-       {}, actor_fence},
+       {}},
       {spot_key, current_spot.store_version,
        authority_generation_transition_t::new_owner, bytes ("fenced-spot"),
-       {}, spot_fence}};
+       {}}};
     fenced_aggregate.inventory_digest = {};
     fenced_aggregate.target_descriptor = {descriptor.mesh_name, descriptor.rid};
     fenced_aggregate.target_descriptor_lifecycle_generation = 1;
@@ -516,7 +455,6 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     fenced_aggregate.capacity_bundle.spot_type =
       spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1};
     fenced_aggregate.target_owner = claimed->token;
-    fenced_aggregate.capacity_fences = {actor_fence, spot_fence};
     auto unsupported_membership = fenced_aggregate;
     unsupported_membership.aggregate_id.value[14] = std::byte{0x33};
     unsupported_membership.participants.front ().membership_mutation = {
@@ -531,10 +469,6 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     EXPECT_EQ (nodes.items.front ().capacity.spots.reserved, 1u);
     EXPECT_EQ (reopened.commit_aggregate (fenced->fence).result ().value (),
                aggregate_commit_result_t::committed);
-    EXPECT_EQ (reopened.abort_relocation_capacity (actor_fence).result ().value (),
-               relocation_capacity_abort_result_t::already_committed);
-    EXPECT_EQ (reopened.abort_relocation_capacity (spot_fence).result ().value (),
-               relocation_capacity_abort_result_t::already_committed);
     nodes = reopened.list_mesh_nodes ("play").result ().value ();
     EXPECT_EQ (nodes.items.front ().capacity.actors.reserved, 0u);
     EXPECT_EQ (nodes.items.front ().capacity.spots.reserved, 0u);
@@ -543,30 +477,17 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
       reopened.read_authority (actor_key).result ().value ());
     const auto abort_spot = std::get<authority_snapshot_t> (
       reopened.read_authority (spot_key).result ().value ());
-    const auto abort_actor_fence = reserve_move (std::byte{5}, actor_key.value,
-                                                 placement_object_kind_t::actor, "player",
-                                                 actor_capacity, abort_actor.store_version);
-    const auto abort_spot_fence = reserve_move (std::byte{6}, spot_key.value,
-                                                placement_object_kind_t::user_spot, "room",
-                                                spot_capacity, abort_spot.store_version);
     aggregate_prepare_request_t abort_aggregate = fenced_aggregate;
     abort_aggregate.aggregate_id.value[15] = std::byte{4};
     abort_aggregate.participants[0].expected_store_version = abort_actor.store_version;
     abort_aggregate.participants[0].authority_payload = bytes ("abort-actor");
-    abort_aggregate.participants[0].capacity_fence = abort_actor_fence;
     abort_aggregate.participants[1].expected_store_version = abort_spot.store_version;
     abort_aggregate.participants[1].authority_payload = bytes ("abort-spot");
-    abort_aggregate.participants[1].capacity_fence = abort_spot_fence;
-    abort_aggregate.capacity_fences = {abort_actor_fence, abort_spot_fence};
     const auto abort_prepared = reopened.prepare_aggregate (abort_aggregate).result ().value ();
     const auto *abort_fence = std::get_if<aggregate_prepared_t> (&abort_prepared);
     ASSERT_NE (abort_fence, nullptr);
     EXPECT_EQ (reopened.abort_aggregate (abort_fence->fence).result ().value (),
                aggregate_abort_result_t::aborted);
-    EXPECT_EQ (reopened.abort_relocation_capacity (abort_actor_fence).result ().value (),
-               relocation_capacity_abort_result_t::already_aborted);
-    EXPECT_EQ (reopened.abort_relocation_capacity (abort_spot_fence).result ().value (),
-               relocation_capacity_abort_result_t::already_aborted);
     nodes = reopened.list_mesh_nodes ("play").result ().value ();
     EXPECT_EQ (nodes.items.front ().capacity.actors.reserved, 0u);
     EXPECT_EQ (nodes.items.front ().capacity.spots.reserved, 0u);

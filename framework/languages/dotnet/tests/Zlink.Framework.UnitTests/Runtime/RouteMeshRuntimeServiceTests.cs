@@ -611,7 +611,6 @@ public sealed class RouteMeshRuntimeServiceTests
             var services = new ServiceCollection();
             services.AddZLinkFramework(options =>
             {
-                options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
                 options.UseTestLocationStore();
                 var node = options.AddRouteMesh(MeshName)
                     .Listen(listenEndpoint)
@@ -638,7 +637,6 @@ public sealed class RouteMeshRuntimeServiceTests
             var services = new ServiceCollection();
             services.AddZLinkFramework(options =>
             {
-                options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
                 options.UseTestLocationStore();
                 var node = options.AddRouteMesh(MeshName)
                     .Listen(listenEndpoint);

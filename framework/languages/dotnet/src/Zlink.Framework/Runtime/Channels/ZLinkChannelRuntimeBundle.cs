@@ -15,7 +15,6 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         IAsyncDisposable socket,
         Action<string>? connect = null,
         Action<string>? disconnect = null,
-        ZLinkAsyncSubmitter? submitter = null,
         RoutingId localRid = default,
         string? socketRole = null,
         ZLinkClientServerServerIdentity? clientServerServer = null,
@@ -24,7 +23,6 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         Socket = socket;
         _connect = connect;
         _disconnect = disconnect;
-        Submitter = submitter;
         LocalRid = localRid.Size > 0 ? localRid.ToString() : null;
         SocketRole = socketRole;
         ClientServerServer = clientServerServer;
@@ -32,8 +30,6 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
     }
 
     public IAsyncDisposable Socket { get; }
-
-    public ZLinkAsyncSubmitter? Submitter { get; }
 
     public string? LocalRid { get; }
 
@@ -68,9 +64,6 @@ internal sealed class ZLinkChannelRuntimeBundle : IAsyncDisposable
         await started.ConfigureAwait(false);
         var failures = new ZLinkFailureCollector();
         failures.Capture(DetachManualConnections);
-        if (Submitter is not null)
-            await failures.CaptureAsync(Submitter.DisposeAsync).ConfigureAwait(false);
-
         await _connectionGate.WaitAsync().ConfigureAwait(false);
         try
         {

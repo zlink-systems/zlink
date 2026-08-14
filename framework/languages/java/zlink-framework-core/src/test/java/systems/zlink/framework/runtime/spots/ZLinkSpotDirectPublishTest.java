@@ -1,6 +1,4 @@
 package systems.zlink.framework.runtime.spots;
-import systems.zlink.contracts.core.RoutingId;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -17,7 +15,6 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.messaging.Message;
 
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
-import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
@@ -35,9 +32,9 @@ final class ZLinkSpotDirectPublishTest {
                 case "admissionSource" -> ignored;
                 case "admissionTimeout" -> Duration.ofSeconds(1);
                 case "admissionPendingCapacity" -> 8;
-                case "publish" -> {
+                case "publishAsync" -> {
                     publishCalls.incrementAndGet();
-                    yield true;
+                    yield CompletableFuture.completedFuture(null);
                 }
                 case "close", "setAdmissionReadyHandler",
                     "setAdmissionShutdownHandler" -> null;
@@ -74,14 +71,14 @@ final class ZLinkSpotDirectPublishTest {
     }
 
     @Test
-    void publicSpotSendCannotCompletePendingAdmission() {
+    void publicSpotPublishCannotCompleteBindingAdmission() {
         CompletableFuture<Void> admission = new CompletableFuture<>();
-        ZLinkOneWayCalls oneWayCalls = new ZLinkOneWayCalls(
-            (backend, key) -> (submission, cleanup) -> admission);
         ZLinkBackendSpot spot = (ZLinkBackendSpot) Proxy.newProxyInstance(
             ZLinkBackendSpot.class.getClassLoader(),
             new Class<?>[] {ZLinkBackendSpot.class},
-            (ignored, method, arguments) -> defaultValue(method.getReturnType()));
+            (ignored, method, arguments) -> method.getName().equals("publishAsync")
+                ? admission
+                : defaultValue(method.getReturnType()));
         var options = new ZLinkDispatchOptionsRegistration();
         options.messageFlow(
             systems.zlink.framework.configuration
@@ -92,16 +89,14 @@ final class ZLinkSpotDirectPublishTest {
             new ZLinkMessageFlowTracer(
                 options,
                 ZLinkHandlerActivator.reflection(),
-                Runnable::run),
-            oneWayCalls);
+                Runnable::run));
 
         try (Message payload = Message.from(
                 "payload".getBytes(StandardCharsets.UTF_8))) {
-            var publicStage = outbound.send(
+            var publicStage = outbound.publish(
                     spot,
-                    RoutingId.from("node"),
-                    "spot",
-                    1L,
+                    "events",
+                    "orders",
                     payload,
                     Optional.empty())
                 .submit()
@@ -113,6 +108,43 @@ final class ZLinkSpotDirectPublishTest {
 
             admission.complete(null);
             assertTrue(admission.isDone());
+        }
+    }
+
+    @Test
+    void publicSpotPublishCancellationReachesBindingAdmission() {
+        CompletableFuture<Void> admission = new CompletableFuture<>();
+        ZLinkBackendSpot spot = (ZLinkBackendSpot) Proxy.newProxyInstance(
+            ZLinkBackendSpot.class.getClassLoader(),
+            new Class<?>[] {ZLinkBackendSpot.class},
+            (ignored, method, arguments) -> method.getName().equals("publishAsync")
+                ? admission
+                : defaultValue(method.getReturnType()));
+        var options = new ZLinkDispatchOptionsRegistration();
+        options.messageFlow(
+            systems.zlink.framework.configuration
+                .ZLinkMessageFlowLogMode.OFF);
+        var outbound = new ZLinkSpotDirectOutbound(
+            new ZLinkSpotRouteMessages(new ZLinkStringMessageSerializer()),
+            Runnable::run,
+            new ZLinkMessageFlowTracer(
+                options,
+                ZLinkHandlerActivator.reflection(),
+                Runnable::run));
+
+        try (Message payload = Message.from(
+                "payload".getBytes(StandardCharsets.UTF_8))) {
+            var publicStage = outbound.publish(
+                    spot,
+                    "events",
+                    "orders",
+                    payload,
+                    Optional.empty())
+                .submit()
+                .toCompletableFuture();
+
+            assertTrue(publicStage.cancel(false));
+            assertTrue(admission.isCancelled());
         }
     }
 

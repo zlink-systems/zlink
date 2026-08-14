@@ -48,7 +48,8 @@ class client_server_location_runtime_t final : public client_server_runtime_t
       serializer_registry_t &serializers,
       const handler_registry_t &handlers,
       std::map<std::string, std::string> advertise_hosts = {},
-      std::shared_ptr<listener_status_registry_t> listener_statuses = {});
+      std::shared_ptr<listener_status_registry_t> listener_statuses = {},
+      std::shared_ptr<application_job_queue_t> application_jobs = {});
     ~client_server_location_runtime_t () noexcept;
 
     client_server_location_runtime_t (
@@ -78,6 +79,8 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     struct server_entry_t;
     struct client_connection_t;
     struct client_channel_t;
+    struct pump_task_state_t;
+    struct ready_waiter_t;
 
     void start_server (
       const channel_snapshot_t &channel,
@@ -90,24 +93,31 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     void pump ();
     void refresh_client_pump_snapshot ();
     void publish_snapshot_changes ();
-    void dispatch_server (server_entry_t &server);
+    task_t<void> dispatch_server (
+      std::shared_ptr<raw_client_server_server_t> owner);
     void stop_servers () noexcept;
     void stop_clients () noexcept;
 
-    result_t<void> send (const std::string &channel_name,
-                         std::string packet_name,
-                         std::string content_type,
-                         zlink::message_t message,
-                         std::chrono::milliseconds timeout);
-    result_t<zlink::message_t>
+    task_t<void> send (const std::string &channel_name,
+                       std::string packet_name,
+                       std::string content_type,
+                       zlink::message_t message,
+                       std::chrono::milliseconds timeout);
+    task_t<zlink::message_t>
     request (const std::string &channel_name,
              std::string packet_name,
              std::string content_type,
              zlink::message_t message,
              std::chrono::milliseconds timeout);
-    result_t<std::shared_ptr<raw_client_server_client_t>>
+    task_t<std::shared_ptr<raw_client_server_client_t>>
     select_ready (const std::string &channel_name,
                   std::chrono::steady_clock::time_point deadline);
+    result_t<std::shared_ptr<raw_client_server_client_t>>
+    select_ready_locked (const std::string &channel_name);
+    void complete_ready_waiters (
+      std::chrono::steady_clock::time_point now);
+    std::optional<std::chrono::steady_clock::time_point>
+    next_ready_waiter_deadline () const;
 
     static std::uint64_t make_lifecycle_generation ();
     static std::uint32_t effective_max_message_bytes (
@@ -139,10 +149,11 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     service_provider_t _services;
     serializer_registry_t *_serializers;
     const handler_registry_t *_handlers;
+    std::shared_ptr<application_job_queue_t> _application_jobs;
+    std::unique_ptr<application_supply_slot_t> _application_supply;
     std::map<std::string, std::string> _advertise_hosts;
     std::shared_ptr<listener_status_registry_t> _listener_statuses;
     mutable std::mutex _gate;
-    std::condition_variable _ready;
     std::map<std::string, std::unique_ptr<server_entry_t>> _servers;
     std::map<std::string, std::unique_ptr<client_channel_t>> _clients;
     std::map<std::string, std::uint64_t> _snapshot_sequences;
@@ -151,9 +162,11 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     std::size_t _server_pump_cursor = 0;
     std::size_t _client_pump_cursor = 0;
     std::vector<server_entry_t *> _server_pump_snapshot;
-    std::vector<std::shared_ptr<raw_client_server_client_t>> _client_pump_snapshot;
+    std::vector<client_connection_t *> _client_pump_snapshot;
+    std::vector<std::unique_ptr<ready_waiter_t>> _ready_waiters;
     std::unique_ptr<zlink::poller_t> _transport_poller;
-    eventing::runtime_wake_timer_t _wake_timer;
+    std::shared_ptr<eventing::runtime_wake_timer_t> _wake_timer =
+      std::make_shared<eventing::runtime_wake_timer_t> ();
     std::atomic_bool _stop{false};
     std::mutex _descriptor_publish_mutex;
     std::condition_variable _descriptor_publish_changed;

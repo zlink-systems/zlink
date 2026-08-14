@@ -30,11 +30,19 @@ constexpr std::size_t max_application_state_bytes = 64u * 1024u * 1024u;
 constexpr std::uint32_t max_pending_records = 4096;
 constexpr std::uint32_t max_logical_timers = 4096;
 
-struct replay_ack_effect_progress_t
+protocol::relocation_object_kind_t to_wire_object_kind (
+  object_kind_t kind)
 {
-    std::uint64_t acknowledged = 0;
-    std::uint64_t acknowledged_records = 0;
-};
+    switch (kind) {
+        case object_kind_t::actor:
+            return protocol::relocation_object_kind_t::actor;
+        case object_kind_t::user_spot:
+            return protocol::relocation_object_kind_t::user_spot;
+        case object_kind_t::instance_spot:
+            return protocol::relocation_object_kind_t::instance_spot;
+    }
+    throw std::invalid_argument ("invalid stateful object kind");
+}
 
 void append_u32 (std::vector<std::uint8_t> &output, std::uint32_t value)
 {
@@ -162,9 +170,8 @@ std::vector<std::uint8_t> encode_recoverable_payload (
         || context.coordinator.expected_authority_store_version.empty ()
         || context.target_node_routing_id.empty ()
         || context.target_node_generation == 0
-        || context.participant_ids.empty ()
-        || context.participant_ids.size () > std::numeric_limits<std::uint32_t>::max ()
-        || records.size () > max_pending_records) {
+        || records.size () > max_pending_records
+        || context.session_routes.size () > max_pending_records) {
         return {};
     }
 
@@ -189,19 +196,36 @@ std::vector<std::uint8_t> encode_recoverable_payload (
         return {};
     append_u64 (output, context.target_node_generation);
     append_u32 (
-      output,
-      static_cast<std::uint32_t> (context.participant_ids.size ()));
-    for (const auto participant : context.participant_ids) {
-        if (participant == 0)
-            return {};
-        append_u64 (output, participant);
-    }
-    append_u32 (
       output, static_cast<std::uint32_t> (records.size ()));
     for (const auto &record : records) {
         std::vector<std::uint8_t> encoded;
         try {
             encoded = protocol::encode_relocation_control (record);
+        }
+        catch (...) {
+            return {};
+        }
+        if (!append_bytes (output, encoded))
+            return {};
+    }
+    append_u32 (
+      output,
+      static_cast<std::uint32_t> (context.session_routes.size ()));
+    for (const auto &route : context.session_routes) {
+        if (route.relocation != context.relocation
+            || route.coordinator != context.coordinator
+            || route.sender_role != protocol::relocation_role_t::target
+            || route.route.action
+                 != protocol::session_relocation_route_action_t::commit
+            || route.route.target_node_routing_id
+                 != context.target_node_routing_id
+            || route.route.target_node_generation
+                 != context.target_node_generation) {
+            return {};
+        }
+        std::vector<std::uint8_t> encoded;
+        try {
+            encoded = protocol::encode_session_relocation_route (route);
         }
         catch (...) {
             return {};
@@ -243,7 +267,6 @@ try
     const auto authority_version = reader.text ();
     auto target_node = reader.bytes (255);
     const auto target_generation = reader.u64 ();
-    const auto participant_count = reader.u32 ();
     if (!state || !relocation_high || !relocation_low
         || (*relocation_high == 0 && *relocation_low == 0)
         || !attempt || *attempt == 0 || !coordinator_owner
@@ -253,10 +276,7 @@ try
         || *coordinator_generation == 0 || !authority_version
         || authority_version->empty () || !target_node
         || target_node->empty () || !target_generation
-        || *target_generation == 0 || !participant_count
-        || *participant_count == 0
-        || reader.remaining ()
-             < static_cast<std::size_t> (*participant_count) * 8u + 4u) {
+        || *target_generation == 0 || reader.remaining () < 4u) {
         return std::nullopt;
     }
 
@@ -271,13 +291,6 @@ try
       std::move (*authority_version)};
     persisted.context.target_node_routing_id = std::move (*target_node);
     persisted.context.target_node_generation = *target_generation;
-    persisted.context.participant_ids.reserve (*participant_count);
-    for (std::uint32_t index = 0; index != *participant_count; ++index) {
-        const auto participant = reader.u64 ();
-        if (!participant || *participant == 0)
-            return std::nullopt;
-        persisted.context.participant_ids.push_back (*participant);
-    }
     const auto record_count = reader.u32 ();
     if (!record_count || *record_count > max_pending_records
         || reader.remaining ()
@@ -302,8 +315,37 @@ try
         }
         persisted.records.push_back (*record);
     }
-    if (!reader.done ())
-        return std::nullopt;
+    if (!reader.done ()) {
+        const auto route_count = reader.u32 ();
+        if (!route_count || *route_count > max_pending_records
+            || reader.remaining ()
+                 < static_cast<std::size_t> (*route_count) * 4u) {
+            return std::nullopt;
+        }
+        persisted.context.session_routes.reserve (*route_count);
+        for (std::uint32_t index = 0; index != *route_count; ++index) {
+            const auto encoded = reader.bytes ();
+            if (!encoded)
+                return std::nullopt;
+            const auto route =
+              protocol::decode_session_relocation_route (*encoded);
+            if (route.relocation != persisted.context.relocation
+                || route.coordinator != persisted.context.coordinator
+                || route.sender_role
+                     != protocol::relocation_role_t::target
+                || route.route.action
+                     != protocol::session_relocation_route_action_t::commit
+                || route.route.target_node_routing_id
+                     != persisted.context.target_node_routing_id
+                || route.route.target_node_generation
+                     != persisted.context.target_node_generation) {
+                return std::nullopt;
+            }
+            persisted.context.session_routes.push_back (route);
+        }
+        if (!reader.done ())
+            return std::nullopt;
+    }
     return recoverable_payload_t{
       std::move (*state), std::move (persisted)};
 }
@@ -447,6 +489,26 @@ decode_session_journal (const std::vector<std::uint8_t> &payload)
 }
 
 } // namespace
+
+struct maintenance_runtime_t::relocation_terminal_state_t
+{
+    object_ref_t source;
+    std::string target_node_id;
+    location_owner_token_t target_owner;
+    std::size_t encoded_upper_bound = 0;
+    inventory_digest_t inventory_digest{};
+    eligible_relocation_unit_t::canonical_wire_context_t context;
+    std::stop_token cancellation;
+    std::shared_ptr<permit_t> permit;
+    aggregate_relocation_seal_attempt_t seal_attempt;
+    std::vector<std::uint8_t> payload;
+    relocation_stored_t stored;
+    std::optional<target_only_cas_t> handoff;
+    relocation_ingress_batch_t batch;
+    relocation_reason_t failure = relocation_reason_t::restore_failed;
+    std::optional<std::vector<protocol::relocation_data_t>> records;
+    std::optional<relocation_result_t> result;
+};
 
 durable_join_completion_store_t::durable_join_completion_store_t (
   std::shared_ptr<relocation_store_port_t> store) :
@@ -602,8 +664,7 @@ maintenance_runtime_t::maintenance_runtime_t (
         || _limits.outbound_units == 0
         || _limits.inbound_units == 0
         || _limits.capture_callbacks == 0
-        || _limits.restore_callbacks == 0
-        || _limits.payload_bytes == 0) {
+        || _limits.restore_callbacks == 0) {
         throw std::invalid_argument ("maintenance runtime configuration is invalid");
     }
 }
@@ -630,14 +691,14 @@ void maintenance_runtime_t::attach_relocation_wire (
 }
 
 std::optional<std::vector<protocol::relocation_data_t>>
-maintenance_runtime_t::build_replay_records (
+maintenance_runtime_t::build_boundary_records (
   const std::vector<frozen_object_state_t> &participants,
   const eligible_relocation_unit_t::canonical_wire_context_t &context,
+  const relocation_ingress_batch_t &batch,
   relocation_reason_t &failure_reason) const
 {
     failure_reason = relocation_reason_t::restore_failed;
-    if (!_relocation_wire
-        || (context.relocation.high == 0 && context.relocation.low == 0)
+    if ((context.relocation.high == 0 && context.relocation.low == 0)
         || context.target_attempt_generation == 0
         || context.coordinator.owner_id.empty ()
         || context.coordinator.lease_generation == 0
@@ -646,568 +707,366 @@ maintenance_runtime_t::build_replay_records (
         || context.coordinator.expected_authority_store_version.empty ()
         || context.target_node_routing_id.empty ()
         || context.target_node_generation == 0
-        || context.participant_ids.size () != participants.size ()
-        || !context.prepare_target || !context.acknowledged
-        || !context.abort_target)
+        || !context.prepare_target || !context.send_relocation_data
+        || !context.send_cutover || !context.abort_target_before_cutover)
         return std::nullopt;
 
-    std::vector<protocol::relocation_data_t> result;
-    for (std::size_t index = 0; index != participants.size (); ++index) {
-        const auto &participant = participants[index];
-        const auto participant_id = context.participant_ids[index];
-        if (participant_id == 0)
-            return std::nullopt;
-        std::uint64_t sequence = 0;
-        for (const auto &pending : participant.pending_application) {
-            if (pending.application_record
-                && pending.application_record->source_kind
-                     == protocol::frozen_source_kind_t::bound_session
-                && (!pending.application_record->source_session_routing_id
-                    || pending.application_record->source_session_routing_id
-                         ->empty ()
-                    || pending.application_record->source_binding_generation
-                         == 0
-                    || pending.application_record->source_session_sequence
-                         == 0
-                    || !pending.application_record->source_actor
-                    || pending.application_record->source_actor->second
-                         == 0)) {
-                // Fail-closed backstop for a captured record that claims a
-                // bound-session source without its exact fence. Ingest
-                // rejects this condition pre-Captured; if a record still
-                // reaches capture, surface the distinct reason instead of
-                // failing the batch silently.
-                failure_reason =
-                  relocation_reason_t::bound_session_fence_incomplete;
+    std::vector<protocol::relocation_data_t> records;
+    try {
+        for (const auto &batch_participant : batch.participants) {
+            const auto frozen = std::find_if (
+              participants.begin (), participants.end (),
+              [&] (const frozen_object_state_t &candidate) {
+                  return candidate.owner == batch_participant.owner;
+              });
+            if (frozen == participants.end ())
                 return std::nullopt;
-            }
-            protocol::frozen_record_t frozen;
-            try {
-                if (pending.application_record) {
-                    // Normal application records retain typed input in the
-                    // mailbox. Encode the canonical relocation record only at
-                    // this relocation boundary.
-                    frozen = protocol::encode_frozen_application_record (
-                      *pending.application_record);
+            const protocol::relocation_object_t object{
+              to_wire_object_kind (frozen->owner.kind),
+              frozen->stable_type, frozen->owner.key,
+              frozen->owner.object_generation,
+              frozen->owner.authority_owner_generation};
+            for (const auto &turn : batch_participant.records) {
+                if (!turn.application_record)
+                    return std::nullopt;
+                const auto &input = *turn.application_record;
+                protocol::frozen_record_t record{
+                  .kind = input.kind,
+                  .source_kind = input.source_kind,
+                  .source = input.source,
+                  .source_spot_id = input.source_spot_id,
+                  .source_actor = input.source_actor,
+                  .source_session_routing_id = input.source_session_routing_id,
+                  .source_binding_generation = input.source_binding_generation,
+                  .source_session_sequence = input.source_session_sequence,
+                  .has_metadata = !input.metadata.empty (),
+                  .operation = input.operation,
+                  .operation_kind = input.operation_kind,
+                  .reply_route_id = input.reply_route_id};
+                if (const auto *spot = std::get_if<
+                      protocol::frozen_spot_application_body_t> (&input.body)) {
+                    record.target = protocol::frozen_target_identity_t{
+                      to_wire_object_kind (object_kind_t::user_spot),
+                      spot->target.spot_id, spot->target.object_generation,
+                      spot->target.target_node_routing_id,
+                      spot->target.target_node_generation,
+                      spot->target.authority_owner_generation,
+                      spot->expected_owner_lease_generation};
+                    record.application = spot->application;
+                } else {
+                    const auto &actor = std::get<
+                      protocol::frozen_actor_application_body_t> (input.body);
+                    record.target = protocol::frozen_target_identity_t{
+                      to_wire_object_kind (object_kind_t::actor),
+                      actor.target.actor_id, actor.target.object_generation,
+                      actor.target.target_node_routing_id,
+                      actor.target.target_node_generation,
+                      actor.target.authority_owner_generation,
+                      actor.target.owner_lease_generation};
+                    record.application = actor.application;
                 }
-                else {
-                    frozen = protocol::decode_frozen_record (pending.payload);
-                }
+                records.push_back ({context.relocation,
+                  context.target_attempt_generation, context.coordinator,
+                  protocol::relocation_role_t::source, object,
+                  std::move (record)});
             }
-            catch (...) {
-                return std::nullopt;
-            }
-            if (!frozen.target
-                || frozen.target->object_id != participant.owner.key
-                || frozen.target->object_generation
-                     != participant.owner.object_generation
-                || frozen.target->authority_owner_generation
-                     != participant.owner.authority_owner_generation
-                || (frozen.source.owner_id.empty ()
-                    || frozen.source.lease_generation == 0
-                    || frozen.source.node_routing_id.empty ()
-                    || frozen.source.node_generation == 0)
-                || (frozen.operation.high == 0 && frozen.operation.low == 0)
-                || ((frozen.kind
-                       == protocol::frozen_record_kind_t::actor_request
-                     || frozen.kind
-                          == protocol::frozen_record_kind_t::spot_request)
-                    && (!frozen.reply_route_id
-                        || *frozen.reply_route_id == 0)))
-                return std::nullopt;
-            if (frozen.source_kind
-                  == protocol::frozen_source_kind_t::bound_session
-                && (!frozen.source_session_routing_id
-                    || frozen.source_session_routing_id->empty ()
-                    || frozen.source_binding_generation == 0
-                    || frozen.source_session_sequence == 0
-                    || !frozen.source_actor
-                    || frozen.source_actor->second == 0)) {
-                // Fail-closed backstop for a frozen record that claims a
-                // bound-session source without its exact fence. Ingest
-                // rejects this condition pre-Captured; if a record still
-                // reaches capture, surface the distinct reason instead of
-                // failing the batch silently.
-                failure_reason =
-                  relocation_reason_t::bound_session_fence_incomplete;
-                return std::nullopt;
-            }
-            protocol::relocation_object_kind_t kind;
-            switch (participant.owner.kind) {
-            case object_kind_t::actor:
-                kind = protocol::relocation_object_kind_t::actor;
-                break;
-            case object_kind_t::user_spot:
-                kind = protocol::relocation_object_kind_t::user_spot;
-                break;
-            case object_kind_t::instance_spot:
-                kind = protocol::relocation_object_kind_t::instance_spot;
-                break;
-            default:
-                return std::nullopt;
-            }
-            result.push_back ({
-              context.relocation,
-              context.target_attempt_generation,
-              context.coordinator,
-              protocol::relocation_role_t::source,
-              participant_id,
-              ++sequence,
-              frozen.source,
-              {kind, participant.stable_type, participant.owner.key,
-               participant.owner.object_generation,
-               participant.owner.authority_owner_generation},
-              protocol::relocation_phase_t::prepared,
-              0,
-              protocol::framework_error_code::none,
-              std::move (frozen)});
         }
     }
-    return result;
+    catch (...) {
+        return std::nullopt;
+    }
+    return records;
 }
 
-bool maintenance_runtime_t::prepare_replay_source (
+task_t<bool> maintenance_runtime_t::prepare_target (
   const eligible_relocation_unit_t::canonical_wire_context_t &context,
   const std::vector<frozen_object_state_t> &participants,
-  const std::vector<protocol::relocation_data_t> &records,
   const relocation_stored_t &stored)
 {
     bool target_prepared = false;
     try {
         target_prepared =
-          context.prepare_target (participants, records, stored);
+          co_await context.prepare_target (participants, stored);
     }
     catch (...) {
         target_prepared = false;
     }
-    if (!target_prepared) {
-        return false;
-    }
-    if (records.empty ())
-        return true;
-
-    std::vector<protocol::wire_operation_id_t> terminal_sources;
-    for (const auto &record : records) {
-        if (!record.frozen_record
-            || !record.frozen_record->reply_route_id)
-            continue;
-        if (!context.complete_source_terminal) {
-            try {
-                context.abort_target ();
-            }
-            catch (...) {
-            }
-            return false;
-        }
-        const auto operation = record.frozen_record->operation;
-        const auto sequence = record.sequence;
-        const auto participant = record.participant_id;
-        if (!_relocation_wire->register_terminal_source ({
-              context.relocation,
-              context.coordinator,
-              operation,
-              record.source,
-              context.target_node_routing_id,
-              context.target_node_generation,
-              context.target_attempt_generation,
-              participant,
-              sequence,
-              *record.frozen_record->reply_route_id,
-              [callback = context.complete_source_terminal,
-               participant,
-               sequence] (
-                const protocol::reply_relay_t &relay,
-                const std::optional<protocol::application_payload_t>
-                  &application_reply) {
-                  return callback (
-                    participant, sequence, relay, application_reply);
-              }})) {
-            for (const auto &registered : terminal_sources) {
-                (void) _relocation_wire->unregister_terminal_source (
-                  context.relocation, registered);
-            }
-            try {
-                context.abort_target ();
-            }
-            catch (...) {
-            }
-            return false;
-        }
-        terminal_sources.push_back (operation);
-    }
-
-    std::map<std::uint64_t, std::vector<protocol::relocation_data_t>> grouped;
-    for (const auto &record : records)
-        grouped[record.participant_id].push_back (record);
-    std::vector<std::uint64_t> registered;
-    for (auto &[participant, participant_records] : grouped) {
-        const auto high_water = participant_records.size ();
-        const auto records_for_ack =
-          std::make_shared<std::vector<protocol::relocation_data_t>> (
-            participant_records);
-        const auto effect_progress =
-          std::make_shared<replay_ack_effect_progress_t> ();
-        if (!_relocation_wire->register_source ({
-              context.relocation,
-              context.target_attempt_generation,
-              context.coordinator,
-              participant,
-              context.target_node_routing_id,
-              context.target_node_generation,
-              high_water,
-              [callback = context.acknowledged,
-               record_callback = context.acknowledged_records,
-               records_for_ack,
-               participant,
-               effect_progress] (std::uint64_t value) {
-                  if (value > effect_progress->acknowledged) {
-                      if (callback)
-                          callback (participant, value);
-                      effect_progress->acknowledged = value;
-                  }
-                  if (record_callback
-                      && value > effect_progress->acknowledged_records) {
-                      record_callback (
-                        participant, *records_for_ack, value);
-                      effect_progress->acknowledged_records = value;
-                  }
-              },
-              std::move (participant_records)})) {
-            for (const auto registered_participant : registered) {
-                (void) _relocation_wire->unregister_source (
-                  context.relocation, context.target_attempt_generation,
-                  registered_participant);
-            }
-            for (const auto &registered_operation : terminal_sources) {
-                (void) _relocation_wire->unregister_terminal_source (
-                  context.relocation, registered_operation);
-            }
-            try {
-                context.abort_target ();
-            }
-            catch (...) {
-            }
-            return false;
-        }
-        registered.push_back (participant);
-    }
-    return true;
+    co_return target_prepared;
 }
 
-bool maintenance_runtime_t::arm_replay_source (
+task_t<bool> maintenance_runtime_t::send_boundary_records (
   const eligible_relocation_unit_t::canonical_wire_context_t &context,
-  const std::vector<protocol::relocation_data_t> &records)
+  const std::vector<protocol::relocation_data_t> &records,
+  const relocation_ingress_batch_t &batch)
 {
-    std::set<std::uint64_t> participants;
-    for (const auto &record : records)
-        participants.insert (record.participant_id);
-    for (const auto participant : participants) {
-        if (!_relocation_wire->arm_source (
-              context.relocation, context.target_attempt_generation,
-              participant))
-            return false;
-    }
-    (void) _relocation_wire->retry_source_replays (
-      raw_relocation_replay_coordinator_t::clock_t::now ());
-    return true;
-}
-
-void maintenance_runtime_t::abort_replay_source (
-  const eligible_relocation_unit_t::canonical_wire_context_t &context,
-  const std::vector<protocol::relocation_data_t> &records) noexcept
-{
-    std::set<std::uint64_t> participants;
-    for (const auto &record : records)
-        participants.insert (record.participant_id);
-    for (const auto participant : participants) {
-        (void) _relocation_wire->unregister_source (
-          context.relocation, context.target_attempt_generation,
-          participant);
-    }
-    std::set<std::pair<std::uint64_t, std::uint64_t>> operations;
-    for (const auto &record : records) {
-        if (!record.frozen_record
-            || !record.frozen_record->reply_route_id)
-            continue;
-        operations.emplace (
-          record.frozen_record->operation.high,
-          record.frozen_record->operation.low);
-    }
-    for (const auto &[high, low] : operations) {
-        (void) _relocation_wire->unregister_terminal_source (
-          context.relocation, {high, low});
-    }
     try {
-        context.abort_target ();
+        co_return co_await context.send_relocation_data (records, batch);
     }
     catch (...) {
+        co_return false;
     }
 }
 
-relocation_result_t maintenance_runtime_t::relocate (
+bool maintenance_runtime_t::abort_target_before_cutover (
+  const eligible_relocation_unit_t::canonical_wire_context_t &context) noexcept
+{
+    try {
+        return context.abort_target_before_cutover ();
+    }
+    catch (...) {
+        return false;
+    }
+}
+
+task_t<relocation_result_t> maintenance_runtime_t::relocate (
   const object_ref_t &source,
   std::string target_node_id,
   location_owner_token_t target_owner,
-  relocation_capacity_fence_t relocation_capacity_fence,
   std::size_t encoded_upper_bound,
   inventory_digest_t inventory_digest,
   const std::optional<eligible_relocation_unit_t::canonical_wire_context_t>
     &canonical_wire,
   std::stop_token cancellation)
 {
-    auto permit = try_acquire (encoded_upper_bound);
-    if (!permit) {
-        return finish (
-          {relocation_terminal_t::blocked,
-           relocation_reason_t::permit_unavailable,
-           std::nullopt});
+    if (!canonical_wire) {
+        return task_t<relocation_result_t> (result_t<relocation_result_t>::success (
+          finish ({relocation_terminal_t::blocked,
+                   relocation_reason_t::restore_failed,
+                   std::nullopt})));
     }
+    auto state = std::make_shared<relocation_terminal_state_t> (
+      relocation_terminal_state_t{
+        source, std::move (target_node_id), std::move (target_owner),
+        encoded_upper_bound, inventory_digest, *canonical_wire, cancellation,
+        std::make_shared<permit_t> (try_acquire ())});
+    if (!*state->permit) {
+        return task_t<relocation_result_t> (result_t<relocation_result_t>::success (
+          finish ({relocation_terminal_t::blocked,
+                   relocation_reason_t::permit_unavailable,
+                   std::nullopt})));
+    }
+    return relocate_terminal (std::move (state));
+}
 
-    auto [seal_error, seal] =
-      _objects.try_seal_relocation (source, cancellation);
-    if (seal_error != stateful_error_t::none) {
-        return finish (
+task_t<relocation_result_t> maintenance_runtime_t::relocate_terminal (
+  std::shared_ptr<relocation_terminal_state_t> state)
+{
+    if (!co_await relocate_seal (state))
+        co_return std::move (*state->result);
+    if (!relocate_encode_and_store (state))
+        co_return std::move (*state->result);
+    if (!co_await relocate_prepare_target (state))
+        co_return std::move (*state->result);
+    if (!co_await relocate_boundary_and_send (state))
+        co_return std::move (*state->result);
+    (void) co_await relocate_cutover (state);
+    co_return std::move (*state->result);
+}
+
+task_t<bool> maintenance_runtime_t::capture_relocation_session_routes (
+  eligible_relocation_unit_t::canonical_wire_context_t &context)
+{
+    if (!context.capture_session_routes)
+        co_return true;
+    const auto routes = co_await context.capture_session_routes ();
+    if (!routes)
+        co_return false;
+    context.session_routes = *routes;
+    co_return true;
+}
+
+task_t<bool> maintenance_runtime_t::relocate_seal (
+  std::shared_ptr<relocation_terminal_state_t> state)
+{
+    std::vector<object_ref_t> participants{state->source};
+    std::function<task_t<bool> ()> before_capture = [this, state] {
+        return capture_relocation_session_routes (state->context);
+    };
+    auto seal_task = _objects.try_seal_relocation_aggregate (
+      participants, state->cancellation, before_capture);
+    auto seal_attempt = co_await seal_task;
+    state->seal_attempt = std::move (seal_attempt);
+    if (state->seal_attempt.error != stateful_error_t::none
+        || state->seal_attempt.seal.participants.size () != 1) {
+        state->result.emplace (finish (
           {relocation_terminal_t::blocked,
-           seal_error == stateful_error_t::backpressured
+           state->seal_attempt.error == stateful_error_t::backpressured
              ? relocation_reason_t::turn_active
              : relocation_reason_t::restore_failed,
-           std::nullopt});
+           std::nullopt}));
+        co_return false;
     }
+    co_return true;
+}
 
-    // Failure paths release the target's reserved relocation capacity before
-    // abort_relocation restores the source admission, so reserved space is
-    // never held across the admission restore.
-    const auto abort_capacity = [&] () noexcept {
-        if (_authority)
-            _authority->abort_capacity (relocation_capacity_fence);
-    };
-
-    std::vector<protocol::relocation_data_t> replay_records;
-    if (canonical_wire) {
-        auto replay_failure = relocation_reason_t::restore_failed;
-        const auto built = build_replay_records (
-          {seal.frozen}, *canonical_wire, replay_failure);
-        if (!built) {
-            abort_capacity ();
-            (void) _objects.abort_relocation (seal.token);
-            return finish (
-              {relocation_terminal_t::blocked,
-               replay_failure,
-               std::nullopt});
-        }
-        replay_records = *built;
-    }
-
-    std::vector<std::uint8_t> payload;
+bool maintenance_runtime_t::relocate_encode_and_store (
+  const std::shared_ptr<relocation_terminal_state_t> &state)
+{
     try {
-        payload = encode (seal.frozen, inventory_digest);
-        if (payload.empty () || payload.size () > encoded_upper_bound) {
-            abort_capacity ();
-            (void) _objects.abort_relocation (seal.token);
-            return finish (
+        state->payload = encode (state->seal_attempt.seal.participants.front (),
+                                 state->inventory_digest);
+        state->payload = encode_recoverable_payload (
+          std::move (state->payload), state->context, {});
+        if (state->payload.empty () || state->payload.size () > state->encoded_upper_bound) {
+            (void) _objects.abort_relocation (state->seal_attempt.seal.token);
+            state->result.emplace (finish (
               {relocation_terminal_t::blocked,
                relocation_reason_t::payload_bound_exceeded,
-               std::nullopt});
-        }
-        if (canonical_wire) {
-            payload = encode_recoverable_payload (
-              std::move (payload), *canonical_wire, replay_records);
+               std::nullopt}));
+            return false;
         }
     }
     catch (...) {
-        abort_capacity ();
-        (void) _objects.abort_relocation (seal.token);
-        return finish (
+        (void) _objects.abort_relocation (state->seal_attempt.seal.token);
+        state->result.emplace (finish (
           {relocation_terminal_t::store_failed,
            relocation_reason_t::store_write_failed,
-           std::nullopt});
+           std::nullopt}));
+        return false;
     }
-    if (payload.empty ()) {
-        abort_capacity ();
-        (void) _objects.abort_relocation (seal.token);
-        return finish (
+    if (state->payload.empty ()) {
+        (void) _objects.abort_relocation (state->seal_attempt.seal.token);
+        state->result.emplace (finish (
           {relocation_terminal_t::blocked,
            relocation_reason_t::payload_bound_exceeded,
-           std::nullopt});
+           std::nullopt}));
+        return false;
     }
-    const auto checksum = crc32c (payload);
+    const auto checksum = crc32c (state->payload);
 
-    relocation_stored_t stored;
     try {
-        stored = _relocations->put (payload, relocation_retention);
+        state->stored = _relocations->put (state->payload, relocation_retention);
     }
     catch (...) {
-        abort_capacity ();
-        (void) _objects.abort_relocation (seal.token);
-        return finish (
+        (void) _objects.abort_relocation (state->seal_attempt.seal.token);
+        state->result.emplace (finish (
           {relocation_terminal_t::store_failed,
            relocation_reason_t::store_write_failed,
-           std::nullopt});
+           std::nullopt}));
+        return false;
     }
-    if (stored.reference.empty () || stored.checksum_crc32c != checksum) {
-        if (!stored.reference.empty ()) {
+    if (state->stored.reference.empty () || state->stored.checksum_crc32c != checksum) {
+        if (!state->stored.reference.empty ()) {
             try {
-                _relocations->remove (stored.reference);
+                _relocations->remove (state->stored.reference);
             }
             catch (...) {
             }
         }
-        abort_capacity ();
-        (void) _objects.abort_relocation (seal.token);
-        return finish (
+        (void) _objects.abort_relocation (state->seal_attempt.seal.token);
+        state->result.emplace (finish (
           {relocation_terminal_t::store_failed,
            relocation_reason_t::checksum_mismatch,
-           std::nullopt});
+           std::nullopt}));
+        return false;
     }
+    return true;
+}
 
+task_t<bool> maintenance_runtime_t::relocate_prepare_target (
+  std::shared_ptr<relocation_terminal_state_t> state)
+{
+    state->handoff.emplace (target_only_cas_t{
+      {state->source}, state->target_node_id, state->target_owner,
+      state->inventory_digest, state->stored});
+    auto completion = std::make_shared<detail::task_completion_source_t<bool>> ();
+    auto output = completion->task ();
+    auto prepared = std::make_shared<task_t<bool>> (prepare_target (
+      state->context, {state->seal_attempt.seal.participants.front ()}, state->stored));
+    detail::observe_task_completion (
+      *prepared, [this, state, completion, prepared] (
+                   const result_t<bool> &settled) {
+          if (!settled) {
+              completion->complete (detail::propagate_failure<bool> (
+                settled, "relocation target preparation failed"));
+              return;
+          }
+          if (!settled.value ()) {
+              (void) _objects.abort_relocation_before_cutover (
+                state->seal_attempt.seal.token);
+              state->result.emplace (finish ({relocation_terminal_t::blocked,
+                                      relocation_reason_t::restore_failed,
+                                      std::nullopt}));
+              completion->complete (result_t<bool>::success (false));
+              return;
+          }
+          completion->complete (result_t<bool>::success (true));
+      });
+    return output;
+}
 
-    if (canonical_wire
-        && !prepare_replay_source (
-          *canonical_wire, {seal.frozen}, replay_records, stored)) {
-        try {
-            _relocations->remove (stored.reference);
-        }
-        catch (...) {
-        }
-        abort_capacity ();
-        (void) _objects.abort_relocation (seal.token);
-        return finish (
-          {relocation_terminal_t::blocked,
-           relocation_reason_t::restore_failed,
-           std::nullopt});
+task_t<bool> maintenance_runtime_t::relocate_boundary_and_send (
+  std::shared_ptr<relocation_terminal_state_t> state)
+{
+    const auto boundary =
+      _objects.begin_relocation_boundary (state->seal_attempt.seal.token);
+    const auto boundary_error = boundary.first;
+    state->batch = boundary.second;
+    if (boundary_error != stateful_error_t::none) {
+        (void) abort_target_before_cutover (state->context);
+        (void) _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
+        state->result.emplace (finish ({relocation_terminal_t::blocked,
+                        relocation_reason_t::restore_failed,
+                        std::nullopt}));
+        co_return false;
     }
-    authority_publish_result_t published;
-    bool publish_uncertain = false;
-    try {
-        auto target = source;
-        target.node_id = std::move (target_node_id);
-        ++target.authority_owner_generation;
-        // The fence is passed by copy so a failed publish can still release
-        // the reserved capacity before the source admission is restored.
-        published = _authority->publish (
-          source, target,
-          std::move (target_owner),
-          relocation_capacity_fence,
-          stored.reference,
-          checksum, inventory_digest);
+    state->records = build_boundary_records (
+      {state->seal_attempt.seal.participants.front ()}, state->context,
+      state->batch, state->failure);
+    if (!state->records
+        || !co_await send_boundary_records (
+          state->context, *state->records, state->batch)) {
+        if (abort_target_before_cutover (state->context))
+            (void) _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
+        state->result.emplace (finish ({relocation_terminal_t::recovery_required, state->failure,
+                        std::nullopt,
+                        state->records.value_or (std::vector<protocol::relocation_data_t>{}),
+                        state->handoff}));
+        co_return false;
     }
-    catch (...) {
-        published.status = authority_publish_status_t::failed;
-        publish_uncertain = true;
-    }
-    if (published.status != authority_publish_status_t::published
-        || !published.current) {
-        try {
-            const auto current =
-              _authority->read (source.kind, source.key);
-            if (current
-                && current->source == source
-                && current->relocation_reference == stored.reference
-                && current->checksum_crc32c == checksum
-                && current->inventory_digest == inventory_digest) {
-                published.status = authority_publish_status_t::published;
-                published.current = current;
-                publish_uncertain = false;
-            } else {
-                publish_uncertain = false;
-            }
-        }
-        catch (...) {
-            publish_uncertain = true;
-        }
-    }
-    if (published.status != authority_publish_status_t::published
-        || !published.current) {
-        if (publish_uncertain) {
-            return finish (
-              {relocation_terminal_t::recovery_required,
-               relocation_reason_t::authority_publish_failed,
-               std::nullopt,
-               replay_records});
-        }
-        if (canonical_wire)
-            abort_replay_source (*canonical_wire, replay_records);
-        try {
-            _relocations->remove (stored.reference);
-        }
-        catch (...) {
-        }
-        abort_capacity ();
-        (void) _objects.abort_relocation (seal.token);
-        return finish (
-          {published.status == authority_publish_status_t::conflict
-             ? relocation_terminal_t::conflict
-             : relocation_terminal_t::store_failed,
-           published.status == authority_publish_status_t::conflict
-             ? relocation_reason_t::authority_conflict
-             : relocation_reason_t::authority_publish_failed,
-           published.current});
-    }
+    co_return true;
+}
 
-
-    if (canonical_wire
-        && !arm_replay_source (*canonical_wire, replay_records)) {
-        return finish (
-          {relocation_terminal_t::recovery_required,
-           relocation_reason_t::restore_failed,
-           published.current,
-           replay_records});
+task_t<bool> maintenance_runtime_t::relocate_cutover (
+  std::shared_ptr<relocation_terminal_state_t> state)
+{
+    const protocol::relocation_object_t object{
+      to_wire_object_kind (state->source.kind),
+      state->seal_attempt.seal.participants.front ().stable_type,
+      state->source.key, state->source.object_generation,
+      state->source.authority_owner_generation};
+    const auto cutover = protocol::relocation_cutover_t{
+      state->context.relocation, state->context.target_attempt_generation,
+      state->context.coordinator, protocol::relocation_role_t::source, object};
+    const auto outcome = co_await state->context.send_cutover (cutover);
+    if (outcome == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::not_enqueued) {
+        if (abort_target_before_cutover (state->context))
+            (void) _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
+        state->result.emplace (finish ({relocation_terminal_t::blocked,
+                        relocation_reason_t::restore_failed, std::nullopt,
+                        *state->records, state->handoff}));
+        co_return false;
     }
-    const auto [commit_error, committed] =
-      _objects.commit_relocation (
-        seal.token, published.current->target.node_id);
-    if (commit_error != stateful_error_t::none
-        || committed != published.current->target) {
-        return finish (
-          {relocation_terminal_t::recovery_required,
-           relocation_reason_t::restore_failed,
-           published.current,
-           replay_records});
+    if (_objects.finalize_relocation_cutover (state->seal_attempt.seal.token) != stateful_error_t::none) {
+        state->result.emplace (finish ({relocation_terminal_t::recovery_required,
+                        relocation_reason_t::restore_failed, std::nullopt,
+                        *state->records, state->handoff}));
+        co_return false;
     }
-    if (canonical_wire
-        && (!canonical_wire->complete_target
-            || !canonical_wire->complete_target ())) {
-        return finish (
-          {relocation_terminal_t::recovery_required,
-           relocation_reason_t::restore_failed,
-           published.current,
-           replay_records});
-    }
-    return finish (
-      {relocation_terminal_t::completed,
-       relocation_reason_t::none,
-       published.current,
-       replay_records});
+    state->result.emplace (finish ({outcome == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::enqueued
+                      ? relocation_terminal_t::completed
+                      : relocation_terminal_t::recovery_required,
+                    outcome == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::enqueued
+                      ? relocation_reason_t::none
+                      : relocation_reason_t::restore_failed,
+                    std::nullopt, *state->records, state->handoff}));
+    co_return true;
 }
 
 relocation_result_t maintenance_runtime_t::recover (
   object_kind_t kind,
   const std::string &key,
   stateful_object_runtime_t &target,
-  std::stop_token cancellation)
-{
-    return recover_impl (
-      kind, key, target, nullptr, cancellation);
-}
-
-relocation_result_t maintenance_runtime_t::recover (
-  object_kind_t kind,
-  const std::string &key,
-  stateful_object_runtime_t &target,
-  const eligible_relocation_unit_t::canonical_wire_context_t
-    &recovery_callbacks,
-  std::stop_token cancellation)
-{
-    return recover_impl (
-      kind, key, target, &recovery_callbacks, cancellation);
-}
-
-relocation_result_t maintenance_runtime_t::recover_impl (
-  object_kind_t kind,
-  const std::string &key,
-  stateful_object_runtime_t &target,
-  const eligible_relocation_unit_t::canonical_wire_context_t
-    *recovery_callbacks,
   std::stop_token cancellation)
 {
     std::optional<authority_relocation_reference_t> authority;
@@ -1269,10 +1128,6 @@ relocation_result_t maintenance_runtime_t::recover_impl (
            relocation_reason_t::inventory_mismatch,
            authority});
     }
-    const auto recovery_participant =
-      recoverable && recoverable->wire && recovery_callbacks
-        ? std::make_optional (decoded->first)
-        : std::nullopt;
     stateful_error_t restored = stateful_error_t::conflict;
     try {
         restored = target.restore_relocation (
@@ -1296,37 +1151,8 @@ relocation_result_t maintenance_runtime_t::recover_impl (
            relocation_reason_t::restore_failed,
            authority});
     }
-    if (recoverable && recoverable->wire && recovery_callbacks) {
-        auto context = std::move (recoverable->wire->context);
-        context.prepare_target = recovery_callbacks->prepare_target;
-        context.acknowledged = recovery_callbacks->acknowledged;
-        context.acknowledged_records =
-          recovery_callbacks->acknowledged_records;
-        context.complete_source_terminal =
-          recovery_callbacks->complete_source_terminal;
-        context.complete_target = recovery_callbacks->complete_target;
-        context.abort_target = recovery_callbacks->abort_target;
-        if (!prepare_replay_source (
-              context, {*recovery_participant},
-              recoverable->wire->records,
-              {authority->relocation_reference,
-               authority->checksum_crc32c})
-            || !arm_replay_source (
-              context, recoverable->wire->records)
-            || !context.complete_target
-            || !context.complete_target ()) {
-            return finish (
-              {relocation_terminal_t::recovery_required,
-               relocation_reason_t::restore_failed,
-               authority,
-               recoverable->wire->records});
-        }
-        return finish (
-          {relocation_terminal_t::completed,
-           relocation_reason_t::none,
-           authority,
-           recoverable->wire->records});
-    }
+    // Target restoration owns saved work; recovery does not replay it into
+    // the source relay lane.
     return finish (
       {relocation_terminal_t::recovery_required,
        relocation_reason_t::restore_failed,
@@ -1336,29 +1162,6 @@ relocation_result_t maintenance_runtime_t::recover_impl (
 aggregate_relocation_result_t maintenance_runtime_t::recover_aggregate (
   const std::vector<object_ref_t> &sources,
   stateful_object_runtime_t &target,
-  std::stop_token cancellation)
-{
-    return recover_aggregate_impl (
-      sources, target, nullptr, cancellation);
-}
-
-aggregate_relocation_result_t maintenance_runtime_t::recover_aggregate (
-  const std::vector<object_ref_t> &sources,
-  stateful_object_runtime_t &target,
-  const eligible_relocation_unit_t::canonical_wire_context_t
-    &recovery_callbacks,
-  std::stop_token cancellation)
-{
-    return recover_aggregate_impl (
-      sources, target, &recovery_callbacks, cancellation);
-}
-
-aggregate_relocation_result_t
-maintenance_runtime_t::recover_aggregate_impl (
-  const std::vector<object_ref_t> &sources,
-  stateful_object_runtime_t &target,
-  const eligible_relocation_unit_t::canonical_wire_context_t
-    *recovery_callbacks,
   std::stop_token cancellation)
 {
     if (sources.size () < 2) {
@@ -1509,10 +1312,6 @@ maintenance_runtime_t::recover_aggregate_impl (
           authority};
     }
 
-    const auto recovery_participants =
-      recoverable && recoverable->wire && recovery_callbacks
-        ? std::make_optional (frozen)
-        : std::nullopt;
     stateful_error_t restored = stateful_error_t::conflict;
     try {
         restored = target.restore_relocation_aggregate (
@@ -1535,306 +1334,112 @@ maintenance_runtime_t::recover_aggregate_impl (
           relocation_reason_t::restore_failed,
           authority};
     }
-    if (recoverable && recoverable->wire && recovery_callbacks) {
-        auto context = std::move (recoverable->wire->context);
-        context.prepare_target = recovery_callbacks->prepare_target;
-        context.acknowledged = recovery_callbacks->acknowledged;
-        context.acknowledged_records =
-          recovery_callbacks->acknowledged_records;
-        context.complete_source_terminal =
-          recovery_callbacks->complete_source_terminal;
-        context.complete_target = recovery_callbacks->complete_target;
-        context.abort_target = recovery_callbacks->abort_target;
-        if (!prepare_replay_source (
-              context, *recovery_participants,
-              recoverable->wire->records,
-              {root.relocation_reference, root.checksum_crc32c})
-            || !arm_replay_source (
-              context, recoverable->wire->records)
-            || !context.complete_target
-            || !context.complete_target ()) {
-            return {
-              relocation_terminal_t::recovery_required,
-              relocation_reason_t::restore_failed,
-              authority,
-              recoverable->wire->records};
-        }
-        return {
-          relocation_terminal_t::completed,
-          relocation_reason_t::none,
-          authority,
-          recoverable->wire->records};
-    }
     return {
       relocation_terminal_t::recovery_required,
       relocation_reason_t::restore_failed,
       authority};
 }
 
-aggregate_relocation_result_t maintenance_runtime_t::relocate_aggregate (
+task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate (
   const std::vector<object_ref_t> &sources,
   std::string target_node_id,
   location_owner_token_t target_owner,
-  std::vector<relocation_capacity_fence_t>
-    relocation_capacity_fences,
   std::size_t encoded_upper_bound,
   inventory_digest_t inventory_digest,
   const std::optional<eligible_relocation_unit_t::canonical_wire_context_t>
     &canonical_wire,
   std::stop_token cancellation)
 {
-    if (!_aggregate_authority || sources.size () < 2) {
-        return {
-          relocation_terminal_t::blocked,
-          relocation_reason_t::restore_failed,
-          {}};
+    if (sources.size () < 2 || !canonical_wire) {
+        co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
+                relocation_reason_t::restore_failed, {}};
     }
-    auto permit = try_acquire (encoded_upper_bound);
-    if (!permit) {
-        return {
-          relocation_terminal_t::blocked,
-          relocation_reason_t::permit_unavailable,
-          {}};
+    auto persisted_context = *canonical_wire;
+    auto permit = std::make_shared<permit_t> (try_acquire ());
+    if (!*permit) {
+        co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
+                relocation_reason_t::permit_unavailable, {}};
     }
-    auto [seal_error, seal] =
-      _objects.try_seal_relocation_aggregate (
-        sources, cancellation);
+    const auto seal_attempt =
+      co_await _objects.try_seal_relocation_aggregate (
+        sources, cancellation,
+        [this, &persisted_context] {
+            return capture_relocation_session_routes (persisted_context);
+        });
+    const auto seal_error = seal_attempt.error;
+    const auto &seal = seal_attempt.seal;
     if (seal_error != stateful_error_t::none) {
-        return {
-          relocation_terminal_t::blocked,
-          seal_error == stateful_error_t::backpressured
-            ? relocation_reason_t::turn_active
-            : relocation_reason_t::restore_failed,
-          {}};
-    }
-    // Failure paths release the target's reserved relocation capacity before
-    // abort_relocation restores the source admission, so reserved space is
-    // never held across the admission restore.
-    const auto abort_capacity = [&] () noexcept {
-        if (!_authority)
-            return;
-        for (const auto &fence : relocation_capacity_fences)
-            _authority->abort_capacity (fence);
-    };
-    std::vector<protocol::relocation_data_t> replay_records;
-    if (canonical_wire) {
-        auto replay_failure = relocation_reason_t::restore_failed;
-        const auto built = build_replay_records (
-          seal.participants, *canonical_wire, replay_failure);
-        if (!built) {
-            abort_capacity ();
-            (void) _objects.abort_relocation (seal.token);
-            return {
-              relocation_terminal_t::blocked,
-              replay_failure,
-              {}};
-        }
-        replay_records = *built;
+        co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
+                relocation_reason_t::restore_failed, {}};
     }
     std::vector<std::uint8_t> payload;
     try {
-        payload = encode_aggregate (
-          seal.participants, inventory_digest);
-        if (payload.empty () || payload.size () > encoded_upper_bound) {
-            abort_capacity ();
-            (void) _objects.abort_relocation (seal.token);
-            return {
-              relocation_terminal_t::blocked,
-              relocation_reason_t::payload_bound_exceeded,
-              {}};
-        }
-        if (canonical_wire) {
-            payload = encode_recoverable_payload (
-              std::move (payload), *canonical_wire, replay_records);
-        }
+        payload = encode_aggregate (seal.participants, inventory_digest);
+        payload = encode_recoverable_payload (
+          std::move (payload), persisted_context, {});
     }
     catch (...) {
-        abort_capacity ();
-        (void) _objects.abort_relocation (seal.token);
-        return {
-          relocation_terminal_t::store_failed,
-          relocation_reason_t::store_write_failed,
-          {}};
     }
-    if (payload.empty ()) {
-        abort_capacity ();
-        (void) _objects.abort_relocation (seal.token);
-        return {
-          relocation_terminal_t::blocked,
-          relocation_reason_t::payload_bound_exceeded,
-          {}};
+    if (payload.empty () || payload.size () > encoded_upper_bound) {
+        (void) _objects.abort_relocation_before_cutover (seal.token);
+        co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
+                relocation_reason_t::payload_bound_exceeded, {}};
     }
-    const auto checksum = crc32c (payload);
     relocation_stored_t stored;
     try {
         stored = _relocations->put (payload, relocation_retention);
     }
     catch (...) {
-        abort_capacity ();
-        (void) _objects.abort_relocation (seal.token);
-        return {
-          relocation_terminal_t::store_failed,
-          relocation_reason_t::store_write_failed,
-          {}};
+        (void) _objects.abort_relocation_before_cutover (seal.token);
+        co_return aggregate_relocation_result_t{relocation_terminal_t::store_failed,
+                relocation_reason_t::store_write_failed, {}};
     }
-    if (stored.reference.empty () || stored.checksum_crc32c != checksum) {
-        if (!stored.reference.empty ()) {
-            try {
-                _relocations->remove (stored.reference);
-            }
-            catch (...) {
-            }
-        }
-        abort_capacity ();
-        (void) _objects.abort_relocation (seal.token);
-        return {
-          relocation_terminal_t::store_failed,
-          relocation_reason_t::checksum_mismatch,
-          {}};
+    if (stored.reference.empty () || stored.checksum_crc32c != crc32c (payload)
+        || !co_await prepare_target (*canonical_wire, seal.participants, stored)) {
+        (void) _objects.abort_relocation_before_cutover (seal.token);
+        co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
+                relocation_reason_t::restore_failed, {}};
     }
-
-
-    if (canonical_wire
-        && !prepare_replay_source (
-          *canonical_wire, seal.participants, replay_records,
-          stored)) {
-        try {
-            _relocations->remove (stored.reference);
-        }
-        catch (...) {
-        }
-        abort_capacity ();
-        (void) _objects.abort_relocation (seal.token);
-        return {
-          relocation_terminal_t::blocked,
-          relocation_reason_t::restore_failed,
-          {}};
+    const target_only_cas_t handoff{
+      sources, target_node_id, target_owner,
+      inventory_digest, stored};
+    const auto [boundary_error, batch] =
+      _objects.begin_relocation_boundary (seal.token);
+    auto failure = relocation_reason_t::restore_failed;
+    const auto records = boundary_error == stateful_error_t::none
+      ? build_boundary_records (seal.participants, *canonical_wire, batch, failure)
+      : std::nullopt;
+    if (!records || !co_await send_boundary_records (*canonical_wire, *records, batch)) {
+        if (abort_target_before_cutover (*canonical_wire))
+            (void) _objects.abort_relocation_before_cutover (seal.token);
+        co_return aggregate_relocation_result_t{relocation_terminal_t::recovery_required, failure, {},
+                records.value_or (std::vector<protocol::relocation_data_t>{}), handoff};
     }
-    aggregate_publish_result_t prepared;
-    try {
-        prepared = _aggregate_authority->prepare (
-          sources, target_node_id, std::move (target_owner),
-          std::move (relocation_capacity_fences),
-          stored.reference, checksum,
-          inventory_digest);
+    const auto &root = seal.participants.front ();
+    const protocol::relocation_cutover_t cutover{
+      canonical_wire->relocation, canonical_wire->target_attempt_generation,
+      canonical_wire->coordinator, protocol::relocation_role_t::source,
+      {to_wire_object_kind (root.owner.kind),
+       root.stable_type, root.owner.key, root.owner.object_generation,
+       root.owner.authority_owner_generation}};
+    const auto outcome = co_await canonical_wire->send_cutover (cutover);
+    if (outcome == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::not_enqueued) {
+        if (abort_target_before_cutover (*canonical_wire))
+            (void) _objects.abort_relocation_before_cutover (seal.token);
+        co_return aggregate_relocation_result_t{relocation_terminal_t::blocked, relocation_reason_t::restore_failed,
+                {}, *records, handoff};
     }
-    catch (...) {
-        if (canonical_wire)
-            abort_replay_source (*canonical_wire, replay_records);
-        try {
-            _relocations->remove (stored.reference);
-        }
-        catch (...) {
-        }
-        (void) _objects.abort_relocation (seal.token);
-        return {
-          relocation_terminal_t::store_failed,
-          relocation_reason_t::authority_publish_failed,
-          {}};
+    if (_objects.finalize_relocation_cutover (seal.token) != stateful_error_t::none) {
+        co_return aggregate_relocation_result_t{relocation_terminal_t::recovery_required,
+                relocation_reason_t::restore_failed, {}, *records, handoff};
     }
-    if (prepared.status != aggregate_publish_status_t::prepared
-        || prepared.fence.value == 0) {
-        if (canonical_wire)
-            abort_replay_source (*canonical_wire, replay_records);
-        try {
-            _relocations->remove (stored.reference);
-        }
-        catch (...) {
-        }
-        (void) _objects.abort_relocation (seal.token);
-        return {
-          prepared.status == aggregate_publish_status_t::conflict
-            ? relocation_terminal_t::conflict
-            : relocation_terminal_t::store_failed,
-          prepared.status == aggregate_publish_status_t::conflict
-            ? relocation_reason_t::authority_conflict
-            : relocation_reason_t::authority_publish_failed,
-          prepared.current};
-    }
-
-    aggregate_publish_result_t committed;
-    try {
-        committed = _aggregate_authority->commit (prepared.fence);
-    }
-    catch (...) {
-        return {
-          relocation_terminal_t::recovery_required,
-          relocation_reason_t::authority_publish_failed,
-          prepared.current,
-          replay_records};
-    }
-    if (committed.status != aggregate_publish_status_t::committed
-        || committed.current.size () != sources.size ()) {
-        if (committed.status == aggregate_publish_status_t::conflict) {
-            if (canonical_wire)
-                abort_replay_source (*canonical_wire, replay_records);
-            try {
-                _aggregate_authority->abort (prepared.fence);
-            }
-            catch (...) {
-            }
-            try {
-                _relocations->remove (stored.reference);
-            }
-            catch (...) {
-            }
-            (void) _objects.abort_relocation (seal.token);
-            return {
-              relocation_terminal_t::conflict,
-              relocation_reason_t::authority_conflict,
-              committed.current};
-        }
-        return {
-          relocation_terminal_t::recovery_required,
-          relocation_reason_t::authority_publish_failed,
-          committed.current,
-          replay_records};
-    }
-
-    if (canonical_wire
-        && !arm_replay_source (*canonical_wire, replay_records)) {
-        return {
-          relocation_terminal_t::recovery_required,
-          relocation_reason_t::restore_failed,
-          committed.current,
-          replay_records};
-    }
-    const auto [commit_error, local] =
-      _objects.commit_relocation_aggregate (
-        seal.token, std::move (target_node_id));
-    if (commit_error != stateful_error_t::none
-        || local.size () != committed.current.size ()) {
-        return {
-          relocation_terminal_t::recovery_required,
-          relocation_reason_t::restore_failed,
-          committed.current,
-          replay_records};
-    }
-    for (const auto &current : committed.current) {
-        const auto match = std::find (
-          local.begin (), local.end (), current.target);
-        if (match == local.end ()) {
-            return {
-              relocation_terminal_t::recovery_required,
-              relocation_reason_t::restore_failed,
-              committed.current,
-              replay_records};
-        }
-    }
-    if (canonical_wire
-        && (!canonical_wire->complete_target
-            || !canonical_wire->complete_target ())) {
-        return {
-          relocation_terminal_t::recovery_required,
-          relocation_reason_t::restore_failed,
-          committed.current,
-          replay_records};
-    }
-    return {
-      relocation_terminal_t::completed,
-      relocation_reason_t::none,
-      committed.current,
-      replay_records};
+    co_return aggregate_relocation_result_t{outcome == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::enqueued
+              ? relocation_terminal_t::completed
+              : relocation_terminal_t::recovery_required,
+            outcome == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::enqueued
+              ? relocation_reason_t::none
+              : relocation_reason_t::restore_failed,
+            {}, *records, handoff};
 }
 
 relocation_gate_snapshot_t maintenance_runtime_t::gate_snapshot () const
@@ -2181,23 +1786,37 @@ catch (...)
     return std::nullopt;
 }
 
-maintenance_runtime_t::permit_t::permit_t (
-  maintenance_runtime_t *owner,
-  std::size_t payload) :
-    _owner (owner), _payload (payload)
+std::optional<std::vector<protocol::session_relocation_route_t>>
+maintenance_runtime_t::decode_session_routes (
+  const std::vector<std::uint8_t> &payload) noexcept
+try
+{
+    const auto recoverable = decode_recoverable_payload (payload);
+    if (!recoverable)
+        return std::nullopt;
+    if (!recoverable->wire)
+        return std::vector<protocol::session_relocation_route_t>{};
+    return recoverable->wire->context.session_routes;
+}
+catch (...)
+{
+    return std::nullopt;
+}
+
+maintenance_runtime_t::permit_t::permit_t (maintenance_runtime_t *owner) :
+    _owner (owner)
 {
 }
 
 maintenance_runtime_t::permit_t::~permit_t ()
 {
     if (_owner)
-        _owner->release (_payload);
+        _owner->release ();
 }
 
 maintenance_runtime_t::permit_t::permit_t (
   permit_t &&other) noexcept :
-    _owner (std::exchange (other._owner, nullptr)),
-    _payload (std::exchange (other._payload, 0))
+    _owner (std::exchange (other._owner, nullptr))
 {
 }
 
@@ -2208,9 +1827,8 @@ maintenance_runtime_t::permit_t::operator= (
     if (this == &other)
         return *this;
     if (_owner)
-        _owner->release (_payload);
+        _owner->release ();
     _owner = std::exchange (other._owner, nullptr);
-    _payload = std::exchange (other._payload, 0);
     return *this;
 }
 
@@ -2220,41 +1838,29 @@ maintenance_runtime_t::permit_t::operator bool () const noexcept
 }
 
 maintenance_runtime_t::permit_t
-maintenance_runtime_t::try_acquire (std::size_t payload)
+maintenance_runtime_t::try_acquire ()
 {
-    if (payload == 0)
-        return {};
     std::lock_guard lock (_gate_mutex);
-    const bool empty = _gate.outbound_units == 0
-                       && _gate.inbound_units == 0
-                       && _gate.capture_callbacks == 0
-                       && _gate.restore_callbacks == 0
-                       && _gate.payload_bytes == 0;
-    const bool oversized = payload > _limits.payload_bytes;
     if (_gate.outbound_units >= _limits.outbound_units
         || _gate.inbound_units >= _limits.inbound_units
         || _gate.capture_callbacks >= _limits.capture_callbacks
-        || _gate.restore_callbacks >= _limits.restore_callbacks
-        || (oversized ? !empty
-                      : payload > _limits.payload_bytes - _gate.payload_bytes)) {
+        || _gate.restore_callbacks >= _limits.restore_callbacks) {
         return {};
     }
     ++_gate.outbound_units;
     ++_gate.inbound_units;
     ++_gate.capture_callbacks;
     ++_gate.restore_callbacks;
-    _gate.payload_bytes += payload;
-    return permit_t (this, payload);
+    return permit_t (this);
 }
 
-void maintenance_runtime_t::release (std::size_t payload) noexcept
+void maintenance_runtime_t::release () noexcept
 {
     std::lock_guard lock (_gate_mutex);
     --_gate.outbound_units;
     --_gate.inbound_units;
     --_gate.capture_callbacks;
     --_gate.restore_callbacks;
-    _gate.payload_bytes -= payload;
 }
 
 relocation_result_t maintenance_runtime_t::finish (
@@ -2323,18 +1929,21 @@ host_maintenance_runtime_t::intent_snapshot () const
     return _effective_intent;
 }
 
-termination_result_t host_maintenance_runtime_t::terminate (
+task_t<termination_result_t> host_maintenance_runtime_t::terminate (
   termination_intent_t intent)
 {
     std::uint64_t attempt = 0;
+    std::shared_ptr<detail::task_completion_source_t<termination_result_t>> completion;
     {
         std::unique_lock lock (_mutex);
         if (_terminal)
-            return *_terminal;
+            return task_t<termination_result_t> (
+              result_t<termination_result_t>::success (*_terminal));
         if (_state == maintenance_admission_state_t::stopped) {
-            return {
-              intent, termination_outcome_t::stopped,
-              termination_reason_t::none};
+            return task_t<termination_result_t> (
+              result_t<termination_result_t>::success ({
+                intent, termination_outcome_t::stopped,
+                termination_reason_t::none}));
         }
         if (_active) {
             attempt = _active_attempt;
@@ -2342,16 +1951,14 @@ termination_result_t host_maintenance_runtime_t::terminate (
                 && !_effective_intent) {
                 _shutdown_claimed = true;
             }
-            _changed.wait (
-              lock,
-              [&] { return _attempt_results.contains (attempt); });
-            return _attempt_results.at (attempt);
+            return _active_completion->task ();
         }
         if (intent == termination_intent_t::retire
             && _state != maintenance_admission_state_t::serving) {
-            return {
-              intent, termination_outcome_t::blocked,
-              termination_reason_t::runtime_not_ready};
+            return task_t<termination_result_t> (
+              result_t<termination_result_t>::success ({
+                intent, termination_outcome_t::blocked,
+                termination_reason_t::runtime_not_ready}));
         }
         _active = true;
         _shutdown_claimed = false;
@@ -2360,14 +1967,30 @@ termination_result_t host_maintenance_runtime_t::terminate (
         _active_attempt = attempt;
         if (intent == termination_intent_t::shutdown)
             _effective_intent = termination_intent_t::shutdown;
+        completion = std::make_shared<
+          detail::task_completion_source_t<termination_result_t>> ();
+        _active_completion = completion;
     }
+    auto output = completion->task ();
+    auto running = std::make_shared<task_t<termination_result_t>> (
+      run_termination_attempt (intent, attempt));
+    detail::observe_task_completion (
+      *running, [completion, running] (
+                  const result_t<termination_result_t> &settled) {
+          completion->complete (settled);
+      });
+    return output;
+}
 
-    const auto result =
-      intent == termination_intent_t::retire
-        ? run_retire ()
-        : run_shutdown (termination_intent_t::shutdown);
+task_t<termination_result_t>
+host_maintenance_runtime_t::run_termination_attempt (
+  termination_intent_t intent, std::uint64_t attempt)
+{
+    const auto result = intent == termination_intent_t::retire
+                        ? co_await run_retire ()
+                        : run_shutdown (termination_intent_t::shutdown);
     complete_attempt (attempt, result);
-    return result;
+    co_return result;
 }
 
 std::vector<relocation_unit_t>
@@ -2413,11 +2036,11 @@ host_maintenance_runtime_t::inventory_units (
     return units;
 }
 
-termination_result_t host_maintenance_runtime_t::run_retire ()
+task_t<termination_result_t> host_maintenance_runtime_t::run_retire ()
 {
     auto inventory = _objects.try_begin_maintenance_inventory ();
     if (!inventory) {
-        return {
+        co_return termination_result_t{
           termination_intent_t::retire,
           termination_outcome_t::blocked,
           termination_reason_t::runtime_not_ready};
@@ -2433,7 +2056,7 @@ termination_result_t host_maintenance_runtime_t::run_retire ()
                 std::lock_guard lock (_mutex);
                 _inventory_sealed = false;
             }
-            return {
+            co_return termination_result_t{
               termination_intent_t::retire,
               termination_outcome_t::blocked,
               termination_reason_t::state_incompatible};
@@ -2488,13 +2111,13 @@ termination_result_t host_maintenance_runtime_t::run_retire ()
             }
             _objects.end_maintenance_inventory ();
             _inventory_sealed = false;
-            return {
+            co_return termination_result_t{
               termination_intent_t::retire,
               termination_outcome_t::blocked, reason};
         }
     }
     if (_effective_intent == termination_intent_t::shutdown)
-        return run_shutdown (termination_intent_t::shutdown);
+        co_return run_shutdown (termination_intent_t::shutdown);
 
     std::size_t committed_units = 0;
     const auto fail_relocation =
@@ -2521,10 +2144,8 @@ termination_result_t host_maintenance_runtime_t::run_retire ()
     for (const auto &eligible : preflight.units) {
         if (eligible.unit.participants.empty ()
             || eligible.target_node_id.empty ()
-            || eligible.relocation_capacity_fences.size ()
-                 != eligible.unit.participants.size ()
             || eligible.encoded_upper_bound == 0) {
-            return fail_relocation (
+            co_return fail_relocation (
               termination_reason_t::state_incompatible);
         }
 
@@ -2544,17 +2165,16 @@ termination_result_t host_maintenance_runtime_t::run_retire ()
         if (!barrier_ready) {
             for (const auto &barrier : barriers)
                 (void) _sessions.abort_barrier (barrier);
-            return fail_relocation (
+            co_return fail_relocation (
               termination_reason_t::state_incompatible);
         }
 
         std::vector<authority_relocation_reference_t> current;
         relocation_terminal_t terminal = relocation_terminal_t::blocked;
         if (eligible.unit.participants.size () == 1) {
-            const auto result = _relocation.relocate (
+            const auto result = co_await _relocation.relocate (
               eligible.unit.participants.front (),
               eligible.target_node_id, eligible.target_owner,
-              eligible.relocation_capacity_fences.front (),
               eligible.encoded_upper_bound,
               eligible.inventory_digest,
               eligible.canonical_wire);
@@ -2562,10 +2182,9 @@ termination_result_t host_maintenance_runtime_t::run_retire ()
             if (result.authority)
                 current.push_back (*result.authority);
         } else {
-            const auto result = _relocation.relocate_aggregate (
+            const auto result = co_await _relocation.relocate_aggregate (
               eligible.unit.participants, eligible.target_node_id,
               eligible.target_owner,
-              eligible.relocation_capacity_fences,
               eligible.encoded_upper_bound,
               eligible.inventory_digest,
               eligible.canonical_wire);
@@ -2575,7 +2194,7 @@ termination_result_t host_maintenance_runtime_t::run_retire ()
         if (terminal != relocation_terminal_t::completed) {
             for (const auto &barrier : barriers)
                 (void) _sessions.abort_barrier (barrier);
-            return fail_relocation (
+            co_return fail_relocation (
               termination_reason_t::store_unavailable,
               terminal == relocation_terminal_t::recovery_required
                 || terminal == relocation_terminal_t::data_lost);
@@ -2590,7 +2209,7 @@ termination_result_t host_maintenance_runtime_t::run_retire ()
                 || _sessions.commit_barrier (
                      barrier, target->target)
                      != stateful_error_t::none) {
-                return fail_relocation (
+                co_return fail_relocation (
                   termination_reason_t::relocation_failed, true);
             }
         }
@@ -2606,7 +2225,7 @@ termination_result_t host_maintenance_runtime_t::run_retire ()
             std::lock_guard lock (_mutex);
             _state = maintenance_admission_state_t::stopped;
         }
-        return {
+        co_return termination_result_t{
           termination_intent_t::retire,
           termination_outcome_t::force_stopped,
           termination_reason_t::relocation_failed};
@@ -2615,7 +2234,7 @@ termination_result_t host_maintenance_runtime_t::run_retire ()
         std::lock_guard lock (_mutex);
         _state = maintenance_admission_state_t::stopped;
     }
-    return {
+    co_return termination_result_t{
       termination_intent_t::retire,
       termination_outcome_t::stopped,
       termination_reason_t::none};
@@ -2672,6 +2291,7 @@ void host_maintenance_runtime_t::complete_attempt (
         _attempt_results[attempt] = result;
         _active = false;
         _active_attempt = 0;
+        _active_completion.reset ();
         _shutdown_claimed = false;
         _effective_intent.reset ();
         if (result.outcome != termination_outcome_t::blocked)
@@ -2717,6 +2337,7 @@ void public_host_runtime_t::configure_relocation (
           "relocation providers must be configured once before host start");
     }
     _relocation_authority = authority;
+    _aggregate_relocation_authority = aggregate_authority;
     _session_relocations = relocations;
     auto maintenance =
       std::make_unique<stateful::maintenance_runtime_t> (
@@ -2741,6 +2362,7 @@ void public_host_runtime_t::configure_maintenance (
     }
     auto targets = providers.targets;
     _relocation_authority = providers.authority;
+    _aggregate_relocation_authority = providers.aggregate_authority;
     _session_relocations = providers.relocations;
     auto maintenance =
       std::make_unique<stateful::maintenance_runtime_t> (

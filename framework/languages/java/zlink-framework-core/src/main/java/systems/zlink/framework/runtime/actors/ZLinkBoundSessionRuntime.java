@@ -19,7 +19,6 @@ import java.util.function.Predicate;
 import java.util.function.Consumer;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkBoundSession;
@@ -115,7 +114,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
         return ignoreMissingBinding(stream.unbindActor(sessionRid, actorId).submit(timeout))
             .thenCompose(unbound -> awaitRouteReady(targetActor, timeout))
             .thenCompose(ignored -> bindActorWithRetry(stream, sessionRid, targetActor, timeout))
-            .thenCompose(ignored -> relayBoundSessionBindWithRetry(header, timeout))
+            .thenCompose(ignored -> relayBoundSessionBind(header))
             .thenRun(() -> rebindListener.accept(targetActor));
     }
 
@@ -131,24 +130,21 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                     + actorId));
     }
 
-    private CompletionStage<Void> relayBoundSessionBindWithRetry(
-        ZLinkStreamHeader header,
-        Duration timeout) {
-        return ZLinkActorRetryScheduler.submitRelayUntilAccepted(
-            timeout,
-            () -> {
-                try (Message body = Message.from(new byte[0])) {
-                    return stream.relayBoundActor(
-                        sessionRid,
-                        actorId,
-                        header,
-                        List.of(body),
-                        SendFlags.DONT_WAIT);
-                }
-            },
-            () -> new TimeoutException(
-                "remote bound session bind relay was not ready before timeout: "
-                    + actorId));
+    private CompletionStage<Void> relayBoundSessionBind(
+        ZLinkStreamHeader header) {
+        Message body = Message.from(new byte[0]);
+        CompletionStage<Void> submission;
+        try {
+            submission = stream.relayBoundActorAsync(
+                sessionRid,
+                actorId,
+                header,
+                List.of(body));
+        } catch (RuntimeException failure) {
+            body.close();
+            return CompletableFuture.failedFuture(failure);
+        }
+        return submission.whenComplete((ignored, failure) -> body.close());
     }
 
     static CompletionStage<Void> bindActorWithRetry(
@@ -189,8 +185,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
             actorId,
             encoded.payload(),
             options,
-            metadataPolicy,
-            actorRuntime.oneWayCalls());
+            metadataPolicy);
     }
 
     @Override
@@ -210,7 +205,6 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
         Message payload,
         ZLinkBoundSessionSendOptions options,
         ZLinkRelayMetadataPolicy metadataPolicy,
-        ZLinkOneWayCalls oneWayCalls,
         AtomicBoolean submitGate)
         implements ZLinkBoundSessionSendCall {
         SendCall(
@@ -219,9 +213,8 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
             String actorId,
             Message payload,
             ZLinkBoundSessionSendOptions options,
-            ZLinkRelayMetadataPolicy metadataPolicy,
-            ZLinkOneWayCalls oneWayCalls) {
-            this(stream, sessionRid, actorId, payload, options, metadataPolicy, oneWayCalls,
+            ZLinkRelayMetadataPolicy metadataPolicy) {
+            this(stream, sessionRid, actorId, payload, options, metadataPolicy,
                 new AtomicBoolean());
         }
         public ZLinkBoundSessionSendCall packetName(String packetName) {
@@ -232,7 +225,6 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                 payload,
                 options.withPacketName(packetName),
                 metadataPolicy,
-                oneWayCalls,
                 submitGate);
         }
 
@@ -245,7 +237,6 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                 payload,
                 options.withMetadata(key, value),
                 metadataPolicy,
-                oneWayCalls,
                 submitGate);
         }
 
@@ -263,15 +254,18 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
             } finally {
                 payload.close();
             }
-            return oneWayCalls.submitOneWay(
-                stream,
-                ZLinkBackendAdmissionKey.socket(),
-                () -> stream.send(
+            CompletionStage<Void> submission;
+            try {
+                submission = stream.sendAsync(
                     sessionRid,
                     header,
-                    List.of(payloadPart),
-                    SendFlags.DONT_WAIT),
-                payloadPart::close);
+                    List.of(payloadPart));
+            } catch (RuntimeException failure) {
+                payloadPart.close();
+                return CompletableFuture.failedFuture(failure);
+            }
+            return ZLinkOneWayCalls.adaptOneWay(submission)
+                .whenComplete((ignored, failure) -> payloadPart.close());
         }
 
     }

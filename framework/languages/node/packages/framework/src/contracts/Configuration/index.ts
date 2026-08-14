@@ -27,9 +27,9 @@ export type {
   ZLinkSpotPublisherConfig
 } from './Configs';
 export * from './Connections';
-export { ZLinkApplicationHwmProfile } from './InboundDispatch';
-export type {
-  ZLinkInboundDispatchOptions
-} from './InboundDispatch';
 export * from './ObjectRoles';
-export type { ZLinkWorkerOptions } from './RegistrationTypes';
+export type {
+  ZLinkApplicationJobQueueOptions,
+  ZLinkCoreHwmOptions,
+  ZLinkWorkerOptions
+} from './RegistrationTypes';

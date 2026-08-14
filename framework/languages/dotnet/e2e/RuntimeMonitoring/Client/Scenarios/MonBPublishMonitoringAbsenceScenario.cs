@@ -91,7 +91,6 @@ internal static class MonBPublishMonitoringAbsenceScenario
                     target,
                     "application-gate-enter|spot=monitor-blocked|topic=monitor.blocker",
                     evidenceStart);
-                await WaitForApplicationReceivePausedAsync(target);
             }
         }
 
@@ -199,22 +198,6 @@ internal static class MonBPublishMonitoringAbsenceScenario
         }
         throw new InvalidOperationException(
             $"Evidence '{expected}' was not observed.");
-    }
-
-    private static async Task WaitForApplicationReceivePausedAsync(
-        ZLinkHttpClient service)
-    {
-        var elapsed = Stopwatch.StartNew();
-        while (elapsed.Elapsed < TimeSpan.FromSeconds(10))
-        {
-            var status = (await service.Get("/runtime/host/status")
-                .Async<HostRuntimeSnapshotRes>()).Body;
-            if (status.ApplicationReceivePaused)
-                return;
-            await Task.Delay(50);
-        }
-        throw new InvalidOperationException(
-            "MON-B1 blocked target did not report ApplicationReceivePaused.");
     }
 
     private static async Task WaitForReadyChannelAsync(ZLinkHttpClient service)

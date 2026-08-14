@@ -333,12 +333,12 @@ internal abstract partial class ZLinkSpotActivation
                     activation.DispatchActorJoinDrainTurnAsync(ct)),
                 () => QueueSerialized(static (activation, ct) =>
                     activation.DispatchActorLifecycleDrainAsync(ct)),
-                (actorParts, inboundDispatchLease) =>
+                (actorParts, creditOwner) =>
                 {
                     var dispatchable = ZLinkActorHandoffIngress.CaptureMovingFrames(
                         _runtime,
                         actorParts,
-                        inboundDispatchLease);
+                        creditOwner);
                     if (dispatchable.Count == 0)
                     {
                         dispatchable.Dispose();
@@ -1098,6 +1098,10 @@ internal abstract partial class ZLinkSpotActivation
             }
             var lifecycle = NativeSpot.RecvActorLifecycle(RecvFlags.DontWait);
             if (lifecycle is null) return;
+            using var applicationAdmission =
+                lifecycle.Value.ApplicationJobAdmission is { } admission
+                    ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+                    : null;
             count++;
             bytes = checked(
                 bytes + (lifecycle.Value.Info.CurrentActor?.ActorId?.Length ?? 0));
@@ -1278,7 +1282,7 @@ internal abstract partial class ZLinkSpotActivation
         var routeNodeRid = route.NodeRid
                            ?? throw new InvalidOperationException(
                                "A bound Session route requires a target NodeRid.");
-        var result = await _runtime.SealSessionRelocationAsync(
+        _ = await _runtime.SealSessionRelocationAsync(
                 route.MeshName!,
                 routeNodeRid,
                 ZLinkSessionRelocationWire.CreateSeal(
@@ -1288,10 +1292,7 @@ internal abstract partial class ZLinkSpotActivation
                     wireContext),
                 cancellationToken)
             .ConfigureAwait(false);
-        return route with
-        {
-            AcceptedHighWater = result.LastAcceptedSessionSequence
-        };
+        return route;
     }
 
     internal async ValueTask AbortActorBoundSessionRouteSealForRetireAsync(
@@ -1305,28 +1306,15 @@ internal abstract partial class ZLinkSpotActivation
         var routeNodeRid = route.NodeRid
                            ?? throw new InvalidOperationException(
                                "A bound Session route requires a target NodeRid.");
-        var reply = await _runtime.RouteSessionRelocationAsync(
+        await _runtime.RouteSessionRelocationAsync(
                 route.MeshName!,
                 routeNodeRid,
                 ZLinkSessionRelocationWire.CreateAbort(
                     actorId,
                     route,
                     wireContext),
-                route.AcceptedHighWater,
                 cancellationToken)
             .ConfigureAwait(false);
-        var acknowledged = reply.Result is
-            ZLinkServiceWireCodec.SessionRelocationRouteResult.Applied
-            or ZLinkServiceWireCodec.SessionRelocationRouteResult.AlreadyApplied;
-        // Best-effort: source admission restore no longer waits on the session
-        // owner (wire contract, Ready boundary). A missing or negative ack
-        // means the seal is already gone or fenced by a newer binding
-        // identity; either way the abort must not gate the source abort path.
-        if (!acknowledged)
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"session_route_abort_unacknowledged actor={actorId}"
-                + $" relocation={wireContext.RelocationId.High:x16}"
-                + $"{wireContext.RelocationId.Low:x16}");
     }
 
     internal void BeginMessageFollow(
@@ -1736,7 +1724,7 @@ internal abstract partial class ZLinkSpotActivation
     internal static bool SubmitSpotMessageFollowRequest(
         ZLinkBackendRouteReceived received,
         ZLinkSpotMessageFollow.AdmissionLease admission,
-        Func<RequestCallback, bool> submit)
+        Func<ZLinkBackendRequestCallback, bool> submit)
     {
         ArgumentNullException.ThrowIfNull(received);
         ArgumentNullException.ThrowIfNull(admission);

@@ -106,10 +106,11 @@ final class ZLinkFrameworkActorSubsystem {
                 transferAdapters,
                 registration.defaultRequestTimeout(),
                 registration.messageFollowDuration(),
+                registration.locations().options(),
                 serializer,
                 runtimeHandlers,
                 defaultStreamCodec,
-                ZLinkAdmissionRuntime.factory(backendFactory),
+                null,
                 registration.serialExecutor())
             : null;
         ZLinkActorDirectory actorDirectory = actors != null
@@ -146,7 +147,7 @@ final class ZLinkFrameworkActorSubsystem {
                 storeLocationResolvers,
                 serializer,
                 registration.defaultRequestTimeout(),
-                ZLinkAdmissionRuntime.factory(backendFactory),
+                null,
                 runtimeReady)
             : null;
         registerActorServices(runtimeHandlers, actorClient, actorDirectory, actors);

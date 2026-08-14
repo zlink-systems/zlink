@@ -182,11 +182,7 @@ final class ZLinkUserSpotOperationHandler
                 return authorityStore.compareExchange(
                         key,
                         new ZLinkAuthorityExpectFound(snapshot.storeVersion()),
-                        new ZLinkAuthorityPut(
-                            closing,
-                            ZLinkAuthorityGenerationTransition.PRESERVE,
-                            Optional.empty(),
-                            Optional.empty()),
+                        new ZLinkAuthorityPut(closing),
                         OPEN)
                     .thenCompose(closingWrite -> {
                         if (!(closingWrite instanceof ZLinkAuthorityStored stored)) {
@@ -404,11 +400,7 @@ final class ZLinkUserSpotOperationHandler
         return authorityStore.compareExchange(
                 key,
                 new ZLinkAuthorityExpectFound(closingStoreVersion),
-                new ZLinkAuthorityPut(
-                    ready,
-                    ZLinkAuthorityGenerationTransition.PRESERVE,
-                    Optional.empty(),
-                    Optional.empty()),
+                new ZLinkAuthorityPut(ready),
                 OPEN)
             .thenCompose(ignored -> failed(
                 TERMINAL_INVALID_STATE,

@@ -1,6 +1,9 @@
 package systems.zlink.framework.runtime.actors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.lang.reflect.Proxy;
@@ -39,44 +42,15 @@ import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 final class ZLinkBoundSessionSendCallContractTest {
     @Test
-    void immutableSendOptionsShareTheOneWaySubmissionGate() {
-        AtomicInteger sends = new AtomicInteger();
-        ZLinkInternalSpotNode spotNode = spotNode(sends);
-        AtomicReference<Duration> admissionTimeout = new AtomicReference<>();
-        AtomicInteger detachedAdmissions = new AtomicInteger();
-        ZLinkOneWayCalls.Admission admission = new ZLinkOneWayCalls.Admission() {
-            @Override
-            public CompletionStage<Void> submit(
-                ZLinkBackendObject ignoredBackend,
-                ZLinkBackendAdmissionKey ignoredKey,
-                Supplier<Boolean> submission,
-                Runnable cleanup,
-                Duration timeout) {
-                admissionTimeout.set(timeout);
-                try {
-                    if (submission.get()) {
-                        return CompletableFuture.completedFuture(null);
-                    }
-                    return CompletableFuture.failedFuture(
-                        new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.UNAVAILABLE,
-                            "fake transport rejected the send"));
-                } finally {
-                    cleanup.run();
-                }
-            }
-
-            @Override
-            public CompletionStage<Void> submitDetached(
-                ZLinkBackendObject backend,
-                ZLinkBackendAdmissionKey key,
-                Supplier<Boolean> submission,
-                Runnable cleanup,
-                Duration timeout) {
-                detachedAdmissions.incrementAndGet();
-                return submit(backend, key, submission, cleanup, timeout);
-            }
-        };
+    void localNativeBoundSessionUsesOneBindingAdmissionTerminal() {
+        AtomicInteger synchronousSends = new AtomicInteger();
+        AtomicInteger asynchronousSends = new AtomicInteger();
+        CompletableFuture<Void> bindingTerminal = new CompletableFuture<>();
+        ZLinkInternalSpotNode spotNode = spotNode(
+            synchronousSends,
+            asynchronousSends,
+            bindingTerminal,
+            new AtomicBoolean(true));
         ZLinkActorRuntime actors = new ZLinkActorRuntime(
             spotNode,
             Map.of("probe", ProbeFactory.class),
@@ -86,7 +60,7 @@ final class ZLinkBoundSessionSendCallContractTest {
             new ZLinkJsonMessageSerializer(),
             ZLinkHandlerActivator.reflection(),
             ZLinkStreamCodec.RAW,
-            admission);
+            unusedAdmission());
 
         ZLinkActor actor = actors.getOrCreateLocalActor("actor-1", ZLinkActor.class)
             .toCompletableFuture()
@@ -104,42 +78,34 @@ final class ZLinkBoundSessionSendCallContractTest {
         ZLinkBoundSessionSendCall base = boundSession.send("payload");
         ZLinkBoundSessionSendCall transformed = base.metadata("trace", "one");
 
-        base.submit().toCompletableFuture().join();
+        CompletionStage<Void> submitted = base.submit();
+        long evidenceDeadline =
+            System.nanoTime() + Duration.ofSeconds(1).toNanos();
+        while (asynchronousSends.get() == 0
+            && System.nanoTime() < evidenceDeadline) {
+            Thread.onSpinWait();
+        }
+        assertAll(
+            () -> assertEquals(1, asynchronousSends.get()),
+            () -> assertEquals(0, synchronousSends.get()),
+            () -> assertFalse(submitted.toCompletableFuture().isDone()));
+
+        bindingTerminal.complete(null);
+        submitted.toCompletableFuture().join();
         CompletionException duplicate = assertThrows(
             CompletionException.class,
             () -> transformed.submit().toCompletableFuture().join());
 
         assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION,
             ((ZLinkFrameworkException) duplicate.getCause()).kind());
-        assertEquals(1, sends.get());
-        assertEquals(0, detachedAdmissions.get(),
-            "a ready bound-session route keeps ordinary send admission");
-        assertEquals(Duration.ofSeconds(1), admissionTimeout.get());
+        assertEquals(1, asynchronousSends.get());
+        assertEquals(0, synchronousSends.get());
     }
 
     @Test
     void missingBoundSessionRouteFailsWithoutTransportRetry() {
         AtomicInteger sends = new AtomicInteger();
-        AtomicInteger attempts = new AtomicInteger();
         ZLinkInternalSpotNode spotNode = spotNode(sends, false);
-        ZLinkOneWayCalls.Admission admission =
-            (ignoredBackend, ignoredKey, submission, cleanup, timeout) -> {
-                attempts.incrementAndGet();
-                CompletableFuture<Void> submitted = new CompletableFuture<>();
-                try {
-                    if (submission.get()) {
-                        submitted.complete(null);
-                    } else {
-                        submitted.completeExceptionally(
-                            new AssertionError("missing route was treated as backpressure"));
-                    }
-                } catch (RuntimeException failure) {
-                    submitted.completeExceptionally(failure);
-                } finally {
-                    cleanup.run();
-                }
-                return ZLinkOneWayCalls.adaptOneWay(submitted);
-            };
         ZLinkActorRuntime actors = new ZLinkActorRuntime(
             spotNode,
             Map.of("probe", ProbeFactory.class),
@@ -149,7 +115,7 @@ final class ZLinkBoundSessionSendCallContractTest {
             new ZLinkJsonMessageSerializer(),
             ZLinkHandlerActivator.reflection(),
             ZLinkStreamCodec.RAW,
-            admission);
+            unusedAdmission());
         ZLinkActor actor = actors.getOrCreateLocalActor("actor-1", ZLinkActor.class)
             .toCompletableFuture()
             .join()
@@ -169,58 +135,14 @@ final class ZLinkBoundSessionSendCallContractTest {
 
         assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND,
             ((ZLinkFrameworkException) failure.getCause()).kind());
-        assertEquals(1, attempts.get());
         assertEquals(0, sends.get());
     }
 
     @Test
     void bindingGenerationAloneDoesNotInventARelocationPendingFence() {
         AtomicInteger sends = new AtomicInteger();
-        AtomicInteger regularAdmissions = new AtomicInteger();
         AtomicBoolean routeAvailable = new AtomicBoolean();
-        AtomicReference<Supplier<Boolean>> pendingAttempt = new AtomicReference<>();
-        AtomicReference<Runnable> pendingCleanup = new AtomicReference<>();
         ZLinkInternalSpotNode spotNode = spotNode(sends, routeAvailable);
-        ZLinkOneWayCalls.Admission admission = new ZLinkOneWayCalls.Admission() {
-            @Override
-            public CompletionStage<Void> submit(
-                ZLinkBackendObject backend,
-                ZLinkBackendAdmissionKey key,
-                Supplier<Boolean> submission,
-                Runnable cleanup,
-                Duration timeoutOverride) {
-                regularAdmissions.incrementAndGet();
-                if (submission.get()) {
-                    cleanup.run();
-                }
-                return CompletableFuture.completedFuture(null);
-            }
-
-            @Override
-            public CompletionStage<Void> submitDetached(
-                ZLinkBackendObject backend,
-                ZLinkBackendAdmissionKey key,
-                Supplier<Boolean> submission,
-                Runnable cleanup,
-                Duration timeoutOverride) {
-                if (submission.get()) {
-                    cleanup.run();
-                } else {
-                    pendingAttempt.set(submission);
-                    pendingCleanup.set(cleanup);
-                }
-                return CompletableFuture.completedFuture(null);
-            }
-
-            @Override
-            public void releaseDetached(
-                ZLinkBackendObject backend,
-                ZLinkBackendAdmissionKey key) {
-                if (pendingAttempt.get().get()) {
-                    pendingCleanup.get().run();
-                }
-            }
-        };
         ZLinkActorRuntime actors = new ZLinkActorRuntime(
             spotNode,
             Map.of("probe", ProbeFactory.class),
@@ -230,7 +152,7 @@ final class ZLinkBoundSessionSendCallContractTest {
             new ZLinkJsonMessageSerializer(),
             ZLinkHandlerActivator.reflection(),
             ZLinkStreamCodec.RAW,
-            admission);
+            unusedAdmission());
         ZLinkActor actor = actors.getOrCreateLocalActor("actor-1", ZLinkActor.class)
             .toCompletableFuture()
             .join()
@@ -251,49 +173,19 @@ final class ZLinkBoundSessionSendCallContractTest {
         actor.context().boundSession().send("payload")
             .submit().toCompletableFuture().join();
 
-        assertEquals(1, regularAdmissions.get());
         assertEquals(1, sends.get());
     }
 
-    @Test
-    void synchronousJoinWithABoundSessionFailsBeforeCommand42() {
-        AtomicInteger sends = new AtomicInteger();
-        ZLinkInternalSpotNode spotNode = spotNode(sends);
-        ZLinkActorRuntime actors = new ZLinkActorRuntime(
-            spotNode,
-            Map.of("probe", ProbeFactory.class),
-            Duration.ofSeconds(1),
-            new ZLinkJsonMessageSerializer());
-        ZLinkActor actor = actors
-            .getOrCreateLocalActor("actor-1", ZLinkActor.class)
-            .toCompletableFuture()
-            .join()
-            .orElseThrow();
-        actors.bindNativeSession(
-            actor,
-            spotNode,
-            new ZLinkBackendActorRef(
-                RoutingId.from("node-a"),
-                "actor-1",
-                7));
-
-        CompletionException failure = assertThrows(
-            CompletionException.class,
-            () -> actors.directJoinSessionRouteCommand(
-                    actor,
-                    actors.currentRef(actor),
-                    RoutingId.from("node-b"),
-                    UUID.randomUUID(),
-                    false)
-                .toCompletableFuture()
-                .join());
-
-        assertEquals(
-            "StateIncompatible: bound-Session direct Join requires durable "
-                + "source-cleanup completion evidence",
-            failure.getCause().getMessage());
-        assertEquals(0, sends.get(),
-            "the unsupported Join must fail before any relocation ingress");
+    private static java.util.function.BiFunction<
+        ZLinkBackendObject,
+        ZLinkBackendAdmissionKey,
+        java.util.function.BiFunction<
+            Supplier<Boolean>,
+            Runnable,
+            CompletionStage<Void>>> unusedAdmission() {
+        return (backend, key) -> (submission, cleanup) ->
+            CompletableFuture.failedFuture(new AssertionError(
+                "Framework admission must not be invoked"));
     }
 
     private static ZLinkInternalSpotNode spotNode(AtomicInteger sends) {
@@ -323,8 +215,7 @@ final class ZLinkBoundSessionSendCallContractTest {
             7,
             8,
             RoutingId.from("node-a"),
-            9,
-            0);
+            9);
     }
 
     private static ZLinkInternalSpotNode spotNode(
@@ -335,6 +226,18 @@ final class ZLinkBoundSessionSendCallContractTest {
 
     private static ZLinkInternalSpotNode spotNode(
         AtomicInteger sends,
+        AtomicBoolean hasBoundSessionRoute) {
+        return spotNode(
+            sends,
+            sends,
+            CompletableFuture.completedFuture(null),
+            hasBoundSessionRoute);
+    }
+
+    private static ZLinkInternalSpotNode spotNode(
+        AtomicInteger synchronousSends,
+        AtomicInteger asynchronousSends,
+        CompletionStage<Void> bindingTerminal,
         AtomicBoolean hasBoundSessionRoute) {
         return (ZLinkInternalSpotNode) Proxy.newProxyInstance(
             ZLinkInternalSpotNode.class.getClassLoader(),
@@ -351,16 +254,30 @@ final class ZLinkBoundSessionSendCallContractTest {
                         7);
                 }
                 case "sendActorBoundSession" -> {
-                    sends.incrementAndGet();
+                    synchronousSends.incrementAndGet();
                     yield true;
+                }
+                case "hasRemoteActorBoundSessionRoute" -> false;
+                case "hasLocalActorBoundSessionRoute" ->
+                    hasBoundSessionRoute.get();
+                case "sendLocalActorBoundSession" -> {
+                    synchronousSends.incrementAndGet();
+                    yield true;
+                }
+                case "sendLocalActorBoundSessionAsync" -> {
+                    asynchronousSends.incrementAndGet();
+                    yield bindingTerminal;
+                }
+                case "sendRemoteActorBoundSession" -> {
+                    asynchronousSends.incrementAndGet();
+                    yield CompletableFuture.completedFuture(null);
                 }
                 case "boundSessionRoute" -> hasBoundSessionRoute.get()
                     ? Optional.of(new ZLinkInternalSpotNode.BoundSessionRoute(
                         RoutingId.from("session-node"),
                         1,
                         RoutingId.from("session-1"),
-                        1,
-                        0))
+                        1))
                     : Optional.empty();
                 case "destroyActor" -> CompletableFuture.completedFuture(null);
                 case "close" -> null;

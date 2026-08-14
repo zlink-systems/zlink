@@ -4,9 +4,17 @@ import type {
   ZLinkRawHostPort,
   ZLinkRawMonitorRecord,
   ZLinkRawMonitorPort,
+  ZLinkRawReceivedRecord,
   ZLinkRawRouterPort
 } from '../backend/raw-binding-port';
 import { RequestResult } from '../backend/runtime-values';
+import type {
+  ApplicationJobPermitPort,
+  ApplicationJobQueuePort
+} from '../application-jobs/contracts';
+import {
+  ApplicationIngressRecordOwner
+} from '../application-jobs/application-ingress-record-owner';
 import { OperationRegistry, type PendingOperation } from './operation-registry';
 import { ServiceLivenessRegistry, type ServiceLivenessTick } from './service-liveness-registry';
 import { ServiceMailbox, type ServiceMailboxLimits, type ServiceMailboxRecord } from './service-mailbox';
@@ -68,11 +76,12 @@ export interface RawServiceIngressRecord {
   readonly requestSequence?: bigint;
   readonly reply?: (parts: readonly Uint8Array[]) => void;
   readonly parts: readonly Buffer[];
+  readonly applicationJobOwner?: ApplicationIngressRecordOwner;
 }
 
 export type RawServiceIngressHandler = (
   record: RawServiceIngressRecord
-) => RawServicePumpResult | undefined;
+) => RawServicePumpResult | undefined | Promise<RawServicePumpResult | undefined>;
 
 export interface RawServiceMeshRuntimeOptions {
   readonly descriptor: ServiceNodeDescriptor;
@@ -80,6 +89,8 @@ export interface RawServiceMeshRuntimeOptions {
   readonly probeIntervalMs?: number;
   readonly peerTimeoutMs?: number;
   readonly bindingPort: ZLinkRawBindingPort;
+  readonly applicationJobQueue?: ApplicationJobQueuePort;
+  readonly onMailboxReady?: (domain: 'application' | 'infrastructure') => void;
   readonly onPeerNotRequired?: (
     nodeRoutingId: string,
     endpoint: string
@@ -89,11 +100,6 @@ export interface RawServiceMeshRuntimeOptions {
     endpoint: string,
     lifecycleGeneration: bigint
   ) => void;
-  readonly onInboundMessageDropped?: (
-    surface: 'node' | 'channel',
-    messageKind: 'send',
-    reason: 'backpressure'
-  ) => void;
   readonly onProtocolError?: (record: {
     readonly sourceRoutingId: string;
     readonly request: boolean;
@@ -102,35 +108,12 @@ export interface RawServiceMeshRuntimeOptions {
   }) => void;
 }
 
-const DEFAULT_MAILBOX_LIMITS: ServiceMailboxLimits = {
-  applicationMessages: 4_096,
-  applicationBytes: 64 * 1024 * 1024,
-  infrastructureMessages: 1_024,
-  infrastructureBytes: 8 * 1024 * 1024
-};
 const MONITOR_DISCONNECTED = 0x0200;
 const MONITOR_CONNECTION_READY = 0x1000;
 const MONITOR_CONNECTION_READY_EDGE = 1;
 // Framework error code 13 (RequestTargetNotFound) is encoded as 14 on a
 // RequestResult.NotFound reply. Boundary transport results keep failureCode 0.
 const REQUEST_TARGET_NOT_FOUND_FAILURE_CODE = 14;
-// Framework error code 17 (WorkerQueueFull) uses the wire offset convention.
-const WORKER_QUEUE_FULL_FAILURE_CODE = 18;
-const MAX_COMPLETION_CONTROL_BYTES = 64 * 1024;
-const COMPLETION_CONTROL_COMMANDS = new Set<number>([
-  M6aServiceWireCommand.hello,
-  M6aServiceWireCommand.admit,
-  M6aServiceWireCommand.reject,
-  M6aServiceWireCommand.update,
-  M6aServiceWireCommand.livenessProbe,
-  M6aServiceWireCommand.livenessAck,
-  // Relocation coordination and reply recovery commands. Object messages,
-  // lifecycle callbacks and normal request/reply commands are deliberately
-  // absent from this allowlist.
-  30, 31, 32, 33, 34, 35,
-  40, 41, 42, 43, 44, 45, 46
-]);
-
 type PhysicalConnectionDirection = 'inbound' | 'outbound' | 'unknown';
 
 interface PhysicalConnectionCandidate {
@@ -154,7 +137,7 @@ const MAX_UNRESOLVED_CONNECTION_CANDIDATES = 4096;
 
 /**
  * RouteMesh M6A runtime built only on the public raw binding package.
- * It owns protocol, admission, mailbox, completion and liveness state.
+ * It owns protocol, admission, mailbox, request and liveness state.
  */
 export class RawServiceMeshRuntime {
   readonly topology: ServiceTopologyRegistry;
@@ -185,9 +168,10 @@ export class RawServiceMeshRuntime {
   private monitorEvents: ZLinkRawMonitorRecord[] = [];
   private monitorDrainBuffer: ZLinkRawMonitorRecord[] = [];
   private readonly bindingPort: ZLinkRawBindingPort;
+  private readonly applicationJobQueue: ApplicationJobQueuePort;
+  private readonly applicationJobStop = new AbortController();
   private readonly onPeerNotRequired?: RawServiceMeshRuntimeOptions['onPeerNotRequired'];
   private readonly onPeerDisconnected?: RawServiceMeshRuntimeOptions['onPeerDisconnected'];
-  private readonly onInboundMessageDropped?: RawServiceMeshRuntimeOptions['onInboundMessageDropped'];
   private readonly onProtocolError?: RawServiceMeshRuntimeOptions['onProtocolError'];
   private descriptor: ServiceNodeDescriptor;
   private host?: ZLinkRawHostPort;
@@ -200,12 +184,15 @@ export class RawServiceMeshRuntime {
   constructor(options: RawServiceMeshRuntimeOptions) {
     this.descriptor = options.descriptor;
     this.topology = new ServiceTopologyRegistry(options.descriptor);
-    this.mailbox = new ServiceMailbox({ ...DEFAULT_MAILBOX_LIMITS, ...options.mailbox });
+    this.mailbox = new ServiceMailbox(undefined, options.onMailboxReady);
     this.liveness = new ServiceLivenessRegistry(options.probeIntervalMs, options.peerTimeoutMs);
     this.bindingPort = options.bindingPort;
+    if (options.applicationJobQueue === undefined) {
+      throw new TypeError('Raw service runtime requires the host Application Job Queue.');
+    }
+    this.applicationJobQueue = options.applicationJobQueue;
     this.onPeerNotRequired = options.onPeerNotRequired;
     this.onPeerDisconnected = options.onPeerDisconnected;
-    this.onInboundMessageDropped = options.onInboundMessageDropped;
     this.onProtocolError = options.onProtocolError;
   }
 
@@ -247,16 +234,6 @@ export class RawServiceMeshRuntime {
             this.monitorEvents.push(event);
           }
         }
-      });
-      router.setCompletionControlHandler?.((sourceRid, parts) => {
-        // The binding callback owns Completion progress independently of
-        // Application Recv. Process the copied record synchronously so the
-        // Framework does not add another payload queue.
-        this.processReceived({
-          sourceRid,
-          sourceRoute: Buffer.alloc(0),
-          parts
-        }, performance.now(), true);
       });
       this.host = host;
       this.router = router;
@@ -372,9 +349,9 @@ export class RawServiceMeshRuntime {
     }
   }
 
-  announcePeer(nodeRoutingId: string): boolean {
+  async announcePeer(nodeRoutingId: string): Promise<boolean> {
     if (!this.expectedPeers.has(nodeRoutingId)) return false;
-    return this.trySend(
+    return this.send(
       nodeRoutingId,
       [encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())]
     );
@@ -406,7 +383,7 @@ export class RawServiceMeshRuntime {
     return ready;
   }
 
-  announceExpectedPeers(): number {
+  async announceExpectedPeers(): Promise<number> {
     let accepted = 0;
     for (const nodeRoutingId of this.expectedPeers.keys()) {
       // Admission is a one-time fence for the current physical connection.
@@ -415,16 +392,16 @@ export class RawServiceMeshRuntime {
       // can use the route. A disconnected peer is removed by monitor handling
       // and remains eligible for the next admission attempt.
       if (this.topology.peer(nodeRoutingId) !== undefined) continue;
-      if (this.announcePeer(nodeRoutingId)) accepted++;
+      if (await this.announcePeer(nodeRoutingId)) accepted++;
     }
     return accepted;
   }
 
-  updateLocalWeights(options: {
+  async updateLocalWeights(options: {
     readonly placementWeight?: number;
     readonly channelName?: string;
     readonly channelWeight?: number;
-  }): void {
+  }): Promise<void> {
     const current = this.topology.localDescriptor();
     const channels = options.channelName === undefined
       ? current.channels
@@ -449,7 +426,7 @@ export class RawServiceMeshRuntime {
       this.topology.localDescriptor()
     );
     for (const peer of this.topology.peers()) {
-      const sent = this.trySend(peer.descriptor.nodeRoutingId, [update]);
+      const sent = await this.send(peer.descriptor.nodeRoutingId, [update]);
       debugRoute('descriptor-update-send', {
         meshName: this.descriptor.meshName,
         localNodeRoutingId: this.descriptor.nodeRoutingId,
@@ -460,7 +437,7 @@ export class RawServiceMeshRuntime {
         sent
       });
     }
-    this.announceExpectedPeers();
+    await this.announceExpectedPeers();
   }
 
   replaceDiscoveredNotRequired(
@@ -476,28 +453,43 @@ export class RawServiceMeshRuntime {
     return descriptor?.objectRole === 'client';
   }
 
-  sendToNode(targetNodeRoutingId: string, payload: ServiceApplicationPayload): boolean {
-    return this.trySend(
+  async sendToNode(
+    targetNodeRoutingId: string,
+    payload: ServiceApplicationPayload
+  ): Promise<boolean> {
+    return this.send(
       targetNodeRoutingId,
       [encodeNodeSendHeader(), encodeApplicationPayload(payload)]
     );
   }
 
-  sendToChannel(channelName: string, payload: ServiceApplicationPayload): boolean {
+  async sendToChannel(
+    channelName: string,
+    payload: ServiceApplicationPayload
+  ): Promise<boolean> {
     const selected = this.topology.selectChannel(
       channelName,
       peer => this.isLocalOrReadyPeer(peer.descriptor.nodeRoutingId)
     );
     if (selected === undefined) return false;
     if (selected.descriptor.nodeRoutingId === this.descriptor.nodeRoutingId) {
-      return this.mailbox.tryEnqueue({
-        owner: `channel:${channelName}`,
-        domain: 'application',
-        parts: [encodeChannelSendHeader(channelName), encodeApplicationPayload(payload)],
-        sourceRoutingId: this.descriptor.nodeRoutingId
-      });
+      const applicationJobOwner = await this.reserveLocalIngress();
+      try {
+        const applicationJob = await applicationJobOwner.acquire('application');
+        const accepted = this.mailbox.tryEnqueue({
+          owner: `channel:${channelName}`,
+          domain: 'application',
+          parts: [encodeChannelSendHeader(channelName), encodeApplicationPayload(payload)],
+          sourceRoutingId: this.descriptor.nodeRoutingId,
+          applicationJob
+        });
+        if (!accepted) applicationJob.close();
+        return accepted;
+      } finally {
+        applicationJobOwner.close();
+      }
     }
-    return this.trySend(selected.descriptor.nodeRoutingId, [
+    return this.send(selected.descriptor.nodeRoutingId, [
       encodeChannelSendHeader(channelName),
       encodeApplicationPayload(payload)
     ]);
@@ -547,27 +539,25 @@ export class RawServiceMeshRuntime {
     this.serviceIngress = handler;
   }
 
-  sendService(targetNodeRoutingId: string, parts: readonly Uint8Array[]): boolean {
-    return this.trySend(targetNodeRoutingId, parts);
+  async reserveLocalIngress(
+    signal?: AbortSignal
+  ): Promise<ApplicationIngressRecordOwner> {
+    const waitSignal = signal === undefined
+      ? this.applicationJobStop.signal
+      : AbortSignal.any([this.applicationJobStop.signal, signal]);
+    const permit = await this.applicationJobQueue.acquire(waitSignal);
+    return ApplicationIngressRecordOwner.create(
+      this.applicationJobQueue,
+      permit,
+      { close() {} }
+    );
   }
 
-  /**
-   * Sends only the bounded Framework control commands that are safe while
-   * Application receive is paused.
-   */
-  sendCompletionControl(
+  async sendService(
     targetNodeRoutingId: string,
     parts: readonly Uint8Array[]
-  ): boolean {
-    if (!validCompletionControlRecord(parts)) return false;
-    try {
-      return this.requireStarted().trySendCompletionControl?.(
-        targetNodeRoutingId,
-        parts
-      ) ?? false;
-    } catch {
-      return false;
-    }
+  ): Promise<boolean> {
+    return this.send(targetNodeRoutingId, parts);
   }
 
   requestService(
@@ -637,22 +627,47 @@ export class RawServiceMeshRuntime {
     );
   }
 
-  pumpOne(
+  async pumpOne(
     nowMs = performance.now(),
     observe?: RawServicePumpObserver
-  ): RawServicePumpResult {
+  ): Promise<RawServicePumpResult> {
     const router = this.requireStarted();
-    const received = router.receive(true);
-    if (received === undefined) return 'noData';
-    const result = this.processReceived(received, nowMs, false);
-    if (result === 'protocolError') {
-      this.reportProtocolError(received);
+    let permit: ApplicationJobPermitPort;
+    try {
+      permit = await this.applicationJobQueue.acquire(this.applicationJobStop.signal);
+    } catch (error) {
+      if (this.closed || this.applicationJobStop.signal.aborted) return 'noData';
+      throw error;
     }
-    observe?.(
-      received.sourceRid,
-      received.parts.reduce((sum, part) => sum + part.byteLength, 0)
+    let received: ZLinkRawReceivedRecord | undefined;
+    try {
+      received = router.receive(true);
+    } catch (error) {
+      permit.releaseAfterInternalProcessing();
+      throw error;
+    }
+    if (received === undefined) {
+      permit.releaseAfterInternalProcessing();
+      return 'noData';
+    }
+    const applicationJobOwner = ApplicationIngressRecordOwner.create(
+      this.applicationJobQueue,
+      permit,
+      received
     );
-    return result;
+    try {
+      const result = await this.processReceived(received, nowMs, applicationJobOwner);
+      if (result === 'protocolError') {
+        this.reportProtocolError(received);
+      }
+      observe?.(
+        received.sourceRid,
+        received.parts.reduce((sum, part) => sum + part.byteLength, 0)
+      );
+      return result;
+    } finally {
+      applicationJobOwner.close();
+    }
   }
 
   private reportProtocolError(
@@ -701,22 +716,11 @@ export class RawServiceMeshRuntime {
     }
   }
 
-  /**
-   * Progresses request completions and bounded Framework controls without
-   * consuming a message from the Application connection.
-   */
-  progressCompletion(): number {
-    return this.requireStarted().progressCompletion?.() ?? 0;
-  }
-
-  private processReceived(
-    received: import('../backend/node/node-raw-binding-port').ZLinkRawReceivedRecord,
+  private async processReceived(
+    received: ZLinkRawReceivedRecord,
     nowMs: number,
-    completionControl: boolean
-  ): RawServicePumpResult {
-    if (completionControl && !validCompletionControlRecord(received.parts)) {
-      return 'protocolError';
-    }
+    applicationJobOwner: ApplicationIngressRecordOwner
+  ): Promise<RawServicePumpResult> {
     if (
       received.parts.length === 0
       || (
@@ -724,7 +728,7 @@ export class RawServiceMeshRuntime {
         && received.parts[0]!.byteLength === 0
       )
     ) {
-      return this.trySend(
+      return await this.send(
         received.sourceRid,
         [encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())]
       )
@@ -752,7 +756,7 @@ export class RawServiceMeshRuntime {
             || expected.nodeRoutingId !== descriptor.nodeRoutingId
           )
         ) {
-          this.trySend(received.sourceRid, [encodeReject(3)]);
+          await this.send(received.sourceRid, [encodeReject(3)]);
           return 'infrastructure';
         }
         const connection = this.currentConnectionCandidate(
@@ -768,7 +772,7 @@ export class RawServiceMeshRuntime {
           expected
         );
         if (result !== 'admitted') {
-          this.trySend(received.sourceRid, [encodeReject(admissionReason(result))]);
+          await this.send(received.sourceRid, [encodeReject(admissionReason(result))]);
           if (result === 'notRequired') {
             this.retireNotRequiredExpectedPeer(
               received.sourceRid,
@@ -779,7 +783,7 @@ export class RawServiceMeshRuntime {
         }
         this.selectBilateralConnection(descriptor);
         if (header.command === M6aServiceWireCommand.hello) {
-          this.trySend(
+          await this.send(
             received.sourceRid,
             [encodeRouteMeshAdmission(M6aServiceWireCommand.admit, this.topology.localDescriptor())]
           );
@@ -823,14 +827,12 @@ export class RawServiceMeshRuntime {
             peer.connectionId,
             record.probeId
           );
-          const sent = ack !== undefined && this.trySend(
+          const sent = ack !== undefined && await this.send(
             received.sourceRid,
             [livenessCodec.encodeLivenessRecord({
               command: M6aServiceWireCommand.livenessAck,
               probeId: record.probeId
-            })],
-            received.transportPairId,
-            received.transportPairGeneration
+            })]
           );
           if (!sent) {
             return 'protocolError';
@@ -853,7 +855,7 @@ export class RawServiceMeshRuntime {
         }
         return 'infrastructure';
       }
-      const stateful = this.serviceIngress?.({
+      const stateful = await this.serviceIngress?.({
         command: header.command,
         flags: header.flags,
         sourceRoutingId: received.sourceRid,
@@ -861,7 +863,8 @@ export class RawServiceMeshRuntime {
         sourceRoute: received.sourceRoute,
         ...(received.reply === undefined ? {} : { reply: received.reply }),
         ...(received.requestSeq === undefined ? {} : { requestSequence: received.requestSeq }),
-        parts: received.parts
+        parts: received.parts,
+        applicationJobOwner
       });
       if (stateful !== undefined) return stateful;
       if (
@@ -890,6 +893,7 @@ export class RawServiceMeshRuntime {
         owner = `channel:${channel.channelName}`;
         correlation = channel.correlation;
       }
+      const applicationJob = await applicationJobOwner.acquire('application');
       const accepted = this.mailbox.tryEnqueue({
         owner,
         domain: 'application',
@@ -898,14 +902,11 @@ export class RawServiceMeshRuntime {
         sourceRoute: received.sourceRoute,
         ...(received.reply === undefined ? {} : { reply: received.reply }),
         requestSequence: received.requestSeq,
-        ...(correlation === undefined ? {} : { correlation })
+        ...(correlation === undefined ? {} : { correlation }),
+        applicationJob
       });
       if (accepted) return 'application';
-      if (header.command === M6aServiceWireCommand.nodeSend) {
-        this.onInboundMessageDropped?.('node', 'send', 'backpressure');
-      } else if (header.command === M6aServiceWireCommand.channelSend) {
-        this.onInboundMessageDropped?.('channel', 'send', 'backpressure');
-      }
+      applicationJob.close();
       if (correlation !== undefined && received.requestSeq !== undefined) {
         this.replyService({
           sourceRoutingId: received.sourceRid,
@@ -915,8 +916,8 @@ export class RawServiceMeshRuntime {
         }, [
           encodeReplyHeader(
             correlation,
-            RequestResult.Rejected,
-            WORKER_QUEUE_FULL_FAILURE_CODE
+            RequestResult.NotConnected,
+            0
           )
         ]);
         return 'infrastructure';
@@ -928,11 +929,11 @@ export class RawServiceMeshRuntime {
     }
   }
 
-  tickLiveness(nowMs = performance.now()): ServiceLivenessTick {
+  async tickLiveness(nowMs = performance.now()): Promise<ServiceLivenessTick> {
     const result = this.liveness.tick(nowMs);
     this.requireStarted();
     for (const probe of result.probes) {
-      const sent = this.trySend(probe.nodeRoutingId, [livenessCodec.encodeLivenessRecord({
+      const sent = await this.send(probe.nodeRoutingId, [livenessCodec.encodeLivenessRecord({
         command: M6aServiceWireCommand.livenessProbe,
         probeId: probe.probeId
       })]);
@@ -959,7 +960,7 @@ export class RawServiceMeshRuntime {
     return result;
   }
 
-  drainMonitorEvents(nowMs = performance.now()): number {
+  async drainMonitorEvents(nowMs = performance.now()): Promise<number> {
     let handled = 0;
     // Detach the current batch so monitor callbacks that run while an event is
     // being handled append to the next batch without copying or reindexing it.
@@ -1009,7 +1010,7 @@ export class RawServiceMeshRuntime {
                 this.connectionCandidates.set(nodeRoutingId, provisionalCandidates);
               }
               provisionalCandidates.set(candidate.connectionId, candidate);
-              this.announcePeer(nodeRoutingId);
+              await this.announcePeer(nodeRoutingId);
               continue;
             }
             const sameTransportPair = existingCandidate !== undefined
@@ -1041,7 +1042,7 @@ export class RawServiceMeshRuntime {
           }
           provisionalCandidates.set(candidate.connectionId, candidate);
           this.connectionIds.set(nodeRoutingId, candidate.connectionId);
-          this.announcePeer(nodeRoutingId);
+          await this.announcePeer(nodeRoutingId);
           continue;
         }
         let candidates = this.connectionCandidates.get(nodeRoutingId);
@@ -1053,7 +1054,7 @@ export class RawServiceMeshRuntime {
         // Before wire admission the monitor candidate is the only physical
         // route evidence available to the admission message.
         this.connectionIds.set(nodeRoutingId, candidate.connectionId);
-        this.announcePeer(nodeRoutingId);
+        await this.announcePeer(nodeRoutingId);
       } else if (
         event.event === MONITOR_DISCONNECTED
         && nodeRoutingId !== undefined
@@ -1082,6 +1083,9 @@ export class RawServiceMeshRuntime {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.applicationJobStop.abort(
+      new Error('Raw service runtime application job admission stopped.')
+    );
     this.mailbox.close();
     this.operations.close('Raw service runtime closed.');
     this.serviceIngress = undefined;
@@ -1140,27 +1144,47 @@ export class RawServiceMeshRuntime {
     }
     if (selectedTargetNodeRoutingId === this.descriptor.nodeRoutingId) {
       const parts = [header, encodedPayload];
-      const accepted = this.mailbox.tryEnqueue({
-        owner: channelName === undefined
-          ? `node:${this.descriptor.nodeRoutingId}`
-          : `channel:${channelName}`,
-        domain: 'application',
-        parts,
-        sourceRoutingId: this.descriptor.nodeRoutingId,
-        correlation,
-        localReply: (terminalResult, failureCode, reply) =>
-          this.operations.complete(pending.id, {
-            terminalResult,
-            failureCode,
-            ...(reply === undefined ? {} : { payload: reply })
-          })
-      });
-      if (!accepted) {
-        this.operations.complete(pending.id, {
-          terminalResult: 109,
-          failureCode: 0
-        });
-      }
+      const capacityStop = new AbortController();
+      void pending.promise.finally(() => capacityStop.abort()).catch(() => undefined);
+      void (async () => {
+        const applicationJobOwner = await this.reserveLocalIngress(capacityStop.signal);
+        try {
+          if (!this.operations.isPending(pending.id)) return;
+          const applicationJob = await applicationJobOwner.acquire(
+            'application',
+            capacityStop.signal
+          );
+          if (!this.operations.isPending(pending.id)) {
+            applicationJob.close();
+            return;
+          }
+          const accepted = this.mailbox.tryEnqueue({
+            owner: channelName === undefined
+              ? `node:${this.descriptor.nodeRoutingId}`
+              : `channel:${channelName}`,
+            domain: 'application',
+            parts,
+            sourceRoutingId: this.descriptor.nodeRoutingId,
+            correlation,
+            localReply: (terminalResult, failureCode, reply) =>
+              this.operations.complete(pending.id, {
+                terminalResult,
+                failureCode,
+                ...(reply === undefined ? {} : { payload: reply })
+              }),
+            applicationJob
+          });
+          if (!accepted) {
+            applicationJob.close();
+            this.operations.complete(pending.id, {
+              terminalResult: RequestResult.NotConnected,
+              failureCode: 0
+            });
+          }
+        } finally {
+          applicationJobOwner.close();
+        }
+      })().catch(error => this.operations.fail(pending.id, error));
       return pending;
     }
     if (!this.isPeerRouteReady(selectedTargetNodeRoutingId)) {
@@ -1179,7 +1203,6 @@ export class RawServiceMeshRuntime {
       return pending;
     }
     const parts = [header, encodedPayload];
-    const selectedPair = this.currentTransportPair(selectedTargetNodeRoutingId);
     debugRoute('request-native', {
       meshName: this.descriptor.meshName,
       targetNodeRoutingId: selectedTargetNodeRoutingId,
@@ -1191,16 +1214,11 @@ export class RawServiceMeshRuntime {
     let request: Promise<readonly Uint8Array[]>;
     try {
       router = this.requireStarted();
-      request = selectedPair?.transportPairId !== undefined
-        && selectedPair.transportPairGeneration !== undefined
-        ? router.requestTransportPair(
-            selectedTargetNodeRoutingId,
-            selectedPair.transportPairId,
-            selectedPair.transportPairGeneration,
-            parts,
-            timeoutMs
-          )
-        : router.request(selectedTargetNodeRoutingId, parts, timeoutMs);
+      request = router.request(
+        selectedTargetNodeRoutingId,
+        parts,
+        timeoutMs
+      );
     } catch (error) {
       this.operations.fail(pending.id, error);
       return pending;
@@ -1672,84 +1690,16 @@ export class RawServiceMeshRuntime {
     return this.router;
   }
 
-  private trySend(
+  private async send(
     targetNodeRoutingId: string,
-    parts: readonly Uint8Array[],
-    transportPairId?: bigint,
-    transportPairGeneration?: bigint
-  ): boolean {
+    parts: readonly Uint8Array[]
+  ): Promise<boolean> {
     try {
-      const router = this.requireStarted();
-      const candidate = this.currentTransportPair(targetNodeRoutingId);
-      const pairId = transportPairId ?? candidate?.transportPairId;
-      const pairGeneration = transportPairGeneration ?? candidate?.transportPairGeneration;
-      const command = completionControlCommand(parts);
-      if (
-        command !== undefined
-        && command >= M6aServiceWireCommand.livenessProbe
-        && command <= M6aServiceWireCommand.livenessAck
-      ) {
-        if (
-          pairId !== undefined
-          && pairGeneration !== undefined
-          && router.trySendCompletionControlTransportPair !== undefined
-        ) {
-          return router.trySendCompletionControlTransportPair(
-            targetNodeRoutingId,
-            pairId,
-            pairGeneration,
-            parts
-          );
-        }
-        if (router.trySendCompletionControl === undefined) return false;
-        return router.trySendCompletionControl(targetNodeRoutingId, parts);
-      }
-      if (
-        pairId !== undefined
-        && pairGeneration !== undefined
-      ) {
-        return router.sendTransportPair(
-          targetNodeRoutingId,
-          pairId,
-          pairGeneration,
-          parts,
-          true
-        );
-      }
-      return router.send(targetNodeRoutingId, parts, true);
+      await this.requireStarted().send(targetNodeRoutingId, parts);
+      return true;
     } catch {
       return false;
     }
-  }
-
-  private currentTransportPair(nodeRoutingId: string): PhysicalConnectionCandidate | undefined {
-    const peer = this.topology.peer(nodeRoutingId);
-    // The topology owns semantic route selection. Monitor candidates may
-    // represent a provisional or stale physical connection with the same RID.
-    const connectionId = peer?.connectionId ?? this.connectionIds.get(nodeRoutingId);
-    const candidates = this.connectionCandidates.get(nodeRoutingId);
-    if (connectionId !== undefined) {
-      const selected = candidates?.get(connectionId);
-      if (selected?.transportPairId !== undefined
-        && selected.transportPairGeneration !== undefined) {
-        return selected;
-      }
-    }
-    if (peer !== undefined && peer.connectionId.startsWith('unmonitored:')) {
-      // A monitor pair can become ready immediately after the fallback
-      // endpoint admission. Use its physical pair for the next operation;
-      // otherwise Core may already have replaced the fallback pipe while the
-      // semantic descriptor still names the same peer.
-      let latest: PhysicalConnectionCandidate | undefined;
-      for (const candidate of candidates?.values() ?? []) {
-        if (candidate.transportPairId !== undefined
-          && candidate.transportPairGeneration !== undefined) {
-          latest = candidate;
-        }
-      }
-      return latest;
-    }
-    return undefined;
   }
 
 }
@@ -1761,12 +1711,6 @@ function protocolCommand(parts: readonly Uint8Array[]): { readonly command?: num
   } catch {
     return {};
   }
-}
-
-function validCompletionControlRecord(parts: readonly Uint8Array[]): boolean {
-  return completionControlCommand(parts) !== undefined
-    && parts.reduce((total, part) => total + part.byteLength, 0)
-      <= MAX_COMPLETION_CONTROL_BYTES;
 }
 
 function debugRoute(event: string, fields: Record<string, unknown>): void {
@@ -1796,23 +1740,6 @@ function isAlreadyDisconnectedError(error: unknown): boolean {
     return false;
   }
   return (error as { readonly nativeErrno?: unknown }).nativeErrno === 2;
-}
-
-function completionControlCommand(
-  parts: readonly Uint8Array[]
-): number | undefined {
-  if (parts.length !== 1 || parts[0]!.byteLength < 5) return undefined;
-  try {
-    const header = decodeHeader(parts[0]!);
-    const validFlags = header.command === 30
-      ? header.flags === 8
-      : header.flags === 0;
-    return validFlags && COMPLETION_CONTROL_COMMANDS.has(header.command)
-      ? header.command
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function monitorConnectionId(

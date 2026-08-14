@@ -35,7 +35,6 @@ import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
@@ -54,6 +53,7 @@ final class ZLinkMeshApplicationDispatcherTest {
         GatedNodeHandler.release = new CompletableFuture<>();
         GatedNodeHandler.completedCount = new AtomicInteger();
         GatedNodeHandler.completed = new CompletableFuture<>();
+        GatedNodeHandler.threeCompleted = new CompletableFuture<>();
         ProtocolRequestHandler.received = new CompletableFuture<>();
     }
 
@@ -190,7 +190,9 @@ final class ZLinkMeshApplicationDispatcherTest {
             Message.from("owned-value".getBytes(StandardCharsets.UTF_8)));
 
         Integer status = dispatcher.submitLocalNodeSend(
-            RoutingId.from("source-node"), new byte[0], parts);
+                RoutingId.from("source-node"), new byte[0], parts)
+            .toCompletableFuture()
+            .get(2, TimeUnit.SECONDS);
         parts.forEach(Message::close);
 
         assertEquals(0, status);
@@ -205,14 +207,21 @@ final class ZLinkMeshApplicationDispatcherTest {
     }
 
     @Test
-    void localNodeSendUsesBoundedPendingCapacityAndEmitsReadyOnce() throws Exception {
+    void localNodeSendUsesTheHostQueueWithoutReusingSocketHwm() throws Exception {
         MeshNodeRegistration mesh = new MeshNodeRegistration("game");
         mesh.listen("inproc://mesh-local-node-capacity");
         mesh.configureRouterSocket().setReceiveHighWaterMark(1);
         mesh.addRouteSendHandler(GatedNodeHandler.class, String.class);
-        ZLinkMeshApplicationDispatcher dispatcher = dispatcher(mesh);
-        CompletableFuture<Void> capacityAvailable = new CompletableFuture<>();
-        dispatcher.setLocalNodeReadyHandler(() -> capacityAvailable.complete(null));
+        ZLinkFrameworkRegistration framework = new ZLinkFrameworkRegistration();
+        framework.inboundDispatch().setMaxQueuedApplicationJobs(1);
+        ZLinkMeshApplicationDispatcher dispatcher = new ZLinkMeshApplicationDispatcher(
+            mesh,
+            new ZLinkStringMessageSerializer(),
+            framework,
+            ZLinkHandlerActivator.reflection(),
+            (token, parts) -> {
+                throw new AssertionError("send dispatch must not reply");
+            });
 
         assertEquals(
             0,
@@ -221,16 +230,22 @@ final class ZLinkMeshApplicationDispatcherTest {
         assertEquals(
             0,
             submitLocal(dispatcher, "String", "pending"));
-        assertEquals(
-            1,
-            submitLocal(dispatcher, "String", "rejected"));
+        CompletionStage<Integer> waiting =
+            submitLocalAsync(dispatcher, "String", "waiting");
+        assertFalse(waiting.toCompletableFuture().isDone());
+        var snapshot = framework.applicationJobQueue().snapshot();
+        assertEquals(1, snapshot.queuedApplicationJobs());
+        assertEquals(1, snapshot.capacityWaiters());
 
         GatedNodeHandler.release.complete(null);
 
-        capacityAvailable.get(2, TimeUnit.SECONDS);
         assertEquals(
             0,
-            submitLocal(dispatcher, "String", "after-ready"));
+            waiting.toCompletableFuture().get(2, TimeUnit.SECONDS));
+        assertEquals(
+            3,
+            GatedNodeHandler.threeCompleted.get(2, TimeUnit.SECONDS));
+        assertEquals(0, framework.applicationJobQueue().snapshot().permitsInUse());
     }
 
     @Test
@@ -283,51 +298,17 @@ final class ZLinkMeshApplicationDispatcherTest {
         assertTrue(drains.awaitZero("game").toCompletableFuture().isDone());
     }
 
-    @Test
-    void attachedRawMailboxLeaseIsNotCountedAgainByTheApplicationDispatcher()
-        throws Exception {
-        MeshNodeRegistration mesh = new MeshNodeRegistration("game");
-        mesh.listen("inproc://mesh-dispatch-attached-lease");
-        mesh.addRouteSendHandler(GatedNodeHandler.class, String.class);
-        ZLinkInboundDispatchBudget budget =
-            new ZLinkInboundDispatchBudget(10);
-        ZLinkMeshApplicationDispatcher dispatcher =
-            new ZLinkMeshApplicationDispatcher(
-                mesh,
-                new ZLinkStringMessageSerializer(),
-                new ZLinkFrameworkRegistration(),
-                ZLinkHandlerActivator.reflection(),
-                (token, parts) -> parts.forEach(Message::close),
-                null,
-                budget);
-        ZLinkInboundDispatchBudget.Lease mailboxLease = budget.track(7);
-
-        dispatcher.accept(record(
-            RecordKind.NODE_SEND,
-            null,
-            "mailbox-value",
-            Map.of(),
-            null,
-            null,
-            mailboxLease));
-
-        assertEquals(
-            7,
-            budget.snapshot().pendingPayloadBytes());
-        GatedNodeHandler.started.get(2, TimeUnit.SECONDS);
-        assertEquals(7, budget.snapshot().activePayloadBytes());
-
-        GatedNodeHandler.release.complete(null);
-        long deadline = System.nanoTime()
-            + TimeUnit.SECONDS.toNanos(2);
-        while (budget.snapshot().pendingPayloadBytes() != 0
-            && System.nanoTime() < deadline) {
-            Thread.sleep(1);
-        }
-        assertEquals(0, budget.snapshot().pendingPayloadBytes());
-    }
 
     private static Integer submitLocal(
+        ZLinkMeshApplicationDispatcher dispatcher,
+        String packetName,
+        String value) {
+        return submitLocalAsync(dispatcher, packetName, value)
+            .toCompletableFuture()
+            .join();
+    }
+
+    private static CompletionStage<Integer> submitLocalAsync(
         ZLinkMeshApplicationDispatcher dispatcher,
         String packetName,
         String value) {
@@ -375,17 +356,7 @@ final class ZLinkMeshApplicationDispatcherTest {
         Map<String, String> metadata,
         String contentType,
         Consumer<List<Message>> reply) {
-        return record(kind, channelName, value, metadata, contentType, reply, null);
-    }
 
-    private static ZLinkMeshDispatchRecord record(
-        RecordKind kind,
-        String channelName,
-        String value,
-        Map<String, String> metadata,
-        String contentType,
-        Consumer<List<Message>> reply,
-        ZLinkInboundDispatchBudget.Lease inboundDispatchLease) {
         RoutingId source = RoutingId.from("source-node");
         ReadyRecord owner = new ReadyRecord(OwnerKind.NODE, 1, null, null);
         ReceiveRecord receive = new ReceiveRecord(
@@ -411,8 +382,7 @@ final class ZLinkMeshApplicationDispatcherTest {
             List.of(
                 Message.from("String".getBytes(StandardCharsets.UTF_8)),
                 Message.from(value.getBytes(StandardCharsets.UTF_8))),
-            reply,
-            inboundDispatchLease);
+              reply);
     }
 
     private static ZLinkMeshDispatchRecord recordWithWireContentType(
@@ -444,7 +414,6 @@ final class ZLinkMeshApplicationDispatcherTest {
                 Message.from("String".getBytes(StandardCharsets.UTF_8)),
                 Message.from(value.getBytes(StandardCharsets.UTF_8)),
                 ZLinkChannelContentTypeFrame.encode(contentType)),
-            null,
             null);
     }
 
@@ -485,14 +454,20 @@ final class ZLinkMeshApplicationDispatcherTest {
         private static CompletableFuture<Void> release;
         private static AtomicInteger completedCount;
         private static CompletableFuture<Integer> completed;
+        private static CompletableFuture<Integer> threeCompleted;
 
         @Override
         public CompletionStage<Void> handle(
             String message,
             ZLinkRouteMessageContext context) {
             started.complete(message + "@" + context.sourceNodeRid());
-            return release.whenComplete((ignored, error) ->
-                completed.complete(completedCount.incrementAndGet()));
+            return release.whenComplete((ignored, error) -> {
+                int count = completedCount.incrementAndGet();
+                completed.complete(count);
+                if (count == 3) {
+                    threeCompleted.complete(count);
+                }
+            });
         }
     }
 

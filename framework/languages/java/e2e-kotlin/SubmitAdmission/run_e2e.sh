@@ -445,7 +445,7 @@ run_sa02() {
   start_role sa02-target \
     --role=target --rid=submit-target --httpPort="$target_http" \
     --meshEndpoint="tcp://127.0.0.1:$target_mesh" \
-    --gateFile="$gate" --applicationHwmBytes=512 \
+    --gateFile="$gate" \
     --defaultRequestTimeoutMillis=5000 \
     --evidenceFile="$LOG_DIR/sa02-target-evidence.jsonl"
   start_role sa02-caller \
@@ -488,13 +488,13 @@ run_sa03() {
   start_role sa03-target-a \
     --role=target --rid=submit-target-a --httpPort="$target_a_http" \
     --meshEndpoint="tcp://127.0.0.1:$target_a_mesh" \
-    --gateFile="$gate_a" --applicationHwmBytes=512 \
+    --gateFile="$gate_a" \
     --defaultRequestTimeoutMillis=700 \
     --evidenceFile="$LOG_DIR/sa03-target-a-evidence.jsonl"
   start_role sa03-target-b \
     --role=target --rid=submit-target-b --httpPort="$target_b_http" \
     --meshEndpoint="tcp://127.0.0.1:$target_b_mesh" \
-    --gateFile="$gate_b" --applicationHwmBytes=512 \
+    --gateFile="$gate_b" \
     --defaultRequestTimeoutMillis=700 \
     --evidenceFile="$LOG_DIR/sa03-target-b-evidence.jsonl"
   start_role sa03-caller \
@@ -548,7 +548,7 @@ run_sa04() {
   start_role sa04-target \
     --role=target --rid=submit-target --httpPort="$target_http" \
     --meshEndpoint="tcp://127.0.0.1:$target_mesh" \
-    --gateFile="$gate" --applicationHwmBytes=512 \
+    --gateFile="$gate" \
     --defaultRequestTimeoutMillis=600 \
     --evidenceFile="$LOG_DIR/sa04-target-evidence.jsonl"
   start_role sa04-caller \
@@ -596,7 +596,7 @@ run_sa07() {
   start_role sa07-target \
     --role=target --rid=submit-target --httpPort="$target_http" \
     --meshEndpoint="tcp://127.0.0.1:$target_mesh" \
-    --gateFile="$send_gate" --applicationHwmBytes=512 \
+    --gateFile="$send_gate" \
     --defaultRequestTimeoutMillis=5000 \
     --evidenceFile="$LOG_DIR/sa07-target-evidence.jsonl"
   start_role sa07-caller \
@@ -660,7 +660,7 @@ run_clientserver_variant() {
     --role=target --rid=submit-cs-$variant --httpPort="$target_http" \
     --meshEndpoint="tcp://127.0.0.1:$target_mesh" \
     --clientServerRole=server --clientServerPort="$cs_port" \
-    --gateFile="$gate" --applicationHwmBytes=512 \
+    --gateFile="$gate" \
     --defaultRequestTimeoutMillis=700 \
     --evidenceFile="$LOG_DIR/sa10-$variant-server-evidence.jsonl"
   start_role "sa10-$variant-client" \

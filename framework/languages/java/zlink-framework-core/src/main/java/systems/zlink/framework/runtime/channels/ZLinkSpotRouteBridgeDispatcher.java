@@ -3,102 +3,41 @@ package systems.zlink.framework.runtime.channels;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.SendFlags;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
 
 final class ZLinkSpotRouteBridgeDispatcher {
-    private static final Duration RETRY_DELAY = Duration.ofMillis(10);
-
     private ZLinkSpotRouteBridgeDispatcher() {
     }
 
-    static void submitSendWithRetry(
+    static void submitSend(
         ZLinkBackendSpotRouteBridge bridge,
         String routerChannelId,
         RoutingId targetNodeRid,
         String targetSpotId,
-        List<byte[]> payloads,
-        Duration timeout,
-        ScheduledExecutorService scheduler,
-        Executor infrastructureExecutor,
+        List<Message> requestParts,
         CompletableFuture<Void> result) {
-        long timeoutNanos = timeout.toNanos();
-        long deadline = System.nanoTime() + timeoutNanos;
-        class Attempt implements Runnable {
-            @Override
-            public void run() {
-                if (result.isDone()) {
-                    return;
-                }
-                List<Message> attemptParts = payloads.stream()
-                    .map(Message::from)
-                    .toList();
-                try {
-                    boolean submitted = bridge.send(
-                        routerChannelId,
-                        targetNodeRid,
-                        targetSpotId,
-                        attemptParts,
-                        SendFlags.DONT_WAIT);
-                    if (submitted) {
+        try {
+            bridge.send(
+                    routerChannelId,
+                    targetNodeRid,
+                    targetSpotId,
+                    requestParts)
+                .whenComplete((ignored, failure) -> {
+                    requestParts.forEach(Message::close);
+                    if (failure == null) {
                         result.complete(null);
-                        return;
+                    } else {
+                        result.completeExceptionally(
+                            ZLinkChannelCallRuntime.unwrap(failure));
                     }
-                    if (result.isDone()) {
-                        return;
-                    }
-                    if (System.nanoTime() >= deadline) {
-                        result.completeExceptionally(new TimeoutException(
-                            "routed SPOT route mesh send was not ready before timeout"));
-                        return;
-                    }
-                    // This attempt owns a single successor; the timer only
-                    // signals the infrastructure lane.
-                    scheduleRetry();
-                } catch (RuntimeException ex) {
-                    result.completeExceptionally(ex);
-                } finally {
-                    attemptParts.forEach(Message::close);
-                }
-            }
-
-            private void scheduleRetry() {
-                try {
-                    scheduler.schedule(
-                        () -> handoffRetry(this),
-                        RETRY_DELAY.toMillis(),
-                        TimeUnit.MILLISECONDS);
-                } catch (RejectedExecutionException rejection) {
-                    completeShutdown(rejection);
-                }
-            }
-
-            private void handoffRetry(Runnable retry) {
-                if (result.isDone()) {
-                    return;
-                }
-                try {
-                    infrastructureExecutor.execute(retry);
-                } catch (RejectedExecutionException rejection) {
-                    completeShutdown(rejection);
-                }
-            }
-
-            private void completeShutdown(RejectedExecutionException rejection) {
-                result.completeExceptionally(
-                    ZLinkChannelCallRuntime.shuttingDownFailure(rejection));
-            }
+                });
+        } catch (RuntimeException failure) {
+            requestParts.forEach(Message::close);
+            result.completeExceptionally(failure);
         }
-        new Attempt().run();
     }
 
     static void submitRequest(
@@ -108,53 +47,40 @@ final class ZLinkSpotRouteBridgeDispatcher {
         String targetSpotId,
         List<Message> requestParts,
         Duration timeout,
-        Executor executor,
-        ZLinkSpotRouteBridgeRawReplies rawReplies,
         CompletableFuture<List<Message>> result) {
-        ZLinkSpotRouteBridgeRawReplies.Pending rawReply = rawReplies.enqueue(
-            routerChannelId,
-            targetNodeRid,
-            requestParts.stream().map(Message::toByteArray).toList(),
-            result,
-            timeout);
-        executor.execute(() -> {
-            try {
-                bridge.requestAsync(
-                        routerChannelId,
-                        targetNodeRid,
-                        targetSpotId,
-                        requestParts,
-                        SendFlags.NONE,
-                        timeout)
-                    .whenComplete((reply, error) -> {
-                    if (error != null) {
-                        ZLinkChannelRuntime.trace("spot-route bridge-reply-error router=" + routerChannelId
-                            + " targetNode=" + targetNodeRid
-                            + " targetSpot=" + targetSpotId
-                            + " error=" + ZLinkChannelRuntime.requestErrorSummary(error));
-                        result.completeExceptionally(error);
+        try {
+            bridge.request(
+                    routerChannelId,
+                    targetNodeRid,
+                    targetSpotId,
+                    requestParts,
+                    timeout)
+                .whenComplete((reply, failure) -> {
+                    requestParts.forEach(Message::close);
+                    if (failure != null) {
+                        result.completeExceptionally(
+                            ZLinkChannelCallRuntime.unwrap(failure));
+                        return;
+                    }
+                    if (result.isDone()) {
+                        reply.forEach(Message::close);
                         return;
                     }
                     try {
-                        ZLinkChannelRuntime.trace("spot-route bridge-reply router=" + routerChannelId
-                            + " targetNode=" + targetNodeRid
-                            + " targetSpot=" + targetSpotId
-                            + " parts=" + ZLinkChannelRuntime.describeTraceParts(reply));
-                        if (ZLinkSpotRouteBridgeRawReplies.isEcho(rawReply, reply)) {
-                            return;
-                        }
+                        ZLinkChannelRuntime.trace(
+                            "spot-route bridge-reply router=" + routerChannelId
+                                + " targetNode=" + targetNodeRid
+                                + " targetSpot=" + targetSpotId
+                                + " parts="
+                                + ZLinkChannelRuntime.describeTraceParts(reply));
                         if (ZLinkChannelRuntime.isFrameworkErrorReply(reply)) {
-                            result.completeExceptionally(new ZLinkFrameworkException(
-                                ZLinkChannelRuntime.frameworkErrorReplyKind(reply),
-                                ZLinkChannelRuntime.frameworkErrorReplyMessage(reply)));
+                            result.completeExceptionally(
+                                new ZLinkFrameworkException(
+                                    ZLinkChannelRuntime.frameworkErrorReplyKind(reply),
+                                    ZLinkChannelRuntime.frameworkErrorReplyMessage(reply)));
                             return;
                         }
-                        List<Message> normalizedReply =
-                            ZLinkSpotRouteBridgeRawReplies.copyReplyMessages(reply);
-                        if (ZLinkSpotRouteBridgeRawReplies.isEcho(rawReply, normalizedReply)) {
-                            normalizedReply.forEach(Message::close);
-                            return;
-                        }
+                        List<Message> normalizedReply = copyReplyMessages(reply);
                         if (!result.complete(normalizedReply)) {
                             normalizedReply.forEach(Message::close);
                         }
@@ -162,15 +88,24 @@ final class ZLinkSpotRouteBridgeDispatcher {
                         reply.forEach(Message::close);
                     }
                 });
-            } catch (RuntimeException ex) {
-                ZLinkChannelRuntime.trace("spot-route bridge-submit-error router=" + routerChannelId
-                    + " targetNode=" + targetNodeRid
-                    + " targetSpot=" + targetSpotId
-                    + " error=" + ex);
-                result.completeExceptionally(ex);
-            } finally {
-                requestParts.forEach(Message::close);
-            }
-        });
+        } catch (RuntimeException failure) {
+            requestParts.forEach(Message::close);
+            result.completeExceptionally(failure);
+        }
+    }
+
+    private static List<Message> copyReplyMessages(List<Message> parts) {
+        int payloadOffset = 0;
+        if (ZLinkChannelRuntime.looksLikeSpotRouteBridgePacket(parts)) {
+            payloadOffset = 1;
+        }
+        if (parts.size() - payloadOffset > 1) {
+            payloadOffset++;
+        }
+        if (payloadOffset > 0 && payloadOffset < parts.size()) {
+            return ZLinkChannelRuntime.copyMessages(
+                parts.subList(payloadOffset, parts.size()));
+        }
+        return ZLinkChannelRuntime.copyMessages(parts);
     }
 }

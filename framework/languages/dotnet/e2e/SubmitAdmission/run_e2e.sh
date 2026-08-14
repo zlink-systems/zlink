@@ -278,7 +278,9 @@ PY
     "$LOG_DIR/negative.stdout.log" "$LOG_DIR/negative.stderr.log"
 
   dotnet test "$UNIT_PROJECT" \
-    --no-build --filter 'FullyQualifiedName~ZLinkAsyncSubmitterTests' --logger 'console;verbosity=minimal' \
+    --no-build \
+    --filter 'FullyQualifiedName~SpotMessageFollowSubmitTests|FullyQualifiedName~BoundSession_Uses_BindingOwned_Async_Admission_Without_Framework_Retry' \
+    --logger 'console;verbosity=minimal' \
     >"$LOG_DIR/internal-primitive.stdout.log" 2>"$LOG_DIR/internal-primitive.stderr.log"
   echo "SA-REG-01 PASS"
   echo "SA-REG-02 PASS"

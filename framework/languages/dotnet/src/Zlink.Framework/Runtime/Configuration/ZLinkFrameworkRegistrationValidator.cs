@@ -45,6 +45,7 @@ internal static partial class ZLinkFrameworkRegistrationValidator
                     $"ChannelName '{membership.ChannelName}' is registered on both RouteMesh and ClientServer physical paths.");
 
         registration.ActorCatalog.Build(registration.SpotNodes.Values);
+        registration.Locations.CaptureStartupOptions();
     }
 
     private static void ValidateRouteMeshChannelNames(
@@ -67,39 +68,29 @@ internal static partial class ZLinkFrameworkRegistrationValidator
         }
     }
 
-    internal static void ValidateInboundDispatch(ZLinkFrameworkRegistration registration)
+    internal static void ValidateInboundDispatch(
+        ZLinkFrameworkRegistration registration,
+        ulong effectiveProcessorCount)
     {
         var options = registration.InboundDispatchOptions;
-        if (!Enum.IsDefined(options.ApplicationHwmProfile))
+        if (!Enum.IsDefined(options.CoreHwmProfile))
             throw new ZLinkConfigurationException(
-                $"Unknown ApplicationHwmProfile value '{(int)options.ApplicationHwmProfile}'.");
-
-        options.EffectiveApplicationHwmBytes = ZLinkApplicationHwmResolver.Resolve(options);
-        if (options.EffectiveApplicationHwmBytes == 0)
-            return;
-
-        foreach (var (name, maximumMessageBytes) in EnumerateApplicationListenerLimits(registration))
-            if (maximumMessageBytes <= 0)
-                throw new ZLinkConfigurationException(
-                    $"Application listener '{name}' must set a finite positive MaxMessageSize when ApplicationHwmBytes is Auto or positive.");
-    }
-
-    private static IEnumerable<(string Name, long MaximumMessageBytes)>
-        EnumerateApplicationListenerLimits(ZLinkFrameworkRegistration registration)
-    {
-        foreach (var channel in registration.Channels.Values)
-        {
-            if (channel.Server is not null)
-                yield return ($"ClientServer:{channel.ChannelName}",
-                    channel.Server.SocketConfig.MaxMessageSize);
-            if (channel.Subscriber is not null)
-                yield return ($"Fanout:{channel.ChannelName}",
-                    channel.Subscriber.SocketConfig.MaxMessageSize);
-        }
-
-        foreach (var streamNode in registration.StreamNodes.Values)
-            yield return ($"STREAM:{streamNode.StreamNodeName}",
-                streamNode.SocketConfig.MaxMessageSize);
+                $"Unknown CoreHwmProfile value '{(int)options.CoreHwmProfile}'.");
+        if (options.CoreHwmMemoryLimitBytes == 0)
+            throw new ZLinkConfigurationException(
+                "CoreHwmMemoryLimitBytes must be positive when configured.");
+        if (options.CoreHwmBudgetBytes == 0)
+            throw new ZLinkConfigurationException(
+                "CoreHwmBudgetBytes must be positive when configured.");
+        if (options.CoreHwmMemoryLimitBytes is { } memoryLimit
+            && options.CoreHwmBudgetBytes is { } budget
+            && budget > memoryLimit)
+            throw new ZLinkConfigurationException(
+                "CoreHwmBudgetBytes must not exceed CoreHwmMemoryLimitBytes.");
+        _ = ZLinkApplicationJobQueueCapacityResolver.Resolve(
+            options.ApplicationJobQueueProfile,
+            options.MaxQueuedApplicationJobs,
+            effectiveProcessorCount);
     }
 
     private static void ValidateRelocationStoreRequirement(

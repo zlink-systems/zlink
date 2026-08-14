@@ -35,15 +35,13 @@ internal sealed record ZLinkActorRelocationAuthorityPayload(
     Guid RelocationId,
     ZLinkActorRelocationAuthorityPhase Phase,
     ZLinkRemoteActorBoundSessionRoute BoundSessionRoute,
-    ReadOnlyMemory<byte> ApplicationPayload,
-    uint AcceptedRequestCount = 0,
-    uint TerminalCompletionCount = 0,
-    uint PendingRelayCount = 0);
+    ReadOnlyMemory<byte> ApplicationPayload);
 
 internal static class ZLinkActorRelocationAuthorityPayloadCodec
 {
     private const uint Magic = 0x50414c5a; // ZLAP
-    private const ushort Version = 4;
+    private const ushort VersionWithoutSessionOwnerFence = 5;
+    private const ushort Version = 6;
     private const int MaximumBytes = 1024 * 1024;
 
     internal static byte[] Encode(ZLinkActorRelocationAuthorityPayload value)
@@ -62,7 +60,9 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
                                        value.BoundSessionRoute.SessionOwnerId)
                                    && value.BoundSessionRoute
                                           .SessionOwnerLeaseGeneration > 0;
-        var wireVersion = hasSessionOwnerFence ? Version : (ushort)3;
+        var wireVersion = hasSessionOwnerFence
+            ? Version
+            : VersionWithoutSessionOwnerFence;
         writer.Write(Magic);
         writer.Write(wireVersion);
         writer.Write(value.RelocationId.ToByteArray());
@@ -89,9 +89,6 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
         }
         writer.Write(value.ApplicationPayload.Length);
         writer.Write(value.ApplicationPayload.Span);
-        writer.Write(value.AcceptedRequestCount);
-        writer.Write(value.TerminalCompletionCount);
-        writer.Write(value.PendingRelayCount);
         writer.Flush();
         writer.Write(ZLinkCrc32C.Compute(stream.GetBuffer().AsSpan(
             0,
@@ -122,7 +119,8 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
             if (reader.ReadUInt32() != Magic)
                 return false;
             var version = reader.ReadUInt16();
-            if (version is not (2 or 3 or Version)) return false;
+            if (version is not (VersionWithoutSessionOwnerFence or Version))
+                return false;
             var relocationId = new Guid(ReadExact(reader, 16));
             var phase = (ZLinkActorRelocationAuthorityPhase)reader.ReadByte();
             ZLinkRemoteActorBoundSessionRoute route = default;
@@ -139,8 +137,8 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
                 var ownerLeaseGeneration = reader.ReadUInt64();
                 var sessionOwnerNodeGeneration = reader.ReadUInt64();
                 var acceptedHighWater = reader.ReadUInt64();
-                var sessionOwnerId = version >= 4 ? ReadString(reader) : null;
-                var sessionOwnerLeaseGeneration = version >= 4
+                var sessionOwnerId = version == Version ? ReadString(reader) : null;
+                var sessionOwnerLeaseGeneration = version == Version
                     ? reader.ReadUInt64()
                     : 0;
                 route = new ZLinkRemoteActorBoundSessionRoute(
@@ -164,30 +162,16 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
             if (applicationSize is < 1 or > MaximumBytes)
                 return false;
             var applicationPayload = ReadExact(reader, applicationSize);
-            var acceptedRequestCount = version >= 3
-                ? reader.ReadUInt32()
-                : 0;
-            var terminalCompletionCount = version >= 3
-                ? reader.ReadUInt32()
-                : 0;
-            var pendingRelayCount = version >= 3
-                ? reader.ReadUInt32()
-                : 0;
             if (stream.Position != stream.Length
                 || relocationId == Guid.Empty
                 || phase is < ZLinkActorRelocationAuthorityPhase.Activated
-                    or > ZLinkActorRelocationAuthorityPhase.Steady
-                || pendingRelayCount > terminalCompletionCount
-                || terminalCompletionCount > acceptedRequestCount)
+                    or > ZLinkActorRelocationAuthorityPhase.Steady)
                 return false;
             value = new ZLinkActorRelocationAuthorityPayload(
                 relocationId,
                 phase,
                 route,
-                applicationPayload,
-                acceptedRequestCount,
-                terminalCompletionCount,
-                pendingRelayCount);
+                applicationPayload);
             return true;
         }
         catch (Exception error) when (error is IOException

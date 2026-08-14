@@ -8,6 +8,8 @@ namespace SpotActorTransfer.Client.Scenarios;
 
 internal static class StB5TargetCrashAggregateUnavailableScenario
 {
+    private static readonly TimeSpan ReplacementReadinessTimeout = TimeSpan.FromSeconds(45);
+
     internal static async Task RunAsync(
         SpotActorTransferScenarioContext context)
     {
@@ -66,22 +68,29 @@ internal static class StB5TargetCrashAggregateUnavailableScenario
             context.NodeA,
             targetProbe.SpotIds.Single());
 
-        try
-        {
-            var relocation = await context.RelocateAsync(
-                context.NodeA,
-                TimeSpan.FromSeconds(20));
-            ZlinkStreamAssert.Ensure(
-                !StringComparer.Ordinal.Equals(
-                    relocation.Outcome,
-                    "Relocated"),
-                $"{scenario} reported relocation success after target crash.");
-        }
-        catch (Exception)
-        {
-            // The runner terminates the selected target at the public runtime
-            // completion boundary. The source request can lose its reply.
-        }
+        await context.ArmTargetPublicationGateAsync(
+            context.NodeB,
+            actorId,
+            scenario);
+        var relocationTask = context.RelocateAsync(
+            context.NodeA,
+            TimeSpan.FromSeconds(20));
+        await context.WaitEvidenceAsync(
+            context.NodeB,
+            [
+                $"transfer|{actorId}|application_state_restored|",
+                $"{scenario}|{actorId}|target_publication_gate|opaque-delete-batch|"
+            ]);
+        Console.Error.WriteLine("st_b5_target_publication_gate");
+        Console.Error.Flush();
+        await WaitForRunnerAckAsync(
+            context.Options.TargetCrashCompletedAckFile,
+            TimeSpan.FromSeconds(60));
+        await SpotActorTransferScenarioContext.WaitUnavailableAsync(
+            context.Options.NodeBUrl,
+            "target process exit");
+
+        await ObserveRelocationBestEffortAsync(relocationTask);
 
         var actorOperationId = Guid.NewGuid().ToString("N");
         var spotOperationId = Guid.NewGuid().ToString("N");
@@ -107,9 +116,20 @@ internal static class StB5TargetCrashAggregateUnavailableScenario
             spotError == nameof(ZLinkFrameworkErrorKind.Unavailable),
             $"{scenario} Spot request after target crash returned '{spotError}'.");
 
+        await SpotActorTransferScenarioContext.WaitAvailableAsync(
+            context.Options.NodeBUrl,
+            "replacement actor-b startup",
+            ReplacementReadinessTimeout);
+
         // A restarted target may be RouteMesh-ready, but it must not recreate
         // the committed aggregate or execute either post-crash operation.
+        var sourceEvidence = await context.GetEvidenceAsync(context.NodeA);
         var replacementEvidence = await context.GetEvidenceAsync(context.NodeB);
+        ZlinkStreamAssert.Ensure(
+            sourceEvidence.All(item =>
+                !item.Value.Contains(actorOperationId, StringComparison.Ordinal)
+                && !item.Value.Contains(spotOperationId, StringComparison.Ordinal)),
+            $"{scenario} the source executed a post-crash operation.");
         ZlinkStreamAssert.Ensure(
             replacementEvidence.All(item =>
                 !item.Value.Contains(actorOperationId, StringComparison.Ordinal)
@@ -128,6 +148,39 @@ internal static class StB5TargetCrashAggregateUnavailableScenario
             + $" spot={spotId} actor={actorId}"
             + $" failed_target={failedTargetRid}"
             + " replacement_recovery=false actor=Unavailable spot=Unavailable");
+    }
+
+    private static async Task ObserveRelocationBestEffortAsync(
+        Task relocationTask)
+    {
+        try
+        {
+            await relocationTask.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // A target process loss may close the source-side request before
+            // its one-way cutover result is observed by this E2E client.
+        }
+    }
+
+    private static async Task WaitForRunnerAckAsync(
+        string? path,
+        TimeSpan timeout)
+    {
+        ZlinkStreamAssert.Ensure(
+            !string.IsNullOrWhiteSpace(path),
+            "ST-B5 runner acknowledgement file is required.");
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (File.Exists(path))
+                return;
+            await Task.Delay(20);
+        }
+
+        throw new TimeoutException(
+            $"ST-B5 runner acknowledgement was not observed: {path}");
     }
 
     private static RelocationWorkloadCallReq CreateRequest(

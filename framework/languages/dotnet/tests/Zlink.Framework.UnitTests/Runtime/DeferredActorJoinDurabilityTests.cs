@@ -34,11 +34,9 @@ public sealed class DeferredActorJoinDurabilityTests
                 new ZLinkRelocationPublicationRequest(
                     key,
                     authority.Snapshot.StoreVersion,
-                    ZLinkAuthorityGenerationTransition.Preserve,
                     authority.Snapshot.OwnerId,
                     authority.Snapshot.OwnerLeaseGeneration,
                     authority.Snapshot.Payload,
-                    null,
                     envelope),
                 CancellationToken.None);
 
@@ -126,11 +124,9 @@ public sealed class DeferredActorJoinDurabilityTests
                 new ZLinkRelocationPublicationRequest(
                     key,
                     authority.Snapshot.StoreVersion,
-                    ZLinkAuthorityGenerationTransition.Preserve,
                     authority.Snapshot.OwnerId,
                     authority.Snapshot.OwnerLeaseGeneration,
                     originalAuthorityPayload,
-                    null,
                     envelope),
                 CancellationToken.None);
 
@@ -246,7 +242,6 @@ public sealed class DeferredActorJoinDurabilityTests
                     actorAuthority.NodeGeneration,
                     actorAuthority.OwnerId,
                     actorAuthority.OwnerLeaseGeneration,
-                    1,
                     actorAuthority.OwnerId,
                     actorAuthority.OwnerLeaseGeneration,
                     actorAuthority.NodeRid.ToHex(),
@@ -254,8 +249,7 @@ public sealed class DeferredActorJoinDurabilityTests
                     (byte)ZLinkStandaloneActorCanonicalPhase.Completed,
                     stored.Root.Reference,
                     stored.Root.ChecksumCrc32c,
-                    0,
-                    1),
+                    0),
                 root);
         authority.ReplacePayload(canonicalPayload);
         Assert.True(
@@ -271,11 +265,10 @@ public sealed class DeferredActorJoinDurabilityTests
                 completedProjection.State with
                 {
                     Phase =
-                        (byte)ZLinkStandaloneActorCanonicalPhase.Activated,
-                    SourceCleanupState = 0
+                        (byte)ZLinkStandaloneActorCanonicalPhase.Activated
                 },
                 root);
-        Assert.False(
+        Assert.True(
             ZLinkFrameworkRuntime.IsCompletedCanonicalActorRelocation(
                 authority.Snapshot with { Payload = activatedPayload },
                 stored.Root.Reference));

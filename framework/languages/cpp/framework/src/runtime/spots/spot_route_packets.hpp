@@ -81,8 +81,8 @@ struct spot_actor_commit_route_request_t
     std::uint64_t target_node_lifecycle_generation = 0;
     std::string target_owner_id;
     std::uint64_t target_owner_lease_generation = 0;
-    std::string relocation_capacity_fence;
     std::string source_spot_id;
+    std::uint64_t source_spot_generation = 0;
     std::string bound_session_node_rid;
     std::string bound_session_rid;
     std::vector<std::uint8_t> session_relocation_route;
@@ -93,13 +93,27 @@ struct spot_actor_commit_route_request_t
     std::uint64_t core_transfer_id_low = 0;
     std::uint64_t core_membership_epoch = 0;
     std::uint64_t core_final_sequence = 0;
-    std::uint64_t core_reserve_message_count = 0;
-    std::uint64_t core_reserve_byte_count = 0;
     std::uint64_t finalize_timeout_ms = 0;
     bool prepare = false;
     bool finalize = false;
-    bool defer_completion = false;
-    bool completion_only = false;
+};
+
+struct spot_actor_leave_route_command_t
+{
+    static constexpr const char *packet_name = "__zlink.spot.actor.leave";
+
+    std::string transfer_id;
+    std::string actor_node_rid;
+    std::string actor_type;
+    std::string actor_id;
+    std::uint64_t actor_generation = 0;
+    std::string source_spot_id;
+    std::uint64_t source_spot_generation = 0;
+    std::string target_spot_id;
+    std::string target_node_rid;
+    std::uint64_t target_node_generation = 0;
+    std::uint64_t target_authority_owner_generation = 0;
+    std::uint64_t target_owner_lease_generation = 0;
 };
 
 struct spot_actor_join_route_request_t
@@ -213,6 +227,8 @@ void to_json (nlohmann::json &json, const spot_actor_handoff_packet_t &value);
 void from_json (const nlohmann::json &json, spot_actor_handoff_packet_t &value);
 void to_json (nlohmann::json &json, const spot_actor_commit_route_request_t &value);
 void from_json (const nlohmann::json &json, spot_actor_commit_route_request_t &value);
+void to_json (nlohmann::json &json, const spot_actor_leave_route_command_t &value);
+void from_json (const nlohmann::json &json, spot_actor_leave_route_command_t &value);
 void to_json (nlohmann::json &json, const spot_actor_join_route_request_t &value);
 void from_json (const nlohmann::json &json, spot_actor_join_route_request_t &value);
 void to_json (nlohmann::json &json, const spot_actor_join_route_reply_t &value);

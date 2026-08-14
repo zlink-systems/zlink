@@ -74,12 +74,8 @@ export interface ServiceMaintenanceReplyRelayAck {
 }
 
 export type ServiceWireRelocationRole = 'source' | 'target' | 'coordinator';
-export type ServiceWireRelocationRound =
-  | 'initial'
-  | 'preparedReplacement'
-  | 'postCommitReplacement';
 
-export interface ServiceWireRelocationCandidate {
+export interface ServiceWireRelocationTarget {
   readonly nodeRid: string;
   readonly nodeGeneration: bigint;
   readonly ownerId: string;
@@ -106,24 +102,6 @@ export type ServiceWireRelocationObject =
       readonly objectGeneration: bigint;
     };
 
-export interface ServiceWireRelocationBoundSessionIdentity {
-  readonly sessionOwnerNodeRid: string;
-  readonly sessionOwnerNodeGeneration: bigint;
-  readonly sessionOwnerId: string;
-  readonly sessionOwnerLeaseGeneration: bigint;
-  readonly sessionRid: string;
-  readonly bindingGeneration: bigint;
-  readonly lastAcceptedSessionSequence: bigint;
-}
-
-export interface ServiceWireRelocationParticipant {
-  readonly participantId: bigint;
-  /** Present for boundSession (kind 2) participants; absent for objectMailbox (kind 1). */
-  readonly boundSession?: ServiceWireRelocationBoundSessionIdentity;
-  readonly allowanceMessages: bigint;
-  readonly allowanceBytes: bigint;
-}
-
 export interface ServiceWireRelocationRoot {
   readonly reference: string;
   readonly checksumCrc32c: number;
@@ -137,50 +115,21 @@ interface ServiceWireRelocationBase {
 
 export interface ServiceMaintenanceRelocationPrepare extends ServiceWireRelocationBase {
   readonly kind: 'prepare';
-  readonly round: ServiceWireRelocationRound;
-  readonly candidate: ServiceWireRelocationCandidate;
+  readonly target: ServiceWireRelocationTarget;
   readonly initiatorRole: ServiceWireRelocationRole;
   readonly object: ServiceWireRelocationObject;
   readonly sourceNodeRid: string;
   readonly sourceNodeGeneration: bigint;
-  readonly requiredMessages: bigint;
-  readonly requiredBytes: bigint;
-  readonly participants: readonly ServiceWireRelocationParticipant[];
   readonly root?: ServiceWireRelocationRoot;
   readonly applicationVersion: bigint;
 }
 
 export interface ServiceMaintenanceRelocationReady extends ServiceWireRelocationBase {
   readonly kind: 'ready';
-  readonly round: ServiceWireRelocationRound;
-  readonly candidate: ServiceWireRelocationCandidate;
+  readonly target: ServiceWireRelocationTarget;
   readonly object: ServiceWireRelocationObject;
-  readonly role: ServiceWireRelocationRole;
-  readonly offeredMessages: bigint;
-  readonly offeredBytes: bigint;
-  readonly participants: readonly ServiceWireRelocationParticipant[];
-  readonly sourceNodeGeneration: bigint;
-  readonly targetNodeGeneration: bigint;
-  readonly reservationGeneration: bigint;
-  readonly root?: ServiceWireRelocationRoot;
-  readonly applicationVersion: bigint;
-  readonly participantProgress: readonly {
-    readonly participantId: bigint;
-    readonly acceptedBoundary: bigint;
-    readonly replayCursor: bigint;
-  }[];
+  readonly senderRole: ServiceWireRelocationRole;
 }
-
-export interface ServiceMaintenanceRelocationReserved extends ServiceWireRelocationBase {
-  readonly kind: 'reserved';
-  readonly round: ServiceWireRelocationRound;
-  readonly candidate: ServiceWireRelocationCandidate;
-  readonly reservationGeneration: bigint;
-  readonly participants: readonly ServiceWireRelocationParticipant[];
-}
-
-export type ServiceWireRelocationPhase = 'none' | 'preparing' | 'captured' | 'prepared'
-  | 'committed' | 'activating' | 'activated' | 'cleaning' | 'completed' | 'aborted';
 
 export interface ServiceWireFrozenRecord {
   readonly recordKind: number;
@@ -195,65 +144,48 @@ export interface ServiceWireFrozenRecord {
   readonly operationId: ServiceWireOperationId;
   readonly operationKind: number;
   readonly replyRouteId?: bigint;
+  /** Decoded routing/application body used by the target temporary queue owner. */
+  readonly target?:
+    | {
+        readonly kind: 'spot';
+        readonly spotId: string;
+        readonly generation: bigint;
+        readonly targetNodeRid: string;
+        readonly targetNodeGeneration: bigint;
+        readonly authorityOwnerGeneration: bigint;
+        readonly ownerLeaseGeneration: bigint;
+      }
+    | {
+        readonly kind: 'actor';
+        readonly actorId: string;
+        readonly generation: bigint;
+        readonly targetNodeRid: string;
+        readonly targetNodeGeneration: bigint;
+        readonly authorityOwnerGeneration: bigint;
+        readonly ownerLeaseGeneration: bigint;
+      };
+  readonly applicationPayload?: NonNullable<ServiceMaintenanceReplyRelay['payload']>;
   readonly canonicalBytes: Buffer;
 }
 
-interface ServiceMaintenanceRelocationDataBase extends ServiceWireRelocationBase {
+export interface ServiceMaintenanceRelocationData extends ServiceWireRelocationBase {
   readonly kind: 'data';
   readonly senderRole: ServiceWireRelocationRole;
-  readonly participantId: bigint;
-  readonly sequence: bigint;
-}
-
-export interface ServiceMaintenanceRelocationControlData
-  extends ServiceMaintenanceRelocationDataBase {
-  readonly source: ServiceWireRequestSourceFence;
   readonly object: ServiceWireRelocationObject;
-  readonly phase: ServiceWireRelocationPhase;
-  readonly frozenRecord?: undefined;
-}
-
-export interface ServiceMaintenanceRelocationFrozenData
-  extends ServiceMaintenanceRelocationDataBase {
   readonly frozenRecord: ServiceWireFrozenRecord;
 }
 
-export type ServiceMaintenanceRelocationData =
-  | ServiceMaintenanceRelocationControlData
-  | ServiceMaintenanceRelocationFrozenData;
-
-export interface ServiceMaintenanceRelocationAck extends ServiceWireRelocationBase {
-  readonly kind: 'ack';
+export interface ServiceMaintenanceRelocationCutover extends ServiceWireRelocationBase {
+  readonly kind: 'cutover';
   readonly senderRole: ServiceWireRelocationRole;
-  readonly participantId: bigint;
-  readonly highWater: bigint;
-}
-
-export interface ServiceMaintenanceRelocationSeal extends ServiceWireRelocationBase {
-  readonly kind: 'seal';
-  readonly senderRole: ServiceWireRelocationRole;
-  readonly response: boolean;
-  readonly participants: readonly {
-    readonly participantId: bigint;
-    readonly highWater: bigint;
-  }[];
-}
-
-export interface ServiceMaintenanceRelocationComplete extends ServiceWireRelocationBase {
-  readonly kind: 'complete';
-  readonly senderRole: ServiceWireRelocationRole;
-  readonly source: ServiceWireRequestSourceFence;
-  readonly sourceCleanupState: 'pending' | 'completed' | 'sourceLeaseExpired';
+  readonly object: ServiceWireRelocationObject;
 }
 
 export type ServiceMaintenanceRelocationControl =
   | ServiceMaintenanceRelocationPrepare
   | ServiceMaintenanceRelocationReady
-  | ServiceMaintenanceRelocationReserved
   | ServiceMaintenanceRelocationData
-  | ServiceMaintenanceRelocationAck
-  | ServiceMaintenanceRelocationSeal
-  | ServiceMaintenanceRelocationComplete;
+  | ServiceMaintenanceRelocationCutover;
 
 export const M6bServiceWireFlag = ServiceWireFlag;
 
@@ -301,7 +233,7 @@ export interface ServiceSessionRelocationOwnerFence {
 export interface ServiceSessionRelocationSeal {
   readonly relocation: ServiceWireOperationId;
   readonly coordinator: ServiceWireRelocationCoordinatorFence;
-  readonly senderRole: 'source';
+  readonly senderRole: 'source' | 'coordinator';
   readonly actor: ServiceBoundSessionActorAuthority;
   readonly session: ServiceSessionRelocationOwnerFence;
 }
@@ -311,14 +243,13 @@ export interface ServiceSessionRelocationSealed {
   readonly coordinator: ServiceWireRelocationCoordinatorFence;
   readonly actor: ServiceBoundSessionActorAuthority;
   readonly session: ServiceSessionRelocationOwnerFence;
-  readonly lastAcceptedSessionSequence: bigint;
 }
 
 export type ServiceSessionRelocationRoute =
   | {
       readonly relocation: ServiceWireOperationId;
       readonly coordinator: ServiceWireRelocationCoordinatorFence;
-      readonly senderRole: 'target';
+      readonly senderRole: 'target' | 'coordinator';
       readonly actor: ServiceActorRef;
       readonly session: ServiceSessionRelocationOwnerFence;
       readonly route: {
@@ -327,13 +258,12 @@ export type ServiceSessionRelocationRoute =
         readonly targetAuthorityOwnerGeneration: bigint;
         readonly targetNodeRid: string;
         readonly targetNodeGeneration: bigint;
-        readonly replayedHighWater: bigint;
       };
     }
   | {
       readonly relocation: ServiceWireOperationId;
       readonly coordinator: ServiceWireRelocationCoordinatorFence;
-      readonly senderRole: 'source';
+      readonly senderRole: 'source' | 'coordinator';
       readonly actor: ServiceActorRef;
       readonly session: ServiceSessionRelocationOwnerFence;
       readonly route: {
@@ -341,23 +271,6 @@ export type ServiceSessionRelocationRoute =
         readonly currentAuthorityOwnerGeneration: bigint;
       };
     };
-
-export type ServiceSessionRelocationRouteResult =
-  | 'applied'
-  | 'alreadyApplied'
-  | 'stale'
-  | 'sessionOrBindingClosed';
-
-export interface ServiceSessionRelocationRouted {
-  readonly relocation: ServiceWireOperationId;
-  readonly coordinator: ServiceWireRelocationCoordinatorFence;
-  readonly actor: ServiceActorRef;
-  readonly session: ServiceSessionRelocationOwnerFence;
-  readonly action: 'commit' | 'abort';
-  readonly result: ServiceSessionRelocationRouteResult;
-  readonly currentAuthorityOwnerGeneration: bigint;
-  readonly lastAcceptedSessionSequence: bigint;
-}
 
 export interface ServiceRetiredBoundSessionRouteFence {
   readonly sessionOwnerNodeRid: string;
@@ -761,7 +674,7 @@ export function decodeSessionRelocationSeal(frame: Uint8Array): ServiceSessionRe
   const relocation = reader.operationId('relocation');
   const coordinator = reader.coordinatorFence();
   const senderRole = reader.relocationRole();
-  if (senderRole !== 'source') {
+  if (senderRole !== 'source' && senderRole !== 'coordinator') {
     fail('Session relocation seal sender role is invalid.');
   }
   const actor = reader.actorAuthorityFence();
@@ -777,8 +690,7 @@ export function encodeSessionRelocationSealed(value: ServiceSessionRelocationSea
     wireId(value.relocation, 'relocation'),
     coordinatorFence(value.coordinator),
     actorAuthorityFence(value.actor),
-    sessionRelocationOwnerFence(value.session),
-    ordinalU64(value.lastAcceptedSessionSequence, 'lastAcceptedSessionSequence')
+    sessionRelocationOwnerFence(value.session)
   );
 }
 
@@ -793,16 +705,15 @@ export function decodeSessionRelocationSealed(frame: Uint8Array): ServiceSession
   const coordinator = reader.coordinatorFence();
   const actor = reader.actorAuthorityFence();
   const session = reader.sessionRelocationOwnerFence();
-  const lastAcceptedSessionSequence = reader.ordinal('lastAcceptedSessionSequence');
   reader.end();
-  return { relocation, coordinator, actor, session, lastAcceptedSessionSequence };
+  return { relocation, coordinator, actor, session };
 }
 
 /** Encodes canonical service-wire command 44. */
 export function encodeSessionRelocationRoute(value: ServiceSessionRelocationRoute): Buffer {
   const route = value.route.action === 'commit'
     ? (() => {
-        if (value.senderRole !== 'target') {
+        if (value.senderRole !== 'target' && value.senderRole !== 'coordinator') {
           fail('Session relocation commit sender role is invalid.');
         }
         if (
@@ -815,12 +726,11 @@ export function encodeSessionRelocationRoute(value: ServiceSessionRelocationRout
           u64(value.route.previousAuthorityOwnerGeneration),
           u64(value.route.targetAuthorityOwnerGeneration),
           rid(value.route.targetNodeRid, 'targetNodeRid'),
-          u64(value.route.targetNodeGeneration),
-          ordinalU64(value.route.replayedHighWater, 'replayedHighWater')
+          u64(value.route.targetNodeGeneration)
         );
       })()
     : (() => {
-        if (value.senderRole !== 'source') {
+        if (value.senderRole !== 'source' && value.senderRole !== 'coordinator') {
           fail('Session relocation abort sender role is invalid.');
         }
         return u64(value.route.currentAuthorityOwnerGeneration);
@@ -855,7 +765,7 @@ export function decodeSessionRelocationRoute(frame: Uint8Array): ServiceSessionR
   const routeEnd = reader.offset + routeLength;
   if (routeEnd > reader.bytes.byteLength) fail('Truncated Session relocation route body.');
   if (action === 1) {
-    if (senderRole !== 'target') {
+    if (senderRole !== 'target' && senderRole !== 'coordinator') {
       fail('Session relocation commit sender role is invalid.');
     }
     const previousAuthorityOwnerGeneration = reader.nonZeroU64(
@@ -866,7 +776,6 @@ export function decodeSessionRelocationRoute(frame: Uint8Array): ServiceSessionR
     );
     const targetNodeRid = reader.rid('targetNodeRid');
     const targetNodeGeneration = reader.nonZeroU64('targetNodeGeneration');
-    const replayedHighWater = reader.ordinal('replayedHighWater');
     if (reader.offset !== routeEnd) fail('Invalid Session relocation commit route length.');
     if (targetAuthorityOwnerGeneration <= previousAuthorityOwnerGeneration) {
       fail('Session relocation commit must advance the authority owner generation.');
@@ -883,13 +792,12 @@ export function decodeSessionRelocationRoute(frame: Uint8Array): ServiceSessionR
         previousAuthorityOwnerGeneration,
         targetAuthorityOwnerGeneration,
         targetNodeRid,
-        targetNodeGeneration,
-        replayedHighWater
+        targetNodeGeneration
       }
     };
   }
   if (action === 2) {
-    if (senderRole !== 'source') {
+    if (senderRole !== 'source' && senderRole !== 'coordinator') {
       fail('Session relocation abort sender role is invalid.');
     }
     const currentAuthorityOwnerGeneration = reader.nonZeroU64(
@@ -907,61 +815,6 @@ export function decodeSessionRelocationRoute(frame: Uint8Array): ServiceSessionR
     };
   }
   fail('Session relocation route action is invalid.');
-}
-
-/** Encodes canonical service-wire command 45. */
-export function encodeSessionRelocationRouted(value: ServiceSessionRelocationRouted): Buffer {
-  const result = value.result === 'applied' ? 0
-    : value.result === 'alreadyApplied' ? 1
-      : value.result === 'stale' ? 2 : 3;
-  return concat(
-    prefix(M6bServiceWireCommand.sessionRelocationRouted),
-    wireId(value.relocation, 'relocation'),
-    coordinatorFence(value.coordinator),
-    actorRef(value.actor),
-    sessionRelocationOwnerFence(value.session),
-    Buffer.of(value.action === 'commit' ? 1 : 2, result),
-    u64(value.currentAuthorityOwnerGeneration),
-    ordinalU64(value.lastAcceptedSessionSequence, 'lastAcceptedSessionSequence')
-  );
-}
-
-/** Decodes canonical service-wire command 45. */
-export function decodeSessionRelocationRouted(frame: Uint8Array): ServiceSessionRelocationRouted {
-  const reader = new Reader(frame);
-  const command = reader.prefix();
-  if (command.command !== M6bServiceWireCommand.sessionRelocationRouted || command.flags !== 0) {
-    fail('Command is not sessionRelocationRouted.');
-  }
-  const relocation = reader.operationId('relocation');
-  const coordinator = reader.coordinatorFence();
-  const actor = reader.actorRef('actor');
-  const session = reader.sessionRelocationOwnerFence();
-  const actionValue = reader.u8('action');
-  if (actionValue !== 1 && actionValue !== 2) fail('Session relocation routed action is invalid.');
-  const resultValue = reader.u8('result');
-  if (resultValue > 3) fail('Session relocation routed result is invalid.');
-  const currentAuthorityOwnerGeneration = reader.nonZeroU64(
-    'currentAuthorityOwnerGeneration'
-  );
-  const lastAcceptedSessionSequence = reader.ordinal('lastAcceptedSessionSequence');
-  reader.end();
-  const results: readonly ServiceSessionRelocationRouteResult[] = [
-    'applied',
-    'alreadyApplied',
-    'stale',
-    'sessionOrBindingClosed'
-  ];
-  return {
-    relocation,
-    coordinator,
-    actor,
-    session,
-    action: actionValue === 1 ? 'commit' : 'abort',
-    result: results[resultValue]!,
-    currentAuthorityOwnerGeneration,
-    lastAcceptedSessionSequence
-  };
 }
 
 export function encodeInstanceSpotHeader(
@@ -1545,7 +1398,7 @@ export function encodeStatefulReply(
   );
 }
 
-/** Encodes canonical maintenance relocation commands 30..32, 34..35, and 40..41. */
+/** Encodes canonical maintenance relocation commands 30, 31, 34, and 40. */
 export function encodeMaintenanceRelocationControl(
   value: ServiceMaintenanceRelocationControl
 ): Buffer {
@@ -1560,67 +1413,39 @@ export function encodeMaintenanceRelocationControl(
         prefix(M6bServiceWireCommand.relocationPrepare),
         wireId(value.relocation, 'relocation'),
         u64(value.targetAttemptGeneration),
-        Buffer.of(relocationRound(value.round)),
         coordinatorFence(value.coordinator),
-        relocationCandidate(value.candidate),
+        relocationTarget(value.target),
         Buffer.of(relocationRole(value.initiatorRole)),
         relocationObject(value.object),
         rid(value.sourceNodeRid, 'sourceNodeRid'),
         u64(value.sourceNodeGeneration),
-        u64Any(value.requiredMessages),
-        u64Any(value.requiredBytes),
-        relocationParticipants(value.participants),
         relocationRoot(value.root),
         applicationVersion(value.applicationVersion)
       );
     case 'ready':
-      return encodeRelocationReady(value);
-    case 'reserved':
       return concat(
-        prefix(M6bServiceWireCommand.relocationReserved),
+        prefix(M6bServiceWireCommand.relocationReady),
         wireId(value.relocation, 'relocation'),
         u64(value.targetAttemptGeneration),
-        Buffer.of(relocationRound(value.round)),
         coordinatorFence(value.coordinator),
-        relocationCandidate(value.candidate),
-        u64(value.reservationGeneration),
-        relocationParticipants(value.participants)
+        relocationTarget(value.target),
+        relocationObject(value.object),
+        Buffer.of(relocationRole(value.senderRole))
       );
     case 'data':
       return concat(
         prefix(M6bServiceWireCommand.relocationData),
         base,
         Buffer.of(relocationRole(value.senderRole)),
-        u64(value.participantId),
-        u64(value.sequence),
-        value.frozenRecord === undefined
-          ? frozenRelocationControl(value)
-          : encodeServiceWireFrozenRecord(value.frozenRecord)
+        relocationObject(value.object),
+        encodeServiceWireFrozenRecord(value.frozenRecord)
       );
-    case 'ack':
+    case 'cutover':
       return concat(
-        prefix(M6bServiceWireCommand.relocationAck),
+        prefix(M6bServiceWireCommand.relocationCutover),
         base,
         Buffer.of(relocationRole(value.senderRole)),
-        u64(value.participantId),
-        u64Any(value.highWater)
-      );
-    case 'seal':
-      return concat(
-        prefix(M6bServiceWireCommand.relocationSeal),
-        base,
-        Buffer.of(relocationRole(value.senderRole), value.response ? 1 : 0),
-        relocationTerminalParticipants(value.participants)
-      );
-    case 'complete':
-      return concat(
-        prefix(M6bServiceWireCommand.relocationComplete),
-        base,
-        Buffer.of(relocationRole(value.senderRole)),
-        requestSourceFence(value.source),
-        Buffer.of(value.sourceCleanupState === 'pending'
-          ? 0
-          : value.sourceCleanupState === 'completed' ? 1 : 2)
+        relocationObject(value.object)
       );
   }
 }
@@ -1636,117 +1461,52 @@ export function decodeMaintenanceRelocationControl(
       requireFlags(prefixValue.flags, 0);
       const relocation = reader.operationId('relocation');
       const targetAttemptGeneration = reader.nonZeroU64('targetAttemptGeneration');
-      const round = reader.relocationRound();
       const coordinator = reader.coordinatorFence();
-      const candidate = reader.relocationCandidate();
+      const target = reader.relocationTarget();
       const initiatorRole = reader.relocationRole();
       const object = reader.relocationObject();
       const sourceNodeRid = reader.rid('sourceNodeRid');
       const sourceNodeGeneration = reader.nonZeroU64('sourceNodeGeneration');
-      const requiredMessages = reader.ordinal('requiredMessages');
-      const requiredBytes = reader.ordinal('requiredBytes');
-      const participants = reader.relocationParticipants();
       const root = reader.relocationRoot();
       const applicationVersion = reader.applicationVersion();
       reader.end();
-      return { kind: 'prepare', relocation, targetAttemptGeneration, round, coordinator,
-        candidate, initiatorRole, object, sourceNodeRid, sourceNodeGeneration,
-        requiredMessages, requiredBytes, participants,
+      return { kind: 'prepare', relocation, targetAttemptGeneration, coordinator,
+        target, initiatorRole, object, sourceNodeRid, sourceNodeGeneration,
         ...(root === undefined ? {} : { root }), applicationVersion };
     }
-    case M6bServiceWireCommand.relocationReady:
-      requireFlags(prefixValue.flags, 8);
-      return reader.relocationReady();
-    case M6bServiceWireCommand.relocationReserved: {
+    case M6bServiceWireCommand.relocationReady: {
       requireFlags(prefixValue.flags, 0);
       const relocation = reader.operationId('relocation');
       const targetAttemptGeneration = reader.nonZeroU64('targetAttemptGeneration');
-      const round = reader.relocationRound();
       const coordinator = reader.coordinatorFence();
-      const candidate = reader.relocationCandidate();
-      const reservationGeneration = reader.nonZeroU64('reservationGeneration');
-      const participants = reader.relocationParticipants();
+      const target = reader.relocationTarget();
+      const object = reader.relocationObject();
+      const senderRole = reader.relocationRole();
       reader.end();
-      return { kind: 'reserved', relocation, targetAttemptGeneration, round, coordinator,
-        candidate, reservationGeneration, participants };
+      return { kind: 'ready', relocation, targetAttemptGeneration, coordinator,
+        target, object, senderRole };
     }
     case M6bServiceWireCommand.relocationData: {
       requireFlags(prefixValue.flags, 0);
       const base = reader.relocationBase();
       const senderRole = reader.relocationRole();
-      const participantId = reader.nonZeroU64('participantId');
-      const sequence = reader.nonZeroU64('sequence');
+      const object = reader.relocationObject();
       const frozenBytes = reader.takeRemaining();
       const frozenRecord = decodeServiceWireFrozenRecord(frozenBytes);
-      if (frozenRecord.recordKind !== 13) {
-        return { kind: 'data', ...base, senderRole, participantId, sequence, frozenRecord };
-      }
-      const frozen = decodeFrozenRelocationControl(
-        frozenRecord.canonicalBytes,
-        base.relocation,
-        senderRole
-      );
       reader.end();
-      return { kind: 'data', ...base, senderRole, participantId, sequence, ...frozen };
+      return { kind: 'data', ...base, senderRole, object, frozenRecord };
     }
-    case M6bServiceWireCommand.relocationAck: {
+    case M6bServiceWireCommand.relocationCutover: {
       requireFlags(prefixValue.flags, 0);
       const base = reader.relocationBase();
       const senderRole = reader.relocationRole();
-      const participantId = reader.nonZeroU64('participantId');
-      const highWater = reader.ordinal('highWater');
+      const object = reader.relocationObject();
       reader.end();
-      return { kind: 'ack', ...base, senderRole, participantId, highWater };
-    }
-    case M6bServiceWireCommand.relocationSeal: {
-      requireFlags(prefixValue.flags, 0);
-      const base = reader.relocationBase();
-      const senderRole = reader.relocationRole();
-      const response = reader.bool8('response');
-      const participants = reader.relocationTerminalParticipants();
-      reader.end();
-      return { kind: 'seal', ...base, senderRole, response, participants };
-    }
-    case M6bServiceWireCommand.relocationComplete: {
-      requireFlags(prefixValue.flags, 0);
-      const base = reader.relocationBase();
-      const senderRole = reader.relocationRole();
-      const source = reader.requestSourceFence();
-      const state = reader.u8('sourceCleanupState');
-      if (state > 2) fail('Invalid sourceCleanupState.');
-      reader.end();
-      return { kind: 'complete', ...base, senderRole, source,
-        sourceCleanupState: state === 0 ? 'pending' : state === 1 ? 'completed' : 'sourceLeaseExpired' };
+      return { kind: 'cutover', ...base, senderRole, object };
     }
     default:
       fail(`Unsupported maintenance relocation command '${prefixValue.command}'.`);
   }
-}
-
-function encodeRelocationReady(value: ServiceMaintenanceRelocationReady): Buffer {
-  const targetOffer = value.role === 'target';
-  const sourceAccept = value.role === 'source';
-  if ((targetOffer && (value.offeredMessages === 0n || value.offeredBytes === 0n
-      || value.participants.length !== 0))
-    || (sourceAccept && (value.offeredMessages !== 0n || value.offeredBytes !== 0n
-      || value.participants.length === 0))
-    || (!targetOffer && !sourceAccept)) {
-    fail('Relocation ready offer or accept fields do not match its role.');
-  }
-  return concat(
-    prefix(M6bServiceWireCommand.relocationReady, 8),
-    wireId(value.relocation, 'relocation'),
-    u64(value.targetAttemptGeneration),
-    Buffer.of(relocationRound(value.round)),
-    coordinatorFence(value.coordinator),
-    relocationCandidate(value.candidate),
-    relocationObject(value.object),
-    Buffer.of(relocationRole(value.role)),
-    u64Any(value.offeredMessages),
-    u64Any(value.offeredBytes),
-    relocationParticipants(value.participants),
-    relocationExtension(value)
-  );
 }
 
 /** Encodes canonical service-wire command 33 for a maintenance terminal relay. */
@@ -2056,10 +1816,6 @@ function coordinatorFence(value: ServiceWireRelocationCoordinatorFence): Buffer 
   );
 }
 
-function relocationRound(value: ServiceWireRelocationRound): number {
-  return value === 'initial' ? 1 : value === 'preparedReplacement' ? 2 : 3;
-}
-
 function relocationRole(value: ServiceWireRelocationRole): number {
   return value === 'source' ? 1 : value === 'target' ? 2 : 3;
 }
@@ -2071,7 +1827,7 @@ function applicationVersion(value: bigint): Buffer {
   return u64Any(value);
 }
 
-function relocationCandidate(value: ServiceWireRelocationCandidate): Buffer {
+function relocationTarget(value: ServiceWireRelocationTarget): Buffer {
   return concat(
     rid(value.nodeRid, 'targetNodeRid'),
     u64(value.nodeGeneration),
@@ -2102,101 +1858,11 @@ function relocationObject(value: ServiceWireRelocationObject): Buffer {
     u16(body.byteLength), body);
 }
 
-function relocationParticipants(
-  values: readonly ServiceWireRelocationParticipant[]
-): Buffer {
-  if (values.length > 2048) throw new RangeError('Relocation participant count exceeds 2048.');
-  validateSortedParticipants(values);
-  return concat(
-    u32(values.length, 'participantCount'),
-    ...values.map(value => concat(
-      u64(value.participantId),
-      relocationParticipantIdentity(value.boundSession),
-      u64Any(value.allowanceMessages),
-      u64Any(value.allowanceBytes)
-    ))
-  );
-}
-
-function relocationParticipantIdentity(
-  value: ServiceWireRelocationBoundSessionIdentity | undefined
-): Buffer {
-  if (value === undefined) return concat(Buffer.of(1), u16(0));
-  const body = concat(
-    rid(value.sessionOwnerNodeRid, 'sessionOwnerNodeRid'),
-    u64(value.sessionOwnerNodeGeneration),
-    text8(value.sessionOwnerId, 'sessionOwnerId'),
-    u64(value.sessionOwnerLeaseGeneration),
-    rid(value.sessionRid, 'sessionRid'),
-    u64(value.bindingGeneration),
-    u64Any(value.lastAcceptedSessionSequence)
-  );
-  return concat(Buffer.of(2), u16(body.byteLength), body);
-}
-
-function relocationTerminalParticipants(
-  values: readonly { readonly participantId: bigint; readonly highWater: bigint }[]
-): Buffer {
-  if (values.length > 2048) throw new RangeError('Relocation terminal participant count exceeds 2048.');
-  validateSortedParticipants(values.map(value => ({
-    ...value, allowanceMessages: 0n, allowanceBytes: 0n
-  })));
-  return concat(
-    u32(values.length, 'participantTerminalCount'),
-    ...values.map(value => concat(u64(value.participantId), u64Any(value.highWater)))
-  );
-}
-
-function validateSortedParticipants(values: readonly ServiceWireRelocationParticipant[]): void {
-  let previous = 0n;
-  for (const value of values) {
-    requirePositive(value.participantId, 'participantId');
-    if (value.participantId <= previous) {
-      throw new RangeError('Relocation participants must be sorted and unique.');
-    }
-    previous = value.participantId;
-  }
-}
-
 function relocationRoot(value: ServiceWireRelocationRoot | undefined): Buffer {
   if (value === undefined) return concat(Buffer.of(0), u16(0));
   const body = concat(relocationReference(value.reference),
     u32(value.checksumCrc32c, 'relocationChecksumCrc32c'));
   return concat(Buffer.of(1), u16(body.byteLength), body);
-}
-
-function participantProgress(
-  values: ServiceMaintenanceRelocationReady['participantProgress']
-): Buffer {
-  let previous = 0n;
-  const entries = values.map(value => {
-    if (value.participantId <= previous || value.replayCursor > value.acceptedBoundary) {
-      throw new RangeError('Relocation participant progress is invalid.');
-    }
-    previous = value.participantId;
-    return concat(u64(value.participantId), u64Any(value.acceptedBoundary),
-      u64Any(value.replayCursor));
-  });
-  return concat(u32(entries.length, 'participantProgressCount'), ...entries);
-}
-
-function relocationExtension(value: ServiceMaintenanceRelocationReady): Buffer {
-  const fields: Buffer[] = [
-    tlv(2, u64(value.sourceNodeGeneration)),
-    tlv(3, u64(value.targetNodeGeneration)),
-    tlv(4, u64(value.reservationGeneration))
-  ];
-  if (value.root !== undefined) {
-    fields.push(tlv(5, relocationReference(value.root.reference)));
-    fields.push(tlv(6, u32(value.root.checksumCrc32c, 'relocationChecksumCrc32c')));
-  }
-  fields.push(tlv(8, applicationVersion(value.applicationVersion)));
-  fields.push(tlv(9, participantProgress(value.participantProgress)));
-  const body = concat(...fields);
-  if (body.byteLength > 1_048_576) {
-    throw new RangeError('Relocation extension exceeds 1048576 bytes.');
-  }
-  return concat(u32(body.byteLength, 'relocationExtensionLength'), body);
 }
 
 function relocationReference(value: string): Buffer {
@@ -2207,60 +1873,13 @@ function relocationReference(value: string): Buffer {
   return concat(u16(bytes.byteLength), bytes);
 }
 
-function tlv(id: number, body: Buffer): Buffer {
-  return concat(Buffer.of(id), u32(body.byteLength, 'tlvLength'), body);
-}
 
-function frozenRelocationControl(value: ServiceMaintenanceRelocationControlData): Buffer {
-  const sourceBody = concat(
-    rid(value.source.nodeRid, 'sourceNodeRid'),
-    u64(value.source.nodeGeneration),
-    text8(value.source.ownerId, 'sourceOwnerId'),
-    u64(value.source.leaseGeneration)
-  );
-  return concat(
-    Buffer.of(13),
-    Buffer.of(1), u16(sourceBody.byteLength), sourceBody,
-    Buffer.of(0),
-    u64Any(0n), u64Any(0n),
-    u32(0, 'operationKind'),
-    u16(0),
-    Buffer.of(relocationPhase(value.phase)),
-    Buffer.of(relocationRole(value.senderRole)),
-    wireId(value.relocation, 'relocation'),
-    relocationObject(value.object),
-    u32(0, 'terminalResult'),
-    u32(0, 'failureCode')
-  );
-}
-
-function decodeFrozenRelocationControl(
-  bytes: Uint8Array,
-  expectedRelocation: ServiceWireOperationId,
-  expectedRole: ServiceWireRelocationRole
-): {
-  readonly source: ServiceWireRequestSourceFence;
-  readonly object: ServiceWireRelocationObject;
-  readonly phase: ServiceWireRelocationPhase;
-} {
-  const reader = new Reader(bytes);
-  const value = reader.frozenRelocationControl(expectedRelocation, expectedRole);
-  reader.end();
-  return value;
-}
-
-function relocationPhase(value: ServiceWireRelocationPhase): number {
-  return ['none', 'preparing', 'captured', 'prepared', 'committed',
-    'activating', 'activated', 'cleaning', 'completed', 'aborted'].indexOf(value);
-}
-
-function relocationPhaseName(value: number): ServiceWireRelocationPhase {
+function validateRelocationPhase(value: number): void {
   const phases = ['none', 'preparing', 'captured', 'prepared', 'committed',
     'activating', 'activated', 'cleaning', 'completed', 'aborted'] as const;
   if (!Number.isInteger(value) || value < 0 || value >= phases.length) {
     fail('Invalid relocationData control phase.');
   }
-  return phases[value]!;
 }
 
 function requestSourceFence(value: ServiceWireRequestSourceFence): Buffer {
@@ -2459,13 +2078,6 @@ function u64Any(value: bigint): Buffer {
   return result;
 }
 
-function ordinalU64(value: bigint, name: string): Buffer {
-  if (value < 0n || value > 0x7fff_ffff_ffff_ffffn) {
-    throw new RangeError(`${name} exceeds the signed ordinal range.`);
-  }
-  return u64Any(value);
-}
-
 function requirePositive(value: bigint | undefined, name: string): bigint {
   if (value === undefined || value < 1n || value > 0xffff_ffff_ffff_ffffn) {
     throw new RangeError(`${name} must be a non-zero u64.`);
@@ -2604,12 +2216,6 @@ class Reader {
     return value === 1 ? 'source' : value === 2 ? 'target' : 'coordinator';
   }
 
-  relocationRound(): ServiceWireRelocationRound {
-    const value = this.u8('relocationRound');
-    if (value < 1 || value > 3) fail('Invalid relocationRound.');
-    return value === 1 ? 'initial' : value === 2 ? 'preparedReplacement' : 'postCommitReplacement';
-  }
-
   ordinal(name: string): bigint {
     const value = this.u64(name);
     if (value > 0x7fff_ffff_ffff_ffffn) fail(`${name} exceeds the signed ordinal range.`);
@@ -2620,7 +2226,7 @@ class Reader {
     return this.ordinal('applicationVersion');
   }
 
-  relocationCandidate(): ServiceWireRelocationCandidate {
+  relocationTarget(): ServiceWireRelocationTarget {
     return {
       nodeRid: this.rid('targetNodeRid'),
       nodeGeneration: this.nonZeroU64('targetNodeGeneration'),
@@ -2653,61 +2259,6 @@ class Reader {
     return value;
   }
 
-  relocationParticipants(): readonly ServiceWireRelocationParticipant[] {
-    const count = this.u32('participantCount');
-    if (count > 2048) fail('Relocation participant count exceeds 2048.');
-    const values: ServiceWireRelocationParticipant[] = [];
-    let previous = 0n;
-    for (let index = 0; index < count; index++) {
-      const participantId = this.nonZeroU64('participantId');
-      if (participantId <= previous) fail('Relocation participants are not sorted and unique.');
-      previous = participantId;
-      const kind = this.u8('participantKind');
-      const identityLength = this.u16('participantIdentityLength');
-      if (kind === 1) {
-        if (identityLength !== 0) fail('objectMailbox participant identity must be empty.');
-        values.push({ participantId,
-          allowanceMessages: this.ordinal('allowanceMessages'),
-          allowanceBytes: this.ordinal('allowanceBytes') });
-        continue;
-      }
-      if (kind !== 2) fail('Invalid relocation participant kind.');
-      const end = this.offset + identityLength;
-      if (end > this.bytes.byteLength) fail('Truncated relocation participant identity.');
-      const boundSession: ServiceWireRelocationBoundSessionIdentity = {
-        sessionOwnerNodeRid: this.rid('sessionOwnerNodeRid'),
-        sessionOwnerNodeGeneration: this.nonZeroU64('sessionOwnerNodeGeneration'),
-        sessionOwnerId: this.text8('sessionOwnerId'),
-        sessionOwnerLeaseGeneration: this.nonZeroU64('sessionOwnerLeaseGeneration'),
-        sessionRid: this.rid('sessionRid'),
-        bindingGeneration: this.nonZeroU64('bindingGeneration'),
-        lastAcceptedSessionSequence: this.ordinal('lastAcceptedSessionSequence')
-      };
-      if (this.offset !== end) fail('Invalid relocation participant identity length.');
-      values.push({ participantId, boundSession,
-        allowanceMessages: this.ordinal('allowanceMessages'),
-        allowanceBytes: this.ordinal('allowanceBytes') });
-    }
-    return values;
-  }
-
-  relocationTerminalParticipants(): readonly {
-    readonly participantId: bigint;
-    readonly highWater: bigint;
-  }[] {
-    const count = this.u32('participantTerminalCount');
-    if (count > 2048) fail('Relocation terminal participant count exceeds 2048.');
-    const values: { participantId: bigint; highWater: bigint }[] = [];
-    let previous = 0n;
-    for (let index = 0; index < count; index++) {
-      const participantId = this.nonZeroU64('participantId');
-      if (participantId <= previous) fail('Relocation terminal participants are not sorted and unique.');
-      previous = participantId;
-      values.push({ participantId, highWater: this.ordinal('highWater') });
-    }
-    return values;
-  }
-
   relocationRoot(): ServiceWireRelocationRoot | undefined {
     const present = this.bool8('hasRelocation');
     const length = this.u16('relocationRootLength');
@@ -2723,127 +2274,6 @@ class Reader {
     };
     if (this.offset !== end) fail('Invalid relocation root length.');
     return value;
-  }
-
-  relocationReady(): ServiceMaintenanceRelocationReady {
-    const relocation = this.operationId('relocation');
-    const targetAttemptGeneration = this.nonZeroU64('targetAttemptGeneration');
-    const round = this.relocationRound();
-    const coordinator = this.coordinatorFence();
-    const candidate = this.relocationCandidate();
-    const object = this.relocationObject();
-    const role = this.relocationRole();
-    const offeredMessages = this.ordinal('offeredMessages');
-    const offeredBytes = this.ordinal('offeredBytes');
-    const participants = this.relocationParticipants();
-    const targetOffer = role === 'target';
-    const sourceAccept = role === 'source';
-    if ((targetOffer && (offeredMessages === 0n || offeredBytes === 0n
-        || participants.length !== 0))
-      || (sourceAccept && (offeredMessages !== 0n || offeredBytes !== 0n
-        || participants.length === 0))
-      || (!targetOffer && !sourceAccept)) {
-      fail('Relocation ready offer or accept fields do not match its role.');
-    }
-    const extensionLength = this.u32('relocationExtensionLength');
-    if (extensionLength > 1_048_576) fail('Relocation extension exceeds 1048576 bytes.');
-    const extensionEnd = this.offset + extensionLength;
-    if (extensionEnd > this.bytes.byteLength) fail('Truncated relocation extension.');
-    let sourceNodeGeneration: bigint | undefined;
-    let targetNodeGeneration: bigint | undefined;
-    let reservationGeneration: bigint | undefined;
-    let rootReference: string | undefined;
-    let rootChecksum: number | undefined;
-    let applicationVersionValue: bigint | undefined;
-    let progress: ServiceMaintenanceRelocationReady['participantProgress'] | undefined;
-    let previousId = 0;
-    while (this.offset < extensionEnd) {
-      const id = this.u8('extensionFieldId');
-      if (id <= previousId) fail('Relocation extension fields are not ordered and unique.');
-      previousId = id;
-      const length = this.u32('extensionFieldLength');
-      const end = this.offset + length;
-      if (end > extensionEnd) fail('Truncated relocation extension field.');
-      if (id === 2) sourceNodeGeneration = this.nonZeroU64('sourceNodeGeneration');
-      else if (id === 3) targetNodeGeneration = this.nonZeroU64('targetNodeGeneration');
-      else if (id === 4) reservationGeneration = this.nonZeroU64('reservationGeneration');
-      else if (id === 5) rootReference = this.relocationReference();
-      else if (id === 6) rootChecksum = this.u32('relocationChecksumCrc32c');
-      else if (id === 8) applicationVersionValue = this.applicationVersion();
-      else if (id === 9) progress = this.participantProgress();
-      else this.offset = end;
-      if (this.offset !== end) fail('Invalid relocation extension field length.');
-    }
-    if (sourceNodeGeneration === undefined || targetNodeGeneration === undefined
-      || reservationGeneration === undefined || applicationVersionValue === undefined
-      || progress === undefined || (rootReference === undefined) !== (rootChecksum === undefined)) {
-      fail('Relocation extension is missing a required field.');
-    }
-    this.end();
-    return { kind: 'ready', relocation, targetAttemptGeneration, round, coordinator,
-      candidate, object, role, offeredMessages, offeredBytes, participants,
-      sourceNodeGeneration, targetNodeGeneration, reservationGeneration,
-      ...(rootReference === undefined ? {} : { root: {
-        reference: rootReference, checksumCrc32c: rootChecksum!
-      } }), applicationVersion: applicationVersionValue, participantProgress: progress };
-  }
-
-  participantProgress(): ServiceMaintenanceRelocationReady['participantProgress'] {
-    const count = this.u32('participantProgressCount');
-    if (count > 2048) fail('Relocation participant progress count exceeds 2048.');
-    const values: { participantId: bigint; acceptedBoundary: bigint; replayCursor: bigint }[] = [];
-    let previous = 0n;
-    for (let index = 0; index < count; index++) {
-      const participantId = this.nonZeroU64('participantId');
-      const acceptedBoundary = this.ordinal('acceptedBoundary');
-      const replayCursor = this.ordinal('replayCursor');
-      if (participantId <= previous || replayCursor > acceptedBoundary) {
-        fail('Invalid relocation participant progress.');
-      }
-      previous = participantId;
-      values.push({ participantId, acceptedBoundary, replayCursor });
-    }
-    return values;
-  }
-
-  frozenRelocationControl(
-    expectedRelocation: ServiceWireOperationId,
-    expectedRole: ServiceWireRelocationRole
-  ): {
-    readonly source: ServiceWireRequestSourceFence;
-    readonly object: ServiceWireRelocationObject;
-    readonly phase: ServiceWireRelocationPhase;
-  } {
-    if (this.u8('recordKind') !== 13) fail('relocationData record must be relocationControl.');
-    if (this.u8('sourceKind') !== 1) fail('relocationData source must be a node.');
-    const sourceLength = this.u16('sourceLength');
-    const sourceEnd = this.offset + sourceLength;
-    const source = {
-      nodeRid: this.rid('sourceNodeRid'),
-      nodeGeneration: this.nonZeroU64('sourceNodeGeneration'),
-      ownerId: this.text8('sourceOwnerId'),
-      leaseGeneration: this.nonZeroU64('sourceOwnerLeaseGeneration')
-    };
-    if (this.offset !== sourceEnd) fail('Invalid frozen source length.');
-    if (this.bool8('hasMetadata')) fail('relocationData control record cannot contain metadata.');
-    const operation = { high: this.u64('operationId.high'), low: this.u64('operationId.low') };
-    if (operation.high !== 0n || operation.low !== 0n) {
-      fail('relocationData control operation must be zero.');
-    }
-    if (this.u32('operationKind') !== 0 || this.u16('replyRouteLength') !== 0) {
-      fail('relocationData control record has a reply route.');
-    }
-    const phase = relocationPhaseName(this.u8('phase'));
-    if (this.relocationRole() !== expectedRole) fail('relocationData control role changed.');
-    const relocation = this.operationId('controlRelocation');
-    if (relocation.high !== expectedRelocation.high || relocation.low !== expectedRelocation.low) {
-      fail('relocationData control relocation changed.');
-    }
-    const object = this.relocationObject();
-    if (this.u32('terminalResult') !== 0 || this.u32('failureCode') !== 0) {
-      fail('relocationData control record is not successful.');
-    }
-    return { source, object, phase };
   }
 
   relocationReference(): string {
@@ -3092,10 +2522,10 @@ export function decodeServiceWireFrozenRecord(bytes: Uint8Array): ServiceWireFro
     ? replyReader.nonZeroU64('replyRouteId')
     : undefined;
   replyReader.end('frozen reply route');
-  const instanceOperationKind = reader.frozenBody(recordKind);
+  const body = reader.frozenBody(recordKind);
   reader.end('frozen record');
   validateFrozenOperationMatrix(recordKind, operationKind, operationId, replyRouteId,
-    instanceOperationKind);
+    body.instanceOperationKind);
   return {
     recordKind,
     sourceKind,
@@ -3109,6 +2539,10 @@ export function decodeServiceWireFrozenRecord(bytes: Uint8Array): ServiceWireFro
     operationId,
     operationKind,
     ...(replyRouteId === undefined ? {} : { replyRouteId }),
+    ...(body.target === undefined ? {} : { target: body.target }),
+    ...(body.applicationPayload === undefined
+      ? {}
+      : { applicationPayload: body.applicationPayload }),
     canonicalBytes: Buffer.from(bytes)
   };
 }
@@ -3291,16 +2725,17 @@ class FrozenReader {
     return new FrozenReader(body);
   }
 
-  applicationPayload(): void {
+  applicationPayload(): NonNullable<ServiceMaintenanceReplyRelay['payload']> {
     if (this.u8('applicationPayload.version') !== 1) {
       fail('Application payload envelope version must be one.');
     }
     const body = this.body32('application payload');
-    body.text8('packetName');
-    body.text8('contentType');
+    const packetName = body.text8('packetName');
+    const contentType = body.text8('contentType');
     const payloadLength = body.u32('payloadLength');
-    body.skip(payloadLength, 'payload');
+    const bytes = body.take(payloadLength, 'payload');
     body.end('application payload');
+    return { packetName, contentType, bytes };
   }
 
   metadata(): void {
@@ -3317,31 +2752,43 @@ class FrozenReader {
     }
   }
 
-  frozenBody(recordKind: number): number | undefined {
-    if (recordKind === 1 || recordKind === 2) this.applicationPayload();
+  frozenBody(recordKind: number): {
+    readonly instanceOperationKind?: number;
+    readonly target?: ServiceWireFrozenRecord['target'];
+    readonly applicationPayload?: NonNullable<ServiceMaintenanceReplyRelay['payload']>;
+  } {
+    if (recordKind === 1 || recordKind === 2) {
+      return { applicationPayload: this.applicationPayload() };
+    }
     else if (recordKind === 3 || recordKind === 4) {
       this.text8('channelName');
-      this.applicationPayload();
+      return { applicationPayload: this.applicationPayload() };
     } else if (recordKind === 5 || recordKind === 6) {
-      this.spotRoute();
-      this.applicationPayload();
+      return {
+        target: this.spotRoute(),
+        applicationPayload: this.applicationPayload()
+      };
     } else if (recordKind === 7) {
       this.text8('channelName');
       this.text8('topic');
-      this.applicationPayload();
+      return { applicationPayload: this.applicationPayload() };
     } else if (recordKind === 8) this.actorControl();
     else if (recordKind === 9 || recordKind === 10) {
-      this.actorRoute();
-      this.applicationPayload();
+      return {
+        target: this.actorRoute(),
+        applicationPayload: this.applicationPayload()
+      };
     } else if (recordKind === 11) {
       const terminalResult = this.u32('terminalResult');
       const failureCode = this.u32('failureCode');
       const hasPayload = this.bool8('hasPayload');
       validateReplyTerminal(terminalResult, failureCode, hasPayload);
-      if (hasPayload) this.applicationPayload();
+      return hasPayload
+        ? { applicationPayload: this.applicationPayload() }
+        : {};
     } else if (recordKind === 12) this.sendReadyDestination();
     else if (recordKind === 13) {
-      relocationPhaseName(this.u8('phase'));
+      validateRelocationPhase(this.u8('phase'));
       const role = this.u8('role');
       if (role < 1 || role > 3) fail('Invalid relocation control role.');
       const relocation = { high: this.u64('relocation.high'), low: this.u64('relocation.low') };
@@ -3353,36 +2800,48 @@ class FrozenReader {
       this.nonZeroU64('instanceSourceNodeGeneration');
       const operationKind = this.u8('instanceOperationKind');
       if (operationKind < 1 || operationKind > 2) fail('Invalid Instance activation operation kind.');
-      this.applicationPayload();
-      return operationKind;
+      const applicationPayload = this.applicationPayload();
+      return { instanceOperationKind: operationKind, applicationPayload };
     }
-    return undefined;
+    return {};
   }
 
-  private spotRoute(): void {
-    this.spotIdentity();
-    this.rid8('targetNodeRid');
-    this.nonZeroU64('targetNodeGeneration');
-    this.nonZeroU64('expectedAuthorityOwnerGeneration');
-    this.nonZeroU64('expectedOwnerLeaseGeneration');
+  private spotRoute(): Extract<NonNullable<ServiceWireFrozenRecord['target']>, { kind: 'spot' }> {
+    const spot = this.spotIdentity();
+    return {
+      kind: 'spot',
+      ...spot,
+      targetNodeRid: this.rid8('targetNodeRid'),
+      targetNodeGeneration: this.nonZeroU64('targetNodeGeneration'),
+      authorityOwnerGeneration: this.nonZeroU64('expectedAuthorityOwnerGeneration'),
+      ownerLeaseGeneration: this.nonZeroU64('expectedOwnerLeaseGeneration')
+    };
   }
 
-  private actorRoute(): void {
-    this.actorIdentity();
-    this.rid8('targetNodeRid');
-    this.nonZeroU64('targetNodeGeneration');
-    this.nonZeroU64('expectedAuthorityOwnerGeneration');
-    this.nonZeroU64('expectedOwnerLeaseGeneration');
+  private actorRoute(): Extract<NonNullable<ServiceWireFrozenRecord['target']>, { kind: 'actor' }> {
+    const actor = this.actorIdentity();
+    return {
+      kind: 'actor',
+      ...actor,
+      targetNodeRid: this.rid8('targetNodeRid'),
+      targetNodeGeneration: this.nonZeroU64('targetNodeGeneration'),
+      authorityOwnerGeneration: this.nonZeroU64('expectedAuthorityOwnerGeneration'),
+      ownerLeaseGeneration: this.nonZeroU64('expectedOwnerLeaseGeneration')
+    };
   }
 
-  private actorIdentity(): void {
-    this.text8('actorId');
-    this.nonZeroU64('actorGeneration');
+  private actorIdentity(): { readonly actorId: string; readonly generation: bigint } {
+    return {
+      actorId: this.text8('actorId'),
+      generation: this.nonZeroU64('actorGeneration')
+    };
   }
 
-  private spotIdentity(): void {
-    this.text8('spotId');
-    this.nonZeroU64('spotGeneration');
+  private spotIdentity(): { readonly spotId: string; readonly generation: bigint } {
+    return {
+      spotId: this.text8('spotId'),
+      generation: this.nonZeroU64('spotGeneration')
+    };
   }
 
   private membershipSnapshot(): void {
@@ -3474,9 +2933,11 @@ class FrozenReader {
     return new FrozenReader(body);
   }
 
-  private skip(length: number, name: string): void {
+  private take(length: number, name: string): Buffer {
     this.need(length, name);
+    const value = Buffer.from(this.bytes.subarray(this.offset, this.offset + length));
     this.offset += length;
+    return value;
   }
 
   private textBody(length: number, name: string): string {

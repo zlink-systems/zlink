@@ -8,6 +8,13 @@ const framework = require('../../packages/framework/dist/internal');
 const {
   ZLinkRoutedSpotPacketDispatch
 } = require('../../packages/framework/dist/runtime/spots/spot-routed-spot-packet-dispatch');
+const {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} = require('../../packages/framework/dist/runtime/host/application-job-queue');
+const {
+  runWithApplicationJobPermit
+} = require('../../packages/framework/dist/runtime/application-jobs/application-job-queue-scope');
 
 class PlayerActor {
   constructor(context) {
@@ -466,7 +473,7 @@ test('routed local self-send queues behind the current turn while self-request f
   ]);
 });
 
-test('routed local one-way waits for bounded capacity and completes at admission', async () => {
+test('routed local one-way carries its shared job permit through the owner serial wait', async () => {
   let releaseCurrent;
   let currentStarted;
   let releaseHandler;
@@ -509,30 +516,47 @@ test('routed local one-way waits for bounded capacity and completes at admission
   });
   await currentDidStart;
 
-  let admitted = false;
-  const first = dispatch.send('capacity-target', 'SlowPacket', {}, {
-    channelName: 'test',
-    admissionTimeoutMs: 1_000
-  }).then(() => { admitted = true; });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(admitted, false);
-  await assert.rejects(
-    dispatch.send('capacity-target', 'SlowPacket', {}, {
-      channelName: 'test',
-      admissionTimeoutMs: 1_000
-    }),
-    (error) => error instanceof framework.ZLinkFrameworkException
-      && error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+  const queue = new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration(
+      { maxQueuedApplicationJobs: 1n },
+      () => 8n
+    )
   );
+  const permit = await queue.acquire();
+  permit.markApplicationQueued();
+  let admitted = false;
+  const first = runWithApplicationJobPermit(permit, () =>
+    dispatch.send('capacity-target', 'SlowPacket', {}, {
+      channelName: 'test'
+    })).then(() => { admitted = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(admitted, true);
+  assert.equal(handlerFinished, false);
+  assert.equal(queue.snapshot().permitsInUse, 1n);
+  assert.equal(queue.snapshot().queuedApplicationJobs, 1n);
+
+  let nextPermitAcquired = false;
+  const nextPermitPending = queue.acquire().then((nextPermit) => {
+    nextPermitAcquired = true;
+    return nextPermit;
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(nextPermitAcquired, false);
+  assert.equal(queue.snapshot().capacityWaiters, 1n);
 
   releaseCurrent();
   await running;
   await first;
   await handlerDidStart;
+  const nextPermit = await nextPermitPending;
+  assert.equal(nextPermitAcquired, true);
   assert.equal(handlerFinished, false);
+  assert.equal(queue.snapshot().permitsInUse, 1n);
+  nextPermit.releaseAfterInternalProcessing();
   releaseHandler();
   await handlerDidFinish;
   assert.equal(handlerFinished, true);
+  assert.equal(queue.snapshot().permitsInUse, 0n);
 });
 
 test('yield request from an entry turn is rejected because Entry forbids Yield', async () => {

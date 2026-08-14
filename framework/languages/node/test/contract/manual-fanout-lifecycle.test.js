@@ -296,8 +296,7 @@ function createLifecycle({
     codecs: { serializers: new Map() },
     dispatchServices,
     spotRoutes: {},
-    spotRouteBridges: new Map(),
-    spotRouteBridgeRawReplies: { rejectAll() {} }
+    spotRouteBridges: new Map()
   });
   lifecycle.taskRunner = taskRunner;
   return { lifecycle, registration, taskRunner };

@@ -14,12 +14,14 @@ mesh_record_dispatcher_t::mesh_record_dispatcher_t (
   serializer_registry_t &serializers,
   const route_handler_registry_t &handlers,
   const handler_registry_t &filters,
-  dispatch_options_t dispatch_options) :
+  dispatch_options_t dispatch_options,
+  std::function<void ()> before_application_handler) :
     _services (&services),
     _serializers (&serializers),
     _handlers (&handlers),
     _filters (&filters),
-    _dispatch_options (std::move (dispatch_options))
+    _dispatch_options (std::move (dispatch_options)),
+    _before_application_handler (std::move (before_application_handler))
 {
 }
 
@@ -54,7 +56,8 @@ mesh_record_dispatcher_t::dispatch (
       channel_dispatch ? handler_dispatch_kind_t::channel_send
                        : handler_dispatch_kind_t::node_direct_send,
       channel_dispatch ? handler_dispatch_kind_t::channel_request
-                       : handler_dispatch_kind_t::node_direct_request);
+                       : handler_dispatch_kind_t::node_direct_request,
+      _before_application_handler);
     auto dispatched = dispatcher.dispatch (
       route_received_packet_t{record.source_node_rid, {}, std::move (message_parts), {}});
     if (!dispatched) {

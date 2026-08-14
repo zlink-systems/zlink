@@ -33,8 +33,6 @@ internal sealed class ZLinkSpotActivationDispatcher
         Func<ZLinkSpotActorHandlerRegistry?> actorHandlers,
         Func<ZLinkSpotHandlerInvoker> handlerInvoker,
         Func<IZLinkActor, CancellationToken, ValueTask>? commitAcceptedActorJoin = null,
-        ZLinkAsyncSubmitter? replySubmitter = null,
-        ZLinkCompletionAdmissionOwner? completionAdmission = null,
         bool acceptActorJoinWithoutHandler = false)
     {
         this.runtime = runtime;
@@ -79,9 +77,7 @@ internal sealed class ZLinkSpotActivationDispatcher
             runtime.Registration.Codecs,
             _dispatchErrors,
             DispatchInternalRoutePacketAsync,
-            runtime.Services.GetService<ILoggerFactory>()?.CreateLogger<ZLinkSpotRouteDispatcher>(),
-            replySubmitter,
-            completionAdmission);
+            runtime.Services.GetService<ILoggerFactory>()?.CreateLogger<ZLinkSpotRouteDispatcher>());
     }
 
     public ZLinkSpotActorPacketDispatcher ActorPackets => _actorPacketDispatcher;
@@ -114,13 +110,11 @@ internal sealed class ZLinkSpotActivationDispatcher
 
             try
             {
-                request.DispatchLease?.StartDispatch();
                 await _actorJoinDispatcher.DispatchAsync(request, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ZLinkMessageParts.DisposeAll(request.Parts);
-                request.DispatchLease?.Dispose();
+                request.Dispose();
             }
         }
         return false;
@@ -366,9 +360,6 @@ internal sealed class ZLinkSpotActivationDispatcher
                 var header = ZLinkEnvelopeCodec.DecodeHeader(received.Parts);
                 var errorKind = admission switch
                 {
-                    ZLinkAcceptedWorkAdmission.QueueFull => localTarget
-                        ? ZLinkFrameworkErrorKind.CapacityExceeded
-                        : ZLinkFrameworkErrorKind.Unavailable,
                     ZLinkAcceptedWorkAdmission.Closed =>
                         ZLinkFrameworkErrorKind.ShuttingDown,
                     ZLinkAcceptedWorkAdmission.RelocationMoving =>
@@ -383,8 +374,6 @@ internal sealed class ZLinkSpotActivationDispatcher
                         errorKind,
                         admission switch
                         {
-                            ZLinkAcceptedWorkAdmission.QueueFull =>
-                                "SPOT application admission is at capacity.",
                             ZLinkAcceptedWorkAdmission.Closed =>
                                 "SPOT application admission is closed.",
                             ZLinkAcceptedWorkAdmission.RelocationMoving =>

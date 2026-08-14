@@ -25,6 +25,10 @@ import { resolveLifecycleHandler } from '../handlers/handler-instance-scope';
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
 import type { ZLinkSpotSerialExecutor } from './spot-serial-executor';
 import type { ZLinkSerialWorkOptions } from '../execution/serial-scheduler';
+import {
+  detachApplicationJobPermit,
+  releaseApplicationJobPermitBeforeHandler
+} from '../application-jobs/application-job-queue-scope';
 
 interface ZLinkRoutedSpotPacketActivation {
   readonly meshName?: string;
@@ -136,6 +140,7 @@ export class ZLinkRoutedSpotPacketDispatch {
           >,
           this.options.providerResolver
         );
+        releaseApplicationJobPermitBeforeHandler();
         response = await handler.handle(activation.spot, payload, {
           channelName: context.channelName,
           contentType: context.contentType,
@@ -147,24 +152,24 @@ export class ZLinkRoutedSpotPacketDispatch {
     try {
       if (!returnResponse) {
         detached = true;
+        const detachedApplicationPermit = detachApplicationJobPermit();
         try {
           await activation.serial.postOneWay(
             async () => {
               try {
                 await runHandler();
               } finally {
+                detachedApplicationPermit?.releaseAfterInternalProcessing();
                 applicationClaim?.close();
               }
             },
             (error) => this.reportFailure(spotId, packetName, context, false, error),
             context.workOptions,
-            {
-              timeoutMs: context.admissionTimeoutMs,
-              signal: context.signal
-            }
+            { signal: context.signal }
           );
         } catch (error) {
           detached = false;
+          detachedApplicationPermit?.releaseAfterInternalProcessing();
           throw error;
         }
       } else {

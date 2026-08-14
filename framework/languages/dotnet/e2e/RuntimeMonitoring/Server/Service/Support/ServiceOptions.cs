@@ -17,7 +17,7 @@ internal sealed record ServerOptions(
     string? SpotPubEndpoint = null,
     string SubjectSpotType = RuntimeMonitoringNames.SubjectSpotType,
     int SpotLimit = 1,
-    ulong? ApplicationHwmBytes = null)
+    ulong? CoreHwmBudgetBytes = null)
 {
     public static ServerOptions Parse(string[] args, string defaultRole)
         => E2eConfiguration.Load<ServerOptions>(args) with { Role = defaultRole };

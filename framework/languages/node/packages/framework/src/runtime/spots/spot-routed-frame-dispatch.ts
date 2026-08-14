@@ -79,20 +79,6 @@ interface ZLinkSpotRoutedFrameDispatchOptions {
     actorPacketTarget?: unknown,
     signal?: AbortSignal
   ) => Promise<void>;
-  readonly routedBoundSessionOwnershipReceiver?: (payload: unknown) => Promise<{
-    readonly actorId: string;
-    readonly actorGeneration: string;
-    readonly actorOwnershipGeneration: string;
-    readonly bindingGeneration: string;
-    readonly targetOwnerLeaseGeneration: string;
-    readonly acceptedHighWater: string;
-    readonly sealId: string;
-  }>;
-  readonly routedBoundSessionSealReceiver?: (payload: unknown) => Promise<{
-    readonly actorId: string;
-    readonly sealId: string;
-    readonly acceptedHighWater: string;
-  }>;
   readonly actorPacketTargetProvider?: (actorId: string) => ZLinkRemoteActorPacketTarget | undefined;
   readonly bindRemoteSession?: (
     actor: ActorRef,
@@ -121,8 +107,6 @@ export class ZLinkSpotRoutedFrameDispatch {
       routedBoundSessionReceiver: options.routedBoundSessionReceiver,
       routedBoundSessionResponseReceiver: options.routedBoundSessionResponseReceiver,
       routedBoundSessionErrorReceiver: options.routedBoundSessionErrorReceiver,
-      routedBoundSessionOwnershipReceiver: options.routedBoundSessionOwnershipReceiver,
-      routedBoundSessionSealReceiver: options.routedBoundSessionSealReceiver,
       dispatchErrors: options.dispatchErrors
     });
     this.actorPacketRelayDispatch = new ZLinkSpotActorPacketRelayDispatch({

@@ -15,8 +15,6 @@ namespace
 
 constexpr std::size_t liveness_size = 13;
 constexpr std::size_t prefix_size = 5;
-constexpr auto relocation_resource_participant_limit =
-  static_cast<std::size_t> (relocationResourceParticipants);
 constexpr std::uint8_t application_payload_version = 1;
 constexpr std::uint8_t application_payload_flow_version = 2;
 
@@ -1106,7 +1104,6 @@ std::vector<std::uint8_t> encode_session_relocation_route (
         append_bytes8 (route, record.route.target_node_routing_id,
                        "target node RID");
         append_u64 (route, record.route.target_node_generation);
-        append_u64 (route, record.route.replayed_high_water);
     }
     else if (record.route.action
              == session_relocation_route_action_t::abort) {
@@ -1116,8 +1113,7 @@ std::vector<std::uint8_t> encode_session_relocation_route (
             || record.route.previous_authority_owner_generation != 0
             || record.route.target_authority_owner_generation != 0
             || !record.route.target_node_routing_id.empty ()
-            || record.route.target_node_generation != 0
-            || record.route.replayed_high_water != 0) {
+            || record.route.target_node_generation != 0) {
             throw service_wire_error_t (
               "Session relocation abort route has an invalid authority fence");
         }
@@ -1278,7 +1274,6 @@ std::vector<std::uint8_t> encode_session_relocation_sealed (
     append_u64 (bytes, record.session_owner_lease_generation);
     append_bytes8 (bytes, record.session_routing_id, "Session RID");
     append_u64 (bytes, record.binding_generation);
-    append_u64 (bytes, record.last_accepted_session_sequence);
     return bytes;
 }
 
@@ -1319,7 +1314,6 @@ session_relocation_sealed_t decode_session_relocation_sealed (
     record.session_routing_id =
       read_bytes8 (bytes, offset, "Session RID");
     record.binding_generation = read_u64 (bytes, offset);
-    record.last_accepted_session_sequence = read_u64 (bytes, offset);
     if (offset != bytes.size ())
         throw service_wire_error_t (
           "Session relocation sealed ACK has trailing bytes");
@@ -1385,8 +1379,6 @@ session_relocation_route_t decode_session_relocation_route (
           read_bytes8 (route, route_offset, "target node RID");
         record.route.target_node_generation =
           read_u64 (route, route_offset);
-        record.route.replayed_high_water =
-          read_u64 (route, route_offset);
     }
     else if (record.route.action
              == session_relocation_route_action_t::abort) {
@@ -1401,107 +1393,6 @@ session_relocation_route_t decode_session_relocation_route (
         throw service_wire_error_t (
           "Session relocation route has trailing bytes");
     (void) encode_session_relocation_route (record);
-    return record;
-}
-
-std::vector<std::uint8_t> encode_session_relocation_routed (
-  const session_relocation_routed_t &record)
-{
-    if ((record.relocation.high == 0 && record.relocation.low == 0)
-        || record.coordinator.lease_generation == 0
-        || record.coordinator.node_generation == 0
-        || record.actor.object_generation == 0
-        || record.session_owner_node_generation == 0
-        || record.session_owner_lease_generation == 0
-        || record.binding_generation == 0
-        || record.current_authority_owner_generation == 0
-        || (record.action != session_relocation_route_action_t::commit
-            && record.action
-                 != session_relocation_route_action_t::abort)
-        || static_cast<std::uint8_t> (record.result) > 3) {
-        throw service_wire_error_t (
-          "Session relocation routed ACK contains an invalid exact fence");
-    }
-    std::vector<std::uint8_t> bytes{
-      magic[0], magic[1], wire_major,
-      static_cast<std::uint8_t> (command::sessionRelocationRouted), 0};
-    append_u64 (bytes, record.relocation.high);
-    append_u64 (bytes, record.relocation.low);
-    append_text8 (bytes, record.coordinator.owner_id,
-                  "coordinator owner ID");
-    append_u64 (bytes, record.coordinator.lease_generation);
-    append_bytes8 (bytes, record.coordinator.node_routing_id,
-                   "coordinator node RID");
-    append_u64 (bytes, record.coordinator.node_generation);
-    append_text16 (bytes,
-                   record.coordinator.expected_authority_store_version,
-                   "expected authority StoreVersion",
-                   authorityStoreVersionBytes);
-    append_text8 (bytes, record.actor.actor_id, "Actor ID");
-    append_u64 (bytes, record.actor.object_generation);
-    append_bytes8 (bytes, record.session_owner_node_routing_id,
-                   "session owner node RID");
-    append_u64 (bytes, record.session_owner_node_generation);
-    append_text8 (bytes, record.session_owner_id, "session owner ID");
-    append_u64 (bytes, record.session_owner_lease_generation);
-    append_bytes8 (bytes, record.session_routing_id, "Session RID");
-    append_u64 (bytes, record.binding_generation);
-    bytes.push_back (static_cast<std::uint8_t> (record.action));
-    bytes.push_back (static_cast<std::uint8_t> (record.result));
-    append_u64 (bytes, record.current_authority_owner_generation);
-    append_u64 (bytes, record.last_accepted_session_sequence);
-    return bytes;
-}
-
-session_relocation_routed_t decode_session_relocation_routed (
-  std::span<const std::uint8_t> bytes)
-{
-    const auto header = decode_header (bytes);
-    if (header.kind != command::sessionRelocationRouted
-        || header.flags != 0) {
-        throw service_wire_error_t (
-          "record is not a Session relocation routed ACK");
-    }
-    std::size_t offset = prefix_size;
-    session_relocation_routed_t record;
-    record.relocation.high = read_u64 (bytes, offset);
-    record.relocation.low = read_u64 (bytes, offset);
-    record.coordinator.owner_id =
-      read_text8 (bytes, offset, "coordinator owner ID");
-    record.coordinator.lease_generation = read_u64 (bytes, offset);
-    record.coordinator.node_routing_id =
-      read_bytes8 (bytes, offset, "coordinator node RID");
-    record.coordinator.node_generation = read_u64 (bytes, offset);
-    record.coordinator.expected_authority_store_version =
-      read_text16 (bytes, offset, "expected authority StoreVersion",
-                   authorityStoreVersionBytes);
-    record.actor.actor_id = read_text8 (bytes, offset, "Actor ID");
-    record.actor.object_generation = read_u64 (bytes, offset);
-    record.session_owner_node_routing_id =
-      read_bytes8 (bytes, offset, "session owner node RID");
-    record.session_owner_node_generation = read_u64 (bytes, offset);
-    record.session_owner_id =
-      read_text8 (bytes, offset, "session owner ID");
-    record.session_owner_lease_generation = read_u64 (bytes, offset);
-    record.session_routing_id =
-      read_bytes8 (bytes, offset, "Session RID");
-    record.binding_generation = read_u64 (bytes, offset);
-    if (offset >= bytes.size ())
-        throw service_wire_error_t (
-          "Session relocation routed action is truncated");
-    record.action =
-      static_cast<session_relocation_route_action_t> (bytes[offset++]);
-    if (offset >= bytes.size ())
-        throw service_wire_error_t (
-          "Session relocation routed result is truncated");
-    record.result =
-      static_cast<session_relocation_route_result_t> (bytes[offset++]);
-    record.current_authority_owner_generation = read_u64 (bytes, offset);
-    record.last_accepted_session_sequence = read_u64 (bytes, offset);
-    if (offset != bytes.size ())
-        throw service_wire_error_t (
-          "Session relocation routed ACK has trailing bytes");
-    (void) encode_session_relocation_routed (record);
     return record;
 }
 
@@ -1627,49 +1518,27 @@ relocation_role_t read_role (std::span<const std::uint8_t> bytes,
     return role;
 }
 
-void append_round (std::vector<std::uint8_t> &bytes,
-                   relocation_round_t round)
+void append_target (std::vector<std::uint8_t> &bytes,
+                    const relocation_target_fence_t &value)
 {
-    if (round != relocation_round_t::initial
-        && round != relocation_round_t::prepared_replacement
-        && round != relocation_round_t::post_commit_replacement)
-        throw service_wire_error_t ("invalid relocation reservation round");
-    bytes.push_back (static_cast<std::uint8_t> (round));
-}
-
-relocation_round_t read_round (std::span<const std::uint8_t> bytes,
-                               std::size_t &offset)
-{
-    if (offset >= bytes.size ())
-        throw service_wire_error_t ("relocation reservation round is truncated");
-    const auto round = static_cast<relocation_round_t> (bytes[offset++]);
-    if (round != relocation_round_t::initial
-        && round != relocation_round_t::prepared_replacement
-        && round != relocation_round_t::post_commit_replacement)
-        throw service_wire_error_t ("invalid relocation reservation round");
-    return round;
-}
-
-void append_candidate (std::vector<std::uint8_t> &bytes,
-                       const relocation_candidate_t &value)
-{
-    append_bytes8 (bytes, value.node_routing_id, "target node RID");
-    append_nonzero_u64 (bytes, value.node_generation,
+    append_bytes8 (bytes, value.target_node_routing_id, "target node RID");
+    append_nonzero_u64 (bytes, value.target_node_generation,
                         "target node generation");
-    append_text8 (bytes, value.owner_id, "target owner ID");
-    append_nonzero_u64 (bytes, value.owner_lease_generation,
+    append_text8 (bytes, value.target_owner_id, "target owner ID");
+    append_nonzero_u64 (bytes, value.target_owner_lease_generation,
                         "target owner lease generation");
 }
 
-relocation_candidate_t read_candidate (std::span<const std::uint8_t> bytes,
-                                       std::size_t &offset)
+relocation_target_fence_t read_target (
+  std::span<const std::uint8_t> bytes, std::size_t &offset)
 {
-    relocation_candidate_t result;
-    result.node_routing_id = read_bytes8 (bytes, offset, "target node RID");
-    result.node_generation = read_nonzero_u64 (
+    relocation_target_fence_t result;
+    result.target_node_routing_id = read_bytes8 (
+      bytes, offset, "target node RID");
+    result.target_node_generation = read_nonzero_u64 (
       bytes, offset, "target node generation");
-    result.owner_id = read_text8 (bytes, offset, "target owner ID");
-    result.owner_lease_generation = read_nonzero_u64 (
+    result.target_owner_id = read_text8 (bytes, offset, "target owner ID");
+    result.target_owner_lease_generation = read_nonzero_u64 (
       bytes, offset, "target owner lease generation");
     return result;
 }
@@ -1743,115 +1612,6 @@ relocation_object_t read_object (std::span<const std::uint8_t> bytes,
     }
     if (body_offset != body.size ())
         throw service_wire_error_t ("relocation object has trailing bytes");
-    return result;
-}
-
-void append_participants (std::vector<std::uint8_t> &bytes,
-                          const std::vector<relocation_participant_t> &values)
-{
-    if (values.size () > relocation_resource_participant_limit)
-        throw service_wire_error_t (
-          "relocation participant count exceeds the protocol limit");
-    append_u32 (bytes, static_cast<std::uint32_t> (values.size ()));
-    std::uint64_t previous = 0;
-    for (const auto &value : values) {
-        if (value.participant_id == 0 || value.participant_id <= previous)
-            throw service_wire_error_t (
-              "relocation participants must be sorted and unique");
-        previous = value.participant_id;
-        append_u64 (bytes, value.participant_id);
-        std::vector<std::uint8_t> identity;
-        if (value.kind == relocation_participant_kind_t::bound_session) {
-            append_bytes8 (identity, value.session_owner_node_routing_id,
-                           "session owner node RID");
-            append_nonzero_u64 (identity, value.session_owner_node_generation,
-                                "session owner node generation");
-            append_text8 (identity, value.session_owner_id,
-                          "session owner ID");
-            append_nonzero_u64 (identity, value.session_owner_lease_generation,
-                                "session owner lease generation");
-            append_bytes8 (identity, value.session_routing_id, "Session RID");
-            append_nonzero_u64 (identity, value.binding_generation,
-                                "binding generation");
-            append_ordinal (identity, value.last_accepted_session_sequence,
-                            "last accepted session sequence");
-        }
-        else if (value.kind != relocation_participant_kind_t::object_mailbox) {
-            throw service_wire_error_t ("invalid relocation participant kind");
-        }
-        if (identity.size () > std::numeric_limits<std::uint16_t>::max ())
-            throw service_wire_error_t ("participant identity exceeds u16");
-        bytes.push_back (static_cast<std::uint8_t> (value.kind));
-        append_u16 (bytes, static_cast<std::uint16_t> (identity.size ()));
-        bytes.insert (bytes.end (), identity.begin (), identity.end ());
-        append_ordinal (bytes, value.allowance_messages,
-                        "participant message allowance");
-        append_ordinal (bytes, value.allowance_bytes,
-                        "participant byte allowance");
-    }
-}
-
-std::vector<relocation_participant_t> read_participants (
-  std::span<const std::uint8_t> bytes, std::size_t &offset)
-{
-    const auto count = read_u32 (bytes, offset);
-    if (count > relocation_resource_participant_limit)
-        throw service_wire_error_t (
-          "relocation participant count exceeds the protocol limit");
-    // Every participant has at least an ID, kind, empty identity length and
-    // two signed ordinals. Check the encoded lower bound before reserve so a
-    // truncated count cannot request memory that the frame cannot contain.
-    constexpr std::size_t minimum_encoded_participant_bytes = 8 + 1 + 2 + 8 + 8;
-    if (count > (bytes.size () - offset) / minimum_encoded_participant_bytes)
-        throw service_wire_error_t ("relocation participant count is truncated");
-    std::vector<relocation_participant_t> result;
-    result.reserve (count);
-    std::uint64_t previous = 0;
-    for (std::uint32_t index = 0; index < count; ++index) {
-        relocation_participant_t value;
-        value.participant_id = read_nonzero_u64 (
-          bytes, offset, "participant ID");
-        if (value.participant_id <= previous)
-            throw service_wire_error_t (
-              "relocation participants must be sorted and unique");
-        previous = value.participant_id;
-        if (offset >= bytes.size ())
-            throw service_wire_error_t ("participant kind is truncated");
-        value.kind = static_cast<relocation_participant_kind_t> (bytes[offset++]);
-        const auto length = read_u16 (bytes, offset);
-        if (bytes.size () - offset < length)
-            throw service_wire_error_t ("participant identity is truncated");
-        const auto identity = bytes.subspan (offset, length);
-        offset += length;
-        std::size_t identity_offset = 0;
-        if (value.kind == relocation_participant_kind_t::bound_session) {
-            value.session_owner_node_routing_id = read_bytes8 (
-              identity, identity_offset, "session owner node RID");
-            value.session_owner_node_generation = read_nonzero_u64 (
-              identity, identity_offset, "session owner node generation");
-            value.session_owner_id = read_text8 (
-              identity, identity_offset, "session owner ID");
-            value.session_owner_lease_generation = read_nonzero_u64 (
-              identity, identity_offset, "session owner lease generation");
-            value.session_routing_id = read_bytes8 (
-              identity, identity_offset, "Session RID");
-            value.binding_generation = read_nonzero_u64 (
-              identity, identity_offset, "binding generation");
-            value.last_accepted_session_sequence = read_ordinal (
-              identity, identity_offset, "last accepted session sequence");
-        }
-        else if (value.kind != relocation_participant_kind_t::object_mailbox
-                 || !identity.empty ()) {
-            throw service_wire_error_t ("invalid relocation participant identity");
-        }
-        if (identity_offset != identity.size ())
-            throw service_wire_error_t ("participant identity has trailing bytes");
-        value.allowance_messages = read_ordinal (
-          bytes, offset, "participant message allowance");
-        value.allowance_bytes = read_ordinal (
-          bytes, offset, "participant byte allowance");
-        result.push_back (std::move (value));
-    }
     return result;
 }
 
@@ -2088,20 +1848,12 @@ std::vector<std::uint8_t> encode_relocation_control (
         std::uint8_t flags = 0;
         if constexpr (std::is_same_v<record_t, relocation_prepare_t>)
             kind = command::relocationPrepare;
-        else if constexpr (std::is_same_v<record_t, relocation_ready_t>) {
+        else if constexpr (std::is_same_v<record_t, relocation_ready_t>)
             kind = command::relocationReady;
-            flags = 8;
-        }
-        else if constexpr (std::is_same_v<record_t, relocation_reserved_t>)
-            kind = command::relocationReserved;
         else if constexpr (std::is_same_v<record_t, relocation_data_t>)
             kind = command::relocationData;
-        else if constexpr (std::is_same_v<record_t, relocation_ack_t>)
-            kind = command::relocationAck;
-        else if constexpr (std::is_same_v<record_t, relocation_seal_t>)
-            kind = command::relocationSeal;
         else
-            kind = command::relocationComplete;
+            kind = command::relocationCutover;
 
         std::vector<std::uint8_t> bytes{
           magic[0], magic[1], wire_major,
@@ -2111,200 +1863,38 @@ std::vector<std::uint8_t> encode_relocation_control (
             append_relocation_id (bytes, value.relocation);
             append_nonzero_u64 (bytes, value.target_attempt_generation,
                                 "target attempt generation");
-            append_round (bytes, value.round);
             append_coordinator (bytes, value.coordinator);
-            append_candidate (bytes, value.candidate);
+            append_target (bytes, value.target);
             append_role (bytes, value.initiator_role);
             append_object (bytes, value.object);
             append_bytes8 (bytes, value.source_node_routing_id,
                            "source node RID");
             append_nonzero_u64 (bytes, value.source_node_generation,
                                 "source node generation");
-            append_ordinal (bytes, value.required_messages,
-                            "required messages");
-            append_ordinal (bytes, value.required_bytes, "required bytes");
-            append_participants (bytes, value.participants);
             append_root (bytes, value.root);
             append_ordinal (bytes, value.application_version,
                             "application version");
         }
         else if constexpr (std::is_same_v<record_t, relocation_ready_t>) {
-            const auto target_offer = value.role == relocation_role_t::target;
-            const auto source_accept = value.role == relocation_role_t::source;
-            if ((target_offer
-                 && (value.offered_messages == 0 || value.offered_bytes == 0
-                     || !value.participants.empty ()))
-                || (source_accept
-                    && (value.offered_messages != 0 || value.offered_bytes != 0
-                        || value.participants.empty ()))
-                || (!target_offer && !source_accept)) {
-                throw service_wire_error_t (
-                  "relocation ready offer or accept fields do not match its role");
-            }
             append_relocation_id (bytes, value.relocation);
             append_nonzero_u64 (bytes, value.target_attempt_generation,
                                 "target attempt generation");
-            append_round (bytes, value.round);
             append_coordinator (bytes, value.coordinator);
-            append_candidate (bytes, value.candidate);
+            append_target (bytes, value.target);
             append_object (bytes, value.object);
-            append_role (bytes, value.role);
-            append_ordinal (bytes, value.offered_messages,
-                            "offered messages");
-            append_ordinal (bytes, value.offered_bytes, "offered bytes");
-            append_participants (bytes, value.participants);
-
-            std::vector<std::uint8_t> extension;
-            std::vector<std::uint8_t> field;
-            append_nonzero_u64 (field, value.source_node_generation,
-                                "source node generation");
-            append_tlv (extension, 2, field);
-            field.clear ();
-            append_nonzero_u64 (field, value.target_node_generation,
-                                "target node generation");
-            append_tlv (extension, 3, field);
-            field.clear ();
-            append_nonzero_u64 (field, value.reservation_generation,
-                                "reservation generation");
-            append_tlv (extension, 4, field);
-            if (value.root) {
-                field.clear ();
-                append_text16 (field, value.root->reference,
-                               "relocation reference",
-                               relocationReferenceBytes);
-                append_tlv (extension, 5, field);
-                field.clear ();
-                append_u32 (field, value.root->checksum_crc32c);
-                append_tlv (extension, 6, field);
-            }
-            field.clear ();
-            append_ordinal (field, value.application_version,
-                            "application version");
-            append_tlv (extension, 8, field);
-            field.clear ();
-            if (value.participant_progress.size ()
-                > relocation_resource_participant_limit)
-                throw service_wire_error_t (
-                  "relocation participant progress count exceeds the protocol limit");
-            append_u32 (field, static_cast<std::uint32_t> (
-                                 value.participant_progress.size ()));
-            std::uint64_t previous = 0;
-            for (const auto &progress : value.participant_progress) {
-                if (progress.participant_id == 0
-                    || progress.participant_id <= previous
-                    || progress.replay_cursor > progress.accepted_boundary)
-                    throw service_wire_error_t (
-                      "relocation participant progress is invalid");
-                previous = progress.participant_id;
-                append_u64 (field, progress.participant_id);
-                append_ordinal (field, progress.accepted_boundary,
-                                "accepted boundary");
-                append_ordinal (field, progress.replay_cursor,
-                                "replay cursor");
-            }
-            append_tlv (extension, 9, field);
-            if (extension.size () > 1048576)
-                throw service_wire_error_t (
-                  "relocation extension exceeds 1048576 bytes");
-            append_u32 (bytes, static_cast<std::uint32_t> (extension.size ()));
-            bytes.insert (bytes.end (), extension.begin (), extension.end ());
-        }
-        else if constexpr (std::is_same_v<record_t, relocation_reserved_t>) {
-            append_relocation_id (bytes, value.relocation);
-            append_nonzero_u64 (bytes, value.target_attempt_generation,
-                                "target attempt generation");
-            append_round (bytes, value.round);
-            append_coordinator (bytes, value.coordinator);
-            append_candidate (bytes, value.candidate);
-            append_nonzero_u64 (bytes, value.reservation_generation,
-                                "reservation generation");
-            append_participants (bytes, value.participants);
+            append_role (bytes, value.sender_role);
         }
         else if constexpr (std::is_same_v<record_t, relocation_data_t>) {
             append_relocation_base (bytes, value);
             append_role (bytes, value.sender_role);
-            append_nonzero_u64 (bytes, value.participant_id,
-                                "participant ID");
-            append_nonzero_u64 (bytes, value.sequence, "sequence");
-            if (value.frozen_record) {
-                const auto frozen = encode_frozen_record (
-                  *value.frozen_record);
-                const auto decoded = decode_frozen_record (frozen);
-                if (decoded.source != value.source)
-                    throw service_wire_error_t (
-                      "relocation data source does not match its frozen record");
-                bytes.insert (bytes.end (), frozen.begin (), frozen.end ());
-                return bytes;
-            }
-            bytes.push_back (13);
-            std::vector<std::uint8_t> source;
-            append_bytes8 (source, value.source.node_routing_id,
-                           "source node RID");
-            append_nonzero_u64 (source, value.source.node_generation,
-                                "source node generation");
-            append_text8 (source, value.source.owner_id, "source owner ID");
-            append_nonzero_u64 (source, value.source.lease_generation,
-                                "source owner lease generation");
-            bytes.push_back (1);
-            append_u16 (bytes, static_cast<std::uint16_t> (source.size ()));
-            bytes.insert (bytes.end (), source.begin (), source.end ());
-            bytes.push_back (0);
-            append_u64 (bytes, 0);
-            append_u64 (bytes, 0);
-            append_u32 (bytes, 0);
-            append_u16 (bytes, 0);
-            const auto phase = static_cast<std::uint8_t> (value.phase);
-            if (phase > 9)
-                throw service_wire_error_t ("invalid relocation control phase");
-            bytes.push_back (phase);
-            append_role (bytes, value.sender_role);
-            append_relocation_id (bytes, value.relocation);
             append_object (bytes, value.object);
-            if (!valid_terminal_failure (value.terminal_result,
-                                         value.failure_code))
-                throw service_wire_error_t (
-                  "relocation control terminal and failure do not match");
-            append_u32 (bytes, value.terminal_result);
-            append_u32 (bytes, static_cast<std::uint32_t> (
-                                 value.failure_code));
-        }
-        else if constexpr (std::is_same_v<record_t, relocation_ack_t>) {
-            append_relocation_base (bytes, value);
-            append_role (bytes, value.sender_role);
-            append_nonzero_u64 (bytes, value.participant_id,
-                                "participant ID");
-            append_ordinal (bytes, value.high_water, "high water");
-        }
-        else if constexpr (std::is_same_v<record_t, relocation_seal_t>) {
-            append_relocation_base (bytes, value);
-            append_role (bytes, value.sender_role);
-            bytes.push_back (value.response ? 1 : 0);
-            if (value.participants.size ()
-                > relocation_resource_participant_limit)
-                throw service_wire_error_t (
-                  "relocation terminal participant count exceeds the protocol limit");
-            append_u32 (bytes, static_cast<std::uint32_t> (
-                                 value.participants.size ()));
-            std::uint64_t previous = 0;
-            for (const auto &participant : value.participants) {
-                if (participant.participant_id == 0
-                    || participant.participant_id <= previous)
-                    throw service_wire_error_t (
-                      "relocation terminal participants must be sorted and unique");
-                previous = participant.participant_id;
-                append_u64 (bytes, participant.participant_id);
-                append_ordinal (bytes, participant.high_water, "high water");
-            }
+            const auto frozen = encode_frozen_record (value.record);
+            bytes.insert (bytes.end (), frozen.begin (), frozen.end ());
         }
         else {
             append_relocation_base (bytes, value);
             append_role (bytes, value.sender_role);
-            append_request_source (bytes, value.source);
-            const auto state = static_cast<std::uint8_t> (
-              value.source_cleanup_state);
-            if (state > 2)
-                throw service_wire_error_t ("invalid source cleanup state");
-            bytes.push_back (state);
+            append_object (bytes, value.object);
         }
         return bytes;
     }, record);
@@ -2314,9 +1904,7 @@ relocation_control_t decode_relocation_control (
   std::span<const std::uint8_t> bytes)
 {
     const auto header = decode_header (bytes);
-    const auto expected_flags =
-      header.kind == command::relocationReady ? 8 : 0;
-    if (header.flags != expected_flags)
+    if (header.flags != 0)
         throw service_wire_error_t ("invalid relocation control flags");
     std::size_t offset = prefix_size;
     switch (header.kind) {
@@ -2325,20 +1913,14 @@ relocation_control_t decode_relocation_control (
             result.relocation = read_relocation_id (bytes, offset);
             result.target_attempt_generation = read_nonzero_u64 (
               bytes, offset, "target attempt generation");
-            result.round = read_round (bytes, offset);
             result.coordinator = read_coordinator (bytes, offset);
-            result.candidate = read_candidate (bytes, offset);
+            result.target = read_target (bytes, offset);
             result.initiator_role = read_role (bytes, offset);
             result.object = read_object (bytes, offset);
             result.source_node_routing_id = read_bytes8 (
               bytes, offset, "source node RID");
             result.source_node_generation = read_nonzero_u64 (
               bytes, offset, "source node generation");
-            result.required_messages = read_ordinal (
-              bytes, offset, "required messages");
-            result.required_bytes = read_ordinal (
-              bytes, offset, "required bytes");
-            result.participants = read_participants (bytes, offset);
             result.root = read_root (bytes, offset);
             result.application_version = read_ordinal (
               bytes, offset, "application version");
@@ -2352,281 +1934,33 @@ relocation_control_t decode_relocation_control (
             result.relocation = read_relocation_id (bytes, offset);
             result.target_attempt_generation = read_nonzero_u64 (
               bytes, offset, "target attempt generation");
-            result.round = read_round (bytes, offset);
             result.coordinator = read_coordinator (bytes, offset);
-            result.candidate = read_candidate (bytes, offset);
+            result.target = read_target (bytes, offset);
             result.object = read_object (bytes, offset);
-            result.role = read_role (bytes, offset);
-            result.offered_messages = read_ordinal (
-              bytes, offset, "offered messages");
-            result.offered_bytes = read_ordinal (
-              bytes, offset, "offered bytes");
-            result.participants = read_participants (bytes, offset);
-            const auto target_offer = result.role == relocation_role_t::target;
-            const auto source_accept = result.role == relocation_role_t::source;
-            if ((target_offer
-                 && (result.offered_messages == 0 || result.offered_bytes == 0
-                     || !result.participants.empty ()))
-                || (source_accept
-                    && (result.offered_messages != 0 || result.offered_bytes != 0
-                        || result.participants.empty ()))
-                || (!target_offer && !source_accept)) {
-                throw service_wire_error_t (
-                  "relocation ready offer or accept fields do not match its role");
-            }
-            const auto extension_length = read_u32 (bytes, offset);
-            if (extension_length > 1048576
-                || bytes.size () - offset < extension_length)
-                throw service_wire_error_t (
-                  "relocation extension is truncated or exceeds its bound");
-            const auto extension = bytes.subspan (offset, extension_length);
-            offset += extension_length;
-            std::size_t extension_offset = 0;
-            std::uint8_t previous_id = 0;
-            bool source_seen = false;
-            bool target_seen = false;
-            bool reservation_seen = false;
-            bool reference_seen = false;
-            bool checksum_seen = false;
-            bool version_seen = false;
-            bool progress_seen = false;
-            std::string reference;
-            std::uint32_t checksum = 0;
-            while (extension_offset < extension.size ()) {
-                const auto id = extension[extension_offset++];
-                if (id <= previous_id)
-                    throw service_wire_error_t (
-                      "relocation extension fields must be ordered and unique");
-                previous_id = id;
-                const auto length = read_u32 (extension, extension_offset);
-                if (extension.size () - extension_offset < length)
-                    throw service_wire_error_t (
-                      "relocation extension field is truncated");
-                const auto field = extension.subspan (extension_offset, length);
-                extension_offset += length;
-                std::size_t field_offset = 0;
-                if (id == 2) {
-                    result.source_node_generation = read_nonzero_u64 (
-                      field, field_offset, "source node generation");
-                    source_seen = true;
-                }
-                else if (id == 3) {
-                    result.target_node_generation = read_nonzero_u64 (
-                      field, field_offset, "target node generation");
-                    target_seen = true;
-                }
-                else if (id == 4) {
-                    result.reservation_generation = read_nonzero_u64 (
-                      field, field_offset, "reservation generation");
-                    reservation_seen = true;
-                }
-                else if (id == 5) {
-                    reference = read_text16 (
-                      field, field_offset, "relocation reference",
-                      relocationReferenceBytes);
-                    reference_seen = true;
-                }
-                else if (id == 6) {
-                    checksum = read_u32 (field, field_offset);
-                    checksum_seen = true;
-                }
-                else if (id == 8) {
-                    result.application_version = read_ordinal (
-                      field, field_offset, "application version");
-                    version_seen = true;
-                }
-                else if (id == 9) {
-                    const auto count = read_u32 (field, field_offset);
-                    if (count > relocation_resource_participant_limit)
-                        throw service_wire_error_t (
-                          "relocation participant progress count exceeds the protocol limit");
-                    constexpr std::size_t minimum_encoded_progress_bytes = 8 + 8 + 8;
-                    if (count > (field.size () - field_offset)
-                                   / minimum_encoded_progress_bytes)
-                        throw service_wire_error_t (
-                          "relocation participant progress count is truncated");
-                    std::uint64_t previous = 0;
-                    result.participant_progress.reserve (count);
-                    for (std::uint32_t index = 0; index < count; ++index) {
-                        relocation_participant_progress_t progress;
-                        progress.participant_id = read_nonzero_u64 (
-                          field, field_offset, "participant ID");
-                        progress.accepted_boundary = read_ordinal (
-                          field, field_offset, "accepted boundary");
-                        progress.replay_cursor = read_ordinal (
-                          field, field_offset, "replay cursor");
-                        if (progress.participant_id <= previous
-                            || progress.replay_cursor
-                                 > progress.accepted_boundary)
-                            throw service_wire_error_t (
-                              "relocation participant progress is invalid");
-                        previous = progress.participant_id;
-                        result.participant_progress.push_back (progress);
-                    }
-                    progress_seen = true;
-                }
-                else {
-                    field_offset = field.size ();
-                }
-                if (field_offset != field.size ())
-                    throw service_wire_error_t (
-                      "relocation extension field has trailing bytes");
-            }
-            if (!source_seen || !target_seen || !reservation_seen
-                || !version_seen || !progress_seen
-                || reference_seen != checksum_seen)
-                throw service_wire_error_t (
-                  "relocation extension is missing a required field");
-            if (reference_seen)
-                result.root = relocation_root_t{std::move (reference), checksum};
+            result.sender_role = read_role (bytes, offset);
             if (offset != bytes.size ())
                 throw service_wire_error_t ("relocation ready has trailing bytes");
-            return result;
-        }
-        case command::relocationReserved: {
-            relocation_reserved_t result;
-            result.relocation = read_relocation_id (bytes, offset);
-            result.target_attempt_generation = read_nonzero_u64 (
-              bytes, offset, "target attempt generation");
-            result.round = read_round (bytes, offset);
-            result.coordinator = read_coordinator (bytes, offset);
-            result.candidate = read_candidate (bytes, offset);
-            result.reservation_generation = read_nonzero_u64 (
-              bytes, offset, "reservation generation");
-            result.participants = read_participants (bytes, offset);
-            if (offset != bytes.size ())
-                throw service_wire_error_t (
-                  "relocation reserved has trailing bytes");
             return result;
         }
         case command::relocationData: {
             relocation_data_t result;
             read_relocation_base (bytes, offset, result);
             result.sender_role = read_role (bytes, offset);
-            result.participant_id = read_nonzero_u64 (
-              bytes, offset, "participant ID");
-            result.sequence = read_nonzero_u64 (bytes, offset, "sequence");
+            result.object = read_object (bytes, offset);
             if (offset >= bytes.size ())
                 throw service_wire_error_t (
                   "relocation data frozen record is truncated");
-            if (bytes[offset] != 13) {
-                auto frozen = decode_frozen_record (bytes.subspan (offset));
-                result.source = frozen.source;
-                result.frozen_record = std::move (frozen);
-                return result;
-            }
-            if (bytes[offset++] != 13 || offset >= bytes.size ()
-                || bytes[offset++] != 1)
-                throw service_wire_error_t (
-                  "relocation data must carry a node relocationControl record");
-            const auto source_length = read_u16 (bytes, offset);
-            if (bytes.size () - offset < source_length)
-                throw service_wire_error_t (
-                  "relocation data source is truncated");
-            const auto source = bytes.subspan (offset, source_length);
-            offset += source_length;
-            std::size_t source_offset = 0;
-            result.source.node_routing_id = read_bytes8 (
-              source, source_offset, "source node RID");
-            result.source.node_generation = read_nonzero_u64 (
-              source, source_offset, "source node generation");
-            result.source.owner_id = read_text8 (
-              source, source_offset, "source owner ID");
-            result.source.lease_generation = read_nonzero_u64 (
-              source, source_offset, "source owner lease generation");
-            if (source_offset != source.size ())
-                throw service_wire_error_t (
-                  "relocation data source has trailing bytes");
-            if (offset >= bytes.size () || bytes[offset++] != 0)
-                throw service_wire_error_t (
-                  "relocation data cannot contain metadata");
-            const wire_operation_id_t operation{
-              read_u64 (bytes, offset), read_u64 (bytes, offset)};
-            if ((operation.high != 0 || operation.low != 0)
-                || read_u32 (bytes, offset) != 0
-                || read_u16 (bytes, offset) != 0)
-                throw service_wire_error_t (
-                  "relocation data operation or reply route changed");
-            if (offset >= bytes.size ())
-                throw service_wire_error_t (
-                  "relocation data control phase is truncated");
-            result.phase = static_cast<relocation_phase_t> (bytes[offset++]);
-            const auto phase = static_cast<std::uint8_t> (result.phase);
-            if (phase > 9)
-                throw service_wire_error_t (
-                  "invalid relocation data control phase");
-            if (read_role (bytes, offset) != result.sender_role
-                || read_relocation_id (bytes, offset) != result.relocation)
-                throw service_wire_error_t (
-                  "relocation data control fence changed");
+            result.record = decode_frozen_record (bytes.subspan (offset));
+            return result;
+        }
+        case command::relocationCutover: {
+            relocation_cutover_t result;
+            read_relocation_base (bytes, offset, result);
+            result.sender_role = read_role (bytes, offset);
             result.object = read_object (bytes, offset);
-            result.terminal_result = read_u32 (bytes, offset);
-            result.failure_code = static_cast<framework_error_code> (
-              read_u32 (bytes, offset));
-            if (!valid_terminal_failure (result.terminal_result,
-                                         result.failure_code)
-                || offset != bytes.size ())
-                throw service_wire_error_t (
-                  "relocation data control terminal is invalid or has trailing bytes");
-            return result;
-        }
-        case command::relocationAck: {
-            relocation_ack_t result;
-            read_relocation_base (bytes, offset, result);
-            result.sender_role = read_role (bytes, offset);
-            result.participant_id = read_nonzero_u64 (
-              bytes, offset, "participant ID");
-            result.high_water = read_ordinal (bytes, offset, "high water");
-            if (offset != bytes.size ())
-                throw service_wire_error_t ("relocation ACK has trailing bytes");
-            return result;
-        }
-        case command::relocationSeal: {
-            relocation_seal_t result;
-            read_relocation_base (bytes, offset, result);
-            result.sender_role = read_role (bytes, offset);
-            if (offset >= bytes.size () || bytes[offset] > 1)
-                throw service_wire_error_t ("invalid relocation seal response");
-            result.response = bytes[offset++] != 0;
-            const auto count = read_u32 (bytes, offset);
-            if (count > relocation_resource_participant_limit)
-                throw service_wire_error_t (
-                  "relocation terminal participant count exceeds the protocol limit");
-            constexpr std::size_t minimum_encoded_terminal_bytes = 8 + 8;
-            if (count > (bytes.size () - offset) / minimum_encoded_terminal_bytes)
-                throw service_wire_error_t (
-                  "relocation terminal participant count is truncated");
-            result.participants.reserve (count);
-            std::uint64_t previous = 0;
-            for (std::uint32_t index = 0; index < count; ++index) {
-                relocation_participant_terminal_t participant;
-                participant.participant_id = read_nonzero_u64 (
-                  bytes, offset, "participant ID");
-                participant.high_water = read_ordinal (
-                  bytes, offset, "high water");
-                if (participant.participant_id <= previous)
-                    throw service_wire_error_t (
-                      "relocation terminal participants must be sorted and unique");
-                previous = participant.participant_id;
-                result.participants.push_back (participant);
-            }
             if (offset != bytes.size ())
                 throw service_wire_error_t (
-                  "relocation seal has trailing bytes");
-            return result;
-        }
-        case command::relocationComplete: {
-            relocation_complete_t result;
-            read_relocation_base (bytes, offset, result);
-            result.sender_role = read_role (bytes, offset);
-            result.source = read_request_source (bytes, offset);
-            if (offset >= bytes.size () || bytes[offset] > 2)
-                throw service_wire_error_t ("invalid source cleanup state");
-            result.source_cleanup_state =
-              static_cast<source_cleanup_state_t> (bytes[offset++]);
-            if (offset != bytes.size ())
-                throw service_wire_error_t (
-                  "relocation complete has trailing bytes");
+                  "relocation cutover has trailing bytes");
             return result;
         }
         default:

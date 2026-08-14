@@ -8,7 +8,7 @@ event-loop, private phase와 함수 이름을 넣지 않는다.
 
 `serial-execution-v1.json`은 owner별 serial execution의 admission, lane arbitration과
 same-owner 호출 규칙을 정의한다. 수치나 trace를 바꾸려면 C++/.NET/JVM/Node 소비 test와
-common internals를 같은 변경 단위에서 갱신해야 한다.
+common spec 내부 설계 장을 같은 변경 단위에서 갱신해야 한다.
 
 `runtime-observation-v1.json`은 subscriber별 source-latest intermediate, bounded terminal
 FIFO, source key 수명과 서로 분리된 loss counter를 정의한다. Source 사이의 공개 sequence

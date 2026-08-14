@@ -37,19 +37,15 @@ import type {
   ZLinkStreamCompressionBuilder,
   ZLinkStreamCompressionCodec
 } from './contracts';
-import { ZLinkApplicationHwmProfile } from './contracts/Configuration/InboundDispatch';
 import type { ZLinkProviderResolver } from './contracts/Common/ZLinkProviderResolver';
 import type { ZLinkSpotHandleResolver } from './runtime/spots/spot-handle';
 import type { ZLinkBoundSessionFactory } from './runtime/streams/session-context';
 import type { ZLinkFrameworkRegistration } from './contracts/Configuration/Registration';
 import type {
   ZLinkCodecSerializerRegistration,
+  ZLinkFrameworkRegistrationOptions,
   ZLinkStreamCodecRegistration
 } from './contracts/Configuration/RegistrationTypes';
-import type {
-  ZLinkInboundDispatchOptionValues,
-  ZLinkInboundDispatchOptions
-} from './contracts/Configuration/InboundDispatch';
 import {
   DefaultDispatchOptionsBuilder,
   DefaultInboundDispatchOptionsBuilder,
@@ -99,15 +95,9 @@ export function createIntegrationDispatchOptionsBuilder(
 }
 
 export function createIntegrationInboundDispatchOptionsBuilder(
-  options: Partial<ZLinkInboundDispatchOptionValues>
-): ZLinkInboundDispatchOptions {
-  // Keep the caller-owned options object as the builder state.  The Nest
-  // adapter stores this same object in its registration state; copying it
-  // here would make fluent HWM changes disappear from build().
-  options.applicationHwmProfile ??= ZLinkApplicationHwmProfile.Balanced;
-  return new DefaultInboundDispatchOptionsBuilder(
-    options as ZLinkInboundDispatchOptionValues
-  );
+  options: Pick<ZLinkFrameworkRegistrationOptions, 'coreHwm' | 'applicationJobQueue'>
+): import('./contracts').ZLinkInboundDispatchOptions {
+  return new DefaultInboundDispatchOptionsBuilder(options);
 }
 
 export function createIntegrationLocationOptionsBuilder(

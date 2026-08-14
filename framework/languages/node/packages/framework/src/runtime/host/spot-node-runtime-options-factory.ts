@@ -23,6 +23,7 @@ import type { MeshRouterResolver } from './mesh-router-resolver';
 import type { ZLinkBoundSessionRelay } from './bound-session-relay';
 import type { ZLinkActorHandoffCoordinator } from '../actors';
 import type { ZLinkRuntimeMetrics } from '../diagnostics';
+import type { ApplicationJobQueue } from './application-job-queue';
 
 export interface ZLinkSpotNodeRuntimeOptionsFactoryOptions {
   readonly registration: ZLinkFrameworkRegistration;
@@ -41,6 +42,7 @@ export interface ZLinkSpotNodeRuntimeOptionsFactoryOptions {
   readonly actorHandoff: ZLinkActorHandoffCoordinator;
   readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
   readonly metrics: ZLinkRuntimeMetrics;
+  readonly applicationJobQueue: ApplicationJobQueue;
 }
 
 export class ZLinkSpotNodeRuntimeOptionsFactory {
@@ -64,6 +66,7 @@ export class ZLinkSpotNodeRuntimeOptionsFactory {
       dispatchErrors: this.options.dispatchErrors,
       runtimeEventPublisher: this.options.runtimeEventPublisher,
       metrics: this.options.metrics,
+      applicationJobQueue: this.options.applicationJobQueue,
       detachedTaskRunner: this.options.detachedTaskRunner,
       messageSerializers: this.options.registration.messageSerializers,
       entryActorRuntime: this.options.entryActorRuntime,

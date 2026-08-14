@@ -21,9 +21,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActor;
@@ -314,21 +312,19 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                 EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
                 header.packetName(),
                 Map.of());
-            byte[] replyBytes = reply.payload().toByteArray();
-            return ZLinkActorRetryScheduler.submitRelayUntilAccepted(
-                ZLinkSessionActorsRuntime.RELAY_SUBMIT_TIMEOUT,
-                () -> {
-                    try (Message attemptReply = Message.from(replyBytes)) {
-                        return stream.reply(
-                            sessionRid,
-                            replyHeader,
-                            List.of(attemptReply),
-                            SendFlags.DONT_WAIT);
-                    }
-                },
-                () -> new TimeoutException(
-                    "local actor session reply was not ready before timeout: "
-                        + ref.actorId()));
+            Message replyPart = Message.from(reply.payload());
+            CompletionStage<Void> submission;
+            try {
+                submission = stream.replyAsync(
+                    sessionRid,
+                    replyHeader,
+                    List.of(replyPart));
+            } catch (RuntimeException failure) {
+                replyPart.close();
+                return CompletableFuture.failedFuture(failure);
+            }
+            return submission.whenComplete(
+                (ignored, failure) -> replyPart.close());
         } finally {
             reply.payload().close();
         }
@@ -344,22 +340,21 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         ZLinkStreamHeader header,
         byte[] payloadBytes,
         long sourceSessionSequence) {
-        return ZLinkActorRetryScheduler.submitStoredRelayUntilAccepted(
-            ZLinkSessionActorsRuntime.RELAY_SUBMIT_TIMEOUT,
-            () -> {
-                try (Message payloadPart = Message.from(payloadBytes)) {
-                    return stream.relayBoundActor(
-                        sessionRid,
-                        ref.actorId(),
-                        sourceSessionSequence,
-                        header,
-                        List.of(payloadPart),
-                        SendFlags.DONT_WAIT);
-                }
-            },
-            () -> new TimeoutException(
-                "session relay route was not ready before timeout: "
-                    + ref.actorId()));
+        Message payloadPart = Message.from(payloadBytes);
+        CompletionStage<Void> submission;
+        try {
+            submission = stream.relayBoundActorAsync(
+                sessionRid,
+                ref.actorId(),
+                sourceSessionSequence,
+                header,
+                List.of(payloadPart));
+        } catch (RuntimeException failure) {
+            payloadPart.close();
+            return CompletableFuture.failedFuture(failure);
+        }
+        submission.whenComplete((ignored, failure) -> payloadPart.close());
+        return submission;
     }
 
     @Override

@@ -1,5 +1,27 @@
 import type { ZLinkFlowOrigin } from './ZLinkFlowOrigin';
 
+export enum ZLinkCoreHwmProfile {
+  Compact = 'compact',
+  LowLatency = 'low_latency',
+  Balanced = 'balanced',
+  Throughput = 'throughput'
+}
+
+export enum ZLinkApplicationJobQueueProfile {
+  Compact = 'compact',
+  LowLatency = 'low_latency',
+  Balanced = 'balanced',
+  Throughput = 'throughput'
+}
+
+export interface ZLinkInboundDispatchOptions {
+  coreHwmMemoryLimitBytes(value: bigint | undefined): this;
+  coreHwmBudgetBytes(value: bigint | undefined): this;
+  coreHwmProfile(value: ZLinkCoreHwmProfile): this;
+  applicationJobQueueProfile(value: ZLinkApplicationJobQueueProfile): this;
+  maxQueuedApplicationJobs(value: bigint | undefined): this;
+}
+
 export interface ZLinkDispatchOptions {
   readonly unhandled: ZLinkUnhandledDispatchOptions;
   readonly diagnostics: ZLinkDiagnosticsOptions;

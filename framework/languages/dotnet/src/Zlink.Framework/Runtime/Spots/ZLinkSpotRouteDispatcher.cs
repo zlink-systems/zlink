@@ -12,9 +12,7 @@ internal sealed class ZLinkSpotRouteDispatcher(
     ZLinkCodecRegistryBuilder codecs,
     ZLinkDispatchErrorReporter dispatchErrors,
     Func<ZLinkBackendRouteReceived, ZLinkEnvelopeHeader, CancellationToken, ValueTask<bool>>? internalPackets = null,
-    ILogger<ZLinkSpotRouteDispatcher>? logger = null,
-    ZLinkAsyncSubmitter? replySubmitter = null,
-    ZLinkCompletionAdmissionOwner? completionAdmission = null)
+    ILogger<ZLinkSpotRouteDispatcher>? logger = null)
 {
     private readonly ILogger<ZLinkSpotRouteDispatcher> _logger =
         logger ?? NullLogger<ZLinkSpotRouteDispatcher>.Instance;
@@ -23,7 +21,10 @@ internal sealed class ZLinkSpotRouteDispatcher(
         ZLinkBackendRouteReceived received,
         CancellationToken cancellationToken)
     {
-        received.StartDispatch();
+        using var applicationAdmission =
+            received.ApplicationJobAdmission is { } admission
+                ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+                : null;
         using (received)
         {
         if (received.Parts.Count == 0)
@@ -60,12 +61,6 @@ internal sealed class ZLinkSpotRouteDispatcher(
                 && await internalPackets(received, header, cancellationToken).ConfigureAwait(false))
                 return;
 
-            using var completionPermit = received.CanReply
-                && completionAdmission is not null
-                ? await completionAdmission.AcquireResponderAsync(cancellationToken)
-                    .ConfigureAwait(false)
-                : null;
-
             if (!packets.TryResolve(header, out var descriptor) || descriptor is null)
             {
                 if (header.Kind == ZLinkMessageKind.Request)
@@ -80,7 +75,7 @@ internal sealed class ZLinkSpotRouteDispatcher(
                         ZLinkDispatchErrorAction.ReplyError,
                         error);
                     await ReplyErrorAsync(
-                            received, header, error, completionPermit,
+                            received, header, error,
                             cancellationToken)
                         .ConfigureAwait(false);
                 }
@@ -108,7 +103,7 @@ internal sealed class ZLinkSpotRouteDispatcher(
                         out var decodeError))
                 {
                     await ReplyErrorAsync(
-                            received, header, decodeError!, completionPermit,
+                            received, header, decodeError!,
                             cancellationToken)
                         .ConfigureAwait(false);
                     return;
@@ -183,7 +178,7 @@ internal sealed class ZLinkSpotRouteDispatcher(
             }
 
             await SubmitReplyAsync(
-                    received, replyParts, completionPermit, cancellationToken)
+                    received, replyParts, cancellationToken)
                 .ConfigureAwait(false);
         }
     }
@@ -208,33 +203,22 @@ internal sealed class ZLinkSpotRouteDispatcher(
     private ValueTask SubmitReplyAsync(
         ZLinkBackendRouteReceived received,
         IReadOnlyList<Message> replyParts,
-        ZLinkCompletionAdmissionOwner.ResponderLease? completionPermit,
         CancellationToken cancellationToken)
     {
-        if (completionPermit is null)
-        {
-            ZLinkSpotReplySubmitter.SubmitAndDispose(received, replyParts);
-            return ValueTask.CompletedTask;
-        }
-        if (replySubmitter is null)
-            return ZLinkSpotReplySubmitter.SubmitDirectAsync(
-                received, replyParts, completionPermit, cancellationToken);
-        return ZLinkSpotReplySubmitter.SubmitAsync(
-            replySubmitter, received, replyParts, completionPermit,
-            cancellationToken);
+        return ZLinkSpotReplySubmitter.SubmitDirectAsync(
+            received, replyParts, cancellationToken);
     }
 
     private ValueTask ReplyErrorAsync(
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header,
         Exception exception,
-        ZLinkCompletionAdmissionOwner.ResponderLease? completionPermit,
         CancellationToken cancellationToken)
     {
         var replyParts = ZLinkSpotReplyEnvelope.EncodeErrorParts(
             channelName, header.MessageName, header.CorrelationId, exception);
         return SubmitReplyAsync(
-            received, replyParts, completionPermit, cancellationToken);
+            received, replyParts, cancellationToken);
     }
 
     private void ReplyError(

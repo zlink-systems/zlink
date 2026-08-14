@@ -1772,7 +1772,9 @@ class spot_handler_registry_t
                                               const spot_inbound_message_t &)>
                                               before_invoke = {},
                                             actor_queue_dispatch_t actor_queue_dispatch =
-                                              actor_queue_dispatch_t::acquire) const;
+                                              actor_queue_dispatch_t::acquire,
+                                            std::function<void ()>
+                                              before_application_handler = {}) const;
 
     void register_actor_admission_erased (std::type_index actor_type,
                                           detail::spot_actor_admission_callbacks_t callbacks);
@@ -1875,7 +1877,7 @@ class spot_manager_t
       std::shared_ptr<detail::spot_node_builder_state_t> state,
       std::weak_ptr<detail::spot_context_state_t> source);
     std::optional<actor_ref_t> current_actor_ref (const actor_ref_t &actor_ref) const;
-    result_t<std::optional<zlink::message_t>>
+    task_t<std::optional<zlink::message_t>>
     relay_actor_packet (const actor_ref_t &actor_ref,
                         actor_context_t actor_context,
                         std::string_view packet_name,
@@ -1883,7 +1885,7 @@ class spot_manager_t
                         service_provider_t &services,
                         serializer_registry_t &serializers,
                         spot_inbound_message_t metadata = {});
-    result_t<std::optional<zlink::message_t>>
+    task_t<std::optional<zlink::message_t>>
     relay_actor_packet (const actor_ref_t &actor_ref,
                         actor_context_t actor_context,
                         detail::stream_message_kind_t message_kind,

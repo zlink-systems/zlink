@@ -147,6 +147,20 @@ final class ZLinkRelocationTreeStore {
         long expectedRootChecksum,
         Duration retention,
         ZLinkStoreCancellation cancellation) {
+        return renewStored(
+            store,
+            rootReference,
+            expectedRootChecksum,
+            retention,
+            cancellation).thenApply(ignored -> null);
+    }
+
+    static CompletionStage<ZLinkRelocationStored> renewStored(
+        ZLinkRelocationStore store,
+        String rootReference,
+        long expectedRootChecksum,
+        Duration retention,
+        ZLinkStoreCancellation cancellation) {
         return store.get(rootReference, cancellation).thenCompose(rootRead -> {
             if (!(rootRead instanceof ZLinkRelocationFound found)
                 || crc32c(found.payload()) != expectedRootChecksum) {
@@ -168,14 +182,19 @@ final class ZLinkRelocationTreeStore {
                                 store,
                                 chunk.reference(),
                                 retention,
-                                cancellation);
+                                cancellation).thenApply(renewed -> null);
                         }));
             }
             return chain.thenCompose(ignored -> renewComponent(
                 store,
                 rootReference,
                 retention,
-                cancellation));
+                cancellation).thenApply(renewed ->
+                    new ZLinkRelocationStored(
+                        rootReference,
+                        expectedRootChecksum,
+                        renewed.expiresAt(),
+                        renewed.storeNow())));
         });
     }
 
@@ -230,7 +249,7 @@ final class ZLinkRelocationTreeStore {
         });
     }
 
-    private static CompletionStage<Void> renewComponent(
+    private static CompletionStage<ZLinkRelocationRenewed> renewComponent(
         ZLinkRelocationStore store,
         String reference,
         Duration retention,
@@ -239,7 +258,7 @@ final class ZLinkRelocationTreeStore {
             .thenCompose(result -> result instanceof ZLinkRelocationRenewed renewed
                     && Duration.between(renewed.storeNow(), renewed.expiresAt())
                         .compareTo(RENEW_THRESHOLD) > 0
-                ? CompletableFuture.completedFuture(null)
+                ? CompletableFuture.completedFuture(renewed)
                 : failed(new DataLostException(
                     "relocation tree component renewal failed")));
     }

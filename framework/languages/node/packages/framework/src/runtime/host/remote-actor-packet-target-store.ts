@@ -93,7 +93,8 @@ export class ZLinkRemoteActorPacketTargetStore {
     const state = this.options.actorManager()?.getState(actorId);
     if (
       state?.remoteActorPacketTarget !== undefined &&
-      (state.spotId === undefined || state.remoteActorPacketTarget.spotId === state.spotId)
+      (state.spotId === undefined
+        || routingIdsEqual(state.remoteActorPacketTarget.spotId, state.spotId))
     ) {
       return state.remoteActorPacketTarget;
     }

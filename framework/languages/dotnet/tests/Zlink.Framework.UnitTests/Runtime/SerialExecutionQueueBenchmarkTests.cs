@@ -57,8 +57,6 @@ public sealed class SerialExecutionQueueBenchmarkTests(ITestOutputHelper output)
         }
         var burstElapsed = Stopwatch.GetElapsedTime(burstStartedAt);
         var peakPending = queue.ApplicationPendingCount;
-        var peakPendingBytes = checked(
-            (long)peakPending * ZLinkSerialExecutionQueue.WorkItemFixedCostBytes);
 
         var recoveryStartedAt = Stopwatch.GetTimestamp();
         releaseFirst.TrySetResult();
@@ -87,9 +85,8 @@ public sealed class SerialExecutionQueueBenchmarkTests(ITestOutputHelper output)
             TicksToMicroseconds(p95),
             TicksToMicroseconds(p99));
         output.WriteLine(
-            "peakPending={0} peakPendingBytes={1} firstReadmissionMilliseconds={2:F3} fullyDrainedMilliseconds={3:F3}",
+            "peakPending={0} firstReadmissionMilliseconds={1:F3} fullyDrainedMilliseconds={2:F3}",
             peakPending,
-            peakPendingBytes,
             firstReadmission.TotalMilliseconds,
             fullyDrained.TotalMilliseconds);
 

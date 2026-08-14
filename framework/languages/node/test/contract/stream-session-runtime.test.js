@@ -7,12 +7,13 @@ const zlink = require('@zlink-systems/zlink');
 const connector = require('../../packages/stream-connector/dist');
 const protocolCodecs = require('./helpers/stream-protocol-codecs');
 const framework = require('../../packages/framework/dist/internal');
+const {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} = require('../../packages/framework/dist/runtime/host/application-job-queue');
 const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
 const streamReassembler = require(
   '../../packages/framework/dist/runtime/streams/stream-frame-reassembler'
-);
-const streamDispatchCapacity = require(
-  '../../packages/framework/dist/runtime/streams/stream-dispatch-capacity'
 );
 const backend = require('../../packages/framework/dist/runtime/backend');
 const nodeMonitorBackend = require('../../packages/framework/dist/runtime/backend/node/node-monitor-backend-adapter');
@@ -545,37 +546,6 @@ test('stream heartbeat control bypasses a blocked application handler', async ()
 
   assert.deepEqual(socket.disconnects, []);
   assert.equal(controlHeader(socket.sent.at(-1)).name, '$zlink.heartbeat.ping');
-  await runtime.dispose();
-});
-
-test('stream control frames do not consume the application HWM budget', async () => {
-  const socket = new FakeStreamSocket();
-  const budget = new framework.ZLinkInboundDispatchBudget(1n);
-  let pauseTransitions = 0;
-  budget.onPause(() => { pauseTransitions += 1; });
-  const runtime = createStreamRuntime({
-    socket,
-    inboundDispatchBudget: budget,
-    sessionFactory(context) { return { context }; }
-  });
-
-  runtime.start();
-  const header = fakeHeader({
-    kind: connector.ZlinkStreamMessageKind.Control,
-    codec: connector.ZlinkStreamCodec.Raw,
-    flags: connector.ZlinkStreamHeaderFlags.None,
-    name: '$zlink.heartbeat.ping'
-  });
-  const frame = rawStreamFrame(header.data(), Buffer.from('invalid-control-payload'));
-  header.close();
-  socket.emitRaw('control-budget-peer', [frame]);
-  await waitForCondition(
-    () => socket.disconnects.length === 1,
-    'invalid control frame isolation'
-  );
-
-  assert.equal(pauseTransitions, 0);
-  assert.equal(budget.pendingPayloadBytes, 0n);
   await runtime.dispose();
 });
 
@@ -1122,6 +1092,35 @@ test('segmented STREAM frames reuse the transferred assembled backing buffer', (
   assert.equal(firstResult.frame.payload.buffer, secondResult.frame.payload.buffer);
 });
 
+test('STREAM reassembler retains each raw owner until every contributing frame closes', () => {
+  const reassembler = new streamReassembler.ZLinkStreamFrameReassembler();
+  const first = rawStreamFrame(Buffer.from('first-header'), Buffer.from('one'));
+  const second = rawStreamFrame(Buffer.from('second-header'), Buffer.from('two'));
+  const combined = Buffer.concat([first, second]);
+  let ownerCloses = 0;
+  const parts = [fakeMessageBytes(combined)];
+  reassembler.appendRetained(parts, {
+    close() {
+      ownerCloses += 1;
+      parts.forEach((part) => part.close());
+    }
+  });
+
+  const firstResult = reassembler.next();
+  const secondResult = reassembler.next();
+  assert.equal(firstResult.kind, 'frame');
+  assert.equal(secondResult.kind, 'frame');
+  assert.equal(ownerCloses, 0);
+  firstResult.frame.close();
+  firstResult.frame.close();
+  assert.equal(ownerCloses, 0);
+  secondResult.frame.close();
+  secondResult.frame.close();
+  assert.equal(ownerCloses, 1);
+  reassembler.clear();
+  assert.equal(ownerCloses, 1);
+});
+
 test('stream session node runtime rejects MaxMessageSize violations on direct and copied paths', async () => {
   for (const segmented of [false, true]) {
     const socket = new FakeStreamSocket();
@@ -1200,9 +1199,68 @@ test('stream session node runtime dispatches every frame contained in one raw pa
   await runtime.dispose();
 });
 
-test('stream receive loop yields between bounded batches when Application HWM is unlimited', async () => {
+test('stream session keeps a retained raw receive through handler terminals and then progresses', async () => {
   const socket = new FakeStreamSocket();
-  const budget = new framework.ZLinkInboundDispatchBudget(0n);
+  const events = [];
+  let releaseFirst;
+  const firstCanFinish = new Promise((resolve) => { releaseFirst = resolve; });
+  let firstEntered;
+  const firstDidEnter = new Promise((resolve) => { firstEntered = resolve; });
+  const runtime = createStreamRuntime({
+    socket,
+    headerDecoder: (header) => ({ name: header.getString() }),
+    sessionFactory(context) {
+      return {
+        context,
+        async onDispatch(header) {
+          events.push(header.packetName);
+          if (events.length === 1) {
+            firstEntered();
+            await firstCanFinish;
+          }
+        }
+      };
+    }
+  });
+
+  runtime.start();
+  const first = rawStreamFrame(
+    fakeHeader({ name: 'FirstRetained' }).data(),
+    Buffer.from(JSON.stringify('one'))
+  );
+  const second = rawStreamFrame(
+    fakeHeader({ name: 'SecondRetained' }).data(),
+    Buffer.from(JSON.stringify('two'))
+  );
+  let ownerCloses = 0;
+  socket.emitTrackedRaw(
+    'retained-peer',
+    [Buffer.concat([first, second])],
+    () => { ownerCloses += 1; }
+  );
+  await firstDidEnter;
+  assert.equal(ownerCloses, 0);
+
+  releaseFirst();
+  await waitForCondition(
+    () => events.length === 2 && ownerCloses === 1,
+    'retained receive terminal'
+  );
+  assert.deepEqual(events, ['FirstRetained', 'SecondRetained']);
+
+  socket.emitPacket(
+    'retained-peer',
+    fakeHeader({ name: 'AfterRelease' }),
+    fakeJsonMessage('three')
+  );
+  await waitForCondition(() => events.length === 3, 'post-release stream progress');
+  assert.deepEqual(events, ['FirstRetained', 'SecondRetained', 'AfterRelease']);
+  assert.equal(ownerCloses, 1);
+  await runtime.dispose();
+});
+
+test('stream receive loop yields between bounded batches', async () => {
+  const socket = new FakeStreamSocket();
   const totalFrames = 256;
   let dispatches = 0;
   for (let index = 0; index < totalFrames; index += 1) {
@@ -1212,7 +1270,6 @@ test('stream receive loop yields between bounded batches when Application HWM is
   }
   const runtime = createStreamRuntime({
     socket,
-    inboundDispatchBudget: budget,
     headerDecoder: (header) => ({ name: header.getString() }),
     sessionFactory(context) {
       return {
@@ -1315,220 +1372,10 @@ test('stream session node runtime checks Poller readiness before Framework recv'
   assert.equal(disposed, true);
 });
 
-test('stream session node runtime stops recv at the host application HWM and resumes after dispatch', async () => {
-  const socket = new FakeStreamSocket();
-  const budget = new framework.ZLinkInboundDispatchBudget(3n);
-  const events = [];
-  let releaseFirst;
-  const firstCanFinish = new Promise((resolve) => { releaseFirst = resolve; });
-  let firstStarted;
-  const firstStartedPromise = new Promise((resolve) => { firstStarted = resolve; });
-  const runtime = createStreamRuntime({
-    socket,
-    inboundDispatchBudget: budget,
-    headerDecoder: (header) => ({ name: header.getString() }),
-    sessionFactory(context) {
-      return {
-        context,
-        async onDispatch(header, payload) {
-          events.push(['start', header.packetName, payload.decode()]);
-          if (header.packetName === 'BudgetFirst') {
-            firstStarted();
-            await firstCanFinish;
-          }
-          events.push(['end', header.packetName]);
-        }
-      };
-    }
-  });
-
-  runtime.start();
-  socket.emitRaw('budget-peer', [
-    rawStreamFrame(
-      fakeHeader({ name: 'BudgetFirst' }).data(),
-      Buffer.from(JSON.stringify('one'))
-    )
-  ]);
-  await waitForReceive(socket);
-  await firstStartedPromise;
-  assert.equal(budget.receivePaused, true);
-
-  const recvCallsWhilePaused = socket.recvCalls;
-  socket.emitRaw('budget-peer', [
-    rawStreamFrame(
-      fakeHeader({ name: 'BudgetSecond' }).data(),
-      Buffer.from(JSON.stringify('two'))
-    )
-  ]);
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(socket.recvCalls, recvCallsWhilePaused);
-  assert.equal(socket.received.length, 1);
-
-  releaseFirst();
-  await waitForCondition(() => events.length === 4, 'resumed stream dispatch');
-  assert.deepEqual(events, [
-    ['start', 'BudgetFirst', 'one'],
-    ['end', 'BudgetFirst'],
-    ['start', 'BudgetSecond', 'two'],
-    ['end', 'BudgetSecond']
-  ]);
-  assert.equal(budget.pendingPayloadBytes, 0n);
-  await runtime.dispose();
-});
-
-test('stream session node runtime bounds zero-byte dispatch metadata independently of byte HWM', async () => {
-  const socket = new FakeStreamSocket();
-  const totalFrames = streamDispatchCapacity.ZLINK_STREAM_MAX_IN_FLIGHT_DISPATCHES + 1;
-  let releaseFirst;
-  const firstCanFinish = new Promise((resolve) => { releaseFirst = resolve; });
-  let firstStarted;
-  const firstStartedPromise = new Promise((resolve) => { firstStarted = resolve; });
-  let dispatchCount = 0;
-  const runtime = createStreamRuntime({
-    socket,
-    sessionFactory(context) {
-      return {
-        context,
-        async onDispatch() {
-          dispatchCount += 1;
-          if (dispatchCount === 1) {
-            firstStarted();
-            await firstCanFinish;
-          }
-        }
-      };
-    }
-  });
-
-  runtime.start();
-  const frame = rawStreamFrame(
-    fakeHeader({ name: 'ZeroByteDispatch' }).data(),
-    Buffer.alloc(0)
-  );
-  socket.emitRaw('zero-byte-peer', [frame]);
-  await waitForReceive(socket);
-  await firstStartedPromise;
-
-  for (let index = 1; index < totalFrames; index += 1) {
-    socket.emitRaw('zero-byte-peer', [frame]);
-  }
-  await waitForCondition(
-    () => socket.recvCalls >= streamDispatchCapacity.ZLINK_STREAM_MAX_IN_FLIGHT_DISPATCHES
-      && socket.received.length > 0,
-    'zero-byte dispatch capacity'
-  );
-  const recvCallsAtCapacity = socket.recvCalls;
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(dispatchCount, 1);
-  assert.equal(socket.recvCalls, recvCallsAtCapacity);
-  assert.equal(socket.received.length, 1);
-
-  releaseFirst();
-  await waitForCondition(
-    () => dispatchCount === totalFrames && socket.received.length === 0,
-    'zero-byte dispatch resume'
-  );
-  await runtime.dispose();
-});
-
-test('stream HWM does not block the final recv of a segmented frame', async () => {
-  const socket = new FakeStreamSocket();
-  const budget = new framework.ZLinkInboundDispatchBudget(3n);
-  let releaseDispatch;
-  const dispatchCanFinish = new Promise((resolve) => { releaseDispatch = resolve; });
-  let dispatchStarted;
-  const dispatchStartedPromise = new Promise((resolve) => { dispatchStarted = resolve; });
-  const runtime = createStreamRuntime({
-    socket,
-    inboundDispatchBudget: budget,
-    headerDecoder: (header) => ({ name: header.getString() }),
-    sessionFactory(context) {
-      return {
-        context,
-        async onDispatch() {
-          dispatchStarted();
-          await dispatchCanFinish;
-        }
-      };
-    }
-  });
-
-  runtime.start();
-  const frame = rawStreamFrame(
-    fakeHeader({ name: 'SegmentedHwm' }).data(),
-    Buffer.from('payload')
-  );
-  const headerEnd = 6 + frame.readUInt16BE(0);
-  socket.emitRaw('segmented-hwm-peer', [frame.subarray(0, headerEnd)]);
-  await waitForReceive(socket);
-  assert.equal(budget.receivePaused, false);
-
-  socket.emitRaw('segmented-hwm-peer', [frame.subarray(headerEnd)]);
-  await waitForReceive(socket);
-  await dispatchStartedPromise;
-  assert.equal(budget.receivePaused, true);
-
-  releaseDispatch();
-  await waitForCondition(() => budget.pendingPayloadBytes === 0n, 'segmented HWM dispatch');
-  await runtime.dispose();
-});
-
-test('stream liveness deadlines pause while the host application HWM blocks receive', async () => {
-  const socket = new FakeStreamSocket();
-  const clock = new FakeLivenessClock();
-  const budget = new framework.ZLinkInboundDispatchBudget(3n);
-  let releaseDispatch;
-  const dispatchCanFinish = new Promise((resolve) => { releaseDispatch = resolve; });
-  let dispatchStarted;
-  const dispatchStartedPromise = new Promise((resolve) => { dispatchStarted = resolve; });
-  const runtime = createStreamRuntime({
-    socket,
-    livenessClock: clock,
-    inboundDispatchBudget: budget,
-    sessionFactory(context) {
-      return {
-        context,
-        async onDispatch() {
-          dispatchStarted();
-          await dispatchCanFinish;
-        }
-      };
-    }
-  });
-
-  runtime.start();
-  runtime.markConnected('paused-heartbeat-peer');
-  await clock.flush();
-  await clock.advance(1000);
-  socket.emitRaw('paused-heartbeat-peer', [
-    rawStreamFrame(fakeHeader({ name: 'Blocked' }).data(), Buffer.from('one'))
-  ]);
-  await waitForReceive(socket);
-  await dispatchStartedPromise;
-  assert.equal(budget.receivePaused, true);
-
-  await clock.advance(6000);
-  assert.deepEqual(socket.disconnects, []);
-
-  releaseDispatch();
-  await waitForCondition(() => budget.pendingPayloadBytes === 0n, 'paused stream resume');
-  socket.emitRaw('paused-heartbeat-peer', [
-    rawStreamFrame(fakeHeader({
-      kind: connector.ZlinkStreamMessageKind.Control,
-      codec: connector.ZlinkStreamCodec.Raw,
-      flags: connector.ZlinkStreamHeaderFlags.None,
-      name: '$zlink.heartbeat.pong'
-    }).data(), Buffer.alloc(0))
-  ]);
-  await waitForReceive(socket);
-  assert.deepEqual(socket.disconnects, []);
-  await runtime.dispose();
-});
-
 test('stream session node runtime isolates a malformed peer from another peer', async () => {
   const socket = new FakeStreamSocket();
   const events = [];
+  let malformedOwnerCloses = 0;
   const runtime = createStreamRuntime({
     socket,
     headerDecoder: (header) => ({ name: header.getString() }),
@@ -1546,7 +1393,11 @@ test('stream session node runtime isolates a malformed peer from another peer', 
   });
 
   runtime.start();
-  socket.emitRaw('malformed-peer', [rawStreamFrame(Buffer.from([0xff]), Buffer.alloc(0))]);
+  socket.emitTrackedRaw(
+    'malformed-peer',
+    [rawStreamFrame(Buffer.from([0xff]), Buffer.alloc(0))],
+    () => { malformedOwnerCloses += 1; }
+  );
   await waitForReceive(socket);
   socket.emitRaw('healthy-peer', [
     rawStreamFrame(
@@ -1562,7 +1413,53 @@ test('stream session node runtime isolates a malformed peer from another peer', 
     ['disconnected', 'malformed-peer'],
     ['dispatch', 'healthy-peer', 'Healthy', 'ok']
   ]);
+  assert.equal(malformedOwnerCloses, 1);
   await runtime.dispose();
+});
+
+test('stream session releases incomplete retained receives on disconnect and shutdown', async () => {
+  const socket = new FakeStreamSocket();
+  const runtime = createStreamRuntime({
+    socket,
+    sessionFactory(context) {
+      return { context };
+    }
+  });
+
+  runtime.start();
+  const disconnectedHeader = fakeHeader({ name: 'DisconnectIncomplete' });
+  const disconnectedFrame = rawStreamFrame(
+    disconnectedHeader.data(),
+    Buffer.from(JSON.stringify('disconnect'))
+  );
+  disconnectedHeader.close();
+  let disconnectCloses = 0;
+  socket.emitTrackedRaw(
+    'disconnect-incomplete',
+    [disconnectedFrame.subarray(0, disconnectedFrame.length - 1)],
+    () => { disconnectCloses += 1; }
+  );
+  await waitForReceive(socket);
+  assert.equal(disconnectCloses, 0);
+  runtime.markDisconnected('disconnect-incomplete');
+  await waitForCondition(() => disconnectCloses === 1, 'disconnect retained release');
+
+  const shutdownHeader = fakeHeader({ name: 'ShutdownIncomplete' });
+  const shutdownFrame = rawStreamFrame(
+    shutdownHeader.data(),
+    Buffer.from(JSON.stringify('shutdown'))
+  );
+  shutdownHeader.close();
+  let shutdownCloses = 0;
+  socket.emitTrackedRaw(
+    'shutdown-incomplete',
+    [shutdownFrame.subarray(0, shutdownFrame.length - 1)],
+    () => { shutdownCloses += 1; }
+  );
+  await waitForReceive(socket);
+  assert.equal(shutdownCloses, 0);
+  await runtime.dispose();
+  assert.equal(shutdownCloses, 1);
 });
 
 test('stream receive loop survives a recv error and a peer session factory error', async () => {
@@ -1798,6 +1695,7 @@ test('stream session node runtime closes rejected packets after dispose', async 
 test('stream session runtime replies to dispatch errors without session onError callback', async () => {
   const socket = new FakeStreamSocket();
   const errors = [];
+  let ownerCloses = 0;
   const runtime = createStreamRuntime({
     socket,
     headerDecoder: (header) => JSON.parse(header.getString(), streamHeaderReviver),
@@ -1818,12 +1716,20 @@ test('stream session runtime replies to dispatch errors without session onError 
   });
 
   runtime.start();
-  socket.emitPacket('session-e', fakeHeader({
+  const failedHeader = fakeHeader({
     kind: connector.ZlinkStreamMessageKind.Request,
     requestSeq: 7n,
     name: 'Move'
-  }), fakeMessage('p'));
+  });
+  const failedFrame = rawStreamFrame(failedHeader.data(), Buffer.from('p'));
+  failedHeader.close();
+  socket.emitTrackedRaw(
+    'session-e',
+    [failedFrame],
+    () => { ownerCloses += 1; }
+  );
   await waitForReceive(socket);
+  await waitForCondition(() => ownerCloses === 1, 'failed handler retained release');
   await runtime.dispose();
 
   assert.deepEqual(errors, [['sink', 'dispatch failed']]);
@@ -1837,6 +1743,7 @@ test('stream session runtime replies to dispatch errors without session onError 
     code: 'Error',
     message: 'dispatch failed'
   });
+  assert.equal(ownerCloses, 1);
 });
 
 test('stream session runtime encodes Framework error kinds as string error codes', async () => {
@@ -1952,6 +1859,9 @@ test('stream session runtime completes pending responses before session dispatch
   let pending;
   const runtime = createStreamRuntime({
     socket,
+    claimApplicationWork() {
+      throw new Error('terminal completion must not claim application work');
+    },
     headerDecoder: (header) => JSON.parse(header.getString(), streamHeaderReviver),
     sessionFactory(context) {
       pending = context.startRequest(1000);
@@ -2219,6 +2129,9 @@ test('stream session node runtime receives framed packets from public binding st
 function createStreamRuntime(options) {
   return new framework.ZLinkStreamSessionNodeRuntime({
     readablePoller: readyPoller(),
+    applicationJobQueue: new ApplicationJobQueue(
+      resolveApplicationJobQueueConfiguration()
+    ),
     ...options
   });
 }
@@ -2252,6 +2165,10 @@ class FakeStreamSocket {
     return true;
   }
 
+  async sendAsync(routingId, payload, timeoutMs) {
+    this.sent.push({ routingId, payload, timeoutMs });
+  }
+
   disconnectPeer(routingId) {
     this.disconnects.push(routingId);
   }
@@ -2268,6 +2185,21 @@ class FakeStreamSocket {
 
   emitRaw(routingId, parts) {
     this.received.push(receivedEnvelope(routingId, parts.map((part) => zlink.Message.from(part))));
+  }
+
+  emitTrackedRaw(routingId, parts, onClose) {
+    const messages = parts.map((part) => zlink.Message.from(part));
+    let closed = false;
+    this.received.push({
+      routingId,
+      parts: messages,
+      close() {
+        if (closed) return;
+        closed = true;
+        messages.forEach((part) => part.close());
+        onClose();
+      }
+    });
   }
 
   async dispose() {}

@@ -5,8 +5,6 @@ import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
-import systems.zlink.contracts.sockets.SubmitResult;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -161,11 +159,9 @@ final class RouteSendCall implements ZLinkSendCall {
         }
         List<Message> sendParts = ZLinkChannelCallRuntime.parts(
             packetName, payload, contentType);
-        return runtime.oneWayCalls().submitOneWay(
-            router,
-            ZLinkBackendAdmissionKey.socket(),
-            () -> router.send(target, sendParts, SendFlags.DONT_WAIT),
-            () -> sendParts.forEach(Message::close));
+        return ZLinkOneWayCalls.adaptOneWay(router.send(target, sendParts))
+            .whenComplete((ignored, failure) ->
+                sendParts.forEach(Message::close));
     }
 }
 
@@ -265,12 +261,18 @@ final class RouteRequestCall implements ZLinkRequestCall {
                 packetName.orElse(null), channelName, null, null,
                 target.toString(), null, null, null));
         }
-        try {
-            runtime.submitRoute(
-                router,
-                target,
-                requestParts,
-                reply -> {
+        runtime.requestRoute(router, target, requestParts, timeout)
+            .whenComplete((reply, failure) -> {
+                requestParts.forEach(Message::close);
+                if (failure != null) {
+                    result.completeExceptionally(
+                        ZLinkChannelCallRuntime.unwrap(failure));
+                    return;
+                }
+                if (result.isDone()) {
+                    reply.close();
+                    return;
+                }
                     try {
                         runtime.completeReply(reply, replyType, result);
                         if (runtime.flow().enabled(ZLinkMessageFlowOutcome.REPLY_RECEIVED)) {
@@ -284,14 +286,9 @@ final class RouteRequestCall implements ZLinkRequestCall {
                     } catch (RuntimeException ex) {
                         result.completeExceptionally(ex);
                     } finally {
-                        reply.parts().forEach(Message::close);
+                        reply.close();
                     }
-                },
-                timeout,
-                result);
-        } finally {
-            requestParts.forEach(Message::close);
-        }
+            });
         return ZLinkAsyncSerialQueue.manageCurrent(result);
     }
 
@@ -392,11 +389,10 @@ final class MeshNodeRouteSendCall implements ZLinkSendCall {
         List<Message> sendParts = ZLinkChannelCallRuntime.parts(
             packetName, payload, contentType);
         if (node.routingId().equals(target)) {
-            return runtime.oneWayCalls().submitOneWay(
-                node,
-                ZLinkBackendAdmissionKey.node(target),
-                () -> submitLocal(node, target, metadata.encode(), sendParts),
-                () -> sendParts.forEach(Message::close));
+            return submitLocal(node, target, metadata.encode(), sendParts)
+                .thenCompose(ZLinkOneWayCalls::oneWayStatus)
+                .whenComplete((ignored, failure) ->
+                    sendParts.forEach(Message::close));
         }
         Optional<Integer> classified =
             node.classifyNodeSendTarget(target);
@@ -404,36 +400,20 @@ final class MeshNodeRouteSendCall implements ZLinkSendCall {
             sendParts.forEach(Message::close);
             return ZLinkOneWayCalls.oneWayStatus(classified.orElseThrow());
         }
-        return runtime.oneWayCalls().submitOneWay(
-            node,
-            ZLinkBackendAdmissionKey.node(target),
-            () -> node.sendToNode(
-                target, metadata.encode(), sendParts, SendFlags.DONT_WAIT),
-            () -> sendParts.forEach(Message::close));
+        return ZLinkOneWayCalls.adaptOneWay(
+                node.sendToNode(target, metadata.encode(), sendParts))
+            .whenComplete((ignored, failure) ->
+                sendParts.forEach(Message::close));
     }
 
-    private static boolean submitLocal(
+    private static CompletionStage<Integer> submitLocal(
         ZLinkInternalSpotNode node,
         RoutingId target,
         byte[] metadata,
         List<Message> parts) {
-        int status =
-            node.submitLocalNodeSend(target, metadata, parts)
-                .orElse(ZLinkOneWayCalls.ROUTE_NOT_CONNECTED);
-        return switch (status) {
-            case ZLinkOneWayCalls.SUBMITTED -> true;
-            case ZLinkOneWayCalls.BACKPRESSURED -> false;
-            case ZLinkOneWayCalls.TARGET_NOT_FOUND ->
-                throw new ZlinkSubmitException(SubmitResult.NOT_FOUND);
-            case ZLinkOneWayCalls.ROUTE_NOT_CONNECTED ->
-                throw new ZlinkSubmitException(SubmitResult.NOT_CONNECTED);
-            case ZLinkOneWayCalls.SHUTDOWN ->
-                throw new ZlinkSubmitException(SubmitResult.TERMINATED);
-            case ZLinkOneWayCalls.TIMED_OUT -> throw new IllegalStateException(
-                "local Node admission cannot return a timeout before waiting");
-            default -> throw new IllegalStateException(
-                "unknown local Node admission status: " + status);
-        };
+        return node.submitLocalNodeSend(target, metadata, parts)
+            .orElseGet(() -> CompletableFuture.completedFuture(
+                ZLinkOneWayCalls.ROUTE_NOT_CONNECTED));
     }
 }
 
@@ -532,12 +512,10 @@ final class MeshChannelRouteSendCall implements ZLinkSendCall {
         }
         List<Message> parts = ZLinkChannelCallRuntime.parts(
             packetName, payload, contentType);
-        return runtime.oneWayCalls().submitOneWay(
-            node,
-            ZLinkBackendAdmissionKey.channel(channelName),
-            () -> node.sendToChannel(
-                channelName, metadata.encode(), parts, SendFlags.DONT_WAIT),
-            () -> parts.forEach(Message::close));
+        return ZLinkOneWayCalls.adaptOneWay(
+                node.sendToChannel(channelName, metadata.encode(), parts))
+            .whenComplete((ignored, failure) ->
+                parts.forEach(Message::close));
     }
 }
 
@@ -652,9 +630,30 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
             return ZLinkAsyncSerialQueue
                 .manageCurrent(result);
         }
-        long deadline = System.nanoTime() + timeout.toNanos();
         result.whenComplete((ignored, failure) -> payload.close());
-        submitAttempt(replyType, result, deadline, payload);
+        List<Message> parts = ZLinkChannelCallRuntime.parts(
+            packetName,
+            Message.from(payload),
+            contentType);
+        node.requestToChannel(
+                channelName,
+                metadata.encode(),
+                parts,
+                timeout)
+            .whenComplete((reply, failure) -> {
+                parts.forEach(Message::close);
+                if (failure != null) {
+                    result.completeExceptionally(failure);
+                    return;
+                }
+                try {
+                    runtime.completeReply(reply, replyType, result);
+                } catch (RuntimeException error) {
+                    result.completeExceptionally(error);
+                } finally {
+                    reply.close();
+                }
+            });
         return ZLinkAsyncSerialQueue.manageCurrent(result);
     }
 
@@ -666,56 +665,6 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
             .yieldCurrent(submit(replyType));
     }
 
-    private <TReply> void submitAttempt(
-        Class<TReply> replyType,
-        CompletableFuture<TReply> result,
-        long deadline,
-        Message payload) {
-        if (result.isDone()) {
-            return;
-        }
-        List<Message> parts = ZLinkChannelCallRuntime.parts(
-            packetName,
-            Message.from(payload),
-            contentType);
-        try {
-            boolean submitted = node.requestToChannel(
-                channelName,
-                metadata.encode(),
-                parts,
-                reply -> {
-                    try {
-                        runtime.completeReply(reply, replyType, result);
-                    } catch (RuntimeException error) {
-                        result.completeExceptionally(error);
-                    } finally {
-                        reply.parts().forEach(Message::close);
-                    }
-                },
-                SendFlags.NONE,
-                timeout);
-            if (!submitted) {
-                if (System.nanoTime() < deadline) {
-                    runtime.retryRouteRequest(() -> submitAttempt(
-                        replyType, result, deadline, payload));
-                } else {
-                    result.completeExceptionally(new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-                        "RouteMesh channel request was not submitted to " + channelName));
-                }
-            }
-        } catch (RuntimeException error) {
-            if (ZLinkChannelRequestSubmitter.isRetriableSubmit(error)
-                && System.nanoTime() < deadline) {
-                runtime.retryRouteRequest(() -> submitAttempt(
-                    replyType, result, deadline, payload));
-            } else {
-                result.completeExceptionally(error);
-            }
-        } finally {
-            parts.forEach(Message::close);
-        }
-    }
 }
 
 final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
@@ -857,11 +806,16 @@ final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
                 return systems.zlink.framework.execution
                     .ZLinkAsyncSerialQueue.manageCurrent(result);
             }
-            boolean submitted = node.requestToNode(
-                target,
-                metadata.encode(),
-                requestParts,
-                reply -> {
+            node.requestToNode(
+                    target,
+                    metadata.encode(),
+                    requestParts,
+                    timeout)
+                .whenComplete((reply, failure) -> {
+                    if (failure != null) {
+                        result.completeExceptionally(failure);
+                        return;
+                    }
                     try {
                         runtime.completeReply(reply, replyType, result);
                         if (runtime.flow().enabled(ZLinkMessageFlowOutcome.REPLY_RECEIVED)) {
@@ -875,16 +829,9 @@ final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
                     } catch (RuntimeException error) {
                         result.completeExceptionally(error);
                     } finally {
-                        reply.parts().forEach(Message::close);
+                        reply.close();
                     }
-                },
-                SendFlags.NONE,
-                timeout);
-            if (!submitted) {
-                result.completeExceptionally(new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-                    "RouteMesh node request was not submitted to " + target));
-            }
+                });
         } catch (RuntimeException error) {
             result.completeExceptionally(error);
         } finally {

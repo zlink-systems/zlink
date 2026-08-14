@@ -149,7 +149,7 @@ void verify_client_server_runtime_projection_and_observation ()
            && std::chrono::steady_clock::now () < deadline) {
         const auto now = std::chrono::steady_clock::now ();
         (void) server.drain_monitor_events (now);
-        const auto server_pump = server.pump_one (now);
+        const auto server_pump = server.pump_one (now).result ().value ();
         assert (server_pump != client_server::client_server_pump_result_t::protocol_error);
         std::this_thread::sleep_for (1ms);
     }

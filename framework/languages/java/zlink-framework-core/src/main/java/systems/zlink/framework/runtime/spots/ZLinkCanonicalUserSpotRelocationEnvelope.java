@@ -123,13 +123,6 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
             }
             writer.body64(stateBody);
         }
-        writer.u32(inventory.size());
-        for (int index = 0; index < inventory.size(); index++) {
-            long id = index + 1L;
-            writer.u64(id);
-            writer.u64(boundaries.getOrDefault(id, 0L));
-            writer.u64(0);
-        }
         writer.u32(journal.size());
         for (Journal entry : journal) {
             writer.u64(entry.participantId());
@@ -162,7 +155,6 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
             writer.u64(tick.scheduledAtUnixMilliseconds());
             writer.u64(tick.skippedTicks());
         }
-        writer.u32(0);
         byte[] encoded = writer.bytes();
         ZLinkServiceRelocationEnvelopeCodec.decode(encoded);
         return encoded;
@@ -184,8 +176,7 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
         }
         List<ZLinkSpotRetireControl.ParticipantFence> inventory =
             stage.participants();
-        if (root.applicationStates().size() != inventory.size()
-            || root.participantProgress().size() != inventory.size()) {
+        if (root.applicationStates().size() != inventory.size()) {
             throw invalid("canonical participant inventory is incomplete");
         }
         Map<Long, ZLinkServiceRelocationEnvelopeCodec.ApplicationState> states =
@@ -234,7 +225,7 @@ final class ZLinkCanonicalUserSpotRelocationEnvelope {
         }
         LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> journal =
             new LinkedHashMap<>();
-        for (var entry : root.journal()) {
+        for (var entry : root.savedWork()) {
             String lane = lanes.get(entry.participantId());
             if (lane == null) {
                 throw invalid("canonical journal participant is unknown");

@@ -49,27 +49,9 @@ public sealed class ZLinkLocationOptions
     public TimeSpan MessageFollowDuration { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Maximum number of source relocation units that may be active in this process.
+    /// Maximum time a relocated Session route seal may wait for its exact
+    /// route update before the physical Session is closed.
     /// </summary>
-    public int MaxActiveOutboundRelocations { get; set; } = 64;
-
-    /// <summary>
-    /// Maximum number of target relocation units that may be active in this process.
-    /// </summary>
-    public int MaxActiveInboundRelocations { get; set; } = 64;
-
-    /// <summary>
-    /// Maximum number of application relocation capture callbacks that may run concurrently.
-    /// </summary>
-    public int MaxConcurrentRelocationCaptures { get; set; } = 8;
-
-    /// <summary>
-    /// Maximum number of application relocation restore callbacks that may run concurrently.
-    /// </summary>
-    public int MaxConcurrentRelocationRestores { get; set; } = 8;
-
-    /// <summary>
-    /// Maximum encoded relocation payload bytes retained by active payload stages.
-    /// </summary>
-    public long MaxRelocationPayloadInFlightBytes { get; set; } = 268_435_456;
+    public TimeSpan SessionRelocationSealTimeout { get; set; } =
+        TimeSpan.FromSeconds(3);
 }

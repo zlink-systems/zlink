@@ -465,55 +465,33 @@ function requestAdmission(
     securityIdentity: descriptor.securityIdentity,
     normalizedEffectiveMaxMessageBytes: normalizedMessageLimit(dealer.maxMessageSize)
   }));
-  return new Promise((resolve, reject) => {
-    let submitted = false;
+  return dealer.request(message, timeoutMs).then((parts) => {
     try {
-      submitted = dealer.request(
-        message,
-        (result, parts) => {
-          try {
-            if (result !== 0 || parts.length !== 1) {
-              reject(new ZLinkConfigurationException(
-                `ClientServer '${descriptor.channelName}' admission request failed with result ${result}.`
-              ));
-              return;
-            }
+      if (parts.length !== 1) {
+        throw new ZLinkConfigurationException(
+          `ClientServer '${descriptor.channelName}' admission reply must contain exactly one part.`
+        );
+      }
             const first = parts[0]!;
             const record = decodeClientServerControl(first.data());
             if (record.kind === 'reject') {
-              reject(new ZLinkConfigurationException(
+        throw new ZLinkConfigurationException(
                 `ClientServer '${descriptor.channelName}' admission was rejected (${record.reason}).`
-              ));
-              return;
+        );
             }
             if (record.kind !== 'admit') {
-              reject(new ZLinkConfigurationException(
+        throw new ZLinkConfigurationException(
                 `ClientServer '${descriptor.channelName}' admission reply has an invalid command.`
-              ));
-              return;
+        );
             }
-            resolve(record.admission);
-          } catch (error) {
-            reject(error);
-          } finally {
-            message.close();
-            closeMessages(parts);
-          }
-        },
-        0,
-        timeoutMs
-      );
-    } catch (error) {
+      return record.admission;
+    } finally {
       message.close();
-      reject(error);
-      return;
+      closeMessages(parts);
     }
-    if (!submitted) {
+  }, (error) => {
       message.close();
-      reject(new ZLinkConfigurationException(
-        `ClientServer '${descriptor.channelName}' admission request was not submitted.`
-      ));
-    }
+    throw error;
   });
 }
 

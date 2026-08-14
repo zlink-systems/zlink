@@ -1,19 +1,15 @@
 using System.Threading.Channels;
 
-using Zlink.Framework.Runtime.Dispatch;
-
 namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDisposable
 {
-    private const int Capacity = 1024;
     private static readonly TimeSpan ShutdownJoinTimeout =
         TimeSpan.FromSeconds(1);
     private readonly Channel<DispatchWork<TWork>> _queue =
-        Channel.CreateBounded<DispatchWork<TWork>>(
-            new BoundedChannelOptions(Capacity)
+        Channel.CreateUnbounded<DispatchWork<TWork>>(
+            new UnboundedChannelOptions
             {
-                FullMode = BoundedChannelFullMode.Wait,
                 SingleReader = true,
                 SingleWriter = true,
                 AllowSynchronousContinuations = false
@@ -48,17 +44,9 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
 
     internal ValueTask<bool> PostAsync(
         TWork payload,
-        ZLinkInboundDispatchBudget budget,
-        ulong payloadBytes,
-        CancellationToken cancellationToken,
-        bool overageReservation = false)
+        CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(budget);
-        var work = new DispatchWork<TWork>(
-            payload,
-            budget,
-            payloadBytes,
-            overageReservation);
+        var work = new DispatchWork<TWork>(payload);
         if (Volatile.Read(ref _stopped) != 0)
         {
             Reject(work);
@@ -68,9 +56,6 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
         if (cancellationToken.IsCancellationRequested
             || !_queue.Writer.TryWrite(work))
         {
-            // The receive loop must not wait for application dispatch space.
-            // A full application queue is observable through the supplied
-            // rejection path, while infrastructure/control receives continue.
             Reject(work);
             return ValueTask.FromResult(false);
         }
@@ -121,11 +106,8 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
                         Reject(pending);
                     break;
                 }
-                var handlerStarted = false;
                 try
                 {
-                    work.Budget.HandlerStarted(work.PayloadBytes);
-                    handlerStarted = true;
                     await _dispatch(work.Payload, cancellationToken)
                         .ConfigureAwait(false);
                 }
@@ -136,13 +118,6 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
                 catch (Exception exception)
                 {
                     Report(exception);
-                }
-                finally
-                {
-                    work.Budget.Completed(
-                        work.PayloadBytes,
-                        handlerStarted,
-                        work.OverageReservation);
                 }
             }
         }
@@ -168,20 +143,6 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
         {
             Report(exception);
         }
-        try
-        {
-            work.Budget.Completed(
-                work.PayloadBytes,
-                handlerStarted: false,
-                overageReservation: work.OverageReservation);
-        }
-        catch (Exception exception)
-        {
-            // Rejection has already returned the payload to its owner. Budget
-            // accounting must not turn that completed handoff into an exception
-            // visible to the receive loop.
-            Report(exception);
-        }
     }
 
     private void Report(Exception exception)
@@ -195,11 +156,7 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
         }
     }
 
-    private readonly record struct DispatchWork<TPayload>(
-        TPayload Payload,
-        ZLinkInboundDispatchBudget Budget,
-        ulong PayloadBytes,
-        bool OverageReservation);
+    private readonly record struct DispatchWork<TPayload>(TPayload Payload);
 }
 
 internal sealed class ZLinkChannelReplyGate

@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.internal.backend;
 
 import java.util.List;
+import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
@@ -15,4 +16,9 @@ public interface ZLinkBackendPublisherSocket extends ZLinkBackendSocket {
     }
 
     boolean publish(String topic, List<Message> parts, SendFlags flags);
+
+    CompletionStage<Void> publishAsync(
+        String topic,
+        List<Message> parts,
+        SendFlags flags);
 }

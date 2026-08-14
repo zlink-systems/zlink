@@ -44,6 +44,7 @@ public sealed class FrameworkRuntimeContracts
         var contract = typeof(IZLinkFrameworkRuntime);
 
         Assert.NotNull(contract.GetProperty(nameof(IZLinkFrameworkRuntime.Status)));
+        Assert.NotNull(contract.GetMethod(nameof(IZLinkFrameworkRuntime.ResetCapacityMetrics)));
         Assert.NotNull(contract.GetMethod(nameof(IZLinkFrameworkRuntime.RelocateAsync)));
         Assert.NotNull(contract.GetMethod(nameof(IZLinkFrameworkRuntime.ShutdownAsync)));
         Assert.Null(contract.GetMethod("RetireAsync"));
@@ -67,6 +68,10 @@ public sealed class FrameworkRuntimeContracts
                 Status,
                 default);
             await Task.CompletedTask;
+        }
+
+        public void ResetCapacityMetrics()
+        {
         }
 
         public ValueTask<ZLinkFrameworkRelocationResult> RelocateAsync(

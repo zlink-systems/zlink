@@ -144,10 +144,8 @@ export function decodeRemoteActorJoinPayload(
       payload.boundSessionBindingGeneration,
       payload.boundSessionPreviousAuthorityOwnerGeneration,
       payload.boundSessionPreviousOwnerLeaseGeneration,
-      payload.boundSessionAcceptedHighWater,
       payload.boundSessionRelocationSealId,
-      payload.boundSessionAcceptedJournalReference,
-      payload.boundSessionAcceptedJournalChecksumCrc32c
+      payload.boundSessionServiceWireRelocation
     ),
     request,
     requestContentType: typeof payload.requestContentType === 'string'
@@ -215,10 +213,8 @@ export function decodeRemoteBoundSessionTarget(
   bindingGeneration: unknown,
   previousAuthorityOwnerGeneration?: unknown,
   previousOwnerLeaseGeneration?: unknown,
-  acceptedHighWater?: unknown,
   relocationSealId?: unknown,
-  acceptedJournalReference?: unknown,
-  acceptedJournalChecksumCrc32c?: unknown
+  serviceWireRelocation?: unknown
 ): ZLinkRemoteBoundSessionTarget | undefined {
   if (
     typeof routerChannelId !== 'string' ||
@@ -247,16 +243,59 @@ export function decodeRemoteBoundSessionTarget(
     previousOwnerLeaseGeneration: typeof previousOwnerLeaseGeneration === 'string'
       ? BigInt(previousOwnerLeaseGeneration)
       : undefined,
-    acceptedHighWater: typeof acceptedHighWater === 'string'
-      ? BigInt(acceptedHighWater)
-      : undefined,
     relocationSealId: typeof relocationSealId === 'string' ? relocationSealId : undefined,
-    acceptedJournalReference: typeof acceptedJournalReference === 'string'
-      ? acceptedJournalReference
-      : undefined,
-    acceptedJournalChecksumCrc32c: typeof acceptedJournalChecksumCrc32c === 'number'
-      ? acceptedJournalChecksumCrc32c
-      : undefined
+    serviceWireRelocation: decodeBoundSessionServiceWireRelocation(serviceWireRelocation)
+  };
+}
+
+function decodeBoundSessionServiceWireRelocation(
+  value: unknown
+): ZLinkRemoteBoundSessionTarget['serviceWireRelocation'] {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'object' || value === null) {
+    throw new TypeError('Remote bound Session service-wire relocation fence is invalid.');
+  }
+  const text = (key: string): string => {
+    const candidate = (value as Record<string, unknown>)[key];
+    if (typeof candidate !== 'string' || candidate.length === 0) {
+      throw new TypeError(`Remote bound Session service-wire '${key}' is invalid.`);
+    }
+    return candidate;
+  };
+  const nonNegative = (key: string): bigint => {
+    const candidate = BigInt(text(key));
+    if (candidate < 0n) throw new TypeError(`Remote bound Session service-wire '${key}' is invalid.`);
+    return candidate;
+  };
+  const positive = (key: string): bigint => {
+    const candidate = nonNegative(key);
+    if (candidate === 0n) throw new TypeError(`Remote bound Session service-wire '${key}' is invalid.`);
+    return candidate;
+  };
+  const relocation = {
+    high: nonNegative('relocationHigh'),
+    low: nonNegative('relocationLow')
+  };
+  if (relocation.high === 0n && relocation.low === 0n) {
+    throw new TypeError('Remote bound Session service-wire relocation identity is zero.');
+  }
+  return {
+    relocation,
+    coordinator: {
+      ownerId: text('coordinatorOwnerId'),
+      leaseGeneration: positive('coordinatorLeaseGeneration'),
+      nodeRid: text('coordinatorNodeRid'),
+      nodeGeneration: positive('coordinatorNodeGeneration'),
+      expectedAuthorityStoreVersion: text('coordinatorExpectedAuthorityStoreVersion')
+    },
+    session: {
+      sessionOwnerNodeRid: text('sessionOwnerNodeRid'),
+      sessionOwnerNodeGeneration: positive('sessionOwnerNodeGeneration'),
+      sessionOwnerId: text('sessionOwnerId'),
+      sessionOwnerLeaseGeneration: positive('sessionOwnerLeaseGeneration'),
+      sessionRid: text('sessionRid'),
+      bindingGeneration: positive('bindingGeneration')
+    }
   };
 }
 

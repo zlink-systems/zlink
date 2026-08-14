@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -10,8 +11,8 @@ final class ZLinkServiceMailboxCloseTest {
     @Test
     void closeReleasesAllRetainedQueueRecords() {
         ZLinkServiceMailbox mailbox =
-            new ZLinkServiceMailbox(4, 1024, 4, 1024);
-        assertFalse(mailbox.tryEnqueue(new ZLinkServiceMailbox.Record(
+            new ZLinkServiceMailbox(4, 4096, 4, 1024);
+        assertTrue(mailbox.tryEnqueue(new ZLinkServiceMailbox.Record(
             "owner",
             ZLinkServiceMailbox.Domain.APPLICATION,
             List.of(new byte[2048]),

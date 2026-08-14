@@ -36,10 +36,15 @@ final class ZLinkActorSpotRoutePacketsTest {
                 List.of(),
                 new ZLinkActorSpotRoutePackets.CoreTransfer(
                     true, 31L, 41L, 7L, 3L, 5L, 1024L),
-                new ZLinkDeferredJoinAcceptedRecovery.Manifest(
+                new ZLinkDirectJoinRelocation.Manifest(
                     "relocation-root-41",
                     91L,
-                    1));
+                    31L,
+                    41L,
+                    51L,
+                    61L,
+                    1L,
+                    new byte[] {7, 8}));
             try {
                 ZLinkActorSpotRoutePackets.TransferRequest decoded =
                     ZLinkActorSpotRoutePackets.decodeTransferRequest(parts.get(1));
@@ -59,9 +64,11 @@ final class ZLinkActorSpotRoutePacketsTest {
                 assertEquals(1024L, decoded.coreReserveByteCount());
                 assertEquals(
                     "relocation-root-41",
-                    decoded.completionManifest().reference());
-                assertEquals(91L, decoded.completionManifest().checksumCrc32c());
-                assertEquals(1, decoded.completionManifest().cursor());
+                    decoded.relocationManifest().reference());
+                assertEquals(91L, decoded.relocationManifest().checksumCrc32c());
+                assertArrayEquals(
+                    new byte[] {7, 8},
+                    decoded.relocationManifest().rawReply());
             } finally {
                 parts.forEach(Message::close);
             }

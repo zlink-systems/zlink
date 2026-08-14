@@ -4,30 +4,14 @@ internal readonly record struct ZLinkActorHandoffDrainSnapshot(
     long Epoch,
     bool IsSafe);
 
-internal readonly record struct ZLinkActorHandoffAdmissionDecision(
-    ZLinkRemoteActorAdmissionReply Reply,
-    ZLinkRelocationPermitPool.ZLinkRelocationPermitLease Reservation,
-    ZLinkRelocationCapacityFence? CapacityFence = null);
-
 internal sealed class ZLinkActorHandoffAdmissions(
     TimeProvider? timeProvider = null,
-    Action<string>? diagnostic = null,
-    Func<ZLinkRelocationCapacityFence, CancellationToken,
-        ValueTask<ZLinkRelocationCapacityAbortResult>>?
-        abortCapacityReservation = null)
+    Action<string>? diagnostic = null)
 {
-    private const int TerminalCapacity = 1024;
-    private static readonly TimeSpan CleanupAttemptTimeout =
-        TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan CleanupTransitionTimeout =
-        TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan CleanupRecoveryDelay =
-        TimeSpan.FromMilliseconds(250);
     private readonly object _gate = new();
     private readonly Dictionary<string, PendingAdmission> _pending = new(StringComparer.Ordinal);
     private readonly Dictionary<string, AdmissionExecution> _admitting = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TerminalOutcome> _terminal = new(StringComparer.Ordinal);
-    private readonly Queue<string> _terminalOrder = new();
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private CancellationTokenSource _generationStop = new();
     private TaskCompletionSource _drainSafe = CompletedSignal();
@@ -55,22 +39,6 @@ internal sealed class ZLinkActorHandoffAdmissions(
         Func<CancellationToken, ValueTask<ZLinkRemoteActorAdmissionReply>> admit,
         CancellationToken cancellationToken)
     {
-        return await AdmitReservedAsync(
-                request,
-                targetSpotId,
-                async token => new ZLinkActorHandoffAdmissionDecision(
-                    await admit(token).ConfigureAwait(false),
-                    default),
-                cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    public async ValueTask<ZLinkRemoteActorAdmissionReply> AdmitReservedAsync(
-        ZLinkRemoteActorAdmissionRequest request,
-        string targetSpotId,
-        Func<CancellationToken, ValueTask<ZLinkActorHandoffAdmissionDecision>> admit,
-        CancellationToken cancellationToken)
-    {
         ArgumentNullException.ThrowIfNull(admit);
         AdmissionExecution execution;
         var ownsExecution = false;
@@ -80,11 +48,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
             {
                 if (pending.Deadline <= _timeProvider.GetUtcNow())
                 {
-                    if (pending.HasDurableCapacityReservation)
-                        throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.DeadlineExceeded,
-                            $"Actor '{request.ActorId}' handoff admission '{request.HandoffId}' is awaiting durable expiry cleanup.");
-                    RemovePendingWithoutCapacityLocked(
+                    RemovePendingLocked(
                         request.HandoffId,
                         pending);
                 }
@@ -118,15 +82,15 @@ internal sealed class ZLinkActorHandoffAdmissions(
         try
         {
             EnsureDeadlineAndCancellation(request, cancellationToken);
-            var decision = await admit(cancellationToken).ConfigureAwait(false);
+            var reply = await admit(cancellationToken).ConfigureAwait(false);
             await RegisterReservedAsync(
                     request,
                     targetSpotId,
-                    decision,
+                    reply,
                     cancellationToken)
                 .ConfigureAwait(false);
-            execution.Complete(decision.Reply);
-            return decision.Reply;
+            execution.Complete(reply);
+            return reply;
         }
         catch (Exception exception)
         {
@@ -156,10 +120,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
             {
                 if (pending.Deadline <= _timeProvider.GetUtcNow())
                 {
-                    if (!pending.HasDurableCapacityReservation)
-                        RemovePendingWithoutCapacityLocked(
-                            request.HandoffId,
-                            pending);
+                    RemovePendingLocked(request.HandoffId, pending);
                     reply = null!;
                     return false;
                 }
@@ -183,14 +144,13 @@ internal sealed class ZLinkActorHandoffAdmissions(
         RegisterReserved(
             request,
             targetSpotId,
-            new ZLinkActorHandoffAdmissionDecision(reply, default));
+            reply);
     }
 
     public void RegisterRecoveredReservation(
         ZLinkRemoteActorJoinRequest request,
         string targetSpotId,
-        DateTimeOffset deadline,
-        ZLinkRelocationPermitPool.ZLinkRelocationPermitLease reservation)
+        DateTimeOffset deadline)
     {
         var admission = new ZLinkRemoteActorAdmissionRequest(
             request.ActorId,
@@ -221,170 +181,69 @@ internal sealed class ZLinkActorHandoffAdmissions(
         RegisterReserved(
             admission,
             targetSpotId,
-            new ZLinkActorHandoffAdmissionDecision(reply, reservation));
+            reply);
     }
 
     private void RegisterReserved(
         ZLinkRemoteActorAdmissionRequest request,
         string targetSpotId,
-        ZLinkActorHandoffAdmissionDecision decision)
+        ZLinkRemoteActorAdmissionReply reply)
     {
-        try
-        {
-            if (string.IsNullOrWhiteSpace(request.HandoffId))
-                throw new InvalidOperationException("Remote actor admission requires a handoff id.");
-
-            var deadline = DateTimeOffset.FromUnixTimeMilliseconds(request.DeadlineUnixTimeMilliseconds);
-            if (deadline <= _timeProvider.GetUtcNow())
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.DeadlineExceeded,
-                    $"Actor '{request.ActorId}' handoff admission deadline has expired.");
-
-            var pending = new PendingAdmission(
-                request,
-                targetSpotId,
-                deadline,
-                decision.Reply,
-                decision.Reservation,
-                decision.CapacityFence,
-                abortCapacityReservation);
-            lock (_gate)
-            {
-                if (_pending.TryGetValue(request.HandoffId, out var existing))
-                {
-                    if (existing.Deadline <= _timeProvider.GetUtcNow())
-                    {
-                        if (existing.HasDurableCapacityReservation)
-                            throw new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.DeadlineExceeded,
-                                $"Actor '{request.ActorId}' handoff admission '{request.HandoffId}' is awaiting durable expiry cleanup.");
-                        RemovePendingWithoutCapacityLocked(
-                            request.HandoffId,
-                            existing);
-                    }
-                    else
-                    {
-                        if (!existing.Matches(request, targetSpotId))
-                            throw new InvalidOperationException(
-                                $"Handoff admission '{request.HandoffId}' is already assigned to another actor.");
-                        decision.Reservation.Dispose();
-                        return;
-                    }
-                }
-
-                _pending.Add(request.HandoffId, pending);
-                if (decision.Reply.Accepted) MarkDrainUnsafeLocked();
-            }
-
-            CancellationToken generationToken;
-            lock (_gate) generationToken = _generationStop.Token;
-            pending.SetExpirationTask(
-                ExpireAsync(
-                    request.HandoffId,
-                    pending,
-                    generationToken));
-        }
-        catch
-        {
-            decision.Reservation.Dispose();
-            throw;
-        }
-    }
-
-    private async ValueTask RegisterReservedAsync(
-        ZLinkRemoteActorAdmissionRequest request,
-        string targetSpotId,
-        ZLinkActorHandoffAdmissionDecision decision,
-        CancellationToken cancellationToken)
-    {
-        if (decision.CapacityFence is null)
-        {
-            RegisterReserved(request, targetSpotId, decision);
-            return;
-        }
-
         if (string.IsNullOrWhiteSpace(request.HandoffId))
-            throw new InvalidOperationException(
-                "Remote actor admission requires a handoff id.");
-        var deadline = DateTimeOffset.FromUnixTimeMilliseconds(
-            request.DeadlineUnixTimeMilliseconds);
+            throw new InvalidOperationException("Remote actor admission requires a handoff id.");
+
+        var deadline = DateTimeOffset.FromUnixTimeMilliseconds(request.DeadlineUnixTimeMilliseconds);
+        if (deadline <= _timeProvider.GetUtcNow())
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                $"Actor '{request.ActorId}' handoff admission deadline has expired.");
+
         var pending = new PendingAdmission(
             request,
             targetSpotId,
             deadline,
-            decision.Reply,
-            decision.Reservation,
-            decision.CapacityFence,
-            abortCapacityReservation);
-        var registered = false;
-        try
+            reply);
+        lock (_gate)
         {
-            lock (_gate)
+            if (_pending.TryGetValue(request.HandoffId, out var existing))
             {
-                if (_pending.TryGetValue(
+                if (existing.Deadline <= _timeProvider.GetUtcNow())
+                {
+                    RemovePendingLocked(
                         request.HandoffId,
-                        out var existing))
+                        existing);
+                }
+                else
                 {
                     if (!existing.Matches(request, targetSpotId))
                         throw new InvalidOperationException(
                             $"Handoff admission '{request.HandoffId}' is already assigned to another actor.");
-                    decision.Reservation.Dispose();
                     return;
                 }
-                _pending.Add(request.HandoffId, pending);
-                registered = true;
-                MarkDrainUnsafeLocked();
             }
 
-            CancellationToken generationToken;
-            lock (_gate) generationToken = _generationStop.Token;
-            pending.SetExpirationTask(
-                ExpireAsync(
-                    request.HandoffId,
-                    pending,
-                    generationToken));
+            _pending.Add(request.HandoffId, pending);
+            if (reply.Accepted) MarkDrainUnsafeLocked();
+        }
 
-            if (deadline <= _timeProvider.GetUtcNow())
-            {
-                using var cleanupDeadline =
-                    new CancellationTokenSource(
-                        CleanupTransitionTimeout);
-                try
-                {
-                    await AbortAsync(
-                            request.HandoffId,
-                            cleanupDeadline.Token)
-                        .ConfigureAwait(false);
-                }
-                catch
-                {
-                    // The registered expiration task remains the retry owner.
-                }
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.DeadlineExceeded,
-                    $"Actor '{request.ActorId}' handoff admission deadline has expired.");
-            }
-        }
-        catch
-        {
-            if (!registered)
-            {
-                try
-                {
-                    using var cleanupDeadline =
-                        new CancellationTokenSource(
-                            CleanupTransitionTimeout);
-                    await pending.AbortCapacityAsync(
-                            cleanupDeadline.Token)
-                        .ConfigureAwait(false);
-                }
-                finally
-                {
-                    pending.ReleasePermit();
-                }
-            }
-            throw;
-        }
+        CancellationToken generationToken;
+        lock (_gate) generationToken = _generationStop.Token;
+        pending.SetExpirationTask(
+            ExpireAsync(
+                request.HandoffId,
+                pending,
+                generationToken));
+    }
+
+    private ValueTask RegisterReservedAsync(
+        ZLinkRemoteActorAdmissionRequest request,
+        string targetSpotId,
+        ZLinkRemoteActorAdmissionReply reply,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RegisterReserved(request, targetSpotId, reply);
+        return ValueTask.CompletedTask;
     }
 
     private void EnsureDeadlineAndCancellation(
@@ -400,70 +259,9 @@ internal sealed class ZLinkActorHandoffAdmissions(
                 $"Actor '{request.ActorId}' handoff admission deadline has expired.");
     }
 
-    public async ValueTask OwnAndAbortCapacityAsync(
-        ZLinkRemoteActorAdmissionRequest request,
-        string targetSpotId,
-        ZLinkRelocationCapacityFence capacityFence,
-        ZLinkRelocationPermitPool.ZLinkRelocationPermitLease reservation,
-        CancellationToken cancellationToken)
-    {
-        var pending = new PendingAdmission(
-            request,
-            targetSpotId,
-            DateTimeOffset.FromUnixTimeMilliseconds(
-                request.DeadlineUnixTimeMilliseconds),
-            new ZLinkRemoteActorAdmissionReply(
-                false,
-                string.Empty,
-                [],
-                request.DeadlineUnixTimeMilliseconds),
-            reservation,
-            capacityFence,
-            abortCapacityReservation);
-        lock (_gate)
-        {
-            if (_pending.TryGetValue(request.HandoffId, out var existing))
-            {
-                reservation.Dispose();
-                if (!existing.Matches(request, targetSpotId))
-                    throw new InvalidOperationException(
-                        $"Handoff admission '{request.HandoffId}' is already assigned to another actor.");
-            }
-            else
-            {
-                _pending.Add(request.HandoffId, pending);
-                MarkDrainUnsafeLocked();
-                var generationToken = _generationStop.Token;
-                pending.SetExpirationTask(
-                    ExpireAsync(
-                        request.HandoffId,
-                        pending,
-                        generationToken));
-            }
-        }
-
-        using var cleanupDeadline =
-            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cleanupDeadline.CancelAfter(CleanupTransitionTimeout);
-        await AbortAsync(request.HandoffId, cleanupDeadline.Token)
-            .ConfigureAwait(false);
-    }
-
-    public ZLinkRelocationCapacityFence? BeginCommit(
+    public void BeginCommit(
         ZLinkRemoteActorJoinRequest request,
-        string targetSpotId) =>
-        BeginCommitCore(request, targetSpotId, null);
-
-    public ZLinkRelocationCapacityFence? BeginCommit(
-        ZLinkRemoteActorJoinRequest request,
-        string targetSpotId,
-        long actualPayloadBytes) =>
-        BeginCommitCore(request, targetSpotId, actualPayloadBytes);
-
-    private ZLinkRelocationCapacityFence? BeginCommitCore(
-        ZLinkRemoteActorJoinRequest request,
-        string targetSpotId,
-        long? actualPayloadBytes)
+        string targetSpotId)
     {
         lock (_gate)
         {
@@ -473,10 +271,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
                     $"Actor '{request.ActorId}' does not have a matching pending handoff admission '{request.HandoffId}'.");
             if (pending.Deadline <= _timeProvider.GetUtcNow())
             {
-                if (!pending.HasDurableCapacityReservation)
-                    RemovePendingWithoutCapacityLocked(
-                        request.HandoffId,
-                        pending);
+                RemovePendingLocked(request.HandoffId, pending);
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.DeadlineExceeded,
                     $"Actor '{request.ActorId}' handoff admission '{request.HandoffId}' has expired.");
@@ -486,69 +281,68 @@ internal sealed class ZLinkActorHandoffAdmissions(
                 throw new InvalidOperationException(
                     $"Actor '{request.ActorId}' handoff admission '{request.HandoffId}' was rejected.");
 
-            if (actualPayloadBytes is { } actual)
-                pending.ValidateCommit(request, targetSpotId, actual);
+            pending.ValidateCommit(request, targetSpotId);
             pending.Committing = true;
-            return pending.CapacityFence;
+        }
+    }
+
+    public void RollbackCommit(
+        ZLinkRemoteActorJoinRequest request,
+        string targetSpotId)
+    {
+        lock (_gate)
+        {
+            if (!_pending.TryGetValue(request.HandoffId, out var pending))
+                return;
+            pending.ValidateCommit(request, targetSpotId);
+            if (pending.Deadline <= _timeProvider.GetUtcNow())
+            {
+                RemovePendingLocked(request.HandoffId, pending);
+                return;
+            }
+            pending.Committing = false;
         }
     }
 
     public void Complete(string handoffId)
     {
-        PendingAdmission? removed = null;
         lock (_gate)
         {
-            if (_pending.Remove(handoffId, out removed))
-                removed.MarkCapacityCommitted();
+            _pending.Remove(handoffId);
             TryCompleteDrainSafeLocked();
         }
-        removed?.ReleasePermit();
     }
 
-    public async ValueTask AbortAsync(
+    public ValueTask AbortAsync(
         string handoffId,
         CancellationToken cancellationToken = default)
     {
-        PendingAdmission? pending;
-        lock (_gate)
-            _pending.TryGetValue(handoffId, out pending);
-        if (pending is null) return;
-        await pending.AbortCapacityAsync(cancellationToken)
-            .ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
-            if (_pending.TryGetValue(handoffId, out var current)
-                && ReferenceEquals(current, pending))
-                _pending.Remove(handoffId);
+            _pending.Remove(handoffId);
             TryCompleteDrainSafeLocked();
         }
-        pending.ReleasePermit();
+        return ValueTask.CompletedTask;
     }
 
-    public async ValueTask AbortReservationAsync(
+    public ValueTask AbortReservationAsync(
         ZLinkRemoteActorAdmissionAbortRequest request,
         string targetSpotId,
         CancellationToken cancellationToken = default)
     {
-        PendingAdmission? pending;
+        cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
-            if (!_pending.TryGetValue(request.HandoffId, out pending))
-                return;
+            if (!_pending.TryGetValue(request.HandoffId, out var pending))
+                return ValueTask.CompletedTask;
             if (!pending.MatchesAbort(request, targetSpotId))
                 throw new InvalidOperationException(
                     $"Actor '{request.ActorId}' admission abort does not match reservation '{request.HandoffId}'.");
-        }
-        await pending.AbortCapacityAsync(cancellationToken)
-            .ConfigureAwait(false);
-        lock (_gate)
-        {
-            if (_pending.TryGetValue(request.HandoffId, out var current)
-                && ReferenceEquals(current, pending))
-                _pending.Remove(request.HandoffId);
+            _pending.Remove(request.HandoffId);
             TryCompleteDrainSafeLocked();
         }
-        pending.ReleasePermit();
+        return ValueTask.CompletedTask;
     }
 
     public bool TryGetJoinOutcome(
@@ -595,8 +389,6 @@ internal sealed class ZLinkActorHandoffAdmissions(
                     reply.Accepted && preparedCompletionTimeout is { } timeout
                         ? _timeProvider.GetUtcNow() + timeout
                         : null));
-            _terminalOrder.Enqueue(request.HandoffId);
-            TrimTerminalOutcomesLocked();
         }
     }
 
@@ -615,8 +407,6 @@ internal sealed class ZLinkActorHandoffAdmissions(
                 _terminal.Add(
                     request.HandoffId,
                     new TerminalOutcome(request, targetSpotId, rejectedReply, null));
-                _terminalOrder.Enqueue(request.HandoffId);
-                TrimTerminalOutcomesLocked();
                 return;
             }
 
@@ -628,7 +418,6 @@ internal sealed class ZLinkActorHandoffAdmissions(
 
             terminal.Reply = rejectedReply;
             terminal.Phase = ZLinkActorCommitPhase.Rejected;
-            TrimTerminalOutcomesLocked();
         }
     }
 
@@ -692,7 +481,6 @@ internal sealed class ZLinkActorHandoffAdmissions(
 
             terminal.Reply = rejectedReply;
             terminal.Phase = ZLinkActorCommitPhase.Expired;
-            TrimTerminalOutcomesLocked();
             return true;
         }
     }
@@ -709,6 +497,23 @@ internal sealed class ZLinkActorHandoffAdmissions(
                    && terminal.Phase is ZLinkActorCommitPhase.Prepared
                        or ZLinkActorCommitPhase.Completing;
         }
+    }
+
+    public Task WaitForTerminalCompletionAsync(
+        ZLinkRemoteActorJoinRequest request,
+        string targetSpotId,
+        CancellationToken cancellationToken)
+    {
+        Task completion;
+        lock (_gate)
+        {
+            if (!_terminal.TryGetValue(request.HandoffId, out var terminal)
+                || !terminal.Matches(request, targetSpotId))
+                throw new InvalidOperationException(
+                    $"Actor '{request.ActorId}' does not have a matching terminal handoff.");
+            completion = terminal.TerminalCompletion;
+        }
+        return completion.WaitAsync(cancellationToken);
     }
 
     public void RecordCompletion(
@@ -729,22 +534,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
                 throw new InvalidOperationException(
                     $"Actor '{request.ActorId}' handoff completion is not active.");
             terminal.Phase = ZLinkActorCommitPhase.Completed;
-            TrimTerminalOutcomesLocked();
-        }
-    }
-
-    private void TrimTerminalOutcomesLocked()
-    {
-        var candidates = _terminalOrder.Count;
-        while (_terminal.Count > TerminalCapacity && candidates-- > 0)
-        {
-            var handoffId = _terminalOrder.Dequeue();
-            if (!_terminal.TryGetValue(handoffId, out var terminal)) continue;
-            if (terminal.Phase is ZLinkActorCommitPhase.Completed or ZLinkActorCommitPhase.Expired
-                || !terminal.Reply.Accepted)
-                _terminal.Remove(handoffId);
-            else
-                _terminalOrder.Enqueue(handoffId);
+            terminal.CompleteTerminal();
         }
     }
 
@@ -778,13 +568,10 @@ internal sealed class ZLinkActorHandoffAdmissions(
             _admitting.Clear();
             pending = _pending.Values.ToArray();
             _terminal.Clear();
-            _terminalOrder.Clear();
         }
 
         stopped.Cancel();
         stopped.Dispose();
-        var expirationFailures =
-            new Dictionary<PendingAdmission, Exception>();
         foreach (var admission in pending)
         {
             try
@@ -797,55 +584,22 @@ internal sealed class ZLinkActorHandoffAdmissions(
             {
                 // Generation cancellation hands cleanup to this shutdown path.
             }
-            catch (Exception exception)
-            {
-                expirationFailures[admission] = exception;
-            }
         }
-        var cleanupFailures = new List<Exception>();
         foreach (var admission in pending)
         {
-            try
+            lock (_gate)
             {
-                await admission.AbortCapacityAsync(cancellationToken)
-                    .ConfigureAwait(false);
-                admission.ReleasePermit();
-                lock (_gate)
-                {
-                    if (_pending.TryGetValue(
-                            admission.HandoffId,
-                            out var current)
-                        && ReferenceEquals(current, admission))
-                        _pending.Remove(admission.HandoffId);
-                }
-            }
-            catch (Exception cleanupFailure)
-            {
-                cleanupFailures.Add(
-                    expirationFailures.TryGetValue(
-                        admission,
-                        out var expirationFailure)
-                        ? new AggregateException(
-                            expirationFailure,
-                            cleanupFailure)
-                        : cleanupFailure);
-                CancellationToken successorToken;
-                lock (_gate) successorToken = _generationStop.Token;
-                admission.SetExpirationTask(
-                    ExpireAsync(
+                if (_pending.TryGetValue(
                         admission.HandoffId,
-                        admission,
-                        successorToken));
+                        out var current)
+                    && ReferenceEquals(current, admission))
+                    _pending.Remove(admission.HandoffId);
             }
         }
         lock (_gate) TryCompleteDrainSafeLocked();
         var failure = new InvalidOperationException(
             "Actor handoff admission belongs to a stopped framework runtime generation.");
         foreach (var execution in admitting) execution.Fail(failure);
-        if (cleanupFailures.Count > 0)
-            throw new AggregateException(
-                "Actor handoff cleanup did not reach a terminal Store state before the shutdown deadline.",
-                cleanupFailures);
     }
 
     private async Task ExpireAsync(
@@ -853,7 +607,6 @@ internal sealed class ZLinkActorHandoffAdmissions(
         PendingAdmission pending,
         CancellationToken cancellationToken)
     {
-        var shouldExpire = false;
         try
         {
             var delay = pending.Deadline - _timeProvider.GetUtcNow();
@@ -865,50 +618,21 @@ internal sealed class ZLinkActorHandoffAdmissions(
             return;
         }
 
+        PendingAdmission? expired = null;
         lock (_gate)
         {
             if (_pending.TryGetValue(handoffId, out var current)
                 && ReferenceEquals(current, pending)
                 && !current.Committing)
             {
-                shouldExpire = true;
-            }
-        }
-        if (shouldExpire)
-        {
-            while (true)
-            {
-                try
-                {
-                    await pending.AbortCapacityAsync(cancellationToken)
-                        .ConfigureAwait(false);
-                    break;
-                }
-                catch (OperationCanceledException)
-                    when (cancellationToken.IsCancellationRequested)
-                {
-                    return;
-                }
-                catch
-                {
-                    await Task.Delay(
-                            CleanupRecoveryDelay,
-                            _timeProvider,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                }
-            }
-            lock (_gate)
-            {
-                if (_pending.TryGetValue(handoffId, out var current)
-                    && ReferenceEquals(current, pending)
-                    && !current.Committing)
-                    _pending.Remove(handoffId);
+                _pending.Remove(handoffId, out expired);
                 TryCompleteDrainSafeLocked();
             }
-            pending.ReleasePermit();
+        }
+        if (expired is not null)
+        {
             diagnostic?.Invoke(
-                $"pending_admission_expired actor={pending.ActorId} handoff_id={handoffId}");
+                $"pending_admission_expired actor={expired.ActorId} handoff_id={handoffId}");
         }
     }
 
@@ -933,18 +657,14 @@ internal sealed class ZLinkActorHandoffAdmissions(
         }
     }
 
-    private void RemovePendingWithoutCapacityLocked(
+    private void RemovePendingLocked(
         string handoffId,
         PendingAdmission pending)
     {
-        if (pending.HasDurableCapacityReservation)
-            throw new InvalidOperationException(
-                "Durable capacity cleanup requires an asynchronous terminal transition.");
         if (_pending.TryGetValue(handoffId, out var current)
             && ReferenceEquals(current, pending))
         {
             _pending.Remove(handoffId);
-            pending.ReleasePermit();
             TryCompleteDrainSafeLocked();
         }
     }
@@ -961,12 +681,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
         ZLinkRemoteActorAdmissionRequest request,
         string targetSpotId,
         DateTimeOffset deadline,
-        ZLinkRemoteActorAdmissionReply reply,
-        ZLinkRelocationPermitPool.ZLinkRelocationPermitLease reservation,
-        ZLinkRelocationCapacityFence? capacityFence,
-        Func<ZLinkRelocationCapacityFence, CancellationToken,
-            ValueTask<ZLinkRelocationCapacityAbortResult>>?
-            abortCapacityReservation)
+        ZLinkRemoteActorAdmissionReply reply)
     {
         public string ActorId { get; } = request.ActorId;
         public string HandoffId { get; } = request.HandoffId;
@@ -976,15 +691,10 @@ internal sealed class ZLinkActorHandoffAdmissions(
         public ZLinkRemoteActorAdmissionReply Reply { get; } = reply;
 
         public bool Committing { get; set; }
-        public ZLinkRelocationCapacityFence? CapacityFence { get; } =
-            capacityFence;
-        public bool HasDurableCapacityReservation =>
-            CapacityFence is not null;
 
         public void ValidateCommit(
             ZLinkRemoteActorJoinRequest candidate,
-            string candidateTargetSpotId,
-            long actualPayloadBytes)
+            string candidateTargetSpotId)
         {
             if (!Matches(candidate, candidateTargetSpotId)
                 || request.ActorGeneration != candidate.ActorGeneration
@@ -1010,75 +720,14 @@ internal sealed class ZLinkActorHandoffAdmissions(
                     candidate.TargetNodeRid))
                 throw new InvalidOperationException(
                     $"Actor '{candidate.ActorId}' handoff commit does not match its target reservation.");
-            if (!reservation.TryShrinkPayload(actualPayloadBytes))
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Rejected,
-                    $"Actor '{candidate.ActorId}' relocation payload exceeded its target reservation.");
         }
 
-        private int _permitReleased;
-        private int _capacityCommitted;
         private Task _expirationTask = Task.CompletedTask;
 
         public void SetExpirationTask(Task expirationTask) =>
             _expirationTask = expirationTask;
 
         public Task WaitForExpirationOwnerAsync() => _expirationTask;
-
-        public void MarkCapacityCommitted() =>
-            Volatile.Write(ref _capacityCommitted, 1);
-
-        public void ReleasePermit()
-        {
-            if (Interlocked.Exchange(ref _permitReleased, 1) == 0)
-                reservation.Dispose();
-        }
-
-        public async ValueTask AbortCapacityAsync(
-            CancellationToken cancellationToken)
-        {
-            if (Volatile.Read(ref _capacityCommitted) != 0
-                || CapacityFence is not { } fence
-                || abortCapacityReservation is null)
-                return;
-            Exception? lastFailure = null;
-            for (var attempt = 0; attempt < 3; attempt++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                try
-                {
-                    using var attemptDeadline =
-                        CancellationTokenSource.CreateLinkedTokenSource(
-                            cancellationToken);
-                    attemptDeadline.CancelAfter(CleanupAttemptTimeout);
-                    var result = await abortCapacityReservation(
-                            fence,
-                            attemptDeadline.Token)
-                        .AsTask()
-                        .WaitAsync(attemptDeadline.Token)
-                        .ConfigureAwait(false);
-                    if (result is ZLinkRelocationCapacityAbortResult.Aborted
-                        or ZLinkRelocationCapacityAbortResult.AlreadyAborted
-                        or ZLinkRelocationCapacityAbortResult.AlreadyCommitted)
-                        return;
-                    lastFailure = new InvalidOperationException(
-                        $"Capacity reservation '{fence.Value}' is stale and cannot be released yet.");
-                }
-                catch (Exception exception)
-                    when (exception is not OperationCanceledException)
-                {
-                    lastFailure = exception;
-                }
-                if (attempt < 2)
-                    await Task.Delay(
-                            TimeSpan.FromMilliseconds(25 * (attempt + 1)),
-                            cancellationToken)
-                        .ConfigureAwait(false);
-            }
-            throw new InvalidOperationException(
-                $"Capacity reservation '{fence.Value}' cleanup did not reach a terminal Store state.",
-                lastFailure);
-        }
 
         public bool MatchesAbort(
             ZLinkRemoteActorAdmissionAbortRequest candidate,
@@ -1153,6 +802,9 @@ internal sealed class ZLinkActorHandoffAdmissions(
     {
         public ZLinkRemoteActorJoinRequest Request { get; } = request;
 
+        private ZLinkActorHandoffCommitIdentity CommitIdentity { get; } =
+            ZLinkActorHandoffCommitIdentity.Capture(request);
+
         public ZLinkRemoteActorJoinReply Reply { get; set; } = reply;
 
         public DateTimeOffset? PreparedCompletionDeadline { get; } = preparedCompletionDeadline;
@@ -1163,9 +815,16 @@ internal sealed class ZLinkActorHandoffAdmissions(
 
         public ZLinkRemoteActorHandoffCompletionRequest? Completion { get; set; }
 
+        private TaskCompletionSource TerminalCompletionSource { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task TerminalCompletion => TerminalCompletionSource.Task;
+
+        public void CompleteTerminal() => TerminalCompletionSource.TrySetResult();
+
         public bool Matches(ZLinkRemoteActorJoinRequest candidate, string candidateTargetSpotId)
             => targetSpotId == candidateTargetSpotId
-               && ZLinkActorHandoffRequestIdentity.Matches(Request, candidate);
+               && CommitIdentity.Matches(candidate);
 
         public bool Matches(
             ZLinkRemoteActorHandoffCompletionRequest candidate,
@@ -1273,6 +932,33 @@ internal sealed class ZLinkActorHandoffAdmissions(
     }
 }
 
+internal sealed class ZLinkActorHandoffCommitIdentity
+{
+    private readonly ZLinkRemoteActorJoinRequest _request;
+
+    private ZLinkActorHandoffCommitIdentity(ZLinkRemoteActorJoinRequest request)
+    {
+        _request = request with
+        {
+            BoundSessionNodeRid = request.BoundSessionNodeRid?.ToArray(),
+            BoundSessionRid = request.BoundSessionRid?.ToArray(),
+            RelocationInventoryDigest = request.RelocationInventoryDigest.ToArray(),
+            Request = request.Request.ToArray(),
+            HandoffFrames = [],
+            SourceNodeRid = request.SourceNodeRid.ToArray(),
+            TargetNodeRid = request.TargetNodeRid?.ToArray(),
+            RelocationCoordinatorNodeRid =
+                request.RelocationCoordinatorNodeRid?.ToArray()
+        };
+    }
+
+    public static ZLinkActorHandoffCommitIdentity Capture(
+        ZLinkRemoteActorJoinRequest request) => new(request);
+
+    public bool Matches(ZLinkRemoteActorJoinRequest candidate) =>
+        ZLinkActorHandoffRequestIdentity.CommitMatches(_request, candidate);
+}
+
 internal enum ZLinkActorCommitPhase
 {
     Prepared,
@@ -1285,6 +971,14 @@ internal enum ZLinkActorCommitPhase
 internal static class ZLinkActorHandoffRequestIdentity
 {
     public static bool Matches(
+        ZLinkRemoteActorJoinRequest left,
+        ZLinkRemoteActorJoinRequest right)
+    {
+        return CommitMatches(left, right)
+               && FramesEqual(left.HandoffFrames, right.HandoffFrames);
+    }
+
+    public static bool CommitMatches(
         ZLinkRemoteActorJoinRequest left,
         ZLinkRemoteActorJoinRequest right)
     {
@@ -1352,7 +1046,21 @@ internal static class ZLinkActorHandoffRequestIdentity
                == right.TargetAuthorityOwnerGeneration
                && left.TargetSpotAuthorityOwnerGeneration
                == right.TargetSpotAuthorityOwnerGeneration
-               && FramesEqual(left.HandoffFrames, right.HandoffFrames);
+               && string.Equals(
+                   left.RelocationCoordinatorOwnerId,
+                   right.RelocationCoordinatorOwnerId,
+                   StringComparison.Ordinal)
+               && left.RelocationCoordinatorLeaseGeneration
+               == right.RelocationCoordinatorLeaseGeneration
+               && BytesEqual(
+                   left.RelocationCoordinatorNodeRid,
+                   right.RelocationCoordinatorNodeRid)
+               && left.RelocationCoordinatorNodeGeneration
+               == right.RelocationCoordinatorNodeGeneration
+               && string.Equals(
+                   left.RelocationCoordinatorExpectedAuthorityStoreVersion,
+                   right.RelocationCoordinatorExpectedAuthorityStoreVersion,
+                   StringComparison.Ordinal);
     }
 
     public static bool FramesEqual(

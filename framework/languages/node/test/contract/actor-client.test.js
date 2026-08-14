@@ -68,14 +68,8 @@ function createResolver(resolve = ({ actorId }) => actorLocation(actorId)) {
 }
 
 const operationId = Object.freeze({ high: 1n, low: 2n });
-const actorClientMeshSubmitters = framework.createStandaloneMeshSubmitterRegistry();
-test.after(() => actorClientMeshSubmitters.dispose());
-
 function createActorClient(options) {
-  return new framework.DefaultZLinkActorClient({
-    meshSubmitters: actorClientMeshSubmitters,
-    ...options
-  });
+  return new framework.DefaultZLinkActorClient(options);
 }
 
 function completionTable(terminalResult, parts = []) {
@@ -382,8 +376,7 @@ test('actor client submit maps native terminal outcomes to operation-specific er
   const accepted = createActorClient({
     nodeProvider: () => ({ sendToActor: () => 0 }),
     completionTableProvider: () => undefined,
-    locationResolver: () => createResolver(),
-    meshSubmitters: new framework.ZLinkMeshSubmitterRegistry(5, 4096)
+    locationResolver: () => createResolver()
   });
   assert.equal(
     await accepted.sendToActor('actor-1', new ActorNotify('ping')).submit(),
@@ -398,8 +391,7 @@ test('actor client submit maps native terminal outcomes to operation-specific er
         }
       }),
       completionTableProvider: () => undefined,
-      locationResolver: () => createResolver(),
-      meshSubmitters: new framework.ZLinkMeshSubmitterRegistry(5, 4096)
+      locationResolver: () => createResolver()
     });
     await assert.rejects(
       () => client.sendToActor('actor-1', new ActorNotify('ping')).submit(),
@@ -411,8 +403,7 @@ test('actor client submit maps native terminal outcomes to operation-specific er
     const client = createActorClient({
       nodeProvider: () => ({ sendToActor: () => nativeResult }),
       completionTableProvider: () => undefined,
-      locationResolver: () => createResolver(),
-      meshSubmitters: new framework.ZLinkMeshSubmitterRegistry(5, 4096)
+      locationResolver: () => createResolver()
     });
     await assert.rejects(
       () => client.sendToActor('actor-1', new ActorNotify('ping')).submit(),
@@ -427,86 +418,12 @@ test('actor client submit maps native terminal outcomes to operation-specific er
       }
     }),
     completionTableProvider: () => undefined,
-    locationResolver: () => createResolver(),
-    meshSubmitters: new framework.ZLinkMeshSubmitterRegistry(5, 4096)
+    locationResolver: () => createResolver()
   });
   await assert.rejects(
     () => invalid.sendToActor('actor-1', new ActorNotify('ping')).submit(),
     /submit result 6/
   );
-});
-
-test('Mesh submit cancellation removes pending admission and prevents late replay', async () => {
-  let attempts = 0;
-  const registry = new framework.ZLinkMeshSubmitterRegistry(1000, 4096);
-  const controller = new AbortController();
-  const pending = registry.submit('play-mesh', () => {
-    attempts += 1;
-    return { status: ZLinkSubmitStatus.Backpressured };
-  }, controller.signal);
-  controller.abort();
-  await assert.rejects(pending, (error) => error?.name === 'AbortError');
-  registry.notify('play-mesh');
-
-  assert.equal(attempts, 1);
-  registry.dispose();
-});
-
-test('Mesh submit shutdown rejects pending and future admission without late replay', async () => {
-  let attempts = 0;
-  const registry = new framework.ZLinkMeshSubmitterRegistry(1000, 4096);
-  const pending = registry.submit('play-mesh', () => {
-    attempts += 1;
-    return { status: ZLinkSubmitStatus.Backpressured };
-  });
-
-  registry.dispose();
-  assert.deepEqual(
-    await pending,
-    { status: ZLinkSubmitStatus.Shutdown }
-  );
-  registry.notify('play-mesh');
-  assert.equal(attempts, 1);
-
-  assert.deepEqual(
-    await registry.submit('play-mesh', () => {
-      attempts += 1;
-      return { status: ZLinkSubmitStatus.Submitted };
-    }),
-    { status: ZLinkSubmitStatus.Shutdown }
-  );
-  assert.equal(attempts, 1);
-});
-
-test('Mesh submit uses the configured per-mesh timeout and releases capacity after timeout', async () => {
-  let attempts = 0;
-  let ready = false;
-  const registry = new framework.ZLinkMeshSubmitterRegistry(
-    (meshName) => meshName === 'play-mesh' ? 50 : 500,
-    1
-  );
-  const started = Date.now();
-  const first = registry.submit('play-mesh', () => {
-    attempts += 1;
-    return { status: ZLinkSubmitStatus.Backpressured };
-  });
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  const second = registry.submit('play-mesh', () => {
-    attempts += 1;
-    return {
-      status: ready
-        ? ZLinkSubmitStatus.Submitted
-        : ZLinkSubmitStatus.Backpressured
-    };
-  });
-
-  assert.deepEqual(await first, { status: ZLinkSubmitStatus.TimedOut });
-  assert.equal(Date.now() - started < 500, true);
-  ready = true;
-  registry.notify('play-mesh');
-  assert.deepEqual(await second, { status: ZLinkSubmitStatus.Submitted });
-  assert.equal(attempts, 3);
-  registry.dispose();
 });
 
 test('pre-aborted Actor call does not read authority or submit transport work', async () => {

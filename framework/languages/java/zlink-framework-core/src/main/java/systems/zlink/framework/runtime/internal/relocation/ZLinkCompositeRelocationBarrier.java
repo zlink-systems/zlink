@@ -198,7 +198,7 @@ public final class ZLinkCompositeRelocationBarrier {
         RelocationCommit.Cut cut;
         do {
             cut = commit.cut();
-        } while (!commit.tryEstablishAndFinish(cut));
+        } while (!commit.tryEstablishAndFinishCapture(cut));
         commit.complete();
         return Optional.of(cut.records());
     }
@@ -420,10 +420,14 @@ public final class ZLinkCompositeRelocationBarrier {
                 lanes, cut.lanes);
         }
 
-        private boolean tryEstablishAndFinish(Cut cut) {
+        public boolean tryEstablishAndFinishCapture(Cut cut) {
             Objects.requireNonNull(cut, "cut");
             return ZLinkRetainedSerialQueueCommit.establishAndFinishCapture(
                 lanes, cut.lanes);
+        }
+
+        public boolean abort() {
+            return ZLinkRetainedSerialQueueCommit.abortRetained(lanes);
         }
 
         public void complete() {

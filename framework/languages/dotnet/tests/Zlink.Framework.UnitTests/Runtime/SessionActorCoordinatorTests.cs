@@ -1403,7 +1403,7 @@ public sealed class SessionActorCoordinatorTests
                 identity.SessionOwnerLeaseGeneration,
                 identity.Context.RoutingId!.Value,
                 identity.BindingGeneration));
-        var sealedRecord = await runtime.SealCanonicalSessionActorRouteAsync(
+        _ = await runtime.SealCanonicalSessionActorRouteAsync(
             seal,
             CancellationToken.None);
 
@@ -1443,8 +1443,7 @@ public sealed class SessionActorCoordinatorTests
                 identity.AuthorityOwnerGeneration,
                 targetAuthority,
                 targetNode,
-                targetNodeGeneration,
-                sealedRecord.LastAcceptedSessionSequence));
+                targetNodeGeneration));
         var routed = runtime.RouteCanonicalSessionActor(
             command44,
             new ZLinkSessionRelocationAuthenticatedRoute(
@@ -1454,12 +1453,185 @@ public sealed class SessionActorCoordinatorTests
                 targetAuthority,
                 targetOwnerLease));
 
-        Assert.Equal(
-            ZLinkServiceWireCodec.SessionRelocationRouteResult.Applied,
-            routed.Result);
+        Assert.True(routed);
         await pending.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.Single(stream.Writes);
         Assert.Equal(new byte[] { 7, 8, 9 }, stream.Writes[0].Payload);
+    }
+
+    [Fact]
+    public async Task SessionRelocationSealTimeout_Closes_Physical_Session_And_Rejects_Late_Command_44()
+    {
+        var time = new SealTimeProvider();
+        var table = new ZLinkSessionActorBindingTable(
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromMilliseconds(17),
+            time);
+        var runtime = CreateRuntime();
+        var closeCount = 0;
+        var closed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var stream = new TestStream(
+            RoutingId.From("session-seal-timeout"));
+        var context = new ZLinkSessionContext(
+            runtime,
+            stream,
+            new TestSessionHandlerRegistry(),
+            () =>
+            {
+                Interlocked.Increment(ref closeCount);
+                closed.TrySetResult();
+                return ValueTask.CompletedTask;
+            },
+            static _ => ValueTask.CompletedTask);
+        var route = SessionBindingRoute("actor-seal-timeout", 3);
+        var sessionRid = context.RoutingId!.Value;
+        var sessionOwnerRid = RoutingId.From("session-owner-timeout");
+        var actor = new ZLinkSessionActor(
+            context,
+            route.Ref.ActorId,
+            sessionRid,
+            "binding-seal-timeout");
+        _ = table.Bind(
+            ZLinkActorId.FromBoundary(route.Ref.ActorId, nameof(route)),
+            context,
+            actor.BindingToken,
+            actor,
+            bindingGeneration: 5,
+            route,
+            sessionOwnerNodeGeneration: 7,
+            sessionOwnerNodeRid: sessionOwnerRid,
+            sessionOwnerId: "session-owner",
+            sessionOwnerLeaseGeneration: 11);
+
+        var siblingRoute = SessionBindingRoute(
+            "actor-seal-timeout-sibling",
+            3);
+        var sibling = new ZLinkSessionActor(
+            context,
+            siblingRoute.Ref.ActorId,
+            sessionRid,
+            "binding-seal-timeout-sibling");
+        _ = table.Bind(
+            ZLinkActorId.FromBoundary(
+                siblingRoute.Ref.ActorId,
+                nameof(siblingRoute)),
+            context,
+            sibling.BindingToken,
+            sibling,
+            bindingGeneration: 6,
+            siblingRoute,
+            sessionOwnerNodeGeneration: 7,
+            sessionOwnerNodeRid: sessionOwnerRid,
+            sessionOwnerId: "session-owner",
+            sessionOwnerLeaseGeneration: 11);
+
+        var targetTenure = new ZLinkSessionOutboundTenure(
+            route.Ref.ActorId,
+            route.Ref.ObjectGeneration,
+            route.MeshName.Value,
+            RoutingId.From("actor-node-seal-target"),
+            route.TargetNodeGeneration + 1,
+            route.AuthorityOwnerGeneration + 1,
+            route.OwnerLeaseGeneration + 1,
+            actor.BindingToken,
+            BindingGeneration: 5,
+            SessionOwnerNodeGeneration: 7,
+            sessionRid);
+        var admission = table.AdmitOutbound(
+            targetTenure,
+            new ZLinkSessionOutboundTenureProof(
+                targetTenure,
+                "target-owner"),
+            [1, 2, 3]);
+        Assert.Equal(
+            ZLinkSessionOutboundAdmissionKind.Retained,
+            admission.Kind);
+        var retained = Assert.IsType<ZLinkSessionOutboundCapability>(
+            admission.Capability);
+        Assert.False(retained.Completion.IsCompleted);
+
+        var seal = new ZLinkServiceWireCodec.SessionRelocationSealRecord(
+            new ZLinkServiceWireCodec.RelocationWireId(101, 109),
+            new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+                "source-owner",
+                route.OwnerLeaseGeneration,
+                route.Ref.NodeRid,
+                route.TargetNodeGeneration,
+                "store-timeout"),
+            1,
+            new ZLinkServiceWireCodec.SessionActorRouteFenceRecord(
+                new ZLinkServiceWireCodec.SessionActorIdentityRecord(
+                    route.Ref.ActorId,
+                    route.Ref.ObjectGeneration),
+                route.Ref.NodeRid,
+                route.TargetNodeGeneration,
+                route.AuthorityOwnerGeneration,
+                route.OwnerLeaseGeneration),
+            new ZLinkServiceWireCodec.SessionOwnerFenceRecord(
+                sessionOwnerRid,
+                7,
+                "session-owner",
+                11,
+                sessionRid,
+                5));
+        _ = await table.SealCanonicalRouteAsync(
+            seal,
+            CancellationToken.None);
+        var routeWait = table.WaitForRouteAvailableAsync(
+                route.Ref.ActorId,
+                actor.BindingToken,
+                CancellationToken.None)
+            .AsTask();
+
+        time.Advance(TimeSpan.FromMilliseconds(16));
+        await Task.Yield();
+        Assert.Equal(0, Volatile.Read(ref closeCount));
+        Assert.False(routeWait.IsCompleted);
+        Assert.False(retained.Completion.IsCompleted);
+        Assert.True(table.TryGet(
+            route.Ref.ActorId,
+            actor.BindingToken,
+            out ZLinkSessionBindingEntry _));
+
+        time.Advance(TimeSpan.FromMilliseconds(1));
+        await closed.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(1, Volatile.Read(ref closeCount));
+        Assert.Equal(
+            ZLinkSessionOutboundDelivery.Discarded,
+            await retained.Completion.WaitAsync(TimeSpan.FromSeconds(1)));
+        Assert.True(await routeWait.WaitAsync(TimeSpan.FromSeconds(1)));
+        Assert.False(table.TryGet(
+            route.Ref.ActorId,
+            actor.BindingToken,
+            out ZLinkSessionBindingEntry _));
+        Assert.False(table.TryGet(
+            siblingRoute.Ref.ActorId,
+            sibling.BindingToken,
+            out ZLinkSessionBindingEntry _));
+        Assert.Equal(0, time.ActiveTimerCount);
+
+        var late = new ZLinkServiceWireCodec.SessionRelocationRouteRecord(
+            seal.RelocationId,
+            seal.Coordinator,
+            1,
+            seal.Actor.Actor,
+            seal.Session,
+            ZLinkServiceWireCodec.SessionRelocationRouteUpdateRecord.Abort(
+                route.AuthorityOwnerGeneration));
+        Assert.False(table.RouteCanonical(
+            late,
+            new ZLinkSessionRelocationAuthenticatedRoute(
+                route.Ref.NodeRid,
+                route.TargetNodeGeneration,
+                route.MeshName.Value,
+                route.AuthorityOwnerGeneration,
+                route.OwnerLeaseGeneration)));
+
+        time.Advance(TimeSpan.FromMilliseconds(17));
+        await Task.Yield();
+        Assert.Equal(1, Volatile.Read(ref closeCount));
     }
 
     [Fact]
@@ -1754,6 +1926,7 @@ public sealed class SessionActorCoordinatorTests
         var time = new ManualTimeProvider();
         var table = new ZLinkSessionActorBindingTable(
             TimeSpan.FromSeconds(1),
+            new ZLinkLocationOptions().SessionRelocationSealTimeout,
             time,
             maxTombstones: 2);
         var runtime = CreateRuntime();
@@ -1826,7 +1999,8 @@ public sealed class SessionActorCoordinatorTests
     public void Session_Owner_Tombstone_Requires_The_Full_Actor_Route_Fence()
     {
         var table = new ZLinkSessionActorBindingTable(
-            TimeSpan.FromSeconds(30));
+            TimeSpan.FromSeconds(30),
+            new ZLinkLocationOptions().SessionRelocationSealTimeout);
         var runtime = CreateRuntime();
         var context = CreateSessionContext(runtime, "session-full-fence");
         var sessionRid = context.RoutingId!.Value;
@@ -1874,6 +2048,7 @@ public sealed class SessionActorCoordinatorTests
     {
         var table = new ZLinkSessionActorBindingTable(
             TimeSpan.FromMinutes(1),
+            new ZLinkLocationOptions().SessionRelocationSealTimeout,
             maxTombstones: 2);
         var routeA = SessionBindingRoute("actor-capacity-a", 1);
         var routeB = SessionBindingRoute("actor-capacity-b", 1);
@@ -1907,7 +2082,8 @@ public sealed class SessionActorCoordinatorTests
     public async Task Late_Route_Seal_Abort_After_Rebind_Is_A_Fenced_Noop()
     {
         var table = new ZLinkSessionActorBindingTable(
-            TimeSpan.FromSeconds(30));
+            TimeSpan.FromSeconds(30),
+            new ZLinkLocationOptions().SessionRelocationSealTimeout);
         var runtime = CreateRuntime();
         var context = CreateSessionContext(runtime, "session-rebind-first");
         var route = SessionBindingRoute(
@@ -2105,6 +2281,125 @@ public sealed class SessionActorCoordinatorTests
             ZLinkSessionDispatchContext dispatch,
             ZLinkMessage payload,
             CancellationToken cancellationToken = default) => ValueTask.FromResult(false);
+    }
+
+    private sealed class SealTimeProvider : TimeProvider
+    {
+        private readonly object _gate = new();
+        private readonly HashSet<SealTimer> _timers = [];
+        private long _timestamp;
+
+        internal int ActiveTimerCount
+        {
+            get
+            {
+                lock (_gate)
+                    return _timers.Count(timer => timer.IsScheduled);
+            }
+        }
+
+        public override long GetTimestamp() =>
+            Volatile.Read(ref _timestamp);
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            var timer = new SealTimer(this, callback, state);
+            lock (_gate)
+            {
+                _timers.Add(timer);
+                timer.ChangeCore(_timestamp, dueTime, period);
+            }
+            return timer;
+        }
+
+        internal void Advance(TimeSpan delta)
+        {
+            if (delta < TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(delta));
+            List<(TimerCallback Callback, object? State)> due = [];
+            lock (_gate)
+            {
+                _timestamp = checked(_timestamp + delta.Ticks);
+                foreach (var timer in _timers)
+                    if (timer.TryTakeDue(_timestamp, out var callback))
+                        due.Add(callback);
+            }
+            foreach (var callback in due)
+                callback.Callback(callback.State);
+        }
+
+        private sealed class SealTimer(
+            SealTimeProvider owner,
+            TimerCallback callback,
+            object? state) : ITimer
+        {
+            private long? _dueAt;
+            private TimeSpan _period;
+            private bool _disposed;
+
+            internal bool IsScheduled => !_disposed && _dueAt.HasValue;
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                lock (owner._gate)
+                {
+                    if (_disposed) return false;
+                    ChangeCore(owner._timestamp, dueTime, period);
+                    return true;
+                }
+            }
+
+            internal void ChangeCore(
+                long now,
+                TimeSpan dueTime,
+                TimeSpan period)
+            {
+                _period = period;
+                _dueAt = dueTime == Timeout.InfiniteTimeSpan
+                    ? null
+                    : checked(now + dueTime.Ticks);
+            }
+
+            internal bool TryTakeDue(
+                long now,
+                out (TimerCallback Callback, object? State) due)
+            {
+                if (_disposed || _dueAt is not { } dueAt || dueAt > now)
+                {
+                    due = default;
+                    return false;
+                }
+                _dueAt = _period > TimeSpan.Zero
+                         && _period != Timeout.InfiniteTimeSpan
+                    ? checked(now + _period.Ticks)
+                    : null;
+                due = (callback, state);
+                return true;
+            }
+
+            public void Dispose()
+            {
+                lock (owner._gate)
+                {
+                    if (_disposed) return;
+                    _disposed = true;
+                    _dueAt = null;
+                    owner._timers.Remove(this);
+                }
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
     }
 
     private sealed class TestStream(RoutingId routingId, bool acceptsWrites = true) : IZLinkStream

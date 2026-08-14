@@ -98,7 +98,7 @@ class app_t
   private:
     friend class app_advanced_t;
 
-    static void run_shared_relocation (detail::app_state_t &state) noexcept;
+    static task_t<void> run_shared_relocation (detail::app_state_t &state);
     static void run_shared_shutdown (detail::app_state_t &state) noexcept;
 
     service_collection_t &_services () noexcept;

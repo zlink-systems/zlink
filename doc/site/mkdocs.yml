@@ -184,9 +184,8 @@ plugins:
 exclude_docs: |
   perf/
   */internals/
-  # framework 내부 구조는 nav에 올린다 — 위 */internals/는 각 언어의
-  # bindings/framework internals(공개용이 아닌 것)를 빼는 규칙이라, 여기서만 되살린다.
-  !common/internals/
+  # 언어별 bindings/framework internals는 공개용이 아니므로 제외한다.
+  # Framework 공통 내부 설계는 common/spec의 40~52 문서로 nav에 올린다.
   common/e2e/
   # 공통 가이드는 언어 탭을 담은 소스다. 읽는 자리는 언어별 생성판이다.
   common/guide/
@@ -395,20 +394,20 @@ nav:
               - "Failure handling and failover": common/spec/31-failure-failover-policy.md
               - "Framework error model": common/spec/32-framework-error-model.md
       - Internals:
-          - "Internals overview": common/internals/README.md
-          - "1. Layer boundary and identifier": common/internals/01-layering.md
-          - "2. Spot and Actor execution serialization": common/internals/02-serialization.md
-          - "3. Application and infrastructure isolation": common/internals/03-progress-isolation.md
-          - "4. Operation completion": common/internals/04-completion.md
-          - "5. Message continuity during a move": common/internals/05-relocation-continuity.md
-          - "6. Target selection and route cache": common/internals/06-routing-and-cache.md
-          - "7. Receive and dispatch loop": common/internals/07-dispatch-loop.md
-          - "8. Object kind and activation": common/internals/08-object-lifecycle.md
-          - "9. Session and Actor connection": common/internals/09-session-binding.md
-          - "10. Liveness and status publication": common/internals/10-liveness-and-state.md
-          - "11. Payload ownership and copy": common/internals/11-message-ownership.md
-          - "12. Service wire protocol": common/internals/12-service-wire-protocol.md
-          - "13. Relocation handoff state transitions": common/internals/13-relocation-handoff.md
+          - "Internal design overview (non-normative)": common/spec/README.md
+          - "40. Layer boundary and identifier": common/spec/40-internal-layering.md
+          - "41. Spot and Actor execution serialization": common/spec/41-internal-serialization.md
+          - "42. Application and infrastructure isolation": common/spec/42-internal-progress-isolation.md
+          - "43. Operation completion": common/spec/43-internal-completion.md
+          - "44. Message continuity during a move": common/spec/44-internal-relocation-continuity.md
+          - "45. Target selection and route cache": common/spec/45-internal-routing-and-cache.md
+          - "46. Receive and dispatch loop": common/spec/46-internal-dispatch-loop.md
+          - "47. Object kind and activation": common/spec/47-internal-object-lifecycle.md
+          - "48. Session and Actor connection": common/spec/48-internal-session-binding.md
+          - "49. Liveness and status publication": common/spec/49-internal-liveness-and-state.md
+          - "50. Payload ownership and copy": common/spec/50-internal-message-ownership.md
+          - "51. Service wire protocol": common/spec/51-internal-service-wire-protocol.md
+          - "52. Relocation handoff state transitions": common/spec/52-internal-relocation-handoff.md
   - Bindings:
       - Guide:
         - Overview: bindings/guide/README.md

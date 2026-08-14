@@ -3,6 +3,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <deque>
 #include <map>
 #include <mutex>
@@ -12,6 +14,11 @@
 #include <string>
 #include <vector>
 
+namespace zlink
+{
+class received_t;
+}
+
 namespace zlink::framework::runtime::mesh
 {
 
@@ -19,6 +26,13 @@ enum class service_mailbox_domain_t
 {
     application,
     infrastructure
+};
+
+enum class service_mailbox_enqueue_result_t
+{
+    accepted,
+    capacity_exceeded,
+    closed
 };
 
 struct service_bound_session_source_t
@@ -39,6 +53,8 @@ struct service_mailbox_record_t
     std::uint64_t source_node_generation = 0;
     std::optional<std::pair<std::uint64_t, std::uint64_t>> operation;
     std::optional<service_bound_session_source_t> bound_session_source;
+    std::shared_ptr<zlink::received_t> retained;
+    std::function<void ()> before_application_handler;
 };
 
 struct service_mailbox_claim_t
@@ -60,6 +76,8 @@ class service_mailbox_t
                        std::size_t infrastructure_byte_budget);
 
     bool try_enqueue (service_mailbox_record_t &&record);
+    service_mailbox_enqueue_result_t try_enqueue_result (
+      service_mailbox_record_t &&record);
     std::optional<service_mailbox_claim_t>
     try_claim (service_mailbox_domain_t domain,
                std::size_t message_budget,

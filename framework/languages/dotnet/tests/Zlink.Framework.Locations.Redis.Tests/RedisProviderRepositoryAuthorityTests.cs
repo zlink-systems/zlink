@@ -59,26 +59,7 @@ public sealed class RedisProviderRepositoryAuthorityTests(
                 await target.ReadAuthorityAsync(request.Key))
                 .Snapshot.StoreVersion);
 
-        var relocation = new ZLinkRelocationCapacityReservationRequest(
-            Guid.NewGuid(),
-            request.Key,
-            created.StoreVersion,
-            ZLinkPlacementObjectKind.Actor,
-            "player",
-            new ZLinkMeshNodeDescriptorKey(
-                "play",
-                sourceDescriptor.Rid),
-            sourceDescriptor.LifecycleGeneration,
-            sourceOwner,
-            new ZLinkMeshNodeDescriptorKey(
-                "play",
-                targetDescriptor.Rid),
-            targetDescriptor.LifecycleGeneration,
-            targetOwner,
-            new ZLinkCapacityVector(1, 0, null));
-        var capacity = Assert.IsType<
-            ZLinkRelocationCapacityReserveResult.Reserved>(
-            await target.ReserveRelocationCapacityAsync(relocation));
+        var targetGeneration = created.AuthorityOwnerGeneration + 1;
         var moved = Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
             await source.CompareExchangeAuthorityAsync(
                 request.Key,
@@ -87,16 +68,22 @@ public sealed class RedisProviderRepositoryAuthorityTests(
                     new byte[] { 0x42 },
                     ZLinkAuthorityGenerationTransition.NewOwner,
                     targetOwner,
-                    capacity.Fence))).Snapshot;
+                    created.Allocation with
+                    {
+                        Descriptor = new ZLinkMeshNodeDescriptorKey(
+                            "play",
+                            targetDescriptor.Rid),
+                        DescriptorLifecycleGeneration =
+                            targetDescriptor.LifecycleGeneration
+                    },
+                    targetGeneration))).Snapshot;
         var observed = Assert.IsType<ZLinkAuthorityReadResult.Found>(
             await target.ReadAuthorityAsync(request.Key)).Snapshot;
 
         Assert.Equal(targetOwner.OwnerId, moved.OwnerId);
         Assert.Equal(targetOwner.OwnerId, observed.OwnerId);
         Assert.Equal(created.ObjectGeneration, observed.ObjectGeneration);
-        Assert.True(
-            observed.AuthorityOwnerGeneration
-            > created.AuthorityOwnerGeneration);
+        Assert.Equal(targetGeneration, observed.AuthorityOwnerGeneration);
         Assert.Equal(targetDescriptor.Rid, observed.Allocation.Descriptor.Rid);
     }
 

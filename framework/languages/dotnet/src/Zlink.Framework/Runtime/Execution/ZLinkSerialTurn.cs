@@ -127,12 +127,8 @@ internal sealed class ZLinkSerialTurn
         if (admission != ZLinkSerialPostAdmission.Accepted)
             resume.TrySetException(
                 new ZLinkFrameworkException(
-                    admission == ZLinkSerialPostAdmission.Closed
-                        ? ZLinkFrameworkErrorKind.ShuttingDown
-                        : ZLinkFrameworkErrorKind.CapacityExceeded,
-                    admission == ZLinkSerialPostAdmission.Closed
-                        ? "The serial execution queue is closed before a yielded turn can resume."
-                        : "The serial execution queue is at capacity before a yielded turn can resume."));
+                    ZLinkFrameworkErrorKind.ShuttingDown,
+                    "The serial execution queue is closed before a yielded turn can resume."));
 
         return resume.Task;
     }

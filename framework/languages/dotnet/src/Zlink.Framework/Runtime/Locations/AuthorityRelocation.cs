@@ -89,7 +89,8 @@ internal abstract record ZLinkAuthorityMutation
         ReadOnlyMemory<byte> Payload,
         ZLinkAuthorityGenerationTransition GenerationTransition,
         ZLinkLocationOwnerToken? TargetOwner,
-        ZLinkRelocationCapacityFence? RelocationCapacityFence)
+        ZLinkPlacementAllocation? TargetAllocation,
+        ulong TargetAuthorityOwnerGeneration = 0)
         : ZLinkAuthorityMutation;
 
     /// <summary>
@@ -109,8 +110,6 @@ internal enum ZLinkAuthorityGenerationTransition
     Preserve = 1,
     NewOwner = 2
 }
-
-internal readonly record struct ZLinkRelocationCapacityFence(string Value);
 
 internal abstract record ZLinkAuthorityCompareExchangeResult
 {
@@ -292,54 +291,6 @@ internal abstract record ZLinkObjectAbortResult
     public sealed record GenerationExhausted : ZLinkObjectAbortResult;
 }
 
-internal sealed record ZLinkRelocationCapacityReservationRequest(
-    Guid ReservationId,
-    ZLinkAuthorityKey Key,
-    string ExpectedStoreVersion,
-    ZLinkPlacementObjectKind ObjectKind,
-    string StableType,
-    ZLinkMeshNodeDescriptorKey SourceDescriptor,
-    ulong SourceNodeLifecycleGeneration,
-    ZLinkLocationOwnerToken SourceOwner,
-    ZLinkMeshNodeDescriptorKey TargetDescriptor,
-    ulong TargetNodeLifecycleGeneration,
-    ZLinkLocationOwnerToken TargetOwner,
-    ZLinkCapacityVector Capacity);
-
-internal abstract record ZLinkRelocationCapacityReserveResult
-{
-    private protected ZLinkRelocationCapacityReserveResult() { }
-
-    public sealed record Reserved(ZLinkRelocationCapacityFence Fence)
-        : ZLinkRelocationCapacityReserveResult
-    {
-        internal ulong TargetAuthorityOwnerGeneration { get; init; }
-    }
-
-    public sealed record AlreadyReserved(ZLinkRelocationCapacityFence Fence)
-        : ZLinkRelocationCapacityReserveResult
-    {
-        internal ulong TargetAuthorityOwnerGeneration { get; init; }
-    }
-
-    public sealed record Conflict(ZLinkAuthorityReadResult Current)
-        : ZLinkRelocationCapacityReserveResult;
-
-    public sealed record TargetUnavailable
-        : ZLinkRelocationCapacityReserveResult;
-
-    public sealed record PlacementCapacityExhausted
-        : ZLinkRelocationCapacityReserveResult;
-}
-
-internal enum ZLinkRelocationCapacityAbortResult
-{
-    Aborted = 1,
-    AlreadyAborted = 2,
-    AlreadyCommitted = 3,
-    Stale = 4
-}
-
 internal sealed record ZLinkAggregateParticipant(
     ZLinkAuthorityKey Key,
     string ExpectedStoreVersion,
@@ -372,7 +323,8 @@ internal abstract record ZLinkAggregatePrepareResult
         : ZLinkAggregatePrepareResult
     {
         internal IReadOnlyDictionary<ZLinkAuthorityKey, ulong>
-            TargetAuthorityOwnerGenerations { get; init; } =
+            TargetAuthorityOwnerGenerations
+        { get; init; } =
                 new Dictionary<ZLinkAuthorityKey, ulong>();
     }
 
@@ -380,7 +332,8 @@ internal abstract record ZLinkAggregatePrepareResult
         : ZLinkAggregatePrepareResult
     {
         internal IReadOnlyDictionary<ZLinkAuthorityKey, ulong>
-            TargetAuthorityOwnerGenerations { get; init; } =
+            TargetAuthorityOwnerGenerations
+        { get; init; } =
                 new Dictionary<ZLinkAuthorityKey, ulong>();
     }
 

@@ -10,8 +10,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
-import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationReceiver;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
 public final class ZLinkMeshNodesRuntime implements AutoCloseable {
     private final List<ZLinkMeshNodeRuntime> nodes;
@@ -45,22 +44,34 @@ public final class ZLinkMeshNodesRuntime implements AutoCloseable {
         ZLinkBackendContext context,
         Function<MeshNodeRegistration, Consumer<ZLinkMeshDispatchRecord>> receiverFactory,
         boolean deferServiceReadyPublication) {
+        return start(
+            registrations,
+            adapter,
+            context,
+            receiverFactory,
+            deferServiceReadyPublication,
+            null);
+    }
+
+    public static ZLinkMeshNodesRuntime start(
+        List<MeshNodeRegistration> registrations,
+        ZLinkMeshBackendAdapter adapter,
+        ZLinkBackendContext context,
+        Function<MeshNodeRegistration, Consumer<ZLinkMeshDispatchRecord>> receiverFactory,
+        boolean deferServiceReadyPublication,
+        ZLinkApplicationJobQueue applicationJobQueue) {
         List<ZLinkMeshNodeRuntime> started = new ArrayList<>();
         try {
             for (MeshNodeRegistration registration : registrations) {
                 Consumer<ZLinkMeshDispatchRecord> receiver =
                     receiverFactory.apply(registration);
-                ZLinkInboundDispatchBudget applicationDispatchBudget =
-                    receiver instanceof ZLinkMeshApplicationReceiver applicationReceiver
-                        ? applicationReceiver.applicationDispatchBudget()
-                        : null;
                 ZLinkMeshNodeRuntime runtime = ZLinkMeshNodeRuntime.start(
                     registration,
                     adapter,
                     context,
-                    applicationDispatchBudget,
                     deferServiceReadyPublication,
-                    receiver);
+                    receiver,
+                    applicationJobQueue);
                 started.add(runtime);
             }
             return new ZLinkMeshNodesRuntime(started);

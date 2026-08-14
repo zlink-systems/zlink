@@ -2,8 +2,9 @@
 
 #include <zlink/framework.hpp>
 #include <zlink/http_client.hpp>
+#include <zlink/Contracts/Core/context.hpp>
 
-#include "runtime/host/application_hwm_resolver.hpp"
+#include "runtime/channels/channel_runtime.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -759,81 +760,10 @@ bool wait_for_raw_status (const zlink::http_client::client_t &client, std::strin
     return false;
 }
 
-bool verify_application_hwm_memory_candidates ()
-{
-    using zlink::framework::application_hwm_profile_t;
-    using zlink::framework::runtime::host::detail::application_hwm_memory_limits_t;
-    using zlink::framework::runtime::host::detail::calculate_application_hwm;
-    using zlink::framework::runtime::host::detail::effective_application_memory_limit;
-
-    const application_hwm_memory_limits_t bounded_os{
-      std::nullopt, 4096, 2048, 8192, 16384};
-    if (!effective_application_memory_limit (bounded_os)
-        || *effective_application_memory_limit (bounded_os) != 2048
-        || !calculate_application_hwm (std::nullopt, application_hwm_profile_t::balanced,
-                                       bounded_os)
-        || *calculate_application_hwm (std::nullopt, application_hwm_profile_t::balanced,
-                                       bounded_os)
-             != 204) {
-        return false;
-    }
-
-    const application_hwm_memory_limits_t physical_fallback{
-      std::nullopt, std::nullopt, std::nullopt, std::nullopt, 5000};
-    if (!effective_application_memory_limit (physical_fallback)
-        || *effective_application_memory_limit (physical_fallback) != 5000
-        || !calculate_application_hwm (std::nullopt, application_hwm_profile_t::balanced,
-                                       physical_fallback)
-        || *calculate_application_hwm (std::nullopt, application_hwm_profile_t::balanced,
-                                       physical_fallback)
-             != 500) {
-        return false;
-    }
-
-    const application_hwm_memory_limits_t explicit_process{
-      1000, 64, 128, 256, 512};
-    if (!effective_application_memory_limit (explicit_process)
-        || *effective_application_memory_limit (explicit_process) != 1000) {
-        return false;
-    }
-    const std::vector<std::pair<application_hwm_profile_t, std::uint64_t>> profiles{
-      {application_hwm_profile_t::compact, 20},
-      {application_hwm_profile_t::low_latency, 50},
-      {application_hwm_profile_t::balanced, 100},
-      {application_hwm_profile_t::throughput, 200}};
-    for (const auto &[profile, expected] : profiles) {
-        const auto result = calculate_application_hwm (std::nullopt, profile, explicit_process);
-        if (!result || *result != expected) {
-            return false;
-        }
-    }
-
-    const application_hwm_memory_limits_t no_limit{};
-    if (effective_application_memory_limit (no_limit)
-        || calculate_application_hwm (std::nullopt, application_hwm_profile_t::balanced,
-                                      no_limit)) {
-        return false;
-    }
-    const application_hwm_memory_limits_t zero_limit{
-      std::nullopt, std::nullopt, std::nullopt, std::nullopt, 0};
-    if (calculate_application_hwm (std::nullopt, application_hwm_profile_t::balanced,
-                                   zero_limit)) {
-        return false;
-    }
-    const auto unlimited = calculate_application_hwm (
-      std::uint64_t{0}, application_hwm_profile_t::balanced, no_limit);
-    const auto fixed = calculate_application_hwm (
-      std::uint64_t{123}, application_hwm_profile_t::balanced, no_limit);
-    return unlimited && *unlimited == 0 && fixed && *fixed == 123;
-}
-
 } // namespace
 
 int main ()
 {
-    if (!verify_application_hwm_memory_candidates ()) {
-        return 66;
-    }
     failure_trace_t trace;
     bool duplicate_route_rejected = false;
     try {
@@ -1427,14 +1357,28 @@ int main ()
     }
     auto provider = app.advanced ().services ().build_provider ();
     (void) provider.get_required<zlink::framework::actor_client_t> ();
-    const auto runtime_status =
-      provider.get_required<zlink::framework::framework_runtime_t> ()
-        .status ();
-    if (runtime_status.inbound_dispatch.application_hwm_bytes == 0
-        || runtime_status.inbound_dispatch.completion_send_limit != 65'536
-        || runtime_status.inbound_dispatch.pending_completion_sends != 0
-        || runtime_status.sequence == 0) {
+    auto &framework_runtime =
+      provider.get_required<zlink::framework::framework_runtime_t> ();
+    const auto runtime_status = framework_runtime.status ();
+    if (runtime_status.sequence == 0
+        || runtime_status.capacity.application_job_queue
+             .effective_processor_count == 0
+        || runtime_status.capacity.application_job_queue
+             .effective_max_queued_application_jobs == 0) {
         return 61;
+    }
+    const auto measurement_epoch =
+      runtime_status.capacity.measurement_epoch;
+    framework_runtime.reset_capacity_metrics ();
+    const auto reset_status = framework_runtime.status ();
+    if (reset_status.capacity.measurement_epoch <= measurement_epoch
+        || reset_status.capacity.application_job_queue
+             .peak_permits_in_use
+             != reset_status.capacity.application_job_queue.permits_in_use
+        || reset_status.capacity.application_job_queue.capacity_wait_count != 0
+        || reset_status.capacity.application_job_queue.capacity_wait_duration
+             != std::chrono::nanoseconds::zero ()) {
+        return 66;
     }
     std::promise<zlink::framework::framework_runtime_status_t>
       observed_runtime_status;
@@ -1451,63 +1395,28 @@ int main ()
           });
     if (observed_runtime_status_future.wait_for (
           std::chrono::seconds (1))
-          != std::future_status::ready
-        || observed_runtime_status_future.get ()
-             .inbound_dispatch.completion_send_limit
-             != 65'536) {
+        != std::future_status::ready) {
         return 62;
     }
     runtime_observation->close ();
     {
-        const std::vector<std::pair<zlink::framework::application_hwm_profile_t,
-                                    std::uint64_t>> profiles{
-          {zlink::framework::application_hwm_profile_t::compact, 20},
-          {zlink::framework::application_hwm_profile_t::low_latency, 50},
-          {zlink::framework::application_hwm_profile_t::balanced, 100},
-          {zlink::framework::application_hwm_profile_t::throughput, 200}};
-        for (const auto &[profile, expected] : profiles) {
-            auto profile_app = zlink::framework::app_t::create ();
-            profile_app.add_zlink_framework (
-              [profile] (zlink::framework::zlink_framework_options_t &options) {
-                  options.configure_inbound_dispatch ()
-                    .set_application_hwm_profile (profile)
-                    .set_process_memory_limit_bytes (std::uint64_t{1000});
-              });
-            const auto profile_status =
-              profile_app.advanced ().services ().build_provider ()
-                .get_required<zlink::framework::framework_runtime_t> ()
-                .status ();
-            if (profile_status.inbound_dispatch.application_hwm_bytes != expected) {
-                return 65;
-            }
-        }
-    }
-    {
-        auto unlimited_app = zlink::framework::app_t::create ();
-        unlimited_app.add_zlink_framework (
+        auto core_hwm_app = zlink::framework::app_t::create ();
+        core_hwm_app.add_zlink_framework (
           [] (zlink::framework::zlink_framework_options_t &options) {
-              options.configure_inbound_dispatch ().set_application_hwm_bytes (0);
+              options.configure_core_hwm ()
+                .set_core_hwm_memory_limit_bytes (4096)
+                .set_core_hwm_budget_bytes (1024)
+                .set_core_hwm_profile (zlink::auto_hwm_profile::throughput);
           });
-        const auto status =
-          unlimited_app.advanced ().services ().build_provider ()
-            .get_required<zlink::framework::framework_runtime_t> ()
-            .status ();
-        if (status.inbound_dispatch.application_hwm_bytes != 0) {
-            return 67;
-        }
-    }
-    {
-        auto fixed_app = zlink::framework::app_t::create ();
-        fixed_app.add_zlink_framework (
-          [] (zlink::framework::zlink_framework_options_t &options) {
-              options.configure_inbound_dispatch ().set_application_hwm_bytes (123);
-          });
-        const auto status =
-          fixed_app.advanced ().services ().build_provider ()
-            .get_required<zlink::framework::framework_runtime_t> ()
-            .status ();
-        if (status.inbound_dispatch.application_hwm_bytes != 123) {
-            return 68;
+        const auto core_context =
+          zlink::framework::detail::zlink_builder_access_t::shared_core_context (
+            core_hwm_app.advanced ().zlink ());
+        if (!core_context
+            || core_context->options ().core_hwm_memory_limit_bytes ().bytes () != 0
+            || core_context->options ().core_hwm_budget_bytes ().bytes () != 1024
+            || core_context->options ().core_hwm_profile ()
+                 != zlink::auto_hwm_profile::throughput) {
+            return 65;
         }
     }
     std::promise<void> allow_self_close;
@@ -1541,10 +1450,7 @@ int main ()
     {
         auto short_lived_app = zlink::framework::app_t::create ();
         short_lived_app.add_zlink_framework (
-          [] (zlink::framework::zlink_framework_options_t &options) {
-              options.configure_inbound_dispatch ()
-                .set_application_hwm_bytes (1024 * 1024);
-          });
+          [] (zlink::framework::zlink_framework_options_t &) {});
         detached_provider =
           short_lived_app.advanced ().services ().build_provider ();
         detached_observation =

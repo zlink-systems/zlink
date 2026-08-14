@@ -12,10 +12,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.SendFlags;
-import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkBoundSession;
@@ -97,8 +94,6 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
         Message frame = Message.from(frameBytes);
         return submitBoundSessionFrame(
             spotNode,
-            actorRuntime,
-            actor,
             currentActorRef,
             frame,
             timeout).thenApply(ignored -> null);
@@ -186,8 +181,6 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
             Message frame = Message.from(frameBytes);
             return submitBoundSessionFrame(
                 spotNode,
-                actorRuntime,
-                actor,
                 currentActorRef,
                 frame,
                 timeout);
@@ -197,33 +190,39 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
 
     private static CompletionStage<Void> submitBoundSessionFrame(
         ZLinkInternalSpotNode spotNode,
-        ZLinkActorRuntime actorRuntime,
-        ZLinkActor actor,
         ZLinkBackendActorRef actorRef,
         Message frame,
         Duration timeout) {
-        java.util.function.Supplier<Boolean> submission =
-            () -> sendBoundSessionFrame(spotNode, actorRef, frame);
-        return actorRuntime.oneWayCalls().submitOneWay(
-            spotNode,
-            ZLinkBackendAdmissionKey.boundSession(
-                actorRef.nodeRid(),
-                actorRef.actorId(),
-                actorRef.generation()),
-            submission,
-            frame::close,
-            timeout);
-    }
-
-    private static boolean sendBoundSessionFrame(
-        ZLinkInternalSpotNode spotNode,
-        ZLinkBackendActorRef actorRef,
-        Message frame) {
-        if (spotNode.boundSessionRoute(actorRef).isEmpty()) {
-            throw new ZlinkSubmitException(SubmitResult.NOT_FOUND);
+        if (spotNode.hasRemoteActorBoundSessionRoute(actorRef)) {
+            CompletionStage<Void> submission;
+            try {
+                submission = spotNode.sendRemoteActorBoundSession(
+                    actorRef, List.of(frame));
+            } catch (RuntimeException failure) {
+                Message.closeAll(List.of(frame));
+                return CompletableFuture.failedFuture(failure);
+            }
+            return ZLinkOneWayCalls.adaptOneWay(submission)
+                .whenComplete((ignored, failure) ->
+                    Message.closeAll(List.of(frame)));
         }
-        return spotNode.sendActorBoundSession(
-            actorRef, List.of(frame), SendFlags.DONT_WAIT);
+        if (!spotNode.hasLocalActorBoundSessionRoute(actorRef)) {
+            frame.close();
+            return ZLinkOneWayCalls.oneWayStatus(
+                ZLinkOneWayCalls.TARGET_NOT_FOUND);
+        }
+        CompletionStage<Void> submission;
+        try {
+            submission = spotNode.sendLocalActorBoundSessionAsync(
+                actorRef, List.of(frame), timeout);
+        } catch (RuntimeException failure) {
+            frame.close();
+            return CompletableFuture.failedFuture(failure);
+        }
+        CompletionStage<Void> adapted =
+            ZLinkOneWayCalls.adaptOneWay(submission);
+        adapted.whenComplete((ignored, failure) -> frame.close());
+        return adapted;
     }
 
 }

@@ -2,10 +2,7 @@ package systems.zlink.framework.runtime.internal.locations;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -27,106 +24,21 @@ final class ZLinkServiceRelocationEnvelopeCodecTest {
         assertEquals(0, envelope.relocationHigh());
         assertEquals(9, envelope.relocationLow());
         assertEquals(1, envelope.applicationVersion());
-        assertEquals(2, envelope.participantProgress().size());
-        assertEquals(2, envelope.participantProgress().getFirst()
-            .acceptedBoundary());
-        assertEquals(0, envelope.participantProgress().getFirst()
-            .replayCursor());
-        assertEquals(1, envelope.terminalCompletions().size());
-        assertEquals(1, envelope.terminalCompletions().getFirst()
-            .deliveryState());
-        assertFalse(envelope.recoveryReleaseEligible(),
-            "terminal receipt alone does not release recovery data");
-        assertArrayEquals(encoded,
-            ZLinkServiceRelocationEnvelopeCodec.encodeSuccessor(
-                envelope,
-                envelope.participantProgress(),
-                envelope.terminalCompletions()));
+        assertEquals(2, envelope.applicationStates().size());
+        assertEquals(1, envelope.savedWork().size());
+        assertEquals(1, envelope.savedWork().getFirst().participantId());
+        assertEquals(1, envelope.savedWork().getFirst().sequence());
+        assertEquals(1, envelope.timerRegistrations().size());
+        assertEquals(1, envelope.pendingTimerTicks().size());
+        assertArrayEquals(encoded, envelope.canonicalBytes());
     }
 
     @Test
-    void recoveryReleaseRequiresRelayAckOrSourceLeaseExpiry()
-        throws IOException {
-        var envelope = ZLinkServiceRelocationEnvelopeCodec.decode(golden());
-
-        for (int evidence : new int[] {2, 3}) {
-            var completions = envelope.terminalCompletions().stream()
-                .map(value -> new ZLinkServiceRelocationEnvelopeCodec.Completion(
-                    value.operationHigh(),
-                    value.operationLow(),
-                    value.sourceOwnerId(),
-                    value.sourceOwnerLeaseGeneration(),
-                    value.sourceNodeRid(),
-                    value.sourceNodeGeneration(),
-                    value.participantId(),
-                    value.sequence(),
-                    value.terminalResult(),
-                    value.failureCode(),
-                    evidence,
-                    value.payload()))
-                .toList();
-            var successor = ZLinkServiceRelocationEnvelopeCodec.decode(
-                ZLinkServiceRelocationEnvelopeCodec.encodeSuccessor(
-                    envelope,
-                    envelope.participantProgress(),
-                    completions));
-
-            assertTrue(successor.recoveryReleaseEligible());
-        }
-    }
-
-    @Test
-    void successorDurablyAdvancesCursorAndRelayState() throws IOException {
-        var envelope = ZLinkServiceRelocationEnvelopeCodec.decode(golden());
-        var progress = envelope.participantProgress().stream()
-            .map(value -> value.participantId() == 1
-                ? new ZLinkServiceRelocationEnvelopeCodec.Progress(
-                    value.participantId(), value.acceptedBoundary(), 1)
-                : value)
-            .toList();
-        var completions = envelope.terminalCompletions().stream()
-            .map(value -> new ZLinkServiceRelocationEnvelopeCodec.Completion(
-                value.operationHigh(),
-                value.operationLow(),
-                value.sourceOwnerId(),
-                value.sourceOwnerLeaseGeneration(),
-                value.sourceNodeRid(),
-                value.sourceNodeGeneration(),
-                value.participantId(),
-                value.sequence(),
-                value.terminalResult(),
-                value.failureCode(),
-                0,
-                value.payload()))
-            .toList();
-
-        byte[] successor = ZLinkServiceRelocationEnvelopeCodec.encodeSuccessor(
-            envelope, progress, completions);
-        var decoded = ZLinkServiceRelocationEnvelopeCodec.decode(successor);
-
-        assertNotEquals(HexFormat.of().formatHex(golden()),
-            HexFormat.of().formatHex(successor));
-        assertEquals(1, decoded.participantProgress().getFirst()
-            .replayCursor());
-        assertEquals(1, decoded.pendingRelayCount());
-        assertEquals(0, decoded.terminalCompletions().getFirst()
-            .deliveryState());
-    }
-
-    @Test
-    void malformedProgressAndTrailingBytesAreRejected() throws IOException {
+    void trailingBytesAreRejected() throws IOException {
         byte[] encoded = golden();
         byte[] trailing = Arrays.copyOf(encoded, encoded.length + 1);
         assertThrows(IllegalArgumentException.class,
             () -> ZLinkServiceRelocationEnvelopeCodec.decode(trailing));
-
-        byte[] replayOverflow = encoded.clone();
-        byte[] progressPrefix = HexFormat.of().parseHex(
-            "00000002000000000000000100000000000000020000000000000000");
-        int offset = indexOf(replayOverflow, progressPrefix);
-        replayOverflow[offset + progressPrefix.length - 1] = 3;
-        assertThrows(IllegalArgumentException.class,
-            () -> ZLinkServiceRelocationEnvelopeCodec.decode(replayOverflow));
     }
 
     private static byte[] golden() throws IOException {
@@ -150,16 +62,5 @@ final class ZLinkServiceRelocationEnvelopeCodecTest {
         }
         throw new IllegalStateException(
             "shared relocation envelope fixture was not found");
-    }
-
-    private static int indexOf(byte[] source, byte[] value) {
-        for (int index = 0; index <= source.length - value.length; index++) {
-            if (Arrays.equals(
-                Arrays.copyOfRange(source, index, index + value.length),
-                value)) {
-                return index;
-            }
-        }
-        throw new IllegalStateException("fixture progress prefix was not found");
     }
 }

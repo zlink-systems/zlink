@@ -10,7 +10,6 @@ internal sealed partial class ZLinkProviderLocationRepository
     private const string AuthorityPrefix = Prefix + "authority:";
     private const string ReservationPrefix = Prefix + "creation-reservation:";
     private const string TerminalPrefix = Prefix + "creation-terminal:";
-    private const string RelocationCapacityPrefix = Prefix + "relocation-capacity:";
     private const string AggregatePrefix = Prefix + "aggregate:";
     private static readonly TimeSpan AmbiguousReconciliationTimeout =
         TimeSpan.FromSeconds(5);
@@ -57,16 +56,15 @@ internal sealed partial class ZLinkProviderLocationRepository
             ZLinkAuthorityMutation mutation,
             CancellationToken cancellationToken = default)
     {
-        // Only the complete NewOwner handoff has an auxiliary capacity fence.
-        // Preserve and Delete conflicts must retain their caller-visible
-        // single-CAS semantics; retrying those here could hide an owner or
-        // lifecycle transition from their coordinator.
-        var retriesCapacityContention = mutation is ZLinkAuthorityMutation.Put
+        // A NewOwner CAS also moves two shared placement counters. Retry only
+        // while the authority version itself remains unchanged so unrelated
+        // counter contention cannot become a false relocation conflict.
+        var retriesAllocationContention = mutation is ZLinkAuthorityMutation.Put
         {
             GenerationTransition: ZLinkAuthorityGenerationTransition.NewOwner,
-            RelocationCapacityFence: not null
+            TargetAllocation: not null
         };
-        if (!retriesCapacityContention)
+        if (!retriesAllocationContention)
             return await CompareExchangeAuthorityCoreAsync(
                     key,
                     expectedStoreVersion,
@@ -74,12 +72,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     cancellationToken)
                 .ConfigureAwait(false);
 
-        // A NewOwner CAS also fences source and target capacity records. Those
-        // records can change while the authority version remains unchanged.
-        // Rebuild the complete atomic write for that narrow case; returning the
-        // first provider conflict would turn unrelated capacity contention into
-        // a source-side handoff failure.
-        const int maximumCapacityContentionRetries = 8;
+        const int maximumAllocationContentionRetries = 8;
         for (var attempt = 0; ; attempt++)
         {
             var result = await CompareExchangeAuthorityCoreAsync(
@@ -88,11 +81,11 @@ internal sealed partial class ZLinkProviderLocationRepository
                     mutation,
                     cancellationToken)
                 .ConfigureAwait(false);
-            if (attempt >= maximumCapacityContentionRetries
+            if (attempt >= maximumAllocationContentionRetries
                 || result is not ZLinkAuthorityCompareExchangeResult.Conflict
-                    {
-                        Current: ZLinkAuthorityReadResult.Found current
-                    }
+                {
+                    Current: ZLinkAuthorityReadResult.Found current
+                }
                 || !string.Equals(
                     current.Snapshot.StoreVersion,
                     expectedStoreVersion,
@@ -245,97 +238,62 @@ internal sealed partial class ZLinkProviderLocationRepository
         };
         var mutations = new List<ZLinkStoreMutation>();
         var nextAllocation = current.Snapshot.Allocation;
-        RelocationRecordState? relocation = null;
-        StoredRecord<RelocationRecordState>? storedRelocation = null;
-        StoredCapacity? sourceCapacity = null;
-        StoredCapacity? targetCapacity = null;
-        if (put.RelocationCapacityFence is { } fence)
+        if (changesOwner)
         {
-            storedRelocation = await ReadRecordAsync<RelocationRecordState>(
-                    RelocationKey(fence),
+            var targetAllocation = put.TargetAllocation!;
+            if (targetAllocation.ObjectKind
+                    != current.Snapshot.Allocation.ObjectKind
+                || !StringComparer.Ordinal.Equals(
+                    targetAllocation.StableType,
+                    current.Snapshot.Allocation.StableType)
+                || targetAllocation.Capacity
+                   != current.Snapshot.Allocation.Capacity)
+                return Conflict(current);
+            var target = await ReadEligibleTargetAsync(
+                    targetAllocation.Descriptor,
+                    targetAllocation.DescriptorLifecycleGeneration,
+                    targetOwner,
+                    targetAllocation.ObjectKind,
+                    targetAllocation.StableType,
+                    cancellationToken,
+                    requireNewPlacementEligibility: false)
+                .ConfigureAwait(false);
+            if (target is null)
+                return Conflict(current);
+            AddCondition(conditions, target.DescriptorCondition);
+            AddCondition(conditions, target.OwnerCondition);
+
+            var sourceCapacity = await ReadCapacityAsync(
+                    current.Snapshot.Allocation.Descriptor,
+                    current.Snapshot.Allocation.DescriptorLifecycleGeneration,
                     cancellationToken)
                 .ConfigureAwait(false);
-            relocation = storedRelocation?.Record;
-            if (relocation is null
-                || relocation.Status is not (RelocationStatus.Reserved
-                    or RelocationStatus.Prepared)
-                || relocation.Request.Key != key
-                || relocation.Request.SourceOwner
-                != new ZLinkLocationOwnerToken(
-                    current.Snapshot.OwnerId,
-                    current.Snapshot.OwnerLeaseGeneration)
-                || !MatchesSourceAllocation(
-                    current.Snapshot.Allocation,
-                    relocation.Request))
-                return Conflict(current);
-            conditions.Add(new ZLinkStoreCondition.Version(
-                RelocationKey(fence),
-                storedRelocation!.Version));
-
-            if (changesOwner)
-            {
-                if (relocation.Request.TargetOwner != targetOwner
-                    || !await IsEligibleTargetAsync(
-                            relocation.Request.TargetDescriptor,
-                            relocation.Request.TargetNodeLifecycleGeneration,
-                            targetOwner,
-                            relocation.Request.ObjectKind,
-                            relocation.Request.StableType,
-                            cancellationToken)
-                        .ConfigureAwait(false))
-                    return Conflict(current);
-                sourceCapacity = await ReadCapacityAsync(
-                        current.Snapshot.Allocation.Descriptor,
-                        current.Snapshot.Allocation.DescriptorLifecycleGeneration,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                targetCapacity = await ReadCapacityAsync(
-                        relocation.Request.TargetDescriptor,
-                        relocation.Request.TargetNodeLifecycleGeneration,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                AddCondition(conditions, sourceCapacity.Condition);
-                AddCondition(conditions, targetCapacity.Condition);
-                var source = sourceCapacity.Record.Clone();
-                var target = sourceCapacity.Key == targetCapacity.Key
-                    ? source
-                    : targetCapacity.Record.Clone();
-                ApplyCapacity(source, current.Snapshot.Allocation, activeDelta: -1);
-                ApplyCapacity(
-                    target,
-                    TargetAllocation(relocation.Request),
-                    pendingDelta: -1,
-                    activeDelta: 1);
-                mutations.Add(new ZLinkStoreMutation.Put(
-                    sourceCapacity.Key,
-                    Encode(source),
-                    null));
-                if (targetCapacity.Key != sourceCapacity.Key)
-                    mutations.Add(new ZLinkStoreMutation.Put(
-                        targetCapacity.Key,
-                        Encode(target),
-                        null));
-                relocation = relocation with { Status = RelocationStatus.Committed };
-                nextAllocation = new ZLinkPlacementAllocation(
-                    ZLinkPlacementAllocationState.Active,
-                    relocation.Request.ObjectKind,
-                    relocation.Request.StableType,
-                    relocation.Request.TargetDescriptor,
-                    relocation.Request.TargetNodeLifecycleGeneration,
-                    relocation.Request.Capacity);
-            }
-            else
-            {
-                relocation = relocation with { Status = RelocationStatus.Prepared };
-            }
+            var targetCapacity = await ReadCapacityAsync(
+                    targetAllocation.Descriptor,
+                    targetAllocation.DescriptorLifecycleGeneration,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            AddCondition(conditions, sourceCapacity.Condition);
+            AddCondition(conditions, targetCapacity.Condition);
+            var sourceUsage = sourceCapacity.Record.Clone();
+            var targetUsage = sourceCapacity.Key == targetCapacity.Key
+                ? sourceUsage
+                : targetCapacity.Record.Clone();
+            ApplyCapacity(
+                sourceUsage,
+                current.Snapshot.Allocation,
+                activeDelta: -1);
+            ApplyCapacity(targetUsage, targetAllocation, activeDelta: 1);
             mutations.Add(new ZLinkStoreMutation.Put(
-                RelocationKey(fence),
-                Encode(relocation),
+                sourceCapacity.Key,
+                Encode(sourceUsage),
                 null));
-        }
-        else if (changesOwner)
-        {
-            return Conflict(current);
+            if (targetCapacity.Key != sourceCapacity.Key)
+                mutations.Add(new ZLinkStoreMutation.Put(
+                    targetCapacity.Key,
+                    Encode(targetUsage),
+                    null));
+            nextAllocation = targetAllocation;
         }
 
         var nextAuthorityOwnerGeneration =
@@ -348,8 +306,22 @@ internal sealed partial class ZLinkProviderLocationRepository
                 || generation.AuthorityOwnerGeneration
                 != current.Meta.AuthorityOwnerGeneration)
                 return Conflict(current);
+            var counter =
+                await ReadAuthorityOwnerGenerationCounterAsync(
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            var highWater = Math.Max(
+                counter.Value,
+                generation.AuthorityOwnerGeneration);
             nextAuthorityOwnerGeneration =
-                relocation!.TargetAuthorityOwnerGeneration;
+                put.TargetAuthorityOwnerGeneration == 0
+                    ? highWater == long.MaxValue
+                        ? 0
+                        : highWater + 1
+                    : put.TargetAuthorityOwnerGeneration;
+            if (nextAuthorityOwnerGeneration == 0)
+                return new ZLinkAuthorityCompareExchangeResult
+                    .GenerationExhausted();
             if (nextAuthorityOwnerGeneration
                     <= generation.AuthorityOwnerGeneration
                 || nextAuthorityOwnerGeneration > long.MaxValue)
@@ -361,6 +333,15 @@ internal sealed partial class ZLinkProviderLocationRepository
                     generation.ObjectGeneration,
                     nextAuthorityOwnerGeneration)),
                 null));
+            if (nextAuthorityOwnerGeneration > counter.Value)
+            {
+                AddCondition(conditions, counter.Condition);
+                mutations.Add(new ZLinkStoreMutation.Put(
+                    AuthorityOwnerGenerationCounterKey(),
+                    Encode(new AuthorityOwnerGenerationCounter(
+                        nextAuthorityOwnerGeneration)),
+                    null));
+            }
         }
         var meta = current.Meta with
         {
@@ -1093,302 +1074,6 @@ internal sealed partial class ZLinkProviderLocationRepository
             : new ZLinkObjectAbortResult.Stale();
     }
 
-    public ValueTask<ZLinkRelocationCapacityReserveResult>
-        ReserveRelocationCapacityAsync(
-            ZLinkRelocationCapacityReservationRequest request,
-            CancellationToken cancellationToken = default) =>
-        ReserveRelocationCapacityCoreAsync(
-            request,
-            0,
-            DateTimeOffset.UtcNow + CounterRetryWindow,
-            cancellationToken);
-
-    private async ValueTask<ZLinkRelocationCapacityReserveResult>
-        ReserveRelocationCapacityCoreAsync(
-            ZLinkRelocationCapacityReservationRequest request,
-            int counterRetry,
-            DateTimeOffset retryDeadline,
-            CancellationToken cancellationToken)
-    {
-        ValidateRelocationRequest(request);
-        var fence = new ZLinkRelocationCapacityFence(
-            request.ReservationId.ToString("N"));
-        var existing = await ReadRecordAsync<RelocationRecordState>(
-                RelocationKey(fence),
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (existing is not null)
-            return existing.Record.Request == request
-                   && existing.Record.Status == RelocationStatus.Reserved
-                   && existing.Record.TargetAuthorityOwnerGeneration > 0
-                ? new ZLinkRelocationCapacityReserveResult.AlreadyReserved(fence)
-                {
-                    TargetAuthorityOwnerGeneration =
-                        existing.Record.TargetAuthorityOwnerGeneration
-                }
-                : new ZLinkRelocationCapacityReserveResult.Conflict(
-                    await ReadAuthorityAsync(request.Key, cancellationToken)
-                        .ConfigureAwait(false));
-        var current = await ReadAuthorityRecordAsync(
-                request.Key,
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (current is null
-            || current.Version.Value != request.ExpectedStoreVersion
-            || current.Snapshot.OwnerId != request.SourceOwner.OwnerId
-            || current.Snapshot.OwnerLeaseGeneration
-            != request.SourceOwner.LeaseGeneration
-            || !MatchesSourceAllocation(current.Snapshot.Allocation, request)
-            || current.Meta.AggregateFence is not null)
-            return new ZLinkRelocationCapacityReserveResult.Conflict(
-                current is null
-                    ? new ZLinkAuthorityReadResult.Missing(
-                        await ReadStoreNowAsync(cancellationToken)
-                            .ConfigureAwait(false))
-                    : new ZLinkAuthorityReadResult.Found(current.Snapshot));
-        //  The caller named this target, so no selection happens here and the
-        //  new-placement rules that govern selection do not apply. Placement
-        //  weight steers which node the framework *chooses*; a relocation to an
-        //  explicitly addressed target must not be refused because that node is
-        //  currently weighted out of the candidate pool. Capacity and liveness
-        //  still gate it, through the checks below.
-        var targetRead = ReadEligibleTargetAsync(
-            request.TargetDescriptor,
-            request.TargetNodeLifecycleGeneration,
-            request.TargetOwner,
-            request.ObjectKind,
-            request.StableType,
-            cancellationToken,
-            requireNewPlacementEligibility: false).AsTask();
-        var capacityRead = ReadCapacityAsync(
-            request.TargetDescriptor,
-            request.TargetNodeLifecycleGeneration,
-            cancellationToken).AsTask();
-        var generationRead = ReadGenerationAsync(
-            request.Key,
-            cancellationToken).AsTask();
-        var counterRead =
-            ReadAuthorityOwnerGenerationCounterAsync(cancellationToken)
-                .AsTask();
-        await Task.WhenAll(
-                targetRead,
-                capacityRead,
-                generationRead,
-                counterRead)
-            .ConfigureAwait(false);
-        var target = await targetRead.ConfigureAwait(false);
-        if (target is null)
-            return new ZLinkRelocationCapacityReserveResult.TargetUnavailable();
-        var capacity = await capacityRead.ConfigureAwait(false);
-        if (!HasCapacity(target.Descriptor, capacity.Record, request.Capacity))
-            return new ZLinkRelocationCapacityReserveResult
-                .PlacementCapacityExhausted();
-        var generation = await generationRead.ConfigureAwait(false);
-        if (generation.ObjectGeneration != current.Meta.ObjectGeneration
-            || generation.AuthorityOwnerGeneration
-               != current.Meta.AuthorityOwnerGeneration)
-            return new ZLinkRelocationCapacityReserveResult.Conflict(
-                new ZLinkAuthorityReadResult.Found(current.Snapshot));
-        var authorityCounter = await counterRead.ConfigureAwait(false);
-        var authorityHighWater = Math.Max(
-            authorityCounter.Value,
-            generation.AuthorityOwnerGeneration);
-        if (authorityHighWater == long.MaxValue)
-            throw new ZLinkAuthorityGenerationExhaustedException(
-                "reserving relocation capacity");
-        var targetAuthorityOwnerGeneration = checked(
-            authorityHighWater + 1);
-        var nextCapacity = capacity.Record.Clone();
-        ApplyCapacity(
-            nextCapacity,
-            TargetAllocation(request),
-            pendingDelta: 1);
-        var conditions = new List<ZLinkStoreCondition>
-        {
-                    new ZLinkStoreCondition.Version(
-                        AuthorityMetaKey(request.Key),
-                        current.Version),
-                    new ZLinkStoreCondition.Missing(RelocationKey(fence)),
-                    target.DescriptorCondition,
-                    target.OwnerCondition,
-                    capacity.Condition,
-                    authorityCounter.Condition
-        };
-        var mutations = new List<ZLinkStoreMutation>
-        {
-                    new ZLinkStoreMutation.Put(
-                        RelocationKey(fence),
-                        Encode(new RelocationRecordState(
-                            request,
-                            RelocationStatus.Reserved,
-                            targetAuthorityOwnerGeneration)),
-                        null),
-                    new ZLinkStoreMutation.Put(
-                        capacity.Key,
-                        Encode(nextCapacity),
-                        null),
-                    new ZLinkStoreMutation.Put(
-                        AuthorityOwnerGenerationCounterKey(),
-                        Encode(new AuthorityOwnerGenerationCounter(
-                            targetAuthorityOwnerGeneration)),
-                        null)
-        };
-        ZLinkStoreWriteResult result;
-        try
-        {
-            result = await provider.WriteAsync(
-                    new ZLinkStoreWriteRequest(conditions, mutations),
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch
-        {
-            var reconciled =
-                await ReadRecordForReconciliationAsync<
-                        RelocationRecordState>(
-                        RelocationKey(fence))
-                .ConfigureAwait(false);
-            if (reconciled is not null
-                && reconciled.Record.Request == request
-                && reconciled.Record.Status == RelocationStatus.Reserved
-                && reconciled.Record.TargetAuthorityOwnerGeneration > 0)
-                return new ZLinkRelocationCapacityReserveResult
-                    .AlreadyReserved(fence)
-                {
-                    TargetAuthorityOwnerGeneration = reconciled.Record
-                            .TargetAuthorityOwnerGeneration
-                };
-            if (reconciled is not null)
-                return new ZLinkRelocationCapacityReserveResult.Conflict(
-                    await ReadAuthorityForReconciliationAsync(
-                            request.Key)
-                        .ConfigureAwait(false));
-            throw;
-        }
-        if (result is ZLinkStoreWriteResult.Conflict
-            && counterRetry < CounterRetryLimit
-            && DateTimeOffset.UtcNow < retryDeadline)
-        {
-            var terminal = await ReadRecordAsync<RelocationRecordState>(
-                    RelocationKey(fence),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (terminal is null)
-            {
-                var unchanged = await ReadAuthorityRecordAsync(
-                        request.Key,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                if (unchanged is not null
-                    && unchanged.Version.Value
-                    == request.ExpectedStoreVersion)
-                {
-                    await DelayCounterRetryAsync(
-                            counterRetry,
-                            retryDeadline,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    return await ReserveRelocationCapacityCoreAsync(
-                            request,
-                            counterRetry + 1,
-                            retryDeadline,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                }
-            }
-        }
-        return result is ZLinkStoreWriteResult.Applied
-            ? new ZLinkRelocationCapacityReserveResult.Reserved(fence)
-            {
-                TargetAuthorityOwnerGeneration =
-                    targetAuthorityOwnerGeneration
-            }
-            : await ReconcileRelocationCapacityReservationAsync(
-                    request,
-                    fence,
-                    cancellationToken)
-                .ConfigureAwait(false);
-    }
-
-    public async ValueTask<ZLinkRelocationCapacityAbortResult>
-        AbortRelocationCapacityAsync(
-            ZLinkRelocationCapacityFence fence,
-            CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(fence.Value);
-        var stored = await ReadRecordAsync<RelocationRecordState>(
-                RelocationKey(fence),
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (stored is null) return ZLinkRelocationCapacityAbortResult.Stale;
-        if (stored.Record.Status == RelocationStatus.Aborted)
-            return ZLinkRelocationCapacityAbortResult.AlreadyAborted;
-        if (stored.Record.Status == RelocationStatus.Committed)
-            return ZLinkRelocationCapacityAbortResult.AlreadyCommitted;
-        var request = stored.Record.Request;
-        var capacity = await ReadCapacityAsync(
-                request.TargetDescriptor,
-                request.TargetNodeLifecycleGeneration,
-                cancellationToken)
-            .ConfigureAwait(false);
-        var nextCapacity = capacity.Record.Clone();
-        ApplyCapacity(
-            nextCapacity,
-            TargetAllocation(request),
-            pendingDelta: -1);
-        var result = await provider.WriteAsync(
-                new ZLinkStoreWriteRequest(
-                [
-                    new ZLinkStoreCondition.Version(
-                        RelocationKey(fence),
-                        stored.Version),
-                    capacity.Condition
-                ],
-                [
-                    new ZLinkStoreMutation.Put(
-                        RelocationKey(fence),
-                        Encode(stored.Record with
-                        {
-                            Status = RelocationStatus.Aborted
-                        }),
-                        null),
-                    new ZLinkStoreMutation.Put(
-                        capacity.Key,
-                        Encode(nextCapacity),
-                        null)
-                ]),
-                cancellationToken)
-            .ConfigureAwait(false);
-        return result is ZLinkStoreWriteResult.Applied
-            ? ZLinkRelocationCapacityAbortResult.Aborted
-            : ZLinkRelocationCapacityAbortResult.Stale;
-    }
-
-    private async ValueTask<ZLinkRelocationCapacityReserveResult>
-        ReconcileRelocationCapacityReservationAsync(
-            ZLinkRelocationCapacityReservationRequest request,
-            ZLinkRelocationCapacityFence fence,
-            CancellationToken cancellationToken)
-    {
-        var stored = await ReadRecordAsync<RelocationRecordState>(
-                RelocationKey(fence),
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (stored is not null
-            && stored.Record.Request == request
-            && stored.Record.Status == RelocationStatus.Reserved
-            && stored.Record.TargetAuthorityOwnerGeneration > 0)
-            return new ZLinkRelocationCapacityReserveResult
-                .AlreadyReserved(fence)
-            {
-                TargetAuthorityOwnerGeneration =
-                        stored.Record.TargetAuthorityOwnerGeneration
-            };
-        return new ZLinkRelocationCapacityReserveResult.Conflict(
-            await ReadAuthorityAsync(request.Key, cancellationToken)
-                .ConfigureAwait(false));
-    }
-
     public async ValueTask<ZLinkAggregatePrepareResult>
         PrepareAggregateAsync(
             ZLinkAggregatePrepareRequest request,
@@ -1543,87 +1228,87 @@ internal sealed partial class ZLinkProviderLocationRepository
                 inventory.Root,
                 cancellationToken)
             .ConfigureAwait(false);
-        if (staging is null)
-        {
-            var raced = await ReadRecordAsync<AggregateRecord>(
-                    key,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (raced is null)
-                return new ZLinkAggregatePrepareResult.Conflict();
-            if (raced.Record.Status != AggregateStatus.Staging)
-                return await ReconcileExistingAggregateAsync(
-                        fence,
-                        raced.Record,
-                        request,
+            if (staging is null)
+            {
+                var raced = await ReadRecordAsync<AggregateRecord>(
+                        key,
                         cancellationToken)
                     .ConfigureAwait(false);
-            if (!AggregateHeaderEquals(raced.Record.Header, header)
-                || !CryptographicOperations.FixedTimeEquals(
-                    raced.Record.RequestFingerprint,
-                    requestFingerprint)
-                || !AggregateInventoryRootEquals(
-                    raced.Record.Inventory,
-                    inventory.Root))
-                return new ZLinkAggregatePrepareResult.Conflict();
-            staging = raced;
-        }
+                if (raced is null)
+                    return new ZLinkAggregatePrepareResult.Conflict();
+                if (raced.Record.Status != AggregateStatus.Staging)
+                    return await ReconcileExistingAggregateAsync(
+                            fence,
+                            raced.Record,
+                            request,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                if (!AggregateHeaderEquals(raced.Record.Header, header)
+                    || !CryptographicOperations.FixedTimeEquals(
+                        raced.Record.RequestFingerprint,
+                        requestFingerprint)
+                    || !AggregateInventoryRootEquals(
+                        raced.Record.Inventory,
+                        inventory.Root))
+                    return new ZLinkAggregatePrepareResult.Conflict();
+                staging = raced;
+            }
             await StageAggregateInventoryAsync(
                 fence,
                 inventory,
                 cancellationToken)
             .ConfigureAwait(false);
-        var stagedParticipants = request.Participants
-            .Select((participant, index) => new AggregateParticipantRecord(
-                index,
-                participant.Key.Value,
-                participant.ExpectedStoreVersion,
-                participant.OwnerTransition,
-                Sha256(participant.AuthorityPayload),
-                Sha256(participant.MembershipMutation),
-                0,
-                requestFingerprint))
-            .ToArray();
-        if (!await StageAggregateParticipantsAsync(
-                fence,
-                request.Participants,
-                stagedParticipants,
-                cancellationToken)
-            .ConfigureAwait(false))
-        {
-            await AbortAggregateStagingAsync(
+            var stagedParticipants = request.Participants
+                .Select((participant, index) => new AggregateParticipantRecord(
+                    index,
+                    participant.Key.Value,
+                    participant.ExpectedStoreVersion,
+                    participant.OwnerTransition,
+                    Sha256(participant.AuthorityPayload),
+                    Sha256(participant.MembershipMutation),
+                    0,
+                    requestFingerprint))
+                .ToArray();
+            if (!await StageAggregateParticipantsAsync(
                     fence,
-                    staging,
+                    request.Participants,
+                    stagedParticipants,
+                    cancellationToken)
+                .ConfigureAwait(false))
+            {
+                await AbortAggregateStagingAsync(
+                        fence,
+                        staging,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                return new ZLinkAggregatePrepareResult.Conflict();
+            }
+            await UpdateAggregateParticipantGenerationsAsync(
+                    fence,
+                    stagedParticipants,
+                    targetAuthorityOwnerGenerations,
                     cancellationToken)
                 .ConfigureAwait(false);
-            return new ZLinkAggregatePrepareResult.Conflict();
-        }
-        await UpdateAggregateParticipantGenerationsAsync(
-                fence,
-                stagedParticipants,
-                targetAuthorityOwnerGenerations,
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (!await InstallAggregateParticipantFencesAsync(
-                fence,
-                request,
-                authorities,
-                cancellationToken)
-            .ConfigureAwait(false))
-        {
-            await AbortAggregateStagingAsync(
+            if (!await InstallAggregateParticipantFencesAsync(
                     fence,
-                    staging,
+                    request,
+                    authorities,
                     cancellationToken)
-                .ConfigureAwait(false);
-            return new ZLinkAggregatePrepareResult.Conflict();
-        }
-        var nextCapacity = capacity.Record.Clone();
-        ApplyCapacityVector(
-            nextCapacity,
-            request.Capacity,
-            pendingDelta: 1);
-        var conditions = new List<ZLinkStoreCondition>
+                .ConfigureAwait(false))
+            {
+                await AbortAggregateStagingAsync(
+                        fence,
+                        staging,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                return new ZLinkAggregatePrepareResult.Conflict();
+            }
+            var nextCapacity = capacity.Record.Clone();
+            ApplyCapacityVector(
+                nextCapacity,
+                request.Capacity,
+                pendingDelta: 1);
+            var conditions = new List<ZLinkStoreCondition>
         {
             new ZLinkStoreCondition.Version(key, staging.Version),
             target.DescriptorCondition,
@@ -1631,7 +1316,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             capacity.Condition,
             authorityCounter.Condition
         };
-        var mutations = new List<ZLinkStoreMutation>
+            var mutations = new List<ZLinkStoreMutation>
         {
             new ZLinkStoreMutation.Put(
                 key,
@@ -1650,101 +1335,101 @@ internal sealed partial class ZLinkProviderLocationRepository
                     nextIssuedGeneration)),
                 null)
         };
-        ZLinkStoreWriteResult result;
-        try
-        {
-            result = await provider.WriteAsync(
-                    new ZLinkStoreWriteRequest(conditions, mutations),
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch
-        {
-            var reconciled =
-                await ReadRecordForReconciliationAsync<AggregateRecord>(
-                        key)
-                .ConfigureAwait(false);
-            if (reconciled is not null
-                && reconciled.Record.Status
-                is AggregateStatus.Prepared or AggregateStatus.Committed)
-                return await ReconcileExistingAggregateForAmbiguousAsync(
-                        fence,
-                        reconciled.Record,
-                        request)
-                    .ConfigureAwait(false);
-            throw;
-        }
-        if (result is ZLinkStoreWriteResult.Conflict
-            && counterRetry < CounterRetryLimit
-            && DateTimeOffset.UtcNow < retryDeadline)
-        {
-            var terminal = await ReadRecordAsync<AggregateRecord>(
-                    key,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (terminal is null
-                || terminal.Record.Status == AggregateStatus.Staging)
+            ZLinkStoreWriteResult result;
+            try
             {
-                var unchanged = true;
-                foreach (var participant in request.Participants)
-                {
-                    var authority = await ReadAuthorityRecordAsync(
-                            participant.Key,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    if (authority is null
-                        || !(authority.Meta.AggregateFence == fence
-                             && string.Equals(
-                                 authority.Meta
-                                     .AggregateExpectedStoreVersion,
-                                 participant.ExpectedStoreVersion,
-                                 StringComparison.Ordinal)))
-                    {
-                        unchanged = false;
-                        break;
-                    }
-                }
-                if (unchanged)
-                {
-                    await DelayCounterRetryAsync(
-                            counterRetry,
-                            retryDeadline,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    return await PrepareAggregateCoreAsync(
-                            request,
-                            counterRetry + 1,
-                            retryDeadline,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                }
-            }
-        }
-        if (result is ZLinkStoreWriteResult.Applied)
-            return new ZLinkAggregatePrepareResult.Prepared(fence)
-            {
-                TargetAuthorityOwnerGenerations =
-                    targetAuthorityOwnerGenerations
-            };
-        var reconciliation = await ReconcileAggregatePrepareAsync(
-                key,
-                fence,
-                request,
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (reconciliation is ZLinkAggregatePrepareResult.Conflict)
-        {
-            var stillStaging = await ReadRecordAsync<AggregateRecord>(
-                    key,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (stillStaging?.Record.Status == AggregateStatus.Staging)
-                await AbortAggregateStagingAsync(
-                        fence,
-                        stillStaging,
+                result = await provider.WriteAsync(
+                        new ZLinkStoreWriteRequest(conditions, mutations),
                         cancellationToken)
                     .ConfigureAwait(false);
-        }
+            }
+            catch
+            {
+                var reconciled =
+                    await ReadRecordForReconciliationAsync<AggregateRecord>(
+                            key)
+                    .ConfigureAwait(false);
+                if (reconciled is not null
+                    && reconciled.Record.Status
+                    is AggregateStatus.Prepared or AggregateStatus.Committed)
+                    return await ReconcileExistingAggregateForAmbiguousAsync(
+                            fence,
+                            reconciled.Record,
+                            request)
+                        .ConfigureAwait(false);
+                throw;
+            }
+            if (result is ZLinkStoreWriteResult.Conflict
+                && counterRetry < CounterRetryLimit
+                && DateTimeOffset.UtcNow < retryDeadline)
+            {
+                var terminal = await ReadRecordAsync<AggregateRecord>(
+                        key,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (terminal is null
+                    || terminal.Record.Status == AggregateStatus.Staging)
+                {
+                    var unchanged = true;
+                    foreach (var participant in request.Participants)
+                    {
+                        var authority = await ReadAuthorityRecordAsync(
+                                participant.Key,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        if (authority is null
+                            || !(authority.Meta.AggregateFence == fence
+                                 && string.Equals(
+                                     authority.Meta
+                                         .AggregateExpectedStoreVersion,
+                                     participant.ExpectedStoreVersion,
+                                     StringComparison.Ordinal)))
+                        {
+                            unchanged = false;
+                            break;
+                        }
+                    }
+                    if (unchanged)
+                    {
+                        await DelayCounterRetryAsync(
+                                counterRetry,
+                                retryDeadline,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        return await PrepareAggregateCoreAsync(
+                                request,
+                                counterRetry + 1,
+                                retryDeadline,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                }
+            }
+            if (result is ZLinkStoreWriteResult.Applied)
+                return new ZLinkAggregatePrepareResult.Prepared(fence)
+                {
+                    TargetAuthorityOwnerGenerations =
+                        targetAuthorityOwnerGenerations
+                };
+            var reconciliation = await ReconcileAggregatePrepareAsync(
+                    key,
+                    fence,
+                    request,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (reconciliation is ZLinkAggregatePrepareResult.Conflict)
+            {
+                var stillStaging = await ReadRecordAsync<AggregateRecord>(
+                        key,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (stillStaging?.Record.Status == AggregateStatus.Staging)
+                    await AbortAggregateStagingAsync(
+                            fence,
+                            stillStaging,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+            }
             return reconciliation;
         }
         catch
@@ -4779,28 +4464,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                 ownerRead.Version));
     }
 
-    //  Used only when committing a relocation whose target was already chosen
-    //  and reserved. Selection is long past, so the new-placement rules that
-    //  govern selection must not be re-applied here; a target weighted out of
-    //  the candidate pool after admission would otherwise fail the commit of a
-    //  relocation it had already accepted.
-    private async ValueTask<bool> IsEligibleTargetAsync(
-        ZLinkMeshNodeDescriptorKey key,
-        ulong lifecycleGeneration,
-        ZLinkLocationOwnerToken owner,
-        ZLinkPlacementObjectKind objectKind,
-        string stableType,
-        CancellationToken cancellationToken) =>
-        await ReadEligibleTargetAsync(
-                key,
-                lifecycleGeneration,
-                owner,
-                objectKind,
-                stableType,
-                cancellationToken,
-                requireNewPlacementEligibility: false)
-            .ConfigureAwait(false) is not null;
-
     private async ValueTask<StoredOwner?> ReadLiveOwnerAsync(
         ZLinkLocationOwnerToken token,
         CancellationToken cancellationToken)
@@ -5077,27 +4740,6 @@ internal sealed partial class ZLinkProviderLocationRepository
             meta.ReservedCreation,
             now);
 
-    private static bool MatchesSourceAllocation(
-        ZLinkPlacementAllocation allocation,
-        ZLinkRelocationCapacityReservationRequest request) =>
-        allocation.State == ZLinkPlacementAllocationState.Active
-        && allocation.ObjectKind == request.ObjectKind
-        && allocation.StableType == request.StableType
-        && allocation.Descriptor == request.SourceDescriptor
-        && allocation.DescriptorLifecycleGeneration
-        == request.SourceNodeLifecycleGeneration
-        && allocation.Capacity == request.Capacity;
-
-    private static ZLinkPlacementAllocation TargetAllocation(
-        ZLinkRelocationCapacityReservationRequest request) =>
-        new(
-            ZLinkPlacementAllocationState.Reserved,
-            request.ObjectKind,
-            request.StableType,
-            request.TargetDescriptor,
-            request.TargetNodeLifecycleGeneration,
-            request.Capacity);
-
     private static bool IsEligible(
         ZLinkMeshNodeDescriptor descriptor,
         ZLinkPlacementAllocation allocation) =>
@@ -5217,9 +4859,15 @@ internal sealed partial class ZLinkProviderLocationRepository
         var changesOwner = put.GenerationTransition
                            == ZLinkAuthorityGenerationTransition.NewOwner;
         if (!preserve && !changesOwner
-            || preserve && put.TargetOwner is not null
+            || preserve && (put.TargetOwner is not null
+                            || put.TargetAllocation is not null
+                            || put.TargetAuthorityOwnerGeneration != 0)
             || changesOwner && (put.TargetOwner is null
-                                || put.RelocationCapacityFence is null))
+                                || put.TargetAllocation is not
+                                {
+                                    State: ZLinkPlacementAllocationState.Active,
+                                    DescriptorLifecycleGeneration: > 0
+                                }))
             throw new ArgumentException(
                 "The authority mutation is inconsistent.",
                 nameof(mutation));
@@ -5239,23 +4887,6 @@ internal sealed partial class ZLinkProviderLocationRepository
             || request.TargetNodeLifecycleGeneration == 0
             || request.TargetOwner.LeaseGeneration <= 0)
             throw new ArgumentOutOfRangeException(nameof(request));
-    }
-
-    private static void ValidateRelocationRequest(
-        ZLinkRelocationCapacityReservationRequest request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        if (request.ReservationId == Guid.Empty
-            || string.IsNullOrWhiteSpace(request.Key.Value)
-            || string.IsNullOrWhiteSpace(request.ExpectedStoreVersion)
-            || string.IsNullOrWhiteSpace(request.StableType)
-            || request.SourceNodeLifecycleGeneration == 0
-            || request.TargetNodeLifecycleGeneration == 0
-            || request.SourceOwner.LeaseGeneration <= 0
-            || request.TargetOwner.LeaseGeneration <= 0)
-            throw new ArgumentException(
-                "The relocation capacity reservation is invalid.",
-                nameof(request));
     }
 
     private static void ValidateAggregate(ZLinkAggregatePrepareRequest request)
@@ -5356,10 +4987,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         $"{operation.SourceNodeRid.ToHex()}:{operation.SourceNodeGeneration}:"
         + $"{operation.OperationIdHigh}:{operation.OperationIdLow}";
 
-    private static ZLinkStoreKey RelocationKey(
-        ZLinkRelocationCapacityFence fence) =>
-        Key($"{RelocationCapacityPrefix}{EncodeSegment(fence.Value)}");
-
     private static ZLinkStoreKey AggregateKey(ZLinkAggregateFence fence) =>
         Key($"{AggregatePrefix}{fence.AggregateId:N}:"
             + fence.AggregateGeneration);
@@ -5432,11 +5059,6 @@ internal sealed partial class ZLinkProviderLocationRepository
     private sealed record StoredTerminal(
         ZLinkCreationTerminalRecord Record,
         ZLinkStoreVersion Version);
-
-    private sealed record RelocationRecordState(
-        ZLinkRelocationCapacityReservationRequest Request,
-        RelocationStatus Status,
-        ulong TargetAuthorityOwnerGeneration);
 
     private sealed record AggregateHeader(
         Guid AggregateId,
@@ -5678,14 +5300,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         Reclaimed = 2,
         Conflict = 3,
         RecoveryRequired = 4
-    }
-
-    private enum RelocationStatus
-    {
-        Reserved = 1,
-        Prepared = 2,
-        Committed = 3,
-        Aborted = 4
     }
 
     private enum AggregateStatus

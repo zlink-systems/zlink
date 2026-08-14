@@ -187,11 +187,9 @@ internal sealed class ZLinkActorMessageFollower
         var outcome = DirectReplyDeliveryResult.Interrupted;
         try
         {
-            outcome = await SubmitDirectReplyUntilDeadlineAsync(
+            outcome = await SubmitDirectReplyOnceAsync(
                     pending,
-                    actorId,
-                    requestId,
-                    frame,
+                    [frame],
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -317,10 +315,8 @@ internal sealed class ZLinkActorMessageFollower
         var outcome = DirectReplyDeliveryResult.Interrupted;
         try
         {
-            outcome = await SubmitDirectReplyUntilDeadlineAsync(
+            outcome = await SubmitDirectReplyOnceAsync(
                     pending,
-                    actorId,
-                    requestId,
                     frames,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -363,19 +359,8 @@ internal sealed class ZLinkActorMessageFollower
                 terminal = true;
                 return SubmitResult.Terminated;
             }
-            var result = pending.Reply(parts, flags);
-            if (result == SubmitResult.Ok)
-            {
-                pending.Complete();
-                terminal = true;
-            }
-            else if (result is not (SubmitResult.Backpressured
-                         or SubmitResult.NotConnected))
-            {
-                pending.Complete();
-                terminal = true;
-            }
-            return result;
+            terminal = true;
+            return pending.Reply(parts, flags);
         }
         finally
         {
@@ -430,61 +415,31 @@ internal sealed class ZLinkActorMessageFollower
         }
     }
 
-    private async ValueTask<DirectReplyDeliveryResult>
-        SubmitDirectReplyUntilDeadlineAsync(
+    private static ValueTask<DirectReplyDeliveryResult>
+        SubmitDirectReplyOnceAsync(
         PendingDirectReply pending,
-        string actorId,
-        ulong requestId,
-        byte[] frame,
-        CancellationToken cancellationToken) =>
-        await SubmitDirectReplyUntilDeadlineAsync(
-                pending,
-                actorId,
-                requestId,
-                [frame],
-                cancellationToken)
-            .ConfigureAwait(false);
-
-    private async ValueTask<DirectReplyDeliveryResult>
-        SubmitDirectReplyUntilDeadlineAsync(
-        PendingDirectReply pending,
-        string actorId,
-        ulong requestId,
         IReadOnlyList<byte[]> frames,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (pending.IsExpired)
+            return ValueTask.FromResult(
+                DirectReplyDeliveryResult.DeadlineExpired);
         var messages = new Message[frames.Count];
-        while (!pending.IsExpired)
+        SubmitResult result;
+        for (var index = 0; index < frames.Count; index++)
+            messages[index] = Message.From(frames[index]);
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            SubmitResult result;
-            for (var index = 0; index < frames.Count; index++)
-                messages[index] = Message.From(frames[index]);
-            try
-            {
-                result = pending.Reply(messages, SendFlags.DontWait);
-            }
-            finally
-            {
-                ZLinkMessageParts.DisposeAll(messages);
-            }
-            if (result == SubmitResult.Ok)
-                return DirectReplyDeliveryResult.Submitted;
-            if (result is not (SubmitResult.Backpressured
-                or SubmitResult.NotConnected))
-                return DirectReplyDeliveryResult.TerminalRejected;
-            var remaining = pending.Remaining;
-            if (remaining <= TimeSpan.Zero)
-                break;
-            await Task.Delay(
-                    remaining < TimeSpan.FromMilliseconds(10)
-                        ? remaining
-                        : TimeSpan.FromMilliseconds(10),
-                    cancellationToken)
-                .ConfigureAwait(false);
+            result = pending.Reply(messages, SendFlags.DontWait);
         }
-        pending.Expire();
-        return DirectReplyDeliveryResult.DeadlineExpired;
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(messages);
+        }
+        return ValueTask.FromResult(result == SubmitResult.Ok
+            ? DirectReplyDeliveryResult.Submitted
+            : DirectReplyDeliveryResult.TerminalRejected);
     }
 
     private static long ResolveDeadlineUnixMs(
@@ -743,6 +698,7 @@ internal sealed class ZLinkActorMessageFollower
                 owner._runtime.ShutdownToken);
         private bool _retired;
         private bool _retirementScheduled;
+        private long _queuedBytes;
 
         internal uint SnapshotQueuedMessages()
         {
@@ -752,7 +708,7 @@ internal sealed class ZLinkActorMessageFollower
         internal uint SnapshotQueuedBytes()
         {
             return (uint)Math.Min(
-                _queue.ApplicationPendingRetainedBytes,
+                Volatile.Read(ref _queuedBytes),
                 uint.MaxValue);
         }
 
@@ -761,12 +717,24 @@ internal sealed class ZLinkActorMessageFollower
             lock (_lifecycleGate)
             {
                 if (_retired) return false;
-                var admission = _queue.TryPostApplicationWithoutConfiguredLimit(
-                    frame.EncodedSize,
-                    cancellationToken => owner.FollowAsync(
-                        this,
-                        frame,
-                        cancellationToken),
+                var encodedSize = frame.EncodedSize;
+                Interlocked.Add(ref _queuedBytes, encodedSize);
+                var admission = _queue.TryPostApplicationWithAdmission(
+                    async cancellationToken =>
+                    {
+                        try
+                        {
+                            await owner.FollowAsync(
+                                    this,
+                                    frame,
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            Interlocked.Add(ref _queuedBytes, -encodedSize);
+                        }
+                    },
                     out _);
                 if (admission == ZLinkSerialPostAdmission.Accepted)
                 {
@@ -777,6 +745,7 @@ internal sealed class ZLinkActorMessageFollower
                     }
                     return true;
                 }
+                Interlocked.Add(ref _queuedBytes, -encodedSize);
                 _retired = true;
                 return false;
             }

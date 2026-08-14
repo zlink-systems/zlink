@@ -21,6 +21,8 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeoutException;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
@@ -35,7 +37,7 @@ import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.internal.service.ZLinkClassicFanoutLiveness;
 
-final class ZLinkAsyncSubmitterTest {
+final class ZLinkChannelSubmissionContractTest {
     @Test
     void oneWaySendWaitsUntilTheAdmissionDeadline() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
@@ -94,6 +96,25 @@ final class ZLinkAsyncSubmitterTest {
                 ZLinkFrameworkErrorKind.INVALID_OPERATION,
                 frameworkError.kind());
             assertEquals(1, backend.submissions);
+        }
+    }
+
+    @Test
+    void cancellingFanoutPublishCancelsBindingAdmission() {
+        RecordingPublishBackend backend = new RecordingPublishBackend();
+        backend.asyncAdmission = new CompletableFuture<>();
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addFanoutChannel("events").enablePublisher("inproc://events");
+
+        try (ZLinkFrameworkRuntime runtime =
+                 ZLinkFrameworkRuntimeTestAccess.start(options, backend)) {
+            CompletableFuture<Void> submission = runtime.fanout()
+                .publish("events", "payload")
+                .submit()
+                .toCompletableFuture();
+
+            assertTrue(submission.cancel(false));
+            assertTrue(backend.asyncAdmission.isCancelled());
         }
     }
 
@@ -221,6 +242,8 @@ final class ZLinkAsyncSubmitterTest {
     private static final class RecordingPublishBackend extends NoReplyBackend {
         private SendFlags flags;
         private int submissions;
+        private CompletableFuture<Void> asyncAdmission =
+            CompletableFuture.completedFuture(null);
 
         @Override
         public ZLinkBackendPublisherSocket createPublisherSocket(ZLinkBackendContext context) {
@@ -239,8 +262,9 @@ final class ZLinkAsyncSubmitterTest {
         @Override
         public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
             return new NoReplyDealer() {
-                @Override public boolean send(List<Message> parts, SendFlags flags) {
-                    return false;
+                @Override public CompletionStage<Void> send(
+                    List<Message> parts) {
+                    return new CompletableFuture<>();
                 }
                 public Duration admissionTimeout() {
                     return Duration.ofMillis(20);
@@ -255,17 +279,14 @@ final class ZLinkAsyncSubmitterTest {
         @Override
         public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
             return new NoReplyDealer() {
-                @Override public boolean request(
+                @Override public CompletionStage<ZLinkBackendReceived> request(
                     List<Message> parts,
-                    ZLinkBackendRequestCallback callback,
-                    SendFlags flags,
                     Duration timeout) {
                     RecordingRequestBackend.this.timeout = timeout;
                     if (isClientServerHello(parts)) {
-                        return super.request(
-                            parts, callback, flags, timeout);
+                        return super.request(parts, timeout);
                     }
-                    return true;
+                    return new CompletableFuture<>();
                 }
             };
         }
@@ -277,22 +298,22 @@ final class ZLinkAsyncSubmitterTest {
         @Override public void connect(String endpoint) { }
         @Override public void disconnect(String endpoint) { }
         @Override public void setChannelName(String channelName) { }
-        @Override public boolean send(List<Message> parts, SendFlags flags) { return true; }
-        @Override public boolean request(
+        @Override public CompletionStage<Void> send(List<Message> parts) {
+            return CompletableFuture.completedFuture(null);
+        }
+        @Override public CompletionStage<ZLinkBackendReceived> request(
             List<Message> parts,
-            ZLinkBackendRequestCallback callback,
-            SendFlags flags,
             Duration timeout) {
             if (isClientServerHello(parts)) {
                 Message response = Message.from(clientServerAdmit());
-                callback.handle(new ZLinkBackendReceived(
+                return CompletableFuture.completedFuture(new ZLinkBackendReceived(
                     ZLinkBackendRequestResult.OK,
                     Optional.empty(),
                     Optional.empty(),
                     Optional.empty(),
                     List.of(response)));
             }
-            return true;
+            return new CompletableFuture<>();
         }
         @Override public ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) { return null; }
         @Override public boolean waitForReadable(Duration timeout) { return false; }
@@ -382,12 +403,20 @@ final class ZLinkAsyncSubmitterTest {
         @Override public void setChannelName(String channelName) { }
         @Override public void setRoutingId(RoutingId routingId) { }
         @Override public boolean publish(String topic, List<Message> parts, SendFlags flags) {
+            record(topic, flags);
+            return true;
+        }
+        @Override public CompletionStage<Void> publishAsync(
+            String topic, List<Message> parts, SendFlags flags) {
+            record(topic, flags);
+            return owner.asyncAdmission;
+        }
+        private void record(String topic, SendFlags flags) {
             owner.flags = flags;
             if (!ZLinkClassicFanoutLiveness.isReservedTopic(
                     topic.getBytes(StandardCharsets.UTF_8))) {
                 owner.submissions++;
             }
-            return true;
         }
         @Override public void close() { }
     }

@@ -46,7 +46,7 @@ internal static class PlayHostFactory
             //  This E2E host is not started inside a memory-limited
             //  container. Supply a deterministic finite limit so the
             //  default Auto HWM contract does not depend on the host.
-            framework.ConfigureInboundDispatch().ProcessMemoryLimitBytes =
+            framework.ConfigureCoreHwm().CoreHwmMemoryLimitBytes =
                 1UL * 1024 * 1024 * 1024;
             // Actor Join callbacks intentionally hold admission for 350 ms.
             // Leave deterministic time for transport and Store work.

@@ -368,26 +368,6 @@ class test_location_repository_t : public zlink::framework::location_repository_
         return _inner.abort (std::move (request), cancellation);
     }
 
-    zlink::framework::task_t<
-      zlink::framework::relocation_capacity_reserve_result_t>
-    reserve_relocation_capacity (
-      zlink::framework::relocation_capacity_reserve_request_t request,
-      std::stop_token cancellation = {}) override
-    {
-        return _inner.reserve_relocation_capacity (
-          std::move (request), cancellation);
-    }
-
-    zlink::framework::task_t<
-      zlink::framework::relocation_capacity_abort_result_t>
-    abort_relocation_capacity (
-      zlink::framework::relocation_capacity_fence_t fence,
-      std::stop_token cancellation = {}) override
-    {
-        return _inner.abort_relocation_capacity (
-          std::move (fence), cancellation);
-    }
-
     zlink::framework::task_t<zlink::framework::aggregate_prepare_result_t>
     prepare_aggregate (
       zlink::framework::aggregate_prepare_request_t request,
@@ -1683,6 +1663,16 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RejectsInvalidRoutingAndRelocationLi
     {
         options_fixture_t fixture;
         auto options = fixture.make_options ();
+        EXPECT_EQ (
+          std::chrono::milliseconds (3000),
+          options.configure_locations ().session_relocation_seal_timeout);
+        options.configure_locations ().session_relocation_seal_timeout =
+          std::chrono::milliseconds::zero ();
+        EXPECT_THROW (options.apply (), zlink::framework::framework_exception_t);
+    }
+    {
+        options_fixture_t fixture;
+        auto options = fixture.make_options ();
         options.configure_locations ().route_cache_max_age = std::chrono::seconds (26);
         options.configure_locations ().message_follow_duration = std::chrono::seconds (30);
         EXPECT_THROW (options.apply (), zlink::framework::framework_exception_t);
@@ -2861,30 +2851,34 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
       zlink::framework::framework_exception_t);
 
     const auto mesh_send = [] (
-                             zlink::framework::runtime::messaging::message_parts_t) {
-        return zlink::framework::result_t<void>::success ();
+                             zlink::framework::runtime::messaging::message_parts_t)
+      -> zlink::framework::task_t<zlink::framework::result_t<void>> {
+        co_return zlink::framework::result_t<void>::success ();
     };
     const auto mesh_request = [] (
                                 zlink::framework::runtime::messaging::message_parts_t parts,
-                                std::chrono::milliseconds) {
-        return zlink::framework::result_t<
+                                std::chrono::milliseconds)
+      -> zlink::framework::task_t<zlink::framework::result_t<
+        zlink::framework::runtime::messaging::message_parts_t>> {
+        co_return zlink::framework::result_t<
           zlink::framework::runtime::messaging::message_parts_t>::success (
-          std::move (parts));
+            std::move (parts));
     };
     const auto client_server_send = [] (
                                       std::string,
                                       std::string,
                                       zlink::message_t,
-                                      std::chrono::milliseconds) {
-        return zlink::framework::result_t<void>::success ();
+                                      std::chrono::milliseconds)
+      -> zlink::framework::task_t<void> {
+        co_return;
     };
     const auto client_server_request = [] (
                                          std::string,
                                          std::string,
                                          zlink::message_t message,
-                                         std::chrono::milliseconds) {
-        return zlink::framework::result_t<zlink::message_t>::success (
-          std::move (message));
+                                         std::chrono::milliseconds)
+      -> zlink::framework::task_t<zlink::message_t> {
+        co_return std::move (message);
     };
 
     zlink::framework::zlink_builder_t mesh_first_builder;

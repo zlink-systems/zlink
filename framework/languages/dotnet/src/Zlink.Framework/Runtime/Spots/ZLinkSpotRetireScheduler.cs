@@ -144,44 +144,17 @@ internal sealed record ZLinkPreparedSpotRetireStaging(
     internal ZLinkRelocationEnvelope Envelope => Root.Envelope;
 }
 
-internal static class ZLinkSpotRetireCompletionMarker
-{
-    private static ReadOnlySpan<byte> SourceCleanupPending =>
-        "zlink.spot.source.pending.v1"u8;
-
-    private static ReadOnlySpan<byte> SourceCleanupCompleted =>
-        "zlink.spot.source.completed.v1"u8;
-
-    internal static byte[] CreatePending() =>
-        SourceCleanupPending.ToArray();
-
-    internal static byte[] CreateCompleted() =>
-        SourceCleanupCompleted.ToArray();
-
-    internal static bool IsCompleted(ReadOnlySpan<byte> payload) =>
-        payload.SequenceEqual(SourceCleanupCompleted);
-
-    internal static bool IsPending(ReadOnlySpan<byte> payload) =>
-        payload.SequenceEqual(SourceCleanupPending);
-}
-
 /// <summary>
-/// Runs one source Spot relocation transaction. Queue and timer dispatch stay
-/// available until every process-wide permit is acquired. Any failure before
-/// authority commit aborts target staging and resumes the exact source seal.
+/// Runs one source Spot relocation transaction. Any failure before authority
+/// commit aborts target staging and resumes the exact source seal.
 /// </summary>
 internal sealed class ZLinkSpotRetireScheduler(
     IZLinkLocationRepository authorityStore,
     IZLinkRelocationRepository relocationStore,
     IZLinkSpotRetireTarget target,
-    ZLinkRelocationPermitPool permits,
     ZLinkFrameworkRuntime runtime)
 {
     private const int MaxConcurrentParticipantIo = 8;
-    private const long SnapshotReservationBytes = 64L * 1024 * 1024;
-    private const long EnvelopeHeaderBytes =
-        sizeof(uint) + sizeof(ushort) + 16 + sizeof(ulong)
-        + sizeof(int) + 32 + sizeof(int);
 
     internal static ZLinkFrameworkRelocationReason MapFailureReason(
         Exception exception,
@@ -325,18 +298,6 @@ internal sealed class ZLinkSpotRetireScheduler(
         var actorIds = perActorShell
             ? Array.Empty<string>()
             : activation.SnapshotActorIds();
-        var participantKeys = new[]
-            {
-                ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(
-                    activation.SpotId)
-            }
-            .Concat(actorIds.Select(
-                ZLinkActorAuthorityPayloadCodec.AuthorityKey))
-            .ToArray();
-        var snapshotParticipantCount = CountSnapshotParticipants(
-            activation,
-            actorIds);
-        var requiresCapture = snapshotParticipantCount > 0;
         var inventory = CreateInventory(
             activation,
             instanceSpot,
@@ -378,69 +339,12 @@ internal sealed class ZLinkSpotRetireScheduler(
             throw;
         }
 
-        async ValueTask ReleaseUncommittedSealAsync(
-            ZLinkSpotRelocationSeal currentSeal)
-        {
-            try
-            {
-                await activation
-                    .CompleteRelocationReadyBeforeAbortAsync(
-                        currentSeal,
-                        cleanupDeadline.Token)
-                    .ConfigureAwait(false);
-            }
-            finally
-            {
-                try
-                {
-                    if (!activation.AbortRelocation(currentSeal))
-                        throw new ZLinkRelocationDataLostException(
-                            $"SPOT '{activation.SpotId}' could not restore its source admission seal.");
-                }
-                finally
-                {
-                    await target.AbortAsync(reservation, fence: null)
-                        .ConfigureAwait(false);
-                }
-            }
-        }
-
-        ZLinkRelocationPermitPool.ZLinkRelocationPermitLease permit = default;
-        bool permitAcquired;
-        try
-        {
-            permitAcquired = permits.TryAcquire(
-                ZLinkRelocationPermitRequest.Outbound(
-                    CalculatePayloadReservation(
-                        snapshotParticipantCount,
-                        participantKeys,
-                        admittedSeal.QueueSeal.QueueSeal.Captured,
-                        admittedSeal.LogicalTimers),
-                    requiresCapture,
-                    allowOversizedPayload: !instanceSpot),
-                out permit);
-        }
-        catch
-        {
-            permit.Dispose();
-            await ReleaseUncommittedSealAsync(admittedSeal)
-                .ConfigureAwait(false);
-            throw;
-        }
-        if (!permitAcquired)
-        {
-            await ReleaseUncommittedSealAsync(admittedSeal)
-                .ConfigureAwait(false);
-            return ZLinkRelocationUnitResult.Pending();
-        }
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"relocation_sealed spot={activation.SpotId}");
         var interruption =
             activation.StartRelocationInterruption(instanceSpot);
 
-        using (permit)
-        {
-            ZLinkSpotRelocationSeal? seal = admittedSeal;
+        ZLinkSpotRelocationSeal? seal = admittedSeal;
             ZLinkPreparedSpotRetireStaging? staging = null;
             ZLinkAggregateRelocationPublished? published = null;
             IReadOnlyList<ZLinkAcceptedWorkRecord> heldAtCutoff = [];
@@ -452,7 +356,6 @@ internal sealed class ZLinkSpotRetireScheduler(
             var messageFollowStarted = false;
             var sourceCommitted = false;
             var committedHeldValidated = false;
-            var sourceCleanupCompleted = false;
             var targetCompletionDelivered = false;
             var sourceCompleted = false;
             var aggregateId = Guid.NewGuid();
@@ -562,9 +465,6 @@ internal sealed class ZLinkSpotRetireScheduler(
                         actorIds.ToHashSet(StringComparer.Ordinal),
                         cancellationToken)
                     .ConfigureAwait(false);
-                ValidateSnapshotPayloadSize(application.SpotState);
-                foreach (var actorState in application.ActorStates.Values)
-                    ValidateSnapshotPayloadSize(actorState);
                 foreach (var capture in actorCaptures.Values)
                 {
                     capture.State.Handoff.SealCapture();
@@ -627,15 +527,6 @@ internal sealed class ZLinkSpotRetireScheduler(
                 staging = new ZLinkPreparedSpotRetireStaging(
                     stagingRoot,
                     participants);
-                var actualPayloadBytes =
-                    ZLinkRelocationEnvelopeCodec.MeasureEncodedLength(
-                        staging.Envelope);
-                if (!permit.TryShrinkPayload(actualPayloadBytes))
-                    throw new InvalidOperationException(
-                        $"SPOT '{activation.SpotId}' relocation payload exceeded its sealed reservation"
-                        + $" (actual={actualPayloadBytes},"
-                        + $" reserved={permit.ReservedPayloadBytes}).");
-
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"relocation_stage_begin spot={activation.SpotId} aggregate={aggregateId:N}");
                 published = new ZLinkAggregateRelocationPublished(
@@ -650,16 +541,13 @@ internal sealed class ZLinkSpotRetireScheduler(
                     .ConfigureAwait(false);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"relocation_stage_end spot={activation.SpotId} aggregate={aggregateId:N}");
-                // Command 34 is acknowledged only after the target has
-                // restored the complete staged journal, published authority,
-                // and opened application admission. Command 35 only proves
-                // source cleanup so the target can converge on Completed and
-                // steady normalization; it no longer gates target execution.
+                // StageAsync returns after command 34 has been submitted on
+                // the ordered relocation connection. The target owns CAS,
+                // queue publication and dispatch opening from this boundary.
                 interruption.Complete();
-                // StageAsync returns only after the source sends command 34
-                // response=true. That response authorizes the target commit,
-                // so cancellation or an unobserved commit must never reopen
-                // source admission from this point forward.
+                // A lost one-way submit result is ambiguous because the target
+                // may already have observed cutover. Never reopen source
+                // admission after this point.
                 committed = true;
                 await CompleteCommittedWithinDeadlineAsync()
                     .ConfigureAwait(false);
@@ -972,40 +860,6 @@ internal sealed class ZLinkSpotRetireScheduler(
                             .ToArray());
                     committedHeldValidated = true;
                 }
-                if (!sourceCleanupCompleted)
-                {
-                    var cleanup = new ZLinkAggregateRelocationCoordinator(
-                        authorityStore,
-                        relocationStore);
-                        var cleanupReconciliationDelay =
-                        TimeSpan.FromMilliseconds(1);
-                    while (!await cleanup.TryCompleteSourceCleanupAsync(
-                               committedPublication,
-                               activeReservation.TargetDescriptor,
-                               activeReservation.TargetDescriptorLifecycleGeneration,
-                               activeReservation.TargetOwner,
-                               completionToken).ConfigureAwait(false))
-                    {
-                        var remaining = deadline - DateTimeOffset.UtcNow;
-                        if (remaining <= TimeSpan.Zero)
-                            throw new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.DeadlineExceeded,
-                                $"SPOT '{activation.SpotId}' relocation reply delivery did not complete before its fixed deadline.",
-                                ZLinkRetryAdvice.RetryAfterBackoff);
-                        await Task.Delay(
-                                cleanupReconciliationDelay < remaining
-                                    ? cleanupReconciliationDelay
-                                    : remaining,
-                                completionToken)
-                            .ConfigureAwait(false);
-                        cleanupReconciliationDelay = TimeSpan.FromMilliseconds(
-                            Math.Min(
-                                cleanupReconciliationDelay.TotalMilliseconds
-                                * 2,
-                                100));
-                    }
-                    sourceCleanupCompleted = true;
-                }
                 if (!targetCompletionDelivered)
                 {
                     if (activeActorMessageFollowBacklog.Count != 0
@@ -1131,8 +985,6 @@ internal sealed class ZLinkSpotRetireScheduler(
                     .DiscardPreparedAsync(discard.Root)
                     .ConfigureAwait(false);
             }
-
-        }
     }
 
     private const int MaxSessionRouteUnsealAttempts = 3;
@@ -1179,98 +1031,6 @@ internal sealed class ZLinkSpotRetireScheduler(
                     return;
             }
         }
-    }
-
-    private static int CountSnapshotParticipants(
-        ZLinkSpotActivation activation,
-        IReadOnlyList<string> actorIds)
-    {
-        var spot = activation.ResolveSpotRelocationRegistrationForRetire();
-        if (spot.PolicyKind == 0)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Rejected,
-                $"Relocation is disabled for SPOT '{activation.SpotId}'.");
-        var count = spot.PolicyKind == 2 ? 1 : 0;
-        foreach (var actorId in actorIds)
-        {
-            var actor =
-                activation.ResolveActorRelocationRegistrationForRetire(actorId);
-            if (actor.PolicyKind == 0)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Rejected,
-                    $"Relocation is disabled for Actor '{actorId}'.");
-            if (actor.PolicyKind == 2)
-                count++;
-        }
-        return count;
-    }
-
-    internal static long CalculatePayloadReservation(
-        int snapshotParticipantCount,
-        IReadOnlyList<ZLinkAuthorityKey> participantKeys,
-        IReadOnlyList<ZLinkAcceptedWorkRecord> captured,
-        IReadOnlyList<ZLinkRelocationLogicalTimer> timers)
-    {
-        if (snapshotParticipantCount < 0)
-            throw new ArgumentOutOfRangeException(
-                nameof(snapshotParticipantCount));
-        ArgumentNullException.ThrowIfNull(participantKeys);
-        ArgumentNullException.ThrowIfNull(captured);
-        ArgumentNullException.ThrowIfNull(timers);
-        if (participantKeys.Count < 1)
-            throw new ArgumentOutOfRangeException(nameof(participantKeys));
-
-        // This is the exact encoded size of the framework-owned portion of
-        // ZLinkRelocationEnvelopeCodec: header, participant manifest, accepted
-        // journal and logical timers. Application state remains empty here;
-        // Snapshot adapters reserve their documented maximum separately.
-        long frameworkBytes = EnvelopeHeaderBytes;
-        foreach (var key in participantKeys)
-        {
-            var keyBytes =
-                System.Text.Encoding.UTF8.GetByteCount(key.Value);
-            frameworkBytes = checked(
-                frameworkBytes
-                + sizeof(ushort) + keyBytes
-                + sizeof(byte)
-                + sizeof(ulong) + sizeof(ulong)
-                + sizeof(int) // application state length
-                + sizeof(int) // accepted job count
-                + sizeof(int) // logical timer count
-                + sizeof(int) // recovery payload length
-                + sizeof(int)); // completion payload length
-        }
-        foreach (var record in captured)
-            frameworkBytes = checked(
-                frameworkBytes
-                + sizeof(ulong)
-                + sizeof(int)
-                + record.Payload.Length);
-        foreach (var timer in timers)
-            frameworkBytes = checked(
-                frameworkBytes
-                + sizeof(ushort)
-                + System.Text.Encoding.UTF8.GetByteCount(timer.TimerId)
-                + sizeof(long)
-                + sizeof(long)
-                + sizeof(int)
-                + timer.Payload.Length);
-        return checked(
-            frameworkBytes
-            + ZLinkSpotRetireCompletionMarker.CreatePending().LongLength
-            + (long)ZLinkCanonicalParticipantRecoveryCodec
-                .MaximumEncodedBytesWithEmptyMembership
-              * participantKeys.Count
-            + SnapshotReservationBytes * snapshotParticipantCount);
-    }
-
-    internal static void ValidateSnapshotPayloadSize(
-        ReadOnlyMemory<byte> payload)
-    {
-        if (payload.Length > SnapshotReservationBytes)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Rejected,
-                "A relocation Snapshot payload cannot exceed 64 MiB.");
     }
 
     private async ValueTask<ZLinkAggregateRelocationParticipant[]>
@@ -1346,9 +1106,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                 includeSpotTimers
                     ? seal.LogicalTimers
                     : [],
-                RecoveryPayload: spotRecovery,
-                CompletionPayload:
-                    ZLinkSpotRetireCompletionMarker.CreatePending()),
+                RecoveryPayload: spotRecovery),
             spot.StoreVersion,
             ZLinkAuthorityGenerationTransition.NewOwner,
             spot.Payload,
@@ -1403,11 +1161,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                         actorCaptures[actorKey],
                         actor.ObjectGeneration),
                     [],
-                    RecoveryPayload: actorRecovery)
-                {
-                    AcceptedBoundary = actorCaptures[actorKey]
-                        .CommitBoundary.AcceptedHighWater
-                },
+                    RecoveryPayload: actorRecovery),
                 actor.StoreVersion,
                 ZLinkAuthorityGenerationTransition.NewOwner,
                 relocationAuthority,

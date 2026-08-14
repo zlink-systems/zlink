@@ -43,8 +43,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
                 authorityPayload(),
                 request,
                 ZLinkAuthorityGenerationTransition.PRESERVE,
-                STORED,
-                true));
+                STORED));
     }
 
     @Test
@@ -59,8 +58,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
             authorityPayload(),
             initial,
             ZLinkAuthorityGenerationTransition.NEW_OWNER,
-            STORED,
-            false);
+            STORED);
         byte[] application =
             ZLinkCanonicalRelocationAuthorityStateCodec
                 .applicationPayloadOrOriginal(canonical);
@@ -75,8 +73,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
             canonical,
             successor,
             ZLinkAuthorityGenerationTransition.PRESERVE,
-            STORED,
-            true);
+            STORED);
 
         assertArrayEquals(
             application,
@@ -96,8 +93,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
             authorityPayload(),
             initial,
             ZLinkAuthorityGenerationTransition.NEW_OWNER,
-            STORED,
-            false);
+            STORED);
 
         UUID differentAggregate = new UUID(0, 10);
         var successor = request(
@@ -114,8 +110,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
                 canonical,
                 successor,
                 ZLinkAuthorityGenerationTransition.PRESERVE,
-                STORED,
-                true));
+                STORED));
     }
 
     @Test
@@ -130,8 +125,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
             authorityPayload(),
             request,
             ZLinkAuthorityGenerationTransition.NEW_OWNER,
-            STORED,
-            false);
+            STORED);
         byte[] malformed = canonical.clone();
         malformed[relocationSlotOffset(malformed)] = 2;
         rewriteChecksum(malformed);
@@ -142,8 +136,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
                 malformed,
                 request,
                 ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                STORED,
-                false));
+                STORED));
     }
 
     @Test
@@ -165,8 +158,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
                 malformed,
                 request,
                 ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                STORED,
-                false));
+                STORED));
     }
 
     private static ZLinkAggregateRelocationCoordinator.Request request(

@@ -439,17 +439,14 @@ final class ChannelMessagingTest {
                 var rawDealer = channelAdapter.createDealerSocket(rawContext)) {
                 rawDealer.connect(endpoint);
                 Thread.sleep(100);
-                CompletableFuture<ZLinkBackendReceived> replyFuture = new CompletableFuture<>();
                 List<Message> malformedParts = List.of(
                     Message.from("DecodeReq"),
                     Message.from("{"));
                 try {
-                    assertTrue(rawDealer.request(
+                    try (ZLinkBackendReceived reply = rawDealer.request(
                         malformedParts,
-                        replyFuture::complete,
-                        SendFlags.NONE,
-                        Duration.ofSeconds(2)));
-                    try (ZLinkBackendReceived reply = replyFuture.get(2, TimeUnit.SECONDS)) {
+                        Duration.ofSeconds(2)).toCompletableFuture().get(
+                            2, TimeUnit.SECONDS)) {
                         assertEquals("ZLinkFrameworkError", reply.parts().get(0).toUtf8String());
                         assertTrue(reply.parts().get(1).toUtf8String().contains("PayloadDecodeFailed"));
                     }
@@ -583,17 +580,14 @@ final class ChannelMessagingTest {
                  var rawDealer = channelAdapter.createDealerSocket(rawContext)) {
                 rawDealer.connect(endpoint);
                 Thread.sleep(100);
-                CompletableFuture<ZLinkBackendReceived> replyFuture = new CompletableFuture<>();
                 List<Message> malformedParts = List.of(
                     Message.from("DecodeReq"),
                     Message.from("{"));
                 try {
-                    assertTrue(rawDealer.request(
+                    try (ZLinkBackendReceived reply = rawDealer.request(
                         malformedParts,
-                        replyFuture::complete,
-                        SendFlags.NONE,
-                        Duration.ofSeconds(2)));
-                    try (ZLinkBackendReceived reply = replyFuture.get(2, TimeUnit.SECONDS)) {
+                        Duration.ofSeconds(2)).toCompletableFuture().get(
+                            2, TimeUnit.SECONDS)) {
                         assertEquals("ZLinkFrameworkError", reply.parts().get(0).toUtf8String());
                         assertTrue(reply.parts().get(1).toUtf8String().contains("PayloadDecodeFailed"));
                     }

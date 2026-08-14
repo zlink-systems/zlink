@@ -639,7 +639,7 @@ final class ZLinkDefaultSpotContextTest {
             return actorQueues.computeIfAbsent(
                     actorId,
                     ignored -> new ZLinkAsyncSerialQueue(executor, false))
-                .enqueueWithPayloadBytes(payloadBytes, operation);
+                .enqueue(operation);
         }
 
         private static ZLinkBackendSpot backendSpot() {

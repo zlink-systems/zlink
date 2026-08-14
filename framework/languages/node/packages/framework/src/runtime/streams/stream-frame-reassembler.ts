@@ -5,6 +5,11 @@ import { constants as bufferConstants } from 'node:buffer';
 export interface ZLinkAssembledStreamFrame {
   readonly header: Buffer;
   readonly payload: Buffer;
+  close(): void;
+}
+
+export interface ZLinkRetainedStreamOwner {
+  close(): void;
 }
 
 export type ZLinkStreamFrameReadResult =
@@ -14,6 +19,61 @@ export type ZLinkStreamFrameReadResult =
 
 const STREAM_FRAME_PREFIX_BYTES = 6;
 const EMPTY_BUFFER = Buffer.alloc(0);
+
+class ZLinkRetainedStreamOwnerState {
+  private bufferedSegments = 0;
+  private frameClaims = 0;
+  private closed = false;
+
+  constructor(private readonly owner: ZLinkRetainedStreamOwner) {}
+
+  addBufferedSegment(): void {
+    if (this.closed) {
+      throw new Error('STREAM retained receive owner is already closed.');
+    }
+    this.bufferedSegments += 1;
+  }
+
+  removeBufferedSegment(): void {
+    if (this.bufferedSegments <= 0) {
+      throw new Error('STREAM retained segment accounting underflow.');
+    }
+    this.bufferedSegments -= 1;
+    this.tryClose();
+  }
+
+  claimFrame(): void {
+    if (this.closed) {
+      throw new Error('STREAM retained receive owner is already closed.');
+    }
+    this.frameClaims += 1;
+  }
+
+  releaseFrame(): void {
+    if (this.frameClaims <= 0) {
+      throw new Error('STREAM retained frame accounting underflow.');
+    }
+    this.frameClaims -= 1;
+    this.tryClose();
+  }
+
+  closeNow(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.owner.close();
+  }
+
+  private tryClose(): void {
+    if (this.bufferedSegments === 0 && this.frameClaims === 0) {
+      this.closeNow();
+    }
+  }
+}
+
+interface ZLinkRetainedStreamSegment {
+  remainingBytes: number;
+  readonly owner?: ZLinkRetainedStreamOwnerState;
+}
 
 export class ZLinkStreamMessageSizeError extends Error {
   readonly code = 'EMSGSIZE';
@@ -35,15 +95,49 @@ export class ZLinkStreamFrameReassembler {
   private start = 0;
   private end = 0;
   private directView: Buffer | undefined;
+  private retainedSegments: ZLinkRetainedStreamSegment[] = [];
+  private retainedHead = 0;
 
   get hasPendingBytes(): boolean {
     return this.directView !== undefined || this.end > this.start;
   }
 
   append(bytes: Uint8Array): void {
+    this.appendOwned(bytes);
+  }
+
+  appendRetained(
+    parts: readonly { data(): Uint8Array }[],
+    retainedOwner: ZLinkRetainedStreamOwner
+  ): void {
+    const owner = new ZLinkRetainedStreamOwnerState(retainedOwner);
+    let retained = false;
+    try {
+      for (const part of parts) {
+        const bytes = part.data();
+        if (bytes.byteLength === 0) continue;
+        this.appendOwned(bytes, owner);
+        retained = true;
+      }
+    } catch (error) {
+      if (!retained) owner.closeNow();
+      throw error;
+    }
+    if (!retained) owner.closeNow();
+  }
+
+  private appendOwned(
+    bytes: Uint8Array,
+    owner?: ZLinkRetainedStreamOwnerState
+  ): void {
     if (bytes.byteLength === 0) {
       return;
     }
+    owner?.addBufferedSegment();
+    this.retainedSegments.push({
+      remainingBytes: bytes.byteLength,
+      owner
+    });
     if (this.directView !== undefined) {
       const pending = this.directView;
       this.directView = undefined;
@@ -103,6 +197,7 @@ export class ZLinkStreamFrameReassembler {
     const payloadStart = frameStart + headerSize;
     const header = storage.subarray(frameStart, payloadStart);
     const payload = storage.subarray(payloadStart, payloadStart + payloadSize);
+    const close = this.consumeRetained(totalSize);
     const remainingStart = this.start + totalSize;
     this.directView = remainingStart < this.end
       ? storage.subarray(remainingStart, this.end)
@@ -114,7 +209,7 @@ export class ZLinkStreamFrameReassembler {
     this.storage = EMPTY_BUFFER;
     this.start = 0;
     this.end = 0;
-    return { kind: 'frame', frame: { header, payload } };
+    return { kind: 'frame', frame: { header, payload, close } };
   }
 
   clear(): void {
@@ -122,6 +217,12 @@ export class ZLinkStreamFrameReassembler {
     this.storage = EMPTY_BUFFER;
     this.start = 0;
     this.end = 0;
+    while (this.retainedHead < this.retainedSegments.length) {
+      this.retainedSegments[this.retainedHead]?.owner?.removeBufferedSegment();
+      this.retainedHead += 1;
+    }
+    this.retainedSegments = [];
+    this.retainedHead = 0;
   }
 
   private nextDirect(bytes: Buffer, maxMessageSize: number): ZLinkStreamFrameReadResult {
@@ -154,8 +255,46 @@ export class ZLinkStreamFrameReassembler {
     }
     const header = bytes.subarray(STREAM_FRAME_PREFIX_BYTES, STREAM_FRAME_PREFIX_BYTES + headerSize);
     const payload = bytes.subarray(STREAM_FRAME_PREFIX_BYTES + headerSize, totalSize);
+    const close = this.consumeRetained(totalSize);
     this.directView = totalSize === bytes.length ? undefined : bytes.subarray(totalSize);
-    return { kind: 'frame', frame: { header, payload } };
+    return { kind: 'frame', frame: { header, payload, close } };
+  }
+
+  private consumeRetained(consumedBytes: number): () => void {
+    let remaining = consumedBytes;
+    const owners = new Set<ZLinkRetainedStreamOwnerState>();
+    while (remaining > 0 && this.retainedHead < this.retainedSegments.length) {
+      const segment = this.retainedSegments[this.retainedHead]!;
+      const consumed = Math.min(remaining, segment.remainingBytes);
+      remaining -= consumed;
+      segment.remainingBytes -= consumed;
+      if (segment.owner !== undefined && !owners.has(segment.owner)) {
+        segment.owner.claimFrame();
+        owners.add(segment.owner);
+      }
+      if (segment.remainingBytes === 0) {
+        segment.owner?.removeBufferedSegment();
+        this.retainedHead += 1;
+      }
+    }
+    if (remaining !== 0) {
+      throw new Error('STREAM retained byte accounting is incomplete.');
+    }
+    if (
+      this.retainedHead > 64
+      && this.retainedHead * 2 >= this.retainedSegments.length
+    ) {
+      this.retainedSegments = this.retainedSegments.slice(this.retainedHead);
+      this.retainedHead = 0;
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      for (const owner of owners) {
+        owner.releaseFrame();
+      }
+    };
   }
 
   private ensureCapacity(additionalBytes: number): void {

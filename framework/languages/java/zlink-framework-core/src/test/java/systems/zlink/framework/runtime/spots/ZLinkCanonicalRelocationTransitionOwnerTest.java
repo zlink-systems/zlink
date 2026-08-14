@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HexFormat;
 import java.util.concurrent.CompletionException;
+import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 
@@ -17,8 +18,14 @@ final class ZLinkCanonicalRelocationTransitionOwnerTest {
     @Test
     void validatedCommandWithoutSemanticOwnerFailsClosed() throws Exception {
         var fixture = new ObjectMapper().readTree(Files.readString(fixture()));
+        var prepareFixture = StreamSupport.stream(
+                fixture.path("canonical").spliterator(), false)
+            .filter(entry -> "relocationPrepareRestore".equals(
+                entry.path("name").asText()))
+            .findFirst()
+            .orElseThrow();
         byte[] prepare = HexFormat.of().parseHex(
-            fixture.path("canonical").get(5).path("hex").asText());
+            prepareFixture.path("hex").asText());
         var owner = new ZLinkCanonicalRelocationTransitionOwner(
             ZLinkCanonicalRelocationTransitionOwner.unavailable());
 

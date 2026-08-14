@@ -44,20 +44,47 @@ public sealed class BackendAdapterFactoryTests
     }
 
     [Theory]
-    [InlineData(ZLinkApplicationHwmProfile.Compact)]
-    [InlineData(ZLinkApplicationHwmProfile.LowLatency)]
-    [InlineData(ZLinkApplicationHwmProfile.Balanced)]
-    [InlineData(ZLinkApplicationHwmProfile.Throughput)]
-    public async Task Framework_Profile_Is_Applied_To_The_Binding_Context(
-        ZLinkApplicationHwmProfile frameworkProfile)
+    [InlineData(AutoHwmProfile.Compact)]
+    [InlineData(AutoHwmProfile.LowLatency)]
+    [InlineData(AutoHwmProfile.Balanced)]
+    [InlineData(AutoHwmProfile.Throughput)]
+    public async Task Core_Profile_Is_Applied_To_The_Binding_Context(
+        AutoHwmProfile coreProfile)
     {
         await using var context = new ZLinkDotNetBackendAdapterFactory()
             .CreateRuntimeContext();
 
-        context.ConfigureAutoHwm(frameworkProfile);
+        context.ConfigureCoreHwm(coreProfile, 1024 * 1024, 256 * 1024);
 
         // The port owns the binding option mapping. The binding enum is not
         // exposed through the semantic runtime contract.
+    }
+
+    [Fact]
+    public async Task Core_Hwm_Snapshot_And_Reset_Are_Direct_Binding_Projections()
+    {
+        await using var context = new ZLinkDotNetBackendAdapterFactory()
+            .CreateRuntimeContext();
+        const ulong budgetBytes = 1024 * 1024;
+        context.ConfigureCoreHwm(
+            AutoHwmProfile.Balanced,
+            memoryLimitBytes: 0,
+            budgetBytes);
+
+        var before = context.GetCoreHwmBudgetSnapshot();
+
+        Assert.Equal(budgetBytes, before.ConfiguredCoreBudgetBytes);
+        Assert.Equal(budgetBytes, before.EffectiveCoreBudgetBytes);
+
+        context.ResetCoreHwmBudgetMetrics();
+        var after = context.GetCoreHwmBudgetSnapshot();
+
+        Assert.True(after.MeasurementEpoch > before.MeasurementEpoch);
+        Assert.Equal(before.EffectiveCoreBudgetBytes, after.EffectiveCoreBudgetBytes);
+        Assert.Equal(after.CurrentAccountedBytes, after.PeakAccountedBytes);
+        Assert.Equal(
+            after.CompletionCurrentAccountedBytes,
+            after.CompletionPeakAccountedBytes);
     }
 
     [Fact]
@@ -70,31 +97,13 @@ public sealed class BackendAdapterFactoryTests
         var endpoint = $"inproc://binding-progress-{Guid.NewGuid():N}";
         router.Bind(endpoint);
         dealer.Connect(endpoint);
-        var completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-
+        Task<IReadOnlyList<Message>> requestTask;
         using (var request = Message.From("request"))
         {
-            Assert.True(dealer.Request()
+            requestTask = dealer.Request()
                 .Message(request)
                 .Timeout(TimeSpan.FromSeconds(2))
-                .Submit(
-                    (result, parts) =>
-                    {
-                        try
-                        {
-                            if (result != RequestResult.Ok)
-                            {
-                                completion.TrySetException(new InvalidOperationException($"Request failed: {result}."));
-                                return;
-                            }
-
-                            completion.TrySetResult(Assert.Single(parts).GetString());
-                        }
-                        finally
-                        {
-                            ZLinkMessageParts.DisposeAll(parts);
-                        }
-                    }));
+                .Async(CancellationToken.None);
         }
 
         using var received = await ReceiveAsync(router, TimeSpan.FromSeconds(2));
@@ -105,7 +114,15 @@ public sealed class BackendAdapterFactoryTests
                 .Message(reply)
                 .Submit();
 
-        Assert.Equal("reply", await completion.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        var replyParts = await requestTask.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            Assert.Equal("reply", Assert.Single(replyParts).GetString());
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(replyParts);
+        }
         Assert.Null(typeof(ZLinkFrameworkRuntime).Assembly.GetType(
             "Zlink.Framework.Runtime.Messaging.ZLinkRequestCompletionPump"));
     }

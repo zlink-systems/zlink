@@ -51,10 +51,6 @@ import {
   type ZLinkRouteLocation,
   type ZLinkRouteLocationFilter,
   type ZLinkRouteLocationKey,
-  type ZLinkRelocationCapacityAbortResult,
-  type ZLinkRelocationCapacityFence,
-  type ZLinkRelocationCapacityReservationRequest,
-  type ZLinkRelocationCapacityReserveResult,
   type ZLinkSpotLocation,
   type ZLinkSpotLocationFilter,
   type ZLinkSpotLocationKey
@@ -191,20 +187,6 @@ export class ZLinkInMemoryLocationStore implements
     signal?: AbortSignal
   ): Promise<ZLinkObjectAbortResult> {
     return this.authority.abort(request, signal);
-  }
-
-  async reserveRelocationCapacity(
-    request: ZLinkRelocationCapacityReservationRequest,
-    signal?: AbortSignal
-  ): Promise<ZLinkRelocationCapacityReserveResult> {
-    return this.authority.reserveRelocationCapacity(request, signal);
-  }
-
-  async abortRelocationCapacity(
-    fence: ZLinkRelocationCapacityFence,
-    signal?: AbortSignal
-  ): Promise<ZLinkRelocationCapacityAbortResult> {
-    return this.authority.abortRelocationCapacity(fence, signal);
   }
 
   async prepareAggregate(

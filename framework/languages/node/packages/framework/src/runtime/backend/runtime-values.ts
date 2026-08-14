@@ -69,11 +69,6 @@ export function isBackendNotConnectedError(error: unknown): boolean {
   return result === SubmitResult.NotConnected || result === RequestResult.NotConnected;
 }
 export type ZLinkBackendMessageLike = Message | Buffer | Uint8Array | string;
-export type ZLinkBackendRequestCallback = (
-  result: RequestResult,
-  parts: readonly Message[]
-) => void;
-
 export interface ZLinkBackendSendSubmitBuilder {
   message(message: ZLinkBackendMessageLike): ZLinkBackendSendSubmitBuilder;
   submit(): unknown;

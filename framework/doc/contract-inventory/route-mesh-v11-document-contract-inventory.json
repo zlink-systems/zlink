@@ -370,58 +370,63 @@
   "consolidated_internal_document_sets": [
     {
       "name": "common-internals",
-      "directory": "framework/doc/framework/common/internals",
+      "directory": "framework/doc/framework/common/spec",
       "required_documents": [
         "README.ko.md",
-        "01-layering.ko.md",
-        "02-serialization.ko.md",
-        "03-progress-isolation.ko.md",
-        "04-completion.ko.md",
-        "05-relocation-continuity.ko.md",
-        "06-routing-and-cache.ko.md",
-        "07-dispatch-loop.ko.md",
-        "08-object-lifecycle.ko.md",
-        "09-session-binding.ko.md",
-        "10-liveness-and-state.ko.md",
-        "11-message-ownership.ko.md",
-        "12-service-wire-protocol.ko.md"
+        "40-internal-layering.ko.md",
+        "41-internal-serialization.ko.md",
+        "42-internal-progress-isolation.ko.md",
+        "43-internal-completion.ko.md",
+        "44-internal-relocation-continuity.ko.md",
+        "45-internal-routing-and-cache.ko.md",
+        "46-internal-dispatch-loop.ko.md",
+        "47-internal-object-lifecycle.ko.md",
+        "48-internal-session-binding.ko.md",
+        "49-internal-liveness-and-state.ko.md",
+        "50-internal-message-ownership.ko.md",
+        "51-internal-service-wire-protocol.ko.md",
+        "52-internal-relocation-handoff.ko.md"
       ],
       "readme_required_fragments": [
-        "Framework 공통 내부 구조",
+        "내부 설계 문서(비규범)",
         "Application이 호출하는 API의 이름과 signature",
         "공개 동작의 의미와 완료 조건",
         "Core가 제공하는 raw socket·transport 내부",
-        "구현 갭 목록"
+        "99 언어별 구현 gap과 정상화 gate"
       ],
       "required_file_fragments": {
-        "01-layering.ko.md": [
-          "binding type 이름은 adapter 층에만 나타난다",
+        "40-internal-layering.ko.md": [
+          "Public contract와 runtime core에는 binding type을 노출하지 않는다",
           "STREAM"
         ],
-        "03-progress-isolation.ko.md": [
+        "42-internal-progress-isolation.ko.md": [
           "infrastructure 작업은",
-          "처리 대기 byte"
+          "Owner별 structural count/byte 한도"
         ],
-        "06-routing-and-cache.ko.md": [
+        "45-internal-routing-and-cache.ko.md": [
           "Location Store",
           "Positive route cache"
         ],
-        "08-object-lifecycle.ko.md": [
+        "47-internal-object-lifecycle.ko.md": [
           "process 단위 byte 회계",
           "Spot 단위 byte 회계"
         ],
-        "10-liveness-and-state.ko.md": [
+        "49-internal-liveness-and-state.ko.md": [
           "확인 주기 **5초**",
           "peer 판정 기한 **15초**",
           "STREAM session"
         ],
-        "11-message-ownership.ko.md": [
+        "50-internal-message-ownership.ko.md": [
           "framework가 추가로 만드는 복사는 0",
           "raw byte"
         ],
-        "12-service-wire-protocol.ko.md": [
+        "51-internal-service-wire-protocol.ko.md": [
           "schema가 command ID",
           "`livenessProbe`"
+        ],
+        "52-internal-relocation-handoff.ko.md": [
+          "공통 handoff 하나를 사용한다",
+          "queue 소유권"
         ]
       },
       "aggregate_required_fragments": [
@@ -528,7 +533,7 @@
   },
   "formal_documents": [
     {
-      "path": "framework/doc/framework/common/internals/12-service-wire-protocol.ko.md",
+      "path": "framework/doc/framework/common/spec/51-internal-service-wire-protocol.ko.md",
       "required_fragments": [
         "`livenessProbe`",
         "`livenessAck`",

@@ -11,49 +11,6 @@ namespace Zlink.Framework.UnitTests;
 public sealed class TransportFailFastTests
 {
     [Fact]
-    public async Task NotConnected_Fails_Fast_On_AutoConnect_Managed_Submitters()
-    {
-        var submitter = new ZLinkAsyncSubmitter(
-            _ => { },
-            TimeSpan.FromSeconds(5),
-            CancellationToken.None,
-            failFastNotConnected: () => true);
-
-        var exception = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-            await submitter.Async(
-                Message.From(new byte[] { 1 }),
-                _ => throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected)));
-
-        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, exception.Kind);
-        Assert.Equal(ZLinkRetryAdvice.RetryAfterBackoff, exception.RetryAdvice);
-        await submitter.DisposeAsync();
-    }
-
-    [Fact]
-    public async Task NotConnected_Still_Buffers_Without_The_Opt_In()
-    {
-        Action ready = () => { };
-        var submitter = new ZLinkAsyncSubmitter(
-            handler => ready = handler,
-            TimeSpan.FromSeconds(30),
-            CancellationToken.None);
-
-        var connected = false;
-        var pending = submitter.Async(
-            Message.From(new byte[] { 1 }),
-            _ => connected
-                ? true
-                : throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected));
-
-        Assert.False(pending.IsCompleted);
-
-        connected = true;
-        ready();
-        await pending;
-        await submitter.DisposeAsync();
-    }
-
-    [Fact]
     public async Task Unawaited_Submit_Failures_Reach_The_Error_Sink()
     {
         Exception? seen = null;
@@ -223,7 +180,6 @@ public sealed class TransportFailFastTests
     {
         var services = new ServiceCollection();
         var registration = new ZLinkFrameworkRegistration();
-        registration.InboundDispatchOptions.ApplicationHwmBytes = 0;
         services.AddSingleton(registration);
         return services.BuildServiceProvider();
     }

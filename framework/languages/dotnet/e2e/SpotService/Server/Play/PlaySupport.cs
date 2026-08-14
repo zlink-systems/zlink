@@ -259,7 +259,7 @@ internal sealed record ServerOptions(
     int? OwnerLeaseTtlMilliseconds = null,
     int? PopulationLimit = null,
     int? InstanceSpotIdleTimeoutMilliseconds = null,
-    ulong? ApplicationHwmBytes = null,
+    ulong? CoreHwmBudgetBytes = null,
     string? BackpressureGateFile = null,
     string? SpotInitializationGateFile = null,
     string? ActorFactoryGateFile = null,

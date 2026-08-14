@@ -1,4 +1,5 @@
 import type { ZLinkFrameworkOptions } from '../../contracts';
+import { ZLinkApplicationJobQueueProfile } from '../Dispatch';
 export { ZLinkConfigurationException } from './ConfigurationException';
 import { createFrameworkOptions } from './RegistrationBuilders';
 export { createFrameworkOptions } from './RegistrationBuilders';
@@ -28,7 +29,6 @@ import type {
   ZLinkFrameworkRegistration,
   ZLinkFrameworkRegistrationOptions
 } from './RegistrationTypes';
-import { ZLinkApplicationHwmProfile } from './InboundDispatch';
 export * from './RegistrationTypes';
 import { validateFrameworkRegistration } from './RegistrationValidators';
 export { validateFrameworkRegistration };
@@ -71,20 +71,49 @@ export function createFrameworkRegistration(
     spotPublisherClients: toSpotPublisherClientSet(options.spotPublisherClients, spotNodes),
     filterTypes: [...(options.filters ?? [])],
     worker: normalizeWorkerOptions(options.worker),
-    inboundDispatch: {
-      applicationHwmBytes: options.inboundDispatch?.applicationHwmBytes,
-      applicationHwmProfile:
-        options.inboundDispatch?.applicationHwmProfile
-        ?? ZLinkApplicationHwmProfile.Balanced,
-      processMemoryLimitBytes:
-        options.inboundDispatch?.processMemoryLimitBytes
-    },
     dispatch: options.dispatch,
     metrics: options.metrics,
+    coreHwm: normalizeCoreHwm(options.coreHwm),
+    applicationJobQueue: normalizeApplicationJobQueue(options.applicationJobQueue),
     locations: normalizeLocationRegistration(options.locations)
   };
   validateFrameworkRegistration(registration, options);
   return registration;
+}
+
+function normalizeApplicationJobQueue(
+  value: ZLinkFrameworkRegistrationOptions['applicationJobQueue']
+): NonNullable<ZLinkFrameworkRegistrationOptions['applicationJobQueue']> {
+  const profile = value?.profile ?? ZLinkApplicationJobQueueProfile.Balanced;
+  if (!Object.values(ZLinkApplicationJobQueueProfile).includes(profile)) {
+    throw new TypeError('applicationJobQueue.profile must be a supported profile.');
+  }
+  const maxQueuedApplicationJobs = value?.maxQueuedApplicationJobs;
+  if (maxQueuedApplicationJobs !== undefined
+      && (typeof maxQueuedApplicationJobs !== 'bigint'
+        || maxQueuedApplicationJobs < 1n
+        || maxQueuedApplicationJobs > 2_147_483_647n)) {
+    throw new TypeError(
+      'applicationJobQueue.maxQueuedApplicationJobs must be a bigint in the range 1..2147483647.'
+    );
+  }
+  return Object.freeze({ profile, maxQueuedApplicationJobs });
+}
+
+function normalizeCoreHwm(
+  value: ZLinkFrameworkRegistrationOptions['coreHwm']
+): ZLinkFrameworkRegistrationOptions['coreHwm'] {
+  if (value === undefined) return undefined;
+  const { profile, memoryLimitBytes, budgetBytes } = value;
+  if (profile !== undefined && (!Number.isInteger(profile) || profile < 0 || profile > 3)) {
+    throw new TypeError('coreHwm.profile must be a Core Auto HWM profile value.');
+  }
+  for (const [name, bytes] of [['memoryLimitBytes', memoryLimitBytes], ['budgetBytes', budgetBytes]] as const) {
+    if (bytes !== undefined && (typeof bytes !== 'bigint' || bytes <= 0n)) {
+      throw new TypeError(`coreHwm.${name} must be a positive bigint.`);
+    }
+  }
+  return Object.freeze({ profile, memoryLimitBytes, budgetBytes });
 }
 
 const MAX_APPLICATION_VERSION = 9_223_372_036_854_775_807n;

@@ -1,9 +1,7 @@
 namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkSpotNodeBundleRegistry(
-    ZLinkFrameworkRegistration frameworkRegistration,
-    IZLinkBackendSpotNode node,
-    CancellationToken stopToken) : IAsyncDisposable
+    IZLinkBackendSpotNode node) : IAsyncDisposable
 {
     private readonly object _gate = new();
     private readonly Dictionary<ZLinkChannelName, ZLinkSpotPublisherBundle> _publisherBundles = [];
@@ -44,12 +42,6 @@ internal sealed class ZLinkSpotNodeBundleRegistry(
 
     private ZLinkSpotPublisherBundle CreatePublisherBundle()
     {
-        var publisher = node.CreateSpot();
-        return new ZLinkSpotPublisherBundle(
-            publisher,
-            new ZLinkAsyncSubmitter(
-                publisher.OnSendReady,
-                frameworkRegistration.DefaultSocketSendTimeout,
-                stopToken));
+        return new ZLinkSpotPublisherBundle(node.CreateSpot());
     }
 }

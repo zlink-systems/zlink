@@ -377,7 +377,7 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
-    public void LocationMessaging_RmC9_Fills_A_Bounded_High_Water_Mark()
+    public void LocationMessaging_RmC9_Releases_Retained_Inbound_Work()
     {
         var root = Path.Combine(ResolveE2eRoot(), "LocationMessaging");
         var scenario = File.ReadAllText(Path.Combine(
@@ -385,14 +385,11 @@ public sealed partial class RegressionTests
         var consumer = File.ReadAllText(Path.Combine(root, "Server", "Consumer", "ConsumerHostFactory.cs"));
         var provider = File.ReadAllText(Path.Combine(root, "Server", "Provider", "ProviderHostFactory.cs"));
 
-        Assert.Contains("private const ulong ApplicationHwmBytes = 1UL * 1024 * 1024", scenario, StringComparison.Ordinal);
         Assert.Contains("private const int BlockerPayloadBytes = 2 * 1024 * 1024", scenario, StringComparison.Ordinal);
         Assert.DoesNotContain("SendHighWaterMark = 4", consumer, StringComparison.Ordinal);
         Assert.Contains("ReceiveHighWaterMark = 4", provider, StringComparison.Ordinal);
         Assert.Contains("/profile/backpressure/release", scenario, StringComparison.Ordinal);
-        Assert.Contains("/runtime/status", scenario, StringComparison.Ordinal);
-        Assert.Contains("ApplicationReceivePaused", scenario, StringComparison.Ordinal);
-        Assert.Contains("PendingPayloadBytes", scenario, StringComparison.Ordinal);
+        Assert.Contains("rm-c9-after", scenario, StringComparison.Ordinal);
         Assert.DoesNotContain("Task.Delay(TimeSpan.FromSeconds(10))", scenario, StringComparison.Ordinal);
     }
 
@@ -527,6 +524,404 @@ public sealed partial class RegressionTests
         Assert.Contains("source_cleanup_completed", d2, StringComparison.Ordinal);
         Assert.Contains("location_snapshot_after_cleanup", d2, StringComparison.Ordinal);
         Assert.DoesNotContain("Task.Delay", b2 + d2, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SpotActorTransfer_Initial_Cluster_Readiness_Has_A_Dedicated_Bound()
+    {
+        var runner = File.ReadAllText(Path.Combine(
+            ResolveE2eRoot(), "SpotActorTransfer", "run_e2e.sh"));
+        var healthCalls = runner.Split('\n')
+            .Select(static line => line.Trim())
+            .Where(static line => line.StartsWith(
+                "wait_health ", StringComparison.Ordinal))
+            .ToArray();
+        var clusterBoundCalls = healthCalls
+            .Where(static line => line.Contains(
+                "$INITIAL_CLUSTER_READINESS_TIMEOUT_SECONDS",
+                StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.Contains(
+            "INITIAL_CLUSTER_READINESS_TIMEOUT_SECONDS=15",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            new[]
+            {
+                "wait_health \"$NODE_A_URL\" actor-a "
+                + "\"$INITIAL_CLUSTER_READINESS_TIMEOUT_SECONDS\" \"$NODE_A_PID\""
+            },
+            clusterBoundCalls);
+        Assert.Contains(
+            "local timeout_seconds=\"${3:-$LOCAL_READINESS_TIMEOUT_SECONDS}\"",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "local process_pid=\"${4:-}\"",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "! kill -0 \"$process_pid\"",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "exited before health",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "wait_health \"$NODE_B_URL\" actor-b",
+            healthCalls);
+        Assert.Contains(
+            "wait_health \"$NODE_C_URL\" actor-c",
+            healthCalls);
+        Assert.Contains(
+            "wait_health \"$NODE_D_URL\" actor-d",
+            healthCalls);
+        Assert.Contains(
+            "wait_health \"$SESSION_A_URL\" session-a",
+            healthCalls);
+        Assert.Contains(
+            "wait_health \"$SESSION_B_URL\" session-b",
+            healthCalls);
+        Assert.DoesNotContain(
+            healthCalls,
+            static line => line !=
+                "wait_health \"$NODE_A_URL\" actor-a "
+                + "\"$INITIAL_CLUSTER_READINESS_TIMEOUT_SECONDS\" \"$NODE_A_PID\""
+                && line.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length > 3);
+    }
+
+    [Fact]
+    public void SpotActorTransfer_Target_Crash_Gate_Is_E2e_Store_Owned()
+    {
+        var root = Path.Combine(ResolveE2eRoot(), "SpotActorTransfer");
+        var host = File.ReadAllText(Path.Combine(
+            root, "Server", "ActorNode", "ActorNodeHostFactory.cs"));
+        var actorRuntime = File.ReadAllText(Path.Combine(
+            root, "Server", "ActorNode", "ActorRuntime.cs"));
+        var support = File.ReadAllText(Path.Combine(
+            root, "Server", "ActorNode", "Support.cs"));
+        var gatedStore = File.ReadAllText(Path.Combine(
+            root, "Server", "ActorNode", "CleanupGatedLocationStore.cs"));
+        var scenario = File.ReadAllText(Path.Combine(
+            root, "Client", "Scenarios",
+            "StB5TargetCrashAggregateUnavailableScenario.cs"));
+        var clientContext = File.ReadAllText(Path.Combine(
+            root, "Client", "Support",
+            "SpotActorTransferScenarioContext.cs"));
+        var runner = File.ReadAllText(Path.Combine(root, "run_e2e.sh"));
+        var retireRuntime = File.ReadAllText(Path.Combine(
+            ResolveDotnetRoot(),
+            "src", "Zlink.Framework", "Runtime", "Spots",
+            "ZLinkSpotRetireTransport.cs"));
+
+        Assert.DoesNotContain(
+            "PostPublicationBeforeNormalization" + "TestHook",
+            retireRuntime,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Zlink.Framework.Runtime.Spots",
+            host,
+            StringComparison.Ordinal);
+        var payloadFactoryStart = host.IndexOf(
+            ".AddSpotFactory<RelocationPayloadUserSpot>",
+            StringComparison.Ordinal);
+        var nextFactoryStart = host.IndexOf(
+            ".AddSpotFactory<RelocationPayloadPerActorUserSpot>",
+            payloadFactoryStart,
+            StringComparison.Ordinal);
+        Assert.True(
+            payloadFactoryStart >= 0 && nextFactoryStart > payloadFactoryStart,
+            "The registered RelocationPayloadUserSpot factory was not found.");
+        Assert.DoesNotContain(
+            ".RelocationReadiness(",
+            host[payloadFactoryStart..nextFactoryStart],
+            StringComparison.Ordinal);
+        var payloadSpotStart = actorRuntime.IndexOf(
+            "internal sealed class RelocationPayloadUserSpot(",
+            StringComparison.Ordinal);
+        var nextSpotStart = actorRuntime.IndexOf(
+            "internal sealed class RelocationPayloadInstanceSpot(",
+            payloadSpotStart,
+            StringComparison.Ordinal);
+        Assert.True(
+            payloadSpotStart >= 0 && nextSpotStart > payloadSpotStart,
+            "The RelocationPayloadUserSpot fixture was not found.");
+        Assert.DoesNotContain(
+            "OnRelocationReadyCompletedAsync",
+            actorRuntime[payloadSpotStart..nextSpotStart],
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "target_publication_gate",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "opaque-delete-batch",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "request.Conditions.Count == 0",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "request.Mutations.Count > 0",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ExpectedParticipantCount = 2",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "request.Mutations.Count == ExpectedParticipantCount",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "request.Mutations.All",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "request.Mutations.Any",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ActorCleanupGateStore cleanupGates",
+            actorRuntime,
+            StringComparison.Ordinal);
+        var applicationRestored = actorRuntime.IndexOf(
+            "\"application_state_restored\"",
+            StringComparison.Ordinal);
+        var targetGateActivation = actorRuntime.IndexOf(
+            "cleanupGates.ActivateTargetPublicationAfterRestore(actorId)",
+            applicationRestored,
+            StringComparison.Ordinal);
+        Assert.True(
+            applicationRestored >= 0 && targetGateActivation > applicationRestored,
+            "The armed target gate must activate only after application state is restored.");
+        Assert.Contains(
+            "TargetPublicationStage.Inactive",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "TargetPublicationStage.AwaitingNewOwnerParticipants",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "TargetPublicationStage.AwaitingNormalizedMarker",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "TargetPublicationStage.AwaitingDelete",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "TargetPublicationStage.BlockingDelete",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "result is not ZLinkStoreWriteResult.Applied",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "request.Conditions.Count == 2",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "request.Conditions[0] is ZLinkStoreCondition.Version",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "request.Conditions[1] is ZLinkStoreCondition.Missing",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "or ZLinkStoreCondition.Version",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "request.Mutations.Count == 3",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "NewOwnerParticipantWritesObserved == 2",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "request.Conditions.Count == 1",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "request.Mutations.Count == 1",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "mutation is ZLinkStoreMutation.Put",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "await gate.AllowAttempt.Task.WaitAsync(cancellationToken)",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "mutation.Key",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "mutation.Value",
+            gatedStore,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Decode",
+            gatedStore,
+            StringComparison.Ordinal);
+        var targetWait = gatedStore.IndexOf(
+            "await cleanupGates.WaitBeforeWriteAsync(request, cancellationToken)",
+            StringComparison.Ordinal);
+        var innerWrite = gatedStore.IndexOf(
+            "var result = await inner.WriteAsync(request, cancellationToken)",
+            targetWait,
+            StringComparison.Ordinal);
+        var appliedObservation = gatedStore.IndexOf(
+            "cleanupGates.ObserveAppliedWrite(request, result);",
+            innerWrite,
+            StringComparison.Ordinal);
+        Assert.True(
+            targetWait >= 0 && innerWrite > targetWait
+            && appliedObservation > innerWrite,
+            "The target delete must wait before inner submission, while applied "
+            + "normalization writes are observed only after inner completion.");
+        Assert.Contains(
+            "ArmTargetPublicationGateAsync",
+            scenario,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "!relocationTask.IsCompleted",
+            scenario,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "relocation.Outcome",
+            scenario,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "await ObserveRelocationBestEffortAsync(relocationTask)",
+            scenario,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "var sourceEvidence = await context.GetEvidenceAsync(context.NodeA)",
+            scenario,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "sourceEvidence.All",
+            scenario,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "TargetCrashCompletedAckFile",
+            scenario,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "SpotActorTransferScenarioContext.WaitUnavailableAsync(",
+            scenario,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ReplacementReadinessTimeout = TimeSpan.FromSeconds(45)",
+            scenario,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "internal static async Task WaitAvailableAsync(",
+            clientContext,
+            StringComparison.Ordinal);
+        var oldTargetUnavailable = scenario.IndexOf(
+            "SpotActorTransferScenarioContext.WaitUnavailableAsync(",
+            StringComparison.Ordinal);
+        var actorPostLossCall = scenario.IndexOf(
+            "var actorError = await CaptureErrorAsync(",
+            oldTargetUnavailable,
+            StringComparison.Ordinal);
+        var spotPostLossCall = scenario.IndexOf(
+            "var spotError = await CaptureErrorAsync(",
+            actorPostLossCall,
+            StringComparison.Ordinal);
+        var actorUnavailableAssertion = scenario.IndexOf(
+            "actorError == nameof(ZLinkFrameworkErrorKind.Unavailable)",
+            spotPostLossCall,
+            StringComparison.Ordinal);
+        var spotUnavailableAssertion = scenario.IndexOf(
+            "spotError == nameof(ZLinkFrameworkErrorKind.Unavailable)",
+            actorUnavailableAssertion,
+            StringComparison.Ordinal);
+        var replacementAvailable = scenario.IndexOf(
+            "SpotActorTransferScenarioContext.WaitAvailableAsync(",
+            spotUnavailableAssertion,
+            StringComparison.Ordinal);
+        var replacementEvidenceRead = scenario.IndexOf(
+            "var replacementEvidence = await context.GetEvidenceAsync(context.NodeB)",
+            replacementAvailable,
+            StringComparison.Ordinal);
+        Assert.True(
+            oldTargetUnavailable >= 0
+            && actorPostLossCall > oldTargetUnavailable
+            && spotPostLossCall > actorPostLossCall
+            && actorUnavailableAssertion > spotPostLossCall
+            && spotUnavailableAssertion > actorUnavailableAssertion
+            && replacementAvailable > spotUnavailableAssertion
+            && replacementEvidenceRead > replacementAvailable,
+            "ST-B5 must prove the old target unavailable, assert both post-loss "
+            + "operations unavailable, then wait boundedly for the replacement "
+            + "before reading its evidence.");
+        Assert.Contains(
+            "require_st_b5_target_publication_gate_order",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "application_state_restored",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "--marker \"st_b5_target_publication_gate\"",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "--path \"$LOG_DIR/client.stderr.log\"",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "--target-crash-completed-ack-file",
+            runner,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "st_b5_target_publication_gate",
+            scenario,
+            StringComparison.Ordinal);
+        var stB5RunnerStart = runner.IndexOf(
+            "if [[ \"$SCENARIO\" == \"ST-B5\" ]]; then",
+            StringComparison.Ordinal);
+        var processExit = runner.IndexOf(
+            "wait_process_exit \"$NODE_B_PID\" actor-b",
+            stB5RunnerStart,
+            StringComparison.Ordinal);
+        var processExitAck = runner.IndexOf(
+            ": >\"$TARGET_CRASH_COMPLETED_ACK_FILE\"",
+            stB5RunnerStart,
+            StringComparison.Ordinal);
+        var replacementLeaseWait = runner.IndexOf(
+            "wait_replacement_lease_expiry actor-b",
+            stB5RunnerStart,
+            StringComparison.Ordinal);
+        Assert.True(
+            stB5RunnerStart >= 0
+            && processExit > stB5RunnerStart
+            && processExitAck > processExit
+            && replacementLeaseWait > processExitAck,
+            "ST-B5 must acknowledge the old target process exit before "
+            + "waiting to start its replacement.");
+        Assert.DoesNotContain(
+            "TargetPublicationCrashTextWriter",
+            host + support,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "aggregate_target_complete_gate",
+            host + runner,
+            StringComparison.Ordinal);
     }
 
     [Fact]

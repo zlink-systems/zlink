@@ -62,11 +62,16 @@ public sealed class RuntimeMetricsTests
             ["zlink.location.owner_lease.renew.lateness"] = (typeof(Histogram<>), "s"),
             ["zlink.observability.events.overflow"] = (typeof(Counter<>), "{event}"),
             ["zlink.host.state"] = (typeof(ObservableGauge<>), "{runtime}"),
-            ["zlink.host.inbound.application_hwm"] = (typeof(ObservableGauge<>), "By"),
-            ["zlink.host.inbound.pending_payload"] = (typeof(ObservableGauge<>), "By"),
-            ["zlink.host.inbound.receive_paused"] = (typeof(ObservableGauge<>), "{state}"),
-            ["zlink.host.completion.pending_sends"] = (typeof(ObservableGauge<>), "{request}"),
-            ["zlink.host.completion.send_limit"] = (typeof(ObservableGauge<>), "{request}"),
+            ["zlink.host.core_hwm.effective_budget"] = (typeof(ObservableGauge<>), "By"),
+            ["zlink.host.core_hwm.applied"] = (typeof(ObservableGauge<>), "By"),
+            ["zlink.host.core_hwm.accounted"] = (typeof(ObservableGauge<>), "By"),
+            ["zlink.host.core_hwm.completion_accounted"] = (typeof(ObservableGauge<>), "By"),
+            ["zlink.host.core_hwm.blocked_ratio"] = (typeof(ObservableGauge<>), "{ppm}"),
+            ["zlink.host.application_job_queue.limit"] = (typeof(ObservableGauge<>), "{job}"),
+            ["zlink.host.application_job_queue.jobs"] = (typeof(ObservableGauge<>), "{job}"),
+            ["zlink.host.application_job_queue.capacity_waiters"] = (typeof(ObservableGauge<>), "{waiter}"),
+            ["zlink.host.application_job_queue.capacity_waits"] = (typeof(ObservableCounter<>), "{wait}"),
+            ["zlink.host.application_job_queue.capacity_wait_duration"] = (typeof(ObservableCounter<>), "s"),
             ["zlink.host.relocation.duration"] = (typeof(Histogram<>), "s"),
             ["zlink.host.relocation.blocked"] = (typeof(Counter<>), "{operation}"),
             ["zlink.host.shutdown.duration"] = (typeof(Histogram<>), "s"),
@@ -125,6 +130,87 @@ public sealed class RuntimeMetricsTests
             () => ZLinkRuntimeMetrics.RecordActorCreated("mesh"));
 
         Assert.Null(exception);
+    }
+
+    [Fact]
+    public void Host_capacity_metrics_read_one_projection_with_only_exact_state_labels()
+    {
+        var core = default(ZLinkCoreHwmStatus) with
+        {
+            EffectiveBudgetBytes = 100,
+            TotalAppliedHwmBytes = 80,
+            CurrentAccountedBytes = 30,
+            PeakAccountedBytes = 50,
+            CompletionCurrentAccountedBytes = 3,
+            CompletionPeakAccountedBytes = 5,
+            BlockedRatioPpm = 7
+        };
+        var queue = new ZLinkApplicationJobQueueStatus(
+            ZLinkApplicationJobQueueProfile.Balanced,
+            ConfiguredManualMax: 16,
+            EffectiveProcessorCount: 4,
+            EffectiveMaxQueuedApplicationJobs: 16,
+            ReservedSupplyPermits: 2,
+            QueuedApplicationJobs: 3,
+            PermitsInUse: 5,
+            PeakPermitsInUse: 8,
+            CapacityWaiters: 1,
+            CapacityWaitCount: 11,
+            CapacityWaitDuration: TimeSpan.FromSeconds(1.25));
+        using var registration = ZLinkRuntimeMetrics.RegisterHostCapacity(
+            () => new ZLinkHostCapacityStatus(4, core, queue));
+        var longSamples = new List<(
+            string Name,
+            long Value,
+            IReadOnlyDictionary<string, string> Tags)>();
+        var durationSamples = new List<double>();
+        var names = new[]
+        {
+            "zlink.host.core_hwm.effective_budget",
+            "zlink.host.core_hwm.applied",
+            "zlink.host.core_hwm.accounted",
+            "zlink.host.core_hwm.completion_accounted",
+            "zlink.host.core_hwm.blocked_ratio",
+            "zlink.host.application_job_queue.limit",
+            "zlink.host.application_job_queue.jobs",
+            "zlink.host.application_job_queue.capacity_waiters",
+            "zlink.host.application_job_queue.capacity_waits"
+        };
+        using var longListener = Listen<long>(
+            names,
+            (instrument, value, tags) => longSamples.Add(
+                (instrument.Name, value, Tags(tags))));
+        using var durationListener = Listen<double>(
+            "zlink.host.application_job_queue.capacity_wait_duration",
+            (_, value, _) => durationSamples.Add(value));
+
+        longListener.RecordObservableInstruments();
+        durationListener.RecordObservableInstruments();
+
+        Assert.Contains(longSamples, sample =>
+            sample.Name == "zlink.host.core_hwm.effective_budget"
+            && sample.Value == 100
+            && sample.Tags.Count == 0);
+        Assert.Equal(
+            ["current", "peak"],
+            longSamples
+                .Where(static sample =>
+                    sample.Name == "zlink.host.core_hwm.accounted")
+                .Select(static sample => sample.Tags["state"])
+                .Order(StringComparer.Ordinal));
+        Assert.Equal(
+            ["in_use", "peak", "queued", "reserved"],
+            longSamples
+                .Where(static sample =>
+                    sample.Name == "zlink.host.application_job_queue.jobs")
+                .Select(static sample => sample.Tags["state"])
+                .Order(StringComparer.Ordinal));
+        Assert.All(
+            longSamples,
+            static sample => Assert.All(
+                sample.Tags.Keys,
+                static key => Assert.Equal("state", key)));
+        Assert.Equal(1.25, Assert.Single(durationSamples), precision: 3);
     }
 
     [Fact]
@@ -604,67 +690,6 @@ public sealed class RuntimeMetricsTests
         listener.RecordObservableInstruments();
         Assert.Equal(4, peerSamples[^1]);
         Assert.Equal("draining", hostSamples[^1]);
-    }
-
-    [Fact]
-    public void Host_Inbound_Observable_Metrics_Read_Bounded_Status_Without_Identity_Labels()
-    {
-        var status = new ZLinkInboundDispatchStatus(
-            1024,
-            400,
-            300,
-            100,
-            true,
-            7,
-            32);
-        var providerReads = 0;
-        using var registration = ZLinkRuntimeMetrics.RegisterHostInboundDispatch(() =>
-        {
-            providerReads++;
-            return status;
-        });
-        var samples = new List<(string Name, long Value, IReadOnlyDictionary<string, string> Tags)>();
-        using var listener = new MeterListener
-        {
-            InstrumentPublished = (instrument, owner) =>
-            {
-                if (instrument.Meter.Name == ZLinkMeters.Framework
-                    && (instrument.Name.StartsWith("zlink.host.inbound.", StringComparison.Ordinal)
-                        || instrument.Name.StartsWith("zlink.host.completion.", StringComparison.Ordinal)))
-                    owner.EnableMeasurementEvents(instrument);
-            }
-        };
-        listener.SetMeasurementEventCallback<long>((instrument, value, tags, _) =>
-            samples.Add((instrument.Name, value, Tags(tags))));
-        listener.Start();
-
-        Assert.Equal(0, providerReads);
-        listener.RecordObservableInstruments();
-        Assert.Equal(5, providerReads);
-
-        Assert.Contains(samples, sample =>
-            sample is { Name: "zlink.host.inbound.application_hwm", Value: 1024 }
-            && sample.Tags.Count == 0);
-        Assert.Contains(samples, sample =>
-            sample is { Name: "zlink.host.inbound.pending_payload", Value: 300 }
-            && sample.Tags["state"] == "queued");
-        Assert.Contains(samples, sample =>
-            sample is { Name: "zlink.host.inbound.pending_payload", Value: 100 }
-            && sample.Tags["state"] == "active");
-        Assert.Contains(samples, sample =>
-            sample is { Name: "zlink.host.inbound.receive_paused", Value: 1 }
-            && sample.Tags.Count == 0);
-        Assert.Contains(samples, sample =>
-            sample is { Name: "zlink.host.completion.pending_sends", Value: 7 }
-            && sample.Tags.Count == 0);
-        Assert.Contains(samples, sample =>
-            sample is { Name: "zlink.host.completion.send_limit", Value: 32 }
-            && sample.Tags.Count == 0);
-        Assert.All(
-            samples,
-            sample => Assert.DoesNotContain(
-                sample.Tags.Keys,
-                key => key is "mesh_name" or "channel_name" or "actor_id" or "spot_id" or "owner"));
     }
 
     private static string? Tag(ReadOnlySpan<KeyValuePair<string, object?>> tags, string name)

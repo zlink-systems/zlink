@@ -1156,50 +1156,6 @@ test('remote User Spot close remains deleted when the terminal reply is lost', a
   assert.equal(await manager.close(spot), false);
 });
 
-test('relocation matches durable source allocation and only requires the target to be live', async () => {
-  const live = new Set([
-    'mesh:node-a:1:owner-a:1',
-    'mesh:node-b:2:owner-b:2'
-  ]);
-  const store = authority(live);
-  const current = await createActive(store, 'relocate', target('node-a', 'owner-a'));
-  live.delete('mesh:node-a:1:owner-a:1');
-
-  const reservation = await store.reserveRelocationCapacity({
-    reservationId: '11111111-1111-4111-8111-111111111111',
-    authorityKey: authorityKey('relocate'),
-    expectedStoreVersion: current.storeVersion,
-    objectKind: 'user_spot',
-    stableType: 'room',
-    sourceDescriptor: { meshName: 'mesh', rid: 'node-a' },
-    sourceNodeLifecycleGeneration: 1n,
-    sourceOwner: owner('owner-a', 1n),
-    targetDescriptor: { meshName: 'mesh', rid: 'node-b' },
-    targetNodeLifecycleGeneration: 2n,
-    targetOwner: owner('owner-b', 2n),
-    capacity: userSpotCapacity('room')
-  });
-  assert.equal(reservation.kind, 'reserved');
-  if (reservation.kind !== 'reserved') return;
-  const moved = await store.compareExchangeAuthority(
-    authorityKey('relocate'),
-    current.storeVersion,
-    {
-      kind: 'put',
-      payload: Buffer.from('moved'),
-      generationTransition: 'newOwner',
-      targetOwner: owner('owner-b', 2n),
-      relocationCapacityFence: reservation.fence
-    }
-  );
-  assert.equal(moved.kind, 'stored');
-  if (moved.kind !== 'stored') return;
-  assert.equal(moved.ownerId, 'owner-b');
-  assert.equal(moved.allocation.descriptor.rid, 'node-b');
-  assert.equal(moved.objectGeneration, current.objectGeneration);
-  assert.ok(moved.authorityOwnerGeneration > current.authorityOwnerGeneration);
-});
-
 test('aggregate prepare reserves one typed bundle until aggregate commit or abort', async () => {
   const live = new Set([
     'mesh:node-a:1:owner-a:1',
@@ -1218,21 +1174,6 @@ test('aggregate prepare reserves one typed bundle until aggregate commit or abor
       count: 2
     }
   };
-  const capacityReservation = await store.reserveRelocationCapacity({
-    reservationId: aggregateId.value,
-    authorityKey: authorityKey('aggregate-a'),
-    expectedStoreVersion: first.storeVersion,
-    objectKind: 'user_spot',
-    stableType: 'room',
-    sourceDescriptor: { meshName: 'mesh', rid: 'node-a' },
-    sourceNodeLifecycleGeneration: 1n,
-    sourceOwner: owner('owner-a', 1n),
-    targetDescriptor: { meshName: 'mesh', rid: 'node-b' },
-    targetNodeLifecycleGeneration: 2n,
-    targetOwner: owner('owner-b', 2n),
-    capacity
-  });
-  assert.equal(capacityReservation.kind, 'reserved');
   const prepared = await store.prepareAggregate({
     aggregateId,
     aggregateGeneration: 1n,

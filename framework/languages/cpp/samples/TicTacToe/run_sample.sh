@@ -133,10 +133,6 @@ wait_grep() {
     fi
     sleep 0.1
   done
-  if [[ "$pattern" == "tictactoe play route ready"* ]]; then
-    echo "TicTacToe route startup readiness did not settle; retrying with fresh processes." >&2
-    return 75
-  fi
   grep -q "$pattern" "$file"
 }
 

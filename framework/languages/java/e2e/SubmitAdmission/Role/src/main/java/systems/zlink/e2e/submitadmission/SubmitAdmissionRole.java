@@ -84,11 +84,6 @@ public class SubmitAdmissionRole {
     ZLinkFrameworkConfigurer configureFramework(RoleState state) {
         return options -> {
             RoleConfig config = state.config();
-            if ("target".equals(config.role())) {
-                // Keep two deterministic payloads within the host-wide budget so
-                // the second submit must wait for the first handler to complete.
-                options.configureInboundDispatch().setApplicationHwmBytes(1024);
-            }
             if (!"publisher".equals(config.role()) && !"subscriber".equals(config.role())) {
                 var mesh = options.addRouteMesh(MESH)
                     .listen(config.meshEndpoint())
@@ -332,7 +327,6 @@ public class SubmitAdmissionRole {
             server.createContext("/send-channel", this::sendChannel);
             server.createContext("/publish", this::publish);
             server.createContext("/counts", this::counts);
-            server.createContext("/inbound-status", this::inboundStatus);
             server.start();
             state.record("role_ready", Map.of("httpPort", Integer.toString(state.config().httpPort())));
         }
@@ -428,13 +422,6 @@ public class SubmitAdmissionRole {
         private void counts(HttpExchange exchange) throws IOException {
             respond(exchange, 200,
                 "started=" + state.handlerStarted() + ",completed=" + state.handlerCompleted());
-        }
-
-        private void inboundStatus(HttpExchange exchange) throws IOException {
-            var status = runtimeProvider.getObject().status().inboundDispatch();
-            respond(exchange, 200,
-                "hwm=" + status.applicationHwmBytes()
-                    + ",paused=" + status.applicationReceivePaused());
         }
 
         @Override

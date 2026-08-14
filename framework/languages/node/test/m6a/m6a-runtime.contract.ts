@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
-import { totalmem } from 'node:os';
 import { test } from 'node:test';
-import { getHeapStatistics } from 'node:v8';
+import { createContext } from '@zlink-systems/zlink';
 
 import {
   SERVICE_WIRE_MAGIC,
@@ -20,13 +19,6 @@ import {
   ZLinkNodeRawMeshBackend
 } from '../../packages/framework/src/runtime/backend/node/node-raw-mesh-backend';
 import {
-  ZLinkInboundDispatchBudget,
-  resolveApplicationHwm
-} from '../../packages/framework/src/runtime/dispatch/inbound-dispatch-budget';
-import {
-  ZLinkApplicationHwmProfile
-} from '../../packages/framework/src/contracts';
-import {
   ServiceDiscoveryRegistry
 } from '../../packages/framework/src/runtime/foundation/service-discovery-registry';
 import {
@@ -39,6 +31,10 @@ import {
 import {
   ServiceMailbox
 } from '../../packages/framework/src/runtime/foundation/service-mailbox';
+import {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} from '../../packages/framework/src/runtime/host/application-job-queue';
 import {
   ServiceTopologyRegistry,
   type ServiceNodeDescriptor
@@ -90,8 +86,18 @@ function rawServiceRuntime(
 ): RawServiceMeshRuntime {
   return new RawServiceMeshRuntime({
     ...options,
-    bindingPort: options.bindingPort ?? new ZLinkNodeRawBindingPort()
+    bindingPort: options.bindingPort ?? new ZLinkNodeRawBindingPort(),
+    applicationJobQueue: options.applicationJobQueue ?? applicationJobQueue()
   });
+}
+
+function applicationJobQueue(): ApplicationJobQueue {
+  return new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration(
+      { maxQueuedApplicationJobs: 2_048n },
+      () => 1n
+    )
+  );
 }
 
 function runtimeStateWireValue(frame: Uint8Array): number {
@@ -199,7 +205,8 @@ test('RouteMesh admission preserves an optional maintenance wave across updates'
   const backend = new ZLinkNodeRawMeshBackend(
     'wave-mesh',
     'wave-node',
-    new ZLinkNodeRawBindingPort()
+    new ZLinkNodeRawBindingPort(),
+    applicationJobQueue()
   );
   backend.configureObjectPlacement({
     role: 'server',
@@ -212,6 +219,46 @@ test('RouteMesh admission preserves an optional maintenance wave across updates'
   const created = (backend as unknown as { createDescriptor(): ServiceNodeDescriptor })
     .createDescriptor();
   assert.equal(created.maintenanceWave, 'rolling-a');
+});
+
+test('raw binding receive retains Core credit until the Framework record closes', async () => {
+  const context = createContext();
+  const binding = new ZLinkNodeRawBindingPort(context);
+  const host = binding.createHost();
+  const router = host.createRouter();
+  const dealer = host.createDealer();
+  const endpoint = `ipc:///tmp/zlink-node-raw-retained-${process.pid}-${Date.now()}.sock`;
+  router.setRoutingId('raw-retained-router');
+  router.bind(endpoint);
+  dealer.setRoutingId('raw-retained-dealer');
+  dealer.connect(endpoint);
+  try {
+    await pollUntil(async () => {
+      try {
+        await dealer.send([Buffer.from('retained-payload')]);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    let received;
+    await pollUntil(() => {
+      received = router.receive(true);
+      return received !== undefined;
+    });
+    assert.equal(
+      context.getCoreHwmBudgetSnapshot().outstandingApplicationLeaseCount,
+      1n
+    );
+    received!.close();
+    assert.equal(
+      context.getCoreHwmBudgetSnapshot().outstandingApplicationLeaseCount,
+      0n
+    );
+  } finally {
+    host.close();
+    context.close();
+  }
 });
 
 test('RouteMesh admission rejects malformed UTF-8 instead of replacing bytes', () => {
@@ -286,7 +333,7 @@ test('topology snapshots fence reconnect and exclude retiring placement targets'
   assert.equal(topology.selectPlacement(), undefined);
 });
 
-test('RouteMesh admission classifies stale and conflicting descriptor revisions as protocol errors', () => {
+test('RouteMesh admission classifies stale and conflicting descriptor revisions as protocol errors', async () => {
   const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
   const current = {
     ...descriptor('peer'),
@@ -298,23 +345,23 @@ test('RouteMesh admission classifies stale and conflicting descriptor revisions 
     processReceived(record: {
       sourceRid: string;
       parts: readonly Buffer[];
-    }, nowMs: number, completionControl: boolean): string;
+    }, nowMs: number): Promise<string>;
   }).processReceived.bind(runtime);
 
-  assert.equal(processReceived({
+  assert.equal(await processReceived({
     sourceRid: current.nodeRoutingId,
     parts: [encodeRouteMeshAdmission(M6aServiceWireCommand.update, {
       ...current,
       descriptorRevision: 1n
     })]
-  }, performance.now(), false), 'protocolError');
-  assert.equal(processReceived({
+  }, performance.now()), 'protocolError');
+  assert.equal(await processReceived({
     sourceRid: current.nodeRoutingId,
     parts: [encodeRouteMeshAdmission(M6aServiceWireCommand.update, {
       ...current,
       channels: [{ name: 'alpha', weight: 99 }]
     })]
-  }, performance.now(), false), 'protocolError');
+  }, performance.now()), 'protocolError');
   assert.equal(runtime.topology.peer(current.nodeRoutingId)?.descriptor.descriptorRevision, 2n);
 });
 
@@ -477,7 +524,7 @@ test('topology treats lifecycle generation as an opaque equality token', () => {
   assert.equal(topology.peer('peer')?.connectionId, 'current-connection');
 });
 
-test('raw monitor preserves each physical candidate direction through admission and disconnect fencing', () => {
+test('raw monitor preserves each physical candidate direction through admission and disconnect fencing', async () => {
   const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
   const peer = { ...descriptor('peer'), state: 'serving' as const };
   const internal = runtime as unknown as {
@@ -524,7 +571,7 @@ test('raw monitor preserves each physical candidate direction through admission 
     }
   );
 
-  assert.equal(runtime.drainMonitorEvents(), 2);
+  assert.equal(await runtime.drainMonitorEvents(), 2);
   const candidates = [...internal.connectionCandidates.get('peer')!.values()];
   assert.deepEqual(
     candidates.map(candidate => [candidate.direction, candidate.discriminator]),
@@ -551,13 +598,13 @@ test('raw monitor preserves each physical candidate direction through admission 
     localAddress: 'tcp://ephemeral:41001',
     remoteAddress: peer.advertisedEndpoint
   });
-  assert.equal(runtime.drainMonitorEvents(), 1);
+  assert.equal(await runtime.drainMonitorEvents(), 1);
   assert.equal(runtime.topology.peer('peer')?.connectionId, inbound.connectionId);
   assert.equal(internal.connectionCandidates.get('peer')?.size, 1);
   assert.equal(internal.connectionIds.get('peer'), inbound.connectionId);
 });
 
-test('raw monitor ignores a late disconnect from the superseded physical connection', () => {
+test('raw monitor ignores a late disconnect from the superseded physical connection', async () => {
   const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
   const peer = { ...descriptor('peer'), state: 'serving' as const };
   const internal = runtime as unknown as {
@@ -581,12 +628,12 @@ test('raw monitor ignores a late disconnect from the superseded physical connect
     remoteAddress: 'remote'
   });
 
-  assert.equal(runtime.drainMonitorEvents(), 1);
+  assert.equal(await runtime.drainMonitorEvents(), 1);
   assert.equal(runtime.topology.peer('peer')?.connectionId, currentConnection);
   assert.equal(internal.connectionIds.get('peer'), currentConnection);
 });
 
-test('raw monitor fences paired transport lanes and ignores ready-count snapshots', () => {
+test('raw monitor fences paired transport lanes and ignores ready-count snapshots', async () => {
   const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
   const peer = { ...descriptor('peer-paired'), state: 'serving' as const };
   const internal = runtime as unknown as {
@@ -633,7 +680,7 @@ test('raw monitor fences paired transport lanes and ignores ready-count snapshot
     }
   );
 
-  assert.equal(runtime.drainMonitorEvents(), 2);
+  assert.equal(await runtime.drainMonitorEvents(), 2);
   assert.equal(internal.connectionCandidates.get(peer.nodeRoutingId)?.size, 1);
   const connectionId = [...internal.connectionCandidates.get(peer.nodeRoutingId)!.keys()][0]!;
   assert.equal(
@@ -653,7 +700,7 @@ test('raw monitor fences paired transport lanes and ignores ready-count snapshot
     transportLane: 1,
     flags: 0
   });
-  assert.equal(runtime.drainMonitorEvents(), 1);
+  assert.equal(await runtime.drainMonitorEvents(), 1);
   assert.equal(runtime.topology.peer(peer.nodeRoutingId), undefined);
 
   internal.monitorEvents.push({
@@ -668,7 +715,7 @@ test('raw monitor fences paired transport lanes and ignores ready-count snapshot
     transportLane: 0,
     flags: 0
   });
-  assert.equal(runtime.drainMonitorEvents(), 1);
+  assert.equal(await runtime.drainMonitorEvents(), 1);
   assert.equal(runtime.topology.peer(peer.nodeRoutingId), undefined);
 });
 
@@ -916,7 +963,7 @@ test('ClientServer keeps a known target observable while its transport is discon
   );
 });
 
-test('runtime weight changes increment the local descriptor revision and preserve public bounds', () => {
+test('runtime weight changes increment the local descriptor revision and preserve public bounds', async () => {
   const runtime = rawServiceRuntime({
     descriptor: {
       ...descriptor('runtime-options'),
@@ -924,12 +971,12 @@ test('runtime weight changes increment the local descriptor revision and preserv
     }
   });
   const initial = runtime.topology.localDescriptor();
-  runtime.updateLocalWeights({ placementWeight: 0 });
+  await runtime.updateLocalWeights({ placementWeight: 0 });
   const placement = runtime.topology.localDescriptor();
   assert.equal(placement.descriptorRevision, initial.descriptorRevision + 1n);
   assert.equal(placement.placementWeight, 0);
 
-  runtime.updateLocalWeights({
+  await runtime.updateLocalWeights({
     channelName: 'alpha',
     channelWeight: 10_000
   });
@@ -938,7 +985,7 @@ test('runtime weight changes increment the local descriptor revision and preserv
   assert.equal(channel.channels.find(candidate => candidate.name === 'alpha')?.weight, 10_000);
 });
 
-test('mailbox domains remain bounded and infrastructure claims progress independently', () => {
+test('mailbox has no hidden admission cap and owner claims progress independently', () => {
   const mailbox = new ServiceMailbox({
     applicationMessages: 2,
     applicationBytes: 8,
@@ -959,7 +1006,7 @@ test('mailbox domains remain bounded and infrastructure claims progress independ
     owner: 'spot-b',
     domain: 'application',
     parts: [Buffer.from([6])]
-  }), false);
+  }), true);
   assert.equal(mailbox.tryEnqueue({
     owner: 'peer-a',
     domain: 'infrastructure',
@@ -967,21 +1014,25 @@ test('mailbox domains remain bounded and infrastructure claims progress independ
   }), true);
 
   const application = mailbox.tryClaim('application', 1, 8)!;
-  assert.equal(mailbox.tryClaim('application', 1, 8), undefined);
+  const parallelOwner = mailbox.tryClaim('application', 1, 8)!;
+  assert.equal(parallelOwner.owner, 'spot-b');
   mailbox.releaseClaimedPayload(application.records[0]!);
   assert.equal(application.records[0]!.parts.length, 0);
   const infrastructure = mailbox.tryClaim('infrastructure', 1, 8)!;
   assert.equal(infrastructure.records.length, 1);
   assert.equal(mailbox.release(infrastructure), true);
   assert.equal(mailbox.release(infrastructure), false);
+  assert.equal(mailbox.release(parallelOwner), true);
   assert.equal(mailbox.release(application), true);
   assert.equal(mailbox.tryClaim('application', 1, 8)?.records.length, 1);
 });
 
-test('remote request receives CapacityExceeded when bounded mailbox admission fails', () => {
+test('remote request is not rejected by legacy mailbox limits after shared admission', async () => {
+  const jobs = applicationJobQueue();
   const runtime = rawServiceRuntime({
     descriptor: descriptor('local'),
-    mailbox: { applicationMessages: 1, applicationBytes: 4_096 }
+    mailbox: { applicationMessages: 1, applicationBytes: 4_096 },
+    applicationJobQueue: jobs
   });
   assert.equal(runtime.topology.admit({
     ...descriptor('peer'),
@@ -1002,10 +1053,11 @@ test('remote request receives CapacityExceeded when bounded mailbox admission fa
         reply(parts: readonly Uint8Array[]): void;
       },
       nowMs: number,
-      completionControl: boolean
-    ): string;
+      applicationJobOwner: Awaited<ReturnType<RawServiceMeshRuntime['reserveLocalIngress']>>
+    ): Promise<string>;
   };
-  const result = internals.processReceived({
+  const applicationJobOwner = await runtime.reserveLocalIngress();
+  const result = await internals.processReceived({
     sourceRid: 'peer',
     requestSeq: 19n,
     parts: [
@@ -1017,16 +1069,12 @@ test('remote request receives CapacityExceeded when bounded mailbox admission fa
       })
     ],
     reply(parts) { reply = parts; }
-  }, 0, false);
+  }, 0, applicationJobOwner);
+  applicationJobOwner.close();
 
-  assert.equal(result, 'infrastructure');
-  assert.ok(reply);
-  assert.deepEqual(decodeReplyHeader(reply[0]!), {
-    correlation: 7n,
-    terminalResult: 106,
-    failureCode: 18,
-    tail: Buffer.alloc(0)
-  });
+  assert.equal(result, 'application');
+  assert.equal(reply, undefined);
+  assert.equal(runtime.mailbox.pendingMessages('application'), 2);
   runtime.close();
 });
 
@@ -1165,10 +1213,10 @@ test('raw admission keeps Object Client-only pairs out of liveness and records N
   right.start();
   try {
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
-    await pollUntil(() => {
-      left.announceExpectedPeers();
-      right.pumpOne();
-      left.pumpOne();
+    await pollUntil(async () => {
+      await left.announceExpectedPeers();
+      await right.pumpOne();
+      await left.pumpOne();
       return left.topology.notRequiredPeers().length === 1
         && right.topology.notRequiredPeers().length === 1;
     });
@@ -1189,7 +1237,8 @@ test('raw admission keeps Object Client-only pairs out of liveness and records N
   const backend = new ZLinkNodeRawMeshBackend(
     'm6a-mesh',
     'client-monitor',
-    new ZLinkNodeRawBindingPort()
+    new ZLinkNodeRawBindingPort(),
+    applicationJobQueue()
   );
   backend.configureObjectPlacement({
     role: 'client',
@@ -1243,12 +1292,12 @@ test('raw runtime admits peers and completes node/channel requests once', async 
   right.start();
   try {
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
-    await pollUntil(() => {
-      left.announceExpectedPeers();
-      right.pumpOne();
-      left.pumpOne();
-      left.tickLiveness();
-      right.tickLiveness();
+    await pollUntil(async () => {
+      await left.announceExpectedPeers();
+      await right.pumpOne();
+      await left.pumpOne();
+      await left.tickLiveness();
+      await right.tickLiveness();
       return left.topology.peer('m6a-right') !== undefined
         && right.topology.peer('m6a-left') !== undefined
         && left.isPeerRouteReady('m6a-right')
@@ -1257,14 +1306,14 @@ test('raw runtime admits peers and completes node/channel requests once', async 
     assert.equal(left.isPeerRouteReady('m6a-right', rightDescriptor.lifecycleGeneration), true);
     assert.equal(left.isPeerRouteReady('m6a-right', rightDescriptor.lifecycleGeneration + 1n), false);
 
-    assert.equal(left.sendToChannel('alpha', {
+    assert.equal(await left.sendToChannel('alpha', {
       packetName: 'ChannelNotice',
       contentType: 'application/json',
       payload: Buffer.from('notice')
     }), true);
     let observedSourceRoutingId: string | undefined;
     let observedByteCount = 0;
-    await pollUntil(() => right.pumpOne(
+    await pollUntil(async () => await right.pumpOne(
       performance.now(),
       (sourceRoutingId, byteCount) => {
         observedSourceRoutingId = sourceRoutingId;
@@ -1282,7 +1331,7 @@ test('raw runtime admits peers and completes node/channel requests once', async 
       contentType: 'application/json',
       payload: Buffer.from('request')
     }, 2_000);
-    await pollUntil(() => right.pumpOne() === 'application');
+    await pollUntil(async () => await right.pumpOne() === 'application');
     const request = right.mailbox.tryClaim('application', 1, 4096)!;
     right.reply(request.records[0]!, {
       packetName: 'Answer',
@@ -1305,7 +1354,8 @@ test('raw runtime admits peers and completes node/channel requests once', async 
   const backend = new ZLinkNodeRawMeshBackend(
     'm6a-mesh',
     'backend-host',
-    new ZLinkNodeRawBindingPort()
+    new ZLinkNodeRawBindingPort(),
+    applicationJobQueue()
   );
   backend.setBind(`ipc:///tmp/zlink-m6a-backend-${process.pid}-${Date.now()}.sock`);
   backend.addChannelName('alpha');
@@ -1313,12 +1363,15 @@ test('raw runtime admits peers and completes node/channel requests once', async 
   try {
     assert.equal(backend.status().state, 2);
     const initialRevision = backend.status().descriptorRevision;
-    backend.setPlacementWeight(0);
+    await backend.setPlacementWeight(0);
     assert.equal(backend.status().descriptorRevision, initialRevision + 1n);
-    backend.setChannelWeight('alpha', 0);
+    await backend.setChannelWeight('alpha', 0);
     assert.equal(backend.status().descriptorRevision, initialRevision + 2n);
-    assert.throws(() => backend.setPlacementWeight(-1), /0\.\.10000/);
-    assert.throws(() => backend.setChannelWeight('alpha', 10_001), /0\.\.10000/);
+    await assert.rejects(backend.setPlacementWeight(-1), /0\.\.10000/);
+    await assert.rejects(
+      backend.setChannelWeight('alpha', 10_001),
+      /0\.\.10000/
+    );
     const publisher = backend.createPublisher();
     await publisher.publishAsync(
       'alpha',
@@ -1331,7 +1384,7 @@ test('raw runtime admits peers and completes node/channel requests once', async 
   }
 });
 
-test('completion control preserves liveness while Application receive is paused', async () => {
+test('normal receive pump carries application and liveness traffic on one route', async () => {
   const endpointNonce = `${process.pid}-${Date.now()}`;
   const leftDescriptor = descriptor(
     'completion-left',
@@ -1355,46 +1408,33 @@ test('completion control preserves liveness while Application receive is paused'
   right.start();
   try {
     left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
-    await pollUntil(() => {
-      left.announceExpectedPeers();
-      right.pumpOne();
-      left.pumpOne();
+    await pollUntil(async () => {
+      await left.announceExpectedPeers();
+      await right.pumpOne();
+      await left.pumpOne();
       return left.topology.peer(rightDescriptor.nodeRoutingId) !== undefined
         && right.topology.peer(leftDescriptor.nodeRoutingId) !== undefined;
     });
 
-    assert.equal(left.sendToNode(rightDescriptor.nodeRoutingId, {
-      packetName: 'ApplicationMustRemainUnread',
+    assert.equal(await left.sendToNode(rightDescriptor.nodeRoutingId, {
+      packetName: 'ApplicationOnNormalRoute',
       contentType: 'application/octet-stream',
-      payload: Buffer.from('unread')
+      payload: Buffer.from('normal-route')
     }), true);
 
-    // Object traffic cannot be smuggled onto Completion, and a control record
-    // cannot consume the connection's entire 256 KiB HWM.
-    assert.equal(left.sendCompletionControl(
-      rightDescriptor.nodeRoutingId,
-      [Buffer.from([0x5a, 0x4d, 1, M6aServiceWireCommand.nodeSend, 0])]
-    ), false);
-    assert.equal(left.sendCompletionControl(
-      rightDescriptor.nodeRoutingId,
-      [Buffer.concat([
-        Buffer.from([0x5a, 0x4d, 1, M6aServiceWireCommand.livenessProbe, 0]),
-        Buffer.alloc(64 * 1024)
-      ])]
-    ), false);
-
     const before = performance.now() + 10;
-    const probe = left.tickLiveness(before);
+    const probe = await left.tickLiveness(before);
     assert.equal(probe.probes.length, 1);
     const leftLiveness = left.liveness as unknown as {
       peers: Map<string, { outstandingProbe?: bigint }>;
     };
-    await pollUntil(() => {
-      right.progressCompletion();
-      left.progressCompletion();
+    await pollUntil(async () => {
+      await right.pumpOne();
+      await left.pumpOne();
       return leftLiveness.peers.get(rightDescriptor.nodeRoutingId)
         ?.outstandingProbe === undefined;
     });
+    assert.equal(right.mailbox.pendingMessages('application'), 1);
 
     const rightInternal = right as unknown as {
       expectedPeers: Map<string, {
@@ -1412,7 +1452,7 @@ test('completion control preserves liveness while Application receive is paused'
       securityIdentity: leftDescriptor.securityIdentity,
       lifecycleGeneration: leftDescriptor.lifecycleGeneration
     });
-    assert.equal(left.sendCompletionControl(
+    assert.equal(await left.sendService(
       rightDescriptor.nodeRoutingId,
       [encodeRouteMeshAdmission(M6aServiceWireCommand.update, {
         ...leftDescriptor,
@@ -1421,18 +1461,12 @@ test('completion control preserves liveness while Application receive is paused'
         state: 'serving'
       })]
     ), true);
-    await new Promise(resolve => setTimeout(resolve, 20));
-    right.progressCompletion();
+    await pollUntil(async () => await right.pumpOne() === 'infrastructure');
     assert.equal(
       right.topology.peer(leftDescriptor.nodeRoutingId)
         ?.descriptor.lifecycleGeneration,
       leftDescriptor.lifecycleGeneration
     );
-
-    // No Application Recv was started while Completion control progressed.
-    assert.equal(right.mailbox.pendingMessages('application'), 0);
-    await pollUntil(() => right.pumpOne() === 'application');
-    assert.equal(right.mailbox.pendingMessages('application'), 1);
   } finally {
     left.close();
     right.close();
@@ -1455,16 +1489,14 @@ test('one-sided endpoint-only client upgrades the provisional route before Ready
   client.start();
   try {
     client.connectPeerEndpoint(providerDescriptor.advertisedEndpoint);
-    await pollUntil(() => {
-      provider.drainMonitorEvents();
-      client.drainMonitorEvents();
-      provider.pumpOne();
-      client.pumpOne();
-      provider.progressCompletion();
-      client.progressCompletion();
-      provider.tickLiveness();
-      client.tickLiveness();
-      client.announceExpectedPeers();
+    await pollUntil(async () => {
+      await provider.drainMonitorEvents();
+      await client.drainMonitorEvents();
+      await provider.pumpOne();
+      await client.pumpOne();
+      await provider.tickLiveness();
+      await client.tickLiveness();
+      await client.announceExpectedPeers();
       return client.isPeerRouteReady(providerDescriptor.nodeRoutingId)
         && provider.isPeerRouteReady(clientDescriptor.nodeRoutingId);
     });
@@ -1474,13 +1506,11 @@ test('one-sided endpoint-only client upgrades the provisional route before Ready
       contentType: 'application/json',
       payload: Buffer.from('request')
     }, 2_000);
-    await pollUntil(() => {
-      provider.drainMonitorEvents();
-      client.drainMonitorEvents();
-      provider.pumpOne();
-      client.pumpOne();
-      provider.progressCompletion();
-      client.progressCompletion();
+    await pollUntil(async () => {
+      await provider.drainMonitorEvents();
+      await client.drainMonitorEvents();
+      await provider.pumpOne();
+      await client.pumpOne();
       return provider.mailbox.pendingMessages('application') > 0;
     });
     const request = provider.mailbox.tryClaim('application', 1, 4_096)!;
@@ -1520,18 +1550,16 @@ test('bilateral endpoint-only manual connections learn peer RIDs and converge', 
     await new Promise(resolve => setTimeout(resolve, 20));
     left.start();
     left.connectPeerEndpoint(rightDescriptor.advertisedEndpoint);
-    await pollUntil(() => {
-      right.announceExpectedPeers();
-      left.announceExpectedPeers();
-      right.drainMonitorEvents();
-      left.drainMonitorEvents();
-      right.pumpOne();
-      left.pumpOne();
-      right.pumpOne();
-      left.tickLiveness();
-      right.tickLiveness();
-      left.progressCompletion();
-      right.progressCompletion();
+    await pollUntil(async () => {
+      await right.announceExpectedPeers();
+      await left.announceExpectedPeers();
+      await right.drainMonitorEvents();
+      await left.drainMonitorEvents();
+      await right.pumpOne();
+      await left.pumpOne();
+      await right.pumpOne();
+      await left.tickLiveness();
+      await right.tickLiveness();
       return left.topology.peer(rightDescriptor.nodeRoutingId) !== undefined
         && right.topology.peer(leftDescriptor.nodeRoutingId) !== undefined
         && left.isPeerRouteReady(rightDescriptor.nodeRoutingId)
@@ -1568,7 +1596,7 @@ test('bilateral endpoint-only manual connections learn peer RIDs and converge', 
         contentType: 'application/json',
         payload: Buffer.from('request')
       }, 2_000);
-      await pollUntil(() => target.pumpOne() === 'application');
+      await pollUntil(async () => await target.pumpOne() === 'application');
       const request = target.mailbox.tryClaim('application', 1, 4_096)!;
       target.reply(request.records[0]!, {
         packetName: 'BilateralAnswer',
@@ -1606,12 +1634,19 @@ test('local channel requests preserve successful and failed terminal results', a
       contentType: 'application/json',
       payload: Buffer.from('request')
     }, 2_000)!;
-    const successClaim = local.mailbox.tryClaim('application', 1, 4096)!;
+    let successClaim!: NonNullable<ReturnType<ServiceMailbox['tryClaim']>>;
+    await pollUntil(() => {
+      const claimed = local.mailbox.tryClaim('application', 1, 4096);
+      if (claimed === undefined) return false;
+      successClaim = claimed;
+      return true;
+    });
     local.reply(successClaim.records[0]!, {
       packetName: 'Answer',
       contentType: 'application/json',
       payload: Buffer.from('reply')
     });
+    successClaim.records[0]!.applicationJob?.close();
     assert.equal(local.mailbox.release(successClaim), true);
     const successResult = await success.promise;
     assert.equal(successResult.terminalResult, 0);
@@ -1622,7 +1657,13 @@ test('local channel requests preserve successful and failed terminal results', a
       contentType: 'application/json',
       payload: Buffer.from('request')
     }, 2_000)!;
-    const failureClaim = local.mailbox.tryClaim('application', 1, 4096)!;
+    let failureClaim!: NonNullable<ReturnType<ServiceMailbox['tryClaim']>>;
+    await pollUntil(() => {
+      const claimed = local.mailbox.tryClaim('application', 1, 4096);
+      if (claimed === undefined) return false;
+      failureClaim = claimed;
+      return true;
+    });
     local.reply(
       failureClaim.records[0]!,
       {
@@ -1633,6 +1674,7 @@ test('local channel requests preserve successful and failed terminal results', a
       102,
       7
     );
+    failureClaim.records[0]!.applicationJob?.close();
     assert.equal(local.mailbox.release(failureClaim), true);
     const failureResult = await failure.promise;
     assert.equal(failureResult.terminalResult, 102);
@@ -1641,58 +1683,6 @@ test('local channel requests preserve successful and failed terminal results', a
   } finally {
     local.close();
   }
-});
-
-test('host-wide inbound byte budget pauses and resumes without dropping accepted work', () => {
-  const budget = new ZLinkInboundDispatchBudget(8n);
-  let resumed = 0;
-  budget.onResume(() => resumed += 1);
-
-  budget.enqueue(9n);
-  assert.equal(budget.receivePaused, true);
-  budget.start(9n);
-  assert.deepEqual(budget.snapshot(), {
-    applicationHwmBytes: 8n,
-    pendingPayloadBytes: 9n,
-    queuedPayloadBytes: 0n,
-    activePayloadBytes: 9n,
-    applicationReceivePaused: true,
-    pendingCompletionSends: 0n,
-    completionSendLimit: 65_536n
-  });
-  budget.complete(9n);
-
-  assert.equal(resumed, 1);
-  assert.equal(budget.receivePaused, false);
-  assert.equal(budget.pendingPayloadBytes, 0n);
-});
-
-test('paused Application receive resumes from a terminal handler without polling', async () => {
-  const budget = new ZLinkInboundDispatchBudget(8n);
-  budget.enqueue(8n);
-  budget.start(8n);
-
-  let resumed = false;
-  const waiting = budget.waitUntilResumed().then(() => {
-    resumed = true;
-  });
-  await Promise.resolve();
-  assert.equal(resumed, false);
-
-  budget.complete(8n);
-  await waiting;
-  assert.equal(resumed, true);
-});
-
-test('completion send admission reports the real host-wide permit usage', async () => {
-  const budget = new ZLinkInboundDispatchBudget(0n);
-  const release = await budget.acquireCompletionSend();
-  assert.equal(budget.snapshot().pendingCompletionSends, 1n);
-  assert.equal(budget.snapshot().completionSendLimit, 65_536n);
-
-  release();
-  release();
-  assert.equal(budget.snapshot().pendingCompletionSends, 0n);
 });
 
 test('completion send admission applies only to operations with a reply route', () => {
@@ -1706,30 +1696,12 @@ test('completion send admission applies only to operations with a reply route', 
   assert.equal(operationRequiresReply(OperationKind.UserSpotCreate), false);
 });
 
-test('Application HWM Auto uses the configured finite process memory limit', () => {
-  assert.equal(resolveApplicationHwm({
-    applicationHwmProfile: ZLinkApplicationHwmProfile.Balanced,
-    processMemoryLimitBytes: 1_000n
-  }), 100n);
-});
-
-test('Application HWM Auto uses the managed heap as an automatic candidate', () => {
-  //  Spec 06: an unconfigured host still starts, and repeated resolution is stable.
-  const resolved = resolveApplicationHwm({
-    applicationHwmProfile: ZLinkApplicationHwmProfile.Balanced
-  });
-  assert.ok(resolved > 0n);
-  assert.equal(resolved, resolveApplicationHwm({
-    applicationHwmProfile: ZLinkApplicationHwmProfile.Balanced
-  }));
-  assert.ok(resolved <= BigInt(Math.floor(getHeapStatistics().heap_size_limit / 10)) + 1n);
-  assert.ok(resolved <= BigInt(totalmem()));
-});
-
-async function pollUntil(condition: () => boolean): Promise<void> {
+async function pollUntil(
+  condition: () => boolean | Promise<boolean>
+): Promise<void> {
   const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
-    if (condition()) return;
+    if (await condition()) return;
     await new Promise(resolve => setTimeout(resolve, 1));
   }
   throw new Error('Timed out waiting for deterministic runtime progress.');

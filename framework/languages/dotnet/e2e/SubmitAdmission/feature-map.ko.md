@@ -30,7 +30,7 @@
 | SA-E2E-19 | 미구현 | Timeout·shutdown terminal 이후 connection generation과 late transport attempt를 함께 기록하는 observer가 없다. |
 | SA-E2E-20 | 부분 구현 | RID-direct handler gate를 닫은 상태에서 submit `Submitted` terminal이 먼저 완료되고 handler 완료는 gate를 연 뒤 한 번 기록됨을 확인한다. 나머지 family matrix가 남아 있다. |
 | SA-REG-01 | 구현 | Public contract·sample·E2E C# source의 제거 이름 no-hit와 제거된 동기 terminator의 compile-negative fixture를 실행한다. |
-| SA-REG-02 | 구현 | Internal primitive allowlist 검증과 `ZLinkAsyncSubmitterTests`를 실행하여 public 제거 뒤에도 non-blocking first attempt·send-ready primitive를 유지한다. |
+| SA-REG-02 | 구현 | Spot Message Follow와 Bound Session의 focused contract를 실행해 Framework retry queue 없이 binding-owned async admission terminal을 한 번만 호출하고 timeout·cancellation·ownership을 보존하는지 검증한다. |
 | SA-REG-03 | 해당 없음 | Kotlin 전용 시나리오다. JVM feature map과 runner가 소유한다. |
 | SA-REG-04 | 부분 구현 | RID-direct pending operation에서 host stop 2회와 gate open을 경쟁시켜 terminal·cleanup이 각각 한 번이고 waiter·reservation·callback final count가 모두 0이며 process exit code가 0임을 확인한다. Internal primitive test는 writable callback과 double dispose를 경쟁시켜 dispose가 이긴 경우에도 cleanup 1회와 resource 0을 검증한다. 다른 family와 `SA-E2E-17.c` 100회 반복이 남아 있으므로 전체 완료로 판정하지 않는다. |
 

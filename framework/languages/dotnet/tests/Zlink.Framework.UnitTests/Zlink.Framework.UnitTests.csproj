@@ -40,7 +40,6 @@
         <Compile Include="AssemblyInfo.cs"/>
         <Compile Include="Configuration/Registration/Channels.cs"/>
         <Compile Include="Configuration/Registration/HandlerExposure.cs"/>
-        <Compile Include="Configuration/Registration/InboundDispatchOptionsTests.cs"/>
         <Compile Include="Configuration/Registration/NodesAndServices.cs"/>
         <Compile Include="Configuration/Registration/Monitoring.cs"/>
         <Compile Include="Configuration/Registration/Support.cs"/>
@@ -63,11 +62,11 @@
         <Compile Include="Runtime/AuthorityKeyCodecTests.cs"/>
         <Compile Include="Runtime/ActorRelocationProtocolTests.cs"/>
         <Compile Include="Runtime/ActorRemoteJoinRecoveryCodecBoundaryTests.cs"/>
-        <Compile Include="Runtime/ActorJoinRelocationOwnershipRegressionTests.cs"/>
         <Compile Include="Runtime/ActorHandoffTests.cs"/>
         <Compile Include="Runtime/ActorHandlerActivationTests.cs"/>
         <Compile Include="Runtime/ActorClientTests.cs"/>
         <Compile Include="Runtime/ActorBoundSessionRelayTests.cs"/>
+        <Compile Include="Runtime/ApplicationJobQueueTests.cs"/>
         <Compile Include="Runtime/BoundSessionReplacementLifecycleTests.cs"/>
         <Compile Include="Runtime/TransportFailFastTests.cs"/>
         <Compile Include="Runtime/BackendAdapterFactoryTests.cs"/>
@@ -79,8 +78,6 @@
         <Compile Include="Runtime/CustomSerializerEnvelopeTests.cs"/>
         <Compile Include="Runtime/EncodedPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/DrainCoordinatorTests.cs"/>
-        <Compile Include="Runtime/Dispatch/InboundDispatchBudgetTests.cs"/>
-        <Compile Include="Runtime/Dispatch/CompletionAdmissionOwnerTests.cs"/>
         <Compile Include="Runtime/DeferredActorJoinContractTests.cs"/>
         <Compile Include="Runtime/DeferredActorJoinDurabilityTests.cs"/>
         <Compile Include="Runtime/DirectReplyCompletionRegistryTests.cs"/>
@@ -121,10 +118,8 @@
         <Compile Include="Runtime/ServiceRuntimeFoundationTests.cs"/>
         <Compile Include="Runtime/ZLinkObservationQueueTests.cs"/>
         <Compile Include="Runtime/ZLinkMeshPeerAdmissionTests.cs"/>
-        <Compile Include="Runtime/ZLinkMeshPeerControlRetryQueueTests.cs"/>
         <Compile Include="Runtime/ServiceWireRelocationCodecTests.cs"/>
         <Compile Include="Runtime/ServiceWireSessionRelocationCodecTests.cs"/>
-        <Compile Include="Runtime/SessionRelocationBarrierTests.cs"/>
         <Compile Include="Runtime/StatefulServiceRuntimeTests.cs"/>
         <Compile Include="Runtime/SessionActorCoordinatorTests.cs"/>
         <Compile Include="Runtime/StreamWireInteropTests.cs"/>
@@ -151,7 +146,6 @@
         <Compile Include="Runtime/StandaloneActorRelocationPrecommitTests.cs"/>
         <Compile Include="Runtime/CanonicalActorAcceptedJournalTests.cs"/>
         <Compile Include="Runtime/CanonicalAuthorityAggregateGenerationTests.cs"/>
-        <Compile Include="Runtime/CanonicalRelocationReservationOwnerTests.cs"/>
         <Compile Include="Runtime/RelocationStartupRecoveryTests.cs"/>
         <Compile Include="Runtime/RouteCodecTests.cs"/>
         <Compile Include="Runtime/RouteMeshRuntimeServiceTests.cs"/>
@@ -163,7 +157,6 @@
         <Compile Include="Runtime/UserSpotExecutionSchedulerTests.cs"/>
         <Compile Include="Runtime/WorkerPoolTests.cs"/>
         <Compile Include="Runtime/WeightContractTests.cs"/>
-        <Compile Include="Runtime/ZLinkAsyncSubmitterTests.cs"/>
         <Compile Include="../Common/FrameworkGlobalUsings.cs" Link="GlobalUsings.cs"/>
         <Compile Include="../Common/FrameworkTestEnvironment.cs" Link="Common/FrameworkTestEnvironment.cs"/>
         <Compile Include="../../scripts/PublicContractSnapshot.cs" Link="Runtime/PublicContractSnapshot.cs"/>

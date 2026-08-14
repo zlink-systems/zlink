@@ -17,7 +17,7 @@ final class ZLinkCanonicalRelocationControlCodecTest {
     void sharedCanonicalControlsRoundTripByteForByte() throws Exception {
         var fixture = new ObjectMapper().readTree(Files.readString(fixture()));
         var codec = new ZLinkCanonicalRelocationControlCodec();
-        assertEquals(9, fixture.path("canonical").size());
+        assertEquals(4, fixture.path("canonical").size());
         for (JsonNode entry : fixture.path("canonical")) {
             byte[] bytes = HexFormat.of().parseHex(entry.path("hex").asText());
             ZLinkCanonicalRelocationControlCodec.Control decoded;
@@ -36,7 +36,7 @@ final class ZLinkCanonicalRelocationControlCodecTest {
     }
 
     @Test
-    void closedCommandAndPhaseAreRejected() throws Exception {
+    void reservedCommandsAndWrongSenderRoleAreRejected() throws Exception {
         var fixture = new ObjectMapper().readTree(Files.readString(fixture()));
         var codec = new ZLinkCanonicalRelocationControlCodec();
         byte[] unknown = HexFormat.of().parseHex(
@@ -44,25 +44,19 @@ final class ZLinkCanonicalRelocationControlCodecTest {
         unknown[3] = 39;
         assertThrows(IllegalArgumentException.class, () -> codec.decode(unknown));
 
-        byte[] data = HexFormat.of().parseHex(
-            fixture.path("canonical").get(1).path("hex").asText());
-        // The canonical command-31 fixture ends with phase, role, identity,
-        // terminal and failure. Locate the relocationControl phase after the
-        // zero reply route by decoding the stable suffix marker.
-        int phase = find(data, new byte[]{0, 0, 0, 0, 4, 1});
-        data[phase + 4] = 10;
-        assertThrows(IllegalArgumentException.class, () -> codec.decode(data));
-    }
-
-    private static int find(byte[] source, byte[] needle) {
-        for (int i = 0; i <= source.length - needle.length; i++) {
-            boolean match = true;
-            for (int j = 0; j < needle.length; j++) {
-                if (source[i + j] != needle[j]) { match = false; break; }
-            }
-            if (match) return i;
+        byte[] cutover = HexFormat.of().parseHex(
+            fixture.path("canonical").get(2).path("hex").asText());
+        for (int reserved : new int[]{32, 35, 41}) {
+            byte[] frame = cutover.clone();
+            frame[3] = (byte) reserved;
+            assertThrows(IllegalArgumentException.class,
+                () -> codec.decode(frame));
         }
-        throw new AssertionError("fixture suffix was not found");
+
+        byte[] ready = HexFormat.of().parseHex(
+            fixture.path("canonical").get(0).path("hex").asText());
+        ready[ready.length - 1] = 1;
+        assertThrows(IllegalArgumentException.class, () -> codec.decode(ready));
     }
 
     private static Path fixture() {

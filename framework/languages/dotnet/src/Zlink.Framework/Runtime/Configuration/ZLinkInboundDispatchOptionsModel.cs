@@ -1,36 +1,40 @@
+using Zlink.Framework.Contracts.Configuration;
+
 namespace Zlink.Framework.Runtime.Configuration;
 
 internal sealed class ZLinkInboundDispatchOptionsModel : IZLinkInboundDispatchOptions
 {
-    private ZLinkApplicationHwmProfile _applicationHwmProfile =
-        ZLinkApplicationHwmProfile.Balanced;
-    private ulong? _processMemoryLimitBytes;
+    private ZLinkCoreHwmProfile _coreHwmProfile = ZLinkCoreHwmProfile.Balanced;
+    private ZLinkApplicationJobQueueProfile _applicationJobQueueProfile =
+        ZLinkApplicationJobQueueProfile.Balanced;
 
-    public ulong? ApplicationHwmBytes { get; set; }
-
-    public ZLinkApplicationHwmProfile ApplicationHwmProfile
+    public ZLinkCoreHwmProfile CoreHwmProfile
     {
-        get => _applicationHwmProfile;
+        get => _coreHwmProfile;
         set
         {
             if (!Enum.IsDefined(value))
                 throw new ZLinkConfigurationException(
-                    $"Unknown ApplicationHwmProfile value '{(int)value}'.");
-            _applicationHwmProfile = value;
+                    $"Unknown CoreHwmProfile value '{(int)value}'.");
+            _coreHwmProfile = value;
         }
     }
 
-    public ulong? ProcessMemoryLimitBytes
+    public ulong? CoreHwmMemoryLimitBytes { get; set; }
+
+    public ulong? CoreHwmBudgetBytes { get; set; }
+
+    public ZLinkApplicationJobQueueProfile ApplicationJobQueueProfile
     {
-        get => _processMemoryLimitBytes;
+        get => _applicationJobQueueProfile;
         set
         {
-            if (value == 0)
+            if (!Enum.IsDefined(value))
                 throw new ZLinkConfigurationException(
-                    "ProcessMemoryLimitBytes must be a positive finite byte value.");
-            _processMemoryLimitBytes = value;
+                    $"Unknown ApplicationJobQueueProfile value '{(int)value}'.");
+            _applicationJobQueueProfile = value;
         }
     }
 
-    internal ulong EffectiveApplicationHwmBytes { get; set; }
+    public ulong? MaxQueuedApplicationJobs { get; set; }
 }

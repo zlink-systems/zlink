@@ -1,33 +1,28 @@
 import { ZLINK_BACKEND_RECV_DONT_WAIT } from './runtime-values';
 import {
-  operationRequiresReply,
   ReadyDomain,
   type ReadyRecord,
   type ReceiveRecord
 } from '../foundation/service-runtime-contracts';
 import type { ZLinkBackendMeshNode } from './contracts';
-import type { ZLinkInboundDispatchBudget } from '../dispatch/inbound-dispatch-budget';
 import { runZLinkExecutionArea } from '../execution';
+import type {
+  ApplicationJobPermitPort,
+  ApplicationJobQueuePort
+} from '../application-jobs/contracts';
+import { runWithApplicationJobPermit } from '../application-jobs/application-job-queue-scope';
 
 const MESH_DISPATCH_TIMER_YIELD_BATCHES = 16;
 const MESH_DISPATCH_TIMER_YIELD_INTERVAL_MS = 2;
 const MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET = 4;
-
-//  The pump awaits between the two reads and the budget can pause in that gap.
-//  Reading through a function keeps the later check honest; an inline read
-//  stays narrowed by the first one.
-function budgetPaused(budget?: { readonly receivePaused: boolean }): boolean {
-  return budget?.receivePaused === true;
-}
 
 
 export interface ZLinkMeshDispatchPumpOptions {
   readonly readyCapacity?: number;
   readonly messageCapacity?: number;
   readonly partCapacity?: number;
-  readonly byteCapacity?: number;
   readonly dispatch: (owner: ReadyRecord, record: ReceiveRecord) => void | Promise<void>;
-  readonly inboundDispatchBudget?: ZLinkInboundDispatchBudget;
+  readonly applicationJobQueue: ApplicationJobQueuePort;
   readonly reportError?: (error: unknown) => void;
   readonly monotonicNowMs?: () => number;
 }
@@ -38,17 +33,12 @@ export class ZLinkMeshDispatchPump {
   private disposed = false;
   private drainPromise?: Promise<void>;
   private readonly activeDrains = new Set<Promise<void>>();
-  private readonly removeResumeListener?: () => void;
+  private readonly capacityStop = new AbortController();
 
   constructor(
     private readonly node: ZLinkBackendMeshNode,
     private readonly options: ZLinkMeshDispatchPumpOptions
   ) {
-    this.removeResumeListener = options.inboundDispatchBudget?.onResume(() => {
-      if (this.disposed) return;
-      this.pendingDomains |= ReadyDomain.Application;
-      this.schedule();
-    });
   }
 
   start(): void {
@@ -67,8 +57,8 @@ export class ZLinkMeshDispatchPump {
       return;
     }
     this.disposed = true;
+    this.capacityStop.abort();
     this.pendingDomains = ReadyDomain.None;
-    this.removeResumeListener?.();
     while (this.activeDrains.size > 0) {
       await Promise.all([...this.activeDrains]);
     }
@@ -124,21 +114,15 @@ export class ZLinkMeshDispatchPump {
   }
 
   private async drainDomain(domain: number, claimBudget?: number): Promise<boolean> {
-    const applicationBudget = domain === ReadyDomain.Application
-      ? this.options.inboundDispatchBudget
-      : undefined;
-    if (budgetPaused(applicationBudget)) return false;
     const readyCapacity = domain === ReadyDomain.Application
       ? 1
       : claimBudget === undefined
         ? (this.options.readyCapacity ?? 32)
         : Math.min(this.options.readyCapacity ?? 32, claimBudget);
     const readyBatch = this.node.createReadyBatch(readyCapacity);
-    const receiveBatch = this.node.createReceiveBatch(
-      applicationBudget === undefined ? (this.options.messageCapacity ?? 64) : 1,
-      this.options.partCapacity ?? 256,
-      this.options.byteCapacity ?? (1 << 20)
-    );
+    // One record per claim receive keeps one ordinary-ingress permit paired
+    // with exactly one dispatch turn. Terminal completion claims bypass it.
+    const receiveBatch = this.node.createReceiveBatch(1, this.options.partCapacity ?? 256);
     let receiveBatchesSinceTimerYield = 0;
     let timerYieldStartedAtMs = this.nowMs();
     let claimsDrained = 0;
@@ -163,24 +147,30 @@ export class ZLinkMeshDispatchPump {
           try {
             receiveBatch.reset();
             for (;;) {
-              if (budgetPaused(applicationBudget)) return false;
+              const owner = drained.records[index];
+              const claimPermit = owner.terminalCompletion === true
+                || owner.ordinaryIngressPreAdmitted === true
+                ? undefined
+                : await this.acquirePermit();
+              if (claimPermit === undefined
+                  && this.disposed
+                  && owner.terminalCompletion !== true
+                  && owner.ordinaryIngressPreAdmitted !== true) return false;
               const received = claim.recvBatch(receiveBatch, ZLINK_BACKEND_RECV_DONT_WAIT);
               if (!received.ok) {
+                claimPermit?.releaseAfterInternalProcessing();
                 break;
               }
+              if (received.records.length === 0) {
+                claimPermit?.releaseAfterInternalProcessing();
+              }
               for (const record of received.records) {
-                let payloadByteCount = 0;
-                for (const part of record.parts) {
-                  payloadByteCount += part.size();
+                const permit = record.applicationJobPermit ?? claimPermit;
+                if (owner.ordinaryIngressPreAdmitted === true && permit === undefined) {
+                  record.releaseRetainedIngress?.();
+                  throw new Error('Pre-admitted raw ingress record lost its Application Job Queue permit.');
                 }
-                const payloadBytes = BigInt(payloadByteCount);
-                applicationBudget?.enqueue(payloadBytes);
-                let started = false;
-                let releaseCompletion: (() => void) | undefined;
                 try {
-                  releaseCompletion = operationRequiresReply(record.operationKind)
-                    ? await applicationBudget?.acquireCompletionSend()
-                    : undefined;
                   // A handler may synchronously submit an operation whose
                   // control/completion is owned by this same MeshNode.
                   this.scheduled = false;
@@ -188,25 +178,27 @@ export class ZLinkMeshDispatchPump {
                   if (this.pendingDomains !== ReadyDomain.None) {
                     this.schedule();
                   }
-                  applicationBudget?.start(payloadBytes);
-                  started = true;
-                  await runZLinkExecutionArea(
+                  const dispatch = () => runZLinkExecutionArea(
                     domain === ReadyDomain.Infrastructure ? 'infrastructure' : 'application',
                     async () => {
                       await this.options.dispatch(drained.records[index], record);
                       await record.onTerminalCompletion?.();
                     }
                   );
-                } finally {
-                  releaseCompletion?.();
-                  if (started) {
-                    applicationBudget?.complete(payloadBytes);
+                  if (permit === undefined) {
+                    await dispatch();
                   } else {
-                    applicationBudget?.cancelQueued(payloadBytes);
+                    if (
+                      domain === ReadyDomain.Application
+                      && record.applicationJobPermit === undefined
+                    ) permit.markApplicationQueued();
+                    await runWithApplicationJobPermit(permit, dispatch);
                   }
+                } finally {
                   for (const part of record.parts) {
                     part.close();
                   }
+                  record.releaseRetainedIngress?.();
                 }
               }
               // A continuously readable owner must not keep the timers phase
@@ -242,6 +234,15 @@ export class ZLinkMeshDispatchPump {
 
   private nowMs(): number {
     return this.options.monotonicNowMs?.() ?? performance.now();
+  }
+
+  private async acquirePermit(): Promise<ApplicationJobPermitPort | undefined> {
+    try {
+      return await this.options.applicationJobQueue.acquire(this.capacityStop.signal);
+    } catch (error) {
+      if (this.disposed || this.capacityStop.signal.aborted) return undefined;
+      throw error;
+    }
   }
 }
 

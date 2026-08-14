@@ -13,14 +13,6 @@ public interface ZLinkMeshNodeSocketConfig {
 
     void setReceiveHighWaterMark(long value);
 
-    long mailboxMessageBudget();
-
-    void setMailboxMessageBudget(long value);
-
-    long mailboxByteBudget();
-
-    void setMailboxByteBudget(long value);
-
     Optional<Duration> receiveTimeout();
 
     void setReceiveTimeout(Duration value);

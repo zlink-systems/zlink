@@ -1,10 +1,14 @@
 namespace Zlink.Framework.Contracts.Configuration;
 
-/// <summary>
-/// Selects how much of the process memory limit may hold application payloads
-/// that have been received but whose handlers have not completed.
-/// </summary>
-public enum ZLinkApplicationHwmProfile
+public enum ZLinkCoreHwmProfile
+{
+    Compact = 0,
+    LowLatency = 1,
+    Balanced = 2,
+    Throughput = 3
+}
+
+public enum ZLinkApplicationJobQueueProfile
 {
     Compact = 0,
     LowLatency = 1,
@@ -13,26 +17,17 @@ public enum ZLinkApplicationHwmProfile
 }
 
 /// <summary>
-/// Configures the host-wide admission limit for inbound application payloads.
+/// Configures Core HWM and the host-wide Application Job Queue independently.
 /// </summary>
 public interface IZLinkInboundDispatchOptions
 {
-    /// <summary>
-    /// Gets or sets the host-wide pending payload limit in bytes. A null value
-    /// selects automatic sizing, zero disables this limit, and a positive value
-    /// applies that exact limit.
-    /// </summary>
-    ulong? ApplicationHwmBytes { get; set; }
+    ulong? CoreHwmMemoryLimitBytes { get; set; }
 
-    /// <summary>
-    /// Gets or sets the profile used by automatic sizing. The default is
-    /// <see cref="ZLinkApplicationHwmProfile.Balanced"/>.
-    /// </summary>
-    ZLinkApplicationHwmProfile ApplicationHwmProfile { get; set; }
+    ulong? CoreHwmBudgetBytes { get; set; }
 
-    /// <summary>
-    /// Gets or sets the finite process memory limit used by automatic sizing.
-    /// When omitted, the Framework reads the container or cgroup limit.
-    /// </summary>
-    ulong? ProcessMemoryLimitBytes { get; set; }
+    ZLinkCoreHwmProfile CoreHwmProfile { get; set; }
+
+    ZLinkApplicationJobQueueProfile ApplicationJobQueueProfile { get; set; }
+
+    ulong? MaxQueuedApplicationJobs { get; set; }
 }

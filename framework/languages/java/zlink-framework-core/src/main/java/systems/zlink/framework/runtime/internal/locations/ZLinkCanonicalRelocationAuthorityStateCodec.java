@@ -32,30 +32,10 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         byte[] authorityPayload,
         ZLinkAggregateRelocationCoordinator.Request request,
         ZLinkAuthorityGenerationTransition ownerTransition,
-        ZLinkRelocationStored stored,
-        boolean sourceCleanupCompleted) {
-        return publish(
-            authorityPayload,
-            request,
-            ownerTransition,
-            stored,
-            sourceCleanupCompleted ? 8 : 4);
-    }
-
-    static byte[] publish(
-        byte[] authorityPayload,
-        ZLinkAggregateRelocationCoordinator.Request request,
-        ZLinkAuthorityGenerationTransition ownerTransition,
-        ZLinkRelocationStored stored,
-        int phase) {
+        ZLinkRelocationStored stored) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(ownerTransition, "ownerTransition");
         Objects.requireNonNull(stored, "stored");
-        if (phase != 3 && phase != 4 && phase != 8) {
-            throw new IllegalArgumentException(
-                "canonical relocation phase must be 3, 4 or 8");
-        }
-        boolean sourceCleanupCompleted = phase == 8;
         Published previous = decodeStrict(authorityPayload);
         byte[] applicationPayload = previous == null
             ? Objects.requireNonNull(authorityPayload, "authorityPayload").clone()
@@ -96,7 +76,6 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         body.u64(request.targetOwner().leaseGeneration());
         body.sized8(request.targetDescriptor().rid().toBytes());
         body.u64(request.targetDescriptorLifecycleGeneration());
-        body.u8(phase);
         Writer pointer = new Writer();
         pointer.text16(stored.reference());
         pointer.u32(stored.checksumCrc32c());
@@ -104,16 +83,6 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         body.u16(pointer.size());
         body.raw(pointer.bytes());
         body.u64(root.applicationVersion());
-        body.u32(root.participantProgress().size());
-        for (var progress : root.participantProgress()) {
-            body.u64(progress.participantId());
-            body.u64(progress.acceptedBoundary());
-            body.u64(progress.replayCursor());
-        }
-        body.u32(root.terminalCompletions().size());
-        body.u32(root.terminalCompletions().stream()
-            .filter(value -> value.deliveryState() == 0).count());
-        body.u8(sourceCleanupCompleted ? 1 : 0);
         Writer state = new Writer();
         state.u8(1);
         state.u32(body.size());
@@ -131,16 +100,11 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         }
     }
 
-    /** Returns the committed marker's initial root projection. */
+    /** Projects the immutable committed-root pointer. */
     public static ZLinkAggregateProgress progress(byte[] authorityPayload) {
         Published publication = decodeStrict(authorityPayload);
         return new ZLinkAggregateProgress(
-            publication.reference(),
-            publication.checksumCrc32c(),
-            publication.phase(),
-            publication.sourceCleanupCompleted(),
-            publication.terminalCompletionCount(),
-            publication.pendingRelayCount());
+            publication.reference(), publication.checksumCrc32c());
     }
 
     private static Published decodeStrict(byte[] authorityPayload) {
@@ -160,91 +124,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
             current.targetNodeRid(),
             current.targetNodeGeneration(),
             current.targetOwnerId(), current.targetOwnerLeaseGeneration(),
-            replace(slot, EMPTY),
-            current.phase(),
-            current.sourceCleanupCompleted(),
-            current.terminalCompletionCount(),
-            current.pendingRelayCount());
-    }
-
-    static byte[] replaceRoot(
-        byte[] authorityPayload,
-        ZLinkRelocationStored stored,
-        ZLinkServiceRelocationEnvelopeCodec.Envelope root) {
-        return replaceRoot(authorityPayload, stored, root, false);
-    }
-
-    /** Replaces the public authority projection without changing relocation state. */
-    static byte[] replaceApplicationPayload(
-        byte[] authorityPayload,
-        byte[] applicationPayload) {
-        Slot current = slot(authorityPayload);
-        Slot replacement = slot(applicationPayload);
-        if (!current.present() || replacement.present()) {
-            throw invalid();
-        }
-        return replace(replacement, current.state());
-    }
-
-    static byte[] completeSourceCleanup(
-        byte[] authorityPayload,
-        ZLinkRelocationStored stored,
-        ZLinkServiceRelocationEnvelopeCodec.Envelope root) {
-        return replaceRoot(authorityPayload, stored, root, true);
-    }
-
-    private static byte[] replaceRoot(
-        byte[] authorityPayload,
-        ZLinkRelocationStored stored,
-        ZLinkServiceRelocationEnvelopeCodec.Envelope root,
-        boolean completeSourceCleanup) {
-        Current current = current(authorityPayload);
-        if (root.relocationHigh() != current.relocationHigh()
-            || root.relocationLow() != current.relocationLow()) {
-            throw new IllegalArgumentException(
-                "successor root has a different relocation identity");
-        }
-        Writer body = new Writer();
-        body.u64(current.relocationHigh());
-        body.u64(current.relocationLow());
-        body.u64(current.aggregateGeneration());
-        body.sized8(current.sourceNodeRid().toBytes());
-        body.u64(current.sourceNodeGeneration());
-        body.text8(current.sourceOwnerId());
-        body.u64(current.sourceOwnerLeaseGeneration());
-        body.sized8(current.targetNodeRid().toBytes());
-        body.u64(current.targetNodeGeneration());
-        body.text8(current.targetOwnerId());
-        body.u64(current.targetOwnerLeaseGeneration());
-        body.u64(current.placementReservationToken());
-        body.text8(current.capacityOwnerId());
-        body.u64(current.capacityOwnerLeaseGeneration());
-        body.sized8(current.capacityDescriptorRid().toBytes());
-        body.u64(current.capacityDescriptorGeneration());
-        body.u8(completeSourceCleanup ? 8 : current.phase());
-        Writer pointer = new Writer();
-        pointer.text16(stored.reference());
-        pointer.u32(stored.checksumCrc32c());
-        body.u8(1);
-        body.u16(pointer.size());
-        body.raw(pointer.bytes());
-        body.u64(root.applicationVersion());
-        body.u32(root.participantProgress().size());
-        for (var progress : root.participantProgress()) {
-            body.u64(progress.participantId());
-            body.u64(progress.acceptedBoundary());
-            body.u64(progress.replayCursor());
-        }
-        body.u32(root.terminalCompletions().size());
-        body.u32(root.terminalCompletions().stream()
-            .filter(value -> value.deliveryState() == 0).count());
-        body.u8(completeSourceCleanup
-            || current.sourceCleanupCompleted() ? 1 : 0);
-        Writer state = new Writer();
-        state.u8(1);
-        state.u32(body.size());
-        state.raw(body.bytes());
-        return replace(authorityPayload, state.bytes());
+            replace(slot, EMPTY));
     }
 
     private static Current current(byte[] authorityPayload) {
@@ -277,38 +157,13 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         long capacityOwnerLeaseGeneration = body.nonzeroU64();
         RoutingId capacityDescriptorRid = RoutingId.from(body.sized8());
         long capacityDescriptorGeneration = body.nonzeroU64();
-        int phase = body.u8();
-        if (phase != 3 && phase != 4 && phase != 8
-            || body.u8() != 1) throw invalid();
+        if (body.u8() != 1) throw invalid();
         Reader pointer = body.reader(body.u16());
         String reference = pointer.text16();
         long checksumCrc32c = pointer.u32Unsigned();
         if (!pointer.end()) throw invalid();
         long applicationVersion = body.u64();
         if (applicationVersion < 0) throw invalid();
-        int progress = body.u32();
-        if (progress < 0 || progress > body.remaining() / 24) throw invalid();
-        long previousParticipantId = 0;
-        for (int index = 0; index < progress; index++) {
-            long participantId = body.nonzeroU64();
-            long acceptedBoundary = body.ordinalOrZero();
-            long replayCursor = body.ordinalOrZero();
-            if (Long.compareUnsigned(participantId, previousParticipantId) <= 0
-                || Long.compareUnsigned(replayCursor, acceptedBoundary) > 0) {
-                throw invalid();
-            }
-            previousParticipantId = participantId;
-        }
-        int terminalCompletionCount = body.u32();
-        int pendingRelayCount = body.u32();
-        if (pendingRelayCount > terminalCompletionCount) throw invalid();
-        int cleanupState = body.u8();
-        if (cleanupState != 0 && cleanupState != 1
-            || cleanupState == 1 && phase != 8
-            || cleanupState == 0 && phase == 8) {
-            throw invalid();
-        }
-        boolean sourceCleanupCompleted = cleanupState == 1;
         if (!body.end()) throw invalid();
         return new Current(
             relocationHigh, relocationLow, aggregateGeneration,
@@ -319,8 +174,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
             placementReservationToken,
             capacityOwnerId, capacityOwnerLeaseGeneration,
             capacityDescriptorRid, capacityDescriptorGeneration,
-            phase, reference, checksumCrc32c, sourceCleanupCompleted,
-            terminalCompletionCount, pendingRelayCount);
+            reference, checksumCrc32c);
     }
 
     private static void validateSuccessor(
@@ -583,11 +437,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         long targetNodeGeneration,
         String targetOwnerId,
         long targetOwnerLeaseGeneration,
-        byte[] applicationPayload,
-        int phase,
-        boolean sourceCleanupCompleted,
-        int terminalCompletionCount,
-        int pendingRelayCount) {
+        byte[] applicationPayload) {
         Published { applicationPayload = applicationPayload.clone(); }
         @Override public byte[] applicationPayload() {
             return applicationPayload.clone();
@@ -610,12 +460,8 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         long capacityOwnerLeaseGeneration,
         RoutingId capacityDescriptorRid,
         long capacityDescriptorGeneration,
-        int phase,
         String reference,
-        long checksumCrc32c,
-        boolean sourceCleanupCompleted,
-        int terminalCompletionCount,
-        int pendingRelayCount) {}
+        long checksumCrc32c) {}
     private record Owner(String ownerId, long ownerLeaseGeneration,
                          String meshName, RoutingId nodeRid,
                          long nodeGeneration) {}

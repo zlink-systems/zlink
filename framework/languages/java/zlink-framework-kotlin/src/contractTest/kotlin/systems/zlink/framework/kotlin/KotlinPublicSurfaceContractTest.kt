@@ -10,6 +10,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
 import java.util.concurrent.CompletionStage
+import java.time.Duration
 import kotlin.coroutines.Continuation
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -19,6 +20,15 @@ import systems.zlink.framework.channels.ZLinkClient
 import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.channels.ZLinkSendCall
 import systems.zlink.framework.streams.ZLinkSessionActor
+import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile
+import systems.zlink.framework.configuration.ZLinkCoreHwmProfile
+import systems.zlink.framework.configuration.ZLinkFrameworkOptions
+import systems.zlink.framework.configuration.ZLinkInboundDispatchOptions
+import systems.zlink.framework.configuration.ZLinkStreamNodeBuilder
+import systems.zlink.framework.locations.ZLinkLocationOptions
+import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus
+import systems.zlink.framework.monitoring.ZLinkHostCapacityStatus
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
 
 class KotlinPublicSurfaceContractTest {
     private val facadeClasses = listOf(
@@ -31,6 +41,68 @@ class KotlinPublicSurfaceContractTest {
         "ZLinkMessageExtensionsKt",
         "ZLinkSpotHandlerRegistryExtensionsKt",
     ).map { Class.forName("systems.zlink.framework.kotlin.$it") }
+
+    @Test
+    fun sessionSealTimeoutUsesTheInheritedRootLocationSurfaceOnly() {
+        assertEquals(
+            Duration::class.java,
+            ZLinkLocationOptions::class.java
+                .getMethod("sessionRelocationSealTimeout")
+                .returnType,
+        )
+        assertEquals(
+            Void.TYPE,
+            ZLinkLocationOptions::class.java
+                .getMethod("setSessionRelocationSealTimeout", Duration::class.java)
+                .returnType,
+        )
+        Assertions.assertThrows(NoSuchMethodException::class.java) {
+            ZLinkStreamNodeBuilder::class.java
+                .getMethod("sessionRelocationSealTimeout", Duration::class.java)
+        }
+    }
+
+    @Test
+    fun hostCapacityUsesTheInheritedExactJavaRuntimeSurface() {
+        assertEquals(
+            ZLinkHostCapacityStatus::class.java,
+            ZLinkFrameworkRuntimeStatus::class.java
+                .getMethod("capacity")
+                .returnType,
+        )
+        assertEquals(
+            Void.TYPE,
+            ZLinkFrameworkRuntime::class.java
+                .getMethod("resetCapacityMetrics")
+                .returnType,
+        )
+        assertEquals(
+            ZLinkInboundDispatchOptions::class.java,
+            ZLinkFrameworkOptions::class.java
+                .getMethod("configureInboundDispatch")
+                .returnType,
+        )
+        assertEquals(
+            listOf("COMPACT", "LOW_LATENCY", "BALANCED", "THROUGHPUT"),
+            ZLinkCoreHwmProfile.entries.map { it.name },
+        )
+        assertEquals(
+            listOf("COMPACT", "LOW_LATENCY", "BALANCED", "THROUGHPUT"),
+            ZLinkApplicationJobQueueProfile.entries.map { it.name },
+        )
+        Assertions.assertThrows(NoSuchMethodException::class.java) {
+            ZLinkFrameworkRuntime::class.java
+                .getMethod("resetCoreHwmBudgetMetrics")
+        }
+    }
+
+    private fun inheritedCapacity(
+        status: ZLinkFrameworkRuntimeStatus,
+    ): ZLinkHostCapacityStatus = status.capacity()
+
+    private fun inheritedCapacityReset(runtime: ZLinkFrameworkRuntime) {
+        runtime.resetCapacityMetrics()
+    }
 
     @Test
     fun canonicalOneWayWrappersHideJavaCalls() {

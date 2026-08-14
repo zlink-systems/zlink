@@ -268,7 +268,9 @@ public sealed class BoundSessionReplacementLifecycleTests
     {
         await using var fixture = await ReplacementFixture.CreateAsync(
             ReplacementCallbackBehavior.Success);
-        var table = new ZLinkSessionActorBindingTable(TimeSpan.FromSeconds(30));
+        var table = new ZLinkSessionActorBindingTable(
+            TimeSpan.FromSeconds(30),
+            new ZLinkLocationOptions().SessionRelocationSealTimeout);
         const string actorId = "actor-fence";
         const string bindingToken = "binding-fence";
         var actor = new ActorRef(

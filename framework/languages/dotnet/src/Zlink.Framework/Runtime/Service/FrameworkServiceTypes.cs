@@ -1,5 +1,6 @@
 using Systems.Zlink;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Dispatch;
 
 namespace Zlink.Framework.Runtime.Service;
 
@@ -303,35 +304,38 @@ internal readonly record struct ZLinkRelocationReplyCompletion(
     ZLinkRelocationReplyCompletionState State,
     ZLinkServiceWireCodec.RequestSourceFence RequestSource);
 
-internal interface ICanonicalRelocationReservationTarget
+internal sealed class ZLinkCanonicalRelocationPreparationLease
 {
-    ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> OfferAsync(
+    private int _prepared;
+
+    internal bool IsPrepared => Volatile.Read(ref _prepared) != 0;
+
+    internal void MarkPrepared() => Volatile.Write(ref _prepared, 1);
+}
+
+internal interface ICanonicalRelocationTarget
+{
+    ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareAsync(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         RoutingId authenticatedSourceNodeRid,
+        ZLinkCanonicalRelocationPreparationLease lease,
         CancellationToken cancellationToken);
 
-    ValueTask<ZLinkServiceWireCodec.RelocationReservedRecord> AcceptAsync(
-        ZLinkServiceWireCodec.RelocationReadyRecord acceptance,
-        RoutingId authenticatedSourceNodeRid,
-        CancellationToken cancellationToken);
+    void ReadySubmitted(
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        RoutingId authenticatedSourceNodeRid);
 
-    ValueTask<ZLinkServiceWireCodec.RelocationAckRecord> StageDataAsync(
+    ValueTask AbortPreparedAsync(
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        RoutingId authenticatedSourceNodeRid);
+
+    ValueTask StageDataAsync(
         ZLinkServiceWireCodec.RelocationDataRecord data,
         RoutingId authenticatedSourceNodeRid,
         CancellationToken cancellationToken);
 
-    bool TryCreateSealRequest(
-        ZLinkServiceWireCodec.RelocationWireId relocationId,
-        ulong targetAttemptGeneration,
-        out ZLinkServiceWireCodec.RelocationSealRecord seal);
-
-    ValueTask AcceptSealResponseAsync(
-        ZLinkServiceWireCodec.RelocationSealRecord seal,
-        RoutingId authenticatedSourceNodeRid,
-        CancellationToken cancellationToken);
-
-    ValueTask CompleteAsync(
-        ZLinkServiceWireCodec.RelocationCompleteRecord complete,
+    ValueTask CutoverAsync(
+        ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
         RoutingId authenticatedSourceNodeRid,
         CancellationToken cancellationToken);
 }
@@ -343,7 +347,7 @@ internal interface ISessionRelocationBarrierTarget
         RoutingId authenticatedSourceNodeRid,
         CancellationToken cancellationToken);
 
-    ValueTask<ZLinkServiceWireCodec.SessionRelocationRoutedRecord> RouteAsync(
+    ValueTask RouteAsync(
         ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
         ZLinkSessionRelocationAuthenticatedRoute authenticatedRoute,
         CancellationToken cancellationToken);
@@ -425,7 +429,7 @@ internal sealed class MeshReadyBatch : IDisposable
 
 internal sealed class MeshReceiveBatch : IDisposable
 {
-    private readonly List<(MeshReceiveRecord Record, IReadOnlyList<Message> Parts)> _entries = new();
+    private readonly List<(MeshReceiveRecord Record, IReadOnlyList<Message> Parts, IDisposable? CreditOwner)> _entries = new();
     internal int MaximumRecords { get; set; } = int.MaxValue;
     internal long MaximumBytes { get; set; } = long.MaxValue;
     internal long StartedAt { get; set; }
@@ -446,31 +450,45 @@ internal sealed class MeshReceiveBatch : IDisposable
         return bytes <= MaximumBytes - Math.Min(Bytes, MaximumBytes);
     }
 
-    internal void Add(MeshReceiveRecord record, IReadOnlyList<Message> parts)
+    internal void Add(
+        MeshReceiveRecord record,
+        IReadOnlyList<Message> parts,
+        IDisposable? creditOwner = null)
     {
-        _entries.Add((record, parts));
+        _entries.Add((record, parts, creditOwner));
         Bytes = checked(Bytes + parts.Sum(static part => Math.Max(part.Size, 0)));
     }
     public void Reset()
     {
-        foreach (var (record, parts) in _entries)
+        foreach (var (record, parts, creditOwner) in _entries)
         {
-            foreach (var part in parts)
-                part.Dispose();
-            record.InboundDispatchLease?.Dispose();
+            try
+            {
+                foreach (var part in parts)
+                    part.Dispose();
+            }
+            finally
+            {
+                creditOwner?.Dispose();
+            }
         }
         _entries.Clear();
         Bytes = 0;
     }
 
-    internal ZLinkInboundDispatchLease? TakeInboundDispatchLease(int index)
+    internal IDisposable? TakeCreditOwner(int index)
     {
         var entry = _entries[index];
-        var lease = entry.Record.InboundDispatchLease;
-        entry.Record.InboundDispatchLease = null;
-        _entries[index] = entry;
-        return lease;
+        _entries[index] = (entry.Record, entry.Parts, null);
+        return entry.CreditOwner;
     }
+
+    internal ZLinkApplicationJobQueueLease? GetApplicationJobAdmission(
+        int index) =>
+        _entries[index].CreditOwner
+            is ZLinkApplicationJobQueueCreditOwner owner
+                ? owner.Admission
+                : null;
 
     internal ulong? GetApplicationPayloadBytes(int index) =>
         _entries[index].Record.ApplicationPayloadBytes;
@@ -550,25 +568,9 @@ internal struct MeshReceiveRecord
     public ulong ReplyRouteId { get; }
     public ulong DeadlineUnixMs { get; }
     public MeshRecordPayload? KindData { get; }
-    internal ZLinkInboundDispatchLease? InboundDispatchLease { get; set; }
-
     // Ingress records carry the payload size once it is known. This keeps the
     // mailbox and dispatch pump from rediscovering envelope boundaries.
     internal ulong? ApplicationPayloadBytes { get; set; }
-
-    internal bool RequiresApplicationDispatchLease =>
-        Domain == MeshReadyDomains.Application
-        && (Kind is MeshRecordKind.NodeSend
-            or MeshRecordKind.NodeRequest
-            or MeshRecordKind.ChannelSend
-            or MeshRecordKind.ChannelRequest
-            or MeshRecordKind.SpotSend
-            or MeshRecordKind.SpotRequest
-            or MeshRecordKind.SpotMulticast
-            or MeshRecordKind.ActorSend
-            or MeshRecordKind.ActorRequest
-            || Kind == MeshRecordKind.SpotControl
-               && OperationKind == MeshOperationKind.ActorJoin);
 
     public ActorControlRecord? ActorControl => KindData as ActorControlRecord;
     public ActorJoinCompletion? JoinCompletion => KindData as ActorJoinCompletion;
@@ -626,8 +628,6 @@ internal struct MeshReceiveRecord
 
 internal interface IMeshNode : IDisposable, IAsyncDisposable
 {
-    void SetInboundDispatchBudget(ZLinkInboundDispatchBudget budget) { }
-
     ValueTask ForceStopAsync(CancellationToken cancellationToken);
     RoutingId RoutingId { get; }
     MeshOperationId AllocateOperationId();
@@ -697,7 +697,7 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
         out MeshOperationId operationId, TimeSpan timeout = default,
         SendFlags flags = SendFlags.None, ReadOnlyMemory<byte> metadata = default);
     SubmitResult RequestToNode(RoutingId targetRid, IReadOnlyList<Message> parts,
-        RequestCallback callback, TimeSpan timeout = default,
+        ZLinkBackendRequestCallback callback, TimeSpan timeout = default,
         SendFlags flags = SendFlags.None, ReadOnlyMemory<byte> metadata = default);
     SubmitResult SendToActor(ActorRef actor, IReadOnlyList<Message> parts, SendFlags flags = SendFlags.None);
     SubmitResult RequestToActor(ActorRef actor, IReadOnlyList<Message> parts,
@@ -711,8 +711,8 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
         IActorMessageFollowIngressTarget target);
     void SetInstanceSpotActivationTarget(IInstanceSpotActivationTarget target);
     void SetRelocationReplyRelayTarget(IRelocationReplyRelayTarget target);
-    void SetCanonicalRelocationReservationTarget(
-        ICanonicalRelocationReservationTarget target);
+    void SetCanonicalRelocationTarget(
+        ICanonicalRelocationTarget target);
     void SetSessionRelocationBarrierTarget(
         ISessionRelocationBarrierTarget target);
     ValueTask<ZLinkServiceWireCodec.ReplyRelayAckRecord> RelayRelocationReplyAsync(
@@ -722,21 +722,19 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
         IReadOnlyList<Message> payload,
         TimeSpan timeout,
         CancellationToken cancellationToken);
-    ValueTask<ZLinkServiceWireCodec.RelocationReservedRecord>
-        ReserveCanonicalRelocationAsync(
+    ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord>
+        PrepareCanonicalRelocationAsync(
             RoutingId targetNodeRid,
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
             TimeSpan timeout,
             CancellationToken cancellationToken);
-    ValueTask StageCanonicalRelocationAsync(
+    ValueTask SendCanonicalRelocationDataAsync(
         RoutingId targetNodeRid,
-        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-        IReadOnlyList<ZLinkServiceWireCodec.RelocationDataRecord> data,
-        TimeSpan timeout,
+        ZLinkServiceWireCodec.RelocationDataRecord data,
         CancellationToken cancellationToken);
-    ValueTask CompleteCanonicalRelocationAsync(
+    ValueTask SendCanonicalRelocationCutoverAsync(
         RoutingId targetNodeRid,
-        ZLinkServiceWireCodec.RelocationCompleteRecord complete,
+        ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
         CancellationToken cancellationToken);
     ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord>
         SealSessionRelocationAsync(
@@ -744,12 +742,9 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
             ZLinkServiceWireCodec.SessionRelocationSealRecord seal,
             TimeSpan timeout,
             CancellationToken cancellationToken);
-    ValueTask<ZLinkServiceWireCodec.SessionRelocationRoutedRecord>
-        RouteSessionRelocationAsync(
+    ValueTask RouteSessionRelocationAsync(
             RoutingId sessionOwnerNodeRid,
             ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
-            ulong expectedSealedHighWater,
-            TimeSpan timeout,
             CancellationToken cancellationToken);
     SubmitResult ActivateInstanceSpot(
         InstanceSpotActivationTarget target,
@@ -805,7 +800,7 @@ internal interface ISpot : IDisposable, IAsyncDisposable
         out MeshOperationId operationId, TimeSpan timeout = default,
         SendFlags flags = SendFlags.None, ReadOnlyMemory<byte> metadata = default);
     SubmitResult RequestToChannel(string channelName, IReadOnlyList<Message> parts,
-        RequestCallback callback, TimeSpan timeout = default,
+        ZLinkBackendRequestCallback callback, TimeSpan timeout = default,
         SendFlags flags = SendFlags.None, ReadOnlyMemory<byte> metadata = default);
     void Publish(string channelName, string topic,
         IReadOnlyList<Message> parts, SendFlags flags = SendFlags.None,

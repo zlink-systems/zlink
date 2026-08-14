@@ -20,33 +20,21 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 
 final class ZLinkChannelMessageDispatcher {
     private final ZLinkChannelDispatchRegistry registry;
     private final ZLinkChannelHandlerInvoker invoker;
     private final ZLinkChannelDispatchReporter errors;
     private final ZLinkMessageFlowTracer flow;
-    private final ZLinkInboundDispatchBudget inboundDispatchBudget;
     ZLinkChannelMessageDispatcher(
         ZLinkChannelDispatchRegistry registry,
         ZLinkChannelHandlerInvoker invoker,
         ZLinkChannelDispatchReporter errors,
         ZLinkMessageFlowTracer flow) {
-        this(registry, invoker, errors, flow, new ZLinkInboundDispatchBudget(0));
-    }
-
-    ZLinkChannelMessageDispatcher(
-        ZLinkChannelDispatchRegistry registry,
-        ZLinkChannelHandlerInvoker invoker,
-        ZLinkChannelDispatchReporter errors,
-        ZLinkMessageFlowTracer flow,
-        ZLinkInboundDispatchBudget inboundDispatchBudget) {
         this.registry = registry;
         this.invoker = invoker;
         this.errors = errors;
         this.flow = flow;
-        this.inboundDispatchBudget = inboundDispatchBudget;
     }
 
     void dispatchRequest(
@@ -157,12 +145,10 @@ final class ZLinkChannelMessageDispatcher {
                 topic,
                 null);
             Message payload = Message.from(packet.payload());
-            ZLinkInboundDispatchBudget.Lease lease =
-                inboundDispatchBudget.track(payload.size());
             try {
                 CompletionStage<Void> queued = registry.publishQueue(channelName)
-                    .enqueueWithPayloadBytes(payload.size(), () ->
-                    invokeStarted(lease, () -> invoker.executeHandler(() ->
+                    .enqueue(() ->
+                    invokeStarted(() -> invoker.executeHandler(() ->
                         invoker.invokePublishHandler(
                             channelName, registration, topic, payload, contentType)))
                         .whenComplete((ignored, error) -> {
@@ -189,17 +175,14 @@ final class ZLinkChannelMessageDispatcher {
                         })
                         .whenComplete((ignored, error) -> {
                             payload.close();
-                            lease.close();
                         }));
                 queued.whenComplete((ignored, error) -> {
                     if (error != null) {
                         payload.close();
-                        lease.close();
                     }
                 });
             } catch (RuntimeException error) {
                 payload.close();
-                lease.close();
                 throw error;
             }
         } finally {
@@ -235,12 +218,10 @@ final class ZLinkChannelMessageDispatcher {
             null,
             null);
         Message payload = Message.from(packet.payload());
-        ZLinkInboundDispatchBudget.Lease lease =
-            inboundDispatchBudget.track(payload.size());
         try {
             CompletionStage<Void> queued = registry.sendQueue(channelName)
-                .enqueueWithPayloadBytes(payload.size(), () ->
-                invokeStarted(lease, () -> invoker.executeHandler(() ->
+                .enqueue(() ->
+                invokeStarted(() -> invoker.executeHandler(() ->
                     invoker.invokeSendHandler(
                         channelName, registration, payload, Map.of(), contentType)))
                     .whenComplete((ignored, error) -> {
@@ -266,17 +247,14 @@ final class ZLinkChannelMessageDispatcher {
                     })
                     .whenComplete((ignored, error) -> {
                         payload.close();
-                        lease.close();
                     }));
             queued.whenComplete((ignored, error) -> {
                 if (error != null) {
                     payload.close();
-                    lease.close();
                 }
             });
         } catch (RuntimeException error) {
             payload.close();
-            lease.close();
             throw error;
         }
     }
@@ -291,15 +269,13 @@ final class ZLinkChannelMessageDispatcher {
         String contentType) {
         String packetName = packet.packetName();
         Message payload = Message.from(packet.payload());
-        ZLinkInboundDispatchBudget.Lease lease =
-            inboundDispatchBudget.track(payload.size());
         try {
             CompletionStage<Void> queued = registry.requestQueue(channelName)
-                .enqueueWithPayloadBytes(payload.size(), () ->
-                inboundDispatchBudget.acquireCompletionPermit()
+                .enqueue(() ->
+                CompletableFuture.completedFuture(null)
                     .thenCompose(permit -> {
                         try {
-                            return invokeStarted(lease, () -> invoker.executeHandler(() ->
+                            return invokeStarted(() -> invoker.executeHandler(() ->
                                 invoker.invokeRequestHandler(
                                     channelName,
                                     registration,
@@ -335,43 +311,33 @@ final class ZLinkChannelMessageDispatcher {
                                                 String.valueOf(requestSeq));
                                         }
                                     } finally {
-                                        permit.close();
+
                                     }
                                 });
                         } catch (RuntimeException failure) {
-                            permit.close();
+
                             return CompletableFuture
                                 .<Message>failedFuture(failure);
                         }
                     })
                     .whenComplete((ignored, error) -> {
                         payload.close();
-                        lease.close();
                     })
                     .thenApply(ignored -> null));
             queued.whenComplete((ignored, error) -> {
                 if (error != null) {
                     payload.close();
-                    lease.close();
                 }
             });
         } catch (RuntimeException error) {
             payload.close();
-            lease.close();
             throw error;
         }
     }
 
     private static <T> CompletionStage<T> invokeStarted(
-        ZLinkInboundDispatchBudget.Lease lease,
         Supplier<CompletionStage<T>> invocation) {
-        lease.handlerStarted();
-        try {
-            return invocation.get();
-        } catch (RuntimeException error) {
-            lease.close();
-            throw error;
-        }
+        return invocation.get();
     }
 
     private void traceReceivedRequest(

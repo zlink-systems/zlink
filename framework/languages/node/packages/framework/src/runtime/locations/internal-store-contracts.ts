@@ -35,10 +35,6 @@ export type ZLinkObjectCreationStore = Pick<ZLinkDomainLocationStore,
   | 'commitAggregate'
   | 'abortAggregate'>;
 
-export type ZLinkRelocationCapacityStore = Pick<ZLinkDomainLocationStore,
-  | 'reserveRelocationCapacity'
-  | 'abortRelocationCapacity'>;
-
 export type ZLinkOwnerLeaseStore = Pick<ZLinkDomainLocationStore,
   | 'claimOwnerLease'
   | 'readOwnerLease'

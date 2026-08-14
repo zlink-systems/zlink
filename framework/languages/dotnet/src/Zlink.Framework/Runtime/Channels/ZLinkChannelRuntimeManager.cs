@@ -79,8 +79,8 @@ internal sealed class ZLinkChannelRuntimeManager(
                         bundle.ClientServerServer
                         ?? throw new InvalidOperationException(
                             "ClientServer server identity is not initialized."),
+                        state.ApplicationJobQueue,
                         state.ErrorSink,
-                        state.InboundDispatchBudget,
                         ct))));
             }
 
@@ -99,7 +99,7 @@ internal sealed class ZLinkChannelRuntimeManager(
                             fanoutRuntime,
                             state.ErrorSink,
                             state.StopTokenSource.Token,
-                            inboundDispatchBudget: state.InboundDispatchBudget));
+                            applicationJobQueue: state.ApplicationJobQueue));
                     continue;
                 }
 
@@ -111,8 +111,8 @@ internal sealed class ZLinkChannelRuntimeManager(
                     ct => new ValueTask(receiveLoop.RunSubscriberLoopAsync(
                         channelName,
                         (ISubSocket)bundle.Socket,
+                        state.ApplicationJobQueue,
                         state.ErrorSink,
-                        state.InboundDispatchBudget,
                         ct))));
             }
         }
@@ -180,7 +180,7 @@ internal sealed class ZLinkChannelRuntimeManager(
         {
             using var payload = Message.From(
                 ZLinkFanoutLivenessProtocol.Payload);
-            _ = publisher.Publish(ZLinkFanoutLivenessProtocol.Topic)
+            _ = publisher.TryPublish(ZLinkFanoutLivenessProtocol.Topic)
                 .Message(payload)
                 .Flags(SendFlags.DontWait)
                 .Submit();

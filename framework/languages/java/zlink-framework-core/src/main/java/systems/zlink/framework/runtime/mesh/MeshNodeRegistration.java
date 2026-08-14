@@ -954,12 +954,9 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     }
 
     private static final class RouterSocketConfig implements ZLinkMeshNodeSocketConfig {
-        //  HWM is an accounted byte count, so it has to be 64-bit. The mailbox
-        //  budgets default to 0, which leaves the runtime default in place.
+        // HWM is an accounted byte count, so it has to be 64-bit.
         private long sendHighWaterMark = 4_096_000L;
         private long receiveHighWaterMark = 4_096_000L;
-        private long mailboxMessageBudget;
-        private long mailboxByteBudget;
         private Duration receiveTimeout;
         private Duration sendTimeout;
 
@@ -967,22 +964,6 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         @Override public void setSendHighWaterMark(long value) { sendHighWaterMark = value; }
         @Override public long receiveHighWaterMark() { return receiveHighWaterMark; }
         @Override public void setReceiveHighWaterMark(long value) { receiveHighWaterMark = value; }
-        @Override public long mailboxMessageBudget() { return mailboxMessageBudget; }
-        @Override public void setMailboxMessageBudget(long value) {
-            if (value < 0) {
-                throw new ZLinkConfigurationException(
-                    "mailboxMessageBudget must not be negative");
-            }
-            mailboxMessageBudget = value;
-        }
-        @Override public long mailboxByteBudget() { return mailboxByteBudget; }
-        @Override public void setMailboxByteBudget(long value) {
-            if (value < 0) {
-                throw new ZLinkConfigurationException(
-                    "mailboxByteBudget must not be negative");
-            }
-            mailboxByteBudget = value;
-        }
         @Override public Optional<Duration> receiveTimeout() {
             return Optional.ofNullable(receiveTimeout);
         }

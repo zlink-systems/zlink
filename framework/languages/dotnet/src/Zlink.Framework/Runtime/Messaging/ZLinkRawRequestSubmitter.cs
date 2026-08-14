@@ -5,53 +5,41 @@ namespace Zlink.Framework.Runtime.Messaging;
 internal static class ZLinkRawRequestSubmitter
 {
     public static async ValueTask<IReadOnlyList<Message>> SubmitAsync(
-        ZLinkAsyncSubmitter submitter,
-        Message message,
-        Func<Message, RequestCallback, TimeSpan?, bool> request,
-        TimeSpan timeout,
-        string failureMessage,
-        CancellationToken cancellationToken)
-    {
-        return await submitter.SubmitRequestAsync<IReadOnlyList<Message>>(
-                message,
-                (pending, complete, fail) => request(
-                    pending,
-                    CreateCompletion(complete, fail, failureMessage),
-                    timeout),
-                cancellationToken,
-                ZLinkMessageParts.DisposeAll)
-            .ConfigureAwait(false);
-    }
-
-    public static async ValueTask<IReadOnlyList<Message>> SubmitAsync(
-        ZLinkAsyncSubmitter submitter,
         IReadOnlyList<Message> parts,
-        Func<IReadOnlyList<Message>, RequestCallback, TimeSpan?, bool> request,
+        Func<IReadOnlyList<Message>, TimeSpan, CancellationToken,
+            Task<IReadOnlyList<Message>>> request,
         TimeSpan timeout,
         string failureMessage,
         CancellationToken cancellationToken)
     {
-        return await submitter.SubmitRequestAsync<IReadOnlyList<Message>>(
-                parts,
-                (pending, complete, fail) => request(
-                    pending,
-                    CreateCompletion(complete, fail, failureMessage),
-                    timeout),
-                cancellationToken,
-                ZLinkMessageParts.DisposeAll)
-            .ConfigureAwait(false);
-    }
-
-    private static RequestCallback CreateCompletion(
-        Action<IReadOnlyList<Message>> complete,
-        Action<Exception> fail,
-        string failureMessage)
-    {
-        return (result, reply) => ZLinkRawReplyCompletion.Complete(
-            result,
-            reply,
-            complete,
-            fail,
-            string.Format(CultureInfo.InvariantCulture, failureMessage, result));
+        ArgumentNullException.ThrowIfNull(parts);
+        ArgumentNullException.ThrowIfNull(request);
+        try
+        {
+            return await request(parts, timeout, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (ZlinkRequestException error)
+        {
+            throw ZLinkRequestFailureMapper.CreateCompletionException(
+                (RequestResult)(int)error.Result,
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    failureMessage,
+                    error.Result));
+        }
+        catch (ZlinkSubmitException error)
+        {
+            throw ZLinkRequestFailureMapper.CreateSubmitException(
+                error,
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    failureMessage,
+                    error.Result));
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
     }
 }

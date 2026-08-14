@@ -67,12 +67,8 @@ final class ZLinkCanonicalRelocationTransitionOwner {
         boolean known =
             command == ServiceWireConstants.COMMAND_RELOCATION_READY
                 || command == ServiceWireConstants.COMMAND_RELOCATION_DATA
-                || command == ServiceWireConstants.COMMAND_RELOCATION_ACK
-                || command == ServiceWireConstants.COMMAND_RELOCATION_SEAL
-                || command == ServiceWireConstants.COMMAND_RELOCATION_COMPLETE
                 || command == ServiceWireConstants.COMMAND_RELOCATION_PREPARE
-                || command
-                    == ServiceWireConstants.COMMAND_RELOCATION_RESERVED;
+                || command == ServiceWireConstants.COMMAND_RELOCATION_CUTOVER;
         if (!known) {
             throw new IllegalArgumentException(
                 "canonical relocation command is invalid");

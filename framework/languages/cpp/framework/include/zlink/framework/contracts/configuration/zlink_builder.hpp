@@ -23,6 +23,7 @@ class channel_runtime_manager_t;
 class mesh_node_runtime_t;
 class spot_node_runtime_t;
 class zlink_builder_state_t;
+class zlink_builder_access_t;
 void apply_dispatch_options (zlink_builder_t &builder, const dispatch_options_t &options);
 void bind_stream_serializers (zlink_builder_t &builder, serializer_registry_t &serializers);
 void apply_stream_compression_codec (zlink_builder_t &builder,
@@ -69,6 +70,7 @@ class zlink_builder_t
     friend void detail::bind_zlink_monitoring (
       zlink_builder_t &builder,
       std::shared_ptr<detail::monitoring_runtime_state_t> monitoring);
+    friend class detail::zlink_builder_access_t;
     friend class detail::channel_runtime_manager_t;
     friend class detail::mesh_node_runtime_t;
     friend class detail::spot_node_runtime_t;

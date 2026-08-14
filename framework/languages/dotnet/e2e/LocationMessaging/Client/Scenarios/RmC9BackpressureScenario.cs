@@ -5,10 +5,9 @@ using Zlink.HttpClient;
 
 namespace LocationMessaging.Client.Scenarios;
 
-// RM-C9 verifies the public inbound application HWM status and recovery path.
+// RM-C9 verifies retained inbound ownership is released when the handler completes.
 internal static class RmC9BackpressureScenario
 {
-    private const ulong ApplicationHwmBytes = 1UL * 1024 * 1024;
     private const int BlockerPayloadBytes = 2 * 1024 * 1024;
 
     public static async Task RunAsync(ZLinkHttpClient backpressureConsumer, ZLinkHttpClient providerA)
@@ -27,24 +26,7 @@ internal static class RmC9BackpressureScenario
             .Body(new EvidenceWaitReq($"profile-command-start|rid=api-a|command={commandId}", 30000))
             .Async<string[]>();
 
-        var paused = await WaitForInboundStatusAsync(
-            providerA,
-            status => status.ApplicationHwmBytes == ApplicationHwmBytes
-                      && status.PendingPayloadBytes >= ApplicationHwmBytes
-                      && status.ApplicationReceivePaused,
-            "RM-C9 provider did not expose pending payload at the application HWM.");
-        ZlinkStreamAssert.Ensure(paused.PendingPayloadBytes >= ApplicationHwmBytes,
-            "RM-C9 provider status reported less pending payload than the configured HWM.");
-
         await providerA.Post("/profile/backpressure/release").Async<object>();
-
-        var resumed = await WaitForInboundStatusAsync(
-            providerA,
-            status => status.PendingPayloadBytes == 0
-                      && !status.ApplicationReceivePaused,
-            "RM-C9 provider did not resume application receives after handler completion.");
-        ZlinkStreamAssert.Ensure(resumed.PendingPayloadBytes == 0,
-            "RM-C9 provider retained pending payload after the blocker was released.");
 
         var followUp = (await backpressureConsumer.Post("/profile/request")
             .Body(new ProfileReq("rm-c9-after"))
@@ -69,25 +51,4 @@ internal static class RmC9BackpressureScenario
             .Async<string>()).Body;
     }
 
-    private static async Task<RuntimeInboundStatusRes> WaitForInboundStatusAsync(
-        ZLinkHttpClient providerA,
-        Func<RuntimeInboundStatusRes, bool> predicate,
-        string failureMessage)
-    {
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
-        RuntimeInboundStatusRes latest = default!;
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            latest = (await providerA.Get("/runtime/status")
-                .Async<RuntimeInboundStatusRes>()).Body;
-            if (predicate(latest)) return latest;
-            await Task.Delay(TimeSpan.FromMilliseconds(100));
-        }
-
-        throw new InvalidOperationException(
-            $"{failureMessage} Last status: "
-            + $"hwm={latest.ApplicationHwmBytes},pending={latest.PendingPayloadBytes},"
-            + $"queued={latest.QueuedPayloadBytes},active={latest.ActivePayloadBytes},"
-            + $"paused={latest.ApplicationReceivePaused}.");
-    }
 }

@@ -5,7 +5,6 @@ internal sealed class ZLinkActorHandoffState(
     TimeProvider timeProvider,
     Action<string>? diagnostic = null,
     ZLinkBoundedIngressAdmission? sourceIngressAdmission = null,
-    ZLinkBoundedIngressAdmission? targetIngressAdmission = null,
     ZLinkBoundedIngressAdmission? sourceHoldAdmission = null)
 {
     private readonly object _gate = new();
@@ -18,8 +17,6 @@ internal sealed class ZLinkActorHandoffState(
         sourceIngressAdmission ?? new ZLinkBoundedIngressAdmission();
     private readonly ZLinkBoundedIngressAdmission _sourceHoldAdmission =
         sourceHoldAdmission ?? new ZLinkBoundedIngressAdmission();
-    private ZLinkBoundedIngressAdmission _targetIngressAdmission =
-        targetIngressAdmission ?? new ZLinkBoundedIngressAdmission();
     private CancellationTokenSource? _messageFollowExpiry;
     private ZLinkActorMessageFollowRoute? _messageFollowRoute;
     private ZLinkBackendActorRef? _staleSourceActor;
@@ -29,10 +26,6 @@ internal sealed class ZLinkActorHandoffState(
     private ZLinkActorTargetHandoffPhase _targetPhase;
     private TaskCompletionSource? _targetCompletion;
     private TaskCompletionSource? _targetReplayCompletion;
-    private ZLinkServiceWireCodec.SessionRelocationRouteRecord?
-        _requiredSessionRouteTerminal;
-    private bool _sessionRouteTerminalRequired;
-    private bool _sessionRouteTerminalObserved;
     private long _arrivalIndex;
     private int _importedFrameCount;
     private int _sourceCommittedFrameCount = -1;
@@ -74,7 +67,6 @@ internal sealed class ZLinkActorHandoffState(
                     _preparation = null;
                     _targetCompletion = null;
                     _targetReplayCompletion = null;
-                    ClearSessionRouteTerminalLocked();
                     _canonicalMaintenanceDrain = null;
                     _canonicalMaintenanceReplayReservations.Clear();
                     _targetPhase = ZLinkActorTargetHandoffPhase.Idle;
@@ -88,7 +80,6 @@ internal sealed class ZLinkActorHandoffState(
                 _sourceCompletion = new TaskCompletionSource(
                     TaskCreationOptions.RunContinuationsAsynchronously);
                 _sourceHoldAdmission.ReleaseAll();
-                _targetIngressAdmission.ReleaseAll();
                 _sourceHoldFrames.Clear();
                 return;
             }
@@ -97,7 +88,6 @@ internal sealed class ZLinkActorHandoffState(
             _joinRequest = null;
             _preparation = null;
             _targetReplayCompletion = null;
-            ClearSessionRouteTerminalLocked();
             _canonicalMaintenanceDrain = null;
             _canonicalMaintenanceReplayReservations.Clear();
             _targetPhase = ZLinkActorTargetHandoffPhase.Idle;
@@ -111,7 +101,6 @@ internal sealed class ZLinkActorHandoffState(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             _sourceIngressAdmission.ReleaseAll();
             _sourceHoldAdmission.ReleaseAll();
-            _targetIngressAdmission.ReleaseAll();
             _frames.Clear();
             _sourceHoldFrames.Clear();
             _arrivalIndex = 0;
@@ -157,7 +146,6 @@ internal sealed class ZLinkActorHandoffState(
     {
         _sourceIngressAdmission.ReleaseAll();
         _sourceHoldAdmission.ReleaseAll();
-        _targetIngressAdmission.ReleaseAll();
         _frames.Clear();
         _sourceHoldFrames.Clear();
         _arrivalIndex = 0;
@@ -171,8 +159,7 @@ internal sealed class ZLinkActorHandoffState(
             or ZLinkActorTargetHandoffPhase.Prepared
             or ZLinkActorTargetHandoffPhase.Replaying
             or ZLinkActorTargetHandoffPhase.AdmissionOpenDraining
-        || _targetPhase == ZLinkActorTargetHandoffPhase.Completed
-           && !IsSessionRouteTerminalSatisfiedLocked();
+        || _targetPhase == ZLinkActorTargetHandoffPhase.Completed;
 
     public IReadOnlyList<ZLinkActorHandoffFrame> EndDeferredJoinCapture()
     {
@@ -193,7 +180,6 @@ internal sealed class ZLinkActorHandoffState(
             _deferredJoinCapture = false;
             _sourceIngressAdmission.ReleaseAll();
             _sourceHoldAdmission.ReleaseAll();
-            _targetIngressAdmission.ReleaseAll();
             _frames.Clear();
             _sourceHoldFrames.Clear();
             _arrivalIndex = 0;
@@ -406,9 +392,6 @@ internal sealed class ZLinkActorHandoffState(
             if (capturesSourceHold
                 && !_sourceHoldAdmission.TryAcquire(encodedBytes))
                 return ZLinkActorHandoffCaptureResult.Full;
-            if (capturesTargetIngress
-                && !_targetIngressAdmission.TryAcquire(encodedBytes))
-                return ZLinkActorHandoffCaptureResult.Full;
             try
             {
                 if (capturesSourceHold)
@@ -423,8 +406,6 @@ internal sealed class ZLinkActorHandoffState(
                     _sourceIngressAdmission.Release(encodedBytes);
                 if (capturesSourceHold)
                     _sourceHoldAdmission.Release(encodedBytes);
-                if (capturesTargetIngress)
-                    _targetIngressAdmission.Release(encodedBytes);
                 throw;
             }
             diagnostic?.Invoke(
@@ -478,12 +459,10 @@ internal sealed class ZLinkActorHandoffState(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             _targetReplayCompletion = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
-            ClearSessionRouteTerminalLocked();
             preparation = _preparation.Task;
             _targetPhase = ZLinkActorTargetHandoffPhase.Importing;
             _sourceIngressAdmission.ReleaseAll();
             _sourceHoldAdmission.ReleaseAll();
-            _targetIngressAdmission.ReleaseAll();
             _frames.Clear();
             _sourceHoldFrames.Clear();
             _arrivalIndex = 0;
@@ -505,9 +484,7 @@ internal sealed class ZLinkActorHandoffState(
 
     internal void BeginCanonicalMaintenanceImport(
         string handoffId,
-        IReadOnlyList<ZLinkActorHandoffFrame> frames,
-        int? negotiatedMessages = null,
-        long? negotiatedBytes = null)
+        IReadOnlyList<ZLinkActorHandoffFrame> frames)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(handoffId);
         ArgumentNullException.ThrowIfNull(frames);
@@ -545,23 +522,11 @@ internal sealed class ZLinkActorHandoffState(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             _targetReplayCompletion = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
-            if (!adoptingPreparedRemoteJoin)
-                ClearSessionRouteTerminalLocked();
             _canonicalMaintenanceDrain = null;
             _canonicalMaintenanceReplayReservations.Clear();
             _targetPhase = ZLinkActorTargetHandoffPhase.Importing;
             _sourceIngressAdmission.ReleaseAll();
             _sourceHoldAdmission.ReleaseAll();
-            _targetIngressAdmission.ReleaseAll();
-            if (negotiatedMessages is not null || negotiatedBytes is not null)
-            {
-                if (negotiatedMessages is null || negotiatedBytes is null)
-                    throw new ArgumentException(
-                        "Canonical target admission requires both negotiated bounds.");
-                _targetIngressAdmission = new ZLinkBoundedIngressAdmission(
-                    negotiatedMessages.Value,
-                    negotiatedBytes.Value);
-            }
             _frames.Clear();
             _sourceHoldFrames.Clear();
             long previousSequence = 0;
@@ -574,19 +539,12 @@ internal sealed class ZLinkActorHandoffState(
                         || frame.CanonicalEncodedLength <= 0)
                         throw new ZLinkRelocationDataLostException(
                             $"Actor '{actorId}' canonical accepted sequence or size is invalid.");
-                    if (!_targetIngressAdmission.TryAcquire(
-                            frame.CanonicalEncodedLength))
-                        throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.Unavailable,
-                            $"Actor '{actorId}' canonical target backlog exceeds its bound.",
-                            ZLinkRetryAdvice.RetryAfterBackoff);
                     _frames.Add(frame);
                     previousSequence = frame.ArrivalIndex;
                 }
             }
             catch
             {
-                _targetIngressAdmission.ReleaseAll();
                 _frames.Clear();
                 _canonicalMaintenanceReplayReservations.Clear();
                 _handoffId = null;
@@ -614,7 +572,6 @@ internal sealed class ZLinkActorHandoffState(
             var ordered = frames.OrderBy(static frame => frame.ArrivalIndex)
                 .ToArray();
             var expectedSequence = _arrivalIndex;
-            long requiredBytes = 0;
             foreach (var frame in ordered)
             {
                 if (frame.ArrivalIndex != expectedSequence
@@ -622,24 +579,9 @@ internal sealed class ZLinkActorHandoffState(
                     throw new ZLinkRelocationDataLostException(
                         $"Actor '{actorId}' canonical delta sequence or size is invalid.");
                 expectedSequence++;
-                requiredBytes = checked(requiredBytes
-                    + frame.CanonicalEncodedLength);
             }
-            if (ordered.Length
-                    > _targetIngressAdmission.RemainingRecordCapacity
-                || requiredBytes
-                    > _targetIngressAdmission.RemainingByteCapacity)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    $"Actor '{actorId}' canonical target backlog exceeds its negotiated bound.",
-                    ZLinkRetryAdvice.RetryAfterBackoff);
             foreach (var frame in ordered)
             {
-                if (!_targetIngressAdmission.TryAcquire(frame.CanonicalEncodedLength))
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Unavailable,
-                        $"Actor '{actorId}' canonical target backlog exceeds its negotiated bound.",
-                        ZLinkRetryAdvice.RetryAfterBackoff);
                 _frames.Add(frame);
                 _arrivalIndex++;
             }
@@ -647,41 +589,36 @@ internal sealed class ZLinkActorHandoffState(
         }
     }
 
-    public void AcceptPreparation(string handoffId, ZLinkRemoteActorJoinReply reply)
+    internal void AppendPreparedImport(
+        string handoffId,
+        IReadOnlyList<ZLinkActorHandoffFrame> frames)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(handoffId);
+        ArgumentNullException.ThrowIfNull(frames);
         lock (_gate)
         {
-            if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal))
+            if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
+                || _joinRequest is null
+                || _targetPhase != ZLinkActorTargetHandoffPhase.Importing)
                 throw new InvalidOperationException(
-                    $"Actor '{actorId}' cannot accept an inactive handoff preparation.");
-            if (_targetPhase != ZLinkActorTargetHandoffPhase.NotifyingJoined)
-                throw new InvalidOperationException(
-                    $"Actor '{actorId}' handoff target notification is not active.");
-            _targetPhase = ZLinkActorTargetHandoffPhase.Prepared;
-            _preparation!.TrySetResult(reply);
+                    $"Actor '{actorId}' does not have the matching prepared import.");
+            foreach (var frame in frames.OrderBy(static frame => frame.ArrivalIndex))
+            {
+                _frames.Add(frame with
+                {
+                    ArrivalIndex = _arrivalIndex++,
+                    CanonicalEncodedLength = 0
+                });
+                diagnostic?.Invoke(
+                    $"backlog_enqueued actor={actorId} arrival={_arrivalIndex - 1} request_id={frame.RequestId} flags={frame.Flags}");
+            }
+            _importedFrameCount = _frames.Count;
         }
     }
 
-    public void AcceptCommittedPreparation(
+    public void CompleteJoinedNotification(
         string handoffId,
         ZLinkRemoteActorJoinReply reply)
-    {
-        lock (_gate)
-        {
-            if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal))
-                throw new InvalidOperationException(
-                    $"Actor '{actorId}' cannot accept an inactive handoff preparation.");
-            if (_targetPhase != ZLinkActorTargetHandoffPhase.Prepared)
-                throw new InvalidOperationException(
-                    $"Actor '{actorId}' handoff target lifecycle is not complete.");
-            // The preparation result is the source-side lifecycle barrier.
-            // Only a successful joined callback advances the target to
-            // Prepared and permits this result to become observable.
-            _preparation!.TrySetResult(reply);
-        }
-    }
-
-    public void CompleteJoinedNotification(string handoffId)
     {
         lock (_gate)
         {
@@ -690,7 +627,24 @@ internal sealed class ZLinkActorHandoffState(
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' handoff joined notification is not active.");
             _targetPhase = ZLinkActorTargetHandoffPhase.Prepared;
+            _preparation!.TrySetResult(reply);
         }
+    }
+
+    public Task<ZLinkRemoteActorJoinReply> WaitForPreparationAsync(
+        string handoffId,
+        CancellationToken cancellationToken)
+    {
+        Task<ZLinkRemoteActorJoinReply> preparation;
+        lock (_gate)
+        {
+            if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
+                || _preparation is null)
+                throw new InvalidOperationException(
+                    $"Actor '{actorId}' does not have an active handoff preparation.");
+            preparation = _preparation.Task;
+        }
+        return preparation.WaitAsync(cancellationToken);
     }
 
     public void MarkAuthorityCommitted(
@@ -762,7 +716,9 @@ internal sealed class ZLinkActorHandoffState(
         }
     }
 
-    public bool FailJoinedNotification(string handoffId)
+    public bool FailJoinedNotification(
+        string handoffId,
+        ZLinkRemoteActorJoinReply reply)
     {
         lock (_gate)
         {
@@ -775,6 +731,7 @@ internal sealed class ZLinkActorHandoffState(
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' handoff joined notification cannot become terminally failed.");
             _targetPhase = ZLinkActorTargetHandoffPhase.Failed;
+            _preparation!.TrySetResult(reply);
             _targetCompletion?.TrySetException(
                 new InvalidOperationException(
                     $"Actor '{actorId}' target handoff '{handoffId}' failed."));
@@ -782,7 +739,6 @@ internal sealed class ZLinkActorHandoffState(
                 new InvalidOperationException(
                     $"Actor '{actorId}' target handoff '{handoffId}' failed."));
             _deferredJoinAwaitingTarget = false;
-            _targetIngressAdmission.ReleaseAll();
             _frames.Clear();
             _sourceHoldFrames.Clear();
             _importedFrameCount = 0;
@@ -844,7 +800,6 @@ internal sealed class ZLinkActorHandoffState(
             _deferredJoinAwaitingTarget = false;
             _sourceIngressAdmission.ReleaseAll();
             _sourceHoldAdmission.ReleaseAll();
-            _targetIngressAdmission.ReleaseAll();
             _frames.Clear();
             _sourceHoldFrames.Clear();
             _importedFrameCount = 0;
@@ -855,95 +810,8 @@ internal sealed class ZLinkActorHandoffState(
             _preparation = null;
             _targetCompletion = null;
             _targetReplayCompletion = null;
-            ClearSessionRouteTerminalLocked();
             _canonicalMaintenanceDrain = null;
             _canonicalMaintenanceReplayReservations.Clear();
-        }
-    }
-
-    internal void RequireSessionRouteTerminal(
-        string handoffId)
-    {
-        lock (_gate)
-        {
-            if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal))
-                throw new InvalidOperationException(
-                    $"Actor '{actorId}' cannot register a terminal for an inactive handoff.");
-            if (_targetPhase == ZLinkActorTargetHandoffPhase.Completed
-                && _targetCompletion?.Task.IsCompleted == true)
-                throw new InvalidOperationException(
-                    $"Actor '{actorId}' target successor was released before its session route terminal was registered.");
-            _sessionRouteTerminalRequired = true;
-            _sessionRouteTerminalObserved = false;
-        }
-    }
-
-    internal void RequireSessionRouteTerminal(
-        string handoffId,
-        ZLinkServiceWireCodec.SessionRelocationRouteRecord fingerprint)
-    {
-        if (fingerprint.Route.Action
-            != ZLinkServiceWireCodec.SessionRelocationRouteAction.Commit)
-            throw new ArgumentException(
-                "A target successor gate requires a command 44 commit fingerprint.",
-                nameof(fingerprint));
-        lock (_gate)
-        {
-            if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal))
-                throw new InvalidOperationException(
-                    $"Actor '{actorId}' cannot register a terminal for an inactive handoff.");
-            if (_requiredSessionRouteTerminal is { } current)
-            {
-                if (current != fingerprint)
-                    throw new InvalidDataException(
-                        "The session route terminal fingerprint changed during handoff.");
-                return;
-            }
-            if (_targetPhase == ZLinkActorTargetHandoffPhase.Completed
-                && _targetCompletion?.Task.IsCompleted == true)
-                throw new InvalidOperationException(
-                    $"Actor '{actorId}' target successor was released before its session route terminal was registered.");
-            _sessionRouteTerminalRequired = true;
-            _requiredSessionRouteTerminal = fingerprint;
-            _sessionRouteTerminalObserved = false;
-        }
-    }
-
-    internal bool ValidateSessionRouteTerminal(
-        string handoffId,
-        ZLinkServiceWireCodec.SessionRelocationRouteRecord fingerprint)
-    {
-        lock (_gate)
-        {
-            if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
-                || !_sessionRouteTerminalRequired
-                || _requiredSessionRouteTerminal is not { } required)
-                return false;
-            if (required != fingerprint)
-                throw new InvalidDataException(
-                    "Command 45 does not match the required session route fingerprint.");
-            return !_sessionRouteTerminalObserved;
-        }
-    }
-
-    internal bool ObserveSessionRouteTerminal(
-        string handoffId,
-        ZLinkServiceWireCodec.SessionRelocationRouteRecord fingerprint)
-    {
-        lock (_gate)
-        {
-            if (!string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
-                || _requiredSessionRouteTerminal is not { } required)
-                return false;
-            if (required != fingerprint)
-                throw new InvalidDataException(
-                    "Command 45 does not match the required session route fingerprint.");
-            if (_sessionRouteTerminalObserved)
-                return false;
-            _sessionRouteTerminalObserved = true;
-            if (_targetPhase == ZLinkActorTargetHandoffPhase.Completed)
-                ReleaseTargetCompletionLocked(handoffId);
-            return true;
         }
     }
 
@@ -997,14 +865,8 @@ internal sealed class ZLinkActorHandoffState(
         return true;
     }
 
-    private bool IsSessionRouteTerminalSatisfiedLocked() =>
-        !_sessionRouteTerminalRequired
-        || _sessionRouteTerminalObserved;
-
     private void ReleaseTargetCompletionLocked(string handoffId)
     {
-        if (!IsSessionRouteTerminalSatisfiedLocked())
-            return;
         if (_deferredJoinAwaitingTarget)
         {
             _deferredJoinAwaitingTarget = false;
@@ -1014,13 +876,6 @@ internal sealed class ZLinkActorHandoffState(
                 + $"handoff={handoffId}");
         }
         _targetCompletion?.TrySetResult();
-    }
-
-    private void ClearSessionRouteTerminalLocked()
-    {
-        _sessionRouteTerminalRequired = false;
-        _requiredSessionRouteTerminal = null;
-        _sessionRouteTerminalObserved = false;
     }
 
     public IReadOnlyList<ZLinkActorHandoffFrame> SnapshotFrames()
@@ -1154,7 +1009,6 @@ internal sealed class ZLinkActorHandoffState(
 
                 _sourceIngressAdmission.ReleaseAll();
                 _sourceHoldAdmission.ReleaseAll();
-                _targetIngressAdmission.ReleaseAll();
                 _frames.Clear();
                 _sourceHoldFrames.Clear();
                 _sourcePhase = ZLinkActorSourceHandoffPhase.MessageFollowCommitted;
@@ -1490,11 +1344,7 @@ internal sealed class ZLinkActorHandoffState(
             if (_frames.Count == 0)
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' does not have a handoff frame to acknowledge.");
-            var removed = _frames[0];
             _frames.RemoveAt(0);
-            if (removed.CanonicalEncodedLength > 0)
-                _targetIngressAdmission.Release(
-                    removed.CanonicalEncodedLength);
         }
     }
 
@@ -1512,11 +1362,7 @@ internal sealed class ZLinkActorHandoffState(
             if (index < 0)
                 throw new InvalidOperationException(
                     $"Actor '{actorId}' does not have replay frame '{arrivalIndex}' to acknowledge.");
-            var removed = _frames[index];
             _frames.RemoveAt(index);
-            if (removed.CanonicalEncodedLength > 0)
-                _targetIngressAdmission.Release(
-                    removed.CanonicalEncodedLength);
         }
     }
 
@@ -1532,10 +1378,7 @@ internal sealed class ZLinkActorHandoffState(
             while (_frames.Count != 0
                    && checked((ulong)_frames[0].ArrivalIndex) <= acceptedSequence)
             {
-                var removed = _frames[0];
                 _frames.RemoveAt(0);
-                _targetIngressAdmission.Release(
-                    removed.CanonicalEncodedLength);
             }
         }
     }
@@ -1634,7 +1477,6 @@ internal sealed class ZLinkActorHandoffState(
                 _sourcePhase = ZLinkActorSourceHandoffPhase.Idle;
                 _sourceIngressAdmission.ReleaseAll();
                 _sourceHoldAdmission.ReleaseAll();
-                _targetIngressAdmission.ReleaseAll();
                 _frames.Clear();
                 _sourceHoldFrames.Clear();
                 _importedFrameCount = 0;
@@ -1692,7 +1534,6 @@ internal sealed class ZLinkActorHandoffState(
                 _targetPhase = ZLinkActorTargetHandoffPhase.Idle;
                 _sourceIngressAdmission.ReleaseAll();
                 _sourceHoldAdmission.ReleaseAll();
-                _targetIngressAdmission.ReleaseAll();
                 _frames.Clear();
                 _sourceHoldFrames.Clear();
                 _importedFrameCount = 0;
@@ -1711,7 +1552,6 @@ internal sealed class ZLinkActorHandoffState(
                     new InvalidOperationException(
                         $"Actor '{actorId}' target handoff was reset."));
                 _targetReplayCompletion = null;
-                ClearSessionRouteTerminalLocked();
                 _deferredJoinAwaitingTarget = false;
                 _canonicalMaintenanceDrain = null;
                 _canonicalMaintenanceReplayReservations.Clear();
@@ -1736,7 +1576,6 @@ internal sealed class ZLinkActorHandoffState(
                 _targetPhase = ZLinkActorTargetHandoffPhase.Idle;
                 _sourceIngressAdmission.ReleaseAll();
                 _sourceHoldAdmission.ReleaseAll();
-                _targetIngressAdmission.ReleaseAll();
                 _frames.Clear();
                 _sourceHoldFrames.Clear();
                 _importedFrameCount = 0;
@@ -1751,7 +1590,6 @@ internal sealed class ZLinkActorHandoffState(
                 _targetCompletion = null;
                 _targetReplayCompletion?.TrySetException(failure);
                 _targetReplayCompletion = null;
-                ClearSessionRouteTerminalLocked();
                 _deferredJoinAwaitingTarget = false;
                 _canonicalMaintenanceDrain = null;
                 _canonicalMaintenanceReplayReservations.Clear();

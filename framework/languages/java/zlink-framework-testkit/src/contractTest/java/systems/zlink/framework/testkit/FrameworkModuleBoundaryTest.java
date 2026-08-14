@@ -95,6 +95,7 @@ final class FrameworkModuleBoundaryTest {
             .resolve("src/main/java/systems/zlink/framework/runtime");
         Set<String> allowedImports = Set.of(
             "import systems.zlink.contracts.core.Context;",
+            "import systems.zlink.contracts.core.CoreHwmBudgetSnapshot;",
             "import systems.zlink.contracts.core.RoutingId;",
             "import systems.zlink.contracts.core.Zlink;",
             "import systems.zlink.contracts.errors.ConfigResult;",
@@ -111,6 +112,7 @@ final class FrameworkModuleBoundaryTest {
             "import systems.zlink.contracts.eventing.MonitorEventType;",
             "import systems.zlink.contracts.eventing.SocketMonitor;",
             "import systems.zlink.contracts.sockets.RequestResult;",
+            "import systems.zlink.contracts.sockets.AutoHwmProfile;",
             "import systems.zlink.contracts.sockets.RecvFlags;",
             "import systems.zlink.contracts.sockets.RecvResult;",
             "import systems.zlink.contracts.sockets.SubmitResult;",
@@ -161,7 +163,7 @@ final class FrameworkModuleBoundaryTest {
     }
 
     @Test
-    void javaBackendAdapterImplementationUsesOnlyBindingPublicApi() throws IOException {
+    void javaBackendAdapterUsesOnlyPublicOrQualifiedFrameworkBindingApi() throws IOException {
         Path bindingAdapterRoot = frameworkJavaRoot()
             .resolve("zlink-framework-core")
             .resolve("src/main/java/systems/zlink/framework/runtime/binding");
@@ -174,10 +176,10 @@ final class FrameworkModuleBoundaryTest {
             List<Path> offenders = files
                 .filter(Files::isRegularFile)
                 .filter(path -> path.toString().endsWith(".java"))
-                .filter(FrameworkModuleBoundaryTest::importsBindingRuntimePackage)
+                .filter(FrameworkModuleBoundaryTest::importsDisallowedBindingRuntimePackageInAdapter)
                 .toList();
 
-            assertTrue(offenders.isEmpty(), "binding runtime/internal imports in Java adapter: " + offenders);
+            assertTrue(offenders.isEmpty(), "unapproved binding runtime/internal imports in Java adapter: " + offenders);
         }
     }
 
@@ -211,15 +213,31 @@ final class FrameworkModuleBoundaryTest {
 
     private static boolean importsBindingRuntimePackage(Path path) {
         try {
-            String content = Files.readString(path);
-            String withoutPublicNativeFacade = content.replace(
-                "import systems.zlink.runtime.nativeapi.Native;",
-                "");
-            return withoutPublicNativeFacade.contains("import systems.zlink.runtime.")
-                || content.contains("import systems.zlink.internal.");
+            return importsBindingRuntimePackageText(Files.readString(path));
         } catch (IOException ex) {
             throw new IllegalStateException("failed to read " + path, ex);
         }
+    }
+
+    private static boolean importsDisallowedBindingRuntimePackageInAdapter(
+        Path path) {
+        try {
+            String content = Files.readString(path);
+            String withoutQualifiedFrameworkBridge = content.replace(
+                "import systems.zlink.runtime.framework.FrameworkStreamOperations;",
+                "");
+            return importsBindingRuntimePackageText(withoutQualifiedFrameworkBridge);
+        } catch (IOException ex) {
+            throw new IllegalStateException("failed to read " + path, ex);
+        }
+    }
+
+    private static boolean importsBindingRuntimePackageText(String content) {
+        String withoutPublicNativeFacade = content.replace(
+            "import systems.zlink.runtime.nativeapi.Native;",
+            "");
+        return withoutPublicNativeFacade.contains("import systems.zlink.runtime.")
+            || content.contains("import systems.zlink.internal.");
     }
 
     private static List<String> bindingContractImports(Path path) {

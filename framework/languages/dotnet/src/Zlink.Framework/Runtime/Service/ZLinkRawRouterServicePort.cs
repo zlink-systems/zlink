@@ -4,8 +4,8 @@ namespace Zlink.Framework.Runtime.Service;
 
 // Private transport seam for the Framework service runtime. This type owns a
 // raw ROUTER socket only; service state machines stay in the runtime owners that
-// consume this port. Its poller owns receive readiness, while the binding's
-// request progress pump owns asynchronous request completion. Keeping those
+// consume this port. Its poller owns receive readiness, while each binding
+// asynchronous operation owns its request completion. Keeping those
 // responsibilities separate prevents an awaited request from depending on a
 // caller that happens to poll the socket for receive readiness.
 internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
@@ -69,10 +69,10 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
         _socket.Connect(endpoint);
     }
 
-    internal bool TrySend(
+    internal async Task SendAsync(
         RoutingId target,
         IReadOnlyList<ReadOnlyMemory<byte>> parts,
-        SendFlags flags = SendFlags.None)
+        CancellationToken cancellationToken = default)
     {
         EnsureStarted();
         if (target.IsEmpty)
@@ -84,7 +84,10 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
         var messages = CreateMessages(parts);
         try
         {
-            return _socket.Send(target).Messages(messages).Flags(flags).Submit();
+            await _socket.Send(target)
+                .Messages(messages)
+                .Async(cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {
@@ -115,7 +118,7 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
         var received = Received.Create();
         try
         {
-            if (_socket.Recv(received, RecvFlags.DontWait))
+            if (_socket.RecvRetained(received, RecvFlags.DontWait))
             {
                 envelope = new ZLinkRawRouterEnvelope(received);
                 return true;

@@ -1038,11 +1038,6 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
         Assert.Equal(TimeSpan.FromSeconds(3), options.OwnerLeaseRenewTimeout);
         Assert.Equal(TimeSpan.FromSeconds(15), options.RouteCacheMaxAge);
         Assert.Equal(TimeSpan.FromSeconds(30), options.MessageFollowDuration);
-        Assert.Equal(64, options.MaxActiveOutboundRelocations);
-        Assert.Equal(64, options.MaxActiveInboundRelocations);
-        Assert.Equal(8, options.MaxConcurrentRelocationCaptures);
-        Assert.Equal(8, options.MaxConcurrentRelocationRestores);
-        Assert.Equal(268_435_456, options.MaxRelocationPayloadInFlightBytes);
     }
 
     [Theory]
@@ -1068,41 +1063,6 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
                 : "at least five seconds shorter",
             exception.Message,
             StringComparison.Ordinal);
-    }
-
-    [Theory]
-    [InlineData("outbound")]
-    [InlineData("inbound")]
-    [InlineData("capture")]
-    [InlineData("restore")]
-    [InlineData("payload")]
-    public void AddZLinkFramework_RejectsNonPositiveRelocationLimits(string limit)
-    {
-        var exception = Assert.Throws<ZLinkConfigurationException>(() =>
-            new ServiceCollection().AddZLinkFramework(options =>
-            {
-                var locations = options.ConfigureLocations();
-                switch (limit)
-                {
-                    case "outbound":
-                        locations.MaxActiveOutboundRelocations = 0;
-                        break;
-                    case "inbound":
-                        locations.MaxActiveInboundRelocations = 0;
-                        break;
-                    case "capture":
-                        locations.MaxConcurrentRelocationCaptures = 0;
-                        break;
-                    case "restore":
-                        locations.MaxConcurrentRelocationRestores = 0;
-                        break;
-                    case "payload":
-                        locations.MaxRelocationPayloadInFlightBytes = 0;
-                        break;
-                }
-            }));
-
-        Assert.Contains("greater than zero", exception.Message, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -1167,7 +1127,6 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddZLinkFramework(options =>
         {
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
             options.AddLocationStore(store);
         });
         using var host = builder.Build();
@@ -1182,7 +1141,6 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddZLinkFramework(options =>
         {
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
             options.UseTestLocationStore();
             options.DisableImplicitHandlerAutoRegistration();
             var node = options.AddRouteMesh("duplicate-packet")
@@ -1207,7 +1165,6 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddZLinkFramework(options =>
         {
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
             options.UseTestLocationStore();
             options.DisableImplicitHandlerAutoRegistration();
             var node = options.AddRouteMesh("duplicate-subscription")
@@ -1230,7 +1187,6 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddZLinkFramework(options =>
         {
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
             options.UseTestLocationStore();
             options.DisableImplicitHandlerAutoRegistration();
             var node = options.AddRouteMesh("duplicate-actor")
@@ -1253,7 +1209,6 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddZLinkFramework(options =>
         {
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
             options.UseTestLocationStore();
             var node = options.AddRouteMesh("invalid-timer")
                 .Listen($"inproc://invalid-timer-{Guid.NewGuid():N}");

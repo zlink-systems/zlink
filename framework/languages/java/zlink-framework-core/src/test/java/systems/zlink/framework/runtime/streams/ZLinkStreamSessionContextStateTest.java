@@ -10,10 +10,9 @@ import java.util.Optional;
 import java.lang.reflect.Proxy;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
@@ -75,14 +74,17 @@ final class ZLinkStreamSessionContextStateTest {
     }
 
     @Test
-    void errorReplyStageCompletesOnlyAfterAdmission() throws Exception {
-        ScheduledExecutorService retries = Executors.newSingleThreadScheduledExecutor();
-        AtomicInteger attempts = new AtomicInteger();
-        ZLinkBackendStreamSocket stream = stream(attempts, 2);
+    void errorReplyDelegatesOnceToBackendAsyncAndWaitsForPhysicalTerminal()
+        throws Exception {
+        CompletableFuture<Void> physicalTerminal = new CompletableFuture<>();
+        AtomicInteger asyncSubmits = new AtomicInteger();
+        AtomicInteger syncSubmits = new AtomicInteger();
+        AtomicReference<systems.zlink.contracts.messaging.Message> submitted =
+            new AtomicReference<>();
+        ZLinkBackendStreamSocket stream = stream(
+            asyncSubmits, syncSubmits, physicalTerminal, submitted);
         ZLinkStreamSessionContextState context = context(
-            new AtomicInteger(),
-            stream,
-            retries);
+            new AtomicInteger(), stream);
         ZLinkStreamHeader request = new ZLinkStreamHeader(
             "Request",
             Map.of(),
@@ -94,51 +96,54 @@ final class ZLinkStreamSessionContextStateTest {
                 ZLinkMessage.empty(),
                 new FailedSession(context));
 
+            assertEquals(1, asyncSubmits.get());
+            assertEquals(0, syncSubmits.get());
+            assertFalse(dispatch.toCompletableFuture().isDone());
+            assertTrue(submitted.get().size() > 0);
+            physicalTerminal.complete(null);
             dispatch.toCompletableFuture().get(1, TimeUnit.SECONDS);
-            assertEquals(2, attempts.get());
+            assertEquals(0, submitted.get().size());
         } finally {
             context.closeReplyRetries();
-            retries.shutdownNow();
         }
     }
 
     @Test
-    void closingContextCancelsDelayedErrorReply() throws Exception {
-        ScheduledExecutorService retries = Executors.newSingleThreadScheduledExecutor();
-        AtomicInteger attempts = new AtomicInteger();
-        ZLinkBackendStreamSocket stream = stream(attempts, Integer.MAX_VALUE);
+    void closingContextCancelsBackendErrorReplyTerminal() {
+        CompletableFuture<Void> physicalTerminal = new CompletableFuture<>();
+        AtomicInteger asyncSubmits = new AtomicInteger();
+        AtomicInteger syncSubmits = new AtomicInteger();
+        AtomicReference<systems.zlink.contracts.messaging.Message> submitted =
+            new AtomicReference<>();
+        ZLinkBackendStreamSocket stream = stream(
+            asyncSubmits, syncSubmits, physicalTerminal, submitted);
         ZLinkStreamSessionContextState context = context(
-            new AtomicInteger(),
-            stream,
-            retries);
+            new AtomicInteger(), stream);
         ZLinkStreamHeader request = new ZLinkStreamHeader(
             "Request",
             Map.of(),
             Optional.of(10L));
 
-        try {
-            CompletionStage<Void> dispatch = context.dispatchStage(
-                request,
-                ZLinkMessage.empty(),
-                new FailedSession(context));
-            context.closeReplyRetries();
-            assertTrue(dispatch.toCompletableFuture().isCompletedExceptionally());
-            int attemptsAtClose = attempts.get();
-            Thread.sleep(50);
-            assertEquals(attemptsAtClose, attempts.get());
-        } finally {
-            retries.shutdownNow();
-        }
+        CompletionStage<Void> dispatch = context.dispatchStage(
+            request,
+            ZLinkMessage.empty(),
+            new FailedSession(context));
+        context.closeReplyRetries();
+
+        assertEquals(1, asyncSubmits.get());
+        assertEquals(0, syncSubmits.get());
+        assertTrue(physicalTerminal.isCancelled());
+        assertTrue(dispatch.toCompletableFuture().isCompletedExceptionally());
+        assertEquals(0, submitted.get().size());
     }
 
     private static ZLinkStreamSessionContextState context(AtomicInteger closes) {
-        return context(closes, null, null);
+        return context(closes, null);
     }
 
     private static ZLinkStreamSessionContextState context(
         AtomicInteger closes,
-        ZLinkBackendStreamSocket stream,
-        ScheduledExecutorService retries) {
+        ZLinkBackendStreamSocket stream) {
         return new ZLinkStreamSessionContextState(
             "session",
             stream,
@@ -163,7 +168,7 @@ final class ZLinkStreamSessionContextStateTest {
                         cleanup.run();
                     }
                 }),
-            retries);
+            null);
     }
 
     private static ZLinkMessageFlowTracer flow() {
@@ -177,14 +182,28 @@ final class ZLinkStreamSessionContextStateTest {
     }
 
     private static ZLinkBackendStreamSocket stream(
-        AtomicInteger attempts,
-        int successfulAttempt) {
+        AtomicInteger asyncSubmits,
+        AtomicInteger syncSubmits,
+        CompletableFuture<Void> physicalTerminal,
+        AtomicReference<systems.zlink.contracts.messaging.Message> submitted) {
         return (ZLinkBackendStreamSocket) Proxy.newProxyInstance(
             ZLinkBackendStreamSocket.class.getClassLoader(),
             new Class<?>[] {ZLinkBackendStreamSocket.class},
             (proxy, method, arguments) -> switch (method.getName()) {
                 case "name" -> "test-stream";
-                case "reply" -> attempts.incrementAndGet() >= successfulAttempt;
+                case "replyAsync" -> {
+                    asyncSubmits.incrementAndGet();
+                    @SuppressWarnings("unchecked")
+                    java.util.List<systems.zlink.contracts.messaging.Message>
+                        parts = (java.util.List<systems.zlink.contracts.messaging.Message>)
+                            arguments[2];
+                    submitted.set(parts.getFirst());
+                    yield physicalTerminal;
+                }
+                case "reply" -> {
+                    syncSubmits.incrementAndGet();
+                    yield false;
+                }
                 case "close", "bind", "setTlsServer", "setMaxMessageSize",
                     "enableNotifications", "onTransportError", "startSessionService" -> null;
                 default -> defaultValue(method.getReturnType());

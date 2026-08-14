@@ -511,7 +511,6 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         ZLinkRemoteActorBoundSessionRoute boundSessionRoute,
         ZLinkRelocationManifestReference relocationReference,
         ZLinkRelocationEnvelope relocationRoot,
-        ZLinkRelocationCapacityFence? capacityFence,
         ulong targetAuthorityOwnerGeneration,
         Func<CancellationToken, ValueTask>? deactivate,
         CancellationToken cancellationToken = default)
@@ -540,7 +539,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             if (snapshot.AuthorityOwnerGeneration
                 != targetAuthorityOwnerGeneration)
                 throw new ZLinkRelocationDataLostException(
-                    $"Actor '{actorId}' committed authority does not match its reserved target generation.");
+                    $"Actor '{actorId}' committed authority does not match its expected target generation.");
             if (!ZLinkRelocationAuthorityPayloadCodec.TryDecode(
                     snapshot.Payload.Span,
                     out var existingPublication)
@@ -580,14 +579,11 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         var targetOwner = new ZLinkLocationOwnerToken(
             target.OwnerId,
             target.LeaseGeneration);
-        if (capacityFence is not { } reservedCapacityFence)
-            throw new ZLinkRelocationDataLostException(
-                $"Actor '{actorId}' has no durable target capacity reservation.");
         if (targetAuthorityOwnerGeneration
                 <= snapshot.AuthorityOwnerGeneration
             || targetAuthorityOwnerGeneration > long.MaxValue)
             throw new ZLinkRelocationDataLostException(
-                $"Actor '{actorId}' target reservation has an invalid authority generation.");
+                $"Actor '{actorId}' handoff has an invalid expected authority generation.");
 
         var applicationPayload = ZLinkActorAuthorityPayloadCodec.Encode(
             authority with
@@ -620,7 +616,6 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     target.LifecycleGeneration,
                     targetOwner.OwnerId,
                     checked((ulong)targetOwner.LeaseGeneration),
-                    targetAuthorityOwnerGeneration,
                     snapshot.OwnerId,
                     checked((ulong)snapshot.OwnerLeaseGeneration),
                     authority.NodeRid.ToHex(),
@@ -628,7 +623,6 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     (byte)ZLinkStandaloneActorCanonicalPhase.Activated,
                     relocationReference.Reference,
                     relocationReference.ChecksumCrc32c,
-                    0,
                     0)
                 {
                     CoordinatorExpectedAuthorityStoreVersion =
@@ -636,108 +630,103 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 },
                 relocationRoot);
 
-        var committed = false;
-        try
+        var targetAllocation = snapshot.Allocation with
         {
-            var result = await runtime.Store.CompareExchangeAuthorityAsync(
+            State = ZLinkPlacementAllocationState.Active,
+            Descriptor = new ZLinkMeshNodeDescriptorKey(
+                target.MeshName,
+                target.Rid),
+            DescriptorLifecycleGeneration = target.LifecycleGeneration
+        };
+        var result = await runtime.Store.CompareExchangeAuthorityAsync(
                     key,
                     snapshot.StoreVersion,
                     new ZLinkAuthorityMutation.Put(
                         authorityPayload,
                         ZLinkAuthorityGenerationTransition.NewOwner,
                         targetOwner,
-                        reservedCapacityFence),
+                        targetAllocation,
+                        targetAuthorityOwnerGeneration),
                     cancellationToken)
                 .ConfigureAwait(false);
-            switch (result)
-            {
-                case ZLinkAuthorityCompareExchangeResult.Stored stored:
-                    if (stored.Snapshot.AuthorityOwnerGeneration
+        switch (result)
+        {
+            case ZLinkAuthorityCompareExchangeResult.Stored stored:
+                if (stored.Snapshot.AuthorityOwnerGeneration
+                    != targetAuthorityOwnerGeneration)
+                    throw new ZLinkRelocationDataLostException(
+                        $"Actor '{actorId}' authority commit did not preserve the expected target generation.");
+                TrackCommittedActorAuthority(
+                    actorId,
+                    stored.Snapshot,
+                    authority with
+                    {
+                        State = ZLinkActorAuthorityState.Ready,
+                        CurrentSpotId = spotId.Value,
+                        CurrentSpotGeneration = spotGeneration,
+                        CurrentSpotKind = spotKind,
+                        OwnerId = targetOwner.OwnerId,
+                        OwnerLeaseGeneration = checked((ulong)targetOwner.LeaseGeneration),
+                        MeshName = meshName.Value,
+                        NodeRid = target.Rid,
+                        NodeGeneration = target.LifecycleGeneration
+                    },
+                    deactivate);
+                return new ZLinkCommittedActorAuthority(
+                    stored.Snapshot.AuthorityOwnerGeneration,
+                    meshName,
+                    target.LifecycleGeneration,
+                    checked((ulong)targetOwner.LeaseGeneration));
+
+            case ZLinkAuthorityCompareExchangeResult.Conflict conflict:
+                if (TryResolveCommittedAuthority(
+                        conflict.Current,
+                        actorRef,
+                        spotId,
+                        spotGeneration,
+                        spotKind,
+                        relocationId,
+                        relocationReference,
+                        out var currentSnapshot,
+                        out var currentAuthority))
+                {
+                    if (currentSnapshot.AuthorityOwnerGeneration
                         != targetAuthorityOwnerGeneration)
                         throw new ZLinkRelocationDataLostException(
-                            $"Actor '{actorId}' authority commit did not preserve the reserved target generation.");
-                    committed = true;
+                            $"Actor '{actorId}' reconciled authority does not match its expected target generation.");
                     TrackCommittedActorAuthority(
                         actorId,
-                        stored.Snapshot,
-                        authority with
-                        {
-                            State = ZLinkActorAuthorityState.Ready,
-                            CurrentSpotId = spotId.Value,
-                            CurrentSpotGeneration = spotGeneration,
-                            CurrentSpotKind = spotKind,
-                            OwnerId = targetOwner.OwnerId,
-                            OwnerLeaseGeneration = checked((ulong)targetOwner.LeaseGeneration),
-                            MeshName = meshName.Value,
-                            NodeRid = target.Rid,
-                            NodeGeneration = target.LifecycleGeneration
-                        },
+                        currentSnapshot,
+                        currentAuthority,
                         deactivate);
                     return new ZLinkCommittedActorAuthority(
-                        stored.Snapshot.AuthorityOwnerGeneration,
-                        meshName,
-                        target.LifecycleGeneration,
-                        checked((ulong)targetOwner.LeaseGeneration));
+                        currentSnapshot.AuthorityOwnerGeneration,
+                        ZLinkMeshName.FromBoundary(
+                            currentAuthority.MeshName,
+                            nameof(currentAuthority.MeshName)),
+                        currentAuthority.NodeGeneration,
+                        currentAuthority.OwnerLeaseGeneration);
+                }
+                //  The message says the authority changed but not how, so
+                //  the axis that actually moved never reaches a log.
+                Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"handoff_cas_conflict actor={actorId} "
+                    + $"expected_version={snapshot.StoreVersion} "
+                    + $"expected_target_gen={targetAuthorityOwnerGeneration} "
+                    + $"current={conflict.Current.GetType().Name} "
+                    + $"current_detail={DescribeAuthority(conflict.Current)}");
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    $"Actor '{actorId}' authority changed during handoff commit.",
+                    ZLinkRetryAdvice.RetryAfterBackoff);
 
-                case ZLinkAuthorityCompareExchangeResult.Conflict conflict:
-                    if (TryResolveCommittedAuthority(
-                            conflict.Current,
-                            actorRef,
-                            spotId,
-                            spotGeneration,
-                            spotKind,
-                            relocationId,
-                            relocationReference,
-                            out var currentSnapshot,
-                            out var currentAuthority))
-                    {
-                        if (currentSnapshot.AuthorityOwnerGeneration
-                            != targetAuthorityOwnerGeneration)
-                            throw new ZLinkRelocationDataLostException(
-                                $"Actor '{actorId}' reconciled authority does not match its reserved target generation.");
-                        committed = true;
-                        TrackCommittedActorAuthority(
-                            actorId,
-                            currentSnapshot,
-                            currentAuthority,
-                            deactivate);
-                        return new ZLinkCommittedActorAuthority(
-                            currentSnapshot.AuthorityOwnerGeneration,
-                            ZLinkMeshName.FromBoundary(
-                                currentAuthority.MeshName,
-                                nameof(currentAuthority.MeshName)),
-                            currentAuthority.NodeGeneration,
-                            currentAuthority.OwnerLeaseGeneration);
-                    }
-                    //  The message says the authority changed but not how, so
-                    //  the axis that actually moved never reaches a log.
-                    Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"handoff_cas_conflict actor={actorId} "
-                        + $"expected_version={snapshot.StoreVersion} "
-                        + $"expected_target_gen={targetAuthorityOwnerGeneration} "
-                        + $"current={conflict.Current.GetType().Name} "
-                        + $"current_detail={DescribeAuthority(conflict.Current)}");
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Unavailable,
-                        $"Actor '{actorId}' authority changed during handoff commit.",
-                        ZLinkRetryAdvice.RetryAfterBackoff);
+            case ZLinkAuthorityCompareExchangeResult.GenerationExhausted:
+                throw new ZLinkAuthorityGenerationExhaustedException(
+                    $"committing Actor '{actorId}' handoff authority");
 
-                case ZLinkAuthorityCompareExchangeResult.GenerationExhausted:
-                    throw new ZLinkAuthorityGenerationExhaustedException(
-                        $"committing Actor '{actorId}' handoff authority");
-
-                default:
-                    throw new InvalidOperationException(
-                        "The authority store returned an invalid Actor handoff result.");
-            }
-        }
-        finally
-        {
-            if (!committed)
-                await runtime.Store.AbortRelocationCapacityAsync(
-                        reservedCapacityFence,
-                        CancellationToken.None)
-                    .ConfigureAwait(false);
+            default:
+                throw new InvalidOperationException(
+                    "The authority store returned an invalid Actor handoff result.");
         }
     }
 
@@ -753,7 +742,6 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         ZLinkRemoteActorBoundSessionRoute boundSessionRoute,
         ZLinkRelocationManifestReference relocationReference,
         ZLinkRelocationEnvelope relocationRoot,
-        ZLinkRelocationCapacityFence? capacityFence,
         ulong targetAuthorityOwnerGeneration,
         Func<CancellationToken, ValueTask>? deactivate,
         CancellationToken cancellationToken = default) =>
@@ -768,7 +756,6 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             boundSessionRoute,
             relocationReference,
             relocationRoot,
-            capacityFence,
             targetAuthorityOwnerGeneration,
             deactivate,
             cancellationToken);
@@ -1066,15 +1053,15 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                 return;
 
             case ZLinkAuthorityCompareExchangeResult.Conflict
-                {
-                    Current: ZLinkAuthorityReadResult.Missing
-                }:
+            {
+                Current: ZLinkAuthorityReadResult.Missing
+            }:
                 return;
 
             case ZLinkAuthorityCompareExchangeResult.Conflict
-                {
-                    Current: ZLinkAuthorityReadResult.Found current
-                } when IsTransferredAuthority(
+            {
+                Current: ZLinkAuthorityReadResult.Found current
+            } when IsTransferredAuthority(
                     expectedSourceSnapshot,
                     current.Snapshot):
                 return;
@@ -1342,7 +1329,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                             EncodeAuthorityPayload(snapshot.Payload, proposed),
                             ZLinkAuthorityGenerationTransition.Preserve,
                             TargetOwner: null,
-                            RelocationCapacityFence: null),
+                            TargetAllocation: null),
                         cancellationToken)
                     .ConfigureAwait(false);
                 if (result is ZLinkAuthorityCompareExchangeResult.Stored stored)
@@ -1424,9 +1411,9 @@ internal sealed class ZLinkActorOwnershipCoordinator(
                     CancellationToken.None)
                 .ConfigureAwait(false);
             var transferred = result is ZLinkAuthorityCompareExchangeResult.Conflict
-                {
-                    Current: ZLinkAuthorityReadResult.Found transferredRead
-                }
+            {
+                Current: ZLinkAuthorityReadResult.Found transferredRead
+            }
                 && transferredRead.Snapshot.ObjectGeneration == snapshot.ObjectGeneration
                 && transferredRead.Snapshot.AuthorityOwnerGeneration
                    > snapshot.AuthorityOwnerGeneration

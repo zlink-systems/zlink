@@ -24,7 +24,7 @@ IMPLEMENTED_PROCESS=(
   SA-E2E-14 SA-E2E-15 SA-E2E-16 SA-E2E-17 SA-E2E-18 SA-E2E-19
   SA-E2E-20 SA-E2E-05
 )
-IMPLEMENTED_REGRESSION=(SA-REG-01 SA-REG-02 SA-REG-03 SA-REG-04)
+IMPLEMENTED_REGRESSION=(SA-REG-01 SA-REG-02 SA-REG-03)
 ALL_KNOWN=()
 for number in $(seq 1 20); do
   [[ "$number" -eq 10 ]] || ALL_KNOWN+=("$(printf 'SA-E2E-%02d' "$number")")
@@ -157,17 +157,6 @@ run_regression_02() {
     | tee -a "$EVIDENCE_FILE"
 }
 
-run_regression_04() {
-  (
-    cd "$PACKAGE_ROOT"
-    node --test \
-      --test-name-pattern='ZLinkAsyncSubmitter disposal races release each pending payload exactly once' \
-      test/contract/channel-client.test.js
-  ) >"$LOG_DIR/disposal-regression.log" 2>&1
-  echo '{"scenarioId":"SA-REG-04","status":"PASS","iterations":100,"discardCountPerOperation":1,"lateAttemptCount":0}' \
-    | tee -a "$EVIDENCE_FILE"
-}
-
 PROCESS_SELECTORS=()
 RUN_MISSING_DISCONNECTED=0
 for selector in "${SELECTORS[@]}"; do
@@ -177,7 +166,6 @@ for selector in "${SELECTORS[@]}"; do
     SA-REG-03)
       echo '{"scenarioId":"SA-REG-03","status":"N/A","reason":"Kotlin-only"}' \
         | tee -a "$EVIDENCE_FILE" ;;
-    SA-REG-04) run_regression_04 ;;
     SA-E2E-05) RUN_MISSING_DISCONNECTED=1 ;;
     *) PROCESS_SELECTORS+=("$selector") ;;
   esac

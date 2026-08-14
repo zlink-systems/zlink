@@ -26,10 +26,7 @@ export interface ZLinkRemoteBoundSessionTarget {
   readonly bindingGeneration?: bigint;
   readonly previousAuthorityOwnerGeneration?: bigint;
   readonly previousOwnerLeaseGeneration?: bigint;
-  readonly acceptedHighWater?: bigint;
   readonly relocationSealId?: string;
-  readonly acceptedJournalReference?: string;
-  readonly acceptedJournalChecksumCrc32c?: number;
   readonly serviceWireRelocation?: {
     readonly relocation: {
       readonly high: bigint;
@@ -57,7 +54,7 @@ export interface ZLinkRemoteBoundSessionTarget {
  * Applies a lightweight Session binding refresh without discarding the
  * relocation fence that was staged for the same route. Core emits the bind
  * refresh with routing coordinates only; the relocation owner retains the
- * seal and accepted-journal fields until command 46 releases them.
+ * service-wire relocation identity until command 44 releases the owner seal.
  */
 export function mergeRemoteBoundSessionTarget(
   target: ZLinkRemoteBoundSessionTarget,
@@ -81,11 +78,7 @@ export function mergeRemoteBoundSessionTarget(
       target.previousAuthorityOwnerGeneration ?? fallback.previousAuthorityOwnerGeneration,
     previousOwnerLeaseGeneration:
       target.previousOwnerLeaseGeneration ?? fallback.previousOwnerLeaseGeneration,
-    acceptedHighWater: target.acceptedHighWater ?? fallback.acceptedHighWater,
     relocationSealId: target.relocationSealId ?? fallback.relocationSealId,
-    acceptedJournalReference: target.acceptedJournalReference ?? fallback.acceptedJournalReference,
-    acceptedJournalChecksumCrc32c:
-      target.acceptedJournalChecksumCrc32c ?? fallback.acceptedJournalChecksumCrc32c,
     serviceWireRelocation:
       target.serviceWireRelocation ?? fallback.serviceWireRelocation
   };
@@ -106,10 +99,7 @@ export function preferredRemoteBoundSessionTarget(
 }
 
 function hasRelocationFence(target: ZLinkRemoteBoundSessionTarget): boolean {
-  return target.acceptedHighWater !== undefined
-    || target.relocationSealId !== undefined
-    || target.acceptedJournalReference !== undefined
-    || target.acceptedJournalChecksumCrc32c !== undefined
+  return target.relocationSealId !== undefined
     || target.serviceWireRelocation !== undefined;
 }
 
@@ -119,6 +109,11 @@ export interface ZLinkRemoteActorPacketTarget {
   readonly spotId: RoutingId;
   readonly spotKind?: ZLinkSpotKind;
   readonly targetSpotGeneration?: bigint;
+  readonly targetNodeGeneration?: bigint;
+  readonly authorityOwnerGeneration?: bigint;
+  readonly targetOwnerId?: string;
+  readonly ownerLeaseGeneration?: bigint;
+  readonly authorityStoreVersion?: string;
 }
 
 export interface ZLinkActorCreationOperation {
@@ -489,25 +484,6 @@ export class ZLinkActorRuntimeState {
         : { ...target, bindingGeneration };
   }
 
-  /**
-   * Removes the accepted-journal fence after command 46 has released the
-   * corresponding Session route. Keep the route coordinates so a later
-   * relocation can seal the same route again, but do not retain a reference
-   * to a journal that has already been deleted.
-   */
-  clearBoundSessionAcceptedJournalFence(
-    target: ZLinkRemoteBoundSessionTarget
-  ): void {
-    this.remoteBoundSessionTargetValue = clearAcceptedJournalFence(
-      this.remoteBoundSessionTargetValue,
-      target
-    );
-    this.boundSessionTransferTargetValue = clearAcceptedJournalFence(
-      this.boundSessionTransferTargetValue,
-      target
-    );
-  }
-
   setRemoteActorPacketTarget(target: ZLinkRemoteActorPacketTarget | undefined): void {
     this.remoteActorPacketTargetValue = target;
   }
@@ -584,33 +560,6 @@ export class ZLinkActorRuntimeState {
     this.deferredJoinPendingValue = false;
     this.destroyTask = undefined;
   }
-}
-
-function clearAcceptedJournalFence(
-  current: ZLinkRemoteBoundSessionTarget | undefined,
-  released: ZLinkRemoteBoundSessionTarget
-): ZLinkRemoteBoundSessionTarget | undefined {
-  if (
-    current === undefined
-    || current.routerChannelId !== released.routerChannelId
-    || !routingIdsEqual(current.targetNodeRid, released.targetNodeRid)
-    || !routingIdsEqual(current.spotId, released.spotId)
-    || current.relocationSealId !== released.relocationSealId
-    || current.acceptedJournalReference !== released.acceptedJournalReference
-    || current.acceptedJournalChecksumCrc32c !== released.acceptedJournalChecksumCrc32c
-    || current.acceptedHighWater !== released.acceptedHighWater
-  ) {
-    return current;
-  }
-  const {
-    acceptedHighWater: _acceptedHighWater,
-    relocationSealId: _relocationSealId,
-    acceptedJournalReference: _acceptedJournalReference,
-    acceptedJournalChecksumCrc32c: _acceptedJournalChecksumCrc32c,
-    serviceWireRelocation: _serviceWireRelocation,
-    ...withoutAcceptedJournalFence
-  } = current;
-  return withoutAcceptedJournalFence;
 }
 
 function maxBindingGeneration(...values: (bigint | undefined)[]): bigint | undefined {

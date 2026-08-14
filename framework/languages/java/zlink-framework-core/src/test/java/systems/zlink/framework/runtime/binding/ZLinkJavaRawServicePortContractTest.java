@@ -44,12 +44,9 @@ final class ZLinkJavaRawServicePortContractTest {
             right.connect(endpoint);
 
             long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-            while (!port.send(right, leftRid, List.of(first, second))) {
-                if (System.nanoTime() >= deadline) {
-                    throw new AssertionError("raw multipart send did not become ready");
-                }
-                Thread.sleep(1);
-            }
+            port.send(right, leftRid, List.of(first, second))
+                .toCompletableFuture()
+                .get(2, TimeUnit.SECONDS);
             first[0] = 9;
             second[0] = 9;
 
@@ -91,12 +88,9 @@ final class ZLinkJavaRawServicePortContractTest {
 
             long connectDeadline =
                 System.nanoTime() + Duration.ofSeconds(2).toNanos();
-            while (!port.send(right, leftRid, List.of(new byte[] {0}))) {
-                if (System.nanoTime() >= connectDeadline) {
-                    throw new AssertionError("raw concurrent route did not become ready");
-                }
-                Thread.sleep(1);
-            }
+            port.send(right, leftRid, List.of(new byte[] {0}))
+                .toCompletableFuture()
+                .get(2, TimeUnit.SECONDS);
             awaitInbound(port, left, 1, connectDeadline);
 
             CountDownLatch start = new CountDownLatch(1);
@@ -122,22 +116,18 @@ final class ZLinkJavaRawServicePortContractTest {
         try {
             start.await();
             for (int index = 0; index < 16; index++) {
-                long deadline =
-                    System.nanoTime() + Duration.ofSeconds(2).toNanos();
-                while (!port.send(
-                    router,
-                    target,
-                    List.of(new byte[] {marker, (byte) index}))) {
-                    if (System.nanoTime() >= deadline) {
-                        throw new AssertionError(
-                            "concurrent raw multipart send timed out");
-                    }
-                    Thread.yield();
-                }
+                port.send(
+                        router,
+                        target,
+                        List.of(new byte[] {marker, (byte) index}))
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
             }
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new AssertionError("concurrent raw multipart send interrupted", interrupted);
+        } catch (Exception failure) {
+            throw new AssertionError("concurrent raw multipart send failed", failure);
         }
     }
 

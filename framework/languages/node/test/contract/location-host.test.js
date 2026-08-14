@@ -42,12 +42,21 @@ test('framework and NestJS builders register separate location and relocation st
   const options = framework.createFrameworkOptions((builder) => {
     builder.addLocationStore(store);
     builder.addRelocationStore(relocationStore);
-    builder.configureLocations().ownerLeaseRenewIntervalMs(123);
+    const locations = builder.configureLocations();
+    locations
+      .ownerLeaseRenewIntervalMs(123)
+      .sessionRelocationSealTimeoutMs(1_234);
+    assert.equal(typeof locations.maxActiveOutboundRelocations, 'undefined');
+    assert.equal(typeof locations.maxActiveInboundRelocations, 'undefined');
+    assert.equal(typeof locations.maxConcurrentRelocationCaptures, 'undefined');
+    assert.equal(typeof locations.maxConcurrentRelocationRestores, 'undefined');
+    assert.equal(typeof locations.maxRelocationPayloadInFlightBytes, 'undefined');
   });
   const registration = framework.createFrameworkRegistration(options);
   assert.equal(registration.locations.storeInstance, store);
   assert.equal(registration.locations.relocationStoreInstance, relocationStore);
   assert.equal(registration.locations.options.ownerLeaseRenewIntervalMs, 123);
+  assert.equal(registration.locations.options.sessionRelocationSealTimeoutMs, 1_234);
 
   const nestBuilder = nestjs.zlinkFramework()
     .addLocationStore(store)
@@ -56,13 +65,27 @@ test('framework and NestJS builders register separate location and relocation st
     .ownerLeaseRenewIntervalMs(100)
     .ownerLeaseRenewTimeoutMs(30)
     .ownerLeaseFencingMarginMs(50)
-    .ownerLeaseTtlMs(456);
+    .ownerLeaseTtlMs(456)
+    .sessionRelocationSealTimeoutMs(2_345);
   const nestModule = nestjs.ZLinkModule.forRoot(nestBuilder.build());
   const nestRegistration = await resolveFrameworkRegistration(nestModule);
   assert.equal(nestRegistration.locations.storeInstance, store);
   assert.equal(nestRegistration.locations.relocationStoreInstance, relocationStore);
   assert.equal(nestRegistration.locations.options.ownerLeaseTtlMs, 456);
+  assert.equal(nestRegistration.locations.options.sessionRelocationSealTimeoutMs, 2_345);
 
+});
+
+test('Session relocation seal timeout is a positive finite Location option', () => {
+  for (const value of [0, -1, Number.POSITIVE_INFINITY, Number.NaN]) {
+    const options = framework.createFrameworkOptions((builder) => {
+      builder.configureLocations().sessionRelocationSealTimeoutMs(value);
+    });
+    assert.throws(
+      () => framework.createFrameworkRegistration(options),
+      /sessionRelocationSealTimeoutMs must be a finite positive number/u
+    );
+  }
 });
 
 test('framework runtime host uses the explicit location store for Actor lifecycle and authority routing', () => {
@@ -458,6 +481,8 @@ function fakeBackendAdapterFactory(calls, nodeRid) {
         createContext() {
           return {
             nativeInstance: {},
+            getCoreHwmBudgetSnapshot() { return undefined; },
+            resetCoreHwmBudgetMetrics() {},
             shutdown() {},
             async dispose() {
               calls.push('context:dispose');

@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
@@ -19,7 +21,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationReceiver;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 
 class ZLinkMeshNodeRuntimeTest {
     @Test
@@ -84,8 +85,6 @@ class ZLinkMeshNodeRuntimeTest {
         registration.listen("inproc://game-1");
         registration.configureRouterSocket().setSendHighWaterMark(7);
         registration.configureRouterSocket().setReceiveHighWaterMark(11);
-        registration.configureRouterSocket().setMailboxMessageBudget(13);
-        registration.configureRouterSocket().setMailboxByteBudget(17);
         registration.configureRouterSocket().setSendTimeout(Duration.ofMillis(23));
         registration.configureSpotPublisher().setSendHighWaterMark(91);
 
@@ -96,31 +95,11 @@ class ZLinkMeshNodeRuntimeTest {
             new RecordingContext())) {
             assertEquals(7L, node.routerHighWaterMark);
             assertEquals(11L, node.routerReceiveHighWaterMark);
-            assertEquals(13L, node.mailboxMessageBudget);
-            assertEquals(17L, node.mailboxByteBudget);
             assertEquals(7, node.pendingAdmissionCapacity);
             assertEquals(Duration.ofMillis(23), node.routerSendTimeout);
         }
     }
 
-    @Test
-    void startInstallsApplicationDispatchBudgetBeforeBackendStart() {
-        MeshNodeRegistration registration = new MeshNodeRegistration("game");
-        registration.listen("inproc://game-budget");
-        RecordingMeshNode node = new RecordingMeshNode();
-        ZLinkInboundDispatchBudget budget =
-            new ZLinkInboundDispatchBudget(1024);
-
-        try (ZLinkMeshNodeRuntime ignored = ZLinkMeshNodeRuntime.start(
-            registration,
-            (context, meshName) -> node,
-            new RecordingContext(),
-            budget)) {
-            assertSame(budget, node.applicationDispatchBudget);
-            assertTrue(node.calls.indexOf("application-budget")
-                < node.calls.indexOf("start"));
-        }
-    }
 
     @Test
     void startInstallsIngressOwnersBeforeTheBackendCanReceive() {
@@ -138,11 +117,11 @@ class ZLinkMeshNodeRuntimeTest {
             }
 
             @Override
-            public int submitLocalNodeSend(
+            public CompletionStage<Integer> submitLocalNodeSend(
                 RoutingId sourceNodeRid,
                 byte[] metadata,
                 List<systems.zlink.contracts.messaging.Message> parts) {
-                return 0;
+                return CompletableFuture.completedFuture(0);
             }
         };
 
@@ -150,7 +129,6 @@ class ZLinkMeshNodeRuntimeTest {
             registration,
             (context, meshName) -> node,
             new RecordingContext(),
-            new ZLinkInboundDispatchBudget(1024),
             true,
             receiver)) {
             assertTrue(node.calls.indexOf("application-receiver")
@@ -171,11 +149,8 @@ class ZLinkMeshNodeRuntimeTest {
         private final List<String> calls = new ArrayList<>();
         private long routerHighWaterMark;
         private long routerReceiveHighWaterMark;
-        private long mailboxMessageBudget;
-        private long mailboxByteBudget;
         private int pendingAdmissionCapacity;
         private Duration routerSendTimeout;
-        private ZLinkInboundDispatchBudget applicationDispatchBudget;
         private Consumer<ZLinkMeshDispatchRecord> dispatchReceiver;
 
         @Override public String name() { return "mesh-node"; }
@@ -195,22 +170,11 @@ class ZLinkMeshNodeRuntimeTest {
         @Override public void setRouterReceiveHighWaterMark(long value) {
             routerReceiveHighWaterMark = value;
         }
-        @Override public void setMailboxMessageBudget(long value) {
-            mailboxMessageBudget = value;
-        }
-        @Override public void setMailboxByteBudget(long value) {
-            mailboxByteBudget = value;
-        }
         @Override public void setRouterPendingAdmissionCapacity(int value) {
             pendingAdmissionCapacity = value;
         }
         @Override public void setRouterSendTimeout(Duration value) {
             routerSendTimeout = value;
-        }
-        @Override public void setApplicationDispatchBudget(
-            ZLinkInboundDispatchBudget value) {
-            applicationDispatchBudget = value;
-            calls.add("application-budget");
         }
         @Override public void setApplicationReceiver(
             ZLinkMeshApplicationReceiver value) {

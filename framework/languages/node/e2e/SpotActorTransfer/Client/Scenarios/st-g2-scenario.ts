@@ -1,4 +1,4 @@
-// ST-G2: User Spot aggregate capacity를 all-or-none으로 적용한다 시나리오를 검증한다.
+// ST-G2: SpotWide durable backlog와 lazy job admission 시나리오를 검증한다.
 import { runSpotActorCoverage } from '../Support/coverage-scenarios';
 
 export async function runSTG2(): Promise<void> {

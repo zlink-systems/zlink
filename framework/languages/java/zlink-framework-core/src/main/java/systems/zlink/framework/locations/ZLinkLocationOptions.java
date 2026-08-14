@@ -13,6 +13,7 @@ public final class ZLinkLocationOptions {
     private Duration ownerLeaseRenewTimeout = Duration.ofSeconds(3);
     private Duration routeCacheMaxAge = Duration.ofSeconds(15);
     private Duration messageFollowDuration = Duration.ofSeconds(30);
+    private Duration sessionRelocationSealTimeout = Duration.ofMillis(3_000);
     private int maxActiveOutboundRelocations = 64;
     private int maxActiveInboundRelocations = 64;
     private int maxConcurrentRelocationCaptures = 8;
@@ -100,6 +101,16 @@ public final class ZLinkLocationOptions {
         this.messageFollowDuration = candidate;
     }
 
+    public Duration sessionRelocationSealTimeout() {
+        return sessionRelocationSealTimeout;
+    }
+
+    public void setSessionRelocationSealTimeout(Duration value) {
+        sessionRelocationSealTimeout = requirePositiveWholeMilliseconds(
+            value,
+            "sessionRelocationSealTimeout");
+    }
+
     public int maxActiveOutboundRelocations() {
         return maxActiveOutboundRelocations;
     }
@@ -155,6 +166,28 @@ public final class ZLinkLocationOptions {
     private static Duration requirePositive(Duration value, String name) {
         if (value == null || value.isZero() || value.isNegative()) {
             throw new IllegalArgumentException(name + " must be positive.");
+        }
+        return value;
+    }
+
+    private static Duration requirePositiveWholeMilliseconds(
+        Duration value,
+        String name) {
+        if (value == null || value.isZero() || value.isNegative()) {
+            throw new IllegalArgumentException(name + " must be positive.");
+        }
+        final long milliseconds;
+        try {
+            milliseconds = value.toMillis();
+        } catch (ArithmeticException overflow) {
+            throw new IllegalArgumentException(
+                name + " must be representable in milliseconds.",
+                overflow);
+        }
+        if (milliseconds <= 0
+            || !Duration.ofMillis(milliseconds).equals(value)) {
+            throw new IllegalArgumentException(
+                name + " must be representable as positive whole milliseconds.");
         }
         return value;
     }

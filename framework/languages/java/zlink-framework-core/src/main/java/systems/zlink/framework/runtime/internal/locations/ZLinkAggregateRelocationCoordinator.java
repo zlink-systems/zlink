@@ -2,7 +2,6 @@ package systems.zlink.framework.runtime.internal.locations;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
 import java.io.ByteArrayOutputStream;
@@ -28,7 +27,6 @@ import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.locations.*;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 
 /**
  * Prepares an immutable relocation root and publishes all participant routes
@@ -60,25 +58,37 @@ public final class ZLinkAggregateRelocationCoordinator {
                 staged.request(),
                 staged.inventoryDigest(),
                 staged.stored(),
-                cancellation,
-                null));
+                cancellation));
     }
 
-    /**
-     * Prepares a private replay-pending publication. Target activation must
-     * wait until {@link #activateCanonicalReplay} advances the aggregate
-     * marker after the source barrier fixes its final accepted suffix.
-     */
-    public CompletionStage<Prepared> prepareReplayPending(
+    /** Prepares authority against an already verified immutable source root. */
+    public CompletionStage<Prepared> prepareExistingRoot(
         Request request,
+        Root verified,
+        String reference,
+        long checksumCrc32c,
         ZLinkStoreCancellation cancellation) {
-        return stageRoot(request, cancellation).thenCompose(staged ->
-            prepareAuthority(
-                staged.request(),
-                staged.inventoryDigest(),
-                staged.stored(),
-                cancellation,
-                3));
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(verified, "verified");
+        Objects.requireNonNull(reference, "reference");
+        Objects.requireNonNull(cancellation, "cancellation");
+        byte[] digest = inventoryDigest(request.participants());
+        if (!Arrays.equals(request.root(), verified.payload())
+            || !Arrays.equals(digest, verified.inventoryDigest())) {
+            return failed(new RelocationDataLostException(
+                "verified relocation root differs from authority request"));
+        }
+        return ZLinkRelocationTreeStore.renewStored(
+                relocationStore,
+                reference,
+                checksumCrc32c,
+                RETENTION,
+                cancellation)
+            .thenCompose(stored -> prepareAuthority(
+                request,
+                digest,
+                stored,
+                cancellation));
     }
 
     /** Stores and verifies an initial factory/Restore root without publishing
@@ -249,10 +259,6 @@ public final class ZLinkAggregateRelocationCoordinator {
         return requireAggregateProgress(
                 fence, targetOwner, digest, cancellation)
             .thenCompose(marker -> {
-                if (marker.progress().phase() == 3) {
-                    return failed(new RelocationDataLostException(
-                        "relocation replay is still pending"));
-                }
                 var publication = new AtomicReference<
                     ZLinkCanonicalRelocationAuthorityStateCodec.Published>();
                 Map<String, Long> ownerGenerations = new LinkedHashMap<>();
@@ -369,102 +375,9 @@ public final class ZLinkAggregateRelocationCoordinator {
         }
     }
 
-    /** Verifies the post-cleanup aggregate before target admission opens. */
-    public CompletionStage<Void> verifyCompletedAggregate(
-        List<ExpectedParticipant> participants,
-        ZLinkAggregateFence activatedFence,
-        ZLinkLocationOwnerToken targetOwner,
-        ZLinkStoreCancellation cancellation) {
-        List<ExpectedParticipant> expected = List.copyOf(
-            Objects.requireNonNull(participants, "participants"));
-        Objects.requireNonNull(activatedFence, "activatedFence");
-        Objects.requireNonNull(targetOwner, "targetOwner");
-        Objects.requireNonNull(cancellation, "cancellation");
-        if (expected.isEmpty()
-            || activatedFence.aggregateGeneration() == Long.MAX_VALUE) {
-            throw new IllegalArgumentException(
-                "completed aggregate participant fence is invalid");
-        }
-        return requireAggregateProgress(
-                activatedFence, targetOwner, null, cancellation)
-            .thenCompose(marker -> {
-                if (!marker.progress().sourceCleanupCompleted()) {
-                    return failed(new RelocationDataLostException(
-                        "completed aggregate marker is not in cleanup phase"));
-                }
-                CompletionStage<Void> reads =
-                    CompletableFuture.completedFuture(null);
-                for (ExpectedParticipant participant : expected) {
-                    reads = reads.thenCompose(ignored -> authorityStore.read(
-                            participant.authorityKey(),
-                            cancellation)
-                        .thenCompose(read -> {
-                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-                                return failed(new RelocationDataLostException(
-                                    "completed relocation participant is missing: "
-                                        + participant.authorityKey()));
-                            }
-                            var payload =
-                                ZLinkCanonicalRelocationAuthorityStateCodec
-                                    .decode(snapshot.payload());
-                            boolean ownerGenerationMatches =
-                                ownerGenerationAdvanced(
-                                    participant.sourceAuthorityOwnerGeneration(),
-                                    snapshot.authorityOwnerGeneration());
-                            if (payload == null
-                                || snapshot.objectGeneration()
-                                    != participant.objectGeneration()
-                                || !ownerGenerationMatches
-                                || !snapshot.ownerId().equals(
-                                    targetOwner.ownerId())
-                                || snapshot.ownerLeaseGeneration()
-                                    != targetOwner.leaseGeneration()
-                                || !payload.aggregateId().equals(
-                                    activatedFence.aggregateId())
-                                || payload.aggregateGeneration()
-                                    != activatedFence.aggregateGeneration()
-                                || !payload.targetOwnerId().equals(
-                                    targetOwner.ownerId())
-                                || payload.targetOwnerLeaseGeneration()
-                                    != targetOwner.leaseGeneration()
-                                || !payload.targetNodeRid().equals(
-                                    marker.request().targetDescriptor().rid())
-                                || payload.targetNodeGeneration()
-                                    != marker.request()
-                                        .targetDescriptorLifecycleGeneration()) {
-                                return failed(new RelocationDataLostException(
-                                    "completed relocation participant has a different fence: "
-                                        + participant.authorityKey()));
-                            }
-                            return CompletableFuture.completedFuture(null);
-                        }));
-                }
-                return reads.thenCompose(ignored -> readRoot(
-                        marker.progress().reference(),
-                        marker.progress().checksumCrc32c(),
-                        cancellation)
-                    .thenCompose(root -> {
-                        var canonical =
-                            ZLinkServiceRelocationEnvelopeCodec.decode(
-                                root.payload());
-                        boolean countsMatch =
-                            marker.progress().terminalCompletionCount()
-                                == canonical.terminalCompletions().size()
-                            && marker.progress().pendingRelayCount()
-                                == canonical.pendingRelayCount();
-                        return countsMatch
-                            && canonical.recoveryReleaseEligible()
-                            && canonical.pendingRelayCount() == 0
-                            ? CompletableFuture.completedFuture(null)
-                            : failed(new RelocationDataLostException(
-                                "completed relocation terminal accounting differs"));
-                    }));
-            });
-    }
-
-    /** Replaces completed relocation slots with steady authority payloads.
+    /** Replaces target-published relocation slots with steady authority payloads.
      * Ownership and both object generations are preserved by StoreVersion CAS. */
-    public CompletionStage<Void> normalizeCompletedAggregate(
+    public CompletionStage<Void> normalizePublishedAggregate(
         List<ExpectedParticipant> participants,
         ZLinkAggregateFence activatedFence,
         ZLinkLocationOwnerToken targetOwner,
@@ -496,15 +409,10 @@ public final class ZLinkAggregateRelocationCoordinator {
         return authorityStore.readAggregateProgress(
                 activatedFence, cancellation)
             .thenCompose(marker -> {
-            if (marker.isPresent()
-                && !marker.get().progress().sourceCleanupCompleted()) {
-                return failed(new RelocationDataLostException(
-                    "aggregate normalization started before cleanup"));
-            }
             return participantReads.thenCompose(ignored -> {
             if (alreadySteady.get() + steady.size() != expected.size()) {
                 return failed(new RelocationDataLostException(
-                    "completed relocation normalization has an unknown participant state"));
+                    "published relocation normalization has an unknown participant state"));
             }
             CompletionStage<Void> writes =
                 CompletableFuture.completedFuture(null);
@@ -533,10 +441,7 @@ public final class ZLinkAggregateRelocationCoordinator {
                 new ZLinkAuthorityExpectFound(
                     participant.expectedStoreVersion()),
                 new ZLinkAuthorityPut(
-                    participant.applicationAuthorityPayload(),
-                    ZLinkAuthorityGenerationTransition.PRESERVE,
-                    Optional.empty(),
-                    Optional.empty()),
+                    participant.applicationAuthorityPayload()),
                 cancellation)
             .thenCompose(result -> {
                 if (result instanceof ZLinkAuthorityStored) {
@@ -568,49 +473,6 @@ public final class ZLinkAggregateRelocationCoordinator {
                     snapshot.payload()) == null;
     }
 
-    /**
-     * Removes a marker that no participant publishes any more. Normalization
-     * writes every steady participant payload before it removes the single
-     * aggregate marker, so a process that stops between those two writes leaves
-     * the marker behind; a participant row that was deleted afterwards leaves
-     * the same orphan. In both shapes no authority points at the immutable root
-     * any more, so there is no published relocation left to recover and no
-     * owner or membership to move. Startup recovery reruns only the remaining
-     * removal step; it never invents a new relocation and it never resumes one
-     * across a process restart.
-     *
-     * <p>The root payload is left to relocation-store orphan cleanup and its
-     * retention window, exactly as the steady normalization path leaves it.</p>
-     *
-     * <p>Removal is fenced by the marker's target owner lease. A replacement
-     * process runs under a newer lease, so the store can refuse the removal
-     * even though the marker is unreachable. That answer is reported as
-     * {@code false} rather than raised: an orphan nobody points through must
-     * never keep a runtime from starting.</p>
-     *
-     * @return whether the marker is gone from the store
-     */
-    public CompletionStage<Boolean> discardOrphanedAggregateProgress(
-        ZLinkAggregateProgressSnapshot marker,
-        ZLinkStoreCancellation cancellation) {
-        Objects.requireNonNull(marker, "marker");
-        Objects.requireNonNull(cancellation, "cancellation");
-        return authorityStore.removeAggregateProgress(
-                marker.fence(),
-                marker.storeVersion(),
-                cancellation)
-            .thenCompose(removed -> removed
-                ? CompletableFuture.completedFuture(true)
-                : authorityStore.readAggregateProgress(
-                        marker.fence(), cancellation)
-                    .thenCompose(current -> current.isEmpty()
-                        ? CompletableFuture.completedFuture(true)
-                        : authorityStore.removeAggregateProgress(
-                            marker.fence(),
-                            current.get().storeVersion(),
-                            cancellation)));
-    }
-
     private CompletionStage<Void> removeProgressAfterNormalization(
         ZLinkAggregateFence fence,
         Optional<ZLinkAggregateProgressSnapshot> marker,
@@ -631,10 +493,6 @@ public final class ZLinkAggregateRelocationCoordinator {
                         if (current.isEmpty()) {
                             return CompletableFuture.completedFuture(null);
                         }
-                        if (!current.get().progress().sourceCleanupCompleted()) {
-                            return failed(new RelocationDataLostException(
-                                "aggregate normalization marker regressed before removal"));
-                        }
                         return authorityStore.removeAggregateProgress(
                                 fence,
                                 current.get().storeVersion(),
@@ -643,401 +501,6 @@ public final class ZLinkAggregateRelocationCoordinator {
                                 ? CompletableFuture.completedFuture(null)
                                 : failed(new RelocationDataLostException(
                                     "aggregate progress removal lost its StoreVersion race")));
-                    });
-            });
-    }
-
-    /**
-     * Stores one immutable replay successor and advances the single private
-     * aggregate marker. Participant rows are not used as mutable root
-     * pointers after the initial bounded commit.
-     */
-    public CompletionStage<CanonicalProgress> updateCanonicalReplay(
-        List<ExpectedParticipant> participants,
-        ZLinkLocationOwnerToken targetOwner,
-        UnaryOperator<
-            ZLinkServiceRelocationEnvelopeCodec.Envelope> update,
-        ZLinkStoreCancellation cancellation) {
-        List<ExpectedParticipant> expected = List.copyOf(
-            Objects.requireNonNull(participants, "participants"));
-        Objects.requireNonNull(targetOwner, "targetOwner");
-        Objects.requireNonNull(update, "update");
-        Objects.requireNonNull(cancellation, "cancellation");
-        if (expected.isEmpty()) {
-            throw new IllegalArgumentException(
-                "canonical replay participants are required");
-        }
-        return resolveAggregateFence(expected, targetOwner, cancellation)
-            .thenCompose(fence -> updateCanonicalReplay(
-                expected,
-                fence,
-                targetOwner,
-                update,
-                cancellation));
-    }
-
-    /** Internal overload used when the aggregate generation is available. */
-    public CompletionStage<CanonicalProgress> updateCanonicalReplay(
-        List<ExpectedParticipant> participants,
-        ZLinkAggregateFence fence,
-        ZLinkLocationOwnerToken targetOwner,
-        UnaryOperator<
-            ZLinkServiceRelocationEnvelopeCodec.Envelope> update,
-        ZLinkStoreCancellation cancellation) {
-        List<ExpectedParticipant> expected = List.copyOf(
-            Objects.requireNonNull(participants, "participants"));
-        Objects.requireNonNull(fence, "fence");
-        Objects.requireNonNull(targetOwner, "targetOwner");
-        Objects.requireNonNull(update, "update");
-        Objects.requireNonNull(cancellation, "cancellation");
-        if (expected.isEmpty()) {
-            throw new IllegalArgumentException(
-                "canonical replay participants are required");
-        }
-        return requireAggregateProgress(
-                fence, targetOwner, null, cancellation)
-            .thenCompose(marker -> {
-                List<ZLinkAuthoritySnapshot> snapshots = new ArrayList<>();
-                var shared = new AtomicReference<
-                    ZLinkCanonicalRelocationAuthorityStateCodec.Published>();
-                CompletionStage<Void> reads =
-                    CompletableFuture.completedFuture(null);
-                for (ExpectedParticipant participant : expected) {
-                    reads = reads.thenCompose(ignored -> authorityStore.read(
-                            participant.authorityKey(), cancellation)
-                        .thenCompose(result -> {
-                            if (!(result instanceof ZLinkAuthoritySnapshot snapshot)
-                                || snapshot.objectGeneration()
-                                    != participant.objectGeneration()
-                                || !ownerGenerationAdvanced(
-                                    participant.sourceAuthorityOwnerGeneration(),
-                                    snapshot.authorityOwnerGeneration())
-                                || !snapshot.ownerId().equals(
-                                    targetOwner.ownerId())
-                                || snapshot.ownerLeaseGeneration()
-                                    != targetOwner.leaseGeneration()) {
-                                return failed(new RelocationDataLostException(
-                                    "canonical replay authority owner differs: "
-                                        + participant.authorityKey()));
-                            }
-                            var publication =
-                                ZLinkCanonicalRelocationAuthorityStateCodec
-                                    .decode(snapshot.payload());
-                            var first = shared.get();
-                            if (publication == null
-                                || !publication.aggregateId().equals(
-                                    fence.aggregateId())
-                                || publication.aggregateGeneration()
-                                    != fence.aggregateGeneration()
-                                || !publication.targetOwnerId().equals(
-                                    targetOwner.ownerId())
-                                || publication.targetOwnerLeaseGeneration()
-                                    != targetOwner.leaseGeneration()
-                                || !publication.targetNodeRid().equals(
-                                    marker.request().targetDescriptor().rid())
-                                || publication.targetNodeGeneration()
-                                    != marker.request()
-                                        .targetDescriptorLifecycleGeneration()
-                                || first != null
-                                    && (!publication.aggregateId().equals(
-                                            first.aggregateId())
-                                        || publication.aggregateGeneration()
-                                            != first.aggregateGeneration())) {
-                                return failed(new RelocationDataLostException(
-                                    "canonical replay authority fence differs"));
-                            }
-                            shared.compareAndSet(null, publication);
-                            snapshots.add(snapshot);
-                            return CompletableFuture.completedFuture(null);
-                        }));
-                }
-                return reads.thenCompose(ignored -> readRoot(
-                        marker.progress().reference(),
-                        marker.progress().checksumCrc32c(),
-                        cancellation)
-                    .thenCompose(stored -> {
-                        var current = ZLinkServiceRelocationEnvelopeCodec
-                            .decode(stored.payload());
-                        var successor = Objects.requireNonNull(
-                            update.apply(current),
-                            "canonical replay successor");
-                        List<String> versions = snapshots.stream()
-                            .map(ZLinkAuthoritySnapshot::storeVersion)
-                            .toList();
-                        List<Long> ownerGenerations = snapshots.stream()
-                            .map(ZLinkAuthoritySnapshot::authorityOwnerGeneration)
-                            .toList();
-                        if (Arrays.equals(
-                            successor.canonicalBytes(), current.canonicalBytes())) {
-                            return CompletableFuture.completedFuture(
-                                new CanonicalProgress(
-                                    current, versions, ownerGenerations));
-                        }
-                        List<Participant> mutations = new ArrayList<>();
-                        for (int index = 0; index < expected.size(); index++) {
-                            var participant = expected.get(index);
-                            var snapshot = snapshots.get(index);
-                            mutations.add(new Participant(
-                                participant.authorityKey(),
-                                snapshot.allocation().objectKind(),
-                                snapshot.objectGeneration(),
-                                snapshot.authorityOwnerGeneration(),
-                                snapshot.storeVersion(),
-                                ZLinkAuthorityGenerationTransition.PRESERVE,
-                                snapshot.payload(),
-                                new byte[0]));
-                        }
-                        var allocation = snapshots.getFirst().allocation();
-                        var request = new Request(
-                            fence.aggregateId(),
-                            fence.aggregateGeneration(),
-                            mutations,
-                            successor.canonicalBytes(),
-                            marker.request().targetDescriptor(),
-                            marker.request()
-                                .targetDescriptorLifecycleGeneration(),
-                            new ZLinkPlacementCapacityBundle(
-                                0, 0, Optional.empty()),
-                            targetOwner);
-                        return stageRoot(
-                                request,
-                                marker.request().inventoryDigest(),
-                                cancellation)
-                            .thenCompose(staged -> {
-                                var nextProgress = new ZLinkAggregateProgress(
-                                    staged.stored().reference(),
-                                    staged.stored().checksumCrc32c(),
-                                    marker.progress().phase(),
-                                    marker.progress()
-                                        .sourceCleanupCompleted(),
-                                    successor.terminalCompletions().size(),
-                                    successor.pendingRelayCount());
-                                return authorityStore
-                                    .compareExchangeAggregateProgress(
-                                        fence,
-                                        marker.storeVersion(),
-                                        nextProgress,
-                                        cancellation)
-                                    .thenCompose(result -> {
-                                        if (result
-                                            instanceof ZLinkAggregateProgressStored) {
-                                            return CompletableFuture
-                                                .completedFuture(
-                                                    new CanonicalProgress(
-                                                        successor,
-                                                        versions,
-                                                        ownerGenerations));
-                                        }
-                                        return authorityStore.readAggregateProgress(
-                                                fence, cancellation)
-                                            .thenCompose(currentMarker -> {
-                                                if (currentMarker.isPresent()
-                                                    && currentMarker.get()
-                                                        .progress().reference()
-                                                        .equals(nextProgress.reference())
-                                                    && currentMarker.get()
-                                                        .progress()
-                                                        .checksumCrc32c()
-                                                        == nextProgress
-                                                            .checksumCrc32c()) {
-                                                    return CompletableFuture
-                                                        .completedFuture(
-                                                            new CanonicalProgress(
-                                                                successor,
-                                                                versions,
-                                                                ownerGenerations));
-                                                }
-                                                return deleteOrphan(
-                                                        staged.stored().reference())
-                                                    .thenCompose(ignoredDelete ->
-                                                        failed(
-                                                            new RelocationDataLostException(
-                                                                "canonical replay marker CAS conflicted")));
-                                            });
-                                    });
-                            });
-                    }));
-            });
-    }
-
-    /**
-     * Makes a replay-pending aggregate visible only after its marker points at
-     * the exact final suffix root. The participant rows already carry the
-     * target authority fence; this private marker CAS is the publication gate.
-     */
-    public CompletionStage<Published> activateCanonicalReplay(
-        Prepared prepared,
-        ZLinkStoreCancellation cancellation) {
-        Objects.requireNonNull(prepared, "prepared");
-        Objects.requireNonNull(cancellation, "cancellation");
-        return requireAggregateProgress(
-                prepared.fence(),
-                prepared.request().targetOwner(),
-                prepared.inventoryDigest(),
-                cancellation)
-            .thenCompose(marker -> {
-                if (marker.progress().phase() == 4) {
-                    return publishedFromAggregateMarker(
-                        prepared, cancellation);
-                }
-                if (marker.progress().phase() != 3) {
-                    return failed(new RelocationDataLostException(
-                        "replay-pending aggregate has an invalid phase"));
-                }
-                var progress = marker.progress();
-                var ready = new ZLinkAggregateProgress(
-                    progress.reference(),
-                    progress.checksumCrc32c(),
-                    4,
-                    false,
-                    progress.terminalCompletionCount(),
-                    progress.pendingRelayCount());
-                CompletionStage<ZLinkAggregateProgressWriteResult> operation;
-                try {
-                    operation = authorityStore.compareExchangeAggregateProgress(
-                        prepared.fence(),
-                        marker.storeVersion(),
-                        ready,
-                        cancellation);
-                } catch (RuntimeException failure) {
-                    operation = failed(failure);
-                }
-                return operation
-                    .handle((result, failure) -> new Attempt<>(result, failure))
-                    .thenCompose(attempt -> {
-                        if (attempt.failure() == null
-                            && attempt.result()
-                                instanceof ZLinkAggregateProgressStored) {
-                            return publishedFromAggregateMarker(
-                                prepared, cancellation);
-                        }
-                        return authorityStore.readAggregateProgress(
-                                prepared.fence(), cancellation)
-                            .thenCompose(current -> {
-                                if (current.isPresent()
-                                    && sameProgressRoot(
-                                        ready, current.get().progress())
-                                    && current.get().progress().phase() == 4) {
-                                    return publishedFromAggregateMarker(
-                                        prepared, cancellation);
-                                }
-                                if (current.isPresent()
-                                    && sameProgressRoot(
-                                        progress, current.get().progress())
-                                    && current.get().progress().phase() == 3
-                                    && attempt.failure() == null) {
-                                    return activateCanonicalReplay(
-                                        prepared, cancellation);
-                                }
-                                Throwable failure = attempt.failure() == null
-                                    ? new RelocationDataLostException(
-                                        "replay-pending marker CAS conflicted")
-                                    : unwrap(attempt.failure());
-                                return failed(failure);
-                            });
-                    });
-            });
-    }
-
-    private static boolean sameProgressRoot(
-        ZLinkAggregateProgress left,
-        ZLinkAggregateProgress right) {
-        return left.reference().equals(right.reference())
-            && left.checksumCrc32c() == right.checksumCrc32c()
-            && left.terminalCompletionCount()
-                == right.terminalCompletionCount()
-            && left.pendingRelayCount() == right.pendingRelayCount();
-    }
-
-    /** Reads the exact completion published by command 33's authority fence. */
-    public CompletionStage<ZLinkServiceRelocationEnvelopeCodec.Completion>
-        readCanonicalReply(
-            String authorityKey,
-            long objectGeneration,
-            String sourceOwnerId,
-            long sourceOwnerLeaseGeneration,
-            RoutingId sourceNodeRid,
-            long sourceNodeGeneration,
-            ZLinkServiceRelocationWireCodec.ReplyRelay relay,
-            ZLinkStoreCancellation cancellation) {
-        Objects.requireNonNull(authorityKey, "authorityKey");
-        Objects.requireNonNull(sourceOwnerId, "sourceOwnerId");
-        Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
-        Objects.requireNonNull(relay, "relay");
-        Objects.requireNonNull(cancellation, "cancellation");
-        return authorityStore.read(authorityKey, cancellation)
-            .thenCompose(result -> {
-                if (!(result instanceof ZLinkAuthoritySnapshot snapshot)
-                    || snapshot.objectGeneration() != objectGeneration
-                    || snapshot.authorityOwnerGeneration()
-                        != relay.targetAttemptGeneration()
-                    || !snapshot.storeVersion().equals(
-                        relay.coordinator()
-                            .expectedAuthorityStoreVersion())
-                    || !snapshot.ownerId().equals(
-                        relay.coordinator().ownerId())
-                    || snapshot.ownerLeaseGeneration()
-                        != relay.coordinator().leaseGeneration()
-                    || !snapshot.allocation().descriptor().rid().equals(
-                        relay.coordinator().nodeRid())
-                    || snapshot.allocation()
-                        .descriptorLifecycleGeneration()
-                        != relay.coordinator().nodeGeneration()) {
-                    return failed(new RelocationDataLostException(
-                        "canonical reply authority fence differs"));
-                }
-                UUID relocation = new UUID(
-                    relay.relocation().high(), relay.relocation().low());
-                return findAggregateProgress(relocation, cancellation)
-                    .thenCompose(marker -> {
-                        if (!marker.request().targetOwner().ownerId().equals(
-                                relay.coordinator().ownerId())
-                            || marker.request().targetOwner()
-                                .leaseGeneration()
-                                != relay.coordinator().leaseGeneration()
-                            || !marker.request().targetDescriptor().rid().equals(
-                                relay.coordinator().nodeRid())
-                            || marker.request()
-                                .targetDescriptorLifecycleGeneration()
-                                != relay.coordinator().nodeGeneration()) {
-                            return failed(new RelocationDataLostException(
-                                "canonical reply aggregate fence differs"));
-                        }
-                        return readRoot(
-                                marker.progress().reference(),
-                                marker.progress().checksumCrc32c(),
-                                cancellation)
-                    .thenCompose(root -> {
-                        var envelope =
-                            ZLinkServiceRelocationEnvelopeCodec.decode(
-                                root.payload());
-                        return envelope.terminalCompletions().stream()
-                            .filter(value ->
-                                value.operationHigh()
-                                    == relay.operation().high()
-                                && value.operationLow()
-                                    == relay.operation().low()
-                                && value.sourceOwnerId().equals(sourceOwnerId)
-                                && value.sourceOwnerLeaseGeneration()
-                                    == sourceOwnerLeaseGeneration
-                                && value.sourceNodeRid().equals(
-                                    sourceNodeRid.toString())
-                                && value.sourceNodeGeneration()
-                                    == sourceNodeGeneration
-                                && value.participantId()
-                                    == relay.participantId()
-                                && value.sequence() == relay.sequence()
-                                && value.terminalResult()
-                                    == relay.terminalResult()
-                                && value.failureCode()
-                                    == relay.failureCode())
-                            .findFirst()
-                            .<CompletionStage<ZLinkServiceRelocationEnvelopeCodec.Completion>>map(
-                                CompletableFuture::completedFuture)
-                            .orElseGet(() -> failed(
-                                new RelocationDataLostException(
-                                    "canonical reply completion is absent")));
-                    });
                     });
             });
     }
@@ -1135,90 +598,18 @@ public final class ZLinkAggregateRelocationCoordinator {
             });
     }
 
-    /**
-     * Records the exact external terminal, then resumes cleanup from its
-     * durable tombstone until the root and tombstone are both absent.
-     */
-    public CompletionStage<Void> completeRetainedAbort(
-        ZLinkAggregateAbortRecoverySnapshot retained,
-        String reference,
+    /** Aborts a target-prepared aggregate before cutover without deleting the
+     * independently owned immutable source root. */
+    public CompletionStage<Void> abortPreparedFence(
+        ZLinkAggregateFence fence,
         ZLinkStoreCancellation cancellation) {
-        Objects.requireNonNull(retained, "retained");
-        Objects.requireNonNull(reference, "reference");
+        Objects.requireNonNull(fence, "fence");
         Objects.requireNonNull(cancellation, "cancellation");
-        long checksumCrc32c = retainedAbortChecksum(retained, reference);
-        return authorityStore.markAggregateAbortTerminal(
-                retained.fence(),
-                retained.storeVersion(),
-                reference,
-                checksumCrc32c,
-                cancellation)
-            .thenCompose(cleanup -> cleanup.isPresent()
-                ? resumeTerminalAggregateAbortCleanup(
-                    cleanup.orElseThrow(), cancellation)
-                : ZLinkRelocationTreeStore.deleteStrict(
-                    relocationStore, reference, cancellation));
-    }
-
-    /** Resumes terminal cleanups left by an earlier process. */
-    public CompletionStage<Void> resumeTerminalAggregateAbortCleanups(
-        ZLinkStoreCancellation cancellation) {
-        Objects.requireNonNull(cancellation, "cancellation");
-        return authorityStore.listTerminalAggregateAborts(cancellation)
-            .thenCompose(cleanups -> {
-                CompletionStage<Void> chain =
-                    CompletableFuture.completedFuture(null);
-                for (ZLinkAggregateAbortCleanupSnapshot cleanup : cleanups) {
-                    chain = chain.thenCompose(ignored ->
-                        resumeTerminalAggregateAbortCleanup(
-                            cleanup, cancellation));
-                }
-                return chain;
-            });
-    }
-
-    private CompletionStage<Void> resumeTerminalAggregateAbortCleanup(
-        ZLinkAggregateAbortCleanupSnapshot cleanup,
-        ZLinkStoreCancellation cancellation) {
-        return authorityStore.cleanupTerminalAggregateAbortInventory(
-                cleanup, cancellation)
-            .thenCompose(ignored -> ZLinkRelocationTreeStore.deleteStrict(
-                relocationStore,
-                cleanup.reference(),
-                cancellation))
-            .thenCompose(ignored -> authorityStore.removeTerminalAggregateAbort(
-                cleanup, cancellation))
-            .thenCompose(removed -> {
-                if (removed) {
-                    return CompletableFuture.completedFuture(null);
-                }
-                return authorityStore.listTerminalAggregateAborts(cancellation)
-                    .thenCompose(current -> current.stream().anyMatch(value ->
-                            value.fence().equals(cleanup.fence()))
-                        ? failed(new RelocationDataLostException(
-                            "aggregate abort cleanup tombstone CAS conflicted"))
-                        : CompletableFuture.completedFuture(null));
-            });
-    }
-
-    private static long retainedAbortChecksum(
-        ZLinkAggregateAbortRecoverySnapshot retained,
-        String reference) {
-        if (retained.request().participants().size() != 1) {
-            throw new IllegalStateException(
-                "retained direct-Join abort inventory is not singular");
-        }
-        var publication = ZLinkCanonicalRelocationAuthorityStateCodec.decode(
-            retained.request().participants().getFirst().authorityPayload());
-        if (publication == null) {
-            throw new IllegalStateException(
-                "retained direct-Join abort has no canonical publication");
-        }
-        ZLinkDeferredJoinCompletionAuthority.validateRetainedAbort(
-            retained,
-            reference,
-            publication.checksumCrc32c());
-        return publication.checksumCrc32c();
+        return authorityStore.abortAggregate(fence, cancellation)
+            .thenCompose(result -> result == ZLinkAggregateAbortResult.ABORTED
+                    || result == ZLinkAggregateAbortResult.ALREADY_ABORTED
+                ? CompletableFuture.completedFuture(null)
+                : failed(new AuthorityConflictException(result)));
     }
 
     public record Root(byte[] payload, byte[] inventoryDigest) {
@@ -1232,56 +623,6 @@ public final class ZLinkAggregateRelocationCoordinator {
         @Override public byte[] payload() { return payload.clone(); }
         @Override public byte[] inventoryDigest() {
             return inventoryDigest.clone();
-        }
-    }
-
-    public record CanonicalProgress(
-        ZLinkServiceRelocationEnvelopeCodec.Envelope root,
-        List<String> participantStoreVersions,
-        List<Long> participantOwnerGenerations) {
-        public CanonicalProgress {
-            Objects.requireNonNull(root, "root");
-            participantStoreVersions = List.copyOf(
-                Objects.requireNonNull(
-                    participantStoreVersions,
-                    "participantStoreVersions"));
-            participantOwnerGenerations = List.copyOf(Objects.requireNonNull(
-                participantOwnerGenerations,
-                "participantOwnerGenerations"));
-            if (participantStoreVersions.isEmpty()) {
-                throw new IllegalArgumentException(
-                    "canonical progress requires participant versions");
-            }
-            if (participantOwnerGenerations.size()
-                != participantStoreVersions.size()
-                || participantOwnerGenerations.stream().anyMatch(
-                    value -> value == null || value <= 0)) {
-                throw new IllegalArgumentException(
-                    "canonical progress owner generations are invalid");
-            }
-        }
-
-        public String storeVersion(long participantId) {
-            if (participantId == 0
-                || Long.compareUnsigned(
-                    participantId,
-                    Integer.toUnsignedLong(participantStoreVersions.size())) > 0) {
-                throw new IllegalArgumentException(
-                    "participantId is outside the canonical inventory");
-            }
-            return participantStoreVersions.get((int) participantId - 1);
-        }
-
-        public long ownerGeneration(long participantId) {
-            if (participantId == 0
-                || Long.compareUnsigned(
-                    participantId,
-                    Integer.toUnsignedLong(
-                        participantOwnerGenerations.size())) > 0) {
-                throw new IllegalArgumentException(
-                    "participantId is outside the canonical inventory");
-            }
-            return participantOwnerGenerations.get((int) participantId - 1);
         }
     }
 
@@ -1301,235 +642,19 @@ public final class ZLinkAggregateRelocationCoordinator {
         }
     }
 
-    /**
-     * Publishes the source-cleanup completion root without changing ownership,
-     * generations, membership or capacity. Previous roots remain available to
-     * retention-based cleanup after the authority reference changes.
-     */
-    public CompletionStage<Published> completeSourceCleanup(
-        Published published,
-        byte[] completedRoot,
-        ZLinkStoreCancellation cancellation) {
-        Objects.requireNonNull(published, "published");
-        Objects.requireNonNull(completedRoot, "completedRoot");
-        Objects.requireNonNull(cancellation, "cancellation");
-        return requireAggregateProgress(
-                published.fence(),
-                published.request().targetOwner(),
-                published.inventoryDigest(),
-                cancellation)
-            .thenCompose(marker -> {
-                List<Participant> completedParticipants = new ArrayList<>();
-                CompletionStage<Void> reads =
-                    CompletableFuture.completedFuture(null);
-                for (Participant original : canonical(
-                    published.request().participants())) {
-                    reads = reads.thenCompose(ignored -> authorityStore.read(
-                            original.authorityKey(),
-                            cancellation)
-                        .thenCompose(read -> {
-                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-                                return failed(new RelocationDataLostException(
-                                    "relocation authority disappeared before source cleanup: "
-                                        + original.authorityKey()));
-                            }
-                            var current =
-                                ZLinkCanonicalRelocationAuthorityStateCodec
-                                    .decode(snapshot.payload());
-                            if (current == null
-                                || !current.aggregateId().equals(
-                                    published.fence().aggregateId())
-                                || current.aggregateGeneration()
-                                    != published.fence().aggregateGeneration()
-                                || !current.targetOwnerId().equals(
-                                    published.request().targetOwner().ownerId())
-                                || current.targetOwnerLeaseGeneration()
-                                    != published.request().targetOwner()
-                                        .leaseGeneration()
-                                || !current.targetNodeRid().equals(
-                                    marker.request().targetDescriptor().rid())
-                                || current.targetNodeGeneration()
-                                    != marker.request()
-                                        .targetDescriptorLifecycleGeneration()
-                                || snapshot.objectGeneration()
-                                    != original.objectGeneration()
-                                || !ownerGenerationAdvanced(
-                                    original.authorityOwnerGeneration(),
-                                    snapshot.authorityOwnerGeneration())
-                                || !snapshot.ownerId().equals(
-                                    published.request().targetOwner().ownerId())
-                                || snapshot.ownerLeaseGeneration()
-                                    != published.request().targetOwner()
-                                        .leaseGeneration()) {
-                                return failed(new RelocationDataLostException(
-                                    "relocation authority has a different completion fence: "
-                                        + original.authorityKey()));
-                            }
-                            completedParticipants.add(new Participant(
-                                original.authorityKey(),
-                                original.objectKind(),
-                                snapshot.objectGeneration(),
-                                snapshot.authorityOwnerGeneration(),
-                                snapshot.storeVersion(),
-                                ZLinkAuthorityGenerationTransition.PRESERVE,
-                                snapshot.payload(),
-                                new byte[0]));
-                            return CompletableFuture.completedFuture(null);
-                        }));
-                }
-                return reads.thenCompose(ignored -> {
-                    boolean advanced = !marker.progress().reference().equals(
-                            published.stored().reference())
-                        || marker.progress().checksumCrc32c()
-                            != published.stored().checksumCrc32c();
-                    CompletionStage<Root> root = advanced
-                        ? readRoot(
-                                marker.progress().reference(),
-                                marker.progress().checksumCrc32c(),
-                                cancellation)
-                        : CompletableFuture.completedFuture(new Root(
-                            completedRoot,
-                            published.inventoryDigest()));
-                    return root.thenCompose(authoritative -> {
-                        if (!Arrays.equals(
-                                authoritative.inventoryDigest(),
-                                published.inventoryDigest())) {
-                            return failed(new RelocationDataLostException(
-                                "source cleanup root inventory digest differs"));
-                        }
-                        Request completion = new Request(
-                            published.request().aggregateId(),
-                            published.fence().aggregateGeneration(),
-                            completedParticipants,
-                            authoritative.payload(),
-                            published.request().targetDescriptor(),
-                            published.request()
-                                .targetDescriptorLifecycleGeneration(),
-                            new ZLinkPlacementCapacityBundle(
-                                0, 0, Optional.empty()),
-                            published.request().targetOwner());
-                        return stageRoot(
-                                completion,
-                                authoritative.inventoryDigest(),
-                                cancellation)
-                            .thenCompose(staged -> {
-                                var nextProgress = new ZLinkAggregateProgress(
-                                    staged.stored().reference(),
-                                    staged.stored().checksumCrc32c(),
-                                    8,
-                                    true,
-                                    authoritative.payload() == null
-                                        ? 0
-                                        : ZLinkServiceRelocationEnvelopeCodec
-                                            .decode(authoritative.payload())
-                                            .terminalCompletions().size(),
-                                    authoritative.payload() == null
-                                        ? 0
-                                        : ZLinkServiceRelocationEnvelopeCodec
-                                            .decode(authoritative.payload())
-                                            .pendingRelayCount());
-                                return authorityStore
-                                    .compareExchangeAggregateProgress(
-                                        published.fence(),
-                                        marker.storeVersion(),
-                                        nextProgress,
-                                        cancellation)
-                                    .thenCompose(result -> {
-                                        CompletionStage<ZLinkAggregateProgressSnapshot>
-                                            selected;
-                                        if (result
-                                            instanceof ZLinkAggregateProgressStored stored) {
-                                            selected = CompletableFuture
-                                                .completedFuture(stored.snapshot());
-                                        } else {
-                                            selected = authorityStore
-                                                .readAggregateProgress(
-                                                    published.fence(),
-                                                    cancellation)
-                                                .thenCompose(current ->
-                                                    current.isPresent()
-                                                        && current.get().progress()
-                                                            .reference().equals(
-                                                                nextProgress.reference())
-                                                        && current.get().progress()
-                                                            .checksumCrc32c()
-                                                            == nextProgress
-                                                                .checksumCrc32c()
-                                                        ? CompletableFuture
-                                                            .completedFuture(
-                                                                current.get())
-                                                        : failed(
-                                                            new RelocationDataLostException(
-                                                                "source cleanup marker CAS conflicted")));
-                                        }
-                                        return selected.thenApply(selectedMarker -> {
-                                            Map<String, Long> generations =
-                                                new LinkedHashMap<>();
-                                            for (Participant participant :
-                                                completedParticipants) {
-                                                generations.put(
-                                                    participant.authorityKey(),
-                                                    participant.authorityOwnerGeneration());
-                                            }
-                                            return new Published(
-                                                    published.fence(),
-                                                    selectedMarker.progress()
-                                                            .reference().equals(
-                                                                staged.stored()
-                                                                    .reference())
-                                                        ? staged.stored()
-                                                        : new ZLinkRelocationStored(
-                                                            selectedMarker.progress()
-                                                                .reference(),
-                                                            selectedMarker.progress()
-                                                                .checksumCrc32c(),
-                                                            published.stored()
-                                                                .expiresAt(),
-                                                            published.stored()
-                                                                .storeNow()),
-                                                    completion,
-                                                    authoritative.inventoryDigest(),
-                                                    generations);
-                                        });
-                                    });
-                            });
-                    });
-                });
-            });
-    }
-
     private CompletionStage<Prepared> prepareAuthority(
         Request request,
         byte[] digest,
         ZLinkRelocationStored stored,
         ZLinkStoreCancellation cancellation) {
-        return prepareAuthority(
-            request, digest, stored, cancellation, null);
-    }
-
-    private CompletionStage<Prepared> prepareAuthority(
-        Request request,
-        byte[] digest,
-        ZLinkRelocationStored stored,
-        ZLinkStoreCancellation cancellation,
-        Integer phaseOverride) {
         List<ZLinkAggregateParticipant> mutations = new ArrayList<>();
-        boolean sourceCleanupCompleted = request.participants().stream()
-                .allMatch(value -> value.ownerTransition()
-                    == ZLinkAuthorityGenerationTransition.PRESERVE)
-                && request.capacityBundle().actorSlots() == 0
-                && request.capacityBundle().spotSlots() == 0;
-        int phase = phaseOverride == null
-            ? sourceCleanupCompleted ? 8 : 4
-            : phaseOverride;
         for (Participant participant : canonical(request.participants())) {
             byte[] authorityPayload =
                 ZLinkCanonicalRelocationAuthorityStateCodec.publish(
                     participant.applicationAuthorityPayload(),
                     request,
                     participant.ownerTransition(),
-                    stored,
-                    phase);
+                    stored);
             mutations.add(new ZLinkAggregateParticipant(
                 participant.authorityKey(),
                 participant.objectGeneration(),
@@ -2029,51 +1154,6 @@ public final class ZLinkAggregateRelocationCoordinator {
                     ? CompletableFuture.completedFuture(marker)
                     : failed(new RelocationDataLostException(
                         "aggregate progress marker fence differs"));
-            });
-    }
-
-    private CompletionStage<ZLinkAggregateProgressSnapshot>
-        findAggregateProgress(
-            UUID aggregateId,
-            ZLinkStoreCancellation cancellation) {
-        return authorityStore.listAggregateProgress(cancellation)
-            .thenCompose(markers -> {
-                List<ZLinkAggregateProgressSnapshot> matches = markers.stream()
-                    .filter(value -> value.fence().aggregateId().equals(
-                        aggregateId))
-                    .toList();
-                return matches.size() == 1
-                    ? CompletableFuture.completedFuture(matches.getFirst())
-                    : failed(new RelocationDataLostException(
-                        matches.isEmpty()
-                            ? "aggregate progress marker is missing"
-                            : "aggregate progress marker is ambiguous"));
-            });
-    }
-
-    private CompletionStage<ZLinkAggregateFence> resolveAggregateFence(
-        List<ExpectedParticipant> participants,
-        ZLinkLocationOwnerToken targetOwner,
-        ZLinkStoreCancellation cancellation) {
-        Set<String> expectedKeys = participants.stream()
-            .map(ExpectedParticipant::authorityKey)
-            .collect(Collectors.toSet());
-        return authorityStore.listAggregateProgress(cancellation)
-            .thenCompose(markers -> {
-                List<ZLinkAggregateProgressSnapshot> matches = markers.stream()
-                    .filter(value -> value.request().targetOwner().equals(
-                        targetOwner))
-                    .filter(value -> value.request().participants().stream()
-                        .map(ZLinkAggregateParticipant::authorityKey)
-                        .collect(Collectors.toSet())
-                        .equals(expectedKeys))
-                    .toList();
-                return matches.size() == 1
-                    ? CompletableFuture.completedFuture(matches.getFirst().fence())
-                    : failed(new RelocationDataLostException(
-                        matches.isEmpty()
-                            ? "aggregate progress marker cannot be resolved"
-                            : "aggregate progress marker is ambiguous"));
             });
     }
 

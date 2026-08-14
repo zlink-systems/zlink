@@ -867,8 +867,7 @@ int main ()
       session_seal.session_owner_id,
       session_seal.session_owner_lease_generation,
       session_seal.session_routing_id,
-      session_seal.binding_generation,
-      13};
+      session_seal.binding_generation};
     assert (protocol::decode_session_relocation_sealed (
               protocol::encode_session_relocation_sealed (
                 session_sealed))
@@ -886,7 +885,7 @@ int main ()
       {0xb1},
       9,
       {protocol::session_relocation_route_action_t::commit,
-       10, 11, {0xd1}, 12, 13, 0}};
+       10, 11, {0xd1}, 12, 0}};
     const auto encoded_session_route =
       protocol::encode_session_relocation_route (session_route);
     assert (encoded_session_route == from_hex (
@@ -897,8 +896,8 @@ int main ()
       "056163746f72000000000000000601a1"
       "0000000000000007056f776e6572"
       "000000000000000801b10000000000000009"
-      "010022000000000000000a000000000000000b01d1"
-      "000000000000000c000000000000000d"));
+      "01001a000000000000000a000000000000000b01d1"
+      "000000000000000c"));
     assert (protocol::decode_session_relocation_route (
               encoded_session_route)
             == session_route);
@@ -907,36 +906,18 @@ int main ()
       protocol::relocation_role_t::source;
     abort_session_route.route = {
       protocol::session_relocation_route_action_t::abort,
-      0, 0, {}, 0, 0, 10};
+      0, 0, {}, 0, 10};
     assert (protocol::decode_session_relocation_route (
               protocol::encode_session_relocation_route (
                 abort_session_route))
             == abort_session_route);
 
-    const protocol::session_relocation_routed_t session_routed{
-      {1, 2},
-      {"coord", 3, {0xc1}, 4, "v5"},
-      {"actor", 6},
-      {0xa1},
-      7,
-      "owner",
-      8,
-      {0xb1},
-      9,
-      protocol::session_relocation_route_action_t::commit,
-      protocol::session_relocation_route_result_t::applied,
-      11,
-      13};
-    const auto encoded_session_routed =
-      protocol::encode_session_relocation_routed (session_routed);
-    assert (protocol::decode_session_relocation_routed (
-              encoded_session_routed)
-            == session_routed);
     {
         std::ifstream fixture (
           ZLINK_SESSION_RELOCATION_BARRIER_GOLDEN_PATH);
         assert (fixture.good ());
         const auto vectors = nlohmann::json::parse (fixture);
+        assert (vectors.at ("canonical").size () == 4);
         const auto &identity = vectors.at ("identity");
         const auto ordinal = [&identity] (const char *name) {
             return std::stoull (
@@ -999,8 +980,7 @@ int main ()
           seal.session_owner_id,
           seal.session_owner_lease_generation,
           seal.session_routing_id,
-          seal.binding_generation,
-          ordinal ("lastAcceptedSessionSequence")};
+          seal.binding_generation};
         const protocol::session_relocation_route_t commit{
           relocation,
           coordinator,
@@ -1017,22 +997,7 @@ int main ()
            ordinal ("targetAuthorityOwnerGeneration"),
            bytes ("targetNodeRid"),
            ordinal ("targetNodeGeneration"),
-           ordinal ("lastAcceptedSessionSequence"),
            0}};
-        const protocol::session_relocation_routed_t committed{
-          relocation,
-          coordinator,
-          commit.actor,
-          seal.session_owner_node_routing_id,
-          seal.session_owner_node_generation,
-          seal.session_owner_id,
-          seal.session_owner_lease_generation,
-          seal.session_routing_id,
-          seal.binding_generation,
-          protocol::session_relocation_route_action_t::commit,
-          protocol::session_relocation_route_result_t::applied,
-          ordinal ("targetAuthorityOwnerGeneration"),
-          ordinal ("lastAcceptedSessionSequence")};
         auto abort = commit;
         abort.sender_role = protocol::relocation_role_t::source;
         abort.route = {
@@ -1041,13 +1006,7 @@ int main ()
           0,
           {},
           0,
-          0,
           ordinal ("sourceAuthorityOwnerGeneration")};
-        auto aborted = committed;
-        aborted.action =
-          protocol::session_relocation_route_action_t::abort;
-        aborted.current_authority_owner_generation =
-          ordinal ("sourceAuthorityOwnerGeneration");
 
         assert (protocol::encode_session_relocation_seal (seal)
                 == canonical ("sessionRelocationSeal"));
@@ -1055,12 +1014,8 @@ int main ()
                 == canonical ("sessionRelocationSealed"));
         assert (protocol::encode_session_relocation_route (commit)
                 == canonical ("sessionRelocationRouteCommit"));
-        assert (protocol::encode_session_relocation_routed (committed)
-                == canonical ("sessionRelocationRoutedCommit"));
         assert (protocol::encode_session_relocation_route (abort)
                 == canonical ("sessionRelocationRouteAbort"));
-        assert (protocol::encode_session_relocation_routed (aborted)
-                == canonical ("sessionRelocationRoutedAbort"));
     }
     {
         auto malformed = encoded_session_route;
@@ -1077,13 +1032,10 @@ int main ()
     }
 
     const std::vector<std::string_view> relocation_control_golden{
-      "5a4d011e08000000000000000400000000000000050000000000000006010b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33066e6f64652d62000000000000000c0c7461726765742d6f776e657200000000000000080200170673706f742d310000000000000009000000000000000a0200000000000000020000000000000080000000000000008c0200000008000000000000000b0300000008000000000000000c0400000008000000000000000d0500000011000f72656c6f636174696f6e2d726f6f7406000000041234567808000000080000000000000001090000003400000002000000000000000100000000000000020000000000000000000000000000000200000000000000000000000000000000",
-      "5a4d011f000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d3301000000000000000100000000000000010d010024066e6f64652d61000000000000000b0c736f757263652d6f776e6572000000000000000900000000000000000000000000000000000000000000000401000000000000000400000000000000050200170673706f742d310000000000000009000000000000000a0000000000000000",
-      "5a4d0120000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d330200000000000000010000000000000002",
-      "5a4d0122000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d330101000000020000000000000001000000000000000200000000000000020000000000000000",
-      "5a4d0123000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33010c736f757263652d6f776e65720000000000000009066e6f64652d61000000000000000b01",
-      "5a4d012800000000000000000400000000000000050000000000000006010b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33066e6f64652d62000000000000000c0c7461726765742d6f776e65720000000000000008010200170673706f742d310000000000000009000000000000000a066e6f64652d61000000000000000b0000000000000002000000000000008000000002000000000000000101000000000000000000020000000000000080000000000000000201000000000000000000000000000000000000010015000f72656c6f636174696f6e2d726f6f74123456780000000000000001",
-      "5a4d012900000000000000000400000000000000050000000000000006010b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33066e6f64652d62000000000000000c0c7461726765742d6f776e65720000000000000008000000000000000d00000002000000000000000101000000000000000000020000000000000080000000000000000201000000000000000000000000000000000000"};
+      "5a4d011e000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33066e6f64652d62000000000000000c0c7461726765742d6f776e657200000000000000080200170673706f742d310000000000000009000000000000000a02",
+      "5a4d011f000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33010200170673706f742d310000000000000009000000000000000a06010021016e00000000000000010e726571756573742d736f757263650000000000000006000000000000000000000000000000002a000000030008000000000000006304726f6f6d0000000000000001016d00000000000000020000000000000007000000000000000101000000290b4368617452657175657374106170706c69636174696f6e2f6a736f6e000000087b226964223a317d",
+      "5a4d0122000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33010200170673706f742d310000000000000009000000000000000a",
+      "5a4d0128000000000000000004000000000000000500000000000000060b636f6f7264696e61746f720000000000000007066e6f64652d61000000000000000b000773746f72652d33066e6f64652d62000000000000000c0c7461726765742d6f776e65720000000000000008010200170673706f742d310000000000000009000000000000000a066e6f64652d61000000000000000b010015000f72656c6f636174696f6e2d726f6f74123456780000000000000001"};
     std::vector<protocol::relocation_control_t> decoded_controls;
     for (const auto fixture : relocation_control_golden) {
         const auto bytes = from_hex (fixture);
@@ -1102,140 +1054,30 @@ int main ()
         }
         assert (rejected);
     }
-    {
-        auto ready = std::get<protocol::relocation_ready_t> (
-          decoded_controls.front ());
-        ready.participant_progress.front ().replay_cursor = 3;
-        bool rejected = false;
-        try {
-            static_cast<void> (
-              protocol::encode_relocation_control (ready));
-        }
-        catch (const protocol::service_wire_error_t &) {
-            rejected = true;
-        }
-        assert (rejected);
-    }
-    {
-        auto ready = std::get<protocol::relocation_ready_t> (
-          decoded_controls.front ());
-        ready.participants.push_back (
-          protocol::relocation_participant_t{
-            .participant_id = 1,
-            .kind = protocol::relocation_participant_kind_t::object_mailbox,
-            .allowance_messages = 2,
-            .allowance_bytes = 128});
-        bool rejected = false;
-        try {
-            static_cast<void> (
-              protocol::encode_relocation_control (ready));
-        }
-        catch (const protocol::service_wire_error_t &) {
-            rejected = true;
-        }
-        assert (rejected);
-    }
-    {
-        auto data = std::get<protocol::relocation_data_t> (
-          decoded_controls[1]);
-        for (std::uint8_t phase = 0; phase <= 9; ++phase) {
-            data.phase = static_cast<protocol::relocation_phase_t> (phase);
-            const auto encoded = protocol::encode_relocation_control (data);
-            assert (std::get<protocol::relocation_data_t> (
-                      protocol::decode_relocation_control (encoded))
-                    == data);
-        }
-        data.phase = static_cast<protocol::relocation_phase_t> (10);
-        bool rejected = false;
-        try {
-            static_cast<void> (
-              protocol::encode_relocation_control (data));
-        }
-        catch (const protocol::service_wire_error_t &) {
-            rejected = true;
-        }
-        assert (rejected);
-    }
-    {
-        auto ready_wire = from_hex (relocation_control_golden.front ());
-        const std::vector<std::uint8_t> second_tlv{
-          3, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 12};
-        const auto position = std::search (
-          ready_wire.begin (), ready_wire.end (),
-          second_tlv.begin (), second_tlv.end ());
-        assert (position != ready_wire.end ());
-        *position = 2;
-        bool rejected = false;
-        try {
-            static_cast<void> (
-              protocol::decode_relocation_control (ready_wire));
-        }
-        catch (const protocol::service_wire_error_t &) {
-            rejected = true;
-        }
-        assert (rejected);
-    }
-    {
-        auto ready = std::get<protocol::relocation_ready_t> (
-          decoded_controls.front ());
-        ready.role = protocol::relocation_role_t::source;
-        ready.offered_messages = 0;
-        ready.offered_bytes = 0;
-        ready.participants.resize (2049);
-        for (std::size_t index = 0; index < ready.participants.size (); ++index) {
-            ready.participants[index].participant_id = index + 1;
-            ready.participants[index].kind =
-              protocol::relocation_participant_kind_t::object_mailbox;
-        }
-        bool rejected = false;
-        try {
-            static_cast<void> (protocol::encode_relocation_control (ready));
-        }
-        catch (const protocol::service_wire_error_t &) {
-            rejected = true;
-        }
-        assert (rejected);
-    }
-    {
-        // Bound-session participant identities round-trip the trailing
-        // lastAcceptedSessionSequence introduced by framework-service-v12,
-        // both as the zero ordinal and as a resumed nonzero cursor.
-        auto reserved = std::get<protocol::relocation_reserved_t> (
-          decoded_controls.back ());
-        protocol::relocation_participant_t bound;
-        bound.participant_id = 1;
-        bound.kind = protocol::relocation_participant_kind_t::bound_session;
-        bound.session_owner_node_routing_id = {'n', 'o', 'd', 'e'};
-        bound.session_owner_node_generation = 7;
-        bound.session_owner_id = "session-owner";
-        bound.session_owner_lease_generation = 9;
-        bound.session_routing_id = {'s', 'e', 's', 's'};
-        bound.binding_generation = 11;
-        bound.last_accepted_session_sequence = 0;
-        bound.allowance_messages = 2;
-        bound.allowance_bytes = 128;
-        auto resumed = bound;
-        resumed.participant_id = 2;
-        resumed.last_accepted_session_sequence = 42;
-        reserved.participants = {bound, resumed};
-        const auto encoded = protocol::encode_relocation_control (reserved);
-        assert (std::get<protocol::relocation_reserved_t> (
-                  protocol::decode_relocation_control (encoded))
-                == reserved);
-        // The identity blob honours the u16 length discipline: trailing bytes
-        // after the sequence are rejected.
-        auto truncated = encoded;
-        truncated.pop_back ();
-        bool rejected = false;
-        try {
-            static_cast<void> (
-              protocol::decode_relocation_control (truncated));
-        }
-        catch (const protocol::service_wire_error_t &) {
-            rejected = true;
-        }
-        assert (rejected);
-    }
+    assert (std::holds_alternative<protocol::relocation_ready_t> (
+      decoded_controls[0]));
+    assert (std::holds_alternative<protocol::relocation_data_t> (
+      decoded_controls[1]));
+    assert (std::holds_alternative<protocol::relocation_cutover_t> (
+      decoded_controls[2]));
+    assert (std::holds_alternative<protocol::relocation_prepare_t> (
+      decoded_controls[3]));
+    const auto &ready = std::get<protocol::relocation_ready_t> (
+      decoded_controls[0]);
+    const auto &data = std::get<protocol::relocation_data_t> (
+      decoded_controls[1]);
+    const auto &cutover = std::get<protocol::relocation_cutover_t> (
+      decoded_controls[2]);
+    const auto &prepare = std::get<protocol::relocation_prepare_t> (
+      decoded_controls[3]);
+    assert (ready.sender_role == protocol::relocation_role_t::target);
+    assert (data.sender_role == protocol::relocation_role_t::source);
+    assert (data.record.kind
+            == protocol::frozen_record_kind_t::spot_request);
+    assert (cutover.sender_role == protocol::relocation_role_t::source);
+    assert (prepare.initiator_role == protocol::relocation_role_t::source);
+    assert (prepare.root.has_value ());
+    assert (prepare.root->reference == "relocation-root");
 
     std::vector<std::vector<std::uint8_t>> frozen_records;
     frozen_records.push_back (make_frozen_record (
@@ -1564,13 +1406,11 @@ int main ()
         auto data = std::get<protocol::relocation_data_t> (
           decoded_controls[1]);
         auto frozen = protocol::decode_frozen_record (frozen_records[1]);
-        data.source = frozen.source;
-        data.frozen_record = frozen;
+        data.record = frozen;
         const auto encoded = protocol::encode_relocation_control (data);
         const auto decoded = std::get<protocol::relocation_data_t> (
           protocol::decode_relocation_control (encoded));
-        assert (decoded.frozen_record == data.frozen_record);
-        assert (decoded.source == data.source);
+        assert (decoded.record == data.record);
     }
     for (auto invalid : std::vector<std::vector<std::uint8_t>>{
            [&] {

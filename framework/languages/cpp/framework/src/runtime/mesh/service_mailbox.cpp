@@ -45,43 +45,50 @@ service_mailbox_t::domain (service_mailbox_domain_t value) const
 
 bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record)
 {
+    return try_enqueue_result (std::move (record))
+           == service_mailbox_enqueue_result_t::accepted;
+}
+
+service_mailbox_enqueue_result_t
+service_mailbox_t::try_enqueue_result (service_mailbox_record_t &&record)
+{
     if (record.owner.empty () || record.parts.empty ()) {
         throw std::invalid_argument (
           "service mailbox record requires an owner and retained payload");
     }
     const auto retained = retained_bytes (record);
     if (retained.overflow) {
-        return false;
+        return service_mailbox_enqueue_result_t::capacity_exceeded;
     }
     std::lock_guard lock (_mutex);
     auto &target = domain (record.domain);
     if (_closed) {
-        return false;
+        return service_mailbox_enqueue_result_t::closed;
     }
     const auto owner = record.owner;
     auto &queue = target.owners[owner];
     const auto used_messages = record.domain == service_mailbox_domain_t::application
-                                  ? (queue.messages > std::numeric_limits<std::size_t>::max ()
-                                       - queue.active_messages
-                                       ? std::numeric_limits<std::size_t>::max ()
-                                       : queue.messages + queue.active_messages)
-                                  : (target.messages > std::numeric_limits<std::size_t>::max ()
-                                       - target.active_messages
-                                       ? std::numeric_limits<std::size_t>::max ()
-                                       : target.messages + target.active_messages);
+      ? (queue.messages > std::numeric_limits<std::size_t>::max ()
+           - queue.active_messages
+           ? std::numeric_limits<std::size_t>::max ()
+           : queue.messages + queue.active_messages)
+      : (target.messages > std::numeric_limits<std::size_t>::max ()
+           - target.active_messages
+           ? std::numeric_limits<std::size_t>::max ()
+           : target.messages + target.active_messages);
     const auto used_bytes = record.domain == service_mailbox_domain_t::application
-                              ? (queue.bytes > std::numeric_limits<std::size_t>::max ()
-                                   - queue.active_bytes
-                                   ? std::numeric_limits<std::size_t>::max ()
-                                   : queue.bytes + queue.active_bytes)
-                              : (target.bytes > std::numeric_limits<std::size_t>::max ()
-                                   - target.active_bytes
-                                   ? std::numeric_limits<std::size_t>::max ()
-                                   : target.bytes + target.active_bytes);
+      ? (queue.bytes > std::numeric_limits<std::size_t>::max ()
+           - queue.active_bytes
+           ? std::numeric_limits<std::size_t>::max ()
+           : queue.bytes + queue.active_bytes)
+      : (target.bytes > std::numeric_limits<std::size_t>::max ()
+           - target.active_bytes
+           ? std::numeric_limits<std::size_t>::max ()
+           : target.bytes + target.active_bytes);
     if (used_messages >= target.message_budget
         || used_bytes > target.byte_budget
         || retained.bytes > target.byte_budget - used_bytes) {
-        return false;
+        return service_mailbox_enqueue_result_t::capacity_exceeded;
     }
     queue.bytes += retained.bytes;
     ++queue.messages;
@@ -91,7 +98,7 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record)
     if (!queue.claimed && target.indexed.insert (owner).second) {
         target.ready.push_back (owner);
     }
-    return true;
+    return service_mailbox_enqueue_result_t::accepted;
 }
 
 std::optional<service_mailbox_claim_t> service_mailbox_t::try_claim (

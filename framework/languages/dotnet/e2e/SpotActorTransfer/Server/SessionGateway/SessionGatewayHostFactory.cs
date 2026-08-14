@@ -22,7 +22,7 @@ internal static class SessionGatewayHostFactory
         {
             // This E2E host is not started inside a memory-limited container.
             // Keep the default Auto HWM deterministic across execution hosts.
-            framework.ConfigureInboundDispatch().ProcessMemoryLimitBytes =
+            framework.ConfigureCoreHwm().CoreHwmMemoryLimitBytes =
                 1UL * 1024 * 1024 * 1024;
             framework.AddLocationStore(new ZLinkRedisLocationStore(redis => { redis.ConnectionString = options.RedisEndpoint; redis.KeyPrefix = options.RedisKeyPrefix; }));
             var mesh27 = framework.AddRouteMesh(SpotActorTransferNames.Mesh)

@@ -1,7 +1,7 @@
 // MON-B1: Remote target 일부가 받지 못해도 topology status를 delivery 결과로 바꾸지 않는다 시나리오를 검증한다.
 import type { ClientOptions } from '../Support/client-options';
 import { getJson, postJson } from '../../../http-client';
-import { readRouteStatus, waitForHostStatus } from '../Support/public-status';
+import { readRouteStatus } from '../Support/public-status';
 import { ensure } from '../Support/scenario-assert';
 
 interface SpotCreateRes {
@@ -38,17 +38,6 @@ export async function runMonB1(options: ClientOptions): Promise<void> {
       containsAnyGroups: [],
       timeoutMilliseconds: 10000
     });
-    const blockedHost = await waitForHostStatus(
-      blockedUrl,
-      (status) => status.inboundDispatch.applicationReceivePaused,
-      'MON-B1 blocked target did not expose Application receive paused=true.',
-      10000
-    );
-    ensure(
-      BigInt(blockedHost.inboundDispatch.applicationHwmBytes) < 16_384n,
-      'MON-B1 blocker payload was not larger than the configured public HWM.'
-    );
-
     const before = await readRouteStatus(options.serviceUrl);
     await postJson(options.serviceUrl, '/admin/publish', { marker });
 

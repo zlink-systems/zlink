@@ -37,13 +37,15 @@ public final class ZLinkTestAdmissionFactory {
         ZLinkBackendObject,
         ZLinkBackendAdmissionKey,
         BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>> create() {
-        return ZLinkAdmissionRuntime.factory(
-            backend -> ((Backend) backend).admissionSource(),
-            backend -> ((Backend) backend).admissionTimeout(),
-            backend -> ((Backend) backend).admissionPendingCapacity(),
-            (backend, handler) ->
-                ((Backend) backend).setAdmissionReadyHandler(handler),
-            (backend, handler) ->
-                ((Backend) backend).setAdmissionShutdownHandler(handler));
+        return (backend, key) -> (submission, cleanup) -> {
+            try {
+                return submission.get()
+                    ? java.util.concurrent.CompletableFuture.completedFuture(null)
+                    : java.util.concurrent.CompletableFuture.failedFuture(
+                        new IllegalStateException("one-way submission was not admitted"));
+            } finally {
+                cleanup.run();
+            }
+        };
     }
 }

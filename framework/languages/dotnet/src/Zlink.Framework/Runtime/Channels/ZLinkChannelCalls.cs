@@ -21,23 +21,24 @@ internal sealed class ZLinkPublishCall(
             ZLinkFlowOrigin.Application,
             runtime.Flow.CaptureEnabled);
         cancellationToken.ThrowIfCancellationRequested();
-        var (bundle, publisher, envelopedMsg) = Build();
-        var result = await (bundle.Submitter
-                    ?? throw new InvalidOperationException(
-                        "ZLink publish submitter is not initialized."))
-                .SubmitAsync(
-                    envelopedMsg,
-                    pending => publisher.Publish(topic)
-                        .Messages(pending)
-                        .Flags(SendFlags.DontWait)
-                        .Submit(),
-                    cancellationToken)
-                .ConfigureAwait(false);
-        ZLinkOneWaySubmitOutcome.EnsureAccepted(result, "Fanout publish");
+        var (publisher, envelopedMsg) = Build();
+        try
+        {
+            await publisher.Publish(topic).Messages(envelopedMsg)
+                .Async(cancellationToken).ConfigureAwait(false);
+        }
+        catch (ZlinkSubmitException failure)
+        {
+            throw ZLinkRequestFailureMapper.CreateSubmitException(
+                failure, "Fanout publish");
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(envelopedMsg);
+        }
     }
 
-    private (ZLinkChannelRuntimeBundle Bundle, IPubSocket Publisher,
-        IReadOnlyList<Message> Message) Build()
+    private (IPubSocket Publisher, IReadOnlyList<Message> Message) Build()
     {
         var bundle = runtime.GetPublisherBundle(channelName);
         var publisher = (IPubSocket)bundle.Socket;
@@ -51,6 +52,6 @@ internal sealed class ZLinkPublishCall(
             includeDeadline: false);
         var envelopedMsg = ZLinkEnvelopeCodec.EncodeParts(
             header, message, message?.GetType(), registration.Codecs);
-        return (bundle, publisher, envelopedMsg);
+        return (publisher, envelopedMsg);
     }
 }

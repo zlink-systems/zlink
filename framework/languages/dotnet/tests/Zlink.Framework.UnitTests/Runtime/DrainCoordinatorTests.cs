@@ -947,8 +947,7 @@ public sealed class DrainCoordinatorTests
     {
         var executor = new FakeDrainExecutor();
         var builder = Host.CreateApplicationBuilder();
-        builder.Services.AddZLinkFramework(options =>
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0);
+        builder.Services.AddZLinkFramework(_ => { });
         builder.Services.AddSingleton<IZLinkDrainExecutor>(executor);
         using var host = builder.Build();
         await host.StartAsync();
@@ -1179,6 +1178,36 @@ public sealed class DrainCoordinatorTests
     }
 
     [Fact]
+    public async Task Framework_Registration_Projects_And_Resets_Host_Capacity()
+    {
+        const ulong budgetBytes = 4 * 1024 * 1024;
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.AddZLinkFramework(options =>
+        {
+            options.ConfigureInboundDispatch().CoreHwmBudgetBytes = budgetBytes;
+        });
+        using var host = builder.Build();
+        await host.StartAsync();
+        var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
+
+        var before = runtime.Status.Capacity;
+        Assert.Equal(budgetBytes, before.CoreHwm.ConfiguredBudgetBytes);
+
+        runtime.ResetCapacityMetrics();
+        var after = runtime.Status.Capacity;
+
+        Assert.True(after.MeasurementEpoch > before.MeasurementEpoch);
+        Assert.Equal(
+            before.CoreHwm.EffectiveBudgetBytes,
+            after.CoreHwm.EffectiveBudgetBytes);
+
+        await host.StopAsync();
+        Assert.Equal(default, runtime.Status.Capacity);
+        Assert.Throws<InvalidOperationException>(
+            runtime.ResetCapacityMetrics);
+    }
+
+    [Fact]
     public void Legacy_Drain_Contracts_Are_Not_Public()
     {
         var contracts = typeof(IZLinkFrameworkRuntime).Assembly;
@@ -1197,7 +1226,6 @@ public sealed class DrainCoordinatorTests
         builder.Services.AddSingleton(sessionProbe);
         builder.Services.AddZLinkFramework(options =>
         {
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
             options.AddStreamNode("drain-stream")
                 .Bind($"tcp://127.0.0.1:{port}")
                 .AddSession<DrainSession>();
@@ -1252,7 +1280,6 @@ public sealed class DrainCoordinatorTests
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddZLinkFramework(options =>
         {
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
             options.AddStreamNode("drain-stream")
                 .Bind($"tcp://127.0.0.1:{port}")
                 .AddSession<DrainSession>();
@@ -1502,6 +1529,10 @@ public sealed class DrainCoordinatorTests
             CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException(
                 "The readiness check must not start observation.");
+
+        public void ResetCapacityMetrics() =>
+            throw new InvalidOperationException(
+                "The readiness check must not reset host-capacity metrics.");
 
         public ValueTask<ZLinkFrameworkRelocationResult> RelocateAsync(
             ZLinkFrameworkRelocationOptions options,

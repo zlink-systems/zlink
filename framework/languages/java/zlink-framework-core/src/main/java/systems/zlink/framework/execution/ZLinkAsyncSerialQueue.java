@@ -19,9 +19,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.time.Duration;
 import java.util.function.Supplier;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.relocation
     .ZLinkRetainedSerialQueueCommit;
 
+/**
+ * Serializes one logical owner's work and bounds only that owner's queued and
+ * claimed records. These reservations are independent from Core byte HWM and
+ * from the host-wide application-job supply authority.
+ */
 public final class ZLinkAsyncSerialQueue {
     public static final int DEFAULT_APPLICATION_MESSAGE_CAPACITY = 1024;
     public static final int DEFAULT_LIFECYCLE_MESSAGE_CAPACITY = 128;
@@ -66,7 +72,6 @@ public final class ZLinkAsyncSerialQueue {
     private long turnClaimedAtNanos;
     private RelocationState relocation;
     private boolean relocated;
-    private Runnable capacityAvailable = () -> { };
     private final List<CompletableFuture<Void>> quiescenceWaiters =
         new ArrayList<>();
 
@@ -394,10 +399,6 @@ public final class ZLinkAsyncSerialQueue {
         return true;
     }
 
-    public synchronized void onCapacityAvailable(Runnable callback) {
-        capacityAvailable = Objects.requireNonNull(callback, "callback");
-    }
-
     private CompletionStage<Void> enqueueAccepted(
         byte[] record,
         Supplier<CompletionStage<Void>> operation) {
@@ -551,6 +552,9 @@ public final class ZLinkAsyncSerialQueue {
     }
 
     private void release(Entry entry) {
+        if (entry.applicationJobOwnership != null) {
+            entry.applicationJobOwnership.close();
+        }
         if (entry.capacityReserved) {
             if (entry.lane == Lane.APPLICATION) {
                 applicationMessages--;
@@ -656,12 +660,12 @@ public final class ZLinkAsyncSerialQueue {
         CompletionStage<Void> gate = invoke(
             entry.operation,
             entry.result,
-            entry.flow);
+            entry.flow,
+            entry.applicationJobOwnership);
         gate.whenComplete((ignored, error) -> finish(entry));
     }
 
     private void finish(Entry entry) {
-        Runnable notify = null;
         List<CompletableFuture<Void>> quiescent = List.of();
         RelocationBoundary boundary = entry.relocationBoundary;
         boolean yieldToExecutor = false;
@@ -670,14 +674,7 @@ public final class ZLinkAsyncSerialQueue {
                 return;
             }
             active = null;
-            boolean wasApplicationFull = !canReserve(
-                Lane.APPLICATION,
-                fixedWorkByteCost);
             release(entry);
-            if (wasApplicationFull
-                && canReserve(Lane.APPLICATION, fixedWorkByteCost)) {
-                notify = capacityAvailable;
-            }
             yieldToExecutor = hasPending()
                 && ownerTimeBudgetNanos > 0
                 && System.nanoTime() - turnClaimedAtNanos >= ownerTimeBudgetNanos;
@@ -689,14 +686,6 @@ public final class ZLinkAsyncSerialQueue {
                 startNext();
             }
             quiescent = takeQuiescenceWaitersIfReady();
-        }
-        if (notify != null) {
-            try {
-                executor.execute(notify);
-            } catch (RuntimeException rejected) {
-                // Capacity notification is advisory. Queue terminal release
-                // has already happened and must not be lost on executor close.
-            }
         }
         if (yieldToExecutor) {
             try {
@@ -898,21 +887,13 @@ public final class ZLinkAsyncSerialQueue {
         }
         for (Entry entry : commit.entries) {
             RuntimeException failure = null;
-            Runnable capacityNotification = null;
             try {
                 entry.relocationRelease.run();
             } catch (RuntimeException error) {
                 failure = error;
             } finally {
-                boolean notify;
                 synchronized (this) {
-                    notify = releaseRelocatedCapacityLocked(entry);
-                    if (notify) {
-                        capacityNotification = capacityAvailable;
-                    }
-                }
-                if (capacityNotification != null) {
-                    executeAdvisory(capacityNotification);
+                    release(entry);
                 }
             }
             if (failure == null) {
@@ -928,16 +909,6 @@ public final class ZLinkAsyncSerialQueue {
         quiescent.forEach(waiter -> waiter.complete(null));
     }
 
-    private void executeAdvisory(Runnable action) {
-        try {
-            executor.execute(action);
-        } catch (RuntimeException rejected) {
-            // Capacity notification is advisory. The terminal result of the
-            // released entry must not be lost when the queue executor is
-            // concurrently shutting down.
-        }
-    }
-
     private boolean matches(RelocationSeal seal) {
         return seal != null
             && relocation != null
@@ -945,16 +916,11 @@ public final class ZLinkAsyncSerialQueue {
             && relocation.seal == seal;
     }
 
-    private boolean releaseRelocatedCapacityLocked(Entry entry) {
-        boolean wasFull = !canReserve(Lane.APPLICATION, fixedWorkByteCost);
-        release(entry);
-        return wasFull && canReserve(Lane.APPLICATION, fixedWorkByteCost);
-    }
-
     private CompletionStage<Void> invoke(
         Supplier<CompletionStage<Void>> operation,
         CompletableFuture<Void> result,
-        ZLinkFlowContext.State flow) {
+        ZLinkFlowContext.State flow,
+        ZLinkApplicationJobContext.QueuedOwnership applicationJobOwnership) {
         CompletableFuture<Void> gate = new CompletableFuture<>();
         try {
             executor.execute(() -> {
@@ -969,7 +935,10 @@ public final class ZLinkAsyncSerialQueue {
                              new SerialTurnCarrier(new SerialTurn(this, gate)));
                      ZLinkFlowContext.Scope ignored = flow == null
                          ? () -> { }
-                         : ZLinkFlowContext.enter(flow)) {
+                         : ZLinkFlowContext.enter(flow);
+                     ZLinkApplicationJobContext.Scope applicationJob =
+                         ZLinkApplicationJobContext.enterQueued(
+                             applicationJobOwnership)) {
                     CompletionStage<Void> execution = Objects.requireNonNull(
                         operation.get(), "operation result");
                     execution.whenComplete((value, error) -> {
@@ -1450,6 +1419,52 @@ public final class ZLinkAsyncSerialQueue {
         }
 
         @Override
+        public boolean canAbort() {
+            synchronized (owner) {
+                return !completed.get()
+                    && (owner.relocation != null
+                            && owner.relocation.retained == this
+                        || owner.relocation == null
+                            && owner.relocated
+                            && entries != null);
+            }
+        }
+
+        @Override
+        public void abort() {
+            synchronized (owner) {
+                if (!canAbort()) {
+                    throw new IllegalStateException(
+                        "serial queue retained relocation cannot be restored");
+                }
+                List<Entry> restored;
+                if (owner.relocation != null) {
+                    restored = new ArrayList<>(
+                        owner.relocation.captured.size()
+                            + owner.relocation.held.size());
+                    restored.addAll(owner.relocation.captured);
+                    restored.addAll(owner.relocation.held);
+                    owner.relocation = null;
+                } else {
+                    restored = entries;
+                    owner.relocated = false;
+                }
+                entries = null;
+                durableCut = false;
+                for (Entry entry : restored) {
+                    if (entry.lane == Lane.LIFECYCLE) {
+                        owner.lifecyclePending.addLast(entry);
+                    } else if (entry.continuation) {
+                        owner.continuationPending.addLast(entry);
+                    } else {
+                        owner.applicationPending.addLast(entry);
+                    }
+                }
+                owner.startNext();
+            }
+        }
+
+        @Override
         public void complete() {
             owner.completeRelocationCommit(this);
         }
@@ -1526,6 +1541,8 @@ public final class ZLinkAsyncSerialQueue {
         private final Runnable relocationRelease;
         private final CompletableFuture<Void> result;
         private final ZLinkFlowContext.State flow;
+        private final ZLinkApplicationJobContext.QueuedOwnership
+            applicationJobOwnership;
         private final RelocationBoundary relocationBoundary;
         private final Lane lane;
         private final long byteCost;
@@ -1550,6 +1567,8 @@ public final class ZLinkAsyncSerialQueue {
             this.relocationRelease = relocationRelease;
             this.result = result;
             this.flow = flow;
+            this.applicationJobOwnership =
+                ZLinkApplicationJobContext.transferToQueuedJob();
             this.relocationBoundary = relocationBoundary;
             this.lane = lane;
             this.byteCost = byteCost;
@@ -1576,6 +1595,8 @@ public final class ZLinkAsyncSerialQueue {
             this.relocationRelease = relocationRelease;
             this.result = result;
             this.flow = flow;
+            this.applicationJobOwnership =
+                ZLinkApplicationJobContext.transferToQueuedJob();
             this.relocationBoundary = relocationBoundary;
             this.lane = lane;
             this.byteCost = byteCost;

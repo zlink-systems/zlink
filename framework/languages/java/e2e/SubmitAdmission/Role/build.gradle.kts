@@ -9,7 +9,7 @@ dependencies {
     implementation("systems.zlink:zlink-framework-core:0.10.0")
     implementation("systems.zlink:zlink-framework-spring-boot-starter:0.10.0")
     val zlinkBindingVersion = providers.environmentVariable("ZLINK_EXPECTED_BINDING_VERSION")
-        .orElse("0.11.0")
+        .orElse("0.11.1")
         .get()
     implementation("systems.zlink:zlink:$zlinkBindingVersion")
     implementation("org.springframework.boot:spring-boot-starter:3.5.14")

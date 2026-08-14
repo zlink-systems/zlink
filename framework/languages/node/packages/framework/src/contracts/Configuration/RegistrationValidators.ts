@@ -49,37 +49,7 @@ export function validateFrameworkRegistration(
   validateRouteChannels(registration, peerLocationConfigured);
   validateStreamNodes(registration);
   validateWorkerOptions(registration.worker);
-  validateInboundDispatchListenerBounds(registration);
   validateLocationRegistration(registration);
-}
-
-function validateInboundDispatchListenerBounds(
-  registration: ZLinkFrameworkRegistration
-): void {
-  if (registration.inboundDispatch.applicationHwmBytes === 0n) {
-    return;
-  }
-
-  const listeners: Array<readonly [string, number | undefined]> = [];
-  for (const [channelName, channel] of registration.channels) {
-    listeners.push(
-      [`channel '${channelName}' server`, channel.server?.maxMessageSize],
-      [`channel '${channelName}' subscriber`, channel.subscriber?.maxMessageSize]
-    );
-  }
-  for (const [streamNodeName, streamNode] of registration.streamNodes) {
-    listeners.push([
-      `STREAM node '${streamNodeName}'`,
-      streamNode.maxMessageSize
-    ]);
-  }
-
-  const unbounded = listeners.find(([, maxMessageSize]) => maxMessageSize === 0);
-  if (unbounded !== undefined) {
-    throw new ZLinkConfigurationException(
-      `${unbounded[0]} maxMessageSize must be bounded when Application HWM is enabled.`
-    );
-  }
 }
 
 function validateChannelTopologyNames(registration: ZLinkFrameworkRegistration): void {
@@ -156,7 +126,8 @@ function validateLocationRegistration(registration: ZLinkFrameworkRegistration):
     ownerLeaseRenewIntervalMs: options.ownerLeaseRenewIntervalMs,
     ownerLeaseTtlMs: options.ownerLeaseTtlMs,
     ownerLeaseFencingMarginMs: options.ownerLeaseFencingMarginMs,
-    ownerLeaseRenewTimeoutMs: options.ownerLeaseRenewTimeoutMs
+    ownerLeaseRenewTimeoutMs: options.ownerLeaseRenewTimeoutMs,
+    sessionRelocationSealTimeoutMs: options.sessionRelocationSealTimeoutMs
   })) {
     if (!Number.isFinite(value) || value <= 0) {
       throw new ZLinkConfigurationException(`${name} must be a finite positive number.`);
@@ -186,17 +157,6 @@ function validateLocationRegistration(registration: ZLinkFrameworkRegistration):
     throw new ZLinkConfigurationException(
       'routeCacheMaxAgeMs must be at least 5000 ms shorter than messageFollowDurationMs.'
     );
-  }
-  for (const [name, value] of Object.entries({
-    maxActiveOutboundRelocations: options.maxActiveOutboundRelocations,
-    maxActiveInboundRelocations: options.maxActiveInboundRelocations,
-    maxConcurrentRelocationCaptures: options.maxConcurrentRelocationCaptures,
-    maxConcurrentRelocationRestores: options.maxConcurrentRelocationRestores,
-    maxRelocationPayloadInFlightBytes: options.maxRelocationPayloadInFlightBytes
-  })) {
-    if (!Number.isSafeInteger(value) || value <= 0) {
-      throw new ZLinkConfigurationException(`${name} must be a positive safe integer.`);
-    }
   }
 }
 

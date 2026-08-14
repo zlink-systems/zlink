@@ -20,58 +20,30 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 
 final class ZLinkChannelRouteDispatcher {
     private final ZLinkChannelSocketRegistry sockets;
     private final ZLinkChannelDispatchRegistry registry;
-    private final ZLinkSpotRouteBridgeRawReplies rawReplies;
     private final ZLinkChannelHandlerInvoker invoker;
     private final ZLinkChannelDispatchReporter errors;
     private final ZLinkMessageFlowTracer flow;
     private final ZLinkSpotRouteBridgeDrainer bridgeDrainer;
     private final Function<String, ZLinkBackendSpotRouteBridge> bridgeResolver;
-    private final ZLinkInboundDispatchBudget inboundDispatchBudget;
     ZLinkChannelRouteDispatcher(
         ZLinkChannelSocketRegistry sockets,
         ZLinkChannelDispatchRegistry registry,
-        ZLinkSpotRouteBridgeRawReplies rawReplies,
         ZLinkChannelHandlerInvoker invoker,
         ZLinkChannelDispatchReporter errors,
         ZLinkMessageFlowTracer flow,
         ZLinkSpotRouteBridgeDrainer bridgeDrainer,
         Function<String, ZLinkBackendSpotRouteBridge> bridgeResolver) {
-        this(
-            sockets,
-            registry,
-            rawReplies,
-            invoker,
-            errors,
-            flow,
-            bridgeDrainer,
-            bridgeResolver,
-            new ZLinkInboundDispatchBudget(0));
-    }
-
-    ZLinkChannelRouteDispatcher(
-        ZLinkChannelSocketRegistry sockets,
-        ZLinkChannelDispatchRegistry registry,
-        ZLinkSpotRouteBridgeRawReplies rawReplies,
-        ZLinkChannelHandlerInvoker invoker,
-        ZLinkChannelDispatchReporter errors,
-        ZLinkMessageFlowTracer flow,
-        ZLinkSpotRouteBridgeDrainer bridgeDrainer,
-        Function<String, ZLinkBackendSpotRouteBridge> bridgeResolver,
-        ZLinkInboundDispatchBudget inboundDispatchBudget) {
         this.sockets = sockets;
         this.registry = registry;
-        this.rawReplies = rawReplies;
         this.invoker = invoker;
         this.errors = errors;
         this.flow = flow;
         this.bridgeDrainer = bridgeDrainer;
         this.bridgeResolver = bridgeResolver;
-        this.inboundDispatchBudget = inboundDispatchBudget;
     }
 
     void dispatch(
@@ -83,9 +55,6 @@ final class ZLinkChannelRouteDispatcher {
             : ZLinkFlowContext.enter(incomingFlow);
         try {
             if (isProbeFrame(received.parts())) {
-                return;
-            }
-            if (rawReplies.tryComplete(channelName, received)) {
                 return;
             }
             if (dispatchBridgePacket(channelName, received)) {
@@ -130,12 +99,6 @@ final class ZLinkChannelRouteDispatcher {
             }
             ChannelRouteRequestHandlerRegistration registration =
                 registry.routeRequestHandler(channelName, packet.packetName());
-            if (registration == null && rawReplies.hasPending(channelName, source)) {
-                return;
-            }
-            if (registration == null && rawReplies.discardRecentlyCompleted(channelName, received)) {
-                return;
-            }
             if (registration == null) {
                 errors.replyError(
                     router,
@@ -241,7 +204,7 @@ final class ZLinkChannelRouteDispatcher {
             return false;
         }
         Message payload = Message.from(packet.payload());
-        registry.routeRequestQueue(channelName).enqueueWithPayloadBytes(payload.size(), () ->
+        registry.routeRequestQueue(channelName).enqueue(() ->
             handler.handle(source, payload)
                 .thenAccept(reply -> ZLinkChannelDispatchReporter.replyAndClose(
                     router,
@@ -261,15 +224,13 @@ final class ZLinkChannelRouteDispatcher {
         ChannelRouteRequestHandlerRegistration registration,
         String contentType) {
         Message payload = Message.from(packet.payload());
-        ZLinkInboundDispatchBudget.Lease lease =
-            inboundDispatchBudget.track(payload.size());
         try {
             CompletionStage<Void> queued = registry.routeRequestQueue(channelName)
-                .enqueueWithPayloadBytes(payload.size(), () ->
-                inboundDispatchBudget.acquireCompletionPermit()
+                .enqueue(() ->
+                CompletableFuture.completedFuture(null)
                     .thenCompose(permit -> {
                         try {
-                            return invokeStarted(lease, () -> invoker.executeHandler(() ->
+                            return invokeStarted(() -> invoker.executeHandler(() ->
                                 invoker.invokeRouteRequestHandler(
                                     channelName,
                                     registration,
@@ -306,29 +267,26 @@ final class ZLinkChannelRouteDispatcher {
                                                 source);
                                         }
                                     } finally {
-                                        permit.close();
+
                                     }
                                 });
                         } catch (RuntimeException failure) {
-                            permit.close();
+
                             return CompletableFuture
                                 .<Message>failedFuture(failure);
                         }
                     })
                     .whenComplete((ignored, error) -> {
                         payload.close();
-                        lease.close();
                     })
                     .thenApply(ignored -> null));
             queued.whenComplete((ignored, error) -> {
                 if (error != null) {
                     payload.close();
-                    lease.close();
                 }
             });
         } catch (RuntimeException error) {
             payload.close();
-            lease.close();
             throw error;
         }
     }
@@ -361,12 +319,10 @@ final class ZLinkChannelRouteDispatcher {
             null,
             source);
         Message payload = Message.from(packet.payload());
-        ZLinkInboundDispatchBudget.Lease lease =
-            inboundDispatchBudget.track(payload.size());
         try {
             CompletionStage<Void> queued = registry.routeSendQueue(channelName)
-                .enqueueWithPayloadBytes(payload.size(), () ->
-                invokeStarted(lease, () -> invoker.executeHandler(() ->
+                .enqueue(() ->
+                invokeStarted(() -> invoker.executeHandler(() ->
                     invoker.invokeRouteSendHandler(
                         channelName, registration, source, payload, Map.of(), contentType)))
                     .whenComplete((ignored, error) -> {
@@ -392,31 +348,21 @@ final class ZLinkChannelRouteDispatcher {
                     })
                     .whenComplete((ignored, error) -> {
                         payload.close();
-                        lease.close();
                     }));
             queued.whenComplete((ignored, error) -> {
                 if (error != null) {
                     payload.close();
-                    lease.close();
                 }
             });
         } catch (RuntimeException error) {
             payload.close();
-            lease.close();
             throw error;
         }
     }
 
     private static <T> CompletionStage<T> invokeStarted(
-        ZLinkInboundDispatchBudget.Lease lease,
         Supplier<CompletionStage<T>> invocation) {
-        lease.handlerStarted();
-        try {
-            return invocation.get();
-        } catch (RuntimeException error) {
-            lease.close();
-            throw error;
-        }
+        return invocation.get();
     }
 
     private void traceFlow(

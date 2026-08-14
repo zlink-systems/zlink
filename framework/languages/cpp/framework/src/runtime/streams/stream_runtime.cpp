@@ -10,7 +10,6 @@
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
-#include "runtime/messaging/async_submit_runtime.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -98,8 +97,9 @@ class stream_write_call_state_t
     stream_write_call_state_t (stream_header_t header,
                                zlink::message_t payload,
                                std::shared_ptr<const stream_compression_codec_t> compression_codec,
-                               std::function<result_t<void> (const stream_header_t &,
-                                                            const zlink::message_t &)> submit) :
+                               std::function<task_t<void> (const stream_header_t &,
+                                                          const zlink::message_t &,
+                                                          std::optional<std::chrono::milliseconds>)> submit) :
         _header (std::move (header)),
         _payload (std::move (payload)),
         _submit (std::move (submit)),
@@ -138,14 +138,21 @@ class stream_write_call_state_t
         return result_t<void>::success ();
     }
 
-    result_t<void> submit_now ()
+    task_t<void> submit_now ()
     {
         if (_immediate) {
-            return *_immediate;
+            if (!*_immediate) {
+                throw framework_exception_t (
+                  _immediate->error_kind (),
+                  _immediate->error () ? _immediate->error ()->what ()
+                                       : "STREAM write failed");
+            }
+            co_return;
         }
         if (!_submit || !_header || !_payload) {
-            return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                            "STREAM write call is not bound to a stream");
+            throw framework_exception_t (
+              framework_error_kind_t::protocol_error,
+              "STREAM write call is not bound to a stream");
         }
 
         auto metadata = _header->metadata ().values ();
@@ -156,15 +163,16 @@ class stream_write_call_state_t
         auto payload = *_payload;
         if (_compressed) {
             if (!_compression_codec) {
-                return result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                                "STREAM compression codec is not configured");
+                throw framework_exception_t (
+                  framework_error_kind_t::internal_failure,
+                  "STREAM compression codec is not configured");
             }
             try {
                 payload = _compression_codec->compress (payload);
             }
             catch (const std::exception &error) {
-                return result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                                error.what ());
+                throw framework_exception_t (
+                  framework_error_kind_t::internal_failure, error.what ());
             }
             flags = flags | stream_header_flags_t::payload_compressed;
         }
@@ -176,18 +184,16 @@ class stream_write_call_state_t
         if (auto correlation = _header->correlation_id ()) {
             header.with_correlation_id (std::string (*correlation));
         }
-        auto result = _submit (header, payload);
-        if (_timeout) {
-            runtime::messaging::limit_submit_attempt_timeout (*_timeout);
-        }
-        return result;
+        co_await _submit (header, payload, _timeout);
+        co_return;
     }
 
   private:
     std::optional<result_t<void>> _immediate;
     std::optional<stream_header_t> _header;
     std::optional<zlink::message_t> _payload;
-    std::function<result_t<void> (const stream_header_t &, const zlink::message_t &)> _submit;
+    std::function<task_t<void> (const stream_header_t &, const zlink::message_t &,
+                                 std::optional<std::chrono::milliseconds>)> _submit;
     std::shared_ptr<const stream_compression_codec_t> _compression_codec;
     std::map<std::string, std::string> _metadata;
     std::string _packet_name;
@@ -314,8 +320,8 @@ class stream_session_dispatcher_t
           }, std::move (cancelled));
         if (!posted) {
             return result_t<void>::failure (
-              framework_error_kind_t::capacity_exceeded,
-              "stream serial dispatch queue is full or closed");
+              framework_error_kind_t::shutting_down,
+              "stream serial dispatch queue is closed or stopping");
         }
         return result_t<void>::success ();
     }
@@ -424,10 +430,10 @@ task_t<void> stream_write_call_t::submit ()
         return task_t<void> (
           detail::result_access_t::failure<void> (*claimed.error ()));
     }
-    return detail::submit_one_way_task ([state] { return state->submit_now (); });
+    return state->submit_now ();
 }
 
-result_t<void> stream_write_call_t::submit_now ()
+task_t<void> stream_write_call_t::submit_now ()
 {
     return _state->submit_now ();
 }
@@ -489,7 +495,7 @@ task_t<void> stream_send_call_t::submit ()
         return task_t<void> (
           detail::result_access_t::failure<void> (*claimed.error ()));
     }
-    return detail::submit_one_way_task ([state] { return state->submit_now (); });
+    return state->submit_now ();
 }
 
 stream_error_t::stream_error_t (stream_session_error_t error, std::string message) :
@@ -679,32 +685,43 @@ task_t<void> stream_t::close ()
 namespace
 {
 
-std::function<result_t<void> (const stream_header_t &, const zlink::message_t &)>
+std::function<task_t<void> (const stream_header_t &, const zlink::message_t &,
+                             std::optional<std::chrono::milliseconds>)>
 stream_submitter (std::shared_ptr<detail::stream_state_t> state)
 {
-    return [state = std::move (state)] (const stream_header_t &submitted_header,
-                                        const zlink::message_t &submitted_payload) {
+    return [state = std::move (state)] (
+             const stream_header_t &submitted_header,
+             const zlink::message_t &submitted_payload,
+             std::optional<std::chrono::milliseconds> timeout) -> task_t<void> {
         if (state->closed.load (std::memory_order_acquire)) {
-            return detail::boundary_failure<void> (detail::boundary_error_t::disconnected,
-                                                    "STREAM session is disconnected");
+            throw framework_exception_t (
+              framework_error_kind_t::unavailable,
+              "STREAM session is disconnected");
         }
+        std::function<task_t<void> (
+          const stream_header_t &, const zlink::message_t &,
+          std::optional<std::chrono::milliseconds>)> writer;
         {
             const std::lock_guard<std::mutex> lock (state->transport_writer_mutex);
             if (state->closed.load (std::memory_order_acquire)) {
-                return detail::boundary_failure<void> (detail::boundary_error_t::disconnected,
-                                                        "STREAM session is disconnected");
+                throw framework_exception_t (
+                  framework_error_kind_t::unavailable,
+                  "STREAM session is disconnected");
             }
-            if (state->transport_writer)
-                return state->transport_writer (submitted_header, submitted_payload);
+            writer = state->transport_writer;
         }
+        if (writer)
+            co_return co_await writer (
+              submitted_header, submitted_payload, timeout);
         if (state->closed.load (std::memory_order_acquire)) {
-            return detail::boundary_failure<void> (detail::boundary_error_t::disconnected,
-                                                    "STREAM session is disconnected");
+            throw framework_exception_t (
+              framework_error_kind_t::unavailable,
+              "STREAM session is disconnected");
         }
         const std::lock_guard<std::mutex> lock (state->state_mutex);
         state->written_headers.push_back (submitted_header);
         state->written_payloads.push_back (submitted_payload);
-        return result_t<void>::success ();
+        co_return;
     };
 }
 
@@ -1707,7 +1724,8 @@ result_t<void> stream_runtime_t::dispatch_error (packet_stream_session_t &sessio
 
 void stream_runtime_t::attach_transport_writer (
   stream_t &stream,
-  std::function<result_t<void> (const stream_header_t &, const zlink::message_t &)> writer) const
+  std::function<task_t<void> (const stream_header_t &, const zlink::message_t &,
+                               std::optional<std::chrono::milliseconds>)> writer) const
 {
     stream._state->transport_writer = std::move (writer);
 }

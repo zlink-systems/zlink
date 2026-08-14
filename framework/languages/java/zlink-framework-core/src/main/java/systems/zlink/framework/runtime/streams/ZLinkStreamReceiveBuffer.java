@@ -1,7 +1,12 @@
 package systems.zlink.framework.runtime.streams;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
+import java.util.LinkedHashSet;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamReceived;
 
 /** Accumulates raw STREAM bytes and yields complete framework frames. */
 final class ZLinkStreamReceiveBuffer implements AutoCloseable {
@@ -11,6 +16,7 @@ final class ZLinkStreamReceiveBuffer implements AutoCloseable {
     private int offset;
     private int length;
     private boolean closed;
+    private final ArrayDeque<RetainedSegment> retainedSegments = new ArrayDeque<>();
 
     ZLinkStreamReceiveBuffer(long maxMessageSize) {
         if (maxMessageSize < 0) {
@@ -33,6 +39,33 @@ final class ZLinkStreamReceiveBuffer implements AutoCloseable {
         ensureCapacity(required);
         System.arraycopy(bytes, 0, buffer, offset + length, bytes.length);
         length = required;
+    }
+
+    void append(
+        java.util.List<Message> parts,
+        ZLinkBackendStreamReceived received) {
+        ensureOpen();
+        RetainedOwner owner = new RetainedOwner(received);
+        boolean retained = false;
+        try {
+            for (Message part : parts) {
+                byte[] bytes = part.toByteArray();
+                append(bytes);
+                if (bytes.length > 0) {
+                    retainedSegments.addLast(new RetainedSegment(bytes.length, owner));
+                    owner.addBufferedSegment();
+                    retained = true;
+                }
+            }
+        } catch (RuntimeException | Error failure) {
+            if (!retained) {
+                owner.closeNow();
+            }
+            throw failure;
+        }
+        if (!retained) {
+            owner.closeNow();
+        }
     }
 
     ZLinkStreamInboundFrame tryTakeFrame() {
@@ -71,8 +104,9 @@ final class ZLinkStreamReceiveBuffer implements AutoCloseable {
                 buffer,
                 bodyOffset + headerSize,
                 Math.toIntExact(payloadSize));
+            Runnable terminalRelease = consumeRetained(Math.toIntExact(totalBytes));
             consume(Math.toIntExact(totalBytes));
-            return new ZLinkStreamInboundFrame(header, payload);
+            return new ZLinkStreamInboundFrame(header, payload, terminalRelease);
         } catch (RuntimeException failure) {
             header.close();
             throw failure;
@@ -88,6 +122,10 @@ final class ZLinkStreamReceiveBuffer implements AutoCloseable {
         buffer = new byte[0];
         offset = 0;
         length = 0;
+        while (!retainedSegments.isEmpty()) {
+            RetainedSegment segment = retainedSegments.removeFirst();
+            segment.owner.removeBufferedSegment();
+        }
     }
 
     private void ensureOpen() {
@@ -132,6 +170,105 @@ final class ZLinkStreamReceiveBuffer implements AutoCloseable {
         if (offset >= buffer.length / 2) {
             System.arraycopy(buffer, offset, buffer, 0, length);
             offset = 0;
+        }
+    }
+
+    private Runnable consumeRetained(int consumed) {
+        int remaining = consumed;
+        Set<RetainedOwner> owners = new LinkedHashSet<>();
+        while (remaining > 0) {
+            RetainedSegment segment = retainedSegments.peekFirst();
+            if (segment == null) {
+                break;
+            }
+            int part = Math.min(remaining, segment.remainingBytes);
+            segment.remainingBytes -= part;
+            remaining -= part;
+            if (owners.add(segment.owner)) {
+                segment.owner.claimFrame();
+            }
+            if (segment.remainingBytes == 0) {
+                retainedSegments.removeFirst();
+                segment.owner.removeBufferedSegment();
+            }
+        }
+        AtomicBoolean released = new AtomicBoolean();
+        return () -> {
+            if (!released.compareAndSet(false, true)) {
+                return;
+            }
+            for (RetainedOwner owner : owners) {
+                owner.releaseFrame();
+            }
+        };
+    }
+
+    private static final class RetainedSegment {
+        private int remainingBytes;
+        private final RetainedOwner owner;
+
+        private RetainedSegment(int remainingBytes, RetainedOwner owner) {
+            this.remainingBytes = remainingBytes;
+            this.owner = owner;
+        }
+    }
+
+    private static final class RetainedOwner {
+        private final ZLinkBackendStreamReceived received;
+        private int bufferedSegments;
+        private int frameClaims;
+        private boolean closed;
+
+        private RetainedOwner(ZLinkBackendStreamReceived received) {
+            this.received = received;
+        }
+
+        private synchronized void addBufferedSegment() {
+            if (closed) {
+                throw new IllegalStateException("STREAM retained owner is closed");
+            }
+            bufferedSegments++;
+        }
+
+        private synchronized void removeBufferedSegment() {
+            if (bufferedSegments <= 0) {
+                throw new IllegalStateException(
+                    "STREAM retained segment accounting underflow");
+            }
+            bufferedSegments--;
+            tryCloseLocked();
+        }
+
+        private synchronized void claimFrame() {
+            if (closed) {
+                throw new IllegalStateException("STREAM retained owner is closed");
+            }
+            frameClaims++;
+        }
+
+        private synchronized void releaseFrame() {
+            if (frameClaims <= 0) {
+                throw new IllegalStateException(
+                    "STREAM retained frame accounting underflow");
+            }
+            frameClaims--;
+            tryCloseLocked();
+        }
+
+        private synchronized void closeNow() {
+            if (!closed) {
+                closed = true;
+                received.close();
+            }
+        }
+
+        private void tryCloseLocked() {
+            if (bufferedSegments == 0 && frameClaims == 0) {
+                if (!closed) {
+                    closed = true;
+                    received.close();
+                }
+            }
         }
     }
 }

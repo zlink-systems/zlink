@@ -9,6 +9,7 @@
 #include "runtime/client_server/weighted_selector.hpp"
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
+#include "runtime/messaging/submit_result_mapper.hpp"
 
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/Contracts/Eventing/poller.hpp>
@@ -17,7 +18,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
-#include <future>
 #include <iostream>
 #include <limits>
 #include <random>
@@ -210,8 +210,10 @@ framework_runtime_state_t client_server_framework_state (
 struct client_server_location_runtime_t::server_entry_t
 {
     channel_capability_snapshot_t capability;
-    std::unique_ptr<raw_client_server_server_t> owner;
+    std::shared_ptr<raw_client_server_server_t> owner;
     std::optional<client_server_server_descriptor_t> published_descriptor;
+    std::shared_ptr<pump_task_state_t> pump_task;
+    std::shared_ptr<pump_task_state_t> dispatch_task;
 };
 
 struct client_server_location_runtime_t::client_connection_t
@@ -219,6 +221,22 @@ struct client_server_location_runtime_t::client_connection_t
     client_server_server_descriptor_t descriptor;
     std::shared_ptr<raw_client_server_client_t> owner;
     bool selector_ready = false;
+    std::shared_ptr<pump_task_state_t> pump_task;
+};
+
+struct client_server_location_runtime_t::pump_task_state_t
+{
+    std::mutex mutex;
+    std::optional<result_t<void>> completion;
+    std::shared_ptr<task_t<void>> task;
+};
+
+struct client_server_location_runtime_t::ready_waiter_t
+{
+    std::string channel_name;
+    std::chrono::steady_clock::time_point deadline;
+    std::shared_ptr<detail::task_completion_source_t<
+      std::shared_ptr<raw_client_server_client_t>>> completion;
 };
 
 struct client_server_location_runtime_t::client_channel_t
@@ -233,6 +251,35 @@ struct client_server_location_runtime_t::client_channel_t
 
 namespace
 {
+
+task_t<void> pump_server_transport (
+  std::shared_ptr<raw_client_server_server_t> server,
+  mesh::service_liveness_registry_t::clock_t::time_point now,
+  std::shared_ptr<application_job_queue_t::permit_t> application_permit)
+{
+    (void) server->drain_monitor_events (now);
+    (void) co_await server->pump_one (
+      now, std::move (application_permit));
+    (void) co_await server->tick_liveness (now);
+}
+
+task_t<void> pump_client_transport (
+  std::shared_ptr<raw_client_server_client_t> client,
+  mesh::service_liveness_registry_t::clock_t::time_point now)
+{
+    (void) co_await client->drain_monitor_events (now);
+    receive_batch_budget_t budget;
+    while (budget.can_receive ()) {
+        const auto result = co_await client->pump_one (now);
+        if (result == client_server_pump_result_t::no_data
+            || result == client_server_pump_result_t::backpressured)
+            break;
+        budget.account (client->last_pump_bytes ());
+        if (budget.exhausted ())
+            break;
+    }
+    (void) co_await client->tick_liveness (now);
+}
 
 class client_server_observation_t final : public mesh_runtime_observation_t
 {
@@ -300,7 +347,8 @@ client_server_location_runtime_t::client_server_location_runtime_t (
   serializer_registry_t &serializers,
   const handler_registry_t &handlers,
   std::map<std::string, std::string> advertise_hosts,
-  std::shared_ptr<listener_status_registry_t> listener_statuses) :
+  std::shared_ptr<listener_status_registry_t> listener_statuses,
+  std::shared_ptr<application_job_queue_t> application_jobs) :
     _bus (std::move (bus)),
     _channel_runtime (detail::channel_runtime_t::from (_bus)),
     _channels (std::move (channels)),
@@ -310,6 +358,17 @@ client_server_location_runtime_t::client_server_location_runtime_t (
     _services (services),
     _serializers (&serializers),
     _handlers (&handlers),
+    _application_jobs (
+      application_jobs
+        ? std::move (application_jobs)
+        : std::make_shared<application_job_queue_t> (
+            application_job_queue_configuration_t{
+              application_job_queue_profile_t::balanced,
+              static_cast<std::uint32_t> (
+                std::numeric_limits<std::int32_t>::max ()),
+              1,
+              static_cast<std::uint32_t> (
+                std::numeric_limits<std::int32_t>::max ())})),
     _advertise_hosts (std::move (advertise_hosts)),
     _listener_statuses (std::move (listener_statuses))
 {
@@ -561,7 +620,10 @@ void client_server_location_runtime_t::start ()
     _stop.store (false, std::memory_order_release);
     try {
         _transport_poller = std::make_unique<zlink::poller_t> ();
-        _wake_timer.attach (*_transport_poller);
+        _wake_timer->attach (*_transport_poller);
+        _application_supply = std::make_unique<application_supply_slot_t> (
+          _application_jobs,
+          [wake = _wake_timer] { wake->signal (); });
         for (const auto &channel : _channels) {
             if (channel.server.enabled
                 && !channel.server.bind_endpoints.empty ())
@@ -615,8 +677,8 @@ void client_server_location_runtime_t::start_server (
         : std::optional<std::string> (advertise->second)};
     options.transport_poller = _transport_poller.get ();
     options.transport_poller_slot = next_transport_poller_slot ();
-    auto raw = std::make_unique<raw_client_server_server_t> (
-      std::move (options));
+    auto raw = std::make_shared<raw_client_server_server_t> (
+      std::move (options), _channel_runtime.core_context ());
     raw->start ();
     auto entry = std::make_unique<server_entry_t> ();
     entry->capability = channel.server;
@@ -687,7 +749,7 @@ bool client_server_location_runtime_t::publish_descriptor_state (
         _descriptor_publish_pending = true;
     }
     _descriptor_publish_changed.notify_all ();
-    _wake_timer.signal ();
+    _wake_timer->signal ();
 
     std::unique_lock lock (_descriptor_publish_mutex);
     if (!_descriptor_publish_changed.wait_for (
@@ -764,10 +826,13 @@ void client_server_location_runtime_t::run ()
                   server->owner->next_liveness_activity ())
                 wake_at = std::min (wake_at, *activity);
         }
-        for (const auto &client : _client_pump_snapshot) {
-            if (const auto activity = client->next_liveness_activity ())
+        for (const auto *connection : _client_pump_snapshot) {
+            if (const auto activity =
+                  connection->owner->next_liveness_activity ())
                 wake_at = std::min (wake_at, *activity);
         }
+        if (const auto ready_deadline = next_ready_waiter_deadline ())
+            wake_at = std::min (wake_at, *ready_deadline);
 
         const auto after_pump = std::chrono::steady_clock::now ();
         if (wake_at <= after_pump || !_transport_poller)
@@ -779,8 +844,8 @@ void client_server_location_runtime_t::run ()
               1,
               std::chrono::duration_cast<std::chrono::milliseconds> (
                 wake_at - after_pump));
-            if (count == 1 && _wake_timer.is_event (readiness))
-                _wake_timer.consume ();
+            if (count == 1 && _wake_timer->is_event (readiness))
+                _wake_timer->consume ();
         }
         catch (...) {
             if (!_stop.load (std::memory_order_acquire))
@@ -948,7 +1013,7 @@ void client_server_location_runtime_t::reconcile_channel (
         options.transport_poller = _transport_poller.get ();
         options.transport_poller_slot = next_transport_poller_slot ();
         auto raw = std::make_shared<raw_client_server_client_t> (
-          std::move (options));
+          std::move (options), _channel_runtime.core_context ());
         raw->start ();
         std::lock_guard lock (_gate);
         channel.selector_dirty = true;
@@ -997,6 +1062,32 @@ void client_server_location_runtime_t::pump ()
     refresh_client_pump_snapshot ();
     const auto now =
       mesh::service_liveness_registry_t::clock_t::now ();
+    complete_ready_waiters (now);
+    const auto take_completed = [] (
+      const std::shared_ptr<pump_task_state_t> &state)
+      -> std::optional<result_t<void>> {
+        if (!state)
+            return std::nullopt;
+        std::lock_guard lock (state->mutex);
+        return state->completion;
+    };
+    const auto start_task = [wake = _wake_timer] (
+      task_t<void> pending) {
+        auto state = std::make_shared<pump_task_state_t> ();
+        state->task = std::make_shared<task_t<void>> (
+          std::move (pending));
+        detail::observe_task_completion (
+          *state->task,
+          [state, wake] (const result_t<void> &result) {
+              {
+                  std::lock_guard lock (state->mutex);
+                  state->completion = result;
+              }
+              wake->signal ();
+          });
+        return state;
+    };
+
     _server_pump_snapshot.clear ();
     _server_pump_snapshot.reserve (_servers.size ());
     for (auto &[_, server] : _servers)
@@ -1006,59 +1097,78 @@ void client_server_location_runtime_t::pump ()
         for (std::size_t offset = 0; offset < _server_pump_snapshot.size (); ++offset) {
             auto &server = *_server_pump_snapshot[
               (start + offset) % _server_pump_snapshot.size ()];
-            (void) server.owner->drain_monitor_events (now);
-            receive_batch_budget_t budget;
-            while (budget.can_receive ()) {
-                const auto result = server.owner->pump_one (now);
-                if (result == client_server_pump_result_t::no_data
-                    || result == client_server_pump_result_t::backpressured)
-                    break;
-                budget.account (server.owner->last_pump_bytes ());
-                if (budget.exhausted ())
-                    break;
+            if (const auto completed = take_completed (server.pump_task)) {
+                if (!*completed)
+                    _locations->record_store_error ();
+                server.pump_task.reset ();
             }
-            (void) server.owner->tick_liveness (now);
-            dispatch_server (server);
+            if (!server.pump_task) {
+                std::shared_ptr<application_job_queue_t::permit_t>
+                  application_permit;
+                bool may_pump = true;
+                if (!server.owner->has_pending_application ()) {
+                    _application_supply->ensure_waiter ();
+                    auto reserved = _application_supply->take ();
+                    may_pump = reserved.has_value ();
+                    if (reserved) {
+                        application_permit = std::make_shared<
+                          application_job_queue_t::permit_t> (
+                            std::move (*reserved));
+                    }
+                }
+                if (may_pump) {
+                    server.pump_task = start_task (pump_server_transport (
+                      server.owner, now, std::move (application_permit)));
+                }
+            }
+            if (const auto completed = take_completed (
+                  server.dispatch_task)) {
+                if (!*completed)
+                    _locations->record_store_error ();
+                server.dispatch_task.reset ();
+            }
+            if (!server.dispatch_task) {
+                server.dispatch_task = start_task (
+                  dispatch_server (server.owner));
+            }
         }
         _server_pump_cursor = (start + 1) % _server_pump_snapshot.size ();
     }
     if (!_client_pump_snapshot.empty ()) {
         const auto start = _client_pump_cursor % _client_pump_snapshot.size ();
         for (std::size_t offset = 0; offset < _client_pump_snapshot.size (); ++offset) {
-            auto &client = _client_pump_snapshot[
+            auto &connection = *_client_pump_snapshot[
               (start + offset) % _client_pump_snapshot.size ()];
-            (void) client->drain_monitor_events (now);
-            receive_batch_budget_t budget;
-            while (budget.can_receive ()) {
-                const auto result = client->pump_one (now);
-                if (result == client_server_pump_result_t::no_data
-                    || result == client_server_pump_result_t::backpressured)
-                    break;
-                budget.account (client->last_pump_bytes ());
-                if (budget.exhausted ())
-                    break;
+            if (const auto completed = take_completed (
+                  connection.pump_task)) {
+                if (!*completed)
+                    _locations->record_store_error ();
+                connection.pump_task.reset ();
             }
-            (void) client->tick_liveness (now);
-            (void) client->expire_requests (
-              foundation::operation_registry_t::clock_t::now ());
+            if (!connection.pump_task) {
+                connection.pump_task = start_task (
+                  pump_client_transport (connection.owner, now));
+            }
         }
         _client_pump_cursor = (start + 1) % _client_pump_snapshot.size ();
     }
-    std::lock_guard lock (_gate);
-    for (auto &[_, channel] : _clients) {
-        for (auto &[__, connection] : channel->connections) {
-            const bool ready =
-              connection.owner->ready ()
-              && connection.descriptor.state
-                   == framework_runtime_state_t::serving
-              && connection.descriptor.weight > 0;
-            if (ready != connection.selector_ready) {
-                connection.selector_ready = ready;
-                channel->selector_dirty = true;
+    {
+        std::lock_guard lock (_gate);
+        for (auto &[_, channel] : _clients) {
+            for (auto &[__, connection] : channel->connections) {
+                const bool ready =
+                  connection.owner->ready ()
+                  && connection.descriptor.state
+                       == framework_runtime_state_t::serving
+                  && connection.descriptor.weight > 0;
+                if (ready != connection.selector_ready) {
+                    connection.selector_ready = ready;
+                    channel->selector_dirty = true;
+                }
             }
         }
     }
-    _ready.notify_all ();
+    complete_ready_waiters (now);
 }
 
 void client_server_location_runtime_t::refresh_client_pump_snapshot ()
@@ -1067,24 +1177,24 @@ void client_server_location_runtime_t::refresh_client_pump_snapshot ()
     std::lock_guard lock (_gate);
     for (auto &[_, channel] : _clients) {
         for (auto &[__, connection] : channel->connections)
-            _client_pump_snapshot.push_back (connection.owner);
+            _client_pump_snapshot.push_back (&connection);
     }
 }
 
-void client_server_location_runtime_t::dispatch_server (
-  server_entry_t &server)
+task_t<void> client_server_location_runtime_t::dispatch_server (
+  std::shared_ptr<raw_client_server_server_t> owner)
 {
-    auto &mailbox = server.owner->mailbox ();
+    auto &mailbox = owner->mailbox ();
     receive_batch_budget_t budget;
     for (;;) {
         if (!budget.can_receive ())
-            return;
+            co_return;
         auto claim = mailbox.try_claim (
           mesh::service_mailbox_domain_t::application,
           dispatch_limits::receive_batch_messages,
           dispatch_limits::receive_batch_bytes);
         if (!claim)
-            return;
+            co_return;
         for (const auto &record : claim->records) {
             std::size_t record_bytes = 0;
             for (const auto &part : record.parts)
@@ -1095,6 +1205,8 @@ void client_server_location_runtime_t::dispatch_server (
         for (const auto &record : claim->records) {
             if (record.parts.size () != 2)
                 continue;
+            std::optional<protocol::application_payload_t> pending_reply;
+            std::optional<client_server_wire_failure_t> pending_failure_reply;
             try {
                 const auto payload =
                   protocol::decode_application_payload (
@@ -1103,6 +1215,8 @@ void client_server_location_runtime_t::dispatch_server (
                   zlink::message_t::from (payload.payload);
                 detail::inbound_message_context_t
                   inbound;
+                inbound.before_application_handler =
+                  record.before_application_handler;
                 inbound.message.channel_name = record.owner;
                 inbound.message.packet_name =
                   payload.packet_name;
@@ -1145,8 +1259,7 @@ void client_server_location_runtime_t::dispatch_server (
                       scope.provider (), *_serializers, *_handlers,
                       message, inbound);
                     if (reply) {
-                        (void) server.owner->reply (
-                          record,
+                        pending_reply.emplace (
                           protocol::application_payload_t{
                             payload.packet_name,
                             std::string (
@@ -1167,9 +1280,7 @@ void client_server_location_runtime_t::dispatch_server (
                           dispatch_error_action_t::reply_error,
                           error);
                         const auto failure = wire_failure (error);
-                        (void) server.owner->reply (
-                          record, failure.terminal_result,
-                          failure.failure_code);
+                        pending_failure_reply = failure;
                     }
                 } else {
                     auto result = _channel_runtime.dispatch_send (
@@ -1207,9 +1318,8 @@ void client_server_location_runtime_t::dispatch_server (
                 if (record.request_sequence
                     && record.correlation) {
                     const auto failure = wire_failure (error);
-                    (void) server.owner->reply (
-                      record, failure.terminal_result,
-                      failure.failure_code);
+                    pending_reply.reset ();
+                    pending_failure_reply = failure;
                 }
             }
             catch (const std::exception &error) {
@@ -1230,9 +1340,8 @@ void client_server_location_runtime_t::dispatch_server (
                 if (record.request_sequence
                     && record.correlation) {
                     const auto wire = wire_failure (failure);
-                    (void) server.owner->reply (
-                      record, wire.terminal_result,
-                      wire.failure_code);
+                    pending_reply.reset ();
+                    pending_failure_reply = wire;
                 }
             }
             catch (...) {
@@ -1253,19 +1362,29 @@ void client_server_location_runtime_t::dispatch_server (
                 if (record.request_sequence
                     && record.correlation) {
                     const auto wire = wire_failure (failure);
-                    (void) server.owner->reply (
-                      record, wire.terminal_result,
-                      wire.failure_code);
+                    pending_reply.reset ();
+                    pending_failure_reply = wire;
                 }
+            }
+            try {
+                if (pending_reply)
+                    (void) owner->reply (record, *pending_reply);
+                else if (pending_failure_reply)
+                    (void) owner->reply (
+                      record,
+                      pending_failure_reply->terminal_result,
+                      pending_failure_reply->failure_code);
+            }
+            catch (...) {
             }
         }
         (void) mailbox.release (*claim);
         if (yield_after_claim)
-            return;
+            co_return;
     }
 }
 
-result_t<void> client_server_location_runtime_t::send (
+task_t<void> client_server_location_runtime_t::send (
   const std::string &channel_name,
   std::string packet_name,
   std::string content_type,
@@ -1280,27 +1399,39 @@ result_t<void> client_server_location_runtime_t::send (
       effective,
       std::chrono::duration_cast<std::chrono::milliseconds> (
         maximum_ready_wait));
-    auto selected = select_ready (
+    const auto deadline = std::chrono::steady_clock::now () + effective;
+    auto selected = co_await select_ready (
       channel_name, std::chrono::steady_clock::now () + wait);
-    if (!selected)
-        return result_t<void>::failure (
-          selected.error_kind (),
-          selected.error () != nullptr
-            ? selected.error ()->what ()
-            : "ClientServer has no admitted ready server");
-    const auto sent = selected.value ()->send (
+    const auto now = std::chrono::steady_clock::now ();
+    if (now >= deadline) {
+        throw detail::make_boundary_exception (
+          detail::boundary_error_t::timed_out,
+          "ClientServer send timed out");
+    }
+    const auto remaining =
+      std::max (
+        std::chrono::milliseconds (1),
+        std::chrono::duration_cast<std::chrono::milliseconds> (
+          deadline - now));
+    const auto submitted = co_await selected->send (
       protocol::application_payload_t{
         std::move (packet_name),
         std::move (content_type),
-        message.to_bytes ()});
-    return sent
-             ? result_t<void>::success ()
-             : result_t<void>::failure (
-                 framework_error_kind_t::unavailable,
-                 "ClientServer send lost its admitted server");
+        message.to_bytes ()},
+      remaining);
+    if (submitted == zlink::submit_result_t::backpressured) {
+        throw detail::make_boundary_exception (
+          detail::boundary_error_t::timed_out,
+          "ClientServer send timed out");
+    }
+    if (submitted != zlink::submit_result_t::ok) {
+        throw runtime::messaging::map_submit_result_exception (
+          submitted, "ClientServer send failed");
+    }
+    co_return;
 }
 
-result_t<zlink::message_t>
+task_t<zlink::message_t>
 client_server_location_runtime_t::request (
   const std::string &channel_name,
   std::string packet_name,
@@ -1318,112 +1449,92 @@ client_server_location_runtime_t::request (
         maximum_ready_wait));
     const auto deadline =
       std::chrono::steady_clock::now () + effective;
-    auto selected = select_ready (
-      channel_name, std::chrono::steady_clock::now () + wait);
-    if (!selected)
-        return result_t<zlink::message_t>::failure (
-          selected.error_kind (),
-          selected.error () != nullptr
-            ? selected.error ()->what ()
-            : "ClientServer has no admitted ready server");
-    auto promise = std::make_shared<
-      std::promise<result_t<zlink::message_t>>> ();
-    auto future = promise->get_future ();
-    const auto submitted = selected.value ()->request (
+    std::shared_ptr<raw_client_server_client_t> selected;
+    try {
+        selected = co_await select_ready (
+          channel_name, std::chrono::steady_clock::now () + wait);
+    }
+    catch (const framework_exception_t &error) {
+        co_return detail::result_access_t::failure<zlink::message_t> (
+          error);
+    }
+    const auto now = std::chrono::steady_clock::now ();
+    if (now >= deadline) {
+        co_return detail::result_access_t::failure<zlink::message_t> (
+          client_server_operation_exception (
+            foundation::operation_terminal_t::timed_out,
+            "ClientServer request"));
+    }
+    const auto remaining =
+      std::max (
+        std::chrono::milliseconds (1),
+        std::chrono::duration_cast<std::chrono::milliseconds> (
+          deadline - now));
+    const auto completion = co_await selected->request (
       protocol::application_payload_t{
         std::move (packet_name),
         std::move (content_type),
         message.to_bytes ()},
-      effective,
-      [promise] (client_server_request_completion_t completion) {
-          if (completion.terminal
-              != foundation::operation_terminal_t::completed) {
-              promise->set_value (
-                zlink::framework::detail::result_access_t::failure<
-                  zlink::message_t> (
-                  client_server_operation_exception (
-                    completion.terminal, "ClientServer request")));
-              return;
-          }
-          if (completion.reply_header.terminal_result != 0) {
-              const auto error =
-                runtime::messaging::request_failure_mapper_t{}
-                  .reply_header_exception (
-                    completion.reply_header.terminal_result,
-                    completion.reply_header.failure_code,
-                    "ClientServer request");
-              promise->set_value (
-                zlink::framework::detail::result_access_t::failure<
-                  zlink::message_t> (error));
-              return;
-          }
-          try {
-              const auto decoded =
-                protocol::decode_application_payload (
-                  completion.payload);
-              promise->set_value (
-                result_t<zlink::message_t>::success (
-                  zlink::message_t::from (decoded.payload)));
-          }
-          catch (const std::exception &error) {
-              promise->set_value (
-                result_t<zlink::message_t>::failure (
-                  framework_error_kind_t::internal_failure,
-                  error.what ()));
-          }
-      });
-    if (!submitted)
-        return result_t<zlink::message_t>::failure (
-          framework_error_kind_t::unavailable,
-          "ClientServer request lost its admitted server");
-    if (future.wait_until (deadline) != std::future_status::ready)
-        return zlink::framework::detail::result_access_t::failure<
-          zlink::message_t> (client_server_operation_exception (
-          foundation::operation_terminal_t::timed_out,
-          "ClientServer request"));
-    return future.get ();
+      remaining);
+    if (completion.terminal
+        != foundation::operation_terminal_t::completed) {
+        co_return detail::result_access_t::failure<zlink::message_t> (
+          client_server_operation_exception (
+            completion.terminal, "ClientServer request"));
+    }
+    if (completion.reply_header.terminal_result != 0) {
+        const auto error =
+          runtime::messaging::request_failure_mapper_t{}
+            .reply_header_exception (
+              completion.reply_header.terminal_result,
+              completion.reply_header.failure_code,
+              "ClientServer request");
+        co_return detail::result_access_t::failure<zlink::message_t> (
+          error);
+    }
+    try {
+        const auto decoded = protocol::decode_application_payload (
+          completion.payload);
+        co_return zlink::message_t::from (decoded.payload);
+    }
+    catch (const std::exception &error) {
+        co_return result_t<zlink::message_t>::failure (
+          framework_error_kind_t::internal_failure, error.what ());
+    }
 }
 
-result_t<std::shared_ptr<raw_client_server_client_t>>
+task_t<std::shared_ptr<raw_client_server_client_t>>
 client_server_location_runtime_t::select_ready (
   const std::string &channel_name,
   std::chrono::steady_clock::time_point deadline)
 {
-    std::unique_lock lock (_gate);
-    if (!_clients.contains (channel_name)) {
-        return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
-          framework_error_kind_t::not_configured,
-          "ClientServer Client role is not registered for this channel");
+    std::lock_guard lock (_gate);
+    auto selected = select_ready_locked (channel_name);
+    if (selected || selected.error_kind () != framework_error_kind_t::not_found
+        || std::chrono::steady_clock::now () >= deadline) {
+        return task_t<std::shared_ptr<raw_client_server_client_t>> (
+          std::move (selected));
     }
-    const auto available = [&] {
-        const auto found = _clients.find (channel_name);
-        if (found == _clients.end ())
-            return false;
-        return std::any_of (
-          found->second->connections.begin (),
-          found->second->connections.end (),
-          [] (const auto &entry) {
-              return entry.second.owner->ready ()
-                     && entry.second.descriptor.state
-                          == framework_runtime_state_t::serving
-                     && entry.second.descriptor.weight > 0;
-          });
-    };
-    if (!_ready.wait_until (lock, deadline, available)) {
-        if (_stop.load (std::memory_order_acquire)) {
-            return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
-              framework_error_kind_t::shutting_down,
-              "ClientServer runtime is stopping");
-        }
-        const auto found = _clients.find (channel_name);
-        if (found == _clients.end ()) {
-            return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
-              framework_error_kind_t::not_configured,
-              "ClientServer Client role is not registered for this channel");
-        }
+    auto completion = std::make_shared<detail::task_completion_source_t<
+      std::shared_ptr<raw_client_server_client_t>>> ();
+    auto task = completion->task ();
+    auto waiter = std::make_unique<ready_waiter_t> ();
+    waiter->channel_name = channel_name;
+    waiter->deadline = deadline;
+    waiter->completion = std::move (completion);
+    _ready_waiters.push_back (std::move (waiter));
+    _wake_timer->signal ();
+    return task;
+}
+
+result_t<std::shared_ptr<raw_client_server_client_t>>
+client_server_location_runtime_t::select_ready_locked (
+  const std::string &channel_name)
+{
+    if (_stop.load (std::memory_order_acquire)) {
         return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
-          framework_error_kind_t::not_found,
-          "ClientServer has no ready target before the bounded wait expired");
+          framework_error_kind_t::shutting_down,
+          "ClientServer runtime is stopping");
     }
     const auto channel_it = _clients.find (channel_name);
     if (channel_it == _clients.end ()) {
@@ -1467,6 +1578,51 @@ client_server_location_runtime_t::select_ready (
       connection->second.owner);
 }
 
+void client_server_location_runtime_t::complete_ready_waiters (
+  std::chrono::steady_clock::time_point now)
+{
+    using client_t = std::shared_ptr<raw_client_server_client_t>;
+    using completion_t = detail::task_completion_source_t<client_t>;
+    std::vector<std::pair<std::shared_ptr<completion_t>, result_t<client_t>>>
+      completed;
+    {
+        std::lock_guard lock (_gate);
+        auto write = _ready_waiters.begin ();
+        for (auto read = _ready_waiters.begin ();
+             read != _ready_waiters.end (); ++read) {
+            auto selected = select_ready_locked ((*read)->channel_name);
+            const bool terminal =
+              selected
+              || selected.error_kind ()
+                   != framework_error_kind_t::not_found
+              || now >= (*read)->deadline;
+            if (!terminal) {
+                if (write != read)
+                    *write = std::move (*read);
+                ++write;
+                continue;
+            }
+            completed.emplace_back (
+              (*read)->completion, std::move (selected));
+        }
+        _ready_waiters.erase (write, _ready_waiters.end ());
+    }
+    for (auto &entry : completed)
+        entry.first->complete (std::move (entry.second));
+}
+
+std::optional<std::chrono::steady_clock::time_point>
+client_server_location_runtime_t::next_ready_waiter_deadline () const
+{
+    std::lock_guard lock (_gate);
+    std::optional<std::chrono::steady_clock::time_point> deadline;
+    for (const auto &waiter : _ready_waiters) {
+        if (!deadline || waiter->deadline < *deadline)
+            deadline = waiter->deadline;
+    }
+    return deadline;
+}
+
 void client_server_location_runtime_t::stop () noexcept
 {
     const bool was_stopped =
@@ -1477,11 +1633,15 @@ void client_server_location_runtime_t::stop () noexcept
         _descriptor_publish_pending = false;
     }
     _descriptor_publish_changed.notify_all ();
-    _wake_timer.signal ();
-    _ready.notify_all ();
+    _wake_timer->signal ();
+    complete_ready_waiters (std::chrono::steady_clock::now ());
     if (_thread.joinable ())
         _thread.join ();
-    _wake_timer.detach ();
+    if (_application_supply) {
+        _application_supply->close ();
+        _application_supply.reset ();
+    }
+    _wake_timer->detach ();
     std::vector<std::string> client_channels;
     bool has_servers = false;
     bool has_clients = false;
@@ -1550,7 +1710,6 @@ void client_server_location_runtime_t::stop_servers () noexcept
                 admission.state =
                   mesh::service_node_state_t::draining;
                 admission.weight = 0;
-                server->owner->update_descriptor (admission);
                 auto draining = *server->published_descriptor;
                 draining.descriptor_revision =
                   admission.descriptor_revision;

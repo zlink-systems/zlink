@@ -99,6 +99,11 @@ export interface ZLinkRemoteActorPacketTargetWire {
   readonly spotId: string;
   readonly spotKind: ZLinkSpotKind;
   readonly targetSpotGeneration?: string;
+  readonly targetNodeGeneration?: string;
+  readonly authorityOwnerGeneration?: string;
+  readonly targetOwnerId?: string;
+  readonly ownerLeaseGeneration?: string;
+  readonly authorityStoreVersion?: string;
 }
 
 export function encodeRemoteActorPacketTarget(
@@ -113,7 +118,12 @@ export function encodeRemoteActorPacketTarget(
     targetNodeRidHex: routingIdWireHex(target.targetNodeRid),
     spotId: String(target.spotId),
     spotKind: target.spotKind ?? ZLinkSpotKind.User,
-    targetSpotGeneration: target.targetSpotGeneration?.toString()
+    targetSpotGeneration: target.targetSpotGeneration?.toString(),
+    targetNodeGeneration: target.targetNodeGeneration?.toString(),
+    authorityOwnerGeneration: target.authorityOwnerGeneration?.toString(),
+    targetOwnerId: target.targetOwnerId,
+    ownerLeaseGeneration: target.ownerLeaseGeneration?.toString(),
+    authorityStoreVersion: target.authorityStoreVersion
   };
 }
 
@@ -137,10 +147,12 @@ export function decodeRemoteActorPacketTarget(value: unknown): ZLinkRemoteActorP
     spotKind: (value as { spotKind?: unknown }).spotKind === ZLinkSpotKind.Entry
       ? ZLinkSpotKind.Entry
       : ZLinkSpotKind.User,
-    targetSpotGeneration:
-      typeof (value as { targetSpotGeneration?: unknown }).targetSpotGeneration === 'string'
-        ? BigInt((value as { targetSpotGeneration: string }).targetSpotGeneration)
-        : undefined
+    targetSpotGeneration: optionalBigInt(value, 'targetSpotGeneration'),
+    targetNodeGeneration: optionalBigInt(value, 'targetNodeGeneration'),
+    authorityOwnerGeneration: optionalBigInt(value, 'authorityOwnerGeneration'),
+    targetOwnerId: optionalString(value, 'targetOwnerId'),
+    ownerLeaseGeneration: optionalBigInt(value, 'ownerLeaseGeneration'),
+    authorityStoreVersion: optionalString(value, 'authorityStoreVersion')
   };
 }
 
@@ -207,4 +219,9 @@ export function decodeRemoteActorPacketRelayPayload(payload: unknown): {
 function optionalString(value: object, key: string): string | undefined {
   const field = (value as Record<string, unknown>)[key];
   return typeof field === 'string' ? field : undefined;
+}
+
+function optionalBigInt(value: object, key: string): bigint | undefined {
+  const field = optionalString(value, key);
+  return field === undefined ? undefined : BigInt(field);
 }

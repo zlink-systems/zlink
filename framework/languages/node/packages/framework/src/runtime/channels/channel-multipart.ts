@@ -27,36 +27,17 @@ export function appendParts<TNext extends ZLinkMultipartOperation<TNext>>(
   return current;
 }
 
-export function submitRequestOperation(operation: {
-  submit(callback: (result: number, parts: readonly Message[]) => void): boolean;
+export async function submitRequestOperation(operation: {
+  submit(): Promise<readonly Message[]>;
 }, label: string): Promise<readonly Message[]> {
-  return new Promise((resolve, reject) => {
-    try {
-      const accepted = operation.submit((result, parts) => {
-        if (result !== 0) {
-          reject(createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-            `Channel request failed with result ${result}.`,
-            true
-          ));
-          return;
-        }
-        resolve(parts);
-      });
-      if (!accepted) {
-        reject(createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-          'Channel request submit was not accepted.',
-          true
-        ));
-      }
-    } catch (error) {
-      reject(createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-        `${label} failed before a reply was received.`,
-        true,
-        error
-      ));
-    }
-  });
+  try {
+    return await operation.submit();
+  } catch (error) {
+    throw createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+      `${label} failed before a reply was received.`,
+      true,
+      error
+    );
+  }
 }

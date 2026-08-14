@@ -21,6 +21,11 @@ internal static class ZLinkRemoteActorReplyProtocol
     public const string PacketName = "$zlink.actor.reply-relay.v1";
 }
 
+internal static class ZLinkRemoteActorSourceLeaveProtocol
+{
+    public const string PacketName = "$zlink.actor.source-leave.v1";
+}
+
 internal sealed record ZLinkRemoteActorFrameRelay(
     string ActorId,
     ulong ActorGeneration,
@@ -55,6 +60,13 @@ internal sealed record ZLinkRemoteActorReplyRelay(
     string ReplyCapability,
     string ResponderNodeRid,
     byte[] Frame);
+
+internal sealed record ZLinkRemoteActorSourceLeave(
+    string ActorId,
+    string HandoffId,
+    ulong ActorGeneration,
+    string TargetNodeRid,
+    ulong TargetAuthorityOwnerGeneration);
 
 internal sealed class ZLinkRemoteActorFrameRelayHandler(ZLinkFrameworkRuntime runtime)
     : IZLinkRouteSendHandler<ZLinkRemoteActorFrameRelay>
@@ -143,9 +155,8 @@ internal sealed class ZLinkRemoteSessionPushRelayHandler(ZLinkFrameworkRuntime r
         ZLinkRouteMessageContext context,
         CancellationToken cancellationToken)
     {
-        await runtime.DeliverRemoteSessionPushAsync(
+        await runtime.AdmitRemoteSessionPushOneWayAsync(
                 message,
-                message.Frame,
                 context.SourceNodeRid,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -174,5 +185,25 @@ internal sealed class ZLinkRemoteActorReplyRelayHandler(ZLinkFrameworkRuntime ru
                 message.Frame,
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+}
+
+internal sealed class ZLinkRemoteActorSourceLeaveHandler(ZLinkFrameworkRuntime runtime)
+    : IZLinkRouteSendHandler<ZLinkRemoteActorSourceLeave>
+{
+    public ValueTask HandleAsync(
+        ZLinkRemoteActorSourceLeave message,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var authenticatedTargetNodeRid = context.SourceNodeRid;
+        runtime.RunDetached(
+            $"actor-source-leave:{message.ActorId}:{message.HandoffId}",
+            token => runtime.DeliverRemoteActorSourceLeaveAsync(
+                message,
+                authenticatedTargetNodeRid,
+                token));
+        return ValueTask.CompletedTask;
     }
 }

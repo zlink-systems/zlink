@@ -16,13 +16,13 @@
 #include <zlink/Contracts/Sockets/results.hpp>
 #include <zlink/framework/contracts/actors/actor.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
+#include <zlink/framework/contracts/locations/options.hpp>
 
 #include "runtime/actors/actor_ref_access.hpp"
 #include <zlink/framework/contracts/locations/stores.hpp>
 
 #include <chrono>
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -43,6 +43,11 @@
 namespace zlink::framework::runtime::stateful
 {
 class raw_relocation_replay_coordinator_t;
+}
+
+namespace zlink::framework::detail
+{
+class spot_node_runtime_t;
 }
 
 namespace zlink::framework::runtime::host
@@ -392,6 +397,9 @@ struct host_options_t
     std::set<std::string> object_stable_types;
     std::chrono::milliseconds route_cache_max_age{15'000};
     std::chrono::milliseconds owner_lease_fencing_margin{5'000};
+    std::shared_ptr<zlink::context_t> core_context;
+    std::chrono::milliseconds session_relocation_seal_timeout =
+      location_options_t{}.session_relocation_seal_timeout;
     std::size_t user_spot_operation_capacity = 65'536;
     std::chrono::milliseconds user_spot_operation_replay_retention =
       std::chrono::minutes (5);
@@ -434,8 +442,7 @@ struct bound_session_operations_t
     std::function<bool (
       const protocol::session_relocation_route_t &,
       const stateful::stream_binding_t &,
-      const stateful::stream_binding_t &,
-      std::uint64_t)> commit_relocation_route;
+      const stateful::stream_binding_t &)> commit_relocation_route;
     std::function<std::optional<delivery_capability_t> (
       const protocol::bound_session_send_t &)> capture_send;
 };
@@ -466,13 +473,6 @@ using actor_create_operation_completion_t = std::function<void (
 using user_spot_close_completion_t = std::function<void (
   foundation::operation_terminal_t,
   protocol::user_spot_close_reply_t)>;
-
-using session_relocation_route_completion_t = std::function<void (
-  foundation::operation_terminal_t,
-  std::optional<protocol::session_relocation_routed_t>)>;
-using session_relocation_route_terminal_handler_t = std::function<bool (
-  const protocol::session_relocation_route_t &,
-  const protocol::session_relocation_routed_t &)>;
 
 struct session_relocation_seal_result_t
 {
@@ -568,14 +568,14 @@ class spot_handle_t
 
     spot_status_t status () const;
     const std::string &spot_id () const noexcept;
-    zlink::submit_result_t send_to_spot (
+    task_t<zlink::submit_result_t> send_to_spot (
       const zlink::routing_id_t &target_node_rid,
       const std::string &target_spot_id,
       std::uint64_t target_spot_generation,
       const std::vector<zlink::message_t> &parts,
       zlink::send_flags_t flags = zlink::send_flags_t::none,
       std::span<const std::uint8_t> metadata = {});
-    zlink::submit_result_t request_to_spot (
+    task_t<zlink::submit_result_t> request_to_spot (
       const zlink::routing_id_t &target_node_rid,
       const std::string &target_spot_id,
       std::uint64_t target_spot_generation,
@@ -590,6 +590,9 @@ class spot_handle_t
       const std::string &topic,
       const std::vector<zlink::message_t> &parts,
       zlink::send_flags_t flags = zlink::send_flags_t::none,
+      std::span<const std::uint8_t> metadata = {});
+    task_t<void> publish_tail (
+      const std::vector<zlink::message_t> &parts,
       std::span<const std::uint8_t> metadata = {});
     void set_subscription (const std::string &channel_name,
                            const std::string &topic);
@@ -623,12 +626,12 @@ class actor_handle_t
       const std::vector<zlink::message_t> &parts,
       call_id_t &operation,
       std::chrono::milliseconds timeout);
-    zlink::submit_result_t send_to (
+    task_t<zlink::submit_result_t> send_to (
       const actor_ref_t &target,
       const std::vector<zlink::message_t> &parts,
       zlink::send_flags_t flags = zlink::send_flags_t::none,
       std::span<const std::uint8_t> metadata = {});
-    zlink::submit_result_t request_to (
+    task_t<zlink::submit_result_t> request_to (
       const actor_ref_t &target,
       const std::vector<zlink::message_t> &parts,
       call_id_t &operation,
@@ -672,7 +675,7 @@ class public_host_runtime_t :
     void set_channel_weight (const std::string &channel_name,
                              std::uint32_t weight);
     mesh::raw_mesh_node_owner_t &transport () noexcept;
-    bool send_message_follow (
+    task_t<bool> send_message_follow (
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::message_follow_notice_t &notice);
     stateful::stateful_object_runtime_t &objects () noexcept;
@@ -746,64 +749,48 @@ class public_host_runtime_t :
       std::function<void (const protocol::message_follow_notice_t &)> handler);
     void configure_bound_session_operations (
       bound_session_operations_t operations);
-    bool seal_session_remote (
+    task_t<bool> seal_session_remote (
       const zlink::routing_id_t &session_owner_node,
       protocol::session_relocation_seal_t seal,
       std::chrono::milliseconds timeout,
       session_relocation_journal_capture_t capture_journal,
       session_relocation_seal_completion_t completion);
-    bool activate_instance_spot_remote (
+    task_t<bool> activate_instance_spot_remote (
       const zlink::routing_id_t &target_node,
       protocol::instance_spot_activation_header_t request,
       std::optional<std::vector<std::uint8_t>> metadata,
       protocol::application_payload_t application_payload,
       std::chrono::milliseconds timeout,
       instance_spot_activation_completion_t completion);
-    bool send_instance_spot_activation_remote (
+    task_t<bool> send_instance_spot_activation_remote (
       const zlink::routing_id_t &target_node,
       protocol::instance_spot_activation_header_t request,
       std::optional<std::vector<std::uint8_t>> metadata,
       protocol::application_payload_t application_payload);
-    bool prepare_relocation_remote (
+    task_t<bool> prepare_relocation_remote (
       const zlink::routing_id_t &target_node,
       protocol::relocation_prepare_t prepare,
       std::chrono::milliseconds timeout);
-    bool complete_relocation_remote (
+    task_t<bool> cutover_relocation_remote (
       const zlink::routing_id_t &target_node,
-      protocol::relocation_complete_t complete,
-      protocol::request_source_fence_t expected_target,
-      std::chrono::milliseconds timeout,
-      bool wait_for_target);
-    bool complete_relocated_source (
-      const stateful::object_ref_t &owner,
-      std::uint64_t sequence,
-      const protocol::reply_relay_t &relay,
-      const std::optional<protocol::application_payload_t> &reply);
-    bool acknowledge_relocated_source (
-      const stateful::object_ref_t &owner,
-      const protocol::wire_operation_id_t &operation);
+      protocol::relocation_cutover_t cutover);
     stateful::stateful_error_t ingest_stateful (
       const stateful::object_ref_t &owner);
-    bool route_session_remote (
+    task_t<bool> route_session_remote (
       const zlink::routing_id_t &session_owner_node,
-      protocol::session_relocation_route_t route,
-      std::chrono::milliseconds timeout,
-      session_relocation_route_completion_t completion);
-    bool track_completed_session_relocation_route (
-      protocol::session_relocation_route_t route,
-      session_relocation_route_terminal_handler_t terminal_handler = {});
+      protocol::session_relocation_route_t route);
     std::size_t recover_instance_spot_activations ();
-    bool create_user_spot_remote (
+    task_t<bool> create_user_spot_remote (
       const zlink::routing_id_t &target_node,
       protocol::user_spot_create_header_t request,
       std::chrono::milliseconds timeout,
       user_spot_create_completion_t completion);
-    bool create_actor_remote (
+    task_t<bool> create_actor_remote (
       const zlink::routing_id_t &target_node,
       protocol::actor_create_header_t request,
       std::chrono::milliseconds timeout,
       actor_create_operation_completion_t completion);
-    bool close_user_spot_remote (
+    task_t<bool> close_user_spot_remote (
       const zlink::routing_id_t &target_node,
       protocol::user_spot_close_header_t request,
       std::chrono::milliseconds timeout,
@@ -815,7 +802,7 @@ class public_host_runtime_t :
     actor_handle_t create_reserved_actor (
       std::string actor_type,
       stateful::object_ref_t reserved);
-    zlink::submit_result_t send_to_actor (
+    task_t<zlink::submit_result_t> send_to_actor (
       const actor_ref_t &target,
       const std::vector<zlink::message_t> &parts,
       std::span<const std::uint8_t> metadata = {},
@@ -823,14 +810,14 @@ class public_host_runtime_t :
       std::uint64_t owner_lease_generation = 0,
       std::optional<protocol::actor_message_header_t::bound_session_source_t>
         bound_session_source = std::nullopt);
-    zlink::submit_result_t send_bound_session (
+    task_t<zlink::submit_result_t> send_bound_session (
       const actor_ref_t &actor,
       const zlink::routing_id_t &session_owner,
       std::uint64_t expected_binding_generation,
       std::uint64_t authority_owner_generation,
       std::uint64_t owner_lease_generation,
       const std::vector<zlink::message_t> &parts);
-    zlink::submit_result_t request_to_actor (
+    task_t<zlink::submit_result_t> request_to_actor (
       const actor_ref_t &target,
       const std::vector<zlink::message_t> &parts,
       call_id_t &operation,
@@ -840,23 +827,23 @@ class public_host_runtime_t :
       std::uint64_t owner_lease_generation = 0,
       std::optional<protocol::actor_message_header_t::bound_session_source_t>
         bound_session_source = std::nullopt);
-    zlink::submit_result_t send_to_node (
+    task_t<zlink::submit_result_t> send_to_node (
       const zlink::routing_id_t &target,
       const std::vector<zlink::message_t> &parts);
-    zlink::submit_result_t request_to_node (
+    task_t<zlink::submit_result_t> request_to_node (
       const zlink::routing_id_t &target,
       const std::vector<zlink::message_t> &parts,
       call_id_t &operation,
       std::chrono::milliseconds timeout);
-    zlink::submit_result_t send_to_channel (
+    task_t<zlink::submit_result_t> send_to_channel (
       const std::string &channel_name,
       const std::vector<zlink::message_t> &parts);
-    zlink::submit_result_t request_to_channel (
+    task_t<zlink::submit_result_t> request_to_channel (
       const std::string &channel_name,
       const std::vector<zlink::message_t> &parts,
       call_id_t &operation,
       std::chrono::milliseconds timeout);
-    std::size_t dispatch_ready (
+    task_t<std::size_t> dispatch_ready (
       const std::function<void (const ready_record_t &,
                                 const receive_record_t &,
                                 std::vector<zlink::message_t>)> &dispatch,
@@ -864,6 +851,7 @@ class public_host_runtime_t :
     bool wait_for_dispatch_activity (
       std::chrono::milliseconds timeout,
       bool accept_application_receive = true) noexcept;
+    void signal_dispatch_activity () noexcept;
     bool prepare_actor_transfer (const actor_transfer_prepare_t &prepare,
                                  actor_transfer_token_t &token,
                                  actor_transfer_prepare_result_t &result);
@@ -889,6 +877,9 @@ class public_host_runtime_t :
     friend class spot_handle_t;
     friend class actor_handle_t;
     friend class actor_transfer_token_t;
+    friend class ::zlink::framework::detail::spot_node_runtime_t;
+
+    spot_handle_t bind_relocation_spot (stateful::object_ref_t object);
 
     protocol::application_payload_t encode_application (
       const std::vector<zlink::message_t> &parts,
@@ -953,14 +944,14 @@ class public_host_runtime_t :
                              operation_kind_t kind,
                              foundation::operation_terminal_t terminal,
                              std::vector<std::uint8_t> payload);
-    std::size_t dispatch_user_spot_operations ();
+    task_t<std::size_t> dispatch_user_spot_operations ();
     bool dispatch_bound_session_send (
       const mesh::service_mailbox_record_t &record,
       std::function<void ()> retain_mailbox_reservation = {},
       std::function<void ()> release_mailbox_reservation = {});
     void queue_bound_session_replacement_retry (
       protocol::bound_session_replaced_t replacement);
-    void retry_bound_session_replacements ();
+    task_t<void> retry_bound_session_replacements ();
 
     host_options_t _options;
     std::string _entry_spot_id;
@@ -1000,16 +991,21 @@ class public_host_runtime_t :
     bound_session_operations_t _bound_session_operations;
     std::shared_ptr<stateful::relocation_store_port_t>
       _session_relocations;
+    using session_seal_local_completion_t = std::function<void (
+      foundation::operation_terminal_t,
+      std::optional<protocol::session_relocation_sealed_t>)>;
     struct session_seal_terminal_record_t
     {
         protocol::session_relocation_seal_t seal;
         protocol::session_relocation_sealed_t sealed;
+        std::uint64_t last_accepted_sequence = 0;
         stateful::stream_barrier_t barrier;
+        std::chrono::steady_clock::time_point expires_at{};
         bool consumed = false;
         bool ready = false;
         std::vector<std::uint8_t> response_routing_id;
-        std::vector<std::function<void (
-          protocol::session_relocation_sealed_t)>> local_completions;
+        std::vector<session_seal_local_completion_t>
+          local_completions;
     };
     using session_relocation_key_t =
       std::tuple<std::uint64_t, std::uint64_t, std::string,
@@ -1022,61 +1018,47 @@ class public_host_runtime_t :
              std::pair<protocol::session_relocation_seal_t,
                        session_relocation_seal_result_t>>
       _session_journal_terminals;
-    relocation_detail::bounded_terminal_journal_t<
-      session_relocation_key_t,
-      protocol::session_relocation_route_t,
-      protocol::session_relocation_routed_t>
-      _session_route_terminals{65'536, std::chrono::minutes (5)};
     std::pair<bool,
               std::optional<protocol::session_relocation_sealed_t>>
     admit_session_relocation_seal (
       const protocol::session_relocation_seal_t &seal,
       const location_owner_token_t &session_owner,
       std::vector<std::uint8_t> response_routing_id,
-      std::function<void (protocol::session_relocation_sealed_t)>
-        local_completion = {});
+      session_seal_local_completion_t local_completion = {});
     using relocation_attempt_key_t =
       std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>;
     struct relocation_target_attempt_t;
     bool try_finalize_relocation_target (
       const relocation_attempt_key_t &key);
-    void retry_relocation_session_routes (
-      const relocation_attempt_key_t &key);
+    task_t<void> retry_relocation_session_routes (
+      relocation_attempt_key_t key);
     void flush_pending_session_relocation_seals ();
-    void complete_relocation_session_route (
-      const relocation_attempt_key_t &key,
-      std::size_t index,
-      foundation::operation_terminal_t terminal,
-      std::optional<protocol::session_relocation_routed_t> ack);
-    bool send_relocation_target_terminal (
-      const relocation_attempt_key_t &key);
     bool relocation_target_authority_committed (
       const relocation_target_attempt_t &attempt) const noexcept;
     bool relocation_target_authority_committed_strict (
       const relocation_target_attempt_t &attempt) const noexcept;
+    bool commit_relocation_target_authority (
+      relocation_target_attempt_t &attempt) noexcept;
     struct relocation_target_attempt_t
     {
         struct session_route_state_t
         {
             protocol::session_relocation_route_t route;
-            bool in_flight = false;
             bool completed = false;
             relocation_detail::session_route_retry_schedule_t retry;
-            session_relocation_route_terminal_handler_t terminal_handler;
-            std::optional<protocol::session_relocation_routed_t>
-              terminal_ack;
         };
         protocol::relocation_prepare_t prepare;
         stateful::relocation_restore_identity_t restore_identity;
+        std::vector<stateful::object_ref_t> sources;
         std::vector<stateful::object_ref_t> targets;
-        std::map<std::uint64_t, std::uint64_t> expected_high_water;
+        std::vector<protocol::relocation_object_t> wire_objects;
+        std::optional<stateful::aggregate_relocation_fence_t>
+          authority_fence;
         std::vector<session_route_state_t> session_routes;
-        bool reserved = false;
-        std::optional<protocol::relocation_complete_t> completion;
-        std::vector<std::uint8_t> completion_source_routing_id;
+        bool ready = false;
+        bool cutover_received = false;
+        std::chrono::steady_clock::time_point ready_fallback_at{};
         bool target_finalized = false;
-        bool session_route_only = false;
-        std::optional<protocol::relocation_complete_t> terminal_response;
         std::chrono::steady_clock::time_point attempt_expires_at{};
     };
     std::vector<relocation_target_attempt_t>
@@ -1086,35 +1068,16 @@ class public_host_runtime_t :
     void poll_relocation_target_attempts ();
     void cleanup_expired_relocation_target_attempts (
       std::vector<relocation_target_attempt_t> attempts) noexcept;
-    struct relocation_completion_wait_t
-    {
-        protocol::relocation_coordinator_fence_t coordinator;
-        protocol::request_source_fence_t expected_target;
-        protocol::source_cleanup_state_t source_cleanup_state =
-          protocol::source_cleanup_state_t::pending;
-        bool accepted = false;
-    };
-    struct relocation_reservation_wait_t
-    {
-        protocol::relocation_reserved_t expected;
-        bool accepted = false;
-    };
-    std::map<relocation_attempt_key_t, protocol::relocation_ready_t>
-      _relocation_ready_responses;
-    std::map<relocation_attempt_key_t, relocation_reservation_wait_t>
-      _relocation_reservation_responses;
-    std::map<relocation_attempt_key_t, relocation_completion_wait_t>
-      _relocation_complete_responses;
     std::map<relocation_attempt_key_t, relocation_target_attempt_t>
       _relocation_target_attempts;
     std::shared_ptr<stateful::authority_relocation_port_t>
       _relocation_authority;
-    static constexpr std::size_t relocation_terminal_capacity = 65'536;
+    std::shared_ptr<stateful::aggregate_authority_port_t>
+      _aggregate_relocation_authority;
     static constexpr auto relocation_attempt_retention =
       std::chrono::minutes (5);
-    static constexpr auto relocation_accept_retransmit_interval =
-      std::chrono::milliseconds (50);
-    std::condition_variable _relocation_changed;
+    static constexpr auto relocation_ready_fallback =
+      std::chrono::milliseconds (1000);
     struct user_spot_terminal_record_t
     {
         protocol::command kind = protocol::command::userSpotCreate;
@@ -1152,7 +1115,6 @@ class public_host_runtime_t :
     struct local_spot_request_state_t
     {
         std::chrono::steady_clock::time_point deadline;
-        std::size_t payload_bytes = 0;
         spot_request_completion_t completion;
         local_spot_deadline_index_t::iterator deadline_index;
         bool queued = true;
@@ -1164,7 +1126,6 @@ class public_host_runtime_t :
       zlink::framework::runtime::call_id_hash_t>
       _local_spot_requests;
     local_spot_deadline_index_t _local_spot_request_deadlines;
-    std::size_t _local_spot_request_bytes = 0;
     struct local_application_dispatch_t
     {
         ready_record_t owner;

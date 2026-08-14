@@ -536,14 +536,15 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                 connection.expected().securityIdentity(),
                 Integer.MAX_VALUE));
         try (Message message = Message.from(hello)) {
-            boolean submitted = connection.dealer().request(
-                List.of(message),
-                reply -> completeAdmission(connection, fence, reply),
-                SendFlags.DONT_WAIT,
-                adapterOptions.defaultRequestTimeout());
-            if (!submitted) {
-                removeConnection(connection.connectionId(), connection);
-            }
+            connection.dealer()
+                .request(List.of(message), adapterOptions.defaultRequestTimeout())
+                .whenComplete((reply, failure) -> {
+                    if (failure == null) {
+                        completeAdmission(connection, fence, reply);
+                    } else {
+                        removeConnection(connection.connectionId(), connection);
+                    }
+                });
         } catch (RuntimeException failure) {
             // A connection can terminate between the monitor readiness event
             // and the admission request. The monitor callback must not leak

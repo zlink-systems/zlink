@@ -686,146 +686,15 @@ final class ZLinkRedisAuthorityClient {
             KEYS[4], targetOwner, targetLease) then
             return {'conflict', nowMs}
         end
-        local targetDescriptor = nil
-        local targetLifecycle = nil
-        local targetBucket = nil
-        local targetNodeBucket = nil
-        local sourceBucket = nil
-        local sourceNodeBucket = nil
-        local delta = nil
-        if ARGV[4] == 'new-owner' then
-            local currentVersion =
-                redis.call('HGET', KEYS[1], 'storeVersion')
-            local currentOwner =
-                redis.call('HGET', KEYS[1], 'ownerId')
-            local currentLease =
-                redis.call('HGET', KEYS[1], 'ownerLeaseGeneration')
-            if redis.call('HGET', KEYS[7], 'state')
-                    ~= 'reserved'
-                or redis.call(
-                    'HGET', KEYS[7], 'authorityKey')
-                    ~= ARGV[10]
-                or redis.call(
-                    'HGET', KEYS[7], 'expectedVersion')
-                    ~= currentVersion
-                or redis.call(
-                    'HGET', KEYS[7], 'sourceOwner')
-                    ~= currentOwner
-                or redis.call(
-                    'HGET', KEYS[7], 'sourceLease')
-                    ~= currentLease
-                or redis.call(
-                    'HGET', KEYS[7], 'targetOwner')
-                    ~= targetOwner
-                or redis.call(
-                    'HGET', KEYS[7], 'targetLease')
-                    ~= targetLease
-                or redis.call('HGET', KEYS[7], 'kind')
-                    ~= redis.call(
-                        'HGET', KEYS[1], 'objectKind')
-                or redis.call(
-                    'HGET', KEYS[7], 'stableType')
-                    ~= redis.call(
-                        'HGET', KEYS[1], 'stableType')
-                or redis.call(
-                    'HGET', KEYS[7], 'sourceDescriptor')
-                    ~= redis.call(
-                        'HGET', KEYS[1], 'descriptorKey')
-                or redis.call(
-                    'HGET', KEYS[7], 'sourceLifecycle')
-                    ~= redis.call(
-                        'HGET', KEYS[1],
-                        'descriptorLifecycleGeneration')
-                or redis.call('HGET', KEYS[7], 'capacityBundle')
-                    ~= redis.call(
-                        'HGET', KEYS[1],
-                        'capacityBundle') then
-                return {'conflict', nowMs}
-            end
-            targetDescriptor = redis.call(
-                'HGET', KEYS[7], 'descriptorKey')
-            targetLifecycle = redis.call(
-                'HGET', KEYS[7], 'targetLifecycle')
-            targetBucket = redis.call(
-                'HGET', KEYS[7], 'targetBucket')
-            targetNodeBucket = redis.call(
-                'HGET', KEYS[7], 'targetNodeBucket')
-            sourceBucket = redis.call(
-                'HGET', KEYS[7], 'sourceBucket')
-            sourceNodeBucket = redis.call(
-                'HGET', KEYS[7], 'sourceNodeBucket')
-            delta = capacityDelta(
-                redis.call('HGET', KEYS[7], 'capacityBundle'),
-                redis.call('HGET', KEYS[7], 'kind'))
-            local descriptorRowKey = KEYS[9]
-            local accepted, checkedBucket, checkedNodeBucket =
-                descriptorAccepts(
-                    descriptorRowKey, KEYS[10],
-                    targetDescriptor,
-                    targetLifecycle, targetOwner, targetLease,
-                    redis.call('HGET', KEYS[7], 'kind'),
-                    redis.call('HGET', KEYS[7], 'stableType'),
-                    capacityKeys, 0)
-            local currentSourceBucket = capacityBucket(
-                redis.call('HGET', KEYS[1], 'descriptorKey'),
-                redis.call(
-                    'HGET', KEYS[1],
-                    'descriptorLifecycleGeneration'),
-                redis.call('HGET', KEYS[1], 'objectKind'),
-                redis.call('HGET', KEYS[1], 'stableType'))
-            local currentSourceNodeBucket = nodeCapacityBucket(
-                redis.call('HGET', KEYS[1], 'descriptorKey'),
-                redis.call(
-                    'HGET', KEYS[1],
-                    'descriptorLifecycleGeneration'),
-                redis.call('HGET', KEYS[1], 'objectKind'))
-            if redis.call('HGET', KEYS[1], 'objectKind') == 'actor' then
-                currentSourceBucket = currentSourceNodeBucket
-            end
-            if not accepted
-                or checkedBucket ~= targetBucket
-                or checkedNodeBucket ~= targetNodeBucket
-                or not delta
-                or sourceBucket ~= currentSourceBucket
-                or sourceNodeBucket ~= currentSourceNodeBucket
-                or not canAdjustCapacity(
-                    capacityKeys, sourceBucket, sourceNodeBucket,
-                    'active', -delta)
-                or not canAdjustCapacity(
-                    capacityKeys, targetBucket, targetNodeBucket,
-                    'pending', -delta)
-                or not canAdjustCapacity(
-                    capacityKeys, targetBucket, targetNodeBucket,
-                    'active', delta) then
-                return {'conflict', nowMs}
-            end
-        end
-        if counterValue(KEYS[3], 'storeRevision') == maxCounter
-            or (ARGV[4] ~= 'preserve'
-                and counterValue(
-                    KEYS[6], 'authorityOwnerGeneration')
-                    == maxCounter) then
+        if counterValue(KEYS[3], 'storeRevision') == maxCounter then
             return {'generation-exhausted', nowMs}
         end
         local revision = incrementCounter(
             KEYS[3], 'storeRevision')
         local objectGeneration =
             redis.call('HGET', KEYS[1], 'objectGeneration')
-        local ownerGeneration = ARGV[4] == 'preserve'
-            and redis.call('HGET', KEYS[1], 'authorityOwnerGeneration')
-            or incrementCounter(
-                KEYS[6], 'authorityOwnerGeneration')
-        if ARGV[4] == 'new-owner' then
-            adjustCapacity(
-                capacityKeys, sourceBucket, sourceNodeBucket,
-                'active', -delta)
-            adjustCapacity(
-                capacityKeys, targetBucket, targetNodeBucket,
-                'pending', -delta)
-            adjustCapacity(
-                capacityKeys, targetBucket, targetNodeBucket,
-                'active', delta)
-        end
+        local ownerGeneration =
+            redis.call('HGET', KEYS[1], 'authorityOwnerGeneration')
         redis.call('HSET', KEYS[1],
             'storeVersion', revision,
             'payload', ARGV[5],
@@ -834,21 +703,10 @@ final class ZLinkRedisAuthorityClient {
             'ownerId', targetOwner,
             'ownerLeaseGeneration', targetLease,
             'authorityKey', ARGV[10])
-        if ARGV[4] == 'new-owner' then
-            redis.call('HSET', KEYS[1],
-                'descriptorKey', targetDescriptor,
-                'descriptorLifecycleGeneration',
-                    targetLifecycle)
-        end
         recordHistory(
             KEYS[1], KEYS[11], KEYS[12],
             KEYS[16], KEYS[18])
         redis.call('ZADD', KEYS[2], 0, ARGV[6])
-        if ARGV[4] == 'new-owner' then
-            redis.call('HSET', KEYS[7],
-                'state', 'committed',
-                'committedVersion', revision)
-        end
         return {'stored', nowMs, revision,
             objectGeneration, ownerGeneration, targetOwner, targetLease,
             redis.call('HGET', KEYS[1], 'allocationState'),
@@ -1179,125 +1037,6 @@ final class ZLinkRedisAuthorityClient {
         end
         return {ARGV[10] == 'rejected'
             and 'rejected' or 'aborted', nowMs}
-        """;
-    private static final String RESERVE_RELOCATION_CAPACITY = PROLOGUE + """
-        local capacityKeys = {
-            KEYS[4], KEYS[7], KEYS[8], KEYS[9],
-            KEYS[10], KEYS[11]}
-        local existingState = redis.call('HGET', KEYS[5], 'state')
-        if existingState then
-            if redis.call('HGET', KEYS[5], 'signature') == ARGV[14] then
-                return {'already-reserved', nowMs}
-            end
-            return {'conflict', nowMs}
-        end
-        if redis.call('EXISTS', KEYS[1]) == 0
-            or redis.call('HGET', KEYS[1], 'storeVersion') ~= ARGV[1] then
-            return {'conflict', nowMs}
-        end
-        if redis.call('HGET', KEYS[1], 'ownerId') ~= ARGV[2]
-            or redis.call('HGET', KEYS[1], 'ownerLeaseGeneration') ~= ARGV[3]
-            or redis.call('HGET', KEYS[1], 'allocationState') ~= 'active'
-            or redis.call('HGET', KEYS[1], 'objectKind') ~= ARGV[6]
-            or redis.call('HGET', KEYS[1], 'stableType') ~= ARGV[7]
-            or redis.call('HGET', KEYS[1], 'descriptorKey') ~= ARGV[8]
-            or redis.call('HGET', KEYS[1], 'descriptorLifecycleGeneration') ~= ARGV[9]
-            or redis.call('HGET', KEYS[1], 'capacityBundle') ~= ARGV[10] then
-            return {'conflict', nowMs}
-        end
-        if not leaseIsLive(KEYS[2], ARGV[4], ARGV[5]) then
-            return {'target-unavailable', nowMs}
-        end
-        local accepted, targetBucket, targetNodeBucket =
-            descriptorAccepts(
-                KEYS[3], KEYS[6],
-                ARGV[11], ARGV[12],
-                ARGV[4], ARGV[5], ARGV[6], ARGV[7],
-                capacityKeys, capacityDelta(ARGV[10], ARGV[6]))
-        if not accepted then
-            return {
-                targetBucket == 'capacity'
-                    and 'capacity-exhausted'
-                    or 'target-unavailable',
-                nowMs}
-        end
-        local sourceBucket = capacityBucket(
-            redis.call('HGET', KEYS[1], 'descriptorKey'),
-            redis.call(
-                'HGET', KEYS[1],
-                'descriptorLifecycleGeneration'),
-            redis.call('HGET', KEYS[1], 'objectKind'),
-            redis.call('HGET', KEYS[1], 'stableType'))
-        local sourceNodeBucket = nodeCapacityBucket(
-            redis.call('HGET', KEYS[1], 'descriptorKey'),
-            redis.call(
-                'HGET', KEYS[1],
-                'descriptorLifecycleGeneration'),
-            redis.call('HGET', KEYS[1], 'objectKind'))
-        if redis.call('HGET', KEYS[1], 'objectKind') == 'actor' then
-            sourceBucket = sourceNodeBucket
-        end
-        if not sourceBucket or not sourceNodeBucket
-            or not adjustCapacity(
-                capacityKeys, targetBucket, targetNodeBucket,
-                'pending', capacityDelta(ARGV[10], ARGV[6])) then
-            return {'capacity-exhausted', nowMs}
-        end
-        redis.call('HSET', KEYS[5],
-            'state', 'reserved',
-            'signature', ARGV[14],
-            'authorityKey', ARGV[16],
-            'expectedVersion', ARGV[1],
-            'kind', ARGV[6],
-            'stableType', ARGV[7],
-            'sourceDescriptor', ARGV[8],
-            'sourceLifecycle', ARGV[9],
-            'sourceOwner', ARGV[2],
-            'sourceLease', ARGV[3],
-            'sourceBucket', sourceBucket,
-            'sourceNodeBucket', sourceNodeBucket,
-            'descriptorKey', ARGV[11],
-            'targetLifecycle', ARGV[12],
-            'targetOwner', ARGV[4],
-            'targetLease', ARGV[5],
-            'targetBucket', targetBucket,
-            'targetNodeBucket', targetNodeBucket,
-            'capacityBundle', ARGV[10])
-        return {'reserved', nowMs}
-        """;
-    private static final String ABORT_RELOCATION_CAPACITY = PROLOGUE + """
-        local capacityKeys = {
-            KEYS[2], KEYS[3], KEYS[4], KEYS[5],
-            KEYS[6], KEYS[7]}
-        local state = redis.call('HGET', KEYS[1], 'state')
-        if not state then return {'stale', nowMs} end
-        if state == 'aborted' then
-            return {'already-aborted', nowMs}
-        end
-        if state == 'committed' then
-            return {'already-committed', nowMs}
-        end
-        if state ~= 'reserved' then
-            return {'stale', nowMs}
-        end
-        local targetBucket =
-            redis.call('HGET', KEYS[1], 'targetBucket')
-        local targetNodeBucket =
-            redis.call('HGET', KEYS[1], 'targetNodeBucket')
-        local delta = capacityDelta(
-            redis.call('HGET', KEYS[1], 'capacityBundle'),
-            redis.call('HGET', KEYS[1], 'kind'))
-        if not targetBucket or not targetNodeBucket or not delta
-            or not canAdjustCapacity(
-                capacityKeys, targetBucket, targetNodeBucket,
-                'pending', -delta) then
-            return {'stale', nowMs}
-        end
-        adjustCapacity(
-            capacityKeys, targetBucket, targetNodeBucket,
-            'pending', -delta)
-        redis.call('HSET', KEYS[1], 'state', 'aborted')
-        return {'aborted', nowMs}
         """;
     private static final String PREPARE_AGGREGATE = PROLOGUE + """
         local capacityKeys = {
@@ -1758,24 +1497,11 @@ final class ZLinkRedisAuthorityClient {
                     mutation).payload()
                 : ((ZLinkAuthorityPut) mutation).payload();
         String payload = encode(mutationPayload);
-        ZLinkAuthorityPut put = deleting || restoring
-            ? null
-            : (ZLinkAuthorityPut) mutation;
-        String transition = deleting
-            ? "preserve"
-            : switch (put.generationTransition()) {
-                case PRESERVE -> "preserve";
-                case NEW_OWNER -> "new-owner";
-            };
+        String transition = "preserve";
         ZLinkLocationOwnerToken targetOwner = restoring
             ? ((ZLinkAuthorityRestore)
                 mutation).expectedOwner()
-            : put == null ? null : put.targetOwner().orElse(null);
-        String capacityFence = put == null
-            ? ""
-            : put.relocationCapacityFence()
-                .map(ZLinkRelocationCapacityFence::value)
-                .orElse("");
+            : null;
         String leaseOwner = targetOwner == null
             ? ""
             : targetOwner.ownerId();
@@ -1786,21 +1512,7 @@ final class ZLinkRedisAuthorityClient {
                     current instanceof ZLinkAuthoritySnapshot snapshot
                         ? snapshot.ownerId()
                         : "");
-        CompletionStage<Optional<ZLinkMeshNodeDescriptorKey>>
-            targetDescriptorStage =
-            "new-owner".equals(transition)
-                ? connection.commands().thenCompose(redis ->
-                    redis.hget(
-                        keys.relocationCapacityKey(capacityFence),
-                        "descriptorKey"))
-                    .thenApply(value -> Optional.of(
-                        descriptor(value)))
-                : CompletableFuture.completedFuture(
-                    Optional.empty());
-        return leaseOwnerStage.thenCombine(
-            targetDescriptorStage,
-            CasInputs::new)
-            .thenCompose(inputs ->
+        return leaseOwnerStage.thenCompose(currentLeaseOwner ->
             connection.commands()
             .thenCompose(redis -> redis.<List<Object>>eval(
                 CAS,
@@ -1809,20 +1521,13 @@ final class ZLinkRedisAuthorityClient {
                     keys.authorityRowKey(key),
                     keys.authorityIndexKey(),
                     keys.authorityRevisionKey(),
-                    keys.leaseKey(inputs.leaseOwner),
+                    keys.leaseKey(currentLeaseOwner),
                     keys.authorityObjectGenerationKey(),
                     keys.authorityOwnerGenerationKey(),
-                    keys.relocationCapacityKey(
-                        capacityFence.isEmpty()
-                            ? "unused"
-                            : capacityFence),
+                    keys.schemaKey(),
                     keys.capacityTypeActiveKey(),
-                    inputs.targetDescriptor
-                        .map(keys::meshNodeDescriptorRowKey)
-                        .orElse(keys.schemaKey()),
-                    inputs.targetDescriptor
-                        .map(keys::meshNodeDescriptorMetadataKey)
-                        .orElse(keys.schemaKey()),
+                    keys.schemaKey(),
+                    keys.schemaKey(),
                     keys.authorityHistoryKey(key),
                     keys.authorityHistoryRevisionsKey(key),
                     keys.capacityTypePendingKey(),
@@ -1844,7 +1549,7 @@ final class ZLinkRedisAuthorityClient {
                 targetOwner == null
                     ? ""
                     : Long.toString(targetOwner.leaseGeneration()),
-                capacityFence,
+                "",
                 key)))
             .thenCompose(raw -> {
                 String status = string(raw.getFirst());
@@ -2215,113 +1920,6 @@ final class ZLinkRedisAuthorityClient {
             .thenCompose(redis -> redis.hgetall(
                 keys.creationTerminalKey(operation)))
             .thenApply(fields -> decodeCreationTerminal(operation, fields));
-    }
-
-    CompletionStage<ZLinkRelocationCapacityReserveResult>
-        reserveRelocationCapacity(
-            ZLinkRelocationCapacityReservationRequest request,
-            ZLinkStoreCancellation cancellation) {
-        if (cancelled(cancellation)) {
-            return cancelledStage();
-        }
-        String fence = request.reservationId().toString();
-        String signature = relocationSignature(request);
-        return connection.commands()
-            .thenCompose(redis -> redis.<List<Object>>eval(
-                RESERVE_RELOCATION_CAPACITY,
-                ScriptOutputType.MULTI,
-                new String[] {
-                    keys.authorityRowKey(request.authorityKey()),
-                    keys.leaseKey(
-                        request.targetOwner().ownerId()),
-                    keys.meshNodeDescriptorRowKey(
-                        request.targetDescriptor()),
-                    keys.capacityTypeActiveKey(),
-                    keys.relocationCapacityKey(fence)
-                    ,
-                    keys.meshNodeDescriptorMetadataKey(
-                        request.targetDescriptor()),
-                    keys.capacityTypePendingKey(),
-                    keys.capacityNodeActiveKey(),
-                    keys.capacityNodePendingKey(),
-                    keys.capacitySpotActiveKey(),
-                    keys.capacitySpotReservedKey()
-                },
-                request.expectedStoreVersion(),
-                request.sourceOwner().ownerId(),
-                Long.toString(
-                    request.sourceOwner().leaseGeneration()),
-                request.targetOwner().ownerId(),
-                Long.toString(
-                    request.targetOwner().leaseGeneration()),
-                objectKindToken(request.objectKind()),
-                request.stableType(),
-                descriptorKey(request.sourceDescriptor()),
-                Long.toString(
-                    request.sourceDescriptorLifecycleGeneration()),
-                encodeCapacityBundle(request.capacityBundle()),
-                descriptorKey(request.targetDescriptor()),
-                Long.toString(
-                    request.targetDescriptorLifecycleGeneration()),
-                "",
-                signature,
-                keys.meshNodeDescriptorRowKey(
-                    request.targetDescriptor()),
-                request.authorityKey()))
-            .thenCompose(raw -> {
-                String status = string(raw.getFirst());
-                if ("conflict".equals(status)) {
-                    return read(request.authorityKey(), cancellation)
-                        .thenApply(
-                            ZLinkRelocationCapacityConflict::new);
-                }
-                ZLinkRelocationCapacityFence capacityFence =
-                    new ZLinkRelocationCapacityFence(fence);
-                return CompletableFuture.completedFuture(
-                    switch (status) {
-                        case "reserved" ->
-                            new ZLinkRelocationCapacityReserved(
-                                capacityFence);
-                        case "already-reserved" ->
-                            new ZLinkRelocationCapacityAlreadyReserved(
-                                capacityFence);
-                        case "capacity-exhausted" ->
-                            new ZLinkRelocationCapacityExhausted();
-                        default ->
-                            new ZLinkRelocationCapacityTargetUnavailable();
-                    });
-            });
-    }
-
-    CompletionStage<ZLinkRelocationCapacityAbortResult>
-        abortRelocationCapacity(
-            ZLinkRelocationCapacityFence fence,
-            ZLinkStoreCancellation cancellation) {
-        if (cancelled(cancellation)) {
-            return cancelledStage();
-        }
-        return connection.commands()
-            .thenCompose(redis -> redis.<List<Object>>eval(
-                ABORT_RELOCATION_CAPACITY,
-                ScriptOutputType.MULTI,
-                new String[] {
-                    keys.relocationCapacityKey(fence.value()),
-                    keys.capacityTypeActiveKey(),
-                    keys.capacityTypePendingKey(),
-                    keys.capacityNodeActiveKey(),
-                    keys.capacityNodePendingKey(),
-                    keys.capacitySpotActiveKey(),
-                    keys.capacitySpotReservedKey()
-                }))
-            .thenApply(raw -> switch (string(raw.getFirst())) {
-                case "aborted" ->
-                    ZLinkRelocationCapacityAbortResult.ABORTED;
-                case "already-aborted" ->
-                    ZLinkRelocationCapacityAbortResult.ALREADY_ABORTED;
-                case "already-committed" ->
-                    ZLinkRelocationCapacityAbortResult.ALREADY_COMMITTED;
-                default -> ZLinkRelocationCapacityAbortResult.STALE;
-            });
     }
 
     CompletionStage<ZLinkAggregatePrepareResult> prepareAggregate(
@@ -2946,50 +2544,6 @@ final class ZLinkRedisAuthorityClient {
         return ZLinkRedisLocationKeyCodec.encodeMeshNodeKey(descriptor);
     }
 
-    private static String relocationSignature(
-        ZLinkRelocationCapacityReservationRequest request) {
-        try {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            try (DataOutputStream data = new DataOutputStream(bytes)) {
-                writeField(data, request.reservationId().toString());
-                writeField(data, request.authorityKey());
-                writeField(data, request.expectedStoreVersion());
-                data.writeInt(request.objectKind().value());
-                writeField(data, request.stableType());
-                writeField(
-                    data,
-                    descriptorKey(request.sourceDescriptor()));
-                data.writeLong(
-                    request.sourceDescriptorLifecycleGeneration());
-                writeField(data, request.sourceOwner().ownerId());
-                data.writeLong(
-                    request.sourceOwner().leaseGeneration());
-                writeField(
-                    data,
-                    descriptorKey(request.targetDescriptor()));
-                data.writeLong(
-                    request.targetDescriptorLifecycleGeneration());
-                writeField(data, request.targetOwner().ownerId());
-                data.writeLong(
-                    request.targetOwner().leaseGeneration());
-                writeField(
-                    data,
-                    encodeCapacityBundle(request.capacityBundle()));
-            }
-            return HexFormat.of().formatHex(
-                MessageDigest.getInstance("SHA-256")
-                    .digest(bytes.toByteArray()));
-        } catch (IOException impossible) {
-            throw new IllegalStateException(
-                "failed to encode relocation reservation",
-                impossible);
-        } catch (NoSuchAlgorithmException impossible) {
-            throw new IllegalStateException(
-                "SHA-256 is unavailable",
-                impossible);
-        }
-    }
-
     private AggregateEncoding encodeAggregate(
         ZLinkAggregatePrepareRequest request) {
         if (request.aggregateId().getMostSignificantBits() == 0L
@@ -3396,11 +2950,6 @@ final class ZLinkRedisAuthorityClient {
         UUID scanId,
         String watermark,
         int offset) {
-    }
-
-    private record CasInputs(
-        String leaseOwner,
-        Optional<ZLinkMeshNodeDescriptorKey> targetDescriptor) {
     }
 
     private record CapacityMaps(

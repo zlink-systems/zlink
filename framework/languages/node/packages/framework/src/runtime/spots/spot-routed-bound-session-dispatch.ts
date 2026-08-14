@@ -3,9 +3,7 @@ import type { ActorRef } from '../../contracts';
 import type { ZLinkChannelEnvelopeCodecRegistry } from '../channels/channel-envelope';
 import {
   decodeRemoteBoundSessionError,
-  decodeRemoteBoundSessionOwnership,
   decodeRemoteBoundSessionResponse,
-  decodeRemoteBoundSessionSeal,
   decodeRemoteBoundSessionSend
 } from './spot-remote-route-codec';
 import {
@@ -13,7 +11,6 @@ import {
   submitRoutePayloadReply,
   submitRouteReply
 } from './spot-route-replies';
-import { encodeRemoteBoundSessionNack } from '../actors/bound-session-wire';
 import type { ZLinkActorResponseOptions } from './spot-actor-packet-dispatch';
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import type { ZLinkDispatchErrorReporter } from '../channels';
@@ -47,20 +44,6 @@ interface ZLinkSpotRoutedBoundSessionDispatchOptions {
     actorPacketTarget?: unknown,
     signal?: AbortSignal
   ) => Promise<void>;
-  readonly routedBoundSessionOwnershipReceiver?: (payload: unknown) => Promise<{
-    readonly actorId: string;
-    readonly actorGeneration: string;
-    readonly actorOwnershipGeneration: string;
-    readonly bindingGeneration: string;
-    readonly targetOwnerLeaseGeneration: string;
-    readonly acceptedHighWater: string;
-    readonly sealId: string;
-  }>;
-  readonly routedBoundSessionSealReceiver?: (payload: unknown) => Promise<{
-    readonly actorId: string;
-    readonly sealId: string;
-    readonly acceptedHighWater: string;
-  }>;
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
 }
 
@@ -68,38 +51,6 @@ export class ZLinkSpotRoutedBoundSessionDispatch {
   constructor(private readonly options: ZLinkSpotRoutedBoundSessionDispatchOptions) {}
 
   async dispatch(received: BackendReceived): Promise<boolean> {
-    const seal = decodeRemoteBoundSessionSeal(received.parts, this.options.channelCodecs());
-    if (seal !== undefined) {
-      let ack;
-      try {
-        ack = await this.options.routedBoundSessionSealReceiver?.(seal);
-      } catch (error) {
-        // A fence rejection repeats identically on every retry: nack the
-        // requester with its typed code so the sender terminates its loop.
-        if (!isReplyableRequestSeq(received.requestSeq)) throw error;
-        submitRoutePayloadReply(received, seal.envelope, encodeRemoteBoundSessionNack(error));
-        return true;
-      }
-      if (isReplyableRequestSeq(received.requestSeq)) {
-        submitRoutePayloadReply(received, seal.envelope, ack ?? { ok: false });
-      }
-      return true;
-    }
-    const ownership = decodeRemoteBoundSessionOwnership(received.parts, this.options.channelCodecs());
-    if (ownership !== undefined) {
-      let ack;
-      try {
-        ack = await this.options.routedBoundSessionOwnershipReceiver?.(ownership);
-      } catch (error) {
-        if (!isReplyableRequestSeq(received.requestSeq)) throw error;
-        submitRoutePayloadReply(received, ownership.envelope, encodeRemoteBoundSessionNack(error));
-        return true;
-      }
-      if (isReplyableRequestSeq(received.requestSeq)) {
-        submitRoutePayloadReply(received, ownership.envelope, ack ?? { ok: false });
-      }
-      return true;
-    }
     const boundSessionSend = decodeRemoteBoundSessionSend(received.parts, this.options.channelCodecs());
     if (boundSessionSend !== undefined) {
       await runWithFlow(

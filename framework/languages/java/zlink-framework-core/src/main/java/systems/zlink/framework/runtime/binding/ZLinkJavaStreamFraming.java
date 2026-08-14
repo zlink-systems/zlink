@@ -47,17 +47,23 @@ final class ZLinkJavaStreamFraming {
         ZLinkStreamHeader header,
         List<Message> parts,
         SendFlags flags) {
-        if (parts == null || parts.size() != 1) {
-            throw new IllegalArgumentException("stream frame requires exactly one payload part");
-        }
-        Message frame = Message.from(ZLinkStreamFrameCodec.encode(
-            ZLinkStreamHeaderCodec.encode(header),
-            parts.get(0).toByteArray()));
+        Message frame = frame(header, parts);
         try {
             return operation.message(frame).flags(flags).submit();
         } finally {
             frame.close();
         }
+    }
+
+    static Message frame(
+        ZLinkStreamHeader header,
+        List<Message> parts) {
+        if (parts == null || parts.size() != 1) {
+            throw new IllegalArgumentException("stream frame requires exactly one payload part");
+        }
+        return Message.from(ZLinkStreamFrameCodec.encode(
+            ZLinkStreamHeaderCodec.encode(header),
+            parts.get(0).toByteArray()));
     }
 
     private static StreamPayload streamPayload(String packetName, List<Message> parts) {

@@ -108,7 +108,6 @@ import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 
 public final class ZLinkChannelRuntime
     implements ZLinkClient, ZLinkFanoutClient, ZLinkRouteClient, ZLinkChannelRuntimeOptions,
@@ -126,8 +125,6 @@ public final class ZLinkChannelRuntime
     private final boolean ownsContext;
     private final ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
     private final ZLinkChannelDispatchRegistry dispatchRegistry;
-    private final ZLinkSpotRouteBridgeRawReplies spotRouteBridgeRawReplies =
-        new ZLinkSpotRouteBridgeRawReplies();
     private final ZLinkMessageSerializer serializer;
     private final ZLinkChannelReplyDecoder replyDecoder;
     private final ZLinkCodecRegistration codecs;
@@ -137,7 +134,6 @@ public final class ZLinkChannelRuntime
     private final List<Class<? extends ZLinkHandlerFilter>> filterTypes;
     private final ZLinkChannelHandlerInvoker channelHandlerInvoker;
     private final ZLinkChannelReceiveLoops receiveLoops;
-    private final ZLinkInboundDispatchBudget inboundDispatchBudget;
     private final Duration defaultRequestTimeout;
     private final ZLinkChannelCallRuntime callRuntime;
     private final SpotTransportAddressResolver spotAddressResolver;
@@ -167,11 +163,6 @@ public final class ZLinkChannelRuntime
             () -> manualFanoutRuntime,
             () -> hostState.get());
     private Supplier<ZLinkInternalSpotNode> spotRouteBridgeOwner;
-    private final ExecutorService spotRouteBridgeExecutor = Executors.newSingleThreadExecutor(task -> {
-        Thread thread = new Thread(task, "zlink-java-spot-route-bridge");
-        thread.setDaemon(true);
-        return thread;
-    });
     private final ScheduledExecutorService spotRouteBridgeDrainLoopExecutor =
         Executors.newSingleThreadScheduledExecutor(task -> {
             Thread thread = new Thread(task, "zlink-java-spot-route-bridge-drain");
@@ -467,9 +458,9 @@ public final class ZLinkChannelRuntime
             this.handlerExecutor,
             suspendHandlerInvokers,
             filterTypes);
-        this.inboundDispatchBudget = registration.inboundDispatchBudget();
         this.receiveLoops = new ZLinkChannelReceiveLoops(
-            () -> running, inboundDispatchBudget);
+            () -> running,
+            registration.applicationJobQueue());
         this.defaultRequestTimeout = registration.defaultRequestTimeout();
         this.spotRouteBridgeDrainer = new ZLinkSpotRouteBridgeDrainer(
             sockets.spotRouteBridges(),
@@ -487,29 +478,24 @@ public final class ZLinkChannelRuntime
         this.callRuntime = new ZLinkChannelCallRuntime(
             dispatchErrors.flow(),
             timeoutExecutor,
-            infrastructureExecutor,
-            defaultRequestTimeout,
             replyDecoder,
             this::sendToSpotViaRouterChannel,
             this::requestToSpotViaRouterChannel,
-            new ZLinkOneWayCalls(admission));
+            new ZLinkOneWayCalls());
         this.dispatchReporter = new ZLinkChannelDispatchReporter(dispatchErrors);
         this.messageDispatcher = new ZLinkChannelMessageDispatcher(
             dispatchRegistry,
             channelHandlerInvoker,
             dispatchReporter,
-            dispatchErrors.flow(),
-            inboundDispatchBudget);
+            dispatchErrors.flow());
         this.routeDispatcher = new ZLinkChannelRouteDispatcher(
             sockets,
             dispatchRegistry,
-            spotRouteBridgeRawReplies,
             channelHandlerInvoker,
             dispatchReporter,
             dispatchErrors.flow(),
             spotRouteBridgeDrainer,
-            this::resolveSpotRouteBridgeForDispatch,
-            inboundDispatchBudget);
+            this::resolveSpotRouteBridgeForDispatch);
         this.context = Objects.requireNonNull(context, "context");
         this.ownsContext = ownsContext;
         this.clientServerMonitoringBackend =
@@ -902,19 +888,20 @@ public final class ZLinkChannelRuntime
             new ZLinkClientServerServiceWire.Hello(
                 channelName, "default", Integer.MAX_VALUE));
         try (Message message = Message.from(hello)) {
-            boolean submitted = dealer.request(
-                List.of(message),
-                reply -> completeManualClientServerAdmission(
-                    connectionId,
-                    channelName,
-                    endpoint,
-                    fence,
-                    reply),
-                SendFlags.DONT_WAIT,
-                defaultRequestTimeout(channelName));
-            if (!submitted) {
-                sockets.reconnectClientServerConnection(connectionId, dealer);
-            }
+            dealer.request(List.of(message), defaultRequestTimeout(channelName))
+                .whenComplete((reply, failure) -> {
+                    if (failure != null) {
+                        sockets.clientServerTransportTerminated(
+                            connectionId, dealer);
+                        return;
+                    }
+                    completeManualClientServerAdmission(
+                        connectionId,
+                        channelName,
+                        endpoint,
+                        fence,
+                        reply);
+                });
         } catch (ZlinkSubmitException ignored) {
             // A monitor callback may race with draining or socket teardown.
             // Treat the failed admission request as a terminated candidate;
@@ -1362,12 +1349,22 @@ public final class ZLinkChannelRuntime
         callRuntime.track(result, effectiveTimeout);
         List<Message> requestParts = ZLinkChannelCallRuntime.parts(
             Optional.of(packetName), payload);
-        try {
-            callRuntime.submitRoute(
+        callRuntime.requestRoute(
                 requireRouteRouter(channelName),
                 target,
                 requestParts,
-                reply -> {
+                effectiveTimeout)
+            .whenComplete((reply, failure) -> {
+                requestParts.forEach(Message::close);
+                if (failure != null) {
+                    result.completeExceptionally(
+                        ZLinkChannelCallRuntime.unwrap(failure));
+                    return;
+                }
+                if (result.isDone()) {
+                    reply.close();
+                    return;
+                }
                     try {
                         if (reply.result() != ZLinkBackendRequestResult.OK) {
                             result.completeExceptionally(new ZLinkFrameworkException(
@@ -1382,14 +1379,9 @@ public final class ZLinkChannelRuntime
                     } catch (RuntimeException error) {
                         result.completeExceptionally(error);
                     } finally {
-                        reply.parts().forEach(Message::close);
+                        reply.close();
                     }
-                },
-                effectiveTimeout,
-                result);
-        } finally {
-            requestParts.forEach(Message::close);
-        }
+            });
         return ZLinkAsyncSerialQueue.manageCurrent(result);
     }
 
@@ -1427,18 +1419,12 @@ public final class ZLinkChannelRuntime
         }
         try {
             ZLinkBackendSpotRouteBridge bridge = requireSpotRouteBridge(routerChannelId);
-            List<byte[]> bridgePayloads = spotParts.stream()
-                .map(Message::toByteArray)
-                .toList();
-            ZLinkSpotRouteBridgeDispatcher.submitSendWithRetry(
+            ZLinkSpotRouteBridgeDispatcher.submitSend(
                 bridge,
                 routerChannelId,
                 targetNodeRid,
                 targetSpotId,
-                bridgePayloads,
-                timeout,
-                timeoutExecutor,
-                infrastructureExecutor,
+                copyMessages(spotParts),
                 result);
             return result;
         } catch (RuntimeException ex) {
@@ -1501,8 +1487,6 @@ public final class ZLinkChannelRuntime
                 targetSpotId,
                 copyMessages(spotParts),
                 timeout,
-                spotRouteBridgeExecutor,
-                spotRouteBridgeRawReplies,
                 result);
             return result;
         } catch (RuntimeException ex) {
@@ -1510,7 +1494,6 @@ public final class ZLinkChannelRuntime
                 + " targetNode=" + targetNodeRid
                 + " targetSpot=" + targetSpotId
                 + " error=" + ex);
-            spotRouteBridgeRawReplies.remove(routerChannelId, result);
             result.completeExceptionally(ex);
             return result;
         }
@@ -1553,8 +1536,7 @@ public final class ZLinkChannelRuntime
             targetSpotGeneration,
             spotParts,
             effectiveRouteTimeout(defaultRequestTimeout(routerChannelId)),
-            callRuntime::track,
-            callRuntime::retryRouteRequest);
+            callRuntime::track);
     }
 
     private CompletionStage<List<Message>> requestToSpotViaSpotRouterNode(
@@ -1573,8 +1555,7 @@ public final class ZLinkChannelRuntime
             targetSpotGeneration,
             spotParts,
             timeout,
-            callRuntime::track,
-            callRuntime::retryRouteRequest);
+            callRuntime::track);
     }
 
     static void trace(String message) {
@@ -1629,14 +1610,12 @@ public final class ZLinkChannelRuntime
         timeoutExecutor.shutdownNow();
         receiveLoops.close();
         spotRouteBridgeDrainLoopExecutor.shutdownNow();
-        spotRouteBridgeExecutor.shutdown();
         awaitInfrastructureSettlement(
             "ClientServer location", clientServerStop);
         awaitInfrastructureSettlement("fanout location", fanoutStop);
         infrastructureExecutor.shutdown();
         receiveLoops.awaitTermination();
         awaitTerminated(spotRouteBridgeDrainLoopExecutor);
-        awaitTerminated(spotRouteBridgeExecutor);
         awaitTerminated(timeoutExecutor);
         awaitTerminated(infrastructureExecutor);
         closeSpotRouteBridges();

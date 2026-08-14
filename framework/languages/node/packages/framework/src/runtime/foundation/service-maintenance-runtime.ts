@@ -5,9 +5,6 @@ export type ServiceMaintenanceState =
 
 export interface ServiceRelocationUnit {
   readonly id: string;
-  readonly encodedUpperBound: number;
-  /** Allows one aggregate larger than the shared byte budget to run alone. */
-  readonly allowOversizedExclusive?: boolean;
   readonly ready: () => boolean;
   readonly relocate: (signal: AbortSignal) => Promise<void>;
 }
@@ -17,7 +14,6 @@ export interface ServiceMaintenanceSnapshot {
   readonly state: ServiceMaintenanceState;
   readonly queued: number;
   readonly activeOutbound: number;
-  readonly inFlightBytes: number;
   readonly terminalError?: unknown;
 }
 
@@ -25,16 +21,13 @@ export interface ServiceMaintenanceOptions {
   readonly preflight: (kind: ServiceMaintenanceKind, signal: AbortSignal) => Promise<boolean>;
   readonly publishState: (state: 'retiring' | 'draining') => void;
   readonly forceStop: () => Promise<void> | void;
-  readonly maxOutbound?: number;
-  readonly maxInFlightBytes?: number;
 }
 
-/** Owns first-intent-wins maintenance, bounded relocation permits and terminal observation. */
+/** Owns first-intent-wins maintenance admission and terminal observation. */
 export class ServiceMaintenanceRuntime {
   private readonly units: ServiceRelocationUnit[] = [];
   private readonly observers = new Set<(snapshot: ServiceMaintenanceSnapshot) => void>();
   private activeOutbound = 0;
-  private inFlightBytes = 0;
   private state: ServiceMaintenanceState = 'serving';
   private kind?: ServiceMaintenanceKind;
   private terminalError?: unknown;
@@ -46,8 +39,8 @@ export class ServiceMaintenanceRuntime {
     if (this.state !== 'serving' && this.state !== 'preparing' && this.state !== 'retiring') {
       throw new Error('Maintenance admission is sealed.');
     }
-    if (unit.id.length === 0 || unit.encodedUpperBound < 0) {
-      throw new TypeError('Relocation unit identity and size must be valid.');
+    if (unit.id.length === 0) {
+      throw new TypeError('Relocation unit identity must be valid.');
     }
     this.units.push(unit);
     this.publish();
@@ -80,7 +73,6 @@ export class ServiceMaintenanceRuntime {
       state: this.state,
       queued: this.units.length,
       activeOutbound: this.activeOutbound,
-      inFlightBytes: this.inFlightBytes,
       ...(this.terminalError === undefined ? {} : { terminalError: this.terminalError })
     };
   }
@@ -133,8 +125,6 @@ export class ServiceMaintenanceRuntime {
     signal: AbortSignal,
     stopStartingSignal?: AbortSignal
   ): Promise<void> {
-    const maxOutbound = this.options.maxOutbound ?? 64;
-    const maxBytes = this.options.maxInFlightBytes ?? 256 * 1024 * 1024;
     const pending = new Set<Promise<void>>();
     while (this.units.length > 0 || pending.size > 0) {
       signal.throwIfAborted();
@@ -143,28 +133,18 @@ export class ServiceMaintenanceRuntime {
         stopStartingSignal.throwIfAborted();
       }
       let admitted = false;
-      for (let index = 0; index < this.units.length && this.activeOutbound < maxOutbound;) {
+      for (let index = 0; index < this.units.length;) {
         if (stopStartingSignal?.aborted === true) break;
         const unit = this.units[index]!;
-        const oversizedExclusive = unit.allowOversizedExclusive === true
-          && unit.encodedUpperBound > maxBytes
-          && this.activeOutbound === 0
-          && this.inFlightBytes === 0;
-        if (
-          !unit.ready()
-          || unit.encodedUpperBound > maxBytes && !oversizedExclusive
-          || this.inFlightBytes + unit.encodedUpperBound > maxBytes && !oversizedExclusive
-        ) {
+        if (!unit.ready()) {
           index++;
           continue;
         }
         this.units.splice(index, 1);
         admitted = true;
         this.activeOutbound++;
-        this.inFlightBytes += unit.encodedUpperBound;
         const running = unit.relocate(signal).finally(() => {
           this.activeOutbound--;
-          this.inFlightBytes -= unit.encodedUpperBound;
           pending.delete(running);
           this.publish();
         });
@@ -172,7 +152,7 @@ export class ServiceMaintenanceRuntime {
         this.publish();
       }
       if (pending.size === 0) {
-        if (!admitted) throw new Error('No ready relocation unit can acquire a bounded permit.');
+        if (!admitted) throw new Error('No relocation unit is ready to start.');
       } else {
         await Promise.race(pending);
       }

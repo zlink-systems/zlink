@@ -43,8 +43,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     private readonly ZLinkDispatchErrorReporter _dispatchErrors;
     private readonly ZLinkFrameworkRuntime _runtime;
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
-    private readonly ZLinkCompletionAdmissionOwner _completionAdmission;
-    private readonly ZLinkAsyncSubmitter? _replySubmitter;
     private readonly ILogger _logger;
     private readonly object _orderedActorRelayGate = new();
     private readonly Dictionary<ZLinkActorId, TaskCompletionSource> _orderedActorRelayTails = [];
@@ -59,8 +57,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         ZLinkDispatchErrorReporter dispatchErrors,
         ZLinkFrameworkRuntime runtime,
         ZLinkRuntimeTaskRunner taskRunner,
-        ZLinkCompletionAdmissionOwner completionAdmission,
-        ZLinkAsyncSubmitter? replySubmitter,
         ILogger logger)
     {
         _meshName = meshName;
@@ -72,8 +68,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         _dispatchErrors = dispatchErrors;
         _runtime = runtime;
         _taskRunner = taskRunner;
-        _completionAdmission = completionAdmission;
-        _replySubmitter = replySubmitter;
         _logger = logger;
     }
 
@@ -84,9 +78,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         ZLinkFrameworkRegistration registration,
         ZLinkSpotNodeRegistration spotNode,
         ZLinkFrameworkRuntime runtime,
-        ZLinkRuntimeTaskRunner taskRunner,
-        ZLinkCompletionAdmissionOwner completionAdmission,
-        ZLinkAsyncSubmitter? replySubmitter = null)
+        ZLinkRuntimeTaskRunner taskRunner)
     {
         var descriptors = BuildRouteDescriptors(spotNode);
         // Router-capable nodes always host the framework's internal
@@ -137,6 +129,13 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                         typeof(IZLinkRouteSendHandler<ZLinkRemoteActorReplyRelay>),
                         ZLinkMessageKind.Command,
                         ZLinkRemoteActorReplyProtocol.PacketName)))
+                .Append(ToRouteDescriptor(
+                    ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
+                        typeof(ZLinkRemoteActorSourceLeaveHandler),
+                        typeof(IZLinkRouteSendHandler<
+                            ZLinkRemoteActorSourceLeave>),
+                        ZLinkMessageKind.Command,
+                        ZLinkRemoteActorSourceLeaveProtocol.PacketName)))
                 ;
         var routeDescriptors = descriptors.ToArray();
         var channelEndpoints = BuildChannelEndpoints(registration, spotNode).ToArray();
@@ -191,8 +190,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             dispatchErrors,
             runtime,
             taskRunner,
-            completionAdmission,
-            replySubmitter,
             logger);
     }
 
@@ -339,14 +336,11 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         ZLinkEnvelopeHeader? decodedHeader,
         CancellationToken cancellationToken)
     {
-        received.StartDispatch();
+        using var applicationAdmission =
+            received.ApplicationJobAdmission is { } admission
+                ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+                : null;
         using (received)
-        using (var completionPermit = received.CanReply
-                   && !(decodedHeader is not null
-                        && IsInfrastructureRelay(received, decodedHeader))
-                   ? await _completionAdmission.AcquireResponderAsync(cancellationToken)
-                       .ConfigureAwait(false)
-                   : null)
         {
             if (received.Parts.Count == 0)
             {
@@ -398,17 +392,17 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                         header,
                         new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.ShuttingDown,
-                            "MeshNode application admission is sealed for drain."), completionPermit!, cancellationToken).ConfigureAwait(false);
+                            "MeshNode application admission is sealed for drain."), cancellationToken).ConfigureAwait(false);
                 return;
             }
 
             using (operation)
             {
                 if (received.ChannelName is { } channelName)
-                    await DispatchChannelAsync(received, channelName, header, completionPermit, cancellationToken)
+                    await DispatchChannelAsync(received, channelName, header, cancellationToken)
                         .ConfigureAwait(false);
                 else
-                    await DispatchNodeRouteAsync(received, header, completionPermit, cancellationToken)
+                    await DispatchNodeRouteAsync(received, header, cancellationToken)
                         .ConfigureAwait(false);
             }
         }
@@ -421,12 +415,12 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         && header.Kind == ZLinkMessageKind.Command
         && header.MessageName is ZLinkRemoteSessionPushProtocol.PacketName
             or ZLinkRemoteActorFrameProtocol.PacketName
-            or ZLinkRemoteActorReplyProtocol.PacketName;
+            or ZLinkRemoteActorReplyProtocol.PacketName
+            or ZLinkRemoteActorSourceLeaveProtocol.PacketName;
 
     private async ValueTask DispatchNodeRouteAsync(
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header,
-        ZLinkCompletionAdmissionOwner.ResponderLease? completionPermit,
         CancellationToken cancellationToken)
     {
         var isRequest = header.Kind == ZLinkMessageKind.Request;
@@ -452,7 +446,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                     LogLevel.Error,
                     ZLinkDispatchErrorAction.ReplyError,
                     error);
-                await ReplyErrorAsync(received, header, error, completionPermit!, cancellationToken)
+                await ReplyErrorAsync(received, header, error, cancellationToken)
                     .ConfigureAwait(false);
             }
             else
@@ -507,7 +501,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         catch (Exception ex)
         {
             await ReplyErrorAsync(
-                    received, header, ex, completionPermit!, cancellationToken)
+                    received, header, ex, cancellationToken)
                 .ConfigureAwait(false);
             scope.HandlerException(
                 _logger,
@@ -525,7 +519,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                     header,
                     reply.Message,
                     reply.MessageType,
-                    completionPermit!,
                     cancellationToken)
                 .ConfigureAwait(false);
             }
@@ -540,7 +533,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         ZLinkBackendRouteReceived received,
         string channelName,
         ZLinkEnvelopeHeader header,
-        ZLinkCompletionAdmissionOwner.ResponderLease? completionPermit,
         CancellationToken cancellationToken)
     {
         var scope = new ZLinkDispatchFlowScope(
@@ -563,11 +555,11 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                         channelName,
                         received.Parts,
                         header,
-                        (Self: this, received, Permit: completionPermit!, cancellationToken),
+                        (Self: this, received, cancellationToken),
                         static (s, replyHeader, reply, replyType) =>
-                            s.Self.SubmitEnvelopeAsync(s.received, replyHeader, reply, replyType, s.Permit, s.cancellationToken),
+                            s.Self.SubmitEnvelopeAsync(s.received, replyHeader, reply, replyType, s.cancellationToken),
                         static (s, errorHeader) =>
-                            s.Self.SubmitEnvelopeAsync(s.received, errorHeader, null, null, s.Permit, s.cancellationToken),
+                            s.Self.SubmitEnvelopeAsync(s.received, errorHeader, null, null, s.cancellationToken),
                         cancellationToken,
                         received.Metadata,
                         received.SourceNodeRid)
@@ -591,7 +583,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         ZLinkEnvelopeHeader requestHeader,
         object? reply,
         Type? replyType,
-        ZLinkCompletionAdmissionOwner.ResponderLease completionPermit,
         CancellationToken cancellationToken) =>
         SubmitEnvelopeAsync(
             received,
@@ -601,14 +592,12 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 requestHeader),
             reply,
             replyType,
-            completionPermit,
             cancellationToken);
 
     private ValueTask ReplyErrorAsync(
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader requestHeader,
         Exception exception,
-        ZLinkCompletionAdmissionOwner.ResponderLease completionPermit,
         CancellationToken cancellationToken) =>
         SubmitEnvelopeAsync(
             received,
@@ -618,7 +607,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 exception),
             null,
             null,
-            completionPermit,
             cancellationToken);
 
     private ValueTask SubmitEnvelopeAsync(
@@ -626,7 +614,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         ZLinkEnvelopeHeader header,
         object? body,
         Type? bodyType,
-        ZLinkCompletionAdmissionOwner.ResponderLease completionPermit,
         CancellationToken cancellationToken)
     {
         if (!received.CanReply)
@@ -634,15 +621,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
 
         var replyParts = ZLinkEnvelopeCodec.EncodeParts(
             header, body, bodyType, _codecs);
-        if (_replySubmitter is null)
-            return ZLinkSpotReplySubmitter.SubmitDirectAsync(
-                received, replyParts, completionPermit, cancellationToken);
-        return ZLinkSpotReplySubmitter.SubmitAsync(
-            _replySubmitter,
-            received,
-            replyParts,
-            completionPermit,
-            cancellationToken);
+        return ZLinkSpotReplySubmitter.SubmitDirectAsync(
+            received, replyParts, cancellationToken);
     }
 
     private void SubmitEnvelopeUnreserved(

@@ -47,7 +47,6 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     private readonly object _operationGate = new();
     private readonly ZLinkLocationLifecycle? _locationLifecycle;
     private readonly ZLinkLocationRuntime? _locationRuntime;
-    private readonly ZLinkRelocationPermitPool _relocationPermits;
     private readonly ZLinkRelocationInterruptionObserver
         _relocationInterruption;
     private readonly IZLinkAutoConnectTopologyQuery? _topologyQuery;
@@ -85,9 +84,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     {
         Services = services;
         _actorHandoffAdmissions = new ZLinkActorHandoffAdmissions(
-            diagnostic: LogActorHandoff,
-            abortCapacityReservation:
-                AbortActorHandoffCapacityReservationAsync);
+            diagnostic: LogActorHandoff);
         _backendAdapterFactory = backendAdapterFactory;
         _autoConnect = services.GetService<ZLinkLocationAutoConnectHost>();
         Registration = registration;
@@ -95,8 +92,6 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         _locationLifecycle = services.GetService<ZLinkLocationLifecycle>();
         _locationRuntime = services.GetService<ZLinkLocationRuntime>();
         _topologyQuery = services.GetService<IZLinkAutoConnectTopologyQuery>();
-        _relocationPermits = new ZLinkRelocationPermitPool(
-            registration.Locations.Options);
         _relocationInterruption =
             new ZLinkRelocationInterruptionObserver(
                 services.GetService<ILoggerFactory>());
@@ -125,6 +120,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             () => ShutdownToken)
         {
             RemotePushRelay = RelayRemoteSessionPush,
+            RemotePushRelayAsync = RelayRemoteSessionPushAsync,
             RemoteFrameRelay = RelayRemoteActorFrame
         };
         _standaloneActorRelocationRuntime =
@@ -145,6 +141,38 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         => Volatile.Read(ref _lifecyclePhase) == (int)ZLinkRuntimeLifecyclePhase.Running
             ? _state?.Context
             : null;
+
+    internal ZLinkHostCapacityStatus? GetHostCapacityStatus()
+    {
+        if (Volatile.Read(ref _lifecyclePhase)
+            != (int)ZLinkRuntimeLifecyclePhase.Running)
+            return null;
+        var state = _state;
+        if (state is null)
+            return null;
+
+        try
+        {
+            return state.Capacity.GetStatus();
+        }
+        catch (ObjectDisposedException)
+            when (!ReferenceEquals(state, _state))
+        {
+            return null;
+        }
+    }
+
+    internal void ResetCapacityMetrics()
+    {
+        var state = Volatile.Read(ref _lifecyclePhase)
+                    == (int)ZLinkRuntimeLifecyclePhase.Running
+            ? _state
+            : null;
+        if (state is null)
+            throw new InvalidOperationException(
+                "ZLink framework runtime is not started.");
+        state.Capacity.ResetMetrics();
+    }
 
     public ZLinkFrameworkRegistration Registration { get; }
 
@@ -212,9 +240,6 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     internal IServiceProvider Services { get; }
 
     internal ZLinkDrainAdmissionGate DrainAdmission => _drainAdmission;
-
-    internal ZLinkRelocationPermitPool RelocationPermits =>
-        _relocationPermits;
 
     internal ZLinkRelocationInterruptionObserver
         RelocationInterruption => _relocationInterruption;
@@ -797,32 +822,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     internal CancellationToken ShutdownToken
         => _state?.StopTokenSource.Token ?? new CancellationToken(canceled: true);
 
-    internal ZLinkCompletionAdmissionOwner CompletionAdmission =>
-        GetOrStartState().CompletionAdmission;
-
-    internal ZLinkInboundDispatchStatus SnapshotInboundDispatch()
-    {
-        var snapshot = Volatile.Read(ref _state)?.InboundDispatchBudget.Snapshot()
-                       ?? new ZLinkInboundDispatchBudgetSnapshot(
-                           Registration.InboundDispatchOptions
-                               .EffectiveApplicationHwmBytes,
-                           0,
-                           0,
-                           0,
-                           false);
-        var completion = Volatile.Read(ref _state)?
-            .CompletionAdmission.Snapshot();
-        return new ZLinkInboundDispatchStatus(
-            snapshot.ApplicationHwmBytes,
-            snapshot.PendingPayloadBytes,
-            snapshot.QueuedPayloadBytes,
-            snapshot.ActivePayloadBytes,
-            snapshot.ApplicationReceivePaused,
-            PendingCompletionSends: checked((ulong)(
-                completion?.PendingCompletionSends ?? 0)),
-            CompletionSendLimit: checked((ulong)(
-                completion?.CompletionSendLimit ?? 0)));
-    }
+    internal CancellationToken ForceStopToken
+        => _state?.ForceStopTokenSource.Token
+           ?? new CancellationToken(canceled: true);
 
     internal void RunDetached(
         string name,
@@ -963,18 +965,18 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             {
                 lock (_operationGate) _acceptingOperations = false;
                 stateToDispose?.FenceOperations();
-            stateToDispose?.CancelActiveSpotOperations();
-            stateToDispose?.ForceStopStreamSessions();
-            // ForceStop must remain forceful even when the caller does not
-            // supply an external cancellation deadline. The linked token
-            // selects the component state's non-graceful disposal path.
-            using var forceStop =
-                CancellationTokenSource.CreateLinkedTokenSource(
-                    cancellationToken);
-            var failures = await CleanupRuntimeGenerationAsync(
-                        stateToDispose,
-                        forceStop.Token)
-                    .ConfigureAwait(false);
+                stateToDispose?.CancelActiveSpotOperations();
+                stateToDispose?.ForceStopStreamSessions();
+                // ForceStop must remain forceful even when the caller does not
+                // supply an external cancellation deadline. The linked token
+                // selects the component state's non-graceful disposal path.
+                using var forceStop =
+                    CancellationTokenSource.CreateLinkedTokenSource(
+                        cancellationToken);
+                var failures = await CleanupRuntimeGenerationAsync(
+                            stateToDispose,
+                            forceStop.Token)
+                        .ConfigureAwait(false);
                 if (cancellationToken.IsCancellationRequested
                     && failures.Count > 0)
                     throw new OperationCanceledException(
@@ -1043,17 +1045,23 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         var generationCleanupReporter =
             (state?.ErrorSink ?? Volatile.Read(ref _generationErrorSink))
             ?.CaptureGenerationReporter();
-        await CaptureAsync(
-                () => ResetActorRuntimeGenerationAsync(
-                    forceStopToken,
-                    generationCleanupReporter))
-            .ConfigureAwait(false);
+        if (!forceStopToken.CanBeCanceled)
+            await CaptureAsync(
+                    () => ResetActorRuntimeGenerationAsync(
+                        forceStopToken,
+                        generationCleanupReporter))
+                .ConfigureAwait(false);
         if (state is not null)
             await CaptureAsync(forceStopToken.CanBeCanceled
                     ? () => state.ForceStopAsync(forceStopToken)
                     : state.DisposeAsync)
                 .ConfigureAwait(false);
-        Capture(_standaloneActorRelocationRuntime.ReleaseRetainedPermits);
+        if (forceStopToken.CanBeCanceled)
+            await CaptureAsync(
+                    () => ResetActorRuntimeGenerationAsync(
+                        forceStopToken,
+                        generationCleanupReporter))
+                .ConfigureAwait(false);
         if (state is not null) DetachErrorSink(state.ErrorSink);
         if (_locationLifecycle is not null)
             await CaptureAsync(_locationLifecycle.PauseBackgroundWorkAsync).ConfigureAwait(false);

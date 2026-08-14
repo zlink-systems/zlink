@@ -23,9 +23,10 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
     private readonly Func<CancellationToken, ValueTask<bool>> _publishRelocating;
     private readonly long _sourceApplicationVersion;
     private readonly IDisposable _metricRegistration;
-    private readonly IDisposable _inboundMetricRegistration;
-    private readonly Func<ZLinkInboundDispatchStatus> _inboundDispatchSnapshot;
+    private readonly IDisposable _capacityMetricRegistration;
     private readonly Func<bool> _acceptingWorkSnapshot;
+    private readonly Func<ZLinkHostCapacityStatus?> _capacitySnapshot;
+    private readonly Action? _resetCapacityMetrics;
     private readonly ILogger<ZLinkFrameworkMaintenanceRuntime>? _logger;
     private readonly object _gate = new();
     private readonly List<ZLinkObservationQueue<ZLinkFrameworkRuntimeStatus>> _observers = [];
@@ -53,8 +54,9 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
             relocationPreflight,
         Func<CancellationToken, ValueTask<bool>> publishRelocating,
         long sourceApplicationVersion = 0,
-        Func<ZLinkInboundDispatchStatus>? inboundDispatchSnapshot = null,
         Func<bool>? acceptingWorkSnapshot = null,
+        Func<ZLinkHostCapacityStatus?>? capacitySnapshot = null,
+        Action? resetCapacityMetrics = null,
         ILogger<ZLinkFrameworkMaintenanceRuntime>? logger = null)
     {
         _lifecycle = lifecycle;
@@ -62,13 +64,14 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
         _relocationPreflight = relocationPreflight;
         _publishRelocating = publishRelocating;
         _sourceApplicationVersion = sourceApplicationVersion;
-        _inboundDispatchSnapshot = inboundDispatchSnapshot ?? EmptyInboundDispatchSnapshot;
         _acceptingWorkSnapshot = acceptingWorkSnapshot ?? (() => true);
+        _capacitySnapshot = capacitySnapshot ?? (() => null);
+        _resetCapacityMetrics = resetCapacityMetrics;
         _logger = logger;
         _metricRegistration = ZLinkRuntimeMetrics.RegisterHostState(
             () => HostStateMetricValue(_hostLifecycle.State));
-        _inboundMetricRegistration = ZLinkRuntimeMetrics.RegisterHostInboundDispatch(
-            _inboundDispatchSnapshot);
+        _capacityMetricRegistration = ZLinkRuntimeMetrics.RegisterHostCapacity(
+            _capacitySnapshot);
     }
 
     public ZLinkFrameworkRuntimeStatus Status
@@ -78,6 +81,14 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
             lock (_gate)
                 return CreateStatusUnderLock(DateTimeOffset.UtcNow);
         }
+    }
+
+    public void ResetCapacityMetrics()
+    {
+        ThrowIfDisposed();
+        var reset = _resetCapacityMetrics ?? throw new InvalidOperationException(
+            "The Framework host-capacity runtime is not active.");
+        reset();
     }
 
     internal void MarkServing()
@@ -625,7 +636,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
             _terminationResult,
             _sequence,
             observedAt,
-            _inboundDispatchSnapshot());
+            _capacitySnapshot() ?? default);
     }
 
     private void TransitionUnderLock(ZLinkFrameworkRuntimeState state)
@@ -705,8 +716,6 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
             _ => "error"
         };
 
-    private static ZLinkInboundDispatchStatus EmptyInboundDispatchSnapshot() => default;
-
     private static string RelocationReasonMetricValue(
         ZLinkFrameworkRelocationReason reason) =>
         reason switch
@@ -739,6 +748,6 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
             _observers.Clear();
         }
         _metricRegistration.Dispose();
-        _inboundMetricRegistration.Dispose();
+        _capacityMetricRegistration.Dispose();
     }
 }

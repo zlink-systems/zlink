@@ -117,7 +117,7 @@ internal static class ZLinkActorHandoffIngress
     public static ZLinkSpotActorFrameBatch CaptureMovingFrames(
         ZLinkFrameworkRuntime runtime,
         IReadOnlyList<ZLinkBackendActorPart> parts,
-        ZLinkInboundDispatchLease? inboundDispatchLease = null)
+        IDisposable? creditOwner = null)
     {
         var dispatchable = new List<ZLinkSpotActorFrame>(parts.Count / 2);
         var index = 0;
@@ -170,6 +170,11 @@ internal static class ZLinkActorHandoffIngress
                             ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(rt, fr))
                     == ZLinkActorHandoffCaptureResult.Captured)
                 {
+                    // TryCapture copied the payload into the durable handoff
+                    // aggregate. The raw Message no longer owns any bytes for
+                    // this child frame; the returned batch still owns the
+                    // physical-record credit until all sibling frames finish.
+                    frame.Dispose();
                     continue;
                 }
 
@@ -178,15 +183,24 @@ internal static class ZLinkActorHandoffIngress
             }
             catch
             {
-                frame.Dispose();
-                foreach (var dispatchableFrame in dispatchable) dispatchableFrame.Dispose();
-                for (; index < parts.Count; index++) parts[index].Message.Dispose();
+                try
+                {
+                    frame.Dispose();
+                    foreach (var dispatchableFrame in dispatchable)
+                        dispatchableFrame.Dispose();
+                    for (; index < parts.Count; index++)
+                        parts[index].Message.Dispose();
+                }
+                finally
+                {
+                    // No batch was returned, so this method remains the
+                    // physical-record credit owner on the abort path.
+                    creditOwner?.Dispose();
+                }
                 throw;
             }
         }
 
-        return new ZLinkSpotActorFrameBatch(
-            dispatchable,
-            inboundDispatchLease: inboundDispatchLease);
+        return new ZLinkSpotActorFrameBatch(dispatchable, creditOwner: creditOwner);
     }
 }

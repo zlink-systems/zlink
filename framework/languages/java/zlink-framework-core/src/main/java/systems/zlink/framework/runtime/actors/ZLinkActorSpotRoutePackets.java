@@ -11,6 +11,9 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
+import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
+import systems.zlink.framework.runtime.internal.relocation
+    .ZLinkActorJoinAdmissionProfileCodec;
 
 public final class ZLinkActorSpotRoutePackets {
     public static final String JOIN_SPOT_PACKET_NAME = "__zlink.actor.joinSpot";
@@ -52,6 +55,37 @@ public final class ZLinkActorSpotRoutePackets {
                 sourceNodeRid,
                 sourceSessionRid,
                 ""),
+            Message.from(joinPayload));
+    }
+
+    static List<Message> createCanonicalAdmissionRequestParts(
+        String transferId,
+        Duration timeout,
+        String actorId,
+        String actorType,
+        ZLinkBackendActorRef actorRef,
+        RoutingId sourceEntrySpotNodeRid,
+        String sourceEntrySpotId,
+        String sourceEntryRouterChannelId,
+        RoutingId sourceNodeRid,
+        RoutingId sourceSessionRid,
+        Message joinPayload,
+        ZLinkActorJoinOperationId operationId) {
+        return List.of(
+            Message.from(JOIN_SPOT_PACKET_NAME.getBytes(StandardCharsets.UTF_8)),
+            encodeTransferRequest(
+                ADMISSION_PHASE,
+                transferId,
+                timeout,
+                actorId,
+                actorType,
+                actorRef,
+                sourceEntrySpotNodeRid,
+                sourceEntrySpotId,
+                sourceEntryRouterChannelId,
+                sourceNodeRid,
+                sourceSessionRid,
+                ZLinkActorJoinAdmissionProfileCodec.encode(operationId)),
             Message.from(joinPayload));
     }
 
@@ -112,7 +146,7 @@ public final class ZLinkActorSpotRoutePackets {
         Message transferState,
         List<ZLinkActorHandoffPacket> backlog,
         CoreTransfer coreTransfer,
-        ZLinkDeferredJoinAcceptedRecovery.Manifest completionManifest) {
+        ZLinkDirectJoinRelocation.Manifest relocationManifest) {
         return createCommitRequestParts(
             transferId,
             timeout,
@@ -128,7 +162,7 @@ public final class ZLinkActorSpotRoutePackets {
             transferState,
             backlog,
             coreTransfer,
-            completionManifest,
+            relocationManifest,
             new byte[0]);
     }
 
@@ -147,7 +181,7 @@ public final class ZLinkActorSpotRoutePackets {
         Message transferState,
         List<ZLinkActorHandoffPacket> backlog,
         CoreTransfer coreTransfer,
-        ZLinkDeferredJoinAcceptedRecovery.Manifest completionManifest,
+        ZLinkDirectJoinRelocation.Manifest relocationManifest,
         byte[] sessionRouteCommand44) {
         List<Message> parts = new ArrayList<>();
         parts.add(Message.from(JOIN_SPOT_PACKET_NAME.getBytes(StandardCharsets.UTF_8)));
@@ -167,7 +201,7 @@ public final class ZLinkActorSpotRoutePackets {
                 adapterKey == null ? "" : adapterKey,
                 backlog.size(),
                 coreTransfer,
-                completionManifest,
+                relocationManifest,
                 sessionRouteCommand44));
         parts.add(Message.from(transferState));
         for (ZLinkActorHandoffPacket packet : backlog) {
@@ -236,7 +270,7 @@ public final class ZLinkActorSpotRoutePackets {
         String adapterKey,
         int backlogCount,
         CoreTransfer coreTransfer,
-        ZLinkDeferredJoinAcceptedRecovery.Manifest completionManifest) {
+        ZLinkDirectJoinRelocation.Manifest relocationManifest) {
         return encodeTransferRequest(
             phase,
             transferId,
@@ -252,7 +286,7 @@ public final class ZLinkActorSpotRoutePackets {
             adapterKey,
             backlogCount,
             coreTransfer,
-            completionManifest,
+            relocationManifest,
             new byte[0]);
     }
 
@@ -271,7 +305,7 @@ public final class ZLinkActorSpotRoutePackets {
         String adapterKey,
         int backlogCount,
         CoreTransfer coreTransfer,
-        ZLinkDeferredJoinAcceptedRecovery.Manifest completionManifest,
+        ZLinkDirectJoinRelocation.Manifest relocationManifest,
         byte[] sessionRouteCommand44) {
         long timeoutMillis = timeout == null ? 30_000L : Math.max(1L, timeout.toMillis());
         CoreTransfer core = coreTransfer == null
@@ -300,25 +334,23 @@ public final class ZLinkActorSpotRoutePackets {
             Long.toUnsignedString(core.finalSequence()),
             Long.toUnsignedString(core.reserveMessageCount()),
             Long.toUnsignedString(core.reserveByteCount()),
-            completionManifest == null ? "" : completionManifest.reference(),
-            completionManifest == null ? "0"
-                : Long.toUnsignedString(completionManifest.checksumCrc32c()),
-            completionManifest == null ? "0"
-                : Integer.toString(completionManifest.cursor()),
-            completionManifest == null ? "0"
-                : Long.toUnsignedString(completionManifest.operationIdHigh()),
-            completionManifest == null ? "0"
-                : Long.toUnsignedString(completionManifest.operationIdLow()),
-            completionManifest == null ? ""
-                : completionManifest.actorId(),
-            completionManifest == null ? "0"
-                : Long.toUnsignedString(completionManifest.objectGeneration()),
-            completionManifest == null ? "0"
-                : Long.toUnsignedString(completionManifest.aggregateIdHigh()),
-            completionManifest == null ? "0"
-                : Long.toUnsignedString(completionManifest.aggregateIdLow()),
-            completionManifest == null ? "0"
-                : Long.toUnsignedString(completionManifest.aggregateGeneration()),
+            relocationManifest == null ? "" : relocationManifest.reference(),
+            relocationManifest == null ? "0"
+                : Long.toUnsignedString(relocationManifest.checksumCrc32c()),
+            relocationManifest == null || relocationManifest.rawReply().length == 0
+                ? ""
+                : Base64.getEncoder().encodeToString(
+                    relocationManifest.rawReply()),
+            relocationManifest == null ? "0"
+                : Long.toUnsignedString(relocationManifest.operationIdHigh()),
+            relocationManifest == null ? "0"
+                : Long.toUnsignedString(relocationManifest.operationIdLow()),
+            relocationManifest == null ? "0"
+                : Long.toUnsignedString(relocationManifest.aggregateIdHigh()),
+            relocationManifest == null ? "0"
+                : Long.toUnsignedString(relocationManifest.aggregateIdLow()),
+            relocationManifest == null ? "0"
+                : Long.toUnsignedString(relocationManifest.aggregateGeneration()),
             sessionRouteCommand44 == null || sessionRouteCommand44.length == 0
                 ? ""
                 : Base64.getEncoder().encodeToString(sessionRouteCommand44))
@@ -327,9 +359,7 @@ public final class ZLinkActorSpotRoutePackets {
 
     public static TransferRequest decodeTransferRequest(Message message) {
         String[] fields = message.toUtf8String().split("\n", -1);
-        if ((fields.length != 14 && fields.length != 21
-                && fields.length != 24 && fields.length != 28
-                && fields.length != 31 && fields.length != 32)
+        if (fields.length != 30
             || (!ADMISSION_PHASE.equals(fields[0]) && !COMMIT_PHASE.equals(fields[0]))
             || fields[1].isBlank()
             || fields[3].isBlank()
@@ -356,34 +386,28 @@ public final class ZLinkActorSpotRoutePackets {
             fields[11].isBlank() ? null : RoutingId.from(fields[11]),
             fields[12].isBlank() ? null : fields[12],
             Integer.parseInt(fields[13]),
-            fields.length >= 21 && Boolean.parseBoolean(fields[14]),
-            fields.length >= 21 ? Long.parseUnsignedLong(fields[15]) : 0L,
-            fields.length >= 21 ? Long.parseUnsignedLong(fields[16]) : 0L,
-            fields.length >= 21 ? Long.parseUnsignedLong(fields[17]) : 0L,
-            fields.length >= 21 ? Long.parseUnsignedLong(fields[18]) : 0L,
-            fields.length >= 21 ? Long.parseUnsignedLong(fields[19]) : 0L,
-            fields.length >= 21 ? Long.parseUnsignedLong(fields[20]) : 0L,
-            fields.length >= 24 && !fields[21].isBlank()
-                ? new ZLinkDeferredJoinAcceptedRecovery.Manifest(
+            Boolean.parseBoolean(fields[14]),
+            Long.parseUnsignedLong(fields[15]),
+            Long.parseUnsignedLong(fields[16]),
+            Long.parseUnsignedLong(fields[17]),
+            Long.parseUnsignedLong(fields[18]),
+            Long.parseUnsignedLong(fields[19]),
+            Long.parseUnsignedLong(fields[20]),
+            !fields[21].isBlank()
+                ? new ZLinkDirectJoinRelocation.Manifest(
                     fields[21],
                     Long.parseUnsignedLong(fields[22]),
-                    Integer.parseInt(fields[23]),
-                    fields.length >= 28
-                        ? Long.parseUnsignedLong(fields[24]) : 0L,
-                    fields.length >= 28
-                        ? Long.parseUnsignedLong(fields[25]) : 0L,
-                    fields.length >= 28 ? fields[26] : "",
-                    fields.length >= 28
-                        ? Long.parseUnsignedLong(fields[27]) : 0L,
-                    fields.length >= 31
-                        ? Long.parseUnsignedLong(fields[28]) : 0L,
-                    fields.length >= 31
-                        ? Long.parseUnsignedLong(fields[29]) : 0L,
-                    fields.length >= 31
-                        ? Long.parseUnsignedLong(fields[30]) : 0L)
+                    Long.parseUnsignedLong(fields[24]),
+                    Long.parseUnsignedLong(fields[25]),
+                    Long.parseUnsignedLong(fields[26]),
+                    Long.parseUnsignedLong(fields[27]),
+                    Long.parseUnsignedLong(fields[28]),
+                    fields[23].isBlank()
+                        ? new byte[0]
+                        : Base64.getDecoder().decode(fields[23]))
                 : null,
-            fields.length == 32 && !fields[31].isBlank()
-                ? Base64.getDecoder().decode(fields[31])
+            !fields[29].isBlank()
+                ? Base64.getDecoder().decode(fields[29])
                 : new byte[0]);
     }
 
@@ -626,7 +650,7 @@ public final class ZLinkActorSpotRoutePackets {
         long coreFinalSequence,
         long coreReserveMessageCount,
         long coreReserveByteCount,
-        ZLinkDeferredJoinAcceptedRecovery.Manifest completionManifest,
+        ZLinkDirectJoinRelocation.Manifest relocationManifest,
         byte[] sessionRouteCommand44) {
         public TransferRequest(
             String phase,
@@ -650,7 +674,7 @@ public final class ZLinkActorSpotRoutePackets {
             long coreFinalSequence,
             long coreReserveMessageCount,
             long coreReserveByteCount,
-            ZLinkDeferredJoinAcceptedRecovery.Manifest completionManifest) {
+            ZLinkDirectJoinRelocation.Manifest relocationManifest) {
             this(
                 phase,
                 transferId,
@@ -673,7 +697,7 @@ public final class ZLinkActorSpotRoutePackets {
                 coreFinalSequence,
                 coreReserveMessageCount,
                 coreReserveByteCount,
-                completionManifest,
+                relocationManifest,
                 new byte[0]);
         }
 

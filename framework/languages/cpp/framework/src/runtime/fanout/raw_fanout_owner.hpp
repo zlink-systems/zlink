@@ -3,6 +3,7 @@
 
 #include "runtime/mesh/service_topology_registry.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
+#include <zlink/framework/contracts/dispatch/task.hpp>
 
 #include <zlink/Contracts/Eventing/poller.hpp>
 #include <zlink/Contracts/Messaging/topic_message.hpp>
@@ -23,6 +24,7 @@ class context_t;
 class pub_socket_t;
 class sub_socket_t;
 class poller_t;
+class topic_message_t;
 }
 
 namespace zlink::framework::runtime::fanout
@@ -44,6 +46,9 @@ struct fanout_received_t
     std::vector<std::uint8_t> publisher_routing_id;
     std::string topic;
     protocol::application_payload_t payload;
+    // The binding receive envelope carries the Core retained-credit owner.
+    // It remains live through the caller's dispatch terminal path.
+    std::shared_ptr<zlink::topic_message_t> retained;
 };
 
 struct fanout_publisher_intent_t
@@ -77,15 +82,19 @@ struct raw_fanout_connection_snapshot_t
 class raw_fanout_publisher_t
 {
   public:
-    explicit raw_fanout_publisher_t (std::string endpoint);
+    explicit raw_fanout_publisher_t (
+      std::string endpoint,
+      std::shared_ptr<zlink::context_t> context = {});
     ~raw_fanout_publisher_t () noexcept;
 
     void start ();
     void close () noexcept;
     std::string endpoint () const;
     std::chrono::steady_clock::time_point next_activity () const;
-    bool publish (const std::string &topic,
-                  const protocol::application_payload_t &payload);
+    task_t<void> publish (std::string topic,
+                          protocol::application_payload_t payload,
+                          std::chrono::milliseconds timeout =
+                            std::chrono::milliseconds{-1});
     bool tick (std::chrono::steady_clock::time_point now);
 
     static const std::string &reserved_topic ();
@@ -94,7 +103,7 @@ class raw_fanout_publisher_t
   private:
     std::string _configured_endpoint;
     mutable std::mutex _mutex;
-    std::unique_ptr<zlink::context_t> _context;
+    std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::pub_socket_t> _socket;
     std::string _endpoint;
     std::chrono::steady_clock::time_point _next_beacon{};
@@ -105,6 +114,9 @@ class raw_fanout_subscriber_t
 {
   public:
     explicit raw_fanout_subscriber_t (zlink::poller_t *poller = nullptr);
+    raw_fanout_subscriber_t (
+      std::shared_ptr<zlink::context_t> context,
+      zlink::poller_t *poller = nullptr);
     ~raw_fanout_subscriber_t () noexcept;
 
     bool connect_manual (std::vector<std::uint8_t> publisher_routing_id,
@@ -166,7 +178,7 @@ class raw_fanout_subscriber_t
     void reopen_locked (connection_t &connection);
 
     mutable std::mutex _mutex;
-    std::unique_ptr<zlink::context_t> _context;
+    std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::poller_t> _owned_poller;
     zlink::poller_t *_poller = nullptr;
     std::map<publisher_intent_key_t, connection_t> _connections;

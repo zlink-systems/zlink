@@ -9,12 +9,12 @@ import type {
   ZLinkCodecRegistryBuilder,
   ZLinkDispatchOptions,
   ZLinkDispatchOptionsBuilder,
+  ZLinkInboundDispatchOptions,
   ZLinkLocationOptionValues,
   ZLinkLocationOptions,
   ZLinkEntrySpot,
   ZLinkFanoutClient,
   ZLinkHandlerFilterContext,
-  ZLinkInboundDispatchOptions,
   ZLinkRouteClient,
   ZLinkSpot,
   ZLinkSpotManager,
@@ -28,7 +28,6 @@ import type {
   ZLinkCodecSerializerRegistration,
   ZLinkFrameworkRegistration,
   ZLinkFrameworkRegistrationOptions,
-  ZLinkInboundDispatchOptionValues,
   ZLinkNestIntegrationRuntimeHost,
   ZLinkProviderResolver,
   ZLinkStreamCodecRegistration
@@ -44,7 +43,7 @@ interface FrameworkIntegrationModule {
   hasSpotPublisherClient(registration: ZLinkFrameworkRegistration): boolean;
   createIntegrationDispatchOptionsBuilder(dispatch: ZLinkDispatchOptions): ZLinkDispatchOptionsBuilder;
   createIntegrationInboundDispatchOptionsBuilder(
-    options: Partial<ZLinkInboundDispatchOptionValues>
+    options: Pick<ZLinkFrameworkRegistrationOptions, 'coreHwm' | 'applicationJobQueue'>
   ): ZLinkInboundDispatchOptions;
   createIntegrationLocationOptionsBuilder(
     options: Partial<ZLinkLocationOptionValues>

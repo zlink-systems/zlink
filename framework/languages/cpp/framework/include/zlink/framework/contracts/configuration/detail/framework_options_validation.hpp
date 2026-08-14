@@ -4,6 +4,8 @@
 #include <zlink/framework/contracts/configuration/detail/framework_options_state.hpp>
 
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <set>
 #include <string>
 
@@ -45,6 +47,11 @@ inline void validate_location_options (const location_options_t &options)
           framework_error_kind_t::protocol_error,
           "route cache age and Message Follow duration must not be negative");
     }
+    if (options.session_relocation_seal_timeout <= 0ms) {
+        throw framework_exception_t (
+          framework_error_kind_t::protocol_error,
+          "Session relocation seal timeout must be a positive whole-millisecond duration");
+    }
     if (options.route_cache_max_age > 0ms
         && options.message_follow_duration > 0ms
         && options.message_follow_duration
@@ -69,22 +76,36 @@ inline void validate_framework_options (const framework_options_state_t &options
 {
     validate_dispatch_options (options.dispatch);
     validate_location_options (options.locations);
-    if (options.process_memory_limit_bytes
-        && *options.process_memory_limit_bytes == 0) {
-        throw framework_exception_t (
-          framework_error_kind_t::protocol_error,
-          "process memory limit must be positive when specified");
-    }
-    switch (options.application_hwm_profile) {
-        case application_hwm_profile_t::compact:
-        case application_hwm_profile_t::low_latency:
-        case application_hwm_profile_t::balanced:
-        case application_hwm_profile_t::throughput:
+    switch (options.core_hwm_profile) {
+        case core_hwm_profile_t::compact:
+        case core_hwm_profile_t::low_latency:
+        case core_hwm_profile_t::balanced:
+        case core_hwm_profile_t::throughput:
             break;
         default:
             throw framework_exception_t (
               framework_error_kind_t::protocol_error,
-              "application HWM profile is invalid");
+              "Core HWM profile is invalid");
+    }
+    switch (options.application_job_queue_profile) {
+        case application_job_queue_profile_t::compact:
+        case application_job_queue_profile_t::low_latency:
+        case application_job_queue_profile_t::balanced:
+        case application_job_queue_profile_t::throughput:
+            break;
+        default:
+            throw framework_exception_t (
+              framework_error_kind_t::protocol_error,
+              "Application Job Queue profile is invalid");
+    }
+    if (options.max_queued_application_jobs
+        && (*options.max_queued_application_jobs == 0
+            || *options.max_queued_application_jobs
+                 > static_cast<std::uint32_t> (
+                   std::numeric_limits<std::int32_t>::max ()))) {
+        throw framework_exception_t (
+          framework_error_kind_t::protocol_error,
+          "maximum queued application jobs must be between 1 and 2147483647");
     }
     for (const auto &channel_name : options.client_server_channels) {
         if (!options.client_server_channels_with_server.contains (channel_name)

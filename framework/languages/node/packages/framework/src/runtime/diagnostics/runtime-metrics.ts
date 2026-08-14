@@ -1,4 +1,9 @@
-import type { ZLinkMeter, ZLinkMeterProvider, ZLinkMetricAttributes } from '../../contracts';
+import type {
+  ZLinkHostCapacityStatus,
+  ZLinkMeter,
+  ZLinkMeterProvider,
+  ZLinkMetricAttributes
+} from '../../contracts';
 import { ZLinkMeters } from '../../contracts';
 import { metrics as openTelemetryMetrics } from '@opentelemetry/api';
 
@@ -15,6 +20,10 @@ interface ZLinkObservableGauge {
 }
 
 interface ZLinkObservableMeter extends ZLinkMeter {
+  createObservableCounter?(
+    name: string,
+    options?: { readonly unit?: string }
+  ): ZLinkObservableGauge;
   createObservableGauge?(
     name: string,
     options?: { readonly unit?: string }
@@ -116,7 +125,20 @@ const OBSERVABLE_GAUGES = Object.freeze({
   'zlink.object.activation.limit': '{activation}',
   'zlink.instance_spot.pending.messages': '{message}',
   'zlink.instance_spot.pending.bytes': 'By',
-  'zlink.host.state': '{runtime}'
+  'zlink.host.state': '{runtime}',
+  'zlink.host.core_hwm.effective_budget': 'By',
+  'zlink.host.core_hwm.applied': 'By',
+  'zlink.host.core_hwm.accounted': 'By',
+  'zlink.host.core_hwm.completion_accounted': 'By',
+  'zlink.host.core_hwm.blocked_ratio': '{ppm}',
+  'zlink.host.application_job_queue.limit': '{job}',
+  'zlink.host.application_job_queue.jobs': '{job}',
+  'zlink.host.application_job_queue.capacity_waiters': '{waiter}'
+} as const);
+
+const OBSERVABLE_COUNTERS = Object.freeze({
+  'zlink.host.application_job_queue.capacity_waits': '{wait}',
+  'zlink.host.application_job_queue.capacity_wait_duration': 's'
 } as const);
 
 type CounterName = keyof typeof COUNTERS;
@@ -129,6 +151,7 @@ class MetricRegistry {
   readonly histograms = new Map<string, HistogramInstrument>();
   readonly meshSnapshots = new Set<() => ReadonlyArray<ZLinkRuntimeMetricMeshSnapshot>>();
   readonly hostStates = new Set<() => string>();
+  readonly hostCapacities = new Set<() => ZLinkHostCapacityStatus>();
 
   constructor(meter: ZLinkObservableMeter) {
     for (const [name, unit] of Object.entries(COUNTERS)) {
@@ -144,9 +167,24 @@ class MetricRegistry {
       const gauge = meter.createObservableGauge?.(name, { unit });
       gauge?.addCallback((result) => this.observe(name, result));
     }
+    for (const [name, unit] of Object.entries(OBSERVABLE_COUNTERS)) {
+      const counter = meter.createObservableCounter?.(name, { unit });
+      counter?.addCallback((result) => this.observe(name, result));
+    }
   }
 
   private observe(name: string, result: ZLinkObservableResult): void {
+    if (name.startsWith('zlink.host.core_hwm.')
+        || name.startsWith('zlink.host.application_job_queue.')) {
+      for (const provider of this.hostCapacities) {
+        try {
+          this.observeHostCapacity(name, provider(), result);
+        } catch {
+          // Diagnostics must not affect runtime behavior.
+        }
+      }
+      return;
+    }
     if (name === 'zlink.host.state') {
       for (const provider of this.hostStates) {
         try {
@@ -166,6 +204,41 @@ class MetricRegistry {
         continue;
       }
       for (const snapshot of snapshots) this.observeMesh(name, snapshot, result);
+    }
+  }
+
+  private observeHostCapacity(
+    name: string,
+    snapshot: ZLinkHostCapacityStatus,
+    result: ZLinkObservableResult
+  ): void {
+    const core = snapshot.coreHwm;
+    const jobs = snapshot.applicationJobQueue;
+    if (name === 'zlink.host.core_hwm.effective_budget') {
+      result.observe(metricNumber(core.effectiveBudgetBytes));
+    } else if (name === 'zlink.host.core_hwm.applied') {
+      result.observe(metricNumber(core.totalAppliedHwmBytes));
+    } else if (name === 'zlink.host.core_hwm.accounted') {
+      result.observe(metricNumber(core.currentAccountedBytes), { state: 'current' });
+      result.observe(metricNumber(core.peakAccountedBytes), { state: 'peak' });
+    } else if (name === 'zlink.host.core_hwm.completion_accounted') {
+      result.observe(metricNumber(core.completionCurrentAccountedBytes), { state: 'current' });
+      result.observe(metricNumber(core.completionPeakAccountedBytes), { state: 'peak' });
+    } else if (name === 'zlink.host.core_hwm.blocked_ratio') {
+      result.observe(metricNumber(core.blockedRatioPpm));
+    } else if (name === 'zlink.host.application_job_queue.limit') {
+      result.observe(metricNumber(jobs.effectiveMaxQueuedApplicationJobs));
+    } else if (name === 'zlink.host.application_job_queue.jobs') {
+      result.observe(metricNumber(jobs.reservedSupplyPermits), { state: 'reserved' });
+      result.observe(metricNumber(jobs.queuedApplicationJobs), { state: 'queued' });
+      result.observe(metricNumber(jobs.permitsInUse), { state: 'in_use' });
+      result.observe(metricNumber(jobs.peakPermitsInUse), { state: 'peak' });
+    } else if (name === 'zlink.host.application_job_queue.capacity_waiters') {
+      result.observe(metricNumber(jobs.capacityWaiters));
+    } else if (name === 'zlink.host.application_job_queue.capacity_waits') {
+      result.observe(metricNumber(jobs.capacityWaitCount));
+    } else if (name === 'zlink.host.application_job_queue.capacity_wait_duration') {
+      result.observe(nonNegative(jobs.capacityWaitDurationSeconds));
     }
   }
 
@@ -265,6 +338,13 @@ export class ZLinkRuntimeMetrics {
   registerHostState(provider: () => string): ZLinkRuntimeMetricRegistration {
     this.registry.hostStates.add(provider);
     return registration(() => this.registry.hostStates.delete(provider));
+  }
+
+  registerHostCapacity(
+    provider: () => ZLinkHostCapacityStatus
+  ): ZLinkRuntimeMetricRegistration {
+    this.registry.hostCapacities.add(provider);
+    return registration(() => this.registry.hostCapacities.delete(provider));
   }
 
   startRequest(meshName: string, surface: 'node' | 'channel' | 'spot' | 'instance_spot' | 'actor'):
@@ -449,6 +529,10 @@ function capacityValue(
 
 function nonNegative(value: number): number {
   return Math.max(0, value);
+}
+
+function metricNumber(value: bigint | number): number {
+  return nonNegative(Number(value));
 }
 
 function safe(action: () => void): void {

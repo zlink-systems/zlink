@@ -32,6 +32,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ConfigResult;
@@ -258,6 +259,28 @@ final class ZLinkActorClientRuntimeTest {
 
         assertEquals(3,
             OneWayTestStatus.status(result));
+        assertEquals(1, node.sendAttempts);
+    }
+
+    @Test
+    void sameNodeActorSendTerminatesMissingOwnerWithoutFrameworkRetry() {
+        LocalRecordingSpotNode node = new LocalRecordingSpotNode();
+        node.acceptSend = false;
+        ZLinkActorClientRuntime client = new ZLinkActorClientRuntime(
+            () -> node,
+            new ZLinkStoreLocationResolvers(
+                ZLinkRegisteredLocationStores.fromUnified(storeWithActor("actor-1")),
+                new ZLinkLocationOptions()),
+            new ZLinkJsonMessageSerializer(),
+            Duration.ofSeconds(5),
+            ZLinkTestAdmissionFactory.create());
+
+        CompletionStage<Void> result = client.sendToActor("actor-1", new Ping("hello"))
+            .submit();
+
+        assertEquals(4, OneWayTestStatus.status(result));
+        assertEquals(1, node.sendAttempts);
+        node.signalActorReady("actor-1", 7);
         assertEquals(1, node.sendAttempts);
     }
 
@@ -588,6 +611,9 @@ final class ZLinkActorClientRuntimeTest {
         String sentPayload;
         int sendAttempts;
         SubmitResult sendFailure;
+        boolean acceptSend = true;
+        private Consumer<systems.zlink.framework.runtime.internal.backend
+            .ZLinkBackendAdmissionKey> admissionReady = ignored -> { };
 
         RecordingSpotNode() {
             this(reply("unused"));
@@ -598,6 +624,17 @@ final class ZLinkActorClientRuntimeTest {
         }
 
         @Override public RoutingId routingId() { return RoutingId.from("caller"); }
+        @Override public void setAdmissionReadyHandler(
+            Consumer<systems.zlink.framework.runtime.internal.backend
+                .ZLinkBackendAdmissionKey> handler) {
+            admissionReady = handler;
+        }
+        void signalActorReady(String actorId, long generation) {
+            admissionReady.accept(
+                systems.zlink.framework.runtime.internal.backend
+                    .ZLinkBackendAdmissionKey.actor(
+                        RoutingId.from("actor-node"), actorId, generation));
+        }
         @Override public void setRoutingId(RoutingId routingId) { }
         @Override public void setPublisherRoutingId(RoutingId routingId) { }
         @Override public void setSubscriberRoutingId(RoutingId routingId) { }
@@ -624,6 +661,9 @@ final class ZLinkActorClientRuntimeTest {
             sendAttempts++;
             if (sendFailure != null) {
                 throw new ZlinkSubmitException(sendFailure);
+            }
+            if (!acceptSend) {
+                return false;
             }
             sentActor = actor;
             ZLinkStreamHeader header =
@@ -654,6 +694,23 @@ final class ZLinkActorClientRuntimeTest {
         @Override public void closeActorBoundSession(ZLinkBackendActorRef actor, Duration timeout) { }
         @Override public String name() { return "recording"; }
         @Override public void close() { }
+    }
+
+    private static final class LocalRecordingSpotNode extends RecordingSpotNode {
+        @Override
+        public RoutingId routingId() {
+            return RoutingId.from("actor-node");
+        }
+
+        @Override
+        public CompletionStage<Void> sendToActorAsync(
+            ZLinkBackendActorRef actor,
+            List<Message> parts) {
+            return sendToActor(actor, parts, SendFlags.DONT_WAIT)
+                ? CompletableFuture.completedFuture(null)
+                : CompletableFuture.failedFuture(
+                    new ZlinkSubmitException(SubmitResult.NOT_FOUND));
+        }
     }
 
     private static final class RequestFailingSpotNode extends RecordingSpotNode {

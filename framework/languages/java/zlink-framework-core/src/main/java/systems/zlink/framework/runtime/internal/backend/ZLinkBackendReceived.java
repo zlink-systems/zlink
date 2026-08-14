@@ -7,7 +7,6 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 
 public final class ZLinkBackendReceived implements AutoCloseable {
     private final ZLinkBackendRequestResult result;
@@ -22,7 +21,6 @@ public final class ZLinkBackendReceived implements AutoCloseable {
     private final Consumer<List<Message>> reply;
     private final Runnable closeAction;
     private final String contentType;
-    private final ZLinkInboundDispatchBudget.Lease inboundDispatchLease;
 
     public ZLinkBackendReceived(
         ZLinkBackendRequestResult result,
@@ -34,8 +32,7 @@ public final class ZLinkBackendReceived implements AutoCloseable {
         List<Message> parts,
         Consumer<List<Message>> reply,
         Runnable closeAction,
-        String contentType,
-        ZLinkInboundDispatchBudget.Lease inboundDispatchLease) {
+        String contentType) {
         this(
             result,
             routingId,
@@ -47,8 +44,7 @@ public final class ZLinkBackendReceived implements AutoCloseable {
             parts,
             reply,
             closeAction,
-            contentType,
-            inboundDispatchLease);
+            contentType);
         this.acceptedJournalRecord = acceptedJournalRecord == null
             ? new byte[0]
             : acceptedJournalRecord;
@@ -65,8 +61,7 @@ public final class ZLinkBackendReceived implements AutoCloseable {
         List<Message> parts,
         Consumer<List<Message>> reply,
         Runnable closeAction,
-        String contentType,
-        ZLinkInboundDispatchBudget.Lease inboundDispatchLease) {
+        String contentType) {
         this.result = result == null ? ZLinkBackendRequestResult.OK : result;
         this.routingId = routingId == null ? Optional.empty() : routingId;
         this.spotId = spotId == null ? Optional.empty() : spotId;
@@ -81,7 +76,6 @@ public final class ZLinkBackendReceived implements AutoCloseable {
         this.reply = reply;
         this.closeAction = closeAction == null ? () -> { } : closeAction;
         this.contentType = contentType;
-        this.inboundDispatchLease = inboundDispatchLease;
     }
 
     public static ZLinkBackendReceived lazyJournal(
@@ -95,12 +89,11 @@ public final class ZLinkBackendReceived implements AutoCloseable {
         List<Message> parts,
         Consumer<List<Message>> reply,
         Runnable closeAction,
-        String contentType,
-        ZLinkInboundDispatchBudget.Lease inboundDispatchLease) {
+        String contentType) {
         return new ZLinkBackendReceived(
             result, routingId, spotId, requestSeq, applicationMetadata,
             acceptedJournalRecord, acceptedJournalRecordSizeHint, parts, reply,
-            closeAction, contentType, inboundDispatchLease);
+            closeAction, contentType);
     }
 
     public ZLinkBackendRequestResult result() { return result; }
@@ -111,10 +104,6 @@ public final class ZLinkBackendReceived implements AutoCloseable {
     public Consumer<List<Message>> reply() { return reply; }
     public Runnable closeAction() { return closeAction; }
     public String contentType() { return contentType; }
-    public ZLinkInboundDispatchBudget.Lease inboundDispatchLease() {
-        return inboundDispatchLease;
-    }
-
     public int applicationMetadataSize() {
         return applicationMetadata.length;
     }
@@ -136,8 +125,7 @@ public final class ZLinkBackendReceived implements AutoCloseable {
         byte[] acceptedJournalRecord,
         List<Message> parts,
         Consumer<List<Message>> reply,
-        Runnable closeAction,
-        ZLinkInboundDispatchBudget.Lease inboundDispatchLease) {
+        Runnable closeAction) {
         this(
             result,
             routingId,
@@ -148,8 +136,7 @@ public final class ZLinkBackendReceived implements AutoCloseable {
             parts,
             reply,
             closeAction,
-            null,
-            inboundDispatchLease);
+            null);
     }
 
     public ZLinkBackendReceived(
@@ -171,31 +158,6 @@ public final class ZLinkBackendReceived implements AutoCloseable {
             parts,
             reply,
             closeAction,
-            null,
-            null);
-    }
-
-    public ZLinkBackendReceived(
-        ZLinkBackendRequestResult result,
-        Optional<RoutingId> routingId,
-        Optional<String> spotId,
-        Optional<Long> requestSeq,
-        byte[] applicationMetadata,
-        byte[] acceptedJournalRecord,
-        List<Message> parts,
-        Consumer<List<Message>> reply,
-        Runnable closeAction) {
-        this(
-            result,
-            routingId,
-            spotId,
-            requestSeq,
-            applicationMetadata,
-            acceptedJournalRecord,
-            parts,
-            reply,
-            closeAction,
-            null,
             null);
     }
 
@@ -217,7 +179,6 @@ public final class ZLinkBackendReceived implements AutoCloseable {
             parts,
             reply,
             closeAction,
-            null,
             null);
     }
 
@@ -236,7 +197,6 @@ public final class ZLinkBackendReceived implements AutoCloseable {
             parts,
             null,
             () -> { },
-            null,
             null);
     }
 
@@ -256,7 +216,6 @@ public final class ZLinkBackendReceived implements AutoCloseable {
             parts,
             reply,
             () -> { },
-            null,
             null);
     }
 
@@ -277,7 +236,6 @@ public final class ZLinkBackendReceived implements AutoCloseable {
             parts,
             reply,
             closeAction,
-            null,
             null);
     }
 
@@ -297,7 +255,6 @@ public final class ZLinkBackendReceived implements AutoCloseable {
             parts,
             null,
             () -> { },
-            null,
             null);
     }
 
@@ -332,23 +289,12 @@ public final class ZLinkBackendReceived implements AutoCloseable {
         parts.forEach(Message::close);
     }
 
-    /** Releases the application admission lease retained by this receive. */
-    public void closeAdmission() {
-        if (inboundDispatchLease != null) {
-            inboundDispatchLease.close();
-        }
-    }
-
     @Override
     public void close() {
         try {
             closeParts();
         } finally {
-            try {
-                closeAction.run();
-            } finally {
-                closeAdmission();
-            }
+            closeAction.run();
         }
     }
 }

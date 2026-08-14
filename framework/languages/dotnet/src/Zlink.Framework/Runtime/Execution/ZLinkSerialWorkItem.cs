@@ -17,7 +17,6 @@ internal sealed class ZLinkSerialWorkItem
         Action? relocationRelease = null,
         bool previousOwnerMessageFollow = false,
         ZLinkSerialWorkLane lane = ZLinkSerialWorkLane.Application,
-        long accountingBytes = ZLinkSerialExecutionQueue.WorkItemFixedCostBytes,
         ulong acceptedSequence = 0,
         ReadOnlyMemory<byte> acceptedPayload = default,
         Func<ReadOnlyMemory<byte>>? acceptedPayloadFactory = null)
@@ -26,9 +25,6 @@ internal sealed class ZLinkSerialWorkItem
         _relocationRelease = relocationRelease;
         PreviousOwnerMessageFollow = previousOwnerMessageFollow;
         Lane = lane;
-        AccountingBytes = accountingBytes > 0
-            ? accountingBytes
-            : throw new ArgumentOutOfRangeException(nameof(accountingBytes));
         AcceptedSequence = acceptedSequence;
         _acceptedPayload = acceptedPayload;
         _acceptedPayloadFactory = acceptedPayloadFactory;
@@ -60,7 +56,6 @@ internal sealed class ZLinkSerialWorkItem
     public bool IsAccepted => AcceptedSequence != 0;
     public bool PreviousOwnerMessageFollow { get; }
     public ZLinkSerialWorkLane Lane { get; }
-    public long AccountingBytes { get; }
 
     public ZLinkAcceptedWorkRecord CreateAcceptedRecord()
     {

@@ -94,6 +94,12 @@ int main ()
     const auto redis_hpp = read_file (
       root / "extensions/framework-locations-redis/include/zlink/locations/redis.hpp");
     const auto spot_runtime = read_file (root / "framework/src/runtime/spots/spot_runtime.cpp");
+    const auto spot_route_packets = read_file (
+      root / "framework/src/runtime/spots/spot_route_packets.cpp");
+    const auto spot_route_packets_hpp = read_file (
+      root / "framework/src/runtime/spots/spot_route_packets.hpp");
+    const auto spot_route_dispatcher = read_file (
+      root / "framework/src/runtime/spots/spot_route_internal_dispatcher.cpp");
     const auto stream_host =
       read_file (root / "framework/src/runtime/streams/stream_host_service.cpp");
     const auto call_hpp =
@@ -106,8 +112,20 @@ int main ()
       root / "framework/src/runtime/execution/serial_execution_queue.hpp");
     const auto call_id = read_file (
       root / "framework/src/runtime/operations/call_id.hpp");
-    const auto async_submit_runtime =
-      read_file (root / "framework/src/runtime/messaging/async_submit_runtime.cpp");
+    const auto call_facade_runtime =
+      read_file (root / "framework/src/runtime/messaging/call_facade_runtime.cpp");
+    const auto logical_multicast_runtime =
+      read_file (root / "framework/src/runtime/messaging/logical_multicast_runtime.cpp");
+    const auto m6a_sources_begin =
+      cmake.find ("set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES");
+    const auto m6a_sources_end =
+      m6a_sources_begin == std::string::npos
+        ? std::string::npos
+        : cmake.find ("set(ZLINK_FRAMEWORK_CPP_M6B_RUNTIME_SOURCES", m6a_sources_begin);
+    const auto m6a_sources =
+      m6a_sources_begin == std::string::npos || m6a_sources_end == std::string::npos
+        ? std::string{}
+        : cmake.substr (m6a_sources_begin, m6a_sources_end - m6a_sources_begin);
     const auto failure_origin_wire =
       read_file (root / "framework/src/runtime/messaging/failure_origin_wire.hpp");
     const auto flow_context =
@@ -761,7 +779,7 @@ int main ()
     gate.require (join_call_block.find ("void defer ()") != std::string::npos,
                   "CPP-G0-ACTOR-002",
                   "actor_join_call_t declaration is missing or was not extracted whole");
-    for (const std::string forbidden : {"submit (", "async (", "yield ("}) {
+    for (const std::string forbidden : {"submit (", " async (", "yield ("}) {
         gate.require (join_call_block.find (forbidden) == std::string::npos,
                       "CPP-G0-ACTOR-002",
                       "actor_join_call_t still exposes a result-bearing terminal: " + forbidden);
@@ -1071,33 +1089,31 @@ int main ()
                   "E2E-CP-50",
                   "Track-F required markers are not client assertions or remain warnings");
 
-    /* E2E-CP-51 — remote transfer exposes the commit-ack and source-cleanup
-     * boundaries, and ST-B1 requires their order instead of inferring it from
-     * the completed join call. */
+    /* E2E-CP-51 — target completion does not publish a source-side commit
+     * acknowledgement. Source cleanup remains the observable post-commit
+     * boundary. */
     gate.require (mesh_node_runtime.find (
                     "\"commit_ack\", actor, transfer_id")
-                    != std::string::npos
+                    == std::string::npos
                     && spot_runtime.find (
                          "emit_actor_transfer_marker (\"source_cleanup\"")
                          != std::string::npos,
                   "E2E-CP-51",
-                  "remote transfer emits no structured commit_ack/source_cleanup boundaries");
+                  "remote transfer still emits a target commit_ack or lacks source_cleanup evidence");
     const auto st_b1 =
       read_file (e2e_root / "SpotActorTransfer/Client/Scenarios/st_b1_scenario.hpp");
-    gate.require (st_b1.find ("commit_ack") != std::string::npos
-                    && st_b1.find ("source_cleanup") != std::string::npos,
+    gate.require (st_b1.find ("source_cleanup") != std::string::npos,
                   "E2E-CP-51",
-                  "ST-B1 does not require commit_ack and source_cleanup evidence");
+                  "ST-B1 does not require source_cleanup evidence");
     gate.require (
       st_b1.find ("|location_committed|") < st_b1.find ("|joined|"),
       "E2E-CP-51",
       "ST-B1 does not require authority commit before target joined");
     const auto st_b3 =
       read_file (e2e_root / "SpotActorTransfer/Client/Scenarios/st_b3_scenario.hpp");
-    gate.require (st_b3.find ("commit_ack") != std::string::npos
-                    && st_b3.find ("source_cleanup") != std::string::npos,
+    gate.require (st_b3.find ("source_cleanup") != std::string::npos,
                   "E2E-CP-51",
-                  "ST-B3 does not require commit_ack and source_cleanup evidence");
+                  "ST-B3 does not require source_cleanup evidence");
 
     /* E2E-CP-52 — named scenarios must open and observe their contract
      * boundary instead of relying on sleeps or impossible negative checks. */
@@ -1162,14 +1178,101 @@ int main ()
                     && st_f3_follow_up < st_f3_join_get,
                   "E2E-CP-53",
                   "ST-F3 sends S3/S4 only after the join caller observes completion");
-    gate.require (mesh_node_runtime.find (".prepare = true") != std::string::npos
-                    && mesh_node_runtime.find (".finalize = true") != std::string::npos
+    gate.require (mesh_node_runtime.find (".prepare=true") != std::string::npos
+                    && mesh_node_runtime.find (".finalize=true") != std::string::npos
                     && spot_runtime.find ("prepare_remote_actor_to_spot") != std::string::npos
                     && spot_runtime.find ("finalize_remote_actor_to_spot") != std::string::npos
                     && st_f2.find ("assert_evidence_sequence") != std::string::npos
                     && st_f3.find ("assert_evidence_sequence") != std::string::npos,
                   "E2E-CP-53",
                   "remote transfer does not enqueue raced backlog before location publication");
+    const auto target_authority_commit =
+      spot_route_dispatcher.find ("commit_remote_actor_authority (");
+    const auto target_backlog_stage =
+      spot_route_dispatcher.find ("stage_remote_actor_commit_backlog (");
+    const auto target_finalize =
+      spot_route_dispatcher.find ("finalize_remote_actor_to_spot_async (");
+    const auto source_finalizer_begin = mesh_node_runtime.find (
+      "task_t<actor_join_reply_t> mesh_node_runtime_t::finalize_remote_application_actor_join (");
+    const auto source_finalizer_end = source_finalizer_begin == std::string::npos
+      ? std::string::npos
+      : mesh_node_runtime.find (
+          "mesh_node_runtime_t::reserve_application_actor_join_barrier (",
+          source_finalizer_begin);
+    const auto source_finalizer =
+      source_finalizer_begin == std::string::npos
+          || source_finalizer_end == std::string::npos
+        ? std::string{}
+        : mesh_node_runtime.substr (
+            source_finalizer_begin, source_finalizer_end - source_finalizer_begin);
+    const auto source_core_commit =
+      source_finalizer.find ("s->core_token.commit");
+    const auto source_follow_publish =
+      source_finalizer.find ("complete_remote_actor_transfer (", source_core_commit);
+    const auto source_finalize_marker = source_finalizer.find (".finalize=true");
+    const auto source_finalize_command = source_finalizer.find (
+      "runtime::messaging::message_kind_t::command", source_finalize_marker);
+    const auto source_finalize_submit =
+      source_finalizer.find ("send_to_spot(", source_finalize_command);
+    const auto duplicate_source_finalize_submit =
+      source_finalize_submit == std::string::npos
+        ? std::string::npos
+        : source_finalizer.find ("send_to_spot(", source_finalize_submit + 1);
+    gate.require (
+      target_authority_commit != std::string::npos
+        && target_backlog_stage != std::string::npos
+        && target_backlog_stage < target_authority_commit
+        && target_finalize != std::string::npos
+        && target_finalize > target_authority_commit
+        && source_core_commit != std::string::npos
+        && source_finalize_marker != std::string::npos
+        && source_finalize_command > source_finalize_marker
+        && source_finalize_submit < source_core_commit
+        && source_follow_publish > source_core_commit
+        && source_finalize_submit != std::string::npos
+        && duplicate_source_finalize_submit == std::string::npos
+        && source_finalizer.find ("request_actor_join_spot_route")
+             == std::string::npos
+        && spot_route_packets_hpp.find ("__zlink.spot.actor.leave")
+             != std::string::npos
+        && spot_route_dispatcher.find ("send_spot_mesh_parts_exact (")
+             != std::string::npos
+        && mesh_node_runtime.find ("completion_request") == std::string::npos
+        && spot_runtime.find ("poll_deferred_actor_join_completions")
+             == std::string::npos
+        && spot_route_packets.find ("coreReserveMessageCount")
+             == std::string::npos
+        && spot_route_packets.find ("coreReserveByteCount")
+             == std::string::npos
+        && spot_route_packets.find ("deferCompletion") == std::string::npos
+        && spot_route_packets.find ("completionOnly") == std::string::npos,
+      "E2E-CP-53",
+      "cross-node Actor Join still defers target activation or sends a second completion request");
+    const auto target_finalizer_begin = spot_runtime.find (
+      "void spot_node_runtime_t::finalize_remote_actor_to_spot_async (");
+    const auto target_finalizer_end = target_finalizer_begin == std::string::npos
+      ? std::string::npos
+      : spot_runtime.find (
+          "result_t<actor_join_reply_t> spot_node_runtime_t::finalize_remote_actor_to_spot (",
+          target_finalizer_begin);
+    const auto target_finalizer =
+      target_finalizer_begin == std::string::npos
+          || target_finalizer_end == std::string::npos
+        ? std::string{}
+        : spot_runtime.substr (
+            target_finalizer_begin,
+            target_finalizer_end - target_finalizer_begin);
+    gate.require (
+      mesh_node_runtime.find ("deliver_remote_actor_join(*s,accepted)")
+          == std::string::npos
+        && target_finalizer.find ("actor_join_accepted_t{")
+             != std::string::npos
+        && target_finalizer.find ("deliver_actor_join_completion_async (")
+             != std::string::npos
+        && target_finalizer.find ("stage_commit_backlog (")
+             == std::string::npos,
+      "E2E-CP-53",
+      "target does not exclusively own the Accepted OperationId or the finalizer restages the source prefix");
 
     /* E2E-CP-54 — both sides of the Message Follow duration use the same one-way
      * send surface; an explicit stale ref is never silently re-resolved. */
@@ -1322,7 +1425,7 @@ int main ()
                     && stream_auth_block.find ("request_to_node") == std::string::npos,
                   "E2E-CP-14",
                   "SM-D2 stream auth recreates the actor through route mesh instead of binding its snapshot");
-    const auto stream_bind_begin = stream_host.find ("result_t<void> bind_actor_session");
+    const auto stream_bind_begin = stream_host.find ("task_t<void> bind_actor_session");
     const auto stream_remote_bind =
       stream_host.find ("_mesh_node->bind_application_actor_session", stream_bind_begin);
     gate.require (stream_bind_begin != std::string::npos
@@ -1864,19 +1967,6 @@ int main ()
       "CPP-RELOC-002",
       "relocation still treats a one-shot target snapshot as terminal");
 
-    /* CPP-LAYER-005 — no new completion can be admitted after the shutdown
-     * result becomes visible to a termination waiter. */
-    const auto stop_completion_admission =
-      app_runtime.find ("state.completion_admission->stop ()");
-    const auto complete_termination_waiter =
-      app_runtime.find ("waiter->complete (terminal)");
-    gate.require (
-      stop_completion_admission != std::string::npos
-        && complete_termination_waiter != std::string::npos
-        && stop_completion_admission < complete_termination_waiter,
-      "CPP-LAYER-005",
-      "shutdown publishes its terminal result before closing completion admission");
-
     /* CPP-DISP-005 — local application enqueue interrupts the MeshNode
      * ROUTER poll instead of waiting for its 100 ms safety bound. */
     gate.require (
@@ -1901,15 +1991,61 @@ int main ()
       "CPP-DISP-003",
       "pre-admission Request overflow does not send a terminal capacity reply");
 
+    const auto messaging_runtime = root / "framework/src/runtime/messaging";
+    const bool legacy_submit_runtime_absent =
+      !std::filesystem::exists (messaging_runtime / "async_submit_runtime.cpp")
+      && !std::filesystem::exists (messaging_runtime / "async_submit_runtime.hpp")
+      && !std::filesystem::exists (messaging_runtime / "pending_operation.cpp")
+      && !std::filesystem::exists (messaging_runtime / "pending_operation.hpp")
+      && !std::filesystem::exists (messaging_runtime / "pending_operation_state.hpp")
+      && !std::filesystem::exists (messaging_runtime / "pending_submit.cpp")
+      && !std::filesystem::exists (messaging_runtime / "pending_submit.hpp")
+      && !std::filesystem::exists (messaging_runtime / "submit_queue.cpp")
+      && !std::filesystem::exists (messaging_runtime / "submit_queue.hpp");
+    gate.require (
+      legacy_submit_runtime_absent
+        && m6a_sources.find (
+             "framework/src/runtime/messaging/call_facade_runtime.cpp")
+             != std::string::npos
+        && m6a_sources.find (
+             "framework/src/runtime/messaging/logical_multicast_runtime.cpp")
+             != std::string::npos
+        && !std::filesystem::exists (
+             messaging_runtime / "logical_multicast_runtime.hpp")
+        && logical_multicast_runtime.find ("_for_tests") == std::string::npos
+        && !tree_contains (messaging_runtime, "note_submit_attempt")
+        && !tree_contains (messaging_runtime, "notify_submit_ready")
+        && !tree_contains (messaging_runtime, "pending_submit_t")
+        && !tree_contains (messaging_runtime, "submit_queue_t"),
+      "CPP-HWM-ASYNC-001",
+      "Framework still owns legacy submit retry state or the replacement runtimes are not production members");
+
+    /* The compatibility fallback may translate one synchronous terminal, but
+     * it must never retain and retry a Core admission failure. */
+    gate.require (
+      call_facade_runtime.find (
+        "return task_t<void> (terminal_result (submit ()))")
+          != std::string::npos
+        && call_facade_runtime.find ("note_submit_attempt") == std::string::npos
+        && call_facade_runtime.find ("notify_submit_ready") == std::string::npos,
+      "CPP-HWM-ASYNC-002",
+      "one-way compatibility submission is not a single terminal attempt");
+
     /* CPP-DISP-004 — dequeue remains the public completion boundary, while
      * every later publisher failure reaches either the Spot structured
      * observer or the executor fallback observation. */
     gate.require (
-      async_submit_runtime.find (
+      m6a_sources.find (
+        "framework/src/runtime/messaging/logical_multicast_runtime.cpp")
+          != std::string::npos
+        && logical_multicast_runtime.find (
         "job.completion->complete (result_t<void>::success ())")
           != std::string::npos
-        && async_submit_runtime.find (
+        && logical_multicast_runtime.find (
              "observe_logical_multicast_post_completion_failure")
+             != std::string::npos
+        && logical_multicast_runtime.find (
+             "std::clog << \"zlink logical multicast failed after caller completion: \"")
              != std::string::npos
         && spot_runtime.find (
              "detail::report_logical_multicast_failure")
@@ -2112,13 +2248,15 @@ int main ()
         "stream_send_call_t &timeout (std::chrono::milliseconds timeout)")
           != std::string::npos
         && stream_runtime.find (
-             "runtime::messaging::limit_submit_attempt_timeout (*_timeout)")
+             "_submit (header, payload, _timeout)")
              != std::string::npos
-        && async_submit_runtime.find (
-             "last_attempt_context.timeout = std::min")
-             != std::string::npos,
+        && stream_host.find (
+             "std::move (send).timeout (*timeout).async ()")
+             != std::string::npos
+        && !tree_contains (
+             root / "framework/src/runtime/streams", "async_submit_runtime"),
       "CPP-CONTRACT-STREAM-001",
-      "STREAM send does not bound existing socket admission with its per-call timeout");
+      "STREAM send does not propagate its per-call deadline to binding-owned admission");
 
     /* CPP-LAYER-002 — in-flight calls do not reuse the public Actor Join
      * OperationId type or name. */

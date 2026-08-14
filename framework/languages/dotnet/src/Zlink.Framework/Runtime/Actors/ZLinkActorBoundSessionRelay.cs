@@ -215,7 +215,7 @@ internal static class ZLinkActorBoundSessionRelay
         }
 
         var frame = reply.ToFrame(requestHeader);
-        await SendFrameWithRetryAsync(runtime, actorId, sourceSessionRid, frame, cancellationToken)
+        await SendFrameAsync(runtime, actorId, sourceSessionRid, frame, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -288,16 +288,14 @@ internal static class ZLinkActorBoundSessionRelay
             + $"capability={(!string.IsNullOrWhiteSpace(replyCapability))} "
             + $"direct={directReply is not null}");
         if (directReply is not null)
-            await ZLinkRetryingSubmitter.Async(
-                    () =>
-                    {
-                        using var replyMessage = Message.From(frame);
-                        return directReply([replyMessage], SendFlags.DontWait);
-                    },
-                    runtime.Registration.DefaultRequestTimeout,
-                    "Direct actor request terminal reply failed.",
-                    cancellationToken)
-                .ConfigureAwait(false);
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var replyMessage = Message.From(frame);
+            var result = directReply([replyMessage], SendFlags.DontWait);
+            if (result != SubmitResult.Ok)
+                throw new ZlinkSubmitException(
+                    (ZlinkSubmitException.ErrorCode)(int)result);
+        }
         else
         {
             using var replyMessage = Message.From(frame);
@@ -317,37 +315,53 @@ internal static class ZLinkActorBoundSessionRelay
             $"actor_reply_no_bind_done actor={actorRef.ActorId} request_id={requestId}");
     }
 
-    private static async ValueTask SendFrameWithRetryAsync(
+    private static async ValueTask SendFrameAsync(
         ZLinkFrameworkRuntime runtime,
         string actorId,
         RoutingId sourceSessionRid,
         byte[] frame,
         CancellationToken cancellationToken)
     {
-        // An identity-less frame (no session rid) replies on the actor's
-        // current binding: it cannot name a binding token, and gating it on
-        // the empty native token would never match a session bound through
-        // the coordinator's own registry.
-        var sourceBindingToken = ZLinkActorBoundSessionBindingToken.Native(sourceSessionRid);
-        await ZLinkRetryingSubmitter.Async(
-                () =>
-                {
-                    using var frameMessage = Message.From(frame);
-                    return sourceSessionRid.IsEmpty
-                        ? runtime.SendActorBoundSession(
-                            actorId,
-                            new[] { frameMessage },
-                            SendFlags.None)
-                        : runtime.SendActorBoundSessionIfCurrent(
-                            actorId,
-                            sourceBindingToken,
-                            new[] { frameMessage },
-                            SendFlags.None);
-                },
-                runtime.Registration.DefaultRequestTimeout,
-                "Actor request reply relay failed.",
-                cancellationToken)
-            .ConfigureAwait(false);
+        var sourceBindingToken = sourceSessionRid.IsEmpty
+            ? runtime.TryGetActorBoundSessionForOutbound(
+                actorId,
+                out var current)
+                ? current.BindingToken
+                : throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.InvalidOperation,
+                    $"Actor '{actorId}' has no current bound session for its reply.",
+                    ZLinkRetryAdvice.RetryAfterBackoff)
+            : ZLinkActorBoundSessionBindingToken.Native(sourceSessionRid);
+        using var terminal = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            runtime.ShutdownToken);
+        terminal.CancelAfter(runtime.Registration.DefaultRequestTimeout);
+        using var frameMessage = Message.From(frame);
+        try
+        {
+            await runtime.SendActorBoundSessionIfCurrentAsync(
+                    actorId,
+                    sourceBindingToken,
+                    [frameMessage],
+                    terminal.Token)
+                .EnsureAcceptedAsync("Actor request reply relay")
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            runtime.ShutdownToken.IsCancellationRequested)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "Actor request reply relay was interrupted by runtime shutdown.");
+        }
+        catch (OperationCanceledException) when (
+            !cancellationToken.IsCancellationRequested)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                "Actor request reply relay timed out before local admission completed.",
+                ZLinkRetryAdvice.RetryAfterBackoff);
+        }
     }
 
     internal static bool IsNoBindRequest(ulong requestId, uint flags)

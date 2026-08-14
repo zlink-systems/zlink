@@ -26,7 +26,6 @@
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
-#include <zlink/Contracts/Core/byte_count.hpp>
 #include <zlink/Contracts/Core/context.hpp>
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/Contracts/Eventing/events.hpp>
@@ -773,6 +772,13 @@ copy_message_parts (const std::vector<zlink::message_t> &parts)
     return zlink::framework::runtime::messaging::message_parts_t (std::move (copied));
 }
 
+zlink::framework::task_t<std::vector<zlink::message_t>>
+await_native_reply (
+  zlink::async_result_t<std::vector<zlink::message_t>> pending)
+{
+    co_return co_await std::move (pending);
+}
+
 } // namespace
 
 int main ()
@@ -796,8 +802,6 @@ int main ()
     auto standalone_server = standalone_channel.enable_server ()
                                .bind ("tcp://127.0.0.1:7001")
                                .set_routing_id (zlink::routing_id_t::from ("standalone-server"))
-                               .send_high_water_mark (zlink::byte_count_t::bytes (11))
-                               .receive_high_water_mark (zlink::byte_count_t::bytes (12))
                                .max_message_size (zlink::byte_size_t::bytes (4096))
                                .peer_weight (zlink::peer_weight_t::value (3))
                                .snapshot ();
@@ -809,10 +813,6 @@ int main ()
     if (!standalone_server.enabled || standalone_server.bind_endpoints.size () != 1
         || !standalone_server.routing_id
         || standalone_server.routing_id->to_string () != "standalone-server"
-        || !standalone_server.send_high_water_mark
-        || standalone_server.send_high_water_mark->bytes () != 11
-        || !standalone_server.receive_high_water_mark
-        || standalone_server.receive_high_water_mark->bytes () != 12
         || !standalone_server.max_message_size
         || standalone_server.max_message_size->bytes () != 4096
         || !standalone_server.peer_weight || standalone_server.peer_weight->value () != 3
@@ -836,8 +836,6 @@ int main ()
     loose_capability.bind ("tcp://127.0.0.1:7051")
       .connect ("tcp://127.0.0.1:7052")
       .set_routing_id (zlink::routing_id_t::from ("loose-capability"))
-      .send_high_water_mark (zlink::byte_count_t::bytes (4))
-      .receive_high_water_mark (zlink::byte_count_t::bytes (5))
       .max_message_size (zlink::byte_size_t::bytes (2048))
       .peer_weight (zlink::peer_weight_t::value (6));
     zlink::framework::capability_builder_t moved_capability (std::move (loose_capability));
@@ -1204,7 +1202,8 @@ int main ()
         return 404;
     }
 
-    zlink::framework::route_send_call_t unbound_route_send ("event", {});
+    zlink::framework::route_send_call_t unbound_route_send (
+      "event", zlink::framework::route_send_call_t::async_submit_fn_t{});
     /* One-way terminal rule again (04-async-execution-policy.ko.md §1.3): the unbound send
      * call reports its admission failure on the returned task_t<void>. */
     const auto unbound_route_send_result = unbound_route_send.submit ().result ();
@@ -1637,7 +1636,8 @@ int main ()
                                   .message (native_request_body)
                                   .timeout (std::chrono::milliseconds (2000))
                                   .async ();
-    const auto native_client_reply = copy_message_parts (native_client_future.get ());
+    const auto native_client_reply = copy_message_parts (
+      await_native_reply (std::move (native_client_future)).result ().value ());
     const int native_server_result = native_server_done.get ();
     if (native_server_result != 0) {
         return native_server_result;
@@ -1649,11 +1649,16 @@ int main ()
         return 79;
     }
 
+    const auto framework_core_context =
+      std::make_shared<zlink::context_t> ();
     zlink::framework::zlink_builder_t native_bus_builder;
     const auto native_bus_endpoint = unique_tcp_endpoint ();
     native_bus_builder.channel ("native-bus").enable_client ().connect (native_bus_endpoint);
-    zlink::framework::detail::channel_runtime_t::from (native_bus_builder.message_bus ())
-      .bind_serializers (serializers);
+    auto native_bus_runtime =
+      zlink::framework::detail::channel_runtime_t::from (
+        native_bus_builder.message_bus ());
+    native_bus_runtime.bind_core_context (framework_core_context);
+    native_bus_runtime.bind_serializers (serializers);
 
     zlink::context_t native_bus_server_context;
     zlink::router_socket_t native_bus_server (native_bus_server_context);
@@ -1740,16 +1745,16 @@ int main ()
     auto hosted_channel = hosted_builder.channel ("hosted");
     hosted_channel.enable_server ().set_routing_id (hosted_server_rid).bind (hosted_endpoint);
     hosted_channel.enable_client ().connect (hosted_endpoint);
-    zlink::framework::detail::channel_runtime_t::from (hosted_builder.message_bus ())
-      .bind_serializers (serializers);
-    auto hosted_completion_admission =
-      std::make_shared<
-        zlink::framework::runtime::completion_admission_owner_t> (1);
+    auto hosted_runtime =
+      zlink::framework::detail::channel_runtime_t::from (
+        hosted_builder.message_bus ());
+    hosted_runtime.bind_core_context (framework_core_context);
+    hosted_runtime.bind_serializers (serializers);
     zlink::framework::runtime::channel_host_service_t hosted_service (
       hosted_builder.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (hosted_builder.message_bus ())
         .channel_snapshots (),
-      handlers, serializers, nullptr, hosted_completion_admission);
+      handlers, serializers);
     hosted_service.start (provider);
     auto hosted_reply = hosted_builder.request_client ("hosted")
                           .request (request_t{28})
@@ -1792,16 +1797,6 @@ int main ()
         hosted_service.stop ();
         return 247;
     }
-    if (hosted_completion_admission->snapshot ().pending_completion_sends
-        != 0) {
-        {
-            std::lock_guard lock (hosted_handler.send_gate_mutex);
-            hosted_handler.release_blocking_send = true;
-        }
-        hosted_handler.send_gate_changed.notify_all ();
-        hosted_service.stop ();
-        return 248;
-    }
     {
         std::lock_guard lock (hosted_handler.send_gate_mutex);
         hosted_handler.release_blocking_send = true;
@@ -1824,12 +1819,13 @@ int main ()
         try {
             auto attempt_header = zlink::message_t::from (hosted_parts[0].to_string ());
             auto attempt_body = zlink::message_t::from (hosted_parts[1].to_string ());
-            routed_hosted_reply = peer_router.request (hosted_server_rid)
-                                    .message (attempt_header)
-                                    .message (attempt_body)
-                                    .timeout (std::chrono::milliseconds (200))
-                                    .async ()
-                                    .get ();
+            auto pending = peer_router.request (hosted_server_rid)
+                             .message (attempt_header)
+                             .message (attempt_body)
+                             .timeout (std::chrono::milliseconds (200))
+                             .async ();
+            routed_hosted_reply =
+              await_native_reply (std::move (pending)).result ().value ();
             routed_request_completed = true;
         }
         catch (const std::exception &) {
@@ -1864,8 +1860,11 @@ int main ()
     manual_server_builder.channel ("hosted-manual")
       .enable_server ()
       .bind (manual_hosted_endpoint);
-    zlink::framework::detail::channel_runtime_t::from (manual_server_builder.message_bus ())
-      .bind_serializers (serializers);
+    auto manual_server_runtime =
+      zlink::framework::detail::channel_runtime_t::from (
+        manual_server_builder.message_bus ());
+    manual_server_runtime.bind_core_context (framework_core_context);
+    manual_server_runtime.bind_serializers (serializers);
     zlink::framework::runtime::channel_host_service_t manual_hosted_service (
       manual_server_builder.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (manual_server_builder.message_bus ())
@@ -1879,6 +1878,7 @@ int main ()
       .connect (manual_hosted_endpoint);
     auto manual_client_runtime =
       zlink::framework::detail::channel_runtime_t::from (manual_client_builder.message_bus ());
+    manual_client_runtime.bind_core_context (framework_core_context);
     manual_client_runtime.bind_serializers (serializers);
 
     bool manual_reply_completed = false;
@@ -1918,9 +1918,14 @@ int main ()
                          .submit<reply_t> ()
                          .result ();
     const auto stale_elapsed = std::chrono::steady_clock::now () - stale_start;
+    const auto stale_boundary =
+      stale_reply.error () != nullptr
+        ? zlink::framework::detail::boundary_state (*stale_reply.error ())
+        : zlink::framework::detail::boundary_error_t::none;
     if (stale_reply
-        || (stale_reply.error () != nullptr
-         && zlink::framework::detail::boundary_state (*stale_reply.error ()) != zlink::framework::detail::boundary_error_t::timed_out)
+        || (stale_boundary != zlink::framework::detail::boundary_error_t::timed_out
+            && stale_boundary
+                 != zlink::framework::detail::boundary_error_t::disconnected)
         || stale_elapsed > std::chrono::seconds (2)) {
         return 89;
     }
@@ -1930,8 +1935,11 @@ int main ()
     auto nested_hosted_channel = nested_hosted_builder.channel ("hosted-nested");
     nested_hosted_channel.enable_server ().bind (nested_hosted_endpoint);
     nested_hosted_channel.enable_client ().connect (nested_hosted_endpoint);
-    zlink::framework::detail::channel_runtime_t::from (nested_hosted_builder.message_bus ())
-      .bind_serializers (serializers);
+    auto nested_hosted_runtime =
+      zlink::framework::detail::channel_runtime_t::from (
+        nested_hosted_builder.message_bus ());
+    nested_hosted_runtime.bind_core_context (framework_core_context);
+    nested_hosted_runtime.bind_serializers (serializers);
     zlink::framework::service_collection_t nested_services;
     nested_services.add_singleton<zlink::framework::channel_client_t> (
       std::make_unique<zlink::framework::channel_client_t> (nested_hosted_builder.message_bus ()));
@@ -1962,8 +1970,11 @@ int main ()
     auto scoped_hosted_channel = scoped_hosted_builder.channel ("hosted-scoped");
     scoped_hosted_channel.enable_server ().bind (scoped_hosted_endpoint);
     scoped_hosted_channel.enable_client ().connect (scoped_hosted_endpoint);
-    zlink::framework::detail::channel_runtime_t::from (scoped_hosted_builder.message_bus ())
-      .bind_serializers (serializers);
+    auto scoped_hosted_runtime =
+      zlink::framework::detail::channel_runtime_t::from (
+        scoped_hosted_builder.message_bus ());
+    scoped_hosted_runtime.bind_core_context (framework_core_context);
+    scoped_hosted_runtime.bind_serializers (serializers);
     zlink::framework::service_collection_t scoped_services;
     scoped_services.add_scoped<scoped_channel_dependency_t> ();
     scoped_services
@@ -3060,19 +3071,22 @@ int main ()
         const zlink::routing_id_t &target_node_rid,
         const std::string &target_spot_id,
         std::uint64_t target_spot_generation,
-        zlink::framework::runtime::messaging::message_parts_t) {
+        zlink::framework::runtime::messaging::message_parts_t)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           if (target_node_rid.to_string () == "spot-node" && target_spot_id == "spot-rid"
               && target_spot_generation == spot_only_generation) {
               ++spot_only_send_count;
           }
-          return zlink::framework::result_t<void>::success ();
+          co_return zlink::framework::result_t<void>::success ();
       },
       [&spot_only_request_called, &envelope_codec, &serializers] (
         const zlink::routing_id_t &target_node_rid,
         const std::string &target_spot_id,
         std::uint64_t target_spot_generation,
         zlink::framework::runtime::messaging::message_parts_t parts,
-        std::chrono::milliseconds timeout) {
+        std::chrono::milliseconds timeout)
+        -> zlink::framework::task_t<zlink::framework::result_t<
+          zlink::framework::runtime::messaging::message_parts_t>> {
           const auto header = envelope_codec.decode_header (parts);
           const auto body = envelope_codec.decode_body (parts);
           if (!header || !body || target_node_rid.to_string () != "spot-node"
@@ -3084,7 +3098,7 @@ int main ()
                        body.value ()))
                      .value
                    != 53) {
-              return zlink::framework::result_t<
+              co_return zlink::framework::result_t<
                 zlink::framework::runtime::messaging::message_parts_t>::failure (
                 zlink::framework::framework_error_kind_t::internal_failure,
                 "spot-only transport received unexpected request");
@@ -3093,7 +3107,7 @@ int main ()
           auto reply_header = header.value ();
           reply_header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
           reply_t reply{353};
-          return zlink::framework::result_t<
+          co_return zlink::framework::result_t<
             zlink::framework::runtime::messaging::message_parts_t>::success (
             envelope_codec.encode_parts (reply_header, std::type_index (typeid (reply_t)), &reply,
                                          serializers));
@@ -3107,15 +3121,18 @@ int main ()
       "spot-only",
       [&spot_only_node_send_count] (
         const zlink::routing_id_t &target_node_rid,
-        zlink::framework::runtime::messaging::message_parts_t) {
+        zlink::framework::runtime::messaging::message_parts_t)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           if (target_node_rid.to_string () == "spot-node") {
               ++spot_only_node_send_count;
           }
-          return zlink::framework::result_t<void>::success ();
+          co_return zlink::framework::result_t<void>::success ();
       },
       [] (const zlink::routing_id_t &, zlink::framework::runtime::messaging::message_parts_t,
-          std::chrono::milliseconds) {
-          return zlink::framework::result_t<
+          std::chrono::milliseconds)
+        -> zlink::framework::task_t<zlink::framework::result_t<
+          zlink::framework::runtime::messaging::message_parts_t>> {
+          co_return zlink::framework::result_t<
             zlink::framework::runtime::messaging::message_parts_t>::failure (
             zlink::framework::framework_error_kind_t::internal_failure,
             "spot-only node transport received an unexpected request");
@@ -3151,10 +3168,11 @@ int main ()
       [&] (const zlink::framework::spot_id_t &spot_id,
            const zlink::framework::detail::spot_activation_intent_t &intent,
            const std::string &, std::type_index, auto,
-           const std::map<std::string, std::string> &) {
+           const std::map<std::string, std::string> &)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           if (std::string (spot_id) != "cart-17" || intent.mesh_name != "commerce"
               || intent.stable_type != "shopping-cart") {
-              return zlink::framework::result_t<void>::failure (
+              co_return zlink::framework::result_t<void>::failure (
                 zlink::framework::framework_error_kind_t::not_configured,
                 "unexpected Instance Spot activation intent");
           }
@@ -3162,7 +3180,7 @@ int main ()
           auto address = zlink::framework::runtime::spot_address_t{
             "commerce", zlink::routing_id_t::from ("cart-node"), "cart-17", 1};
           activation_resolver.set ("cart-17", address);
-          return zlink::framework::result_t<void>::success ();
+          co_return zlink::framework::result_t<void>::success ();
       },
       [] (const auto &, const auto &, auto, auto, auto, auto, auto) {
           return zlink::framework::task_t<zlink::message_t> (
@@ -3176,22 +3194,25 @@ int main ()
       "commerce",
       [&] (const zlink::routing_id_t &target_node, const std::string &target_spot,
            std::uint64_t generation,
-           zlink::framework::runtime::messaging::message_parts_t) {
+           zlink::framework::runtime::messaging::message_parts_t)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           if (target_node.to_string () == "cart-node" && target_spot == "cart-17"
               && generation == 1) {
               ++activation_send_count;
           }
-          return zlink::framework::result_t<void>::success ();
+          co_return zlink::framework::result_t<void>::success ();
       },
       [&] (const zlink::routing_id_t &, const std::string &, std::uint64_t,
            zlink::framework::runtime::messaging::message_parts_t parts,
-           std::chrono::milliseconds) {
+           std::chrono::milliseconds)
+        -> zlink::framework::task_t<zlink::framework::result_t<
+          zlink::framework::runtime::messaging::message_parts_t>> {
           ++activation_request_count;
           const auto header = envelope_codec.decode_header (parts);
           auto reply_header = header.value ();
           reply_header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
           reply_t reply{617};
-          return zlink::framework::result_t<
+          co_return zlink::framework::result_t<
             zlink::framework::runtime::messaging::message_parts_t>::success (
             envelope_codec.encode_parts (reply_header, std::type_index (typeid (reply_t)),
                                          &reply, serializers));
@@ -3230,21 +3251,25 @@ int main ()
     retry_runtime.bind_spot_mesh_transport (
       "retry-mesh",
       [] (const zlink::routing_id_t &, const std::string &, std::uint64_t,
-          zlink::framework::runtime::messaging::message_parts_t) {
-          return zlink::framework::result_t<void>::success ();
+          zlink::framework::runtime::messaging::message_parts_t)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
+          co_return zlink::framework::result_t<void>::success ();
       },
       [&retry_stale_attempts, &retry_fresh_attempts, &envelope_codec, &serializers] (
         const zlink::routing_id_t &, const std::string &target_spot_id, std::uint64_t,
-        zlink::framework::runtime::messaging::message_parts_t parts, std::chrono::milliseconds) {
+        zlink::framework::runtime::messaging::message_parts_t parts,
+        std::chrono::milliseconds)
+        -> zlink::framework::task_t<zlink::framework::result_t<
+          zlink::framework::runtime::messaging::message_parts_t>> {
           if (target_spot_id == "stale-spot") {
               ++retry_stale_attempts;
-              return zlink::framework::result_t<
+              co_return zlink::framework::result_t<
                 zlink::framework::runtime::messaging::message_parts_t>::failure (
                 zlink::framework::framework_error_kind_t::not_found,
                 "spot moved away from the stale address");
           }
           if (target_spot_id != "fresh-spot") {
-              return zlink::framework::result_t<
+              co_return zlink::framework::result_t<
                 zlink::framework::runtime::messaging::message_parts_t>::failure (
                 zlink::framework::framework_error_kind_t::internal_failure,
                 "unexpected retry target");
@@ -3254,7 +3279,7 @@ int main ()
           auto reply_header = header.value ();
           reply_header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
           reply_t reply{454};
-          return zlink::framework::result_t<
+          co_return zlink::framework::result_t<
             zlink::framework::runtime::messaging::message_parts_t>::success (
             envelope_codec.encode_parts (reply_header, std::type_index (typeid (reply_t)), &reply,
                                          serializers));

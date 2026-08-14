@@ -16,7 +16,6 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore;
 import systems.zlink.framework.runtime.channels.ChannelRegistration;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerScanner;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandler;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
@@ -37,10 +36,9 @@ public final class ZLinkFrameworkRegistration {
         new ZLinkDispatchOptionsRegistration();
     private final ZLinkWorkerOptionsRegistration workers =
         new ZLinkWorkerOptionsRegistration();
-    private final ZLinkLocationRegistration locations = new ZLinkLocationRegistration();
     private final ZLinkInboundDispatchRegistration inboundDispatch =
         new ZLinkInboundDispatchRegistration();
-    private volatile ZLinkInboundDispatchBudget inboundDispatchBudget;
+    private final ZLinkLocationRegistration locations = new ZLinkLocationRegistration();
     private final List<ChannelRegistration> channels = new ArrayList<>();
     private final List<MeshNodeRegistration> meshNodes = new ArrayList<>();
     private final List<SpotNodeRegistration> spotNodes = new ArrayList<>();
@@ -103,21 +101,17 @@ public final class ZLinkFrameworkRegistration {
         return workers;
     }
 
-    public ZLinkLocationRegistration locations() {
-        return locations;
-    }
-
     public ZLinkInboundDispatchRegistration inboundDispatch() {
         return inboundDispatch;
     }
 
-    /** Returns the process-wide inbound dispatch budget after configuration validation. */
-    public synchronized ZLinkInboundDispatchBudget inboundDispatchBudget() {
-        if (inboundDispatchBudget == null) {
-            inboundDispatchBudget = new ZLinkInboundDispatchBudget(
-                ZLinkInboundDispatchBudget.resolveApplicationHwm(inboundDispatch));
-        }
-        return inboundDispatchBudget;
+    public systems.zlink.framework.runtime.internal.dispatch
+        .ZLinkApplicationJobQueue applicationJobQueue() {
+        return inboundDispatch.applicationJobQueue(handlerExecutor);
+    }
+
+    public ZLinkLocationRegistration locations() {
+        return locations;
     }
 
     public List<ChannelRegistration> channels() {
@@ -237,13 +231,11 @@ public final class ZLinkFrameworkRegistration {
     void validate() {
         dispatchOptions.validate();
         workers.validate();
-        long applicationHwmBytes =
-            ZLinkInboundDispatchBudget.resolveApplicationHwm(inboundDispatch);
+        inboundDispatch.applicationJobQueue(handlerExecutor);
         ZLinkScannedHandlerCatalog handlerCatalog =
             ZLinkHandlerScanner.scan(handlerPackageMarkers);
         for (ChannelRegistration channel : channels) {
             channel.validate(locations.enabled(), handlerCatalog);
-            channel.validateApplicationHwm(applicationHwmBytes);
         }
         Set<String> clientServerChannelNames = channels.stream()
             .filter(channel -> channel.kind()
@@ -295,7 +287,6 @@ public final class ZLinkFrameworkRegistration {
         }
         for (StreamNodeRegistration streamNode : streamNodes) {
             streamNode.validate(meshNodes);
-            streamNode.validateApplicationHwm(applicationHwmBytes);
         }
     }
 

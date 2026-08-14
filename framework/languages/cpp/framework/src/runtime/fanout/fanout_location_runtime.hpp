@@ -6,6 +6,7 @@
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/dispatch/receive_batch_budget.hpp"
+#include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/fanout/raw_fanout_owner.hpp"
 #include "runtime/eventing/runtime_wake_timer.hpp"
 #include "runtime/locations/location_runtime.hpp"
@@ -42,7 +43,8 @@ class fanout_location_runtime_t final : public fanout_runtime_t
       serializer_registry_t &serializers,
       const handler_registry_t &handlers,
       std::map<std::string, std::string> publisher_advertise_hosts = {},
-      std::shared_ptr<listener_status_registry_t> listener_statuses = {});
+      std::shared_ptr<listener_status_registry_t> listener_statuses = {},
+      std::shared_ptr<application_job_queue_t> application_jobs = {});
     ~fanout_location_runtime_t () noexcept;
 
     fanout_location_runtime_t (
@@ -91,7 +93,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     void wait_for_activity (std::chrono::milliseconds timeout) noexcept;
     void stop_publishers () noexcept;
     void stop_subscribers () noexcept;
-    result_t<void> publish (
+    task_t<void> publish (
       const std::string &channel_name,
       std::string topic,
       std::string packet_name,
@@ -113,6 +115,8 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     service_provider_t _services;
     serializer_registry_t *_serializers;
     const handler_registry_t *_handlers;
+    std::shared_ptr<application_job_queue_t> _application_jobs;
+    std::unique_ptr<application_supply_slot_t> _application_supply;
     std::unique_ptr<zlink::poller_t> _subscriber_poller;
     eventing::runtime_wake_timer_t _wake_timer;
     mutable std::mutex _gate;

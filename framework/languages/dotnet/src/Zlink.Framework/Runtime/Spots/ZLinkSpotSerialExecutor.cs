@@ -391,9 +391,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         if (claim is null)
         {
             onSkipped?.Invoke();
-            var claimAdmission = IsStoppingOrDisposed()
-                ? ZLinkSerialPostAdmission.Closed
-                : ZLinkSerialPostAdmission.QueueFull;
+            var claimAdmission = ZLinkSerialPostAdmission.Closed;
             ReportApplicationAdmissionIfUnobserved(
                 "spot-application-admission",
                 claimAdmission,
@@ -465,9 +463,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         if (claim is null)
         {
             onSkipped?.Invoke();
-            var claimAdmission = IsStoppingOrDisposed()
-                ? ZLinkSerialPostAdmission.Closed
-                : ZLinkSerialPostAdmission.QueueFull;
+            var claimAdmission = ZLinkSerialPostAdmission.Closed;
             ReportApplicationAdmissionIfUnobserved(
                 "spot-application-admission",
                 claimAdmission,
@@ -511,12 +507,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         _errorSink.ReportRuntimeTaskException(
             "spot-lifecycle-admission",
             new ZLinkFrameworkException(
-                admission == ZLinkSerialPostAdmission.Closed
-                    ? ZLinkFrameworkErrorKind.ShuttingDown
-                    : ZLinkFrameworkErrorKind.CapacityExceeded,
-                admission == ZLinkSerialPostAdmission.Closed
-                    ? "The SPOT lifecycle queue closed before admission."
-                    : "The SPOT lifecycle queue reached its configured capacity."));
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "The SPOT lifecycle queue closed before admission."));
     }
 
     private void ReportApplicationAdmissionIfUnobserved(
@@ -531,12 +523,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         _errorSink.ReportRuntimeTaskException(
             operation,
             new ZLinkFrameworkException(
-                admission == ZLinkSerialPostAdmission.Closed
-                    ? ZLinkFrameworkErrorKind.ShuttingDown
-                    : ZLinkFrameworkErrorKind.CapacityExceeded,
-                admission == ZLinkSerialPostAdmission.Closed
-                    ? "The SPOT application queue closed before admission."
-                    : "The SPOT application queue reached its configured capacity."));
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "The SPOT application queue closed before admission."));
     }
 
     public ZLinkAcceptedWorkAdmission QueueAccepted(

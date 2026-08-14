@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.channels;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -8,147 +9,112 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executor;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestCallback;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
 
 final class ZLinkSpotRouteBridgeDispatcherTest {
     @Test
-    void acceptedRetryDoesNotAttemptAfterLifecycleClose() throws Exception {
-        CapturingScheduler scheduler = new CapturingScheduler();
+    void sendAwaitsOneBindingStageWithoutFrameworkRetry() {
+        DirectBridge bridge = new DirectBridge();
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        Message payload = Message.from("payload");
+
+        ZLinkSpotRouteBridgeDispatcher.submitSend(
+            bridge,
+            "play.route",
+            RoutingId.from("play-node"),
+            "room-spot",
+            List.of(payload),
+            result);
+
+        assertEquals(1, bridge.sendAttempts.get());
+        assertFalse(result.isDone());
+        assertFalse(payload.empty());
+
+        bridge.sendAdmission.complete(null);
+
+        result.join();
+        assertEquals(1, bridge.sendAttempts.get());
+        assertTrue(payload.empty());
+    }
+
+    @Test
+    void channelCloseDoesNotResubmitPendingBindingSend() {
         ScheduledExecutorService deadlines =
             Executors.newSingleThreadScheduledExecutor();
         ZLinkChannelCallRuntime calls = new ZLinkChannelCallRuntime(
             null,
             deadlines,
-            Runnable::run,
-            Duration.ofSeconds(1),
             null,
             null,
             null,
             null);
-        RetryBridge bridge = new RetryBridge();
+        DirectBridge bridge = new DirectBridge();
         CompletableFuture<Void> result = new CompletableFuture<>();
         try {
             calls.track(result, Duration.ofSeconds(1));
-            ZLinkSpotRouteBridgeDispatcher.submitSendWithRetry(
+            ZLinkSpotRouteBridgeDispatcher.submitSend(
                 bridge,
                 "play.route",
                 RoutingId.from("play-node"),
                 "room-spot",
-                List.of("payload".getBytes()),
-                Duration.ofSeconds(1),
-                scheduler,
-                Runnable::run,
+                List.of(Message.from("payload")),
                 result);
 
-            assertEquals(1, bridge.attempts.get());
-            assertTrue(bridge.lastAttempt.get().stream().allMatch(Message::empty));
-            scheduler.awaitAccepted();
             calls.beginClose();
+            bridge.sendAdmission.complete(null);
 
-            scheduler.fireAccepted();
-
-            assertEquals(1, bridge.attempts.get());
-            ZLinkConfigurationException closeFailure = assertInstanceOf(
+            ZLinkConfigurationException failure = assertInstanceOf(
                 ZLinkConfigurationException.class,
                 completionFailure(result));
-            assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, closeFailure.kind());
-            assertEquals("channel runtime is closed", closeFailure.getMessage());
+            assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, failure.kind());
+            assertEquals(1, bridge.sendAttempts.get());
         } finally {
             calls.beginClose();
             deadlines.shutdownNow();
-            scheduler.shutdownNow();
         }
     }
 
     @Test
-    void rejectedRetryTimerSettlesAsShutdownFailure() {
-        ScheduledThreadPoolExecutor scheduler = new ScheduledThreadPoolExecutor(1);
-        scheduler.shutdownNow();
-        RetryBridge bridge = new RetryBridge();
-        CompletableFuture<Void> result = new CompletableFuture<>();
+    void requestUsesOneBindingStageAndClosesBindingReply() {
+        DirectBridge bridge = new DirectBridge();
+        CompletableFuture<List<Message>> result = new CompletableFuture<>();
+        Message request = Message.from("request");
+        Message reply = Message.from("reply");
 
-        ZLinkSpotRouteBridgeDispatcher.submitSendWithRetry(
+        ZLinkSpotRouteBridgeDispatcher.submitRequest(
             bridge,
             "play.route",
             RoutingId.from("play-node"),
             "room-spot",
-            List.of("payload".getBytes()),
+            List.of(request),
             Duration.ofSeconds(1),
-            scheduler,
-            Runnable::run,
             result);
 
-        assertShutdownFailure(result);
-        assertEquals(1, bridge.attempts.get());
-        assertTrue(bridge.lastAttempt.get().stream().allMatch(Message::empty));
-    }
+        bridge.requestReply.complete(List.of(reply));
 
-    @Test
-    void rejectedInfrastructureHandoffSettlesExactlyOnceAsShutdownFailure()
-        throws Exception {
-        CapturingScheduler scheduler = new CapturingScheduler();
-        AtomicInteger handoffs = new AtomicInteger();
-        Executor infrastructure = command -> {
-            handoffs.incrementAndGet();
-            throw new RejectedExecutionException("infrastructure lane is closed");
-        };
-        RetryBridge bridge = new RetryBridge();
-        CompletableFuture<Void> result = new CompletableFuture<>();
-        AtomicInteger completions = new AtomicInteger();
-        result.whenComplete((ignored, failure) -> completions.incrementAndGet());
+        List<Message> copied = result.join();
         try {
-            ZLinkSpotRouteBridgeDispatcher.submitSendWithRetry(
-                bridge,
-                "play.route",
-                RoutingId.from("play-node"),
-                "room-spot",
-                List.of("payload".getBytes()),
-                Duration.ofSeconds(1),
-                scheduler,
-                infrastructure,
-                result);
-
-            scheduler.awaitAccepted();
-            scheduler.fireAccepted();
-
-            assertShutdownFailure(result);
-            assertEquals(1, bridge.attempts.get());
-            assertEquals(1, handoffs.get());
-            assertEquals(1, completions.get());
+            assertEquals("reply", copied.get(0).toUtf8String());
+            assertEquals(1, bridge.requestAttempts.get());
+            assertTrue(request.empty());
+            assertTrue(reply.empty());
         } finally {
-            scheduler.shutdownNow();
+            copied.forEach(Message::close);
         }
     }
 
-    private static void assertShutdownFailure(CompletableFuture<Void> result) {
-        Throwable failure = completionFailure(result);
-        ZLinkFrameworkException frameworkFailure = assertInstanceOf(
-            ZLinkFrameworkException.class,
-            failure);
-        assertEquals(ZLinkFrameworkErrorKind.SHUTTING_DOWN, frameworkFailure.kind());
-        assertInstanceOf(RejectedExecutionException.class, frameworkFailure.getCause());
-    }
-
-    private static Throwable completionFailure(CompletableFuture<Void> result) {
+    private static Throwable completionFailure(CompletableFuture<?> result) {
         try {
             result.join();
             throw new AssertionError("result completed successfully");
@@ -157,48 +123,15 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
         }
     }
 
-    private static final class CapturingScheduler extends ScheduledThreadPoolExecutor {
-        private final AtomicReference<Runnable> accepted = new AtomicReference<>();
-        private final CountDownLatch acceptedSignal = new CountDownLatch(1);
-
-        private CapturingScheduler() {
-            super(1, runnable -> {
-                Thread thread = new Thread(runnable, "captured-route-retry");
-                thread.setDaemon(true);
-                return thread;
-            });
-        }
-
-        @Override
-        public ScheduledFuture<?> schedule(
-            Runnable command,
-            long delay,
-            TimeUnit unit) {
-            if (!accepted.compareAndSet(null, command)) {
-                throw new AssertionError("only one retry may be pending");
-            }
-            acceptedSignal.countDown();
-            return super.schedule(() -> { }, 1, TimeUnit.DAYS);
-        }
-
-        private void awaitAccepted() throws InterruptedException {
-            assertTrue(
-                acceptedSignal.await(1, TimeUnit.SECONDS),
-                "retry timer was not accepted");
-        }
-
-        private void fireAccepted() {
-            Runnable command = accepted.getAndSet(null);
-            if (command == null) {
-                throw new AssertionError("retry was not accepted");
-            }
-            command.run();
-        }
-    }
-
-    private static final class RetryBridge implements ZLinkBackendSpotRouteBridge {
-        private final AtomicInteger attempts = new AtomicInteger();
-        private final AtomicReference<List<Message>> lastAttempt =
+    private static final class DirectBridge
+        implements ZLinkBackendSpotRouteBridge {
+        private final AtomicInteger sendAttempts = new AtomicInteger();
+        private final AtomicInteger requestAttempts = new AtomicInteger();
+        private final CompletableFuture<Void> sendAdmission =
+            new CompletableFuture<>();
+        private final CompletableFuture<List<Message>> requestReply =
+            new CompletableFuture<>();
+        private final AtomicReference<List<Message>> lastSend =
             new AtomicReference<>(List.of());
 
         @Override
@@ -208,27 +141,25 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
         }
 
         @Override
-        public boolean send(
+        public CompletionStage<Void> send(
             String channelName,
             RoutingId targetNodeRid,
             String targetSpotId,
-            List<Message> parts,
-            SendFlags flags) {
-            attempts.incrementAndGet();
-            lastAttempt.set(List.copyOf(parts));
-            return false;
+            List<Message> parts) {
+            sendAttempts.incrementAndGet();
+            lastSend.set(List.copyOf(parts));
+            return sendAdmission;
         }
 
         @Override
-        public boolean request(
+        public CompletionStage<List<Message>> request(
             String channelName,
             RoutingId targetNodeRid,
             String targetSpotId,
             List<Message> parts,
-            ZLinkBackendRequestCallback callback,
-            SendFlags flags,
             Duration timeout) {
-            throw new UnsupportedOperationException();
+            requestAttempts.incrementAndGet();
+            return requestReply;
         }
 
         @Override
@@ -247,7 +178,7 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
 
         @Override
         public String name() {
-            return "retry-bridge";
+            return "direct-bridge";
         }
 
         @Override

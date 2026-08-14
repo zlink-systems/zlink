@@ -580,47 +580,44 @@ internal sealed class ZLinkSessionActorCoordinator(
                 actorRef.BindingToken,
                 sessionBinding.BindingGeneration,
                 acceptedHighWater));
-        await ZLinkRetryingSubmitter.Async(
-                () =>
-                {
-                    using var headerPart = Message.From(headerBytes);
-                    if (!runtime.ForwardActorBoundSessionPart(
-                            route.MeshName.Value,
-                            target,
-                            route.TargetNodeGeneration,
-                            route.AuthorityOwnerGeneration,
-                            route.OwnerLeaseGeneration,
-                            sessionNodeRid,
-                            sessionRid,
-                            headerPart,
-                            true,
-                            SendFlags.DontWait,
-                            replyRoute,
-                            source.NodeGeneration,
-                            source,
-                            handoffMetadata))
-                        return false;
-                    using var bodyPart = Message.From(bodyBytes);
-                    return runtime.ForwardActorBoundSessionPart(
-                        route.MeshName.Value,
-                        target,
-                        route.TargetNodeGeneration,
-                        route.AuthorityOwnerGeneration,
-                        route.OwnerLeaseGeneration,
-                        sessionNodeRid,
-                        sessionRid,
-                        bodyPart,
-                        false,
-                        SendFlags.DontWait,
-                        replyRoute,
-                        source.NodeGeneration,
-                        source,
-                        handoffMetadata);
-                },
-                runtime.Registration.DefaultRequestTimeout,
-                "Remote actor session relay failed because the relay route was not ready before timeout.",
-                cancellationToken)
-            .ConfigureAwait(false);
+        using var terminal = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            runtime.ShutdownToken);
+        terminal.CancelAfter(runtime.Registration.DefaultRequestTimeout);
+        try
+        {
+            await runtime.RelayRemoteActorFrameAsync(
+                    route.MeshName.Value,
+                    target,
+                    route.TargetNodeGeneration,
+                    route.AuthorityOwnerGeneration,
+                    route.OwnerLeaseGeneration,
+                    sessionNodeRid,
+                    sessionRid,
+                    replyRoute,
+                    source.NodeGeneration,
+                    source,
+                    handoffMetadata,
+                    headerBytes.ToArray(),
+                    bodyBytes,
+                    terminal.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            runtime.ShutdownToken.IsCancellationRequested)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "Remote actor session relay was interrupted by runtime shutdown.");
+        }
+        catch (OperationCanceledException) when (
+            !cancellationToken.IsCancellationRequested)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                "Remote actor session relay timed out before local admission completed.",
+                ZLinkRetryAdvice.RetryAfterBackoff);
+        }
     }
 
     private bool IsLocalActorRef(ZLinkSessionBindingRoute route)

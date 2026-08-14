@@ -46,7 +46,6 @@ internal static class SmC6LogicalMulticastBackpressureScenario
             await WaitForEvidenceAsync(
                 playB,
                 $"spot-backpressure-entered|rid=play-b|spot={playBSpot}|marker={blockerMarker}");
-            await WaitForInboundPausedAsync(playB);
 
             Console.WriteLine("spot-service sm-c6 pause-play-b-ready");
             await WaitForRunnerAckAsync(
@@ -149,28 +148,6 @@ internal static class SmC6LogicalMulticastBackpressureScenario
         ZlinkStreamAssert.Ensure(
             evidence.Any(line => line.Contains(expected, StringComparison.Ordinal)),
             $"SM-C6 evidence did not contain '{expected}'.");
-    }
-
-    static async Task WaitForInboundPausedAsync(ZLinkHttpClient client)
-    {
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(3);
-        RuntimeInboundStatusRes latest = default!;
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            latest = (await client.Get("/runtime/status")
-                .Async<RuntimeInboundStatusRes>()).Body;
-            if (latest.ApplicationHwmBytes == 1024 * 1024
-                && latest.PendingPayloadBytes >= latest.ApplicationHwmBytes
-                && latest.ApplicationReceivePaused)
-                return;
-            await Task.Delay(TimeSpan.FromMilliseconds(10));
-        }
-
-        throw new InvalidOperationException(
-            "SM-C6 play-b inbound dispatch did not reach the configured HWM. "
-            + $"hwm={latest.ApplicationHwmBytes},pending={latest.PendingPayloadBytes},"
-            + $"queued={latest.QueuedPayloadBytes},active={latest.ActivePayloadBytes},"
-            + $"paused={latest.ApplicationReceivePaused}.");
     }
 
     static string Evidence(string nodeRid, string spotId, string marker, int sequence)

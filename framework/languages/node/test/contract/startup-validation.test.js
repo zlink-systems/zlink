@@ -6,41 +6,6 @@ const { NestFactory } = require('@nestjs/core');
 const framework = require('../../packages/framework/dist/internal');
 const nestjs = require('../../packages/nestjs/dist');
 
-test('Application HWM rejects an unbounded Application listener', () => {
-  assert.throws(
-    () => framework.createFrameworkRegistration({
-      inboundDispatch: { applicationHwmBytes: 1024n },
-      channels: {
-        api: {
-          server: {
-            bind: 'tcp://127.0.0.1:0',
-            maxMessageSize: 0
-          },
-          requestHandlers: [{
-            packetName: 'Ping',
-            handler: { handle() { return { value: 'pong' }; } }
-          }]
-        }
-      }
-    }),
-    /maxMessageSize must be bounded when Application HWM is enabled/
-  );
-});
-
-test('Application HWM does not depend on the removed RouteMesh message bound', () => {
-  assert.doesNotThrow(() => framework.createFrameworkRegistration({
-    inboundDispatch: { applicationHwmBytes: 1024n },
-    channels: {
-      route: {
-        routeMesh: {
-          bind: 'tcp://127.0.0.1:0',
-          maxMessageSize: 0
-        }
-      }
-    }
-  }));
-});
-
 test('diagnostics builder accepts only the exact levels and finite sample range', () => {
   for (const mode of ['off', 'errors', 'normal', 'detailed']) {
     assert.doesNotThrow(() => framework.createFrameworkOptions((options) => {

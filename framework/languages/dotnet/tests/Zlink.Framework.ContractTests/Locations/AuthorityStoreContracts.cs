@@ -77,7 +77,7 @@ public sealed class AuthorityStoreContracts
         Assert.Equal(ZLinkCreationTerminalState.Created, replayed.Record.State);
 
         // 3. Preserve keeps both generations and refreshes only the payload.
-        //    It carries no TargetOwner and no capacity fence.
+        //    It carries neither a target owner nor a target allocation.
         var active = Assert.IsType<ZLinkAuthorityReadResult.Found>(
             await store.ReadAuthorityAsync(actorKey)).Snapshot;
         var preserved = Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
@@ -89,7 +89,7 @@ public sealed class AuthorityStoreContracts
                         """{"actorType":"player","spotId":"battle-1042","rating":1901}"""),
                     ZLinkAuthorityGenerationTransition.Preserve,
                     TargetOwner: null,
-                    RelocationCapacityFence: null)));
+                    TargetAllocation: null)));
         Assert.Equal(active.ObjectGeneration, preserved.Snapshot.ObjectGeneration);
         Assert.Equal(
             active.AuthorityOwnerGeneration,
@@ -104,25 +104,14 @@ public sealed class AuthorityStoreContracts
                 new ZLinkAuthorityMutation.Delete()));
         Assert.IsType<ZLinkAuthorityReadResult.Found>(conflict.Current);
 
-        // 4. Relocation to play-node-c: reserve target capacity first, then
-        //    hand ownership over with the fence the reservation issued.
-        var capacityReservation =
-            Assert.IsType<ZLinkRelocationCapacityReserveResult.Reserved>(
-            await store.ReserveRelocationCapacityAsync(
-                new ZLinkRelocationCapacityReservationRequest(
-                    Guid.Parse("6f1d1f8c-6b21-4f3a-9a52-2f0a5f8d4c11"),
-                    actorKey,
-                    preserved.Snapshot.StoreVersion,
-                    ZLinkPlacementObjectKind.Actor,
-                    "player",
-                    MatchNodeB,
-                    SourceNodeLifecycleGeneration: 9,
-                    OwnerB,
-                    MatchNodeC,
-                    TargetNodeLifecycleGeneration: 4,
-                    OwnerC,
-                    ActorCapacity())));
-        var fence = capacityReservation.Fence;
+        // 4. The prepared target performs the single owner/allocation CAS.
+        var targetGeneration = preserved.Snapshot.AuthorityOwnerGeneration + 1;
+        var targetAllocation = preserved.Snapshot.Allocation with
+        {
+            State = ZLinkPlacementAllocationState.Active,
+            Descriptor = MatchNodeC,
+            DescriptorLifecycleGeneration = 4
+        };
 
         var handedOver = Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
             await store.CompareExchangeAuthorityAsync(
@@ -132,21 +121,16 @@ public sealed class AuthorityStoreContracts
                     readyPayload,
                     ZLinkAuthorityGenerationTransition.NewOwner,
                     OwnerC,
-                    fence)));
+                    targetAllocation,
+                    targetGeneration)));
         Assert.Equal(
             preserved.Snapshot.ObjectGeneration,
             handedOver.Snapshot.ObjectGeneration);
         Assert.Equal(
-            capacityReservation.TargetAuthorityOwnerGeneration,
+            targetGeneration,
             handedOver.Snapshot.AuthorityOwnerGeneration);
         Assert.Equal(OwnerC.OwnerId, handedOver.Snapshot.OwnerId);
         Assert.Equal(MatchNodeC, handedOver.Snapshot.Allocation.Descriptor);
-
-        // Committing the same fence twice is idempotent, so a retry after a
-        // lost reply does not double-charge the target's capacity.
-        Assert.Equal(
-            ZLinkRelocationCapacityAbortResult.AlreadyCommitted,
-            await store.AbortRelocationCapacityAsync(fence));
 
         // 5. Host recovery scans the prefix rather than resolving one key.
         var page = Assert.IsType<ZLinkAuthorityScanResult.Page>(
@@ -439,8 +423,6 @@ public sealed class AuthorityStoreContracts
         private readonly Dictionary<ZLinkCreationOperationId, ZLinkCreationTerminalRecord>
             _terminals = [];
 
-        private readonly Dictionary<ZLinkRelocationCapacityFence,
-            (bool Committed, ulong TargetGeneration)> _capacityFences = [];
         private readonly Dictionary<ZLinkAggregateFence,
             (ZLinkAggregatePrepareRequest Request,
                 IReadOnlyDictionary<ZLinkAuthorityKey, ulong> Generations)>
@@ -464,20 +446,20 @@ public sealed class AuthorityStoreContracts
         {
             if (mutation is ZLinkAuthorityMutation.Put put)
             {
-                // Invalid owner/fence combinations never reach the backend.
+                // Invalid owner/allocation combinations never reach the backend.
                 if (put.GenerationTransition == ZLinkAuthorityGenerationTransition.Preserve
-                    && (put.TargetOwner is not null || put.RelocationCapacityFence is not null))
+                    && (put.TargetOwner is not null || put.TargetAllocation is not null))
                 {
                     throw new ArgumentException(
-                        "Preserve carries neither a target owner nor a capacity fence.",
+                        "Preserve carries neither a target owner nor a target allocation.",
                         nameof(mutation));
                 }
 
                 if (put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner
-                    && (put.TargetOwner is null || put.RelocationCapacityFence is null))
+                    && (put.TargetOwner is null || put.TargetAllocation is null))
                 {
                     throw new ArgumentException(
-                        "NewOwner requires both a target owner and a capacity fence.",
+                        "NewOwner requires both a target owner and a target allocation.",
                         nameof(mutation));
                 }
             }
@@ -498,24 +480,26 @@ public sealed class AuthorityStoreContracts
             }
 
             var write = (ZLinkAuthorityMutation.Put)mutation;
+            var targetGeneration = row.AuthorityOwnerGeneration;
+            if (write.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner)
+            {
+                targetGeneration = write.TargetAuthorityOwnerGeneration == 0
+                    ? ++_authorityOwnerGeneration
+                    : write.TargetAuthorityOwnerGeneration;
+                _authorityOwnerGeneration = Math.Max(
+                    _authorityOwnerGeneration,
+                    targetGeneration);
+            }
             var updated = write.GenerationTransition switch
             {
                 ZLinkAuthorityGenerationTransition.NewOwner => row with
                 {
                     StoreVersion = NextStoreVersion(),
                     Payload = write.Payload,
-                    AuthorityOwnerGeneration =
-                        _capacityFences[
-                            write.RelocationCapacityFence!.Value]
-                        .TargetGeneration,
+                    AuthorityOwnerGeneration = targetGeneration,
                     OwnerId = write.TargetOwner!.Value.OwnerId,
                     OwnerLeaseGeneration = write.TargetOwner!.Value.LeaseGeneration,
-                    Allocation = row.Allocation with
-                    {
-                        Descriptor = _capacityFences.ContainsKey(write.RelocationCapacityFence!.Value)
-                            ? MatchNodeC
-                            : row.Allocation.Descriptor
-                    }
+                    Allocation = write.TargetAllocation!
                 },
                 _ => row with
                 {
@@ -523,10 +507,6 @@ public sealed class AuthorityStoreContracts
                     Payload = write.Payload
                 }
             };
-
-            if (write.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner)
-                _capacityFences[write.RelocationCapacityFence!.Value] =
-                    (true, updated.AuthorityOwnerGeneration);
 
             _rows[key.Value] = updated;
             return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
@@ -715,55 +695,6 @@ public sealed class AuthorityStoreContracts
                 _rows.ContainsKey(reservation.Key.Value)
                     ? new ZLinkObjectAbortResult.Stale()
                     : new ZLinkObjectAbortResult.AlreadyAborted());
-        }
-
-        public override ValueTask<ZLinkRelocationCapacityReserveResult> ReserveRelocationCapacityAsync(
-            ZLinkRelocationCapacityReservationRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            var fence = new ZLinkRelocationCapacityFence(
-                $"fence/{request.Key.Value}/{request.ReservationId:N}");
-            if (_capacityFences.ContainsKey(fence))
-            {
-                var existing = _capacityFences[fence];
-                return ValueTask.FromResult<ZLinkRelocationCapacityReserveResult>(
-                    new ZLinkRelocationCapacityReserveResult.AlreadyReserved(fence)
-                    {
-                        TargetAuthorityOwnerGeneration =
-                            existing.TargetGeneration
-                    });
-            }
-
-            if (!_rows.TryGetValue(request.Key.Value, out var row)
-                || !string.Equals(
-                    row.StoreVersion,
-                    request.ExpectedStoreVersion,
-                    StringComparison.Ordinal))
-            {
-                return ValueTask.FromResult<ZLinkRelocationCapacityReserveResult>(
-                    new ZLinkRelocationCapacityReserveResult.Conflict(Read(request.Key)));
-            }
-
-            var targetGeneration = ++_authorityOwnerGeneration;
-            _capacityFences[fence] = (false, targetGeneration);
-            return ValueTask.FromResult<ZLinkRelocationCapacityReserveResult>(
-                new ZLinkRelocationCapacityReserveResult.Reserved(fence)
-                {
-                    TargetAuthorityOwnerGeneration = targetGeneration
-                });
-        }
-
-        public override ValueTask<ZLinkRelocationCapacityAbortResult> AbortRelocationCapacityAsync(
-            ZLinkRelocationCapacityFence fence,
-            CancellationToken cancellationToken = default)
-        {
-            if (!_capacityFences.TryGetValue(fence, out var committed))
-                return ValueTask.FromResult(ZLinkRelocationCapacityAbortResult.AlreadyAborted);
-            if (committed.Committed)
-                return ValueTask.FromResult(ZLinkRelocationCapacityAbortResult.AlreadyCommitted);
-
-            _capacityFences.Remove(fence);
-            return ValueTask.FromResult(ZLinkRelocationCapacityAbortResult.Aborted);
         }
 
         public override ValueTask<ZLinkAggregatePrepareResult> PrepareAggregateAsync(

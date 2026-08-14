@@ -13,8 +13,6 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 /** Strict canonical reader/preserver for service-wire relocation controls. */
 final class ZLinkCanonicalRelocationControlCodec {
     private static final int PREFIX = 5;
-    private static final int MAX_PARTICIPANTS = 2048;
-    private static final int MAX_EXTENSION = 1024 * 1024;
 
     public record Control(int command, byte[] encoded) {
         public Control {
@@ -33,19 +31,15 @@ final class ZLinkCanonicalRelocationControlCodec {
         }
         int command = Byte.toUnsignedInt(bytes[3]);
         int flags = Byte.toUnsignedInt(bytes[4]);
-        if (flags != (command == ServiceWireConstants.COMMAND_RELOCATION_READY
-                ? 8 : 0)) {
+        if (flags != 0) {
             throw invalid("flags");
         }
         Reader reader = new Reader(Arrays.copyOfRange(bytes, PREFIX, bytes.length));
         switch (command) {
             case ServiceWireConstants.COMMAND_RELOCATION_PREPARE -> prepare(reader);
             case ServiceWireConstants.COMMAND_RELOCATION_READY -> ready(reader);
-            case ServiceWireConstants.COMMAND_RELOCATION_RESERVED -> reserved(reader);
             case ServiceWireConstants.COMMAND_RELOCATION_DATA -> data(reader);
-            case ServiceWireConstants.COMMAND_RELOCATION_ACK -> ack(reader);
-            case ServiceWireConstants.COMMAND_RELOCATION_SEAL -> seal(reader);
-            case ServiceWireConstants.COMMAND_RELOCATION_COMPLETE -> complete(reader);
+            case ServiceWireConstants.COMMAND_RELOCATION_CUTOVER -> cutover(reader);
             default -> throw invalid("command");
         }
         reader.end();
@@ -60,79 +54,22 @@ final class ZLinkCanonicalRelocationControlCodec {
     }
 
     private static void prepare(Reader r) {
-        relocationId(r); r.nonzero64(); round(r); coordinator(r); candidate(r);
-        role(r); object(r); r.bytes8(); r.nonzero64(); r.ordinal(); r.ordinal();
-        participants(r); root(r); r.ordinal();
+        relocationId(r); r.nonzero64(); coordinator(r); candidate(r);
+        requireRole(r, 1); object(r); r.bytes8(); r.nonzero64(); root(r);
+        r.ordinal();
     }
 
     private static void ready(Reader r) {
-        relocationId(r); r.nonzero64(); round(r); coordinator(r); candidate(r);
-        object(r); int readyRole = roleValue(r);
-        long offeredMessages = r.ordinal(); long offeredBytes = r.ordinal();
-        int participantCount = participants(r);
-        if ((readyRole == 2 && (offeredMessages == 0 || offeredBytes == 0
-                || participantCount != 0))
-            || (readyRole == 1 && (offeredMessages != 0 || offeredBytes != 0
-                || participantCount == 0))
-            || (readyRole != 1 && readyRole != 2)) {
-            throw invalid("ready offer or accept fields");
-        }
-        int length = r.u32Length(MAX_EXTENSION);
-        Reader extension = r.slice(length);
-        int previous = 0;
-        boolean[] required = new boolean[10];
-        while (extension.remaining() != 0) {
-            int tag = extension.u8();
-            if (tag <= previous || tag < 2 || tag > 9 || tag == 7) {
-                throw invalid("ready extension tag");
-            }
-            previous = tag;
-            Reader field = extension.slice(extension.u32Length(MAX_EXTENSION));
-            switch (tag) {
-                case 2, 3, 4 -> field.nonzero64();
-                case 5 -> field.text16();
-                case 6 -> field.u32();
-                case 8 -> field.ordinal();
-                case 9 -> progress(field);
-                default -> throw invalid("ready extension tag");
-            }
-            field.end(); required[tag] = true;
-        }
-        extension.end();
-        if (!required[2] || !required[3] || !required[4]
-            || !required[8] || !required[9] || required[5] != required[6]) {
-            throw invalid("ready required extension");
-        }
-    }
-
-    private static void reserved(Reader r) {
-        relocationId(r); r.nonzero64(); round(r); coordinator(r); candidate(r);
-        r.nonzero64(); participants(r);
+        relocationId(r); r.nonzero64(); coordinator(r); candidate(r);
+        object(r); requireRole(r, 2);
     }
 
     private static void data(Reader r) {
-        relocationBase(r); role(r); r.nonzero64(); r.nonzero64(); frozen(r);
+        relocationBase(r); requireRole(r, 1); object(r); frozen(r);
     }
 
-    private static void ack(Reader r) {
-        relocationBase(r); role(r); r.nonzero64(); r.ordinal();
-    }
-
-    private static void seal(Reader r) {
-        relocationBase(r); role(r); r.bool();
-        int count = r.u32Length(MAX_PARTICIPANTS);
-        long previous = 0;
-        for (int i = 0; i < count; i++) {
-            long id = r.nonzero64();
-            if (Long.compareUnsigned(id, previous) <= 0) throw invalid("terminal order");
-            previous = id; r.ordinal();
-        }
-    }
-
-    private static void complete(Reader r) {
-        relocationBase(r); role(r); requestSource(r);
-        int state = r.u8();
-        if (state > 2) throw invalid("cleanup state");
+    private static void cutover(Reader r) {
+        relocationBase(r); requireRole(r, 1); object(r);
     }
 
     private static void relocationBase(Reader r) {
@@ -145,21 +82,18 @@ final class ZLinkCanonicalRelocationControlCodec {
     private static void coordinator(Reader r) {
         r.text8(); r.nonzero64(); r.bytes8(); r.nonzero64(); r.text16();
     }
-    private static void requestSource(Reader r) {
-        r.text8(); r.nonzero64(); r.bytes8(); r.nonzero64();
-    }
     private static void candidate(Reader r) {
         r.bytes8(); r.nonzero64(); r.text8(); r.nonzero64();
     }
     private static void role(Reader r) {
         roleValue(r);
     }
+    private static void requireRole(Reader r, int expected) {
+        if (roleValue(r) != expected) throw invalid("sender role");
+    }
     private static int roleValue(Reader r) {
         int value = r.u8(); if (value < 1 || value > 3) throw invalid("role");
         return value;
-    }
-    private static void round(Reader r) {
-        int value = r.u8(); if (value < 1 || value > 3) throw invalid("round");
     }
     private static void object(Reader r) {
         int kind = r.u8(); Reader body = r.slice(r.u16());
@@ -170,41 +104,12 @@ final class ZLinkCanonicalRelocationControlCodec {
         } else throw invalid("object kind");
         body.end();
     }
-    private static int participants(Reader r) {
-        int count = r.u32Length(MAX_PARTICIPANTS); long previous = 0;
-        for (int i = 0; i < count; i++) {
-            long id = r.nonzero64();
-            if (Long.compareUnsigned(id, previous) <= 0) throw invalid("participant order");
-            previous = id;
-            int kind = r.u8(); Reader identity = r.slice(r.u16());
-            if (kind == 2) {
-                identity.bytes8(); identity.nonzero64(); identity.text8();
-                identity.nonzero64(); identity.bytes8(); identity.nonzero64();
-                identity.ordinal();
-            } else if (kind != 1 || identity.remaining() != 0) {
-                throw invalid("participant identity");
-            }
-            identity.end(); r.ordinal(); r.ordinal();
-        }
-        return count;
-    }
     private static void root(Reader r) {
         boolean present = r.bool(); Reader body = r.slice(r.u16());
         if (present) { body.text16(); body.u32(); }
         else if (body.remaining() != 0) throw invalid("absent root body");
         body.end();
     }
-    private static void progress(Reader r) {
-        int count = r.u32Length(MAX_PARTICIPANTS); long previous = 0;
-        for (int i = 0; i < count; i++) {
-            long id = r.nonzero64();
-            if (Long.compareUnsigned(id, previous) <= 0) throw invalid("progress order");
-            previous = id;
-            long accepted = r.ordinal(); long replay = r.ordinal();
-            if (replay > accepted) throw invalid("replay cursor");
-        }
-    }
-
     private static void frozen(Reader r) {
         int kind = r.u8(); if (kind < 1 || kind > 14) throw invalid("frozen kind");
         int sourceKind = r.u8();

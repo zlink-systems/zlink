@@ -208,10 +208,11 @@ final class ZLinkActorClientMessageFollowRuntimePortTest {
                     header,
                     acceptedJournalRecord,
                     parts,
-                    contentType,
-                    inboundDispatchLease,
-                    reply,
-                    failure) -> {
+                      contentType,
+
+                      reply,
+                      failure,
+                      terminalRelease) -> {
                     if (!sourceRoute.equals(header.target())) {
                         return false;
                     }
@@ -222,12 +223,10 @@ final class ZLinkActorClientMessageFollowRuntimePortTest {
                     try {
                         assertTrue(target.spotNode().sendToActor(
                             targetActor, parts, SendFlags.DONT_WAIT));
-                    } finally {
-                        parts.forEach(Message::close);
-                        if (inboundDispatchLease != null) {
-                            inboundDispatchLease.close();
-                        }
-                    }
+                      } finally {
+                          parts.forEach(Message::close);
+                          terminalRelease.run();
+                      }
                     return true;
                 });
 

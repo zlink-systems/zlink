@@ -8,10 +8,6 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimRe
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReadResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReleaseResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewResult;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityAbortResult;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityFence;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReservationRequest;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReserveResult;
 
 import java.time.Duration;
 import java.util.List;
@@ -310,22 +306,6 @@ final class ZLinkRedisLocationRepository implements
             ZLinkCreationOperationIdentity operation,
             ZLinkStoreCancellation cancellation) {
         return authority.readCreationTerminal(operation, cancellation);
-    }
-
-    @Override
-    public CompletionStage<ZLinkRelocationCapacityReserveResult>
-        reserveRelocationCapacity(
-            ZLinkRelocationCapacityReservationRequest request,
-            ZLinkStoreCancellation cancellation) {
-        return authority.reserveRelocationCapacity(request, cancellation);
-    }
-
-    @Override
-    public CompletionStage<ZLinkRelocationCapacityAbortResult>
-        abortRelocationCapacity(
-            ZLinkRelocationCapacityFence fence,
-            ZLinkStoreCancellation cancellation) {
-        return authority.abortRelocationCapacity(fence, cancellation);
     }
 
     @Override

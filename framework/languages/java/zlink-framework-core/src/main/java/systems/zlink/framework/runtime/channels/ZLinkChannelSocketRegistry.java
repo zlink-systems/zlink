@@ -582,8 +582,7 @@ final class ZLinkChannelSocketRegistry {
                     try (Message message = Message.from(ack)) {
                         router.send(
                             received.routingId().get(),
-                            List.of(message),
-                            SendFlags.DONT_WAIT);
+                            List.of(message));
                     }
                     received.close();
                     return true;
@@ -723,8 +722,7 @@ final class ZLinkChannelSocketRegistry {
                 try {
                     peer.router.send(
                         peer.routingId,
-                        List.of(message),
-                        SendFlags.DONT_WAIT);
+                        List.of(message));
                 } catch (ZlinkSubmitException ignored) {
                     // The peer may lose admission between the liveness
                     // schedule check and the non-blocking send. Its existing
@@ -762,10 +760,12 @@ final class ZLinkChannelSocketRegistry {
                         ZLinkClientServerServiceWire.encodeLivenessAck(
                             probe.probeId()))) {
                         try {
-                            if (connection.dealer.send(
-                                    List.of(ack), SendFlags.DONT_WAIT)) {
-                                connection.pendingLivenessAckId = 0;
-                            }
+                            connection.dealer.send(List.of(ack))
+                                .whenComplete((ignored, failure) -> {
+                                    if (failure == null) {
+                                        connection.pendingLivenessAckId = 0;
+                                    }
+                                });
                         } catch (ZlinkSubmitException ignored) {
                             // A DEALER may reject an unsolicited control
                             // reply while its accepted application request is
@@ -799,9 +799,12 @@ final class ZLinkChannelSocketRegistry {
         }
         try (Message ack = Message.from(
             ZLinkClientServerServiceWire.encodeLivenessAck(probeId))) {
-            if (connection.dealer.send(List.of(ack), SendFlags.DONT_WAIT)) {
-                connection.pendingLivenessAckId = 0;
-            }
+            connection.dealer.send(List.of(ack))
+                .whenComplete((ignored, failure) -> {
+                    if (failure == null) {
+                        connection.pendingLivenessAckId = 0;
+                    }
+                });
         } catch (ZlinkSubmitException ignored) {
         }
     }
@@ -811,7 +814,7 @@ final class ZLinkChannelSocketRegistry {
         long probeId) {
         try (Message message = Message.from(
             ZLinkClientServerServiceWire.encodeLivenessProbe(probeId))) {
-            connection.dealer.send(List.of(message), SendFlags.DONT_WAIT);
+            connection.dealer.send(List.of(message));
         } catch (ZlinkSubmitException ignored) {
             // The same outstanding probe ID is retried on the next interval.
             // A transient send-admission race is not a connection result.
@@ -987,8 +990,7 @@ final class ZLinkChannelSocketRegistry {
                 try {
                     peer.router.send(
                         peer.routingId,
-                        List.of(message),
-                        SendFlags.DONT_WAIT);
+                        List.of(message));
                 } catch (ZlinkSubmitException ignored) {
                     // The Location Store update remains authoritative. A peer
                     // that has already lost admission cannot receive this

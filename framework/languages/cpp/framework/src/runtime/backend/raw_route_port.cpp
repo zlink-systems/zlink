@@ -34,111 +34,86 @@ raw_route_port_t::raw_route_port_t (zlink::router_socket_t &socket,
     _wake_timer.attach (*_poller);
 }
 
-zlink::submit_result_t raw_route_port_t::send_result (
+task_t<zlink::submit_result_t> raw_route_port_t::send_result (
   const raw_bytes_t &target_routing_id,
   const raw_message_t &parts)
 {
     if (target_routing_id.empty () || parts.empty ()) {
         throw std::invalid_argument ("raw route send requires a target and message parts");
     }
-    std::lock_guard lock (*_socket_mutex);
-    if (_socket == nullptr) {
-        return zlink::submit_result_t::terminated;
-    }
     auto messages = materialize_binding_parts (parts);
-    auto operation = std::move (_socket->send (zlink::routing_id_t::from (target_routing_id)))
-                       .message (messages[0]);
-    for (std::size_t index = 1; index < messages.size (); ++index) {
-        operation = std::move (operation).message (messages[index]);
+    std::optional<zlink::async_result_t<void>> pending;
+    {
+        std::lock_guard lock (*_socket_mutex);
+        if (_socket == nullptr) {
+            co_return zlink::submit_result_t::terminated;
+        }
+        auto operation = std::move (_socket->send (
+                                      zlink::routing_id_t::from (target_routing_id)))
+                           .message (messages[0]);
+        for (std::size_t index = 1; index < messages.size (); ++index) {
+            operation = std::move (operation).message (messages[index]);
+        }
+        pending.emplace (std::move (operation).async ());
     }
     try {
-        const bool accepted = std::move (operation)
-          .flags (static_cast<int> (zlink::send_flags_t::dontwait))
-          .submit ();
-        return accepted ? zlink::submit_result_t::ok
-                        : zlink::submit_result_t::backpressured;
+        co_await std::move (*pending);
+        co_return zlink::submit_result_t::ok;
     }
     catch (const zlink::submit_error_t &error) {
-        return error.result ();
+        co_return error.result ();
     }
 }
 
-bool raw_route_port_t::send (const raw_bytes_t &target_routing_id,
-                             const raw_message_t &parts)
+task_t<bool> raw_route_port_t::send (const raw_bytes_t &target_routing_id,
+                                     const raw_message_t &parts)
 {
-    return send_result (target_routing_id, parts)
-           == zlink::submit_result_t::ok;
+    co_return co_await send_result (target_routing_id, parts)
+              == zlink::submit_result_t::ok;
 }
 
-bool raw_route_port_t::send_completion_control (
+task_t<raw_request_completion_t> raw_route_port_t::request (
   const raw_bytes_t &target_routing_id,
-  const raw_message_t &parts)
+  const raw_message_t &parts,
+  std::chrono::milliseconds timeout)
 {
-    if (target_routing_id.empty () || parts.empty ()) {
-        throw std::invalid_argument (
-          "completion control send requires a target and message parts");
-    }
-    std::lock_guard lock (*_socket_mutex);
-    if (_socket == nullptr) {
-        return false;
-    }
-    const auto messages = materialize_binding_parts (parts);
-    try {
-        return _socket->try_send_completion_control (
-          zlink::routing_id_t::from (target_routing_id), messages);
-    }
-    catch (const zlink::submit_error_t &) {
-        return false;
-    }
-}
-
-void raw_route_port_t::set_completion_control_handler (
-  completion_control_handler_t handler)
-{
-    if (!handler) {
-        throw std::invalid_argument (
-          "completion control handler is required");
-    }
-    std::lock_guard lock (*_socket_mutex);
-    if (_socket == nullptr) {
-        throw std::logic_error ("raw route port is closed");
-    }
-    _socket->set_completion_control_handler (
-      [handler = std::move (handler)] (
-        const zlink::routing_id_t &source,
-        std::vector<zlink::message_t> parts) mutable {
-          handler (source.to_bytes (), copy_binding_parts (parts));
-      });
-}
-
-bool raw_route_port_t::request (const raw_bytes_t &target_routing_id,
-                                const raw_message_t &parts,
-                                std::chrono::milliseconds timeout,
-                                request_callback_t callback)
-{
-    if (target_routing_id.empty () || parts.empty () || !callback) {
-        throw std::invalid_argument ("raw route request requires target, parts and callback");
-    }
-    std::lock_guard lock (*_socket_mutex);
-    if (_socket == nullptr) {
-        return false;
+    if (target_routing_id.empty () || parts.empty ()
+        || timeout <= std::chrono::milliseconds::zero ()) {
+        throw std::invalid_argument ("raw route request requires target, parts and timeout");
     }
     auto messages = materialize_binding_parts (parts);
-    auto operation = std::move (_socket->request (zlink::routing_id_t::from (target_routing_id)))
-                       .message (messages[0]);
-    for (std::size_t index = 1; index < messages.size (); ++index) {
-        operation = std::move (operation).message (messages[index]);
+    std::optional<zlink::async_result_t<std::vector<zlink::message_t>>> pending;
+    {
+        std::lock_guard lock (*_socket_mutex);
+        if (_socket == nullptr) {
+            co_return raw_request_completion_t{
+              raw_request_result_t::terminated, {}};
+        }
+        auto operation = std::move (_socket->request (
+                                      zlink::routing_id_t::from (target_routing_id)))
+                           .message (messages[0]);
+        for (std::size_t index = 1; index < messages.size (); ++index) {
+            operation = std::move (operation).message (messages[index]);
+        }
+        pending.emplace (std::move (operation).timeout (timeout).async ());
     }
     try {
-        return std::move (operation).timeout (timeout).submit (
-          [callback = std::move (callback)] (zlink::request_result_t result,
-                                             std::vector<zlink::message_t> reply) mutable {
-              callback (map_binding_request_result (result),
-                        copy_binding_parts (reply));
-          });
+        auto reply = co_await std::move (*pending);
+        co_return raw_request_completion_t{
+          raw_request_result_t::ok, copy_binding_parts (reply)};
     }
-    catch (const zlink::submit_error_t &) {
-        return false;
+    catch (const zlink::request_error_t &error) {
+        co_return raw_request_completion_t{
+          map_binding_request_result (error.result ()), {}};
+    }
+    catch (const zlink::submit_error_t &error) {
+        const auto result =
+          error.result () == zlink::submit_result_t::not_connected
+            ? raw_request_result_t::not_connected
+          : error.result () == zlink::submit_result_t::terminated
+            ? raw_request_result_t::terminated
+            : raw_request_result_t::failed;
+        co_return raw_request_completion_t{result, {}};
     }
 }
 
@@ -184,7 +159,8 @@ std::optional<raw_received_t> raw_route_port_t::receive_if_ready (
              == 0) {
         return std::nullopt;
     }
-    const int result = _socket->recv (_received, zlink::recv_flags_t::dontwait);
+    const int result = _socket->recv_retained (
+      _received, zlink::recv_flags_t::dontwait);
     if (result == static_cast<int> (zlink::recv_result_t::no_data)) {
         return std::nullopt;
     }
@@ -197,14 +173,16 @@ std::optional<raw_received_t> raw_route_port_t::receive_if_ready (
           + std::to_string (result) + " and errno "
           + std::to_string (errno));
     }
-    binding_received_release_t received_release (_received);
     if (!_received.routing_id ()) {
         throw std::runtime_error ("raw ROUTER receive omitted source routing id");
     }
-    auto source_routing_id = _received.routing_id ()->to_bytes ();
-    auto request_sequence = _received.request_seq ();
-    auto parts = copy_binding_parts (_received.parts ());
-    return raw_received_t{std::move (source_routing_id), request_sequence, std::move (parts)};
+    auto retained = std::make_shared<zlink::received_t> (std::move (_received));
+    _received = {};
+    auto source_routing_id = retained->routing_id ()->to_bytes ();
+    auto request_sequence = retained->request_seq ();
+    auto parts = copy_binding_parts (retained->parts ());
+    return raw_received_t{std::move (source_routing_id), request_sequence,
+                          std::move (parts), std::move (retained)};
 }
 
 std::optional<raw_received_t> raw_route_port_t::try_receive ()
@@ -212,23 +190,27 @@ std::optional<raw_received_t> raw_route_port_t::try_receive ()
     return receive_if_ready (poll (std::chrono::milliseconds::zero ()));
 }
 
-bool raw_route_port_t::reply (const raw_received_t &request, const raw_message_t &parts)
+bool raw_route_port_t::reply (
+  const raw_received_t &request, const raw_message_t &parts)
 {
-    if (request.source_routing_id.empty () || !request.request_sequence || parts.empty ()) {
-        throw std::invalid_argument ("raw route reply requires request context and message parts");
+    if (request.source_routing_id.empty () || !request.request_sequence
+        || parts.empty ()) {
+        throw std::invalid_argument (
+          "raw route reply requires request context and message parts");
     }
     std::lock_guard lock (*_socket_mutex);
-    if (_socket == nullptr) {
+    if (_socket == nullptr)
         return false;
-    }
     auto messages = materialize_binding_parts (parts);
-    auto operation = std::move (_socket->reply (
-                                  zlink::routing_id_t::from (request.source_routing_id),
-                                  *request.request_sequence))
+    auto operation = std::move (
+      request.retained
+        ? request.retained->reply ()
+        : _socket->reply (
+            zlink::routing_id_t::from (request.source_routing_id),
+            *request.request_sequence))
                        .message (messages[0]);
-    for (std::size_t index = 1; index < messages.size (); ++index) {
+    for (std::size_t index = 1; index < messages.size (); ++index)
         operation = std::move (operation).message (messages[index]);
-    }
     try {
         std::move (operation).submit ();
         return true;

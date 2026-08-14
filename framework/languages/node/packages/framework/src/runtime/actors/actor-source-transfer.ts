@@ -2,6 +2,7 @@ import type { ActorRef, ZLinkActor, ZLinkMessage } from '../../contracts';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import type { ZLinkActorRuntimeState } from './actor-runtime-state';
 import type { ZLinkActorHandoffPacket, ZLinkActorHandoffResult } from './actor-handoff';
+import type { ServiceWireOperationId } from '../foundation/service-stateful-wire-codec';
 
 export interface ZLinkPreparedActorSource {
   readonly adapterKey?: string;
@@ -12,8 +13,7 @@ export interface ZLinkPreparedActorSource {
   readonly sourceLeaveCompletion?: Promise<void>;
   readonly sourceLeaveSubmitted?: Promise<void>;
   onSourceLeaveSubmitted(notify: () => Promise<void>): void;
-  reserveTarget(target: ZLinkSpotRouteTarget, signal?: AbortSignal): Promise<void>;
-  commitAuthority(
+  observeTargetAuthority(
     target: ZLinkSpotRouteTarget,
     targetActorRef: ActorRef,
     signal?: AbortSignal
@@ -58,6 +58,7 @@ export interface ZLinkActorSourceTransfer {
     state: ZLinkActorRuntimeState,
     signal?: AbortSignal,
     lifecycleAuthority?: 'framework' | 'core',
-    deferredOperationId?: string
+    deferredOperationId?: string,
+    relocation?: ServiceWireOperationId
   ): Promise<ZLinkPreparedActorSource>;
 }

@@ -128,11 +128,7 @@ internal sealed class ZLinkDeferredActorJoinCompletionJournal(
                                     : participant with
                                     {
                                         CanonicalParticipantId =
-                                            checked((ulong)index + 1),
-                                        AcceptedBoundary = checked(
-                                            (ulong)participant.AcceptedJobs.Count),
-                                        ReplayCursor = checked(
-                                            (ulong)participant.AcceptedJobs.Count)
+                                            checked((ulong)index + 1)
                                     })
                         .ToArray()
                 };
@@ -194,11 +190,9 @@ internal sealed class ZLinkDeferredActorJoinCompletionJournal(
                 new ZLinkRelocationPublicationRequest(
                     key,
                     snapshot.StoreVersion,
-                    ZLinkAuthorityGenerationTransition.Preserve,
                     snapshot.OwnerId,
                     snapshot.OwnerLeaseGeneration,
                     applicationAuthorityPayload,
-                    null,
                     envelope),
                 cancellationToken)
             .ConfigureAwait(false);
@@ -313,7 +307,7 @@ internal sealed class ZLinkDeferredActorJoinCompletionJournal(
                                    == root.AuthorityKey
                         ? participant with
                         {
-                    CompletionPayload =
+                            CompletionPayload =
                         ZLinkDeferredJoinCompletionCodec.Encode(
                                     updatedCompletion)
                         }

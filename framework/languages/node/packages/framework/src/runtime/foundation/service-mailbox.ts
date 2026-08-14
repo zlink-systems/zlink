@@ -1,3 +1,7 @@
+import type {
+  ApplicationJobRecordLease
+} from '../application-jobs/application-ingress-record-owner';
+
 export type ServiceMailboxDomain = 'application' | 'infrastructure';
 
 export interface ServiceMailboxRecord {
@@ -19,6 +23,8 @@ export interface ServiceMailboxRecord {
     }
   ) => void;
   readonly stateful?: unknown;
+  /** Host queue permit plus the retained raw-ingress Core credit. */
+  readonly applicationJob?: ApplicationJobRecordLease;
 }
 
 export interface ServiceMailboxClaim {
@@ -47,8 +53,6 @@ interface DomainState {
   readonly indexed: Set<string>;
   messages: number;
   bytes: number;
-  readonly messageBudget: number;
-  readonly byteBudget: number;
 }
 
 export interface ServiceMailboxLimits {
@@ -59,7 +63,7 @@ export interface ServiceMailboxLimits {
 }
 
 
-/** Bounded level-triggered queues with one active application claim per owner. */
+/** Level-triggered queues with one active application claim per owner. */
 export class ServiceMailbox {
   private readonly application: DomainState;
   private readonly infrastructure: DomainState;
@@ -74,9 +78,15 @@ export class ServiceMailbox {
   private nextRelocationSerial = 1n;
   private closed = false;
 
-  constructor(limits: ServiceMailboxLimits) {
-    this.application = createDomain(limits.applicationMessages, limits.applicationBytes);
-    this.infrastructure = createDomain(limits.infrastructureMessages, limits.infrastructureBytes);
+  constructor(
+    _legacyLimits?: ServiceMailboxLimits,
+    private readonly onReady?: (domain: ServiceMailboxDomain) => void
+  ) {
+    // Host ApplicationJobQueue permits and retained Core HWM credit are the
+    // admission owners. A second mailbox cap would reject already-admitted
+    // work before the shared queue can apply cancellable FIFO backpressure.
+    this.application = createDomain();
+    this.infrastructure = createDomain();
   }
 
   releaseClaimedPayload(record: ServiceMailboxRecord): void {
@@ -89,13 +99,7 @@ export class ServiceMailbox {
     }
     const target = this.domain(record.domain);
     const bytes = retainedBytes(record);
-    if (
-      this.closed
-      || target.messages >= target.messageBudget
-      || bytes > target.byteBudget - target.bytes
-    ) {
-      return false;
-    }
+    if (this.closed) return false;
     if (record.domain === 'application') {
       if (this.relocatedOwners.has(record.owner)) return false;
       const relocation = this.relocationSeals.get(record.owner);
@@ -121,6 +125,7 @@ export class ServiceMailbox {
       target.indexed.add(record.owner);
       target.ready.push(record.owner);
     }
+    this.onReady?.(record.domain);
     return true;
   }
 
@@ -217,6 +222,7 @@ export class ServiceMailbox {
       this.application.indexed.add(seal.owner);
       this.application.ready.push(seal.owner);
     }
+    this.onReady?.('application');
     return true;
   }
 
@@ -236,6 +242,10 @@ export class ServiceMailbox {
     this.closed = true;
     clearDomain(this.application);
     clearDomain(this.infrastructure);
+    for (const relocation of this.relocationSeals.values()) {
+      closeRecords(relocation.captured);
+      closeRecords(relocation.held);
+    }
     this.relocationSeals.clear();
     this.relocatedOwners.clear();
   }
@@ -253,26 +263,29 @@ export class ServiceMailbox {
   }
 }
 
-function createDomain(messageBudget: number, byteBudget: number): DomainState {
-  requirePositive(messageBudget, 'messageBudget');
-  requirePositive(byteBudget, 'byteBudget');
+function createDomain(): DomainState {
   return {
     owners: new Map(),
     ready: new MailboxQueue(),
     indexed: new Set(),
     messages: 0,
-    bytes: 0,
-    messageBudget,
-    byteBudget
+    bytes: 0
   };
 }
 
 function clearDomain(domain: DomainState): void {
+  for (const owner of domain.owners.values()) {
+    closeRecords(owner.records.drain());
+  }
   domain.owners.clear();
   domain.ready.clear();
   domain.indexed.clear();
   domain.messages = 0;
   domain.bytes = 0;
+}
+
+function closeRecords(records: readonly ServiceMailboxRecord[]): void {
+  for (const record of records) record.applicationJob?.close();
 }
 
 /**

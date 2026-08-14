@@ -30,12 +30,60 @@ function collector() {
           createCounter: (instrumentName, options) => create(instrumentName, 'counter', options),
           createUpDownCounter: (instrumentName, options) => create(instrumentName, 'updown', options),
           createHistogram: (instrumentName, options) => create(instrumentName, 'histogram', options),
+          createObservableCounter(instrumentName, options) {
+            instruments.push({ name: instrumentName, kind: 'observable_counter', unit: options?.unit });
+            return { addCallback(callback) { observables.push({ name: instrumentName, callback }); } };
+          },
           createObservableGauge(instrumentName, options) {
             instruments.push({ name: instrumentName, kind: 'gauge', unit: options?.unit });
             return { addCallback(callback) { observables.push({ name: instrumentName, callback }); } };
           }
         };
       }
+    }
+  };
+}
+
+function capacitySnapshot({ peak = 5n, waits = 7n, duration = 1.25 } = {}) {
+  return {
+    measurementEpoch: 4n,
+    coreHwm: {
+      configuredProfile: framework.ZLinkCoreHwmProfile.Balanced,
+      effectiveBudgetBytes: 1_024n,
+      totalAppliedHwmBytes: 900n,
+      coreQueueAccountedBytes: 250n,
+      applicationAccountedBytes: 50n,
+      currentAccountedBytes: 300n,
+      provisionalAccountedBytes: 0n,
+      peakAccountedBytes: 450n,
+      completionCurrentAccountedBytes: 25n,
+      completionPeakAccountedBytes: 40n,
+      completionPendingMessageCount: 1n,
+      totalMessagingAccountedBytes: 325n,
+      monitorQueueAppliedHwmBytes: 10n,
+      monitorQueueAccountedBytes: 5n,
+      totalInstanceAppliedHwmBytes: 20n,
+      totalInstanceAccountedBytes: 8n,
+      blockedRatioPpm: 125n,
+      activeDirectionalQueueCount: 2n,
+      activeCompletionDirectionalQueueCount: 1n,
+      activeSendQueueCount: 1n,
+      activeReceiveQueueCount: 1n,
+      outstandingApplicationLeaseCount: 1n,
+      retiredQueueCount: 0n,
+      deferredOriginCreditBytes: 0n
+    },
+    applicationJobQueue: {
+      configuredProfile: framework.ZLinkApplicationJobQueueProfile.Balanced,
+      effectiveProcessorCount: 8n,
+      effectiveMaxQueuedApplicationJobs: 1_024n,
+      reservedSupplyPermits: 1n,
+      queuedApplicationJobs: 2n,
+      permitsInUse: 3n,
+      peakPermitsInUse: peak,
+      capacityWaiters: 1n,
+      capacityWaitCount: waits,
+      capacityWaitDurationSeconds: duration
     }
   };
 }
@@ -48,7 +96,7 @@ test('RMETRIC-001 global OpenTelemetry no-op provider remains callable', () => {
   metrics.duration('zlink.mesh_node.request.duration', 0.01);
 });
 
-test('RMETRIC-006 server runtime exposes the exact 42-instrument spec25 catalog', () => {
+test('RMETRIC-006 server runtime exposes the exact 52-instrument spec25 catalog', () => {
   const { provider, instruments } = collector();
   new framework.ZLinkRuntimeMetrics(provider);
   const expected = new Map([
@@ -93,14 +141,74 @@ test('RMETRIC-006 server runtime exposes the exact 42-instrument spec25 catalog'
     ['zlink.host.relocation.duration', ['histogram', 's']],
     ['zlink.host.relocation.blocked', ['counter', '{operation}']],
     ['zlink.host.shutdown.duration', ['histogram', 's']],
-    ['zlink.host.shutdown.forced', ['counter', '{operation}']]
+    ['zlink.host.shutdown.forced', ['counter', '{operation}']],
+    ['zlink.host.core_hwm.effective_budget', ['gauge', 'By']],
+    ['zlink.host.core_hwm.applied', ['gauge', 'By']],
+    ['zlink.host.core_hwm.accounted', ['gauge', 'By']],
+    ['zlink.host.core_hwm.completion_accounted', ['gauge', 'By']],
+    ['zlink.host.core_hwm.blocked_ratio', ['gauge', '{ppm}']],
+    ['zlink.host.application_job_queue.limit', ['gauge', '{job}']],
+    ['zlink.host.application_job_queue.jobs', ['gauge', '{job}']],
+    ['zlink.host.application_job_queue.capacity_waiters', ['gauge', '{waiter}']],
+    ['zlink.host.application_job_queue.capacity_waits', ['observable_counter', '{wait}']],
+    ['zlink.host.application_job_queue.capacity_wait_duration', ['observable_counter', 's']]
   ]);
-  assert.equal(instruments.length, 42);
+  assert.equal(instruments.length, 52);
   assert.deepEqual(
     new Map(instruments.map(({ name, kind, unit }) => [name, [kind, unit]])),
     expected
   );
   assert(instruments.every(({ name }) => !name.startsWith('zlink.fanout.')));
+});
+
+test('RMETRIC-017 capacity instruments observe only the host capacity projection', () => {
+  const { provider, observables } = collector();
+  const metrics = new framework.ZLinkRuntimeMetrics(provider);
+  let snapshot = capacitySnapshot();
+  metrics.registerHostCapacity(() => snapshot);
+
+  const collect = () => {
+    const samples = [];
+    for (const observable of observables) {
+      if (!observable.name.startsWith('zlink.host.core_hwm.')
+          && !observable.name.startsWith('zlink.host.application_job_queue.')) continue;
+      observable.callback({
+        observe(value, attributes) { samples.push({ name: observable.name, value, attributes }); }
+      });
+    }
+    return samples;
+  };
+
+  const beforeReset = collect();
+  assert(beforeReset.some((sample) => sample.name === 'zlink.host.core_hwm.effective_budget'
+    && sample.value === 1_024));
+  assert(beforeReset.some((sample) => sample.name === 'zlink.host.core_hwm.accounted'
+    && sample.value === 300
+    && sample.attributes.state === 'current'));
+  assert(beforeReset.some((sample) => sample.name === 'zlink.host.core_hwm.accounted'
+    && sample.value === 450
+    && sample.attributes.state === 'peak'));
+  assert(beforeReset.some((sample) => sample.name === 'zlink.host.application_job_queue.jobs'
+    && sample.value === 3
+    && sample.attributes.state === 'in_use'));
+  assert(beforeReset.some((sample) => sample.name === 'zlink.host.application_job_queue.capacity_waits'
+    && sample.value === 7));
+  assert(beforeReset.some((sample) => sample.name === 'zlink.host.application_job_queue.capacity_wait_duration'
+    && sample.value === 1.25));
+  assert(beforeReset.every((sample) => sample.attributes === undefined
+    || Object.keys(sample.attributes).every((key) => key === 'state')));
+
+  snapshot = capacitySnapshot({ peak: 3n, waits: 0n, duration: 0 });
+  const afterReset = collect();
+  assert(afterReset.some((sample) => sample.name === 'zlink.host.application_job_queue.jobs'
+    && sample.value === 3
+    && sample.attributes.state === 'peak'));
+  assert(afterReset.some((sample) => sample.name === 'zlink.host.application_job_queue.capacity_waits'
+    && sample.value === 0));
+  assert.equal(
+    new Set(afterReset.map((sample) => sample.name)).size,
+    10
+  );
 });
 
 test('RMETRIC-016 connector owns reconnect attempt counting', async () => {

@@ -913,10 +913,9 @@ test('Spot one-way address uses the selected Mesh send timeout instead of reques
   releaseAuthority();
 });
 
-test('Missing Instance send waits for bounded admission before submitting once', async () => {
+test('Missing Instance send directly awaits binding admission and submits once', async () => {
   class Notice {}
   let sendAttempts = 0;
-  let admissionCalls = 0;
   const node = {
     instanceSpotPlacementTypes() {
       return ['chat-room'];
@@ -931,12 +930,11 @@ test('Missing Instance send waits for bounded admission before submitting once',
         }
       };
     },
-    sendToMissingInstanceSpot() {
+    async sendToMissingInstanceSpot() {
       sendAttempts += 1;
-      return sendAttempts === 1 ? 1 : 0;
+      return 0;
     }
   };
-  const registry = new internal.ZLinkMeshSubmitterRegistry(100, 4);
   const addressTransport = new internal.ZLinkHostSpotAddressTransport({
     resolver: () => ({
       async resolve() {
@@ -957,13 +955,7 @@ test('Missing Instance send waits for bounded admission before submitting once',
     meshNames: () => ['play'],
     meshNode: () => node,
     completions: () => undefined,
-    defaultRequestTimeoutMs: 100,
-    submitMissingInstance: (meshName, attempt, signal, timeoutMs) => {
-      admissionCalls += 1;
-      const pending = registry.submit(meshName, attempt, signal, timeoutMs);
-      setTimeout(() => registry.notify(meshName), 5);
-      return pending;
-    }
+    defaultRequestTimeoutMs: 100
   });
 
   assert.deepEqual(
@@ -974,7 +966,5 @@ test('Missing Instance send waits for bounded admission before submitting once',
     }),
     { status: ZLinkSubmitStatus.Submitted }
   );
-  assert.equal(admissionCalls, 1);
-  assert.equal(sendAttempts, 2);
-  registry.dispose();
+  assert.equal(sendAttempts, 1);
 });

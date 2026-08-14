@@ -115,8 +115,7 @@ internal sealed partial class ZLinkEntrySpotActivation :
         _stopSource.Cancel();
     }
 
-    internal void InitializeRuntimeResources(
-        ZLinkCompletionAdmissionOwner? completionAdmission = null)
+    internal void InitializeRuntimeResources()
     {
         _outboundEndpoint = new ZLinkSpotOutboundEndpoint(this, _outbound, _runtime);
         _dispatcher = new ZLinkSpotActivationDispatcher(
@@ -130,8 +129,6 @@ internal sealed partial class ZLinkEntrySpotActivation :
             _subscriptions,
             () => _actorHandlers,
             () => _invoker,
-            replySubmitter: _outbound.Submitter,
-            completionAdmission: completionAdmission,
             acceptActorJoinWithoutHandler: true);
         var errorSink = _runtime.ErrorSink;
         _serial = new ZLinkSerialExecutionQueue(

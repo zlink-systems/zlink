@@ -22,6 +22,7 @@ import systems.zlink.framework.monitoring.ZLinkClientServerStatus;
 import systems.zlink.framework.monitoring.ZLinkFanoutRuntime;
 import systems.zlink.framework.monitoring.ZLinkFanoutStatus;
 import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
+import systems.zlink.framework.monitoring.ZLinkHostCapacityStatus;
 import systems.zlink.framework.monitoring.ZLinkTopologyState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 
@@ -53,6 +54,18 @@ final class RuntimeMonitoringContractTest {
         assertEquals(
             Flow.Publisher.class,
             ZLinkFrameworkRuntime.class.getMethod("observe").getReturnType());
+        assertEquals(
+            ZLinkHostCapacityStatus.class,
+            ZLinkFrameworkRuntimeStatus.class.getMethod("capacity").getReturnType());
+        assertEquals(
+            void.class,
+            ZLinkFrameworkRuntime.class
+                .getMethod("resetCapacityMetrics")
+                .getReturnType());
+        assertThrows(
+            NoSuchMethodException.class,
+            () -> ZLinkFrameworkRuntime.class
+                .getMethod("resetCoreHwmBudgetMetrics"));
         assertEquals(
             ZLinkClientServerStatus.class,
             ZLinkClientServerRuntime.class

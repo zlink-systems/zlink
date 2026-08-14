@@ -50,12 +50,7 @@ public sealed record HostRuntimeSnapshotRes(
     string State,
     bool IsReady,
     bool AcceptingWork,
-    ulong Sequence,
-    ulong ApplicationHwmBytes = 0,
-    ulong PendingPayloadBytes = 0,
-    ulong QueuedPayloadBytes = 0,
-    ulong ActivePayloadBytes = 0,
-    bool ApplicationReceivePaused = false);
+    ulong Sequence);
 
 public sealed record EvidenceWaitReq(
     string[] ContainsAll,

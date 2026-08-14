@@ -4,6 +4,29 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SAMPLES=(TicTacToe Bingo SupportChat ShoppingMall DeliveryDispatch GameQuest ZoneWorld)
 
+# A locally rebuilt binding can retain the same package version. Keep the
+# default sample run independent of a stale user-level NuGet extraction while
+# still honoring an explicitly selected cache (for CI or package debugging).
+# The cache must survive the process: project assets retain absolute package
+# paths for subsequent --no-restore builds.
+if [[ -z "${NUGET_PACKAGES:-}" ]]; then
+  REPOSITORY_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+  PACKAGE_VERSION="$(awk -F= '/^LIBZLINK_VERSION=/{ print $2; exit }' "${REPOSITORY_ROOT}/VERSION")"
+  if [[ -z "${PACKAGE_VERSION}" ]]; then
+    echo "Unable to resolve the local Systems.Zlink package version." >&2
+    exit 1
+  fi
+  BINDING_PACKAGE="${REPOSITORY_ROOT}/.artifacts/wsl/nuget/Systems.Zlink.${PACKAGE_VERSION}.nupkg"
+  if [[ ! -f "${BINDING_PACKAGE}" ]]; then
+    echo "Missing local Systems.Zlink package: ${BINDING_PACKAGE}" >&2
+    exit 1
+  fi
+  PACKAGE_HASH="$(sha256sum "${BINDING_PACKAGE}" | cut -d ' ' -f 1)"
+  SAMPLE_NUGET_PACKAGES="${TMPDIR:-/tmp}/zlink-dotnet-samples-nuget-${PACKAGE_HASH:0:16}"
+  mkdir -p "${SAMPLE_NUGET_PACKAGES}"
+  export NUGET_PACKAGES="${SAMPLE_NUGET_PACKAGES}"
+fi
+
 if (( $# > 0 )); then
   SAMPLES=("$@")
 fi

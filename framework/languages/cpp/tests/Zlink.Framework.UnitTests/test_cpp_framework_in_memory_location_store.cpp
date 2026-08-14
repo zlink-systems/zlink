@@ -99,7 +99,7 @@ void publish_mesh_node (
 
 
 TEST (ZLinkFrameworkInMemoryLocationStore,
-      AuthorityAndReservationPreserveExactOwnerFence)
+      AuthorityRetargetPreservesExactOwnerAndMovesActiveCapacity)
 {
     using namespace zlink::framework;
     in_memory_location_repository_t store;
@@ -156,10 +156,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
         .compare_exchange_authority (
           authority_key,
           committed_value->ready.store_version,
-          authority_put_t{
-            {std::byte{0x05}},
-            authority_generation_transition_t::preserve,
-            std::nullopt})
+          authority_put_t{{std::byte{0x05}}})
         .result ()
         .value ();
     const auto *preserved_value =
@@ -172,51 +169,17 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
       committed_value->ready.authority_owner_generation,
       preserved_value->snapshot.authority_owner_generation);
 
-    std::array<std::byte, 16> relocation_id{};
-    relocation_id[15] = std::byte{0x01};
-    const relocation_capacity_reserve_request_t capacity_request{
-      .reservation_id = relocation_id,
-      .key = authority_key,
-      .expected_store_version =
-        preserved_value->snapshot.store_version,
-      .object_kind = placement_object_kind_t::actor,
-      .stable_type = "player",
-      .source = reservation.target,
-      .target =
-        {.mesh_name = "play",
-         .node_rid = node_rid_t::from_string ("node-b"),
-         .node_lifecycle_generation = 1,
-         .owner = owner_b},
-      .capacity_bundle = {.actor_slots = 1}};
-    const auto capacity =
-      store.reserve_relocation_capacity (capacity_request)
-        .result ()
-        .value ();
-    const auto *capacity_value =
-      std::get_if<relocation_capacity_reserved_t> (
-        &capacity);
-    ASSERT_NE (nullptr, capacity_value);
-    const auto capacity_again =
-      store.reserve_relocation_capacity (capacity_request)
-        .result ()
-        .value ();
-    EXPECT_NE (
-      nullptr,
-      std::get_if<
-        relocation_capacity_already_reserved_t> (
-        &capacity_again));
-
-    store.release_owner_lease (owner_a).result ().value ();
+    const object_creation_target_t target{
+      .mesh_name = "play",
+      .node_rid = node_rid_t::from_string ("node-b"),
+      .node_lifecycle_generation = 1,
+      .owner = owner_b};
     const auto moved =
       store
         .compare_exchange_authority (
           authority_key,
           preserved_value->snapshot.store_version,
-          authority_put_t{
-            {std::byte{0x06}},
-            authority_generation_transition_t::new_owner,
-            owner_b,
-            capacity_value->fence})
+          authority_retarget_t{{std::byte{0x06}}, target})
         .result ()
         .value ();
     const auto *moved_value =
@@ -228,22 +191,19 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
     EXPECT_GT (
       moved_value->snapshot.authority_owner_generation,
       preserved_value->snapshot.authority_owner_generation);
-    EXPECT_EQ (
-      relocation_capacity_abort_result_t::already_committed,
-      store
-        .abort_relocation_capacity (
-          capacity_value->fence)
-        .result ()
-        .value ());
-    EXPECT_THROW (
-      store.compare_exchange_authority (
-        authority_key,
-        moved_value->snapshot.store_version,
-        authority_put_t{
-          {},
-          authority_generation_transition_t::preserve,
-          owner_b}),
-      std::invalid_argument);
+    const auto nodes = store.list_mesh_nodes ("play").result ().value ();
+    const auto source = std::find_if (
+      nodes.items.begin (), nodes.items.end (),
+      [] (const auto &node) { return node.rid.to_string () == "node-a"; });
+    const auto target_node = std::find_if (
+      nodes.items.begin (), nodes.items.end (),
+      [] (const auto &node) { return node.rid.to_string () == "node-b"; });
+    ASSERT_NE (source, nodes.items.end ());
+    ASSERT_NE (target_node, nodes.items.end ());
+    EXPECT_EQ (source->capacity.actors.active, 0u);
+    EXPECT_EQ (source->capacity.actors.reserved, 0u);
+    EXPECT_EQ (target_node->capacity.actors.active, 1u);
+    EXPECT_EQ (target_node->capacity.actors.reserved, 0u);
 }
 
 TEST (ZLinkFrameworkInMemoryLocationStore,
@@ -409,10 +369,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
         .compare_exchange_authority (
           actor_authority_key ("max-revision"),
           committed.ready.store_version,
-          authority_put_t{
-            {std::byte{0x02}},
-            authority_generation_transition_t::preserve,
-            std::nullopt})
+          authority_put_t{{std::byte{0x02}}})
         .result ()
         .value ();
     EXPECT_NE (
@@ -634,7 +591,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
 }
 
 TEST (ZLinkFrameworkInMemoryLocationStore,
-      AggregateConsumesPerObjectCapacityFencesOnce)
+      AggregateMovesCapacityOnce)
 {
     using namespace zlink::framework;
     in_memory_location_repository_t store;
@@ -689,55 +646,6 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
       "fenced-actor",
       std::byte{0x12});
 
-    const auto reserve =
-      [&] (const authority_snapshot_t &snapshot,
-           placement_object_kind_t kind,
-           std::string stable_type,
-           std::array<std::byte, 16> reservation_id) {
-          relocation_capacity_reserve_request_t request;
-          request.reservation_id = reservation_id;
-          request.key = kind == placement_object_kind_t::actor
-                          ? actor_authority_key ("fenced-actor")
-                          : spot_authority_key ("fenced-room");
-          request.expected_store_version = snapshot.store_version;
-          request.object_kind = kind;
-          request.stable_type = std::move (stable_type);
-          request.source = snapshot.allocation.target;
-          request.target = {
-            .mesh_name = "play",
-            .node_rid = node_rid_t::from_string ("fence-target-node"),
-            .node_lifecycle_generation = 1,
-            .owner = owner_b};
-          request.capacity_bundle =
-            kind == placement_object_kind_t::actor
-              ? placement_capacity_bundle_t{.actor_slots = 1}
-              : placement_capacity_bundle_t{
-                  .spot_slots = 1,
-                  .spot_type = spot_type_capacity_delta_t{
-                    placement_object_kind_t::user_spot,
-                    request.stable_type,
-                    1}};
-          const auto result =
-            store.reserve_relocation_capacity (request)
-              .result ().value ();
-          return std::get<relocation_capacity_reserved_t> (result).fence;
-      };
-
-    std::array<std::byte, 16> actor_reservation_id{};
-    actor_reservation_id[15] = std::byte{1};
-    std::array<std::byte, 16> spot_reservation_id{};
-    spot_reservation_id[15] = std::byte{2};
-    const auto actor_capacity = reserve (
-      actor,
-      placement_object_kind_t::actor,
-      "player",
-      actor_reservation_id);
-    const auto spot_capacity = reserve (
-      spot,
-      placement_object_kind_t::user_spot,
-      "room",
-      spot_reservation_id);
-
     aggregate_prepare_request_t request;
     request.aggregate_id.value[15] = std::byte{3};
     request.aggregate_generation = 1;
@@ -746,15 +654,12 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
        actor.store_version,
        authority_generation_transition_t::new_owner,
        {std::byte{0x21}},
-       {},
-       actor_capacity},
+       {}},
       {spot_authority_key ("fenced-room"),
        spot.store_version,
        authority_generation_transition_t::new_owner,
        {std::byte{0x22}},
-       {},
-       spot_capacity}};
-    request.capacity_fences = {actor_capacity, spot_capacity};
+       {}}};
     request.target_descriptor = {
       "play",
       zlink::routing_id_t::from ("fence-target-node")};
@@ -800,12 +705,6 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
     EXPECT_EQ (target_after->capacity.actors.active, 1u);
     EXPECT_EQ (target_after->capacity.spots.reserved, 0u);
     EXPECT_EQ (target_after->capacity.spots.active, 1u);
-    EXPECT_EQ (
-      store.abort_relocation_capacity (actor_capacity).result ().value (),
-      relocation_capacity_abort_result_t::already_committed);
-    EXPECT_EQ (
-      store.abort_relocation_capacity (spot_capacity).result ().value (),
-      relocation_capacity_abort_result_t::already_committed);
     EXPECT_EQ (
       store.commit_aggregate (fence->fence).result ().value (),
       aggregate_commit_result_t::already_committed);

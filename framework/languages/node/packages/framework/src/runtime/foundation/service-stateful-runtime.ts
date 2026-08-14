@@ -128,7 +128,6 @@ interface ServiceSpotMessageFollowState {
   suppressionFence?: MessageFollowSuppressionFence;
   expiresAtMs?: number;
   draining: boolean;
-  retryTimer?: ReturnType<typeof setTimeout>;
 }
 
 export interface ServiceStatefulResult {
@@ -814,8 +813,10 @@ export class ServiceStatefulRuntime {
       deadlineUnixMs: envelope.deadlineUnixMs,
       ...(envelope.replyRouteId === undefined ? {} : { replyRouteId: envelope.replyRouteId })
     };
-    const admitted = this.enqueueActivatedInstanceSpot(
-      {
+    const applicationJobOwner = await this.raw.reserveLocalIngress();
+    try {
+      const admitted = this.enqueueActivatedInstanceSpot(
+        {
         command: M6bServiceWireCommand.instanceSpot,
         flags: envelope.metadataFrame === undefined ? 0 : M6bServiceWireFlag.metadata,
         sourceRoutingId: envelope.sourceNodeRid,
@@ -831,23 +832,27 @@ export class ServiceStatefulRuntime {
             envelope.replyRouteId,
             envelope.metadataFrame !== undefined
           )
-        ]
-      },
-      record,
-      Buffer.from(envelope.applicationPayloadFrame),
-      spot,
-      undefined,
-      this.activationTerminalCompletion(target, route),
-      envelope.metadataFrame === undefined
-        ? undefined
-        : validateServiceMetadataFrame(envelope.metadataFrame),
-      true,
-      this.instanceApplicationTarget(record, route.objectGeneration)
-    );
-    if (admitted !== 'application') {
-      throw new Error('Recovered Instance activation was not admitted to the local queue.');
+        ],
+        applicationJobOwner
+        },
+        record,
+        Buffer.from(envelope.applicationPayloadFrame),
+        spot,
+        undefined,
+        this.activationTerminalCompletion(target, route),
+        envelope.metadataFrame === undefined
+          ? undefined
+          : validateServiceMetadataFrame(envelope.metadataFrame),
+        true,
+        this.instanceApplicationTarget(record, route.objectGeneration)
+      );
+      if (admitted !== 'application') {
+        throw new Error('Recovered Instance activation was not admitted to the local queue.');
+      }
+      return true;
+    } finally {
+      applicationJobOwner.close();
     }
-    return true;
   }
 
   async recoverPendingInstanceActivation(
@@ -1022,12 +1027,12 @@ export class ServiceStatefulRuntime {
     this.spotRoutes.set(spotKey(route.spot), next);
   }
 
-  sendMessageFollowNotification(
+  async sendMessageFollowNotification(
     targetNodeRid: string,
     record: Omit<import('./service-stateful-wire-codec').ServiceMessageFollowRecord, 'kind'>
-  ): boolean {
+  ): Promise<boolean> {
     this.requireOpen();
-    return this.raw.sendService(targetNodeRid, [encodeMessageFollowHeader(record)]);
+    return await this.raw.sendService(targetNodeRid, [encodeMessageFollowHeader(record)]);
   }
 
   setMessageFollowHandler(handler: (
@@ -1067,15 +1072,20 @@ export class ServiceStatefulRuntime {
     const state = this.exactSpotMessageFollow(seal);
     if (state === undefined || state.target !== undefined) return false;
     this.removeSpotMessageFollow(state);
-    for (let index = state.queuedHead; index < state.queued.length; index += 1) {
-      const record = state.queued[index];
-      if (record === undefined) continue;
-      const result = this.ingress(record.ingress);
-      if (result !== 'application') {
-        throw new Error('Aborted Spot ingress could not be restored to its source queue.');
+    try {
+      while (state.queuedCount > 0) {
+        const record = this.peekSpotMessageFollow(state)!;
+        const result = this.restoreSpotMessageFollowRecord(record);
+        if (result !== 'application') {
+          throw new Error('Aborted Spot ingress could not be restored to its source queue.');
+        }
+        this.takeSpotMessageFollow(state);
       }
+      return true;
+    } catch (error) {
+      while (state.queuedCount > 0) this.takeSpotMessageFollow(state);
+      throw error;
     }
-    return true;
   }
 
   async commitSpotMessageFollowIngress(
@@ -1161,13 +1171,13 @@ export class ServiceStatefulRuntime {
     this.subscriptions.delete(spotId);
   }
 
-  publishLogicalMulticast(
+  async publishLogicalMulticast(
     channelName: string,
     topic: string,
     payload: ServiceApplicationPayload,
     sourceSpotId = this.nodeRid
-  ): void {
-    this.enqueueLogicalMulticast(channelName, topic, sourceSpotId, payload);
+  ): Promise<void> {
+    await this.enqueueLogicalMulticast(channelName, topic, sourceSpotId, payload);
     const targets = this.raw.topology.peers()
       .filter(peer => peer.descriptor.channels.some(
         channel => channel.name === channelName && channel.weight > 0
@@ -1177,15 +1187,15 @@ export class ServiceStatefulRuntime {
     for (const target of targets) {
       // Remote admission ends at the source outbound transport queue. The
       // receiver's Spot queue and handler completion are not publish results.
-      this.raw.sendService(target.descriptor.nodeRoutingId, [header, payloadFrame]);
+      await this.raw.sendService(target.descriptor.nodeRoutingId, [header, payloadFrame]);
     }
   }
 
-  sendToSpot(
+  async sendToSpot(
     sourceSpotId: string,
     requested: ServiceDirectSpotRouteFence,
     payload: ServiceApplicationPayload
-  ): number {
+  ): Promise<number> {
     const target = this.acceptSpotAuthority(requested);
     if (target === undefined) {
       return SubmitResult.NotFound;
@@ -1220,14 +1230,14 @@ export class ServiceStatefulRuntime {
     return pending;
   }
 
-  sendToActor(
+  async sendToActor(
     target: ServiceActorRef,
     _targetNodeGeneration: bigint,
     _authorityOwnerGeneration: bigint,
     payload: ServiceApplicationPayload,
     sourceActor?: ServiceActorRef,
     boundSession?: { readonly sessionRid: string; readonly bindingGeneration: bigint }
-  ): number {
+  ): Promise<number> {
     const route = this.tryActorFence(target);
     if (route === undefined) return SubmitResult.NotFound;
     const header = encodeActorHeader(
@@ -1285,12 +1295,12 @@ export class ServiceStatefulRuntime {
     return pending;
   }
 
-  sendToInstanceSpot(
+  async sendToInstanceSpot(
     route: ServiceInstanceRouteFence,
     payload: ServiceApplicationPayload,
     sourceSpotId?: string,
     metadataFrame?: Uint8Array
-  ): number {
+  ): Promise<number> {
     return this.submitOneWay(route.targetNodeRid, instanceOperationParts([
       encodeInstanceSpotHeader(
         route,
@@ -1306,72 +1316,31 @@ export class ServiceStatefulRuntime {
     ], metadataFrame));
   }
 
-  sendToMissingInstanceSpot(
+  async sendToMissingInstanceSpot(
     target: ServiceInstanceActivationTarget,
     payload: ServiceApplicationPayload,
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
     metadataFrame?: Uint8Array
-  ): number {
-    return this.prepareMissingInstanceSpotSend(
+  ): Promise<number> {
+    return await this.sendToMissingInstanceSpotFrame(
       target,
-      payload,
+      encodeApplicationPayload(payload),
       deadlineUnixMs,
       sourceSpotId,
       metadataFrame
-    )();
+    );
   }
 
-  sendToMissingInstanceSpotFrame(
+  async sendToMissingInstanceSpotFrame(
     target: ServiceInstanceActivationTarget,
     payloadFrame: Buffer,
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
     metadataFrame?: Uint8Array
-  ): number {
-    return this.prepareMissingInstanceSpotSendFrame(
-      target,
-      payloadFrame,
-      deadlineUnixMs,
-      sourceSpotId,
-      metadataFrame
-    )();
-  }
-
-  prepareMissingInstanceSpotSend(
-    target: ServiceInstanceActivationTarget,
-    payload: ServiceApplicationPayload,
-    deadlineUnixMs: bigint,
-    sourceSpotId?: string,
-    metadataFrame?: Uint8Array
-  ): () => number {
+  ): Promise<number> {
     const operation = { high: this.nodeGeneration, low: this.nextInstanceOperation++ };
-    const parts = instanceOperationParts([
-      encodeInstanceSpotActivationHeader(
-        target,
-        this.nodeGeneration,
-        this.nodeRid,
-        sourceSpotId,
-        'send',
-        operation,
-        deadlineUnixMs,
-        undefined,
-        metadataFrame !== undefined
-      ),
-      encodeApplicationPayload(payload)
-    ], metadataFrame);
-    return () => this.submitOneWay(target.targetNodeRid, parts);
-  }
-
-  prepareMissingInstanceSpotSendFrame(
-    target: ServiceInstanceActivationTarget,
-    payloadFrame: Buffer,
-    deadlineUnixMs: bigint,
-    sourceSpotId?: string,
-    metadataFrame?: Uint8Array
-  ): () => number {
-    const operation = { high: this.nodeGeneration, low: this.nextInstanceOperation++ };
-    const parts = instanceOperationParts([
+    return await this.submitOneWay(target.targetNodeRid, instanceOperationParts([
       encodeInstanceSpotActivationHeader(
         target,
         this.nodeGeneration,
@@ -1384,8 +1353,7 @@ export class ServiceStatefulRuntime {
         metadataFrame !== undefined
       ),
       payloadFrame
-    ], metadataFrame);
-    return () => this.submitOneWay(target.targetNodeRid, parts);
+    ], metadataFrame));
   }
 
   requestToInstanceSpot(
@@ -1754,11 +1722,11 @@ export class ServiceStatefulRuntime {
     return [...this.sessionDeliveries.values()].map(value => value.binding);
   }
 
-  sendSessionToActor(
+  async sendSessionToActor(
     sessionRid: string,
     actor: ServiceActorRef,
     payload: ServiceApplicationPayload
-  ): number {
+  ): Promise<number> {
     const delivery = this.sessionDeliveries.get(actorKey(actor));
     if (delivery === undefined || delivery.binding.sessionRid !== sessionRid) {
       return SubmitResult.NotFound;
@@ -1776,12 +1744,12 @@ export class ServiceStatefulRuntime {
     );
   }
 
-  sendBoundSession(
+  async sendBoundSession(
     actor: ServiceActorRef,
     expectedBindingGeneration: bigint,
     payload: ServiceApplicationPayload,
     senderFence?: ServiceBoundSessionSendFence
-  ): number {
+  ): Promise<number> {
     let binding: ServiceSessionBinding;
     try {
       binding = this.registry.validateBoundSession(actor, expectedBindingGeneration);
@@ -1831,12 +1799,14 @@ export class ServiceStatefulRuntime {
     this.spotRoutes.clear();
     this.directSpotRoutes.clear();
     for (const state of this.spotMessageFollow.values()) {
-      if (state.retryTimer !== undefined) clearTimeout(state.retryTimer);
+      while (state.queuedCount > 0) this.takeSpotMessageFollow(state);
     }
     this.spotMessageFollow.clear();
   }
 
-  private ingress(record: RawServiceIngressRecord): RawServicePumpResult | undefined {
+  private async ingress(
+    record: RawServiceIngressRecord
+  ): Promise<RawServicePumpResult | undefined> {
     if (
       record.command < M6bServiceWireCommand.spotSend
       || (
@@ -1888,7 +1858,7 @@ export class ServiceStatefulRuntime {
         ? record.parts[record.parts.length - 1]
         : undefined;
       try {
-        return this.handleIngress(record, decoded, payloadFrame, metadataFrame);
+        return await this.handleIngress(record, decoded, payloadFrame, metadataFrame);
       } catch (error) {
         const correlation = statefulCorrelation(decoded);
         if (correlation !== undefined) {
@@ -1915,12 +1885,12 @@ export class ServiceStatefulRuntime {
     }
   }
 
-  private handleIngress(
+  private async handleIngress(
     ingress: RawServiceIngressRecord,
     record: ServiceStatefulWireRecord,
     payloadFrame: Buffer | undefined,
     metadataFrame?: Buffer
-  ): RawServicePumpResult {
+  ): Promise<RawServicePumpResult> {
     switch (record.kind) {
       case 'messageFollow': {
         if (record.source.kind !== record.target.kind
@@ -2035,12 +2005,13 @@ export class ServiceStatefulRuntime {
         );
       }
       case 'logicalMulticast':
-        this.enqueueLogicalMulticastFrame(
+        await this.enqueueLogicalMulticastFrame(
           record.channelName,
           record.topic,
           record.sourceSpotId,
           payloadFrame!,
-          ingress.sourceRoutingId
+          ingress.sourceRoutingId,
+          requireApplicationJobOwner(ingress)
         );
         return 'application';
       case 'actorLookup':
@@ -2081,14 +2052,27 @@ export class ServiceStatefulRuntime {
     metadataFrame?: Buffer
   ): RawServicePumpResult {
     if (record.activation === 'missing' && this.asyncInstanceAuthority !== undefined) {
-      void this.continueMissingInstanceActivation(ingress, record, payloadFrame, undefined, metadataFrame);
+      const retainedIngress = retainIngress(ingress);
+      void this.continueMissingInstanceActivation(
+        retainedIngress,
+        record,
+        payloadFrame,
+        undefined,
+        metadataFrame
+      ).finally(() => retainedIngress.applicationJobOwner?.close());
       return 'infrastructure';
     }
     if (
       record.activation === 'ready'
       && this.needsInstanceApplicationMaterialization(ingress, record)
     ) {
-      void this.continueReadyInstanceMaterialization(ingress, record, payloadFrame, metadataFrame);
+      const retainedIngress = retainIngress(ingress);
+      void this.continueReadyInstanceMaterialization(
+        retainedIngress,
+        record,
+        payloadFrame,
+        metadataFrame
+      ).finally(() => retainedIngress.applicationJobOwner?.close());
       return 'infrastructure';
     }
     const spot = this.requireInstanceActivation(ingress, record);
@@ -2492,7 +2476,7 @@ export class ServiceStatefulRuntime {
       targetSpotId: route.targetSpotId
     };
     if (record.operationKind === 'send') {
-      const submitted = this.submitOneWay(route.targetNodeRid, instanceOperationParts([
+      const submitted = await this.submitOneWay(route.targetNodeRid, instanceOperationParts([
         encodeInstanceSpotActivationHeader(
           redirectedTarget,
           this.nodeGeneration,
@@ -3175,7 +3159,7 @@ export class ServiceStatefulRuntime {
           return 'infrastructure';
         }
         this.registry.installSessionBinding(binding);
-        this.enqueueActorBindingControl(binding);
+        this.enqueueActorBindingControl(ingress, binding);
         this.replyWire(ingress, record.correlation, RequestResult.Ok, 0, undefined, {
           kind: 'streamBind',
           bindingGeneration: binding.bindingGeneration,
@@ -3276,7 +3260,7 @@ export class ServiceStatefulRuntime {
     previous: ServiceSessionBinding,
     actorAuthority: ServiceBoundSessionActorAuthority
   ): void {
-    this.trySendBoundSessionReplacement(
+    void this.trySendBoundSessionReplacement(
       previous,
       actorAuthority,
       SESSION_BINDING_REPLACEMENT_RETRY_INITIAL_DELAY_MS,
@@ -3284,12 +3268,12 @@ export class ServiceStatefulRuntime {
     );
   }
 
-  private trySendBoundSessionReplacement(
+  private async trySendBoundSessionReplacement(
     previous: ServiceSessionBinding,
     actorAuthority: ServiceBoundSessionActorAuthority,
     delayMs: number,
     deadline: number
-  ): void {
+  ): Promise<void> {
     if (this.closed || Date.now() >= deadline) return;
     const ownerGeneration = previous.sessionOwnerNodeGeneration
       ?? this.tryPeerGeneration(previous.sessionOwnerNodeRid);
@@ -3315,7 +3299,7 @@ export class ServiceStatefulRuntime {
     );
     let result: number;
     try {
-      result = this.submitOneWay(previous.sessionOwnerNodeRid, [header]);
+      result = await this.submitOneWay(previous.sessionOwnerNodeRid, [header]);
     } catch {
       result = SubmitResult.InvalidState;
     }
@@ -3338,7 +3322,7 @@ export class ServiceStatefulRuntime {
     deadline: number
   ): void {
     setTimeout(() => {
-      this.trySendBoundSessionReplacement(previous, actorAuthority, delayMs, deadline);
+      void this.trySendBoundSessionReplacement(previous, actorAuthority, delayMs, deadline);
     }, delayMs);
   }
 
@@ -3372,6 +3356,7 @@ export class ServiceStatefulRuntime {
       return;
     }
     const accepted = this.enqueueSessionBindingRetirement(
+      ingress,
       delivery,
       ingress.sourceRoutingId,
       (terminalResult, failureCode) => {
@@ -3382,20 +3367,22 @@ export class ServiceStatefulRuntime {
     if (!accepted) {
       const actor = delivery.binding.actor;
       const result = failure(createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
-        `Actor '${actor.actorId}' session binding tombstone queue is full.`
+        ZLinkFrameworkInternalErrorKind.SpotMoving,
+        `Actor '${actor.actorId}' no longer accepts session binding tombstones.`
       ));
       this.replyWire(ingress, record.correlation, result.terminalResult, result.failureCode);
     }
   }
 
   private enqueueSessionBindingRetirement(
+    ingress: RawServiceIngressRecord,
     delivery: ServiceSessionDelivery,
     sourceRoutingId: string,
     reply: (terminalResult: number, failureCode: number) => boolean
   ): boolean {
     const actor = delivery.binding.actor;
-    return this.raw.mailbox.tryEnqueue({
+    const applicationJob = requireApplicationJobOwner(ingress).takeInitial('infrastructure');
+    const accepted = this.raw.mailbox.tryEnqueue({
       owner: `actor:${actor.actorId}\0${actor.generation}`,
       domain: 'infrastructure',
       parts: [Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.boundSessionBind, 0])],
@@ -3421,8 +3408,11 @@ export class ServiceStatefulRuntime {
           }
           return reply(terminalResult, failureCode);
         }
-      } satisfies ServiceStatefulMailboxData
+      } satisfies ServiceStatefulMailboxData,
+      applicationJob
     });
+    if (!accepted) applicationJob.close();
+    return accepted;
   }
 
   private deliverBoundSession(
@@ -3513,6 +3503,7 @@ export class ServiceStatefulRuntime {
     payloadFrame: Buffer,
     stateful: ServiceStatefulMailboxData
   ): RawServicePumpResult {
+    const applicationJob = requireApplicationJobOwner(ingress).takeInitial(domain);
     const accepted = this.raw.mailbox.tryEnqueue({
       owner,
       domain,
@@ -3522,13 +3513,15 @@ export class ServiceStatefulRuntime {
       ...(ingress.reply === undefined ? {} : { reply: ingress.reply }),
       ...(ingress.requestSequence === undefined ? {} : { requestSequence: ingress.requestSequence }),
       ...(stateful.correlation === undefined ? {} : { correlation: stateful.correlation }),
-      stateful
+      stateful,
+      applicationJob
     });
     if (accepted) return domain;
+    applicationJob.close();
     if (stateful.reply !== undefined) {
       const result = failure(createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.WorkerQueueFull,
-        `Mailbox owner '${owner}' exhausted its bounded admission capacity.`
+        ZLinkFrameworkInternalErrorKind.SpotMoving,
+        `Mailbox owner '${owner}' no longer accepts work on this runtime.`
       ));
       stateful.reply(result.terminalResult, result.failureCode);
       return 'infrastructure';
@@ -3536,29 +3529,36 @@ export class ServiceStatefulRuntime {
     return 'protocolError';
   }
 
-  private enqueueLogicalMulticast(
+  private async enqueueLogicalMulticast(
     channelName: string,
     topic: string,
     sourceSpotId: string,
     payload: ServiceApplicationPayload,
     sourceNodeRid = this.nodeRid
-  ): void {
-    this.enqueueLogicalMulticastFrame(
-      channelName,
-      topic,
-      sourceSpotId,
-      encodeApplicationPayload(payload),
-      sourceNodeRid
-    );
+  ): Promise<void> {
+    const applicationJobOwner = await this.raw.reserveLocalIngress();
+    try {
+      await this.enqueueLogicalMulticastFrame(
+        channelName,
+        topic,
+        sourceSpotId,
+        encodeApplicationPayload(payload),
+        sourceNodeRid,
+        applicationJobOwner
+      );
+    } finally {
+      applicationJobOwner.close();
+    }
   }
 
-  private enqueueLogicalMulticastFrame(
+  private async enqueueLogicalMulticastFrame(
     channelName: string,
     topic: string,
     sourceSpotId: string,
     payloadFrame: Buffer,
-    sourceNodeRid = this.nodeRid
-  ): void {
+    sourceNodeRid: string,
+    applicationJobOwner: NonNullable<RawServiceIngressRecord['applicationJobOwner']>
+  ): Promise<void> {
     const targets = [...this.subscriptions.entries()]
       .filter(([, values]) => [...values].some(value => {
         const separator = value.indexOf('\0');
@@ -3570,6 +3570,7 @@ export class ServiceStatefulRuntime {
     for (const spotId of targets) {
       const spot = this.registry.spot(spotId);
       if (spot === undefined) continue;
+      const applicationJob = await applicationJobOwner.acquire('application');
       const accepted = this.raw.mailbox.tryEnqueue({
         owner: `spot:${spotId}`,
         domain: 'application',
@@ -3585,34 +3586,66 @@ export class ServiceStatefulRuntime {
           channelName,
           topic,
           targetSpot: spot.ref
-        } satisfies ServiceStatefulMailboxData
+        } satisfies ServiceStatefulMailboxData,
+        applicationJob
       });
-      if (!accepted) this.mailboxDropHandler?.({ kind: 'spot_multicast', owner: spotId });
+      if (!accepted) {
+        applicationJob.close();
+        this.mailboxDropHandler?.({ kind: 'spot_multicast', owner: spotId });
+      }
     }
   }
 
-  private enqueueActorControl(spotId: string, control: ActorControlPayload): void {
+  private enqueueActorControl(
+    spotId: string,
+    control: ActorControlPayload,
+    onTerminalCompletion?: () => void | Promise<void>
+  ): void {
     const header = Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.actorJoined, 0]);
-    const accepted = this.raw.mailbox.tryEnqueue({
-      owner: `spot:${spotId}`,
-      domain: 'infrastructure',
-      parts: [header],
-      sourceRoutingId: this.nodeRid,
-      stateful: {
-        receiveKind: ReceiveKind.SpotControl,
-        operationKind: 0,
-        targetSpot: this.registry.spot(spotId)?.ref,
-        kindData: control
-      } satisfies ServiceStatefulMailboxData
+    let terminalAttempted = false;
+    void (async () => {
+      const applicationJobOwner = await this.raw.reserveLocalIngress();
+      let accepted = false;
+      try {
+        const applicationJob = applicationJobOwner.takeInitial('infrastructure');
+        accepted = this.raw.mailbox.tryEnqueue({
+          owner: `spot:${spotId}`,
+          domain: 'infrastructure',
+          parts: [header],
+          sourceRoutingId: this.nodeRid,
+          stateful: {
+            receiveKind: ReceiveKind.SpotControl,
+            operationKind: 0,
+            targetSpot: this.registry.spot(spotId)?.ref,
+            kindData: control,
+            ...(onTerminalCompletion === undefined ? {} : { onTerminalCompletion })
+          } satisfies ServiceStatefulMailboxData,
+          applicationJob
+        });
+        if (!accepted) applicationJob.close();
+      } finally {
+        applicationJobOwner.close();
+      }
+      if (accepted) return;
+      this.mailboxDropHandler?.({ kind: 'actor_control', owner: spotId });
+      terminalAttempted = true;
+      await onTerminalCompletion?.();
+    })().catch(async () => {
+      this.mailboxDropHandler?.({ kind: 'actor_control', owner: spotId });
+      if (!terminalAttempted) {
+        terminalAttempted = true;
+        await onTerminalCompletion?.();
+      }
     });
-    if (!accepted) this.mailboxDropHandler?.({ kind: 'actor_control', owner: spotId });
   }
 
   private enqueueActorBindingControl(
+    ingress: RawServiceIngressRecord,
     binding: ServiceSessionBinding
   ): void {
     const actor = binding.actor;
     const header = Buffer.from([0x5a, 0x4d, 1, M6bServiceWireCommand.boundSessionBind, 0]);
+    const applicationJob = requireApplicationJobOwner(ingress).takeInitial('infrastructure');
     const accepted = this.raw.mailbox.tryEnqueue({
       owner: `actor:${actor.actorId}\0${actor.generation}`,
       domain: 'infrastructure',
@@ -3630,9 +3663,13 @@ export class ServiceStatefulRuntime {
           sessionNodeRid: binding.sessionOwnerNodeRid as never,
           sessionRid: binding.sessionRid as never
         }
-      } satisfies ServiceStatefulMailboxData
+      } satisfies ServiceStatefulMailboxData,
+      applicationJob
     });
-    if (!accepted) this.mailboxDropHandler?.({ kind: 'actor_binding', owner: actor.actorId });
+    if (!accepted) {
+      applicationJob.close();
+      this.mailboxDropHandler?.({ kind: 'actor_binding', owner: actor.actorId });
+    }
   }
 
   private replyPort(
@@ -3878,10 +3915,14 @@ export class ServiceStatefulRuntime {
   ): Promise<readonly Buffer[]> {
     return new Promise((resolve, reject) => {
       let settled = false;
-      const timer = setTimeout(() => {
+      const fail = (error: unknown) => {
         if (settled) return;
         settled = true;
-        reject(new Error('Local infrastructure request timed out.'));
+        clearTimeout(timer);
+        reject(error);
+      };
+      const timer = setTimeout(() => {
+        fail(new Error('Local infrastructure request timed out.'));
       }, timeoutMs);
       const finish = (parts: readonly Uint8Array[]) => {
         if (settled) return;
@@ -3889,47 +3930,55 @@ export class ServiceStatefulRuntime {
         clearTimeout(timer);
         resolve(parts.map(part => Buffer.from(part)));
       };
-      try {
-        const result = this.ingress({
-          command: header[3]!,
-          flags: header[4]!,
-          sourceRoutingId: this.nodeRid,
-          requestSequence,
-          reply: finish,
-          parts: [header]
-        });
-        if (result !== 'infrastructure') {
-          clearTimeout(timer);
-          settled = true;
-          reject(new ServiceWireProtocolError(
-            `Local infrastructure request was rejected as '${result ?? 'unsupported'}'.`
-          ));
+      void (async () => {
+        const applicationJobOwner = await this.raw.reserveLocalIngress();
+        try {
+          const result = await this.ingress({
+            command: header[3]!,
+            flags: header[4]!,
+            sourceRoutingId: this.nodeRid,
+            requestSequence,
+            reply: finish,
+            parts: [header],
+            applicationJobOwner
+          });
+          if (result !== 'infrastructure') {
+            fail(new ServiceWireProtocolError(
+              `Local infrastructure request was rejected as '${result ?? 'unsupported'}'.`
+            ));
+          }
+        } finally {
+          applicationJobOwner.close();
         }
-      } catch (error) {
-        clearTimeout(timer);
-        settled = true;
-        reject(error);
-      }
+      })().catch(fail);
     });
   }
 
-  private submitOneWay(targetNodeRid: string, parts: readonly Buffer[]): number {
+  private async submitOneWay(
+    targetNodeRid: string,
+    parts: readonly Buffer[]
+  ): Promise<number> {
     this.requireOpen();
     if (targetNodeRid === this.nodeRid) {
-      const result = this.ingress({
-        command: parts[0]![3]!,
-        flags: parts[0]![4]!,
-        sourceRoutingId: this.nodeRid,
-        sourceNodeGeneration: this.nodeGeneration,
-        parts
-      });
-      return result === 'application' || result === 'infrastructure'
-        ? SubmitResult.Ok
-        : SubmitResult.InvalidState;
+      const applicationJobOwner = await this.raw.reserveLocalIngress();
+      try {
+        const result = await this.ingress({
+          command: parts[0]![3]!,
+          flags: parts[0]![4]!,
+          sourceRoutingId: this.nodeRid,
+          sourceNodeGeneration: this.nodeGeneration,
+          parts,
+          applicationJobOwner
+        });
+        return result === 'application' || result === 'infrastructure'
+          ? SubmitResult.Ok
+          : SubmitResult.InvalidState;
+      } finally {
+        applicationJobOwner.close();
+      }
     }
-    if (this.raw.sendService(targetNodeRid, parts)) return SubmitResult.Ok;
-    return rawPeerRouteReady(this.raw, targetNodeRid) === true
-      ? SubmitResult.Backpressured
+    return await this.raw.sendService(targetNodeRid, parts)
+      ? SubmitResult.Ok
       : SubmitResult.NotConnected;
   }
 
@@ -3945,24 +3994,30 @@ export class ServiceStatefulRuntime {
   ): void {
     if (targetNodeRid === this.nodeRid) {
       const deadlineUnixMs = BigInt(Date.now() + Math.max(0, timeoutMs));
-      const localIngress: RawServiceIngressRecord = {
-        command: parts[0]![3]!,
-        flags: parts[0]![4]!,
-        sourceRoutingId: this.nodeRid,
-        requestSequence: pending.id,
-        parts
-      };
-      try {
-        this.submitLocalRequest(
-          localIngress,
-          pending,
-          operationKind,
-          actor,
-          deadlineUnixMs
-        );
-      } catch (error) {
-        this.operations.reply(pending.id, failure(error));
-      }
+      void (async () => {
+        const applicationJobOwner = await this.raw.reserveLocalIngress();
+        const localIngress: RawServiceIngressRecord = {
+          command: parts[0]![3]!,
+          flags: parts[0]![4]!,
+          sourceRoutingId: this.nodeRid,
+          requestSequence: pending.id,
+          parts,
+          applicationJobOwner
+        };
+        try {
+          this.submitLocalRequest(
+            localIngress,
+            pending,
+            operationKind,
+            actor,
+            deadlineUnixMs
+          );
+        } catch (error) {
+          this.operations.reply(pending.id, failure(error));
+        } finally {
+          applicationJobOwner.close();
+        }
+      })().catch(error => this.operations.reply(pending.id, failure(error)));
       return;
     }
     void this.raw.requestService(targetNodeRid, parts, timeoutMs).then(
@@ -4108,6 +4163,9 @@ export class ServiceStatefulRuntime {
     if (decoded.kind === 'actorJoin') {
       this.validateSpotFence(decoded.target);
       const previous = this.registry.actor(decoded.actor.actor.actorId);
+      const targetSpotKind = this.registry.spot(decoded.target.spot.spotId)?.kind;
+      let actorJoinReplyAccepted = false;
+      let completeOnJoinDispatchTerminal: (() => void) | undefined;
       const control: ActorControlPayload = {
         kind: 'actorControl',
         lifecycleKind: ActorLifecycleKind.Joined,
@@ -4134,7 +4192,9 @@ export class ServiceStatefulRuntime {
           kindData: control,
           isPending: () => this.operations.isPending(pending.id),
           ...(deadlineUnixMs === undefined ? {} : { deadlineUnixMs }),
+          onTerminalCompletion: () => completeOnJoinDispatchTerminal?.(),
           reply: (terminalResult, failureCode, replyPayload, tail) => {
+            if (actorJoinReplyAccepted) return false;
             const actorJoinTransferId = actorJoinTransferIdFromApplicationFrame(payloadFrame);
             const committedReplay = actorJoinTransferId !== undefined
               && this.hasCommittedActorJoin(actorJoinTransferId);
@@ -4143,27 +4203,47 @@ export class ServiceStatefulRuntime {
               ? {
                   ...tail,
                   membershipEpoch: this.registry.actor(decoded.actor.actor.actorId)?.membershipEpoch
-                    ?? tail.membershipEpoch
+                  ?? tail.membershipEpoch
                 }
               : tail;
-            const acceptedReply = localReply(terminalResult, failureCode, replyPayload, replyTail);
-            if (
-              acceptedReply
-              &&
-              !committedReplay
+            const acceptedJoin = !committedReplay
               && terminalResult === RequestResult.Ok
               && tail?.kind === 'actorJoin'
-              && tail.joinResult === 0
-            ) {
+              && tail.joinResult === 0;
+            if (acceptedJoin && this.operations.isPending(pending.id)) {
+              // Commit membership now, but keep the source operation behind
+              // target OnJoinedActor. Entry finishes on this record; User
+              // Spot lifecycle finishes on the Joined control below.
+              actorJoinReplyAccepted = true;
+              let completed = false;
+              const completeReply = (): void => {
+                if (completed) return;
+                completed = true;
+                localReply(terminalResult, failureCode, replyPayload, replyTail);
+              };
               this.commitJoinedActor(
                 decoded.actor.actor,
                 decoded.target.spot,
-                control.currentMembershipEpoch
+                control.currentMembershipEpoch,
+                targetSpotKind === 'user' ? completeReply : undefined
               );
               if (actorJoinTransferId !== undefined) {
                 this.rememberCommittedActorJoin(actorJoinTransferId);
               }
+              if (targetSpotKind === 'entry') {
+                completeOnJoinDispatchTerminal = completeReply;
+              } else if (targetSpotKind !== 'user') {
+                completeReply();
+              }
+              return true;
             }
+            const acceptedReply = localReply(
+              terminalResult,
+              failureCode,
+              replyPayload,
+              replyTail
+            );
+            if (acceptedReply) actorJoinReplyAccepted = true;
             return acceptedReply;
           }
         }
@@ -4469,7 +4549,7 @@ export class ServiceStatefulRuntime {
       return undefined;
     }
     if (state.expiresAtMs !== undefined && state.expiresAtMs <= Date.now()) {
-      this.removeSpotMessageFollow(state);
+      this.failExpiredSpotMessageFollow(state);
       return undefined;
     }
     const bytes = ingress.parts.reduce((sum, part) => sum + part.byteLength, 0);
@@ -4484,6 +4564,28 @@ export class ServiceStatefulRuntime {
     return 'application';
   }
 
+  private restoreSpotMessageFollowRecord(
+    retained: ServiceSpotMessageFollowRecord
+  ): RawServicePumpResult {
+    const { ingress, wire } = retained;
+    this.validateDirectSpotFence(wire.target);
+    return this.enqueueApplicationFrame(
+      ingress,
+      `spot:${wire.target.spot.spotId}`,
+      ingress.parts[1]!,
+      {
+        receiveKind: wire.kind === 'spotSend' ? ReceiveKind.SpotSend : ReceiveKind.SpotRequest,
+        operationKind: wire.kind === 'spotRequest' ? OperationKind.SpotRequest : 0,
+        ...(wire.correlation === undefined ? {} : { correlation: wire.correlation }),
+        sourceSpotId: wire.sourceSpotId,
+        targetSpot: wire.target.spot,
+        ...(wire.kind === 'spotRequest'
+          ? { reply: this.replyPort(ingress, wire.correlation, 'spotRequest') }
+          : {})
+      }
+    );
+  }
+
   private async drainSpotMessageFollow(state: ServiceSpotMessageFollowState): Promise<void> {
     if (state.draining || state.target === undefined) return;
     state.draining = true;
@@ -4494,63 +4596,57 @@ export class ServiceStatefulRuntime {
           return;
         }
         const current = this.peekSpotMessageFollow(state)!;
-        const parts = [
-          encodeSpotHeader(
-            current.wire.kind,
-            current.wire.sourceSpotId,
-            state.target,
-            current.wire.correlation!
-          ),
-          current.ingress.parts[1]!
-        ];
-        if (current.wire.kind === 'spotSend') {
-          if (!this.raw.sendService(state.target.targetNodeRid, parts)) {
-            this.scheduleSpotMessageFollowRetry(state);
-            return;
+        try {
+          const parts = [
+            encodeSpotHeader(
+              current.wire.kind,
+              current.wire.sourceSpotId,
+              state.target,
+              current.wire.correlation!
+            ),
+            current.ingress.parts[1]!
+          ];
+          if (current.wire.kind === 'spotSend') {
+            if (!await this.raw.sendService(state.target.targetNodeRid, parts)) continue;
+          } else {
+            try {
+              const remainingMs = Math.max(
+                1,
+                Math.min(30_000, state.expiresAtMs - Date.now())
+              );
+              const reply = await this.raw.requestService(
+                state.target.targetNodeRid,
+                parts,
+                remainingMs
+              );
+              this.raw.replyService(current.ingress, reply);
+            } catch (error) {
+              const result = failure(error);
+              this.replyWire(
+                current.ingress,
+                current.wire.correlation!,
+                result.terminalResult,
+                result.failureCode
+              );
+            }
           }
-        } else {
-          try {
-            const remainingMs = Math.max(
-              1,
-              Math.min(30_000, state.expiresAtMs - Date.now())
-            );
-            const reply = await this.raw.requestService(
-              state.target.targetNodeRid,
-              parts,
-              remainingMs
-            );
-            this.raw.replyService(current.ingress, reply);
-          } catch (error) {
-            const result = failure(error);
-            this.replyWire(
-              current.ingress,
-              current.wire.correlation!,
-              result.terminalResult,
-              result.failureCode
-            );
+          await this.notifySpotMessageFollowSource(state, current);
+        } finally {
+          if (this.peekSpotMessageFollow(state) === current) {
+            this.takeSpotMessageFollow(state);
+            state.queuedBytes -= current.bytes;
           }
         }
-        this.notifySpotMessageFollowSource(state, current);
-        this.takeSpotMessageFollow(state);
-        state.queuedBytes -= current.bytes;
       }
     } finally {
       state.draining = false;
     }
   }
 
-  private scheduleSpotMessageFollowRetry(state: ServiceSpotMessageFollowState): void {
-    if (state.retryTimer !== undefined) return;
-    state.retryTimer = setTimeout(() => {
-      state.retryTimer = undefined;
-      void this.drainSpotMessageFollow(state);
-    }, 10);
-  }
-
-  private notifySpotMessageFollowSource(
+  private async notifySpotMessageFollowSource(
     state: ServiceSpotMessageFollowState,
     current: ServiceSpotMessageFollowRecord
-  ): void {
+  ): Promise<void> {
     const target = state.target;
     const suppressionFence = state.suppressionFence;
     if (target === undefined || suppressionFence === undefined) return;
@@ -4560,7 +4656,7 @@ export class ServiceStatefulRuntime {
       && current.ingress.requestSequence !== 0n
       ? current.ingress.requestSequence
       : this.nextMessageFollowOperation++;
-    const accepted = this.raw.sendService(current.ingress.sourceRoutingId, [encodeMessageFollowHeader({
+    const accepted = await this.raw.sendService(current.ingress.sourceRoutingId, [encodeMessageFollowHeader({
       source: messageFollowSpotRoute(state.source),
       target: messageFollowSpotRoute(target),
       hopCount: 1,
@@ -4581,19 +4677,20 @@ export class ServiceStatefulRuntime {
 
   private failExpiredSpotMessageFollow(state: ServiceSpotMessageFollowState): void {
     this.removeSpotMessageFollow(state);
-    for (let index = state.queuedHead; index < state.queued.length; index += 1) {
-      const current = state.queued[index];
-      if (current === undefined) continue;
-      if (current.wire.kind !== 'spotRequest') continue;
-      const result = failure(
-        new ServiceStaleGenerationError('spot', current.wire.target.spot.spotId)
-      );
-      this.replyWire(
-        current.ingress,
-        current.wire.correlation!,
-        result.terminalResult,
-        result.failureCode
-      );
+    while (state.queuedCount > 0) {
+      const current = this.peekSpotMessageFollow(state)!;
+      if (current.wire.kind === 'spotRequest') {
+        const result = failure(
+          new ServiceStaleGenerationError('spot', current.wire.target.spot.spotId)
+        );
+        this.replyWire(
+          current.ingress,
+          current.wire.correlation!,
+          result.terminalResult,
+          result.failureCode
+        );
+      }
+      this.takeSpotMessageFollow(state);
     }
   }
 
@@ -4608,8 +4705,6 @@ export class ServiceStatefulRuntime {
     if (this.spotMessageFollow.get(state.seal.key) === state) {
       this.spotMessageFollow.delete(state.seal.key);
     }
-    if (state.retryTimer !== undefined) clearTimeout(state.retryTimer);
-    state.retryTimer = undefined;
     if (state.suppressionFence !== undefined) {
       this.spotMessageFollowSuppression.expireRoute(state.suppressionFence);
     }
@@ -4627,6 +4722,7 @@ export class ServiceStatefulRuntime {
   private takeSpotMessageFollow(state: ServiceSpotMessageFollowState): void {
     const current = this.peekSpotMessageFollow(state);
     if (current === undefined) return;
+    current.ingress.applicationJobOwner?.close();
     state.queued[state.queuedHead] = undefined;
     state.queuedHead += 1;
     state.queuedCount -= 1;
@@ -4779,7 +4875,12 @@ export class ServiceStatefulRuntime {
     return this.raw.topology.peer(nodeRid)?.descriptor.lifecycleGeneration;
   }
 
-  private commitJoinedActor(actor: ServiceActorRef, spot: ServiceSpotRef, membershipEpoch: bigint): void {
+  private commitJoinedActor(
+    actor: ServiceActorRef,
+    spot: ServiceSpotRef,
+    membershipEpoch: bigint,
+    onTargetLifecycleCompleted?: () => void | Promise<void>
+  ): void {
     const current = this.registry.actor(actor.actorId);
     const previousActor = current?.ref ?? actor;
     const previousSpot = current?.spot;
@@ -4815,7 +4916,7 @@ export class ServiceStatefulRuntime {
         previousMembershipEpoch,
         currentMembershipEpoch: committed.membershipEpoch,
         resultCode: 0
-      });
+      }, onTargetLifecycleCompleted);
     }
     if (
       actor.nodeRid === this.nodeRid
@@ -5079,7 +5180,17 @@ function freezeDirectSpotRoute(
 function retainIngress(record: RawServiceIngressRecord): RawServiceIngressRecord {
   // Raw binding ingress already owns stable Buffer values. Relocation follow
   // queues retain the same record until the route decision completes.
-  return record;
+  const applicationJobOwner = requireApplicationJobOwner(record).retain();
+  return { ...record, applicationJobOwner };
+}
+
+function requireApplicationJobOwner(
+  record: RawServiceIngressRecord
+): NonNullable<RawServiceIngressRecord['applicationJobOwner']> {
+  if (record.applicationJobOwner === undefined) {
+    throw new Error('Service ingress requires the host Application Job Queue owner.');
+  }
+  return record.applicationJobOwner;
 }
 
 function statefulCorrelation(record: ServiceStatefulWireRecord): bigint | undefined {
@@ -5330,17 +5441,6 @@ function actorJoinMetadataFromMultipartPayload(
       : undefined,
     transferId: typeof transferId === 'string' ? transferId : undefined
   };
-}
-
-function rawPeerRouteReady(
-  raw: RawServiceMeshRuntime,
-  targetNodeRid: string
-): boolean | undefined {
-  const candidate = raw as unknown as {
-    isPeerRouteReady?: (nodeRoutingId: string) => boolean;
-  };
-  if (typeof candidate.isPeerRouteReady !== 'function') return undefined;
-  return candidate.isPeerRouteReady.call(raw, targetNodeRid);
 }
 
 function instanceOperationParts(

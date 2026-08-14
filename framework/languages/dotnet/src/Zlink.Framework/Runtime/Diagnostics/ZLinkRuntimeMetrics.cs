@@ -139,37 +139,68 @@ internal static class ZLinkRuntimeMetrics
         Meter.CreateCounter<long>("zlink.observability.events.overflow", "{event}");
 
     private static readonly ConcurrentDictionary<object, Func<string>> HostStateProviders = new();
-    private static readonly ObservableGauge<long> HostState =
-        Meter.CreateObservableGauge("zlink.host.state", ObserveHostStates, "{runtime}");
     private static readonly ConcurrentDictionary<
         object,
-        Func<ZLinkInboundDispatchStatus>> HostInboundDispatchProviders = new();
-    private static readonly ObservableGauge<long> HostInboundApplicationHwm =
+        Func<ZLinkHostCapacityStatus?>> HostCapacityProviders = new();
+    private static readonly ObservableGauge<long> HostState =
+        Meter.CreateObservableGauge("zlink.host.state", ObserveHostStates, "{runtime}");
+    private static readonly ObservableGauge<long> HostCoreHwmEffectiveBudget =
         Meter.CreateObservableGauge(
-            "zlink.host.inbound.application_hwm",
-            () => ObserveHostInbound(static status => status.ApplicationHwmBytes),
+            "zlink.host.core_hwm.effective_budget",
+            () => ObserveHostCapacity(
+                static capacity => capacity.CoreHwm.EffectiveBudgetBytes),
             "By");
-    private static readonly ObservableGauge<long> HostInboundPendingPayload =
+    private static readonly ObservableGauge<long> HostCoreHwmApplied =
         Meter.CreateObservableGauge(
-            "zlink.host.inbound.pending_payload",
-            ObserveHostInboundPendingPayload,
+            "zlink.host.core_hwm.applied",
+            () => ObserveHostCapacity(
+                static capacity => capacity.CoreHwm.TotalAppliedHwmBytes),
             "By");
-    private static readonly ObservableGauge<long> HostInboundReceivePaused =
+    private static readonly ObservableGauge<long> HostCoreHwmAccounted =
         Meter.CreateObservableGauge(
-            "zlink.host.inbound.receive_paused",
-            () => ObserveHostInbound(
-                static status => status.ApplicationReceivePaused ? 1UL : 0UL),
-            "{state}");
-    private static readonly ObservableGauge<long> HostCompletionPendingSends =
+            "zlink.host.core_hwm.accounted",
+            ObserveHostCoreHwmAccounted,
+            "By");
+    private static readonly ObservableGauge<long> HostCoreHwmCompletionAccounted =
         Meter.CreateObservableGauge(
-            "zlink.host.completion.pending_sends",
-            () => ObserveHostInbound(static status => status.PendingCompletionSends),
-            "{request}");
-    private static readonly ObservableGauge<long> HostCompletionSendLimit =
+            "zlink.host.core_hwm.completion_accounted",
+            ObserveHostCoreHwmCompletionAccounted,
+            "By");
+    private static readonly ObservableGauge<long> HostCoreHwmBlockedRatio =
         Meter.CreateObservableGauge(
-            "zlink.host.completion.send_limit",
-            () => ObserveHostInbound(static status => status.CompletionSendLimit),
-            "{request}");
+            "zlink.host.core_hwm.blocked_ratio",
+            () => ObserveHostCapacity(
+                static capacity => capacity.CoreHwm.BlockedRatioPpm),
+            "{ppm}");
+    private static readonly ObservableGauge<long> HostApplicationJobQueueLimit =
+        Meter.CreateObservableGauge(
+            "zlink.host.application_job_queue.limit",
+            () => ObserveHostCapacity(static capacity =>
+                capacity.ApplicationJobQueue.EffectiveMaxQueuedApplicationJobs),
+            "{job}");
+    private static readonly ObservableGauge<long> HostApplicationJobQueueJobs =
+        Meter.CreateObservableGauge(
+            "zlink.host.application_job_queue.jobs",
+            ObserveHostApplicationJobQueueJobs,
+            "{job}");
+    private static readonly ObservableGauge<long> HostApplicationJobQueueWaiters =
+        Meter.CreateObservableGauge(
+            "zlink.host.application_job_queue.capacity_waiters",
+            () => ObserveHostCapacity(static capacity =>
+                capacity.ApplicationJobQueue.CapacityWaiters),
+            "{waiter}");
+    private static readonly ObservableCounter<long> HostApplicationJobQueueWaits =
+        Meter.CreateObservableCounter(
+            "zlink.host.application_job_queue.capacity_waits",
+            () => ObserveHostCapacity(static capacity =>
+                capacity.ApplicationJobQueue.CapacityWaitCount),
+            "{wait}");
+    private static readonly ObservableCounter<double>
+        HostApplicationJobQueueWaitDuration =
+            Meter.CreateObservableCounter(
+                "zlink.host.application_job_queue.capacity_wait_duration",
+                ObserveHostApplicationJobQueueWaitDuration,
+                "s");
     private static readonly Histogram<double> HostRelocationDuration =
         Meter.CreateHistogram<double>("zlink.host.relocation.duration", "s");
     private static readonly Counter<long> HostRelocationBlocked =
@@ -339,14 +370,14 @@ internal static class ZLinkRuntimeMetrics
         return new ProviderRegistration(() => HostStateProviders.TryRemove(owner, out _));
     }
 
-    public static IDisposable RegisterHostInboundDispatch(
-        Func<ZLinkInboundDispatchStatus> snapshot)
+    public static IDisposable RegisterHostCapacity(
+        Func<ZLinkHostCapacityStatus?> snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         var owner = new object();
-        HostInboundDispatchProviders[owner] = snapshot;
+        HostCapacityProviders[owner] = snapshot;
         return new ProviderRegistration(
-            () => HostInboundDispatchProviders.TryRemove(owner, out _));
+            () => HostCapacityProviders.TryRemove(owner, out _));
     }
 
     public static void RecordLocationStoreError(string operation) =>
@@ -586,40 +617,85 @@ internal static class ZLinkRuntimeMetrics
         }
     }
 
-    private static IEnumerable<Measurement<long>> ObserveHostInbound(
-        Func<ZLinkInboundDispatchStatus, ulong> select)
+    private static IEnumerable<Measurement<long>> ObserveHostCapacity(
+        Func<ZLinkHostCapacityStatus, ulong> select)
     {
-        foreach (var status in HostInboundDispatchSnapshots())
-            yield return new Measurement<long>(ToMetricValue(select(status)));
+        foreach (var capacity in HostCapacitySnapshots())
+            yield return new Measurement<long>(ToMetricValue(select(capacity)));
     }
 
-    private static IEnumerable<Measurement<long>> ObserveHostInboundPendingPayload()
+    private static IEnumerable<Measurement<long>> ObserveHostCoreHwmAccounted()
     {
-        foreach (var status in HostInboundDispatchSnapshots())
+        foreach (var capacity in HostCapacitySnapshots())
         {
             yield return new Measurement<long>(
-                ToMetricValue(status.QueuedPayloadBytes),
-                new KeyValuePair<string, object?>("state", "queued"));
+                ToMetricValue(capacity.CoreHwm.CurrentAccountedBytes),
+                new KeyValuePair<string, object?>("state", "current"));
             yield return new Measurement<long>(
-                ToMetricValue(status.ActivePayloadBytes),
-                new KeyValuePair<string, object?>("state", "active"));
+                ToMetricValue(capacity.CoreHwm.PeakAccountedBytes),
+                new KeyValuePair<string, object?>("state", "peak"));
         }
     }
 
-    private static IEnumerable<ZLinkInboundDispatchStatus> HostInboundDispatchSnapshots()
+    private static IEnumerable<Measurement<long>>
+        ObserveHostCoreHwmCompletionAccounted()
     {
-        foreach (var provider in HostInboundDispatchProviders.Values)
+        foreach (var capacity in HostCapacitySnapshots())
         {
-            ZLinkInboundDispatchStatus status;
+            yield return new Measurement<long>(
+                ToMetricValue(capacity.CoreHwm.CompletionCurrentAccountedBytes),
+                new KeyValuePair<string, object?>("state", "current"));
+            yield return new Measurement<long>(
+                ToMetricValue(capacity.CoreHwm.CompletionPeakAccountedBytes),
+                new KeyValuePair<string, object?>("state", "peak"));
+        }
+    }
+
+    private static IEnumerable<Measurement<long>>
+        ObserveHostApplicationJobQueueJobs()
+    {
+        foreach (var capacity in HostCapacitySnapshots())
+        {
+            var queue = capacity.ApplicationJobQueue;
+            yield return new Measurement<long>(
+                ToMetricValue(queue.ReservedSupplyPermits),
+                new KeyValuePair<string, object?>("state", "reserved"));
+            yield return new Measurement<long>(
+                ToMetricValue(queue.QueuedApplicationJobs),
+                new KeyValuePair<string, object?>("state", "queued"));
+            yield return new Measurement<long>(
+                ToMetricValue(queue.PermitsInUse),
+                new KeyValuePair<string, object?>("state", "in_use"));
+            yield return new Measurement<long>(
+                ToMetricValue(queue.PeakPermitsInUse),
+                new KeyValuePair<string, object?>("state", "peak"));
+        }
+    }
+
+    private static IEnumerable<Measurement<double>>
+        ObserveHostApplicationJobQueueWaitDuration()
+    {
+        foreach (var capacity in HostCapacitySnapshots())
+            yield return new Measurement<double>(Math.Max(
+                0d,
+                capacity.ApplicationJobQueue.CapacityWaitDuration.TotalSeconds));
+    }
+
+    private static IEnumerable<ZLinkHostCapacityStatus> HostCapacitySnapshots()
+    {
+        foreach (var provider in HostCapacityProviders.Values)
+        {
+            ZLinkHostCapacityStatus? snapshot;
             try
             {
-                status = provider();
+                snapshot = provider();
             }
             catch
             {
                 continue;
             }
-            yield return status;
+            if (snapshot is { } capacity)
+                yield return capacity;
         }
     }
 

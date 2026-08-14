@@ -1,7 +1,7 @@
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendSendFlags } from '../backend/contracts';
-import { ZLinkConfigurationException } from '../configuration';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
+import { awaitWithAbort } from '../abort';
 import {
   closeMessages,
   decodeChannelReply,
@@ -20,8 +20,9 @@ export class ZLinkRouterSocketSpotRouteTransport {
   ): Promise<void> {
     const router = this.sockets.routeRouter(target.routerChannelId);
     try {
-      await this.sockets.requireSubmitter(router).submitCommand(
-        () => router.sendToSpot(target.targetNodeRid, target.spotId, parts, flags),
+      void flags;
+      await awaitWithAbort(
+        router.sendToSpot(target.targetNodeRid, target.spotId, parts),
         signal
       );
     } finally {
@@ -29,7 +30,7 @@ export class ZLinkRouterSocketSpotRouteTransport {
     }
   }
 
-  request<TReply>(
+  async request<TReply>(
     target: ZLinkSpotRouteTarget,
     parts: readonly Message[],
     codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
@@ -38,81 +39,40 @@ export class ZLinkRouterSocketSpotRouteTransport {
     signal?: AbortSignal
   ): Promise<TReply> {
     const router = this.sockets.routeRouter(target.routerChannelId);
-    return this.sockets.requireSubmitter(router).submitRequest(
-      (resolve, reject) => {
-        const submitted = router.requestToSpot(
-          target.targetNodeRid,
-          target.spotId,
-          parts,
-          (result, replyParts) => {
-            try {
-              if (result !== 0) {
-                reject(this.requestFailure(target.routerChannelId, result));
-                return;
-              }
-              resolve(decodeChannelReply<TReply>(replyParts as readonly Message[], codecs));
-            } catch (error) {
-              reject(error);
-            } finally {
-              closeMessages(replyParts as readonly Message[]);
-              closeMessages(parts);
-            }
-          },
-          flags,
-          timeoutMs
-        );
-        if (!submitted) {
-          closeMessages(parts);
-          reject(this.notReady(target.routerChannelId));
-        }
-        return submitted;
-      },
-      signal,
+    void flags;
+    const operation = router.requestToSpot(
+      target.targetNodeRid,
+      target.spotId,
+      parts,
       timeoutMs
     );
+    const replyParts = await awaitWithAbort(operation, signal, () => {
+      void operation.then(closeMessages, () => undefined);
+    });
+    try {
+      return decodeChannelReply<TReply>(replyParts, codecs);
+    } finally {
+      closeMessages(replyParts);
+      closeMessages(parts);
+    }
   }
 
-  requestRaw(
+  async requestRaw(
     target: ZLinkSpotRouteTarget,
     request: Message,
     timeoutMs: number | undefined,
     signal?: AbortSignal
   ): Promise<readonly Message[]> {
     const router = this.sockets.routeRouter(target.routerChannelId);
-    return this.sockets.requireSubmitter(router).submitRequest(
-      (resolve, reject) => {
-        const submitted = router.requestToSpot(
-          target.targetNodeRid,
-          target.spotId,
-          [request],
-          (result, replyParts) => {
-            if (result !== 0) {
-              closeMessages(replyParts as readonly Message[]);
-              reject(this.requestFailure(target.routerChannelId, result));
-              return;
-            }
-            resolve(replyParts as readonly Message[]);
-          },
-          0,
-          timeoutMs
-        );
-        if (!submitted) reject(this.notReady(target.routerChannelId));
-        return submitted;
-      },
-      signal,
+    const operation = router.requestToSpot(
+      target.targetNodeRid,
+      target.spotId,
+      [request],
       timeoutMs
     );
+    return await awaitWithAbort(operation, signal, () => {
+      void operation.then(closeMessages, () => undefined);
+    });
   }
 
-  private requestFailure(routerChannelId: string, result: number): ZLinkConfigurationException {
-    return new ZLinkConfigurationException(
-      `Route channel '${routerChannelId}' spot request failed with result ${result}.`
-    );
-  }
-
-  private notReady(routerChannelId: string): ZLinkConfigurationException {
-    return new ZLinkConfigurationException(
-      `Route channel '${routerChannelId}' is not ready for SPOT request.`
-    );
-  }
 }
