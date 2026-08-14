@@ -39,6 +39,29 @@ int socket_send_ready_handler_internal (void *s_,
 
     return handle.socket->socket_set_send_ready_handler_with_userdata (handler_, NULL, userdata_);
 }
+
+int socket_routed_send_ready_handler_internal (
+  void *s_, zlink_routed_send_ready_handler_fn handler_, void *userdata_)
+{
+    socket_handle_t handle = as_socket_handle (s_);
+    if (!handle.socket)
+        return -1;
+
+    if (!handler_) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    const int type = socket_type (handle);
+    if (type != ZLINK_CORE_SOCKET_DEALER && type != ZLINK_CORE_SOCKET_ROUTER
+        && type != ZLINK_CORE_SOCKET_STREAM) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    return handle.socket->socket_set_routed_send_ready_handler_with_userdata (
+      handler_, userdata_);
+}
 }
 
 zlink_handler_result_t
@@ -98,6 +121,23 @@ zlink_send_ready_handler (void *s_, zlink_send_ready_handler_fn handler_, void *
     if (target.kind == zlink::option_target_socket)
         return zlink::handler_result_internal::from_rc (
           socket_send_ready_handler_internal (s_, handler_, userdata_));
+
+    errno = EFAULT;
+    return ZLINK_HANDLER_INVALID_HANDLE;
+}
+
+zlink_handler_result_t zlink_routed_send_ready_handler (
+  void *s_, zlink_routed_send_ready_handler_fn handler_, void *userdata_)
+{
+    if (!handler_) {
+        errno = EINVAL;
+        return ZLINK_HANDLER_INVALID_ARGUMENT;
+    }
+
+    const zlink::option_target_t target = zlink::resolve_option_target (s_);
+    if (target.kind == zlink::option_target_socket)
+        return zlink::handler_result_internal::from_rc (
+          socket_routed_send_ready_handler_internal (s_, handler_, userdata_));
 
     errno = EFAULT;
     return ZLINK_HANDLER_INVALID_HANDLE;

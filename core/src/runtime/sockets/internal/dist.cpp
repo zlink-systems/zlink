@@ -256,8 +256,16 @@ zlink::pipe_message_admission_t zlink::dist_t::check_hwm (const msg_t *msg_)
         if (current == pipe_message_admission_too_large
             || current == pipe_message_admission_invalid)
             result = current;
+        else if (current == pipe_message_admission_hwm_full
+                 && result != pipe_message_admission_too_large
+                 && result != pipe_message_admission_invalid)
+            result = current;
+        else if ((result == pipe_message_admission_ready
+                  || result == pipe_message_admission_inactive)
+                 && current == pipe_message_admission_transport_wait)
+            result = current;
         else if (result == pipe_message_admission_ready
-                 && current != pipe_message_admission_ready)
+                 && current == pipe_message_admission_inactive)
             result = current;
     }
 

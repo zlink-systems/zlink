@@ -21,47 +21,6 @@ router_recv_metadata_tls_t &router_recv_metadata_tls ()
 
 namespace
 {
-void close_control_envelope_parts (zlink_msg_t *parts_)
-{
-    if (!parts_)
-        return;
-    for (size_t i = 0; i < zlink::request_reply::control_part_count; ++i)
-        zlink_msg_close (&parts_[i]);
-}
-
-void dispatch_completion_control (
-  socket_request_reply_state_t *state_,
-  const zlink_routing_id_t *source_rid_,
-  zlink_msg_t *parts_,
-  size_t part_count_,
-  const zlink::request_reply::parsed_envelope_t &envelope_)
-{
-    zlink_completion_control_handler_fn handler = NULL;
-    void *userdata = NULL;
-    {
-        std::lock_guard<std::mutex> lock (state_->mutex);
-        handler = state_->completion_control_handler;
-        userdata = state_->completion_control_userdata;
-    }
-
-    if (!handler) {
-        zlink::request_reply::close_request_reply_parts (parts_, part_count_);
-        return;
-    }
-
-    zlink::socket_callback_scope_t callback_scope (state_->socket);
-    if (!callback_scope.acquired ()) {
-        zlink::request_reply::close_request_reply_parts (parts_, part_count_);
-        return;
-    }
-
-    // The callback owns only payload frames. Core retains and closes the four
-    // envelope frames after the callback returns.
-    handler (source_rid_, envelope_.payload_parts,
-             envelope_.payload_part_count, userdata);
-    close_control_envelope_parts (parts_);
-}
-
 void complete_reply_from_transport (
   socket_request_reply_state_t *state_,
   const zlink_routing_id_t *source_rid_,
@@ -74,12 +33,6 @@ void complete_reply_from_transport (
     if (!state_ || !zlink::request_reply::parse_envelope (parts_, part_count_, &envelope)
         || envelope.message_type == zlink::request_reply::request_type) {
         zlink::request_reply::close_request_reply_parts (parts_, part_count_);
-        return;
-    }
-
-    if (envelope.message_type == zlink::request_reply::completion_control_type) {
-        dispatch_completion_control (
-          state_, source_rid_, parts_, part_count_, envelope);
         return;
     }
 
@@ -272,7 +225,8 @@ int drain_close_request_reply_socket (socket_handle_t handle_)
         state->pending_sequences.clear ();
         state->dealer_reply_targets.clear ();
         state->router_reply_targets.clear ();
-        state->reply_target_slots = 0;
+        state->reply_target_slots =
+          state->reply_target_reservations + state->reply_target_checkouts;
     }
 
     for (size_t i = 0; i < pending.size (); ++i) {
@@ -308,7 +262,8 @@ void cleanup_request_reply_socket (socket_handle_t handle_)
             state->pending_sequences.clear ();
             state->dealer_reply_targets.clear ();
             state->router_reply_targets.clear ();
-            state->reply_target_slots = 0;
+            state->reply_target_slots =
+              state->reply_target_reservations + state->reply_target_checkouts;
             zlink::request_completion::close (&state->completion);
         }
     }

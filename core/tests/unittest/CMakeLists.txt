@@ -19,6 +19,7 @@ set(unittests
     unittest_request_completion_queue
     unittest_request_timeout_scheduler
     unittest_result_enum_mapping
+    unittest_auto_hwm_policy
     unittest_control_runtime)
 
 # add location of platform.hpp for Windows builds

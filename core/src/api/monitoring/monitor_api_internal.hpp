@@ -24,6 +24,22 @@ struct socket_monitor_internal_event_t
     uint32_t internal_flags;
 };
 
+inline uint64_t socket_monitor_event_accounted_bytes ()
+{
+    return static_cast<uint64_t> (sizeof (socket_monitor_internal_event_t))
+           + static_cast<uint64_t> (sizeof (zlink_msg_t));
+}
+
+inline bool socket_monitor_default_hwm_bytes (uint64_t *out_)
+{
+    const uint64_t event_charge = socket_monitor_event_accounted_bytes ();
+    const uint64_t default_event_depth = 4096;
+    if (!out_ || event_charge > UINT64_MAX / default_event_depth)
+        return false;
+    *out_ = default_event_depth * event_charge;
+    return true;
+}
+
 struct monitor_handler_state_t
 {
     monitor_handler_state_t (zlink::socket_base_t *socket_) :

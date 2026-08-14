@@ -102,6 +102,74 @@ bool zlink::socket_dispatch_bridge_t::send_recovery_ready () const
     return send_ready_recovery_ready.load (std::memory_order_acquire);
 }
 
+bool zlink::socket_dispatch_bridge_t::routed_send_ready_handler_active () const
+{
+    scoped_lock_t lock (routed_send_ready_sync);
+    return routed_send_ready_handler != NULL;
+}
+
+void zlink::socket_dispatch_bridge_t::store_routed_send_ready_handler (
+  zlink_routed_send_ready_handler_fn handler_, void *userdata_)
+{
+    scoped_lock_t lock (routed_send_ready_sync);
+    routed_send_ready_handler = handler_;
+    routed_send_ready_userdata = userdata_;
+}
+
+bool zlink::socket_dispatch_bridge_t::load_routed_send_ready_handler (
+  zlink_routed_send_ready_handler_fn *handler_out_, void **userdata_out_) const
+{
+    if (!handler_out_ || !userdata_out_)
+        return false;
+
+    scoped_lock_t lock (routed_send_ready_sync);
+    *handler_out_ = routed_send_ready_handler;
+    *userdata_out_ = routed_send_ready_userdata;
+    return routed_send_ready_handler != NULL;
+}
+
+bool zlink::socket_dispatch_bridge_t::enqueue_routed_send_ready (
+  const routed_send_target_key_t &key_,
+  zlink_routed_send_ready_state_t state_,
+  int terminal_errno_)
+{
+    scoped_lock_t lock (routed_send_ready_sync);
+    if (!routed_send_ready_handler || key_.peer_rid.empty ())
+        return false;
+
+    if (state_ == ZLINK_ROUTED_SEND_TERMINAL) {
+        if (!routed_send_ready_terminal.insert (key_).second)
+            return false;
+        routed_send_ready_pending[key_] =
+          routed_send_ready_record_t (key_, state_, terminal_errno_);
+        return true;
+    }
+
+    if (routed_send_ready_terminal.count (key_) != 0
+        || routed_send_ready_pending.count (key_) != 0)
+        return false;
+
+    routed_send_ready_pending.insert (
+      std::make_pair (key_, routed_send_ready_record_t (key_, state_, 0)));
+    return true;
+}
+
+bool zlink::socket_dispatch_bridge_t::take_routed_send_ready (
+  routed_send_ready_record_t *out_)
+{
+    if (!out_)
+        return false;
+
+    scoped_lock_t lock (routed_send_ready_sync);
+    if (routed_send_ready_pending.empty ())
+        return false;
+    std::map<routed_send_target_key_t, routed_send_ready_record_t>::iterator it =
+      routed_send_ready_pending.begin ();
+    *out_ = it->second;
+    routed_send_ready_pending.erase (it);
+    return true;
+}
+
 zlink::socket_send_ready_dispatch_scope_t::socket_send_ready_dispatch_scope_t (
   socket_base_t *socket_) :
     _previous (send_ready_dispatch_socket_tls ())

@@ -32,6 +32,9 @@ struct command_t
         bind,
         activate_read,
         activate_write,
+        retained_credit,
+        routed_send_ready,
+        request_completion,
         hiccup,
         pipe_term,
         pipe_term_ack,
@@ -89,9 +92,32 @@ struct command_t
         //  Sent by pipe reader to return cumulative byte and message credit.
         struct
         {
+            uint64_t generation;
             uint64_t msgs_read;
             uint64_t bytes_read;
         } activate_write;
+
+        //  Returns one retained receive frame's exact origin credit on the
+        //  reader pipe's owning thread.
+        struct
+        {
+            uint64_t generation;
+            uint64_t msgs_read;
+            uint64_t bytes_read;
+        } retained_credit;
+
+        //  Schedules delivery of coalesced routed-target readiness records on
+        //  the socket's async mailbox owner.
+        struct
+        {
+        } routed_send_ready;
+
+        //  Schedules completion-pipe/control processing on the socket mailbox
+        //  owner. The command carries no payload; the socket-owned queues are
+        //  the authoritative state.
+        struct
+        {
+        } request_completion;
 
         //  Sent by pipe reader to writer after creating a new inpipe.
         //  The parameter is actually of type pipe_t::upipe_t, however,
@@ -99,6 +125,7 @@ struct command_t
         struct
         {
             void *pipe;
+            uint64_t generation;
         } hiccup;
 
         //  Sent by pipe reader to pipe writer to ask it to terminate

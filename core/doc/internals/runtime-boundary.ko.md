@@ -67,8 +67,8 @@ request를 완료할 수 있다.
 
 각 lane의 payload는 directional network pipe에만 보관한다. 수신한 application payload를
 숨은 PAIR queue로 옮기지 않으며 reply payload를 completion deque로 복사하지 않는다.
-남은 completion control queue에는 payload가 없는 terminal 결과의 callback metadata만
-보관한다.
+남은 terminal callback metadata queue에는 payload가 없는 timeout·disconnect·shutdown
+결과만 보관한다. 이 queue는 transport lane이나 wire record가 아니다.
 
 ## Transport liveness 경계
 

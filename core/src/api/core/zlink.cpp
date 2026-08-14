@@ -153,7 +153,7 @@ zlink_close_result_t zlink_close (void *s_)
 
     // Reserve close before unregistering handlers, stopping the socket or
     // clearing multipart/request state. This atomically rejects an active
-    // completion-control callback and prevents a new callback from starting.
+    // callback and prevents a new callback from starting.
     const int close_admission = handle.socket->begin_close_handoff ();
     if (close_admission < 0)
         return zlink::close_result_internal::from_rc (-1);
@@ -165,7 +165,8 @@ zlink_close_result_t zlink_close (void *s_)
         raw_monitor_source = raw_monitor_snapshot_subject (monitor_state);
         if (raw_monitor_source && raw_monitor_source != handle.socket) {
             monitor_state->snapshot_subject.store (NULL, std::memory_order_release);
-            (void) raw_monitor_source->monitor (NULL, 0, 3, ZLINK_CORE_SOCKET_PAIR);
+            (void) raw_monitor_source->monitor (NULL, 0, 3,
+                                                ZLINK_CORE_SOCKET_PAIR, 0);
         } else {
             clear_raw_monitor_snapshot_subjects (handle.socket);
         }
@@ -180,8 +181,15 @@ zlink_close_result_t zlink_close (void *s_)
         }
 
         handle.socket->stop ();
-        stream_api_lock_t api_lock (handle);
-        (void) handle.socket->stream_dispatch_stop ();
+        {
+            // Close admission already rejects new public operations.  Hold
+            // the STREAM API mutex only long enough to quiesce an operation
+            // that entered before admission and to stop dispatch.  Async pipe
+            // termination re-enters the same mutex, so it must be released
+            // before complete_close_handoff waits for async quiescence.
+            stream_api_lock_t api_lock (handle);
+            (void) handle.socket->stream_dispatch_stop ();
+        }
         const int drain_rc =
           zlink::socket_reqrep_internal::drain_close_request_reply_socket (handle);
         const int drain_errno = errno;

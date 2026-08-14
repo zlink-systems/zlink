@@ -77,12 +77,21 @@ void zlink::pair_t::xwrite_activated (pipe_t *)
     //  There's nothing to do here.
 }
 
-int zlink::pair_t::xsend (msg_t *msg_)
+int zlink::pair_t::xsend (
+  msg_t *msg_, pipe_message_admission_t *admission_out_)
 {
+    if (admission_out_)
+        *admission_out_ = pipe_message_admission_invalid;
     const bool more = (msg_->flags () & msg_t::more) != 0;
-    const bool ok = _pipe ? (more ? _pipe->write (msg_) : _pipe->write_and_flush (msg_)) : false;
+    pipe_message_admission_t admission = pipe_message_admission_inactive;
+    const bool ok = _pipe
+                      ? (more ? _pipe->write (msg_, &admission)
+                              : _pipe->write_and_flush (msg_, &admission))
+                      : false;
     if (!ok) {
-        if (errno != EMSGSIZE)
+        if (admission_out_)
+            *admission_out_ = admission;
+        if (admission != pipe_message_admission_too_large)
             errno = EAGAIN;
         return -1;
     }
@@ -90,6 +99,8 @@ int zlink::pair_t::xsend (msg_t *msg_)
     //  Detach the original message from the data buffer.
     const int rc = msg_->init ();
     errno_assert (rc == 0);
+    if (admission_out_)
+        *admission_out_ = pipe_message_admission_ready;
 
     return 0;
 }
@@ -105,6 +116,24 @@ int zlink::pair_t::xrecv (msg_t *msg_)
         rc = msg_->init ();
         errno_assert (rc == 0);
 
+        errno = EAGAIN;
+        return -1;
+    }
+    return 0;
+}
+
+int zlink::pair_t::xrecv_retained (msg_t *msg_,
+                                   retained_credit_token_t *token_out_)
+{
+    int rc = msg_->close ();
+    errno_assert (rc == 0);
+
+    if (!_pipe || !_pipe->read_retained (msg_, token_out_)) {
+        rc = msg_->init ();
+        errno_assert (rc == 0);
+        // Match xrecv(): an empty PAIR receive is always a normal no-data
+        // result.  The retained token reset/read path must not leak a stale
+        // errno from an earlier registry lookup into the public receive API.
         errno = EAGAIN;
         return -1;
     }

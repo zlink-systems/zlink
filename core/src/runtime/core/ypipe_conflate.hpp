@@ -37,6 +37,31 @@ template <typename T> class ypipe_conflate_t ZLINK_FINAL : public ypipe_base_t<T
         dbuffer.write (value_);
     }
 
+    void write_with_replacement_accounting (
+      const T &value_,
+      bool incomplete_,
+      uint64_t (*accounted_bytes_) (const T &),
+      bool (*counted_message_) (const T &),
+      ypipe_replacement_accounting_t *replaced_) ZLINK_OVERRIDE
+    {
+        (void) incomplete_;
+        zlink_assert (replaced_);
+        dbuffer.write_with_replacement_accounting (
+          value_, accounted_bytes_, counted_message_, &replaced_->bytes,
+          &replaced_->complete_messages);
+    }
+
+    void discard_accounting (
+      uint64_t (*accounted_bytes_) (const T &),
+      bool (*counted_message_) (const T &),
+      ypipe_replacement_accounting_t *discarded_) ZLINK_OVERRIDE
+    {
+        zlink_assert (discarded_);
+        dbuffer.discard_accounting (
+          accounted_bytes_, counted_message_, &discarded_->bytes,
+          &discarded_->complete_messages);
+    }
+
 #ifdef ZLINK_HAVE_OPENVMS
 #pragma message restore
 #endif

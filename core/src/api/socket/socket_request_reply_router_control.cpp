@@ -6,8 +6,6 @@
 
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "api/socket/socket_request_reply_submit_internal.hpp"
-#include "api/message/handler_result_internal.hpp"
-
 namespace reqrep = zlink::socket_reqrep_internal;
 
 extern "C" void zlink_socket_request_reply_cleanup (void *socket_)
@@ -29,46 +27,6 @@ extern "C" int zlink_router_enable_request_reply_receive (void *router_)
     std::shared_ptr<reqrep::socket_request_reply_state_t> state =
       reqrep::find_or_create_request_reply_state (handle);
     return reqrep::ensure_completion_queue_ready (state);
-}
-
-zlink_handler_result_t zlink_router_completion_control_handler (
-  void *router_, zlink_completion_control_handler_fn handler_, void *userdata_)
-{
-    if (!handler_) {
-        errno = EINVAL;
-        return ZLINK_HANDLER_INVALID_ARGUMENT;
-    }
-    socket_handle_t handle = as_socket_handle (router_);
-    if (!handle.socket) {
-        errno = EFAULT;
-        return ZLINK_HANDLER_INVALID_HANDLE;
-    }
-    if (socket_type (handle) != ZLINK_CORE_SOCKET_ROUTER) {
-        errno = ENOTSUP;
-        return ZLINK_HANDLER_NOT_SUPPORTED;
-    }
-
-    std::unique_ptr<zlink::socket_public_api_scope_t> admission =
-      handle.socket->begin_public_api_scope ();
-    if (!admission)
-        return zlink::handler_result_internal::from_errno (errno);
-
-    std::shared_ptr<reqrep::socket_request_reply_state_t> state =
-      reqrep::find_or_create_request_reply_state (handle);
-    if (!state)
-        return zlink::handler_result_internal::from_errno (errno);
-
-    {
-        std::lock_guard<std::mutex> lock (state->mutex);
-        if (state->closing) {
-            errno = ETERM;
-            return zlink::handler_result_internal::from_errno (errno);
-        }
-        state->completion_control_handler = handler_;
-        state->completion_control_userdata = userdata_;
-    }
-    errno = 0;
-    return ZLINK_HANDLER_OK;
 }
 
 extern "C" int zlink_socket_request_reply_set_default_timeout (void *socket_,

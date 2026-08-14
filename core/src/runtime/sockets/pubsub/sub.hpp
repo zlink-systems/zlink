@@ -20,7 +20,8 @@ class sub_t ZLINK_FINAL : public xsub_t
 
   protected:
     int xsetsockopt (int option_, const void *optval_, size_t optvallen_);
-    int xsend (zlink::msg_t *msg_);
+    int xsend (zlink::msg_t *msg_,
+               pipe_message_admission_t *admission_out_ = NULL);
     bool xhas_out ();
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (sub_t)

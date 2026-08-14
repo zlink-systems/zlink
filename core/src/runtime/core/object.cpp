@@ -21,6 +21,7 @@ zlink::pipe_t *pipe_command_destination (const zlink::command_t &cmd_)
             return cmd_.args.bind.pipe;
         case zlink::command_t::activate_read:
         case zlink::command_t::activate_write:
+        case zlink::command_t::retained_credit:
         case zlink::command_t::hiccup:
         case zlink::command_t::pipe_term:
         case zlink::command_t::pipe_term_ack:
@@ -67,8 +68,19 @@ void zlink::object_t::process_command (const command_t &cmd_)
             break;
 
         case command_t::activate_write:
-            process_activate_write (cmd_.args.activate_write.msgs_read,
+            process_activate_write (cmd_.args.activate_write.generation,
+                                    cmd_.args.activate_write.msgs_read,
                                     cmd_.args.activate_write.bytes_read);
+            break;
+
+        case command_t::retained_credit:
+            process_retained_credit (cmd_.args.retained_credit.generation,
+                                     cmd_.args.retained_credit.msgs_read,
+                                     cmd_.args.retained_credit.bytes_read);
+            break;
+
+        case command_t::routed_send_ready:
+        case command_t::request_completion:
             break;
 
         case command_t::stop:
@@ -96,7 +108,8 @@ void zlink::object_t::process_command (const command_t &cmd_)
             break;
 
         case command_t::hiccup:
-            process_hiccup (cmd_.args.hiccup.pipe);
+            process_hiccup (cmd_.args.hiccup.pipe,
+                            cmd_.args.hiccup.generation);
             break;
 
         case command_t::pipe_term:
@@ -280,21 +293,40 @@ void zlink::object_t::send_activate_read (pipe_t *destination_)
 }
 
 void zlink::object_t::send_activate_write (pipe_t *destination_,
+                                           uint64_t generation_,
                                            uint64_t msgs_read_,
                                            uint64_t bytes_read_)
 {
     command_t cmd;
     cmd.type = command_t::activate_write;
+    cmd.args.activate_write.generation = generation_;
     cmd.args.activate_write.msgs_read = msgs_read_;
     cmd.args.activate_write.bytes_read = bytes_read_;
     send_pipe_command (destination_, cmd, true);
 }
 
-void zlink::object_t::send_hiccup (pipe_t *destination_, void *pipe_)
+void zlink::object_t::send_retained_credit (pipe_t *destination_,
+                                            uint64_t generation_,
+                                            uint64_t msgs_read_,
+                                            uint64_t bytes_read_)
+{
+    command_t cmd;
+    cmd.type = command_t::retained_credit;
+    cmd.args.retained_credit.generation = generation_;
+    cmd.args.retained_credit.msgs_read = msgs_read_;
+    cmd.args.retained_credit.bytes_read = bytes_read_;
+    //  This entry can be called by an arbitrary application thread releasing
+    //  a lease, so it must never self-dispatch based only on object tid.
+    send_pipe_command (destination_, cmd, false);
+}
+
+void zlink::object_t::send_hiccup (pipe_t *destination_, void *pipe_,
+                                   uint64_t generation_)
 {
     command_t cmd;
     cmd.type = command_t::hiccup;
     cmd.args.hiccup.pipe = pipe_;
+    cmd.args.hiccup.generation = generation_;
     send_pipe_command (destination_, cmd, false);
 }
 
@@ -421,12 +453,17 @@ void zlink::object_t::process_activate_read ()
     zlink_assert (false);
 }
 
-void zlink::object_t::process_activate_write (uint64_t, uint64_t)
+void zlink::object_t::process_activate_write (uint64_t, uint64_t, uint64_t)
 {
     zlink_assert (false);
 }
 
-void zlink::object_t::process_hiccup (void *)
+void zlink::object_t::process_retained_credit (uint64_t, uint64_t, uint64_t)
+{
+    zlink_assert (false);
+}
+
+void zlink::object_t::process_hiccup (void *, uint64_t)
 {
     zlink_assert (false);
 }

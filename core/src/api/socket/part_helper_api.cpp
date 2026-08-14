@@ -223,7 +223,8 @@ int zlink::part_helper_internal::stage_recv_sequence (const std::shared_ptr<hand
                                                       uint64_t request_seq_,
                                                       zlink_msg_t *parts_,
                                                       size_t part_count_,
-                                                      std::thread::id owner_thread_)
+                                                      std::thread::id owner_thread_,
+                                                      std::vector<retained_credit_token_t> *credits_)
 {
     if (!state_ || !parts_ || part_count_ == 0) {
         errno = EFAULT;
@@ -241,7 +242,7 @@ int zlink::part_helper_internal::stage_recv_sequence (const std::shared_ptr<hand
     state_->recv.source_socket = source_socket_;
     state_->recv.owner_thread = owner_thread_;
     set_recv_metadata (&state_->recv, source_node_rid_, request_seq_);
-    return buffer_recv_parts (&state_->recv, parts_, part_count_);
+    return buffer_recv_parts (&state_->recv, parts_, part_count_, credits_);
 }
 
 void zlink::part_helper_internal::set_recv_metadata (recv_sequence_state_t *recv_,
@@ -268,7 +269,8 @@ void zlink::part_helper_internal::set_recv_transport_pair (
 
 int zlink::part_helper_internal::buffer_recv_parts (recv_sequence_state_t *recv_,
                                                     zlink_msg_t *parts_,
-                                                    size_t part_count_)
+                                                    size_t part_count_,
+                                                    std::vector<retained_credit_token_t> *credits_)
 {
     if (!recv_ || !parts_ || part_count_ == 0) {
         errno = EFAULT;
@@ -276,6 +278,8 @@ int zlink::part_helper_internal::buffer_recv_parts (recv_sequence_state_t *recv_
     }
 
     recv_->buffered_parts.resize (part_count_);
+    recv_->buffered_credits.clear ();
+    recv_->buffered_credits.resize (part_count_);
     recv_->next_part_index = 0;
     for (size_t i = 0; i < part_count_; ++i) {
         zlink_msg_init (&recv_->buffered_parts[i]);
@@ -283,6 +287,8 @@ int zlink::part_helper_internal::buffer_recv_parts (recv_sequence_state_t *recv_
             errno = EFAULT;
             return -1;
         }
+        if (credits_ && i < credits_->size ())
+            recv_->buffered_credits[i] = std::move ((*credits_)[i]);
     }
 
     return 0;
@@ -290,7 +296,8 @@ int zlink::part_helper_internal::buffer_recv_parts (recv_sequence_state_t *recv_
 
 int zlink::part_helper_internal::take_recv_part (recv_sequence_state_t *recv_,
                                                  zlink_msg_t *part_out_,
-                                                 zlink_part_flag_t *has_more_out_)
+                                                 zlink_part_flag_t *has_more_out_,
+                                                 retained_credit_token_t *credit_out_)
 {
     if (!recv_ || !part_out_ || !has_more_out_) {
         errno = EFAULT;
@@ -304,6 +311,11 @@ int zlink::part_helper_internal::take_recv_part (recv_sequence_state_t *recv_,
         errno = EFAULT;
         return -1;
     }
+    if (credit_out_ && recv_->next_part_index < recv_->buffered_credits.size ())
+        *credit_out_ = std::move (
+          recv_->buffered_credits[recv_->next_part_index]);
+    else if (recv_->next_part_index < recv_->buffered_credits.size ())
+        recv_->buffered_credits[recv_->next_part_index].reset ();
 
     ++recv_->next_part_index;
     *has_more_out_ =
@@ -313,7 +325,8 @@ int zlink::part_helper_internal::take_recv_part (recv_sequence_state_t *recv_,
 
 int zlink::part_helper_internal::take_recv_part (const std::shared_ptr<handle_state_t> &state_,
                                                  zlink_msg_t *part_out_,
-                                                 zlink_part_flag_t *has_more_out_)
+                                                 zlink_part_flag_t *has_more_out_,
+                                                 retained_credit_token_t *credit_out_)
 {
     if (!state_) {
         errno = EFAULT;
@@ -321,7 +334,8 @@ int zlink::part_helper_internal::take_recv_part (const std::shared_ptr<handle_st
     }
 
     std::lock_guard<std::mutex> lock (state_->mutex);
-    return take_recv_part (&state_->recv, part_out_, has_more_out_);
+    return take_recv_part (&state_->recv, part_out_, has_more_out_,
+                           credit_out_);
 }
 
 void zlink::part_helper_internal::export_recv_metadata (
@@ -379,6 +393,7 @@ void zlink::part_helper_internal::reset_recv_sequence (recv_sequence_state_t *st
     for (size_t i = 0; i < state_->buffered_parts.size (); ++i)
         zlink_msg_close (&state_->buffered_parts[i]);
     state_->buffered_parts.clear ();
+    state_->buffered_credits.clear ();
     state_->next_part_index = 0;
 
     state_->active = false;

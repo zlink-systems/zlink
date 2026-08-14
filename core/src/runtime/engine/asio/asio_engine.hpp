@@ -138,8 +138,18 @@ class asio_engine_t : public i_engine
     //  Metadata to be attached to received messages. May be NULL.
     metadata_t *_metadata;
 
-    //  True iff the engine couldn't consume the last decoded message.
-    bool _input_stopped;
+    enum input_stop_reason_t
+    {
+        input_running,
+        input_decoded_message_backpressure,
+        input_decoder_allocation_backpressure
+    };
+
+    //  A decoded message must be retried through _process_msg, while a
+    //  decoder-allocation stop must retry framing admission before any msg
+    //  exists. Keeping those states distinct prevents restart_input() from
+    //  pushing an incomplete decoder message.
+    input_stop_reason_t _input_stop_reason;
 
     //  True iff the engine doesn't have any message to encode.
     bool _output_stopped;
@@ -185,6 +195,8 @@ class asio_engine_t : public i_engine
 
     //  Internal implementation of restart_input
     bool restart_input_internal ();
+    int retry_decoder_allocation ();
+    void stop_input_for_current_backpressure ();
 
     //  Attempt a synchronous read to drain immediately available data.
     //  Returns true if a read was attempted or an error occurred.

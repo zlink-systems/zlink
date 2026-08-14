@@ -17,7 +17,6 @@ zlink::options_owner_t common_option_owner_lookup (zlink_option_t option_)
         case ZLINK_OPT_MAXMSGSIZE:
         case ZLINK_OPT_SNDHWM:
         case ZLINK_OPT_RCVHWM:
-        case ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES:
         case ZLINK_OPT_MULTICAST_HOPS:
         case ZLINK_OPT_IMMEDIATE:
         case ZLINK_OPT_IPV6:
@@ -84,7 +83,6 @@ zlink::options_owner_t zlink::option_owner_of (int option_)
         case ZLINK_INTERNAL_OPT_MULTICAST_MAXTPDU:
         case ZLINK_INTERNAL_OPT_SNDHWM:
         case ZLINK_INTERNAL_OPT_RCVHWM:
-        case ZLINK_INTERNAL_OPT_AUTO_HWM_MSG_UNIT_BYTES:
         case ZLINK_INTERNAL_OPT_IPV6:
         case ZLINK_INTERNAL_OPT_IMMEDIATE:
         case ZLINK_INTERNAL_OPT_CONFLATE:

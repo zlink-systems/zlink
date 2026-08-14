@@ -612,7 +612,13 @@ void run_router_recv_serializes_fq_with_pipe_termination (bool routed_recv_)
     zlink::router_t *router = static_cast<zlink::router_t *> (router_handle);
     zlink::object_t *parents[2] = {router, router};
     zlink::pipe_t *pipes[2] = {NULL, NULL};
-    const uint64_t hwms[2] = {4, 4};
+    // This fixture exercises the recv/termination lock domain, not HWM.
+    // Physical queues account payload bytes plus one msg_t per frame, so keep
+    // both the routing-id and payload frames admissible under the byte HWM.
+    const uint64_t queued_frame_bytes =
+      2 * sizeof (zlink::msg_t) + (sizeof ("peer-A") - 1)
+      + (sizeof ("payload") - 1);
+    const uint64_t hwms[2] = {queued_frame_bytes, queued_frame_bytes};
     const bool conflates[2] = {false, false};
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink::pipepair (parents, pipes, hwms, conflates, true));

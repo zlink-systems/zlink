@@ -19,6 +19,11 @@ void record_socket_pending_transport_pair (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   const pending_key_t &key_,
   zlink::pipe_t *transport_pair_pipe_);
+bool record_socket_pending_transport_pair_identity (
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  const pending_key_t &key_,
+  uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_);
 int ensure_socket_pending_request (socket_handle_t handle_,
                                    const zlink_routing_id_t *peer_rid_,
                                    uint32_t timeout_ms_,

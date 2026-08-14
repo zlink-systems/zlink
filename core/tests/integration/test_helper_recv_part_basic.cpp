@@ -154,6 +154,7 @@ void reply_from_router (void *router_,
 void publish_and_recv_subscribe_part_eventually (void *pub_,
                                                  void *sub_,
                                                  const char *topic_,
+                                                 const char *payload_,
                                                  char *topic_id_buf_,
                                                  size_t topic_id_capacity_,
                                                  size_t *topic_id_len_out_,
@@ -162,13 +163,14 @@ void publish_and_recv_subscribe_part_eventually (void *pub_,
                                                  zlink_recv_result_t expected_rc_,
                                                  int expected_errno_)
 {
+    zlink_msg_t part;
+    init_part (&part, payload_);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_publish (pub_, topic_, &part, 1,
+                     static_cast<zlink_send_flags_t> (0)));
+
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::milliseconds (3000);
     while (std::chrono::steady_clock::now () < deadline) {
-        zlink_msg_t part;
-        init_part (&part, expected_errno_ == EMSGSIZE ? "payload-1" : "payload-2");
-        TEST_ASSERT_SUCCESS_ERRNO (
-          zlink_publish (pub_, topic_, &part, 1, static_cast<zlink_send_flags_t> (0)));
-
         const zlink_recv_result_t rc = zlink_subscribe_part (
           sub_, NULL, topic_id_buf_, topic_id_capacity_, topic_id_len_out_, part_out_,
           has_more_out_, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
@@ -316,7 +318,7 @@ void test_router_recv_part_metadata_view_invalidates_on_next_recv_like_call ()
     test_context_socket_close_zero_linger (router);
 }
 
-void test_subscribe_part_reports_needed_topic_size_and_recovers_after_emsgsize ()
+void test_subscribe_part_reports_needed_topic_size_without_consuming_payload ()
 {
     void *pub = test_context_socket (ZLINK_SOCKET_PUB);
     void *sub = test_context_socket (ZLINK_SOCKET_SUB);
@@ -331,26 +333,45 @@ void test_subscribe_part_reports_needed_topic_size_and_recovers_after_emsgsize (
     size_t topic_len = 0;
     zlink_msg_t payload;
     zlink_msg_init (&payload);
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    publish_and_recv_subscribe_part_eventually (pub, sub, "topic-1", small_topic,
+    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    publish_and_recv_subscribe_part_eventually (pub, sub, "topic-1", "payload-1", small_topic,
                                                 sizeof (small_topic), &topic_len, &payload,
-                                                &has_more, ZLINK_RECV_INTERNAL_ERROR, EMSGSIZE);
-    TEST_ASSERT_EQUAL_INT (EMSGSIZE, zlink_errno ());
+                                                &has_more, ZLINK_RECV_BUFFER_TOO_SMALL, ENOBUFS);
+    TEST_ASSERT_EQUAL_INT (ENOBUFS, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (7, topic_len);
-    TEST_ASSERT_EQUAL_INT (0, has_more);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, has_more);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&payload));
+    TEST_ASSERT_EQUAL_MEMORY ("xy", small_topic, sizeof (small_topic));
+
+    char full_topic[7];
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      recv_subscribe_part_with_retry (sub, full_topic, sizeof (full_topic),
+                                      &topic_len, &payload, &has_more));
+    TEST_ASSERT_EQUAL_MEMORY ("topic-1", full_topic, sizeof (full_topic));
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
     TEST_ASSERT_EQUAL_MEMORY ("payload-1", zlink_msg_data (&payload), 9);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&payload));
-    TEST_ASSERT_EQUAL_MEMORY ("xy", small_topic, sizeof (small_topic));
 
     char sentinel[4] = {'k', 'e', 'e', 'p'};
     topic_len = 0;
     zlink_msg_init (&payload);
-    has_more = ZLINK_PART_FINAL;
-    publish_and_recv_subscribe_part_eventually (pub, sub, "topic-2", sentinel, 0, &topic_len,
-                                                &payload, &has_more, ZLINK_RECV_OK, 0);
+    has_more = ZLINK_PART_MORE;
+    publish_and_recv_subscribe_part_eventually (
+      pub, sub, "topic-2", "payload-2", sentinel, 0, &topic_len, &payload,
+      &has_more, ZLINK_RECV_BUFFER_TOO_SMALL, ENOBUFS);
+    TEST_ASSERT_EQUAL_INT (ENOBUFS, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (7, topic_len);
-    TEST_ASSERT_EQUAL_INT (0, has_more);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, has_more);
     TEST_ASSERT_EQUAL_MEMORY ("keep", sentinel, sizeof (sentinel));
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&payload));
+
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      recv_subscribe_part_with_retry (sub, full_topic, sizeof (full_topic),
+                                      &topic_len, &payload, &has_more));
+    TEST_ASSERT_EQUAL_MEMORY ("topic-2", full_topic, sizeof (full_topic));
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
     TEST_ASSERT_EQUAL_MEMORY ("payload-2", zlink_msg_data (&payload), 9);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&payload));
 
@@ -365,7 +386,8 @@ int main (void)
     UNITY_BEGIN ();
     RUN_TEST (test_recv_part_reads_each_part_and_tracks_has_more);
     RUN_TEST (test_router_recv_part_metadata_view_invalidates_on_next_recv_like_call);
-    RUN_TEST (test_subscribe_part_reports_needed_topic_size_and_recovers_after_emsgsize);
+    RUN_TEST (
+      test_subscribe_part_reports_needed_topic_size_without_consuming_payload);
     const int rc = UNITY_END ();
     fflush (NULL);
     std::_Exit (rc);

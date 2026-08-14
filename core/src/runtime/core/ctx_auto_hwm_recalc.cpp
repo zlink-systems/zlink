@@ -66,55 +66,38 @@ void zlink::ctx_t::schedule_auto_hwm_recalculate ()
 
 int zlink::ctx_t::auto_hwm_recalculate_now ()
 {
-    bool enabled = false;
-    zlink_auto_hwm_profile_t profile = ZLINK_CTX_AUTO_HWM_PROFILE_DFLT;
-    uint64_t message_unit_bytes = ZLINK_CTX_AUTO_HWM_MSG_UNIT_BYTES_DFLT;
+    auto_hwm_budget_input_t input;
     {
         scoped_lock_t locker (_opt_sync);
-        const ctx_auto_hwm_options_t options = _auto_hwm.options ();
-        enabled = options.enabled;
-        profile = options.profile;
-        message_unit_bytes = options.msg_unit_bytes;
+        input = _auto_hwm.budget_input ();
     }
 
     scoped_lock_t runtime_lock (_slot_sync);
-    _auto_hwm.mark_applied ();
-
-    if (!enabled)
-        return 0;
 
     std::vector<socket_base_t *> sockets;
     _socket_registry.collect_sockets (&sockets);
-    if (sockets.empty ())
-        return 0;
 
     auto_hwm_context_plan_t context_plan;
-    auto_hwm_context_plan_make (enabled, profile, &context_plan, message_unit_bytes);
+    auto_hwm_context_plan_make (input, &context_plan);
 
-    std::vector<auto_hwm_socket_plan_t> plans;
-    plans.reserve (sockets.size ());
+    std::vector<physical_queue_endpoint_policy_t> queue_policies;
     for (size_t i = 0; i < sockets.size (); ++i) {
         socket_base_t *socket = sockets[i];
-        if (!socket) {
-            plans.push_back (auto_hwm_socket_plan_t ());
+        if (!socket)
             continue;
-        }
-
-        auto_hwm_socket_plan_t plan = socket->prepare_auto_hwm_socket_plan (context_plan);
-        if (!socket->auto_hwm_policy_enabled ())
-            plan.socket_message_slots = 0;
-        plans.push_back (plan);
+        socket->collect_auto_hwm_queue_policies (&queue_policies);
     }
 
-    if (!plans.empty ())
-        auto_hwm_context_finalize (&context_plan, &plans[0], plans.size ());
+    _physical_queue_registry.plan_application_queues (&context_plan,
+                                                       queue_policies);
 
     for (size_t i = 0; i < sockets.size (); ++i) {
         if (!sockets[i])
             continue;
-        sockets[i]->apply_auto_hwm_socket_plan (context_plan, plans[i], false,
-                                                ZLINK_AUTO_HWM_RECALC_REASON_REFRESH);
+        sockets[i]->apply_physical_auto_hwm_plan (
+          context_plan, ZLINK_AUTO_HWM_RECALC_REASON_REFRESH);
     }
+    _auto_hwm.record_applied_plan (context_plan);
     return 0;
 }
 
@@ -131,20 +114,126 @@ void zlink::ctx_t::auto_hwm_recalc_task ()
         (void) auto_hwm_recalculate_now ();
 }
 
-zlink_auto_hwm_profile_t zlink::ctx_t::auto_hwm_profile () const
+zlink::auto_hwm_budget_input_t zlink::ctx_t::auto_hwm_budget_input () const
 {
     scoped_lock_t locker (const_cast<mutex_t &> (_opt_sync));
-    return _auto_hwm.profile ();
+    return _auto_hwm.budget_input ();
 }
 
-bool zlink::ctx_t::auto_hwm_enabled () const
+int zlink::ctx_t::create_pipepair_queues (
+  uint64_t first_direction_hwm_, uint64_t second_direction_hwm_,
+  physical_queue_class_t queue_class_, auto_hwm_role_t role_,
+  bool planning_enabled_,
+  physical_queue_handle_t *first_direction_,
+  physical_queue_handle_t *second_direction_)
 {
-    scoped_lock_t locker (const_cast<mutex_t &> (_opt_sync));
-    return _auto_hwm.enabled ();
+    scoped_lock_t locker (_opt_sync);
+    auto_hwm_context_plan_t context_plan;
+    auto_hwm_context_plan_make (_auto_hwm.budget_input (), &context_plan);
+    return _physical_queue_registry.create_pipepair_queues (
+      first_direction_hwm_, second_direction_hwm_, queue_class_, role_,
+      planning_enabled_, context_plan, first_direction_, second_direction_);
 }
 
-uint64_t zlink::ctx_t::auto_hwm_msg_unit_bytes () const
+void zlink::ctx_t::record_auto_hwm_endpoint_policy (
+  const physical_queue_endpoint_policy_t &policy_)
 {
-    scoped_lock_t locker (const_cast<mutex_t &> (_opt_sync));
-    return _auto_hwm.msg_unit_bytes ();
+    _physical_queue_registry.record_endpoint_policy (policy_);
+}
+
+void zlink::ctx_t::record_auto_hwm_admission_attempt (
+  bool blocked_by_target_hwm_)
+{
+    _physical_queue_registry.record_admission_attempt (
+      blocked_by_target_hwm_);
+}
+
+int zlink::ctx_t::auto_hwm_budget_snapshot (zlink_auto_hwm_budget_snapshot_t *out_)
+{
+    scoped_lock_t locker (_slot_sync);
+    if (_terminating) {
+        errno = ETERM;
+        return -1;
+    }
+    _auto_hwm.copy_budget_snapshot (out_);
+    physical_queue_registry_snapshot_t queues;
+    _physical_queue_registry.snapshot (&queues);
+    out_->active_directional_queue_count =
+      queues.active_application_direction_count;
+    out_->active_completion_directional_queue_count =
+      queues.active_completion_direction_count;
+    out_->retired_queue_count = queues.retired_direction_count;
+    out_->core_queue_accounted_bytes =
+      queues.application_current_accounted_bytes;
+    out_->application_accounted_bytes =
+      queues.application_lease_accounted_bytes;
+    out_->outstanding_application_lease_count =
+      queues.outstanding_application_lease_count;
+    out_->deferred_origin_credit_bytes =
+      queues.deferred_origin_credit_bytes;
+    const bool application_sum_overflow =
+      UINT64_MAX - queues.application_current_accounted_bytes
+      < out_->application_accounted_bytes;
+    out_->current_accounted_bytes = application_sum_overflow
+                                      ? UINT64_MAX
+                                      : queues.application_current_accounted_bytes
+                                          + out_->application_accounted_bytes;
+    out_->provisional_accounted_bytes =
+      queues.application_provisional_accounted_bytes;
+    out_->peak_accounted_bytes = queues.application_peak_accounted_bytes;
+    out_->completion_current_accounted_bytes =
+      queues.completion_current_accounted_bytes;
+    out_->completion_peak_accounted_bytes =
+      queues.completion_peak_accounted_bytes;
+    out_->completion_pending_message_count =
+      queues.completion_pending_message_count;
+    const bool messaging_sum_overflow =
+      UINT64_MAX - out_->current_accounted_bytes
+      < out_->completion_current_accounted_bytes;
+    out_->total_messaging_accounted_bytes =
+      messaging_sum_overflow
+        ? UINT64_MAX
+        : out_->current_accounted_bytes
+            + out_->completion_current_accounted_bytes;
+    out_->monitor_queue_applied_hwm_bytes =
+      queues.monitor_applied_hwm_bytes;
+    out_->monitor_queue_accounted_bytes =
+      queues.monitor_current_accounted_bytes;
+    const bool instance_applied_sum_overflow =
+      UINT64_MAX - out_->total_applied_hwm_bytes
+      < out_->monitor_queue_applied_hwm_bytes;
+    out_->total_instance_applied_hwm_bytes =
+      instance_applied_sum_overflow
+        ? UINT64_MAX
+        : out_->total_applied_hwm_bytes
+            + out_->monitor_queue_applied_hwm_bytes;
+    const bool instance_accounted_sum_overflow =
+      UINT64_MAX - out_->total_messaging_accounted_bytes
+      < out_->monitor_queue_accounted_bytes;
+    out_->total_instance_accounted_bytes =
+      instance_accounted_sum_overflow
+        ? UINT64_MAX
+        : out_->total_messaging_accounted_bytes
+            + out_->monitor_queue_accounted_bytes;
+    out_->oversize_admission_count = queues.oversize_admission_count;
+    out_->largest_oversize_message_bytes =
+      queues.largest_oversize_message_bytes;
+    out_->blocked_ratio_ppm = queues.blocked_ratio_ppm;
+    if (queues.aggregate_overflow || application_sum_overflow
+        || messaging_sum_overflow || instance_applied_sum_overflow
+        || instance_accounted_sum_overflow)
+        out_->flags |= ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_OVERFLOW;
+    return 0;
+}
+
+int zlink::ctx_t::reset_auto_hwm_budget_metrics ()
+{
+    scoped_lock_t locker (_slot_sync);
+    if (_terminating) {
+        errno = ETERM;
+        return -1;
+    }
+    _auto_hwm.reset_budget_metrics ();
+    _physical_queue_registry.reset_metrics ();
+    return 0;
 }

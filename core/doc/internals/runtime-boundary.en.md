@@ -63,8 +63,9 @@ when Application ingress is backpressured.
 
 Each lane retains payload only in its directional network pipe. Core does not
 place received application payload in a hidden PAIR queue and does not copy
-reply payload into a completion deque. The remaining completion control queue
-contains only callback metadata for payloadless terminal outcomes.
+reply payload into a completion deque. The remaining terminal-callback metadata
+queue contains only payloadless timeout, disconnect, and shutdown outcomes; it
+is not a transport lane or wire record.
 
 ## Transport-liveness boundary
 

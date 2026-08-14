@@ -48,6 +48,7 @@ int attach_socket_monitor_handler_state (void *monitor_,
 void *open_socket_monitor_with_handler_internal (void *s_,
                                                  zlink_socket_monitor_event_mask_t events_,
                                                  int event_version_,
+                                                 uint64_t requested_monitor_hwm_bytes_,
                                                  zlink_monitor_handler_fn handler_,
                                                  void *userdata_)
 {
@@ -55,6 +56,13 @@ void *open_socket_monitor_with_handler_internal (void *s_,
     if (!handle.socket)
         return NULL;
     if (!handler_) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    uint64_t monitor_hwm_bytes = requested_monitor_hwm_bytes_;
+    if (monitor_hwm_bytes == 0
+        && !socket_monitor_default_hwm_bytes (&monitor_hwm_bytes)) {
         errno = EINVAL;
         return NULL;
     }
@@ -70,7 +78,7 @@ void *open_socket_monitor_with_handler_internal (void *s_,
 
     const int monitor_rc =
       handle.socket->monitor (endpoint, events_, event_version_,
-                              ZLINK_CORE_SOCKET_PAIR);
+                              ZLINK_CORE_SOCKET_PAIR, monitor_hwm_bytes);
     if (monitor_rc != 0)
         return NULL;
 
@@ -79,27 +87,24 @@ void *open_socket_monitor_with_handler_internal (void *s_,
     void *monitor_socket = static_cast<void *> (monitor_socket_base);
     if (!monitor_socket) {
         handle.socket->monitor (NULL, 0, event_version_,
-                                ZLINK_CORE_SOCKET_PAIR);
+                                ZLINK_CORE_SOCKET_PAIR, 0);
         return NULL;
     }
-    monitor_socket_base->set_auto_hwm_policy_enabled (false);
-    //  The monitor pipe used to hold 4,096 event messages. HWM is now byte
-    //  based, so the same depth is expressed as the accounted charge of that
-    //  many event frames: the wire event plus the per-frame minimum charge.
-    //  Auto HWM is disabled for this socket, so nothing else would size it.
-    const uint64_t monitor_event_depth = 4096;
-    const uint64_t monitor_hwm =
-      monitor_event_depth
-      * (sizeof (socket_monitor_internal_event_t) + sizeof (zlink_msg_t));
-    (void) monitor_socket_base->setsockopt (ZLINK_INTERNAL_OPT_SNDHWM, &monitor_hwm,
-                                            sizeof (monitor_hwm));
-    (void) monitor_socket_base->setsockopt (ZLINK_INTERNAL_OPT_RCVHWM, &monitor_hwm,
-                                            sizeof (monitor_hwm));
+    if (monitor_socket_base->configure_internal_monitor_queue (
+          monitor_hwm_bytes)
+        != 0) {
+        const int err = errno;
+        zlink_close (monitor_socket);
+        handle.socket->monitor (NULL, 0, event_version_,
+                                ZLINK_CORE_SOCKET_PAIR, 0);
+        errno = err == 0 ? EINVAL : err;
+        return NULL;
+    }
 
     if (zlink_connect (monitor_socket, endpoint) != 0) {
         zlink_close (monitor_socket);
         handle.socket->monitor (NULL, 0, event_version_,
-                                ZLINK_CORE_SOCKET_PAIR);
+                                ZLINK_CORE_SOCKET_PAIR, 0);
         return NULL;
     }
 
@@ -110,7 +115,7 @@ void *open_socket_monitor_with_handler_internal (void *s_,
         const int err = errno;
         zlink_close (monitor_socket);
         handle.socket->monitor (NULL, 0, event_version_,
-                                ZLINK_CORE_SOCKET_PAIR);
+                                ZLINK_CORE_SOCKET_PAIR, 0);
         errno = err;
         return NULL;
     }
@@ -125,7 +130,7 @@ void *open_socket_monitor_internal (
   int event_version_)
 {
     return open_socket_monitor_with_handler_internal (
-      socket_, events_, event_version_, &zlink_monitor_ignore_handler, NULL);
+      socket_, events_, event_version_, 0, &zlink_monitor_ignore_handler, NULL);
 }
 
 void *zlink_socket_monitor_open (void *s_, const zlink_socket_monitor_open_options_t *options_)
@@ -135,6 +140,7 @@ void *zlink_socket_monitor_open (void *s_, const zlink_socket_monitor_open_optio
         return NULL;
     }
     return open_socket_monitor_with_handler_internal (s_, options_->events, 3,
+                                                      options_->monitor_hwm_bytes,
                                                       &zlink_monitor_ignore_handler, NULL);
 }
 

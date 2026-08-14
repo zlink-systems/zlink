@@ -7,6 +7,7 @@
 #include "sockets/common/socket_dispatch_context.hpp"
 #include "utils/err.hpp"
 #include "utils/macros.hpp"
+#include "utils/routing_id.hpp"
 
 namespace
 {
@@ -67,65 +68,9 @@ int zlink::socket_base_t::peer_command_from_io (msg_t *msg_, pipe_t *pipe_)
     return xpeer_command (msg_, socket_pipe);
 }
 
-int zlink::socket_base_t::socket_set_msg_handler (zlink_socket_msg_handler_fn handler_)
-{
-    return socket_set_msg_handler_ex (handler_, NULL);
-}
-
-int zlink::socket_base_t::socket_set_msg_handler_ex (zlink_socket_msg_handler_fn handler_,
-                                                     void *subject_)
-{
-    return socket_set_msg_handler_with_userdata (handler_, subject_, NULL);
-}
-
-int zlink::socket_base_t::socket_set_msg_handler_with_userdata (
-  zlink_socket_msg_handler_fn handler_, void *subject_, void *userdata_)
-{
-    socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
-    socket_public_api_scope_t admission (lifecycle);
-    if (!admission.acquired ())
-        return -1;
-    if (!handler_) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (socket_msg_dispatch_active ()) {
-        errno = EBUSY;
-        return -1;
-    }
-
-    io_thread_t *io_thread = choose_io_thread (options.affinity);
-    if (!io_thread) {
-        errno = EAGAIN;
-        return -1;
-    }
-
-    dispatch_runtime ().socket_msg_handler.store (handler_, std::memory_order_release);
-    dispatch_runtime ().socket_msg_handler_subject.store (subject_, std::memory_order_release);
-    dispatch_runtime ().socket_msg_handler_userdata.store (userdata_, std::memory_order_release);
-    const bool async_already_active =
-      lifecycle_coordinator ().is_async_mailbox_active ();
-    if (!async_already_active && start_async_mailbox_processing (io_thread) != 0) {
-        dispatch_runtime ().socket_msg_handler.store (NULL, std::memory_order_release);
-        dispatch_runtime ().socket_msg_handler_subject.store (NULL, std::memory_order_release);
-        dispatch_runtime ().socket_msg_handler_userdata.store (NULL, std::memory_order_release);
-        return -1;
-    }
-    _completion_async_owned = false;
-
-    lifecycle_coordinator ().wait_async_started (1000);
-
-    xarm_socket_msg_dispatch ();
-
-    // Existing readable pipes may have been attached before dispatch mode was
-    // enabled. Drain them once so typed callback users do not miss the first
-    // message after installing the handler.
-    xdispatch_io ();
-    return 0;
-}
-
 int zlink::socket_base_t::ensure_completion_processing ()
 {
+    scoped_lock_t owner_lock (_completion_owner_sync);
     if (_completion_poller_refs.load (std::memory_order_acquire) != 0)
         return 0;
     if (lifecycle_coordinator ().is_async_mailbox_active ())
@@ -138,35 +83,30 @@ int zlink::socket_base_t::ensure_completion_processing ()
     if (start_async_mailbox_processing (io_thread) != 0)
         return -1;
     lifecycle_coordinator ().wait_async_started (1000);
-    _completion_async_owned = true;
     return 0;
-}
-
-void zlink::socket_base_t::release_completion_processing ()
-{
-    if (!_completion_async_owned)
-        return;
-    if (lifecycle_coordinator ().is_async_mailbox_active ()) {
-        stop_async_mailbox_processing ();
-        wait_async_quiesced (10000);
-    }
-    _completion_async_owned = false;
 }
 
 void zlink::socket_base_t::acquire_completion_poller ()
 {
-    const uint32_t previous =
-      _completion_poller_refs.fetch_add (1, std::memory_order_acq_rel);
-    if (previous == 0)
-        release_completion_processing ();
+    // Keep the event-driven mailbox owner alive for routed readiness,
+    // retained-credit commands, and later completion handoff. The owner gate
+    // fences an in-flight completion drain before the first public poller
+    // registration returns; refs then make the worker skip completion work.
+    scoped_lock_t owner_lock (_completion_owner_sync);
+    _completion_poller_refs.fetch_add (1, std::memory_order_acq_rel);
 }
 
 void zlink::socket_base_t::release_completion_poller ()
 {
-    const uint32_t previous =
-      _completion_poller_refs.fetch_sub (1, std::memory_order_acq_rel);
-    zlink_assert (previous > 0);
-    if (previous == 1)
+    bool resume = false;
+    {
+        scoped_lock_t owner_lock (_completion_owner_sync);
+        const uint32_t previous =
+          _completion_poller_refs.fetch_sub (1, std::memory_order_acq_rel);
+        zlink_assert (previous > 0);
+        resume = previous == 1;
+    }
+    if (resume)
         resume_completion_processing_if_needed ();
 }
 
@@ -184,10 +124,16 @@ void zlink::socket_base_t::release_poller_registration ()
 
 void zlink::socket_base_t::notify_request_completion ()
 {
-    // One pending notification is sufficient until the poller consumes it.
-    // Coalescing avoids one Windows loopback-socket send for every reply.
-    if (!_request_completion_pending.exchange (true, std::memory_order_acq_rel))
-        static_cast<mailbox_t *> (_mailbox)->signal ();
+    // One pending command is sufficient until the completion owner consumes
+    // it. A real mailbox command, rather than signal() alone, also schedules
+    // the async owner and closes the enqueue-vs-reschedule lost-wake window.
+    if (_request_completion_pending.exchange (true, std::memory_order_acq_rel))
+        return;
+    command_t wake;
+    memset (&wake, 0, sizeof (wake));
+    wake.destination = this;
+    wake.type = command_t::request_completion;
+    static_cast<mailbox_t *> (_mailbox)->send (wake);
 }
 
 int zlink::socket_base_t::socket_msg_dispatch_stop ()
@@ -206,7 +152,9 @@ int zlink::socket_base_t::socket_msg_dispatch_stop ()
           dispatch_runtime ().socket_msg_dispatch_sync);
     }
 
-    if (lifecycle_coordinator ().is_async_mailbox_active ()) {
+    if (lifecycle_coordinator ().is_async_mailbox_active ()
+        && !send_ready_handler_active ()
+        && !routed_send_ready_handler_active ()) {
         stop_async_mailbox_processing ();
         if (current_async_mailbox_dispatch_socket () != this)
             wait_async_quiesced (10000);
@@ -223,6 +171,7 @@ void zlink::socket_base_t::socket_msg_dispatch_drain_pending ()
     if (!socket_msg_dispatch_active ())
         return;
 
+    scoped_lock_t receive_lock (receive_runtime ().sync);
     std::lock_guard<std::recursive_mutex> dispatch_lock (
       dispatch_runtime ().socket_msg_dispatch_sync);
     if (socket_msg_dispatch_active ()) {
@@ -259,7 +208,65 @@ int zlink::socket_base_t::socket_set_send_ready_handler_with_userdata (
     }
 
     dispatch_bridge_t &dispatch = dispatch_runtime ();
+    if (!lifecycle.is_async_mailbox_active ()) {
+        io_thread_t *io_thread = choose_io_thread (options.affinity);
+        if (!io_thread || start_async_mailbox_processing (io_thread) != 0) {
+            if (!io_thread)
+                errno = EAGAIN;
+            return -1;
+        }
+        lifecycle.wait_async_started (1000);
+    }
     dispatch.store_send_ready_handler (handler_, subject_, userdata_);
+    return 0;
+}
+
+int zlink::socket_base_t::socket_set_routed_send_ready_handler_with_userdata (
+  zlink_routed_send_ready_handler_fn handler_, void *userdata_)
+{
+    socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
+    socket_public_api_scope_t admission (lifecycle);
+    if (!admission.acquired ())
+        return -1;
+    if (!handler_) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (socket_send_ready_dispatch_scope_t::dispatching_socket (this)) {
+        errno = EDEADLK;
+        return -1;
+    }
+    if (unlikely (_ctx_terminated)) {
+        errno = ETERM;
+        return -1;
+    }
+
+    dispatch_bridge_t &dispatch = dispatch_runtime ();
+    if (!lifecycle.is_async_mailbox_active ()) {
+        io_thread_t *io_thread = choose_io_thread (options.affinity);
+        if (!io_thread || start_async_mailbox_processing (io_thread) != 0) {
+            if (!io_thread)
+                errno = EAGAIN;
+            return -1;
+        }
+        lifecycle.wait_async_started (1000);
+    }
+    dispatch.store_routed_send_ready_handler (handler_, userdata_);
+
+    // A handler can be installed after an application pipe is already
+    // writable. Publish that initial edge as well as later HWM recoveries;
+    // otherwise an async binding may park forever waiting for a transition
+    // that happened before registration. The exact target is still selected
+    // again under the socket route lock before every DONTWAIT submit.
+    std::vector<pipe_t *> pipes;
+    snapshot_attached_pipes (&pipes);
+    for (size_t i = 0; i < pipes.size (); ++i) {
+        if (pipes[i]
+            && pipes[i]->check_write_admission ()
+                 == pipe_message_admission_ready)
+            (void) enqueue_routed_send_ready (
+              pipes[i], ZLINK_ROUTED_SEND_WRITABLE, 0);
+    }
     return 0;
 }
 
@@ -271,6 +278,114 @@ bool zlink::socket_base_t::socket_msg_dispatch_active () const
 bool zlink::socket_base_t::send_ready_handler_active () const
 {
     return dispatch_runtime ().send_ready_handler.load (std::memory_order_acquire) != NULL;
+}
+
+bool zlink::socket_base_t::routed_send_ready_handler_active () const
+{
+    return dispatch_runtime ().routed_send_ready_handler_active ();
+}
+
+bool zlink::socket_base_t::enqueue_routed_send_ready (
+  pipe_t *pipe_, zlink_routed_send_ready_state_t state_, int terminal_errno_)
+{
+    if (!pipe_ || pipe_->get_transport_lane () == transport_lane_completion)
+        return false;
+
+    const blob_t &routing_id = pipe_->get_routing_id ();
+    if (routing_id.size () == 0)
+        return false;
+
+    uint64_t pair_id = pipe_->get_transport_pair_id ();
+    uint64_t pair_generation = pipe_->get_transport_pair_generation ();
+    // STREAM accepts raw TCP peers, which do not negotiate the DEALER/ROUTER
+    // completion lane. Their stable transport connection id is therefore the
+    // exact target identity. It remains distinct across a replacement with
+    // the same public routing id and is used consistently by STREAM select
+    // and exact DONTWAIT send below.
+    if (options.type == ZLINK_CORE_SOCKET_STREAM && pair_id == 0) {
+        pair_id = pipe_->get_transport_connection_id ();
+        pair_generation = pair_id == 0 ? 0 : 1;
+    }
+    zlink_routing_id_t peer_rid;
+    copy_routing_id_from_bytes (
+      routing_id.data (), routing_id.size (), &peer_rid);
+    return enqueue_routed_send_ready_exact (
+      &peer_rid, pair_id, pair_generation, state_, terminal_errno_);
+}
+
+bool zlink::socket_base_t::enqueue_routed_send_ready_exact (
+  const zlink_routing_id_t *peer_rid_, uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_, zlink_routed_send_ready_state_t state_,
+  int terminal_errno_)
+{
+    if (!valid_routing_id (peer_rid_) || transport_pair_id_ == 0
+        || transport_pair_generation_ == 0)
+        return false;
+
+    const routed_send_target_key_t key (
+      peer_rid_->data, peer_rid_->size, transport_pair_id_,
+      transport_pair_generation_);
+    if (!dispatch_runtime ().enqueue_routed_send_ready (
+          key, state_, terminal_errno_))
+        return false;
+
+    command_t wake;
+    memset (&wake, 0, sizeof (wake));
+    wake.destination = this;
+    wake.type = command_t::routed_send_ready;
+    static_cast<mailbox_t *> (_mailbox)->send (wake);
+    return true;
+}
+
+void zlink::socket_base_t::enqueue_all_routed_send_terminals (
+  int terminal_errno_)
+{
+    std::vector<pipe_t *> pipes;
+    snapshot_attached_pipes (&pipes);
+    for (size_t i = 0; i < pipes.size (); ++i)
+        (void) enqueue_routed_send_ready (
+          pipes[i], ZLINK_ROUTED_SEND_TERMINAL, terminal_errno_);
+}
+
+void zlink::socket_base_t::dispatch_routed_send_ready_events (bool closing_)
+{
+    routed_send_ready_record_t record;
+    while (dispatch_runtime ().take_routed_send_ready (&record)) {
+        zlink_routed_send_ready_handler_fn handler = NULL;
+        void *userdata = NULL;
+        if (!dispatch_runtime ().load_routed_send_ready_handler (
+              &handler, &userdata))
+            return;
+
+        zlink_routed_send_ready_event_t event;
+        memset (&event, 0, sizeof (event));
+        zlink::copy_routing_id_from_bytes (
+          record.key.peer_rid.data (), record.key.peer_rid.size (),
+          &event.peer_rid);
+        event.transport_pair_id = record.key.transport_pair_id;
+        event.transport_pair_generation =
+          record.key.transport_pair_generation;
+        event.state = record.state;
+        event.terminal_errno = record.terminal_errno;
+
+        if (closing_) {
+            socket_send_ready_dispatch_scope_t dispatch_scope (this);
+            handler (this, &event, userdata);
+            continue;
+        }
+
+        bool close_requested = false;
+        {
+            socket_callback_scope_t callback_scope (this);
+            if (!callback_scope.acquired ())
+                return;
+            socket_send_ready_dispatch_scope_t dispatch_scope (this);
+            handler (this, &event, userdata);
+            close_requested = lifecycle_coordinator ().public_close_requested ();
+        }
+        if (close_requested)
+            return;
+    }
 }
 
 zlink::socket_base_t *zlink::socket_base_t::current_socket_msg_dispatch_socket ()

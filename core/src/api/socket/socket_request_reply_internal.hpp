@@ -12,11 +12,13 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "api/socket/request_completion_queue_internal.hpp"
 #include "api/socket/request_reply_runtime_core.hpp"
 #include "api/socket/request_timeout_scheduler_internal.hpp"
 #include "api/socket/socket_api_internal.hpp"
+#include "core/ctx_physical_queue_registry.hpp"
 
 namespace zlink
 {
@@ -73,10 +75,10 @@ struct socket_request_reply_state_t : public zlink::request_reply_runtime::seque
     std::unordered_map<pending_key_t, zlink::pipe_t *, pending_key_hash_t>
       router_reply_targets;
     size_t reply_target_slots;
+    size_t reply_target_reservations;
+    size_t reply_target_checkouts;
     uint64_t dealer_next_reply_token;
     bool closing;
-    zlink_completion_control_handler_fn completion_control_handler;
-    void *completion_control_userdata;
     zlink::request_completion::queue_state_t completion;
 };
 
@@ -96,14 +98,16 @@ int recv_router_message_direct (socket_handle_t handle_,
                                 uint64_t *request_seq_out_,
                                 zlink_msg_t **parts_out_,
                                 size_t *part_count_out_,
-                                int flags_);
+                                int flags_,
+                                std::vector<retained_credit_token_t> *credits_out_ = NULL);
 int recv_dealer_message_direct (socket_handle_t handle_,
                                 const std::shared_ptr<socket_request_reply_state_t> &state_,
                                 uint8_t *message_type_out_,
                                 uint64_t *request_seq_out_,
                                 zlink_msg_t **parts_out_,
                                 size_t *part_count_out_,
-                                int flags_);
+                                int flags_,
+                                std::vector<retained_credit_token_t> *credits_out_ = NULL);
 int take_dealer_reply_target (const std::shared_ptr<socket_request_reply_state_t> &state_,
                               uint64_t request_token_,
                               dealer_reply_target_t *target_out_);

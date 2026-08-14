@@ -69,6 +69,26 @@ void reqrep::record_socket_pending_transport_pair (
       transport_pair_pipe_->get_transport_pair_generation ();
 }
 
+bool reqrep::record_socket_pending_transport_pair_identity (
+  const std::shared_ptr<reqrep::socket_request_reply_state_t> &state_,
+  const reqrep::pending_key_t &key_, uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_)
+{
+    if (!state_ || transport_pair_id_ == 0
+        || transport_pair_generation_ == 0)
+        return false;
+
+    std::lock_guard<std::mutex> lock (state_->mutex);
+    std::unordered_map<reqrep::pending_key_t, reqrep::pending_request_t,
+                       reqrep::pending_key_hash_t>::iterator it =
+      state_->pending_requests.find (key_);
+    if (it == state_->pending_requests.end ())
+        return false;
+    it->second.transport_pair_id = transport_pair_id_;
+    it->second.transport_pair_generation = transport_pair_generation_;
+    return true;
+}
+
 int reqrep::ensure_socket_pending_request (
   socket_handle_t handle_,
   const zlink_routing_id_t *peer_rid_,

@@ -180,8 +180,9 @@ Receive:
 
 The reply payload moves directly from the Completion pipe to the registered
 callback. Core does not retain it in a hidden PAIR receive queue or a second
-completion payload deque. A small payloadless control queue remains for
-timeout, shutdown, and similar terminal callbacks.
+completion payload deque. A small payloadless callback-metadata queue remains
+for timeout, shutdown, and similar terminal callbacks. It is not a transport
+lane or wire record.
 
 ## 7. Pending and Completion Rules
 

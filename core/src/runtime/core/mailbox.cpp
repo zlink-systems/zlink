@@ -76,6 +76,8 @@ void zlink::mailbox_t::signal ()
 
 int zlink::mailbox_t::recv (command_t *cmd_, int timeout_)
 {
+    scoped_lock_t receive_owner (_recv_sync);
+
     if (!_active) {
         signaler_t *shared_signaler = NULL;
         bool has_shared_command = false;
@@ -223,6 +225,16 @@ void zlink::mailbox_t::remove_signaler (signaler_t *signaler_)
     const std::vector<signaler_t *>::iterator it = std::find (_signalers.begin (), end, signaler_);
     if (it != end)
         _signalers.erase (it);
+    _sync.unlock ();
+}
+
+void zlink::mailbox_t::signal_pollers ()
+{
+    _sync.lock ();
+    for (std::vector<signaler_t *>::iterator it = _signalers.begin (), end = _signalers.end ();
+         it != end; ++it) {
+        (*it)->send ();
+    }
     _sync.unlock ();
 }
 

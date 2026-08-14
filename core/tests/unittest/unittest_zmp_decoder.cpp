@@ -31,6 +31,45 @@ static void build_header (unsigned char *buf_, unsigned char flags_, uint32_t bo
     zlink::put_uint32 (buf_ + 4, body_len_);
 }
 
+struct fake_frame_admission_t
+{
+    fake_frame_admission_t () :
+        allow (false), calls (0), releases (0), payload_bytes (0), flags (0)
+    {
+    }
+
+    static int reserve (void *subject_, uint32_t payload_bytes_,
+                        unsigned char flags_, void **reservation_out_)
+    {
+        fake_frame_admission_t *self =
+          static_cast<fake_frame_admission_t *> (subject_);
+        ++self->calls;
+        self->payload_bytes = payload_bytes_;
+        self->flags = flags_;
+        *reservation_out_ = NULL;
+        if (!self->allow) {
+            errno = EAGAIN;
+            return -1;
+        }
+        *reservation_out_ = self;
+        return 0;
+    }
+
+    static void release (void *subject_, void *reservation_)
+    {
+        fake_frame_admission_t *self =
+          static_cast<fake_frame_admission_t *> (subject_);
+        TEST_ASSERT_EQUAL_PTR (self, reservation_);
+        ++self->releases;
+    }
+
+    bool allow;
+    int calls;
+    int releases;
+    uint32_t payload_bytes;
+    unsigned char flags;
+};
+
 void test_invalid_magic ()
 {
     zlink::zmp_decoder_t decoder (64, -1);
@@ -104,6 +143,79 @@ void test_more_identity_allowed ()
     const unsigned char flags = decoder.msg ()->flags ();
     TEST_ASSERT_TRUE (flags & zlink::msg_t::more);
     TEST_ASSERT_TRUE (flags & zlink::msg_t::routing_id);
+}
+
+void test_payload_admission_precedes_body_allocation_and_can_retry ()
+{
+    zlink::zmp_decoder_t decoder (64, -1);
+    fake_frame_admission_t admission;
+    decoder.set_frame_admission_handler (&fake_frame_admission_t::reserve,
+                                         NULL, &admission);
+
+    unsigned char frame[zlink::zmp_header_size + 4];
+    build_header (frame, zlink::zmp_flag_more, 4);
+    memcpy (frame + zlink::zmp_header_size, "body", 4);
+
+    size_t processed = 0;
+    TEST_ASSERT_EQUAL_INT (
+      -1, decoder.decode (frame, sizeof (frame), processed));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+    TEST_ASSERT_EQUAL_UINT64 (zlink::zmp_header_size, processed);
+    TEST_ASSERT_TRUE (decoder.allocation_backpressured ());
+    TEST_ASSERT_EQUAL_UINT32 (4, admission.payload_bytes);
+    TEST_ASSERT_TRUE (admission.flags & zlink::msg_t::more);
+    TEST_ASSERT_EQUAL_UINT64 (0, decoder.msg ()->size ());
+
+    admission.allow = true;
+    TEST_ASSERT_EQUAL_INT (0, decoder.retry_frame_admission ());
+    TEST_ASSERT_FALSE (decoder.allocation_backpressured ());
+    TEST_ASSERT_EQUAL_INT (2, admission.calls);
+    TEST_ASSERT_EQUAL_PTR (&admission, *decoder.frame_reservation_slot ());
+    *decoder.frame_reservation_slot () = NULL;
+
+    processed = 0;
+    TEST_ASSERT_EQUAL_INT (
+      1, decoder.decode (frame + zlink::zmp_header_size, 4, processed));
+    TEST_ASSERT_EQUAL_UINT64 (4, processed);
+    TEST_ASSERT_EQUAL_UINT64 (4, decoder.msg ()->size ());
+    TEST_ASSERT_EQUAL_MEMORY ("body", decoder.msg ()->data (), 4);
+}
+
+void test_protocol_control_bypasses_application_admission ()
+{
+    zlink::zmp_decoder_t decoder (64, -1);
+    fake_frame_admission_t admission;
+    decoder.set_frame_admission_handler (&fake_frame_admission_t::reserve,
+                                         NULL, &admission);
+
+    unsigned char frame[zlink::zmp_header_size];
+    build_header (frame, zlink::zmp_flag_control, 0);
+    size_t processed = 0;
+    TEST_ASSERT_EQUAL_INT (1, decoder.decode (frame, sizeof (frame), processed));
+    TEST_ASSERT_EQUAL_INT (0, admission.calls);
+    TEST_ASSERT_FALSE (decoder.allocation_backpressured ());
+}
+
+void test_synchronously_discarded_frame_releases_reservation_once ()
+{
+    zlink::zmp_decoder_t decoder (64, -1);
+    fake_frame_admission_t admission;
+    admission.allow = true;
+    decoder.set_frame_admission_handler (&fake_frame_admission_t::reserve,
+                                         &fake_frame_admission_t::release,
+                                         &admission);
+
+    unsigned char frame[zlink::zmp_header_size];
+    build_header (frame, zlink::zmp_flag_identity, 0);
+    size_t processed = 0;
+    TEST_ASSERT_EQUAL_INT (1, decoder.decode (frame, sizeof (frame), processed));
+    TEST_ASSERT_EQUAL_PTR (&admission, *decoder.frame_reservation_slot ());
+
+    decoder.discard_frame_reservation ();
+    TEST_ASSERT_NULL (*decoder.frame_reservation_slot ());
+    TEST_ASSERT_EQUAL_INT (1, admission.releases);
+    decoder.discard_frame_reservation ();
+    TEST_ASSERT_EQUAL_INT (1, admission.releases);
 }
 
 void test_metadata_parse_valid ()
@@ -181,6 +293,9 @@ int main (void)
     RUN_TEST (test_subscribe_cancel_invalid);
     RUN_TEST (test_body_too_large);
     RUN_TEST (test_more_identity_allowed);
+    RUN_TEST (test_payload_admission_precedes_body_allocation_and_can_retry);
+    RUN_TEST (test_protocol_control_bypasses_application_admission);
+    RUN_TEST (test_synchronously_discarded_frame_releases_reservation_once);
     RUN_TEST (test_metadata_parse_valid);
     RUN_TEST (test_metadata_parse_invalid);
     RUN_TEST (test_metadata_add_basic_properties);

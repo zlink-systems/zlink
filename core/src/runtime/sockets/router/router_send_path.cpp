@@ -47,8 +47,11 @@ void format_routing_id_debug (const zlink_routing_id_t *rid_, char *buf_, size_t
 
 }
 
-int zlink::router_t::xsend (msg_t *msg_)
+int zlink::router_t::xsend (
+  msg_t *msg_, pipe_message_admission_t *admission_out_)
 {
+    if (admission_out_)
+        *admission_out_ = pipe_message_admission_invalid;
     // Public send enters this path through socket_public_send_scope_t. Do not
     // add lock_socket_msg_dispatch() here: routed echo hot paths call
     // router send for every small message, and a second socket-level mutex
@@ -75,21 +78,28 @@ int zlink::router_t::xsend (msg_t *msg_)
                 _current_out_connection_id =
                   _current_out->get_transport_connection_id ();
 
-                const pipe_write_status_t write_status = _current_out->check_write_status ();
-                if (write_status != pipe_write_ready) {
+                const pipe_message_admission_t write_admission =
+                  _current_out->check_write_admission ();
+                if (write_admission != pipe_message_admission_ready) {
                     // HWM removes the pipe from the writable set until an
                     // activation command restores credit. During that window
                     // the transport can also report a non-active pipe state;
                     // the route still exists and remains backpressured.
-                    const bool pipe_full =
-                      write_status == pipe_write_hwm_full || !out_pipe->active;
+                    const bool pipe_full = write_admission
+                                           == pipe_message_admission_hwm_full;
+                    const bool transport_wait =
+                      write_admission
+                      == pipe_message_admission_transport_wait;
+                    if (admission_out_)
+                        *admission_out_ = write_admission;
                     mark_out_pipe_inactive (out_pipe);
                     _current_out = NULL;
                     _current_out_connection_id = 0;
 
                     if (_mandatory) {
                         _more_out = false;
-                        errno = pipe_full ? EAGAIN : EHOSTUNREACH;
+                        errno = pipe_full || transport_wait ? EAGAIN
+                                                            : EHOSTUNREACH;
                         if (router_debug_enabled ()) {
                             fprintf (stderr, "router xsend: pipe not writable size=%zu errno=%d\n",
                                      msg_->size (), errno);
@@ -112,6 +122,8 @@ int zlink::router_t::xsend (msg_t *msg_)
         errno_assert (rc == 0);
         rc = msg_->init ();
         errno_assert (rc == 0);
+        if (admission_out_)
+            *admission_out_ = pipe_message_admission_ready;
         return 0;
     }
 
@@ -126,8 +138,12 @@ int zlink::router_t::xsend (msg_t *msg_)
     if (_current_out) {
         msg_->set_transport_connection_id (
           _current_out_connection_id);
-        const bool ok =
-          _more_out ? _current_out->write (msg_) : _current_out->write_and_flush (msg_);
+        pipe_message_admission_t write_admission =
+          pipe_message_admission_invalid;
+        const bool ok = _more_out
+                          ? _current_out->write (msg_, &write_admission)
+                          : _current_out->write_and_flush (
+                              msg_, &write_admission);
         if (router_debug_enabled ())
             fprintf (stderr, "router xsend write: pipe=%p ok=%d more=%d\\n",
                      static_cast<void *> (_current_out), ok ? 1 : 0,
@@ -136,8 +152,8 @@ int zlink::router_t::xsend (msg_t *msg_)
             // The first multipart frame can pass the readiness check and a
             // later frame can encounter HWM. Preserve that as capacity
             // pressure; only an inactive pipe is unreachable.
-            const pipe_write_status_t write_status = _current_out->check_write_status ();
-            const bool pipe_full = write_status == pipe_write_hwm_full;
+            if (admission_out_)
+                *admission_out_ = write_admission;
             const blob_t &routing_id = _current_out->get_routing_id ();
             out_pipe_t *current_out_pipe = lookup_out_pipe (routing_id);
             mark_out_pipe_inactive (current_out_pipe);
@@ -149,7 +165,11 @@ int zlink::router_t::xsend (msg_t *msg_)
             _current_out_connection_id = 0;
             if (_mandatory) {
                 _more_out = false;
-                errno = pipe_full ? EAGAIN : EHOSTUNREACH;
+                errno = write_admission == pipe_message_admission_hwm_full
+                              || write_admission
+                                   == pipe_message_admission_transport_wait
+                          ? EAGAIN
+                          : EHOSTUNREACH;
                 return -1;
             }
             const int rc = msg_->close ();
@@ -168,14 +188,18 @@ int zlink::router_t::xsend (msg_t *msg_)
 
     const int rc = msg_->init ();
     errno_assert (rc == 0);
+    if (admission_out_)
+        *admission_out_ = pipe_message_admission_ready;
     return 0;
 }
 
-int zlink::router_t::xsend_pipe (msg_t *msg_, pipe_t **pipe_out_)
+int zlink::router_t::xsend_pipe (
+  msg_t *msg_, pipe_t **pipe_out_,
+  pipe_message_admission_t *admission_out_)
 {
     if (pipe_out_)
         *pipe_out_ = NULL;
-    const int rc = xsend (msg_);
+    const int rc = xsend (msg_, admission_out_);
     if (rc == 0 && pipe_out_ && _current_out)
         *pipe_out_ = _current_out;
     return rc;
@@ -183,11 +207,12 @@ int zlink::router_t::xsend_pipe (msg_t *msg_, pipe_t **pipe_out_)
 
 int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                                   msg_t *msg_,
-                                  uint64_t *connection_id_out_,
-                                  uint64_t expected_connection_id_,
-                                  pipe_t **pipe_out_,
-                                  uint64_t expected_transport_pair_id_,
-                                  uint64_t expected_transport_pair_generation_)
+  uint64_t *connection_id_out_,
+  uint64_t expected_connection_id_,
+  pipe_t **pipe_out_,
+  uint64_t expected_transport_pair_id_,
+  uint64_t expected_transport_pair_generation_,
+  pipe_message_admission_t *admission_out_)
 {
     zlink_assert (!_more_out);
     zlink_assert (!_current_out);
@@ -195,6 +220,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         *connection_id_out_ = 0;
     if (pipe_out_)
         *pipe_out_ = NULL;
+    if (admission_out_)
+        *admission_out_ = pipe_message_admission_invalid;
 
     _more_out = (msg_->flags () & msg_t::more) != 0;
 
@@ -235,8 +262,11 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         out_pipe = NULL;
     }
     if (scoped_pipe) {
-        const pipe_write_status_t write_status = _current_out->check_write_status ();
-        if (write_status != pipe_write_ready) {
+        const pipe_message_admission_t write_admission =
+          _current_out->check_write_admission ();
+        if (write_admission != pipe_message_admission_ready) {
+            if (admission_out_)
+                *admission_out_ = write_admission;
             _current_out = NULL;
             _current_out_connection_id = 0;
             if (connection_id_out_)
@@ -244,7 +274,11 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
             if (pipe_out_)
                 *pipe_out_ = NULL;
             _more_out = false;
-            errno = write_status == pipe_write_hwm_full ? EAGAIN : EHOSTUNREACH;
+            errno = write_admission == pipe_message_admission_hwm_full
+                        || write_admission
+                             == pipe_message_admission_transport_wait
+                      ? EAGAIN
+                      : EHOSTUNREACH;
             return -1;
         }
     } else if (out_pipe) {
@@ -273,13 +307,18 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         if (pipe_out_)
             *pipe_out_ = _current_out;
 
-        const pipe_write_status_t write_status = _current_out->check_write_status ();
-        if (write_status != pipe_write_ready) {
+        const pipe_message_admission_t write_admission =
+          _current_out->check_write_admission ();
+        if (write_admission != pipe_message_admission_ready) {
             // Preserve the HWM classification while this route is awaiting
             // write activation. Pipe termination removes the routing-table
             // entry and is reported as unreachable on the next lookup.
             const bool pipe_full =
-              write_status == pipe_write_hwm_full || !out_pipe->active;
+              write_admission == pipe_message_admission_hwm_full;
+            const bool transport_wait = write_admission
+                                        == pipe_message_admission_transport_wait;
+            if (admission_out_)
+                *admission_out_ = write_admission;
             mark_out_pipe_inactive (out_pipe);
             _current_out = NULL;
             _current_out_connection_id = 0;
@@ -290,7 +329,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
 
             if (_mandatory) {
                 _more_out = false;
-                errno = pipe_full ? EAGAIN : EHOSTUNREACH;
+                errno = pipe_full || transport_wait ? EAGAIN
+                                                     : EHOSTUNREACH;
                 if (router_debug_enabled ()) {
                     fprintf (stderr,
                              "router xsend_routed: pipe not writable rid_size=%u errno=%d\n",
@@ -321,14 +361,18 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         }
         msg_->set_transport_connection_id (
           _current_out_connection_id);
-        const bool ok =
-          _more_out ? _current_out->write (msg_) : _current_out->write_and_flush (msg_);
+        pipe_message_admission_t write_admission =
+          pipe_message_admission_invalid;
+        const bool ok = _more_out
+                          ? _current_out->write (msg_, &write_admission)
+                          : _current_out->write_and_flush (
+                              msg_, &write_admission);
         if (unlikely (!ok)) {
             // A routed multipart send can reach HWM after its first frame.
             // Keep the admitted route and report backpressure until write
             // activation returns credit.
-            const pipe_write_status_t write_status = _current_out->check_write_status ();
-            const bool pipe_full = write_status == pipe_write_hwm_full;
+            if (admission_out_)
+                *admission_out_ = write_admission;
             const blob_t &routing_id = _current_out->get_routing_id ();
             out_pipe_t *current_out_pipe = lookup_out_pipe (routing_id);
             mark_out_pipe_inactive (current_out_pipe);
@@ -345,7 +389,11 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                 *pipe_out_ = NULL;
             if (_mandatory) {
                 _more_out = false;
-                errno = pipe_full ? EAGAIN : EHOSTUNREACH;
+                errno = write_admission == pipe_message_admission_hwm_full
+                              || write_admission
+                                   == pipe_message_admission_transport_wait
+                          ? EAGAIN
+                          : EHOSTUNREACH;
                 return -1;
             }
             const int rc = msg_->close ();
@@ -361,6 +409,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
 
     const int rc = msg_->init ();
     errno_assert (rc == 0);
+    if (admission_out_)
+        *admission_out_ = pipe_message_admission_ready;
     return 0;
 }
 

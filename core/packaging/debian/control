@@ -14,7 +14,7 @@ Build-Depends: debhelper (>= 9),
 Standards-Version: 3.9.8
 Homepage: https://github.com/zlink-systems/zlink
 
-Package: libzlink11
+Package: libzlink0
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Pre-Depends: ${misc:Pre-Depends}
@@ -27,10 +27,10 @@ Description: lightweight messaging kernel (shared library)
  .
  This package contains the libzlink shared library.
 
-Package: libzlink11-dev
+Package: libzlink0-dev
 Architecture: any
 Section: libdevel
-Depends: libzlink11 (= ${binary:Version}), ${misc:Depends},
+Depends: libzlink0 (= ${binary:Version}), ${misc:Depends},
  libnorm-dev,
  libunwind-dev | libunwind8-dev | libunwind7-dev,
  libnss3-dev,
@@ -48,11 +48,11 @@ Description: lightweight messaging kernel (development files)
  .
  This package contains the Zlink development libraries and header files.
 
-Package: libzlink11-dbg
+Package: libzlink0-dbg
 Architecture: any
 Priority: extra
 Section: debug
-Depends: libzlink11 (= ${binary:Version}), ${misc:Depends}
+Depends: libzlink0 (= ${binary:Version}), ${misc:Depends}
 Multi-Arch: same
 Description: lightweight messaging kernel (debugging symbols)
  zlink is a modern messaging library that provides asynchronous message

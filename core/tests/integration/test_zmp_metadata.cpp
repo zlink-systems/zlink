@@ -8,6 +8,7 @@
 #include "protocol/zmp_protocol.hpp"
 #include "api/socket/request_reply_protocol_internal.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <errno.h>
 #include <string.h>
@@ -124,10 +125,44 @@ bool send_basic_handshake (fd_t fd_, int socket_type_)
 
     std::vector<unsigned char> ready;
     ready.push_back (zlink::zmp_control_ready);
-    const char *socket_type_name = socket_type_ == ZLINK_SOCKET_PAIR ? "PAIR" : "DEALER";
+    const char *socket_type_name =
+      socket_type_ == ZLINK_CORE_SOCKET_PAIR ? "PAIR" : "DEALER";
     zlink::zmp_metadata::append_property (
       ready, "Socket-Type", socket_type_name, strlen (socket_type_name));
     return send_zmp_control (fd_, &ready[0], ready.size ());
+}
+
+zlink_auto_hwm_budget_snapshot_t read_hwm_snapshot ()
+{
+    zlink_auto_hwm_budget_snapshot_t snapshot;
+    memset (&snapshot, 0, sizeof (snapshot));
+    snapshot.abi_version = ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1;
+    snapshot.struct_size = sizeof (snapshot);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_ctx_get_auto_hwm_budget_snapshot (get_test_context (),
+                                              &snapshot));
+    return snapshot;
+}
+
+bool wait_for_current_accounted_bytes (uint64_t expected_)
+{
+    for (size_t attempt = 0; attempt != 400; ++attempt) {
+        if (read_hwm_snapshot ().current_accounted_bytes == expected_)
+            return true;
+        msleep (5);
+    }
+    return false;
+}
+
+bool wait_for_active_directional_queue_count (uint64_t expected_)
+{
+    for (size_t attempt = 0; attempt != 400; ++attempt) {
+        if (read_hwm_snapshot ().active_directional_queue_count == expected_)
+            return true;
+        msleep (5);
+    }
+    return false;
 }
 
 bool send_paired_dealer_handshake (fd_t fd_,
@@ -340,7 +375,7 @@ void test_network_incomplete_multipart_stops_at_receiver_max_message_size ()
     bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
     fd_t raw = connect_socket (endpoint, AF_INET, IPPROTO_TCP);
     TEST_ASSERT_NOT_EQUAL (retired_fd, raw);
-    TEST_ASSERT_TRUE (send_basic_handshake (raw, ZLINK_SOCKET_PAIR));
+    TEST_ASSERT_TRUE (send_basic_handshake (raw, ZLINK_CORE_SOCKET_PAIR));
 
     const unsigned char payload[6] = {'b', 'o', 'u', 'n', 'd', 's'};
     TEST_ASSERT_TRUE (send_zmp_frame (raw, zlink::zmp_flag_more, payload, sizeof (payload)));
@@ -348,6 +383,158 @@ void test_network_incomplete_multipart_stops_at_receiver_max_message_size ()
     TEST_ASSERT_TRUE (wait_for_raw_close (raw));
 
     close (raw);
+    test_context_socket_close_zero_linger (server);
+}
+
+void test_tcp_hidden_identity_releases_decoder_reservation ()
+{
+    void *server = test_context_socket (ZLINK_SOCKET_PAIR);
+    const uint64_t payload_size = 4;
+    const uint64_t frame_bytes = payload_size + sizeof (zlink::msg_t);
+    const int recv_timeout = 2000;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_RCVHWM, &frame_bytes,
+                        sizeof (frame_bytes)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_RCVTIMEO, &recv_timeout,
+                        sizeof (recv_timeout)));
+
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+    fd_t raw = connect_socket (endpoint, AF_INET, IPPROTO_TCP);
+    TEST_ASSERT_NOT_EQUAL (retired_fd, raw);
+    TEST_ASSERT_TRUE (send_basic_handshake (raw, ZLINK_CORE_SOCKET_PAIR));
+
+    const unsigned char identity[payload_size] = {'r', 'i', 'd', '0'};
+    const unsigned char payload[payload_size] = {'d', 'a', 't', 'a'};
+    TEST_ASSERT_TRUE (send_zmp_frame (
+      raw, zlink::zmp_flag_identity | zlink::zmp_flag_more,
+      identity, sizeof (identity)));
+    TEST_ASSERT_TRUE (send_zmp_frame (raw, 0, payload, sizeof (payload)));
+
+    unsigned char received[payload_size];
+    TEST_ASSERT_EQUAL_INT (
+      static_cast<int> (payload_size),
+      zlink_recv (server, received, sizeof (received), 0));
+    TEST_ASSERT_EQUAL_MEMORY (payload, received, sizeof (payload));
+    TEST_ASSERT_TRUE (wait_for_current_accounted_bytes (0));
+    TEST_ASSERT_EQUAL_UINT64 (
+      0, read_hwm_snapshot ().deferred_origin_credit_bytes);
+
+    close (raw);
+    test_context_socket_close_zero_linger (server);
+}
+
+void test_tcp_decoder_hwm_isolated_by_origin_connection ()
+{
+    void *server = test_context_socket (ZLINK_SOCKET_ROUTER);
+    const uint64_t payload_size = 16;
+    const uint64_t frame_bytes = payload_size + sizeof (zlink::msg_t);
+    const int recv_timeout = 2000;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_RCVHWM, &frame_bytes,
+                        sizeof (frame_bytes)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_RCVTIMEO, &recv_timeout,
+                        sizeof (recv_timeout)));
+
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+    const uint64_t initial_direction_count =
+      read_hwm_snapshot ().active_directional_queue_count;
+    fd_t raw_a_application = connect_socket (endpoint, AF_INET, IPPROTO_TCP);
+    fd_t raw_a_completion = connect_socket (endpoint, AF_INET, IPPROTO_TCP);
+    fd_t raw_b_application = connect_socket (endpoint, AF_INET, IPPROTO_TCP);
+    fd_t raw_b_completion = connect_socket (endpoint, AF_INET, IPPROTO_TCP);
+    TEST_ASSERT_NOT_EQUAL (retired_fd, raw_a_application);
+    TEST_ASSERT_NOT_EQUAL (retired_fd, raw_a_completion);
+    TEST_ASSERT_NOT_EQUAL (retired_fd, raw_b_application);
+    TEST_ASSERT_NOT_EQUAL (retired_fd, raw_b_completion);
+    TEST_ASSERT_TRUE (send_paired_dealer_handshake (
+      raw_a_application, "origin-a", 101, 1, 0,
+      ZLINK_CORE_SOCKET_DEALER));
+    TEST_ASSERT_TRUE (send_paired_dealer_handshake (
+      raw_a_completion, "origin-a", 101, 1, 1,
+      ZLINK_CORE_SOCKET_DEALER));
+    TEST_ASSERT_TRUE (send_paired_dealer_handshake (
+      raw_b_application, "origin-b", 102, 1, 0,
+      ZLINK_CORE_SOCKET_DEALER));
+    TEST_ASSERT_TRUE (send_paired_dealer_handshake (
+      raw_b_completion, "origin-b", 102, 1, 1,
+      ZLINK_CORE_SOCKET_DEALER));
+
+    // Each application connection is backed by two directional application
+    // queues. Completion directions are reported separately by the snapshot.
+    // Wait until both origins are attached before measuring admission.
+    TEST_ASSERT_TRUE (wait_for_active_directional_queue_count (
+      initial_direction_count + 4));
+
+    // ROUTER pipe attachment carries an internal routing-id envelope through
+    // the application queue. Pump it before testing decoder-frame admission.
+    zlink_msg_t pending;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&pending));
+    const zlink_routing_id_t *pending_source_rid = NULL;
+    uint64_t pending_request_seq = 0;
+    zlink_part_flag_t pending_has_more = ZLINK_PART_FINAL;
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_NO_DATA,
+      zlink_router_recv_part (
+        server, &pending_source_rid, &pending_request_seq, &pending,
+        &pending_has_more,
+        static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT)));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&pending));
+    TEST_ASSERT_TRUE (wait_for_current_accounted_bytes (0));
+
+    unsigned char a1[payload_size];
+    unsigned char a2[payload_size];
+    unsigned char b1[payload_size];
+    memset (a1, '1', sizeof (a1));
+    memset (a2, '2', sizeof (a2));
+    memset (b1, 'b', sizeof (b1));
+    TEST_ASSERT_TRUE (
+      send_zmp_frame (raw_a_application, 0, a1, sizeof (a1)));
+    TEST_ASSERT_TRUE (
+      send_zmp_frame (raw_a_application, 0, a2, sizeof (a2)));
+    TEST_ASSERT_TRUE (
+      send_zmp_frame (raw_b_application, 0, b1, sizeof (b1)));
+
+    // A's second header is stopped at its own full physical direction while
+    // B independently reaches Core. No socket-wide or context-wide gate may
+    // turn the expected two admitted frames into one.
+    TEST_ASSERT_TRUE (wait_for_current_accounted_bytes (frame_bytes * 2));
+
+    bool saw_a1 = false;
+    bool saw_a2 = false;
+    bool saw_b1 = false;
+    for (size_t i = 0; i != 3; ++i) {
+        zlink_msg_t msg;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
+        const zlink_routing_id_t *source_rid = NULL;
+        uint64_t request_seq = 0;
+        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_RECV_OK,
+          zlink_router_recv_part (
+            server, &source_rid, &request_seq, &msg, &has_more,
+            static_cast<zlink_recv_flags_t> (0)));
+        TEST_ASSERT_EQUAL_UINT64 (payload_size, zlink_msg_size (&msg));
+        const unsigned char marker =
+          *static_cast<unsigned char *> (zlink_msg_data (&msg));
+        saw_a1 = saw_a1 || marker == '1';
+        saw_a2 = saw_a2 || marker == '2';
+        saw_b1 = saw_b1 || marker == 'b';
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
+    }
+    TEST_ASSERT_TRUE (saw_a1);
+    TEST_ASSERT_TRUE (saw_a2);
+    TEST_ASSERT_TRUE (saw_b1);
+
+    close (raw_b_completion);
+    close (raw_b_application);
+    close (raw_a_completion);
+    close (raw_a_application);
     test_context_socket_close_zero_linger (server);
 }
 
@@ -497,6 +684,8 @@ int main (void)
 
     RUN_TEST (test_zmp_error_invalid_hello);
     RUN_TEST (test_network_incomplete_multipart_stops_at_receiver_max_message_size);
+    RUN_TEST (test_tcp_hidden_identity_releases_decoder_reservation);
+    RUN_TEST (test_tcp_decoder_hwm_isolated_by_origin_connection);
     RUN_TEST (test_paired_ready_generation_mismatch_is_not_attached);
     RUN_TEST (test_paired_ready_pair_id_mismatch_is_not_attached);
     RUN_TEST (test_paired_ready_peer_identity_mismatch_is_not_attached);

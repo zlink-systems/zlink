@@ -6,6 +6,7 @@
 #include <atomic>
 #include <memory>
 
+#include "core/auto_hwm_policy.hpp"
 #include "core/ypipe_base.hpp"
 #include "utils/config.hpp"
 #include "core/object.hpp"
@@ -21,11 +22,16 @@
 namespace zlink
 {
 class pipe_t;
+class ctx_physical_queue_registry_t;
+struct physical_queue_record_t;
+class retained_credit_token_t;
+struct decoder_frame_reservation_t;
 
 enum pipe_write_status_t
 {
     pipe_write_ready = 0,
     pipe_write_hwm_full,
+    pipe_write_transport_wait,
     pipe_write_inactive
 };
 
@@ -33,6 +39,7 @@ enum pipe_message_admission_t : int
 {
     pipe_message_admission_ready = 0,
     pipe_message_admission_hwm_full,
+    pipe_message_admission_transport_wait,
     pipe_message_admission_too_large,
     pipe_message_admission_inactive,
     pipe_message_admission_invalid
@@ -60,9 +67,14 @@ struct transport_lifetime_t
 //  default message_pipe_granularity is used.
 int pipepair (zlink::object_t *parents_[2],
               zlink::pipe_t *pipes_[2],
-               const uint64_t hwms_[2],
+              const uint64_t hwms_[2],
               const bool conflate_[2],
-              bool session_pipe_ = false);
+              bool session_pipe_ = false,
+              transport_lane_t lane_ = transport_lane_application,
+              auto_hwm_role_t role_ = auto_hwm_role_none,
+              bool planning_enabled_ = false,
+              physical_queue_class_t queue_class_ =
+                physical_queue_class_application);
 
 struct i_pipe_events
 {
@@ -94,7 +106,11 @@ class pipe_t ZLINK_FINAL : public object_t,
                          zlink::pipe_t *pipes_[2],
                          const uint64_t hwms_[2],
                          const bool conflate_[2],
-                         bool session_pipe_);
+                         bool session_pipe_,
+                         transport_lane_t lane_,
+                         auto_hwm_role_t role_,
+                         bool planning_enabled_,
+                         physical_queue_class_t queue_class_);
 
   public:
     typedef pipe_stream_packet_state_t stream_packet_state_t;
@@ -121,6 +137,15 @@ class pipe_t ZLINK_FINAL : public object_t,
     uint64_t get_rcv_pending_msgs_approx () const;
     uint64_t get_snd_pending_bytes () const;
     uint64_t get_rcv_pending_bytes_approx () const;
+    uint64_t get_snd_queue_accounted_bytes () const;
+    uint64_t get_rcv_queue_accounted_bytes () const;
+    const std::shared_ptr<physical_queue_record_t> &in_physical_queue () const;
+    const std::shared_ptr<physical_queue_record_t> &out_physical_queue () const;
+    uint64_t planned_out_hwm () const;
+    uint64_t applied_out_hwm () const;
+    uint64_t planned_in_hwm () const;
+    uint64_t applied_in_hwm () const;
+    void apply_physical_queue_hwm_plan ();
     uint64_t get_oversize_message_admission_count () const;
     uint64_t get_oversize_message_admission_max_bytes () const;
     uint64_t get_connected_time () const;
@@ -139,6 +164,18 @@ class pipe_t ZLINK_FINAL : public object_t,
 
     //  Reads a message to the underlying pipe.
     bool read (msg_t *msg_);
+    bool read_retained (msg_t *msg_, retained_credit_token_t *token_out_);
+    int reserve_inbound_decoder_frame (
+      uint64_t payload_bytes_, unsigned char msg_flags_, bool track_multipart_,
+      decoder_frame_reservation_t **reservation_out_);
+    int write_reserved_decoder_frame (
+      msg_t *msg_, decoder_frame_reservation_t **reservation_);
+    void release_decoder_frame_reservation (
+      decoder_frame_reservation_t **reservation_);
+    void finish_direct_decoder_frame (unsigned char msg_flags_);
+    void schedule_retained_credit (uint64_t generation_,
+                                   uint64_t msgs_read_,
+                                   uint64_t bytes_read_);
 
     //  Checks whether messages can be written to the pipe. If the pipe is
     //  closed or if writing the message would cause high watermark the
@@ -148,6 +185,11 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Checks whether messages can be written to the pipe and reports whether
     //  failure was caused by HWM or inactive pipe state.
     pipe_write_status_t check_write_status ();
+    pipe_message_admission_t check_write_admission ();
+
+    //  Consumes the HWM-credit wake marker. Transport-pair activation also
+    //  produces write activation, but must not be reported as credit recovery.
+    bool take_hwm_credit_recovery ();
 
     // Paired transports expose the Application route before both physical
     // lanes finish their handshake so a blocking send can wait on EAGAIN.
@@ -159,7 +201,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Writes a message to the underlying pipe. Returns false if the
     //  message does not pass check_write. If false, the message object
     //  retains ownership of its message buffer.
-    bool write (const msg_t *msg_);
+    bool write (const msg_t *msg_,
+                pipe_message_admission_t *admission_out_ = NULL);
 
     //  Writes a message assuming HWM was already checked by caller.
     //  Still validates pipe active/termination state.
@@ -173,17 +216,21 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Writes a message and flushes it downstream under the same pipe lock.
     //  Use this for final single-part send hot paths to avoid paying for
     //  separate write/flush lock acquisitions.
-    bool write_and_flush (const msg_t *msg_);
+    bool write_and_flush (const msg_t *msg_,
+                          pipe_message_admission_t *admission_out_ = NULL);
 
     //  Writes a message with the HWM check performed under the already-held
     //  pipe lock without re-entering check_hwm().
-    bool write_no_recursive_hwm_check (const msg_t *msg_);
+    bool write_no_recursive_hwm_check (
+      const msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL);
 
     //  Writes and flushes with the same non-recursive HWM check variant.
-    bool write_and_flush_no_recursive_hwm_check (const msg_t *msg_);
+    bool write_and_flush_no_recursive_hwm_check (
+      const msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL);
 
     //  Fast path for a single non-routing-id message that is always flushed.
-    bool write_single_message_and_flush_no_recursive_hwm_check (const msg_t *msg_);
+    bool write_single_message_and_flush_no_recursive_hwm_check (
+      const msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL);
 
 
     //  Remove unfinished parts of the outbound message from the pipe.
@@ -211,7 +258,6 @@ class pipe_t ZLINK_FINAL : public object_t,
     void set_lwm_hint (uint64_t lwm_hint_);
 
     //  Set the boost to high water marks, used by inproc sockets so total hwm are sum of connect and bind sockets watermarks
-    void set_hwms_boost (uint64_t inhwmboost_, uint64_t outhwmboost_);
 
     //  Payload bound for a complete message, or 0 when the reader has no
     //  finite bound. The empty-pipe oversize exception is enabled only when
@@ -250,13 +296,20 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool has_completed_termination () const;
 
   private:
+    friend class ctx_physical_queue_registry_t;
+
     //  Type of the underlying lock-free pipe.
     typedef ypipe_base_t<msg_t> upipe_t;
 
     //  Command handlers.
     void process_activate_read () ZLINK_OVERRIDE;
-    void process_activate_write (uint64_t msgs_read_, uint64_t bytes_read_) ZLINK_OVERRIDE;
-    void process_hiccup (void *pipe_) ZLINK_OVERRIDE;
+    void process_activate_write (uint64_t generation_,
+                                 uint64_t msgs_read_,
+                                 uint64_t bytes_read_) ZLINK_OVERRIDE;
+    void process_retained_credit (uint64_t generation_,
+                                  uint64_t msgs_read_,
+                                  uint64_t bytes_read_) ZLINK_OVERRIDE;
+    void process_hiccup (void *pipe_, uint64_t generation_) ZLINK_OVERRIDE;
     void process_pipe_term () ZLINK_OVERRIDE;
     void process_pipe_term_ack () ZLINK_OVERRIDE;
     void process_pipe_hwm (uint64_t inhwm_, uint64_t outhwm_) ZLINK_OVERRIDE;
@@ -276,10 +329,21 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  the caller drop a message it was told it could send.
     bool write_message_unlocked (const msg_t *msg_,
                                  bool enforce_hwm_,
-                                 bool enforce_incremental_hwm_ = false);
+                                 bool enforce_incremental_hwm_ = false,
+                                 pipe_message_admission_t *admission_out_ = NULL);
+    pipe_message_admission_t write_state_admission_unlocked () const;
+    bool write_state_ready_unlocked (
+      pipe_message_admission_t *admission_out_) const;
+    bool hwm_credit_ready_unlocked (
+      pipe_message_admission_t *admission_out_);
     void rollback_unlocked ();
     void flush_unlocked ();
-    uint64_t frame_accounted_bytes (const msg_t *msg_) const;
+    static uint64_t frame_accounted_bytes (const msg_t *msg_);
+    static uint64_t committed_frame_accounted_bytes_ref (const msg_t &msg_);
+    static bool counted_pending_message_ref (const msg_t &msg_);
+    void publish_outbound_frame_unlocked (const msg_t &msg_, bool more_);
+    void release_discarded_pipe_accounting (upipe_t *pipe_,
+                                            const std::shared_ptr<physical_queue_record_t> &queue_);
     bool append_outbound_frame_bytes_unlocked (const msg_t *msg_);
     bool can_commit_bytes_unlocked (uint64_t message_bytes_,
                                     uint64_t payload_bytes_,
@@ -291,6 +355,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool check_hwm_with_peer_snapshot_unlocked ();
     void refresh_peer_credit_snapshot_unlocked ();
     void account_inbound_frame (const msg_t *msg_);
+    bool read_internal (msg_t *msg_, retained_credit_token_t *token_out_);
+    void refresh_inbound_lwm_from_physical_queue ();
 
     //  Constructor is private. Pipe can only be created using
     //  pipepair function.
@@ -301,12 +367,15 @@ class pipe_t ZLINK_FINAL : public object_t,
             uint64_t outhwm_,
             bool conflate_,
             bool session_pipe_,
-            const std::shared_ptr<transport_lifetime_t> &transport_lifetime_);
+            const std::shared_ptr<transport_lifetime_t> &transport_lifetime_,
+            const std::shared_ptr<physical_queue_record_t> &in_physical_queue_,
+            const std::shared_ptr<physical_queue_record_t> &out_physical_queue_);
 
     //  Pipepair uses this function to let us know about
     //  the peer pipe object.
     void set_peer (pipe_t *peer_);
     void detach_peer_backref ();
+    void retire_physical_queue_endpoints ();
 
     //  Destructor is private. Pipe objects destroy themselves.
     ~pipe_t () ZLINK_OVERRIDE;
@@ -328,14 +397,8 @@ class pipe_t ZLINK_FINAL : public object_t,
 
     //  Low watermark for the inbound pipe.
     std::atomic<uint64_t> _lwm;
-    uint64_t _inhwm;
+    std::atomic<uint64_t> _inhwm;
     uint64_t _lwm_hint;
-
-    // boosts for high and low watermarks, used with inproc sockets so hwm are sum of send and recv hmws on each side of pipe
-    uint64_t _in_hwm_boost;
-    uint64_t _out_hwm_boost;
-    bool _in_hwm_boost_set;
-    bool _out_hwm_boost_set;
 
     //  Number of messages read and written so far.
     uint64_t _msgs_read;
@@ -345,10 +408,13 @@ class pipe_t ZLINK_FINAL : public object_t,
     std::atomic<uint64_t> _published_msgs_read;
     std::atomic<uint64_t> _published_bytes_read;
     uint64_t _last_credit_bytes_read;
+    uint64_t _in_generation;
+    uint64_t _out_generation;
     uint64_t _in_incomplete_bytes;
     uint64_t _out_incomplete_bytes;
     uint64_t _out_incomplete_payload_bytes;
     bool _out_multipart_started_empty;
+    bool _decoder_multipart_started_empty;
     //  Public payload bound for one complete message, or 0 when unlimited.
     uint64_t _max_message_bytes;
     uint64_t _oversize_message_admission_count;
@@ -447,6 +513,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     // The endpoints of this pipe.
     endpoint_uri_pair_t _endpoint_pair;
     std::shared_ptr<transport_lifetime_t> _transport_lifetime;
+    std::shared_ptr<physical_queue_record_t> _in_physical_queue;
+    std::shared_ptr<physical_queue_record_t> _out_physical_queue;
     transport_lane_t _transport_lane;
     uint64_t _transport_pair_id;
     uint64_t _transport_pair_generation;

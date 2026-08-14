@@ -4,9 +4,11 @@
 
 #include "sockets/router/router.hpp"
 
+#include "core/c_api_copy_internal.hpp"
 #include "core/pipe.hpp"
 #include "protocol/wire.hpp"
 #include "utils/debug_log.hpp"
+#include "utils/routing_id.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -50,6 +52,39 @@ bool router_debug_enabled ()
 
 namespace zlink
 {
+int router_t::xselect_routed_submit_target (
+  const zlink_routing_id_t *router_rid_or_null_,
+  zlink_routed_submit_target_t *target_out_)
+{
+    if (!valid_routing_id (router_rid_or_null_) || !target_out_) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    const blob_t routing_id (
+      const_cast<unsigned char *> (router_rid_or_null_->data),
+      router_rid_or_null_->size, reference_tag_t ());
+    const out_pipe_t *out_pipe = lookup_out_pipe (routing_id);
+    if (!out_pipe || !out_pipe->pipe
+        || !transport_pair_application_ready (out_pipe->pipe)) {
+        errno = EHOSTUNREACH;
+        return -1;
+    }
+    if (out_pipe->weight == 0) {
+        errno = ECONNREFUSED;
+        return -1;
+    }
+
+    copy_routing_id_from_bytes (router_rid_or_null_->data,
+                                router_rid_or_null_->size,
+                                &target_out_->peer_rid);
+    target_out_->transport_pair_id =
+      out_pipe->pipe->get_transport_pair_id ();
+    target_out_->transport_pair_generation =
+      out_pipe->pipe->get_transport_pair_generation ();
+    return 0;
+}
+
 pipe_t *router_t::find_transport_pair_pipe (
   const zlink_routing_id_t *target_rid_,
   uint64_t transport_pair_id_,

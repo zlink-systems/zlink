@@ -3,6 +3,8 @@
 #include "utils/precompiled.hpp"
 
 #include "core/session_base.hpp"
+#include "core/ctx_physical_queue_registry.hpp"
+#include "protocol/zmp_decoder.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "utils/err.hpp"
 #include "utils/debug_log.hpp"
@@ -98,10 +100,65 @@ int zlink::session_base_t::pull_msg (msg_t *msg_)
 
 int zlink::session_base_t::push_msg (msg_t *msg_)
 {
+    return push_msg_internal (msg_, NULL);
+}
+
+int zlink::session_base_t::push_msg_with_decoder_reservation (
+  msg_t *msg_, void **reservation_)
+{
+    return push_msg_internal (msg_, reservation_);
+}
+
+void zlink::session_base_t::configure_zmp_decoder (
+  zmp_decoder_t *decoder_)
+{
+    if (!decoder_)
+        return;
+    decoder_->set_frame_admission_handler (
+      &session_base_t::reserve_decoder_frame,
+      &session_base_t::release_decoder_frame, this);
+}
+
+int zlink::session_base_t::reserve_decoder_frame (
+  void *subject_, uint32_t payload_bytes_, unsigned char msg_flags_,
+  void **reservation_out_)
+{
+    if (!subject_ || !reservation_out_) {
+        errno = EFAULT;
+        return -1;
+    }
+    *reservation_out_ = NULL;
+    session_base_t *const self = static_cast<session_base_t *> (subject_);
+    if (!self->_pipe) {
+        errno = ETERM;
+        return -1;
+    }
+    decoder_frame_reservation_t *reservation = NULL;
+    const bool track_multipart =
+      (msg_flags_ & msg_t::routing_id) == 0
+      || self->options.recv_routing_id;
+    const int rc = self->_pipe->reserve_inbound_decoder_frame (
+      payload_bytes_, msg_flags_, track_multipart, &reservation);
+    *reservation_out_ = reservation;
+    return rc;
+}
+
+void zlink::session_base_t::release_decoder_frame (
+  void *, void *reservation_)
+{
+    decoder_frame_reservation_t *reservation =
+      static_cast<decoder_frame_reservation_t *> (reservation_);
+    release_decoder_frame_reservation (&reservation);
+}
+
+int zlink::session_base_t::push_msg_internal (msg_t *msg_,
+                                              void **reservation_)
+{
     if (_pipe)
         msg_->set_transport_connection_id (
           _pipe->get_transport_connection_id ());
     if ((msg_->flags () & msg_t::command) && !msg_->is_subscribe () && !msg_->is_cancel ()) {
+        zlink_assert (!reservation_ || !*reservation_);
         trace_router_session_push (_socket, msg_, session_push_trace_command);
         if (_socket) {
             const int control_rc = _socket->peer_command_from_io (msg_, _pipe);
@@ -119,7 +176,8 @@ int zlink::session_base_t::push_msg (msg_t *msg_)
     trace_router_session_push (_socket, msg_, session_push_trace_payload);
 
     if (_socket && _socket->socket_msg_dispatch_active ()) {
-        const int dispatch_rc = _socket->socket_msg_dispatch_from_io (msg_, _pipe);
+        const int dispatch_rc =
+          _socket->socket_msg_dispatch_from_io (msg_, _pipe);
         if (dispatch_rc < 0)
             return -1;
         if (dispatch_rc > 0) {
@@ -131,16 +189,44 @@ int zlink::session_base_t::push_msg (msg_t *msg_)
 
     if (options.type == ZLINK_CORE_SOCKET_STREAM && _socket && _pipe
         && _socket->stream_dispatch_active ()) {
+        const unsigned char msg_flags = msg_->flags ();
         const int dispatch_rc = _socket->stream_dispatch_msg_from_io (msg_, _pipe);
         if (dispatch_rc < 0)
             return -1;
-        if (dispatch_rc > 1)
+        if (dispatch_rc > 1) {
+            if (reservation_ && *reservation_) {
+                release_decoder_frame (this, *reservation_);
+                *reservation_ = NULL;
+            }
+            _pipe->finish_direct_decoder_frame (msg_flags);
             return 0;
+        }
         if (dispatch_rc > 0) {
+            if (reservation_ && *reservation_) {
+                release_decoder_frame (this, *reservation_);
+                *reservation_ = NULL;
+            }
+            _pipe->finish_direct_decoder_frame (msg_flags);
             const int rc = msg_->close ();
             errno_assert (rc == 0);
             return msg_->init ();
         }
+    }
+
+    if (_pipe && reservation_ && *reservation_) {
+        decoder_frame_reservation_t *decoder_reservation =
+          static_cast<decoder_frame_reservation_t *> (*reservation_);
+        const int write_rc = _pipe->write_reserved_decoder_frame (
+          msg_, &decoder_reservation);
+        *reservation_ = decoder_reservation;
+        if (write_rc == 0) {
+            trace_router_session_push (_socket, msg_, session_push_trace_write);
+            const int rc = msg_->init ();
+            errno_assert (rc == 0);
+            return 0;
+        }
+        trace_router_session_push (_socket, msg_, session_push_trace_write_failed);
+        return -1;
     }
 
     if (_pipe && _pipe->write (msg_)) {

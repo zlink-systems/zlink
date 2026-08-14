@@ -219,7 +219,13 @@ class asio_ws_engine_t ZLINK_FINAL : public i_engine
     //  State flags
     bool _plugged;
     bool _handshaking;
-    bool _input_stopped;
+    enum input_stop_reason_t
+    {
+        input_running,
+        input_decoded_message_backpressure,
+        input_decoder_allocation_backpressure
+    };
+    input_stop_reason_t _input_stop_reason;
     bool _output_stopped;
     bool _io_error;
     bool _read_pending;

@@ -31,6 +31,7 @@ namespace
 // Keep STREAM credit updates more frequent so the writer sees peer progress
 // sooner, especially on same-connection echo/proxy flows.
 const int stream_pipe_lwm_hint = zlink::env::positive_int ("ZLINK_STREAM_PIPE_LWM_HINT", 4);
+const uint64_t stream_pipe_lwm_hint_unit_bytes = 1024;
 }
 
 zlink::session_base_t *zlink::session_base_t::create (class io_thread_t *io_thread_,
@@ -156,8 +157,8 @@ int zlink::session_base_t::set_peer_transport_pair (transport_lane_t lane_,
     _transport_pair_id = pair_id_;
     _transport_pair_generation = generation_;
     if (lane_ == transport_lane_completion) {
-        options.sndhwm = transport_pair_policy::completion_hwm (options.sndhwm);
-        options.rcvhwm = transport_pair_policy::completion_hwm (options.rcvhwm);
+        options.sndhwm = 0;
+        options.rcvhwm = 0;
         options.sndbuf =
           transport_pair_policy::completion_socket_buffer (options.sndbuf);
         options.rcvbuf =
@@ -324,8 +325,27 @@ void zlink::session_base_t::engine_ready ()
         bool conflates[2] = {conflate, conflate};
         //  Session<->socket pipes back one transport connection; use the
         //  small per-connection chunk granularity.
-        const int rc = pipepair (parents, pipes, hwms, conflates, true);
-        errno_assert (rc == 0);
+        const physical_queue_endpoint_policy_t attach_policy =
+          _socket->make_auto_hwm_queue_policy (
+            std::shared_ptr<physical_queue_record_t> (), true);
+        const int rc = pipepair (
+          parents, pipes, hwms, conflates, true, _transport_lane,
+          attach_policy.role, attach_policy.planning_enabled);
+        if (rc != 0) {
+            const int pipepair_errno = errno;
+            const endpoint_uri_pair_t endpoint = _engine->get_endpoint ();
+            _engine->terminate ();
+            _engine = NULL;
+            if (_active) {
+                _socket->event_connect_delayed (endpoint, pipepair_errno);
+                reconnect ();
+            } else {
+                _socket->event_accept_failed (endpoint, pipepair_errno);
+                terminate ();
+            }
+            errno = pipepair_errno;
+            return;
+        }
         pipes[0]->set_transport_pair (
           _transport_lane, _transport_pair_id, _transport_pair_generation);
         pipes[1]->set_transport_pair (
@@ -344,7 +364,7 @@ void zlink::session_base_t::engine_ready ()
         if (options.type == ZLINK_CORE_SOCKET_STREAM && stream_pipe_lwm_hint > 0) {
             const uint64_t stream_lwm_hint_bytes =
               static_cast<uint64_t> (stream_pipe_lwm_hint)
-              * ZLINK_AUTO_HWM_STREAM_UNIT_BYTES_DFLT;
+              * stream_pipe_lwm_hint_unit_bytes;
             pipes[0]->set_lwm_hint (stream_lwm_hint_bytes);
             pipes[1]->set_lwm_hint (stream_lwm_hint_bytes);
         }

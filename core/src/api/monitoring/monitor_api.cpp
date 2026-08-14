@@ -118,7 +118,8 @@ void finalize_monitor_handler_self_close (monitor_handler_state_t *state_)
     zlink::socket_base_t *raw_monitor_source = raw_monitor_snapshot_subject (state_);
     if (raw_monitor_source && raw_monitor_source != socket) {
         state_->snapshot_subject.store (NULL, std::memory_order_release);
-        (void) raw_monitor_source->monitor (NULL, 0, 3, ZLINK_CORE_SOCKET_PAIR);
+        (void) raw_monitor_source->monitor (NULL, 0, 3,
+                                            ZLINK_CORE_SOCKET_PAIR, 0);
     } else {
         clear_raw_monitor_snapshot_subjects (socket);
     }

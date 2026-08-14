@@ -192,7 +192,8 @@ topology나 stateful object protocol을 포함하지 않는다.
 
 Reply payload는 Completion pipe에서 등록 callback으로 바로 이동한다. 숨은 PAIR
 receive queue나 두 번째 completion payload deque에 보관하지 않는다. Timeout,
-shutdown과 같은 terminal callback에는 payload가 없는 작은 control queue만 유지한다.
+shutdown과 같은 terminal callback에는 payload가 없는 작은 callback metadata queue만
+유지한다. 이 queue는 transport lane이나 wire record가 아니다.
 
 ## 7. pending 과 완료 규칙
 

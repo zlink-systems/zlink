@@ -53,6 +53,7 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     // Signaler support for ZLINK_INTERNAL_OPT_FD
     void add_signaler (signaler_t *signaler_);
     void remove_signaler (signaler_t *signaler_);
+    void signal_pollers ();
     void clear_signalers ();
 
 #ifdef HAVE_FORK
@@ -71,10 +72,14 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     signaler_t _signaler;
     bool _active;
 
-    //  There's only one thread receiving from the mailbox, but there
-    //  is arbitrary number of threads sending. Given that ypipe requires
-    //  synchronised access on both of its endpoints, we have to synchronise
-    //  the sending side.
+    // Async socket dispatch and a public blocking operation may both reach
+    // recv().  Keep the command-pipe receive endpoint single-owner even while
+    // ownership is handed between those executors.
+    mutex_t _recv_sync;
+
+    //  There is an arbitrary number of threads sending. Given that ypipe
+    //  requires synchronised access on both of its endpoints, we also have to
+    //  synchronise the sending side.
     mutex_t _sync;
 
     boost::asio::io_context *_io_context;

@@ -10,6 +10,7 @@
 #include "transports/tcp/tcp_transport.hpp"
 #include "core/io_thread.hpp"
 #include "core/session_base.hpp"
+#include "protocol/zmp_decoder.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "zlink.h"
 #include "utils/config.hpp"
@@ -148,7 +149,7 @@ zlink::asio_engine_t::asio_engine_t (fd_t fd_,
     _next_msg (NULL),
     _process_msg (NULL),
     _metadata (NULL),
-    _input_stopped (false),
+    _input_stop_reason (input_running),
     _output_stopped (false),
     _endpoint_uri_pair (endpoint_uri_pair_),
     _has_handshake_timer (false),
@@ -425,7 +426,8 @@ void zlink::asio_engine_t::start_async_read ()
     //  once input is stopped, do not arm new reads until restart_input().
     //  Stream sockets keep proactor-style buffering under backpressure.
     if (_pipeline.read_pending || _pipeline.io_error
-        || (_input_stopped && _options.type != ZLINK_CORE_SOCKET_STREAM))
+        || (_input_stop_reason != input_running
+            && _options.type != ZLINK_CORE_SOCKET_STREAM))
         return;
 
     ENGINE_DBG ("start_async_read: insize=%zu", _insize);
@@ -438,7 +440,8 @@ void zlink::asio_engine_t::start_async_read ()
     //  Get buffer from decoder if available
     size_t read_size;
 
-    if (_decoder && _input_stopped && _options.type == ZLINK_CORE_SOCKET_STREAM) {
+    if (_decoder && _input_stop_reason != input_running
+        && _options.type == ZLINK_CORE_SOCKET_STREAM) {
         read_size = _pipeline.stream_decoder_read_target_size;
         if (read_size == 0) {
             read_size = _options.in_batch_size;
@@ -567,7 +570,7 @@ bool zlink::asio_engine_t::speculative_read ()
     _pipeline.last_speculative_read_bytes = bytes;
 
     //  Mirror async path behavior for backpressure buffering.
-    if (_input_stopped) {
+    if (_input_stop_reason != input_running) {
         (void) buffer_stream_backpressure_read (bytes);
         return true;
     }
@@ -910,7 +913,7 @@ void zlink::asio_engine_t::on_read_complete (const boost::system::error_code &ec
     _pipeline.read_pending = false;
     ENGINE_DBG ("on_read_complete: ec=%s, bytes=%zu, terminating=%d, input_stopped=%d",
                 ec.message ().c_str (), bytes_transferred, _connection_facade.terminating,
-                _input_stopped);
+                _input_stop_reason != input_running);
 
     //  If terminating, just return - terminate() is draining handlers
     if (_connection_facade.terminating)
@@ -934,7 +937,7 @@ void zlink::asio_engine_t::on_read_complete (const boost::system::error_code &ec
 
     //  During backpressure, STREAM keeps proactor-style buffering, while
     //  non-stream keeps bytes in decoder buffer and waits for restart_input().
-    if (_input_stopped) {
+    if (_input_stop_reason != input_running) {
         if (_options.type != ZLINK_CORE_SOCKET_STREAM) {
             if (_decoder && _insize > 0) {
                 const size_t partial_size = _insize;
@@ -1035,7 +1038,8 @@ void zlink::asio_engine_t::maybe_drain_stream_reads ()
     size_t drained_bytes = 0;
 
     while (!_connection_facade.terminating && !_pipeline.io_error && !_pipeline.read_pending
-           && !_input_stopped && drained_loops < asio_stream_read_drain_max_loops
+           && _input_stop_reason == input_running
+           && drained_loops < asio_stream_read_drain_max_loops
            && drained_bytes < asio_stream_read_drain_max_bytes) {
         const bool progressed = speculative_read ();
         if (!progressed)
@@ -1173,7 +1177,7 @@ bool zlink::asio_engine_t::process_input ()
     zlink_assert (_decoder);
 
     //  If there has been an I/O error, stop.
-    if (_input_stopped) {
+    if (_input_stop_reason != input_running) {
         _pipeline.io_error = true;
         return true;
     }
@@ -1227,7 +1231,7 @@ bool zlink::asio_engine_t::process_input ()
             error (protocol_error);
             return false;
         }
-        _input_stopped = true;
+        stop_input_for_current_backpressure ();
     }
 
     _connection_facade.session->flush ();
@@ -1479,7 +1483,7 @@ bool zlink::asio_engine_t::restart_input ()
 {
     //  write_activated() can be delivered even when input flow is already
     //  running. In that case restart is a no-op.
-    if (unlikely (!_input_stopped)) {
+    if (unlikely (_input_stop_reason == input_running)) {
         ENGINE_DBG ("restart_input: ignored (input not stopped)");
         return true;
     }
@@ -1489,7 +1493,7 @@ bool zlink::asio_engine_t::restart_input ()
 
 bool zlink::asio_engine_t::restart_input_internal ()
 {
-    zlink_assert (_input_stopped);
+    zlink_assert (_input_stop_reason != input_running);
     zlink_assert (_connection_facade.session != NULL);
     zlink_assert (_decoder != NULL);
 
@@ -1498,10 +1502,23 @@ bool zlink::asio_engine_t::restart_input_internal ()
                                         : _pipeline.pending_buffers.size ();
     ENGINE_DBG ("restart_input: pending_buffers=%zu, insize=%zu", pending_queue_size, _insize);
 
-    //  First, try to process the previously failed message
-    int rc = (this->*_process_msg) (_decoder->msg ());
+    //  A framing-admission stop happens before the decoder has allocated a
+    //  message. Retry that admission, never the message consumer.
+    int rc = 0;
+    if (_input_stop_reason == input_decoder_allocation_backpressure) {
+        const int admission_rc = retry_decoder_allocation ();
+        if (admission_rc == -1)
+            return errno == EAGAIN;
+        _input_stop_reason = input_running;
+        if (admission_rc == 1)
+            rc = (this->*_process_msg) (_decoder->msg ());
+    } else {
+        //  Retry the previously decoded message rejected by the session pipe.
+        rc = (this->*_process_msg) (_decoder->msg ());
+    }
     if (rc == -1) {
         if (errno == EAGAIN) {
+            stop_input_for_current_backpressure ();
             //  Still backpressure - stay stopped
             _connection_facade.session->flush ();
             ENGINE_DBG ("restart_input: still backpressure on pending msg");
@@ -1538,6 +1555,7 @@ bool zlink::asio_engine_t::restart_input_internal ()
 
     //  Check for backpressure or errors after processing current buffer
     if (rc == -1 && errno == EAGAIN) {
+        stop_input_for_current_backpressure ();
         _connection_facade.session->flush ();
         ENGINE_DBG ("restart_input: backpressure after current buffer");
         return true;
@@ -1583,6 +1601,7 @@ bool zlink::asio_engine_t::restart_input_internal ()
             }
 
             if (rc == -1 && errno == EAGAIN) {
+                stop_input_for_current_backpressure ();
                 if (chunk_pos > 0) {
                     chunk.offset += chunk_pos;
                     _pipeline.total_pending_bytes -= chunk_pos;
@@ -1666,6 +1685,7 @@ bool zlink::asio_engine_t::restart_input_internal ()
 
             //  If backpressure occurred, keep remaining data in buffer
             if (rc == -1 && errno == EAGAIN) {
+                stop_input_for_current_backpressure ();
                 if (buffer_remaining > 0 && buffer_pos > 0) {
                     //  Trim processed data from buffer and update tracking
                     const size_t bytes_consumed = buffer_pos;
@@ -1716,7 +1736,7 @@ bool zlink::asio_engine_t::restart_input_internal ()
     }
 
     //  All pending data processed successfully - NOW safe to clear flag
-    _input_stopped = false;
+    _input_stop_reason = input_running;
     _connection_facade.session->flush ();
 
     ENGINE_DBG ("restart_input: completed, input resumed");
@@ -1737,7 +1757,7 @@ bool zlink::asio_engine_t::restart_input_internal ()
                     pending_after_flush);
         //  Re-enter stopped mode and recursively drain.
         //  Call restart_input_internal() directly to keep state local.
-        _input_stopped = true;
+        _input_stop_reason = input_decoded_message_backpressure;
         return restart_input_internal ();
     }
 
@@ -1748,6 +1768,29 @@ bool zlink::asio_engine_t::restart_input_internal ()
 
     start_async_read ();
     return true;
+}
+
+int zlink::asio_engine_t::retry_decoder_allocation ()
+{
+    zmp_decoder_t *decoder = dynamic_cast<zmp_decoder_t *> (_decoder);
+    zlink_assert (decoder);
+    const int rc = decoder->retry_frame_admission ();
+    if (rc == -1) {
+        if (errno == EAGAIN)
+            return -1;
+        error (protocol_error);
+        return -1;
+    }
+    return rc;
+}
+
+void zlink::asio_engine_t::stop_input_for_current_backpressure ()
+{
+    zmp_decoder_t *const decoder = dynamic_cast<zmp_decoder_t *> (_decoder);
+    _input_stop_reason =
+      decoder && decoder->allocation_backpressured ()
+        ? input_decoder_allocation_backpressure
+        : input_decoded_message_backpressure;
 }
 
 const zlink::endpoint_uri_pair_t &zlink::asio_engine_t::get_endpoint () const
