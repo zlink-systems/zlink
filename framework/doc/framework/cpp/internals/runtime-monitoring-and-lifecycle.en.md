@@ -103,13 +103,11 @@ previous owner's TTL and fencing margin have elapsed.
 
 ## 9. Monitor event ABI and callback lifetime
 
-The extended monitor identity fields are read through the versioned
-`zlink_socket_monitor_recv_v2` entry point. The legacy receive entry point
-writes only the stable event prefix. This keeps a caller compiled with the
-previous `zlink_monitor_event_t` layout from receiving writes past its buffer.
-The C++ binding uses the versioned entry point for pull-based monitoring. The
-callback dispatch path uses an internal extended event object and passes only
-public binding fields to the Framework.
+The extended monitor identity fields are read through the current 0.11.1
+`zlink_socket_monitor_recv` entry point. Core exposes no separate receive entry
+point for the previous event prefix and no size/version negotiation. The C++
+binding uses the current event layout for pull-based monitoring and callback
+dispatch, and passes only public binding fields to the Framework.
 
 The C++ `socket_monitor_t` callback userdata points to a heap-owned callback
 state held by the monitor implementation, rather than to the movable

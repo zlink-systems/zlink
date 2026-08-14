@@ -44,7 +44,7 @@ Sample과 E2E의 설정 파일, 환경 변수 금지와 `@ConfigurationPropertie
 | 문서 | 범위 |
 |------|------|
 | [backend-dependency-policy](internals/backend-dependency-policy.ko.md) | Java binding 의존 격리 |
-| [공통 내부 구조](../common/internals/README.ko.md) | 네 언어가 공유하는 runtime 아키텍처 결정 |
+| [공통 내부 구조](../common/spec/README.ko.md) | 네 언어가 공유하는 runtime 아키텍처 결정 |
 | [regression-test-matrix](internals/regression-test-matrix.ko.md) | JVM contract, E2E와 performance smoke 기준 |
 | [stream-dispatch-hot-path](internals/stream-dispatch-hot-path.ko.md) | Stream 수신 dispatch의 ownership과 allocation 경계 |
 | [runtime-monitoring-placement-usage](internals/runtime-monitoring-placement-usage.ko.md) | Placement limit과 live object count의 결합 경계 |

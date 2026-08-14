@@ -668,8 +668,10 @@ Actors, unexecuted messages, and logical timer as one relocation unit. The Appli
 saves the room's and Actor's domain state, and doesn't duplicate the owner, queue, timer handle, or
 accepted journal.
 
-A failure before commit keeps the source state. A failure after commit recovers the same relocation
-at the target. A message that arrives on the previous route is delivered to the target if there's an
+A declared failure before the RelayReady reply is accepted keeps the source state. After
+RelayReady is accepted, the source isn't restored regardless of the CUTOVER submit result; the
+target completes the same relocation when it receives CUTOVER or through the existing one-second
+fallback. A message that arrives on the previous route is delivered to the target if there's an
 active Message Follow. It ends as `Unavailable` if there's no route, the route expired, or a loop
 forms; as `InvalidOperation` if the generation differs; and as `CapacityExceeded` if the capacity
 limit is exceeded. The sample doesn't turn this error into normal success or work around it by

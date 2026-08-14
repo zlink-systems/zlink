@@ -1,8 +1,8 @@
 <!-- framework-adapter-nav:start -->
-[문서 목록](../README.ko.md) | [이전: Runtime Lifecycle](../../common/internals/README.ko.md) | [다음: Backend Dependency Policy](backend-dependency-policy.ko.md)
+[문서 목록](../README.ko.md) | [이전: Runtime Lifecycle](../../common/spec/README.ko.md) | [다음: Backend Dependency Policy](backend-dependency-policy.ko.md)
 <!-- framework-adapter-nav:end -->
 
-[Node.js 묶음](../README.ko.md) | [Runtime Lifecycle](../../common/internals/README.ko.md) | [Backend Policy](backend-dependency-policy.ko.md) | [공통 E2E](../../common/e2e/README.ko.md)
+[Node.js 묶음](../README.ko.md) | [Runtime Lifecycle](../../common/spec/README.ko.md) | [Backend Policy](backend-dependency-policy.ko.md) | [공통 E2E](../../common/e2e/README.ko.md)
 
 # ZLink Framework Node.js Regression Test Matrix
 
@@ -348,7 +348,7 @@ dotnet 의 문서 회귀 테스트처럼, Node 에서도 구현 기준 문서가
 - `framework/common/spec/server/languages/node/interfaces/README.ko.md`와 그 범주별 interface 문서
 - `framework/node/README.ko.md`
 - `framework/node/internals/regression-test-matrix.ko.md`
-- `../../common/internals/README.ko.md`
+- `../../common/spec/README.ko.md`
 - `framework/node/internals/backend-dependency-policy.ko.md`
 
 [^public-contract]: public contract 는 외부 사용자에게 공개되어 변경 시 호환성을 책임져야 하는 API 표면을 뜻한다.
@@ -366,7 +366,7 @@ dotnet 의 문서 회귀 테스트처럼, Node 에서도 구현 기준 문서가
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[문서 목록](../README.ko.md) | [이전: Runtime Lifecycle](../../common/internals/README.ko.md) | [다음: Backend Dependency Policy](backend-dependency-policy.ko.md)
+[문서 목록](../README.ko.md) | [이전: Runtime Lifecycle](../../common/spec/README.ko.md) | [다음: Backend Dependency Policy](backend-dependency-policy.ko.md)
 <!-- framework-adapter-nav:bottom:end -->
 
 ## 공개 계약 문서에서 이관한 회귀 항목

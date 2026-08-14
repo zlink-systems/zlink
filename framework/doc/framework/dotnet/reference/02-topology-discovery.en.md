@@ -313,7 +313,9 @@ services.AddZLinkFramework(options =>
 {
     options.AddHandlersFromAssemblyOf<GameEntrySpot>(); // finds and registers attribute-marked handlers from an assembly
     options.ConfigureNetwork().BindHost = "0.0.0.0";
-    options.ConfigureInboundDispatch().ApplicationHwmProfile = ZLinkApplicationHwmProfile.LowLatency;
+    IZLinkDispatchOptions dispatch = options.ConfigureDispatch();
+    dispatch.CoreHwmProfile = ZLinkCoreHwmProfile.LowLatency;
+    dispatch.ApplicationJobQueueProfile = ZLinkApplicationJobQueueProfile.LowLatency;
     options.ConfigureMetadata()
         .AllowSessionToActor("trace-id")
         .AllowActorToSession("server-region"); // the metadata-key allowlist to forward
@@ -329,17 +331,21 @@ services.AddZLinkFramework(options =>
 | `.DisableImplicitHandlerAutoRegistration()` | active (auto scan) | turns off attribute-based auto-registration and uses only explicit builder registration |
 | `.ConfigureMetadata().AllowSessionToActor(key)` / `.AllowActorToSession(key)` | a key not specified is not forwarded | adds a metadata key to the per-direction allowlist to forward over STREAM session↔Actor relay |
 | `.ConfigureNetwork()` | `BindHost` is all interfaces | the default bind·advertise host used unless an individual Listen call overrides it. Returns `IZLinkNetworkOptions` (a property bag) |
-| `.ConfigureInboundDispatch()` | `ApplicationHwmProfile = Balanced` | the inbound application HWM size·profile, and the process memory cap. Returns `IZLinkInboundDispatchOptions` |
-| `.ConfigureDispatch().Unhandled` | Framework default policy | how a packet with no matching handler is handled |
+| `.ConfigureDispatch()` | Framework dispatch/diagnostics defaults; both profiles are `Balanced`; nullable manual values are `null` | configures unmatched-packet handling/diagnostics and the Core HWM memory/budget/profile inputs plus the host-wide Application Job Queue profile or exact manual permit limit on `IZLinkDispatchOptions` |
 | `.ConfigureStreamCompression()` | no compression | the default STREAM compression codec (`UseDefault()`/`UseLz4()`/`Use(codec)`/`Disable()`) |
 | `.ConfigureRouterSocket()` / `.ConfigureSpotPublisher()` (on `MeshNodeBuilder`) | socket defaults | individual HWM·buffer·timeout tuning for the MeshNode ROUTER socket and the Spot publisher |
 
 **Completion.** `.AddHandlersFromAssemblyOf(...)`/`.DisableImplicitHandlerAutoRegistration()`
 run synchronously with no return value.
-`.ConfigureMetadata()`/`.ConfigureNetwork()`/`.ConfigureInboundDispatch()`/`.ConfigureDispatch()`/`.ConfigureStreamCompression()`
+`.ConfigureMetadata()`/`.ConfigureNetwork()`/`.ConfigureDispatch()`/`.ConfigureStreamCompression()`
 synchronously return the corresponding builder or options object, on which properties are set or
 further modifiers are called. A value outside range surfaces as `ZLinkConfigurationException`
 during host startup validation.
+
+Core owns its byte-budget calculation. The Framework does not divide that budget by connection
+count. The Application Job Queue is a separate job-count limit; `MaxQueuedApplicationJobs` accepts
+`1..2,147,483,647`, while `null` selects the Auto profile. See the
+[Core/Framework API contract](../../common/spec/06-framework-api.en.md).
 
 **When to use it.** Use it to adjust host-wide settings that end in a single simple value and
 do not belong to one of the dedicated entries above (host lifecycle·topology registration·

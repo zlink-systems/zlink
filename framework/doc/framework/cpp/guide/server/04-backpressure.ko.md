@@ -18,11 +18,11 @@ title: "4. Backpressure — 처리보다 도착이 빠를 때 · C++"
 # 4. Backpressure — 처리보다 도착이 빠를 때
 
 > **이 장의 계약 소유 문서** — [비동기 실행 정책](../../../common/spec/05-async-execution-policy.ko.md)과
+> [Framework API](../../../common/spec/06-framework-api.ko.md),
+> [runtime monitoring](../../../common/spec/24-runtime-monitoring.ko.md)과
 > [언어별 topology 공개 계약](../../../common/spec/server/languages/README.ko.md)이
 > 다룬다. 이 챕터는 그 동작을 개념과 원리로 설명하고 어떤 옵션이 영향을 주는지 다룬다.
-> 옵션의 기본값과 변경 시점은 [16. Options](16-options.ko.md)이 소유한다. 이 챕터가 쓰는
-> 계약 가운데 runtime에 아직 반영되지 않은 부분은
-> [Framework에 아직 적용되지 않은 부분](#6-framework-runtime-적용-범위)이 밝힌다.
+> 옵션의 정확한 이름·기본값과 변경 시점은 언어별 [16. Options](16-options.ko.md)과 exact interface가 소유한다.
 
 ## 0. 처리 능력을 넘는 유입이 발생할 때의 선택지
 
@@ -37,31 +37,27 @@ ZLink는 세 번째 방식을 사용한다. 이렇게 **받는 쪽의 처리 지
 이유로 버리지 않는다. 따라서 부하가 걸린 상태에서 application에 나타나는 증상은
 "message가 사라졌다"가 아니라 "`send`가 느려졌다" 또는 "`DeadlineExceeded`가 발생했다"다.
 
-## 1. 송·수신 queue와 high-water mark
+## 1. Core HWM과 Application job queue
 
-`send_to_channel(...)`이나 `publish(...)`로 보낸 message는 이 process가 상대별로 유지하는
-**송신 queue**에 먼저 들어가고, 그 queue에서 차례로 연결을 통해 나간다. 받는 쪽에도 아직
-처리하지 못한 message가 머무는 **수신 queue**가 있다. 두 queue에는 각각 상한이 있고, 이
-상한을 high-water mark(HWM)라 한다.
+Framework host의 backpressure는 서로 다른 두 자원을 제한한다. Core HWM은 ordinary
+send·receive queue가 보유한 accounted byte를 origin별로 제한한다. Framework의 Application job
+queue는 handler 실행을 기다리는 job 수를 host instance 전체에서 제한한다. Byte와 job을 같은
+상한으로 합치거나 서로 환산하지 않는다.
 
-**HWM은 message 개수가 아니라 그 queue가 실제로 보관하는 byte로 센다.** 개수로 세면 같은
-상한에서도 payload 크기에 따라 보유 memory가 수십 배 달라지고, 그 결과 설정값으로 process
-memory를 예측할 수 없다. byte로 세면 queue 하나가 차지할 수 있는 memory가 설정한 값으로
-정해진다.
-
-두 queue가 세는 byte는 payload 크기가 아니다. runtime이 message와 함께 들고 있는 routing
-frame과 고정 metadata를 더한 값이며, 그 합이 작더라도 message 한 건에 **최소 charge**가
-적용된다. 크기가 거의 0인 message를 아주 많이 보내도 queue metadata만 늘어나는 상황을
-막기 위해서다. 그래서 payload 합계로 계산한 값보다 상한에 조금 일찍 닿는다.
+Core에서 Framework로 꺼낸 application record는 origin의 retained-credit lease를 terminal까지
+유지한다. Application job queue permit은 receive·claim 직전에 얻고 실제 사용자 callback의 첫
+instruction 직전에 반환한다. 따라서 handler가 시작된 뒤 비동기 I/O를 기다리는 동안에는 job
+queue permit을 다시 점유하지 않지만, Core retained byte credit은 record와 필요한 reply submit이
+terminal에 도달할 때까지 유지될 수 있다.
 
 ```mermaid
 %%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
 flowchart LR
     H1["보내는 handler<br/>SendToChannel(...)"]:::app
-    SQ["송신 queue<br/>SendHighWaterMark (byte)"]:::queue
+    SQ["Core ordinary 송신 queue<br/>accounted byte HWM"]:::queue
     AC(["Application 연결"]):::net
-    RQ["수신 queue<br/>ReceiveHighWaterMark (byte)"]:::queue
-    BUD["host application backlog<br/>dispatch를 기다리는 payload byte"]:::budget
+    RQ["Core ordinary 수신 queue<br/>accounted byte HWM"]:::queue
+    BUD["Application job queue<br/>reserved + queued permit"]:::budget
     H2["받는 handler"]:::app
     CC(["Completion 연결"]):::net
 
@@ -75,13 +71,10 @@ flowchart LR
     classDef net fill:#eceff1,stroke:#546e7a,color:#000000
 ```
 
-받는 쪽에서 message는 수신 queue를 지나 Framework의 **application backlog** 안으로 들어온다.
-backlog는 Framework가 받았지만 **아직 handler 실행을 시작하지 못한** message의 payload
-byte 합계다. connection이나 node마다 나누지 않고 한 host 전체에 하나로 적용하며, handler가
-그 message 처리를 시작하는 순간 backlog에서 빠진다. backlog가 상한에 닿으면 Framework는 새
-message를 받는 것을 멈추고, 그만큼 수신 queue가 차고, 그 압력이 보내는 쪽까지 이어진다.
-**어느 단계에서도 이미 받아들인 message를 버리지 않는다** — 상한이 하는 일은 버리는 것이
-아니라 기다리게 하는 것이다.
+Application job queue 상한에 도달하면 receive 전에 terminal reply·error completion으로 식별할 수 있는
+record를 제외한 ordinary ingress는 새 receive·claim 전에 permit을 cancellable하게 기다린다. 이미
+받아들인 message를 부하 때문에 버리거나 capacity error로 바꾸지 않는다. Core ordinary receive
+queue가 차면 origin별 byte HWM이 압력을 sender까지 전달한다.
 
 ## 2. 동작 원리
 
@@ -99,59 +92,47 @@ message를 받는 것을 멈추고, 그만큼 수신 queue가 차고, 그 압력
 
 ### 2.2 수신 지연이 송신으로 전파되는 경로
 
-세 단계를 거친다. 앞 두 단계는 받는 쪽 runtime과 TCP가 처리하고, 마지막 단계에서 비로소
-보내는 application이 대기를 겪는다.
+세 단계를 거친다. 앞 두 단계는 받는 쪽 Framework와 Core가 처리하고, 마지막 단계에서 보내는
+application이 대기를 겪는다.
 
-**1단계 — 받는 쪽이 수신을 멈춘다.** handler가 처리하는 속도보다 도착이 빠르면 dispatch를
-기다리는 message가 쌓이면서 host의 application backlog가 먼저 상한에 닿는다. 그때부터
-Framework는 그 host에서 새 application message를 받기 시작하지 않는다. 이미 도착한 message는
-버려지지 않고 수신 queue에 그대로 남는다.
+**1단계 — Application job queue permit이 찬다.** Handler가 처리하는 속도보다 ordinary ingress가
+빠르면 reserved supply와 handler 시작을 기다리는 job이 host instance 상한에 도달한다. Framework는
+다음 ordinary record를 receive·claim하기 전에 permit 반환을 기다린다. 포화를 reject·drop이나 별도
+임시 queue로 바꾸지 않는다.
 
-**2단계 — TCP 흐름 제어가 전송 속도를 낮춘다.** 받는 쪽이 수신을 멈추면 수신 queue가
-상한까지 차고 그다음에는 수신 버퍼가 찬다. TCP는 남은 여유(수신 윈도우)를 보내는 쪽에 알려
-주고, 여유가 없으면 보내는 쪽 TCP는 더 내보내지 않고 상대가 읽어 갈 때까지 기다린다.
-결과적으로 **전송 속도가 받는 쪽이 처리하는 속도에 맞춰진다.** 이 단계는 실패가 아니라
-감속이므로 보내는 application에는 아직 아무 변화도 나타나지 않는다.
+**2단계 — Core receive queue가 찬다.** Framework가 ordinary ingress를 더 받지 않으면 Core queue에
+accounted byte가 누적된다. Origin별 receive HWM에 도달한 queue는 sender 쪽 흐름을 늦춘다. 다른
+origin과 receive 전에 식별할 수 있는 terminal reply·error completion의 진행 경로는 이 queue의
+포화와 분리된다.
 
-**3단계 — 송신 queue가 상한에 닿으면 `send`가 대기한다.** 전송이 느려진 만큼 송신 queue도
-천천히 비워진다. application이 그보다 빠른 속도로 계속 message를 넣으면 queue에 쌓이고,
-보관 byte가 `send_high_water_mark`에 닿는 순간 그 상대로 가는 송신이 잠긴다. 이때부터 `send`
-호출이 곧바로 반환되지 않고 자리가 나기를 기다린다 — 받는 쪽의 지연이 application의 대기로
-처음 나타나는 지점이다.
+**3단계 — sender의 Core submit이 대기한다.** 받는 쪽으로 더 보낼 수 없는 동안 sender의
+ordinary send queue도 비워지지 않는다. 해당 origin의 HWM에 도달하면 비동기 send는 수용 가능한
+상태를 기다리고, 정해진 deadline까지 자리가 없으면 해당 언어의 timeout 결과로 끝난다.
 
 ```text
 받는 handler가 처리 속도를 못 맞춤
-  → 받는 쪽 application backlog가 차고 수신이 멈춘다   (1단계: 받는 쪽이 멈춘다)
-  → 수신 queue가 byte 상한까지 차고 수신 윈도우가 줄어든다
-  → TCP가 전송 속도를 낮춘다                          (2단계: 전송이 느려진다)
-  → 보내는 쪽 송신 queue가 비워지는 속도도 느려진다
-  → 넣는 byte가 비워지는 byte보다 많으면 상한까지 찬다
-  → send가 자리를 기다린다                            (3단계: application이 대기한다)
+  → Application job queue permit이 차고 ordinary receive가 기다린다
+  → Core ordinary receive queue의 accounted byte가 HWM에 닿는다
+  → origin별 backpressure가 sender의 Core queue로 전달된다
+  → send가 수용 가능한 상태를 기다린다
 ```
 
-**즉 backpressure는 TCP 흐름 제어의 연장이다.** TCP는 전송 속도를 낮추는 데서 멈추고,
-HWM이 그 영향을 application 호출까지 끌어올린다. 그래서 보내는 쪽이 알 수 있는 것은 "내 자리가
-없다"는 사실뿐이고, "상대가 느리다"는 정보는 얻지 못한다. `DeadlineExceeded`도 상대의
-상태를 알려 주지 못하므로, 원인을 구분하려면 상대 node의 처리 지표를 함께
-확인한다([12-operations](12-operations.ko.md) §1).
+Sender가 알 수 있는 것은 자기 submit이 수용되지 않았다는 사실뿐이다. Timeout 결과만으로 remote
+handler, network 또는 local Core queue 가운데 원인을 구분할 수 없으므로 양쪽의 Core HWM과
+Application job queue 상태를 함께 확인한다([12-operations](12-operations.ko.md) §1).
 
-### 2.3 잠금과 해제 임계값
+### 2.3 Permit 반환과 대기 재개
 
-상한에 닿으면 송신이 잠기지만, message가 하나 빠져나갈 때마다 곧바로 풀리지는 않는다.
-**상한의 절반가량이 비워졌을 때** 다시 보낼 수 있게 된다.
+Application job queue permit은 queue 게시나 executor task 생성 시점이 아니라 사용자 callback의
+첫 instruction 직전에 반환한다. 반환한 permit은 가장 오래 기다린 live ingress source에 직접
+넘기며, 새 acquire가 기존 waiter를 앞지르지 않는다. Handler가 시작한 뒤 await에 들어가도 permit을
+다시 얻지 않는다.
 
-message 하나 단위로 잠금과 해제를 반복하지 않기 위한 동작이다. 가득 찬 상태에서 하나가
-빠질 때마다 하나씩 넣도록 하면 양쪽이 번갈아 깨어나기만 하고 throughput이 오르지 않는다.
-반대로 queue가 완전히 빌 때까지 잠가 두면 필요 이상으로 오래 멈춘다. **그래서 상한은
-"잠기는 지점"이면서 동시에 "절반만큼 비워야 풀리는 단위"다** — 값을 크게 설정할수록 한 번
-잠겼을 때 다시 흐르기까지 비워야 하는 byte도 함께 늘어난다.
-
-한 가지 예외가 있다. **queue가 완전히 비어 있으면 상한보다 큰 message도 한 건은
-통과시킨다.** 그렇지 않으면 그 message는 어떤 상황에서도 보낼 수 없다. 다만 무제한으로
-허용하지는 않고 그 방향의 `max_message_size` 이하일 때만 통과시키며, 여러 part로 나뉜
-message를 보내는 중에는 이 예외를 적용하지 않는다. 따라서 순간 보유량이 상한을 넘을 수
-있으므로, 한 queue가 차지할 수 있는 최악의 memory를 계산할 때는 상한과 `max_message_size`
-중 큰 값을 사용한다.
+Receive 전에 식별할 수 있는 terminal reply·error completion은 ordinary ingress permit과 Core
+ordinary byte HWM을 사용하지 않는다. Ordinary connection에서 먼저 받은 record는 분류 후 이 bypass를
+얻지 않는다. 그 밖의 control·malformed record는 receive 전에 permit을 얻고, handler job을 만들지
+않는다고 분류한 직후 반환한다. 이 구분 덕분에 ordinary traffic이 포화되어도 이미 시작한 request의
+terminal completion은 계속 진행한다.
 
 ### 2.4 Application 연결과 Completion 연결 분리
 
@@ -250,10 +231,12 @@ timeout으로 끝나도 이미 시작된 remote handler의 실행은 취소되�
 | --- | --- | --- |
 | `DefaultSocketSendTimeout` | 보낼 자리가 없을 때 기다리는 상한(기본 1초) | 루트 옵션 |
 | — | 실제로 적용되는 값은 **보내는 경로마다 다르다**(아래) | — |
-| `send_high_water_mark` | 상대별로 **보내려고** 보관할 수 있는 byte. `0`은 무제한 | `configure_router_socket()` |
-| `receive_high_water_mark` | 상대별로 **받아서** 보관할 수 있는 byte. `0`은 무제한 | `configure_router_socket()` |
+| `SendHighWaterMark` | 상대별로 **보내려고** 보관할 수 있는 byte. `0`은 무제한 | `configure_router_socket()` |
+| `ReceiveHighWaterMark` | 상대별로 **받아서** 보관할 수 있는 byte. `0`은 무제한 | `configure_router_socket()` |
 | `max_message_size` | 받아들일 message 하나의 최대 크기 | `configure_router_socket()` |
-| `send_high_water_mark` · `linger` | pub/sub 발행 소켓의 상한과 종료 시 잔여 발행 대기 | `ConfigureSpotPublisher()` |
+| `SendHighWaterMark` · `linger` | pub/sub 발행 소켓의 상한과 종료 시 잔여 발행 대기 | `ConfigureSpotPublisher()` |
+| `core_hwm_memory_limit_bytes` · `core_hwm_budget_bytes` · `CoreHwmProfile` | Core context의 ordinary queue byte budget | `configure_dispatch()` |
+| `ApplicationJobQueueProfile` · `max_queued_application_jobs` | host instance의 queued application job 상한 | `configure_dispatch()` |
 
 **"보낼 자리를 기다리는 상한"은 하나의 전역 값이 아니다.** 실제로 쓰이는 값은 그 호출이
 사용하는 socket이 소유한다.
@@ -282,173 +265,82 @@ STREAM one-way send는 call별 timeout modifier로 이 대기를 더 짧게 제�
 - **올리면** 순간 폭주를 더 흡수하고, **내리면** 혼잡이 더 일찍 드러난다.
 - **`max_message_size`를 유한하게 둔다.** 무제한이면 message 한 건이 상한을 얼마든지 넘을 수
   있어 queue가 차지할 memory의 최악값을 계산할 수 없다.
-- **이 값은 연결 하나에 적용되는 상한이다.** process 전체 상한이 아니므로, 목표 peer 수를
-  곱한 결과가 process memory 예산 안에 들어오는지 확인한다.
+- **이 값은 socket 방향별 physical queue에 적용되는 manual 상한이다.** Core context 전체
+  budget이나 Application job queue 상한으로 해석하지 않는다.
 - **high-water mark를 올리는 것이 기본 대응은 아니다.** 상한을 키우면 혼잡이 memory로
   흡수되어 `DeadlineExceeded`가 늦게 나타나고, 그만큼 원인도 늦게 파악하게 된다. 처리
   지연이 계속된다면 상한이 아니라 처리 쪽(수신 node 수, handler 실행 시간)을 확인한다.
 
-두 HWM은 지정하지 않아도 된다. 지정하지 않으면 runtime이 계획한 값이,
-지정하면 그 값이 그대로 적용된다 — 두 경우의 차이는 아래 두 절이 다룬다. 옵션별 기본값과
-실행 중 변경 가능 여부는
-[16. Options](16-options.ko.md) §3.2가 다룬다.
+Manual socket HWM을 지정하지 않아도 Framework가 connection 수 구간표를 계산하지 않는다.
+Framework root는 Core memory 설정을 같은 Core context에 전달하고, Core가 physical queue census와
+방향별 HWM을 계산한다. Application job queue는 이 byte 계산과 별도로 job 수를 제한한다.
 
-### 4.1 Auto HWM — 미지정 socket의 자동 계산
+### 4.1 Core HWM — Core가 소유하는 byte budget
 
-두 high-water mark는 지정하지 않아도 무제한이 되지 않는다. runtime이 socket마다 상한
-byte를 직접 계산해서 적용하며, 이 계산을 **Auto HWM**이라 한다. 기본으로 켜져 있고,
-application이 값을 정하지 않은 socket에만 적용된다.
+`configure_dispatch()`에서 다음 값을 설정한다. 정확한 언어별 표기는 `16. Options`와
+exact interface에서 확인한다.
 
-계산 결과는 byte다. 중간에 message 건수로 환산하는 단계가 없다. 값을 정하는 입력은
-다음과 같다.
+| 설정 | 용도 |
+| --- | --- |
+| `core_hwm_memory_limit_bytes` | Core budget 계산에 전달할 finite process/runtime memory limit hint |
+| `core_hwm_budget_bytes` | profile 계산보다 우선하는 양수 manual Core budget |
+| `CoreHwmProfile` | Core Auto-budget profile. 기본값은 `Balanced` |
 
-- **profile** — 이 process가 queue에 얼마나 여유를 둘지 정하는 성향. 기본은 balanced다.
-- **그 socket에 붙은 연결 수** — 연결이 많아질수록 **연결 하나에 주는 byte를 줄인다.**
+Framework와 binding은 profile 비율을 적용하거나 budget을 connection 수로 나누지 않는다. 실제
+effective budget, 방향별 queue HWM, accounted byte와 blocked ratio는 Core snapshot을 그대로 읽는다.
+`core_hwm_budget_bytes`는 process RSS hard cap이 아니므로 RSS·managed heap과 allocator overhead는 별도로
+관찰한다([runtime monitoring](../../../common/spec/24-runtime-monitoring.ko.md)).
 
-두 번째가 핵심이다. 상한은 연결마다 따로 적용되므로 연결당 값을 고정해 두면 peer가
-늘어난 만큼 이 socket이 쥘 수 있는 memory도 그대로 따라 늘어난다. 그래서 연결 수를
-구간으로 나누고, 구간이 올라갈수록 연결당 상한을 낮춘다.
-
-| 그 socket의 연결 수 | balanced(기본) | compact | low-latency | throughput |
-| --- | --- | --- | --- | --- |
-| 64 이하 | 1,048,576 bytes(1 MiB) | 262,144(256 KiB) | 524,288(512 KiB) | 2,097,152(2 MiB) |
-| 65 ~ 128 | 524,288(512 KiB) | 262,144(256 KiB) | 262,144(256 KiB) | 1,048,576(1 MiB) |
-| 129 ~ 512 | 262,144(256 KiB) | 131,072(128 KiB) | 131,072(128 KiB) | 524,288(512 KiB) |
-| 513 ~ 2,048 | 131,072(128 KiB) | 65,536(64 KiB) | 65,536(64 KiB) | 262,144(256 KiB) |
-| 2,048 초과 | 65,536(64 KiB) | 32,768(32 KiB) | 32,768(32 KiB) | 131,072(128 KiB) |
-
-값은 한 방향 queue 하나에 적용된다. balanced에서 상대가 100개면 이 socket이 수신 방향에
-보관할 수 있는 byte는 `512 KiB × 100`이다. 연결이 늘면 연결당 상한이 줄어들지만 총량은
-그대로 늘어나므로, 이 곱을 effective memory budget과 비교한다.
-
-연결이 늘거나 줄면 계산을 다시 한다. 구간 경계에서 연결 수가 오르내려도 상한이 계속
-바뀌지 않도록 구간을 바꾸는 기준에 여유를 두며, 짧은 시간에 연결이 여러 번 바뀌어도 3초
-안에는 다시 계산하지 않는다.
-
-여기서 쓰는 profile은 [§4.3](#43-application-hwm--host-전체-상한)의
-`ApplicationHwmProfile`과 **같은 이름을 공유한다.** profile을 바꾸면 host 전체 상한과 이
-연결별 상한이 함께 움직인다. 다만 계산식은 서로 다르다 — 이쪽은 연결 수 구간에서 byte를
-고르고, 저쪽은 effective memory budget에 비율을 곱한다. profile을 지정하지 않으면 양쪽 모두
-balanced를 쓴다.
-
-STREAM socket은 같은 profile에서도 더 작은 값을 쓴다([09-stream](09-stream.ko.md)).
-
-계산 결과를 짐작하지 말고 monitor status가 제공하는 값을 읽는다 — 계획한 byte, 실제
-적용한 byte, 축소가 보류된 byte, 현재 in-flight byte, 상한을 넘겨 통과시킨 message의
-횟수와 최대 크기를 각각 제공한다([12-operations](12-operations.ko.md) §1).
+운영에서 manual budget을 사용할 때는 production과 같은 payload 분포와 connection 수에서 Core
+snapshot의 current·peak accounted byte, blocked ratio, throughput, latency와 process memory를 함께
+측정한다. 측정 절차는 [perf §23](../../../common/perf/README.ko.md#23-core-hwm과-application-job-queue-운영값-측정)이
+다룬다.
 
 ### 4.2 HWM을 직접 지정할 때
 
-`send_high_water_mark`나 `receive_high_water_mark`를 지정하면 그 socket은 지정한 값을 그대로
-쓰고, runtime은 그 socket의 상한을 다시 계산하지 않는다. **연결이 늘어도 값이 따라
-줄어들지 않으므로**, 직접 정할 때는 목표 peer 수까지 계산한 값을 넣는다.
+`SendHighWaterMark`나 `ReceiveHighWaterMark`는 socket 방향별 manual HWM이다. Core context의
+`core_hwm_budget_bytes`와 단위는 byte로 같지만 owner와 적용 범위가 다르다. Manual socket HWM은
+해당 방향의 queue에 적용하고 Core Auto budget을 대신 계산하는 값이 아니다.
 
 - **`0`은 무제한이라는 뜻이다.** 상한을 없애는 설정이므로 "기본값으로 두겠다"는 의미로
-  `0`을 쓰지 않는다. 자동 계산에 맡기려면 아무 값도 지정하지 않는다.
-- **한 방향씩 따로 적용된다.** `send_high_water_mark`만 지정하면 수신 방향은 계속 자동
-  계산값을 쓴다.
-- **상한을 줄여도 즉시 반영되지 않을 수 있다.** 이미 보관 중인 byte가 새 상한보다 많아도
-  runtime은 들고 있던 message를 버리지 않는다. 새로 넣는 것만 막고, 보관량이 내려간 뒤에
-  줄어든 상한을 적용한다. 반대로 상한을 올리는 변경은 곧바로 반영된다.
+  `0`을 쓰지 않는다. Core Auto 계산을 사용하려면 manual 값을 지정하지 않는다.
+- **한 방향씩 따로 적용된다.** 한쪽만 지정하면 반대 방향은 Core가 계산한 HWM을 사용한다.
+- **Completion lane에는 적용하지 않는다.** Receive 전에 terminal reply·error completion으로 식별할 수
+  있는 진행 경로에는 public send·receive HWM을 복사하지 않는다.
 
-### 4.3 Application HWM — host 전체 상한
+### 4.3 Application Job Queue HWM — host 전체 job 상한
 
-앞의 두 절은 **연결 하나**의 상한이다. 연결이 늘면 총량도 늘어나므로 이 값만으로는
-dispatch를 기다리는 message가 얼마나 쌓일지 정해지지 않는다. 그래서 Framework는 성격이
-다른 상한을 하나 더 둔다 — **아직 handler 실행을 시작하지 못한 message의 payload
-합계**에 적용하는 상한이며, 이것을 Application HWM이라 한다.
+Application Job Queue HWM은 handler 시작을 기다리는 job 수를 Framework host instance 전체에서
+제한한다. Core HWM과 함께 backpressure를 만들지만 byte나 memory 비율을 세지 않는다.
 
-| | 연결마다 두는 상한 | host 전체 Application HWM |
+| | Core HWM | Application Job Queue HWM |
 | --- | --- | --- |
-| 적용 범위 | socket의 방향별 queue 하나 | 이 host의 application job 전부 |
-| 개수 | 연결 수만큼 | 하나 |
-| 무엇을 세나 | 아직 상대가 가져가지 않은 전송 중 byte(routing frame·metadata·최소 charge 포함) | dispatch를 기다리는 **payload byte만** |
-| 언제 빠지나 | 상대가 읽어 갈 때 | handler가 그 job 실행을 **시작할 때** |
-| 상한에 닿으면 | 그 상대로 가는 송신이 잠긴다 | 이 host의 application 수신을 시작하지 않는다 |
-| 설정 이름 | `send_high_water_mark` · `receive_high_water_mark` | `application_hwm_bytes` · `ApplicationHwmProfile` |
+| owner | Core context의 origin별 ordinary queue | Framework host instance의 shared queue |
+| 단위 | accounted byte | reserved supply와 queued application job 수 |
+| 획득 | Core queue admission | ordinary receive·claim 직전 |
+| 반환 | Core queue·retained lease lifecycle | 사용자 callback의 실제 첫 instruction 직전 |
+| 포화 결과 | 해당 origin의 sender가 기다린다 | ordinary ingress source가 permit을 기다린다 |
+| 설정 | `core_hwm_memory_limit_bytes` · `core_hwm_budget_bytes` · `CoreHwmProfile` | `ApplicationJobQueueProfile` · `max_queued_application_jobs` |
 
-**두 값은 서로를 대신하지 못한다.** Framework는 Application HWM을 각 연결의 상한으로
-복사하지도, 연결 수로 나누지도 않는다. MeshNode나 Channel, Spot마다 따로 두지 않는 이유는
-나누어 두면 node나 connection이 늘어날 때 허용 총량이 자동으로 함께 늘어나기 때문이다.
+Manual `max_queued_application_jobs`는 `1..2,147,483,647` 범위의 정확한 상한이다. `0`은 unlimited가
+아니라 startup configuration error다. Manual 값이 없으면 effective processor 수와 profile을 사용해
+startup에서 한 번 계산한다.
 
-세는 값이 payload뿐이라는 점도 연결 상한과 다르다. envelope, routing 정보, metadata,
-allocator overhead와 최소 charge를 더하지 않는다. 여러 part로 나뉜 message는 application
-payload part의 길이를 모두 합한다. 실행 중인 handler가 참조하는 message, Core pipe와 OS
-socket buffer는 여기에 들어가지 않는다 — Application HWM은 process memory 전체가 아니라
-**dispatch를 기다리는 양**을 제한한다.
+| profile | effective processor 하나당 job |
+| --- | ---: |
+| `Compact` | 32 |
+| `LowLatency` | 64 |
+| `Balanced`(기본) | 128 |
+| `Throughput` | 256 |
 
-#### 값을 어떻게 해석하는가
+`CoreHwmProfile`과 `ApplicationJobQueueProfile`은 같은 label을 사용하지만 서로 다른 public type과
+계산이다. Profile은 benchmark를 시작하기 위한 bootstrap 값이다. 운영에서는 목표 CPU 사용률과
+허용 latency에서 `reserved + queued` permit 분포를 측정하고 manual job 상한을 정한다.
 
-| 설정 | 적용 결과 |
-| --- | --- |
-| 지정하지 않음 | `ApplicationHwmProfile`로 자동 계산한다 |
-| `0` | Application HWM을 적용하지 않는다(무제한) |
-| 양수 | 지정한 byte를 그대로 적용한다 |
-
-자동 계산은 process가 사용할 수 있는 유효 memory budget에 profile 비율을 곱한다. 이 값은 Framework가
-미리 할당하거나 예약하는 메모리가 아니라, 수신을 잠시 멈출 시점을 정하기 위한 기준이다.
-
-```text
-Application HWM = floor(effective memory budget byte × profile 비율)
-```
-
-| profile | 비율 | 언제 고르나 |
-| --- | ---: | --- |
-| `COMPACT` | 2% | backlog memory를 가장 작게 제한해야 한다 |
-| `LOW_LATENCY` | 5% | 짧은 queue 지연이 burst 흡수보다 중요하다 |
-| **`BALANCED`**(기본) | **10%** | 별도의 우선 조건이 없다 |
-| `THROUGHPUT` | 20% | 추가 memory와 queue 지연을 감수하고 burst를 흡수한다 |
-
-유효 memory budget은 다음 규칙으로 정한다.
-
-1. `process_memory_limit_bytes`를 지정하면 그 값을 그대로 사용한다.
-2. 지정하지 않으면 process에 적용된 유한한 OS 상한과 language runtime managed heap 상한을 각각 확인한다.
-   둘 다 있으면 더 작은 값을 사용하고, 하나만 있으면 확인된 값을 사용한다.
-3. OS와 managed heap 상한을 모두 확인할 수 없으면 시스템 물리 메모리 총량을 사용한다.
-
-Java와 Kotlin은 `Runtime.maxMemory()`가 보고하는 JVM heap 상한을 사용한다. .NET은
-`GC.GetGCMemoryInfo().TotalAvailableMemoryBytes`, Node.js는 V8의 `heap_size_limit`을 사용한다.
-C++에는 managed heap이 없으므로 OS 상한과 물리 메모리만 사용한다. managed heap은 process 전체 메모리가
-아니므로 Metaspace, native memory, thread stack, direct buffer와 같은 영역을 위한 여유 공간이 남는다.
-
-예를 들어 container 상한이 `1 GiB`이고 Java `-Xmx`가 `768 MiB`이면 유효 memory budget은 `768 MiB`다.
-기본 `BALANCED` profile은 그 10%인 약 `76 MiB`를 Application HWM으로 사용한다. Application이
-`application_hwm_bytes`와 `process_memory_limit_bytes`를 모두 지정하지 않아도 이 계산을 적용한다.
-
-host 전체 물리 memory, 지금 남은 OS free memory, process RSS, CPU 사용률, 처리량은 이 계산에 쓰지 않는다.
-계산은 ingress를 시작하기 전에 한 번 수행하며, memory limit이나 profile을 명시적으로 바꿨을 때만 다시 한다.
-
-profile을 직접 정하는 것으로 부족하면 production과 같은 workload에서 지속 처리량을 재고
-양수 값을 지정한다. 지속 처리량은 backlog가 있는 동안 handler가 처리를 끝낸 payload byte를
-실행 시간으로 나눈 값이며, 도착 byte나 순간 peak가 아니다.
-
-```text
-후보값 = 측정한 지속 처리 byte/초 × 허용할 최대 queue 대기 초
-```
-
-지속 처리량이 초당 200 MiB이고 queue 대기를 2초까지 허용한다면 후보값은 400 MiB다. 이
-값까지 backlog를 채워도 process memory limit을 넘지 않는지 같은 workload에서 확인한 뒤
-production 값으로 쓴다.
-
-#### 상한에 닿으면 무엇이 일어나나
-
-Framework는 다음 message의 크기를 미리 알 수 없으므로 **byte를 미리 예약하지 않는다.**
-판단 기준은 backlog와 상한의 비교다 — backlog가 상한보다 작으면 새로 받기 시작한다.
-
-- 상한보다 작은 backlog에서 시작한 수신은 그 message가 상한보다 크더라도 **끝까지 받는다.**
-  그래서 상한을 넘겨도 이미 시작한 수신은 실패하지 않고, 상한보다 큰 message 한 건도
-  backlog가 비어 있으면 처리할 수 있다.
-- 상한에 닿거나 넘어서면 **새 수신만 시작하지 않는다.** 넘었다는 이유로 message를
-  제거하거나 오류로 끝내지 않는다.
-- Framework queue에서 기다리던 job은 계속 dispatch하고, 이미 보낸 request의 reply와 진행에
-  필요한 control도 계속 받는다.
-- handler가 job 실행을 시작해 backlog가 상한보다 작아지면 수신을 재개한다.
-
-양수 값이 `max_message_size`보다 작아도 설정 오류가 아니다. Application HWM은 message 한
-건의 허용 크기를 정하지 않는다 — 그 판단은 `max_message_size`가 한다.
-
-언어별 runtime 구현과 packaged E2E 검증의 현재 범위는
-[§6](#6-framework-runtime-적용-범위)에서 별도로 확인한다.
+상한에 도달하면 새 ordinary ingress는 가장 오래 기다린 source부터 permit 반환을 기다린다. Batch와
+1:N local dispatch도 확보한 permit보다 많은 handler job을 먼저 만들지 않는다. Receive 전에 식별할 수
+있는 terminal reply·error completion은 이 permit을 사용하지 않으며, `max_message_size`는 두 HWM과
+독립된 단일 message 상한이다.
 
 ## 5. 정체 발생 확인 방법
 
@@ -464,46 +356,38 @@ message flow 기록에 `backpressured`가 남았다면 보낼 자리를 기다�
 지표로 좁힌다([11. Monitoring](11-monitoring.ko.md) ·
 [12-operations](12-operations.ko.md)).
 
+Byte 압력은 `zlink.host.core_hwm.effective_budget`, `applied`, `accounted`와 `blocked_ratio`를
+함께 본다. Handler 시작 전 job 압력은 `zlink.host.application_job_queue.limit`, `jobs`,
+`capacity_waiters`, `capacity_waits`와 `capacity_wait_duration`을 본다. Metrics reset은 current
+gauge를 유지하고 peak를 current로 재기준화하며 현재 epoch의 count·duration만 0으로 만든다.
+
 `zlink.mesh_node.messages.dropped`는 backpressure 지표가 아니다. 이 값이 오르면 부하가
 아니라 별도의 확인된 사유로 message가 버려진 것이므로 `reason` attribute를 먼저 본다.
 
 ## 6. Framework runtime 적용 범위
 
-위 절은 공통 public contract를 설명한다. 실제 package가 이 계약을 모두 제공하는지는
-언어별 exact interface, runtime test와 packaged E2E 결과를 따로 확인해야 한다. 이 절은
-공통 contract를 구현 완료로 간주하지 않고, 현재 검증에서 남은 runtime integration 항목만 기록한다.
-
-- **두 연결을 나눠 보는 수신 경로** — Application 연결의 수신만 멈추고 Completion 연결은
-  계속 읽는 동작이다([§2.4](#24-application-연결과-completion-연결-분리)).
-- **보유 byte 귀속 관측** — 수신이 멈췄을 때 어느 실행 대상이 backlog byte를 붙잡고 있는지
-  조회한다. 여기서 실행 대상은 자기에게 온 message를 한 줄로 하나씩 처리하는
-  [Spot](03-concepts.ko.md#2-spot--상태를-소유하고-순서대로-처리하는-단위)과
-  [Actor](03-concepts.ko.md#3-actor--id로-식별되는-상태-객체)다. 아직 target이 정해지지
-  않은 message, relocation처럼 두 owner 사이에 있는 message, 이미 실행이 시작된 handler가
-  들고 있는 byte는 각각 따로 집계한다.
+이 공통 가이드는 언어별 구현 차이를 열거하지 않는다. 공통 동작은
+[Framework API §2.1](../../../common/spec/06-framework-api.ko.md#21-core-memory-budget과-application-job-queue를-분리한다),
+status와 reset 의미는 [runtime monitoring](../../../common/spec/24-runtime-monitoring.ko.md)이
+소유한다. 각 언어에서 실제로 사용하는 이름과 호출 형태는 해당 언어의 `16. Options`,
+`11. Monitoring`과 [exact interface](../../../common/spec/server/languages/README.ko.md)에서 확인한다.
 
 ## 7. 자주 발생하는 문제
 
 - **`send`가 `DeadlineExceeded`로 끝난다** → 보낼 자리가 끝까지 생기지 않았다. 상한을 올리기
-  전에 받는 쪽 handler의 실행 시간과 node 수를 확인한다.
-- **건수는 평소와 같은데 더 일찍 대기한다** → 상한은 byte로 센다. payload가 커지면 같은
-  건수로도 상한에 먼저 닿는다. 평균 payload 크기 변화를 함께 확인한다.
-- **payload 합계는 상한보다 한참 작은데 대기한다** → 연결 queue가 세는 값은 payload가
-  아니라 routing frame과 metadata를 더한 값이고, 작은 message에는 최소 charge가 적용된다.
-  작은 message를 많이 보내는 구간일수록 차이가 커진다. host 전체 상한은 반대로 payload만
-  세므로 두 값을 같은 기준으로 비교하지 않는다
-  ([§4.3](#43-application-hwm--host-전체-상한)).
-- **host 상한보다 큰 message를 보냈는데 처리된다** → 정상이다. 판단 기준은 받기 전의
-  backlog가 상한보다 작은지 하나뿐이라, 상한보다 큰 message도 backlog가 비어 있으면 끝까지
-  받는다. 그 결과 잠깐 상한을 넘고 그때부터 새 수신만 멈춘다.
-- **HWM을 설정한 적이 없는데 상한이 걸린다** → 지정하지 않은 socket에는 runtime이 계산한
-  값이 적용된다. 기본 profile에서 연결이 64개 이하면 방향마다·상대마다 1 MiB이고, 연결이
-  늘수록 연결당 값은 작아진다
-  ([§4.1](#41-auto-hwm--미지정-socket의-자동-계산)).
-- **`0`으로 두었더니 memory가 계속 는다** → `0`은 기본값이 아니라 무제한이다. 기본 계산에
-  맡기려면 값을 지정하지 않는다([§4.2](#42-hwm을-직접-지정할-때)).
-- **상한을 낮췄는데 곧바로 반영되지 않는다** → 이미 보관 중인 byte가 새 상한보다 많으면
-  그 queue가 줄어든 뒤에 적용한다. 이미 받아 둔 message를 버리지 않기 때문이다.
+  전에 받는 쪽의 Core `blocked_ratio`, Application job queue waiter와 handler 실행 시간을 확인한다.
+- **Core accounted byte는 낮은데 수신이 기다린다** → Application job queue permit이 찼을 수 있다.
+  `reserved`, `queued`, `in_use`와 capacity waiter를 확인한다.
+- **Application job queue의 `queued`가 낮은데 상한에 닿는다** → receive 직전의 `reserved`
+  permit도 `in_use`에 포함한다. Manual 상한은 `reserved + queued` 기준으로 정한다.
+- **Handler가 시작됐는데 job 수가 줄지 않는다** → executor task 게시가 아니라 사용자 callback의
+  실제 첫 instruction에서 permit을 반환한다. 시작 gate가 열렸는지 확인한다.
+- **`MaxQueuedApplicationJobs = 0`을 주었더니 시작이 실패한다** → `0`은 unlimited가 아니다.
+  Auto 값을 사용하려면 manual 값을 지정하지 않는다.
+- **두 profile을 같은 값으로 바꿨는데 byte와 job 상한이 같은 비율로 움직이지 않는다** →
+  `CoreHwmProfile`과 `ApplicationJobQueueProfile`은 label만 같고 계산과 단위가 다르다.
+- **Application job queue가 포화됐는데 reply는 완료된다** → receive 전에 식별할 수 있는 terminal
+  reply·error completion은 shared permit과 ordinary Core HWM을 우회하므로 정상이다.
 - **상한을 올렸더니 증상이 늦게 나타난다** → 정상이다. 혼잡이 memory로 흡수되면 실패가 늦게
   드러난다. 빠르게 실패시켜 다른 경로로 전환하려면 상한을 낮추고 `DefaultSocketSendTimeout`을
   줄인다.
@@ -521,6 +405,11 @@ message flow 기록에 `backpressured`가 남았다면 보낼 자리를 기다�
 - 옵션 기본값과 변경 시점: [16. Options](16-options.ko.md) §3
 - one-way submit과 완료 경계의 정식 계약:
   [비동기 실행 정책](../../../common/spec/05-async-execution-policy.ko.md)
+- Core HWM과 Application job queue 설정:
+  [Framework API §2.1](../../../common/spec/06-framework-api.ko.md#21-core-memory-budget과-application-job-queue를-분리한다)
+- status·metric과 reset 의미:
+  [runtime monitoring](../../../common/spec/24-runtime-monitoring.ko.md) ·
+  [runtime metrics](../../../common/spec/25-runtime-metrics.ko.md)
 - 소켓 설정 표면: [언어별 topology 공개 계약](../../../common/spec/server/languages/README.ko.md)
 - socket option의 byte 단위 계약: [core guide의 socket option](https://zlink-systems.github.io/zlink/ko/guide/12-socket-options/)
 - 다음 축: [05-channel-messaging](05-channel-messaging.ko.md)

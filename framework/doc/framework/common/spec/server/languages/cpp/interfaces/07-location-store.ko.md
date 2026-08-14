@@ -28,11 +28,7 @@ struct location_options_t {
     std::chrono::milliseconds owner_lease_renew_timeout{3000};
     std::chrono::milliseconds route_cache_max_age{15000};
     std::chrono::milliseconds message_follow_duration{30000};
-    std::size_t max_active_outbound_relocations = 64;
-    std::size_t max_active_inbound_relocations = 64;
-    std::size_t max_concurrent_relocation_captures = 8;
-    std::size_t max_concurrent_relocation_restores = 8;
-    std::uint64_t max_relocation_payload_in_flight_bytes = 268435456;
+    std::chrono::milliseconds session_relocation_seal_timeout{3000};
 };
 
 } // namespace zlink::framework
@@ -464,3 +460,8 @@ Store는 같은 Redis deployment를 사용하거나 물리적으로 분리할 �
 - relocation phase·manifest·participant DTO와 provider-generated relocation reference
 - raw Redis command adapter, script와 key codec
 - Spot·Actor 전용 Store와 capability별 Store interface
+
+## Session relocation seal timeout
+
+`session_relocation_seal_timeout`은 startup-only 양수 millisecond duration이며 기본값은 3,000 ms다.
+0, 음수, 무한대와 표현 범위 초과는 socket bind 전에 configuration error다.

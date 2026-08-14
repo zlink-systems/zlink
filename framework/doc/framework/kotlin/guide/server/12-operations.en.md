@@ -110,10 +110,38 @@ instruments by
 | `zlink.location.owner_lease.renew.lateness` | Owner lease renewal delay versus the scheduled time |
 | `zlink.observability.events.overflow` | Cumulative monitoring/trace observer queue overflows |
 | `zlink.host.state` | The current host Framework runtime state |
+| `zlink.host.core_hwm.effective_budget` | Effective Core HWM byte budget fixed at startup |
+| `zlink.host.core_hwm.applied` | Sum of ordinary directional queue HWMs, excluding the completion lane |
+| `zlink.host.core_hwm.accounted` | Current or epoch-peak Core-accounted bytes (`state=current|peak`) |
+| `zlink.host.core_hwm.completion_accounted` | Current or epoch-peak completion-accounted bytes (`state=current|peak`) |
+| `zlink.host.core_hwm.blocked_ratio` | Core blocked ratio in parts per million |
+| `zlink.host.application_job_queue.limit` | Effective Application Job Queue permit limit fixed at startup |
+| `zlink.host.application_job_queue.jobs` | Reserved, queued, in-use, or peak permits (`state=reserved|queued|in_use|peak`) |
+| `zlink.host.application_job_queue.capacity_waiters` | Current number of permit-capacity waiters |
+| `zlink.host.application_job_queue.capacity_waits` | Permit-capacity waits in the current measurement epoch |
+| `zlink.host.application_job_queue.capacity_wait_duration` | Cumulative permit-capacity wait duration in the current epoch |
 | `zlink.host.relocation.duration` | Time from starting Host `relocate` to the terminal result |
 | `zlink.host.relocation.blocked` | Count of host `relocate` calls that ended in `Blocked` |
 | `zlink.host.shutdown.duration` | Time from starting Host `shutdown` to the terminal result |
 | `zlink.host.shutdown.forced` | Count of host `shutdown` calls that ended via bounded teardown |
+
+### 1.1 Capacity Snapshot And Measurement Reset
+
+The host runtime's capacity snapshot exposes the Core HWM and Application Job Queue status
+together. Use it to correlate the fixed startup configuration and effective limits with
+current/peak accounted bytes, reserved/queued/in-use permits, and capacity waits. Read the
+exact type and member names from the relevant
+[per-language monitoring contract](../../../common/spec/server/languages/README.en.md).
+
+Resetting measurements starts a new epoch without changing capacity. Current gauges and
+configuration stay unchanged, each peak is rebased to its current value, and epoch wait
+counts and duration become zero. A concurrent event belongs to exactly one epoch. Always-on
+metrics deliberately do not timestamp every job or create a per-job queue-wait histogram;
+record such distributions only inside a bounded performance fixture. The exact snapshot and
+reset rules are in
+[Runtime state query and operational diagnostics](../../../common/spec/24-runtime-monitoring.en.md)
+and the metric names, units, and labels are in
+[Runtime metrics](../../../common/spec/25-runtime-metrics.en.md).
 
 ## 2. Relocate — Moving To Another Host While Keeping State
 
@@ -139,23 +167,31 @@ The procedure:
    admission.
 2. Publishes the host as `Relocating` and schedules an infrastructure notification on the
    standalone Actor's, Instance Spot's, and User Spot aggregate's execution queue.
-3. When the notification reaches a turn boundary, only the currently executing turn finishes
-   on the source. Only a ready unit that obtained outbound/inbound, `capture`/`Restore`, and
-   the encoded-payload permit seals its queue. A unit that couldn't obtain the permit keeps
-   processing application messages and timers on the source.
+3. Target kind/version eligibility is confirmed before source dispatch stops. When the
+   notification reaches a turn boundary, only the currently executing turn finishes on the
+   source; it starts no new application turn. Transport reception remains open and later
+   messages enter the source ingress hold while target preparation is pending.
 4. At seal time, the message that didn't run, the accepted journal, the logical timer
    registration/pending tick, and the optional Snapshot bytes are saved to the immutable
-   relocation root. Target factory/`Restore` and journal staging finish before the
-   owner/membership commit.
+   relocation root. The target installs its temporary queue before factory/`Restore`, and
+   finishes journal staging before the owner/membership commit. Ordinary target staging uses
+   the shared Application Job Queue reservation before receive and returns it after finite
+   durable handoff to the retained-byte backlog. Relocation adds no outbound/inbound,
+   `capture`/`Restore`, or encoded-payload capacity gate of its own; a backlog larger than the
+   live-job limit later acquires runnable-turn permits progressively.
 5. A `SpotWide` User Spot and its member Actors change owner/membership together in one
    aggregate commit. An Entry Spot's and a `PerActor` User Spot's Actors are each moved
    individually. Infrastructure relocation doesn't call the application's join/leave
    callbacks.
-6. Restores the frozen queue/timer on the target and relays the source hold to the target
-   after sealing. Opens target admission once source cleanup, `Completed`, the bound STREAM
-   route ACK, and steady normalization finish.
-7. Once every unit has detached from source dispatch, the host transitions to `Relocated`.
-   Connections and infrastructure stay up until `shutdown(...)` is called.
+6. Relays the source hold after the target reports relay-ready, then submits the cutover
+   control one-way. The target performs its owner CAS, merges the ordered backlog, finishes
+   required lifecycle callbacks, and opens application dispatch. For a bound Actor it then
+   sends the Session owner a one-way target-route update; neither control has a completion
+   reply or ACK.
+7. Once every source unit has ended dispatch and every cutover submit has succeeded, the host
+   transitions to `Relocated`. This source-side result does not mean it awaited target CAS or
+   Session route application. Connections and infrastructure stay up until `shutdown(...)` is
+   called.
 
 A failure before the first relocation commit can restore the source queue and admission.
 After the first commit, there's no rollback to the source — target recovery continues, and

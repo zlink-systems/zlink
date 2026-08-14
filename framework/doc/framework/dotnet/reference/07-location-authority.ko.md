@@ -56,14 +56,14 @@ Store를 교체·dispose하지 않는다.
 
 ## `ConfigureLocations()` (구성 시점)
 
-Owner lease, polling과 relocation 동시성 상한을 조정한다.
+Owner lease, polling, route cache와 message-follow window를 조정한다.
 
 ```csharp
 services.AddZLinkFramework(options =>
 {
     ZLinkLocationOptions locations = options.ConfigureLocations();
     locations.OwnerLeaseTtl = TimeSpan.FromSeconds(20);
-    locations.MaxConcurrentRelocationCaptures = 16;
+    locations.MessageFollowDuration = TimeSpan.FromSeconds(30);
 });
 ```
 
@@ -75,12 +75,16 @@ services.AddZLinkFramework(options =>
 | `PollingInterval` | 1초 | Store 상태 확인 주기 |
 | `StoreFailureGrace` | 30초 | Store 장애를 감내하는 유예 시간 |
 | `RouteCacheMaxAge` / `MessageFollowDuration` | 15초 / 30초 | 0이면 기능을 끈다. 둘 다 양수면 cache age가 Message Follow duration보다 최소 5초 작아야 한다 |
-| `MaxActiveOutboundRelocations` / `MaxActiveInboundRelocations` | 64 / 64 | 동시 진행 가능한 relocation unit 상한 |
-| `MaxConcurrentRelocationCaptures` / `MaxConcurrentRelocationRestores` | 8 / 8 | 동시 실행 가능한 Capture·Restore callback 상한 |
-| `MaxRelocationPayloadInFlightBytes` | 268,435,456 | process 전체 encoded relocation payload in-flight 상한 |
 
 **완료 결과.** 동기 설정이다. Lease·polling 값이 0 이하이거나 위 부등식을 어기면 host startup
-검증에서 드러난다. 실행 중 값 변경은 새 relocation admission에만 적용된다.
+검증에서 socket bind 전에 드러난다.
+
+Relocation에는 별도 participant·record·callback 동시성·in-flight byte cap이 없다. Target staging은
+receive 전에 host의 공유 Application Job Queue reservation을 잠시 얻고 유한한 durable handoff 뒤
+반환하며, runnable turn은 이후 live permit을 점진적으로 얻는다. Core memory accounting, frame size와
+Store limit은 그대로 적용한다.
+[Relocation Flow §5.3](../../common/spec/28-relocation-flow.ko.md#53-relocation-전용-capacity-제한을-두지-않는다)을
+참고한다.
 
 **선택 기준.** 기본값이 배포 환경(네트워크 지연, Store 응답 시간)에 맞지 않을 때만 조정한다.
 

@@ -173,3 +173,10 @@ Contract tests and E2E verify the following.
 - A typed `Rejected` result is distinguished from an `ErrorKind.Rejected`
   exception.
 - The public error surface carries no retry hint.
+
+## 9. Application Job Queue Saturation
+
+A manual queue value outside `1..2,147,483,647` or a calculation overflow is a configuration
+error before socket bind. Runtime shared-cap shortage is a cancellable wait, not a public
+error, typed reject, or drop reason. Only an owner structural-limit violation uses the
+existing owner error; the two conditions are distinct.

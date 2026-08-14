@@ -1,15 +1,17 @@
 ---
-title: "11. Payload 소유권과 복사"
+title: "50. Payload 소유권과 복사"
 ---
 
-# 11. Payload 소유권과 복사
+# 50. Payload 소유권과 복사
 
-[내부 구조 목차](README.ko.md) · [이전: 10. Liveness와 상태 공개](10-liveness-and-state.ko.md) · [다음: 12. Service wire protocol](12-service-wire-protocol.ko.md)
+> **문서 성격 — 공개 규범 스펙이 아닌 내부 설계 문서.** 이 장은 연결된 공개 계약을 만족시키는 구현 구조를 설명한다. Application이 관찰하는 동작을 추가하거나 변경하지 않는다.
+
+[내부 구조 목차](README.ko.md) · [이전: 49. Liveness와 상태 공개](49-internal-liveness-and-state.ko.md) · [다음: 51. Service wire protocol](51-internal-service-wire-protocol.ko.md)
 
 > **이 장이 답하는 것** — message 하나가 socket에서 handler까지 가는 동안 byte를 몇 번 복사하는가.
 >
-> **계약 소유** — payload 크기 회계는 [Framework API](../spec/06-framework-api.ko.md)가,
-> 전달 형식은 [Channel 메시징](../spec/08-channel-messaging.ko.md)이 소유한다.
+> **계약 소유** — payload 크기 회계는 [Framework API](06-framework-api.ko.md)가,
+> 전달 형식은 [Channel 메시징](08-channel-messaging.ko.md)이 소유한다.
 > 이 장은 그 계약을 만족시키는 **구조**와, payload 소유권을 어겼을 때 나타나는 실패를 다룬다.
 
 message 하나가 socket에서 handler까지 가는 동안 **byte를 몇 번 복사하는가**를 정한다.
@@ -121,7 +123,7 @@ C++과 .NET은 이 전이가 `close`·`Dispose` 호출로 드러난다. JVM의 m
 소유권 이전에는 복사하지 않는 경로를 따로 둔다.
 
 raw byte를 다루는 API는 **transport 검사와 codec extension 구현에만** 쓴다
-([메시지 모델 「1. Typed 메시지」](../spec/04-message-model.ko.md#1-typed-메시지)). 업무 handler 인자로 raw payload를
+([메시지 모델 「1. Typed 메시지」](04-message-model.ko.md#1-typed-메시지)). 업무 handler 인자로 raw payload를
 받게 하면 계약 위반이다.
 
 ## 6. 역직렬화를 언제 하는가
@@ -144,17 +146,22 @@ flowchart LR
 헤더를 먼저 읽는 것은 선택이 아니다 — 어느 owner에게 보낼지 정하려면 필요하다. 반면
 payload는 handler가 실행되기 전까지 아무도 보지 않는다.
 
-**결정 — 실행 대기열에 수락되지 못한 message는 역직렬화하지 않는다.** 대기열이 가득
-찼거나 현재 owner가 아니어서 거부할 message는 handler에 도달하지 않는다. 이런 message를
+**결정 — 실행 대기열에 수락되지 못한 message는 역직렬화하지 않는다.** Object·channel admission
+규칙이나 current owner 불일치로 거부할 message는 handler에 도달하지 않는다. 이런 message를
 미리 역직렬화하면 **부하가 높은 시점에 결국 거부할 message에도 비용이 큰 작업을 수행한다.**
 
+Application Job Queue 포화는 여기서 말하는 거부가 아니다. 일반 ingress는 receive·claim 전에
+host-wide permit을 취소 가능하게 기다리며 reject·drop하지 않는다. Permit을 얻은 뒤에는 별도의
+object·channel admission 계약이 encoded message를 실행 대기열에 넣을지 결정한다.
+
 Relocation seal 뒤 도착한 message는 거부하지 않는다. Framework는 encoded payload와 reply
-정보를 보류하고, commit 뒤 target에서 replay하거나 abort 뒤 source에서 재개한다. 이 message도
+정보를 보류하고, relay-ready reply가 accepted되기 전 명시 abort에서는 source에서 재개하며 그
+뒤에는 cutover submit 결과와 관계없이 target handoff 또는 Message Follow로 넘긴다. 이 message도
 실행 권한을 얻기 전에는 역직렬화하지 않는다. 따라서 이동 중 보류는 message를 잃지 않으면서
 handler가 실제로 실행되는 시점까지 역직렬화 비용을 미룬다.
 
 **실행 권한을 얻기 전에** 역직렬화하면 권한 안에서 거절된 message에도 역직렬화 비용이
-발생한다. 대기열 수락 여부를 정하기 전에 복사하면 queue-full 거절에도 복사 비용이 남는다.
+발생한다. Object·channel admission 판단 전에 복사하면 해당 계약이 허용한 거절에도 복사 비용이 남는다.
 
 **결정 — 형식을 판별하려고 전체를 두 번 해석하지 않는다.** payload를 시험 삼아 한 번
 해석한 뒤 실제 처리를 위해 **또 해석하면** 비용과 실패 지점이 중복된다. 형식은 헤더가 알려
@@ -175,9 +182,9 @@ message마다 어느 것을 쓸지 정해야 한다.
 
 이 선택을 표현하는 **API 모양은 언어마다 다르다.** .NET은 content-type과 타입별 술어를
 함께 받는다(`AddSerializer(contentType, serializer, canSerialize)`,
-[.NET 직렬화 계약](../spec/server/languages/dotnet/interfaces/11-serialization.ko.md)).
+[.NET 직렬화 계약](server/languages/dotnet/interfaces/11-serialization.ko.md)).
 Node의 구체적인 TypeScript 표현은
-[Node foundation 계약](../spec/server/languages/node/interfaces/01-foundation-configuration.ko.md)이
+[Node foundation 계약](server/languages/node/interfaces/01-foundation-configuration.ko.md)이
 정한다. Internals는 한 언어의 API 모양을 공통 구조로 단정하지 않는다. 아래 결정은
 **선택의 의미**에만 적용된다.
 
@@ -188,7 +195,7 @@ Node의 구체적인 TypeScript 표현은
 | 송신 | 호출 지점에 선언된 **message type** | JSON codec을 쓴다 |
 | 수신 | envelope에 실린 정규화된 **content-type** | JSON으로 다시 해석하지 않고 `ProtocolError`로 끝낸다 |
 
-근거는 [Framework API 「9. Codec」](../spec/06-framework-api.ko.md#9-codec)이며, "송신 타입 선택의
+근거는 [Framework API 「9. Codec」](06-framework-api.ko.md#9-codec)이며, "송신 타입 선택의
 기본값과 수신 wire content-type 검증은 서로 다른 경계이므로 같은 fallback 규칙을 적용하지
 않는다"고 명시한다.
 
@@ -229,7 +236,7 @@ codec 선택은 조회할 수 있지만, 조회 과정의 문자열·배열·호
 | 송신 | 호출 지점에 선언된 message type | 타입을 미리 열거할 수 없다. 처음 만난 타입에서 한 번 계산하고 캐시한다 |
 
 송신 캐시를 **시작 시점에 전부 확정할 수는 없다.** Channel API가 호출마다 임의의 타입을
-받고([Channel 메시징](../spec/08-channel-messaging.ko.md)), 선택자 술어도 실행 중 처음 만난
+받고([Channel 메시징](08-channel-messaging.ko.md)), 선택자 술어도 실행 중 처음 만난
 declared type descriptor를 평가하기 때문이다. Registry 자체는 불변이므로 캐시에 들어간
 type의 결과는 한 번 계산한 뒤 바뀌지 않는다.
 
@@ -238,7 +245,7 @@ type의 결과는 한 번 계산한 뒤 바뀌지 않는다.
 캐시에 넣지 않는다. 이 방식은 이미 자주 쓰는 type의 lookup 비용을 유지하면서 캐시 크기를
 제한한다.
 
-[1. 계층 경계와 식별자 「5. 등록 선언은 시작할 때 한 번만 검증한다」](01-layering.ko.md#5-등록-선언은-시작할-때-한-번만-검증한다)의 "등록 선언은 시작할 때 한 번만 검증한다"가
+[40. 계층 경계와 식별자 「5. 등록 선언은 시작할 때 한 번만 검증한다」](40-internal-layering.ko.md#5-등록-선언은-시작할-때-한-번만-검증한다)의 "등록 선언은 시작할 때 한 번만 검증한다"가
 여기 그대로 적용된다 — 시작 뒤 불변이면 미리 계산해 두고 **잠금 없이** 읽으면 된다.
 조회 결과를 실행 중에 동시 접근을 견디지 못하는 사전에 쓰면 race가 생긴다. 미리 확정하면
 runtime 중 쓰기와 그에 따른 race가 없어진다.
@@ -286,6 +293,20 @@ runtime 중 쓰기와 그에 따른 race가 없어진다.
   끝난다.
 - codec 정보를 읽는 데 잠금이 필요하지 않다.
 
+## Retained Core lease와 1:N child 소유권
+
+Core receive에서 retain한 record는 payload와 Core receive-credit lease의 shared owner 하나를 가진다.
+Application shared permit은 각 exact-target child callback의 실제 첫 instruction에서 반환하고, pre-start
+terminal child는 permit을 정확히 한 번 반환한다. 첫 child를 enqueue한 뒤 remaining child permit은
+[dispatch loop](46-internal-dispatch-loop.ko.md)의 FIFO를 통해 lazy하게 확보하며, 확보하지 않은 child payload를
+별도 무제한 queue에 복제하지 않는다.
+
+Shared retained owner는 모든 child terminal과 필요한 record-level reply attempt가 terminal이 된 뒤 Core
+lease를 정확히 한 번 반환한다. Partial child acquire/enqueue 중 cancellation, decode failure, owner close나
+shutdown이 발생하면 아직 enqueue하지 않은 permit은 즉시 반환하고, enqueue한 child는 각자의 pre-start 또는
+handler-start 경계에서 정리한다. Reply attempt가 필요하지 않은 one-way record는 모든 child terminal이
+record terminal이다.
+
 ---
 
-[내부 구조 목차](README.ko.md) · [이전: 10. Liveness와 상태 공개](10-liveness-and-state.ko.md) · [다음: 12. Service wire protocol](12-service-wire-protocol.ko.md)
+[내부 구조 목차](README.ko.md) · [이전: 49. Liveness와 상태 공개](49-internal-liveness-and-state.ko.md) · [다음: 51. Service wire protocol](51-internal-service-wire-protocol.ko.md)

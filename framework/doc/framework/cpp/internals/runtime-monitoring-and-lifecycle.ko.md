@@ -92,13 +92,11 @@ Framework logging callback은 관측 경계다. callback sink가 예외를 던�
 
 ## 8. Monitor event ABI와 callback 수명
 
-확장된 monitor identity field는 versioned
-`zlink_socket_monitor_recv_v2` entry point를 통해 읽는다. 기존 receive
-entry point는 안정적으로 유지되는 event prefix만 기록한다. 따라서 이전
-`zlink_monitor_event_t` layout으로 빌드한 호출자에게 buffer 범위를 넘는
-기록이 발생하지 않는다. C++ binding은 pull 방식 monitor에 versioned entry
-point를 사용하고, callback 경로는 내부 확장 event를 사용하되 Framework에는
-public binding field만 전달한다.
+확장된 monitor identity field는 현재 0.11.1
+`zlink_socket_monitor_recv` entry point를 통해 읽는다. 이전 event prefix를
+위한 별도 receive entry point나 size/version 협상은 제공하지 않는다. C++
+binding의 pull 방식 monitor와 callback 경로는 모두 현재 event layout을
+사용하되 Framework에는 public binding field만 전달한다.
 
 C++ `socket_monitor_t`의 callback userdata는 movable한
 `socket_monitor_t` 객체 주소가 아니라 monitor 구현이 소유하는 callback

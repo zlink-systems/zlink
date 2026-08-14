@@ -1,16 +1,18 @@
 ---
-title: "10. Liveness와 상태 공개"
+title: "49. Liveness와 상태 공개"
 ---
 
-# 10. Liveness와 상태 공개
+# 49. Liveness와 상태 공개
 
-[내부 구조 목차](README.ko.md) · [이전: 9. Session과 Actor 연결](09-session-binding.ko.md) · [다음: 11. Payload 소유권과 복사](11-message-ownership.ko.md)
+> **문서 성격 — 공개 규범 스펙이 아닌 내부 설계 문서.** 이 장은 연결된 공개 계약을 만족시키는 구현 구조를 설명한다. Application이 관찰하는 동작을 추가하거나 변경하지 않는다.
+
+[내부 구조 목차](README.ko.md) · [이전: 48. Session과 Actor 연결](48-internal-session-binding.ko.md) · [다음: 50. Payload 소유권과 복사](50-internal-message-ownership.ko.md)
 
 > **이 장이 답하는 것** — peer와 계속 통신할 수 있는지 판단하는 방법과 runtime 상태를
 > 외부에 공개하는 방법.
 >
-> **계약 소유** — 확인 주기와 판정 기한은 [Transport liveness](../spec/29-transport-liveness.ko.md)가,
-> 상태 값과 관찰자 계약은 [Runtime 상태와 운영 진단](../spec/24-runtime-monitoring.ko.md)이 소유한다.
+> **계약 소유** — 확인 주기와 판정 기한은 [Transport liveness](29-transport-liveness.ko.md)가,
+> 상태 값과 관찰자 계약은 [Runtime 상태와 운영 진단](24-runtime-monitoring.ko.md)이 소유한다.
 > 이 장은 그 계약을 만족시키는 **구조**와, 상태 authority가 갈릴 때 나타나는 실패를 다룬다.
 
 Peer와 계속 통신할 수 있는지 판단하는 방법과 runtime의 현재 상태를 외부에 공개하는
@@ -22,7 +24,7 @@ Peer와 계속 통신할 수 있는지 판단하는 방법과 runtime의 현재 
 
 정식 spec은 확인 주기 **5초**, peer 판정 기한 **15초**를 고정값으로 정하고, 세 연결
 방식에 같은 기준을 적용한다. 이 값은 builder가 공개하지 않으며 channel·handler·peer마다
-다르게 지정할 수도 없다([Transport liveness 「2. 고정된 시간과 public API 경계」](../spec/29-transport-liveness.ko.md#2-고정된-시간과-public-api-경계)).
+다르게 지정할 수도 없다([Transport liveness 「2. 고정된 시간과 public API 경계」](29-transport-liveness.ko.md#2-고정된-시간과-public-api-경계)).
 
 이 판단을 subsystem마다 나누고 서로 다른 주기를 사용하면 같은 peer를 한 subsystem에서는
 available로, 다른 subsystem에서는 unavailable로 판단하는 구간이 생긴다.
@@ -33,7 +35,7 @@ available로, 다른 subsystem에서는 unavailable로 판단하는 구간이 �
 
 **결정 — 업무 message 수신을 생존 신호로 쓰지 않는다.** 업무 message는 마지막 수신
 시각만 갱신하고 판정 기한을 연장하지 않는다
-([Transport liveness 「3. RouteMesh와 ClientServer」](../spec/29-transport-liveness.ko.md#3-routemesh와-clientserver)).
+([Transport liveness 「3. RouteMesh와 ClientServer」](29-transport-liveness.ko.md#3-routemesh와-clientserver)).
 
 이유는 방향이 비대칭이기 때문이다. Peer에서 message를 계속 받아도 **이 node가 보낸
 message가 peer에 도착하는지는 알 수 없다.** 수신만으로 liveness를 판단하면 한쪽 방향만
@@ -46,14 +48,14 @@ message 관측에도 포함하지 않는다.
 
 기준값은 같아도 **방법**은 다를 수 있다. 양방향 연결은 확인 요청과 응답을 주고받지만,
 한쪽으로만 흐르는 fanout은 구독자가 응답할 수 없으므로 발신자가 주기적으로 신호를
-보내는 방식을 쓴다([Transport liveness 「1. Application에서 보이는 결과」](../spec/29-transport-liveness.ko.md#1-application에서-보이는-결과)).
+보내는 방식을 쓴다([Transport liveness 「1. Application에서 보이는 결과」](29-transport-liveness.ko.md#1-application에서-보이는-결과)).
 
 STREAM session의 연결 유지 신호는 **목적이 다른 별도 신호**이며, mesh peer 생존 판단을
 대신하지 않는다.
 
 ### Liveness 판정은 authority를 변경하지 않는다
 
-공개 동작은 [장애 대응과 failover 범위 §4.4](../spec/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)가
+공개 동작은 [장애 대응과 failover 범위 §4.4](31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)가
 정의한다. 이 절은 그 결과를 만들기 위한 책임만 나눈다.
 
 - Liveness subsystem은 peer와 owner lease의 availability evidence만 게시한다.
@@ -69,9 +71,9 @@ STREAM session의 연결 유지 신호는 **목적이 다른 별도 신호**이�
 **결정 — peer가 하나도 준비되지 않았다는 이유로 application 호출 수락을 막지 않는다.**
 
 host가 `serving`이어도 특정 channel에 준비된 대상이 없으면 **그 topology만 저하 상태로
-표시한다**([Runtime 상태와 운영 진단 「2.2 Topology 상태」](../spec/24-runtime-monitoring.ko.md#22-topology-상태)).
+표시한다**([Runtime 상태와 운영 진단 「2.2 Topology 상태」](24-runtime-monitoring.ko.md#22-topology-상태)).
 시작 절차는 local 수락 완료를 기다리지 않는다
-([Channel 메시징 「선택 순서」](../spec/08-channel-messaging.ko.md#선택-순서)).
+([Channel 메시징 「선택 순서」](08-channel-messaging.ko.md#선택-순서)).
 
 | 방식 | 결과 |
 |---|---|
@@ -85,7 +87,7 @@ host가 `serving`이어도 특정 channel에 준비된 대상이 없으면 **그
 
 **결정 — 자기 주소를 알린 뒤에 `serving`을 공개한다.**
 
-순서는 이렇다([MeshNode 「6. 등록과 startup 순서」](../spec/13-mesh-node.ko.md#6-등록과-startup-순서)).
+순서는 이렇다([MeshNode 「6. 등록과 startup 순서」](13-mesh-node.ko.md#6-등록과-startup-순서)).
 
 1. 등록 선언을 검증한다.
 2. 수신 endpoint를 bind하고 **실제 주소를 확정한다.**
@@ -104,7 +106,7 @@ flowchart LR
 
 **결정 — 상태 값은 닫힌 집합이다.** `preparing`·`serving`·`relocating`·`relocated`·
 `draining`·`stopped`·`error` 일곱이며, 준비 완료 표시는 `serving`일 때만 참이다
-([Runtime 상태와 운영 진단 「2.1 Host 상태」](../spec/24-runtime-monitoring.ko.md#21-host-상태)).
+([Runtime 상태와 운영 진단 「2.1 Host 상태」](24-runtime-monitoring.ko.md#21-host-상태)).
 
 **결정 — 준비 여부를 참·거짓 값 하나로만 관리하지 않는다.** 전역 참·거짓 값 하나로는
 위 일곱 상태를 표현할 수 없고 "왜 아직 준비되지 않았는가"에 답할 수 없다.
@@ -119,7 +121,7 @@ flowchart LR
 
 **결정 — 자리가 넘쳤다는 이유로 구독을 끊지 않는다.** 합치기로만 따라잡으며, 구독자가
 계속 느려도 stream은 열려 있다. 구독 종료는 application이 취소했을 때뿐이다
-([Runtime 상태와 운영 진단 「합치기」](../spec/24-runtime-monitoring.ko.md#합치기)).
+([Runtime 상태와 운영 진단 「합치기」](24-runtime-monitoring.ko.md#합치기)).
 
 **결정 — 종료된 source의 terminal 상태 보관량에도 상한을 둔다.** 상한을 넘기면 가장
 오래된 terminal 상태부터 버리고 그 횟수를 버림 횟수에 반영한다. 무한히 보관하면 느린
@@ -194,7 +196,7 @@ flowchart LR
 결과가 같기 때문이다. 관찰 기준은 구독자를 인위적으로 느리게 만들었을 때 message 처리
 속도가 유지되는지다.
 
-끌어가는 방식을 고르면 [7. 실행 반복 「5. 깨우는 방식을 하나만 고른다」](07-dispatch-loop.ko.md#5-깨우는-방식을-하나만-고른다)와
+끌어가는 방식을 고르면 [46. 실행 반복 「5. 깨우는 방식을 하나만 고른다」](46-internal-dispatch-loop.ko.md#5-깨우는-방식을-하나만-고른다)와
 같은 제약을 받는다 — 확인 주기가 곧 알림 지연 하한이므로 그 주기를 그 언어의 문서에 적는다.
 
 ## 5. 계측이 꺼져 있으면 비용이 없다
@@ -209,7 +211,7 @@ message 흐름 추적은 실행 중에 켜고 끌 수 있다. 꺼진 상태에�
 
 > `off`에서는 현재 level을 확인하는 읽기와 분기 외에 trace 전용 작업을 하지 않는다.
 > ... log provider에서 출력만 막는 구현은 `off` 계약을 만족하지 않는다.
-> — [Message flow tracing 「4.1 실행 중에 기록 수준 변경」](../spec/26-message-flow-tracing.ko.md#41-실행-중에-기록-수준-변경)
+> — [Message flow tracing 「4.1 실행 중에 기록 수준 변경」](26-message-flow-tracing.ko.md#41-실행-중에-기록-수준-변경)
 
 두 번째 문장이 핵심이다. **값을 모두 만든 뒤 출력 단계에서 버리는 구현은 계약 위반이다.**
 출력하지 않아도 값을 만드는 비용은 이미 발생했기 때문이다.
@@ -250,4 +252,4 @@ channel 이름이나 handler 이름처럼 등록 시점에 정해지는 이름�
 
 ---
 
-[내부 구조 목차](README.ko.md) · [이전: 9. Session과 Actor 연결](09-session-binding.ko.md) · [다음: 11. Payload 소유권과 복사](11-message-ownership.ko.md)
+[내부 구조 목차](README.ko.md) · [이전: 48. Session과 Actor 연결](48-internal-session-binding.ko.md) · [다음: 50. Payload 소유권과 복사](50-internal-message-ownership.ko.md)

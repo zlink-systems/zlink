@@ -3,7 +3,7 @@ title: "Bindings API Policy"
 ---
 
 <!-- bindings-nav:start -->
-[Spec index](README.md)
+[Spec index](README.en.md)
 <!-- bindings-nav:end -->
 
 # Bindings API Policy
@@ -910,7 +910,7 @@ The per-language application direction is:
 |---|---|
 | C | `core/include/zlink.h` is the single baseline for the public C ABI. `bindings/c` does not add a separate contract/runtime layer, and aligns only the C-API-based mapping, sample, test, perf, and packaging policy. |
 | C++ | `bindings/cpp/include/zlink/Contracts/` is the public C++ contract location. `bindings/cpp/src/Runtime/` is the private implementation location. It prefers C++20, RAII classes, and concrete values, and does not over-wrap a public class in a virtual interface. |
-| .NET | Detailed standards follow the [.NET binding blueprint](dotnet/README.md). This document does not duplicate .NET's detailed file structure. |
+| .NET | Detailed standards follow the [.NET binding blueprint](dotnet/README.en.md). This document does not duplicate .NET's detailed file structure. |
 | Java | The public contract package under `bindings/java/src/main/java/systems/zlink/contracts/` is the public contract location. Because Java follows URL-based package layout, it reflects the lower-case `contracts` and `runtime` packages in the actual folders. The native bridge lives under the non-exported `systems.zlink.runtime.nativeapi`. |
 | Node | `bindings/node/src/index.ts` and the `package.json` exports are the public contract projection. Contract source lives at a lower-case source path such as `bindings/node/src/zlink/contracts/`, and the runtime/native addon implementation is hidden under `bindings/node/src/zlink/runtime/`. |
 | Python | `bindings/python/src/zlink/contracts/` is the public contract source. The `zlink` root package is the projection that re-exports this contract, and the native/FFI implementation lives under private packages such as `_runtime/` and `_native/`. |
@@ -944,7 +944,7 @@ the `Contracts` or `Runtime` name below.
 | Binding | Contract root | Runtime root | Public projection |
 |---|---|---|---|
 | C++ | `bindings/cpp/include/zlink/Contracts/` | `bindings/cpp/src/Runtime/` | `#include <zlink.hpp>` and installed `include/zlink/...` headers |
-| .NET | See [dotnet/README.md](dotnet/README.md) | See [dotnet/README.md](dotnet/README.md) | See [dotnet/README.md](dotnet/README.md) |
+| .NET | See [dotnet/README.md](dotnet/README.en.md) | See [dotnet/README.md](dotnet/README.en.md) | See [dotnet/README.md](dotnet/README.en.md) |
 | Java | `bindings/java/src/main/java/systems/zlink/contracts/` | `bindings/java/src/main/java/systems/zlink/runtime/` | exported `systems.zlink.contracts.*` JPMS packages and Maven artifact |
 | Node | `bindings/node/src/index.ts` and `bindings/node/src/zlink/contracts/` | `bindings/node/src/zlink/runtime/` | package root export, generated `.d.ts`, and `package.json` exports |
 | Python | `bindings/python/src/zlink/contracts/` | `bindings/python/src/zlink/_runtime/` and `bindings/python/src/zlink/_native/` | `zlink` package exports from `__init__.py` |
@@ -1015,8 +1015,7 @@ to it.
   an operation builder.
 - A builder start point's arguments take only the operation's target —
   destination, topic, channel, routing id, or request sequence. Payload,
-  flags, timeout, callback, and the async/callback submit choice are
-  expressed at the builder stage.
+  flags, and timeout are expressed at the builder stage.
 - Multipart payload accumulates through repeated `message(...)` calls on
   the builder. A `messages(...)` convenience may exist per language
   convention, but the canonical path is the builder. If such a
@@ -1025,9 +1024,9 @@ to it.
 - Do not multiply operation-start names such as `sendNoWait`,
   `publishWithFlags`, `requestAsync`, or `requestCallback`. Keep the same
   operation name, and let the builder stage absorb the variation. The
-  per-language final execution method for an async or callback completion
+  per-language final execution method for native suspension completion
   surface follows the
-  [bindings async execution surface policy](async-coroutine-policy.md).
+  [bindings async execution surface policy](async-coroutine-policy.en.md).
 - Resource creation is not scattered across public constructors on
   several runtime classes. A per-binding root facade or context factory
   owns construction responsibility. For example, the .NET binding
@@ -1206,8 +1205,8 @@ canonical path new code and samples/perf must follow.
 
 zlink's send/request/reply/publish family, and the Actor
 location/session-attach family, all have many combination axes. Spreading
-target path, payload part count, `flags`, `timeout`, and the
-async/callback completion mode across plain method overloads makes a
+target path, payload part count, `flags`, `timeout`, and the native-suspension
+completion mode across plain method overloads makes a
 socket or service handle a shallow, wide interface, and forces multipart
 payload to be wrapped in an external List/Vector container. A high-level
 binding hides this combinatorial complexity inside an operation object,
@@ -1270,12 +1269,12 @@ convention.
   used, multipart payload is always expressed through repeated
   `.message(...)` calls.
 - A builder convenience such as `.messages(...)`, `.flags(...)`,
-  `.timeout(...)`, a callback submit, or the final execution method of an
+  `.timeout(...)`, or the final execution method of an
   async completion is part of the builder contract if it is public. It
   must not be defined only as a runtime-internal shortcut. The
   per-language name and meaning of the async-completion final execution
   method belongs in the
-  [bindings async execution surface policy](async-coroutine-policy.md).
+  [bindings async execution surface policy](async-coroutine-policy.en.md).
 - Payload accumulates through repeated `message(part)` calls on the
   builder. A single payload and a multipart payload are not split into
   separate start-point overloads. Multipart is not wrapped in an
@@ -1302,9 +1301,9 @@ convention.
 - For an operation with no payload — Actor `leave`, `destroy`,
   `bindActor`, `unbindActor`, `remoteActorGetRef` — the builder can submit
   immediately without a `message(...)` step. But it still exposes the
-  same builder shape and option steps (`flags(...)`, `timeout(...)`,
-  `callback(...)`, the async-completion final execution method).
-- `flags`, `timeout`, and the callback/async choice are optional builder
+  same builder shape and option steps (`flags(...)`, `timeout(...)`, and
+  the async-completion final execution method).
+- `flags` and `timeout` are optional builder
   steps, not start-point parameters. A start point takes only
   semantically key arguments, such as the target address or request
   sequence.
@@ -1334,10 +1333,9 @@ convention.
   DEALER cannot designate a specific peer routing id, so reply-routing
   decisions would leak into a protocol helper, and the user would need to
   understand token semantics.
-- An async request or async Actor operation does not take submit flags. A
-  callback form may take `flags` to express a non-blocking submit. The
-  detailed difference in completion mode follows the
-  [bindings async execution surface policy](async-coroutine-policy.md).
+- An async request or async Actor operation does not take submit flags. The
+  detailed completion surface follows the
+  [bindings async execution surface policy](async-coroutine-policy.en.md).
 - A builder cannot be submitted again once it has been submitted. A
   language that offers a move-only or ownership type blocks this by
   type; otherwise it is blocked by a runtime state check.
@@ -1366,18 +1364,18 @@ routerSocket.requestToSpot(destNodeRid, destSpotRid)
 spotNode.joinActor(actor, destNodeRid, destUserSpotRid)
     .message(joinStatePart)
     .timeout(Duration.ofSeconds(3))
-    .submit(joinCallback);
+    .submit();
 
 streamSocket.bindActor(sessionRid, actorRef)
     .timeout(Duration.ofSeconds(2))
-    .submit(replyCallback);
+    .submit();
 ```
 
 #### Per-Language Async Execution Surface Standard
 
-The per-language final execution method for an async or callback
-completion belongs in the
-[bindings async execution surface policy](async-coroutine-policy.md).
+The per-language final execution method for native suspension completion
+belongs in the
+[bindings async execution surface policy](async-coroutine-policy.en.md).
 
 This rule is Required under the POSD standard. When adding or cleaning up
 a new send/request/reply/publish or Actor location/attach public API,
@@ -1443,41 +1441,85 @@ is the baseline.
 - `ZLINK_OPT_SNDHWM` and `ZLINK_OPT_RCVHWM` limit the accounted bytes actually
   retained by each directional pipe. Their manual default is `4,096,000 bytes`,
   and `0` means unlimited. The values are not queue message-count limits.
-- `ZLINK_CTX_OPT_AUTO_HWM_PROFILE` and
-  `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` must be exposed by every
-  binding as a typed context option. The profile value is one of
-  compact, low latency, balanced, or throughput, and the default is
-  balanced. A context message-unit default of `0` means using each
-  socket type's default message unit.
-- `MonitorStatus` must expose every one of core `zlink_monitor_status_t`'s
-  auto-HWM v2 diagnostic fields without omission. Enabled, the profile
-  enum, role, policy class, unit budget, size cap, socket message slots,
-  effective message bytes, applied HWM, the recent recalculation reason
-  enum, deferred shrink, and blocked ratio are all part of the public
-  snapshot contract.
+- `ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES`,
+  `ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES`, and
+  `ZLINK_CTX_OPT_AUTO_HWM_PROFILE` are typed context options in every
+  binding. A byte value of `0` means that the explicit memory limit or
+  manual Core budget is absent. A binding does not calculate profile ratios
+  or per-queue HWM values.
+- Input precedence is manual Core budget, explicit memory limit, a runtime
+  memory limit detected by the binding, then Core fallback. When the user sets
+  either of the first two values, the binding does not auto-detect a runtime
+  hint. Candidate hints are .NET GC available-memory limit, Java maximum JVM
+  heap, Node.js V8 heap limit, and a finite Go runtime memory limit. C++ and
+  Rust add no runtime hint, while Python supplies one only when a distinct VM
+  hard limit is unambiguous. A binding neither combines the hint with Core's
+  hard limit nor applies a profile ratio itself.
+- If Core detects a finite hard limit and an explicit memory limit or manual
+  Core budget exceeds it, the binding preserves Core's `EINVAL` and does not
+  clamp the value.
+- The context budget snapshot includes Core ABI v1 version and structure size
+  and projects this canonical range without unit conversion: configured,
+  runtime, and resolved memory limits; configured and effective Core budgets;
+  planned, applied, and manual-reserved HWM; Core-queue, application, current,
+  peak, and provisional accounted bytes; completion current, peak, pending,
+  and total-messaging values; monitor-queue and instance aggregates; active
+  application and completion queue counts; outstanding application-lease
+  count, retired-queue count, and deferred origin-credit bytes; oversize,
+  blocked, budget-insufficient, and aggregate flags; `budgetGeneration`; and
+  `measurementEpoch`. Metrics reset is an operation on the same context. It
+  preserves current, pending, and queue-count gauges, rebases both peaks to
+  their current values, clears epoch counters, and increments
+  `measurementEpoch`.
+
+  The canonical snapshot fields are below. A language binding changes only
+  naming convention; it does not omit or merge fields, units, or meanings.
+
+  ```text
+  abiVersion, structSize
+  configuredMemoryLimitBytes, runtimeMemoryLimitBytes, resolvedMemoryLimitBytes
+  configuredCoreBudgetBytes, effectiveCoreBudgetBytes
+  totalPlannedHwmBytes, totalAppliedHwmBytes, manualReservedHwmBytes
+  coreQueueAccountedBytes, applicationAccountedBytes
+  currentAccountedBytes, peakAccountedBytes, provisionalAccountedBytes
+  completionCurrentAccountedBytes, completionPeakAccountedBytes
+  completionPendingMessageCount, totalMessagingAccountedBytes
+  monitorQueueAppliedHwmBytes, monitorQueueAccountedBytes
+  totalInstanceAppliedHwmBytes, totalInstanceAccountedBytes
+  activeDirectionalQueueCount, activeSendQueueCount, activeReceiveQueueCount
+  activeCompletionDirectionalQueueCount
+  outstandingApplicationLeaseCount, retiredQueueCount, deferredOriginCreditBytes
+  oversizeAdmissionCount, largestOversizeMessageBytes, blockedRatioPpm
+  unlimitedManualQueueCount, aggregateHwmValid, aggregateOverflow
+  budgetInsufficient, budgetGeneration, measurementEpoch
+  ```
+
+  `currentAccountedBytes = coreQueueAccountedBytes +
+  applicationAccountedBytes`, and `totalMessagingAccountedBytes =
+  currentAccountedBytes + completionCurrentAccountedBytes`. Completion values
+  are diagnostic only and change neither HWM admission nor the Core budget.
+  Send and receive counts are perspective-specific and must not be added to
+  derive the physical directional queue count. `outstandingApplicationLeaseCount`
+  is the number of public retained-credit leases not yet returned,
+  `retiredQueueCount` is the number of queue generations retained after detach
+  or generation replacement because they still have a retained origin, and
+  `deferredOriginCreditBytes` is exact-origin credit held by an internal framing
+  token or public lease and not yet published to the writer. Metrics reset
+  preserves these three gauges as well.
+- `MonitorStatus` projects Core monitoring ABI v3 byte HWM and pending
+  diagnostics. Legacy message-unit, slot, size-cap, and connection-bucket
+  planner properties are removed without aliases.
 
 ##### HWM Calculation And Admission
 
-`ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES` is not a message-size limit. It is a byte
-planning input passed to Core's automatic HWM planner. Core selects a
-message-slot count from the profile, socket role, and observed connection
-count, then calculates the byte HWM as follows.
+Core calculates per-queue planned HWM values from context memory inputs, the
+profile, the physical directional queue registry, and byte water-filling. A
+binding does not transform those inputs into message counts or a planning unit.
 
-```text
-planned HWM bytes = selected message slots * planning unit bytes
-```
-
-A context planning unit of `0` selects `1,024 bytes` for STREAM and
-`4,096 bytes` for every other raw socket. An explicit raw-socket value applies
-only to that socket's calculation. The planning unit is not an observed average
-message size, and Core does not charge every message as though it had that fixed
-size.
-
-Automatic HWM applies a planned value only to sockets without a manual
-directional HWM override. Connection-count changes trigger recalculation
-through debounce and bucket hysteresis. If a new HWM is below the bytes already
-retained, Core keeps the queued messages and defers application until retention
-falls below the new limit.
+Automatic HWM applies a planned value only to physical queues without a manual
+directional HWM override. Core recalculates when topology changes. If a new
+target is below the bytes already retained, Core blocks new admission and
+switches the applied HWM after drain.
 
 Core decides write admission by accumulating the accounted bytes of frames
 retained by a pipe. Once those bytes reach the HWM, later writes receive
@@ -1485,10 +1527,69 @@ backpressure until byte credit returns. An empty pipe may admit one complete
 message larger than its HWM, after which later writes are limited again. This
 exception does not apply to an incomplete multipart message.
 
-`auto_hwm_socket_message_slots`, `snd_pending_msgs`, and `rcv_pending_msgs` are
-count diagnostics, not admission inputs. Planned, applied, and deferred HWM
-values and `snd_bytes_in_flight` and `rcv_bytes_in_flight` use bytes. A binding
-preserves Core monitoring ABI v2 values and validity flags.
+Pending message counts are display diagnostics, not admission inputs. Planned,
+applied, and deferred HWM and pending/accounted values use bytes. A binding
+preserves Core ABI values and flags unchanged.
+
+##### Retained credit and asynchronous first admission
+
+Terminal replies and error replies use the HWM-free completion lane. A binding
+applies no SNDHWM, RCVHWM, HWM-readiness wait, or backpressure retry to this
+completion submit.
+
+For Framework data-plane receive, the binding's `Received`-family owner holds a
+Core HWM budget lease together with the message returned through the existing
+receive framing. This contract adds no multipart transaction ABI. A multipart
+job retains the leases returned with its receive results and releases each
+lease exactly once when `Received` is closed, disposed, dropped, or terminally
+cleaned up. A lease is not a separate application capacity, and a payload copy
+retained by user code does not retain it.
+
+This behavior applies only to the retained aggregate receive entrypoint that a
+Framework backend selects explicitly. Ordinary binding `recv` and `subscribe`
+keep their existing behavior of returning Core credit at dequeue. A binding
+does not silently change ordinary receive semantics; it exposes a
+language-idiomatic `recvRetained`/`subscribeRetained` family without exposing a
+raw lease handle.
+
+Before accepting asynchronous routed operations, a binding registers Core's
+long-lived routed-target readiness handler on the socket. It uses the event's
+exact `(socket, target RID, transport pair ID, generation)` key and keeps
+internal state corresponding to `pendingByTarget`, `readyTargets`, and
+`readySet`. This is private machinery for resuming a Task, Future, Promise, or
+coroutine, not a public scheduler.
+
+An asynchronous routed send or request builder never performs a native blocking
+submit before constructing its completion object. It first records the
+operation as pending, then submits the complete multipart to the same target
+with `DONTWAIT`. Admission removes it from pending and completes a send. On
+backpressure, the exact target event marks only that key ready, and a binding
+pump retries `DONTWAIT` for the same target outside the callback thread. After
+first admission, a request keeps the existing reply correlation until reply,
+timeout, disconnect, termination, or cancellation. Waiting never extends the
+original deadline.
+
+A binding that uses part-level Core APIs has a short complete-record attempt
+gate shared by every outbound path on the same native handle. Inside the gate
+it calls the existing exact-target part API from the first part through
+`FINAL`, then releases the gate immediately after that attempt. It never holds
+the gate while waiting for readiness, and adds no multipart ABI or public
+transaction abstraction.
+
+Long-lived handler registration, pending-before-submit, and generation checks
+prevent lost writable edges and stale-route wakes. Waiting for RID A neither
+blocks submits for B, C, or D on the same socket nor retains a shared submit
+lock. Pipe detach, socket close, context termination, timeout, and cancellation
+races resolve that operation to exactly one terminal completion. Framework owns
+no RID map, retry deque, ready ring, fixed-interval polling, or separate retry
+capacity. Socket-wide send-ready is not used for routed asynchronous admission.
+
+The canonical terminals are C++ `async()`, .NET `Async(...)`, Java/Node/Python/
+Rust `submit()`, Kotlin `submit().await()`, and the completion channel returned
+by Go `Submit(ctx)`. Canonical Rust usage is `submit().await?`. An HWM-managed
+routed builder does not pair that terminal with callback or blocking
+compatibility terminals or `submit_async()`, and no language adds a new
+operation start point such as `request_async`.
 
 Each binding maps HWM values as follows.
 
@@ -1497,10 +1598,10 @@ Each binding maps HWM values as follows.
 | C | `uint64_t` | Passes an exact 8-byte option value. |
 | C++ | `byte_count_t` | Passes its internal `uint64_t` byte value as an exact 8-byte option value. |
 | .NET | `ulong` | Preserves the full `uint64_t` range. |
-| Java/Kotlin | `long` | Treats all 64 bits as unsigned and passes them unchanged. |
+| Java/Kotlin | `long` | Accepts `0` through `Long.MAX_VALUE`; a larger Core value read back is an overflow error. |
 | Node.js | `bigint` | Accepts `0` through `2^64-1` and passes exactly 8 bytes. |
 | Python | `int` | Accepts only the non-negative `uint64_t` range and passes exactly 8 bytes. |
-| Go | `int` | Accepts `0` through platform `MaxInt`, then converts to `uint64`; a read above `MaxInt` returns an overflow error. |
+| Go | `uint64` | Preserves the same range as Core `uint64_t`. |
 | Rust | `u64` | Preserves the same range as `uint64_t`. |
 
 ##### SpotNode HWM Options
@@ -1514,12 +1615,11 @@ Each binding maps HWM values as follows.
   `ZLINK_SPOT_NODE_OPT_PUBSUB_HWM`, and the two dispatch-worker options
   `ZLINK_SPOT_NODE_OPT_DISPATCH_WORKERS_MIN` and
   `ZLINK_SPOT_NODE_OPT_DISPATCH_WORKERS_MAX`.
-  The C API's shared `ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES` stays only as an
-  explicit override on a raw socket. A per-language high-level binding
-  does not expose this value on a socket/SpotNode/Spot public facade — it
-  exposes only the context option as the canonical API. A SPOT node or
-  SPOT handle cannot set the raw socket's shared option; calling it fails
-  with `EINVAL`.
+  The removed `ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES` and
+  `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` do not remain as aliases on a
+  raw socket or on a socket/SpotNode/Spot facade. A binding exposes only
+  the byte-valued context memory limit, Core budget, profile, and ABI v1
+  budget snapshot as the canonical Auto HWM surface.
   A dispatch-worker option adjusts only the size of the callback worker
   pool owned by `SpotNode`, and does not mean `ZLINK_IO_THREADS` or a
   data-plane thread count. `min` must be at least 1, and `max` must be at
@@ -1869,9 +1969,10 @@ Every data-path function (`send`, `recv`, `request`, `reply`,
    - Throws an exception on failure.
    - The exception carries an `int code` (in the 0–706 range) so the
      caller can distinguish the failure cause.
-   - Every failure including `BACKPRESSURED`, `NOT_CONNECTED`, and
-     `NOT_FOUND` is delivered as an exception. These are never return
-     values.
+   - Failures allowed by an operation's contract, including
+     `BACKPRESSURED`, `NOT_CONNECTED`, and `NOT_FOUND`, are delivered as
+     exceptions. These are never return values. A raw terminal reply is the
+     exception: its HWM-free completion lane does not admit `BACKPRESSURED`.
 2. **C / Go / Rust have no exceptions, so they follow a return-based
    contract.** A binding handles it in the style each language's idiom
    fits.
@@ -1895,10 +1996,11 @@ Every data-path function (`send`, `recv`, `request`, `reply`,
      `trySend`, `tryRecv`, or `tryRequest`.
    - The C ABI expresses blocking vs. non-blocking through a function
      argument `flags`.
-   - A wrapper binding's send/publish/request/reply family expresses a
-     non-blocking submit through the builder's `.flags(...)` step. It
-     does not add a separate `flags` argument to the operation
-     start-point signature.
+   - A wrapper binding's send/publish/request family, and any reply family
+     whose Core ABI accepts send flags, expresses a non-blocking submit through
+     the builder's `.flags(...)` step. It does not add a separate `flags`
+     argument to the operation start-point signature. A raw terminal reply has
+     no send flag in the Core ABI and therefore exposes no flag step.
    - A wrapper binding's data-plane `recv`, routed recv, and `subscribe`
      fill caller-provided result storage, and the return value expresses
      only "was data received."
@@ -2099,7 +2201,7 @@ splits the same concept into multiple names across languages.
 
 #### One Entrypoint, Variation Expressed As Builder Steps
 
-Variations of the same operation — async/callback, single/multipart,
+Variations of the same operation — single/multipart,
 with or without flags, with or without a timeout — use the same
 entrypoint name, and the variation is expressed as a builder step. Do not
 create a separate name such as `request_callback`, `send_nonblocking`, or
@@ -2112,14 +2214,9 @@ spot.request_to_channel(channel)
     .timeout(Duration::from_secs(3))
     .submit()                              // returns the language completion object
 
-spot.request_to_channel(channel)
-    .message(part)
-    .flags(SendFlags::DONTWAIT)
-    .submit(callback)                      // callback variant
-
 // BAD: split names for the same operation.
 request_to_channel(channel, parts, timeout)
-request_to_channel_callback(channel, parts, callback, flags, timeout)
+request_to_channel_async(channel, parts, timeout)
 ```
 
 #### Shared Result Type Names
@@ -2171,18 +2268,16 @@ convention.
 
 ### Request Policy
 
-A request can offer both a per-language async-completion form and a
-callback-completion form, and both are selected at the submit step of
-the same `RequestOp` operation builder the `request` entrypoint returns.
-Do not create a separate name (`request_callback`, `requestAsync`, and
-so on).
+A request offers one language-native suspension terminal on the same
+`RequestOp` operation builder the `request` entrypoint returns. Do not create a
+separate name (`request_callback`, `requestAsync`, `submit_async`, and so on).
 
 For a SPOT operation builder target, the work start point is
 `requestToChannel`/`requestToSpot`/`requestToRouter`; for a raw
 `DealerSocket`/`RouterSocket`, the work start point is
 `request`/`request(peer)`. Regardless of the start point, the completion
 mode is selected through the per-language final execution method the
-[bindings async execution surface policy](async-coroutine-policy.md)
+[bindings async execution surface policy](async-coroutine-policy.en.md)
 defines.
 - **On success, it returns only the reply payload's `List<Message>`.**
   The caller already knows the `routing_id` and `request_seq` of the
@@ -2191,41 +2286,12 @@ defines.
 - Because multipart reply is possible, it returns `List<Message>`, not a
   single `Message`. A single-part reply is retrieved with `list[0]`.
 
-#### Callback Request
-
-The builder's callback submit method (`submit(callback)`).
-
-- Takes a flags parameter. Delivered through the builder's `.flags(...)`
-  step; a non-blocking submit is possible with `DONTWAIT`.
-- The timeout is delivered through the builder's `.timeout(...)` step. If
-  not specified, it uses the socket's default timeout.
-- The submit step is interpreted as follows.
-  - Exception-based languages: blocking success = `true`, non-blocking
-    temporary backpressure = `false`, any other submit failure = an
-    exception
-  - Return-based languages: keeps the existing error-return contract
-  On failure, the callback is not registered.
-- On submit success, the callback is called exactly once.
-  - Success: `result = OK`, includes reply parts
-  - Failure: `result != OK` (`TIMED_OUT`, and so on), parts is
-    empty/null/None/`Option::None`
-- The callback signature follows language idiom, and **delivers the
-  reply payload as `List<Message>`** (not `Received`):
-  - The common pattern (C++/Java/.NET/Node/Python/Go):
-    `(RequestResult result, List<Message> parts)` — a result enum and a
-    parts list
-  - Rust idiom: `FnOnce(Result<Vec<Message>, RequestError>)` — this
-    pattern is allowed because `Result` is Rust's standard way to
-    express an error plus a value. `RequestError::code` maps 1:1 to the
-    `RequestResult` enum value.
-
 #### Shared
 
 - For the full `zlink_request_result_t` definition, see
   [errno-map.md](https://zlink-systems.github.io/zlink/spec/core/04-errno-map/).
-- Because Go / Rust have no exceptions, a callback request's submit
-  failure is also handled in a return-based way (Go: returns
-  `*SubmitError`; Rust: returns `Result<_, SubmitError>`).
+- Because Go / Rust have no exceptions, suspension failures use their
+  return-based error representation.
 
 ## Domain Object Policy
 - Java, C#, Go, Rust, Node, and Python prefer a domain object over an
@@ -2545,8 +2611,14 @@ every binding to expose.**
 | `detail_flags` | enum flags | The detail bitmask |
 | `snd_pending_msgs` | `uint64` | The number of messages pending in the send queue |
 | `rcv_pending_msgs` | `uint64` | The number of messages pending in the receive queue |
-| `auto_hwm_*` diagnostic fields | enum / number / bigint | Must expose the canonical auto-HWM fields of C's `zlink_monitor_status_t` with the same meaning. Includes enabled, profile (enum), role, policy class, unit budget, size cap, socket message slots, effective message bytes, applied HWM, applied buffer, the recent recalculation reason (enum), deferred shrink, and blocked ratio |
+| `snd_pending_bytes`, `rcv_pending_bytes` | `uint64` | Current pending accounted bytes in the send and receive queues |
+| `auto_hwm_*` diagnostic fields | enum / number / bigint | Exposes canonical `zlink_monitor_status_t` ABI v3 fields unchanged: enabled, profile, role, policy class, planned/applied/deferred SND and RCV HWM bytes, effective buffer bytes, last recalculation time and reason, blocked ratio, SND and RCV in-flight bytes, minimum Core charge, and oversize diagnostics |
 | `is_ready()` | `bool` | A convenience method that checks the ready bit in `state_flags`, for a raw socket monitor source only |
+
+Monitor open uses only `monitor_hwm_bytes`. Zero selects the Core default;
+a positive value is passed unchanged as the exact byte limit for the source
+worker and both directions of the internal PAIR. No legacy monitor message-count
+option or count-to-byte alias is exposed.
 
 #### Service-Layer Entry Objects
 
@@ -3308,7 +3380,7 @@ Each binding must expose these APIs as a per-language typed surface.
 - Core provides a callback-based async model. A binding can layer a
   per-language completion-object-return surface on top of the callback,
   per the
-  [bindings async execution surface policy](async-coroutine-policy.md).
+  [bindings async execution surface policy](async-coroutine-policy.en.md).
   A coroutine connection is the framework's responsibility.
 - `request()` is not a thread-blocking API.
 - Request-reply is a capability extension of the Router/Dealer sockets
@@ -3437,23 +3509,20 @@ dispatch owner.
 
 #### Request API Variants
 
-A request has two completion modes.
-
-Both async request and callback-completion request are exposed through
-the `RequestOp` operation builder the `request` entrypoint returns. The
-per-completion-mode flags, timeout, and failure-delivery rules follow the
-[bindings async execution surface policy](async-coroutine-policy.md).
+A request exposes one language-native suspension terminal through the
+`RequestOp` operation builder the `request` entrypoint returns. Timeout and
+failure-delivery rules follow the [bindings async execution surface
+policy](async-coroutine-policy.en.md).
 
 The C binding keeps the substrate shape
 `zlink_*_request_part(..., flags, part_flag, timeout, ...)`. The wrapper
 builder policy does not apply to the C ABI.
 
-- Error handling follows the Error Handling Policy. A callback request's
-  submit failure applies language idiom as-is: an exception for
-  exception languages (C++/Java/.NET/Node/Python), a returned error for
-  return-based languages (C/Go/Rust).
-- A reply result is delivered by the callback exactly once:
-  `(RequestResult result, List<Message> parts)`
+- Error handling follows the Error Handling Policy. Exception languages use an
+  exception and return-based languages use an error result for suspension
+  failure.
+- A reply result is delivered exactly once as the suspension's successful
+  `List<Message>` value.
 
 #### SPOT Request-Reply
 
@@ -4522,6 +4591,11 @@ and is not treated as an error.
 | 11 | `SEQ_EXHAUSTED` | `EBUSY` | internal failure | the request seq space is exhausted |
 | 12 | `INTERNAL_ERROR` | `EPROTO`, and so on | internal failure | an internal submit failure (see `zlink_errno()` for detail) |
 
+This enum is shared by the submit function family; that does not make every
+value applicable to every function. `BACKPRESSURED` applies only to HWM-managed
+send, publish, and request submit. A raw ROUTER/`Received` reply makes one
+submission to the HWM-free completion lane and never returns `BACKPRESSURED`.
+
 ##### `zlink_request_result_t` (request completion callback)
 
 | Value | Constant | Internal errno | Meaning |
@@ -4735,18 +4809,21 @@ sends. Only 3 errno values are usable on the wire: `ENOENT`,
 
 **Reply errors (`SubmitError`):**
 
+Raw ROUTER/`Received` reply is a synchronous one-shot submit in every
+high-level binding. It submits a terminal reply or error reply to the HWM-free
+completion lane with one native call. HWM backpressure is not a reply result;
+the non-HWM failures below are delivered immediately.
+
 | Situation | `reply()` |
 |------|-----------|
 | success | returns normally |
-| backpressure | `SubmitError(BACKPRESSURED)` |
 | not connected | `SubmitError(NOT_CONNECTED)` |
+| socket/context terminated | `SubmitError(TERMINATED)` |
+| invalid argument | `SubmitError(INVALID_ARGUMENT)` |
 | any other failure | `SubmitError(<matching submit code>)` |
 
 - An async request delivers a completion failure through the async
   completion path (a Future reject / an await error).
-- A callback request **throws/returns a submit failure immediately**,
-  and delivers only a post-submit-success completion failure through the
-  callback's `RequestResult`/`RequestError`.
 - Uses the per-function-family subtype error (see Per-Function Error
   Type Hierarchy).
   - a submit failure: `SubmitException`/`SubmitError`
@@ -5915,18 +5992,13 @@ A binding must expose `ZLINK_OPT_RID_DUPLICATE_POLICY`,
 connect result values `NOT_FOUND`, `CONFLICT`, `BUSY`, using each
 language's usual enum/error mapping style.
 
-- The C binding exposes `ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES` value
-  `0x3034` through the native socket option contract, and
-  `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` value `18` through the context
-  option contract.
-- A higher-level binding must expose this capability as a typed context
-  option facade.
-- The public facade of a socket, SpotNode, or Spot does not add a
-  per-message-unit option.
-- If a raw socket path is kept for compatibility, it must be clearly
-  separated from the canonical API, not used in new documentation/
-  samples/tests, and must preserve the C contract as-is (`int` bytes, a
-  raw default of `0`, a negative value fails with `EINVAL`).
+- C and higher-level bindings no longer expose the removed
+  `ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES` value `0x3034` or
+  `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` value `18`. They do not add a
+  compatibility alias, deprecated wrapper, or raw bypass.
+- The canonical Auto HWM surface is the byte-valued context memory limit,
+  Core budget, profile, ABI v1 budget snapshot, and metric reset. A
+  socket, SpotNode, or Spot does not add a per-message-unit option.
 
 ## Related Documents
 - `bindings/cpp/`

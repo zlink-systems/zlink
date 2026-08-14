@@ -103,10 +103,36 @@ builder.Services.AddOpenTelemetry().WithMetrics(m => m
 | `zlink.location.owner_lease.renew.lateness` | 예정 시각 대비 owner lease 갱신 지연 |
 | `zlink.observability.events.overflow` | monitoring·trace observer queue overflow 누계 |
 | `zlink.host.state` | 현재 host Framework runtime state |
+| `zlink.host.core_hwm.effective_budget` | 시작 시 고정한 유효 Core HWM byte budget |
+| `zlink.host.core_hwm.applied` | completion lane을 제외한 일반 방향별 queue HWM 합계 |
+| `zlink.host.core_hwm.accounted` | 현재 또는 epoch peak Core accounted byte (`state=current|peak`) |
+| `zlink.host.core_hwm.completion_accounted` | 현재 또는 epoch peak completion accounted byte (`state=current|peak`) |
+| `zlink.host.core_hwm.blocked_ratio` | ppm 단위 Core blocked ratio |
+| `zlink.host.application_job_queue.limit` | 시작 시 고정한 유효 Application Job Queue permit limit |
+| `zlink.host.application_job_queue.jobs` | 예약·대기·사용 중·peak permit (`state=reserved|queued|in_use|peak`) |
+| `zlink.host.application_job_queue.capacity_waiters` | 현재 permit capacity waiter 수 |
+| `zlink.host.application_job_queue.capacity_waits` | 현재 measurement epoch의 permit capacity wait 누계 |
+| `zlink.host.application_job_queue.capacity_wait_duration` | 현재 epoch의 permit capacity wait 누적 시간 |
 | `zlink.host.relocation.duration` | Host `Relocate` 시작부터 terminal result까지의 시간 |
 | `zlink.host.relocation.blocked` | `Blocked`로 끝난 host `Relocate` 수 |
 | `zlink.host.shutdown.duration` | Host `Shutdown` 시작부터 terminal result까지의 시간 |
 | `zlink.host.shutdown.forced` | Bounded teardown으로 끝난 host `Shutdown` 수 |
+
+### 1.1 capacity snapshot과 measurement reset
+
+Host runtime의 capacity snapshot은 Core HWM과 Application Job Queue 상태를 함께 제공한다.
+시작 시 고정한 구성·유효 limit과 현재·peak accounted byte, 예약·대기·사용 중 permit,
+capacity wait를 연관 지어 볼 때 사용한다. 정확한 type과 member 이름은 해당
+[언어별 monitoring 계약](../../../common/spec/server/languages/README.ko.md)에서 확인한다.
+
+Measurement reset은 capacity를 바꾸지 않고 새 epoch를 시작한다. 현재 gauge와 구성은
+유지하고 각 peak는 현재값으로 재설정하며 epoch wait count와 duration은 0으로 만든다.
+동시에 발생한 event는 정확히 한 epoch에만 속한다. Always-on metric은 의도적으로 모든 job에
+timestamp를 찍거나 job별 queue-wait histogram을 만들지 않는다. 그런 분포는 bounded perf
+fixture 안에서만 기록한다. 정확한 snapshot·reset 규칙은
+[Runtime 상태 조회와 운영 진단](../../../common/spec/24-runtime-monitoring.ko.md),
+metric 이름·단위·label은
+[런타임 메트릭](../../../common/spec/25-runtime-metrics.ko.md)이 소유한다.
 
 ## 2. Relocate — 상태를 유지한 채 다른 host로 옮기기
 
@@ -129,19 +155,25 @@ builder.Services.AddOpenTelemetry().WithMetrics(m => m
    target이 없으면 source admission을 바꾸지 않고 `Blocked`로 끝난다.
 2. Host를 `Relocating`으로 게시하고 standalone Actor, Instance Spot과 User Spot aggregate execution queue에
    infrastructure notification을 예약한다.
-3. Notification이 turn boundary에 도달했을 때 현재 실행 중인 turn만 source에서 완료한다. Outbound·inbound,
-   `Capture`·`Restore`와 encoded payload permit을 모두 얻은 ready unit만 queue를 seal한다. Permit을 얻지
-   못한 unit은 source에서 application message와 timer를 계속 처리한다.
+3. Source dispatch를 멈추기 전에 target kind·version 적격성을 확인한다. Notification이 turn boundary에
+   도달하면 현재 실행 중인 turn만 source에서 완료하고 새 application turn은 시작하지 않는다. Target
+   준비 중에도 transport receive는 열어 두고 이후 message는 source ingress hold에 넣는다.
 4. Seal 시점에 실행하지 않은 message, accepted journal, logical timer registration·pending tick과 optional
-   Snapshot bytes를 immutable relocation root에 저장한다. Target factory·`Restore`와 journal staging은
-   owner·membership commit 전에 끝낸다.
+   Snapshot bytes를 immutable relocation root에 저장한다. Target은 factory·`Restore`보다 temporary queue를
+   먼저 설치하고 owner·membership commit 전에 journal staging을 끝낸다. 일반 target staging은 receive
+   전에 공유 Application Job Queue reservation을 얻고 retained-byte backlog로 유한한 durable handoff를 한
+   뒤 반환한다. Relocation 전용 outbound·inbound, `Capture`·`Restore`, encoded payload capacity gate는
+   없으며 live-job limit보다 큰 backlog는 이후 runnable-turn permit을 점진적으로 얻는다.
 5. `SpotWide` User Spot과 member Actor는 하나의 aggregate commit으로 owner·membership을 함께 바꾼다.
    Entry Spot과 `PerActor` User Spot의 Actor는 각각 이전한다. Infrastructure relocation은 application의
    join·leave callback을 호출하지 않는다.
-6. Frozen queue·timer를 target에 복원하고 seal 뒤 source hold를 target으로 relay한다. Source cleanup,
-   `Completed`, bound STREAM route ACK와 steady normalization을 끝낸 뒤 target admission을 연다.
-7. 모든 unit이 source dispatch에서 분리되면 host를 `Relocated`로 전환한다. 연결과 infrastructure는
-   `Shutdown(...)`를 호출할 때까지 유지한다.
+6. Target이 relay-ready를 보고한 뒤 source hold를 relay하고 cutover control을 one-way로 제출한다.
+   Target은 owner CAS, ordered backlog merge와 필수 lifecycle callback을 끝낸 뒤 application dispatch를
+   연다. Bound Actor라면 이어서 Session owner에 target-route update를 one-way로 보낸다. 두 control 모두
+   completion reply나 ACK가 없다.
+7. 모든 source unit의 dispatch가 끝나고 cutover submit이 모두 성공하면 host를 `Relocated`로 전환한다.
+   이 source-side 결과는 target CAS나 Session route 적용 reply를 기다렸다는 뜻이 아니다. 연결과
+   infrastructure는 `Shutdown(...)`를 호출할 때까지 유지한다.
 
 첫 relocation commit 전 failure는 source queue와 admission을 복원할 수 있다. 첫 commit 뒤에는 source로
 rollback하지 않고 target recovery를 계속하며 deadline을 넘기면 `ForceStopped`로 끝낸다.

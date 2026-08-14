@@ -1,10 +1,12 @@
 ---
-title: "12. Service wire protocol"
+title: "51. Service wire protocol"
 ---
 
-# 12. Service wire protocol
+# 51. Service wire protocol
 
-[내부 구조 목차](README.ko.md) · [이전: 11. Payload 소유권과 복사](11-message-ownership.ko.md) · [다음: 13. Relocation handoff 상태 전이](13-relocation-handoff.ko.md)
+> **문서 성격 — 공개 규범 스펙이 아닌 내부 설계 문서.** 이 장은 연결된 공개 계약을 만족시키는 구현 구조를 설명한다. Application이 관찰하는 동작을 추가하거나 변경하지 않는다.
+
+[내부 구조 목차](README.ko.md) · [이전: 50. Payload 소유권과 복사](50-internal-message-ownership.ko.md) · [다음: 52. Relocation handoff 상태 전이](52-internal-relocation-handoff.ko.md)
 
 > **이 장이 답하는 것** — node 사이에 오가는 byte 형식과 command 목록.
 >
@@ -12,11 +14,11 @@ title: "12. Service wire protocol"
 > 이 장은 schema가 정한 field 관계와 검증 순서를 설명하며, 다른 장과 달리
 > 결정·재량·확인할 결과 구분을 적용하지 않는다.
 >
-> **함께 보는 계약** — [계층 경계와 식별자](01-layering.ko.md) ·
-> [Location runtime](../spec/21-location-runtime.ko.md) ·
-> [Redis Relocation Store](../spec/23-relocation-store-redis.ko.md) ·
-> [Transport liveness](../spec/29-transport-liveness.ko.md) ·
-> [Relocation handoff 상태 전이](13-relocation-handoff.ko.md)
+> **함께 보는 계약** — [계층 경계와 식별자](40-internal-layering.ko.md) ·
+> [Location runtime](21-location-runtime.ko.md) ·
+> [Redis Relocation Store](23-relocation-store-redis.ko.md) ·
+> [Transport liveness](29-transport-liveness.ko.md) ·
+> [Relocation handoff 상태 전이](52-internal-relocation-handoff.ko.md)
 
 | 절 | 다루는 내용 |
 |---|---|
@@ -57,13 +59,13 @@ validator가 undefined type, 중복 ID, 잘못된 enum·bound·conditional field
 ### Location Store authority key 형식
 
 객체가 지금 어느 node에 있는지 기록하는 저장소를
-[Location Store](../spec/01-glossary.ko.md#location-store)라고 한다. 그 authority key를 만드는 규칙도 같은
+[Location Store](01-glossary.ko.md#location-store)라고 한다. 그 authority key를 만드는 규칙도 같은
 schema와 golden fixture가 고정한다.
 
 | 객체 | key 형식 |
 |---|---|
 | Actor | `zla1:a:<byte-length>:<encoded-ActorId>` |
-| [Spot](../spec/01-glossary.ko.md#spot) | `zla1:s:<byte-length>:<encoded-SpotRid>` |
+| [Spot](01-glossary.ko.md#spot) | `zla1:s:<byte-length>:<encoded-SpotRid>` |
 
 - MeshName은 key에 포함하지 않으며 authority payload의 current placement attribute로만 저장한다.
 - Percent encoding은 RFC 3986 unreserved byte만 그대로 두고 나머지는 uppercase hex로 표현한다.
@@ -130,13 +132,15 @@ Part count는 1 이상이어야 한다. Decoder는 결과 list를 만들기 전�
 확인하고, 각 length가 남은 범위를 넘지 않는지 확인한다. 모든 part를 읽은 뒤 남은 bytes가 있으면 거부한다.
 Framework는 part의 내용을 업무 의미로 해석하지 않고 원래 bytes를 각 Message로 복원한다.
 
-Application HWM 회계에는 이 profile의 count·length와 outer envelope가 포함되지 않는다. Header와 body를 함께
-전달하는 Framework 경로에서는 application payload part인 body의 크기를 사용하고, part가 하나뿐인 경로에서는
-그 part의 크기를 사용한다. Content-type frame과 Framework metadata도 payload byte 합계에 넣지 않는다.
+이 profile의 count·length, outer envelope, content-type frame과 Framework metadata를 Framework의 별도
+Application byte HWM으로 다시 계산하지 않는다. Core receive에서 retain한 complete message의 credit lease가
+payload 소유권이 끝날 때까지 byte backpressure를 유지한다.
 
 ## 3. Command space
 
-Wire v1은 다음 42개 command를 사용한다. `7..15`와 `52..255`는 reserved이며 다른 의미로 재사용하지 않는다.
+Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `52..255`는 reserved이며
+다른 의미로 재사용하지 않는다. 괄호 안의 이전 command 이름은 호환 진단용 이름일 뿐 decode하거나
+전송하는 command가 아니다.
 
 | ID | Command | 역할 |
 |---:|---|---|
@@ -160,22 +164,22 @@ Wire v1은 다음 42개 command를 사용한다. `7..15`와 `52..255`는 reserve
 | 27 | `actorDestroy` | Actor destroy coordination |
 | 28 | `actorJoin` | Actor membership proposal |
 | 29 | `actorLeft` | Actor leave commit |
-| 30 | `relocationReady` | capacity offer와 inventory accept |
-| 31 | `relocationData` | frozen record 전달 |
-| 32 | `relocationAck` | relocation 진행 응답 |
+| 30 | `relocationReady` | temporary queue·Restore와 relay 수신 준비 reply |
+| 31 | `relocationData` | capture 뒤 ingress-hold relay record 전달 |
+| 32 | reserved (`relocationAck`) | 제거된 per-message ACK·numeric high-water command |
 | 33 | `replyRelay` | terminal completion relay |
-| 34 | `relocationSeal` | participant terminal seal |
-| 35 | `relocationComplete` | target finalization 알림 |
+| 34 | `relocationCutover` | boundary 전 relay 전송 완료를 알리는 one-way control |
+| 35 | reserved (`relocationComplete`) | 제거된 target completion reply command |
 | 36 | `boundSessionSend` | bound STREAM session egress |
 | 37 | `actorJoined` | Actor join commit |
 | 38 | `boundSessionBind` | session binding commit |
 | 39 | `instanceSpot` | logical Instance Spot operation |
-| 40 | `relocationPrepare` | 옮길 대상 목록을 봉인해 제안하고, 필요한 건수·byte를 함께 알린다 |
-| 41 | `relocationReserved` | target reservation ACK |
+| 40 | `relocationPrepare` | temporary queue 설치·Relocation Store payload Restore·relay 준비 request |
+| 41 | reserved (`relocationReserved`) | 제거된 relocation별 capacity reservation ACK |
 | 42 | `sessionRelocationSeal` | session ingress seal 요청 |
 | 43 | `sessionRelocationSealed` | Session seal 응답 |
-| 44 | `sessionRelocationRoute` | target runtime이 보내는 one-way session route 갱신 |
-| 45 | `sessionRelocationRouted` | 예약된 이전 응답 command. 정상 relocation 경로에서는 보내거나 기다리지 않는다. |
+| 44 | `sessionRelocationRoute` | target commit 또는 source의 relay-ready accepted 전 abort를 적용하는 one-way Session route control |
+| 45 | reserved (`sessionRelocationRouted`) | 제거된 Session route 적용 응답 command |
 | 46 | `replyRelayAck` | relayed terminal result ACK |
 | 47 | `userSpotCreate` | 미리 확보한 자리에 remote User Spot을 만든다 |
 | 48 | `userSpotClose` | 지정한 세대의 remote User Spot만 닫는다 |
@@ -214,7 +218,7 @@ route가 있으면 지우지 않는다. 통지가 유실되어도 cache lifetime
 상태는 `idle → inFlight → sentUntilExpiry`로 전이하며, 전송 실패 때만 `inFlight → idle`로 전이한다.
 Route cache 만료·교체가 marker도 함께 지운다. Registry는 원래 operation의 payload, reply route와
 terminal completion을 소유하지 않는다. 자세한 상태 흐름은
-[6. target 선택과 route cache](06-routing-and-cache.ko.md#2-이동과-캐시가-만나는-지점--성능-절벽)가 설명한다.
+[45. target 선택과 route cache](45-internal-routing-and-cache.ko.md#2-이동과-캐시가-만나는-지점--성능-절벽)가 설명한다.
 
 ### 3.2 Bound session 교체 notification
 
@@ -257,9 +261,9 @@ event는 pair identity로 fence되어 새 connection의 admission이나 ready �
 
 ### ClientServer 방향
 
-- ClientServer connection은 application이 붙인 채널 이름인 [ChannelName](../spec/01-glossary.ko.md#channelname) 하나와 client-to-server 방향을 고정한다.
+- ClientServer connection은 application이 붙인 채널 이름인 [ChannelName](01-glossary.ko.md#channelname) 하나와 client-to-server 방향을 고정한다.
 - Client는 send·request와 liveness command만 보내고 server는 reply, liveness, update와 reject만 보낸다.
-- node 여럿이 이름으로 서로를 찾는 [RouteMesh](../spec/01-glossary.ko.md#routemesh)의 record를 ClientServer connection에 재사용하거나 반대로 재사용하면 protocol error다.
+- node 여럿이 이름으로 서로를 찾는 [RouteMesh](01-glossary.ko.md#routemesh)의 record를 ClientServer connection에 재사용하거나 반대로 재사용하면 protocol error다.
 
 ## 5. Service liveness
 
@@ -284,7 +288,7 @@ sequenceDiagram
 ### Classic fanout beacon
 
 받는 쪽이 응답하지 않는 단방향 배포 방식을
-[Classic fanout](../spec/01-glossary.ko.md#classic-fanout)이라고 한다. 이 publisher는 ACK를 받을 수 없으므로
+[Classic fanout](01-glossary.ko.md#classic-fanout)이라고 한다. 이 publisher는 ACK를 받을 수 없으므로
 별도 beacon을 5초마다 보낸다. Beacon은 application publish traffic과 관계없이 주기적으로 전송한다.
 
 ```text
@@ -304,7 +308,7 @@ Payload: 5A 46 01 01
 ### `framework-json-v1` profile 규칙
 
 Framework의 기본 typed application message가 사용하는 `framework-json-v1`의 공개 encoding·validation
-규칙은 [Message model §2.3](../spec/04-message-model.ko.md#23-framework-json-v1-typed-payload-profile)이 단독으로
+규칙은 [Message model §2.3](04-message-model.ko.md#23-framework-json-v1-typed-payload-profile)이 단독으로
 소유한다. Runtime은 그 profile로 payload를 검증하고 typed value로 변환한다. 이 문서는 별도 규칙 집합을
 정의하지 않으며 parser 선택, buffer 재사용과 원본 UTF-8 bytes의 transport 전달 방식만 내부 구현으로 둔다.
 
@@ -320,7 +324,7 @@ state를 opaque bytes로 저장하며 JSON parsing, state contract ID와 applica
 
 - Store-backed authority는 provider가 발급한 `StoreVersion`, `ObjectGeneration`, `AuthorityOwnerGeneration`과 current host의 `OwnerId`, `OwnerLeaseGeneration`을 분리해 보존한다.
 - Object generation은 delete 뒤 같은 key로 새 object를 만들 때만 바뀐다.
-- 저장소가 기록한 현재 owner와 그 자격을 [Authority](../spec/01-glossary.ko.md#authority)라고 하며, authority owner generation은 같은 object의 owner가 바뀔 때마다 올라가 낡은 owner의 변경을 막는다.
+- 저장소가 기록한 현재 owner와 그 자격을 [Authority](01-glossary.ko.md#authority)라고 하며, authority owner generation은 같은 object의 owner가 바뀔 때마다 올라가 낡은 owner의 변경을 막는다.
 - Host owner lease token은 process 전체가 공유한다.
 
 ### Creation record
@@ -330,7 +334,7 @@ Actor와 User Spot manager create와 target-owned Instance activation은 generic
 
 - Creation record는 object kind, global key, stable type, target descriptor, capacity delta, provider-issued fence와 최대 1 MiB complete request envelope의 content reference·hash를 보존한다.
 - Pending current row에 보존된 이 값을 `stored creation intent`, 즉 저장된 생성 의도 기록이라고 한다. 복구할 때는 이 기록을 훑어 fence 값과 receipt가 그대로 일치하는지 확인한 뒤 복원할 수 있다.
-- 객체를 실제로 만드는 application 코드를 [Factory](../spec/01-glossary.ko.md#factory)라고 한다. Factory, initialize와 initial membership이 끝나면 같은 fence로 reservation commit과 `Ready` CAS를 수행한다.
+- 객체를 실제로 만드는 application 코드를 [Factory](01-glossary.ko.md#factory)라고 한다. Factory, initialize와 initial membership이 끝나면 같은 fence로 reservation commit과 `Ready` CAS를 수행한다.
 - Target-owned Instance cold activation만 commit 전에 durable activation inbox first record도 확정한다.
 - Manager `Find`와 ID-only messaging은 `Ready`만 사용한다.
 - Entry Spot은 startup initialization 뒤 host가 `Serving`이 되기 전에 publish하며 caller가 생성하지 않는다.
@@ -350,7 +354,7 @@ runtime을 만들지 않는다.
 ## 8. Instance Spot cold activation recovery
 
 Recovery 적용 범위와 caller에게 보이는 결과는
-[장애 대응과 failover 범위 §4.4](../spec/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)가
+[장애 대응과 failover 범위 §4.4](31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)가
 정의한다. 이 절은 그 범위를 wire record, durable root와 scan으로 구현하는 구조만 설명한다.
 
 이 절의 recovery는 일반적인 owner-loss reactivation이 아니다. 최초 cold activation이 Ready를
@@ -372,7 +376,7 @@ Command 39 route는 첫 byte와 `u16` body length로 닫힌 union을 이룬다.
 
 | Kind | 용도 | 내용 |
 |---|---|---|
-| `1` | 기존 [Ready](../spec/01-glossary.ko.md#ready) authority로 전달 | 새 작업을 받을 수 있는 상태인 object·owner·lease generation과 StoreVersion |
+| `1` | 기존 [Ready](01-glossary.ko.md#ready) authority로 전달 | 새 작업을 받을 수 있는 상태인 object·owner·lease generation과 StoreVersion |
 | `2` | Missing cold activation 전용 | target Mesh·node RID·lifecycle, Spot RID, stable type, descriptor version, deadline — authority fence는 금지 |
 
 Kind `2` route와 ZLIA의 target Mesh·stable type·descriptor version·deadline, operation identity와
@@ -406,7 +410,7 @@ metadata presence·bytes가 다르면 reservation 전에 protocol error로 거�
 
 - User Spot remote close는 command 48을 사용한다.
 - Source node lifecycle과 operation identity 외에 닫을 대상을 정확히 가리키는 `SpotRef`, target node lifecycle, AuthorityOwnerGeneration과 StoreVersion을 보낸다.
-- Target은 current authority와 active Actor가 어느 Spot에 속하는지를 나타내는 [Actor membership](../spec/01-glossary.ko.md#actor-membership)과 relocation state를 수용 판단 전에 검사한다.
+- Target은 current authority와 active Actor가 어느 Spot에 속하는지를 나타내는 [Actor membership](01-glossary.ko.md#actor-membership)과 relocation state를 수용 판단 전에 검사한다.
 - 두 command는 RouteMesh infrastructure command이며 flags와 payload를 허용하지 않는다.
 
 #### Reply envelope
@@ -435,6 +439,16 @@ metadata presence·bytes가 다르면 reservation 전에 protocol error로 거�
 
 ### Relocation envelope와 cutover
 
+- Source는 command 40 `relocationPrepare`을 `[request]`로 보내 temporary queue 설치와
+  Relocation Store payload Restore를 요청한다. Target은 이 준비를 끝낸 뒤 command 30
+  `relocationReady`를 `[reply]`로 보낸다. 이 pair는 message·byte allowance나 participant
+  reservation을 협상하지 않는다.
+- Command 31 `relocationData`는 capture 뒤 ingress hold의 application record만 같은 ordered
+  connection으로 운반한다. Saved queue prefix와 timer를 포함하지 않으며 record별 ACK나
+  numeric high-water를 만들지 않는다.
+- Source는 현재 ingress-hold relay prefix 뒤에 command 34 `relocationCutover`를 `[send]`로
+  넣는다. Target은 response를 보내지 않는다. Reserved ID 32, 35와 41은 보내거나 accept하지
+  않는다.
 - Source는 application state, relocation 시작 전에 실행하지 않은 queue와 timer 정보를
   relocation envelope로 저장한다. Native timer handle과 callback continuation은 encode하지 않는다.
 - Target은 temporary queue를 등록한 뒤 factory와 Restore를 실행한다. 이 작업을 마칠 때까지
@@ -496,27 +510,31 @@ Target은 CAS가 성공하면 다음 순서로 queue와 lifecycle을 연다.
 수락한 순서만 유지한다. Owner 전환 뒤 이전 주소로 도착한 message는 Message Follow가 target에
 전달한다.
 
-Source는 cutover를 `[send]`로 보낸 뒤 target 완료 응답을 기다리지 않는다. Cutover 전 명시적인
-target 실패는 abort하고 source queue와 Session seal을 복원한다. Cutover가 늦거나 중복되면 target은
+Source는 cutover `[send]` submit이 성공 또는 실패 terminal에 도달한 뒤 target 완료 응답을 기다리지
+않는다. Relay-ready reply가 accepted 상태가 되기 전 명시적인 target 실패만 abort하고 source queue와
+Session seal을 복원한다. 그 뒤 submit 실패는 source를 복원하지 않는다. Cutover가 늦거나 중복되면 target은
 `late_cutover` Warning만 기록하고 state를 다시 변경하지 않는다. 1,000 ms fallback으로 queue를
 연 경우에는 늦은 relay가 새 target direct message보다 먼저 실행된다고 보장하지 않는다.
 
 ### Session route
 
 - Session route는 Session owner의 current Session과 binding에서만 검증한다.
-- Command 42는 current binding을 seal하고 command 43은 seal 결과를 반환한다.
-- Command 44는 target runtime이 `[send]`로 전달하며 relocation identity, current binding
-  generation, ActorId·ObjectGeneration과 target route를 포함한다. Session owner는 Location
-  Store나 Actor authority mirror를 다시 읽지 않는다.
+- Command 42는 current binding을 seal하고 command 43은 exact seal 설치 결과만 반환한다.
+  Command 43은 Session message sequence나 high-water를 전달하지 않는다.
+- Command 44는 commit이면 target runtime이, relay-ready reply가 accepted 상태가 되기 전 abort이면 source coordinator가 `[send]`로
+  전달한다. Commit은 relocation identity, current binding generation,
+  ActorId·ObjectGeneration과 target route를 포함한다. Session owner는 Location Store나 Actor
+  authority mirror를 다시 읽지 않는다.
 - Session owner는 route와 current `ActorRef` snapshot을 target으로 바꾸고, seal 중 보관한
   message를 target route로 제출한 뒤 seal을 해제한다.
-- Command 44에는 reply가 없고 정상 경로에서 command 45를 사용하지 않는다.
+- Command 44에는 reply가 없고 reserved command 45를 보내거나 accept하지 않는다.
 - `SessionRelocationSealTimeout`의 기본값은 3,000 ms다. Exact command 44가 그 안에 오지 않으면
   Session owner는 physical Session을 닫고 binding, held message와 seal state를 정리한다.
 - Timeout 뒤 늦은 command 44나 exact duplicate는 Warning만 남기며 route, seal 또는 authority를
   다시 변경하지 않는다.
-- Target이 cutover 전에 명시적으로 실패하면 matching seal만 해제하고 보관한 Session message를
-  source route로 제출한다. Cutover 뒤 failure는 source route를 다시 열지 않는다.
+- Target이 relay-ready reply가 accepted 상태가 되기 전에 명시적으로 실패하면 matching seal만
+  해제하고 보관한 Session message를 source route로 제출한다. 그 뒤 failure와 cutover submit 실패는
+  source route를 다시 열지 않는다.
 
 Transport adapter의 authenticated peer·node generation·frame 검증, target의 owner CAS,
 Session owner의 binding route 검증은 각각 한 번만 수행한다. Actor join, host relocation,
@@ -569,6 +587,10 @@ lease가 유효한 동안 ACK를 확인하지 못하면 Retire는 relocation roo
 - Relocation adapter bytes를 JSON이나 typed state contract로 해석하지 않는다.
 - `replyRelayAck` 없이 physical disconnect만으로 pending relay를 완료하지 않는다.
 
+## Wire record와 shared capacity
+
+Wire command 자체는 우회 권한이 아니며 ordinary control·malformed record도 shared permit을 쓴다. 분류 전 permit은 [수신과 dispatch loop](46-internal-dispatch-loop.ko.md), retained record 수명은 [Payload 소유권](50-internal-message-ownership.ko.md)이 소유한다.
+
 ---
 
-[내부 구조 목차](README.ko.md) · [이전: 11. Payload 소유권과 복사](11-message-ownership.ko.md)
+[내부 구조 목차](README.ko.md) · [이전: 50. Payload 소유권과 복사](50-internal-message-ownership.ko.md)

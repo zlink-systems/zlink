@@ -209,9 +209,11 @@ type을 사용한다. Missing authority라면 placement가 선택한 Mesh에서 
 Instance marker는 한 번만 설정할 수 있고 terminal `submit`도 한 번만 호출할 수 있다.
 
 User·Instance Spot factory의 `preserveStateWith` 등록은 factory type에 맞는
-`ZLinkSpotRelocationAdapter<TSpot>` class를 받는다. Adapter는 application state를 최대 64 MiB의 opaque `byte[]`로
-capture·restore하며 `TState`, `stateContractId`, state class와 `ZLinkMessage`를 사용하지 않는다. Framework는
-capture 결과를 즉시 복사한다. Capture 배열은 adapter가 계속 소유하며 completion 뒤 변경해도 저장 payload가
+`ZLinkSpotRelocationAdapter<TSpot>` class를 받는다. Adapter는 application state를 opaque
+`byte[]`로 capture·restore하며 relocation adapter 전용 size 상한을 두지 않는다. Framework는
+등록한 Relocation Store의 일반 blob·whole-payload 제한에 맞춰 필요한 chunking을 수행한다.
+`TState`, `stateContractId`, state class와 `ZLinkMessage`를 사용하지 않는다. Framework는 capture
+결과를 즉시 복사한다. Capture 배열은 adapter가 계속 소유하며 completion 뒤 변경해도 저장 payload가
 바뀌지 않는다. Restore에는 호출마다 fresh defensive copy를 전달하고 adapter는 stage가 끝난 뒤 배열을 보관하지
 않는다. 길이가 0인 배열도 유효한 application state이며 Restore를 생략하거나 `recreateOnRelocation`으로 해석하지 않는다.
 Whole User Spot relocation에서는 Spot 자체에 Spot adapter를 사용하고 각 Actor participant에는 해당 Actor type의
@@ -243,12 +245,12 @@ Spot field와 Spot-level schedule은 이전하지 않는다. 유지해야 하는
 schedule은 application의 Redis·database·service 같은 외부 저장소에 둔다.
 Target runtime-private shell은 같은 public Spot ID와 object generation을 사용하며
 authority 전환 전에는 public lookup에 노출하지 않는다. Stale source route는 operation
-identity, generation, deadline, correlation과 reply route를 보존해 relay한다. Actor
-queue seal부터 target admission까지 1초는 운영 목표이며 초과해도 relocation을
+identity, generation, deadline, correlation과 reply route를 보존해 relay한다. Actor queue seal부터
+one-way cutover submit의 성공 또는 실패 terminal까지 source-local 1초는 운영 목표이며 초과해도 relocation을
 취소하거나 rollback하지 않는다.
 
 `relocationReady().defer()`는 `SPOT_WIDE`와 `APPLICATION_SIGNALED`을 함께 등록한
-Spot turn에서만 유효하다. Framework는 이동하지 않았거나 commit 전에 abort했으면
+Spot turn에서만 유효하다. Framework는 이동하지 않았거나 relay-ready reply가 accepted 상태가 되기 전에 abort했으면
 source에서 `CONTINUED`, 이동했으면 target에서 `RELOCATED` completion을
 `onRelocationReadyCompleted(...)`에 전달한다. 기본 method는 no-op이다. Callback
 완료 전에는 보류한 application message와 timer를 실행하지 않는다.

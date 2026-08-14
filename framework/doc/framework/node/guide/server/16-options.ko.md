@@ -57,8 +57,7 @@ ZLinkModule.forRootFactory({
 | `codecs()` | payload 직렬화 형식 | 내장 JSON |
 | `configureNetwork()` | listener의 bind · advertise host 기본값 | bind `0.0.0.0` |
 | `configureWorker(options)` | CPU worker 풀(§3.2) | §3.2 표 |
-| `configureInboundDispatch()` | host 전체 수신 상한(§3.3) | 자동 계산 |
-| `configureDispatch()` | 진단 수준과 message flow(§4) | `"errors"` |
+| `configureDispatch()` | 진단 수준·message flow(§4), Core HWM·Application job queue(§3.3) | `"errors"`, 두 profile 모두 `Balanced` |
 | `configureLocations()` | location store 동작(§5) | §5 표 |
 | `configureStreamCompression()` | STREAM 압축 | 압축 없음 |
 | `addLocationStore` · `addRelocationStore` | 위치 결정과 이전 저장소 | 없으면 단일 node 구성 |
@@ -119,13 +118,24 @@ ZLinkModule.forRootFactory({
 
 **I/O worker는 이 풀을 쓰지 않는다.** `runIoWorker(...)`는 이벤트 루프에서 돈다.
 
-### 3.3 host 전체 수신 상한
+### 3.3 Core HWM과 Application job queue
 
-`configureInboundDispatch()`가 돌려주는 표면이다. 연결마다 두는 상한과 성격이 다르다 —
-아직 handler 실행을 시작하지 못한 message의 **payload 합계**에 적용한다.
+`configureDispatch()`가 돌려주는 `ZLinkDispatchOptionsBuilder`의 값이다. Core HWM은
+ordinary queue의 accounted byte를 제한하고, Application job queue는 handler 시작을 기다리는
+job 수를 host instance 전체에서 제한한다.
 
-> 이 단위와 상한은 계약으로 확정되었을 뿐 **아직 runtime이 사용하지 않는다.**
-> [4. Backpressure §6](04-backpressure.ko.md#6-framework-runtime-적용-범위)을 본다.
+| 메서드 | 무엇을 정하나 | 기본값 |
+| --- | --- | --- |
+| `coreHwmMemoryLimitBytes(bigint | undefined)` | Core budget 계산에 전달할 memory limit hint | `undefined` |
+| `coreHwmBudgetBytes(bigint | undefined)` | profile보다 우선하는 manual Core budget | `undefined`(Auto) |
+| `coreHwmProfile(ZLinkCoreHwmProfile)` | Core Auto-budget profile | `Balanced` |
+| `applicationJobQueueProfile(ZLinkApplicationJobQueueProfile)` | queued job Auto profile | `Balanced` |
+| `maxQueuedApplicationJobs(bigint | undefined)` | 정확한 manual queued-job 상한 | `undefined`(Auto) |
+
+Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한은
+`1..2,147,483,647`이며 `0n`은 unlimited가 아니라 startup configuration error다. 두 profile은
+같은 label을 사용하지만 독립된 enum과 계산이다. 포화 동작과 운영값 측정은
+[4. Backpressure](04-backpressure.ko.md)와 [공통 perf §23](../../../common/perf/README.ko.md#23-core-hwm과-application-job-queue-운영값-측정)이 다룬다.
 
 ## 4. 진단
 
@@ -145,7 +155,7 @@ ZLinkModule.forRootFactory({
 
 | 옵션 | 기본값 |
 | --- | --- |
-| `ownerLeaseRenewIntervalMs(...)` | 10,000 |
+| `ownerLeaseRenewIntervalMs(...)` | 5,000 |
 | `ownerLeaseTtlMs(...)` | 15,000 |
 | `ownerLeaseRenewTimeoutMs(...)` | 3,000 |
 | `ownerLeaseFencingMarginMs(...)` | 5,000 |
@@ -153,13 +163,9 @@ ZLinkModule.forRootFactory({
 | `storeFailureGraceMs(...)` | 30,000 |
 | `routeCacheMaxAgeMs(...)` | 15,000 |
 | `messageFollowDurationMs(...)` | 30,000 |
-| `maxActiveOutboundRelocations(...)` · `maxActiveInboundRelocations(...)` | 64 |
-| `maxConcurrentRelocationCaptures(...)` · `maxConcurrentRelocationRestores(...)` | 8 |
-| `maxRelocationPayloadInFlightBytes(...)` | 268,435,456 (256 MiB) |
 
-> **갱신 주기 대비 TTL 배수가 3배다**(5초 : 15초). 갱신을 두 번 놓칠 때까지 lease가
-> 버틴다는 뜻이다. 네 언어가 같은 값이므로 여러 언어 node를 한 mesh에 섞어도 owner 판정
-> 시점이 갈리지 않는다. 값을 바꾼다면 **배수까지 함께 정한다.**
+> **갱신 주기 대비 TTL 배수가 3배다**(5초 : 15초). 값을 바꿀 때는
+> `renew interval + renew timeout < TTL - fencing margin` 관계를 유지한다.
 
 ## 6. STREAM 옵션
 

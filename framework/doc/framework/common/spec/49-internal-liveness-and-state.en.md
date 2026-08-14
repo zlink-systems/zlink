@@ -1,18 +1,20 @@
 ---
-title: "10. Liveness And Status Publication"
+title: "49. Liveness And Status Publication"
 ---
 
-# 10. Liveness And Status Publication
+# 49. Liveness And Status Publication
 
-[Internal structure table of contents](README.en.md) · [Previous: 9. Session And Actor Binding](09-session-binding.en.md) · [Next: 11. Payload Ownership And Copy](11-message-ownership.en.md)
+> **Document status — internal design, not normative public specification.** This chapter explains implementation structure used to satisfy the linked public contracts. It does not add or change application-visible behavior.
+
+[Internal structure table of contents](README.en.md) · [Previous: 48. Session And Actor Binding](48-internal-session-binding.en.md) · [Next: 50. Payload Ownership And Copy](50-internal-message-ownership.en.md)
 
 > **What this chapter answers** — how to determine whether a peer is
 > still reachable and how to publish the runtime's status.
 >
 > **Contract ownership** — the check period and judgment deadline are
-> owned by [Transport Liveness](../spec/29-transport-liveness.en.md),
+> owned by [Transport Liveness](29-transport-liveness.en.md),
 > and the status value and observer contract by
-> [Runtime Status And Operational Diagnostics](../spec/24-runtime-monitoring.en.md).
+> [Runtime Status And Operational Diagnostics](24-runtime-monitoring.en.md).
 > This chapter covers the **structure** that satisfies that contract and
 > the failures that become visible when status authority is split.
 
@@ -30,7 +32,7 @@ The formal spec fixes the check period at **5 seconds** and the peer
 judgment deadline at **15 seconds**, and applies the same standard to
 all three connection methods. This value isn't exposed by the builder
 and can't be specified differently per channel/handler/peer
-([Transport Liveness 「2. Fixed Times And Public API Boundary」](../spec/29-transport-liveness.en.md#2-fixed-times-and-public-api-boundary)).
+([Transport Liveness 「2. Fixed Times And Public API Boundary」](29-transport-liveness.en.md#2-fixed-times-and-public-api-boundary)).
 
 If this judgment is scattered across subsystems that use different
 periods, one subsystem can treat a peer as available while another
@@ -44,7 +46,7 @@ all is itself a violation of the contract above.
 **Decision — receiving a business message isn't used as a liveness
 signal.** A business message only updates the last-received timestamp
 and doesn't extend the judgment deadline
-([Transport Liveness 「3. RouteMesh And ClientServer」](../spec/29-transport-liveness.en.md#3-routemesh-and-clientserver)).
+([Transport Liveness 「3. RouteMesh And ClientServer」](29-transport-liveness.en.md#3-routemesh-and-clientserver)).
 
 The reason is directional asymmetry. Receiving messages from a peer
 doesn't show **whether messages from this node reach that peer.** Using
@@ -61,7 +63,7 @@ The standard value is the same, but the **method** can differ.
 Bidirectional connections exchange a check request and response, but
 fanout, which only flows one direction, has no way for a subscriber to
 respond, so the sender uses a periodic signal instead
-([Transport Liveness 「1. The Result Visible To The Application」](../spec/29-transport-liveness.en.md#1-the-result-visible-to-the-application)).
+([Transport Liveness 「1. The Result Visible To The Application」](29-transport-liveness.en.md#1-the-result-visible-to-the-application)).
 
 A STREAM session's keep-alive signal is a **separate signal for a
 different purpose**, and doesn't substitute for mesh peer liveness
@@ -70,7 +72,7 @@ judgment.
 ### A Liveness Judgment Doesn't Change Authority
 
 The public behavior is defined by
-[Failure Handling And Failover Scope §4.4](../spec/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
+[Failure Handling And Failover Scope §4.4](31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
 This section only assigns the responsibilities that produce it.
 
 - The liveness subsystem publishes peer and owner-lease availability
@@ -92,9 +94,9 @@ a single peer is ready.**
 
 Even if the host is `serving`, if a specific channel has no ready
 target, **only that topology is marked degraded**
-([Runtime Status And Operational Diagnostics 「2.2 Topology State」](../spec/24-runtime-monitoring.en.md#22-topology-state)).
+([Runtime Status And Operational Diagnostics 「2.2 Topology State」](24-runtime-monitoring.en.md#22-topology-state)).
 The startup procedure doesn't wait for local acceptance to complete
-([Channel Messaging 「Selection Order」](../spec/08-channel-messaging.en.md#selection-order)).
+([Channel Messaging 「Selection Order」](08-channel-messaging.en.md#selection-order)).
 
 | Approach | Result |
 |---|---|
@@ -109,7 +111,7 @@ call, and which topology is degraded is revealed through observation.
 **Decision — announce its own address before publishing `serving`.**
 
 The order is as follows
-([MeshNode 「6. Registration And Startup Order」](../spec/13-mesh-node.en.md#6-registration-and-startup-order)).
+([MeshNode 「6. Registration And Startup Order」](13-mesh-node.en.md#6-registration-and-startup-order)).
 
 1. Validate the registration declaration.
 2. Bind the receiving endpoint and **fix the actual address.**
@@ -133,7 +135,7 @@ candidate without knowing where to connect.
 `preparing`, `serving`, `relocating`, `relocated`, `draining`,
 `stopped`, `error` — and the ready-complete marker is true only when
 `serving`
-([Runtime Status And Operational Diagnostics 「2.1 Host State」](../spec/24-runtime-monitoring.en.md#21-host-state)).
+([Runtime Status And Operational Diagnostics 「2.1 Host State」](24-runtime-monitoring.en.md#21-host-state)).
 
 **Decision — readiness isn't managed with just a single boolean.** A
 single global boolean can't express the seven states above or answer
@@ -153,7 +155,7 @@ The message path doesn't wait for the subscriber.
 overflowed.** It catches up only via coalescing, and the stream stays
 open no matter how slow the subscriber keeps being. Subscription only
 ends when the application cancels it
-([Runtime Status And Operational Diagnostics 「Coalescing」](../spec/24-runtime-monitoring.en.md#coalescing)).
+([Runtime Status And Operational Diagnostics 「Coalescing」](24-runtime-monitoring.en.md#coalescing)).
 
 **Decision — the amount of retained terminal state for a finished
 source is also bounded.** Exceeding the bound drops the oldest
@@ -244,7 +246,7 @@ is honored. The observation standard is whether message processing speed
 is maintained when a subscriber is artificially made slow.
 
 Choosing the pull form takes on the same constraint as
-[7. Dispatch Loop 「5. Pick One Wake-Up Method」](07-dispatch-loop.en.md#5-pick-one-wake-up-method):
+[46. Dispatch Loop 「5. Pick One Wake-Up Method」](46-internal-dispatch-loop.en.md#5-pick-one-wake-up-method):
 the poll interval is the notification latency floor, so that interval is
 recorded in that language's documentation.
 
@@ -264,7 +266,7 @@ The formal spec explicitly requires this.
 > branching on the current level. ... An implementation that only
 > suppresses output at the log provider doesn't satisfy the `off`
 > contract.
-> — [Message Flow Tracing 「4.1 Changing The Record Level At Runtime」](../spec/26-message-flow-tracing.en.md#41-changing-the-record-level-at-runtime)
+> — [Message Flow Tracing 「4.1 Changing The Record Level At Runtime」](26-message-flow-tracing.en.md#41-changing-the-record-level-at-runtime)
 
 The second sentence is the crux. **An implementation that builds the
 whole value and drops it at the output stage violates the contract.**
@@ -324,4 +326,4 @@ message midway. Changing it would leave half a message's record.
 
 ---
 
-[Internal structure table of contents](README.en.md) · [Previous: 9. Session And Actor Binding](09-session-binding.en.md) · [Next: 11. Payload Ownership And Copy](11-message-ownership.en.md)
+[Internal structure table of contents](README.en.md) · [Previous: 48. Session And Actor Binding](48-internal-session-binding.en.md) · [Next: 50. Payload Ownership And Copy](50-internal-message-ownership.en.md)

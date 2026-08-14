@@ -46,23 +46,27 @@ Metric 표에서 `counter`는 발생 횟수나 누적량을 단조 증가시키�
 
 ## 3. Host와 MeshNode
 
-### 3.1 Host inbound dispatch
+### 3.1 Host Core HWM과 Application job queue
 
-Framework가 수신했지만 handler가 아직 끝나지 않은 payload의 host 전체 byte 합계는
-[Application HWM](01-glossary.ko.md#application-hwm)으로 제한한다. 다음 observable은 기존 dispatch
-accounting 값을 읽으며 metric 수집을 위해 queue나 handler를 순회하지 않는다.
+다음 instance aggregate 계기는 Core runtime snapshot과 Application job queue accounting을 읽는다.
+Metric 수집을 위해 queue나 handler를 순회하지 않는다.
 
 | 계기 | 종류 | 단위 | Label | 의미 |
 |---|---|---|---|---|
-| `zlink.host.inbound.application_hwm` | observable | `By` | 없음 | Startup에서 적용한 host 전체 HWM이다. `0`은 제한하지 않는다는 뜻이다. |
-| `zlink.host.inbound.pending_payload` | observable | `By` | `state` | 아직 terminal 상태가 아닌 application payload byte다. |
-| `zlink.host.inbound.receive_paused` | observable | `{state}` | 없음 | HWM 때문에 application receive가 중단되었으면 `1`, 아니면 `0`이다. |
-| `zlink.host.completion.pending_sends` | observable | `{request}` | 없음 | Reply 전송 permit을 기다리거나 확보한 request 수다. |
-| `zlink.host.completion.send_limit` | observable | `{request}` | 없음 | Host completion send permit 상한이다. |
+| `zlink.host.core_hwm.effective_budget` | observable | `By` | 없음 | Core가 startup에서 확정한 effective budget이다. |
+| `zlink.host.core_hwm.applied` | observable | `By` | 없음 | Completion을 제외한 방향별 queue HWM의 합이다. |
+| `zlink.host.core_hwm.accounted` | observable | `By` | `state` | Core의 current 또는 epoch peak accounted bytes다. |
+| `zlink.host.core_hwm.completion_accounted` | observable | `By` | `state` | Completion current 또는 epoch peak accounted bytes다. |
+| `zlink.host.core_hwm.blocked_ratio` | observable | `{ppm}` | 없음 | Core snapshot의 blocked ratio다. |
+| `zlink.host.application_job_queue.limit` | observable | `{job}` | 없음 | Startup에서 고정한 effective maximum이다. |
+| `zlink.host.application_job_queue.jobs` | observable | `{job}` | `state` | `reserved|queued|in_use|peak`별 aggregate다. |
+| `zlink.host.application_job_queue.capacity_waiters` | observable | `{waiter}` | 없음 | 현재 capacity waiter 수다. |
+| `zlink.host.application_job_queue.capacity_waits` | counter | `{wait}` | 없음 | 현재 epoch의 capacity wait 횟수다. |
+| `zlink.host.application_job_queue.capacity_wait_duration` | counter | `s` | 없음 | 현재 epoch의 capacity wait 누적 시간이다. |
 
-`zlink.host.inbound.pending_payload`의 `state`는 `queued|active`만 허용한다. MeshName, ChannelName,
-Actor ID, Spot ID, packet name과 owner는 label로 사용하지 않는다. Owner별 top-N 진단은 metric이 아니라
-명시적인 운영 조회로만 제공한다.
+Reset은 current gauge를 유지하고 peak를 current로 재기준화하며 epoch counter와 duration을 0으로 만든다.
+Always-on metric은 job마다 timestamp나 queue-wait histogram을 만들지 않는다. MeshName, ChannelName,
+Actor ID, Spot ID, session ID, RID, endpoint, packet name과 owner는 label로 사용하지 않는다.
 
 ### 3.2 Peer와 channel
 
@@ -204,7 +208,7 @@ Host가 새 작업 수락을 중단하고 이미 받은 작업과 resource를 �
 | `zlink.host.state` | observable | `{runtime}` | `state` | 현재 Framework runtime state 하나에 값 1을 기록한다. |
 | `zlink.host.relocation.duration` | histogram | `s` | `mode`, `outcome` | Host `Relocate` 시작부터 `Relocated` 또는 `Blocked` result까지 걸린 시간을 기록한다. |
 | `zlink.host.relocation.blocked` | counter | `{operation}` | `mode`, `reason` | `Blocked`로 끝난 host `Relocate` 수를 누적한다. |
-| `zlink.relocation.interruption` | histogram | `s` | `unit_kind`, 선택형 `execution_mode` | Actor, Instance Spot 또는 User Spot 한 unit의 admission seal부터 target admission-open ACK까지 걸린 시간을 기록한다. `unit_kind`는 `actor`, `instance_spot`, `user_spot`이다. 1초 초과를 relocation failure로 바꾸지 않는다. |
+| `zlink.relocation.interruption` | histogram | `s` | `unit_kind`, 선택형 `execution_mode` | Actor, Instance Spot 또는 User Spot 한 unit의 admission seal부터 one-way cutover submit의 성공 또는 실패 terminal까지 걸린 source-local 시간을 기록한다. `unit_kind`는 `actor`, `instance_spot`, `user_spot`이다. 1초 초과를 relocation failure로 바꾸지 않는다. |
 | `zlink.host.shutdown.duration` | histogram | `s` | `outcome` | Host `Shutdown` 시작부터 terminal result까지 걸린 시간을 기록한다. |
 | `zlink.host.shutdown.forced` | counter | `{operation}` | `reason` | 제한 시간 안에 정리를 끝내려고 남은 작업을 강제로 종료한 host `Shutdown` 수를 누적한다. |
 

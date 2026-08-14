@@ -141,9 +141,10 @@ and the entire current member Actor set together as one aggregate. There's
 no fixed cap on the total participant count. If even one aggregate
 participant selected `disableRelocation()`, it ends with
 `Blocked/RelocationDisabled`; if target/capacity/reservation can't be
-secured, `Blocked/TargetUnavailable`; if application version/type/
-state-preservation adapter capability doesn't match,
-`Blocked/StateIncompatible`. This preflight failure doesn't change
+secured, or no target satisfies the requested application version and registered factory/type/
+relocation-adapter eligibility, `Blocked/TargetUnavailable`. After target selection, an
+incompatible transferred state schema/type adapter is `Blocked/StateIncompatible`. This
+preflight failure doesn't change
 admission. The mere existence of a
 [User Spot](../../../../01-glossary.en.md#entry-user-instance-spot)
 doesn't block relocation. If there's even one local manual RouteMesh
@@ -203,9 +204,10 @@ state. The candidate selection order for a valid call is as follows.
 Since the version condition is applied first, even if capability or
 capacity is sufficient, it doesn't fall back to a node of a different
 version. If there's no version/wave/capacity or exact-ready target, it
-re-checks until the deadline and then it's `Blocked/TargetUnavailable`.
-If stable type, factory, relocation policy, or adapter doesn't match,
-it's `Blocked/StateIncompatible`. A Store lookup failure is
+re-checks until the deadline and then it's `Blocked/TargetUnavailable`. The same result applies
+when no exact-ready target satisfies registered factory/type/relocation-adapter eligibility.
+After target selection, an incompatible transferred state schema/type adapter is
+`Blocked/StateIncompatible`. A Store lookup failure is
 `Blocked/StoreUnavailable`.
 
 While the same shared relocation is running, a call with the same mode

@@ -69,19 +69,34 @@ The following Java builder members are called directly from Kotlin with
 the same JVM signature, without a property conversion.
 
 ```java
-public enum systems.zlink.framework.configuration.ZLinkApplicationHwmProfile {
+public enum systems.zlink.framework.configuration.ZLinkCoreHwmProfile {
   COMPACT,
   LOW_LATENCY,
   BALANCED,
   THROUGHPUT
 }
-public interface systems.zlink.framework.configuration.ZLinkInboundDispatchOptions {
-  public abstract java.util.OptionalLong applicationHwmBytes();
-  public abstract void setApplicationHwmBytes(long);
-  public abstract systems.zlink.framework.configuration.ZLinkApplicationHwmProfile applicationHwmProfile();
-  public abstract void setApplicationHwmProfile(systems.zlink.framework.configuration.ZLinkApplicationHwmProfile);
-  public abstract java.util.OptionalLong processMemoryLimitBytes();
-  public abstract void setProcessMemoryLimitBytes(long);
+public enum systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile {
+  COMPACT,
+  LOW_LATENCY,
+  BALANCED,
+  THROUGHPUT
+}
+public interface systems.zlink.framework.configuration.ZLinkDispatchOptions {
+  public abstract systems.zlink.framework.configuration.ZLinkUnhandledDispatchOptions unhandled();
+  public abstract systems.zlink.framework.configuration.ZLinkDiagnosticsOptions diagnostics();
+  public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode);
+  public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions traceSampleRate(double);
+  public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions includeMessageSizes(boolean);
+  public abstract java.util.OptionalLong coreHwmMemoryLimitBytes();
+  public abstract void setCoreHwmMemoryLimitBytes(long);
+  public abstract java.util.OptionalLong coreHwmBudgetBytes();
+  public abstract void setCoreHwmBudgetBytes(long);
+  public abstract systems.zlink.framework.configuration.ZLinkCoreHwmProfile coreHwmProfile();
+  public abstract void setCoreHwmProfile(systems.zlink.framework.configuration.ZLinkCoreHwmProfile);
+  public abstract systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile applicationJobQueueProfile();
+  public abstract void setApplicationJobQueueProfile(systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile);
+  public abstract java.util.OptionalLong maxQueuedApplicationJobs();
+  public abstract void setMaxQueuedApplicationJobs(long);
 }
 public interface systems.zlink.framework.locations.ZLinkLocationOptions {
   public abstract java.time.Duration ownerLeaseRenewInterval();
@@ -100,16 +115,8 @@ public interface systems.zlink.framework.locations.ZLinkLocationOptions {
   public abstract void setRouteCacheMaxAge(java.time.Duration);
   public abstract java.time.Duration messageFollowDuration();
   public abstract void setMessageFollowDuration(java.time.Duration);
-  public abstract int maxActiveOutboundRelocations();
-  public abstract void setMaxActiveOutboundRelocations(int);
-  public abstract int maxActiveInboundRelocations();
-  public abstract void setMaxActiveInboundRelocations(int);
-  public abstract int maxConcurrentRelocationCaptures();
-  public abstract void setMaxConcurrentRelocationCaptures(int);
-  public abstract int maxConcurrentRelocationRestores();
-  public abstract void setMaxConcurrentRelocationRestores(int);
-  public abstract long maxRelocationPayloadInFlightBytes();
-  public abstract void setMaxRelocationPayloadInFlightBytes(long);
+  public abstract java.time.Duration sessionRelocationSealTimeout();
+  public abstract void setSessionRelocationSealTimeout(java.time.Duration);
 }
 public interface systems.zlink.framework.configuration.ZLinkMeshNodeBuilder {
   public abstract systems.zlink.framework.configuration.ZLinkMeshNodeBuilder setRoutingIdPrefix(java.lang.String);
@@ -133,6 +140,10 @@ public interface systems.zlink.framework.configuration.ZLinkStreamSocketConfig {
 }
 ```
 
+`sessionRelocationSealTimeout()` is the same startup-only positive `Duration` as Java,
+defaulting to three seconds. A non-millisecond-representable, zero, negative, or infinite
+value is a configuration error before socket bind.
+
 Kotlin uses Java's `ZLinkStreamNodeBuilder.configureSocket()` and
 `ZLinkStreamSocketConfig.setMaxMessageSize(...)` unchanged. The default is
 `64 KiB`, and the setting applies only to complete client-to-server messages
@@ -145,13 +156,10 @@ The raw client observes the close without a separate wire error code. The
 limit doesn't apply to server-to-client outbound messages, and the setting
 isn't added to ClientServer or RouteMesh SS.
 
-Kotlin uses the Java runtime's managed heap cap
-(`Runtime.maxMemory()`). If `processMemoryLimitBytes()` is empty, it
-checks the finite OS cap applied to the process and the JVM managed heap
-cap together, and if both are available, uses the smaller value as the
-basis for Auto computation. If neither can be confirmed, it uses the
-system's total physical memory. This rule and the `ApplicationHwmProfile`
-ratios are the same as the Java public contract.
+The Kotlin binding forwards a positive finite Java `Runtime.maxMemory()` value to Core as
+its runtime memory hint. Core and application-job-queue profiles use the Java public
+contract's independent enums and calculations. Manual job cap, startup CPU snapshot, and
+overflow validation also match the Java public contract.
 
 ## Kotlin Source Signature
 

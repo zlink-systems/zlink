@@ -1,10 +1,10 @@
 <!-- framework-adapter-nav:start -->
-[문서 목록](../../../README.ko.md) | [이전: Runtime Execution](../../common/internals/02-serialization.ko.md) | [다음: Backend Dependency Policy](backend-dependency-policy.ko.md)
+[문서 목록](../../../README.ko.md) | [이전: Runtime Execution](../../common/spec/41-internal-serialization.ko.md) | [다음: Backend Dependency Policy](backend-dependency-policy.ko.md)
 <!-- framework-adapter-nav:end -->
 
 [스펙 목차](../../common/README.ko.md)
 
-[.NET 묶음](../README.ko.md) | [Runtime Lifecycle](../../common/internals/README.ko.md) | [Runtime Execution](../../common/internals/02-serialization.ko.md) | [Backend Policy](backend-dependency-policy.ko.md) | [공통 E2E](../../common/e2e/README.ko.md)
+[.NET 묶음](../README.ko.md) | [Runtime Lifecycle](../../common/spec/README.ko.md) | [Runtime Execution](../../common/spec/41-internal-serialization.ko.md) | [Backend Policy](backend-dependency-policy.ko.md) | [공통 E2E](../../common/e2e/README.ko.md)
 
 # ZLink Framework .NET Regression Test Matrix
 
@@ -256,7 +256,7 @@ socket·context·message handle, process-wide diagnostics, static runtime state,
 routing id 자동 할당의 `.NET` public 입력 규칙은
 [configuration과 topology exact interface](../../common/spec/server/languages/dotnet/interfaces/03-configuration-topology.ko.md)를
 따른다. descriptor claim과 startup 순서는
-[계층 경계와 식별자](../../common/internals/01-layering.ko.md)에 설명한다.
+[계층 경계와 식별자](../../common/spec/40-internal-layering.ko.md)에 설명한다.
 
 | 항목 | 계층 | 통과 기준 |
 |------|------|-----------|
@@ -339,7 +339,7 @@ backend gate 와 별도로 유지한다.
 - `06-location-store.ko.md`
 - `dotnet-http-client.ko.md`
 - `regression-test-matrix.ko.md`
-- `../../common/internals/README.ko.md`
+- `../../common/spec/README.ko.md`
 - `public-symbol-delta-v11.ko.md`
 - `backend-dependency-policy.ko.md`
 - `runtime-integration-and-ownership.ko.md`
@@ -359,7 +359,7 @@ backend gate 와 별도로 유지한다.
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[문서 목록](../../../README.ko.md) | [이전: Runtime Execution](../../common/internals/02-serialization.ko.md) | [다음: Backend Dependency Policy](backend-dependency-policy.ko.md)
+[문서 목록](../../../README.ko.md) | [이전: Runtime Execution](../../common/spec/41-internal-serialization.ko.md) | [다음: Backend Dependency Policy](backend-dependency-policy.ko.md)
 <!-- framework-adapter-nav:bottom:end -->
 
 ## 11. 공개 계약 문서에서 이관한 회귀 테스트 항목

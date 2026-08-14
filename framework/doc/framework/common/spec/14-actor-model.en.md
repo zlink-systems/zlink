@@ -382,21 +382,19 @@ logical Actor moving. On a cross-node move where the owner changes, only
 `AuthorityOwnerGeneration` increases.
 
 If the moving Actor is bound to a Session, once the target restores the Actor and
-commits owner/membership, it starts Actor message processing. The target runtime
-then sends `sessionActorLocationUpdateReqMsg`, asking the session owner to update
-that Actor's stored binding route to the target owner. Here, binding route is the
-delivery path the session owner uses to send a message to the current Actor owner.
-Along with the route switch, the current Actor location snapshot the bound-session
-accessor returns is also updated to the target MeshName/NodeRid, keeping the same
-ActorId/ObjectGeneration. The route and physical STREAM connection of other Actors
-on the same Session not included in the relocation are kept. Once updated, the
-session owner sends `sessionActorLocationUpdateResMsg`. Without a response, the
-target runtime resends the same request starting 1 second after the first send, at
-intervals of 1, 2, 4, 5 seconds, then keeps a 5-second interval afterward. The
-target Actor keeps processing messages while waiting for the response. A route
-update is only allowed for a relocation of the same ObjectGeneration, and the
-application doesn't rebind to learn about the relocation. A new incarnation needs
-an explicit bind.
+commits owner/membership, it merges queues, switches to the regular route, finishes
+lifecycle callbacks, and opens Actor dispatch. Target runtime then sends command 44
+`sessionRelocationRoute` commit one-way so Session owner updates that Actor's stored
+binding route to target owner. The bound-session accessor's current Actor location
+snapshot changes to target MeshName/NodeRid while keeping the same ActorId/ObjectGeneration.
+Other Actors' routes and the physical STREAM connection stay unchanged. Session owner
+validates exact Session/binding/Actor generation and relocation identity, submits held
+messages to target route, and releases the matching seal. There is no application reply;
+without exact command 44 within the default 3,000ms `SessionRelocationSealTimeout`, it
+cleans the physical Session and related state. Target Actor processes messages without a
+command 44 application reply. A route update is only allowed for the same ObjectGeneration,
+and the application doesn't rebind to learn about relocation. A new incarnation needs an
+explicit bind.
 
 The following .NET excerpt is an example to help understand the common rule of
 registering factory and relocation policy together. It doesn't require the same
@@ -730,13 +728,15 @@ ActorId isn't used as a metric label.
 - Inbound dispatch checks whether a current relocation temporary queue is
   registered before finding the Actor application instance. If so, it goes into
   that queue; if not, existing Actor dispatch is used.
-- A message arriving during Restore isn't run from the temporary queue. After
-  commit and lifecycle work finish, saved existing work is put into the real Actor
-  queue first, and temporary work moves in behind it.
-- Temporary queue removal and existing-dispatch switchover are handled atomically,
+- A message arriving during Restore isn't run from the temporary queue. After commit,
+  saved work, pre-boundary relay, and remaining temporary work enter the real Actor queue
+  in order, then the regular route is installed. Required lifecycle work finishes before
+  dispatch opens.
+- Temporary queue removal and regular-route switchover are handled atomically,
   so messages aren't duplicated or dropped.
-- If Relocation Restore fails before commit, the target temporary queue is
-  discarded without running, and the source-owned original is restored.
+- If Relocation Restore explicitly fails before relay-ready is accepted, the target
+  temporary queue is discarded without running and the source-owned original is
+  restored. Afterward, source isn't restored regardless of cutover-submit result.
 - Even after receiving multiple Restores with the same `RelocationId`, target
   attempt, and owner generation, the temporary queue and application instance are
   only created once. A previous attempt's temporary queue isn't used.

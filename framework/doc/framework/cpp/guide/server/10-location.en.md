@@ -112,16 +112,13 @@ and manual connection on the same MeshNode.
 
 ## 3. Location Options
 
-`configure_locations()` sets the lease, route cache, and relocation execution ceilings.
+`configure_locations()` sets the lease, route-cache, and message-follow windows.
 
 ```cpp
 auto &location = options.configure_locations ();
 location.owner_lease_renew_interval = std::chrono::seconds (5);
 location.owner_lease_ttl = std::chrono::seconds (15);
 location.message_follow_duration = std::chrono::seconds (30);
-location.max_active_outbound_relocations = 64;
-location.max_active_inbound_relocations = 64;
-location.max_relocation_payload_in_flight_bytes = 256LL * 1024 * 1024;
 ```
 
 | Option | Default | Meaning |
@@ -134,9 +131,12 @@ location.max_relocation_payload_in_flight_bytes = 256LL * 1024 * 1024;
 | `store_failure_grace` | 30s | How long the last route decision is kept during a Store outage |
 | `route_cache_max_age` | 15s | The max time before a cached route is re-checked |
 | `message_follow_duration` | 30s | How long the previous owner relays messages to the new owner before the move |
-| `max_active_outbound_relocations` | 64 | The ceiling on relocation units a process sends out concurrently |
-| `max_active_inbound_relocations` | 64 | The ceiling on relocation units a process restores concurrently |
-| `max_relocation_payload_in_flight_bytes` | 256 MiB | The ceiling on encoded payload across the whole process |
+
+Relocation has no separate participant, record, concurrency, or in-flight-byte capacity
+setting. Target staging uses the host's shared Application Job Queue reservation and runs a
+backlog larger than the live-job limit progressively. Core memory accounting, negotiated
+frame size, and Store limits still apply; see
+[Relocation Flow §5.3](../../../common/spec/28-relocation-flow.en.md#53-no-relocation-specific-capacity-limit).
 
 **The four lease values are tied together.** Breaking the following relationship is a
 startup error. Look at all four together when changing any one value.

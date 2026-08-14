@@ -37,7 +37,8 @@ file path나 raw event DTO를 추가하지 않는다.
 
 ## Host 상태·error kind
 
-Host 상태(`ZLinkFrameworkRuntimeStatus`, `ZLinkInboundDispatchStatus`)와
+Host 상태(`ZLinkFrameworkRuntimeStatus`, `ZLinkHostCapacityStatus`, `ZLinkCoreHwmStatus`,
+`ZLinkApplicationJobQueueStatus`)와
 `ZLinkFrameworkErrorKind` 대응표는 Java 타입을 그대로 사용한다 — Kotlin 전용 data class나 enum을
 추가하지 않는다. 두 항목의 field 의미와 대응표는
 [Java 레퍼런스 08번](../../java/reference/08-observability-diagnostics.ko.md)을 참고한다.

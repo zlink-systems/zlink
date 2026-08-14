@@ -3,7 +3,7 @@ title: "Java Binding Implementation Blueprint"
 ---
 
 <!-- bindings-nav:start -->
-[Spec index](../README.md) | [Previous: C++](../cpp/README.md) | [Next: Node.js](../node/README.md)
+[Spec index](../README.en.md) | [Previous: C++](../cpp/README.en.md) | [Next: Node.js](../node/README.en.md)
 <!-- bindings-nav:end -->
 
 # Java Binding Implementation Blueprint
@@ -51,9 +51,9 @@ constructors only to preserve the old Java surface.
 | [Socket Contract Shape](#socket-contract-shape) | Common and per-type socket behavior |
 | [Operation Builder Shape](#operation-builder-shape) | Builder start methods and terminal methods |
 | [Messaging Values](#messaging-values) | The `Message`/`Received`/`TopicMessage`/`SubscriptionEvent` contract |
-| [Receive And Subscribe Shape](#receive-and-subscribe-shape) | Caller-provided storage and the no-data distinction |
+| [Receive And Subscribe Shape](#receive-and-subscribe-shape) | Caller-provided storage, no-data, and the Framework retained-credit boundary |
 | [Handler Registration Naming](#handler-registration-naming) | The `set...Handler` naming rule |
-| [Byte HWM And Monitoring ABI v2](#byte-hwm-and-monitoring-abi-v2) | Unsigned `long` HWM and monitor snapshot fields |
+| [Byte HWM And Monitoring ABI v3](#byte-hwm-and-monitoring-abi-v3) | Non-negative `long` HWM and monitor snapshot fields |
 | [Error And Result Policy](#error-and-result-policy) | Typed exceptions and validation timing |
 | [Spot And Actor Contract Shape](#spot-and-actor-contract-shape) | `SpotNode`/`Spot` responsibilities and route results |
 | [Spot Get-Or-Create](#spot-get-or-create) | The `getOrCreateSpot` contract |
@@ -554,7 +554,7 @@ Contract files may import:
 
 - other `systems.zlink.contracts.*` packages;
 - JDK types needed for public signatures, such as `Duration`,
-  `AutoCloseable`, `CompletableFuture`, `Optional`, `List`, records, or
+  `AutoCloseable`, `CompletionStage`, `Optional`, `List`, records, or
   functional interfaces;
 - third-party public value types only when they are intentionally part of the
   public contract.
@@ -666,17 +666,73 @@ another pair using the same peer routing id. This operation is used for
 runtime connection control such as Framework connection replacement; callers
 must not invent a pair identity.
 
-Payload, flags, timeout, callback, and async behavior are builder steps.
-Representative terminal methods:
+The canonical terminal on DEALER/ROUTER routed send and request builders is the
+single no-argument `submit()` method. Routed send returns
+`CompletionStage<Void>` and request returns
+`CompletionStage<List<Message>>`.
 
-- `submit()`
-- `await()`
-- `submit(callback)`
+```java
+public interface RoutedSendSubmitOperation {
+    RoutedSendSubmitOperation message(Message part);
+    CompletionStage<Void> submit();
+}
 
-`submit()` starts the async operation and returns `CompletionStage`; `await()`
-is the adapter that waits for the same operation on the current thread. The
-shared language policy is defined in
-[bindings async execution surface policy](../async-coroutine-policy.md).
+public interface RequestSubmitOperation {
+    RequestSubmitOperation message(Message part);
+    RequestSubmitOperation timeout(Duration timeout);
+    CompletionStage<List<Message>> submit();
+}
+```
+
+These two builders do not expose blocking `await()`, `submit(callback)`,
+`flags(...)`, or a boolean one-shot terminal. `submit()` does not block the
+calling thread; Framework and Kotlin connect the returned `CompletionStage`
+directly to their completion/await boundaries. Existing synchronous data-plane
+terminals outside this routed HWM-managed range, including PAIR and STREAM, are
+not removed by this rule. The shared language policy is defined in
+[bindings async execution surface policy](../async-coroutine-policy.en.md).
+
+The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
+`ReplySubmitOperation.submit() -> void`. It returns no `CompletionStage` and
+submits a terminal reply or error reply to the HWM-free completion lane with
+one native call. HWM backpressure is not a reply result; `NOT_CONNECTED`,
+`TERMINATED`, `INVALID_ARGUMENT`, and other non-HWM submit failures are
+delivered immediately as `ZlinkSubmitException`.
+
+### Routed Asynchronous First Admission
+
+- The socket runtime registers Core's long-lived routed-target readiness
+  handler before accepting an asynchronous operation. An ordinary operation
+  uses the Core target selector to snapshot the exact RID, transport-pair ID,
+  and generation. An explicit Router transport-pair request uses the exact
+  identity obtained from a monitor event.
+- `submit()` creates the completion state, a binding-owned snapshot of the
+  complete record, and the pending operation before scheduling native work.
+  The payload therefore remains valid for the first attempt and retries even
+  if the caller closes its input `Message` immediately after return. It never
+  performs a native blocking submit and then creates or returns the stage.
+- The pending operation enters the `(target RID, transport-pair ID,
+  generation)` queue before its first attempt. The queue and deduplicated ready
+  ring are socket-runtime implementation details; they do not add a separate
+  public same-RID ordering guarantee.
+- Outside the callback thread, the pump invokes the exact target's existing
+  per-part APIs with `DONT_WAIT`. It holds a per-socket short attempt gate only
+  for one complete multipart part loop and releases it immediately on success,
+  backpressure, or failure. It never holds that gate, a worker thread, or a
+  submit lock while waiting for HWM readiness. No public multipart transaction,
+  helper, or retry capacity is added.
+- On `BACKPRESSURED`, the exact target readiness event places only that target
+  in the ready ring. Waiting target A does not block selection or attempts for
+  targets B, C, or D. An event with another generation and a duplicate writable
+  event are stale/duplicate wakes.
+- A send uses the original absolute socket send-timeout deadline. A request
+  timeout covers both HWM admission waiting and the Core reply lifecycle from
+  the first `submit()` and is never extended by a retry.
+- The request reply registry is installed before the first native request part.
+  A fast reply, cancellation, exact-target terminal/disconnect, socket close,
+  context termination, and timeout race to exactly one terminal completion.
+  The binding owns the complete record until admission; after Core accepts it,
+  caller payload ownership ends.
 
 Do not add separate operation-start families such as `sendNoWait`,
 `sendWithFlags`, `requestAsync`, `publishWithFlags`, or direct
@@ -729,6 +785,34 @@ boolean ok = router.recv(received, RecvFlags.DONT_WAIT);
 No-data is a normal `false` result for caller-provided no-wait receive.
 Hard receive failures throw the documented exception type.
 
+Ordinary `recv(...)` and `subscribe(...)` return Core queue credit immediately
+when a part is dequeued. The lifetime of an ordinary receive result therefore
+does not remain in HWM accounting, and this existing behavior does not change.
+
+A Framework backend uses only the following explicit retained aggregate entry
+points:
+
+```java
+boolean received = router.recvRetained(result, flags);
+boolean subscribed = sub.subscribeRetained(topicMessage, flags);
+```
+
+- `recvRetained(...)` is available on `PairSocket`, `DealerSocket`,
+  `RouterSocket`, and `StreamSocket`; `subscribeRetained(...)` is available on
+  `SubSocket` and `XSubSocket`. This surface is for a Framework backend and is
+  not the default application receive path.
+- The returned `Received` or `TopicMessage` privately owns one opaque Core
+  retained credit for every caller-visible physical payload part. Routing ID,
+  request sequence, topic, and multipart framing are preserved exactly as on
+  the ordinary aggregate receive path.
+- Closing or reusing the result returns every retained credit exactly once.
+  Partial multipart failure, cancellation, and error also return credits
+  already acquired. `Cleaner` is only a fallback for missed deterministic
+  cleanup; normal lifecycle code uses `close()`.
+- Individual `Message` parts and bare part receive primitives do not hide a
+  lease. No raw lease handle, separate capacity, allowance, or duplicate
+  accounting state is exposed through the public API.
+
 SPOT readable dispatch events are readiness notifications. Callers drain the
 corresponding receive API until no-data.
 
@@ -766,46 +850,82 @@ Canonical Java names:
 - `recvRouted`
 - `recvActorLifecycle`
 
-## Byte HWM And Monitoring ABI v2
+## Byte HWM And Monitoring ABI v3
 
 - An HWM is not the number of queued messages but the limit on accounted bytes Core computes.
-- The Java public interface interprets all 64 bits of a `long` as an unsigned value, carrying the full range of Core's `uint64_t` without loss.
-- A Java caller uses `Long.compareUnsigned` and `Long.toUnsignedString`; a Kotlin caller converts with `ULong.toLong()` and `Long.toULong()`.
+- The Java public interface accepts byte values from `0` through
+  `Long.MAX_VALUE`. It rejects negative input before calling Core and reports
+  a Core value above `Long.MAX_VALUE` as an overflow error.
 - `0` means unlimited, and the manual default is `4_096_000 bytes`.
 - The former `int` overload, an alias, or a count-unit adapter is not provided.
 
 ```java
 public final class ContextOptions {
-    public long autoHwmMessageUnitBytes();           // Returns an unsigned 64-bit planning unit.
-    public void autoHwmMessageUnitBytes(long value); // Zero selects the socket-type default.
+    public long coreHwmMemoryLimitBytes();
+    public void coreHwmMemoryLimitBytes(long value);
+    public long coreHwmBudgetBytes();
+    public void coreHwmBudgetBytes(long value);
+    public CoreHwmProfile coreHwmProfile();
+    public void coreHwmProfile(CoreHwmProfile value);
+}
+
+public interface Context {
+    CoreHwmBudgetSnapshot coreHwmBudgetSnapshot();
+    void resetCoreHwmBudgetMetrics();
 }
 
 public class CommonSocketOptions {
-    public long sendHwm();           // Returns the unsigned outbound accounted-byte limit.
-    public void sendHwm(long value); // Passes all 64 bits of value to Core.
+    public long sendHwm();           // Returns the non-negative outbound accounted-byte limit.
+    public void sendHwm(long value); // Passes 0 through Long.MAX_VALUE to Core.
     public long recvHwm();
     public void recvHwm(long value);
 }
 ```
 
-`autoHwmMessageUnitBytes(...)` is an input to Core's planner. Core multiplies
-the selected message-slot count by this value to calculate the planned byte
-HWM. A direction on which the caller sets `sendHwm(...)` or `recvHwm(...)`
+Input precedence is manual Core budget, explicit memory limit, maximum JVM heap
+hint, then Core fallback. Setting either of the first two values disables
+automatic JVM-hint detection. The binding does not combine the hint with Core's
+hard limit. If an explicit input exceeds a finite hard limit Core detected, the
+binding preserves the existing configuration exception corresponding to
+`EINVAL` and does not clamp the value.
+
+Core applies the profile ratio to the memory limit exactly once, or uses an
+explicit Core budget unchanged, then calculates planned byte HWM per physical
+directional queue. A direction on which the caller sets `sendHwm(...)` or `recvHwm(...)`
 becomes a manual override and is not changed by later automatic HWM
 recalculation.
 
 The Java binding does not recount queued messages or payloads. When the actual
 accounted bytes in a Core pipe reach the applied HWM, the native submit result
 reports backpressure and the Java operation preserves it through the existing
-result and timeout contract. A `long` value of `0` means unlimited. A `long`
-that appears negative is still passed as an unsigned 64-bit HWM, so callers use
-unsigned comparison and string conversion.
+result and timeout contract. A `long` value of `0` means unlimited. Negative
+values are not valid HWM inputs.
 
-- The `MonitorStatus` record exposes the same fields as native `zlink_monitor_status_t` ABI version 2.
-- Planned, applied, and deferred HWMs, and in-flight usage, are unsigned `long` byte values.
+`monitorOpen(monitorHwmBytes, events...)` accepts a non-negative `long` byte
+value for the monitor queue. Zero selects the Core monitor default; a positive
+value is forwarded unchanged. Java and Kotlin expose no message-count overload
+or alias.
+
+- The `MonitorStatus` record exposes the same fields as native `zlink_monitor_status_t` ABI version 3.
+- Planned, applied, and deferred HWMs, and in-flight usage, are non-negative
+  `long` byte values; a larger Core value is an overflow error.
 - A deferred value is meaningful only when its matching `autoHwmDeferredSendHwmValid()` or `autoHwmDeferredRecvHwmValid()` method returns `true`.
 - A pending-message value remains a count diagnostic and does not share a name with a byte field.
-- A snapshot whose `abiVersion()` is not `2`, or whose `structSize()` differs from the binding layout, raises `UnsupportedOperationException`. The former 32-bit monitoring layout is not accepted.
+- Pending bytes are exposed separately through `sndPendingBytes()` and `rcvPendingBytes()`.
+- A snapshot whose `abiVersion()` is not `3`, or whose `structSize()` differs from the binding layout, raises `UnsupportedOperationException`. An older monitoring layout is not accepted.
+
+`CoreHwmBudgetSnapshot` projects ABI version/size, configured/runtime/resolved
+memory limits, configured/effective budgets, planned/applied/manual-reserved
+HWM, Core-queue/application/current/peak/provisional accounted bytes,
+completion current/peak/pending and total-messaging values, monitor/instance
+aggregates, application/completion queue counts,
+`outstandingApplicationLeaseCount()`, `retiredQueueCount()`,
+`deferredOriginCreditBytes()`, oversize/blocked/aggregate flags,
+`budgetGeneration()`, and `measurementEpoch()` without unit conversion. Reset
+preserves current, pending, queue-count, and those three owner-lifecycle gauges,
+rebases both peaks to current, clears epoch counters, and increments
+`measurementEpoch`. A budget snapshot ABI version/size mismatch raises
+`UnsupportedOperationException`.
 
 Java and Kotlin call the same Java methods. No Kotlin-only adapter or option
 with a different unit is added. Request/reply APIs do not take an HWM argument

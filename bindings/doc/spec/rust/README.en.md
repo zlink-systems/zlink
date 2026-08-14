@@ -3,7 +3,7 @@ title: "Rust Bindings Implementation Blueprint"
 ---
 
 <!-- bindings-nav:start -->
-[Spec index](../README.md) | [Previous: Go](../go/README.md)
+[Spec index](../README.en.md) | [Previous: Go](../go/README.en.md)
 <!-- bindings-nav:end -->
 
 # Rust Bindings Implementation Blueprint
@@ -262,7 +262,7 @@ with public inherent methods, plus private helpers in `runtime/`.
 
 ## Contract file layout
 
-The contract source uses the same classification as the [.NET bindings blueprint](../dotnet/README.md), with Rust naming conventions. Keeping the same conceptual file grouping lets a developer who knows another binding find the same public concept quickly in Rust too.
+The contract source uses the same classification as the [.NET bindings blueprint](../dotnet/README.en.md), with Rust naming conventions. Keeping the same conceptual file grouping lets a developer who knows another binding find the same public concept quickly in Rust too.
 
 - `core/`: `context.rs`, `routing_id.rs`, and core option/value files.
 - `messaging/`: `message.rs`, `received.rs`, `topic_message.rs`, `subscription_event.rs`, common operation payload types.
@@ -335,6 +335,42 @@ public crate items and re-exports.
 - A message payload factory uses a fallible from-source contract: `Message::try_from(...)` and a `TryFrom` implementation. A copy-only name such as `copy_from` is not part of the public contract.
 - Routing id construction uses the standard `From` implementations. Public helpers such as `from_bytes`, `from_string`, `from_u32`, `from_uuid_bytes` are not part of the public contract. Hex decoding may keep `from_hex` / `try_from_hex`.
 - No operation-start method family such as `send_no_wait`, `publish_with_flags`, `request_async` is added. Keep one operation name, and let the builder absorb variants. The async surface also does not grow the operation start-point name — it is expressed as a builder terminator or a `Future`-returning surface.
+- The async builder terminator is `submit()` because `async` is a Rust keyword.
+
+  ```rust
+  dealer.send().message(message).submit().await?;
+  let reply = dealer.request().message(request).submit().await?;
+  ```
+
+  For DEALER and ROUTER routed send, `submit()` returns a runtime-independent
+  `Future<Output = Result<(), SubmitError>>`; request `submit()` returns
+  `Future<Output = Result<Vec<Message>, ZlinkError>>`. Polling never occupies a
+  runtime worker with native blocking submit or an HWM recovery wait. After HWM
+  recovers, the operation retries only its originally selected exact target,
+  while work for other targets can progress independently.
+- Before accepting asynchronous operations, the socket runtime registers
+  Core's long-lived routed-target readiness handler. Before its first poll
+  attempt, Future state places the exact `(socket, RID, transport pair ID,
+  generation)` key and complete record in pending state, then attempts
+  `DONTWAIT` on that target. The callback marks only that key ready; a pump
+  outside the callback performs native retry. An event for another pair
+  generation is a stale wake and is ignored. Outbound paths on one native
+  handle share a short gate for one attempt from the first part through
+  `FINAL`, then release it before readiness waiting.
+- Routed send/request builders do not also expose callback, blocking-wait, or
+  progress-polling terminals. Immediate PAIR, PUB, and STREAM submit and ROUTER
+  reply remain separate synchronous operation contracts. The raw
+  ROUTER/`Received` reply terminal is the one-shot
+  `ReplyOp<Ready>::submit() -> Result<(), SubmitError>`. It submits a terminal
+  reply or error reply to the HWM-free completion lane with one native call.
+  HWM backpressure is not a reply result; `NOT_CONNECTED`, `TERMINATED`,
+  `INVALID_ARGUMENT`, and other non-HWM submit failures return immediately as
+  `Err(SubmitError)`.
+- Dropping a Future before native acceptance cancels its pending operation.
+  Dropping an accepted request Future detaches only its consumer; reply or
+  timeout cleanup for the accepted request still completes. Completion is
+  resolved exactly once. Strict FIFO ordering among operations for the same
+  target is not a public contract.
 
 ## Crate layout
 
@@ -358,17 +394,41 @@ Core owns HWM calculation and queue admission.
 8-byte options. Their getters return Core's full `uint64_t` range as `u64`.
 `0` means unlimited.
 
-`ContextOptions::set_auto_hwm_msg_unit_bytes(u64)` sets a Core planner input.
-Core multiplies the selected message-slot count by the planning unit to
-calculate the planned byte HWM. Setting a directional HWM makes that direction
-a manual override and excludes it from automatic HWM recalculation.
+Context options pass the byte-valued Core memory limit and budget, plus the
+profile, unchanged to Core. Core applies the profile ratio and distributes the
+result across physical directional queues exactly once. Setting a directional
+HWM makes that direction a manual override and excludes it from automatic HWM
+recalculation.
+Context provides `core_hwm_budget_snapshot()` and
+`reset_core_hwm_budget_metrics()`. The Rust binding supplies no runtime memory
+hint. Input precedence is manual Core budget, explicit memory limit, then Core
+fallback. If an explicit input exceeds a finite hard limit Core detected, the
+binding preserves the existing configuration error corresponding to `EINVAL`
+and does not clamp the value.
 
 Core decides backpressure when the accounted bytes retained by a pipe reach
 the applied HWM. The Rust binding does not recount messages and maps Core's
-result through its `Result`-based operation contract. Planned, applied, and
-deferred HWM and in-flight usage in `MonitorStatus` are `u64` bytes. Only
-pending-message fields and `auto_hwm_socket_message_slots` are count
-diagnostics.
+result through its `Result`-based operation contract.
+`SocketMonitorOpenOptions::monitor_hwm_bytes`, passed through
+`SocketMonitor::open_with_options`, is an exact `u64` byte value. Zero selects
+the Core monitor default; a positive value is forwarded unchanged, with no
+message-count alias or conversion. Planned, applied, and
+deferred HWM and in-flight usage in `MonitorStatus` are `u64` bytes.
+Pending-message counts remain display diagnostics; no slot, message-unit,
+size-cap, or connection-bucket property is exposed. `snd_pending_bytes` and
+`rcv_pending_bytes` are separate `u64` byte values.
+
+The Core budget snapshot projects ABI version/size, configured/runtime/resolved
+memory limits, configured/effective budgets, planned/applied/manual-reserved
+HWM, Core-queue/application/current/peak/provisional accounted bytes,
+completion current/peak/pending and total-messaging values, monitor/instance
+aggregates, application/completion queue counts,
+`outstanding_application_lease_count`, `retired_queue_count`,
+`deferred_origin_credit_bytes`, oversize/blocked/aggregate flags,
+`budget_generation`, and `measurement_epoch` as `u64`/boolean values. Reset
+preserves current, pending, queue-count, and those three owner-lifecycle gauges,
+rebases both peaks to current, clears epoch counters, and increments
+`measurement_epoch`. An ABI version/size mismatch is an unsupported error.
 
 ## Required capability coverage
 
@@ -398,6 +458,15 @@ logical spot.
 ## Receive and Subscribe shape
 
 - Data-plane receive and subscribe APIs use a reusable, caller-owned result storage.
+- Ordinary `recv` and `subscribe` return Core queue credit immediately on
+  dequeue. Only the explicit `recv_retained` and `subscribe_retained` entry
+  points selected by a Framework backend privately attach each physical
+  part's opaque Core lease to the `Received` or `TopicMessage` aggregate. No
+  raw lease or capacity value is public.
+- A retained aggregate releases every lease exactly once when it is reused by
+  the next receive, closed or consumed, with `Drop` as the fallback. DEALER
+  request sequence, ROUTER routing id/request sequence, and SUB topic/routing
+  id metadata remain identical to the existing typed receive paths.
 - Non-blocking no-data is distinguished from a hard receive failure.
 - A SPOT readable dispatch event is a readiness notification. The caller drains the matching receive API until it returns no-data.
 - Returned message data has clear ownership and lifetime. Borrowed data never outlives its native owner.

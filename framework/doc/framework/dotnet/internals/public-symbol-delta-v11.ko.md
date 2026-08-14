@@ -1,11 +1,11 @@
 <!-- framework-adapter-nav:start -->
-[문서 목록](../../../README.ko.md) | [Runtime Lifecycle](../../common/internals/README.ko.md)
+[문서 목록](../../../README.ko.md) | [Runtime Lifecycle](../../common/spec/README.ko.md)
 <!-- framework-adapter-nav:end -->
 
 # .NET v11 public boundary
 
 [Exact interface](../../common/spec/server/languages/dotnet/interfaces/README.ko.md) ·
-[Runtime lifecycle](../../common/internals/README.ko.md)
+[Runtime lifecycle](../../common/spec/README.ko.md)
 
 ## 1. 목적
 
@@ -70,5 +70,5 @@ reference를 공개한다. 공개되지 않은 payload는 retention 정책으로
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[문서 목록](../../../README.ko.md) | [Runtime Lifecycle](../../common/internals/README.ko.md)
+[문서 목록](../../../README.ko.md) | [Runtime Lifecycle](../../common/spec/README.ko.md)
 <!-- framework-adapter-nav:bottom:end -->

@@ -676,7 +676,7 @@ number of skipped ticks.
 | --- | --- |
 | `Name` | The name given at registration |
 | `scheduled_index` · `delivery_index` | Which scheduled tick this is / the actual delivery sequence number. The difference between the two is how many ticks have been discarded so far |
-| `ScheduledAt` · `StartedAt` | Scheduled time / actual execution start time |
+| `ScheduledAt` · `started_at` | Scheduled time / actual execution start time |
 | `ScheduledElapsed` · `StartedElapsed` | Elapsed since the timer started (scheduled basis / actual basis) |
 | `Delay` | `StartedElapsed - ScheduledElapsed` -- this tick's delay against schedule |
 | `SkippedTicks` | Number of ticks skipped right before this tick |

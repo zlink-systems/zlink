@@ -29,7 +29,6 @@ public interface IZLinkFrameworkOptions
     void AddLocationStore(IZLinkLocationStore store);
     void AddRelocationStore(IZLinkRelocationStore store);
     ZLinkLocationOptions ConfigureLocations();
-    IZLinkInboundDispatchOptions ConfigureInboundDispatch();
     IZLinkNetworkOptions ConfigureNetwork();
     IZLinkDispatchOptions ConfigureDispatch();
     IZLinkStreamCompressionBuilder ConfigureStreamCompression();
@@ -41,7 +40,7 @@ public interface IZLinkFrameworkOptions
     IZLinkStreamNodeBuilder AddStreamNode(string streamNodeName);
 }
 
-public enum ZLinkApplicationHwmProfile
+public enum ZLinkCoreHwmProfile
 {
     Compact = 0,
     LowLatency = 1,
@@ -49,11 +48,12 @@ public enum ZLinkApplicationHwmProfile
     Throughput = 3
 }
 
-public interface IZLinkInboundDispatchOptions
+public enum ZLinkApplicationJobQueueProfile
 {
-    ulong? ApplicationHwmBytes { get; set; }
-    ZLinkApplicationHwmProfile ApplicationHwmProfile { get; set; }
-    ulong? ProcessMemoryLimitBytes { get; set; }
+    Compact = 0,
+    LowLatency = 1,
+    Balanced = 2,
+    Throughput = 3
 }
 
 public interface IZLinkMeshNodeBuilder
@@ -624,9 +624,9 @@ public interface IZLinkMeshNodeSocketConfig
 }
 ```
 
-ClientServer application listener의 `MaxMessageSize` 기본값은 `16 MiB`다. Application HWM을 Auto 또는
-양수로 사용할 때 `0`을 명시하면 startup configuration error다. `ApplicationHwmBytes = 0`일 때만
-`MaxMessageSize = 0`을 사용할 수 있다. 이 설정은 RouteMesh ServerServer에 적용하지 않는다.
+ClientServer application listener의 `MaxMessageSize` 기본값은 `16 MiB`다. `0`은 Framework가 별도
+single-message 상한을 두지 않는다는 뜻이며 Core HWM budget이나 Application job queue 설정과 결합 검증하지
+않는다. 이 설정은 RouteMesh ServerServer에 적용하지 않는다.
 
 `ConfigureSpotPublisher()`는 publish 전용 전달 정책 option을 제공하지 않는다. [Logical Multicast](../../../../01-glossary.ko.md#logical-multicast)는
 source-local 실행 용량을 send timeout 안에 확보하면 시작하고 결과값 없이 정상 완료한다. Target별
@@ -653,14 +653,11 @@ ChannelName은 local RouteMesh 또는 ClientServer Server 등록을 유일하게
 receiver는 Framework-level complete-message 상한으로 message를 거절하지 않는다. HWM, mailbox byte budget과
 service-wire 표현 한계는 별도 자원·wire guard로 유지한다.
 
-`ConfigureInboundDispatch()`는 host 전체 inbound 설정 하나를 반환한다. `ApplicationHwmBytes`의 기본값은
-`null`이며 Auto mode를 뜻한다. `0`은 제한 없음, 양수는 정확한 byte 상한이다.
-`ApplicationHwmProfile` 기본값은 `Balanced`이고 Auto mode에서만
-계산에 사용한다. `ProcessMemoryLimitBytes`는 `null` 또는 양수만 허용한다. Auto mode에서 이 값을
-생략하면 process에 적용된 유한한 container·cgroup·Windows Job Object와 같은 OS 상한과 .NET GC managed
-heap 상한(`GC.GetGCMemoryInfo().TotalAvailableMemoryBytes`)을 확인한다. 두 값을 모두 확인하면 더 작은
-값을 사용하고, 하나만 확인하면 그 값을 사용한다. 둘 다 확인할 수 없으면 시스템 물리 메모리 총량을 사용한다.
-따라서 Auto mode는 설정 없이도 기동한다.
+`ConfigureDispatch()`는 host 전체 dispatch 설정 하나를 반환한다. Core memory limit·manual budget·profile은
+Core에 전달한다. .NET binding은 `GC.GetGCMemoryInfo().TotalAvailableMemoryBytes`의 양수 유한값을 runtime
+memory hint로 전달한다. 두 profile은 기본값 `Balanced`인 독립된 enum과 계산이다. Manual job cap은
+`1..2,147,483,647`이고, 생략하면 common spec의 startup CPU snapshot과 32/64/128/256 계수를 사용한다.
+범위 위반과 overflow는 socket bind 전에 실패하고 runtime 중 다시 계산하지 않는다.
 
 ## 6. 메시징 metadata
 

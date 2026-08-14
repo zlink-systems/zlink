@@ -651,7 +651,7 @@ timer handler가 받는 tick 값은 예정 대비 지연과 건너뛴 tick 수�
 | --- | --- |
 | `Name` | 등록할 때 준 이름 |
 | `scheduled_index` · `delivery_index` | 몇 번째 예정 tick인지 · 실제 전달 순번. 두 값의 차이가 지금까지 버려진 tick 수다 |
-| `ScheduledAt` · `StartedAt` | 예정 시각 · 실제 실행 시작 시각 |
+| `ScheduledAt` · `started_at` | 예정 시각 · 실제 실행 시작 시각 |
 | `ScheduledElapsed` · `StartedElapsed` | 타이머 시작 이후 경과(예정 기준 · 실제 기준) |
 | `Delay` | `StartedElapsed - ScheduledElapsed` — 이 tick의 예정 대비 지연 |
 | `SkippedTicks` | 이번 tick 직전에 건너뛴 tick 수 |

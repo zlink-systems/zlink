@@ -384,7 +384,38 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
 - `send_no_wait`, `publish_with_flags`, `request_async` 같은 operation-start
   메서드 패밀리를 추가하지 않는다. 하나의 operation 이름을 유지하고 변형은
   builder가 흡수하게 한다. async 표면도 operation 시작점 이름을 늘리지 않고
-  builder terminator 또는 `Future` 반환 표면으로 표현한다.
+  builder의 `submit()` terminator로 표현한다. Rust에서 `async`는 keyword이므로
+  terminator 이름으로 사용하지 않는다.
+
+  ```rust
+  dealer.send().message(message).submit().await?;
+  let reply = dealer.request().message(request).submit().await?;
+  ```
+
+  DEALER와 ROUTER의 routed send `submit()`은 runtime 비종속
+  `Future<Output = Result<(), SubmitError>>`를 반환하고, request `submit()`은
+  `Future<Output = Result<Vec<Message>, ZlinkError>>`를 반환한다. Poll 중에는 native
+  blocking submit이나 HWM 회복 대기로 runtime worker를 점유하지 않는다. HWM이
+  회복되면 처음 선택한 exact target에만 다시 시도하며, 다른 target의 작업은 독립적으로
+  진행할 수 있다.
+- Socket runtime은 비동기 operation을 받기 전에 Core routed-target readiness handler를
+  장기 등록한다. Future state는 최초 poll 시도 전에 정확한 `(socket, RID, transport pair
+  ID, generation)` key와 complete record를 pending에 넣고 같은 target에 `DONTWAIT`로
+  시도한다. Callback은 그 key만 ready로 표시하며 native retry는 callback 밖의 pump가
+  수행한다. Pair generation이 다른 event는 stale wake로 무시한다. 같은 native handle의
+  outbound 경로는 첫 part부터 `FINAL`까지 한 attempt만 보호하는 짧은 gate를 공유하고
+  readiness 대기 전에 반환한다.
+- Routed send/request builder에는 callback, blocking wait, progress polling terminal을
+  함께 제공하지 않는다. PAIR·PUB·STREAM의 즉시 submit과 ROUTER reply는 별도의 동기
+  operation 계약을 유지한다. Raw ROUTER/`Received` reply의 terminal은
+  `ReplyOp<Ready>::submit() -> Result<(), SubmitError>`인 one-shot이다. Native reply를
+  HWM 없는 completion lane에 한 번 호출해 terminal reply 또는 error reply를 제출한다.
+  HWM backpressure는 reply 결과가 아니며 `NOT_CONNECTED`, `TERMINATED`,
+  `INVALID_ARGUMENT`와 그 밖의 non-HWM submit 실패는 즉시 `Err(SubmitError)`로 반환한다.
+- Future가 native acceptance 전에 drop되면 해당 pending operation을 취소한다.
+  Request가 acceptance된 뒤 Future가 drop되면 소비자만 분리하며, 이미 수용된 request의
+  reply 또는 timeout 정리는 계속 완료된다. Completion은 정확히 한 번만 확정된다. 같은
+  target의 엄격한 FIFO 순서는 public 계약이 아니다.
 
 ## Crate 레이아웃
 
@@ -411,16 +442,35 @@ HWM의 계산과 queue admission은 Core가 담당한다.
 전달한다. Getter도 Core의 전체 `uint64_t` 범위를 `u64`로 반환한다. 값 `0`은
 무제한이다.
 
-`ContextOptions::set_auto_hwm_msg_unit_bytes(u64)`는 Core planner 입력을
-설정한다. Core는 선택한 message slot 수에 planning unit을 곱해 planned byte
-HWM을 계산한다. Caller가 방향별 HWM을 설정하면 그 방향은 수동 override가 되어
-Auto-HWM 재계산에서 제외된다.
+Context option은 byte 단위 Core memory limit·budget과 profile을 Core에 그대로 전달한다.
+Profile 비율 계산과 physical directional queue별 분배는 Core가 정확히 한 번 수행한다.
+Caller가 방향별 HWM을 설정하면 그 방향은 manual override가 되어 Auto-HWM 재계산에서
+제외된다.
+Context는 `core_hwm_budget_snapshot()`과 `reset_core_hwm_budget_metrics()`를 제공한다.
+Rust binding은 runtime memory hint를 만들지 않는다. 입력 우선순위는 수동 Core budget,
+명시 memory limit, Core fallback 순서다. 명시 입력이 Core가 감지한 finite hard limit보다
+크면 `EINVAL`에 대응하는 기존 config error를 그대로 전달하고 clamp하지 않는다.
 
 실제 pipe에 쌓인 accounted byte가 applied HWM에 도달하면 Core가
 backpressure를 결정한다. Rust 바인딩은 message 수를 다시 세지 않고 Core result를
-`Result` 기반 operation 계약으로 전달한다. `MonitorStatus`의 planned, applied,
-deferred HWM과 in-flight 사용량은 `u64` byte다. Pending message와
-`auto_hwm_socket_message_slots`만 count 진단값이다.
+`Result` 기반 operation 계약으로 전달한다.
+`SocketMonitorOpenOptions::monitor_hwm_bytes`는
+`SocketMonitor::open_with_options`를 통해 정확한 `u64` byte 값으로 전달된다. `0`은
+Core monitor 기본값을 선택하고, 양수는 변환 없이 전달한다. Message-count alias나
+변환은 없다. `MonitorStatus`의 planned, applied,
+deferred HWM과 in-flight 사용량은 `u64` byte다. Pending message count는 표시용
+진단이고 `snd_pending_bytes`와 `rcv_pending_bytes`는 별도 `u64` byte 값이다.
+slot·message-unit·size-cap·connection-bucket property는 제공하지 않는다.
+
+Core budget snapshot은 ABI version/size, configured/runtime/resolved memory limit,
+configured/effective budget, planned/applied/manual-reserved HWM, Core queue/application/current/
+peak/provisional accounted byte, completion current/peak/pending과 total messaging byte,
+monitor/instance aggregate, application/completion queue count,
+`outstanding_application_lease_count`, `retired_queue_count`, `deferred_origin_credit_bytes`,
+oversize·blocked·aggregate flag, `budget_generation`과 `measurement_epoch`을 `u64`/boolean으로
+제공한다. Reset은 current·pending·queue count와 위 세 owner-lifecycle gauge를 유지하고 두
+peak를 current로 재기준화하며 epoch counter를 0으로 만든 뒤 `measurement_epoch`을
+증가시킨다. ABI version/size 불일치는 unsupported error다.
 
 ## 필수 능력 커버리지
 
@@ -454,6 +504,15 @@ boolean은 논리적 spot을 생성한 호출에서만 `true`이다.
 
 - 데이터 플레인 receive와 subscribe API는 재사용 가능한 호출자 소유 결과
   저장소를 사용한다.
+- 일반 `recv`와 `subscribe`는 dequeue 시 Core queue credit을 즉시 반환한다.
+  Framework backend가 명시적으로 선택하는 `recv_retained`와
+  `subscribe_retained`만 physical part마다 받은 opaque Core lease를
+  `Received` 또는 `TopicMessage` aggregate가 private으로 소유한다. Raw lease와
+  capacity 값은 공개하지 않는다.
+- Retained aggregate는 다음 receive로 재사용될 때, `close` 또는 consuming
+  accessor로 소유권이 끝날 때, 그리고 `Drop` fallback에서 각 lease를 정확히 한
+  번 반환한다. DEALER request sequence, ROUTER routing id/request sequence와 SUB
+  topic/routing id metadata는 기존 typed receive와 동일하게 보존한다.
 - non-blocking no-data는 hard receive 실패와 구별된다.
 - SPOT readable dispatch 이벤트는 readiness 알림이다. 호출자는 매칭되는 receive
   API를 no-data가 될 때까지 비운다.

@@ -297,24 +297,21 @@ reaches a successful or failed terminal, the framework closes the previous conne
 later. An empty outbound queue does not shorten this delay. The exact ordering and fencing rules are defined
 by [Session-Actor Dispatch §4](20-session-actor-dispatch.en.md#4-how-a-session-holds-an-actor-route).
 
-If a bound Actor relocates, the physical STREAM socket and Session object are
-kept as-is. Once the target Actor is restored and owner/membership commit
-finishes, the target Actor starts processing messages. Then the target
-runtime sends `sessionActorLocationUpdateReqMsg`, asking the session owner to
-update that Actor's binding route — stored by the session owner as the path to
-deliver to the current Actor owner — to the target owner. Along with the route
-switch, the bound-session current Actor location snapshot is also updated to
-the target MeshName/NodeRid, keeping the same ActorId/ObjectGeneration. The
-route and location snapshot of a different Actor on the same Session not
-included in the relocation don't change. Once updated, the session owner
-sends `sessionActorLocationUpdateResMsg`. Without a response, the target
-runtime resends the same request starting 1 second after the first send, at
-intervals of 1, 2, 4, 5 seconds, then keeps a 5-second interval afterward. The
-target Actor keeps processing messages while waiting for the response, and a
-message arriving on the previous route is delivered by the Message Follow
-route. A route update is only allowed for the same ObjectGeneration, and the
-application doesn't rebind to learn about the relocation. A new incarnation
-needs an explicit bind.
+If a bound Actor relocates, the physical STREAM socket and Session object stay in place.
+Target Actor dispatch opens only after Restore, target-only owner/membership CAS, queue
+merge, regular-route switch, and lifecycle callbacks finish. Target runtime then sends
+command 44 `sessionRelocationRoute` commit one-way so Session owner updates the stored
+binding route to target owner. The bound-session current Actor location snapshot changes
+to target MeshName/NodeRid while keeping the same ActorId/ObjectGeneration. A different
+Actor's route and snapshot on the same Session don't change. Session owner validates exact
+Session/binding/Actor generation and relocation identity, submits held messages to target
+route, and releases the matching seal. There is no application reply, and reserved command
+45 is neither sent nor accepted. Without exact command 44 within the default 3,000ms
+`SessionRelocationSealTimeout`, it cleans the physical Session and binding/held/seal state.
+Target Actor processes messages without a command 44 application reply, while Message
+Follow delivers a message arriving on the previous route. A route update is only allowed
+for the same ObjectGeneration, and the application doesn't rebind to learn about relocation.
+A new incarnation needs an explicit bind.
 
 ## 9. Implementation And Contract-Test Verification Requirements
 
@@ -328,3 +325,11 @@ needs an explicit bind.
 | Termination and resumption | A stream termination fails a pending request, and messaging resumes after a new session's auth/bind |
 | Reply correlation | The `Response`/`Error` header has no packet name, and the client matches by sequence alone to complete normally |
 | Cross-node Actor delivery | The physical STREAM stays on the session owner — only command 38/24/36/51 records are delivered between MeshNodes |
+
+## 10. Session Dispatch And Shared Permits
+
+STREAM application packets and cross-node Session application records use the same
+host-shared permits. Only terminal response/error completion bypasses. Handshake, bind,
+unbind, and malformed ordinary records acquire before receive/claim and release after
+internal processing. Application packets release at actual session-callback start, and a
+batch never creates more jobs than secured permits.

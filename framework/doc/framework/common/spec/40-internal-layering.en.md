@@ -1,18 +1,20 @@
 ---
-title: "1. Layer Boundary And Identifier"
+title: "40. Layer Boundary And Identifier"
 ---
 
-# 1. Layer Boundary And Identifier
+# 40. Layer Boundary And Identifier
 
-[Internal structure table of contents](README.en.md) · [Next: 2. Spot · Actor Execution Serialization — splitting queue and execution gate](02-serialization.en.md)
+> **Document status — internal design, not normative public specification.** This chapter explains implementation structure used to satisfy the linked public contracts. It does not add or change application-visible behavior.
+
+[Internal structure table of contents](README.en.md) · [Next: 41. Spot · Actor Execution Serialization — splitting queue and execution gate](41-internal-serialization.en.md)
 
 > **What this chapter answers** — what chunk to split the runtime
 > into, and which value must not be merged into one.
 >
 > **Contract ownership** — the shutdown procedure and order is owned
-> by [Complete Host Relocation Flow](../spec/30-host-relocation-flow.en.md),
+> by [Complete Host Relocation Flow](30-host-relocation-flow.en.md),
 > and the identifier's format and lifetime is owned by the
-> [glossary](../spec/01-glossary.en.md).
+> [glossary](01-glossary.en.md).
 > This chapter covers the **structure** that satisfies that contract and
 > the failures that become visible when a boundary is violated.
 
@@ -170,7 +172,7 @@ ownership, meaning conversion, and measured runtime cost are explicit.
 
 **Decision.** Put one host runtime per process, and put the
 per-topology runtime — such as
-[RouteMesh](../spec/01-glossary.en.md#routemesh), ClientServer,
+[RouteMesh](01-glossary.en.md#routemesh), ClientServer,
 fanout, STREAM — where multiple nodes find each other by name, under
 it. **The shutdown order is owned by the host, and the method to close
 each resource is owned by the topology that built it.**
@@ -184,7 +186,7 @@ close`) in a fixed order, and each topology closes its own resource on
 that call. Calling it repeatedly must give the same result.
 
 **Why.** If each topology closes on its own, the close order differs
-every run. If the [Spot](../spec/01-glossary.en.md#spot) side, the
+every run. If the [Spot](01-glossary.en.md#spot) side, the
 execution unit an Actor belongs to, closes first while a STREAM
 session still holds that Actor, the situation can't be reproduced and
 which side is at fault can't be judged.
@@ -235,7 +237,7 @@ already confirmed; if the conditions differ, reject.** If the mode or
 target version matches, join the in-progress procedure. If different,
 don't wait — end with `Blocked/OperationInProgress`
 ([Complete Host Relocation Flow 「6. Concurrent Calls And
-Cancellation」](../spec/30-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation)).
+Cancellation」](30-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation)).
 If two procedures of the same kind run overlapped with different
 conditions, which result is final can't be decided.
 
@@ -243,34 +245,34 @@ conditions, which result is final can't be decided.
 not a rejection — shutdown wins, and the side waiting for relocation
 ends with `Blocked/ShutdownRequested`
 ([Complete Host Relocation Flow 「11. The Race Between Shutdown And
-Relocate」](../spec/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate)).
+Relocate」](30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate)).
 Since shutdown cleans up everything of this host anyway, there's no
 reason to finish the relocation.
 
 **Decision — a shutdown-after-relocation checks the whole host at once
 before changing state**
 ([Complete Host Relocation Flow 「4. Conditions Checked Before Selecting A
-Target」](../spec/30-host-relocation-flow.en.md#4-conditions-checked-before-selecting-a-target)).
+Target」](30-host-relocation-flow.en.md#4-conditions-checked-before-selecting-a-target)).
 If new work is blocked before this check, that node would have been
 stopped for no reason once it learns it can't move
-([5. Message Continuity During A Move 「1. The Four
-Boundaries」](05-relocation-continuity.en.md#1-four-boundaries)).
+([44. Message Continuity During A Move 「1. The Four
+Boundaries」](44-internal-relocation-continuity.en.md#1-four-boundaries)).
 
 It doesn't immediately reject just because there's no node to receive
 it right now. **After waiting for target information to spread up to
 a set time,** it ends with `Blocked/TargetUnavailable`
 ([Complete Host Relocation Flow 「5.1 When There's No Target
-Yet」](../spec/30-host-relocation-flow.en.md#51-when-theres-no-target-yet)).
+Yet」](30-host-relocation-flow.en.md#51-when-theres-no-target-yet)).
 Since the rejected result isn't stored, requesting again checks from
 the start
 ([Complete Host Relocation Flow 「6. Concurrent Calls And
-Cancellation」](../spec/30-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation)).
+Cancellation」](30-host-relocation-flow.en.md#6-concurrent-calls-and-cancellation)).
 
 If there's **not a single** target to move, it succeeds even with no
 node to receive it. Here too, the host state transition and new work
 blocking is the same as any other relocation
 ([Complete Host Relocation Flow 「5.1 When There's No Target
-Yet」](../spec/30-host-relocation-flow.en.md#51-when-theres-no-target-yet)).
+Yet」](30-host-relocation-flow.en.md#51-when-theres-no-target-yet)).
 
 **Decision — failure handling differs before and after confirmation,
 but neither ends the host.** A failure before the first relocation is
@@ -278,7 +280,7 @@ confirmed returns to the original state. A failure after confirmation
 **leaves what's already moved on the receiving node**, reprocesses
 only the not-yet-moved work, and **returns to `Serving`**
 ([Complete Host Relocation Flow 「10. Relocate Completion And
-Failure」](../spec/30-host-relocation-flow.en.md#10-relocate-completion-and-failure)).
+Failure」](30-host-relocation-flow.en.md#10-relocate-completion-and-failure)).
 Shutdown only happens if the caller separately requests it.
 
 **Decision — an observation subscriber can't hold up shutdown
@@ -365,7 +367,7 @@ flowchart TB
 shutdown reason must run while that object's membership and local
 instance are still valid
 ([Complete Host Relocation Flow 「11. The Race Between Shutdown And
-Relocate」](../spec/30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate)).
+Relocate」](30-host-relocation-flow.en.md#11-the-race-between-shutdown-and-relocate)).
 If the timer and session are stopped first, what the callback needs is
 already gone.
 
@@ -446,7 +448,7 @@ only once at that boundary.
 
 `OperationId` is already a public term referring to **the value that
 handles Actor Join completion without duplication**
-([glossary](../spec/01-glossary.en.md#actor-join-operationid)). Using
+([glossary](01-glossary.en.md#actor-join-operationid)). Using
 the same name for the in-progress call identifier mixes the two
 concepts in the document and code. internals uses a different name.
 
@@ -496,4 +498,4 @@ depending on that value's stability.
 
 ---
 
-[Internal structure table of contents](README.en.md) · [Next: 2. Spot · Actor Execution Serialization](02-serialization.en.md)
+[Internal structure table of contents](README.en.md) · [Next: 41. Spot · Actor Execution Serialization](41-internal-serialization.en.md)

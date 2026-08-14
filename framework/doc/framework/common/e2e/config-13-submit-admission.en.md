@@ -37,7 +37,7 @@ socket buffer size, and a test-only snapshot barrier aren't used.
 |---|---:|---|
 | Location Store | 1 | Provides automatic topology and global Spot/Actor location. |
 | Admission caller | 1 | An Object Client that starts Node/Channel/Spot/Actor and Logical Multicast operations. |
-| Mesh target | 2 | Provides Channel, Spot, Actor, and Logical Multicast handlers. Creates admission conditions via public HWM and an application handler gate. |
+| Mesh target | 2 | Provides Channel, Spot, Actor, and Logical Multicast handlers. Creates admission conditions via a public job queue cap and handler-start gate. |
 | ClientServer target | 2 | Provides ClientServer send handlers and weighted select-one candidates. |
 | Session gateway | 2 | Provides bound Session send, Session Actor relay, and server Stream send/reply. |
 | Fanout publisher/subscriber | 1 each | Separately verifies classic fanout publish terminal and subscriber delivery. |
@@ -52,14 +52,13 @@ or queue length.
 
 ## 3. Common Backpressure And Judgment Method
 
-A backpressure scenario creates a receive-stop condition with public
-`ApplicationHwmBytes`, a deterministic payload size, and an
-application gate. An internal waiter or queue limit is neither
-configured nor read. Pending is confirmed by bounded-polling whether
+A backpressure scenario creates shared-permit capacity wait with public
+`MaxQueuedApplicationJobs` and a handler-start gate. It reads only public effective-max,
+reserved/queued, and waiter status. Pending is confirmed by bounded-polling whether
 the public awaitable the source endpoint started isn't yet terminal.
 If the needed pending state isn't created within the common setup
 timeout, it ends as a scenario setup failure, without growing the
-payload size, socket buffer, or repeat count during the run.
+payload size, socket buffer, repeat count, or queue cap during the run.
 
 Send terminal and remote execution are judged with separate evidence.
 Confirm the normal send terminal first, then confirm handler
@@ -97,25 +96,21 @@ while ready, with the target handler running once?
 - Detailed behavior: verifies normal send completion from
   [Error Model §4](../spec/32-framework-error-model.en.md#4-send-completion-and-failure).
 
-#### SA-E2E-02 Accept A Pending Send Once HWM Recovers
+#### SA-E2E-02 Accept A Pending Send Once Shared Job Capacity Recovers
 
 Priority: `P0`
 
-Even if the target's application handler waits and hits HWM, if the
-handler finishes before the deadline, the application must not call
+Even if all target shared permits are reserved, if a handler starts and returns one before
+the deadline, the application must not call
 the same operation again — the original awaitable must complete.
 
-**Verification question:** After HWM recovers, does the pending send
+**Verification question:** After shared job capacity recovers, does the pending send
 complete normally, processed at most once by the handler?
 
-- Start condition: Set public HWM to a small value, and keep a blocker
-  handler processing a deterministic payload larger than HWM at the
-  application gate. Send the blocker payload first to confirm handler
-  entry, then confirm public status's Application receive paused is
-  `true`.
-- Procedure: The source endpoint sends the next payload, larger than
-  HWM, and confirms the awaitable is pending. Open the blocker
-  handler gate to recover HWM.
+- Start condition: Set target `MaxQueuedApplicationJobs = 1` and close a handler-start
+  gate. Reserve the permit with a blocker job and confirm reserved/queued 1 in public status.
+- Procedure: The source sends the next marker and confirms its awaitable is pending. Open
+  the gate so the blocker handler starts and returns its permit.
 - Verification: The original send completes normally with no result
   payload, and the marker appears only once in handler evidence. The
   application doesn't call send again.
@@ -126,19 +121,17 @@ complete normally, processed at most once by the handler?
 
 Priority: `P0`
 
-Even while HWM has stopped remote application receiving, a bounded set
+Even during shared job capacity wait, a bounded set
 of sends must each have a terminal result within its own deadline.
 This scenario doesn't verify the internal pending waiter's size.
 
-**Verification question:** Do sends pending on HWM not stay
+**Verification question:** Do sends pending on shared capacity not stay
 indefinitely, each ending once in either success or
 `DeadlineExceeded`?
 
-- Start condition: Prepare two different target processes, each with a
-  public HWM, a deterministic payload larger than HWM, and a blocker
-  handler gate. Send a blocker payload to each target first, to
-  confirm handler entry and the Application receive paused state.
-  Set both targets' send deadline short and finite.
+- Start condition: Set `MaxQueuedApplicationJobs = 1` and a handler-start gate on two
+  target processes. Send a blocker job to each and confirm reserved/queued 1. Set both send
+  deadlines short and finite.
 - Procedure: Start a send with a different operation ID to each
   target. Open the first target's gate before its deadline, and keep
   the second target's gate closed through its deadline.
@@ -160,7 +153,7 @@ submit a completed operation.
 `DeadlineExceeded`, is the previous marker not delivered to the
 handler?
 
-- Start condition: Configure HWM and the handler gate so a send
+- Start condition: Configure `MaxQueuedApplicationJobs = 1` and the handler-start gate so a send
   becomes pending.
 - Procedure: Keep the gate closed until the public send deadline ends.
   After confirming the `DeadlineExceeded` terminal, open the gate and
@@ -276,8 +269,8 @@ timeout result when capacity does not recover?
 - Start condition: Configure RouteMesh and ClientServer as actual,
   separate topologies. In each topology, the success and timeout
   variants use different ChannelNames and target processes. Set a small
-  public HWM and a handler gate on each target, and use a blocker payload
-  to confirm handler entry, pending, and Application receive paused state.
+  `MaxQueuedApplicationJobs = 1` and a handler-start gate on each target, and use a blocker
+  job to confirm reserved/queued and pending state.
 - Procedure: For each topology, start a send to the success target and
   open its gate before the deadline. Keep the timeout target's gate
   closed through the deadline while a separate send is pending.
@@ -388,9 +381,8 @@ Actor relay use the same deadline and non-replay rule?
 
 - Start condition: Configure a local binding and a remote binding on
   fresh Sessions each. The pending variants place each Session on a
-  separate gateway process so they don't share the host-wide public
-  HWM boundary, and create the capacity wait with that gateway's HWM
-  and application gate.
+  separate gateway process so they don't share host job capacity, and create the capacity
+  wait with that gateway's `MaxQueuedApplicationJobs = 1` and handler-start gate.
 - Procedure: Run a normal send once for each of the four combinations,
   and a separate pending send that doesn't open capacity through the
   deadline.
@@ -529,7 +521,7 @@ remote handler is still waiting?
 - Transport attempt, send-ready signal, private waiter, snapshot pass,
   socket buffer, and raw frame aren't an E2E pass condition.
 - A pending state is created via the public awaitable's incomplete
-  state combined with public HWM/payload/application gate, and fails
+  state combined with public `MaxQueuedApplicationJobs` and handler-start gate, and fails
   if not reproduced within the setup timeout. It isn't retried by
   changing a runtime value.
 - Exactly one of normal terminal, timeout, cancellation, or Shutdown

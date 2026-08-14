@@ -1,19 +1,21 @@
 ---
-title: "9. Session과 Actor 연결"
+title: "48. Session과 Actor 연결"
 ---
 
-# 9. Session과 Actor 연결
+# 48. Session과 Actor 연결
 
-[내부 구조 목차](README.ko.md) · [이전: 8. 객체 종류와 활성화](08-object-lifecycle.ko.md) · [다음: 10. Liveness와 상태 공개](10-liveness-and-state.ko.md)
+> **문서 성격 — 공개 규범 스펙이 아닌 내부 설계 문서.** 이 장은 연결된 공개 계약을 만족시키는 구현 구조를 설명한다. Application이 관찰하는 동작을 추가하거나 변경하지 않는다.
+
+[내부 구조 목차](README.ko.md) · [이전: 47. 객체 종류와 활성화](47-internal-object-lifecycle.ko.md) · [다음: 49. Liveness와 상태 공개](49-internal-liveness-and-state.ko.md)
 
 > **이 장이 답하는 것** — 외부 client 연결 하나를 Actor에 연결하고, 연결을 교체하는 동안
 > message 유입을 어떻게 제어하는가.
 >
-> **계약 소유** — binding 계약은 [Session Actor dispatch](../spec/20-session-actor-dispatch.ko.md)가 소유한다.
+> **계약 소유** — binding 계약은 [Session Actor dispatch](20-session-actor-dispatch.ko.md)가 소유한다.
 > 이 장은 그 계약을 만족시키는 **구조**와, binding 교체에서 나타나는 실패를 다룬다.
 
 Relocation 전체 상태 전이와 Session이 관여하는 정확한 구간은
-[13. Relocation handoff 상태 전이](13-relocation-handoff.ko.md)가 소유한다. 이 장은 physical
+[52. Relocation handoff 상태 전이](52-internal-relocation-handoff.ko.md)가 소유한다. 이 장은 physical
 Session과 Actor binding의 일반 구조만 설명한다.
 
 외부 client 연결 하나를 Actor에 연결하는 구조다. 연결을 교체하는 동안에도 Actor owner가
@@ -24,15 +26,15 @@ current binding을 하나만 갖도록 보장해야 한다.
 **결정 — session의 실행 권한과 Actor의 실행 권한은 서로 다른 권한이다.**
 
 session callback을 실행하는 문맥이 Actor handler를 실행하지 않는다
-([Session Actor dispatch 「3. Inbound dispatch와 reply」](../spec/20-session-actor-dispatch.ko.md#3-inbound-dispatch와-reply)).
+([Session Actor dispatch 「3. Inbound dispatch와 reply」](20-session-actor-dispatch.ko.md#3-inbound-dispatch와-reply)).
 
 나누지 않으면 두 방향으로 문제가 생긴다. 한 client가 보낸 packet 처리가 그 Actor가
-속한 실행 단위인 [Spot](../spec/01-glossary.ko.md#spot) 전체를 잡거나, 반대로 Spot이 바쁠 때
+속한 실행 단위인 [Spot](01-glossary.ko.md#spot) 전체를 잡거나, 반대로 Spot이 바쁠 때
 그 연결의 keepalive 처리까지 밀린다.
 연결 수명 관리와 업무 처리는 빈도도 지연 요구도 다르다.
 
 **결정 — runtime이 쓰는 제어 record는 application queue에 넣지 않는다**
-([Session Actor dispatch 「4. Session이 Actor route를 보관하는 방법」](../spec/20-session-actor-dispatch.ko.md#4-session이-actor-route를-보관하는-방법)). 연결 유지
+([Session Actor dispatch 「4. Session이 Actor route를 보관하는 방법」](20-session-actor-dispatch.ko.md#4-session이-actor-route를-보관하는-방법)). 연결 유지
 신호가 업무 message와 같은 queue에서 기다리면, 업무가 밀릴 때 연결이 끊긴 것으로 오판할 수
 있다.
 
@@ -42,7 +44,7 @@ Spot, session, Actor 전달과 두 도메인 mailbox마다 직렬 실행 원시 
 admission과 ready set을 관리하는 규칙도 각 타입으로 흩어진다.
 
 **결정 — 순서, admission과 ready set을 관리하는 실행 engine은 하나만 둔다.** 타입을 따로
-만들면 [7. 수신과 dispatch 루프](07-dispatch-loop.ko.md)의 한도 처리와 ready set 관리를
+만들면 [46. 수신과 dispatch 루프](46-internal-dispatch-loop.ko.md)의 한도 처리와 ready set 관리를
 각 타입에서 다시 구현해야 한다. 그러면 같은 문제를 여러 곳에서 고쳐야 한다.
 
 **결정 — 적용 위치별 차이는 여러 boolean 설정이 아니라 lane 정책 타입으로 표현한다.**
@@ -70,7 +72,7 @@ admission과 ready set을 관리하는 규칙도 각 타입으로 흩어진다.
 generation의 ingress를 거부하면 message의 목적지는 새 session 하나로 정해진다.
 
 **결정 — 새 연결을 즉시 확정하고 이전 exact session에는 one-way로 교체를 통지한다**
-([Session Actor dispatch 「4. Session이 Actor route를 보관하는 방법」](../spec/20-session-actor-dispatch.ko.md#4-session이-actor-route를-보관하는-방법)).
+([Session Actor dispatch 「4. Session이 Actor route를 보관하는 방법」](20-session-actor-dispatch.ko.md#4-session이-actor-route를-보관하는-방법)).
 
 ```mermaid
 sequenceDiagram
@@ -107,7 +109,7 @@ identity가 여전히 일치하는지 다시 확인한 뒤 connection을 닫는�
 실패해도 새 bind는 rollback하지 않는다.
 
 **결정 — 연결 관계는 값 하나가 아니라 `(연결 식별자, 교체 순번)` 쌍으로 식별한다**
-([Session Actor dispatch 「4. Session이 Actor route를 보관하는 방법」](../spec/20-session-actor-dispatch.ko.md#4-session이-actor-route를-보관하는-방법)). 교체 중에
+([Session Actor dispatch 「4. Session이 Actor route를 보관하는 방법」](20-session-actor-dispatch.ko.md#4-session이-actor-route를-보관하는-방법)). 교체 중에
 이전 연결로 보낸 응답이 늦게 도착할 수 있고, 순번을 비교해야 그 응답이 지금 연결에
 대한 것인지 판단할 수 있다.
 
@@ -121,7 +123,7 @@ identity가 여전히 일치하는지 다시 확인한 뒤 connection을 닫는�
 | Actor가 다른 node로 이동 | **유지한다** | 없다. runtime이 경로만 갱신한다 |
 
 재접속은 새 session을 만들고, 이전 연결의 응답과 갱신은 새 session에 적용하지 않는다
-([장애 대응과 failover 범위 「7. Store 장애」](../spec/31-failure-failover-policy.ko.md#7-store-장애)).
+([장애 대응과 failover 범위 「7. Store 장애」](31-failure-failover-policy.ko.md#7-store-장애)).
 재접속 시도 자체는 client 라이브러리의 몫이다.
 
 **결정 — 이전 연결 관계를 새 session으로 옮기려 시도하지 않는다.** 이전 연결 정보를
@@ -129,7 +131,7 @@ identity가 여전히 일치하는지 다시 확인한 뒤 connection을 닫는�
 정식 계약과도 어긋난다.
 
 이동한 Actor에 연결을 유지하려면 옛 주소로 온 message를 새 owner로 넘기는 경로를
-유지해야 한다([5. 이동 중 연속성](05-relocation-continuity.ko.md)). 그 경로가 없으면
+유지해야 한다([44. 이동 중 연속성](44-internal-relocation-continuity.ko.md)). 그 경로가 없으면
 이동 자체는 성공해도 session이 조용히 끊긴다.
 
 ### Relocation seal과 이전 binding 거부의 구분
@@ -167,9 +169,11 @@ transport, deadline과 cancellation 제한은 그대로 적용한다.
 
 Target만 Location Store owner CAS를 실행한다. Cutover가 1,000 ms 안에 오지 않으면
 `cutover_timeout` Warning을 기록하고 같은 CAS 절차를 시작한다. CAS가 성공하면 target queue를
-열고 target runtime이 command 44를 Session owner에게 `[send]`로 전달한다. Aggregate는 route와
+saved work, boundary 전 relay와 나머지 temporary work 순서로 병합하고 regular route로 전환한다.
+필요한 lifecycle callback 뒤 dispatch를 열고 target runtime이 command 44 commit을 Session owner에게
+`[send]`로 전달한다. Aggregate는 route와
 current `ActorRef` snapshot을 target으로 바꾸고, 보관한 Session message를 새 route로 제출한 뒤
-seal을 해제한다. Command 44에 대한 reply나 command 45는 사용하지 않는다.
+seal을 해제한다. Command 44에 대한 reply는 없고 reserved command 45를 보내거나 accept하지 않는다.
 
 Session owner는 seal 설치 시점부터 설정 가능한 `SessionRelocationSealTimeout`을 적용한다.
 기본값은 3,000 ms다. 그 안에 exact command 44가 오지 않으면 physical Session을 닫고 binding,
@@ -189,7 +193,7 @@ sequenceDiagram
     S-->>C: [reply] command 43 · exact binding seal 설치 완료
     A->>B: [request] temporary queue 설치·Restore 후 dispatch 없이 relay 준비
     B-->>A: [reply] temporary queue·Restore 준비 완료 · source owner 유지
-    A->>B: [send/request relay] cached queue와 ingress hold
+    A->>B: [send/request relay] capture 뒤 ingress hold
     alt cutover arrives within 1,000 ms
         A->>B: [send] cutover · boundary 전 relay 완료
     else cutover timeout
@@ -197,7 +201,7 @@ sequenceDiagram
     end
     B->>L: [request] source fence가 같으면 owner를 target으로 CAS
     L-->>B: [reply] target owner CAS 결과
-    B->>B: [local] queue 병합과 dispatch 개방
+    B->>B: [local] queue 병합 · regular route 전환 · lifecycle 완료 · dispatch 개방
     B->>S: [send] command 44 · exact target route 적용·held 제출·seal 해제
     alt command 44 arrives within SessionRelocationSealTimeout
         S->>S: [local] route 전환 · held message 제출 · seal 해제
@@ -208,8 +212,10 @@ sequenceDiagram
 
 CAS 성공 뒤 도착한 late 또는 duplicate cutover는 `late_cutover` Warning만 기록하고 무시한다.
 Late 또는 duplicate command 44도 Warning만 기록하고 state를 다시 변경하지 않는다. Target이
-cutover 전에 명시적으로 실패하면 matching seal만 해제하고 보관한 message를 source route로
-제출한다. Cutover 뒤 failure는 source route를 다시 열지 않고 seal timeout으로 정리한다.
+relay-ready reply가 accepted 상태가 되기 전에 명시적으로 실패하면 source coordinator가 durable
+abort와 source queue 복원 뒤 command 44 abort를 one-way로 보낸다. Aggregate는 matching seal만
+해제하고 보관한 message를 source route로 제출하며 reply를 보내지 않는다. Relay-ready 뒤 failure와
+cutover submit 실패는 source route를 다시 열지 않고 seal timeout으로 정리한다.
 
 이 구조는 Session binding 검증을 한 곳에 모으지만 relocation 전체를 Session에 맡기지 않는다.
 Actor·Spot 준비, server 간 relay, cutover `[send]`와 Location Store CAS는 공통 relocation runtime의
@@ -228,16 +234,21 @@ Actor·Spot 준비, server 간 relay, cutover `[send]`와 Location Store CAS는 
 - 이전 연결로 늦게 도착한 응답이 교체 순번 비교로 걸러진다.
 - client가 재접속하면 이전 연결 관계가 복원되지 않는다.
 - Actor가 다른 node로 이동한 경우에는 연결을 다시 만들지 않고 경로만 갱신된다.
-- Command 42와 43이 current binding의 seal 설치 결과만 전달한다.
+- Command 42와 43이 current binding의 seal 설치 결과만 전달하며 sequence나 high-water를 전달하지 않는다.
 - `SessionBindingAggregate` 한 곳에서 current Session과 binding route를 검증하며 다른 구성
   요소가 Store나 local mirror로 재검증하지 않는다.
 - Target만 Restore 뒤 cutover를 받거나 1,000 ms가 지나면 Location Store owner CAS를 수행한다.
 - CAS 성공 뒤 target이 command 44를 `[send]`로 전달하면 Session owner가 route를 바꾸고 held
   Session message를 target route에 제출한 다음 seal을 해제한다.
+- Relay-ready reply가 accepted 상태가 되기 전 abort는 source가 command 44로 one-way 전송하며 matching seal만 해제하고 reply를 만들지 않는다.
 - `SessionRelocationSealTimeout`의 기본값은 3,000 ms이며, timeout이면 physical Session과 관련
   state를 정리한다.
 - Late 또는 duplicate cutover와 command 44는 Warning만 남기고 state를 다시 변경하지 않는다.
 
+## Session control permit
+
+Session application과 ordinary control은 같은 shared permit을 쓰고 terminal reply/error completion만 우회한다. 정확한 acquire/release는 [수신과 dispatch loop](46-internal-dispatch-loop.ko.md), retained payload는 [Payload 소유권](50-internal-message-ownership.ko.md)을 따른다.
+
 ---
 
-[내부 구조 목차](README.ko.md) · [이전: 8. 객체 종류와 활성화](08-object-lifecycle.ko.md) · [다음: 10. Liveness와 상태 공개](10-liveness-and-state.ko.md)
+[내부 구조 목차](README.ko.md) · [이전: 47. 객체 종류와 활성화](47-internal-object-lifecycle.ko.md) · [다음: 49. Liveness와 상태 공개](49-internal-liveness-and-state.ko.md)

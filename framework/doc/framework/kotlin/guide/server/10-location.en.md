@@ -108,16 +108,13 @@ and manual connection on the same MeshNode.
 
 ## 3. Location Options
 
-`configureLocations()` sets the lease, route cache, and relocation execution ceilings.
+`configureLocations()` sets the lease, route-cache, and message-follow windows.
 
 ```kotlin
 val location = options.configureLocations()
 location.setOwnerLeaseRenewInterval(Duration.ofSeconds(5))
 location.setOwnerLeaseTtl(Duration.ofSeconds(15))
 location.setMessageFollowDuration(Duration.ofSeconds(30))
-location.setMaxActiveOutboundRelocations(64)
-location.setMaxActiveInboundRelocations(64)
-location.setMaxRelocationPayloadInFlightBytes(256L * 1024 * 1024)
 ```
 
 | Option | Default | Meaning |
@@ -130,9 +127,12 @@ location.setMaxRelocationPayloadInFlightBytes(256L * 1024 * 1024)
 | `storeFailureGrace` | 30s | How long the last route decision is kept during a Store outage |
 | `routeCacheMaxAge` | 15s | The max time before a cached route is re-checked |
 | `messageFollowDuration` | 30s | How long the previous owner relays messages to the new owner before the move |
-| `maxActiveOutboundRelocations` | 64 | The ceiling on relocation units a process sends out concurrently |
-| `maxActiveInboundRelocations` | 64 | The ceiling on relocation units a process restores concurrently |
-| `maxRelocationPayloadInFlightBytes` | 256 MiB | The ceiling on encoded payload across the whole process |
+
+Relocation has no separate participant, record, concurrency, or in-flight-byte capacity
+setting. Target staging uses the host's shared Application Job Queue reservation and runs a
+backlog larger than the live-job limit progressively. Core memory accounting, negotiated
+frame size, and Store limits still apply; see
+[Relocation Flow §5.3](../../../common/spec/28-relocation-flow.en.md#53-no-relocation-specific-capacity-limit).
 
 **The four lease values are tied together.** Breaking the following relationship is a
 startup error. Look at all four together when changing any one value.

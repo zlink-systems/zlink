@@ -35,12 +35,8 @@ public sealed class ZLinkLocationOptions
         = TimeSpan.FromSeconds(15);
     public TimeSpan MessageFollowDuration { get; set; }
         = TimeSpan.FromSeconds(30);
-    public int MaxActiveOutboundRelocations { get; set; } = 64;
-    public int MaxActiveInboundRelocations { get; set; } = 64;
-    public int MaxConcurrentRelocationCaptures { get; set; } = 8;
-    public int MaxConcurrentRelocationRestores { get; set; } = 8;
-    public long MaxRelocationPayloadInFlightBytes { get; set; }
-        = 268_435_456;
+    public TimeSpan SessionRelocationSealTimeout { get; set; }
+        = TimeSpan.FromSeconds(3);
 }
 ```
 
@@ -62,11 +58,9 @@ OwnerLeaseRenewInterval + OwnerLeaseRenewTimeout
 are positive, cache age must be at least 5 seconds smaller than the
 Message Follow duration. 0 turns that feature off.
 
-All five relocation limit options are positive. The default cap for
-active outbound/inbound units is 64 each, the default cap for
-Capture/Restore callbacks is 8 each, and the default cap for
-process-wide encoded payload in-flight is 268,435,456 bytes. A runtime
-change only applies to new relocation admission.
+`SessionRelocationSealTimeout` is a startup-only positive duration with a three-second
+default. Zero, negative, infinite, or a value not representable as finite milliseconds is
+a configuration error before socket bind.
 
 ## 3. Readiness And Operational Queries
 

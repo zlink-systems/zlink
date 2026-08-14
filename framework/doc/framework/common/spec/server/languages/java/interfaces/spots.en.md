@@ -232,9 +232,11 @@ once.
 
 The User/Instance Spot factory's `preserveStateWith` registration takes a
 `ZLinkSpotRelocationAdapter<TSpot>` class matching the factory type. The
-adapter captures/restores application state as an opaque `byte[]` of at
-most 64 MiB, and doesn't use `TState`, `stateContractId`, state class, or
-`ZLinkMessage`. The framework immediately copies the capture result. The
+adapter captures/restores application state as an opaque `byte[]` with no
+relocation-adapter-specific size cap. The framework performs any chunking
+required by the registered Relocation Store's ordinary blob and
+whole-payload limits. The adapter doesn't use `TState`, `stateContractId`,
+state class, or `ZLinkMessage`. The framework immediately copies the capture result. The
 capture array is still owned by the adapter — changing it after
 completion doesn't change the stored payload. Restore is passed a fresh
 defensive copy per call, and the adapter doesn't keep the array after the
@@ -281,13 +283,13 @@ such as Redis or a database. The target's runtime-private shell uses the
 same public Spot ID and object generation, and isn't exposed to public
 lookup before the authority switch. A stale source route is relayed while
 preserving operation identity, generation, deadline, correlation, and
-reply route. The 1-second window from Actor queue seal to target
-admission is an operational goal — exceeding it doesn't cancel or roll
+reply route. The source-local 1-second window from Actor queue seal to the one-way
+cutover submit's success or failure terminal is an operational goal — exceeding it doesn't cancel or roll
 back the relocation.
 
 `relocationReady().defer()` is only valid on a Spot turn that registered
 `SPOT_WIDE` and `APPLICATION_SIGNALED` together. The framework delivers
-`CONTINUED` from the source if it didn't move or aborted before commit,
+`CONTINUED` from the source if it didn't move or aborted before relay-ready was accepted,
 and `RELOCATED` from the target if it moved, to
 `onRelocationReadyCompleted(...)`'s completion. The default method is a
 no-op. Held application messages and timers aren't run before the

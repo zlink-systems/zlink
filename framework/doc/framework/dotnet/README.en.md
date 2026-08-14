@@ -4,7 +4,7 @@
 
 [Guide Home](../index.en.md) | [Common Spec](../common/README.en.md)
 
-[Common Spec](../common/README.en.md) | [Async Execution](../common/spec/05-async-execution-policy.en.md) | [Exact Interface](../common/spec/server/languages/dotnet/interfaces/README.en.md) | [Stream Connector](../common/spec/stream-connector/languages/dotnet/03-stream-connector.en.md) | [Unity Guide](guide/stream-connector/02-unity.en.md) | [Common Internals](../common/internals/README.en.md) | [Regression Matrix](internals/regression-test-matrix.en.md) | [Backend Policy](internals/backend-dependency-policy.en.md) | [Runtime Integration](internals/runtime-integration-and-ownership.en.md)
+[Common Spec](../common/README.en.md) | [Async Execution](../common/spec/05-async-execution-policy.en.md) | [Exact Interface](../common/spec/server/languages/dotnet/interfaces/README.en.md) | [Stream Connector](../common/spec/stream-connector/languages/dotnet/03-stream-connector.en.md) | [Unity Guide](guide/stream-connector/02-unity.en.md) | [Common Internals](../common/spec/README.en.md) | [Regression Matrix](internals/regression-test-matrix.en.md) | [Backend Policy](internals/backend-dependency-policy.en.md) | [Runtime Integration](internals/runtime-integration-and-ownership.en.md)
 
 # ZLink Framework for .NET
 
@@ -183,7 +183,7 @@ follow each feature's spec.
 
 | Document | Scope |
 |------|------------|
-| [Common Internals](../common/internals/README.en.md) | Runtime architecture decisions shared across all four languages |
+| [Common Internals](../common/spec/README.en.md) | Runtime architecture decisions shared across all four languages |
 | [regression-test-matrix.ko.md](internals/regression-test-matrix.en.md) | The regression test items that must always be kept, CI tiers, release gate |
 | [backend-dependency-policy.ko.md](internals/backend-dependency-policy.en.md) | Backend dependency relationships and the boundary for replacing low-level libraries |
 | [runtime-integration-and-ownership.en.md](internals/runtime-integration-and-ownership.en.md) | Binding public API selection, adapter responsibility, and receive-storage ownership |

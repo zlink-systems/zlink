@@ -50,7 +50,7 @@ while running, use `app_t::set_message_flow_mode` in the host-lifecycle category
 ## `framework_runtime_t::status` / `observe` (read/observe)
 
 Queries or observes the host-wide status (lifecycle state, relocation/termination results,
-inbound dispatch backpressure).
+Core HWM accounting, and Application Job Queue backpressure).
 
 ```cpp
 zlink::framework::framework_runtime_status_t status = framework_runtime.status();
@@ -59,7 +59,7 @@ bool can_accept_new_operations = status.is_ready && status.accepting_work;
 auto observation = framework_runtime.observe(
   /*capacity=*/64,
   [](const auto &observed) {
-      // check observed.status.inbound_dispatch, observed.status.state
+      // check observed.status.capacity.application_job_queue and observed.status.state
   });
 ```
 
@@ -68,10 +68,12 @@ auto observation = framework_runtime.observe(
 **Completion result.** `status()` is a synchronous call that returns a value immediately.
 `observe(...)` delivers `observed_status_t<framework_runtime_status_t>` to the callback, and the
 `loss` field tells you whether observations were lost.
-`framework_runtime_status_t::inbound_dispatch` (`inbound_dispatch_status_t`) shows the
-application HWM usage and backpressure status.
+`framework_runtime_status_t::capacity` (`host_capacity_status_t`) contains the independent
+`core_hwm_status_t` and `application_job_queue_status_t` snapshots. Correlate accounted bytes with
+`permits_in_use`, `capacity_waiters`, wait count, and wait duration rather than treating them as
+one queue limit.
 
-**When to use.** Use this to diagnose the host's overall lifecycle state or inbound backpressure.
+**When to use.** Use this to diagnose the host's overall lifecycle state or capacity backpressure.
 Use the status-query entry in the topology-discovery category for a specific
 MeshName/ChannelName's availability.
 

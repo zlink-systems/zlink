@@ -493,10 +493,11 @@ route keep pointing at that Actor's current owner. A per-Actor
 source→target Message Follow route is installed each time an Actor moves.
 
 After a relocation unit is sealed, ingress arriving on the source route is kept in the
-relocation hold, and no application handler runs for it. If the operation aborts before
-the owner commit, the ingress returns to the source queue in arrival order. After the
-commit, it is relayed to the target through the Message Follow route while preserving
-the operation ID, generation, and reply route.
+relocation hold, and no application handler runs for it. If the operation explicitly
+aborts before relay-ready is accepted, the ingress returns to the source queue in arrival
+order. Afterward, source isn't restored regardless of cutover-submit result; ingress is
+relayed to the target through Message Follow while preserving the operation ID,
+generation, and reply route.
 
 A `Relocating` unit that is waiting for a permit has not been sealed. Its existing
 [owner route](01-glossary.en.md#owner-route) therefore continues accepting application
@@ -565,9 +566,10 @@ create a temporary public SpotId or change SpotId after creation.
 
 The source seal, durable capture, target reservation/factory/restore,
 authority commit, and admission order are set by
-[23 Spot And Actor Membership](15-spot-actor.en.md). A failure before
-commit keeps the source; after commit, the procedure only continues on the
-same target process selection finished on. If the target process
+[23 Spot And Actor Membership](15-spot-actor.en.md). Only an explicit failure before
+relay-ready is accepted keeps the source. Afterward, source isn't restored regardless
+of cutover-submit result, and the procedure continues only on the same target process
+selection finished on. If the target process
 terminates, a different target isn't selected and relocation isn't
 automatically resumed. Not-yet-executed messages at seal time, the
 accepted journal, and timer logical registration/pending tick are included

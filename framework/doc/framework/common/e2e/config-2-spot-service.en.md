@@ -553,9 +553,9 @@ be rolled back or the same publish auto-re-run.
 **Verification question:** When a blocked target and a ready target coexist, does only the ready
 target process the marker exactly once?
 
-- Starting condition: One remote target prepares a handler gate and a deterministic payload larger
-  than the public HWM. A blocker payload is sent first to confirm handler entry and an Application
-  receive-paused state. The other target is ready.
+- Starting condition: One remote target uses `MaxQueuedApplicationJobs = 1` and a handler-start
+  gate. A blocker job reserves its permit and public status shows reserved/queued 1. The other
+  target is ready.
 - Procedure: A marker is published once.
 - Verification: The public terminal ends in a formal meaning with no per-target result, and the ready
   target processes the marker exactly once. Private snapshots/attempt counts are not read.
@@ -757,13 +757,12 @@ Priority: `P1`
 
 One Session's slow consumer must not block another Session's send/reply.
 
-**Verification question:** Do B's request and push complete even while Session A is pending on the
-public HWM?
+**Verification question:** Do B's request and push complete while Session A is pending on
+shared job queue capacity?
 
-- Starting condition: A and B are placed on separate Session gateway processes. Only A's gateway uses
-  a small public `ApplicationHwmBytes` and an application receive gate, while B's gateway operates
-  normally with a separate HWM boundary. A's client receive is blocked with the gate, and A's public
-  status confirms receive-paused.
+- Starting condition: A and B are on separate Session gateway processes. Only A uses
+  `MaxQueuedApplicationJobs = 1` and a handler-start gate; B uses independent default
+  capacity. Block A's first callback entry and confirm reserved/queued 1 in public status.
 - Procedure: Sends are started to A, confirming the source awaitable is pending, then B's
   request/push are run. A's gate is released.
 - Verification: B's results complete before A's gate is released. A's operations each have exactly

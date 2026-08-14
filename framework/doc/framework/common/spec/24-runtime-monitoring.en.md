@@ -115,24 +115,27 @@ the current host accepts new application operations. Don't reinterpret the two v
 as separate conditions. The exact meaning of relocation option, deadline, and result is
 set by [Complete Host Relocation Flow](30-host-relocation-flow.en.md).
 
-Host status's inbound dispatch item shows how much application payload the framework
-has received and is currently processing. The value is read from a running total the
-dispatch accounting keeps, not built by walking the queue on every query.
+Host status's capacity item coherently reads the Core HWM snapshot and application
+job queue snapshot from one measurement epoch. It does not walk queues to build a snapshot.
 
-| Value | Meaning |
-|---|---|
-| Applied HWM bytes | The [Application HWM](01-glossary.en.md#application-hwm) fixed at startup. `0` means no limit. |
-| Pending payload bytes | The sum of payload bytes waiting in the queue and being handled. |
-| Queued payload bytes | Payload bytes whose handler hasn't started yet. |
-| Active payload bytes | Payload bytes whose handler is currently running. |
-| Application receive paused | Indicates whether new application receive is stopped due to HWM. |
-| Pending completion sends | The number of requests waiting for or having secured a reply permit. |
-| Completion send limit | The cap on completion send permits the host can hold concurrently. |
+The Core HWM snapshot includes configured memory limit, manual budget, and profile;
+effective budget; total applied HWM; core-queue, application, current, provisional, and peak
+accounted bytes; completion current, peak, and pending; total messaging, monitor-queue
+applied/accounted, and total-instance applied/accounted bytes; blocked ratio; active
+ordinary, completion, send, and receive queue counts; outstanding application leases;
+retired queues; and deferred origin credit. It projects the Core runtime snapshot unchanged; the framework
+does not recompute it.
 
-`PendingPayloadBytes = QueuedPayloadBytes + ActivePayloadBytes` must hold. This status
-doesn't include payload, Actor ID, Spot ID, message type, or a per-owner list. A
-per-owner top-N isn't provided as part of the public contract. A per-owner label or
-event isn't added to regular status updates or the message hot path.
+The application job queue snapshot includes configured profile and manual maximum,
+effective processor count and effective maximum, reserved supply permits, queued
+application jobs, permits in use and peak, capacity waiters, capacity wait count, and
+capacity wait duration. Reset preserves configuration and current gauges and advances the
+measurement epoch. It rebases peak to current at the same boundary and clears epoch count
+and duration. A concurrent event belongs to exactly one epoch and peak cannot be below
+current.
+
+This status does not include payload, Actor ID, Spot ID, session ID, RID, endpoint, message
+type, or a per-owner list. A per-owner top-N is not part of the public contract.
 
 ### 2.2 Topology State
 
@@ -363,13 +366,15 @@ Publisher state is recorded as `excluded_draining`, `excluded_stale`, `reconnect
 `disconnected`. A log is a judgment at the time it was recorded and isn't the basis for
 current location or state. Current state is read from fanout status.
 
-If a relocation unit's time from source admission seal to target admission-open ACK
+If a relocation unit's time from source admission seal to the one-way cutover submit's
+success or failure terminal
 exceeds 1 second, `zlink.runtime.relocation.changed` records `unit_kind`, and where
 needed, `execution_mode`, `interruption_target_exceeded=true`, and the actual
 duration. `unit_kind` is one of `actor`, `instance_spot`, `user_spot`. This is an
 operational warning and doesn't change the relocation outcome or recovery judgment.
 Actor ID and Spot ID aren't put in structured logs and are only checked via
-limited-scope trace.
+limited-scope trace. Target admission opening isn't acknowledged to the source and is
+observed through target-local status and tracing.
 
 ## 6. Startup And Failure
 

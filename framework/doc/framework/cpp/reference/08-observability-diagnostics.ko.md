@@ -45,8 +45,8 @@ host-lifecycle category의 `app_t::set_message_flow_mode`를 쓴다.
 
 ## `framework_runtime_t::status` / `observe` (읽기·관찰)
 
-Host 전체 상태(lifecycle state, relocation·termination 결과, inbound dispatch backpressure)를
-조회하거나 관찰한다.
+Host 전체 상태(lifecycle state, relocation·termination 결과, Core HWM accounting과
+Application Job Queue backpressure)를 조회하거나 관찰한다.
 
 ```cpp
 zlink::framework::framework_runtime_status_t status = framework_runtime.status();
@@ -55,7 +55,7 @@ bool can_accept_new_operations = status.is_ready && status.accepting_work;
 auto observation = framework_runtime.observe(
   /*capacity=*/64,
   [](const auto &observed) {
-      // observed.status.inbound_dispatch, observed.status.state를 확인한다
+      // observed.status.capacity.application_job_queue, observed.status.state를 확인한다
   });
 ```
 
@@ -63,10 +63,11 @@ auto observation = framework_runtime.observe(
 
 **완료 결과.** `status()`는 즉시 값을 반환하는 동기 호출이다. `observe(...)`는
 `observed_status_t<framework_runtime_status_t>`를 콜백으로 전달하며 `loss` field로 관찰 유실
-여부를 판단한다. `framework_runtime_status_t::inbound_dispatch`(`inbound_dispatch_status_t`)로
-application HWM 사용량과 backpressure 상태를 확인한다.
+여부를 판단한다. `framework_runtime_status_t::capacity`(`host_capacity_status_t`)에는 서로 독립적인
+`core_hwm_status_t`와 `application_job_queue_status_t` snapshot이 들어 있다. 하나의 queue limit으로
+취급하지 말고 accounted byte와 `permits_in_use`, `capacity_waiters`, wait count·duration을 연관 지어 본다.
 
-**선택 기준.** Host 전체의 lifecycle 상태나 inbound backpressure를 진단할 때 쓴다. 특정
+**선택 기준.** Host 전체의 lifecycle 상태나 capacity backpressure를 진단할 때 쓴다. 특정
 MeshName·ChannelName의 가용성은 topology-discovery category의 상태 조회 항목을 쓴다.
 
 ---

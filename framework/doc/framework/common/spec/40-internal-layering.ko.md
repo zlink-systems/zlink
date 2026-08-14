@@ -1,15 +1,17 @@
 ---
-title: "1. 계층 경계와 식별자"
+title: "40. 계층 경계와 식별자"
 ---
 
-# 1. 계층 경계와 식별자
+# 40. 계층 경계와 식별자
 
-[내부 구조 목차](README.ko.md) · [다음: 2. Spot·Actor 실행 직렬화 — queue와 execution gate를 나눈다](02-serialization.ko.md)
+> **문서 성격 — 공개 규범 스펙이 아닌 내부 설계 문서.** 이 장은 연결된 공개 계약을 만족시키는 구현 구조를 설명한다. Application이 관찰하는 동작을 추가하거나 변경하지 않는다.
+
+[내부 구조 목차](README.ko.md) · [다음: 41. Spot·Actor 실행 직렬화 — queue와 execution gate를 나눈다](41-internal-serialization.ko.md)
 
 > **이 장이 답하는 것** — runtime을 어떤 덩어리로 나누고, 어떤 값을 하나로 합치면 안 되는가.
 >
-> **계약 소유** — 종료 절차와 순서는 [Host relocation 전체 흐름](../spec/30-host-relocation-flow.ko.md)이,
-> 식별자의 형식과 수명은 [용어집](../spec/01-glossary.ko.md)이 소유한다.
+> **계약 소유** — 종료 절차와 순서는 [Host relocation 전체 흐름](30-host-relocation-flow.ko.md)이,
+> 식별자의 형식과 수명은 [용어집](01-glossary.ko.md)이 소유한다.
 > 이 장은 그 계약을 만족시키는 **구조**와, 경계를 어겼을 때 나타나는 실패를 다룬다.
 
 이 장은 runtime의 책임을 나누는 경계와, 수명이 다른 식별자를 분리하는 기준을 설명한다.
@@ -142,7 +144,7 @@ API만 사용하고, 호출 전달 wrapper를 새로 만들지 않으며, 소유
 ## 2. 종료를 topology마다 두지 않는다
 
 **결정.** process에 host runtime 하나를 두고, node 여럿이 이름으로 서로를 찾는
-[RouteMesh](../spec/01-glossary.ko.md#routemesh)·ClientServer·fanout·STREAM 같은
+[RouteMesh](01-glossary.ko.md#routemesh)·ClientServer·fanout·STREAM 같은
 topology별 runtime은 그 아래에 둔다. **종료 순서는 host가 소유하고, 각 resource를 닫는
 방법은 그것을 만든 topology가 소유한다.**
 
@@ -153,7 +155,7 @@ close`)를 정해진 순서로 부르고, 각 topology는 그 부름에 자기 r
 불러도 결과가 같아야 한다.
 
 **왜.** topology가 각자 닫으면 닫는 순서가 실행할 때마다 달라진다. STREAM session이 아직
-Actor reference를 유지하는데 Actor가 속한 실행 단위인 [Spot](../spec/01-glossary.ko.md#spot) 쪽이
+Actor reference를 유지하는데 Actor가 속한 실행 단위인 [Spot](01-glossary.ko.md#spot) 쪽이
 먼저 닫히면, 그 상황을 재현할 수도 없고 어느 쪽이
 잘못인지 판정할 수도 없다.
 
@@ -193,33 +195,33 @@ topology resource를 개별적으로 닫는 호출이 host 종료 절차를 건�
 **결정 — 같은 종류의 요청이 겹치면 먼저 확정된 쪽에 합류하고, 조건이 다르면 거절한다.**
 mode나 대상 버전이 같으면 진행 중인 절차에 합류한다. 다르면 기다리지 않고
 `Blocked/OperationInProgress`로 끝낸다
-([Host relocation 전체 흐름 「6. Concurrent 호출과 cancellation」](../spec/30-host-relocation-flow.ko.md#6-concurrent-호출과-cancellation)). 같은 종류의
+([Host relocation 전체 흐름 「6. Concurrent 호출과 cancellation」](30-host-relocation-flow.ko.md#6-concurrent-호출과-cancellation)). 같은 종류의
 두 절차가 서로 다른 조건으로 겹쳐 돌면 어느 쪽 결과가 최종인지 정할 수 없다.
 
 **Relocate와 Shutdown이 겹치는 경우는 다르다.** 이때는 거절이 아니라 shutdown이 이기고,
 relocation을 기다리던 쪽이 `Blocked/ShutdownRequested`로 끝난다
-([Host relocation 전체 흐름 「11. Shutdown과 Relocate의 경쟁」](../spec/30-host-relocation-flow.ko.md#11-shutdown과-relocate의-경쟁)). Shutdown은
+([Host relocation 전체 흐름 「11. Shutdown과 Relocate의 경쟁」](30-host-relocation-flow.ko.md#11-shutdown과-relocate의-경쟁)). Shutdown은
 어차피 이 host의 모든 것을 정리하므로 relocation을 마칠 이유가 없다.
 
 **결정 — 이전 후 종료는 상태를 바꾸기 전에 host 전체를 한 번에 검사한다**
-([Host relocation 전체 흐름 「4. Target을 선택하기 전에 확인하는 조건」](../spec/30-host-relocation-flow.ko.md#4-target을-선택하기-전에-확인하는-조건)). 이 확인 전에
+([Host relocation 전체 흐름 「4. Target을 선택하기 전에 확인하는 조건」](30-host-relocation-flow.ko.md#4-target을-선택하기-전에-확인하는-조건)). 이 확인 전에
 새 작업을 막으면, 옮기지 못한다는 사실을 알았을 때 그 node는 이유 없이 멈춰 있던 셈이
-된다([5. 이동 중 message 연속성 「1. 네 개의 경계」](05-relocation-continuity.ko.md#1-네-개의-경계)).
+된다([44. 이동 중 message 연속성 「1. 네 개의 경계」](44-internal-relocation-continuity.ko.md#1-네-개의-경계)).
 
 받을 node가 당장 없다고 바로 거절하지는 않는다. **정해진 시간까지 대상 정보가 퍼지기를
 기다린 뒤** `Blocked/TargetUnavailable`로 끝낸다
-([Host relocation 전체 흐름 「5.1 Target이 아직 없을 때」](../spec/30-host-relocation-flow.ko.md#51-target이-아직-없을-때)).
+([Host relocation 전체 흐름 「5.1 Target이 아직 없을 때」](30-host-relocation-flow.ko.md#51-target이-아직-없을-때)).
 거절 결과는 저장하지 않으므로 다시 요청하면 처음부터 다시 검사한다
-([Host relocation 전체 흐름 「6. Concurrent 호출과 cancellation」](../spec/30-host-relocation-flow.ko.md#6-concurrent-호출과-cancellation)).
+([Host relocation 전체 흐름 「6. Concurrent 호출과 cancellation」](30-host-relocation-flow.ko.md#6-concurrent-호출과-cancellation)).
 
 옮길 대상이 **하나도 없으면** 받을 node 없이도 성공으로 끝난다. 이때도 host 상태 전이와
 새 작업 차단은 다른 이전과 같다
-([Host relocation 전체 흐름 「5.1 Target이 아직 없을 때」](../spec/30-host-relocation-flow.ko.md#51-target이-아직-없을-때)).
+([Host relocation 전체 흐름 「5.1 Target이 아직 없을 때」](30-host-relocation-flow.ko.md#51-target이-아직-없을-때)).
 
 **결정 — 확정 전후로 실패 처리가 다르지만, 어느 쪽도 host를 종료시키지 않는다.** 첫
 이전이 확정되기 전의 실패는 원래 상태로 복귀한다. 확정된 뒤의 실패는 **이미 옮긴 것은
 받은 node에 남기고**, 아직 옮기지 못한 작업만 다시 처리한 뒤 **`Serving`으로 돌아간다**
-([Host relocation 전체 흐름 「10. Relocate 완료와 실패」](../spec/30-host-relocation-flow.ko.md#10-relocate-완료와-실패)).
+([Host relocation 전체 흐름 「10. Relocate 완료와 실패」](30-host-relocation-flow.ko.md#10-relocate-완료와-실패)).
 종료는 caller가 별도로 요청해야 일어난다.
 
 **결정 — 관측 구독자는 종료 절차의 진행을 막지 못한다.** 구독자가 응답하지 않아도
@@ -296,7 +298,7 @@ flowchart TB
 
 **4번이 5번보다 앞서는 것이 핵심이다.** 종료 사유를 받는 callback은 그 객체의 소속과
 지역 인스턴스가 아직 유효한 상태에서 실행되어야 한다
-([Host relocation 전체 흐름 「11. Shutdown과 Relocate의 경쟁」](../spec/30-host-relocation-flow.ko.md#11-shutdown과-relocate의-경쟁)). timer와
+([Host relocation 전체 흐름 「11. Shutdown과 Relocate의 경쟁」](30-host-relocation-flow.ko.md#11-shutdown과-relocate의-경쟁)). timer와
 session을 먼저 멈추면 callback이 쓸 것이 이미 사라진 뒤다.
 
 **결정 — 최종 결과를 게시한 뒤에는 callback·timer·완료·이벤트를 새로 시작하지 않는다.**
@@ -359,7 +361,7 @@ node RID만 전용 타입으로 두거나 모든 식별자를 일반 문자열�
 ### 이름 충돌 주의
 
 `OperationId`는 이미 **Actor Join 완료를 중복 없이 처리하는 값**을 가리키는 공개
-용어다([용어집](../spec/01-glossary.ko.md#actor-join-operationid)). 진행 중 호출
+용어다([용어집](01-glossary.ko.md#actor-join-operationid)). 진행 중 호출
 식별자에 같은 이름을 쓰면 두 개념이 문서와 코드에서 섞인다. internals에서는 다른
 이름을 쓴다.
 
@@ -397,4 +399,4 @@ node RID만 전용 타입으로 두거나 모든 식별자를 일반 문자열�
 
 ---
 
-[내부 구조 목차](README.ko.md) · [다음: 2. Spot·Actor 실행 직렬화](02-serialization.ko.md)
+[내부 구조 목차](README.ko.md) · [다음: 41. Spot·Actor 실행 직렬화](41-internal-serialization.ko.md)

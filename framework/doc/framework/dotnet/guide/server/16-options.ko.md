@@ -86,6 +86,7 @@ process 전체에 적용되는 값이다.
 | `UseFilter<T>()` | handler 앞에 둘 공통 처리 | 없음 | 로그·검증·권한 확인을 한곳에 모을 때 |
 | `ConfigureMetadata()` | client 연결과 actor 사이에 넘길 수 있는 metadata key | 아무 key도 허용 안 함 | 인증 정보처럼 특정 값을 연결에서 actor로 넘겨야 할 때 |
 | `ConfigureNetwork()` | 모든 endpoint의 기본 `BindHost`·`AdvertiseHost` | 지정 없음 | 컨테이너·Kubernetes에서 bind 주소와 광고 주소가 달라야 할 때 |
+| `ConfigureDispatch()` | 처리기가 없는 dispatch·진단, Core HWM, Application job queue | 진단 `Errors`, 두 profile 모두 `Balanced` | dispatch 정책·진단 또는 Core byte budget·queued-job 상한을 조정할 때 |
 | `ApplicationVersion` | 이 process의 application 버전 | `0` | 무중단 배포에서 버전으로 이전 대상을 고를 때 |
 | `MaintenanceWave` | 이 process가 속한 점검 그룹 이름 | 없음 | 노드를 묶어 차례로 점검·교체할 때 |
 | `Worker` | 무거운 작업을 넘길 스레드 풀 | 최대 `프로세서 수 × 2`(최소 2) · 유휴 30초 · 대기열 1024 | 오래 걸리는 계산·I/O를 worker로 많이 넘길 때 |
@@ -152,14 +153,9 @@ await client.SendToChannel("profile", command).Async(ct);
 ### 3.2 backpressure 한도를 정하는 옵션
 
 `ConfigureRouterSocket()`은 이 node가 쓰는 소켓의 한도를, `ConfigureSpotPublisher()`는
-Spot끼리 이벤트를 주고받는 발행 소켓의 한도를 정한다. 지정하지 않으면 backend 기본값을
-쓴다 — 지정하지 않은 socket에는 runtime이 연결 수에 맞춰 계산한 값이 적용된다. 기본
-profile에서 연결이 64개 이하면 방향마다·상대마다 `1,048,576 bytes`(1 MiB)이고, 연결이
-늘수록 연결당 값은 작아진다
-([04-backpressure §4.1](04-backpressure.ko.md#41-auto-hwm--미지정-socket의-자동-계산)).
-**두 high-water mark는 message 개수가 아니라 그 queue가 보관하는 byte를 제한하며, 연결
-하나에 적용된다** — 목표 peer 수를 곱한 값이 process memory 예산 안에 들어오는지
-확인한다([04-backpressure](04-backpressure.ko.md#4-영향을-주는-옵션)).
+Spot끼리 이벤트를 주고받는 발행 소켓의 manual 한도를 정한다. 지정하지 않은 방향의 HWM은
+Core가 context budget과 physical queue census로 계산한다. Framework는 connection 수 구간표를
+별도로 계산하지 않는다([04-backpressure §4.1](04-backpressure.ko.md#41-core-hwm--core가-소유하는-byte-budget)).
 
 | 설정 | 정하는 값 | 올릴 때 | 내릴 때 |
 | --- | --- | --- | --- |
@@ -170,10 +166,8 @@ profile에서 연결이 64개 이하면 방향마다·상대마다 `1,048,576 by
 | `ReceiveTimeout` · `SendTimeout` | 소켓 수준 대기 상한 | — | 기본 동작으로 충분한 경우가 대부분이다 |
 | `Linger`(발행 소켓) | 닫을 때 남은 message를 기다리는 시간 | 종료 시 마지막 발행을 흘리지 않는다 | 기본 `0`이라 즉시 닫는다 |
 
-두 한도는 방향만 다를 뿐 성격이 같다. 각각 **자기 node가 들고 있을 byte**를 정하고,
-그 한도가 상대 쪽 흐름으로 이어진다. 실행 단위별 상한을 host 전체 byte 예산 하나로
-대체하는 설계가 확정되어 있으며, 적용 상태는
-[04-backpressure §6](04-backpressure.ko.md#6-framework-runtime-적용-범위)이 밝힌다.
+두 manual HWM은 방향만 다르며 해당 socket 방향의 physical queue에 적용한다. Core context
+전체 byte budget이나 Application job queue job 상한으로 해석하지 않는다.
 
 **high-water mark를 올리는 것이 기본 대응은 아니다.** 상한을 키우면 혼잡이 메모리로
 흡수되어 `DeadlineExceeded`가 늦게 나타나고, 그만큼 원인을 늦게 알게 된다. 폭주가
@@ -184,6 +178,23 @@ handler 실행 시간)을 확인한다. 반대로 빠르게 실패시켜 다른 
 `MaxMessageSize`를 무제한으로 두면 message 한 건이 상한을 얼마든지 넘을 수 있어 queue가
 차지할 memory의 최악값을 계산할 수 없다. byte 상한을 근거로 process memory를 계획한다면
 유한한 값을 지정한다.
+
+### 3.3 Core HWM과 Application job queue
+
+`ConfigureDispatch()`가 돌려주는 `IZLinkDispatchOptions`의 값이다.
+
+| 설정 | 정하는 값 | 기본값 |
+| --- | --- | --- |
+| `CoreHwmMemoryLimitBytes` | Core budget 계산에 전달할 memory limit hint | `null` |
+| `CoreHwmBudgetBytes` | profile보다 우선하는 manual Core budget | `null`(Auto) |
+| `CoreHwmProfile` | Core Auto-budget profile | `Balanced` |
+| `ApplicationJobQueueProfile` | queued job Auto profile | `Balanced` |
+| `MaxQueuedApplicationJobs` | 정확한 manual queued-job 상한 | `null`(Auto) |
+
+Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한은
+`1..2,147,483,647`이며 `0`은 unlimited가 아니라 startup configuration error다. 두 profile은
+같은 label을 사용하지만 독립된 enum과 계산이다. 포화 동작과 운영값 측정은
+[4. Backpressure](04-backpressure.ko.md)와 [공통 perf §23](../../../common/perf/README.ko.md#23-core-hwm과-application-job-queue-운영값-측정)이 다룬다.
 
 ## 4. 오류 처리와 진단
 
@@ -220,9 +231,8 @@ dispatch.Diagnostics
 
 ## 5. location 옵션
 
-`ConfigureLocations()`는 위치 정보를 갱신하는 주기와 유효 기간, 그리고
-[relocation](03-concepts.ko.md#5-relocation--다른-node로-옮겨가기)을 — actor나 Spot이
-다른 node로 옮겨가는 동작을 — 한 번에 진행할 수 있는 수를 정한다. 등록 방법과 동작은
+`ConfigureLocations()`는 위치 정보를 갱신하는 주기와 유효 기간을 정한다. 등록 방법과
+[relocation](03-concepts.ko.md#5-relocation--다른-node로-옮겨가기) 동작은
 [10-location](10-location.ko.md)이 다룬다.
 
 | 설정 | 정하는 값 | 기본값 | 변경 시점 |
@@ -235,9 +245,6 @@ dispatch.Diagnostics
 | `StoreFailureGrace` | 저장소 장애를 견디는 시간 | 30초 | 이 시간이 지나면 새 연결을 시작하지 않는다. 기존 연결은 유지된다 |
 | `RouteCacheMaxAge` | 조회한 위치를 재사용하는 기간 | 15초 | `0`이면 캐시하지 않는다. 이전이 잦으면 줄인다 |
 | `MessageFollowDuration` | 이전 소유 node가 새 소유 node로 메시지를 넘겨 주는 기간 | 30초 | `0`이면 넘겨 주지 않는다 |
-| `MaxActiveOutboundRelocations` · `MaxActiveInboundRelocations` | 이 process에서 동시에 진행할 이전 수 | 각 64 | 대량 이전이 저장소나 네트워크를 압박할 때 |
-| `MaxConcurrentRelocationCaptures` · `MaxConcurrentRelocationRestores` | 상태를 저장·복원하는 application callback의 동시 실행 수 | 각 8 | 그 callback이 무거워 CPU를 몰아 쓸 때 |
-| `MaxRelocationPayloadInFlightBytes` | 이전 중인 payload가 동시에 차지할 수 있는 메모리 | 256 MiB | 상태가 큰 Spot을 많이 옮길 때 |
 
 ## 6. STREAM 옵션
 
@@ -297,8 +304,6 @@ weight 값의 범위는 `0..10000`이고 기본값은 `100`이다. 운영 흐름
   먼저 확인하고, 짧은 폭주라면 `SendHighWaterMark`나 `DefaultSocketSendTimeout`을 올린다.
 - **활성화가 몰릴 때 저장소가 느려진다** → `SetActivationConcurrency`(기본 128)로 동시
   활성화 수를 줄인다.
-- **이전 중 메모리가 크게 늘어난다** → `MaxRelocationPayloadInFlightBytes`(기본 256 MiB)와
-  동시 이전 수를 줄인다.
 
 ## 10. 관련 문서
 

@@ -43,17 +43,18 @@ export declare enum ZLinkSpotRelocationReadinessMode {
     ApplicationSignaled = "application_signaled"
 }
 
-export declare enum ZLinkApplicationHwmProfile {
+export declare enum ZLinkCoreHwmProfile {
     Compact = "compact",
     LowLatency = "low_latency",
     Balanced = "balanced",
     Throughput = "throughput"
 }
 
-export interface ZLinkInboundDispatchOptions {
-    applicationHwmBytes(value: bigint | undefined): this;
-    applicationHwmProfile(value: ZLinkApplicationHwmProfile): this;
-    processMemoryLimitBytes(value: bigint | undefined): this;
+export declare enum ZLinkApplicationJobQueueProfile {
+    Compact = "compact",
+    LowLatency = "low_latency",
+    Balanced = "balanced",
+    Throughput = "throughput"
 }
 
 export declare enum ZLinkFrameworkErrorKind {
@@ -87,10 +88,12 @@ export type RoutingId = string;
 export type Type<T = unknown> = new (...args: never[]) => T;
 ```
 
-Node runtime은 multiplexed channel receive를 application message와 infrastructure message로
-분류하기 전에 host 전체에서 공유하는 raw receive reservation을 얻는다. 이 reservation 수 `R`은
-16이며 channel, subscriber와 route receive loop가 함께 사용한다. 이 값은 connection·peer·대기 message
-수와 무관하게 고정되므로 application HWM을 넘겨 수신할 수 있는 raw message 수도 host당 최대 16건이다.
+Node runtime은 일반 multiplexed channel receive·claim 전에 host-wide Application Job Queue에서
+permit 하나를 얻는다. Job이 reserved·queued 상태인 동안 permit을 유지하고 user callback의 실제 첫
+instruction에서 반환한다. 실행 중이거나 await 중인 handler는 세지 않는다. 일반 receive 전에 식별할 수
+있는 terminal reply·error completion만 permit을 우회한다. 그 밖의 control·malformed input은 처리 중
+permit 하나를 얻었다가 반환한다. 포화 시 reject·drop·busy spin·무제한 side queue 없이 취소 가능하게
+기다린다. Node만의 고정 raw-receive reservation 수는 추가하지 않는다.
 
 ## 2. 등록, topology와 relocation builder
 
@@ -367,6 +370,11 @@ message 처리를 막지 않는다. Infrastructure relocation은 Entry Spot의 j
 `"ready"` 뒤 target process가 종료되면 ordinary owner loss로 처리하며 이전 relocation payload를 자동
 replay하지 않는다. 이 barrier를 조작하는 public phase API는 제공하지 않는다.
 
+Target의 relay-ready reply가 accepted 상태가 되는 `RelayReady`가 source 복원의 비가역 경계다. 이 경계 전
+명시적인 failure만 source dispatch와 matching Session seal을 복원한다. 경계 뒤에는 cutover submit의
+성공·실패와 관계없이 source dispatch를 다시 열지 않는다. Target은 cutover를 받거나 기존 1,000ms
+fallback이 끝나면 owner CAS와 queue 개방을 진행한다.
+
 같은 source와 target process 안의 재시도에서 factory와 `restore(...)`를 두 번 이상 호출할 수 있다.
 `capture(...)`도 [authority](../../../../01-glossary.ko.md#authority) commit 전에 반복될 수 있다. Current owner와 attempt fence만 completion을 commit하고
 admission을 열 수 있다. Callback에는 relocation ID를 추가하지 않으므로 application restore와 capture는 retry-safe해야
@@ -377,13 +385,15 @@ payload로 다시 시도할 수 있다. 다른 target을 자동 선택하지 않
 Framework는 capture 결과를 즉시 복사하고 restore마다 독립된 `Uint8Array`를 전달한다.
 Adapter가 비동기 호출 뒤 payload를 보관하려면 직접 복사해야 한다.
 
-`capture(...)`가 반환한 `Uint8Array`는 최대 64 MiB이며 길이가 0인 것은 유효한 application payload다. JavaScript runtime에서
+`capture(...)`가 반환한 `Uint8Array`에는 relocation adapter 전용 size 상한이 없으며 길이가 0인 것은 유효한
+application payload다. Framework는 등록한 Relocation Store의 일반 blob·whole-payload 제한에 맞춰 필요한
+chunking을 수행한다. JavaScript runtime에서
 `null`, `undefined` 또는 `Uint8Array`가 아닌 값을 반환하면 adapter failure로 처리하며 빈 payload로 바꾸지 않는다.
 Framework는 resolved array를 callback 완료 직후 복사하므로 adapter는 완료 뒤 그 배열을 변경해도 저장된 payload에
 영향을 주지 않는다. 각 restore attempt는 factory가 새로 만든 instance와 독립된 새 `Uint8Array` copy를 받는다.
 실패한 instance나 이전 attempt의 payload array를 다음 attempt에 재사용하지 않는다.
 
-Final owner·membership commit 전 `capture(...)` 또는 `restore(...)`가 throw, reject 또는 잘못된 반환값으로
+`RelayReady`가 accepted 상태가 되기 전 `capture(...)` 또는 `restore(...)`가 throw, reject 또는 잘못된 반환값으로
 끝나고 허용된 attempt를 모두 사용하면 `StateIncompatible`로 분류한다. Operation deadline 때문에 callback을
 취소하면 `DeadlineExceeded`를 사용하고 stale attempt cancellation은 terminal result를 commit하지 못한다. Source
 capture failure는 durable abort 뒤 reversible seal을 해제하고 target restore failure는 staging instance를
@@ -476,13 +486,25 @@ export interface ZLinkDispatchOptionsBuilder {
     messageFlow(mode: ZLinkMessageFlowLogMode): this;
     traceSampleRate(rate: number): this;
     includeMessageSizes(include: boolean): this;
+    coreHwmMemoryLimitBytes(value: bigint | undefined): this;
+    coreHwmBudgetBytes(value: bigint | undefined): this;
+    coreHwmProfile(value: ZLinkCoreHwmProfile): this;
+    applicationJobQueueProfile(value: ZLinkApplicationJobQueueProfile): this;
+    maxQueuedApplicationJobs(value: bigint | undefined): this;
 }
 
 ```
 
 네 진단 수준은 비활성화, 오류만 기록, 주요 전이 기록, 상세 진단을 각각 뜻한다. Startup에서 지정하지 않은
-diagnostics level의 기본값은 `"errors"`다. Dispatch configuration은 level, sampling rate와 message size 포함
+diagnostics level의 기본값은 `"errors"`다. Dispatch configuration의 diagnostics member는 level, sampling rate와 message size 포함
 여부만 제공하며 file path, label, exporter lifecycle 또는 provider
 sink를 받지 않는다. Framework는 application이 구성한 표준 logger·trace·metric provider에 structured
 record를 기록한다. Message-flow observer callback, runtime error sink와 raw event DTO는 public contract가
 아니다. Provider 호출 실패는 원래 message operation의 terminal 결과를 바꾸지 않으며 별도 진단으로 격리한다.
+
+## Dispatch capacity 계산 입력
+
+Node.js binding은 V8 `heap_size_limit`의 양수 유한값을 Core runtime memory hint로 전달한다. Core와
+Application job queue profile은 기본값 `Balanced`인 독립된 enum과 계산이다. Manual job cap은
+`1..2,147,483,647`이고 생략하면 common startup CPU snapshot과 32/64/128/256 계수를 사용한다. Range
+위반과 overflow는 socket bind 전에 configuration error이며 runtime 중 다시 계산하지 않는다.

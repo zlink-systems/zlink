@@ -177,8 +177,8 @@ Node의 Spot·Actor serial scheduler는 application callback과 lifecycle callba
 Byte 예산에는 payload와 metadata에 작업당 고정 비용을 더한다. Scheduler는 작업을
 queue에서 꺼낸 시점이 아니라 callback이 끝난 뒤에 건수와 byte를 반환한다. 따라서
 실행 중인 callback도 한도를 계속 사용한다. 이 값은 Node 내부 기본값이며 public
-configuration contract가 아니다. 공통 internals의 수치는 구현 비교를 위한 참조값이므로
-Node의 실제 기본값으로 해석하지 않는다.
+configuration contract가 아니다. Common spec 내부 설계 장의 수치는 구현 비교를 위한
+참조값이므로 Node의 실제 기본값으로 해석하지 않는다.
 
 ## Raw transport 요청의 terminal 보장과 monitor queue
 

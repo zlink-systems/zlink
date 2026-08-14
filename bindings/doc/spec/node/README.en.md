@@ -3,7 +3,7 @@ title: "Node / TypeScript Binding Implementation Blueprint"
 ---
 
 <!-- bindings-nav:start -->
-[Spec index](../README.md) | [Previous: Java](../java/README.md) | [Next: Python](../python/README.md)
+[Spec index](../README.en.md) | [Previous: Java](../java/README.en.md) | [Next: Python](../python/README.en.md)
 <!-- bindings-nav:end -->
 
 # Node / TypeScript Binding Implementation Blueprint
@@ -38,7 +38,7 @@ naming conventions. It uses lower-case `contracts` and `runtime` source
 folders, and package exports decide what is public. It does not copy
 capitalized .NET or C++ folder names into the Node package as-is.
 
-Node follows the [.NET design shape](../dotnet/README.md) after alignment.
+Node follows the [.NET design shape](../dotnet/README.en.md) after alignment.
 Native-backed resource behavior is described by public contract interfaces
 and types under `src/zlink/contracts`; runtime implementations live under
 `src/zlink/runtime` and are obtained through package-root factory functions.
@@ -46,7 +46,7 @@ Concrete value classes, DTO-shaped objects, enums, literal unions, results,
 and errors stay in the contract source.
 
 The first code a reviewer should read is the public contract under
-`src/zlink/contracts`, the same way the [.NET binding blueprint](../dotnet/README.md)
+`src/zlink/contracts`, the same way the [.NET binding blueprint](../dotnet/README.en.md)
 starts from `Contracts/`. Runtime files must implement that contract; they
 must not be the place where callers discover new behavior.
 
@@ -381,7 +381,7 @@ and the published TypeScript declarations.
 ## Contract File Layout
 
 Contract source keeps the same classification as the
-[.NET binding blueprint](../dotnet/README.md), with TypeScript naming. It
+[.NET binding blueprint](../dotnet/README.en.md), with TypeScript naming. It
 keeps the same conceptual file grouping so a developer who knows the .NET
 binding can find the same public concept in Node quickly. The folder map is
 shared with .NET, but the names inside it stay idiomatic TypeScript.
@@ -408,7 +408,7 @@ resources and operation builders need named contract files.
 ## Runtime File Layout
 
 Runtime source follows the runtime classification in the
-[.NET binding blueprint](../dotnet/README.md), but holds only
+[.NET binding blueprint](../dotnet/README.en.md), but holds only
 implementation. Node runtime file names use the same lower-case TypeScript
 concept names as the contract tree. Do not use a `default_` filename prefix
 such as `default_context.ts` or `default_pair_socket.ts`. In this package,
@@ -543,8 +543,9 @@ using TypeScript spelling.
 - Do not use `on...` names for handler registration. Use `set...Handler`
   when the API stores or replaces the current handler.
 - Do not create operation-start variants such as `sendNoWait`,
-  `publishWithFlags`, or `requestAsync`. Keep a single operation name and
-  put flag, timeout, callback, and async-submit choices on the builder.
+  `publishWithFlags`, or `requestAsync`. Keep a single operation name. Put
+  operation-specific flags or timeouts on the builder; managed DEALER/ROUTER
+  send and request use the sole Promise `submit()` terminal defined below.
 
 ## Canonical Interface Rules
 
@@ -554,8 +555,8 @@ using TypeScript spelling.
 - Send, routed send, publish, request, reply, SPOT operations, and Actor
   location/session operations return a fluent builder.
 - A builder start method takes only the target identity, topic, channel,
-  routing id, or request sequence. Payload, flags, timeout, callback, and
-  async-submit choices are builder steps.
+  routing id, or request sequence. Payload and the options supported by that
+  operation are builder steps.
 - SPOT channel-targeted operations use `sendToChannel(...)` and
   `requestToChannel(...)`. SPOT topic publish stays `publish(topic)`.
 - Do not add a single-payload shortcut overload sharing a name with an
@@ -587,6 +588,42 @@ using TypeScript spelling.
   builder's terminal method keeps using `submit(...)` even on a
   Promise-returning surface. Do not add a separate `submitAsync` terminal
   name.
+- DEALER/ROUTER `send(...).message(...).submit()` is the managed send
+  terminal and returns `Promise<void>`. DEALER/ROUTER
+  `request(...).message(...).submit()` returns `Promise<Message[]>`. These
+  managed builders do not expose flag, callback, blocking, no-wait, or polling
+  compatibility terminals. Pair, Stream, and Pub data-plane terminals keep
+  their existing synchronous contracts. The public ROUTER
+  `sendTransportPair(...)` call also remains a distinct explicit one-shot
+  immediate operation; it is not a managed HWM-wait terminal.
+- The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
+  `ReplySubmitOperation.submit(): void`. It returns no Promise, enters no HWM-
+  managed path, and submits a terminal reply or error reply to the HWM-free
+  completion lane with one native call. HWM backpressure is not a reply result;
+  `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`, and other non-HWM submit
+  failures are thrown immediately as `SubmitError`.
+- A managed routed submit snapshots its payload and establishes its completion
+  state before native submission. It uses Core target selection plus exact
+  per-part DEALER/ROUTER DONTWAIT APIs. The Node addon must not add or call an
+  array/multipart routed-submit ABI such as `zlink_routed_send_parts` or
+  `zlink_routed_request_parts`. One short socket-local complete-record attempt
+  gate covers an attempt from its first part through its final part and is
+  released before any HWM wait.
+- The binding owns pending operations by the exact tuple `(peer routing id,
+  transport pair id, transport pair generation)`, together with a deduplicated
+  ready-target queue/set. The long-lived Core routed-readiness callback only
+  marks or wakes that exact target and schedules event-loop work; it never
+  submits, waits, or retries in the callback. A blocked target therefore does
+  not gate an unrelated target. A stale generation cannot wake a replacement
+  route. This scheduling does not add a strict FIFO guarantee for concurrent
+  calls that use the same routing id.
+- Send and request deadlines are absolute from the public `submit()` call.
+  HWM waiting is readiness-driven, not timer polling. Acceptance consumes the
+  submitted `Message` values exactly once; failure before acceptance leaves
+  them reusable. Request correlation exists before the first exact attempt so
+  a fast reply cannot outrun registration. Timeout, target detach/terminal,
+  socket close, and native failure settle each Promise exactly once and remove
+  its pending state. Socket close does not block the Node event loop.
 - The MeshNode Logical Multicast publisher also provides `publishAsync(...)`
   because Core's one blocking publish call must run outside the Node.js
   event loop. This name applies only to this publisher and does not change
@@ -636,7 +673,7 @@ The package entrypoint groups the API around domain concepts.
 
 ## 64-bit Byte HWM and Monitoring Contract
 
-Because the HWM and Auto HWM planning unit must represent a `uint64_t` byte
+Because HWM and the Core HWM memory limit and budget must represent `uint64_t` byte
 value losslessly, the public TypeScript type uses `bigint`. It does not also
 accept `number` or change representation based on the safe-integer range.
 `0n` means unlimited for an HWM, and the manual HWM default is
@@ -646,7 +683,14 @@ rejected with `RangeError`; `number` and other types are rejected with
 
 ```ts
 interface ContextOptions {
-  autoHwmMsgUnitBytes: bigint; // 64-bit planning-unit bytes; 0n selects the socket default.
+  coreHwmMemoryLimitBytes: bigint;
+  coreHwmBudgetBytes: bigint;
+  coreHwmProfile: CoreHwmProfile;
+}
+
+interface Context {
+  getCoreHwmBudgetSnapshot(): CoreHwmBudgetSnapshot;
+  resetCoreHwmBudgetMetrics(): void;
 }
 
 interface CommonSocketOptions {
@@ -655,8 +699,15 @@ interface CommonSocketOptions {
 }
 ```
 
-`autoHwmMsgUnitBytes` is an input to Core's planner. Core multiplies the
-selected message-slot count by this value to calculate the planned byte HWM. A
+Input precedence is manual Core budget, explicit memory limit, V8 heap-limit
+hint, then Core fallback. Setting either of the first two values disables
+automatic V8-hint detection. The binding does not combine the hint with Core's
+hard limit. If an explicit input exceeds a finite hard limit Core detected, the
+binding preserves the existing configuration error corresponding to `EINVAL`
+and does not clamp the value.
+
+Core applies the profile ratio to the memory limit exactly once, or uses an
+explicit Core budget unchanged, then calculates planned byte HWM per physical directional queue. A
 direction on which the caller sets `sendHwm` or `recvHwm` becomes a manual
 override and is not changed by later automatic HWM recalculation.
 
@@ -665,12 +716,31 @@ actual accounted bytes in a Core pipe reach the applied HWM, the native submit
 result reports backpressure and the Node.js operation preserves it through the
 existing result and timeout contract. `0n` means unlimited.
 
-The monitor snapshot projects Core monitoring ABI v2 as-is. Planned,
+`monitorOpen(events?, monitorHwmBytes?)` accepts only a `bigint` byte value for
+the monitor queue. `0n` selects the Core monitor default; a positive value is
+forwarded unchanged. There is no number-valued or message-count alias.
+
+The monitor snapshot projects Core monitoring ABI v3 as-is. Planned,
 applied, and deferred values, and in-flight HWM values, include `Bytes` in
 their name and are provided as `bigint`. Whether a deferred value is valid
-is provided as a separate boolean. Pending-message and profile-slot values
-are count diagnostics and do not share a name with a byte field. An old
-count-based name such as `autoHwmAppliedSndHwm` is not kept as an alias.
+is provided as a separate boolean. Pending-message counts are display
+diagnostics; `sndPendingBytes` and `rcvPendingBytes` are separate `bigint` byte
+values. Slot, message-unit, size-cap, and connection-bucket properties,
+including an old count-based name such as `autoHwmAppliedSndHwm`, are not kept
+as aliases.
+
+`CoreHwmBudgetSnapshot` projects ABI version/size, configured/runtime/resolved
+memory limits, configured/effective budgets, planned/applied/manual-reserved
+HWM, Core-queue/application/current/peak/provisional accounted bytes,
+completion current/peak/pending and total-messaging values, monitor/instance
+aggregates, application/completion queue counts,
+`outstandingApplicationLeaseCount`, `retiredQueueCount`,
+`deferredOriginCreditBytes`, oversize/blocked/aggregate flags,
+`budgetGeneration`, and `measurementEpoch` as exact `bigint`/boolean values.
+Reset preserves current, pending, queue-count, and those three owner-lifecycle
+gauges, rebases both peaks to current, clears epoch counters, and increments
+`measurementEpoch`. An ABI version/size mismatch uses the existing unsupported
+error, not `TypeError`.
 
 ## Required Capability Coverage
 
@@ -711,6 +781,22 @@ created the logical spot.
   `Buffer` created by the addon. Reading the payload does not require another
   native call, and Node manages the `Buffer` lifetime after the `Message` is
   closed.
+- Ordinary `recv` and `subscribe` return HWM credit immediately when Core
+  dequeues the message. Only a Framework backend that must keep credit for its
+  payload-processing lifetime uses the explicit `recvRetained(result, flags?)`
+  on Pair, Dealer, Router, and Stream, or `subscribeRetained(result, flags?)`
+  on Sub and XSub. Both shapes fill caller-provided aggregate storage and
+  return `false` for non-blocking no-data.
+- A retained receive privately groups one Core lease per physical multipart
+  payload part under one opaque aggregate owner. Successful result reuse or
+  `result.close()` returns every credit exactly once. If the caller abandons
+  the result, a native finalizer is the last-resort fallback. Keeping a copy of
+  a payload `Buffer` does not extend the credit lifetime.
+- Retained receive preserves the same multipart framing and metadata as the
+  ordinary shape: typed `requestSeq` for Dealer, source `RoutingId` plus
+  `requestSeq` for Router, and topic plus any Core-provided source `RoutingId`
+  for Sub and XSub. No raw lease handle, accounting setter, or per-part release
+  is public API.
 - A service control/admission receive path such as Actor join request
   receive can use a nullable, `undefined`, or tagged result-return shape
   when that is clearer than reusable data-plane storage. It still

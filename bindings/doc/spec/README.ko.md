@@ -860,16 +860,15 @@ runtime/native bridge 역할에만 존재하며 public contract 역할로 만들
 - `send`, routed send, `publish`, `request`, `reply`, SPOT send/request/reply,
   Actor 위치·session attach 계열은 operation builder를 반환한다.
 - builder 시작점 인자는 목적지, topic, channel, routing id, request sequence처럼
-  operation의 대상만 받는다. payload, flags, timeout, callback, async/callback
-  submit 선택은 builder 단계에서 표현한다.
+  operation의 대상만 받는다. payload, flags, timeout은 builder 단계에서 표현한다.
 - multipart payload는 builder의 `message(...)` 반복으로 누적한다. 언어 관례에
   따라 `messages(...)` convenience를 둘 수 있지만, canonical 경로는 builder다.
   이런 convenience도 public 이면 builder contract의 일부이며 `Contracts/`에
   위치해야 한다.
 - `sendNoWait`, `publishWithFlags`, `requestAsync`, `requestCallback`처럼 operation
   시작점 이름을 늘리는 방식은 만들지 않는다. 같은 operation 이름을 유지하고
-  builder 단계가 변형을 흡수한다. async 또는 callback 완료 표면의 언어별
-  마지막 실행 메서드는 [바인딩 비동기 실행 표면 정책](async-coroutine-policy.md)을
+  builder 단계가 변형을 흡수한다. native suspension 완료 표면의 언어별
+  마지막 실행 메서드는 [바인딩 비동기 실행 표면 정책](async-coroutine-policy.ko.md)을
   따른다.
 - resource 생성은 public constructor를 여러 runtime class에 흩어 두지 않는다.
   binding별 root facade 또는 context factory가 생성 책임을 가진다. 예를 들어
@@ -1023,7 +1022,7 @@ sample/perf/internal helper 로만 둔다.
 ### Operation Builder 정책
 
 zlink의 send/request/reply/publish 계열과 Actor 위치·세션 attach 계열은 모두
-조합 축이 많다. 대상 경로, payload part 개수, `flags`, `timeout`, async/callback
+조합 축이 많다. 대상 경로, payload part 개수, `flags`, `timeout`, native suspension
 완료 방식을 일반 메서드 오버로드로 펼치면 socket과 service handle이 얕고
 넓은 인터페이스가 되며 multipart payload를 외부 List/Vector 컨테이너로
 포장해야 한다. 고수준 바인딩은 이 조합 복잡성을 operation 객체 안으로
@@ -1080,10 +1079,10 @@ attach 표면**에서 동일한 패턴으로 노출한다. 이름은 언어 관�
   `ActorBindOp`, `ActorUnbindOp` 같은 언어별 operation builder를 반환한다.
   서로 다른 시작점이라도 multipart payload 표현은 모두 `.message(...)`
   반복으로 통일한다.
-- `.messages(...)`, `.flags(...)`, `.timeout(...)`, callback submit, async 완료
+- `.messages(...)`, `.flags(...)`, `.timeout(...)`, native suspension 완료
   마지막 실행 메서드 같은 builder convenience도 public 이면 builder contract의 일부다.
   runtime 내부 shortcut으로만 정의하지 않는다. async 완료 마지막 실행 메서드의
-  언어별 이름과 의미는 [바인딩 비동기 실행 표면 정책](async-coroutine-policy.md)에
+  언어별 이름과 의미는 [바인딩 비동기 실행 표면 정책](async-coroutine-policy.ko.md)에
   둔다.
 - payload는 builder의 `message(part)` 반복 호출로 누적한다. 단일 payload와
   multipart payload를 별도 시작점 오버로드로 나누지 않는다. 외부 List/Vector
@@ -1106,8 +1105,8 @@ attach 표면**에서 동일한 패턴으로 노출한다. 이름은 언어 관�
 - payload가 없는 작업(Actor `leave`, `destroy`, `bindActor`, `unbindActor`,
   `remoteActorGetRef`)은 builder가 `message(...)` 단계 없이 곧바로 submit이
   가능하다. 단 builder 형태와 옵션 단계(`flags(...)`, `timeout(...)`,
-  `callback(...)`, async 완료 마지막 실행 메서드)는 동일하게 노출한다.
-- `flags`, `timeout`, callback, async 선택은 시작점 파라미터가 아니라
+  async 완료 마지막 실행 메서드)는 동일하게 노출한다.
+- `flags`, `timeout`은 시작점 파라미터가 아니라
   builder의 선택 단계로 둔다. 시작점은 대상 주소·요청 시퀀스처럼 의미상
   키만 받는다.
 - 샘플과 문서 예제의 메시징 호출은 기본값을 반복해서 적지 않는다.
@@ -1129,10 +1128,8 @@ attach 표면**에서 동일한 패턴으로 노출한다. 이름은 언어 관�
   DEALER가 임의 token으로 reply를 시작하는 API는 public binding 표면에 두지
   않는다. DEALER는 특정 peer routing id를 지정할 수 없으므로 reply routing
   결정이 protocol helper에 새고, 사용자가 token 의미를 알아야 한다.
-- async request·async Actor operation은 submit flags를 받지 않는다. callback
-  형태는 non-blocking submit을 표현하기 위해 `flags`를 받을 수 있다. 자세한
-  완료 방식 차이는 [바인딩 비동기 실행 표면 정책](async-coroutine-policy.md)을
-  따른다.
+- async request·async Actor operation은 submit flags를 받지 않는다. 자세한 완료
+  표면은 [바인딩 비동기 실행 표면 정책](async-coroutine-policy.ko.md)을 따른다.
 - builder는 한 번 submit된 뒤 다시 submit될 수 없다. 언어가 move-only 또는
   ownership 타입을 제공하면 타입으로 막고, 그렇지 않으면 런타임 상태 검사로
   막는다.
@@ -1160,17 +1157,17 @@ routerSocket.requestToSpot(destNodeRid, destSpotRid)
 spotNode.joinActor(actor, destNodeRid, destUserSpotRid)
     .message(joinStatePart)
     .timeout(Duration.ofSeconds(3))
-    .submit(joinCallback);
+    .submit();
 
 streamSocket.bindActor(sessionRid, actorRef)
     .timeout(Duration.ofSeconds(2))
-    .submit(replyCallback);
+    .submit();
 ```
 
 #### 언어별 비동기 실행 표면 기준
 
-언어별 async 또는 callback 완료 마지막 실행 메서드는
-[바인딩 비동기 실행 표면 정책](async-coroutine-policy.md)에 둔다.
+언어별 native suspension 완료 마지막 실행 메서드는
+[바인딩 비동기 실행 표면 정책](async-coroutine-policy.ko.md)에 둔다.
 
 이 규칙은 POSD 기준에서 Required다. 새 send/request/reply/publish 또는 Actor
 위치·attach public API를 추가하거나 정리할 때는 이 operation builder 형태와
@@ -1225,36 +1222,73 @@ streamSocket.bindActor(sessionRid, actorRef)
 - `ZLINK_OPT_SNDHWM`과 `ZLINK_OPT_RCVHWM`은 방향별 pipe에 실제로 보관된
   accounted byte의 상한이다. 수동 기본값은 `4,096,000 bytes`이고 `0`은
   무제한이다. 이 값은 queue에 넣을 수 있는 message 개수를 뜻하지 않는다.
-- `ZLINK_CTX_OPT_AUTO_HWM_PROFILE` 과
-  `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` 는 모든 바인딩에서 typed context option
-  으로 노출해야 한다. profile 값은 compact, low latency, balanced, throughput
-  네 가지이며 기본값은 balanced 이다. context message unit 기본값 `0`은 소켓
-  타입별 기본 메시지 단위를 쓰겠다는 뜻이다.
-- `MonitorStatus` 은 core `zlink_monitor_status_t` 의 auto-HWM v2 진단 필드를
-  빠뜨리지 않고 노출해야 한다. enabled, profile enum, role, policy class,
-  unit budget, size cap, socket message slots, effective message bytes,
-  applied HWM, recent recalculation reason enum, deferred shrink, blocked ratio 는
-  public snapshot 계약에 포함된다.
+- `ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES`,
+  `ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES`와 `ZLINK_CTX_OPT_AUTO_HWM_PROFILE`은
+  모든 바인딩에서 typed context option으로 노출한다. Byte 입력 `0`은 각각 명시 memory
+  limit 또는 수동 Core budget이 없다는 뜻이며 binding은 profile 비율이나 queue별 HWM을
+  계산하지 않는다.
+- 입력 우선순위는 수동 Core budget, 명시 memory limit, binding이 감지한 runtime memory
+  limit, Core fallback 순서다. 앞의 두 값을 사용자가 지정하면 binding은 runtime hint를
+  자동 감지하지 않는다. .NET은 GC의 사용 가능 메모리 한도, Java는 JVM 최대 heap,
+  Node.js는 V8 heap limit, Go는 유한한 runtime memory limit을 hint 후보로 사용한다.
+  C++와 Rust는 별도 runtime hint를 만들지 않고, Python은 별도 VM hard limit을 명확히
+  얻을 수 있을 때만 전달한다. Binding은 hint와 Core hard limit을 직접 합치거나 profile
+  비율을 적용하지 않는다.
+- Core가 finite hard limit을 감지했을 때 명시 memory limit 또는 수동 Core budget이 이를
+  넘으면 binding은 Core의 `EINVAL`을 그대로 전달하고 값을 clamp하지 않는다.
+- Context budget snapshot은 Core ABI v1의 version과 struct size를 포함해 다음 canonical
+  범위를 단위 변환 없이 노출한다: configured/runtime/resolved memory limit, configured/effective
+  Core budget, planned/applied/manual-reserved HWM, Core queue/application/current/peak/provisional
+  accounted byte, completion current/peak/pending과 total messaging byte, monitor queue와 instance
+  aggregate, active application/completion queue count, outstanding application lease count,
+  retired queue count, deferred origin credit byte, oversize·blocked·budget-insufficient·aggregate
+  flag, `budgetGeneration`과 `measurementEpoch`. Metrics reset은 같은 context operation이다.
+  Reset은 current·pending·queue count를 유지하고 두 peak를 각 current로 재기준화하며 epoch
+  counter를 0으로 만든 뒤 `measurementEpoch`을 증가시킨다.
+
+  Canonical snapshot field는 다음과 같다. 언어별 binding은 naming convention만 바꾸고
+  항목, 단위와 의미는 줄이거나 합치지 않는다.
+
+  ```text
+  abiVersion, structSize
+  configuredMemoryLimitBytes, runtimeMemoryLimitBytes, resolvedMemoryLimitBytes
+  configuredCoreBudgetBytes, effectiveCoreBudgetBytes
+  totalPlannedHwmBytes, totalAppliedHwmBytes, manualReservedHwmBytes
+  coreQueueAccountedBytes, applicationAccountedBytes
+  currentAccountedBytes, peakAccountedBytes, provisionalAccountedBytes
+  completionCurrentAccountedBytes, completionPeakAccountedBytes
+  completionPendingMessageCount, totalMessagingAccountedBytes
+  monitorQueueAppliedHwmBytes, monitorQueueAccountedBytes
+  totalInstanceAppliedHwmBytes, totalInstanceAccountedBytes
+  activeDirectionalQueueCount, activeSendQueueCount, activeReceiveQueueCount
+  activeCompletionDirectionalQueueCount
+  outstandingApplicationLeaseCount, retiredQueueCount, deferredOriginCreditBytes
+  oversizeAdmissionCount, largestOversizeMessageBytes, blockedRatioPpm
+  unlimitedManualQueueCount, aggregateHwmValid, aggregateOverflow
+  budgetInsufficient, budgetGeneration, measurementEpoch
+  ```
+
+  `currentAccountedBytes = coreQueueAccountedBytes + applicationAccountedBytes`이고
+  `totalMessagingAccountedBytes = currentAccountedBytes +
+  completionCurrentAccountedBytes`다. Completion 값은 진단에만 사용하며 HWM admission과
+  Core budget을 바꾸지 않는다. Send/receive count는 관점별 값이라 둘을 더해 physical
+  directional queue count로 사용하지 않는다. `outstandingApplicationLeaseCount`는 아직 반환되지
+  않은 public retained-credit lease 수, `retiredQueueCount`는 retained origin 때문에 detach 또는
+  generation 교체 뒤에도 유지되는 queue generation 수, `deferredOriginCreditBytes`는 internal framing
+  token 또는 public lease가 보유해 writer에 아직 게시되지 않은 exact-origin byte다. Metrics reset은
+  이 세 gauge도 유지한다.
+- `MonitorStatus`는 Core monitoring ABI v3의 byte HWM·pending 진단을 투영한다. Legacy
+  message-unit, slot, size-cap과 connection-bucket planner property는 alias 없이 제거한다.
 
 ##### HWM 계산과 admission
 
-`ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES`는 메시지 크기 제한이 아니라 자동 HWM
-planner에 전달하는 byte 단위 입력이다. Core는 profile, socket role과 관찰한
-connection 수로 message slot 수를 선택하고 다음 식으로 byte HWM을 계산한다.
+Core는 context memory input, profile, physical directional queue registry와 byte
+water-filling으로 queue별 planned HWM을 계산한다. Binding은 이 계산 입력을 message 수나
+planning unit으로 변환하지 않는다.
 
-```text
-planned HWM bytes = selected message slots * planning unit bytes
-```
-
-Context planning unit이 `0`이면 STREAM은 `1,024 bytes`, 그 밖의 raw socket은
-`4,096 bytes`를 사용한다. Raw socket에 값을 명시하면 그 socket의 계산에만
-적용한다. Planning unit은 관찰한 평균 message 크기가 아니며 실제 message의
-크기를 이 값으로 고정해서 계산하지 않는다.
-
-Auto-HWM은 사용자가 방향별 HWM을 직접 지정하지 않은 socket에만 planned 값을
-적용한다. Connection 수가 달라지면 debounce와 bucket hysteresis를 거쳐 다시
-계산한다. 새 HWM이 현재 보관량보다 작으면 Core는 queue의 message를 삭제하지
-않고 보관량이 새 상한 아래로 감소할 때까지 적용을 보류한다.
+Auto-HWM은 사용자가 방향별 HWM을 직접 지정하지 않은 physical queue에만 planned 값을
+적용한다. Topology가 바뀌면 Core가 재계산하며, 새 목표가 현재 보관량보다 작으면 새 admission을
+막고 drain 뒤 applied HWM을 전환한다.
 
 실제 write admission은 Core가 pipe에 보관한 frame의 accounted byte를 누적하여
 판단한다. Accounted byte가 HWM에 도달하면 이후 write는 byte credit이 반환될
@@ -1262,10 +1296,56 @@ Auto-HWM은 사용자가 방향별 HWM을 직접 지정하지 않은 socket에�
 하나를 허용할 수 있지만, 그 뒤의 write는 다시 제한한다. 끝나지 않은 multipart
 message에는 이 예외를 적용하지 않는다.
 
-`auto_hwm_socket_message_slots`, `snd_pending_msgs`, `rcv_pending_msgs`는
-count 단위의 진단값이다. 이 값은 admission 기준이 아니다. Planned, applied,
-deferred HWM과 `snd_bytes_in_flight`, `rcv_bytes_in_flight`는 byte 단위이며,
-바인딩은 Core monitoring ABI v2의 값과 유효성 flag를 그대로 보존한다.
+Pending message count는 표시용 진단이며 admission 기준이 아니다. Planned, applied,
+deferred HWM과 pending/accounted 값은 byte 단위이고, binding은 Core ABI 값과 flag를 그대로 보존한다.
+
+##### Retained credit과 비동기 최초 수용
+
+Terminal reply와 error reply는 HWM이 없는 completion lane으로 전송한다. Binding은 이
+completion submit에 SNDHWM·RCVHWM, HWM readiness 대기나 backpressure retry를 적용하지 않는다.
+
+Framework data-plane receive에서 binding의 `Received` 계열 owner는 기존 receive framing으로
+반환된 message와 Core HWM budget lease를 함께 소유한다. 이를 위해 새 multipart transaction
+ABI를 추가하지 않는다. Multipart job은 각 receive 결과와 함께 받은 lease를 보관하고,
+`Received`의 close, dispose, drop 또는 job terminal cleanup에서 각 lease를 정확히 한 번
+반환한다. Lease를 별도 application capacity로 바꾸지 않으며 payload copy만 user code에 남긴
+뒤에는 lease를 보유하지 않는다.
+
+이 동작은 Framework backend가 명시적으로 선택하는 retained aggregate receive 진입점에만
+적용한다. 일반 binding `recv`와 `subscribe`는 기존처럼 dequeue 시 Core credit을 즉시
+반환한다. Binding은 일반 receive의 의미를 조용히 바꾸지 않고 언어 naming convention에 맞는
+`recvRetained`·`subscribeRetained` 계열 진입점을 제공하되 raw lease handle은 공개하지 않는다.
+
+Binding은 routed 비동기 operation을 받기 전에 Core routed-target readiness handler를 socket에
+장기 등록한다. Handler event의 `(socket, target RID, transport pair ID, generation)`을 정확한 key로
+사용하고, binding 내부에 `pendingByTarget`, `readyTargets`, `readySet`에 해당하는 상태를 둔다. 이
+상태는 공개 scheduler가 아니라 Task, Future, Promise 또는 coroutine을 재개하기 위한 내부 구현이다.
+
+Routed send와 request builder의 비동기 실행은 native blocking submit을 호출한 다음 완료 객체를
+만들지 않는다. Operation을 pending state에 먼저 넣고 같은 target으로 complete multipart를 Core에
+`DONTWAIT` 제출한다. 수용되면 pending에서 제거하고 send operation을 완료한다. Backpressure면 exact
+target event가 그 key만 ready 상태로 만들고 binding pump가 callback thread 밖에서 같은 target으로
+`DONTWAIT` 제출을 다시 시도한다. Request는 최초 수용 뒤 기존 reply correlation을 계속 소유하고
+reply 또는 timeout·disconnect·termination·cancellation으로 끝난다. 최초 deadline은 대기 중
+연장하지 않는다.
+
+Part 단위 Core API를 사용하는 binding은 같은 native handle의 모든 outbound 경로가 공유하는 짧은
+complete-record attempt gate를 둔다. Gate 안에서 기존 exact-target part API를 첫 part부터 `FINAL`까지
+호출하고 한 번의 attempt가 끝나면 즉시 해제한다. Readiness 대기 중에는 gate를 보유하지 않으며 별도
+multipart ABI나 public transaction abstraction을 추가하지 않는다.
+
+장기 handler 등록, pending-before-submit과 generation 검증으로 writable edge를 잃거나 stale route를
+깨우지 않는다. A RID의 대기는 같은 socket의 B·C·D submit을 막거나 공용 submit lock을 점유하지
+않는다. Pipe detach, socket close, context 종료, timeout과 cancellation 경쟁은 해당 operation을
+정확히 한 번 terminal로 만든다. Framework에 RID map, retry deque, ready ring, 고정 주기 polling 또는
+별도 retry capacity를 요구하지 않는다. 기존 socket-wide send-ready는 routed 비동기 admission에
+사용하지 않는다.
+
+언어별 canonical terminal은 C++ `async()`, .NET `Async(...)`, Java·Node·Python·Rust
+`submit()`, Kotlin `submit().await()`, Go `Submit(ctx)`가 반환하는 completion channel이다.
+Rust의 canonical 사용은 `submit().await?`이다. HWM-managed routed builder에는 callback·blocking
+호환 terminal이나 `submit_async()`를 함께 두지 않으며 `request_async` 같은 새 operation 시작점도
+만들지 않는다.
 
 언어별 HWM 값 표현과 범위는 다음과 같다.
 
@@ -1274,10 +1354,10 @@ deferred HWM과 `snd_bytes_in_flight`, `rcv_bytes_in_flight`는 byte 단위이�
 | C | `uint64_t` | 정확히 8-byte option 값으로 전달한다. |
 | C++ | `byte_count_t` | 내부 `uint64_t` byte 값을 정확히 8-byte option 값으로 전달한다. |
 | .NET | `ulong` | `uint64_t` 전체 범위를 손실 없이 전달한다. |
-| Java/Kotlin | `long` | 64개 bit를 unsigned 값으로 해석하여 그대로 전달한다. |
+| Java/Kotlin | `long` | `0`부터 `Long.MAX_VALUE`까지 허용한다. 그 범위를 넘는 Core 조회값은 overflow 오류로 처리한다. |
 | Node.js | `bigint` | `0`부터 `2^64-1`까지 허용하고 정확히 8 byte로 전달한다. |
 | Python | `int` | 음수가 아닌 `uint64_t` 범위만 허용하고 정확히 8 byte로 전달한다. |
-| Go | `int` | `0`부터 platform `MaxInt`까지 허용한 뒤 `uint64`로 변환한다. 조회값이 `MaxInt`를 넘으면 overflow error를 반환한다. |
+| Go | `uint64` | Core `uint64_t`와 같은 범위를 손실 없이 전달한다. |
 | Rust | `u64` | `uint64_t`와 같은 범위를 손실 없이 전달한다. |
 
 ##### SpotNode HWM 옵션
@@ -1289,11 +1369,11 @@ deferred HWM과 `snd_bytes_in_flight`, `rcv_bytes_in_flight`는 byte 단위이�
   `ZLINK_SPOT_NODE_OPT_PUBSUB_HWM` 네 가지 admission option과
   `ZLINK_SPOT_NODE_OPT_DISPATCH_WORKERS_MIN`,
   `ZLINK_SPOT_NODE_OPT_DISPATCH_WORKERS_MAX` 두 가지 dispatch worker option이다.
-  C API의 공통 `ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES`는 raw socket의 명시
-  override로만 유지한다. 언어별 고수준 바인딩은 이 값을 socket/SpotNode/Spot
-  public facade로 노출하지 않고, context option만 canonical API로 노출한다.
-  SPOT node와 SPOT handle에는 raw socket 공통 옵션을 설정할 수 없으며,
-  호출하면 `EINVAL`로 실패한다.
+  제거된 `ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES`와
+  `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES`는 raw socket이나
+  socket/SpotNode/Spot facade에 alias로 남기지 않는다. 바인딩은 byte 단위
+  context memory limit, Core budget, profile과 ABI v1 budget snapshot만 canonical
+  Auto HWM 표면으로 노출한다.
   dispatch worker option은 `SpotNode` 소유 callback worker pool의 크기만
   조정하며, `ZLINK_IO_THREADS`나 data-plane thread 수를 뜻하지 않는다.
   `min`은 1 이상, `max`는 `min` 이상이어야 한다. 명시 설정이 없으면
@@ -1588,8 +1668,9 @@ surface 배치는 아래 `Actor Dispatch Policy` 절을 따른다.
    - 실패 시 예외를 던진다.
    - 예외에는 `int code` (0–706 범위) 를 포함하여 호출자가 실패 원인을
      구분할 수 있게 한다.
-   - `BACKPRESSURED`, `NOT_CONNECTED`, `NOT_FOUND` 를 포함한 모든 실패는
-     예외로 전달한다. 이들은 반환값이 아니다.
+   - 각 operation 계약이 허용하는 `BACKPRESSURED`, `NOT_CONNECTED`, `NOT_FOUND`
+     등의 실패는 예외로 전달한다. 이들은 반환값이 아니다. 단, raw terminal reply는
+     HWM 없는 completion lane을 사용하므로 `BACKPRESSURED`를 허용하지 않는다.
 2. **C / Go / Rust 는 exception 이 없으므로 return-based 계약을 따른다.**
    바인딩은 각 언어 관용구에 맞는 스타일로 처리한다.
    - C: 함수별 typed result enum 반환
@@ -1609,9 +1690,10 @@ surface 배치는 아래 `Actor Dispatch Policy` 절을 따른다.
    - `.NET` / `Java` / `Node` / `Python` / `C++` 는 public
      `trySend`, `tryRecv`, `tryRequest` 를 두지 않는다.
    - C ABI 는 blocking 과 non-blocking 을 함수 인자의 `flags` 로 표현한다.
-   - wrapper binding 의 send/publish/request/reply 계열은 builder 의
-     `.flags(...)` 단계로 non-blocking submit 을 표현한다. operation 시작점
-     시그니처에 별도 `flags` 인자를 늘리지 않는다.
+   - wrapper binding 의 send/publish/request와 Core ABI가 send flag를 받는 reply
+     계열은 builder 의 `.flags(...)` 단계로 non-blocking submit 을 표현한다.
+     operation 시작점 시그니처에 별도 `flags` 인자를 늘리지 않는다. Raw terminal
+     reply는 Core ABI에 send flag가 없으므로 flag 단계를 노출하지 않는다.
    - wrapper binding 의 data-plane `recv`, routed recv, `subscribe` 는
      caller-provided result storage 를 채우고, 반환값은 "데이터를 받았는가"만
      표현한다.
@@ -1788,7 +1870,7 @@ C API 의 **함수별 typed result enum 구조를 모든 바인딩이 그대로 
 
 #### 한 entrypoint, 빌더 단계로 변형 표현
 
-같은 작업의 변형(async/callback, single/multipart, flags 유무, timeout 유무)은
+같은 작업의 변형(single/multipart, flags 유무, timeout 유무)은
 동일한 entrypoint 이름을 사용하고, 변형은 builder 단계로 표현한다. 별도 이름
 (`request_callback`, `send_nonblocking`, `send_with_flags` 등)을 만들지 않는다.
 
@@ -1799,14 +1881,9 @@ spot.request_to_channel(channel)
     .timeout(Duration::from_secs(3))
     .submit()                              // returns the language completion object
 
-spot.request_to_channel(channel)
-    .message(part)
-    .flags(SendFlags::DONTWAIT)
-    .submit(callback)                      // callback variant
-
 // BAD: split names for the same operation.
 request_to_channel(channel, parts, timeout)
-request_to_channel_callback(channel, parts, callback, flags, timeout)
+request_to_channel_async(channel, parts, timeout)
 ```
 
 #### 공통 결과 타입 이름
@@ -1855,15 +1932,14 @@ surface에서는 같은 시작점에 `Message` / `List<Message>` / `flags` / `ti
 
 ### Request 정책
 
-request 는 언어별 async 완료와 callback 완료 방식을 제공할 수 있으며, 두 방식
-모두 동일한 `request` entrypoint 가 반환하는 `RequestOp` operation builder
-의 submit 단계로 선택한다. 별도 이름 (`request_callback`, `requestAsync` 등)
-을 만들지 않는다.
+request 는 동일한 `request` entrypoint 가 반환하는 `RequestOp` operation builder에서
+언어별 native suspension terminal 하나를 제공한다. 별도 이름 (`request_callback`,
+`requestAsync`, `submit_async` 등)을 만들지 않는다.
 
 SPOT operation builder 대상의 작업 시작점은 `requestToChannel` /
 `requestToSpot` / `requestToRouter` 이고, raw `DealerSocket` /
 `RouterSocket` 의 작업 시작점은 `request` / `request(peer)` 이다. 어느
-시작점이든 완료 방식은 [바인딩 비동기 실행 표면 정책](async-coroutine-policy.md)에
+시작점이든 완료 방식은 [바인딩 비동기 실행 표면 정책](async-coroutine-policy.ko.md)에
 정의한 언어별 마지막 실행 메서드로 선택한다.
 - **성공 시 reply payload 의 `List<Message>` 만 반환한다.** caller 는 이미
   자기가 보낸 request 의 routing_id 와 request_seq 를 알고 있으므로
@@ -1871,40 +1947,11 @@ SPOT operation builder 대상의 작업 시작점은 `requestToChannel` /
 - multipart reply 가 가능하므로 단일 `Message` 가 아닌 `List<Message>` 를
   반환한다. 단일 part reply 는 `list[0]` 으로 꺼낸다.
 
-#### Callback request
-
-builder의 callback submit 메서드 (`submit(callback)`).
-
-- flags 파라미터 있음. builder의 `.flags(...)` 단계로 전달하며,
-  `DONTWAIT` 으로 non-blocking submit 가능.
-- timeout 은 builder의 `.timeout(...)` 단계로 전달한다. 지정하지 않으면 소켓
-  기본 timeout 을 사용한다.
-- submit 단계는 아래처럼 해석한다.
-  - exception 기반 언어:
-    blocking 성공=`true`, non-blocking temporary backpressure=`false`,
-    그 외 submit 실패=예외
-  - return-based 언어:
-    기존 에러 반환 계약 유지
-  실패 시 callback 은 등록되지 않는다.
-- submit 성공 시 callback 이 정확히 한 번 호출된다.
-  - 성공: `result = OK`, reply parts 포함
-  - 실패: `result != OK` (TIMED_OUT 등), parts 는 empty / null / None /
-    `Option::None`
-- callback 시그니처는 언어 관용구를 따르며 **reply payload 는 `List<Message>`**
-  로 전달한다 (`Received` 가 아니다):
-  - 공통 패턴 (C++/Java/.NET/Node/Python/Go):
-    `(RequestResult result, List<Message> parts)` — 결과 enum 과 parts 리스트
-  - Rust 관용구: `FnOnce(Result<Vec<Message>, RequestError>)` — `Result` 타입
-    이 Rust 에서 에러 + 값을 표현하는 표준 방식이므로 이 패턴을 허용한다.
-    `RequestError::code` 는 `RequestResult` enum 값과 1:1 대응한다.
-
 #### 공통
 
 - `zlink_request_result_t` 전체 정의는
   [errno-map.md](https://zlink-systems.github.io/zlink/ko/spec/core/04-errno-map/) 를 참조한다.
-- Go / Rust 는 exception 이 없으므로 callback request 의 submit 실패도
-  return-based 로 처리한다 (Go: `*SubmitError` 반환, Rust:
-  `Result<_, SubmitError>` 반환).
+- Go / Rust 는 exception 이 없으므로 suspension 결과의 실패를 return-based로 처리한다.
 
 ## 도메인 객체 정책
 - Java, C#, Go, Rust, Node, Python은 가능하면 `out` 파라미터나 raw tuple보다
@@ -2193,8 +2240,13 @@ socket monitor 가 제공하는 런타임 상태 스냅샷. 모든 바인딩이 
 | `detail_flags` | enum flags | 세부 비트마스크 |
 | `snd_pending_msgs` | `uint64` | 송신 큐 대기 메시지 수 |
 | `rcv_pending_msgs` | `uint64` | 수신 큐 대기 메시지 수 |
-| `auto_hwm_*` diagnostic fields | enum / number / bigint | C `zlink_monitor_status_t`의 canonical auto-HWM 필드를 같은 의미로 노출해야 한다. enabled, profile(enum), role, policy class, unit budget, size cap, socket message slots, effective message bytes, applied HWM, applied buffer, 최근 재계산 이유(enum), deferred shrink, blocked ratio를 포함한다 |
+| `snd_pending_bytes`, `rcv_pending_bytes` | `uint64` | 송수신 queue의 현재 pending accounted byte |
+| `auto_hwm_*` diagnostic fields | enum / number / bigint | C `zlink_monitor_status_t` ABI v3의 canonical 필드를 같은 의미로 노출한다. enabled, profile, role, policy class, planned/applied/deferred SND·RCV HWM byte, effective buffer byte, 최근 재계산 시각·이유, blocked ratio, SND·RCV in-flight byte, minimum Core charge와 oversize 진단을 포함한다 |
 | `is_ready()` | `bool` | raw socket monitor source에서만 `state_flags` 의 ready 비트 확인 편의 메서드 |
+
+Monitor open option은 `monitor_hwm_bytes` 하나만 사용한다. `0`은 Core 기본값을 선택하고 양수는
+변환 없이 source worker와 내부 PAIR 양방향의 정확한 byte 상한으로 전달한다. Legacy monitor
+message-count option이나 count↔byte alias는 제공하지 않는다.
 
 #### 서비스 계층 엔트리 객체
 
@@ -2889,7 +2941,7 @@ query client, compatibility alias를 현재 API로 노출하면 안 된다.
 - dispatch, pending map, timeout, reply 매칭은 core C API 에서 처리한다.
   바인딩은 이 로직을 다시 구현하지 않는다.
 - core 는 callback 기반 비동기 모델을 제공한다.
-  바인딩은 [바인딩 비동기 실행 표면 정책](async-coroutine-policy.md)에 따라
+  바인딩은 [바인딩 비동기 실행 표면 정책](async-coroutine-policy.ko.md)에 따라
   callback 위에 언어별 완료 객체 반환 표면을 얹을 수 있다. coroutine 연결은 framework가
   맡는다.
 - `request()` 는 thread blocking API 가 아니다.
@@ -3012,22 +3064,16 @@ core 가 request-reply dispatch 를 처리한다. 바인딩은 dispatch owner �
 
 #### Request API 변형
 
-request 는 두 완료 방식을 가진다.
-
-비동기 request와 callback completion request는 모두 `request`
-entrypoint가 반환하는 `RequestOp` operation builder를 통해 노출된다. 완료 방식별
-flags, timeout, 실패 전달 규칙은 [바인딩 비동기 실행 표면 정책](async-coroutine-policy.md)을
-따른다.
+request 는 `request` entrypoint가 반환하는 `RequestOp` operation builder에서 언어별
+native suspension terminal 하나를 노출한다. timeout과 실패 전달 규칙은
+[바인딩 비동기 실행 표면 정책](async-coroutine-policy.ko.md)을 따른다.
 
 C binding 은 `zlink_*_request_part(..., flags, part_flag, timeout, ...)`
 substrate 형태를 유지한다. C ABI에는 wrapper builder 정책을 적용하지 않는다.
 
-- 에러 처리는 Error Handling Policy 를 따른다.
-  callback request 의 submit 실패도 언어 관용구를 그대로 적용한다:
-  exception 언어 (C++/Java/.NET/Node/Python) 는 예외, return-based 언어
-  (C/Go/Rust) 는 에러 반환.
-- reply 결과는 callback 이 정확히 한 번 전달한다.
-  `(RequestResult result, List<Message> parts)`
+- 에러 처리는 Error Handling Policy 를 따른다. exception 언어는 예외, return-based
+  언어는 error result로 suspension 실패를 전달한다.
+- reply 결과는 suspension의 성공 값 `List<Message>`로 정확히 한 번 전달된다.
 
 #### SPOT Request-Reply
 
@@ -3961,6 +4007,11 @@ zlink 에서 사용하는 코드와 의미. 바인딩은 이 코드를 언어별
 | 11 | `SEQ_EXHAUSTED` | `EBUSY` | 내부 실패 | request seq 공간 고갈 |
 | 12 | `INTERNAL_ERROR` | `EPROTO` 등 | 내부 실패 | 내부 submit 실패 (상세는 `zlink_errno()`) |
 
+이 enum은 submit 함수군이 공유하지만 모든 값이 모든 함수에 적용된다는 뜻은 아니다.
+`BACKPRESSURED`는 HWM-managed send, publish와 request submit에만 적용한다. Raw
+ROUTER/`Received` reply는 HWM 없는 completion lane에 한 번 제출하므로
+`BACKPRESSURED`를 반환하지 않는다.
+
 ##### `zlink_request_result_t` (request completion callback)
 
 | 값 | 상수 | 내부 errno | 의미 |
@@ -4167,17 +4218,20 @@ wire 에서 사용 가능한 errno 는 3개로 제한된다: `ENOENT`, `EOPNOTSU
 
 **reply 오류 (`SubmitError`):**
 
+Raw ROUTER/`Received` reply는 모든 high-level binding에서 동기 one-shot submit이다.
+Binding은 terminal reply와 error reply를 HWM 없는 completion lane에 native 호출 한 번으로
+제출한다. HWM backpressure는 reply 결과가 아니며, 아래의 non-HWM 실패는 즉시 전달한다.
+
 | 상황 | `reply()` |
 |------|-----------|
 | 성공 | 정상 반환 |
-| backpressure | `SubmitError(BACKPRESSURED)` |
 | not connected | `SubmitError(NOT_CONNECTED)` |
+| socket/context 종료 | `SubmitError(TERMINATED)` |
+| 잘못된 인자 | `SubmitError(INVALID_ARGUMENT)` |
 | 기타 실패 | `SubmitError(해당 submit 코드)` |
 
 - async request 는 완료 실패를 async completion 경로 (Future reject / await
   error) 로 전달한다.
-- callback request 는 **submit 실패를 즉시 throw/return** 하고, submit 성공 후의
-  완료 실패만 callback 의 `RequestResult` / `RequestError` 로 전달한다.
 - 함수군별 하위 에러 타입을 사용한다 (Per-Function Error Type Hierarchy 참조).
   - submit 실패: `SubmitException` / `SubmitError`
   - request 완료 실패: `RequestException` / `RequestError`
@@ -5139,10 +5193,13 @@ perf 정책은 [`doc/perf/PERF_POLICY.md`](../../../doc/perf/PERF_POLICY.md)에�
 `ZLINK_RID_DUPLICATE_HANDOVER`, 그리고 connect 결과 값 `NOT_FOUND`, `CONFLICT`,
 `BUSY` 를 각 언어의 일반적인 enum/오류 매핑 스타일로 노출해야 한다.
 
-- C 바인딩은 native socket option contract를 통해 `ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES` 값 `0x3034` 를, context option contract를 통해 `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` 값 `18` 을 노출한다.
-- 상위 바인딩은 이 기능을 typed context option facade로 노출해야 한다.
-- socket, SpotNode, Spot 의 public facade는 메시지 단위 옵션을 추가하지 않는다.
-- 호환성을 위해 raw socket 경로를 남겨 둔다면 canonical API와 명확히 분리하고, 새 문서·샘플·테스트에서는 사용하지 않으며, C 계약(`int` bytes, raw 기본값 `0`, 음수 값은 `EINVAL` 로 실패)을 그대로 유지해야 한다.
+- C와 상위 바인딩은 제거된 `ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES` 값
+  `0x3034` 및 `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` 값 `18`을 더 이상
+  노출하지 않는다. 호환 alias, deprecated wrapper와 raw 우회 경로도 만들지
+  않는다.
+- canonical Auto HWM 표면은 byte 단위 context memory limit, Core budget,
+  profile, ABI v1 budget snapshot과 metric reset이다. socket, SpotNode, Spot에는
+  별도의 메시지 단위 옵션을 추가하지 않는다.
 
 ## 관련 문서
 - `bindings/cpp/`

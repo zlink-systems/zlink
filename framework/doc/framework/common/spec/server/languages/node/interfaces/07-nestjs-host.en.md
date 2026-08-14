@@ -161,11 +161,7 @@ export interface ZLinkLocationOptions {
     ownerLeaseRenewTimeoutMs(value: number): this;
     routeCacheMaxAgeMs(value: number): this;
     messageFollowDurationMs(value: number): this;
-    maxActiveOutboundRelocations(value: number): this;
-    maxActiveInboundRelocations(value: number): this;
-    maxConcurrentRelocationCaptures(value: number): this;
-    maxConcurrentRelocationRestores(value: number): this;
-    maxRelocationPayloadInFlightBytes(value: number): this;
+    sessionRelocationSealTimeoutMs(value: number): this;
 }
 
 export interface ZLinkNestFrameworkOptionsBuilder {
@@ -181,7 +177,6 @@ export interface ZLinkNestFrameworkOptionsBuilder {
     setMessageFollowDuration(timeoutMs: number): this;
     configureStreamCompression(): ZLinkStreamCompressionBuilder;
     configureLocations(): ZLinkLocationOptions;
-    configureInboundDispatch(): ZLinkInboundDispatchOptions;
     configureNetwork(): ZLinkNetworkOptions;
     addRouteMesh(name: string): ZLinkNestMeshNodeBuilder;
     addClientServerChannel(name: string): ZLinkNestClientServerChannelRoleBuilder;
@@ -415,16 +410,14 @@ export declare class ZLinkHttpClientModule {
 }
 ```
 
-`applicationHwmBytes(undefined)` is Auto mode, `0n` is no limit, and a
-positive value is the exact host-wide byte cap. `applicationHwmProfile`'s
-default is `Balanced`. If `processMemoryLimitBytes(undefined)`, it
-checks the finite OS cap applied to the process, such as a
-container/cgroup/Windows Job Object, and the V8 managed heap cap
-(`heap_size_limit`). If both are confirmed, the smaller value is used;
-if only one is confirmed, that value is used. If neither can be
-confirmed, the system's total physical memory is used. If the computed
-result isn't positive, startup fails with a configuration error before
-socket bind. The application listener's default `maxMessageSize` is
+The `coreHwmMemoryLimitBytes`, `coreHwmBudgetBytes`, and `coreHwmProfile` methods of the
+`ZLinkDispatchOptionsBuilder` returned by `configureDispatch()` forward values to Core.
+The Node binding forwards a positive finite V8 `heap_size_limit` runtime memory
+hint. Core and job-queue profiles are independent enums, both defaulting to `Balanced`.
+Manual job cap is `1..2,147,483,647`; omission uses the common startup CPU snapshot and
+32/64/128/256 coefficients. Range violation and overflow fail before bind, and runtime does
+not recompute the result. The application
+listener's default `maxMessageSize` is
 `16_777_216` bytes.
 
 The NestJS builder also only registers the Entry Spot implementation
@@ -441,3 +434,7 @@ with no
 factory where every factory is `DisableRelocation` can omit the
 Relocation Store. A missing or duplicate registration is a
 configuration error before socket bind.
+
+`sessionRelocationSealTimeoutMs(value)` is a startup-only positive finite millisecond value
+with a 3,000 default. Zero, negative, `NaN`, infinity, non-integer, or a value outside the
+safe-integer range is a configuration error before socket bind.

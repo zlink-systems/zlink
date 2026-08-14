@@ -40,7 +40,8 @@ blocking을 피하지만 10ms 주기 재시도를 Framework에 구현한다. 이
 - [.NET Framework raw request](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkRawRouterServicePort.cs)
 - [.NET binding Router submit](../../bindings/dotnet/src/Zlink/Runtime/Sockets/RouterSocket.cs)
 - [Java Framework raw service port](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaRawServicePort.java)
-- [Java Framework request 재시도](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkChannelRequestSubmitter.java)
+- Java Framework request 재시도(계획 작성 당시 경로):
+  `framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkChannelRequestSubmitter.java`
 - [Node.js Framework raw binding port](../../framework/languages/node/packages/framework/src/runtime/backend/node/node-raw-binding-port.ts)
 - [Node.js binding request executor](../../bindings/node/src/zlink/runtime/messaging/request_executor.ts)
 - [Node.js native request submit](../../bindings/node/native/src/addon_core.cc)
@@ -221,20 +222,54 @@ connection-bucket 진단 property는 각 binding public type에서 제거한다.
 
 모든 binding은 routed send와 routed request에 두 종류의 호출을 구분해 제공한다.
 
-- Nonblocking submit은 Core에 한 번 제출하고 `OK`, `BACKPRESSURED`, `NOT_FOUND`, `DISCONNECTED`,
+- Nonblocking submit은 Core에 한 번 제출하고 `OK`, `BACKPRESSURED`, `NOT_FOUND`, `NOT_CONNECTED`,
   `TERMINATED`를 즉시 반환한다.
 - 비동기 전송은 target pipe가 HWM 때문에 수용하지 못하면 해당 operation만 기다렸다가 전송 가능 상태에서
   다시 진행한다. Send는 Core 수용 시 완료하고 request는 수용 뒤 reply lifecycle까지 계속 기다린다.
+
+비동기 전송의 canonical terminal은 C++ `async()`, .NET `Async(...)`, Java·Node·Python·Rust
+`submit()`, Kotlin `submit().await()`, Go `Submit(ctx)` completion channel이다. Rust 사용 형태는
+`submit().await?`이다. HWM-managed routed builder에서 callback·blocking 호환 terminal과
+`submit_async()` 이름은 제거한다. Core C callback·handler 등록과 별도 one-shot 즉시 submit은 이 제거
+범위가 아니다.
 
 비동기 전송은 HWM 대기 중 호출 언어의 event loop 또는 runtime worker thread를 점유하지 않는다. 같은
 socket의 공용 submit lock을 잡은 채 기다리지도 않는다. A RID가 막혀도 B·C·D RID의 호출은 Core에
 독립적으로 도달하고 진행할 수 있어야 한다. `Task`, `CompletableFuture` 또는 `Promise`를 반환하기 전에
 native blocking submit을 실행하는 방식은 비동기 계약을 만족하지 않는다.
 
-Binding은 Core의 nonblocking 결과와 대상 pipe의 전송 가능 상태 변화를 이용해 operation을 재개한다.
-수용 실패 뒤 waiter를 등록하는 사이에 wake를 잃지 않도록 waiter를 먼저 등록하고 수용을 시도하거나,
-등록 뒤 같은 pipe 상태를 다시 검사해야 한다. A가 막힌 동안 B가 writable해서 socket-wide send-ready가
-먼저 발생하거나 소비되어도 A operation은 영구 대기해서는 안 된다.
+Binding은 socket의 비동기 operation을 받기 전에 Core의 routed target readiness handler를 등록한다.
+이 handler는 target RID, transport pair ID·generation과 writable/terminal 상태를 전달한다. 기존
+socket-wide send-ready는 어느 RID가 회복됐는지 구분할 수 없으므로 routed 비동기 admission에 사용하지
+않는다.
+
+Binding 내부에는 `(socket, targetRid, transportPairId, generation)`별 pending operation 목록을 둔다.
+이는 Framework의 메시지 scheduler가 아니라 언어의 coroutine, Task, Future 또는 Promise를 재개하기 위한
+binding 내부 대기 상태다. Operation을 이 목록에 먼저 넣고 같은 target으로 `DONTWAIT` submit한다.
+성공하면 목록에서 제거하고 완료하며, `BACKPRESSURED`이면 그대로 기다린다. Target readiness callback은
+해당 key만 실행 가능한 목록에 넣고 binding scheduler에서 다시 submit한다.
+
+Part 단위 Core API를 사용하는 binding은 같은 native handle의 모든 outbound 경로가 공유하는 짧은
+complete-record attempt gate를 둔다. Gate 안에서 기존 exact-target part API를 첫 part부터 `FINAL`까지
+호출하고 즉시 해제하며 readiness 대기 중에는 보유하지 않는다. 이는 binding 내부 admission owner이고
+새 multipart ABI나 public transaction abstraction이 아니다. 내부 pending list나 ready ring은 같은 RID
+concurrent call에 새 strict FIFO 공개 계약을 추가하지 않는다.
+
+~~~text
+onTargetSendReady(event):
+    key = (socket, event.rid, event.pairId, event.generation)
+    if event.state == TERMINAL:
+        pendingByTarget[key]를 terminal error로 정확히 한 번 완료
+    else if pendingByTarget[key]가 비어 있지 않고 key가 readySet에 없으면:
+        readyTargets.push_back(key)
+        readySet.insert(key)
+    schedulePump()
+~~~
+
+위 코드는 contract pseudocode이며 언어별 실제 자료구조나 signature를 요구하지 않는다. Callback은
+blocking submit을 직접 실행하지 않는다. Pump는 대상 key로 `DONTWAIT`를 다시 시도하고 재차
+`BACKPRESSURED`이면 다음 target readiness를 기다린다. Generation이 다른 event는 stale route의 wake이므로
+무시한다. B의 writable event가 A operation을 깨우거나 A를 busy polling하게 해서는 안 된다.
 
 이 대기 상태는 binding 내부 구현이며 Framework에 RID map, retry deque, ready ring이나 주기적 polling을
 요구하지 않는다. 별도 public retry queue capacity와 queue-full 오류도 추가하지 않는다. 대상 pipe의 credit
@@ -250,7 +285,7 @@ binding 내부 계약이고 Framework가 callback 등록 상태를 별도로 관
 
 | Binding | 현재 동작 | 목표와의 차이 |
 |---|---|---|
-| C++ | One-way send는 nonblocking이지만 routed request는 공유 socket mutex 안에서 blocking submit을 호출한다. | Request 수용 대기가 다른 RID 호출을 지연시킬 수 있다. |
+| C++ | Direct `co_await ...async()`와 target별 admission state, socket별 complete-record attempt gate를 사용한다. | Framework promise continuation handoff와 cancellation/lifetime 회귀 검증을 유지해야 한다. |
 | .NET | `RequestAsyncCore`가 `Task`를 반환하기 전에 `SubmitGate` 안에서 flags 0 native request를 호출한다. 일부 다른 경로만 `DONTWAIT` submitter를 사용한다. | Native 수용 대기가 managed thread와 같은 socket submit을 막을 수 있다. |
 | Java | Framework send/request는 `DONT_WAIT`이고 backpressure면 Framework scheduler가 10ms 주기로 재시도한다. | Thread block은 피하지만 비동기 수용 책임과 polling이 Framework에 중복 구현되어 있다. |
 | Node.js | Raw request의 Promise executor가 flags `None` native request를 JS event loop에서 동기 호출한다. 일부 channel 경로만 `DONT_WAIT` submitter를 사용한다. | Native 수용 대기가 event loop 전체를 멈출 수 있다. |
@@ -299,8 +334,9 @@ CoreHwmBudgetBytes의 범위는 Core context 하나다. Binding은 여러 contex
 9. Framework 이관 완료 뒤 Router completion-control API·callback wrapper와 native symbol mapping 제거
 10. Monitor HWM byte open option과 pending byte·instance aggregate 매핑 추가
 11. 모든 perf launcher의 legacy monitor count 옵션과 slot·bucket snapshot property 제거
-12. Routed send/request의 nonblocking 결과와 최초 수용까지 포함하는 비동기 API를 모든 binding에 통일
-13. .NET SubmitGate 대기, Java Framework 10ms polling과 Node.js event-loop native blocking gap 제거
+12. Core routed target readiness callback의 RID·transport pair generation·terminal 상태를 모든 binding에 매핑
+13. Routed send/request의 nonblocking 결과와 최초 수용까지 포함하는 native suspension terminal을 모든 binding에 통일하고 callback·blocking 호환 terminal 제거
+14. .NET SubmitGate 대기, Java Framework polling과 Node.js event-loop native blocking gap 제거
 
 ## 12. 검증 항목
 
@@ -327,6 +363,8 @@ CoreHwmBudgetBytes의 범위는 Core context 하나다. Binding은 여러 contex
 - 비동기 API는 backpressure 중 caller runtime thread와 socket-wide submit lock을 점유하지 않음
 - A RID의 비동기 수용 대기가 B·C·D RID의 submit과 진행을 막지 않음
 - A가 막히고 B가 writable인 상태에서 socket-wide ready가 먼저 발생해도 A operation의 wake가 유실되지 않음
+- Core target-ready event가 해당 `(socket, RID, pair generation)` pending operation만 재개함
+- Stale generation event와 B의 writable event가 A를 재개하거나 busy polling시키지 않음
 - Waiter 등록과 Core 상태 재검사 사이의 경쟁을 반복 시험해 영구 대기가 없음
 - Pipe detach, socket close, context 종료, timeout과 cancellation이 대기 operation을 정확히 한 번 완료함
 - Backpressured multipart를 binding operation이 보존하고 수용 성공 또는 terminal 결과에서 한 번만 정리함

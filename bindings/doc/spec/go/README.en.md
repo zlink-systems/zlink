@@ -3,14 +3,14 @@ title: "Go Bindings Public Contract"
 ---
 
 <!-- bindings-nav:start -->
-[Spec index](../README.md) | [Previous: Python](../python/README.md) | [Next: Rust](../rust/README.md)
+[Spec index](../README.en.md) | [Previous: Python](../python/README.en.md) | [Next: Rust](../rust/README.en.md)
 <!-- bindings-nav:end -->
 
-# Go binding Core 0.9.0 public contract
+# Go binding Core 0.11.1 public contract
 
 > **What this chapter defines** — the public type, ownership, and error
 > contract the currently implemented Go binding provides on top of the
-> Core 0.9.0 raw C API.
+> Core 0.11.1 raw C API.
 
 This document defines only the public contract of the currently
 implemented Go binding. It does not add pre-implementation designs or
@@ -20,12 +20,12 @@ matching projection at the module root.
 
 | Section | Covers |
 |---|---|
-| [Module and public package](#module-and-public-package) | Import path, the internal boundary, the Core 0.9.0 raw scope |
+| [Module and public package](#module-and-public-package) | Import path, the internal boundary, the Core 0.11.1 raw scope |
 | [Public contract categories](#public-contract-categories) | A table of public concepts by category |
 | [Context and resource lifetime](#context-and-resource-lifetime) | Ownership/release rules for Context/socket/monitor/poller/timer |
-| [Byte HWM and Auto-HWM](#byte-hwm-and-auto-hwm) | Mapping between Go `int` and Core `uint64_t` byte HWM |
+| [Byte HWM and Auto-HWM](#byte-hwm-and-auto-hwm) | Mapping between Go `uint64` and Core `uint64_t` byte HWM |
 | [Message and ownership](#message-and-ownership) | Native storage, ownership per builder path |
-| [Socket operation](#socket-operation) | Builder terminal signatures, per-socket operations, ROUTER completion control |
+| [Socket operation](#socket-operation) | Builder terminal signatures, per-socket operations |
 | [Receive and eventing](#receive-and-eventing) | Caller-provided receive return values; monitor/poller/timer |
 | [Error contract](#error-contract) | The `ZlinkError` interface and concrete error types |
 | [FFI and package boundary](#ffi-and-package-boundary) | The cgo include boundary, the module proxy layout |
@@ -38,12 +38,12 @@ consumer imports the `zlink` package at the module root.
 `zlink.systems/zlink/contracts` is a public projection that declares
 the same contract split by category, and the root package re-exports it.
 
-Runtime handles, cgo declarations, native structs, callback trampolines,
-the request-progress pump, and buffer marshalling are implementation
+Runtime handles, cgo declarations, native structs, callback trampolines, and
+buffer marshalling are implementation
 details of `internal/native`. These types and this package are not part of
 the consumer contract.
 
-- The current package contract projects only the Core 0.9.0 raw C API.
+- The current package contract projects only the Core 0.11.1 raw C API.
 - It includes Context, Message, raw sockets, monitor, poller, timer, and utility, but not Spot, Actor, MeshNode, or service operations.
 - The Go module has no per-message codec registration API either.
 - The default path for messages and byte payloads uses the typed API the binding provides.
@@ -69,10 +69,12 @@ capability does not get that method.
 - Context, socket, monitor, poller, timer, and utility resources are owned by the caller, who calls `Close` or the matching close method once done.
 - Calling Close repeatedly on the same resource does not re-release an already-closed state.
 
-A context option sets the I/O thread count and socket defaults. The
-Auto-HWM message unit is passed as the `uint64` storage the Core contract
-requires. A Go caller uses the public `int` method, but a negative value or
-one outside the platform `uint64` range is rejected before it is set.
+A context option sets the I/O thread count and socket defaults. Public `uint64`
+methods preserve Core's full byte range for the Auto-HWM memory limit and Core
+budget. The profile is passed as
+`AutoHwmProfile`. Context provides
+`CoreHwmBudgetSnapshot() (CoreHwmBudgetSnapshot, error)` and
+`ResetCoreHwmBudgetMetrics() error`.
 
 A socket or timer a poller has registered borrows that resource's handle.
 The source must therefore be removed from the poller before it is
@@ -82,25 +84,30 @@ against a single poller.
 ## Byte HWM and Auto-HWM
 
 Core owns HWM calculation and queue admission. The Go binding validates the
-`int` passed to `SetSendHighWaterMark(int)` and
-`SetReceiveHighWaterMark(int)`, then converts it to Core's 8-byte `uint64_t`
-option. Negative values are rejected, and the public range is `0` through the
-executing platform's `MaxInt`. If a value read from Core exceeds `MaxInt`, the
-getter returns an overflow error instead of narrowing it. `0` means unlimited.
+`uint64` passed to `SetSendHighWaterMark(uint64)` and
+`SetReceiveHighWaterMark(uint64)`, then preserves it in Core's 8-byte
+`uint64_t` option. Getters return Core's full range as `uint64`. `0` means
+unlimited.
 
-`ContextOptions.SetAutoHwmMsgUnitBytes(int)` sends the planning unit to Core
-under the same range rule. Core multiplies the selected message-slot count by
-the planning unit to calculate the planned byte HWM. The value is neither an
-average message size nor the actual admission charge. Setting a directional
+The context passes the byte-valued memory limit and Core budget, plus the
+canonical profile option, to Core. Core applies the profile ratio exactly once
+and calculates planned byte HWM per physical directional queue. Setting a directional
 HWM makes that direction a manual override and excludes it from automatic HWM
 recalculation.
+
+Input precedence is manual Core budget, explicit memory limit, a finite memory-
+limit hint configured in the Go runtime, then Core fallback. Setting either of
+the first two values disables automatic runtime-hint detection. The binding
+does not combine the hint with Core's hard limit. If an explicit input exceeds
+a finite hard limit Core detected, the binding preserves the existing
+configuration error corresponding to `EINVAL` and does not clamp the value.
 
 Core decides backpressure when the accounted bytes retained by a pipe reach
 the applied HWM. The Go binding does not recount messages and passes Core's
 result through the existing operation and error contract. Planned, applied,
 and deferred HWM and in-flight usage in `MonitorStatus` are `uint64` bytes.
-Only pending-message fields and `AutoHwmSocketMessageSlots` are count
-diagnostics.
+Pending-message counts remain display diagnostics; no slot, message-unit,
+size-cap, or connection-bucket property is exposed.
 
 ## Message and ownership
 
@@ -112,24 +119,29 @@ message stays open. When the lifetime needs to extend beyond the message,
 
 | Builder path | Ownership rule |
 |---|---|
-| Adding a `Message` | Preserves the caller's message on submit failure; consumes it on success |
-| `MoveMessage` | Transfers ownership explicitly at submit time — no guarantee the caller can reuse the original message after it returns |
-| `Bytes` | Reads the caller's slice during submit and does not retain the slice after submit returns |
+| Adding a `Message` | Preserves the caller's message if the operation fails before Core admission and consumes it when admission succeeds |
+| `MoveMessage` | Transfers ownership explicitly when `Submit` is called — no guarantee the caller can reuse the original message after it returns |
+| `Bytes` | Reads the caller's slice while `Submit` runs and does not retain it after `Submit` returns |
 
 The Go wrapper owns the `Message` parts in a receive result. Parts
 delivered via `Received`, `TopicMessage`, `SubscriptionEvent`, or a request
-completion callback are explicitly closed after use. When a `Recv` family
+completion channel are explicitly closed after use. When a `Recv` family
 method takes caller-provided output, it clears that output object's
 existing parts before filling in the new native parts and metadata.
+
+Ordinary `Recv` and `Subscribe` return Core queue credit immediately when a
+part is dequeued. The lifetime of an ordinary application receive result
+therefore does not remain in HWM accounting. Only a Framework backend
+explicitly selects the retained aggregate path below.
 
 ## Socket operation
 
 ### Builder terminal signature
 
 Send, publish, request, and reply use a multipart builder. The builder
-collects payload and flags, then runs once at the terminal `Submit`.
-Calling the same builder's terminal method twice has no guaranteed
-behavior.
+collects payload and the options allowed by that operation, then runs once at
+the terminal `Submit`. Submitting the same builder twice completes the second
+submission with a state error.
 
 The current implementation's terminal signatures are as follows.
 
@@ -143,14 +155,26 @@ type SendSubmitOp interface {
     Submit(context.Context) (bool, error)
 }
 
-// Request submit chooses either a callback or a completion channel.
+// This is the HWM-managed routed submit used by DEALER Send and ROUTER SendTo.
+type RoutedSendSubmitOp interface {
+    Message(*Message) RoutedSendSubmitOp
+    MoveMessage(*Message) RoutedSendSubmitOp
+    Bytes([]byte) RoutedSendSubmitOp
+    Submit(context.Context) <-chan error
+}
+
+// The single DEALER/ROUTER request terminal returns a completion channel.
 type RequestSubmitOp interface {
     Message(*Message) RequestSubmitOp
     Bytes([]byte) RequestSubmitOp
     Timeout(time.Duration) RequestSubmitOp
-    Flags(SendFlags) RequestCallbackSubmitOp
-    SubmitAsync(context.Context) (<-chan RequestReplyCompletion, error)
-    Submit(context.Context, RequestReplyCallback) (bool, error)
+    Submit(context.Context) <-chan RequestReplyCompletion
+}
+
+type RequestReplyCompletion struct {
+    Result RequestResult
+    Parts  []*Message
+    Err    error
 }
 
 // The reply builder Received.Reply() creates returns only an error on success, with no value.
@@ -163,8 +187,50 @@ type ReplySubmitOp interface {
 
 ### DontWait and error classification
 
-- `SendFlagsDontWait` avoids blocking.
-- The normal result for temporary backpressure is `false, nil`; a real failure such as a broken connection, an invalid argument, or Core termination is returned as that function family's error.
+- Existing one-shot PAIR, PUB, XPUB, STREAM, and reply submits may use
+  `SendFlagsDontWait` on builders that allow it.
+- `ReplySubmitOp.Submit(ctx)` is a synchronous one-shot that returns no
+  completion channel. It submits a terminal reply or error reply to the
+  HWM-free completion lane with one native call. HWM backpressure is not a
+  reply result; `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`, and other
+  non-HWM submit failures return immediately as a `*SubmitError` through
+  `error`.
+- Managed DEALER `Send`, ROUTER `SendTo`, and DEALER/ROUTER `Request` builders
+  expose no flags, callback, or `SubmitAsync` compatibility terminal.
+  After validation, payload snapshot, and target selection, `Submit(ctx)`
+  returns a completion channel without blocking the caller for HWM credit.
+  The selected `(RID, transport pair, generation)` does not change during the
+  operation. If that connection detaches, the operation ends with an error
+  instead of selecting another connection. Other targets on the same socket
+  can continue to make progress during the wait.
+- Before accepting asynchronous operations, the socket runtime registers
+  Core's long-lived routed-target readiness handler. Before its first attempt,
+  an operation places its exact `(socket, RID, transport pair ID, generation)`
+  key, completion channel, and complete record in pending state, then attempts
+  `DONTWAIT` on that same target. The callback marks only that key ready; a pump
+  outside the callback performs native retry. An event for another pair
+  generation is a stale wake and is ignored.
+- Outbound paths on one native handle share a short attempt gate that protects
+  one complete multipart attempt from its first part through `FINAL`, and
+  release it before readiness waiting.
+- A routed send channel yields `nil` when Core accepts the complete record, or
+  one error, and then closes. A request channel likewise yields exactly one
+  reply or submit-failure, timeout, disconnect, socket-close, or context-
+  cancellation result and then closes. On request success the caller closes
+  `Parts`; failures are carried by `Err` and the corresponding `Result`.
+  Context cancellation places `context.Canceled` or
+  `context.DeadlineExceeded` in `Err`.
+- A routed send's absolute deadline is the earlier of the socket `SNDTIMEO` at
+  `Submit` and the context deadline. A request uses the builder `Timeout`, or
+  the socket request timeout when absent, and the earlier context deadline.
+  HWM waiting does not extend that deadline.
+- Payload parts from complete records submitted concurrently on the same
+  socket do not interleave.
+- On an existing one-shot send that returns a boolean, the normal result for
+  temporary backpressure is `false, nil`; a real failure such as a broken
+  connection, an invalid argument, or Core termination is returned as that
+  function family's error. This `false, nil` rule does not apply to reply,
+  which returns only an error.
 - Only a non-blocking receive's no-data is represented as `false, nil`.
 - Every other receive failure is an error.
 
@@ -172,28 +238,21 @@ type ReplySubmitOp interface {
 
 | Socket | Operations provided |
 |---|---|
-| PAIR, DEALER | `Send` |
+| PAIR | One-shot `Send` |
 | PUB, XPUB | `Publish` |
-| ROUTER, STREAM | A send operation that takes a target routing id |
+| DEALER | Managed routed `Send` returning a completion channel |
+| ROUTER | Managed routed `SendTo` taking a routing id and returning a completion channel |
+| STREAM | A one-shot send operation that takes a target routing id |
 | DEALER, ROUTER | A request operation — if ROUTER has received request metadata, it builds the reply operation from that metadata |
 | STREAM | A raw TCP packet callback and caller-provided receive |
 
-| Socket | Receive surface |
+| Socket | Receive API |
 |---|---|
-| PAIR, DEALER, ROUTER, STREAM | `Recv`, which fills a `Received` storage |
-| SUB, XSUB | `Subscribe`, which fills a `TopicMessage` storage |
+| PAIR, DEALER, ROUTER, STREAM | Ordinary `Recv`, which fills `Received` storage; Framework-backend-only `RecvRetained` |
+| SUB, XSUB | Ordinary `Subscribe`, which fills `TopicMessage` storage; Framework-backend-only `SubscribeRetained` |
 
-Core's part functions are the internal substrate used to implement this
-aggregate surface, and are not exposed as Go public methods.
-
-### ROUTER completion control
-
-ROUTER also provides the opaque multipart control record from Core's
-completion connection. The `OnCompletionControl` handler receives a
-`Received` carrying the source routing id and payload parts, and the
-handler must close or consume those parts. The
-`CompletionControl(peerRID)` builder sends a record to the specified peer
-and rejects any flag other than `SendFlagsNone`.
+Core's part functions are the internal substrate used to implement these
+multipart receive APIs, and are not exposed as Go public methods.
 
 ## Receive and eventing
 
@@ -202,11 +261,49 @@ A caller-provided receive method returns `(bool, error)`. If `bool` is
 error is nil. If `bool` is `true`, the output has been filled with one or
 more results. A real failure is `*RecvError`.
 
+`RecvRetained(out, flags)` and `SubscribeRetained(out, flags)` preserve the
+same `Received`/`TopicMessage` shape, routing ID, request sequence, topic, and
+multipart framing as ordinary receive. Their only lifetime difference is
+that the result privately owns one opaque Core retained credit for every
+caller-visible physical payload part. These APIs let a Framework backend move
+Core credit with the message through its queue, executor, and handler; they are
+not the default application receive path.
+
+`Received.Close` and `TopicMessage.Close` return the current parts and every
+retained credit exactly once. Starting another ordinary or retained receive
+with the same output first clears the old result, and no-data or a partial
+multipart error leaves no credit already acquired behind. Framework drop,
+cancellation, and error paths also call `Close` on the aggregate they own. The
+Go binding does not use GC timing as a lifetime contract, so both normal
+cleanup and leak prevention rely on explicit `Close` or reuse.
+
+An individual `Message` part does not secretly own retained credit. The public
+API exposes no native lease handle, separate retry/application capacity,
+allowance, or duplicate accounting state.
+
 A socket monitor is opened with a typed event mask and provides
-`MonitorEvent` and `MonitorStatus`. Each Core 0.9.0 monitor event mask and
+`MonitorEvent` and `MonitorStatus`. Each Core 0.11.1 monitor event mask and
 delivered event value is provided as its matching typed constant.
 `MonitorEventMask` is used to open a monitor, and `MonitorEventType` is
-used to check a received `MonitorEvent.Event`. A poller reports the
+used to check a received `MonitorEvent.Event`.
+`OpenSocketMonitor(socket, options...)` accepts `MonitorEventMask` and
+`MonitorHwmBytes(uint64)` as `MonitorOpenOption` values. With no event mask it
+selects all events, and multiple masks are ORed. `MonitorHwmBytes(0)` selects
+the Core default; a positive value is passed unchanged as the exact byte HWM.
+If the option is supplied more than once, the last value in call order wins.
+A `MonitorStatus` exposes `SndPendingBytes` and `RcvPendingBytes` separately
+from pending-message counts. `CoreHwmBudgetSnapshot` projects ABI version/size,
+configured/runtime/resolved memory limits, configured/effective budgets,
+planned/applied/manual-reserved HWM, Core-queue/application/current/peak/
+provisional accounted bytes, completion current/peak/pending and total-
+messaging values, monitor/instance aggregates, application/completion queue
+counts, `OutstandingApplicationLeaseCount`, `RetiredQueueCount`,
+`DeferredOriginCreditBytes`, oversize/blocked/aggregate flags,
+`BudgetGeneration`, and `MeasurementEpoch` as exact `uint64`/boolean values.
+Reset preserves current, pending, queue-count, and those three owner-lifecycle
+gauges, rebases both peaks to current, clears epoch counters, and increments
+`MeasurementEpoch`. An ABI version/size mismatch is an unsupported error.
+A poller reports the
 readiness of a socket, file descriptor, or timer source as a `PollEvent`. A
 timer is used to receive an interval event either via a poller or
 directly. The callback or event result for a monitor, poller, or timer
@@ -231,10 +328,12 @@ type ZlinkError interface {
 - `errors.Is` via `Unwrap()` is also supported.
 - The `NativeErrno` field, and the `NativeErrno()` alias, are not part of the public contract.
 
-- If a Context was already cancelled or past its deadline before the terminal method call, it returns `context.Canceled` or `context.DeadlineExceeded`.
-- This standard error is not converted into a per-function-family Core error.
-- A request completion result after a native submit has been accepted is delivered via `RequestReplyCompletion` or a callback's `RequestResult`.
-- The unified policy for submit return rules and cancellation after completion is left as a separate review item until the Go/Rust submit draft's approval becomes the formal standard.
+- If a Context was already cancelled or past its deadline before `Submit`, a
+  routed send channel yields that standard error, while a request channel puts
+  it in `RequestReplyCompletion.Err`. The standard error is not converted into
+  a per-function-family Core error.
+- A reply or failure after native request admission is delivered through the
+  same `RequestReplyCompletion` channel. There is no callback terminal.
 
 ## FFI and package boundary
 
@@ -248,9 +347,9 @@ allowlist.
 The module package uses the following file proxy layout.
 
 ```text
-zlink.systems/zlink/@v/v0.9.0.info
-zlink.systems/zlink/@v/v0.9.0.mod
-zlink.systems/zlink/@v/v0.9.0.zip
+zlink.systems/zlink/@v/v0.11.1.info
+zlink.systems/zlink/@v/v0.11.1.mod
+zlink.systems/zlink/@v/v0.11.1.zip
 ```
 
 The supported platform runtimes are included under the module's
@@ -261,9 +360,9 @@ module cache, without `replace` and without the repository's `core/build`.
 
 - Spot, Actor, MeshNode, and service operations
 - Core 10 compatibility aliases and service headers
-- Private cgo types, native pointers, callback userdata, and the progress pump
+- Private cgo types, native pointers, and callback userdata
 - A per-message codec registry, or a caller bypass to raw encode/decode
-- `NativeErrno` and the earlier module path `zlink.systems/zlink`
+- `NativeErrno`
 
 The current verification entry points for GoDoc and the process sample are
 recorded in `bindings/go/README.godoc.md`, `bindings/go/tests/run_tests.sh`,

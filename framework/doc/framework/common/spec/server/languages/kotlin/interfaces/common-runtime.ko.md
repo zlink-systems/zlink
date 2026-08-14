@@ -37,7 +37,8 @@ public suspend fun <T> CompletionStage<T>.await(): T
 
 User Spot은 Spot과 current member Actor 전체를 하나의 aggregate로 이전하며 participant 총수에
 고정 상한을 두지 않는다. 따라서 존재 자체가 relocation blocker가
-아니다. `disableRelocation()` 선택, target 부재와 state capability 불일치의 relocation reason은 Java와 동일하다.
+아니다. `disableRelocation()` 선택, eligible target 부재와 target 선택 뒤 state schema/type adapter 불일치의
+relocation reason은 Java와 동일하다.
 Local manual RouteMesh peer, ClientServer client endpoint, fanout subscriber endpoint 또는 manual fanout publisher가
 하나라도 있으면 Java enum의 `MANUAL_TOPOLOGY_UNSUPPORTED(8)`로 `Blocked`된다. Automatic RouteMesh는 source의
 Core peer table에서 descriptor와 같은 RID·lifecycle generation이 admitted·ready가 된 뒤에만
@@ -48,9 +49,10 @@ target 후보로 사용한다. `ROLLING_UPDATE(1)`는 source보다 큰 target ve
 정확히 같은 version만 후보로 사용한다. Framework는 version, source가 아닌 `SERVING` Object Server,
 stable type·factory·adapter capability, capacity와 다른 maintenance wave, RID·lifecycle generation이
 일치하는 `ADMITTED` Core peer, placement weight 순서로 target을 선택한다. 다른 version으로 fallback하지
-않는다. Version·wave·capacity 또는 exact-ready target이 없으면 deadline까지 다시 확인한 뒤
-`BLOCKED/TARGET_UNAVAILABLE`이다. Factory·policy·adapter가 맞지 않으면
-`BLOCKED/STATE_INCOMPATIBLE`, Store 조회 실패는 `BLOCKED/STORE_UNAVAILABLE`이다.
+않는다. Version·wave·capacity 또는 등록 factory/type·relocation adapter eligibility를 만족하는 exact-ready
+target이 없으면 deadline까지 다시 확인한 뒤 `BLOCKED/TARGET_UNAVAILABLE`이다. Target 선택 뒤 전달한 state
+schema/type adapter가 호환되지 않으면 `BLOCKED/STATE_INCOMPATIBLE`, Store 조회 실패는
+`BLOCKED/STORE_UNAVAILABLE`이다.
 
 같은 mode와 effective target version의 동시 호출은 첫 호출이 시작한 shared operation에 참여하고 같은
 terminal result를 받는다. 첫 options의 deadline이 shared operation deadline을 고정한다. Mode 또는 target

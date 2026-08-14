@@ -50,9 +50,9 @@ deprecated wrapper, 중복 생성 경로, public runtime alias, direct construct
 | [Socket Contract Shape](#socket-contract-shape) | 공통/타입별 socket 동작 |
 | [Operation Builder Shape](#operation-builder-shape) | builder 시작 메서드와 terminal 메서드 |
 | [Messaging Values](#messaging-values) | `Message`/`Received`/`TopicMessage`/`SubscriptionEvent` 계약 |
-| [Receive And Subscribe Shape](#receive-and-subscribe-shape) | 호출자 제공 저장소와 no-data 구분 |
+| [Receive And Subscribe Shape](#receive-and-subscribe-shape) | 호출자 제공 저장소, no-data, Framework retained credit 경계 |
 | [Handler Registration Naming](#handler-registration-naming) | `set...Handler` 명명 규칙 |
-| [Byte HWM 및 monitoring ABI v2](#byte-hwm-및-monitoring-abi-v2) | unsigned `long` HWM과 monitor snapshot field |
+| [Byte HWM 및 monitoring ABI v3](#byte-hwm-및-monitoring-abi-v3) | 양수 `long` HWM과 monitor snapshot field |
 | [Error And Result Policy](#error-and-result-policy) | typed exception과 검증 시점 |
 | [Spot And Actor Contract Shape](#spot-and-actor-contract-shape) | `SpotNode`/`Spot` 책임과 route 결과 |
 | [Spot Get-Or-Create](#spot-get-or-create) | `getOrCreateSpot` 계약 |
@@ -538,7 +538,7 @@ Contract 파일이 import할 수 있는 것:
 
 - 다른 `systems.zlink.contracts.*` 패키지;
 - public signature에 필요한 JDK 타입, 예를 들어 `Duration`, `AutoCloseable`,
-  `CompletableFuture`, `Optional`, `List`, record, functional interface;
+  `CompletionStage`, `Optional`, `List`, record, functional interface;
 - public contract의 의도된 일부인 경우에 한해 서드파티 public 값 타입.
 
 Contract 파일이 import할 수 없는 것:
@@ -645,16 +645,69 @@ physical transport pair만 종료 대상으로 지정한다. 같은 peer routing
 identity가 필요한 Framework connection replacement와 같은 runtime 제어에
 사용하며, 임의의 pair identity를 새로 만들어 전달하지 않는다.
 
-payload, flag, timeout, callback, async 동작은 builder 단계다. 대표적인 terminal
-메서드:
+DEALER/ROUTER routed send와 request builder의 canonical terminal은 인자 없는
+`submit()` 하나다. Routed send는 `CompletionStage<Void>`, request는
+`CompletionStage<List<Message>>`를 반환한다.
 
-- `submit()`
-- `await()`
-- `submit(callback)`
+```java
+public interface RoutedSendSubmitOperation {
+    RoutedSendSubmitOperation message(Message part);
+    CompletionStage<Void> submit();
+}
 
-`submit()`은 `CompletionStage`를 반환하는 async 시작 표면이고, `await()`는 같은 작업의
-완료를 현재 thread에서 기다리는 adapter다. 언어별 비동기 실행 표면 기준은
-[바인딩 비동기 실행 표면 정책](../async-coroutine-policy.md)을 따른다.
+public interface RequestSubmitOperation {
+    RequestSubmitOperation message(Message part);
+    RequestSubmitOperation timeout(Duration timeout);
+    CompletionStage<List<Message>> submit();
+}
+```
+
+이 두 builder에는 blocking `await()`, `submit(callback)`, `flags(...)`, boolean
+one-shot terminal을 제공하지 않는다. `submit()`은 호출 thread를 막지 않으며
+Framework와 Kotlin은 반환된 `CompletionStage`를 직접 completion/await 경계에
+연결한다. PAIR, STREAM 등 이 routed HWM-managed 범위 밖의 기존 동기 data-plane
+terminal은 이 규칙으로 제거하지 않는다. 언어별 비동기 실행 표면 기준은
+[바인딩 비동기 실행 표면 정책](../async-coroutine-policy.ko.md)을 따른다.
+
+Raw ROUTER/`Received` reply의 terminal은
+`ReplySubmitOperation.submit() -> void`인 동기 one-shot이다. `CompletionStage`를
+반환하지 않고 terminal reply 또는 error reply를 HWM 없는 completion lane에 native 호출
+한 번으로 제출한다. HWM backpressure는 reply 결과가 아니며 `NOT_CONNECTED`,
+`TERMINATED`, `INVALID_ARGUMENT`와 그 밖의 non-HWM submit 실패는 즉시
+`ZlinkSubmitException`으로 전달한다.
+
+### Routed 비동기 최초 수용
+
+- Socket runtime은 비동기 operation을 받기 전에 Core의 장기
+  routed-target readiness handler를 등록한다. 일반 operation은 Core target
+  selector로 RID, transport pair ID, generation의 exact target snapshot을 얻고,
+  명시적 Router transport-pair request는 monitor event에서 얻은 exact identity를
+  사용한다.
+- `submit()`은 먼저 `CompletionStage`의 completion state와 complete record의
+  binding-owned snapshot, pending operation을 만든 뒤 native work를
+  scheduling한다. 따라서 반환 직후 caller가 input `Message`를 닫아도
+  최초 시도와 retry의 payload lifetime은 안전하다. Native blocking submit을
+  실행한 뒤 stage를 만들거나 반환하지 않는다.
+- Pending operation은 최초 시도 전에 `(target RID, transport pair ID,
+  generation)` queue에 들어간다. Queue와 deduplicated ready ring은 socket runtime
+  내부 구현이며 same-RID ordering을 별도 public 보장으로 추가하지 않는다.
+- Pump는 callback thread 밖에서 exact target의 기존 per-part API를 항상
+  `DONT_WAIT`로 호출한다. Complete multipart 한 건의 part loop 동안에만
+  per-socket short attempt gate를 잡고, 성공·backpressure·실패 직후 해제한다.
+  HWM readiness를 기다리는 동안에는 gate, worker thread 또는 submit lock을
+  점유하지 않는다. 별도 public multipart transaction/helper나 retry capacity를
+  추가하지 않는다.
+- `BACKPRESSURED`이면 exact target readiness event가 그 target만 ready ring에
+  넣는다. A target의 대기는 B·C·D target의 selection과 시도를 막지 않는다.
+  Generation이 다른 event와 중복 writable event는 stale/duplicate wake다.
+- Send deadline은 socket send timeout의 최초 절대 deadline이다. Request timeout은
+  최초 `submit()`부터 HWM 수용 대기와 Core reply lifecycle을 함께 제한하며 재시도
+  때 연장하지 않는다.
+- Request reply registry는 최초 native request part보다 먼저 설치한다. 빠른 reply,
+  cancellation, exact target terminal/disconnect, socket close, context termination,
+  timeout이 경쟁해도 반환 stage는 정확히 한 번 terminal이 된다. 수용 전에는
+  binding이 complete record를 소유하고, Core 수용 성공 뒤 caller payload
+  ownership을 종료한다.
 
 `sendNoWait`, `sendWithFlags`, `requestAsync`, `publishWithFlags`,
 `send(message)` shortcut 같은 별도의 operation-start 계열을 추가하지 않는다.
@@ -706,6 +759,33 @@ boolean ok = router.recv(received, RecvFlags.DONT_WAIT);
 호출자가 제공하는 no-wait receive에서 no-data는 정상적인 `false` 결과다. 하드
 수신 실패는 문서화된 exception 타입을 던진다.
 
+일반 `recv(...)`와 `subscribe(...)`는 dequeue 시점에 Core queue credit을 즉시
+반환한다. 따라서 일반 수신 결과가 살아 있는 기간은 HWM accounting에 포함되지
+않으며, 이 기존 동작을 변경하지 않는다.
+
+Framework backend는 다음의 명시적 retained aggregate 진입점만 사용한다.
+
+```java
+boolean received = router.recvRetained(result, flags);
+boolean subscribed = sub.subscribeRetained(topicMessage, flags);
+```
+
+- `recvRetained(...)`는 `PairSocket`, `DealerSocket`, `RouterSocket`,
+  `StreamSocket`에 제공하고 `subscribeRetained(...)`는 `SubSocket`,
+  `XSubSocket`에 제공한다. 이 표면은 Framework backend용이며 일반 application
+  receive의 기본 경로가 아니다.
+- 반환된 `Received` 또는 `TopicMessage`는 caller에게 보이는 physical payload
+  part마다 Core의 opaque retained credit 하나를 내부에서 소유한다. Routing ID,
+  request sequence, topic과 multipart framing은 일반 aggregate 수신과 동일하게
+  보존한다.
+- 결과를 `close()`하거나 다음 수신 저장소로 재사용하면 모든 retained credit을
+  정확히 한 번 반환한다. 부분 multipart 실패, cancellation과 error도 이미 얻은
+  credit을 반환한다. `Cleaner`는 누락된 명시적 정리를 보완하는 fallback일 뿐
+  정상 lifecycle은 `close()`를 사용한다.
+- 개별 `Message` part나 bare part receive primitive에는 lease를 숨기지 않는다.
+  Raw lease handle, 별도 capacity, allowance 또는 중복 accounting 상태를 public
+  API로 노출하지 않는다.
+
 SPOT readable dispatch 이벤트는 readiness 알림이다. 호출자는 대응하는 receive
 API를 no-data가 될 때까지 drain한다.
 
@@ -742,44 +822,73 @@ Handler 등록 이름은 이벤트 발생이 아니라 등록을 설명한다.
 - `recvRouted`
 - `recvActorLifecycle`
 
-## Byte HWM 및 monitoring ABI v2
+## Byte HWM 및 monitoring ABI v3
 
 - HWM은 queue의 message 수가 아니라 Core가 계산한 accounted byte의 상한이다.
-- Java 공개 interface는 `long`의 64개 bit를 unsigned 값으로 해석하여 Core의 `uint64_t` 전체 범위를 손실 없이 전달한다.
-- Java caller는 `Long.compareUnsigned`와 `Long.toUnsignedString`을 사용하고, Kotlin caller는 `ULong.toLong()`과 `Long.toULong()`으로 변환한다.
+- Java 공개 interface는 `0`부터 `Long.MAX_VALUE`까지의 byte 값을 허용한다. 음수 입력은
+  Core를 호출하기 전에 거부하고, `Long.MAX_VALUE`보다 큰 Core 조회값은 overflow 오류로 처리한다.
 - `0`은 무제한이고 수동 기본값은 `4_096_000 bytes`다.
 - 이전 `int` overload, alias 또는 count 단위 adapter는 제공하지 않는다.
 
 ```java
 public final class ContextOptions {
-    public long autoHwmMessageUnitBytes();          // unsigned 64-bit planning unit을 반환한다.
-    public void autoHwmMessageUnitBytes(long value); // 0은 socket type별 기본값을 선택한다.
+    public long coreHwmMemoryLimitBytes();
+    public void coreHwmMemoryLimitBytes(long value);
+    public long coreHwmBudgetBytes();
+    public void coreHwmBudgetBytes(long value);
+    public CoreHwmProfile coreHwmProfile();
+    public void coreHwmProfile(CoreHwmProfile value);
+}
+
+public interface Context {
+    CoreHwmBudgetSnapshot coreHwmBudgetSnapshot();
+    void resetCoreHwmBudgetMetrics();
 }
 
 public class CommonSocketOptions {
-    public long sendHwm();           // unsigned outbound accounted-byte 상한을 반환한다.
-    public void sendHwm(long value); // value의 64개 bit를 그대로 Core에 전달한다.
+    public long sendHwm();           // non-negative outbound accounted-byte 상한을 반환한다.
+    public void sendHwm(long value); // 0부터 Long.MAX_VALUE까지 Core에 전달한다.
     public long recvHwm();
     public void recvHwm(long value);
 }
 ```
 
-`autoHwmMessageUnitBytes(...)`는 Core planner 입력이다. Core가 선택한 message
-slot 수에 이 값을 곱해 planned byte HWM을 계산한다. Caller가 `sendHwm(...)`이나
+입력 우선순위는 수동 Core budget, 명시 memory limit, JVM 최대 heap hint, Core fallback
+순서다. 앞의 두 값을 지정하면 JVM hint를 자동 감지하지 않는다. Binding은 hint와 Core
+hard limit을 직접 결합하지 않는다. 명시 입력이 Core가 감지한 finite hard limit보다 크면
+`EINVAL`에 대응하는 기존 config exception을 그대로 전달하고 clamp하지 않는다.
+
+Core는 memory limit에 profile 비율을 정확히 한 번 적용하거나 명시 Core budget을 그대로
+사용해 physical directional queue별 planned byte HWM을 계산한다. Caller가 `sendHwm(...)`이나
 `recvHwm(...)`을 설정한 방향은 수동 override가 되며 이후 Auto-HWM 재계산이
 그 값을 변경하지 않는다.
 
 Java 바인딩은 queue의 message나 payload를 다시 세지 않는다. Core pipe의 실제
 accounted byte가 applied HWM에 도달하면 native submit 결과가 backpressure를
 나타내고, Java operation은 기존 result·timeout 계약에 따라 이를 전달한다.
-`long` 값 `0`은 무제한이다. 음수로 보이는 `long` 값도 unsigned 64-bit HWM으로
-전달되므로 caller는 unsigned 비교와 문자열 변환을 사용해야 한다.
+`long` 값 `0`은 무제한이다. 음수 값은 HWM 입력으로 허용하지 않는다.
 
-- `MonitorStatus` record는 native `zlink_monitor_status_t` ABI version 2와 같은 field를 제공한다.
-- Planned, applied, deferred HWM과 in-flight 사용량은 unsigned `long` byte 값이다.
+`monitorOpen(monitorHwmBytes, events...)`는 monitor queue의 음수가 아닌 `long` byte
+값을 받는다. `0`은 Core monitor 기본값을 선택하고, 양수는 변환 없이 전달한다.
+Java와 Kotlin 모두 message-count overload나 alias를 노출하지 않는다.
+
+- `MonitorStatus` record는 native `zlink_monitor_status_t` ABI version 3과 같은 field를 제공한다.
+- Planned, applied, deferred HWM과 in-flight 사용량은 non-negative `long` byte 값이며,
+  더 큰 Core 값은 overflow 오류다.
 - Deferred 값은 대응하는 `autoHwmDeferredSendHwmValid()` 또는 `autoHwmDeferredRecvHwmValid()`가 `true`일 때만 유효하다.
 - Pending message 값은 count 진단값으로 남고 byte field와 이름을 공유하지 않는다.
-- `abiVersion()`이 `2`가 아니거나 `structSize()`가 binding layout과 다르면 `UnsupportedOperationException`을 발생시킨다. 이전 32-bit monitoring layout은 받지 않는다.
+- Pending byte는 `sndPendingBytes()`와 `rcvPendingBytes()`로 별도 노출한다.
+- `abiVersion()`이 `3`이 아니거나 `structSize()`가 binding layout과 다르면 `UnsupportedOperationException`을 발생시킨다. 이전 monitoring layout은 받지 않는다.
+
+`CoreHwmBudgetSnapshot`은 ABI version/size, configured/runtime/resolved memory limit,
+configured/effective budget, planned/applied/manual-reserved HWM, Core queue/application/current/
+peak/provisional accounted byte, completion current/peak/pending과 total messaging byte,
+monitor/instance aggregate, application/completion queue count,
+`outstandingApplicationLeaseCount()`, `retiredQueueCount()`, `deferredOriginCreditBytes()`,
+oversize·blocked·aggregate flag, `budgetGeneration()`과 `measurementEpoch()`을 단위 변환 없이
+제공한다. Reset은 current·pending·queue count와 위 세 owner-lifecycle gauge를 유지하고 두
+peak를 current로 재기준화하며 epoch counter를 0으로 만든 뒤 `measurementEpoch`을 증가시킨다.
+Budget snapshot ABI version/size가 맞지 않으면 `UnsupportedOperationException`이다.
 
 Java와 Kotlin은 같은 Java method를 호출한다. 별도 Kotlin adapter나 다른 단위의 option을
 추가하지 않는다. Request/reply API는 HWM 값을 인자로 받지 않으며 기존 lifetime과 ownership

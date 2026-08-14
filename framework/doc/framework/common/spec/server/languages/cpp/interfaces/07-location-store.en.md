@@ -32,11 +32,7 @@ struct location_options_t {
     std::chrono::milliseconds owner_lease_renew_timeout{3000};
     std::chrono::milliseconds route_cache_max_age{15000};
     std::chrono::milliseconds message_follow_duration{30000};
-    std::size_t max_active_outbound_relocations = 64;
-    std::size_t max_active_inbound_relocations = 64;
-    std::size_t max_concurrent_relocation_captures = 8;
-    std::size_t max_concurrent_relocation_restores = 8;
-    std::uint64_t max_relocation_payload_in_flight_bytes = 268435456;
+    std::chrono::milliseconds session_relocation_seal_timeout{3000};
 };
 
 } // namespace zlink::framework
@@ -503,3 +499,9 @@ Redis implementation details.
   relocation reference
 - Raw Redis command adapter, script, and key codec
 - Spot/Actor-dedicated Store and per-capability Store interface
+
+## Session Relocation Seal Timeout
+
+`session_relocation_seal_timeout` is a startup-only positive millisecond duration with a
+3,000 ms default. Zero, negative, infinite, or out-of-range values are configuration errors
+before socket bind.

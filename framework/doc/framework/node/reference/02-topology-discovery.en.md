@@ -306,8 +306,9 @@ zlinkFramework()
   .bindHost = "0.0.0.0";
 
 zlinkFramework()
-  .configureInboundDispatch()
-  .applicationHwmProfile(ZLinkApplicationHwmProfile.LowLatency);
+  .configureDispatch()
+  .coreHwmProfile(ZLinkCoreHwmProfile.LowLatency)
+  .applicationJobQueueProfile(ZLinkApplicationJobQueueProfile.LowLatency);
 
 zlinkFramework().configureStreamCompression().useLz4();
 zlinkFramework().setApplicationVersion(2n);
@@ -319,17 +320,21 @@ zlinkFramework().options({ requestTimeoutMs: 30_000, worker: { minThreads: 2, ma
 | Modifier | Default | Meaning |
 | --- | --- | --- |
 | `.configureNetwork()` | `bindHost` is `127.0.0.1` | The default bind/advertise host used unless an individual listen call overrides it |
-| `.configureInboundDispatch()` | `ZLinkApplicationHwmProfile.Balanced` | The inbound application HWM size/profile, and the process memory cap |
-| `.configureDispatch()` | Framework default policy | Dispatch/diagnostics options. See the observability-diagnostics category |
+| `.configureDispatch()` | Framework dispatch/diagnostics defaults; both profiles are `Balanced`; manual values are `undefined` | Configures dispatch/diagnostics and the Core HWM memory/budget/profile inputs plus the host-wide Application Job Queue profile or exact manual permit limit on `ZLinkDispatchOptionsBuilder` |
 | `.configureStreamCompression()` | No compression | The STREAM default compression codec (`useDefault()`/`useLz4()`/`use(codec)`/`disable()`) |
 | `.setApplicationVersion(version)` / `.setMaintenanceWave(waveId)` | `0n` / none (no exclusion) | The deployment version and maintenance wave every local MeshNode publishes |
 | `.options({ requestTimeoutMs, worker, dispatch, metrics, filters })` | Each field's default | Specifies the host-wide request timeout, worker pool, dispatch options, metrics integration, and filters all at once |
 | `.codecs()` | Only JSON registered | `zlinkFramework().codecs().use(extension)`. See the Codec registration entry in messaging-execution category |
 
 **Completion result.** Most execute synchronously with no return value;
-`.configureNetwork()`/`.configureInboundDispatch()`/`.configureDispatch()`/`.codecs()` return the
+`.configureNetwork()`/`.configureDispatch()`/`.codecs()` return the
 corresponding builder or options object to continue further configuration on. Exceeding a value's
 range surfaces as a configuration error in startup validation.
+
+Core owns its byte-budget calculation. The Framework does not divide that budget by connection
+count. The Application Job Queue is a separate job-count limit;
+`maxQueuedApplicationJobs(...)` accepts `1n..2_147_483_647n`, while `undefined` selects the Auto
+profile. See the [Core/Framework API contract](../../common/spec/06-framework-api.en.md).
 
 **When to use.** Use this to adjust host-wide settings that end with a single simple value and do
 not belong to a dedicated category above (host lifecycle, topology registration, diagnostics).

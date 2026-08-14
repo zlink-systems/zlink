@@ -504,8 +504,9 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 - 핸들러 등록에 `on...` 이름을 사용하지 않는다. API가 현재 핸들러를 저장하거나
   교체할 때는 `set...Handler`를 사용한다.
 - `sendNoWait`, `publishWithFlags`, `requestAsync` 같은 operation-start 변형을
-  만들지 않는다. operation 이름은 하나로 유지하고 flag, timeout, callback, 비동기
-  submit 선택은 빌더에 둔다.
+  만들지 않는다. operation 이름은 하나로 유지한다. 각 operation이 지원하는 flag나
+  timeout은 빌더에 두며, 관리형 DEALER/ROUTER send와 request는 아래에서 정의하는
+  유일한 Promise `submit()` 종단을 사용한다.
 
 ## 정식 인터페이스 규칙
 
@@ -515,7 +516,7 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 - send, routed send, publish, request, reply, SPOT operation, Actor location/
   session operation은 fluent 빌더를 반환한다.
 - 빌더 시작 메서드는 대상 identity, topic, channel, routing id, 요청 sequence만
-  받는다. payload, flag, timeout, callback, 비동기 submit 선택은 빌더 단계다.
+  받는다. payload와 그 operation이 지원하는 option은 빌더 단계다.
 - SPOT channel 대상 operation은 `sendToChannel(...)`과
   `requestToChannel(...)`을 사용한다. SPOT topic publish는 `publish(topic)`으로
   유지한다.
@@ -541,6 +542,39 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 - operation-start 명명은 위의 함수 이름 규칙을 따른다. 빌더의 종단 메서드는
   Promise 반환 표면에서도 지금처럼 `submit(...)`을 사용한다. `submitAsync` 같은
   별도 종단 이름을 추가하지 않는다.
+- DEALER/ROUTER `send(...).message(...).submit()`은 관리형 send 종단이며
+  `Promise<void>`를 반환한다. DEALER/ROUTER
+  `request(...).message(...).submit()`은 `Promise<Message[]>`를 반환한다. 이 관리형
+  빌더에는 flag, callback, blocking, no-wait, polling 호환 종단을 노출하지 않는다.
+  Pair, Stream, Pub 데이터 평면 종단은 기존 동기 계약을 유지한다. 공개 ROUTER
+  `sendTransportPair(...)`도 명시적인 one-shot immediate operation으로 유지하며,
+  관리형 HWM 대기 종단으로 해석하지 않는다.
+- Raw ROUTER/`Received` reply의 terminal은
+  `ReplySubmitOperation.submit(): void`인 동기 one-shot이다. Promise를 반환하지 않고
+  HWM-managed 경로에 진입하지 않으며, terminal reply 또는 error reply를 HWM 없는
+  completion lane에 native 호출 한 번으로 제출한다. HWM backpressure는 reply 결과가
+  아니며 `NOT_CONNECTED`, `TERMINATED`,
+  `INVALID_ARGUMENT`와 그 밖의 non-HWM submit 실패는 즉시 `SubmitError`로 발생한다.
+- 관리형 routed submit은 native submit 전에 payload snapshot과 completion 상태를
+  만든다. Core target selector와 DEALER/ROUTER의 exact per-part DONTWAIT API만
+  사용한다. Node addon은 `zlink_routed_send_parts`, `zlink_routed_request_parts` 같은
+  array/multipart routed-submit ABI를 추가하거나 호출하지 않는다. 하나의 짧은
+  socket-local complete-record attempt gate는 첫 part부터 final part까지 한 번의
+  시도만 보호하며 HWM을 기다리기 전에 해제한다.
+- binding은 `(peer routing id, transport pair id, transport pair generation)` exact
+  tuple별 pending operation과 중복 제거된 ready-target queue/set을 소유한다. 장수하는
+  Core routed-readiness callback은 해당 exact target만 mark/wake하고 event-loop 작업을
+  예약한다. callback 안에서 submit, wait, retry하지 않는다. 따라서 막힌 target은
+  무관한 target을 막지 않고 stale generation은 교체된 route를 깨우지 않는다. 이
+  scheduling은 같은 routing id를 사용하는 동시 호출에 새로운 strict FIFO 보장을
+  추가하지 않는다.
+- send/request deadline은 공개 `submit()` 호출 시점부터 계산한 절대 시각이다. HWM
+  대기는 timer polling이 아니라 readiness-driven이다. 수락되면 전달한 `Message`를
+  정확히 한 번 consume하고 수락 전 실패 시에는 재사용할 수 있게 둔다. 빠른 reply가
+  등록을 앞지르지 않도록 첫 exact attempt 전에 request correlation을 설치한다.
+  timeout, target detach/terminal, socket close, native failure는 각 Promise를 정확히
+  한 번 완료하고 pending 상태를 제거한다. socket close는 Node event loop를 막지
+  않는다.
 - MeshNode의 Logical Multicast publisher는 Core의 한 번의 blocking publish를 Node.js
   event loop 밖에서 실행해야 하므로 `publishAsync(...)`를 함께 제공한다. 이 이름은
   이 publisher에만 적용하며 다른 binding operation의 async suffix 규칙을 바꾸지
@@ -583,7 +617,7 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 
 ## 64-bit byte HWM과 monitoring 계약
 
-HWM과 Auto HWM planning unit은 `uint64_t` byte 값을 손실 없이 표현해야 하므로 공개
+HWM과 Core HWM memory limit·budget은 `uint64_t` byte 값을 손실 없이 표현해야 하므로 공개
 TypeScript 타입으로 `bigint`를 사용한다. `number`를 함께 받거나 안전한 정수 범위에 따라
 표현을 바꾸지 않는다. `0n`은 HWM에서 무제한을 뜻하며, 수동 HWM 기본값은
 `4_096_000n` bytes다. 음수나 `2n ** 64n - 1n`을 넘는 값은 `RangeError`, `number`와
@@ -591,7 +625,14 @@ TypeScript 타입으로 `bigint`를 사용한다. `number`를 함께 받거나 �
 
 ```ts
 interface ContextOptions {
-  autoHwmMsgUnitBytes: bigint; // 64-bit planning-unit bytes; 0n selects the socket default.
+  coreHwmMemoryLimitBytes: bigint;
+  coreHwmBudgetBytes: bigint;
+  coreHwmProfile: CoreHwmProfile;
+}
+
+interface Context {
+  getCoreHwmBudgetSnapshot(): CoreHwmBudgetSnapshot;
+  resetCoreHwmBudgetMetrics(): void;
 }
 
 interface CommonSocketOptions {
@@ -600,8 +641,13 @@ interface CommonSocketOptions {
 }
 ```
 
-`autoHwmMsgUnitBytes`는 Core planner 입력이다. Core가 선택한 message slot 수에
-이 값을 곱해 planned byte HWM을 계산한다. Caller가 `sendHwm`이나 `recvHwm`을
+입력 우선순위는 수동 Core budget, 명시 memory limit, V8 heap limit hint, Core fallback
+순서다. 앞의 두 값을 지정하면 V8 hint를 자동 감지하지 않는다. Binding은 hint와 Core
+hard limit을 직접 결합하지 않는다. 명시 입력이 Core가 감지한 finite hard limit보다 크면
+`EINVAL`에 대응하는 기존 config error를 그대로 전달하고 clamp하지 않는다.
+
+Core는 memory limit에 profile 비율을 정확히 한 번 적용하거나 명시 Core budget을 그대로
+사용해 physical directional queue별 planned byte HWM을 계산한다. Caller가 `sendHwm`이나 `recvHwm`을
 설정한 방향은 수동 override가 되며 이후 Auto-HWM 재계산이 그 값을 변경하지
 않는다.
 
@@ -610,11 +656,26 @@ Node.js 바인딩은 queue의 message나 payload를 다시 세지 않는다. Cor
 backpressure를 나타내고, Node.js operation은 기존 result·timeout 계약에 따라
 이를 전달한다. `0n`은 무제한이다.
 
-Monitor snapshot은 Core monitoring ABI v2를 그대로 투영한다. Planned, applied, deferred와
+`monitorOpen(events?, monitorHwmBytes?)`는 monitor queue에 `bigint` byte 값만 받는다.
+`0n`은 Core monitor 기본값을 선택하고, 양수는 변환 없이 전달한다. `number` 값이나
+message-count alias는 없다.
+
+Monitor snapshot은 Core monitoring ABI v3를 그대로 투영한다. Planned, applied, deferred와
 in-flight HWM 값은 이름에 `Bytes`를 포함하고 `bigint`로 제공한다. Deferred 값의 유효
-여부는 별도 boolean으로 제공한다. Pending message와 profile slot은 count 진단값이며 byte
-field와 이름을 공유하지 않는다. 이전 `autoHwmAppliedSndHwm` 같은 count 이름은 alias로
-유지하지 않는다.
+여부는 별도 boolean으로 제공한다. Pending message count는 표시용 진단이며
+`sndPendingBytes`와 `rcvPendingBytes`는 별도 `bigint` byte 값이다.
+slot·message-unit·size-cap·connection-bucket property는 alias로 유지하지 않는다.
+
+`CoreHwmBudgetSnapshot`은 ABI version/size, configured/runtime/resolved memory limit,
+configured/effective budget, planned/applied/manual-reserved HWM, Core queue/application/current/
+peak/provisional accounted byte, completion current/peak/pending과 total messaging byte,
+monitor/instance aggregate, application/completion queue count,
+`outstandingApplicationLeaseCount`, `retiredQueueCount`, `deferredOriginCreditBytes`,
+oversize·blocked·aggregate flag, `budgetGeneration`과 `measurementEpoch`을 정확한
+`bigint`/boolean 값으로 제공한다. Reset은 current·pending·queue count와 위 세
+owner-lifecycle gauge를 유지하고 두 peak를 current로 재기준화하며 epoch counter를 0으로 만든
+뒤 `measurementEpoch`을 증가시킨다. ABI version/size 불일치는 `TypeError`가 아니라 기존
+unsupported error로 전달한다.
 
 ## 필수 기능 범위
 
@@ -654,6 +715,20 @@ Node는 `SpotNode.getOrCreateSpot(spotRid)`를 노출한다. 이는
   addon이 만든 JavaScript 소유 `Buffer`를 payload로 사용하는 `Message`가 된다. Payload를
   읽을 때 추가 native 호출이 발생하지 않으며 `Message`를 닫아도 `Buffer`의 수명 규칙은
   Node가 관리한다.
+- 일반 `recv`와 `subscribe`는 Core에서 dequeue할 때 HWM credit을 즉시 반환한다.
+  Framework backend가 payload 처리 수명까지 credit을 유지해야 할 때만 Pair, Dealer,
+  Router, Stream의 명시적 `recvRetained(result, flags?)` 또는 Sub, XSub의
+  `subscribeRetained(result, flags?)`를 사용한다. 두 형식 모두 호출자 제공 aggregate를
+  채우고 논블로킹 no-data에는 `false`를 반환한다.
+- retained 형식은 multipart의 각 물리적 payload part에 해당하는 Core lease를 binding
+  내부에서 하나의 opaque aggregate owner로 묶는다. 성공적인 result 재사용이나
+  `result.close()`가 모든 credit을 정확히 한 번 반환하며, 호출자가 result를 버린 경우에는
+  native finalizer가 최종 fallback으로 반환한다. Payload `Buffer`를 복사해 보관하는 것은
+  credit 수명을 연장하지 않는다.
+- retained 형식도 일반 receive와 같은 multipart framing과 metadata를 보존한다. Dealer는
+  typed `requestSeq`, Router는 source `RoutingId`와 `requestSeq`, Sub와 XSub는 topic과 Core가
+  제공한 source `RoutingId`를 유지한다. Raw lease handle, accounting setter, part 단위 release는
+  public API로 노출하지 않는다.
 - Actor join 요청 receive 같은 서비스 제어/admission receive 경로는 재사용 가능한
   데이터 평면 저장보다 더 명확할 때 nullable, `undefined`, 또는 태그된 결과 반환
   형태를 사용할 수 있다. 그래도 no-data와 throw된 하드 receive 에러는 구별한다.

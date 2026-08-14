@@ -34,12 +34,17 @@ runtime 계층을 수정한다.
    - Bound Session seal, route update, held message 제출과 connection 정리
 4. [Location runtime](../../framework/doc/framework/common/spec/21-location-runtime.ko.md)
    - Location owner, generation, CAS와 Store 응답 불확정 처리
-5. [Relocation handoff 상태 전이](../../framework/doc/framework/common/internals/13-relocation-handoff.ko.md)
+5. [Relocation handoff 상태 전이](../../framework/doc/framework/common/spec/52-internal-relocation-handoff.ko.md)
    - 모든 언어가 공유할 내부 state, queue owner와 검증 경계
 
-구현 중 계약 누락을 발견하면 위 문서를 임의로 바꾸지 않는다. 실제 충돌 위치와 필요한 결정을
-보고한 뒤 승인된 범위만 같은 vertical slice에서 수정한다. 영문 spec은 한국어 계약과 같은 의미로
-유지한다.
+위 relocation spec과 internals는 이 작업에서 확정된 계약으로 동결한다. 구현 편의, test·sample 실패,
+기존 언어 구조 또는 review 의견을 이유로 내용을 수정하지 않는다. 계약과 구현이 충돌하면 구현을
+계약에 맞춘다.
+
+정식 문서 자체의 모순이나 구현할 수 없는 조건이 재현 증거로 확인된 경우에는 구현을 멈춘다. 변경
+전에 정확한 `file:section`, 재현 결과, 영향을 받는 언어와 최소 변경안을 보고하고 사용자 승인을
+받아야 한다. 승인 전에는 한국어·영문 relocation spec과 internals를 모두 변경하지 않는다. 승인된
+경우에도 지정된 section만 같은 의미로 수정한다.
 
 ### 2.2 Auto HWM 구현 계획
 
@@ -53,6 +58,10 @@ runtime 계층을 수정한다.
 공통 계획은 값, 단위와 불변 조건의 기준이다. Core, bindings와 Framework 계획은 각 계층의 구현
 위치와 검증 항목을 소유한다. Public API가 바뀌는 slice에서는 해당 정식 spec과 exact language
 interface를 구현과 함께 수정한다. 구현하지 않을 후속 범위를 정식 spec에 미리 추가하지 않는다.
+
+Auto HWM 네 plan은 아직 정식 공개 계약 전체가 아니다. 따라서 plan 전체를 미리 spec으로 옮기지
+않는다. 실제로 구현하는 vertical slice에 필요한 public contract와 exact language interface만 구현과
+동시에 확정한다. 이때도 plan의 범위를 넓히거나 관계없는 기존 spec을 정리하지 않는다.
 
 ## 3. 변경할 수 없는 책임 경계
 
@@ -194,20 +203,45 @@ Review 요청에는 전체 repository를 다시 읽히지 않는다. 다음 evid
 - Sample 실패는 production code에서 수정한다. Public example이나 expected output을 삭제하거나
   timeout만 늘려 통과시키지 않는다.
 
+#### 6.1 Zoneworld 분리 gate
+
+Zoneworld는 다른 sample과 같은 실행 묶음에서 디버깅하지 않는다. 먼저 Zoneworld를 제외한 여섯
+Framework sample을 production 경로로 모두 통과시키고, 그 범위를 commit·push한다. 이 gate가 끝나기
+전에는 Zoneworld sample 파일과 Zoneworld 전용 runtime branch를 수정하지 않는다.
+
+Zoneworld를 시작하기 직전에는 relocation spec 28과 실제 production validation owner를 다시 읽고
+다음 항목만 좁혀 확인한다.
+
+- 같은 relocation invariant를 Store, host, adapter와 sample이 중복 검증하지 않는가
+- 한 validation을 맞추면 다른 validation이 같은 state를 다른 기준으로 거절하는가
+- spec 28이 정한 owner 밖에서 추가 phase, completion, progress 또는 capacity 조건을 요구하는가
+- 현재 spec으로 구현할 수 없는 조건인지, 구현은 가능하지만 기존 중복 검증이 방해하는지 구분했는가
+
+중복되거나 과도한 validation은 새 절차와 state를 추가해 맞추지 않는다. Spec 28의 책임 owner에 필요한
+검증 하나만 남기고 subordinate·sample 검증을 제거하거나 완화한다. 이는 protocol expectation을 낮추는
+것이 아니라 동일 invariant의 중복 owner를 없애는 POSDDD 정리다. Zoneworld는 public 사용 예시이므로
+internal helper, raw codec, relocation state mirror나 sample 전용 retry/timeout으로 production 결손을
+보완하지 않는다.
+
 ## 5. 최종 sample gate
 
-최종 단계에서는 repository가 제공하는 runner를 그대로 사용한다.
+최종 단계에서는 repository가 제공하는 runner를 그대로 사용한다. 먼저 각 runner에서 Zoneworld를
+제외한 여섯 sample을 순차 실행하고 그 결과를 commit·push한다. 그 다음 §6.1 review를 수행한 뒤
+Zoneworld를 별도 gate로 실행한다.
 
 ```bash
-bash framework/languages/cpp/samples/run_samples.sh
-bash framework/languages/dotnet/samples/run_samples.sh
-bash framework/languages/java/samples/run_samples.sh
-bash framework/languages/node/samples/run_samples.sh
+bash framework/languages/cpp/samples/run_samples.sh \
+  TicTacToe Bingo DeliveryDispatch SupportChat GameQuest ShoppingMall
+bash framework/languages/dotnet/samples/run_samples.sh \
+  TicTacToe Bingo SupportChat ShoppingMall DeliveryDispatch GameQuest
+bash framework/languages/java/samples/run_samples.sh \
+  TicTacToe Bingo SupportChat ShoppingMall DeliveryDispatch GameQuest
+bash framework/languages/node/samples/run_samples.sh \
+  TicTacToe.Ts Bingo.Ts DeliveryDispatch.Ts SupportChat.Ts GameQuest.Ts ShoppingMall.Ts
 ```
 
-Java runner가 Java와 Kotlin을 함께 실행하는지 runner inventory로 확인한다. 분리된 Kotlin 실행이
-존재하면 같은 최종 gate에 포함한다. 각 runner가 시작한 process와 임시 resource를 종료한 뒤 다음
-언어를 실행한다.
+Java runner는 기본 `ZLINK_SAMPLE_LANGUAGES="java kotlin"` 경계에서 위 selector를 Java와 Kotlin에
+각각 적용한다. 각 runner가 시작한 process와 임시 resource를 종료한 뒤 다음 언어를 실행한다.
 
 ## 6. 완료 조건
 
@@ -232,6 +266,9 @@ Java runner가 Java와 Kotlin을 함께 실행하는지 runner inventory로 확�
 C++/.NET/Java/Kotlin/Node.js의 실제 production 경로에 반영한다. Focused contract test로 각
 vertical slice를 검증한 직후 POSDDD refactoring을 수행하고, 같은 원인의 실패가 세 번 반복되거나
 ownership·concurrency 판단이 불명확하면 evidence packet으로 gpt-5.6-sol read-only review를 요청한다.
+Relocation spec과 internals는 확정 계약이므로 구현 편의, test 실패 또는 review 의견으로 수정하지
+않는다. 문서 자체의 모순이 재현된 경우에만 작업을 멈추고 사용자 승인을 받은 뒤 지정된 section을
+수정한다. Auto HWM spec은 실제 구현하는 vertical slice에 필요한 범위만 구현과 동시에 확정한다.
 마지막에는 모든 Framework sample runner를 순차 실행한다. Sample과 기대값을 수정해 실패를 숨기지
 말고 원인을 소유한 runtime에서 고친다. 문서의 완료 조건을 모두 만족할 때만 goal을 완료한다.
 ```

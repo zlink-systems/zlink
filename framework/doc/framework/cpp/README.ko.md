@@ -28,7 +28,7 @@ HTTP를 직접 제공한다.**
 
 ## internals 목록
 
-[공통 내부 구조](../common/internals/README.ko.md) ·
+[공통 내부 구조](../common/spec/README.ko.md) ·
 [backend dependency policy](internals/backend-dependency-policy.ko.md) ·
 [regression test matrix](internals/regression-test-matrix.ko.md)
 

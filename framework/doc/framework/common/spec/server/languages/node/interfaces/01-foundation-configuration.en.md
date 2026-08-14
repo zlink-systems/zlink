@@ -45,17 +45,18 @@ export declare enum ZLinkSpotRelocationReadinessMode {
     ApplicationSignaled = "application_signaled"
 }
 
-export declare enum ZLinkApplicationHwmProfile {
+export declare enum ZLinkCoreHwmProfile {
     Compact = "compact",
     LowLatency = "low_latency",
     Balanced = "balanced",
     Throughput = "throughput"
 }
 
-export interface ZLinkInboundDispatchOptions {
-    applicationHwmBytes(value: bigint | undefined): this;
-    applicationHwmProfile(value: ZLinkApplicationHwmProfile): this;
-    processMemoryLimitBytes(value: bigint | undefined): this;
+export declare enum ZLinkApplicationJobQueueProfile {
+    Compact = "compact",
+    LowLatency = "low_latency",
+    Balanced = "balanced",
+    Throughput = "throughput"
 }
 
 export declare enum ZLinkFrameworkErrorKind {
@@ -89,11 +90,13 @@ export type RoutingId = string;
 export type Type<T = unknown> = new (...args: never[]) => T;
 ```
 
-Before classifying a multiplexed channel receive as an application or infrastructure message,
-the Node runtime acquires a host-wide raw receive reservation. The reservation count `R` is 16
-and is shared by channel, subscriber, and route receive loops. It does not grow with connections,
-peers, or queued messages, so at most 16 raw messages per host may be received beyond the
-application HWM.
+Before an ordinary multiplexed channel receive or claim, the Node runtime acquires one permit from
+the host-wide Application Job Queue. The permit is held while the job is reserved or queued and is
+returned at the user callback's actual first instruction; a running or awaited handler is not
+counted. Only a terminal reply or error completion identifiable before ordinary receive may bypass
+the permit. Other control and malformed input acquires and then releases one during processing.
+Saturation waits cancellably without reject, drop, busy spin, or an unbounded side queue. Node adds
+no language-specific fixed raw-receive reservation count.
 
 ## 2. Registration, Topology, And Relocation Builder
 
@@ -414,6 +417,12 @@ owner loss, and the previous relocation payload isn't automatically
 replayed. A public phase API for manipulating this barrier isn't
 provided.
 
+`RelayReady`, when the target's relay-ready reply reaches its accepted state, is the
+irreversible boundary for source restoration. Only an explicit failure before that
+boundary restores source dispatch and the matching Session seal. After the boundary,
+source dispatch doesn't reopen regardless of the cutover submit result. The target runs
+owner CAS and queue opening after receiving cutover or after the existing 1,000ms fallback.
+
 On a retry within the same source and target process, factory and
 `restore(...)` can be called more than once. `capture(...)` can also be
 repeated before the [authority](../../../../01-glossary.en.md#authority)
@@ -430,8 +439,10 @@ framework immediately copies the capture result, and passes an
 independent `Uint8Array` per restore. If the adapter needs to keep the
 payload after the async call, it must copy it directly.
 
-The `Uint8Array` `capture(...)` returns is at most 64 MiB, and a
-zero-length one is a valid application payload. If the JavaScript
+The `Uint8Array` `capture(...)` returns has no relocation-adapter-specific
+size cap, and a zero-length one is a valid application payload. The
+framework performs any required chunking under the registered Relocation
+Store's ordinary blob and whole-payload limits. If the JavaScript
 runtime returns `null`, `undefined`, or a non-`Uint8Array` value, it's
 treated as an adapter failure and isn't turned into an empty payload.
 The framework copies the resolved array right after the callback
@@ -442,7 +453,7 @@ created. A failed instance's or a previous attempt's payload array
 isn't reused in the next attempt.
 
 If `capture(...)` or `restore(...)` ends with a throw, reject, or an
-invalid return value before the final owner/membership commit, and
+invalid return value before `RelayReady` reaches its accepted state, and
 every allowed attempt is used up, it's classified as
 `StateIncompatible`. If the framework cancels a callback due to the
 operation deadline, `DeadlineExceeded` is used, and stale attempt
@@ -568,13 +579,18 @@ export interface ZLinkDispatchOptionsBuilder {
     messageFlow(mode: ZLinkMessageFlowLogMode): this;
     traceSampleRate(rate: number): this;
     includeMessageSizes(include: boolean): this;
+    coreHwmMemoryLimitBytes(value: bigint | undefined): this;
+    coreHwmBudgetBytes(value: bigint | undefined): this;
+    coreHwmProfile(value: ZLinkCoreHwmProfile): this;
+    applicationJobQueueProfile(value: ZLinkApplicationJobQueueProfile): this;
+    maxQueuedApplicationJobs(value: bigint | undefined): this;
 }
 
 ```
 
 The four diagnostic levels respectively mean disabled diagnostics, errors
 only, key transitions, and detailed diagnostics. The startup diagnostics level
-defaults to `"errors"` when omitted. Dispatch configuration only provides
+defaults to `"errors"` when omitted. The diagnostics members of dispatch configuration only provide
 level, sampling rate, and whether to include message size; it doesn't
 take a file path, label, exporter lifecycle, or provider sink. The Framework
 writes structured records to standard logger/trace/metric providers configured
@@ -582,3 +598,11 @@ by the application. A message-flow observer callback, runtime error sink, and
 raw event DTO aren't the public contract. A provider call failure doesn't
 change the original message operation's terminal result and is isolated as
 separate diagnostics.
+
+## Dispatch Capacity Calculation Inputs
+
+The Node.js binding forwards a positive finite V8 `heap_size_limit` as Core's runtime
+memory hint. Core and application-job-queue profiles are independent enums and calculations,
+both defaulting to `Balanced`. Manual job cap is `1..2,147,483,647`; omission uses the
+common startup CPU snapshot and 32/64/128/256 coefficients. Range violation and overflow are
+configuration errors before socket bind, and runtime does not recompute the result.

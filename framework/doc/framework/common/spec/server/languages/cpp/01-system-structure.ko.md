@@ -20,7 +20,7 @@
 >
 > **public 타입과 시그니처는 [기능별 exact interface](interfaces/README.ko.md)가 소유한다.**
 > HTTP는 [60](60-http-hosting.ko.md)·[61](61-embedded-http-server.ko.md)이 소유한다.
-> **내부 runtime 구조는 [internals/runtime-architecture](../../../../internals/README.ko.md)가 소유한다** —
+> **내부 runtime 구조는 [internals/runtime-architecture](../../../README.ko.md)가 소유한다** —
 > 공개 계약이 아니다.
 
 ## 1. 제품 포지션

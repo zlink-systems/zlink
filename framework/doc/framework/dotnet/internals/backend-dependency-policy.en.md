@@ -3,7 +3,7 @@
 
 [Spec Index](../../common/README.en.md)
 
-[.NET Bundle](../README.en.md) | [Interfaces](../../common/spec/server/languages/dotnet/interfaces/README.en.md) | [Runtime Lifecycle](../../common/internals/README.en.md) | [Regression Matrix](regression-test-matrix.en.md)
+[.NET Bundle](../README.en.md) | [Interfaces](../../common/spec/server/languages/dotnet/interfaces/README.en.md) | [Runtime Lifecycle](../../common/spec/README.en.md) | [Regression Matrix](regression-test-matrix.en.md)
 
 # ZLink Framework .NET Backend Dependency Policy
 

@@ -1,17 +1,19 @@
 ---
-title: "7. Receive And Dispatch Loop"
+title: "46. Receive And Dispatch Loop"
 ---
 
-# 7. Receive And Dispatch Loop
+# 46. Receive And Dispatch Loop
 
-[Internal structure table of contents](README.en.md) · [Previous: 6. Target Selection And Route Cache](06-routing-and-cache.en.md) · [Next: 8. Object Kind And Activation](08-object-lifecycle.en.md)
+> **Document status — internal design, not normative public specification.** This chapter explains implementation structure used to satisfy the linked public contracts. It does not add or change application-visible behavior.
+
+[Internal structure table of contents](README.en.md) · [Previous: 45. Target Selection And Route Cache](45-internal-routing-and-cache.en.md) · [Next: 47. Object Kind And Activation](47-internal-object-lifecycle.en.md)
 
 > **What this chapter answers** — the span that carries a received
 > message to the execution gate.
 >
 > **Contract ownership** — receive fairness is owned by
-> [Transport Liveness](../spec/29-transport-liveness.en.md), and the
-> queue bound by [the Framework API](../spec/06-framework-api.en.md).
+> [Transport Liveness](29-transport-liveness.en.md), and the
+> queue bound by [the Framework API](06-framework-api.en.md).
 > This chapter covers the **structure** that satisfies that contract and
 > the failures that become visible at the receive/dispatch boundary.
 
@@ -73,7 +75,7 @@ Handle the following as one commit inside that span.
 3. Is it not sealed for a move / not waiting for creation / not
    waiting for a session connection
 4. Can both the lane's item count and bytes be reserved (the byte bound from
-   [8. Object Kind And Activation 「6. Which Unit Memory Accounting Uses」](08-object-lifecycle.en.md#6-which-unit-memory-accounting-uses))
+   [47. Object Kind And Activation 「6. Which Unit Memory Accounting Uses」](47-internal-object-lifecycle.en.md#6-which-unit-memory-accounting-uses))
 5. Commit the accepted-order sequence and append the work to the FIFO
 6. If the FIFO was empty, create §1's ready state and notify the execution resource
    immediately
@@ -102,7 +104,7 @@ flowchart LR
 another method is free. Since a long span becomes a bottleneck itself,
 put **only checking and enqueuing** here — work like deserialization
 or handler lookup happens outside this span
-([11. Payload Ownership And Copy 「6. When Deserialization Happens」](11-message-ownership.en.md#6-when-deserialization-happens)).
+([50. Payload Ownership And Copy 「6. When Deserialization Happens」](50-internal-message-ownership.en.md#6-when-deserialization-happens)).
 
 ## 3. Acquire Exclusivity Together With Taking Ownership
 
@@ -135,7 +137,7 @@ so, process the next item, and if not, put the remaining work back
 into the set and release authority.
 
 Don't use item count as the basis — same reason as
-[8. Object Kind And Activation 「6. Which Unit Memory Accounting Uses」](08-object-lifecycle.en.md#6-which-unit-memory-accounting-uses).
+[47. Object Kind And Activation 「6. Which Unit Memory Accounting Uses」](47-internal-object-lifecycle.en.md#6-which-unit-memory-accounting-uses).
 Even the same 100 items, some handlers finish in 1 ms and some take a
 second. Count can't predict occupancy time.
 
@@ -222,8 +224,8 @@ a Framework-level `MaxMessageSize` setting or complete-message cap.
 These values are fixed before the MeshNode starts and are handed to the bind
 path. The runtime must not infer the receive HWM from the send HWM or treat the
 receive timeout as an alias for the send timeout. This preserves the public
-configuration at the runtime boundary defined by [RouteMesh topology](../spec/07-channel-topology.en.md)
-and [MeshNode startup](../spec/13-mesh-node.en.md).
+configuration at the runtime boundary defined by [RouteMesh topology](07-channel-topology.en.md)
+and [MeshNode startup](13-mesh-node.en.md).
 
 ## 6. Read Multiple Items At Once From A Socket
 
@@ -252,10 +254,10 @@ delayed even with a ceiling in place.
 
 This rule applies to **every multi-connection receive path** —
 fanout, as well as
-[RouteMesh](../spec/01-glossary.en.md#routemesh) where multiple nodes
+[RouteMesh](01-glossary.en.md#routemesh) where multiple nodes
 find each other by name, ClientServer, service connection, and STREAM
 are all targets
-([Transport Liveness](../spec/29-transport-liveness.en.md)).
+([Transport Liveness](29-transport-liveness.en.md)).
 
 If there's leftover work when the bound is hit, it continues reading
 on the next wake-up. §1's rule applies here too — whether anything
@@ -305,7 +307,7 @@ How to handle a passed tick when execution runs late past the period
 is a **public option** — skip and run only the current one, catch up
 up to a fixed count, or recompute the next scheduled time from the
 completion moment
-([Stage Wrapper On Spot 「5. Timer」](../spec/17-stage-wrapper-on-spot.en.md#5-timer)).
+([Stage Wrapper On Spot 「5. Timer」](17-stage-wrapper-on-spot.en.md#5-timer)).
 This option fixes the three behaviors and their names as public contract.
 
 internals doesn't pick and fix one of these. In particular, **"the
@@ -315,7 +317,7 @@ three (fixed delay), not a rule that eliminates the fixed period.**
 **Decision — the default behavior is to coalesce backed-up ticks into
 one.** The spec allows "duplicate expirations may be merged into one
 pending record"
-([Async Execution Policy 「5. Spot Timer」](../spec/05-async-execution-policy.en.md#5-spot-timer)).
+([Async Execution Policy 「5. Spot Timer」](05-async-execution-policy.en.md#5-spot-timer)).
 But if the application chose catch-up, **the ceiling is the count that
 option defines**, and internals doesn't reduce it to one.
 
@@ -328,7 +330,7 @@ a long-running timer.
 A timer callback runs through that Spot's execution authority. In
 `SpotWide`, it uses the shared authority; in `PerActor`, it uses
 **authority per timer name**
-([2. Spot · Actor Execution Serialization](02-serialization.en.md)).
+([41. Spot · Actor Execution Serialization](41-internal-serialization.en.md)).
 If a timer can't acquire its own authority, that tick stays in the
 holding slot and retries next time.
 
@@ -336,19 +338,19 @@ holding slot and retries next time.
 
 A receive callback moves ownership of the received data to a
 runtime-side value and **returns immediately.** It doesn't call the
-handler or change [Spot](../spec/01-glossary.en.md#spot) state inside
+handler or change [Spot](01-glossary.en.md#spot) state inside
 it.
 
 The receive context is usually owned by the transport layer, so
 lingering here delays other receives on that connection. It also
 creates a path that changes state without going through
-[2. Spot · Actor Execution Serialization](02-serialization.en.md)'s
+[41. Spot · Actor Execution Serialization](41-internal-serialization.en.md)'s
 execution authority.
 
 Format validation finishes before calling the handler. Malformed input
 never reaches the handler — a call waiting for a response ends in
 `ProtocolError`
-([Framework Error Model 「5. `Request` Completion And Failure」](../spec/32-framework-error-model.en.md#5-request-completion-and-failure)),
+([Framework Error Model 「5. `Request` Completion And Failure」](32-framework-error-model.en.md#5-request-completion-and-failure)),
 and a call not waiting ends with only a record left.
 
 ## 9. Result To Confirm
@@ -389,6 +391,23 @@ and a call not waiting ends with only a record left.
 - A long-running timer doesn't keep growing memory via tick
   statistics.
 
+## Shared Supply Permits, Readiness, And Fairness
+
+Only supply identifiable before receive as terminal reply/error completion bypasses the
+shared permit and ordinary Core HWM path. A record first received on an ordinary connection
+does not gain this bypass after classification. Every other application, control, or
+malformed ordinary record acquires the same host-instance permit before receive/claim.
+Each source has one outstanding waiter, handed off in oldest-waiter order. A source moves
+to the tail after a batch, and batch/1:N never publishes more application jobs than permits.
+
+An application permit releases at the actual exact-target callback's first instruction;
+control/malformed releases immediately after internal processing. Cancellation, source
+close, and shutdown clean up waiters and handed-off permits exactly once. Same-host relay,
+fanout, serial-owner, and relocation paths must not wait for a same-authority acquire while
+holding a gate, execution authority, or resource needed to return permits. A sustained
+wait/capacity cycle is a protocol/runtime bug, not grounds for bypass.
+[Payload Ownership](50-internal-message-ownership.en.md) owns retained-record lifetime.
+
 ---
 
-[Internal structure table of contents](README.en.md) · [Previous: 6. Target Selection And Route Cache](06-routing-and-cache.en.md) · [Next: 8. Object Kind And Activation](08-object-lifecycle.en.md)
+[Internal structure table of contents](README.en.md) · [Previous: 45. Target Selection And Route Cache](45-internal-routing-and-cache.en.md) · [Next: 47. Object Kind And Activation](47-internal-object-lifecycle.en.md)

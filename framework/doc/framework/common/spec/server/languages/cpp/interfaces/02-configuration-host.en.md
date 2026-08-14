@@ -673,21 +673,18 @@ public:
     codec_options_builder_t &use(const TExtension &extension);
 };
 
-enum class application_hwm_profile_t {
+enum class core_hwm_profile_t {
     compact = 0,
     low_latency = 1,
     balanced = 2,
     throughput = 3
 };
 
-class inbound_dispatch_options_t {
-public:
-    inbound_dispatch_options_t &set_application_hwm_bytes(
-      std::optional<std::uint64_t> value);
-    inbound_dispatch_options_t &set_application_hwm_profile(
-      application_hwm_profile_t value);
-    inbound_dispatch_options_t &set_process_memory_limit_bytes(
-      std::optional<std::uint64_t> value);
+enum class application_job_queue_profile_t {
+    compact = 0,
+    low_latency = 1,
+    balanced = 2,
+    throughput = 3
 };
 
 class zlink_framework_options_t {
@@ -700,7 +697,6 @@ public:
     dispatch_options_t &configure_dispatch();
     dispatch_options_t dispatch_options() const;
     location_options_t &configure_locations();
-    inbound_dispatch_options_t &configure_inbound_dispatch();
     location_options_t location_options() const;
     zlink_framework_options_t &set_max_pending(std::size_t count);
     zlink_framework_options_t &set_application_version(
@@ -775,16 +771,12 @@ AdvertiseHost default, and a per-listener setting overrides this value.
 idle timeout, and queue bound. Both options can be changed only before
 host start.
 
-`configure_inbound_dispatch()` returns one host-wide setting. If HWM is
-specified as `std::nullopt`, it's Auto; `0` means no limit; a positive
-value uses an exact byte bound. The profile default is `balanced`.
-Process memory limit only allows `std::nullopt` or a positive value.
-In Auto mode with no explicit value, it checks a finite OS bound
-applied to the process, such as a container/cgroup/Windows Job Object.
-Since C++ has no managed heap bound, it uses the confirmed OS bound,
-and if there's no OS bound either, it uses the total system physical
-memory. If the computation result isn't positive, it fails as a
-configuration error before socket bind.
+`configure_dispatch()` returns one host-wide dispatch setting. Core memory limit, manual
+budget, and profile are forwarded unchanged; C++ supplies no managed-runtime hint. The two
+profiles both default to `balanced` but are independent enums and calculations. Manual job
+cap is `1..2,147,483,647`; omission uses the common startup CPU snapshot and 32/64/128/256
+coefficients. Range violation and overflow fail before socket bind, and runtime does not
+recompute the result.
 
 Application version and maintenance wave are set once for the whole
 host. Version is a non-negative signed 64-bit deployment ordinal

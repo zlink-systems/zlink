@@ -106,16 +106,13 @@ and manual connection on the same MeshNode.
 
 ## 3. Location Options
 
-`configureLocations()` sets the lease, route cache, and relocation execution ceilings.
+`configureLocations()` sets the lease, route-cache, and message-follow windows.
 
 ```typescript
 const location = builder.configureLocations();
 location.ownerLeaseRenewIntervalMs = 5_000;
 location.ownerLeaseTtlMs = 15_000;
 location.messageFollowDurationMs = 30_000;
-location.maxActiveOutboundRelocations = 64;
-location.maxActiveInboundRelocations = 64;
-location.maxRelocationPayloadInFlightBytes = 256 * 1024 * 1024;
 ```
 
 | Option | Default | Meaning |
@@ -128,9 +125,12 @@ location.maxRelocationPayloadInFlightBytes = 256 * 1024 * 1024;
 | `StoreFailureGrace` | 30s | How long the last route decision is kept during a Store outage |
 | `RouteCacheMaxAge` | 15s | The max time before a cached route is re-checked |
 | `MessageFollowDuration` | 30s | How long the previous owner relays messages to the new owner before the move |
-| `maxActiveOutboundRelocations` | 64 | The ceiling on relocation units a process sends out concurrently |
-| `maxActiveInboundRelocations` | 64 | The ceiling on relocation units a process restores concurrently |
-| `maxRelocationPayloadInFlightBytes` | 256 MiB | The ceiling on encoded payload across the whole process |
+
+Relocation has no separate participant, record, concurrency, or in-flight-byte capacity
+setting. Target staging uses the host's shared Application Job Queue reservation and runs a
+backlog larger than the live-job limit progressively. Core memory accounting, negotiated
+frame size, and Store limits still apply; see
+[Relocation Flow §5.3](../../../common/spec/28-relocation-flow.en.md#53-no-relocation-specific-capacity-limit).
 
 **The four lease values are tied together.** Breaking the following relationship is a
 startup error. Look at all four together when changing any one value.

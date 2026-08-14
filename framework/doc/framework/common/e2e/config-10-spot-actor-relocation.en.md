@@ -294,24 +294,37 @@ binding?
   does not send the same sequence.
 - Contract basis: [Session Actor Dispatch](../spec/20-session-actor-dispatch.en.md)
 
-#### ST-E1C Session Location Update Retry
+#### ST-E1C Session Route Update And Seal Timeout
 
 Priority: `P0`
 
-Join completion does not wait for the Session route-update response. If the moved runtime doesn't
-get a first response, it retries after 1 second. If there is still no response, it retries at 1, 2,
-4, and 5 second intervals, then keeps a 5-second interval after that.
+The Session route update after relocation is one-way and defines no response or application ACK. A
+relocation terminal does not wait for the Session owner to apply it. If the Session owner receives
+the exact update within configurable `SessionRelocationSealTimeout` after installing the seal, it
+keeps the existing physical Session and binding. The default timeout is 3,000ms. On timeout, it
+closes the physical Session and cleans that binding, held messages, and seal state. An update that
+arrives afterward is a no-op that records only a Warning; it does not restore the connection or
+binding.
 
-**Verification question:** Even if the network path to the Session owner is temporarily cut, does
-Join still complete, with the existing binding eventually receiving the target push?
+**Verification question:** Does the normal path keep the existing binding before timeout, while the
+blocked path lets relocation finish and requires explicit reconnect and rebind after timeout cleanup?
 
-- Starting condition: A proxy can block the network path between the target runtime and the Session
-  owner.
-- Procedure: With the path blocked, remote Join completion is confirmed, then the path is restored,
-  and target push delivery is awaited with bounded polling.
-- Verification: Join completion does not time out because of the Session-owner path being cut. After
-  the path is restored, the target push is received with no rebind, with no duplicate push. The
-  actual retry timing is diagnosed only when a public trace contract exists for it.
+- Starting condition: The same Actor and bound client are prepared separately for normal and blocked
+  variants. The Session owner uses the default 3,000ms or a value set through public server
+  configuration for `SessionRelocationSealTimeout`. In the blocked variant, a proxy can block the
+  network path between target runtime and Session owner until after timeout.
+- Procedure: In the normal variant, a target push is checked through the existing client after remote
+  Join. In the blocked variant, the path is blocked while the remote Join terminal and public
+  connector disconnect are observed, then the path is restored after timeout. A push is sent to the
+  old binding before the client explicitly reconnects and binds the Actor again, then another push is
+  sent.
+- Verification: The normal variant receives the target push exactly once with no rebind before
+  timeout. The blocked variant's relocation reaches its terminal without waiting for Session-route
+  application; after timeout the physical Session is closed and the old binding receives no push.
+  Restoring the path does not restore that binding because the late update is a no-op that records
+  only a Warning. Only the push after explicit reconnect and rebind is delivered exactly once. Pass
+  evidence uses only public Join results, connector lifecycle, bind results, and client pushes; it
+  does not inspect a route-update packet, held state, or internal retry count or timing.
 - Contract basis: [Session Actor Dispatch](../spec/20-session-actor-dispatch.en.md)
 
 #### ST-E1A A New Actor Incarnation Requires A Bind
@@ -492,25 +505,43 @@ relocation, observed serially?
   active count across all nodes is 1.
 - Contract basis: [Async Execution Policy](../spec/05-async-execution-policy.en.md)
 
-#### ST-G2 Apply User Spot Aggregate Capacity All-Or-None
+#### ST-G2 SpotWide Durable Backlog And Lazy Job Admission
 
 Priority: `P0`
 
-A `SpotWide` relocation must fit the Spot and all its Actors, as a single unit, into target capacity.
+A `SpotWide` relocation does not reserve live Application Job Queue permits for its entire durable
+ordered backlog up front. A compatible target can hold a backlog larger than
+`EffectiveMaxQueuedApplicationJobs`, complete the owner transition, and, once target CAS makes
+dispatch runnable, acquire only the shared permits needed for the next turn or bounded chunk. There
+is no relocation-only duplicate of a Spot, Actor, or stable-type slot, record, or byte capacity
+blocker; ordinary placement eligibility and resource limits still apply.
 
-**Verification question:** If Spot, Actor, or stable-type capacity is short, does the whole aggregate
-stay at the source, moving to the target only when every bucket is sufficient?
+**Verification question:** Does a SpotWide backlog larger than the target's live job cap move the
+whole owner to target without a capacity blocker, then keep processing in order through post-CAS
+lazy permits?
 
-- Starting condition: For the same-sized SpotWide aggregate, prepare fresh source/target variants
-  with a short Spot slot, a short Actor slot, a short stable-type slot, and all capacity sufficient.
-- Procedure: In each variant, call public Host Relocate without a target argument, then send state
-  requests to the Spot and every Actor after the terminal.
-- Verification: Each short variant returns a capacity-blocker result; public locations, Spot state,
-  and all Actor state remain at the source with the same generations. In the sufficient variant, the
-  Spot and every Actor process at the target with the same pre-move state and generations. A partial
-  member move is not allowed.
-- Contract basis: [Relocation Units And Concurrency Limits](../spec/30-host-relocation-flow.en.md#7-relocation-units-and-concurrency-limits)
-  and [SpotWide User Spot](../spec/30-host-relocation-flow.en.md#85-spotwide-user-spot)
+- Starting condition: A SpotWide Spot with several Actors and a target with compatible factories and
+  application version are prepared. Source accepts `N` public operation IDs before relocation, and
+  target's public Application Job Queue capacity is set low enough that
+  `N > target.EffectiveMaxQueuedApplicationJobs`. A separate no-candidate variant provides no
+  compatible target because of its factory/application version. A separate selected-target variant
+  satisfies eligibility, then has Restore reject the transferred state schema/type adapter.
+- Procedure: In each variant, public Host Relocate is called without a target argument. The compatible
+  variant uses bounded polling of public locations, Spot/Actor handlers, and operation-ID evidence,
+  then sends a follow-up request to every member after the owner transition. Both failure variants
+  send state requests to the source Spot and every Actor after their terminal result and observe
+  target staging cleanup evidence.
+- Verification: The compatible variant changes the Spot and every Actor owner to target without a
+  relocation-specific capacity blocker, leaving no member at source. Even though the complete backlog
+  cannot fit the live cap at once, target handlers process each accepted operation ID exactly once in
+  existing order and show progress in bounded observation windows. Follow-ups succeed at target with
+  the same state and generations. The no-candidate variant ends preflight with
+  `Blocked/TargetUnavailable`; the selected-target state-mismatch variant ends before owner CAS with
+  `Blocked/StateIncompatible`. Both keep owner, state, and generations at source. No variant sets
+  or expects a relocation-specific numeric cap, and none inspects the Relocation Store or a
+  temporary queue directly.
+- Contract basis: [Framework API](../spec/06-framework-api.en.md) and
+  [Host Relocation Flow](../spec/30-host-relocation-flow.en.md)
 
 #### ST-G3 Host Relocation With A PerActor Spot
 

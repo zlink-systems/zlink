@@ -139,3 +139,9 @@ Contract test와 E2E는 다음을 검증한다.
 - `Request` timeout과 cancellation 뒤 늦은 reply가 두 번째 결과를 만들지 않는다.
 - Typed `Rejected` 결과와 `ErrorKind.Rejected` exception을 구분한다.
 - Public 오류 표면에 재시도 hint가 없다.
+
+## 9. Application job queue 포화
+
+Manual queue 값이 `1..2,147,483,647` 밖이거나 계산 overflow이면 socket bind 전 configuration error다.
+Runtime shared-cap 부족은 public error, typed reject나 drop 사유가 아니라 cancellable wait다. Owner 구조
+한도 위반만 기존 owner error를 사용하며 두 조건을 섞지 않는다.

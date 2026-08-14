@@ -43,8 +43,7 @@ configuration provides the following capabilities.
 | worker | Configures the bounded worker scheduler's concurrency, idle timeout, and queue cap |
 | network identity | Configures the bind host and advertised host common to listeners |
 | deployment identity | Configures the application version and maintenance wave used for target eligibility |
-| relocation limits | Configures process-wide outbound/inbound unit, `Capture`/`Restore` callback, and encoded-payload in-flight caps |
-| inbound dispatch | Configures the host-wide byte cap on in-flight application payload, and the memory limit/profile used for Auto computation |
+| inbound dispatch | Configures forwarded Core HWM budget values and the host-wide application job queue profile/capacity |
 
 Configuring the same root twice in a process, or registering the same
 [MeshName](01-glossary.en.md#meshname) twice, causes a configuration error at startup.
@@ -68,112 +67,75 @@ internally and distinguishes orderly disconnect from half-open failure. The fixe
 service liveness message, and reconnect contract are owned by
 [55 Transport Liveness](29-transport-liveness.en.md).
 
-### 2.1 Keeping Received Payload From Growing Memory Indefinitely
+### 2.1 Separating the Core Memory Budget From the Application Job Queue
 
-The byte total of application payload the framework has received but the handler hasn't
-finished processing yet is called [Application HWM](01-glossary.en.md#application-hwm).
-This value isn't split per connection or per MeshNode — it applies once, host-wide.
-
-The application configures only these three values in the root's inbound dispatch options.
+The framework does not compute a separate application byte HWM. The root inbound-dispatch
+options forward the following Core memory settings from one framework host instance to the
+Core context it owns.
 
 | Setting | Meaning |
 |---|---|
-| `ApplicationHwmBytes` | Auto if omitted; unlimited if `0`; a positive value uses that host-wide byte cap. |
-| `ApplicationHwmProfile` | The Auto computation ratio. The default is `Balanced`. |
-| `ProcessMemoryLimitBytes` | The effective memory budget preferred for Auto computation. If omitted, the finite OS cap applied to the process and the language runtime's managed heap cap are each checked and the smaller is used; if only one is available, that one is used. If neither is available, the system's total physical memory is used. |
+| `CoreHwmMemoryLimitBytes` | Optional finite process/runtime memory limit hint forwarded to Core. |
+| `CoreHwmBudgetBytes` | Optional positive manual Core budget; when present it takes precedence over Auto calculation. |
+| `CoreHwmProfile` | Core Auto-budget profile. The default is `Balanced`. |
 
-`managed heap cap` means the maximum bytes the language runtime can use for the application
-heap. Java and Kotlin use `Runtime.maxMemory()`, .NET uses
-`GC.GetGCMemoryInfo().TotalAvailableMemoryBytes`, and Node.js uses V8's
-`heap_size_limit`. C++ has no language-runtime managed heap, so only the OS cap is checked.
-This value isn't the actual whole-process memory cap or memory the framework pre-reserves.
+A configured memory-limit hint must be finite and positive. Managed bindings pass the
+runtime memory hint required by their exact language contract; native C++ has no managed
+runtime hint. Core owns OS/cgroup detection, budget calculation, queue census, directional
+HWM allocation, and its runtime snapshot. The framework does not reproduce that calculation
+or divide the budget by a framework connection count. The settings are fixed at startup.
 
-Auto mode determines the effective memory budget in the following order, then multiplies by
-the profile ratio and truncates the fractional part.
+A message retained from a Core receive keeps the Core receive credit until the framework
+releases the retained lease. Terminal reply/error completion bypasses both the application
+job queue permit and ordinary-ingress Core HWM path so that completion remains live while ordinary
+traffic is saturated.
 
-1. `ProcessMemoryLimitBytes`
-2. Whichever of the process's finite OS cap and the language runtime's managed heap cap is
-   available
-   - the smaller if both are available
-   - that value if only one is available
-3. Total system physical memory
+The same root options also configure one shared application job queue owned by the framework
+host instance.
 
-The OS cap includes values that restrict what a process can use, such as container/cgroup/
-Windows Job Object limits. Since step 3 is a total rather than available memory, Auto mode
-starts up with no extra configuration even in an environment where no valid OS or runtime
-cap can be determined.
+| Setting | Meaning |
+|---|---|
+| `ApplicationJobQueueProfile` | Auto queue profile. The default is `Balanced`. |
+| `MaxQueuedApplicationJobs` | Optional exact manual capacity in `1..2,147,483,647`. Omission selects Auto. |
+| `EffectiveMaxQueuedApplicationJobs` | Read-only startup result exposed by status. |
 
-| Profile | Ratio |
+A manual range violation or Auto multiplication overflow is a configuration error before
+socket bind. Auto capacity uses the minimum known-positive startup value among runtime
+constrained logical count, affinity/cpuset count, `floor(quota/period)` (minimum 1), and
+explicit executor maximum. If none is known, the effective processor count is `1`. It is
+not recomputed at runtime.
+
+| Profile | Jobs per effective processor |
 |---|---:|
-| `Compact` | 2% |
-| `LowLatency` | 5% |
-| `Balanced` | 10% |
-| `Throughput` | 20% |
+| `Compact` | 32 |
+| `LowLatency` | 64 |
+| `Balanced` | 128 |
+| `Throughput` | 256 |
 
-If Auto mode's computed result isn't positive, it fails as a configuration error before
-socket bind. Not setting a cap at all isn't itself an error. The selected profile also
-applies to the Auto HWM profile of the Core context the framework creates, but Application
-HWM bytes aren't copied into a per-connection Core HWM or divided by connection count.
+The `CoreHwmProfile` and `ApplicationJobQueueProfile` labels intentionally use the same
+four names, but they are independent public types and independent calculations.
 
-On an application listener that provides `MaxMessageSize`, a positive
-`ApplicationHwmBytes` requires that value to be finite and positive too. Auto mode applies
-the same condition. Only an explicit `ApplicationHwmBytes = 0` skips this check. RouteMesh
-SS has no `MaxMessageSize` setting, so this combination check doesn't apply to it. It's
-still valid for HWM to be smaller than
-`MaxMessageSize`. A complete message that started while pending bytes were below HWM is
-received to completion, and if that pushes the total over HWM, subsequent receiving stops.
-So an empty host can process one message larger than HWM but no larger than
-`MaxMessageSize`.
+Only supply identifiable before receive as terminal reply/error completion bypasses the
+shared supply permit. A record first received on an ordinary connection does not gain a
+bypass after classification. Every other application, control, or malformed ordinary-ingress
+record acquires one permit before
+receive/claim. A control or malformed record releases it immediately after internal
+processing. An application record transfers the permit with the queued job and releases it
+at the first instruction of the actual handler callback. Async suspension does not
+reacquire it.
 
-On a receive path such as ClientServer where the binding doesn't provide a complete message's length
-before `Recv`, the transport `Recv` itself can't be stopped immediately at the HWM boundary.
-In this case the framework first acquires a bounded reservation per raw receive, then
-classifies application versus control after receiving. A message classified as control isn't
-added to application pending — its reservation is returned immediately — while an
-application message keeps its reservation, along with the measured payload bytes, until a
-terminal state. Once HWM is reached, no new raw receive beyond this reservation range is
-started.
+When no permit is available, receiving waits through a cancellable capacity wait. The
+framework does not turn saturation into a generic capacity error, drop a record, poll,
+busy-spin, or place it in an unbounded bypass queue. Waiters from different receive sources
+are granted in oldest-waiter order. Batch receive and 1:N fanout reserve one permit per
+application job and never publish more jobs than the secured permits. When Core receive
+queues fill, their byte HWM propagates backpressure to the sender.
 
-Letting `M` be the effective `MaxMessageSize` and `R` the number of raw receive reservations
-that can be held concurrently, the amount received over HWM on this path is at most `R * M`.
-The "one message" from the paragraph above becomes, here, at most `R` messages.
-
-StreamNode checks its complete client-to-server message separately on the Core STREAM
-inbound path. Its size is header bytes plus payload bytes, excluding the 6-byte prefix, and
-its default is `64 KiB`. `0` maps to Core `-1`, while the cap isn't applied to server-to-client
-outbound messages.
-
-`R` is a finite positive number fixed at configuration time and **doesn't grow with load.**
-`R` isn't increased in proportion to connection count, pending message count, or peer count.
-`R` doesn't exceed the number of receive loops the host runs concurrently. Each language
-records its `R` value and rationale in its exact interface document.
-
-Scaling `R` with load would accept even more right when pressure needs to be created,
-weakening backpressure. What this provision requires isn't exact accounting but that
-**the overage stays a fixed slack independent of load.** On a path where the binding can
-check length in advance, a new application `Recv` can stop right at HWM without this slack.
-
-Pending bytes include only the application payload part of a complete message. Envelope,
-route, framework metadata, and allocator overhead aren't included. Jobs waiting in the
-queue and jobs currently executing in a handler are included; jobs that reached a terminal
-state, and messages still sitting in a Core/OS buffer, aren't included. The framework
-doesn't walk the queue. It keeps the immutable byte value computed at receive time on the
-job, and computes the current total as the received cumulative total minus the terminal-
-completed cumulative total.
-
-When pending bytes reach HWM, only new application `Recv` stops. Already-started receive
-and queue dispatch, separate Completion-connection request replies, bounded framework
-service control, and Core's send-ready callback keep processing. Once a handler finishes —
-normal completion, failure, or cancellation — and the total drops below HWM, receiving
-resumes. A received message isn't dropped or turned into an error reply merely because HWM
-was exceeded. Once the Core receive queue fills up, the existing byte-based transport HWM
-makes the source's new sends wait.
-
-A request handler runs after securing the internal permit needed to send a reply. Without
-a permit, the request stays in the application queue and in the pending-byte total, while
-processing of the completion connection that will receive the reply continues. Permit size,
-per-peer fairness, connection pairs, and reply reserve are internal framework policy and
-aren't exposed as public options.
+The root Location options own startup-only `SessionRelocationSealTimeout`. It defaults to
+`3,000 ms` and accepts only a finite positive duration. Zero, negative, infinite, or a
+value the exact language interface cannot represent as finite milliseconds is a
+configuration error before socket bind. It bounds how long a Session owner waits for
+terminal cutover/abort of a relocation seal and is not changed at runtime.
 
 ## 3. RouteMesh Registration
 
@@ -276,11 +238,9 @@ negative value is a configuration error. Binding-option representation and conve
 owned by each language's internals and aren't exposed in the application public API.
 
 The ClientServer application listener's `MaxMessageSize` default is `16,777,216` bytes
-(16 MiB). So the default Auto Application HWM configuration has a finite single-message
-cap. If the application explicitly changes this to `0`, it keeps the original meaning of no
-separate cap, but this is rejected at startup validation if Application HWM is Auto or
-positive. Only when both unlimited messages and unlimited pending payload are needed should
-`MaxMessageSize = 0` and `ApplicationHwmBytes = 0` be specified.
+(16 MiB). `MaxMessageSize` is a single-message cap independent of the Core memory budget
+and application job queue capacity. `0` means that the framework adds no separate cap and
+is not cross-validated with another HWM or queue setting.
 
 This regular application-listener rule applies to ClientServer, not RouteMesh ServerServer.
 RouteMesh SS provides no Framework-level message-size setting or cap.
@@ -674,21 +634,6 @@ The Location Store interface and Relocation Store interface don't inherit from e
 The root independently provides two registration operations, each taking its own generic
 Store instance. A per-Actor/Spot Store, a bundle registering both Stores at once, and a
 Redis-only registration operation aren't part of the public contract.
-
-Location options provide five process-wide relocation limits. The defaults are: active
-outbound 64, active inbound 64, concurrent `Capture` 8, concurrent `Restore` 8, and encoded
-payload in-flight 268,435,456 bytes (256 MiB). Every value must be positive. Payload bytes
-include application state, the not-yet-executed message queue, the accepted journal, timer
-logical registrations/pending ticks, the relocation manifest, and framework metadata.
-
-The framework seals a source unit only at a queue-turn boundary where the active unit,
-callback, and expected payload-byte permits are all secured non-blockingly. If a permit
-can't be obtained, it continues application message and timer dispatch and reschedules the
-intent notification. If a single User Spot aggregate's encoded payload reservation exceeds
-the byte cap, it proceeds as a single oversized aggregate only while no other payload is
-in-flight. Standalone Actor and Instance Spot units are only admitted within the configured
-byte gate. A runtime option change applies only to new relocation admission and doesn't
-reduce the cap for a unit that already obtained a permit.
 
 ## 11. Classic Fanout
 

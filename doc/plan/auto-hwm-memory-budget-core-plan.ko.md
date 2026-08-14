@@ -300,16 +300,21 @@ record와 request state를 남기지 않고, 수용에 성공하면 Core가 repl
 등록 순서는 Core 내부 구현으로 둔다.
 
 Binding은 이 nonblocking 결과와 Core의 전송 가능 상태 변화를 이용해 언어별 비동기 전송을 구현한다.
-Core는 대상 pipe의 수용 실패와 readiness 대기 등록을 경쟁 없이 연결할 수 있는 내부 정보를 제공한다.
-구현은 waiter를 등록한 뒤 수용을 시도하거나, 등록 뒤 같은 pipe의 writable 상태와 generation을 다시
-검사해야 한다. A가 HWM에 막히고 B가 writable인 상태에서 socket-wide send-ready가 먼저 소비되어도 A의
-wake가 유실되어서는 안 된다.
+이를 위해 Core C ABI에 routed target readiness callback을 새로 추가한다. 기존
+`zlink_send_ready_handler()`는 socket 전체에 하나 이상의 send 가능성이 생겼다는 신호라서 어느 RID가
+회복됐는지 알 수 없다. A가 HWM에 막혀도 같은 socket의 B가 writable하면 이 callback이 먼저 소비될 수
+있으므로 routed 비동기 admission의 wake 근거로 사용하지 않는다.
+
+새 callback event는 최소한 target RID, transport pair ID와 generation, 그리고 `WRITABLE` 또는
+`TERMINAL` 상태를 전달한다. Core는 HWM 때문에 inactive였던 application pipe가 credit을 회복해
+`write_activated(pipe)`가 실행될 때 그 pipe의 identity로 `WRITABLE`을 발생시킨다. Pipe detach, socket
+close와 context 종료에는 해당 identity의 `TERMINAL`을 발생시킨다. Callback은 재시도할 계기를 뜻하며
+재시도 성공을 보장하지 않으므로 binding은 항상 같은 target으로 `DONTWAIT` submit을 다시 검사한다.
 
 A pipe의 credit 회복은 A waiter를 재개한다. Pipe detach, socket close와 context 종료는 남은 waiter를
 해당 terminal 상태로 정확히 한 번 깨운다. Timeout과 cancellation의 timer·상태 소유권은 binding에 둘 수
-있지만 Core acceptance와 경합해 wire submit 또는 terminal 결과가 중복되어서는 안 된다. 필요한 target RID,
-pipe identity와 generation readiness 정보는 Core–binding 내부 구현 계약이며 Framework에 RID queue나 Core
-scheduler 복제 구현을 요구하는 public API가 아니다.
+있지만 Core acceptance와 경합해 wire submit 또는 terminal 결과가 중복되어서는 안 된다. Target readiness
+API는 모든 언어 binding이 사용하는 Core C ABI지만 Framework application API에는 노출하지 않는다.
 
 ## 7. 큰 메시지와 liveness
 
@@ -415,6 +420,40 @@ in-flight byte, blocked ratio와 재계산 원인은 유지한다.
 
 다음 선언은 **contract pseudocode이며 실제 public API가 아니다**. ABI 검토에서 exact interface를
 확정해야 하며, 반환 형식은 기존 context configuration API 관례에 맞춰 `zlink_config_result_t`를 사용한다.
+
+Routed 비동기 admission에 필요한 target readiness도 같은 ABI 검토에서 확정한다. 다음 callback은
+socket-wide `zlink_send_ready_handler()`를 대체하지 않고 ROUTER·DEALER의 target별 비동기 대기에만 사용한다.
+`peer_rid` storage는 callback 실행 중에만 유효하며 binding은 pending key 조회에 필요한 경우 값을 복사한다.
+
+~~~c
+typedef enum zlink_routed_send_ready_state_t {
+    ZLINK_ROUTED_SEND_WRITABLE = 1,
+    ZLINK_ROUTED_SEND_TERMINAL = 2
+} zlink_routed_send_ready_state_t;
+
+typedef struct zlink_routed_send_ready_event_t {
+    zlink_routing_id_t peer_rid;
+    uint64_t transport_pair_id;
+    uint64_t transport_pair_generation;
+    zlink_routed_send_ready_state_t state;
+    int terminal_errno; /* WRITABLE이면 0 */
+} zlink_routed_send_ready_event_t;
+
+typedef void (*zlink_routed_send_ready_handler_fn) (
+  void *subject,
+  const zlink_routed_send_ready_event_t *event,
+  void *userdata);
+
+zlink_handler_result_t zlink_routed_send_ready_handler (
+  void *socket,
+  zlink_routed_send_ready_handler_fn handler,
+  void *userdata);
+~~~
+
+Handler는 binding이 socket의 비동기 operation을 받기 전에 장기 등록한다. 같은 pipe의 여러 credit 반환은
+하나의 `WRITABLE` event로 병합할 수 있고 불필요한 event도 허용하지만, HWM block 뒤 실제 writable 전이는
+누락할 수 없다. Event generation이 현재 route generation과 다르면 binding은 stale event로 무시한다.
+Handler 안에서 blocking submit을 실행하지 않고 binding scheduler에 대상 key만 전달한다.
 
 ~~~c
 #define ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1 1u
@@ -549,8 +588,9 @@ Retained receive는 이미 accounting된 queue message의 owner만 바꾸므로 
 12. manual reservation과 unlimited 진단 추가
 13. Monitor open option, pending byte와 monitor·instance aggregate 추가
 14. Legacy monitor count 설정 경로와 slot·bucket planner status field 제거
-15. Routed send/request DONTWAIT의 target-local backpressure·multipart rollback과 binding 비동기 전송에
-    필요한 race-free target readiness 등록·재검사 구현
+15. Routed send/request DONTWAIT의 target-local backpressure·multipart rollback 구현
+16. RID·transport pair generation·writable/terminal 상태를 전달하는 routed target readiness C ABI와
+    `write_activated(pipe)`·detach·close·context 종료 dispatch 구현
 16. Framework routed-control 이관과 모든 binding callsite 제거가 완료된 통합 gate에서만 Router
     completion-control C API·export·envelope·handler·dispatch 제거
 
@@ -583,6 +623,8 @@ Retained receive는 이미 accounting된 queue message의 owner만 바꾸므로 
 - Legacy `monitor-hwm` count 입력과 slot·bucket planner status field가 public header에서 제거됐는지 확인
 - A RID의 DONTWAIT send/request가 즉시 BACKPRESSURED를 반환하고 B·C·D submit을 막지 않는지 확인
 - A가 막히고 B가 writable일 때 socket-wide ready가 먼저 발생해도 A waiter wake가 유실되지 않는지 확인
+- Routed readiness event의 RID·transport pair ID·generation이 실제 회복된 application pipe와 일치하는지 확인
+- B의 writable 상태나 wake가 A의 target-ready event로 잘못 보고되지 않는지 확인
 - Readiness 등록 전후 credit 회복 경쟁, pipe detach, socket close와 context 종료가 waiter를 정확히 한 번
   재개하거나 terminal 완료하는지 확인
 - Multipart BACKPRESSURED에서 partial frame이 남지 않고 전체 message ownership이 복구되는지 확인

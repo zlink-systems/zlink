@@ -168,7 +168,7 @@ doesn't call this callback.
 `relocationReady().defer()` is only valid on a Spot turn that
 registered `SpotWide` and `ApplicationSignaled` together. The framework
 delivers `Continued` from the source if it didn't move or aborted
-before commit, and `Relocated` from the target if it moved, to the
+before relay-ready was accepted, and `Relocated` from the target if it moved, to the
 optional `onRelocationReadyCompleted(...)`. If there's no callback, it
 completes as a no-op. Held application messages and timers aren't run
 before the callback completes.

@@ -99,14 +99,51 @@ public readonly record struct ZLinkObservedStatus<TStatus>(
     ZLinkObservationLoss Loss)
     where TStatus : notnull;
 
-public readonly record struct ZLinkInboundDispatchStatus(
-    ulong ApplicationHwmBytes,
-    ulong PendingPayloadBytes,
-    ulong QueuedPayloadBytes,
-    ulong ActivePayloadBytes,
-    bool ApplicationReceivePaused,
-    ulong PendingCompletionSends,
-    ulong CompletionSendLimit);
+public readonly record struct ZLinkCoreHwmStatus(
+    ulong? ConfiguredMemoryLimitBytes,
+    ulong? ConfiguredBudgetBytes,
+    ZLinkCoreHwmProfile ConfiguredProfile,
+    ulong EffectiveBudgetBytes,
+    ulong TotalAppliedHwmBytes,
+    ulong CoreQueueAccountedBytes,
+    ulong ApplicationAccountedBytes,
+    ulong CurrentAccountedBytes,
+    ulong ProvisionalAccountedBytes,
+    ulong PeakAccountedBytes,
+    ulong CompletionCurrentAccountedBytes,
+    ulong CompletionPeakAccountedBytes,
+    ulong CompletionPendingMessageCount,
+    ulong TotalMessagingAccountedBytes,
+    ulong MonitorQueueAppliedHwmBytes,
+    ulong MonitorQueueAccountedBytes,
+    ulong TotalInstanceAppliedHwmBytes,
+    ulong TotalInstanceAccountedBytes,
+    ulong BlockedRatioPpm,
+    ulong ActiveDirectionalQueueCount,
+    ulong ActiveCompletionDirectionalQueueCount,
+    ulong ActiveSendQueueCount,
+    ulong ActiveReceiveQueueCount,
+    ulong OutstandingApplicationLeaseCount,
+    ulong RetiredQueueCount,
+    ulong DeferredOriginCreditBytes);
+
+public readonly record struct ZLinkApplicationJobQueueStatus(
+    ZLinkApplicationJobQueueProfile ConfiguredProfile,
+    ulong? ConfiguredManualMax,
+    ulong EffectiveProcessorCount,
+    ulong EffectiveMaxQueuedApplicationJobs,
+    ulong ReservedSupplyPermits,
+    ulong QueuedApplicationJobs,
+    ulong PermitsInUse,
+    ulong PeakPermitsInUse,
+    ulong CapacityWaiters,
+    ulong CapacityWaitCount,
+    TimeSpan CapacityWaitDuration);
+
+public readonly record struct ZLinkHostCapacityStatus(
+    ulong MeasurementEpoch,
+    ZLinkCoreHwmStatus CoreHwm,
+    ZLinkApplicationJobQueueStatus ApplicationJobQueue);
 
 public sealed record ZLinkFrameworkRuntimeStatus(
     ZLinkFrameworkRuntimeState State,
@@ -117,11 +154,12 @@ public sealed record ZLinkFrameworkRuntimeStatus(
     ZLinkFrameworkTerminationResult? TerminationResult,
     ulong Sequence,
     DateTimeOffset ObservedAt,
-    ZLinkInboundDispatchStatus InboundDispatch = default);
+    ZLinkHostCapacityStatus Capacity = default);
 
 public interface IZLinkFrameworkRuntime
 {
     ZLinkFrameworkRuntimeStatus Status { get; }
+    void ResetCapacityMetrics();
 
     IAsyncEnumerable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>> ObserveAsync(
         CancellationToken cancellationToken = default);
@@ -383,8 +421,8 @@ Identifier에
 ## 8. Dispatch policy와 diagnostics
 
 Unhandled message 정책과 diagnostics 설정은 별도의 child interface가 담당한다. Dispatch configuration은
-두 interface를 찾는 root 역할만 하며 tracing mode, observer, error sink와 file output을 직접 제공하지
-않는다.
+Core HWM과 Application job queue 설정을 직접 소유하고 두 child interface도 제공한다. Tracing mode는
+diagnostics child가 소유하며 observer, error sink와 file output은 제공하지 않는다.
 
 ```csharp
 public enum ZLinkUnhandledDispatchAction
@@ -421,6 +459,11 @@ public interface IZLinkDispatchOptions
 {
     IZLinkUnhandledDispatchOptions Unhandled { get; }
     IZLinkDiagnosticsOptions Diagnostics { get; }
+    ulong? CoreHwmMemoryLimitBytes { get; set; }
+    ulong? CoreHwmBudgetBytes { get; set; }
+    ZLinkCoreHwmProfile CoreHwmProfile { get; set; }
+    ZLinkApplicationJobQueueProfile ApplicationJobQueueProfile { get; set; }
+    ulong? MaxQueuedApplicationJobs { get; set; }
 }
 
 public interface IZLinkDiagnosticsRuntime

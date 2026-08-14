@@ -48,7 +48,7 @@ contract/runtime 소유, 공개 계약 카테고리, 파일 분할 기준, 검�
 | [필수 기능 커버리지](#필수-기능-커버리지) | 정렬 시 보장해야 할 사용자 노출 기능 |
 | [Receive 및 Subscribe 형태](#receive-및-subscribe-형태) | 호출자 제공 저장소와 no-data 구분 |
 | [Service 및 SPOT 형태](#service-및-spot-형태) | `ISpotNode`/`ISpot` 책임 분리 |
-| [Byte HWM 및 monitoring ABI v2](#byte-hwm-및-monitoring-abi-v2) | `ulong` byte HWM과 monitor snapshot field |
+| [Byte HWM 및 monitoring ABI v3](#byte-hwm-및-monitoring-abi-v3) | `ulong` byte HWM과 monitor snapshot field |
 | [에러 및 검증 정책](#에러-및-검증-정책) | 검증 시점과 예외 매핑 |
 | [성능 정책](#성능-정책) | hot path 제약 |
 | [구현 체크리스트](#구현-체크리스트) | 정렬 선언 전 확인 항목과 필수 검증 명령 |
@@ -246,8 +246,7 @@ bindings/dotnet/
   channel send/request, SPOT send/request/reply, actor create, actor join,
   actor join reply operation.
 - Callback 역할: stream packet handler, monitor handler, poll handler,
-  SPOT dispatch handler, route handler, admission handler, request callback,
-  reply callback.
+  SPOT dispatch handler, route handler, admission handler, reply callback.
 
 ### RoutingId 문자열 및 바이너리 헬퍼
 
@@ -300,11 +299,17 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
 - reply builder는 send flag 단계를 갖지 않는다. core reply 함수는 send flag
   인자를 받지 않으므로, .NET binding은 no-op `Flags(...)`를 public 계약으로
   노출하지 않는다.
+- Raw ROUTER/`Received` reply의 terminal은
+  `ReplySubmitOperation.Submit() -> void`인 동기 one-shot이다. Terminal reply와 error
+  reply를 HWM 없는 completion lane에 native 호출 한 번으로 제출한다. HWM backpressure는
+  reply 결과가 아니며 `NotConnected`, `Terminated`, `InvalidArgument`와 그 밖의 non-HWM
+  submit 실패는 즉시 `ZlinkSubmitException`으로 전달한다.
 - operation 시작 메서드와 같은 이름을 가진 single-payload 단축 오버로드를
   추가하지 않는다. `Send(Message)`, `Send(RoutingId, Message)`,
   `Publish(string, Message)`, `SendToChannel(string, Message)`,
-  `SendToSpot(..., Message)`는 공개 계약 멤버가 아니다. 호출자는
-  `Send(...).Message(message).Submit()`을 사용한다.
+  `SendToSpot(..., Message)`는 공개 계약 멤버가 아니다. 호출자는 역할별
+  builder terminal을 사용하며, DEALER/ROUTER routed send는
+  `Send(...).Message(message).Async()`가 canonical이다.
 - multipart payload는 `Message(...)` 호출을 반복해 누적한다.
   `Messages(...)` 스타일의 convenience 메서드는 허용되지만, 이들은 공개
   builder 계약 멤버이므로 `Contracts/`에 둔다.
@@ -318,8 +323,56 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
   아니다.
 - `SendNoWait`, `PublishWithFlags`, `RequestAsync` 같은 operation-start
   메서드 군을 추가하지 않는다. 하나의 operation 이름을 유지하고 변형은
-  builder가 흡수한다. awaitable terminal builder 메서드는 `Async(...)`로
-  통일하고, callback completion 표면이 필요할 때만 `Submit(callback)`을 둔다.
+  builder가 흡수한다. HWM-managed DEALER/ROUTER routed send/request의 awaitable
+  terminal builder 메서드는 `Async(...)`로 통일한다.
+
+### DEALER/ROUTER routed 비동기 terminal
+
+- `IDealerSocket.Send()`와 `IRouterSocket.Send(RoutingId)`는
+  `RoutedSendOperation`을 반환한다. `RoutedSendSubmitOperation`의 terminal은
+  `Task Async(CancellationToken)`뿐이다. 두 socket은
+  `IReceivingMessageSocket`과 connect 역할만 상속하며, 공통 역할에는 동기
+  `SendOperation`이 없다. 따라서 base interface로 변환해 `Flags(...)`나
+  `Submit()`을 호출할 수 없다.
+- `IDealerSocket.Request()`와 `IRouterSocket.Request(RoutingId)`의
+  `RequestSubmitOperation` terminal은
+  `Task<IReadOnlyList<Message>> Async(CancellationToken)`뿐이다. 이 두 routed
+  builder에는 blocking submit, polling 결과, `Flags(...)`, callback
+  `Submit(...)`을 추가하지 않는다.
+- multipart는 반복 `Message(...)` 또는 `Messages(...)`로 누적하고 마지막에
+  한 번 `Async(...)`를 호출한다. `Async(...)`는 payload ownership을 operation으로
+  옮기고, 호출자 thread를 blocking하지 않은 채 Task를 반환한다.
+- 처음 선택된 target은 operation이 끝날 때까지 유지되며, HWM 대기 중 다른
+  target으로 reroute하지 않는다.
+- HWM credit을 기다리는 동안 호출자 thread나 worker thread를 점유하지 않으며,
+  같은 socket의 다른 send를 막는 socket-wide lock도 점유하지 않는다.
+- 한 target의 HWM 대기는 다른 target의 admission을 지연시키지 않는다. 이
+  독립성은 특정 routing id에 대한 공개 strict-FIFO 보장을 뜻하지 않는다.
+- routed send는 `SendTimeout`, request는 builder `Timeout(...)`을
+  `Async(...)`가 시작된 시점의 절대 deadline으로 고정하며 admission 대기
+  시간도 포함한다. cancellation, close, disconnect, target 연결 종료,
+  timeout, 빠른 reply가 경합해도 Task terminal은 한 번만 결정된다.
+- `CancellationToken`이 취소되면 Task는 취소 상태로 끝나며 await는
+  `OperationCanceledException`을 발생시킨다. Routed send가 `SendTimeout`까지
+  admission되지 않으면 `ZlinkSubmitException`(`Result == Backpressured`)으로,
+  request가 `Timeout(...)`까지 끝나지 않으면
+  `ZlinkRequestException`(`Result == TimedOut`)으로 끝난다.
+- 호출자가 반환된 Task를 await하지 않거나 참조를 보관하지 않아도 operation 자체는
+  취소되지 않는다. payload ownership과 terminal 정리는 위 조건 중 하나로
+  operation이 끝날 때까지 유지된다.
+- 공개 계약에는 별도 queue capacity나 queue-full 결과가 없으며,
+  Framework retry/polling을 요구하지 않는다.
+- PAIR, STREAM 등 unrelated 공통 sync data-plane builder는 별도 계약으로 남지만
+  DEALER/ROUTER의 HWM-managed routed 경로에서 canonical terminal로 취급하지
+  않는다.
+- 비동기 operation을 받기 전에 socket runtime은 Core routed-target readiness handler를
+  장기 등록한다. Operation은 최초 시도 전에 정확한 `(socket, RID, transport pair ID,
+  generation)` key와 completion state, complete record를 pending에 넣고 같은 target에
+  `DONTWAIT`로 시도한다. Callback은 해당 key만 ready로 표시하고 native submit은 callback
+  밖의 pump가 수행한다. Pair generation이 다른 event는 stale wake로 무시한다.
+- 같은 native handle의 outbound 경로는 complete multipart의 첫 part부터 `FINAL`까지 한
+  시도만 보호하는 짧은 attempt gate를 공유한다. Gate는 성공·backpressure·실패 직후
+  반환하며 readiness 대기 중에는 보유하지 않는다.
 
 ## Contract 폴더 레이아웃
 
@@ -339,7 +392,7 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
 각 카테고리 안의 파일은 구현 순서가 아니라 사용자 노출 개념에 따라 나뉜다.
 
 - 공통 messaging 연산은 send, request, reply로 나뉘고, service topology 모델은 SPOT node 모델과 공유 topology enum으로 나뉜다.
-- Request result와 콜백 타입은 socket enum 파일이 아니라 messaging request 계약에 속한다.
+- Request result는 socket enum 파일이 아니라 messaging request 계약에 속한다.
 - 수신 메시지 종류는 받은 메시지 metadata와 함께 둔다.
 - SPOT node 모드, socket snapshot, Spot snapshot, actor snapshot은 SPOT node 모델에 속한다.
 
@@ -453,6 +506,21 @@ object identity 기반 dictionary 조회를 포함해 다시 사용하면 안 �
   버퍼를 유지해 다음 `Subscribe`에서 재사용하게 한다. `TopicMessage`가 열린 상태에서만
   사용할 수 있으며 terminal `Dispose()` 뒤에는 `ObjectDisposedException`을 던지고 객체를
   다시 열지 않는다.
+- 일반 `Recv(Received, ...)`와 `Subscribe(TopicMessage, ...)`는 기존처럼 dequeue 시
+  Core queue credit을 즉시 반환한다.
+- Framework backend는 `RecvRetained(Received, ...)`와
+  `SubscribeRetained(TopicMessage, ...)`를 명시적으로 선택한다. 이 경로는 기존 framing과
+  metadata를 유지한 채 caller-visible physical part마다 Core retained-credit lease를
+  내부에서 함께 인수한다. `Received`는 `Dispose()` 또는 같은 저장소로 다음 receive를
+  시작할 때, `TopicMessage`는 `Dispose()`, `ReleaseForReuse()` 또는 같은 저장소로 다음
+  subscribe를 시작할 때 현재 part와 모든 lease를 정확히 한 번 해제한다. 내부 finalizer는
+  누락 방지용 fallback일 뿐이며 정상 경로는 deterministic cleanup을 먼저 수행한다.
+  Payload를 복사해 보관한 값은 lease를 소유하지 않는다.
+- Retained receive는 `Received`와 `TopicMessage` aggregate 경로의 내부 수명 동작이다.
+  Part 단위 primitive와 일반 aggregate receive는 기존 동작을 유지하고, public lease handle이나
+  별도 application capacity를 추가하지 않는다. Dealer message type과 request sequence,
+  Router source RID와 request sequence, SUB topic과 source RID는 기존 typed receive 결과를
+  그대로 보존한다.
 - `false`는 `RecvFlags.DontWait`를 사용한 nonblocking receive에서만 데이터
   없음을 의미한다.
 - 실제 receive 실패(데이터 없음이 아닌 실패)는 `ZlinkRecvException`을 던진다.
@@ -487,7 +555,7 @@ SPOT은 서비스 계층 API이며, raw socket의 누출이 아니다.
 - Actor location과 stream session binding은 서로 독립적이다. actor가 사용자
   Spot에 join하기 위해 bound stream session이 반드시 필요하지는 않다.
 
-## Byte HWM 및 monitoring ABI v2
+## Byte HWM 및 monitoring ABI v3
 
 - HWM은 queue의 message 수가 아니라 Core가 계산한 accounted byte의 상한이다.
 - 공개 타입은 Core의 `uint64_t` 범위를 줄이지 않는 `ulong`이다.
@@ -498,7 +566,15 @@ SPOT은 서비스 계층 API이며, raw socket의 누출이 아니다.
 ```csharp
 public interface IContextOptions
 {
-    ulong AutoHwmMessageUnitBytes { get; set; } // 0은 socket type별 planning unit 기본값을 선택한다.
+    ulong CoreHwmMemoryLimitBytes { get; set; }
+    ulong CoreHwmBudgetBytes { get; set; }
+    CoreHwmProfile CoreHwmProfile { get; set; }
+}
+
+public interface IContext
+{
+    CoreHwmBudgetSnapshot GetCoreHwmBudgetSnapshot();
+    void ResetCoreHwmBudgetMetrics();
 }
 
 public partial class CommonSocketOptions
@@ -508,8 +584,14 @@ public partial class CommonSocketOptions
 }
 ```
 
-`AutoHwmMessageUnitBytes`는 Core planner 입력이다. Core가 선택한 message slot
-수에 이 값을 곱해 planned byte HWM을 계산한다. Caller가
+입력 우선순위는 수동 Core budget, 명시 memory limit, .NET GC가 보고한 사용 가능
+memory limit hint, Core fallback 순서다. 앞의 두 값을 지정하면 GC hint를 자동 감지하지
+않는다. Binding은 hint와 Core hard limit을 직접 결합하지 않는다. 명시 입력이 Core가
+감지한 finite hard limit보다 크면 `EINVAL`에 대응하는 기존 config exception을 그대로
+전달하고 clamp하지 않는다.
+
+Core는 memory limit에 profile 비율을 정확히 한 번 적용하거나 명시 Core budget을 그대로
+사용해 physical directional queue별 planned byte HWM을 계산한다. Caller가
 `SendHighWaterMark`나 `ReceiveHighWaterMark`를 설정한 방향은 수동 override가
 되며 이후 Auto-HWM 재계산이 그 값을 변경하지 않는다.
 
@@ -518,14 +600,30 @@ accounted byte가 applied HWM에 도달하면 native submit 결과가 backpressu
 나타내고, .NET operation은 기존 result·timeout 계약에 따라 이를 전달한다.
 `0UL`은 무제한이다.
 
-- `MonitorStatus`는 native `zlink_monitor_status_t` ABI version 2와 같은 field를 제공한다.
+`MonitorOpen(events, monitorHwmBytes)`는 monitor queue의 정확한 `ulong` byte 값을
+받는다. `0UL`은 Core monitor 기본값을 선택하고, 양수는 변환 없이 전달한다.
+Message-count overload나 alias는 없다.
+
+- `MonitorStatus`는 native `zlink_monitor_status_t` ABI version 3과 같은 field를 제공한다.
 - Planned, applied, deferred HWM과 in-flight 사용량은 모두 `ulong` byte 값이다.
 - Deferred 값은 대응하는 `AutoHwmDeferredSendHighWaterMarkValid` 또는 `AutoHwmDeferredReceiveHighWaterMarkValid`가 `true`일 때만 유효하다.
 - Pending message 값은 `SndPendingMsgs`와 `RcvPendingMsgs`라는 count 진단값으로 유지하며 byte field와 이름을 공유하지 않는다.
-- Snapshot의 `AbiVersion`이 `2`가 아니거나 `StructSize`가 binding layout과 다르면 `NotSupportedException`을 발생시킨다. 이전 32-bit monitoring layout은 받지 않는다.
+- Pending byte는 `SndPendingBytes`와 `RcvPendingBytes`로 별도 노출한다.
+- Snapshot의 `AbiVersion`이 `3`이 아니거나 `StructSize`가 binding layout과 다르면 `NotSupportedException`을 발생시킨다. 이전 monitoring layout은 받지 않는다.
 
-Request/reply API는 HWM 값을 인자로 받지 않는다. Backpressure와 completion 처리는 Core가 소유하며
-binding은 기존 request/reply lifetime과 ownership 계약을 그대로 전달한다.
+`CoreHwmBudgetSnapshot`은 ABI version/size, configured/runtime/resolved memory limit,
+configured/effective budget, planned/applied/manual-reserved HWM, Core queue/application/current/
+peak/provisional accounted byte, completion current/peak/pending과 total messaging byte,
+monitor/instance aggregate, application/completion queue count,
+`OutstandingApplicationLeaseCount`, `RetiredQueueCount`, `DeferredOriginCreditBytes`,
+oversize·blocked·aggregate flag, `BudgetGeneration`과 `MeasurementEpoch`을 단위 변환 없이
+제공한다. Reset은 current·pending·queue count와 위 세 owner-lifecycle gauge를 유지하고 두
+peak를 current로 재기준화하며 epoch counter를 0으로 만든 뒤 `MeasurementEpoch`을
+증가시킨다. ABI version/size가 맞지 않으면 `NotSupportedException`이다.
+
+Request/reply API는 HWM 값을 인자로 받지 않는다. `Async(...)`는 선택한 exact
+target의 HWM credit을 기다리는 동안 request의 원래 deadline을 유지한다.
+호출자는 별도 retry나 polling을 구현하지 않는다.
 
 ## 에러 및 검증 정책
 

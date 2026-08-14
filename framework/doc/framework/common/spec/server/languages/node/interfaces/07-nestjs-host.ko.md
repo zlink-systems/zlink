@@ -159,11 +159,7 @@ export interface ZLinkLocationOptions {
     ownerLeaseRenewTimeoutMs(value: number): this;
     routeCacheMaxAgeMs(value: number): this;
     messageFollowDurationMs(value: number): this;
-    maxActiveOutboundRelocations(value: number): this;
-    maxActiveInboundRelocations(value: number): this;
-    maxConcurrentRelocationCaptures(value: number): this;
-    maxConcurrentRelocationRestores(value: number): this;
-    maxRelocationPayloadInFlightBytes(value: number): this;
+    sessionRelocationSealTimeoutMs(value: number): this;
 }
 
 export interface ZLinkNestFrameworkOptionsBuilder {
@@ -179,7 +175,6 @@ export interface ZLinkNestFrameworkOptionsBuilder {
     setMessageFollowDuration(timeoutMs: number): this;
     configureStreamCompression(): ZLinkStreamCompressionBuilder;
     configureLocations(): ZLinkLocationOptions;
-    configureInboundDispatch(): ZLinkInboundDispatchOptions;
     configureNetwork(): ZLinkNetworkOptions;
     addRouteMesh(name: string): ZLinkNestMeshNodeBuilder;
     addClientServerChannel(name: string): ZLinkNestClientServerChannelRoleBuilder;
@@ -408,12 +403,12 @@ export declare class ZLinkHttpClientModule {
 }
 ```
 
-`applicationHwmBytes(undefined)`는 Auto mode, `0n`은 제한 없음, 양수는 정확한 host 전체 byte 상한이다.
-`applicationHwmProfile` 기본값은 `Balanced`다. `processMemoryLimitBytes(undefined)`이면 process에 적용된
-유한한 container·cgroup·Windows Job Object와 같은 OS 상한과 V8 managed heap 상한(`heap_size_limit`)을
-확인한다. 두 값을 모두 확인하면 더 작은 값을 사용하고, 하나만 확인하면 그 값을 사용한다. 둘 다 확인할
-수 없으면 시스템 물리 메모리 총량을 사용한다. 계산 결과가 양수가 아니면 socket bind 전에 configuration
-error로 startup이 실패한다.
+`configureDispatch()`가 반환하는 `ZLinkDispatchOptionsBuilder`의 `coreHwmMemoryLimitBytes`,
+`coreHwmBudgetBytes`, `coreHwmProfile`은 Core에 전달한다. Node binding은
+양수 유한 V8 `heap_size_limit`를 runtime memory hint로 전달한다. Core와 job queue profile은 기본값
+`Balanced`인 독립된 enum과 계산이다. Manual job cap은 `1..2,147,483,647`이고 생략하면 common startup
+CPU snapshot과 32/64/128/256 계수를 사용한다. Range 위반과 overflow는 bind 전에 실패하며 runtime 중
+다시 계산하지 않는다.
 Application listener의 `maxMessageSize` 기본값은 `16_777_216` bytes다.
 
 NestJS builder도 Entry Spot 구현 type만 등록한다. Entry Spot의 `SpotId`는 Framework가
@@ -423,3 +418,7 @@ NestJS builder도 Entry Spot 구현 type만 등록한다. Entry Spot의 `SpotId`
 `addRelocationStore(...)`를 정확히 한 번 호출해야 한다. [Instance Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) factory가 없고 모든 factory가
 `DisableRelocation`인 same-node 구성만 Relocation Store를 생략할 수 있다. 누락과 중복은 socket bind 전에 configuration
 error다.
+
+`sessionRelocationSealTimeoutMs(value)`는 startup-only 양수 finite millisecond 값이고 기본값은
+3,000이다. 0, 음수, `NaN`, infinity, 정수가 아닌 값과 safe-integer 범위 초과는 socket bind 전에
+configuration error다.

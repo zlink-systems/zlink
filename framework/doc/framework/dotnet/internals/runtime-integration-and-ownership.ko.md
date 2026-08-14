@@ -1,7 +1,7 @@
 <!-- framework-adapter-nav:start -->
 [문서 목록](../../../README.ko.md) | [이전: Backend Policy](backend-dependency-policy.ko.md) | [다음: Regression Test Matrix](regression-test-matrix.ko.md)<!-- framework-adapter-nav:end -->
 
-[공통 layering](../../common/internals/01-layering.ko.md) | [공통 spec](../../common/spec/README.ko.md)
+[공통 layering](../../common/spec/40-internal-layering.ko.md) | [공통 spec](../../common/spec/README.ko.md)
 
 # .NET Runtime Integration과 Receive Ownership
 
@@ -235,7 +235,7 @@ dotnet build framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Zlink.Fr
 ```
 
 native runtime을 사용할 수 있는 환경에서는 backend factory, client-server channel,
-fanout, stream concurrency와 receive dispatch budget test를 함께 실행한다. release
+fanout, stream concurrency와 Application Job Queue admission test를 함께 실행한다. release
 판정에서는 throughput, p99 latency, allocation/GC와 lock contention을 변경 전 기준선과
 비교하고, 설명하지 못한 regression이 있으면 완료로 판정하지 않는다.
 
@@ -248,7 +248,7 @@ fanout, stream concurrency와 receive dispatch budget test를 함께 실행한�
 | `BackendAdapterFactoryTests.BackendFactory_Creates_Backend_Resources_Through_Runtime_Context` | backend factory가 하나의 generation-scoped semantic context port를 통해 socket·Spot·Stream resource를 만들며 binding context는 .NET integration 경계 안에 남는다. |
 | `BackendAdapterFactoryTests.SpotNode_Router_Send_Config_RoundTrips_Through_Binding` | MeshNode topology의 MaxMessageSize, send·receive HWM, mailbox budget과 send·receive timeout이 방향을 잃지 않고 managed ROUTER socket 설정까지 전달된다. |
 | `ClientServerChannelRuntimeTests.BackendWrappers_DeliverUnsolicitedLivenessProbe` | caller-provided `Received` envelope를 control receive에서 재사용하고 application queue가 이를 보관하지 않는다. |
-| `InboundDispatchBudgetTests.Dispatch_queue_rejects_when_full_without_blocking_receive_loop` | application queue가 가득 차면 소유한 envelope를 reject 경로에서 반환하고 control receive loop를 block하지 않는다. |
+| `ApplicationJobQueueAdmissionTests.Saturation_waits_before_receive_and_terminal_completion_bypasses_capacity` | 일반 ingress는 receive·claim 전에 host-wide permit을 얻는다. 포화는 reject·drop·busy spin·무제한 side queue 없이 취소 가능한 wait이며, receive 전에 식별할 수 있는 terminal reply·error completion만 permit을 우회해 completion liveness를 지킨다. Reservation은 handler의 실제 첫 instruction에서 반환하고 cancellation·teardown 뒤 permit이나 envelope owner가 남지 않는다. |
 | `test_pubsub.pubsub_topic_message_can_be_released_for_reuse` | binding public reuse API가 수신 parts를 정리하고 같은 topic envelope가 다음 publish를 받을 수 있게 한다. |
 | `test_socket_concurrency.dealer_and_router_allow_concurrent_public_sends` | 독립적인 DEALER·ROUTER public send builder가 Framework 중복 gate 없이 동시에 완료되고, 각 receive는 single-consumer로 유지된다. |
 | `BackendStreamSocketConcurrencyTests.ConcurrentBoundActorMessages_AreSubmittedSerially` | Stream semantic adapter가 binding session service에 필요한 단일 submit owner를 유지한다. |

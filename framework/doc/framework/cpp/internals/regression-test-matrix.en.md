@@ -52,10 +52,11 @@ Regression tests include both feature-level unit tests and application flow test
 | HTTP lifecycle | accept loop start/stop, in-flight request drain, request during shutdown `503`, worker join |
 | HTTP to zlink | an HTTP handler sends a channel request through `request_client_t` and returns a response DTO |
 | zlink channel request/reply | client/server request, typed reply, timeout, handler not found, payload decode failure, reply serialization failure, disconnected peer |
-| zlink channel send/event | fire-and-forget send, typed event dispatch, handler exception masking, no-reply path, queue full rejection |
+| zlink channel send/event | fire-and-forget send, typed event dispatch, handler exception masking, no-reply path, object/channel admission rejection where its contract allows it |
 | zlink pub/sub | publisher/subscriber delivery, multiple subscribers, unsubscribe/close cleanup, topic mismatch, disconnected subscriber |
 | zlink route channel | manual connection, discovery connection, routing id selection, route handler dispatch, route handler not found, ambiguous route validation |
 | zlink backpressure | pending request limit, outbound queue limit, send-ready resume, shutdown while pending, same error kind for coroutines |
+| Application Job Queue | exact Auto profile coefficients, manual range rejection before bind, cancellable oldest-waiter admission, terminal completion bypass, actual-handler-start permit return, cancellation/teardown leak check |
 | zlink serializer/codec | raw message, JSON DTO, optional MessagePack/Protobuf target off/on, serializer missing startup failure, invalid payload runtime failure |
 | zlink lifecycle | channel bind/connect start order, receive loop start/stop, in-flight drain, shutdown after close, reconnect/disconnect event |
 | SPOT | activation, destroy, join, leave, actor handler, publish, request_to, route resolver, discovery-backed remote address |

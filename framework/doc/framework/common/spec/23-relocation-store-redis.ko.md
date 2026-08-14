@@ -137,10 +137,12 @@ relocation unit을 `DataLost`로 처리한다. 일부 participant만 복원하�
 연장할 때도 각 data chunk의 존재와 checksum을 병렬로 확인하고, 모두 성공한 뒤 맨 앞
 목록의 보관 기간을 연장한다.
 
-Application state adapter 하나가 반환할 수 있는 bytes도 최대 64 MiB다. Process 하나에서 relocation
-payload를 동시에 처리할 때 적용하는 기본 256 MiB 제한은 Framework coordinator의 실행 중 memory
-제한이다. 이 값은 blob 하나나 여러 blob으로 나눈 전체 payload의 저장 크기 제한을
-바꾸지 않는다.
+Application state adapter가 반환한 bytes에는 별도의 64 MiB 상한을 두지 않는다. Framework는
+등록한 Relocation Store의 일반 blob 계약에 맞춰 더 큰 adapter payload를 최대 64 MiB data
+chunk로 나누며, 전체 payload에는 위 256 GiB logical stream 제한을 적용한다. Process 하나에서
+relocation payload를 동시에 처리할 때 적용하는 기본 256 MiB 제한은 Framework coordinator의
+실행 중 memory 제한이다. 이 제한에 도달하면 추가 I/O를 기다리며 adapter payload를 거부하지
+않는다. 이 값은 blob 하나나 여러 blob으로 나눈 전체 payload의 저장 크기 제한을 바꾸지 않는다.
 
 각 data chunk와 맨 앞 목록의 기본 retention은 24시간이고, Framework는 남은 retention이 12시간이 되는
 시점을 기본 renew threshold로 사용한다. Provider는 자신의 clock으로 expiry를 계산해야 한다.

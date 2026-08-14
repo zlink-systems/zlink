@@ -1,5 +1,5 @@
 <!-- framework-adapter-nav:start -->
-[Document List](../README.en.md) | [Runtime Lifecycle](../../common/internals/README.en.md) | [Regression Matrix](regression-test-matrix.en.md)
+[Document List](../README.en.md) | [Runtime Lifecycle](../../common/spec/README.en.md) | [Regression Matrix](regression-test-matrix.en.md)
 <!-- framework-adapter-nav:end -->
 
 # Java Backend Dependency Policy
@@ -95,5 +95,5 @@ status are kept only as optional details, and only when truly necessary.
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[Document List](../README.en.md) | [Runtime Lifecycle](../../common/internals/README.en.md) | [Regression Matrix](regression-test-matrix.en.md)
+[Document List](../README.en.md) | [Runtime Lifecycle](../../common/spec/README.en.md) | [Regression Matrix](regression-test-matrix.en.md)
 <!-- framework-adapter-nav:bottom:end -->

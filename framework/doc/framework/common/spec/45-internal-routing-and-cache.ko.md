@@ -1,15 +1,17 @@
 ---
-title: "6. target 선택과 route cache"
+title: "45. target 선택과 route cache"
 ---
 
-# 6. target 선택과 route cache
+# 45. target 선택과 route cache
 
-[내부 구조 목차](README.ko.md) · [이전: 5. 이동 중 message 연속성](05-relocation-continuity.ko.md) · [다음: 7. 수신과 dispatch 루프](07-dispatch-loop.ko.md)
+> **문서 성격 — 공개 규범 스펙이 아닌 내부 설계 문서.** 이 장은 연결된 공개 계약을 만족시키는 구현 구조를 설명한다. Application이 관찰하는 동작을 추가하거나 변경하지 않는다.
+
+[내부 구조 목차](README.ko.md) · [이전: 44. 이동 중 message 연속성](44-internal-relocation-continuity.ko.md) · [다음: 46. 수신과 dispatch 루프](46-internal-dispatch-loop.ko.md)
 
 > **이 장이 답하는 것** — 이름 하나로 대상을 고르는 절차와, 그 위치 조회를 얼마나 자주 하는가.
 >
-> **계약 소유** — 선택 순서와 tiebreak는 [Channel 메시징](../spec/08-channel-messaging.ko.md)이,
-> cache 수명과 무효화 조건은 [Spot·Actor routing](../spec/18-object-routing.ko.md)이 소유한다.
+> **계약 소유** — 선택 순서와 tiebreak는 [Channel 메시징](08-channel-messaging.ko.md)이,
+> cache 수명과 무효화 조건은 [Spot·Actor routing](18-object-routing.ko.md)이 소유한다.
 > 이 장은 그 계약을 만족시키는 **구조**와, 선택 authority가 갈릴 때 나타나는 실패를 다룬다.
 
 이름 하나로 대상을 고르는 구조와 위치 조회 주기를 설명한다. Location Store는 보통 다른
@@ -27,7 +29,7 @@ throughput에 직접 영향을 준다.
 ### 결정
 
 최근에 확인한 owner 경로를 source runtime에 보관했다가 재사용한다. 정식 spec은 이것을
-[Positive route cache](../spec/01-glossary.ko.md#positive-route-cache)로 정의한다.
+[Positive route cache](01-glossary.ko.md#positive-route-cache)로 정의한다.
 
 보관하는 것은 준비된 객체의 owner 경로와 **수락 판단에 필요한 fence 값**이다. 경로만
 캐시하고 fence를 빼면 낡은 owner에게 보내 놓고 그 사실을 알지 못한다.
@@ -40,7 +42,7 @@ throughput에 직접 영향을 준다.
 
 ### Spec 상태를 resolver 결과 타입으로 보존한다
 
-공개 동작은 [장애 대응과 failover 범위 §4.4](../spec/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)가
+공개 동작은 [장애 대응과 failover 범위 §4.4](31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)가
 정의한다. Resolver는 그 계약을 terminal mapper나 activation coordinator가 다시 추론하지 않도록
 `ReadyRoute`, `Missing`, `Unavailable`, `StoreFailure`의 닫힌 결과로 전달한다.
 
@@ -63,7 +65,7 @@ component가 완료한 뒤에만 resolver가 `Missing`을 반환한다.
 |---|---|
 | `RouteCacheMaxAge` | 캐시 자체의 최대 보관 시간 |
 | owner의 수락 기한 | 이 시간이 지나면 그 owner는 더 이상 수락하지 않는다 |
-| [Message Follow 기간](../spec/01-glossary.ko.md#message-follow-duration)보다 **최소 5초 짧게** | 우회 경로가 닫히기 전에 캐시가 먼저 만료되어야 한다 ([Spot·Actor routing 「2.4 이전 owner route에 도착한 message」](../spec/18-object-routing.ko.md#24-이전-owner-route에-도착한-message), [Location runtime 「6.3 이전 owner로 도착한 message를 새 owner에게 전달한다」](../spec/21-location-runtime.ko.md#63-이전-owner로-도착한-message를-새-owner에게-전달한다)) |
+| [Message Follow 기간](01-glossary.ko.md#message-follow-duration)보다 **최소 5초 짧게** | 우회 경로가 닫히기 전에 캐시가 먼저 만료되어야 한다 ([Spot·Actor routing 「2.4 이전 owner route에 도착한 message」](18-object-routing.ko.md#24-이전-owner-route에-도착한-message), [Location runtime 「6.3 이전 owner로 도착한 message를 새 owner에게 전달한다」](21-location-runtime.ko.md#63-이전-owner로-도착한-message를-새-owner에게-전달한다)) |
 
 ## 1.1 수동 object peer에서도 admission fence를 보존한다
 
@@ -71,7 +73,7 @@ Location Store가 반환한 object peer descriptor에는 endpoint, RID, lifecycl
 security identity가 들어 있다. 수동 endpoint 설정은 연결 의도만 제공한다. Runtime이 이
 endpoint를 descriptor와 연결하여 object peer로 사용할 때는, handshake에 필요한 descriptor
 값을 transport에도 모두 전달해야 한다. 정식 계약은
-[RouteMesh topology](../spec/07-channel-topology.ko.md)의 peer handshake가 소유한다.
+[RouteMesh topology](07-channel-topology.ko.md)의 peer handshake가 소유한다.
 
 JVM 경로는 다음 순서로 이 값을 전달한다. MeshNode를 시작할 때 먼저 manual endpoint-only
 intent를 등록한다. 이후 `ZLinkFrameworkRuntime.connectManualObjectPeers`,
@@ -91,7 +93,7 @@ fence와 liveness event를 처리한다. Descriptor를 찾지 못한 endpoint-on
 동시에 성립한다.
 
 - 옛 owner로 간 message는 버려지지 않는다. Message Follow가 새 owner에게 넘긴다
-  ([5. 이동 중 연속성](05-relocation-continuity.ko.md)).
+  ([44. 이동 중 연속성](44-internal-relocation-continuity.ko.md)).
 - 그러나 **넘기는 동안 모든 message가 한 홉을 더 거친다.**
 
 캐시를 무효화하지 않으면 이동 후 Message Follow 기간(기본 30초) 내내 그 객체로 가는
@@ -111,7 +113,7 @@ flowchart LR
 
 **결정 — 우회로 넘어간 사실을 보낸 쪽에 알려 캐시를 갱신한다.** 정식 spec이 relay
 통지를 캐시 무효화 조건에 포함했다
-([객체 routing](../spec/18-object-routing.ko.md)). 통지를 받은 runtime은 해당 캐시
+([객체 routing](18-object-routing.ko.md)). 통지를 받은 runtime은 해당 캐시
 항목을 지우고 다음 호출에서 owner를 다시 조회한다.
 
 우회는 **캐시가 갱신될 때까지의 과도기를 메우는 장치**이지 정상 경로가 아니다. 알림이
@@ -153,7 +155,7 @@ operation의 terminal 결과를 만들거나 바꾸지 않는다.
 ## 3. 후보 목록을 호출마다 만들지 않는다
 
 이름으로 대상을 고를 때는 후보를 추려야 한다. 제외 조건은 weight가 0인 대상과 종료
-준비 중인 대상이다([Channel 메시징 「3.2 ChannelName select-one」](../spec/08-channel-messaging.ko.md#32-channelname-select-one)).
+준비 중인 대상이다([Channel 메시징 「3.2 ChannelName select-one」](08-channel-messaging.ko.md#32-channelname-select-one)).
 
 **결정 — 후보 목록은 변경 시점에 만들어 두고 호출은 읽기만 한다.** peer 상태가 바뀔
 때 새 목록을 만들어 바꿔 끼우고, 호출 경로에서는 필터링과 정렬을 하지 않는다.
@@ -238,13 +240,13 @@ framework 안에서는 닫을 수 없다. Core의 load balancer가 §5의 절차
 **결정 — 가중치를 매끄럽게 분산하는 순환(smooth weighted round-robin)을 쓴다.**
 
 정식 spec이 이 절차를 계약으로 고정했다
-([Channel 메시징 §선택 순서](../spec/08-channel-messaging.ko.md)). 아래는 그 절차와,
+([Channel 메시징 §선택 순서](08-channel-messaging.ko.md)). 아래는 그 절차와,
 절차를 지키면서 호출 비용을 낮추는 방법이다.
 
 정식 spec은 두 가지를 요구한다 — 장기 선택 비율이 weight 비율에 수렴할 것
-([Channel 메시징 「3.2 ChannelName select-one」](../spec/08-channel-messaging.ko.md#32-channelname-select-one)), 그리고 ClientServer
+([Channel 메시징 「3.2 ChannelName select-one」](08-channel-messaging.ko.md#32-channelname-select-one)), 그리고 ClientServer
 경로에서 **같은 weight를 가진 대상끼리 순환할 것**
-([ClientServer Channel 「5. Weight와 target 선택」](../spec/09-client-server-channel.ko.md#5-weight와-target-선택)).
+([ClientServer Channel 「5. Weight와 target 선택」](09-client-server-channel.ko.md#5-weight와-target-선택)).
 
 이 둘을 만족하는 알고리즘은 여럿이고, **만족하면서도 서로 다른 순서를 낸다.** 한 mesh에
 여러 언어로 만든 node가 섞이면 같은 후보 집합에 같은 요청을 보내도 분포 모양이 달라진다.
@@ -392,7 +394,7 @@ flowchart LR
 
 **결정 — 발행은 결과값 없이 완료하며 대상별 결과를 돌려주지 않는다.** 수락하지 못한
 대상을 public 결과로도 monitoring으로도 집계하지 않는다
-([Spot 메시징 「4.4 Publish가 시작된 이후의 처리」](../spec/12-spot-messaging.ko.md#44-publish가-시작된-이후의-처리)). 완료 시점은 보내는 쪽이
+([Spot 메시징 「4.4 Publish가 시작된 이후의 처리」](12-spot-messaging.ko.md#44-publish가-시작된-이후의-처리)). 완료 시점은 보내는 쪽이
 자기 자리를 확보한 때다.
 
 이것이 §"일부 대상이 실패해도 되돌리지 않는다"와 짝을 이룬다 — 되돌리지도 않고 알리지도
@@ -401,7 +403,7 @@ flowchart LR
 
 ## 8. 확인할 결과
 
-- 같은 객체로 연속 호출할 때 [Location Store](../spec/01-glossary.ko.md#location-store) 조회가 호출마다 발생하지 않는다.
+- 같은 객체로 연속 호출할 때 [Location Store](01-glossary.ko.md#location-store) 조회가 호출마다 발생하지 않는다.
 - 객체 없음·만드는 중·저장소 실패가 캐시에 남지 않는다.
 - Resolver 결과 타입이 `Missing`과 `Unavailable`을 서로 다른 tag로 보존한다.
 - Activation coordinator 입력에는 `Missing`만 연결되고 `Unavailable`은 terminal mapper로 연결된다.
@@ -421,4 +423,4 @@ flowchart LR
 
 ---
 
-[내부 구조 목차](README.ko.md) · [이전: 5. 이동 중 message 연속성](05-relocation-continuity.ko.md) · [다음: 7. 수신과 dispatch 루프](07-dispatch-loop.ko.md)
+[내부 구조 목차](README.ko.md) · [이전: 44. 이동 중 message 연속성](44-internal-relocation-continuity.ko.md) · [다음: 46. 수신과 dispatch 루프](46-internal-dispatch-loop.ko.md)

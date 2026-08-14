@@ -232,8 +232,7 @@ Session relay는 message마다 Actor ID를 resolve하지 않는다. Bind할 때 
 |                                                                      |
 | Bind       : ActorRef -> validate -> store route                     |
 | Relay      : Session -> stored route -> Actor owner                  |
-| Relocation : Target -> location update request -> Session owner     |
-|                                   <- location update response       |
+| Relocation : Target -> command 44 one-way -> Session owner         |
 |                                                                      |
 | No per-message Location Store lookup                                 |
 +----------------------------------------------------------------------+
@@ -304,39 +303,45 @@ Relocation 중에도 Session owner는 Location Store를 조회하여 새 Actor r
 추측하지 않는다. 같은 `ObjectGeneration`의 target Actor가 다음 순서를 완료한 뒤
 Session owner에 새 route를 전달한다.
 
-1. Source Actor의 현재 handler가 끝난 뒤 새 Actor message의 application dispatch를 막는다.
-   Seal 전에 Actor queue가 수락한 request와 one-way packet은 reply route와 수락 순서를
-   포함해 저장한다.
-2. Seal 뒤 source로 들어온 Actor message는 ingress hold에 보관하고, target이 Restore
-   요청을 받아 temporary queue를 등록한 뒤 그 queue로 relay한다.
-3. Owner와 membership을 commit하고 lifecycle callback을 완료한다. Join relocation이면
-   Join completion callback도 이 단계에서 호출한다.
-4. 저장된 기존 작업과 temporary queue 작업을 실제 Actor queue에 옮기고 dispatch를
-   전환한다. 그 뒤 Target Actor가 message를 처리하기 시작한다.
-5. Target은 `sessionActorLocationUpdateReqMsg`를 Session owner에 send한다.
-6. Session owner는 Actor generation, 이전·target owner generation, binding
-   generation, owner lease와 high-water를 검증한다.
-7. Session owner는 해당 Actor route와 bound-session current Actor location snapshot을 atomic하게
-   바꾸고 `sessionActorLocationUpdateResMsg`를 send한다. Snapshot은 같은 ActorId·ObjectGeneration과 target
-   MeshName·NodeRid를 가진다.
-8. 응답이 없으면 Target은 최초 send 1초 뒤 같은 요청을 다시 보낸다. 이후 재전송
-   간격은 1초, 2초, 4초, 5초이며 그 뒤에는 5초를 유지한다.
+1. Source Actor의 현재 handler가 끝나고 target preflight가 성공하면, bound Actor는 command 42
+   `sessionRelocationSeal` request와 command 43 reply로 exact binding seal을 설치한다. 그다음 새
+   Actor application dispatch를 막고 이미 수락한 queue·timer와 application state를 Relocation
+   Store에 저장한다.
+2. Target은 Actor lookup과 factory보다 먼저 temporary queue group을 등록하고 saved queue·timer와
+   state를 Restore한다. 준비가 끝나면 source에 relay 수신 준비 reply를 보낸다.
+3. Capture 뒤 source로 들어온 Actor message만 ingress hold에 보관했다가 같은 ordered connection으로
+   boundary 전 relay 구간에 전달한다. Saved queue와 timer는 relay하지 않는다. Source는 현재 relay
+   prefix 뒤에 cutover를 one-way로 보낸다.
+4. Target은 cutover를 받거나 relay 준비 reply 뒤 1,000ms가 지나면 owner와 membership을 target-only
+   Location Store CAS로 commit한다.
+5. CAS 뒤 saved work, boundary 전 relay와 나머지 temporary work를 실제 Actor queue에 순서대로
+   넣고 regular route로 전환하되 dispatch는 닫아 둔다.
+6. 필요한 lifecycle callback을 끝낸다. Join relocation이면 Join completion callback도 이 단계에서
+   끝낸 뒤 Target Actor dispatch를 연다.
+7. Target은 command 44 `sessionRelocationRoute` commit을 Session owner에 one-way로 보낸다. Session
+   owner는 exact Session·binding·Actor generation과 relocation identity만 확인하고 Actor route와
+   bound-session current Actor location snapshot을 atomic하게 바꾼다. Held message를 target route로
+   제출하고 matching seal을 해제하며 reply를 보내지 않는다.
+8. Exact command 44가 `SessionRelocationSealTimeout` 안에 오지 않으면 Session owner는 physical
+   Session을 종료하고 binding·held·seal state를 정리한다. 이전 route로 늦게 도착한 message는
+   source Message Follow route가 target에 전달한다.
 
 Route 갱신은 binding이 가리키는 `ObjectGeneration`과 같은 Actor relocation에만
 허용한다. 같은 Actor ID로 새 incarnation이 만들어지면 기존 binding을 새 Actor로
 바꾸지 않는다. Application이 새 `ActorRef`로 bind를 다시 시작해야 한다.
 
 같은 Session에서 relocation 대상에 포함되지 않은 다른 Actor의 route, location snapshot, token과 generation은 유지한다.
-Physical STREAM connection도 그대로 유지한다. 위치 갱신 응답을 기다리는 동안에도 Target
-Actor는 message를 처리한다. 이전 route로 도착한 message는 source Message Follow route가
+Physical STREAM connection도 그대로 유지한다. Command 44에는 적용 reply가 없으며 Target
+Actor는 dispatch가 열린 뒤 message를 처리한다. 이전 route로 도착한 message는 source Message Follow route가
 Target Actor에 전달한다. Application은 relocation을 알기 위해 rebind하지 않는다.
 
-Commit 전 relocation failure에서는 Session 위치 갱신을 보내지 않는다. Location Store에서
-source owner를 확인하고 target temporary queue를 폐기한 뒤 source Actor queue와 admission을
-복원한다. Session owner의 기존 route와 location snapshot은 source를 유지한다. Commit 뒤에는
-source route나 snapshot으로 rollback하지 않는다. 실행 중인 current target만
-`sessionActorLocationUpdateReqMsg` 재전송을 이어간다. 위치 갱신 응답을 받을 때까지 source
-Message Follow route가 이전 route의 message를 target에 전달한다. Target process가 종료되면
+Relay-ready reply가 accepted 상태가 되기 전 명시적인 relocation failure에서는 Location Store를
+다시 확인하지 않고 target temporary queue를 폐기한 뒤 source Actor queue와 admission을 복원한다.
+Bound Session seal이 있으면 source
+coordinator가 command 44 abort를 one-way로 보내 held message를 source route에 제출하고 matching
+seal만 해제한다. Relay-ready 뒤에는 cutover submit 결과와 관계없이 source route나 snapshot으로
+rollback하지 않는다. Source Message
+Follow route가 이전 route의 message를 target에 전달한다. Target process가 종료되면
 다른 runtime이 route 갱신을 자동으로 이어받지 않는다.
 
 ## 4. Request의 reply가 돌아가는 방법
@@ -420,11 +425,12 @@ timeout, cancellation 또는 shutdown 가운데 먼저 확정된 terminal 결과
   Session owner binding에 저장한다.
 - Session relay, disconnect와 Actor push가 message마다 Location Store를 조회하지
   않고 stored binding route를 사용한다.
-- Actor relocation이 같은 `ObjectGeneration`에서만 해당 Actor의 binding route를
-  `sessionActorLocationUpdateReqMsg`와 `sessionActorLocationUpdateResMsg`로 바꾸고 relocation
-  대상에 포함되지 않은 다른 Actor route와 physical STREAM connection을 유지한다.
-- 위치 갱신 응답이 없어도 Target Actor가 message를 처리하며, 재전송이 끝날 때까지 source
-  Message Follow route가 이전 route로 도착한 message를 전달한다.
+- Actor relocation이 같은 `ObjectGeneration`의 command 44 `sessionRelocationRoute`를 one-way로
+  적용해 해당 Actor의 binding route만 바꾸고 relocation 대상에 포함되지 않은 다른 Actor route와
+  physical STREAM connection을 유지한다.
+- Command 44에는 응답이 없고 request로 재전송하지 않는다. Target Actor 처리는 그 적용을 기다리지
+  않으며 source Message Follow route가 `MessageFollowDuration` 동안 이전 route로 도착한 message를
+  전달한다.
 - Reply가 request의 reply route와 correlation을 사용하고 requester의 logical ID를
   Location Store에서 조회하지 않는다.
 - Application metadata가 owner route와 reply route를 대신하지 않고 request metadata를

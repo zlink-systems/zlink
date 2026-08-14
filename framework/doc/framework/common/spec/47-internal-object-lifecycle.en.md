@@ -1,26 +1,28 @@
 ---
-title: "8. Object Kind And Activation"
+title: "47. Object Kind And Activation"
 ---
 
-# 8. Object Kind And Activation
+# 47. Object Kind And Activation
 
-[Internal structure table of contents](README.en.md) · [Previous: 7. Receive And Dispatch Loop](07-dispatch-loop.en.md) · [Next: 9. Session And Actor Binding](09-session-binding.en.md)
+> **Document status — internal design, not normative public specification.** This chapter explains implementation structure used to satisfy the linked public contracts. It does not add or change application-visible behavior.
+
+[Internal structure table of contents](README.en.md) · [Previous: 46. Receive And Dispatch Loop](46-internal-dispatch-loop.en.md) · [Next: 48. Session And Actor Binding](48-internal-session-binding.en.md)
 
 > **What this chapter answers** — how the three Spot kinds are
 > distinguished, when a missing object is built, and how a message
 > arriving at a stale owner is filtered out.
 >
 > **Contract ownership** — the Spot kinds and shutdown reasons are
-> owned by [the Spot Model](../spec/11-spot-model.en.md), and where
+> owned by [the Spot Model](11-spot-model.en.md), and where
 > generation is used by
-> [Spot · Actor Routing](../spec/18-object-routing.en.md). The result
+> [Spot · Actor Routing](18-object-routing.en.md). The result
 > after owner failure is owned by
-> [Failure And Failover Policy](../spec/31-failure-failover-policy.en.md). This
+> [Failure And Failover Policy](31-failure-failover-policy.en.md). This
 > chapter covers the **structure** that satisfies that contract and
 > the failures that become visible when a lifecycle boundary is violated.
 
 Covers how, in code, the three kinds of
-[Spot](../spec/01-glossary.en.md#spot) — the execution unit holding
+[Spot](01-glossary.en.md#spot) — the execution unit holding
 Actors and handlers — are distinguished, when a missing object is
 built, and how a message sent to a stale owner is filtered out.
 
@@ -28,7 +30,7 @@ built, and how a message sent to a stale owner is filtered out.
 
 Spot kind is a closed value set — `Invalid = 0`, `Entry = 1`,
 `User = 2`, `Instance = 3`
-([Glossary](../spec/01-glossary.en.md#spot-kind)). The three kinds
+([Glossary](01-glossary.en.md#spot-kind)). The three kinds
 behave differently.
 
 | Kind | When it's created | Move | Return-wait |
@@ -54,7 +56,7 @@ composition, or a tagged union is free. The observation standard is
 
 The Entry Spot **instance** belongs to that Object Server's lifecycle,
 so it doesn't go into the move-candidate list
-([Spot Model 「4.2 Entry Spot's Actor Lifecycle」](../spec/11-spot-model.en.md#42-entry-spots-actor-lifecycle)).
+([Spot Model 「4.2 Entry Spot's Actor Lifecycle」](11-spot-model.en.md#42-entry-spots-actor-lifecycle)).
 
 This is frequently mismatched here — **an Actor that was on the Entry
 Spot does move.** What doesn't move is the Entry Spot itself. If
@@ -68,12 +70,12 @@ down.
 Spot-dedicated call that explicitly declares intent to create can
 build a new one; an ordinary message and a lookup call only target an
 already-ready object
-([Spot · Actor Routing 「2.2 The Condition For Using A Recent Ready Route」](../spec/18-object-routing.en.md#22-the-condition-for-using-a-recent-ready-route)).
+([Spot · Actor Routing 「2.2 The Condition For Using A Recent Ready Route」](18-object-routing.en.md#22-the-condition-for-using-a-recent-ready-route)).
 
 ### Pass Spec States Into The Activation State Machine
 
 The public behavior is defined by
-[Failure Handling And Failover Scope §4.4](../spec/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
+[Failure Handling And Failover Scope §4.4](31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
 The resolver converts its result into one of the closed internal states below. The
 activation state machine passes that state to exactly one responsible component, so a
 later stage does not infer the Store result again.
@@ -107,7 +109,7 @@ factory runs exactly once.
 
 **Decision — don't cache the in-progress-creation state.** Since
 "being created" is a state about to change, it isn't put into
-[6. Target Selection And Route Cache](06-routing-and-cache.en.md)'s
+[45. Target Selection And Route Cache](45-internal-routing-and-cache.en.md)'s
 cache. Caching it would keep showing "being created" for the cache
 lifetime even after creation finished.
 
@@ -169,9 +171,9 @@ already changed. The receiving side must filter this out.
 **Decision — the filtering criterion is owner identity and validity
 period. Not object generation.**
 
-[ObjectGeneration](../spec/01-glossary.en.md#objectgeneration) is
+[ObjectGeneration](01-glossary.en.md#objectgeneration) is
 **not** a targeting condition for an ordinary message
-([Spot · Actor Routing 「2.5 Where ObjectGeneration Is Used And Where It's Not」](../spec/18-object-routing.en.md#25-where-objectgeneration-is-used-and-where-its-not)).
+([Spot · Actor Routing 「2.5 Where ObjectGeneration Is Used And Where It's Not」](18-object-routing.en.md#25-where-objectgeneration-is-used-and-where-its-not)).
 Checking object generation as a condition for ordinary messages too
 would reject every normal message right after an object is recreated.
 Object generation is used to filter lifecycle changes and move relay.
@@ -241,7 +243,7 @@ and a change in owner-availability evidence as different tags into the
 activation state machine. The creation coordinator receives only the former
 tag, while the latter is wired to the terminal completion adapter. The rule
 against resubmitting an accepted request is defined by
-[Failure Handling And Failover Scope §2](../spec/31-failure-failover-policy.en.md#2-common-judgment-criteria).
+[Failure Handling And Failover Scope §2](31-failure-failover-policy.en.md#2-common-judgment-criteria).
 
 Language mappings may name the catalog differently, but each implements
 the same shutdown conditions and verifies them with independent process
@@ -272,7 +274,7 @@ the ceiling.
 
 **Decision — the cleanup target is Instance Spot only.** The formal
 spec added the `IdleEvicted` shutdown reason limited to Instance Spot
-([Spot Model](../spec/11-spot-model.en.md)). The reason User Spot
+([Spot Model](11-spot-model.en.md)). The reason User Spot
 isn't cleaned up is that **an ordinary message does not recreate a cleaned-up User
 Spot**. Only a call explicitly declaring Instance intent can build a missing object (§3).
 Entry Spot belongs to
@@ -287,7 +289,7 @@ on it.
 **Decision — Framework doesn't preserve application state on
 cleanup.** State that needs to be kept is saved by the application
 itself directly in the shutdown callback
-([Spot Model 「6.2 Cleaning Up An Idle Instance Spot」](../spec/11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot)).
+([Spot Model 「6.2 Cleaning Up An Idle Instance Spot」](11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot)).
 For Framework to save state on the application's behalf, it would need
 to know what to save, and that's the application's job.
 
@@ -317,7 +319,7 @@ actually failed.
 **Decision — the execution queue's bound enforces both the count and
 byte axes, and applies whichever is hit first.** The formal spec
 mandates both axes
-([Framework API](../spec/06-framework-api.en.md)).
+([Framework API](06-framework-api.en.md)).
 
 A single axis alone can be routed around via the other axis. Count
 alone lets a few large payloads fill memory; bytes alone lets empty
@@ -352,12 +354,12 @@ layers use the same unit, which layer triggered is also distinguishable.
 
 **Decision — don't have an unbounded execution queue.** Each lane must
 have both count and byte reservations
-([Framework API](../spec/06-framework-api.en.md)).
+([Framework API](06-framework-api.en.md)).
 
 The result on exceeding it **isn't one thing.** It splits by
 submission family and queue location, so an implementation must not
 lump it into one. The table is in
-[2. Spot · Actor Execution Serialization 「2. The Pitfall When Building Execution Authority」](02-serialization.en.md#2-the-pitfall-when-building-execution-authority).
+[41. Spot · Actor Execution Serialization 「2. The Pitfall When Building Execution Authority」](41-internal-serialization.en.md#2-the-pitfall-when-building-execution-authority).
 
 Two non-queue spots aren't in that table and are each
 `CapacityExceeded` — the **worker scheduler queue** and **batch
@@ -368,7 +370,7 @@ An execution-lane reservation for already owned work and limits owned by transpo
 deadline, and cancellation are not reused as a separate relocation-hold ceiling. This is
 a rule the formal spec fixed, so it's
 followed as-is
-([Complete Host Relocation Flow 「9. Moving Pending Messages, Timers, And Sessions」](../spec/30-host-relocation-flow.en.md#9-moving-pending-messages-timers-and-sessions)).
+([Complete Host Relocation Flow 「9. Moving Pending Messages, Timers, And Sessions」](30-host-relocation-flow.en.md#9-moving-pending-messages-timers-and-sessions)).
 
 ## 7. Result To Confirm
 
@@ -408,6 +410,10 @@ followed as-is
   payload consumes the bound.
 - There's no unbounded execution queue.
 
+## Object Queues And Host-Shared Capacity
+
+Per-object bounded queues own ordering/owner isolation and do not replace the host-shared queue. Permit/fairness follows [Receive and Dispatch Loop](46-internal-dispatch-loop.en.md); pre-start terminal lease cleanup follows [Payload Ownership](50-internal-message-ownership.en.md).
+
 ---
 
-[Internal structure table of contents](README.en.md) · [Previous: 7. Receive And Dispatch Loop](07-dispatch-loop.en.md) · [Next: 9. Session And Actor Binding](09-session-binding.en.md)
+[Internal structure table of contents](README.en.md) · [Previous: 46. Receive And Dispatch Loop](46-internal-dispatch-loop.en.md) · [Next: 48. Session And Actor Binding](48-internal-session-binding.en.md)

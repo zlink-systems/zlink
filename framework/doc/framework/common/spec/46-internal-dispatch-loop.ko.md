@@ -1,15 +1,17 @@
 ---
-title: "7. 수신과 dispatch 루프"
+title: "46. 수신과 dispatch 루프"
 ---
 
-# 7. 수신과 dispatch 루프
+# 46. 수신과 dispatch 루프
 
-[내부 구조 목차](README.ko.md) · [이전: 6. target 선택과 route cache](06-routing-and-cache.ko.md) · [다음: 8. 객체 종류와 활성화](08-object-lifecycle.ko.md)
+> **문서 성격 — 공개 규범 스펙이 아닌 내부 설계 문서.** 이 장은 연결된 공개 계약을 만족시키는 구현 구조를 설명한다. Application이 관찰하는 동작을 추가하거나 변경하지 않는다.
+
+[내부 구조 목차](README.ko.md) · [이전: 45. target 선택과 route cache](45-internal-routing-and-cache.ko.md) · [다음: 47. 객체 종류와 활성화](47-internal-object-lifecycle.ko.md)
 
 > **이 장이 답하는 것** — 수신한 message를 execution gate까지 나르는 구간.
 >
-> **계약 소유** — 수신 공정성은 [Transport liveness](../spec/29-transport-liveness.ko.md)가,
-> 대기열 한도는 [Framework API](../spec/06-framework-api.ko.md)가 소유한다.
+> **계약 소유** — 수신 공정성은 [Transport liveness](29-transport-liveness.ko.md)가,
+> 대기열 한도는 [Framework API](06-framework-api.ko.md)가 소유한다.
 > 이 장은 그 계약을 만족시키는 **구조**와, 수신·dispatch 경계에서 나타나는 실패를 다룬다.
 
 수신한 message를 실행 gate까지 나르는 구간이다. message 하나마다 깨우느냐 모아서
@@ -60,7 +62,7 @@ owner가 바뀐다. message는 **더 이상 owner가 아닌 node의 대기열**�
 2. 대상 객체가 이 node에 있고 owner 정보가 유효한가
 3. 이동 봉인·생성 대기·session 연결 대기 중이 아닌가
 4. 해당 lane의 건수와 byte를 함께 예약할 수 있는가
-   ([8. 객체 종류와 활성화 「6. 메모리 회계를 어느 단위로 하는가」](08-object-lifecycle.ko.md#6-메모리-회계를-어느-단위로-하는가)의 byte 한도)
+   ([47. 객체 종류와 활성화 「6. 메모리 회계를 어느 단위로 하는가」](47-internal-object-lifecycle.ko.md#6-메모리-회계를-어느-단위로-하는가)의 byte 한도)
 5. 수락 순서를 나타내는 sequence를 확정하고 FIFO 뒤에 넣는다
 6. 비어 있던 FIFO가 채워졌으면 §1의 준비 상태를 만들고 실행 자원에 즉시 알린다
 
@@ -84,7 +86,7 @@ flowchart LR
 
 **언어별 재량.** 이 구간을 잠금으로 만들지 다른 방법으로 만들지는 자유다. 구간이 길면
 그 자체가 병목이 되므로 **확인만 하고 넣는 것까지만** 넣는다 — 역직렬화나 handler 조회
-같은 일은 이 구간 밖에서 한다([11. Payload 소유권과 복사 「6. 역직렬화를 언제 하는가」](11-message-ownership.ko.md#6-역직렬화를-언제-하는가)).
+같은 일은 이 구간 밖에서 한다([50. Payload 소유권과 복사 「6. 역직렬화를 언제 하는가」](50-internal-message-ownership.ko.md#6-역직렬화를-언제-하는가)).
 
 ## 3. owner를 가져올 때 배타권을 함께 가져온다
 
@@ -109,7 +111,7 @@ owner를 가져오는 비용과 gate를 얻는 비용은 message 하나당 한 �
 끝낼 때마다 예산이 남았는지 보고, 남았으면 다음 건을 처리하고 아니면 남은 일을 집합에
 되돌리고 권한을 놓는다.
 
-건수를 기준으로 삼지 않는다 — [8. 객체 종류와 활성화 「6. 메모리 회계를 어느 단위로 하는가」](08-object-lifecycle.ko.md#6-메모리-회계를-어느-단위로-하는가)과
+건수를 기준으로 삼지 않는다 — [47. 객체 종류와 활성화 「6. 메모리 회계를 어느 단위로 하는가」](47-internal-object-lifecycle.ko.md#6-메모리-회계를-어느-단위로-하는가)과
 같은 이유다. 같은 100건이라도 어떤 handler는 1 ms에 끝나고 어떤 handler는 1초를 쓴다.
 건수는 점유 시간을 예측하지 못한다.
 
@@ -183,8 +185,8 @@ Framework-level `MaxMessageSize` 설정이나 complete-message 상한을 추가�
 
 이 값들은 MeshNode가 시작되기 전에 확정되어 bind 경로에 전달된다. 따라서 수신 HWM을
 송신 HWM에서 추론하거나 수신 timeout을 send timeout의 별칭으로 처리하면 안 된다. 이
-구조는 [RouteMesh topology](../spec/07-channel-topology.ko.md)와
-[MeshNode startup](../spec/13-mesh-node.ko.md)이 정한 public 설정을 runtime 경계에서
+구조는 [RouteMesh topology](07-channel-topology.ko.md)와
+[MeshNode startup](13-mesh-node.ko.md)이 정한 public 설정을 runtime 경계에서
 보존하기 위한 것이다.
 
 ## 6. 소켓에서 한 번에 여러 건을 읽는다
@@ -206,9 +208,9 @@ Framework-level `MaxMessageSize` 설정이나 complete-message 상한을 추가�
 앞쪽 연결이 계속 먼저 처리되어, 상한을 두어도 뒤쪽 연결이 밀린다.
 
 이 규칙은 **모든 multi-connection 수신 경로**에 적용한다 — fanout뿐 아니라
-node 여럿이 이름으로 서로를 찾는 [RouteMesh](../spec/01-glossary.ko.md#routemesh),
+node 여럿이 이름으로 서로를 찾는 [RouteMesh](01-glossary.ko.md#routemesh),
 ClientServer, service connection, STREAM이 모두 대상이다
-([Transport liveness](../spec/29-transport-liveness.ko.md)).
+([Transport liveness](29-transport-liveness.ko.md)).
 
 한도에 걸려 남은 것이 있으면 다시 깨어날 때 이어서 읽는다. §1의 규칙이 여기서도
 적용된다 — 남았는지는 상태를 다시 확인해서 안다.
@@ -250,7 +252,7 @@ Spot 10,000개에 timer를 두 개씩 등록하면 timer가 20,000개다.
 
 주기를 넘겨 늦게 실행될 때 지나간 tick을 어떻게 할지는 **공개 option**이다 — 건너뛰고
 현재 것만, 정해진 개수까지 따라잡기, 다음 예정을 완료 시점 기준으로 다시 계산하기
-([Stage wrapper on Spot 「5. Timer」](../spec/17-stage-wrapper-on-spot.ko.md#5-timer)). 이 option은 세
+([Stage wrapper on Spot 「5. Timer」](17-stage-wrapper-on-spot.ko.md#5-timer)). 이 option은 세
 동작과 각 이름을 공개 계약으로 고정한다.
 
 internals가 이 중 하나를 골라 고정하지 않는다. 특히 **"다음 예약을 처리 완료 뒤에 한다"는
@@ -258,7 +260,7 @@ internals가 이 중 하나를 골라 고정하지 않는다. 특히 **"다음 �
 
 **결정 — 기본 동작은 밀린 tick을 하나로 합치는 것이다.** spec이 "중복 만료를 한 번의
 pending record로 합칠 수 있다"고 허용한다
-([비동기 실행 정책 「5. Spot timer」](../spec/05-async-execution-policy.ko.md#5-spot-timer)). 다만 application이
+([비동기 실행 정책 「5. Spot timer」](05-async-execution-policy.ko.md#5-spot-timer)). 다만 application이
 따라잡기를 골랐다면 **그 option이 정한 개수까지가 상한**이며, internals가 하나로 줄이지
 않는다.
 
@@ -268,20 +270,20 @@ pending record로 합칠 수 있다"고 허용한다
 ### tick이 실행 권한으로 들어가는 경로
 
 timer callback은 그 Spot의 실행 권한을 거쳐 실행된다. `SpotWide`에서는 공유 권한을,
-`PerActor`에서는 **timer 이름별 권한**을 쓴다([2. Spot·Actor 실행 직렬화](02-serialization.ko.md)).
+`PerActor`에서는 **timer 이름별 권한**을 쓴다([41. Spot·Actor 실행 직렬화](41-internal-serialization.ko.md)).
 timer가 자기 권한을 얻지 못하면 그 tick은 보관 자리에 남았다가 다음에 다시 시도한다.
 
 ## 8. 수신 처리와 상태 변경을 분리한다
 
 수신 콜백은 받은 데이터의 소유권을 runtime 쪽 값으로 옮기고 **바로 반환한다.** 그
-안에서 handler를 부르거나 [Spot](../spec/01-glossary.ko.md#spot) 상태를 바꾸지 않는다.
+안에서 handler를 부르거나 [Spot](01-glossary.ko.md#spot) 상태를 바꾸지 않는다.
 
 수신 문맥은 대개 전송 계층이 소유하므로 여기서 오래 머물면 그 연결의 다른 수신이
-밀린다. 또한 [2. Spot·Actor 실행 직렬화](02-serialization.ko.md)의 실행 권한을 거치지
+밀린다. 또한 [41. Spot·Actor 실행 직렬화](41-internal-serialization.ko.md)의 실행 권한을 거치지
 않고 상태를 바꾸는 경로가 생긴다.
 
 형식 검사는 handler를 부르기 전에 끝낸다. 형식이 맞지 않는 입력은 handler에 도달하지
-않고, 응답을 기다리는 호출은 `ProtocolError`로([Framework 오류 모델 「5. `Request` 완료와 실패」](../spec/32-framework-error-model.ko.md#5-request-완료와-실패)),
+않고, 응답을 기다리는 호출은 `ProtocolError`로([Framework 오류 모델 「5. `Request` 완료와 실패」](32-framework-error-model.ko.md#5-request-완료와-실패)),
 기다리지 않는 호출은 기록만 남기고 끝난다.
 
 ## 9. 확인할 결과
@@ -308,6 +310,21 @@ timer가 자기 권한을 얻지 못하면 그 tick은 보관 자리에 남았�
 - 따라잡기 option을 고른 timer는 그 option이 정한 개수까지 밀린 tick을 전달한다.
 - 오래 도는 timer가 tick 통계로 메모리를 계속 늘리지 않는다.
 
+## Shared supply permit, readiness와 fairness
+
+Pre-receive에 terminal reply/error completion으로 식별되는 supply만 shared permit과 ordinary Core HWM 경로를
+우회한다. Ordinary connection에서 먼저 receive한 뒤 classify한 record에는 이 우회를 적용하지 않는다.
+그 밖의 application, control, malformed ordinary record는 receive/claim 전에 같은 host-instance permit을
+얻는다. Source마다 outstanding waiter는 하나이며 oldest waiter 순서로 handoff한다. Batch를 처리한 source는
+tail로 이동하고 batch·1:N은 확보한 permit 수보다 많은 application job을 게시하지 않는다.
+
+Application permit은 실제 exact-target callback 첫 instruction에서 반환하고 control·malformed permit은
+내부 처리 직후 반환한다. Cancellation, source close와 shutdown은 waiter와 handoff permit을 정확히 한 번
+정리한다. Same-host relay, fanout, serial owner와 relocation 경로는 permit 반환에 필요한 gate·execution
+authority·resource를 쥔 채 같은 authority의 새 permit acquire를 기다려서는 안 된다. 지속 wait/capacity
+cycle은 우회 근거가 아니라 protocol/runtime bug다. Retained record 수명은
+[Payload 소유권](50-internal-message-ownership.ko.md)이 소유한다.
+
 ---
 
-[내부 구조 목차](README.ko.md) · [이전: 6. target 선택과 route cache](06-routing-and-cache.ko.md) · [다음: 8. 객체 종류와 활성화](08-object-lifecycle.ko.md)
+[내부 구조 목차](README.ko.md) · [이전: 45. target 선택과 route cache](45-internal-routing-and-cache.ko.md) · [다음: 47. 객체 종류와 활성화](47-internal-object-lifecycle.ko.md)

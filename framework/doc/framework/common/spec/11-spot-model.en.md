@@ -122,9 +122,10 @@ not moving isn't blocked.
 
 If the same Restore request arrives again, the existing temporary queue and
 Restore progress state are used. Messages aren't put into a previous target
-attempt's or a different `ObjectGeneration`'s queue. On an abort before commit,
-the target temporary queue is discarded without running, and work the source
-held is restored to the original queue. After commit, the temporary queue is
+attempt's or a different `ObjectGeneration`'s queue. Only on an explicit abort
+before relay-ready is accepted is the target temporary queue discarded without
+running and source-held work restored to the original queue. After that boundary,
+source isn't restored regardless of cutover-submit result. After owner commit, the temporary queue is
 only moved to the real queue while the same target process is running. If the
 target process terminates, a different runtime doesn't automatically take over
 this work.
@@ -288,20 +289,21 @@ but doesn't call the target's `OnJoinedActorAsync` or the source's
 `OnLeaveActorAsync`. A dedicated relocation application callback also isn't
 provided.
 
-Once state and queue are restored on the target and owner/membership are
-committed, the target Actor starts processing messages. If this Actor is bound
-to a Session, the target runtime sends `sessionActorLocationUpdateReqMsg` to
+Once state and queue are restored on the target and owner/membership are committed,
+queue merge, regular-route switch, and lifecycle finish before target Actor processing
+starts. If this Actor is bound to a Session, target runtime sends command 44
+`sessionRelocationRoute` commit one-way to
 update the binding route — that Actor's current delivery path stored by the
 session owner — to the target owner. Along with the route switch, the current
 Actor location snapshot the bound-session accessor returns is also updated to
 the target MeshName/NodeRid, keeping the same ActorId/ObjectGeneration. The
 route and physical STREAM connection of a different Actor, bound to the same
-Session but not included in the relocation, don't change. Once the session
-owner finishes updating, it sends `sessionActorLocationUpdateResMsg`. Without a
-response, the target runtime resends the same request starting 1 second after
-the first send, at intervals of 1, 2, 4, 5 seconds, then keeps a 5-second
-interval afterward. The target Actor keeps processing messages while waiting
-for the response, and a message on the previous route is delivered by the
+Session but not included in the relocation, don't change. Session owner validates exact
+Session/binding/Actor generation and relocation identity, submits held messages to target
+route, and releases the matching seal. There is no application reply; without exact
+command 44 within `SessionRelocationSealTimeout`, it cleans the physical Session and
+related state. Target Actor processes messages without a command 44 application reply,
+and a message on the previous route is delivered by the
 Message Follow route. A route update only applies to the same
 `ObjectGeneration`, and the application doesn't rebind to learn about the
 relocation. A new incarnation must be explicitly rebound by the application.
@@ -370,11 +372,13 @@ jobs and handles one of the following.
 | Condition | Handling owner | Completion outcome |
 |---|---|---|
 | No relocation to use | Current owner | `Continued` |
-| Relocation canceled before commit | The restored source owner | `Continued` |
+| Relocation canceled before relay-ready is accepted | The restored source owner | `Continued` |
 | Relocation completed | Target owner | `Relocated` |
 
-The framework calls `OnRelocationReadyCompleted` on the current owner before
-the next application job. Once the callback completes, held messages and
+The framework calls `OnRelocationReadyCompleted` on the handling owner in the table
+before the next application job. For `Relocated`, target calls it after queue merge and
+regular-route switch but before dispatch opens; for `Continued`, source calls it before
+its next job. Once the callback completes, held messages and
 timers are processed again. The application can start the next round from this
 callback.
 
@@ -413,20 +417,20 @@ Spot's `OnActorJoinAsync`, `OnJoinedActorAsync`, and `OnLeaveActorAsync` aren't
 called for member Actors. When cleaning up the source User Spot instance,
 `OnClosingAsync` is called with reason `RelocationOut`.
 
-If a member Actor is bound to a Session, once the Spot and Actor are restored
-on the target and the aggregate owner is committed, the target runtime sends
-each session owner `sessionActorLocationUpdateReqMsg`. The session owner
+If a member Actor is bound to a Session, once the Spot and Actor are restored on the
+target and aggregate owner is committed, queue merge, regular-route switch, lifecycle,
+and dispatch opening finish before target runtime sends each Session owner command 44
+`sessionRelocationRoute` commit one-way. The Session owner
 updates each Actor in the aggregate's
 [binding route](01-glossary.en.md#binding-route) to the target owner. Along
 with the route switch, the current Actor location snapshot each bound-session
 accessor returns is also updated to the target MeshName/NodeRid, keeping the
 same ActorId/ObjectGeneration. The route and physical STREAM connection of an
-Actor bound to the same Session but not in this aggregate don't change. Each
-session owner sends `sessionActorLocationUpdateResMsg` once it finishes
-updating. Without a response, the target runtime resends each request at the
-fixed 1, 1, 2, 4 second intervals, then 5-second intervals afterward. The
-target User Spot and member Actors keep processing messages while waiting for
-responses. A route update only applies to the same `ObjectGeneration`, and the
+Actor bound to the same Session but not in this aggregate don't change. Each Session owner
+updates the exact binding once, submits held messages to target route, and releases the
+seal. There is no application reply; timeout cleans the physical Session. Target User
+Spot and member Actors process messages without a command 44 application reply. A route
+update only applies to the same `ObjectGeneration`, and the
 application doesn't rebind to learn about the relocation. A new incarnation
 must be explicitly rebound by the application.
 
@@ -437,18 +441,19 @@ target. Once authority changes, new `ToSpot`, Actor Create, and Join are
 handled by the target, while the source shell only handles existing work and
 relocation control for Actors still remaining on the source.
 
-Actors are each moved with bounded concurrency. An Actor's `ObjectGeneration`
+Actors are each moved by the normal host scheduler, with no relocation-specific concurrent
+unit limit. An Actor's `ObjectGeneration`
 and logical User Spot membership are kept — only the Actor owner generation
 changes. Infrastructure relocation doesn't call `OnActorJoinAsync`,
 `OnJoinedActorAsync`, `OnLeaveActorAsync`, or `OnDisconnectActorAsync`. Once
 the last Actor and every already-accepted Spot work on the source are cleaned
 up, `RelocationOut` is delivered to the source shell and it terminates. If
 each Actor is bound to a Session, the target runtime sends
-`sessionActorLocationUpdateReqMsg` to update its binding route and
+command 44 `sessionRelocationRoute` commit one-way to update its binding route and
 bound-session current Actor location snapshot to the target owner and target
-MeshName/NodeRid, keeping the same ActorId/ObjectGeneration. Without a
-response, it resends at fixed intervals, and the target Actor keeps processing
-messages while waiting. The application doesn't rebind for this update.
+MeshName/NodeRid, keeping the same ActorId/ObjectGeneration. There is no application reply
+or retransmission journal, and target Actor processes messages without a command 44
+application reply. The application doesn't rebind for this update.
 
 ## 6. Instance Spot
 

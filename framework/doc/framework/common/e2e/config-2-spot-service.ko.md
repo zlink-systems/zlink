@@ -487,8 +487,8 @@ Publish terminal은 remote 수신 확인이 아니다. E2E는 target handler evi
 
 **검증 질문:** Blocked target과 ready target이 함께 있을 때 ready target만 marker를 한 번 처리하는가.
 
-- 시작 조건: One remote target은 handler gate와 public HWM보다 큰 deterministic payload를 준비한다. 먼저
-  blocker payload를 보내 handler 진입과 Application receive paused 상태를 확인한다. 다른 target은 ready다.
+- 시작 조건: One remote target은 `MaxQueuedApplicationJobs = 1`과 handler-start gate를 사용한다.
+  Blocker job으로 permit을 예약하고 public status에서 reserved/queued 1을 확인한다. 다른 target은 ready다.
 - 절차: Marker를 한 번 publish한다.
 - 검증: Public terminal은 target별 result 없이 정식 의미로 끝나고 ready target은 marker를 한 번 처리한다.
   Private snapshot·attempt count는 읽지 않는다.
@@ -677,11 +677,11 @@ wire 내부 sequence를 성공 조건으로 복제하지 않는다.
 
 한 Session의 slow consumer가 다른 Session의 send·reply를 막아서는 안 된다.
 
-**검증 질문:** Session A가 public HWM에서 pending이어도 B request와 push가 완료되는가.
+**검증 질문:** Session A가 shared job queue capacity에서 pending이어도 B request와 push가 완료되는가.
 
-- 시작 조건: A와 B를 서로 다른 Session gateway process에 배치한다. A gateway만 small public
-  `ApplicationHwmBytes`와 application receive gate를 사용하고, B gateway는 별도 HWM 경계에서 정상
-  동작하게 구성한다. A client receive를 gate로 막은 뒤 A의 public status에서 receive paused를 확인한다.
+- 시작 조건: A와 B를 서로 다른 Session gateway process에 배치한다. A gateway만
+  `MaxQueuedApplicationJobs = 1`과 handler-start gate를 사용하고 B gateway는 독립된 기본 capacity를 쓴다.
+  A의 첫 callback 진입을 막은 뒤 public status에서 reserved/queued 1을 확인한다.
 - 절차: A에 sends를 시작해 source awaitable pending을 확인하고 B request·push를 실행한다. A gate를
   해제한다.
 - 검증: B results는 A gate 해제 전에 완료한다. A operations는 success 또는 deadline terminal 하나씩을

@@ -59,9 +59,10 @@ socket의 모든 subscriber에 대한 전달이 멈추기 때문입니다. subsc
 ## 자동 HWM 기본값
 
 PUB는 context auto HWM 정책에서 `fanout` policy class로 분류됩니다. 활성
-auto-HWM profile이 단위 예산과 메시지 크기 cap을 고르며, 기본 profile은
-`balanced`입니다. 사용자가 `SNDHWM`이나 `SNDBUF`를 직접 설정하면 자동값보다
-그 값이 우선합니다.
+auto-HWM profile은 Core memory budget 비율과 역할별 byte 경계를 선택하고, Core는
+그 budget을 고유 physical directional queue에 분배합니다. 기본 profile은
+`balanced`입니다. 사용자가 `SNDHWM`을 직접 설정하면 그 application 방향은 자동
+분배에서 제외됩니다. `SNDBUF`는 OS socket buffer option이며 auto HWM이 변경하지 않습니다.
 
 ## 함수
 

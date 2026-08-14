@@ -52,9 +52,11 @@ on PUB/SUB.
 ## Automatic HWM defaults
 
 PUB is classified as the `fanout` policy class by the context automatic HWM
-policy. The active auto-HWM profile selects the unit budget and message-size
-cap; the default profile is `balanced`. Manual `SNDHWM` or `SNDBUF` settings
-override the automatic values.
+policy. Core applies the active profile to its byte budget and distributes it
+across physical directional queues; the default profile is `balanced`. A manual
+`SNDHWM` removes that application direction from automatic distribution.
+`SNDBUF` is an operating-system socket-buffer option and is not changed by
+automatic HWM.
 
 ## Functions
 

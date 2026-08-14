@@ -1,10 +1,12 @@
 ---
-title: "12. Service wire protocol"
+title: "51. Service wire protocol"
 ---
 
-# 12. Service wire protocol
+# 51. Service wire protocol
 
-[Internals index](README.en.md) · [Previous: 11. Payload Ownership and Copying](11-message-ownership.en.md) · [Next: 13. Relocation Handoff State Transitions](13-relocation-handoff.en.md)
+> **Document status — internal design, not normative public specification.** This chapter explains implementation structure used to satisfy the linked public contracts. It does not add or change application-visible behavior.
+
+[Internals index](README.en.md) · [Previous: 50. Payload Ownership and Copying](50-internal-message-ownership.en.md) · [Next: 52. Relocation Handoff State Transitions](52-internal-relocation-handoff.en.md)
 
 > **What this chapter answers** — the byte format and command list exchanged between nodes.
 >
@@ -13,11 +15,11 @@ title: "12. Service wire protocol"
 > schema defines, and unlike other chapters it does not apply the decision/discretion/
 > confirmable-result distinction.
 >
-> **Related contracts** — [Layer Boundaries and Identifiers](01-layering.en.md) ·
-> [Location runtime](../spec/21-location-runtime.en.md) ·
-> [Redis Relocation Store](../spec/23-relocation-store-redis.en.md) ·
-> [Transport liveness](../spec/29-transport-liveness.en.md) ·
-> [Relocation Handoff State Transitions](13-relocation-handoff.en.md)
+> **Related contracts** — [Layer Boundaries and Identifiers](40-internal-layering.en.md) ·
+> [Location runtime](21-location-runtime.en.md) ·
+> [Redis Relocation Store](23-relocation-store-redis.en.md) ·
+> [Transport liveness](29-transport-liveness.en.md) ·
+> [Relocation Handoff State Transitions](52-internal-relocation-handoff.en.md)
 
 | Section | Covers |
 |---|---|
@@ -61,13 +63,13 @@ enum/bound/conditional field.
 ### Location Store authority key format
 
 The store that records which node an object currently lives on is called the
-[Location Store](../spec/01-glossary.en.md#location-store). The rule for
+[Location Store](01-glossary.en.md#location-store). The rule for
 building its authority key is fixed by the same schema and golden fixtures.
 
 | Object | Key format |
 |---|---|
 | Actor | `zla1:a:<byte-length>:<encoded-ActorId>` |
-| [Spot](../spec/01-glossary.en.md#spot) | `zla1:s:<byte-length>:<encoded-SpotRid>` |
+| [Spot](01-glossary.en.md#spot) | `zla1:s:<byte-length>:<encoded-SpotRid>` |
 
 - MeshName is not part of the key — it is stored only as the authority payload's current placement attribute.
 - Percent encoding leaves RFC 3986 unreserved bytes as-is and represents everything else as uppercase hex.
@@ -143,17 +145,16 @@ record if any bytes remain after all parts are read. The Framework does
 not interpret a part's contents for business meaning — it restores the
 original bytes into each Message as-is.
 
-This profile's count, lengths, and outer envelope are not included in
-application HWM accounting. On a Framework path that carries a header and a
-body together, the size of the body — the application payload part — is
-used; on a path with only one part, that part's size is used. The
-content-type frame and Framework metadata are likewise not added to the
-payload byte total.
+The framework does not recompute this profile's count, lengths, outer
+envelope, content-type frame, or framework metadata as a separate
+application byte HWM. The credit lease for the complete message retained
+from Core receive maintains byte backpressure until payload ownership ends.
 
 ## 3. Command space
 
-Wire v1 uses the following 42 commands. `7..15` and `52..255` are reserved
-and never reused for a different meaning.
+Wire v1 uses the following IDs. `7..15`, `32`, `35`, `41`, `45`, and `52..255` are
+reserved and never reused for another meaning. A previous command name in parentheses
+is diagnostic compatibility text, not a command that is decoded or sent.
 
 | ID | Command | Role |
 |---:|---|---|
@@ -177,22 +178,22 @@ and never reused for a different meaning.
 | 27 | `actorDestroy` | Actor destroy coordination |
 | 28 | `actorJoin` | Actor membership proposal |
 | 29 | `actorLeft` | Actor leave commit |
-| 30 | `relocationReady` | Capacity offer and inventory accept |
-| 31 | `relocationData` | Frozen record transfer |
-| 32 | `relocationAck` | Relocation progress response |
+| 30 | `relocationReady` | Temporary queue, Restore, and relay-reception-ready reply |
+| 31 | `relocationData` | Post-capture ingress-hold relay record transfer |
+| 32 | reserved (`relocationAck`) | Removed per-message ACK/numeric-high-water command |
 | 33 | `replyRelay` | Terminal completion relay |
-| 34 | `relocationSeal` | Participant terminal seal |
-| 35 | `relocationComplete` | Target finalization notice |
+| 34 | `relocationCutover` | One-way control reporting all pre-boundary relay sent |
+| 35 | reserved (`relocationComplete`) | Removed target-completion-reply command |
 | 36 | `boundSessionSend` | Bound STREAM session egress |
 | 37 | `actorJoined` | Actor join commit |
 | 38 | `boundSessionBind` | Session binding commit |
 | 39 | `instanceSpot` | Logical Instance Spot operation |
-| 40 | `relocationPrepare` | Seals and proposes the list of targets to move, along with the required count and bytes |
-| 41 | `relocationReserved` | Target reservation ACK |
+| 40 | `relocationPrepare` | Request to install temporary queue, Restore the Relocation Store payload, and prepare relay |
+| 41 | reserved (`relocationReserved`) | Removed relocation-specific capacity-reservation ACK |
 | 42 | `sessionRelocationSeal` | Session ingress seal request |
 | 43 | `sessionRelocationSealed` | Session seal response |
-| 44 | `sessionRelocationRoute` | One-way Session route update sent by target runtime |
-| 45 | `sessionRelocationRouted` | Reserved previous response command; normal relocation neither sends nor awaits it |
+| 44 | `sessionRelocationRoute` | One-way Session-route control for target commit or source abort before relay-ready is accepted |
+| 45 | reserved (`sessionRelocationRouted`) | Removed Session-route application response command |
 | 46 | `replyRelayAck` | Relayed terminal result ACK |
 | 47 | `userSpotCreate` | Creates a remote User Spot in an already-reserved slot |
 | 48 | `userSpotClose` | Closes only the specified generation's remote User Spot |
@@ -238,7 +239,7 @@ The sender's dedicated suppression registry uses the complete source and target 
 as its key. Its state moves through `idle → inFlight → sentUntilExpiry`, and only a send
 failure returns it from `inFlight` to `idle`. Route-cache expiry or replacement also removes
 the marker. The registry does not own the original operation's payload, reply route, or
-terminal completion. [6. Target Selection And Route Cache](06-routing-and-cache.en.md#2-where-a-move-meets-the-cache--a-performance-cliff)
+terminal completion. [45. Target Selection And Route Cache](45-internal-routing-and-cache.en.md#2-where-a-move-meets-the-cache--a-performance-cliff)
 shows the state flow.
 
 ### 3.2 Bound Session Replacement Notification
@@ -285,9 +286,9 @@ of the new connection.
 
 ### ClientServer direction
 
-- A ClientServer connection fixes a single application-attached channel name, the [ChannelName](../spec/01-glossary.en.md#channelname), and a client-to-server direction.
+- A ClientServer connection fixes a single application-attached channel name, the [ChannelName](01-glossary.en.md#channelname), and a client-to-server direction.
 - The client sends only send/request and liveness commands; the server sends only reply, liveness, update, and reject.
-- Reusing a [RouteMesh](../spec/01-glossary.en.md#routemesh) record — where multiple nodes find each other by name — for a ClientServer connection, or the reverse, is a protocol error.
+- Reusing a [RouteMesh](01-glossary.en.md#routemesh) record — where multiple nodes find each other by name — for a ClientServer connection, or the reverse, is a protocol error.
 
 ## 5. Service liveness
 
@@ -312,7 +313,7 @@ sequenceDiagram
 ### Classic fanout beacon
 
 A one-way delivery style where the receiving side never responds is called
-[Classic fanout](../spec/01-glossary.en.md#classic-fanout). Since this kind
+[Classic fanout](01-glossary.en.md#classic-fanout). Since this kind
 of publisher can't receive an ACK, it sends a separate beacon every 5
 seconds. The beacon is sent periodically, independent of application
 publish traffic.
@@ -335,7 +336,7 @@ Payload: 5A 46 01 01
 
 The public encoding and validation rules for the `framework-json-v1` profile used by default
 typed application messages are owned exclusively by
-[Message Model §2.3](../spec/04-message-model.en.md#23-the-framework-json-v1-typed-payload-profile). The runtime validates
+[Message Model §2.3](04-message-model.en.md#23-the-framework-json-v1-typed-payload-profile). The runtime validates
 the payload and converts it to a typed value under that profile. This document defines no second rule
 set; parser choice, buffer reuse, and transport delivery of the original UTF-8 bytes remain internal
 implementation details.
@@ -353,7 +354,7 @@ an application-specific version.
 
 - Store-backed authority keeps the provider-issued `StoreVersion`, `ObjectGeneration`, and `AuthorityOwnerGeneration` separate from the current host's `OwnerId` and `OwnerLeaseGeneration`.
 - The object generation changes only when a new object is created under the same key after a delete.
-- The current owner recorded by the store, and its standing, is called [Authority](../spec/01-glossary.en.md#authority); the authority owner generation increases every time that object's owner changes, blocking changes from a stale owner.
+- The current owner recorded by the store, and its standing, is called [Authority](01-glossary.en.md#authority); the authority owner generation increases every time that object's owner changes, blocking changes from a stale owner.
 - The host owner lease token is shared across the whole process.
 
 ### Creation record
@@ -364,7 +365,7 @@ a `Creating` row.
 
 - A creation record preserves the object kind, global key, stable type, target descriptor, capacity delta, provider-issued fence, and the content reference/hash of a complete request envelope up to 1 MiB.
 - This value, preserved in the pending current row, is called the `stored creation intent`. During recovery, this record can be scanned to confirm the fence value and receipt still match exactly, and used to restore state.
-- The application code that actually creates the object is called the [Factory](../spec/01-glossary.en.md#factory). Once Factory, initialize, and initial membership finish, the reservation commit and the `Ready` CAS run under the same fence.
+- The application code that actually creates the object is called the [Factory](01-glossary.en.md#factory). Once Factory, initialize, and initial membership finish, the reservation commit and the `Ready` CAS run under the same fence.
 - Only target-owned Instance cold activation additionally fixes the durable activation inbox's first record before commit.
 - Manager `Find` and ID-only messaging use only `Ready`.
 - Entry Spot is published after startup initialization, before the host becomes `Serving`, and is never created by a caller.
@@ -384,7 +385,7 @@ object role creates neither authority nor a hidden local runtime.
 ## 8. Instance Spot cold activation recovery
 
 The recovery scope and caller-visible result are defined by
-[Failure Handling And Failover Scope §4.4](../spec/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
+[Failure Handling And Failover Scope §4.4](31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
 This section describes only the wire-record, durable-root, and scan structure
 that implements that scope.
 
@@ -411,7 +412,7 @@ length.
 
 | Kind | Purpose | Contents |
 |---|---|---|
-| `1` | Delivers to an existing [Ready](../spec/01-glossary.en.md#ready) authority | The object/owner/lease generation and StoreVersion of a state that can accept new work |
+| `1` | Delivers to an existing [Ready](01-glossary.en.md#ready) authority | The object/owner/lease generation and StoreVersion of a state that can accept new work |
 | `2` | Missing cold activation only | The target Mesh/node RID/lifecycle, Spot RID, stable type, descriptor version, and deadline — an authority fence is forbidden |
 
 If a kind `2` route's operation identity or metadata presence/bytes differ
@@ -446,7 +447,7 @@ rejected as a protocol error before reservation.
 
 - A User Spot remote close uses command 48.
 - Besides the source node lifecycle and operation identity, it sends the `SpotRef` that exactly identifies the target to close, the target node lifecycle, the AuthorityOwnerGeneration, and the StoreVersion.
-- Before deciding whether to accept, the target checks the current authority and [Actor membership](../spec/01-glossary.en.md#actor-membership) — which Spot each active Actor belongs to — and the relocation state.
+- Before deciding whether to accept, the target checks the current authority and [Actor membership](01-glossary.en.md#actor-membership) — which Spot each active Actor belongs to — and the relocation state.
 - Both commands are RouteMesh infrastructure commands and allow neither flags nor a payload.
 
 #### Reply envelope
@@ -475,6 +476,16 @@ Both operations return their results in the command 20 reply envelope.
 
 ### Relocation Envelope And Cutover
 
+- Source sends command 40, `relocationPrepare`, as `[request]` to request temporary-queue
+  installation and Restore from the Relocation Store payload. Target sends command 30,
+  `relocationReady`, as `[reply]` only after that preparation. This pair negotiates no
+  message/byte allowance or participant reservation.
+- Command 31, `relocationData`, carries only post-capture ingress-hold application records
+  on the same ordered connection. It contains no saved queue prefix or timers and creates
+  no per-record ACK or numeric high-water.
+- Source inserts command 34, `relocationCutover`, as `[send]` after the current
+  ingress-hold relay prefix. Target sends no response. Reserved IDs 32, 35, and 41 are
+  neither sent nor accepted.
 - The source stores application state, queue work not yet executed before relocation,
   and timer information in the relocation envelope. Native timer handles and callback
   continuations aren't encoded.
@@ -542,8 +553,10 @@ There's no global ordering promise between messages arriving over different TCP
 connections. Only order accepted into the target queue is preserved. After owner change,
 Message Follow sends messages arriving at the old address to the target.
 
-The source sends cutover and doesn't wait for a target completion response. An explicit
-target failure before cutover aborts and restores source queue and Session seal. A late
+After cutover submit reaches a success or failure terminal, the source doesn't wait for
+a target completion response. Only an explicit target failure before relay-ready is
+accepted aborts and restores source queue and Session seal. A later submit failure doesn't
+restore source. A late
 or duplicate cutover only records a `late_cutover` Warning and doesn't mutate state
 again. When the 1,000 ms fallback opens the queue, the contract doesn't guarantee that
 late relay runs before new direct target messages.
@@ -552,21 +565,23 @@ late relay runs before new direct target messages.
 
 - Session route is validated only against the Session owner's current Session and
   binding.
-- Command 42 seals the current binding; command 43 returns the seal result.
-- The target runtime sends command 44 with relocation identity, current binding
-  generation, ActorId/ObjectGeneration, and target route. The Session owner doesn't
-  re-read the Location Store or Actor authority mirror.
+- Command 42 seals the current binding; command 43 returns only the exact seal-install
+  result. Command 43 carries no Session-message sequence or high-water.
+- Command 44 is sent by target runtime for commit and by source coordinator for an abort
+  before relay-ready is accepted. Commit carries relocation identity, current binding generation,
+  ActorId/ObjectGeneration, and target route. The Session owner doesn't re-read the
+  Location Store or Actor authority mirror.
 - The Session owner changes the route and current `ActorRef` snapshot to the target,
   submits messages held during the seal to the target route, and releases the seal.
-- Command 44 has no reply and the normal flow doesn't use command 45.
+- Command 44 has no reply, and reserved command 45 is neither sent nor accepted.
 - `SessionRelocationSealTimeout` defaults to 3,000 ms. If exact command 44 doesn't arrive
   in time, the Session owner closes the physical Session and cleans binding,
   held-message, and seal state.
 - A late command 44 or exact duplicate after timeout only records a Warning and doesn't
   change route, seal, or authority again.
-- If target explicitly fails before cutover, only the matching seal is released and held
-  Session messages are submitted to the source route. A failure after cutover doesn't
-  reopen source route.
+- If target explicitly fails before relay-ready is accepted, only the matching seal is
+  released and held Session messages are submitted to the source route. A later failure,
+  including cutover-submit failure, doesn't reopen source route.
 
 Authenticated peer/node-generation/frame validation in the transport adapter, owner CAS
 on the target, and binding-route validation on the Session owner each run once. Actor
@@ -621,6 +636,10 @@ retention period.
 - Relocation adapter bytes are never interpreted as JSON or as a typed state contract.
 - Pending relay is never completed by a physical disconnect alone, without a `replyRelayAck`.
 
+## Wire Records And Shared Capacity
+
+A wire command does not grant bypass; ordinary control and malformed records also use shared permits. [Receive and Dispatch Loop](46-internal-dispatch-loop.en.md) owns pre-classification permits; [Payload Ownership](50-internal-message-ownership.en.md) owns retained-record lifetime.
+
 ---
 
-[Internals index](README.en.md) · [Previous: 11. Payload Ownership and Copying](11-message-ownership.en.md)
+[Internals index](README.en.md) · [Previous: 50. Payload Ownership and Copying](50-internal-message-ownership.en.md)

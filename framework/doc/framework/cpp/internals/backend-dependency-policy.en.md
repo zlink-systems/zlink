@@ -1,5 +1,5 @@
 <!-- framework-adapter-nav:start -->
-[Document List](../../../README.en.md) | [Previous: Runtime Architecture](../../common/internals/README.en.md) | [Next: Regression Test Matrix](regression-test-matrix.en.md)
+[Document List](../../../README.en.md) | [Previous: Runtime Architecture](../../common/spec/README.en.md) | [Next: Regression Test Matrix](regression-test-matrix.en.md)
 <!-- framework-adapter-nav:end -->
 
 [C++ Bundle](../README.en.md) | [Public Interfaces](../../common/spec/server/languages/cpp/interfaces/README.en.md)
@@ -38,7 +38,7 @@ the binding contract.
 ## 4. C++ Responsibility Graph
 
 The C++ implementation follows the [common layering
-principle](../../common/internals/01-layering.en.md). Public headers and the
+principle](../../common/spec/40-internal-layering.en.md). Public headers and the
 domain runtime do not expose binding types. Where binding and framework
 semantics are identical, the semantic runtime calls the binding public API
 directly. Where ownership, lifecycle, readiness, error, or concurrency rules
@@ -110,5 +110,5 @@ implementation is not added solely for testability.
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[Document List](../../../README.en.md) | [Previous: Runtime Architecture](../../common/internals/README.en.md) | [Next: Regression Test Matrix](regression-test-matrix.en.md)
+[Document List](../../../README.en.md) | [Previous: Runtime Architecture](../../common/spec/README.en.md) | [Next: Regression Test Matrix](regression-test-matrix.en.md)
 <!-- framework-adapter-nav:bottom:end -->

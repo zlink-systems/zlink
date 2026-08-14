@@ -1,17 +1,19 @@
 ---
-title: "2. Spot · Actor Execution Serialization — Splitting Queue And Execution Gate"
+title: "41. Spot · Actor Execution Serialization — Splitting Queue And Execution Gate"
 ---
 
-# 2. Spot · Actor Execution Serialization — Splitting Queue And Execution Gate
+# 41. Spot · Actor Execution Serialization — Splitting Queue And Execution Gate
 
-[Internal structure table of contents](README.en.md) · [Previous: 1. Layer Boundary And Identifier](01-layering.en.md) · [Next: 3. Application And Infrastructure Execution Separation](03-progress-isolation.en.md)
+> **Document status — internal design, not normative public specification.** This chapter explains implementation structure used to satisfy the linked public contracts. It does not add or change application-visible behavior.
+
+[Internal structure table of contents](README.en.md) · [Previous: 40. Layer Boundary And Identifier](40-internal-layering.en.md) · [Next: 42. Application And Infrastructure Execution Separation](42-internal-progress-isolation.en.md)
 
 > **What this chapter answers** — the structure that lets an application
 > handler get away with having no synchronization code.
 >
 > **Contract ownership** — the public contract for the queue and the unit
-> of execution is owned by [the Actor model](../spec/14-actor-model.en.md)
-> and [the Stage wrapper on Spot](../spec/17-stage-wrapper-on-spot.en.md).
+> of execution is owned by [the Actor model](14-actor-model.en.md)
+> and [the Stage wrapper on Spot](17-stage-wrapper-on-spot.en.md).
 > This chapter covers the **structure** that satisfies that contract and
 > the failures that become visible when serialization breaks.
 
@@ -24,12 +26,12 @@ The formal spec requires two different things at once.
 
 - A payload addressed to an Actor is **always submitted to that Actor's
   queue, regardless of execution mode**
-  ([Actor Model 「3. Actor Queue」](../spec/14-actor-model.en.md#3-actor-queue)).
+  ([Actor Model 「3. Actor Queue」](14-actor-model.en.md#3-actor-queue)).
 - In `SpotWide`, the Actor handler, Spot handler, timer, and lifecycle
-  callback of that [Spot](../spec/01-glossary.en.md#spot) — the
+  callback of that [Spot](01-glossary.en.md#spot) — the
   execution unit holding several Actors — run **only one at a time
   across the whole Spot**
-  ([Actor Model 「3. Actor Queue」](../spec/14-actor-model.en.md#3-actor-queue)).
+  ([Actor Model 「3. Actor Queue」](14-actor-model.en.md#3-actor-queue)).
 
 The two sentences live in different sections, and only reading them
 together produces one structure. **Where you line up (queue) is kept
@@ -69,7 +71,7 @@ following two ways.
 | In `SpotWide`, **the queue itself is merged into one** | This violates the first requirement above. When moving, the remaining work must be split out per Actor, but it's already mixed together and can't be split |
 
 Why the second one is a problem comes up again in
-[5. Continuity During A Move](05-relocation-continuity.en.md) — when
+[44. Continuity During A Move](44-internal-relocation-continuity.en.md) — when
 the unit of a move is an Actor, only that Actor's remaining work must
 be picked out.
 
@@ -77,7 +79,7 @@ be picked out.
 
 `PerActor` doesn't stop at splitting by Actor and by Spot — it's also
 **per timer**
-([Stage Wrapper On Spot 「9. Implementation And Contract-Test Verification Requirements」](../spec/17-stage-wrapper-on-spot.en.md#9-implementation-and-contract-test-verification-requirements)).
+([Stage Wrapper On Spot 「9. Implementation And Contract-Test Verification Requirements」](17-stage-wrapper-on-spot.en.md#9-implementation-and-contract-test-verification-requirements)).
 Putting two timers together in the Spot line makes different timers
 wait on each other.
 
@@ -112,7 +114,7 @@ What to do when full differs by queue kind.
 **The result is split by submission family, which runtime the queue
 lives in, and whether the call's public result has already been
 finalized.** The canonical source is
-[Spot Messaging 「5.3 Work Put On The Spot Application Queue」](../spec/12-spot-messaging.en.md#53-work-put-on-the-spot-application-queue),
+[Spot Messaging 「5.3 Work Put On The Spot Application Queue」](12-spot-messaging.en.md#53-work-put-on-the-spot-application-queue),
 and the gist is as follows.
 
 | Family | Queue location | Result |
@@ -164,7 +166,7 @@ is returned only at handler terminal completion.
 
 At a turn boundary, which lane to run is decided by a single atomic
 judgment. If both are ready, the lifecycle lane goes first
-([Actor Model 「3. Actor Queue」](../spec/14-actor-model.en.md#3-actor-queue)).
+([Actor Model 「3. Actor Queue」](14-actor-model.en.md#3-actor-queue)).
 
 **Priority alone doesn't prevent starvation.** Two different ceilings
 are involved here.
@@ -186,7 +188,7 @@ a debt is marked on that owner, and while the debt exists, lifecycle
 isn't picked until one application turn has run, as long as the
 application lane is ready. Running it clears the debt. The boundary
 conditions are defined by
-[Actor Model 「3. Actor Queue」](../spec/14-actor-model.en.md#3-actor-queue).
+[Actor Model 「3. Actor Queue」](14-actor-model.en.md#3-actor-queue).
 
 With this rule, even if lifecycle work keeps arriving without a break,
 **an application turn eventually gets picked at the handler boundary.** The 10 ms value
@@ -232,7 +234,7 @@ rule, the same code either deadlocks or runs in a different order.
 rule. A call that keeps the current turn while waiting for a result that
 requires the same gate, or an Actor waiting for a request it sent to
 itself, is **rejected with `InvalidOperation` before submission**
-([Stage Wrapper On Spot 「5. Timer」](../spec/17-stage-wrapper-on-spot.en.md#5-timer)).
+([Stage Wrapper On Spot 「5. Timer」](17-stage-wrapper-on-spot.en.md#5-timer)).
 When an eligible `SpotWide` User Spot or Instance Spot call selects
 `Yield`, it first releases the current shared gate, so this isn't
 reentrancy. Its completion continuation enters at the back of the
@@ -329,7 +331,7 @@ whole time. So there's a way to release and wait.
 
 **On resuming after release, it resumes as new work.** One piece of
 work isn't kept alive across the wait span
-([Async Execution Policy 「1.1 Submit, Async, and Yield」](../spec/05-async-execution-policy.en.md#11-submit-async-and-yield)).
+([Async Execution Policy 「1.1 Submit, Async, and Yield」](05-async-execution-policy.en.md#11-submit-async-and-yield)).
 
 ```mermaid
 sequenceDiagram
@@ -351,8 +353,8 @@ Only the normal path is drawn. If the Spot shuts down while waiting to
 resume, or **the unit gets sealed for a move**, it ends in failure
 instead of resuming. A move merely *starting* isn't enough to stop it
 — existing messages and timers keep being processed until sealing
-([Stage Wrapper On Spot 「5. Timer」](../spec/17-stage-wrapper-on-spot.en.md#5-timer),
-[Complete Host Relocation Flow 「12. Admission Per State」](../spec/30-host-relocation-flow.en.md#12-admission-per-state)).
+([Stage Wrapper On Spot 「5. Timer」](17-stage-wrapper-on-spot.en.md#5-timer),
+[Complete Host Relocation Flow 「12. Admission Per State」](30-host-relocation-flow.en.md#12-admission-per-state)).
 
 ### The Design Constraint This Produces
 
@@ -371,7 +373,7 @@ implementation. The per-language guide must explain this point.
 Release can only be used in `SpotWide` User Spots and Instance Spots.
 Calling it anywhere else ends in failure **before the remote request
 goes out, before the queue changes**
-([Async Execution Policy 「1.1 Submit, Async, and Yield」](../spec/05-async-execution-policy.en.md#11-submit-async-and-yield)).
+([Async Execution Policy 「1.1 Submit, Async, and Yield」](05-async-execution-policy.en.md#11-submit-async-and-yield)).
 If it fails after the request has gone out, only a side effect is
 left remotely and the caller receives a failure.
 
@@ -413,6 +415,10 @@ left remotely and the caller receives a failure.
 - In an implementation that hands work off between threads, state
   between pieces of work isn't carried through thread-bound storage.
 
+## Shared Queue And Owner Serialization
+
+Owner-FIFO structural count/byte rejection is distinct from host shared-cap wait. [Receive and Dispatch Loop](46-internal-dispatch-loop.en.md) owns permit acquisition/fairness; [Payload Ownership](50-internal-message-ownership.en.md) owns retained-lease lifetime.
+
 ---
 
-[Internal structure table of contents](README.en.md) · [Previous: 1. Layer Boundary And Identifier](01-layering.en.md) · [Next: 3. Application And Infrastructure Execution Separation](03-progress-isolation.en.md)
+[Internal structure table of contents](README.en.md) · [Previous: 40. Layer Boundary And Identifier](40-internal-layering.en.md) · [Next: 42. Application And Infrastructure Execution Separation](42-internal-progress-isolation.en.md)

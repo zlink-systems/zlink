@@ -20,7 +20,7 @@ C++의 HTTP 공개 계약은 이 디렉토리에서 별도 문서로 정의한�
 C++에서 갖는 **정확한 public 표면**을 고정한다.
 
 **내부 runtime 구조는 공개 계약이 아니다** —
-[internals/runtime-architecture](../../../../internals/README.ko.md)가 소유한다.
+[internals/runtime-architecture](../../../README.ko.md)가 소유한다.
 
 client connector는 [C++ Stream Connector 가이드](../../../../../cpp/guide/stream-connector/INDEX.ko.md)와
 [Stream Connector 공통 스펙](../../../stream-connector/32-stream-connector.ko.md)이 소유한다.

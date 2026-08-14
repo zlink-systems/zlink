@@ -471,12 +471,13 @@ Backpressure 대기와 재개는 binding 비동기 전송 계약의 일부다. B
 `pendingByTarget`, RID별 deque, ready ring 또는 고정 주기 polling을 두지 않는다. Binding 내부 구현에도
 Application이 설정하는 별도 retry queue 용량이나 queue-full 오류를 추가하지 않는다.
 
-Core와 binding은 대상 pipe의 수용 실패와 readiness 대기 등록 사이에서 wake를 잃지 않아야 한다. A가
-HWM에 막혀도 같은 socket의 B가 writable이면 socket-wide send-ready가 먼저 소비될 수 있으므로, binding은
-waiter를 등록한 뒤 수용을 시도하거나 등록 뒤 A pipe 상태를 다시 검사한다. A pipe의 credit 회복, detach,
-socket close와 context 종료는 기다리는 A operation을 정확히 한 번 깨운다. Timeout과 cancellation은 같은
-operation을 기존 terminal 결과로 완료한다. 이 내부 보장을 Framework가 readiness callback이나 재시도
-queue로 다시 구현하지 않는다.
+Core C ABI에는 target RID, transport pair ID·generation과 writable/terminal 상태를 전달하는 routed target
+readiness callback을 추가한다. 기존 socket-wide send-ready는 어느 RID가 회복됐는지 알 수 없으므로 이
+비동기 admission에 사용하지 않는다. Binding은 handler를 먼저 장기 등록하고 target별 pending operation을
+등록한 뒤 `DONTWAIT` submit한다. A pipe의 credit 회복은 A key만 재개하며 B의 writable 상태는 A를 깨우지
+않는다. Detach, socket close와 context 종료는 해당 key를 terminal 완료한다. Timeout과 cancellation은 같은
+operation을 기존 terminal 결과로 정확히 한 번 완료한다. Framework는 이 callback이나 pending map을 직접
+관리하지 않는다.
 
 One-way send의 비동기 완료는 Core가 complete multipart를 수용한 시점이다. Request의 비동기 operation은
 최초 수용을 기다린 뒤 기존 request/reply lifecycle을 계속 수행하며 reply 또는 기존 timeout·disconnect·
@@ -515,19 +516,21 @@ message backlog를 제한하며 process RSS나 전체 managed heap의 엄격한 
 1. Core budget option, exact accounting, application lease와 snapshot을 구현한다.
 2. Core가 connection 증가·감소에 따라 HWM을 다시 계산하도록 한다.
 3. Bindings가 CoreHwm option, retained-credit receive와 snapshot을 손실 없이 노출한다.
-4. Bindings가 최초 Core 수용 대기까지 포함하는 비동기 send/request 계약을 구현하고 언어 runtime thread와
-   socket 전체 submit lock을 점유하지 않게 한다.
-5. Framework의 공용 pending deque, RID별 retry scheduler와 고정 주기 polling을 제거하고 send·request를
+4. Core가 RID·transport pair generation·writable/terminal 상태를 전달하는 routed target readiness C ABI를
+   구현한다.
+5. Bindings가 이를 사용해 최초 Core 수용 대기까지 포함하는 비동기 send/request 계약을 구현하고 언어
+   runtime thread와 socket 전체 submit lock을 점유하지 않게 한다.
+6. Framework의 공용 pending deque, RID별 retry scheduler와 고정 주기 polling을 제거하고 send·request를
    binding 비동기 전송 API로 통합한다.
-6. Legacy completion-control API가 아직 존재하는 동안 Framework control packet을 같은 binding 비동기
+7. Legacy completion-control API가 아직 존재하는 동안 Framework control packet을 같은 binding 비동기
    전송 API와 기존 Router routed send/receive·application pump로 옮긴다.
-7. 모든 Framework와 binding 호출 경로가 이관된 통합 gate에서만 Core와 bindings의 Router completion-control
+8. 모든 Framework와 binding 호출 경로가 이관된 통합 gate에서만 Core와 bindings의 Router completion-control
    API·envelope·handler를 제거한다.
-8. Managed bindings가 runtime memory limit을 Core에 전달한다.
-9. Framework가 기존 application budget을 제거하고 lease를 job 수명과 연결한다.
-10. Core·bindings·Framework와 perf 도구의 monitor HWM 입력을 byte로 통일하고 legacy count 진단 필드를
+9. Managed bindings가 runtime memory limit을 Core에 전달한다.
+10. Framework가 기존 application budget을 제거하고 lease를 job 수명과 연결한다.
+11. Core·bindings·Framework와 perf 도구의 monitor HWM 입력을 byte로 통일하고 legacy count 진단 필드를
    제거한다.
-11. Perf test로 profile 하한·상한, completion 진행성과 end-to-end backpressure를 검증한다.
+12. Perf test로 profile 하한·상한, completion 진행성과 end-to-end backpressure를 검증한다.
 
 ## 12. 공통 완료 조건
 
@@ -554,6 +557,7 @@ message backlog를 제한하며 process RSS나 전체 managed heap의 엄격한 
 - Send·request·Framework control은 binding의 같은 비동기 최초 수용 계약을 사용한다.
 - A RID의 backpressure 대기는 같은 socket의 B·C·D operation과 언어 runtime thread를 막지 않는다.
 - A가 막히고 B가 writable인 상태에서도 A의 readiness wake가 유실되지 않는다.
+- Core target-ready event는 실제 회복된 RID와 transport pair generation을 식별한다.
 - 대상 pipe의 credit 회복·detach, socket close, context 종료와 timeout·cancellation은 대기 operation을
   정확히 한 번 재개하거나 terminal 완료한다.
 - Framework에는 `pendingByTarget`, RID별 deque, ready ring 또는 고정 주기 submit polling이 없다.
