@@ -181,6 +181,31 @@ success, ownership of the received part moves to the caller, which closes it
 exactly once with `zlink_msg_close()`. No received-part ownership moves on
 failure.
 
+### 4.1 Exact-target raw submit
+
+```c
+ZLINK_EXPORT zlink_submit_result_t zlink_dealer_send_transport_pair_part(
+  void *dealer_,
+  const zlink_routed_submit_target_t *target_,
+  zlink_msg_t *part_,
+  zlink_send_flags_t flags_,
+  zlink_part_flag_t part_flag_);
+```
+
+`target_` is a value returned by `zlink_select_routed_submit_target()` on the
+same DEALER. Core validates once that RID, transport-pair ID, and generation
+identify the same currently connected application pipe and submits only to
+that pipe. HWM returns `ZLINK_SUBMIT_BACKPRESSURED`; detach or a stale
+generation returns `ZLINK_SUBMIT_NOT_CONNECTED`. Neither case reselects another
+pipe. Once the first part succeeds, the exact pipe fence remains through FINAL.
+An intermediate or final failure rolls back the whole staged record and closes
+the sequence, so no partial record is visible to the peer.
+Each part call has its own public API scope, so a binding holds its own
+socket-local attempt gate only while making one non-blocking multipart attempt
+to prevent another binding submit from interleaving. It releases the gate
+before waiting for readiness after `BACKPRESSURED`. This adds neither a new
+Core multipart API nor a public FIFO contract.
+
 ## 5. Raw request submit
 
 ```c
@@ -206,6 +231,29 @@ delivered to `handler_`. A failed submit does not invoke the handler. Ownership
 of callback `parts_` and every message moves to the callback, which releases
 them exactly once. On timeout and other terminal outcomes,
 `zlink_request_result_t` identifies the result.
+
+Use this API for an exact-target request:
+
+```c
+ZLINK_EXPORT zlink_submit_result_t zlink_dealer_request_transport_pair_part(
+  void *dealer_,
+  const zlink_routed_submit_target_t *target_,
+  zlink_msg_t *part_,
+  zlink_send_flags_t flags_,
+  zlink_part_flag_t part_flag_,
+  uint32_t timeout_ms_,
+  zlink_reply_handler_fn handler_,
+  void *userdata_);
+```
+
+Target validation, the multipart fence, and failure rollback match the exact
+raw submit. Core registers pending correlation and the timeout lifecycle before
+the request envelope can become visible on the wire. A failed final submit
+removes that pending entry and its completion reservation without invoking the
+handler. After a successful submit, a fast reply cannot arrive before
+correlation registration. A binding makes one first-part-through-FINAL request
+attempt under the same short socket-local gate as raw send and releases the
+gate before waiting.
 
 ## 6. Raw record receive
 
@@ -245,6 +293,13 @@ This sends a reply part for a `ZLINK_DEALER_MESSAGE_REQUEST` record.
 token for every part. A successful `ZLINK_PART_FINAL` completes the reply for
 that token, which cannot then be reused.
 
+A raw reply or error reply is submitted exactly once on the completion progress lane. That
+lane is not subject to application byte HWM, manual HWM, LWM, or Core budget reservation, so
+this function does not return `ZLINK_SUBMIT_BACKPRESSURED` because of that capacity and does
+not wait for `ZLINK_POLLOUT` or a send-ready callback to retry. Connection, lifecycle,
+argument, state, and allocation failures terminate immediately with their corresponding
+`zlink_submit_result_t` at the call.
+
 ## 8. Results and readiness
 
 Submit APIs return `zlink_submit_result_t`, receive APIs return
@@ -252,7 +307,7 @@ Submit APIs return `zlink_submit_result_t`, receive APIs return
 [errno map](../04-errno-map.en.md) defines the mapping between each result and
 `zlink_errno()`.
 
-DEALER `ZLINK_POLLIN` means that a raw or request/reply record can be received.
-`ZLINK_POLLOUT` and `zlink_send_ready_handler()` indicate that retrying a
-backpressured submit is worthwhile; they do not guarantee that the next submit
-will succeed.
+DEALER `ZLINK_POLLIN` means that a raw or request/reply record can be received. For ordinary
+sends and requests, `ZLINK_POLLOUT` and `zlink_send_ready_handler()` indicate that retrying a
+backpressured submit is worthwhile; they do not guarantee that the next submit will succeed.
+This readiness contract does not apply to raw replies.

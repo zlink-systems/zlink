@@ -3,7 +3,7 @@ title: "C++ Bindings Final Structure"
 ---
 
 <!-- bindings-nav:start -->
-[Spec index](../README.md) | [Previous: .NET](../dotnet/README.md) | [Next: Java](../java/README.md)
+[Spec index](../README.en.md) | [Previous: .NET](../dotnet/README.en.md) | [Next: Java](../java/README.en.md)
 <!-- bindings-nav:end -->
 
 # C++ Bindings Final Structure
@@ -72,9 +72,9 @@ depend on.
 - C++ uses installed headers, RAII classes, concrete values, and opaque implementation state as its natural boundaries.
 
 - C++20 is the bindings library's minimum supported baseline.
-- The bindings library may provide an `async_result_t<T>`-based completion object and callback submit, but it does not own a coroutine awaiter, a framework handler executor, or a framework dispatcher.
-- A framework coroutine wraps bindings' completion object or callback completion at the framework's execution boundary.
-- The per-language async execution surface baseline follows the [bindings async execution surface policy](../async-coroutine-policy.md).
+- The bindings library provides move-only `async_result_t<T>` for direct `co_await`, but it owns no coroutine executor, framework handler executor, or framework dispatcher.
+- A framework coroutine awaits the same object directly and uses an optional promise hook only to hand off its serial turn and ambient context.
+- The per-language async execution surface baseline follows the [bindings async execution surface policy](../async-coroutine-policy.en.md).
 
 ## Repository layout
 
@@ -215,7 +215,7 @@ conventions, headers, RAII facades, move semantics, and concrete value
 types.
 
 `.NET`'s file list is not copied into this document as-is. `.NET`'s single
-baseline is the [.NET bindings blueprint](../dotnet/README.md),
+baseline is the [.NET bindings blueprint](../dotnet/README.en.md),
 specifically its Contract Folder Layout and Runtime Folder Layout
 sections. This C++ README defines only the C++ projection of those
 categories.
@@ -235,7 +235,7 @@ under `src/Runtime/`, but the public contract owner stays in its category.
 The finished C++ binding makes the public contract visible without adding
 an interface-only layer. A user starts at `<zlink.hpp>` and uses the
 following map to find the owning contract header. The .NET baseline's
-source-of-truth detail lives in the [.NET bindings blueprint](../dotnet/README.md); this document keeps only the C++ projection.
+source-of-truth detail lives in the [.NET bindings blueprint](../dotnet/README.en.md); this document keeps only the C++ projection.
 
 | Area | Public objects and role | Owning contract header |
 |------|-------------------|----------------|
@@ -407,19 +407,51 @@ artifact. The finished binding therefore keeps the following build rules.
 - Data-plane `recv`, routed recv, subscribe, and subscription-event receive use caller-provided output storage (e.g., `received_t&`, `topic_message_t&`, `subscription_event_t&`).
 - `message_t::from(...)` copies the caller's bytes independently. When a caller-owned buffer must be handed to a message without a copy, use the advanced API overload `external_message_t::from(span, free_fn, hint)`. This overload entrusts the buffer to the message, and calls `free_fn(data, hint)` exactly once when the message releases the buffer.
 - send, routed send, publish, request, reply, SPOT operations, and Actor location/session operations return a move-only fluent builder.
-- A builder's start method takes only a target identity, topic, channel, routing id, or request sequence. Payload, flag, timeout, callback, and async submit choices happen at the builder stage.
+- A builder's start method takes only a target identity, topic, channel, routing id, or request sequence. Payload, flag, timeout, and async submit choices happen at the builder stage.
 - A SPOT channel-targeted operation uses `send_to_channel(...)` and `request_to_channel(...)`. SPOT topic publish keeps `publish(topic)` as-is.
 - A handler registration method uses the `set_..._handler` name. For example, send readiness uses `set_send_ready_handler(...)`, raw STREAM packet handling uses `set_packet_handler(...)`, a monitor event uses `set_monitor_handler(...)`, and SPOT dispatch uses `set_dispatch_handler(...)`.
 - An `on_...` name is not a public registration method in the finished C++ API — it is reserved for an internal or protected hook when needed.
 - No single-payload shortcut overload is added under the same name as an operation's start method. `send(message)`, `send(routing_id, message)`, `publish(topic, message)`, `send_to_channel(channel, message)`, `send_to_spot(..., message)` are not public contract members. A caller uses `send(...).message(message).submit()`.
 - A multipart payload accumulates via repeated `message(...)` calls. A `messages(...)` convenience method is allowed only when it delegates to the same builder contract and is declared in `Contracts/`.
 - A Dealer socket does not expose protocol envelope helpers such as `request_frame(...)` or `reply(request_token, parts)`. Dealer can start a request with `request()`, but has no API-level peer routing id, so it cannot reply to an arbitrary token.
-- No operation-start overload family such as `send_no_wait`, `publish_with_flags`, `request_async` is added. Keep one operation name, and let the builder absorb variants. The per-language name of the terminal builder method follows the [bindings async execution surface policy](../async-coroutine-policy.md).
+- No operation-start overload family such as `send_no_wait`, `publish_with_flags`, `request_async` is added. Keep one operation name, and let the builder absorb variants. The per-language name of the terminal builder method follows the [bindings async execution surface policy](../async-coroutine-policy.en.md).
+- Routed send and routed request `async()` create their completion object and
+  operation-owned multipart record before invoking any
+  Core submit. The binding fixes the exact Core-selected `(RID, transport pair id,
+  generation)` as the operation key, inserts that key into its pending set, and then
+  attempts only exact-target `DONTWAIT` submits.
+- Every C++ outbound path on the same native handle shares a binding-owned record-
+  attempt gate. One native attempt calls the existing exact-target part API from its
+  first part through `FINAL`, then immediately releases the gate. It never holds the
+  gate while waiting for readiness or resuming a continuation.
+- Backpressure waits only the affected operation. Outside the short record attempt it
+  occupies no socket-wide submit lock, calling thread, coroutine executor, or Framework scheduler, so operations for
+  other targets on the same socket can reach Core independently. Only Core's exact-
+  target writable or terminal event resumes that key; stale-generation events are
+  ignored. The internal ready-target ring prevents one target from monopolizing
+  another, but this adds no new public strict-FIFO guarantee for concurrent calls to
+  the same RID.
+- A send snapshots the socket `SNDTIMEO` once when the operation starts and fixes that
+  absolute deadline. `SNDTIMEO=0` still performs one exact-target `DONTWAIT` attempt.
+  A request's original absolute deadline is likewise never extended during admission wait. Target
+  detach, socket/context termination, deadline, and `async_result_t::cancel()` race to
+  one terminal completion. A request installs Core reply correlation before final wire
+  admission; after admission, Core's reply lifecycle owns completion.
+- A send builder's `.flags(dontwait).submit()` is the one-shot immediate call
+  and returns `false` immediately on backpressure. Only `async()` uses
+  binding-owned event-driven admission wait; no managed callback terminal or
+  `get`/`wait` compatibility surface is provided.
+- The terminal for a raw ROUTER/`received_t` reply is the synchronous one-shot
+  `reply_submit_operation_t::submit() -> void`. It submits a terminal reply or
+  error reply to the HWM-free completion lane with one native call. HWM
+  backpressure is not a reply result; `NOT_CONNECTED`, `TERMINATED`,
+  `INVALID_ARGUMENT`, and other non-HWM submit failures are delivered
+  immediately as `submit_error_t`.
 - No standard-name bypass or operation alias such as `on_send_ready(...)`, `on_packet(...)`, `on_event(...)` is kept. A call site uses the standard public contract directly, not a layered alias.
 
 ## 64-bit byte HWM and the monitoring contract
 
-- HWM and the Auto HWM planning unit are expressed as `byte_count_t`.
+- Socket HWM and the context Core HWM memory limit and budget are expressed as `byte_count_t`.
 - This value type holds only `uint64_t` bytes, and reveals its unit through the `bytes(...)` constructor function and the `bytes()` accessor function.
 - The old `message_count_t` is not kept as an alias or an adapter.
 - `0` means unlimited for HWM, and the manual default is `4,096,000 bytes`.
@@ -430,26 +462,76 @@ options.send_hwm (zlink::byte_count_t::bytes (send_limit)); // Sets the send pip
 options.recv_hwm (zlink::byte_count_t::bytes (0));          // 0 means unlimited receive HWM.
 
 auto context_options = context.options ();
-context_options.auto_hwm_msg_unit_bytes (
-  zlink::byte_count_t::bytes (planning_unit)); // The 64-bit byte input for the Auto HWM calculation.
+context_options.core_hwm_memory_limit_bytes (
+  zlink::byte_count_t::bytes (memory_limit));
+context_options.core_hwm_budget_bytes (
+  zlink::byte_count_t::bytes (core_budget));
+context_options.core_hwm_profile (zlink::auto_hwm_profile::balanced);
+
+const auto snapshot = context.core_hwm_budget_snapshot ();
+context.reset_core_hwm_budget_metrics ();
 ```
 
-`context_options.auto_hwm_msg_unit_bytes(...)` sets a planner input, not a
-calculated result. Core multiplies the selected message-slot count by the
-planning unit to choose the planned byte HWM. A direction on which the caller
-uses `send_hwm(...)` or `recv_hwm(...)` becomes a manual override and is no
-longer changed by automatic HWM recalculation.
+For `core_hwm_memory_limit_bytes(...)` and `core_hwm_budget_bytes(...)`, `0`
+means that the explicit input or manual Core budget is absent. The binding does
+not calculate profile ratios, connection counts, or per-queue HWM values; it
+passes the exact `uint64_t` values to Core context options.
+The C++ binding supplies no runtime memory hint. Input precedence is manual Core
+budget, explicit memory limit, then Core fallback. If an explicit input exceeds
+a finite hard limit Core detected, the binding preserves `EINVAL` and does not
+clamp it.
+The `core_hwm_budget_snapshot_t` value projects Core ABI v1 fields and flags without
+unit conversion, and `core_hwm_budget_snapshot()` owns ABI-version and structure-size
+initialization. A direction on which the caller uses `send_hwm(...)` or
+`recv_hwm(...)` remains a manual override.
+
+The snapshot includes configured/runtime/resolved memory limits,
+configured/effective budgets, planned/applied/manual-reserved HWM, Core-queue/
+application/current/peak/provisional accounted bytes, completion current/peak/
+pending and total-messaging values, monitor/instance aggregates, application/
+completion queue counts, `outstanding_application_lease_count`,
+`retired_queue_count`, `deferred_origin_credit_bytes`, oversize/blocked/aggregate
+flags, `budget_generation`, and `measurement_epoch`. Metrics reset preserves
+current, pending, queue-count, and those three owner-lifecycle gauges, rebases
+budgeted and completion peaks to their current values, clears epoch counters,
+and increments `measurement_epoch`.
 
 The C++ binding does not decide send or receive admission. Core returns
 backpressure when the accounted bytes retained by a pipe reach the applied HWM,
 and the binding carries that result and timeout through the existing operation
 builder contract. `0 bytes` means unlimited; it does not mean one message.
 
-The monitor snapshot projects the Core monitoring ABI v2. The planned,
-applied, deferred, and in-flight HWM fields use a `_bytes` suffix and
-`uint64_t`. A deferred field's validity is provided as a separate boolean.
-Pending message and profile slot values stay count diagnostics and never
-share a name with a byte field.
+`socket.monitor_open(events, monitor_hwm_bytes)` and
+`socket_monitor_t::open(socket, events, monitor_hwm_bytes)` take a
+`byte_count_t`. Zero selects the Core monitor default; a positive value is
+forwarded unchanged as the exact monitor queue byte HWM. There is no
+message-count overload or alias.
+
+The `recv_retained(received_t&)` and
+`subscribe_retained(topic_message_t&)` entrypoints used by a Framework backend
+preserve the existing
+framing and attach the Core HWM budget lease returned with each physical payload
+part to the output object. No public lease is created for a ROUTER's synthetic
+routing-id frame or a SUB's internal topic frame. Multipart receive collects all
+non-null per-part leases under one private output owner and releases every lease
+already received if the receive fails partway through.
+
+Copies of `received_t` or `topic_message_t` share that private owner. Closing one
+copy clears that copy's parts and ownership, but does not return Core credit while
+another copy remains. The final copy returns every lease exactly once when it is
+closed or destroyed. Copying only a `message_t` part does not extend the lease;
+after preserving only a payload copy, the caller closes the output object to
+return credit. Ordinary `recv(received_t&)`, `subscribe(topic_message_t&)`,
+`recv(message_t&)`, and `subscribe_part(...)` retain no hidden lease and keep
+their existing immediate dequeue-credit behavior. Passing the same output
+object to the next retained receive clears that
+copy's prior parts and lease ownership before the binding starts native receive.
+
+The legacy `auto_hwm_msg_unit_bytes` and slot, size-cap, and connection-bucket
+planner properties are removed without aliases. The monitor snapshot projects
+Core monitoring ABI v3 byte-pending fields, keeping pending-message counts
+separate from `snd_pending_bytes` and `rcv_pending_bytes`; context-wide budget, accounting,
+and queue counts come from `core_hwm_budget_snapshot_t`.
 
 ## Feature scope
 
@@ -474,6 +556,11 @@ A C++ caller never has to reason about cleaning up a C handle.
 - A move-only resource class is preferred over shared ownership of a mutable handle.
 - A message value supports an efficient move, and an explicit copy when a copy is requested.
 - The data-plane receive and subscribe paths use caller-provided storage.
+- A `received_t` or `topic_message_t` filled by `recv_retained` or
+  `subscribe_retained` owns the shared lifetime of the received parts and their
+  Core HWM budget leases. Ordinary receive returns credit immediately. A copied
+  part alone does not own a lease; closing or dropping the final retained output
+  object returns the credit.
 - A service control/admission receive path, such as Actor join request receive, may use an optional or a typed result return when that's clearer for a C++ caller — but it must still distinguish no-data from a hard receive failure.
 - A callback keeps the native callback lifetime and the user callable's lifetime internally consistent.
 
@@ -524,5 +611,5 @@ types.
 
 - C++ exposes `spot_node_t::send_to_actor(actor_ref_t)` and `spot_node_t::request_to_actor(actor_ref_t)`, which take a resolved Actor ref.
 - `send_to_actor`, once submit succeeds, transfers ownership of one or more message parts, and completes once the Actor owner's mailbox takes them over.
-- `request_to_actor`, once submit succeeds, transfers ownership of the request part and delivers the reply part the Actor handler produced, as a callback or an awaitable result.
+- `request_to_actor`, once submit succeeds, transfers ownership of the request part and delivers the reply part the Actor handler produced as a native-awaitable result.
 - C++ must not resurrect the removed Discovery route table or resolver API as a compatibility helper.

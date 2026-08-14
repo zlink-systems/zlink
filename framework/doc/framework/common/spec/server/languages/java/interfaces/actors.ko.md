@@ -47,9 +47,11 @@ public interface ZLinkActorRelocationAdapter<TActor extends ZLinkActor> {
 전에 검사한다. Mismatch는 startup configuration error다.
 `preserveStateWith(null)`은 callback 실행 중 configuration error로 거부한다.
 
-Actor adapter는 application state를 최대 64 MiB의 opaque `byte[]`로 capture·restore한다. Public state DTO, `TState`,
-`stateContractId`, state class와 `ZLinkMessage`를 relocation surface에 두지 않는다. Framework는 capture가 정상
-완료한 배열을 즉시 복사한다. Capture가 반환한 배열은 adapter가 계속 소유하며 completion 뒤 재사용하거나
+Actor adapter는 application state를 opaque `byte[]`로 capture·restore하며 relocation adapter 전용
+size 상한을 두지 않는다. Framework는 등록한 Relocation Store의 일반 blob·whole-payload 제한에
+맞춰 필요한 chunking을 수행한다. Public state DTO, `TState`, `stateContractId`, state class와
+`ZLinkMessage`를 relocation surface에 두지 않는다. Framework는 capture가 정상 완료한 배열을 즉시
+복사한다. Capture가 반환한 배열은 adapter가 계속 소유하며 completion 뒤 재사용하거나
 변경해도 저장 payload가 바뀌지 않는다. Restore에는 호출마다 저장 payload의 fresh defensive copy를 전달하고
 adapter는 stage가 끝난 뒤 그 배열을 보관하지 않는다. 길이가 0인 배열도 유효한 보존 state이며
 `recreateOnRelocation()`을 선택한 것으로 해석하거나 restore를 생략하지 않는다. Adapter는 owner claim, relocation envelope, generation과 recovery phase를
@@ -99,9 +101,10 @@ User Spot member Actor만 Spot과 current member 전체를 하나의 aggregate�
 옮긴다. User Spot membership 자체는 relocation blocker가 아니며 participant 하나라도
 `disableRelocation()`을 선택했거나 호환 target을 확보할 수 없을 때만 해당 Actor unit 또는
 `SpotWide` aggregate를 차단한다. Relocation을 비활성화한 participant는
-`BLOCKED/RELOCATION_DISABLED`, target·capacity·reservation 부재는
-`BLOCKED/TARGET_UNAVAILABLE`, application version·type·state 보존 adapter capability 불일치는
-`BLOCKED/STATE_INCOMPATIBLE`다. Actor unit은 target factory와 restore를 끝내고 accepted journal을
+`BLOCKED/RELOCATION_DISABLED`다. 요청한 application version과 등록 factory/type·state 보존 adapter
+eligibility를 만족하는 target·capacity·reservation 부재는 `BLOCKED/TARGET_UNAVAILABLE`이다. Target 선택 뒤
+전달한 state schema/type adapter 불일치는 `BLOCKED/STATE_INCOMPATIBLE`다. Actor unit은 target factory와
+restore를 끝내고 accepted journal을
 application handler가 실행하지 않은 staging queue로 준비한 뒤 `NEW_OWNER` CAS를 수행한다. 이 CAS는
 owner, authority owner generation과 current [Spot](../../../../01-glossary.ko.md#spot)을
 target execution shell로 원자적으로 바꾼다. Infrastructure relocation은 application

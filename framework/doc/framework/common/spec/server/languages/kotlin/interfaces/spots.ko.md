@@ -117,8 +117,9 @@ Kotlin은 Java `ZLinkSpotRelocationAdapter<TSpot>`를 그대로 구현한다. Op
 
 State를 보존하는 whole User Spot relocation은 Spot 자체에 Spot adapter를, member Actor마다 Actor adapter를 사용한다.
 State를 보존하는 Instance Spot relocation은 Spot adapter를 사용한다. Same-node operation, `disableRelocation()`과 `recreateOnRelocation()`에서는
-adapter를 호출하지 않는다. Capture `ByteArray`는 최대 64 MiB이며 adapter가 completion까지 소유한다. Java
-runtime은 completion에서 복사한다.
+adapter를 호출하지 않는다. Capture `ByteArray`에는 relocation adapter 전용 size 상한이 없다. Java runtime은
+completion에서 복사하고, 등록한 Relocation Store의 일반 blob·whole-payload 제한에 맞춰 필요한 chunking을
+수행한다. Adapter는 completion까지 배열을 소유한다.
 Restore는 호출마다 fresh defensive copy를 받고 completion 뒤 보관하지 않는다. Empty `ByteArray`도 유효한
 보존 state다. Factory는 target attempt마다 fresh Spot instance를 만들며 source나 이전 attempt instance를
 재사용하지 않는다. 같은 attempt의 restore는 반복될 수 있다. Capture exception은 source authority와 admission을
@@ -403,8 +404,9 @@ schedule은 application의 Redis·database·service 같은 외부 저장소에 �
 public Spot ID와 ObjectGeneration의 stateless shell을 준비하고 Spot authority를 먼저 바꾼다. 각 Actor는
 자기 current turn을 끝낸 순서대로 queue·accepted journal·Actor timer와 함께 독립적으로 이전한다.
 Target shell은 authority 전에는 public lookup에 노출하지 않는다. Stale source route는 operation identity,
-generation, deadline, correlation과 reply route를 보존해 relay한다. Actor queue seal부터 target
-admission까지 1초는 운영 목표이며 초과해도 relocation을 취소하거나 rollback하지 않는다.
+generation, deadline, correlation과 reply route를 보존해 relay한다. Actor queue seal부터 one-way
+cutover submit의 성공 또는 실패 terminal까지 source-local 1초는 운영 목표이며 초과해도 relocation을
+취소하거나 rollback하지 않는다.
 
 Factory configure callback에서 `relocationReadiness(...)`를 생략하면
 `ANY_TURN_BOUNDARY`다. `APPLICATION_SIGNALED`은 `SPOT_WIDE`에서만 허용한다.

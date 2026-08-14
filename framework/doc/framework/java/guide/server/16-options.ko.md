@@ -53,8 +53,7 @@ Spring 컨텍스트가 시작된 뒤에 builder를 다시 호출하는 표면은
 | `setDefaultRequestTimeout(Duration)` | request reply 대기 상한 | 30초 |
 | `addHandlersFromPackageOf(Class)` | handler 탐색 시작점 | 탐색하지 않음 |
 | `configureMetadata()` | metadata 전달 정책 | — |
-| `configureDispatch()` | 진단 수준과 message flow(§4) | `ERRORS` |
-| `configureInboundDispatch()` | host 전체 수신 상한(§3.3) | 자동 계산 |
+| `configureDispatch()` | 진단 수준·message flow(§4), Core HWM·Application job queue(§3.3) | `ERRORS`, 두 profile 모두 `BALANCED` |
 | `configureLocations()` | location store 동작(§5) | §5 표 |
 | `configureNetwork()` | listener의 bind · advertise host 기본값 | bind `0.0.0.0` |
 | `configureWorkers()` | CPU worker 풀(§3.2) | §3.2 표 |
@@ -124,24 +123,24 @@ handler 실행기를 정하므로 뒤에 부른 쪽이 앞을 덮는다.
 **큐가 차면 submit이 즉시 실패한다.** 기다리거나 호출자 스레드에서 실행하는 정책은
 없다. 큐 길이를 늘리기 전에 worker에 넘기는 작업의 실행 시간을 먼저 본다.
 
-### 3.3 host 전체 수신 상한
+### 3.3 Core HWM과 Application job queue
 
-`configureInboundDispatch()`가 돌려주는 `ZLinkInboundDispatchOptions`의 값이다.
-연결마다 두는 상한(§3.1)과 성격이 다르다 — 아직 handler 실행을 시작하지 못한 message의
-**payload 합계**에 적용한다.
+`configureDispatch()`가 돌려주는 `ZLinkDispatchOptions`의 값이다. Core HWM은
+ordinary queue의 accounted byte를 제한하고, Application job queue는 handler 시작을 기다리는
+job 수를 host instance 전체에서 제한한다.
 
 | 메서드 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
-| `setApplicationHwmBytes(long)` | host 전체 수신 상한 byte | 생략하면 자동 계산 |
-| `setApplicationHwmProfile(ZLinkApplicationHwmProfile)` | 자동 계산이 쓸 비율 | `BALANCED` |
-| `setProcessMemoryLimitBytes(long)` | 자동 계산의 기준이 되는 프로세스 메모리 상한 | 감지한 값 |
+| `setCoreHwmMemoryLimitBytes(long)` | Core budget 계산에 전달할 memory limit hint | 지정 안 함 |
+| `setCoreHwmBudgetBytes(long)` | profile보다 우선하는 manual Core budget | 지정 안 함(Auto) |
+| `setCoreHwmProfile(ZLinkCoreHwmProfile)` | Core Auto-budget profile | `BALANCED` |
+| `setApplicationJobQueueProfile(ZLinkApplicationJobQueueProfile)` | queued job Auto profile | `BALANCED` |
+| `setMaxQueuedApplicationJobs(long)` | 정확한 manual queued-job 상한 | 지정 안 함(Auto) |
 
-profile은 `COMPACT` · `LOW_LATENCY` · `BALANCED` · `THROUGHPUT` 넷이다.
-`setApplicationHwmBytes(0)`은 **제한 없음**이고, 음수는 거절한다.
-`setProcessMemoryLimitBytes`는 양수만 받는다. 둘 다 `ZLinkConfigurationException`이다.
-
-> 이 단위와 상한은 계약으로 확정되었을 뿐 **아직 runtime이 사용하지 않는다.**
-> [4. Backpressure §6](04-backpressure.ko.md#6-framework-runtime-적용-범위)을 본다.
+Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한은
+`1..2,147,483,647`이며 `0`은 unlimited가 아니라 startup configuration error다. 두 profile은
+같은 label을 사용하지만 독립된 enum과 계산이다. 포화 동작과 운영값 측정은
+[4. Backpressure](04-backpressure.ko.md)와 [공통 perf §23](../../../common/perf/README.ko.md#23-core-hwm과-application-job-queue-운영값-측정)이 다룬다.
 
 ## 4. 진단
 
@@ -173,11 +172,6 @@ profile은 `COMPACT` · `LOW_LATENCY` · `BALANCED` · `THROUGHPUT` 넷이다.
 | `setStoreFailureGrace(Duration)` | store 장애를 견디는 기간 | 30초 |
 | `setRouteCacheMaxAge(Duration)` | 경로 캐시 유효 기간 | 15초 |
 | `setMessageFollowDuration(Duration)` | 이동 중 대상으로 온 message를 따라 보내는 기간 | 30초 |
-| `setMaxActiveOutboundRelocations(int)` | 동시에 내보낼 relocation 수 | 64 |
-| `setMaxActiveInboundRelocations(int)` | 동시에 받아들일 relocation 수 | 64 |
-| `setMaxConcurrentRelocationCaptures(int)` | 동시에 capture할 수 | 8 |
-| `setMaxConcurrentRelocationRestores(int)` | 동시에 restore할 수 | 8 |
-| `setMaxRelocationPayloadInFlightBytes(long)` | 이동 중 payload 총량 상한 | 256 MiB |
 
 > **owner lease 기본값이 세 언어에서 모두 다르다.** 갱신 주기 대비 TTL 배수가 Java는
 > 6배(5초 : 30초), C++은 3배(5초 : 15초), Node는 1.5배(10초 : 15초)다. 같은 mesh에

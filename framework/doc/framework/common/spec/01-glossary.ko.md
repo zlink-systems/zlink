@@ -573,7 +573,7 @@ public readonly record struct ZLinkActorJoinOperationId(
 | 공개 구성 | `High`와 `Low`를 함께 비교해야 한다. Application이 각 field에 별도 의미를 부여하지 않는다. |
 | 생성·관리 | Framework가 Actor Join registration에서 생성하고 모든 completion retry에 같은 값을 전달한다. |
 | 전달 | `Accepted`, `Rejected`, `Failed` Actor Join completion에 포함한다. Cross-node `Accepted`에서는 Relocation manifest의 별도 field에도 저장한다. |
-| 수명 | Same-node outcome, `Rejected`와 commit 전 `Failed`는 current process lifetime까지만 retry를 보장한다. Cross-node `Accepted`는 manifest가 유지되는 동안 durable at-least-once completion에 사용한다. |
+| 수명 | Same-node outcome, `Rejected`와 relay-ready accepted 전 `Failed`는 current process lifetime까지만 retry를 보장한다. Cross-node `Accepted`는 manifest가 유지되는 동안 durable at-least-once completion에 사용한다. |
 
 <a id="deferred-join-barrier"></a>
 ### Deferred Join barrier
@@ -657,7 +657,7 @@ byte 상한이 없다. `Defer()`를 호출한 뒤 seal하기 전에 도착한 me
 | .NET 표기 | Public type 없음 |
 | 공개 구성 | Message payload와 original operation identity, `ObjectGeneration`과 queue ordering에 필요한 Framework metadata를 유지한다. 내부 storage 형식은 공개하지 않는다. |
 | 생성·관리 | Source runtime이 relocation seal 뒤 도착한 message를 보관한다. 일반 application lane의 count·byte reservation을 relocation 전용 상한으로 다시 적용하지 않는다. Transport, deadline과 cancellation이 정하는 별도 제한은 그대로 적용한다. |
-| 수명 | Commit 전 abort에서는 source queue로 원래 순서에 맞춰 되돌리고, commit 성공 뒤에는 target queue로 relay한 뒤 제거한다. |
+| 수명 | Relay-ready reply가 accepted 상태가 되기 전 명시적 abort에서는 source queue로 원래 순서에 맞춰 되돌린다. 그 뒤에는 cutover submit 결과와 관계없이 source를 복원하지 않고 target handoff 또는 Message Follow가 소유한 뒤 제거한다. |
 
 <a id="reply-correlation"></a>
 ### Reply correlation
@@ -896,18 +896,22 @@ queue도 비워지지 않으므로, remote의 지연은 별도 신호가 아니�
 family별 send timeout까지 capacity를 기다린다. Logical Multicast를 시작한 뒤에는 target별
 capacity 부족을 public 결과나 publish 전용 monitoring으로 집계하지 않는다.
 
-<a id="application-hwm"></a>
-### Application HWM
+<a id="core-hwm-budget"></a>
+### Core HWM budget
 
-Framework가 이미 수신했지만 application handler가 아직 처리를 끝내지 않은 payload의 byte 합계를
-제한하는 host 단위 값이다. Queue에서 기다리는 payload와 handler가 처리 중인 payload를 모두 센다.
-이 합계가 상한에 도달하면 Framework는 새 application message 수신만 멈춘다. 이미 받은 job과
-별도 Completion connection의 request reply·bounded Framework service control과 Core의 send-ready callback
-처리는 계속하므로 message를 버리지 않고 송신 측에
-[backpressure](#backpressure)가 전달된다.
+Framework host instance가 Core의 방향별 queue HWM에 전달하는 byte budget이다. Framework는
+`CoreHwmMemoryLimitBytes`, `CoreHwmBudgetBytes`, `CoreHwmProfile`을 Core에 그대로 전달하고
+Core가 실제 budget과 queue별 HWM을 계산한다. 이 이름의 `CoreHwmProfile`은 Application job queue의
+동명 profile과 독립된 type과 계산이다.
 
-`HWM`은 high-water mark의 약자다. 이 문서에서 별도 범위를 붙이지 않은 Application HWM은 Core
-socket의 connection별 HWM과 다른 Framework host 전체 제한을 뜻한다.
+<a id="application-job-queue"></a>
+### Application job queue
+
+Framework host instance가 application callback 시작 전까지 보유하는 공유 supply permit queue다.
+Pre-receive에 terminal reply/error completion으로 식별되는 supply만 이 permit을 우회한다. 그 밖의 application, control, malformed ordinary
+ingress는 receive/claim 전에 permit을 확보한다. Application record의 permit은 실제 handler 첫 instruction에서
+반환하고, control·malformed record는 내부 처리를 마친 직후 반환한다. Capacity가 없으면 cancellable wait로
+backpressure를 전파하며 일반 capacity reject, drop, polling, busy-spin이나 무제한 우회 queue를 만들지 않는다.
 
 <a id="timed-out"></a>
 ### DeadlineExceeded
@@ -1108,7 +1112,7 @@ relocation에 등록된 temporary queue가 있는지 확인한다. 있으면 mes
 | 형태 | `RelocationId`, target attempt, object 종류·ID와 `ObjectGeneration`에 연결된 Framework queue. Relocation 전용 record 수·byte 상한은 없다. |
 | .NET 표기 | Public queue type 없음 |
 | 공개 구성 | Target identity, original operation identity, deadline, payload와 reply route를 보존한다. `SpotWide`에서는 Spot과 member Actor를 같은 relocation group에 넣되 record마다 실제 target을 보존한다. |
-| 수명 | Target이 Restore 요청을 수락할 때 등록한다. Commit과 필요한 callback 뒤 실제 object queue로 작업을 옮기고 제거한다. Commit 전 abort에서는 실행하지 않고 폐기한다. |
+| 수명 | Target이 Restore 요청을 수락할 때 등록한다. Owner commit과 필요한 callback 뒤 실제 object queue로 작업을 옮기고 제거한다. Relay-ready reply가 accepted 상태가 되기 전 abort에서만 실행하지 않고 폐기하며 source를 복원한다. |
 
 Temporary queue에서 실제 object queue로 옮길 때 dispatch 전환을 atomic하게 처리한다. 전환
 전에 수락한 message는 temporary queue에 남고, 전환 뒤 수락한 message는 실제 queue로 바로
@@ -2027,7 +2031,9 @@ ActorId·ObjectGeneration과 새 target의 MeshName·NodeRid가 들어간다. Se
 Session identity, binding generation과 relocation identity를 확인하고 route를 바꾼 뒤 held
 message를 제출하고 seal을 해제한다.
 
-이 update에는 reply가 없으며 정상 흐름은 command 45 `sessionRelocationRouted`를 사용하지 않는다.
+이 update에는 reply가 없으며 reserved command 45 `sessionRelocationRouted`를 보내거나 accept하지 않는다.
+Relay-ready reply가 accepted 상태가 되기 전 실패에서는 source coordinator가 command 44 abort를 one-way로 보내 matching seal의 held
+message만 source route로 제출하고 seal을 해제한다.
 `SessionRelocationSealTimeout`의 기본값은 3,000 ms다. 그 안에 exact update가 오지 않으면
 Session owner는 physical Session을 닫고 binding과 held state를 정리한다. Timeout 뒤 late 또는
 duplicate update는 Warning만 기록하고 무시한다. 정확한 처리 순서와 Message Follow 조건은

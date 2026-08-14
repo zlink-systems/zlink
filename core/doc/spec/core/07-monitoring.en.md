@@ -129,13 +129,14 @@ typedef void (*zlink_monitor_handler_fn)(
 typedef zlink_monitor_event_t zlink_socket_monitor_event_t;
 typedef zlink_monitor_handler_fn zlink_socket_monitor_handler_fn;
 
-#define ZLINK_MONITOR_STATUS_ABI_VERSION 2u
+#define ZLINK_MONITOR_STATUS_ABI_VERSION 3u
 
 ZLINK_EXPORT void zlink_monitor_ignore_handler (const zlink_monitor_event_t *event_,
                                                 void *userdata_);
 
 typedef struct zlink_socket_monitor_open_options_t {
   zlink_socket_monitor_event_mask_t events;
+  uint64_t monitor_hwm_bytes;
 } zlink_socket_monitor_open_options_t;
 
 typedef struct zlink_monitor_status_t {
@@ -146,19 +147,12 @@ typedef struct zlink_monitor_status_t {
   zlink_monitor_status_detail_mask_t detail_flags;
   uint64_t snd_pending_msgs;
   uint64_t rcv_pending_msgs;
+  uint64_t snd_pending_bytes;
+  uint64_t rcv_pending_bytes;
   uint32_t auto_hwm_enabled;
   uint32_t auto_hwm_profile;
   uint32_t auto_hwm_role;
   uint32_t auto_hwm_policy_class;
-  uint64_t auto_hwm_unit_budget_bytes;
-  uint32_t auto_hwm_size_cap;
-  uint64_t auto_hwm_socket_message_slots;
-  uint32_t auto_hwm_connection_bucket_enabled;
-  uint32_t auto_hwm_connection_bucket_count;
-  uint32_t auto_hwm_connection_bucket_index;
-  uint32_t auto_hwm_connection_bucket_hwm_4k;
-  uint32_t auto_hwm_connection_bucket_hysteresis_retained;
-  uint64_t auto_hwm_effective_message_bytes;
   uint64_t auto_hwm_planned_sndhwm_bytes;
   uint64_t auto_hwm_planned_rcvhwm_bytes;
   uint64_t auto_hwm_applied_sndhwm_bytes;
@@ -190,15 +184,23 @@ ZLINK_EXPORT zlink_recv_result_t zlink_socket_monitor_recv(
   void *monitor,
   zlink_socket_monitor_event_t *event_out,
   zlink_recv_flags_t flags);
-ZLINK_EXPORT zlink_recv_result_t zlink_socket_monitor_recv_v2(
-  void *monitor,
-  zlink_socket_monitor_event_t *event_out,
-  zlink_recv_flags_t flags);
 ZLINK_EXPORT zlink_config_result_t zlink_monitor_status(
   void *monitor,
   zlink_monitor_status_t *status_out);
 ZLINK_EXPORT zlink_close_result_t zlink_monitor_close(void **monitor_p);
 ```
+
+`monitor_hwm_bytes` is the single byte budget applied to the monitor source
+worker and both directions of its internal monitor PAIR. A positive value is
+used unchanged as the exact SNDHWM, RCVHWM, and worker admission limit. Zero is
+not unlimited; it selects the Core default computed by
+`checkedMultiply(4096, sizeof(socket_monitor_internal_event_t) + sizeof(zlink_msg_t))`.
+The worker admits the actual accounted bytes of each event record, not an event
+count, and applies only the same one-oversize-record-on-empty rule. Monitor
+queues are excluded from application Auto HWM water-filling.
+The context budget snapshot counts each unique physical ypipe direction of the
+internal monitor PAIR once; it does not add the reader and writer endpoint
+option copies separately.
 
 `ZLINK_SOCKET_MONITOR_EVENT_*` names are canonical event-mask names;
 `ZLINK_EVENT_*` are shorter names with the same numeric values.
@@ -207,30 +209,49 @@ The `ZLINK_DISCONNECT_*` macros are ABI-preserving aliases for the matching
 `events == 0`
 selects no event, while `EVENT_ALL` selects every bit. A raw socket monitor
 status has `source_kind == ZLINK_MONITOR_SOURCE_SOCKET`. Optional fields whose
-bits are absent from `detail_flags` are zero. When no connection bucket applies,
-`auto_hwm_connection_bucket_index` is `UINT32_MAX`.
+bits are absent from `detail_flags` are zero.
 `abi_version` is `ZLINK_MONITOR_STATUS_ABI_VERSION`, and `struct_size` is the
-number of bytes in the returned ABI version. Version 2 replaces the former
-32-bit count HWM fields with 64-bit byte fields; the old layout is not accepted
-as a compatibility layout.
+number of bytes in the returned ABI version. Version 3 adds `snd_pending_bytes`
+and `rcv_pending_bytes` and removes message-unit, slot, size-cap, and
+connection-bucket diagnostic fields. Older layouts are not accepted as
+compatibility layouts.
+
+`zlink_socket_monitor_open`, its open-options structure, and its status
+structure replace the existing names in place with the current 0.11.1 layout.
+There is no caller size/version negotiation or parallel versioned entrypoint.
+`abi_version` and `struct_size` diagnose the current layout returned by Core;
+they are neither caller inputs nor compatibility-negotiation values. If an HWM
+range or calculation or an allocation prevents monitor creation, open fails
+with `NULL` and `errno`. Core adds no separate `RESOURCE_LIMIT` config result or
+binding error type.
 
 Each detail bit makes exactly the following fields valid. A field belongs to
 one bit only, and every field in a row is zero when that bit is absent.
 
 | detail bit | valid fields |
 |---|---|
-| `ZLINK_MONITOR_STATUS_DETAIL_SND_PENDING_MSGS` | `snd_pending_msgs` |
-| `ZLINK_MONITOR_STATUS_DETAIL_RCV_PENDING_MSGS` | `rcv_pending_msgs` |
-| `ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUDGET` | `auto_hwm_enabled`, `auto_hwm_profile`, `auto_hwm_role`, `auto_hwm_policy_class`, `auto_hwm_unit_budget_bytes`, `auto_hwm_size_cap`, `auto_hwm_socket_message_slots`, `auto_hwm_connection_bucket_enabled`, `auto_hwm_connection_bucket_count`, `auto_hwm_connection_bucket_index`, `auto_hwm_connection_bucket_hwm_4k`, `auto_hwm_connection_bucket_hysteresis_retained`, `auto_hwm_effective_message_bytes`, `auto_hwm_planned_sndhwm_bytes`, `auto_hwm_planned_rcvhwm_bytes`, `auto_hwm_last_recalc_ms`, `auto_hwm_last_recalc_reason`, `auto_hwm_send_blocked_ratio_ppm`, `auto_hwm_deferred_sndhwm_bytes`, `auto_hwm_deferred_rcvhwm_bytes`, `auto_hwm_deferred_sndhwm_valid`, `auto_hwm_deferred_rcvhwm_valid` |
+| `ZLINK_MONITOR_STATUS_DETAIL_SND_PENDING_MSGS` | `snd_pending_msgs`, `snd_pending_bytes` |
+| `ZLINK_MONITOR_STATUS_DETAIL_RCV_PENDING_MSGS` | `rcv_pending_msgs`, `rcv_pending_bytes` |
+| `ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUDGET` | `auto_hwm_enabled`, `auto_hwm_profile`, `auto_hwm_role`, `auto_hwm_policy_class`, `auto_hwm_planned_sndhwm_bytes`, `auto_hwm_planned_rcvhwm_bytes`, `auto_hwm_last_recalc_ms`, `auto_hwm_last_recalc_reason`, `auto_hwm_send_blocked_ratio_ppm`, `auto_hwm_deferred_sndhwm_bytes`, `auto_hwm_deferred_rcvhwm_bytes`, `auto_hwm_deferred_sndhwm_valid`, `auto_hwm_deferred_rcvhwm_valid` |
 | `ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUFFERS` | `auto_hwm_applied_sndhwm_bytes`, `auto_hwm_applied_rcvhwm_bytes`, `auto_hwm_effective_sndbuf`, `auto_hwm_effective_rcvbuf`, `snd_bytes_in_flight`, `rcv_bytes_in_flight`, `minimum_core_message_charge_bytes`, `oversize_message_admission_count`, `oversize_message_admission_max_bytes` |
 
 The planned fields report the current automatic policy result. The applied
 fields report the byte HWM currently used by the socket, including manual
 overrides. A deferred value is meaningful only when its matching `_valid`
 field is non-zero. `snd_bytes_in_flight` and `rcv_bytes_in_flight` are
-directional pipe totals at snapshot time. Pending message fields remain counts.
-The minimum charge and oversize fields explain byte accounting without
-requiring an allocator lookup for every message.
+directional pipe totals at snapshot time. In version 3, `snd_pending_bytes` and
+`rcv_pending_bytes` expose those same send and receive in-flight totals. Some
+sources estimate the receive total and count. Pending message fields remain
+counts. Pending byte fields use the same byte unit as admission accounting, but
+the diagnostic values themselves are not admission inputs. The minimum charge
+and oversize fields explain byte accounting without requiring an allocator
+lookup for every message.
+
+`auto_hwm_send_blocked_ratio_ppm` is the fraction, in parts per million, of
+first send-admission attempts in the measurement epoch that were blocked by an
+application-pipe HWM. Retries after the same submission wakes are not counted
+again; transport-I/O waits, the completion lane, and context-aggregate usage
+are excluded.
 
 The socket monitor provides bind, accept, connect, disconnect, handshake,
 protocol-error, and close events. Handler mode and receive mode are mutually
@@ -249,23 +270,26 @@ that drains each event without taking further action.
 
 `connection_id` identifies one physical transport attempt within the current
 process. When Application and Completion transports form one Framework peer,
-both events use the same `transport_pair_id` and `transport_pair_generation`,
-and `transport_lane` distinguishes the two lanes. For an unpaired transport,
-the pair fields are zero and `transport_lane` is the Application value. A pair
-id is not a global identifier that survives process restarts.
+physical lifecycle events for each lane use the same `transport_pair_id` and
+`transport_pair_generation`, and `transport_lane` distinguishes the lanes.
+`CONNECTION_READY`, however, aggregates a pair whose two lanes are ready as one
+public ready transport. It emits exactly one ready edge per pair id and
+generation and counts that pair once in `value`. Learning the routing ID at
+different times on the two lanes does not split the pair into two ready
+transports. For an unpaired transport, the pair fields are zero and
+`transport_lane` is the Application value. A pair id is not a global identifier
+that survives process restarts.
 
-For `CONNECTION_READY`, `value` is the current count of ready transports
+For `CONNECTION_READY`, `value` is the current count of public ready transports
 reported by the monitor source. Use
 `ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE` in `flags` to identify the
 transition that increased the count. A ready-count event without this flag is
 a count snapshot, not a new connection-ready edge.
 
-`zlink_socket_monitor_recv` writes only the event prefix that predates the
-appended physical identity fields, so callers built against the previous
-layout remain safe. Callers that need `connection_id` or transport pair
-information must use `zlink_socket_monitor_recv_v2`. Both functions read from
-the same event stream, and the caller must provide an output buffer that
-matches the selected function contract.
+`zlink_socket_monitor_recv` writes the complete current 0.11.1
+`zlink_socket_monitor_event_t` layout. The caller must provide an output buffer
+for that current layout. Core exposes neither a separate receive entry point
+for the previous event prefix nor a version-negotiation path.
 
 ## 2. Ordering, overflow, and thread safety
 

@@ -419,7 +419,6 @@ typedef enum zlink_option_t {
   ZLINK_OPT_TCP_NODELAY                = 0x3031,
   ZLINK_OPT_ROUTE_VALUE_MAX_SIZE       = 0x3032,
   ZLINK_OPT_RID_DUPLICATE_POLICY       = 0x3033,
-  ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES    = 0x3034,
   ZLINK_OPT_SUBMIT_RETRY_MODE          = 0x3037,
   ZLINK_OPT_SUBMIT_RETRY_TIMEOUT       = 0x3038,
   ZLINK_OPT_SUBMIT_RETRY_ATTEMPTS      = 0x3039
@@ -440,26 +439,29 @@ They apply to raw sockets and discovery.
 | `ZLINK_OPT_RCVBUF` | Kernel receive buffer size in bytes (`int`; -1 = keep OS default, >=0 = request size from OS) |
 | `ZLINK_OPT_SNDHWM` | Directional send high water mark in accounted bytes (`uint64_t`; default `4,096,000`; `0` = unlimited) |
 | `ZLINK_OPT_RCVHWM` | Directional receive high water mark in accounted bytes (`uint64_t`; default `4,096,000`; `0` = unlimited) |
-| `ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES` | Planning unit in bytes used to calculate the automatic byte HWM (`uint64_t`; `0` = socket-type default) |
 | `ZLINK_OPT_MAXMSGSIZE` | Maximum inbound message size in bytes (`int64_t`; -1 = unlimited) |
 
-The three `uint64_t` options require exactly `sizeof(uint64_t)` bytes in
+The two HWM `uint64_t` options require exactly `sizeof(uint64_t)` bytes in
 `zlink_set_option()` and `zlink_get_option()`. A four-byte value is rejected
-with `ZLINK_CONFIG_INVALID_ARGUMENT`; it is not interpreted as the former
-message-count contract. The automatic planning unit is not the observed
-message size. It multiplies the profile and connection-bucket slot result to
-produce the planned byte HWM. Pipe admission accounts the actual retained
-bytes.
+with `ZLINK_CONFIG_INVALID_ARGUMENT`. The removed socket option value `0x3034`
+is also unknown and fails with `ZLINK_CONFIG_INVALID_ARGUMENT` and `EINVAL`.
+Pipe admission accounts the actual retained bytes.
 
-HWM is applied to each directional pipe. Once the accounted bytes reach the
+HWM is applied to each HWM-controlled application directional pipe. The
+DEALER/ROUTER completion progress lane carries only terminal replies and error
+replies and applies no automatic HWM, manual `SNDHWM` or `RCVHWM`, LWM, or Core
+budget reservation. Once the accounted bytes reach the
 limit, further writes wait until the receiver returns enough byte credit. An
 empty pipe may admit one message whose accounted size is larger than its HWM,
 so a finite HWM does not reject every legal large message. The message must
 still satisfy `ZLINK_OPT_MAXMSGSIZE`. This exception admits at most one such
-message before further writes wait. When `ZLINK_OPT_MAXMSGSIZE` is unlimited,
-the exception applies only to one complete message. An unfinished multipart
-still follows the ordinary byte HWM, so `MORE` frames cannot accumulate
-without a bound.
+message before further writes wait. Even when `ZLINK_OPT_MAXMSGSIZE` is
+unlimited, the exception applies only to one complete message whose total
+accounted size is known at admission: a single-part or total-known message. An
+incremental multipart whose final total is unknown follows the ordinary byte
+HWM from its first `MORE` frame, so frames cannot accumulate without a bound.
+Core adds neither known-total metadata nor a whole-transaction reservation for
+this exception.
 
 Core normally batches credit at `ceil(hwm_bytes / 2)`. If a sender actually
 reaches its HWM, it first checks the monotonic bytes already read by its peer.
@@ -681,8 +683,7 @@ ZLINK_EXPORT zlink_config_result_t zlink_set_option (void *handle_,
 Configures a common option. `handle_` may be a raw socket or discovery. The `option_` parameter identifies
 the option (e.g. `ZLINK_OPT_SNDHWM`, `ZLINK_OPT_LINGER`). The `optval_`
 pointer supplies the value and `optvallen_` specifies its size in bytes.
-`ZLINK_OPT_SNDHWM`, `ZLINK_OPT_RCVHWM`, and
-`ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES` require an exact `uint64_t` value.
+`ZLINK_OPT_SNDHWM` and `ZLINK_OPT_RCVHWM` require an exact `uint64_t` value.
 
 Configuration timing for raw sockets and discovery follows each option contract.
 
@@ -708,7 +709,7 @@ ZLINK_EXPORT zlink_config_result_t zlink_get_option (void *handle_,
 ```
 
 Retrieves the current value of a common option. `handle_` may be a raw socket or
-discovery. The three HWM byte-count options require a `uint64_t` output buffer
+discovery. The two HWM byte-count options require a `uint64_t` output buffer
 and an exact `*optvallen_` of `sizeof(uint64_t)` on input. Any other size,
 including a larger scratch buffer or a legacy 4-byte one, fails with
 `ZLINK_CONFIG_INVALID_ARGUMENT` and `errno == EINVAL` instead of truncating or
@@ -969,6 +970,161 @@ succeed, and the first retry after the notification may still fail with
 **Returns:** `ZLINK_HANDLER_OK` on success; otherwise a `zlink_handler_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
 
 **See also:** `zlink_send_part`, `zlink_send_part_rid`, `zlink_publish_part`
+
+---
+
+### Routed-target send readiness
+
+```c
+typedef enum zlink_routed_send_ready_state_t {
+  ZLINK_ROUTED_SEND_WRITABLE = 1,
+  ZLINK_ROUTED_SEND_TERMINAL = 2
+} zlink_routed_send_ready_state_t;
+
+typedef struct zlink_routed_send_ready_event_t {
+  zlink_routing_id_t peer_rid;
+  uint64_t transport_pair_id;
+  uint64_t transport_pair_generation;
+  zlink_routed_send_ready_state_t state;
+  int terminal_errno;
+} zlink_routed_send_ready_event_t;
+
+typedef struct zlink_routed_submit_target_t {
+  zlink_routing_id_t peer_rid;
+  uint64_t transport_pair_id;
+  uint64_t transport_pair_generation;
+} zlink_routed_submit_target_t;
+
+typedef void (*zlink_routed_send_ready_handler_fn) (
+  void *subject_, const zlink_routed_send_ready_event_t *event_,
+  void *userdata_);
+
+ZLINK_EXPORT zlink_handler_result_t zlink_routed_send_ready_handler (
+  void *socket_, zlink_routed_send_ready_handler_fn handler_,
+  void *userdata_);
+
+ZLINK_EXPORT zlink_submit_result_t zlink_select_routed_submit_target (
+  void *socket_, const zlink_routing_id_t *router_rid_or_null_,
+  zlink_routed_submit_target_t *target_out_);
+
+```
+
+The binding registers this long-lived handler before accepting asynchronous
+routed operations on the socket. `peer_rid` is borrowed for the callback only.
+When an HWM-blocked application pipe regains credit, Core emits `WRITABLE` with
+that pipe's exact RID and transport-pair identity. Pipe detach, socket close,
+and context termination emit `TERMINAL` for the same identity with the cause in
+`terminal_errno`. An event for another RID or a stale generation cannot wake
+the current target. The event only indicates that a retry is worthwhile, so
+the callback never performs a blocking submit; the binding scheduler retries
+the same key with `DONTWAIT`. Socket-wide send-ready is not used for routed
+asynchronous admission.
+
+`zlink_select_routed_submit_target()` returns the exact value identity a
+binding uses before registering a pending operation. ROUTER requires a non-null
+`router_rid_or_null_` and snapshots that RID's admitted application pipe.
+DEALER requires NULL and commits one weighted-selection step across every
+connected positive-weight application pipe. The candidate set includes pipes
+temporarily inactive because of HWM. A blocked A therefore is not silently
+rerouted to B; an operation that selected A waits only for A's exact readiness.
+
+The returned value is not a pipe-lifetime, HWM-credit, or Core-resource lease.
+Connection state and credit may change immediately after selection, so the
+exact `DONTWAIT` submit may still return `BACKPRESSURED` or a terminal route
+result. A binding registers the handler first, inserts pending state for the
+selected value, and only then performs the exact submit. A stale pair
+generation never retargets to another connection. Only DEALER and ROUTER are
+supported; other socket types return `ZLINK_SUBMIT_NOT_SUPPORTED`.
+
+A binding makes one first-part-through-FINAL `DONTWAIT` attempt with the
+existing exact-target part APIs while holding a short socket-local
+complete-record attempt gate. It releases that gate immediately before waiting
+for readiness after `BACKPRESSURED`. The Core part sequence keeps the exact
+pair fence selected by the first part through FINAL and rolls back the whole
+record on an intermediate failure, so no prefix becomes visible to the peer.
+The private binding gate is not a public FIFO, a separate queue capacity, or a
+new multipart Core ABI.
+
+The request part API installs reply correlation and its timeout lifecycle
+before the first frame can become visible on the wire; a failed submit removes
+both and does not invoke the handler. After `ZLINK_SUBMIT_OK`, the handler runs
+exactly once with a reply or terminal result.
+
+For `WRITABLE`, `terminal_errno` is zero. A `TERMINAL` event reports
+`ENOTCONN` for application-pipe detach or disconnect, `ECANCELED` for socket
+close, and `ETERM` for context termination. When terminal causes race, only
+the first terminal event that becomes final is delivered.
+
+### Retained-credit receive
+
+```c
+typedef struct zlink_hwm_budget_lease_t zlink_hwm_budget_lease_t;
+
+ZLINK_EXPORT int zlink_recv_with_hwm_budget_lease (
+  void *socket_, zlink_msg_t *message_,
+  zlink_hwm_budget_lease_t **lease_out_, int flags_);
+ZLINK_EXPORT zlink_recv_result_t zlink_recv_part_with_hwm_budget_lease (
+  void *s_, const zlink_routing_id_t **source_rid_out_,
+  zlink_msg_t *part_out_, zlink_hwm_budget_lease_t **lease_out_,
+  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
+ZLINK_EXPORT zlink_recv_result_t
+zlink_dealer_recv_part_with_hwm_budget_lease (
+  void *dealer_, uint8_t *message_type_out_, uint64_t *request_seq_out_,
+  zlink_msg_t *part_out_, zlink_hwm_budget_lease_t **lease_out_,
+  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
+ZLINK_EXPORT zlink_recv_result_t
+zlink_router_recv_part_v2_with_hwm_budget_lease (
+  void *router_, const zlink_routing_id_t **source_node_rid_out_,
+  uint64_t *request_seq_out_, uint64_t *transport_pair_id_out_,
+  uint64_t *transport_pair_generation_out_, zlink_msg_t *part_out_,
+  zlink_hwm_budget_lease_t **lease_out_,
+  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
+ZLINK_EXPORT zlink_recv_result_t
+zlink_subscribe_part_with_hwm_budget_lease (
+  void *sub_, const zlink_routing_id_t **source_rid_out_,
+  char *topic_id_buf_, size_t topic_id_capacity_,
+  size_t *topic_id_len_out_, zlink_msg_t *part_out_,
+  zlink_hwm_budget_lease_t **lease_out_,
+  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
+ZLINK_EXPORT void zlink_hwm_budget_lease_release (
+  zlink_hwm_budget_lease_t **lease_p_);
+```
+
+Each variant preserves the framing, metadata, and return values of its existing
+receive counterpart. When one successful call returns one caller-visible
+physical payload frame, only that frame's accounting owner moves atomically
+from the queue to an opaque lease. These APIs do not introduce a new multipart
+transaction: a part variant is called once per existing part and returns one
+lease per call. Dealer message type and request sequence, Router source RID,
+request sequence and transport pair, SUB topic, and raw `STREAM` source RID
+remain the Core-parsed results of the corresponding existing API.
+
+A successful call that returns no physical application-queue charge sets
+`*lease_out_` to `NULL`. This includes Core-synthesized raw `ROUTER` and
+`STREAM` routing-ID frames and local `XPUB` subscription events. Dealer and
+Router envelopes, SUB topic metadata, credential frames, and handshake frames
+are not caller-visible payloads; Core consumes them immediately and does not
+expose their charge as a lease. A subsequent successful call that returns the
+physical payload returns a non-NULL lease.
+
+The lease retains the origin directional queue id, generation, and accounted
+bytes without immediately publishing writer credit. Ownership moves from
+`core_queue_accounted_bytes` to `application_accounted_bytes`, while their sum
+in `current_accounted_bytes` remains unchanged. Ordinary receive keeps its
+existing dequeue-credit behavior. The internal command worker enabled for a
+retained-receive socket processes deferred credit only; without a receive
+handler it does not consume caller-visible payload.
+
+The lease pointer must not be copied into multiple owners, but ownership may
+move between threads. `zlink_hwm_budget_lease_release()` is safe for `NULL` and
+for `*lease_p_ == NULL`; after returning ownership it sets `*lease_p_` to
+`NULL`, so repeating release through the same pointer variable has no effect.
+Release returns credit to the exact origin generation once. If that origin
+detaches or advances generation first, its retired record remains, and release
+of an old lease changes neither credit nor wake state for the new generation.
+The final old lease removes the retired record. Context shutdown prevents new
+lease transfers; forced termination invalidates remaining leases and cleans
+their counters once. A later caller release remains safe.
 
 ---
 

@@ -79,7 +79,7 @@
 | [stream-socket.ko.md](../core/doc/internals/stream-socket.ko.md) | STREAM 소켓 내부 구조, WS/WSS 최적화, 런타임 기본값 |
 | [socket-option-defaults.ko.md](../core/doc/internals/socket-option-defaults.ko.md) | 코드 기준 소켓 옵션 실효 기본값 |
 | [threading-model.ko.md](../core/doc/internals/threading-model.ko.md) | 스레딩 및 동시성 모델 |
-| [Framework 내부 구조](../framework/doc/framework/common/internals/README.ko.md) | Framework runtime 내부 구조와 책임 경계 |
+| [Framework 내부 구조](../framework/doc/framework/common/spec/README.ko.md) | Framework runtime 내부 구조와 책임 경계 |
 | [design-decisions.ko.md](../core/doc/internals/design-decisions.ko.md) | 설계 결정 기록 |
 
 ## 빌드 및 개발 (building/)

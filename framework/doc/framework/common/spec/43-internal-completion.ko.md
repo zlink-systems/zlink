@@ -1,15 +1,17 @@
 ---
-title: "4. operation 완료 확정 — 한 번만 확정한다"
+title: "43. operation 완료 확정 — 한 번만 확정한다"
 ---
 
-# 4. operation 완료 확정 — 한 번만 확정한다
+# 43. operation 완료 확정 — 한 번만 확정한다
 
-[내부 구조 목차](README.ko.md) · [이전: 3. application과 infrastructure 실행 분리](03-progress-isolation.ko.md) · [다음: 5. 이동 중 message 연속성](05-relocation-continuity.ko.md)
+> **문서 성격 — 공개 규범 스펙이 아닌 내부 설계 문서.** 이 장은 연결된 공개 계약을 만족시키는 구현 구조를 설명한다. Application이 관찰하는 동작을 추가하거나 변경하지 않는다.
+
+[내부 구조 목차](README.ko.md) · [이전: 42. application과 infrastructure 실행 분리](42-internal-progress-isolation.ko.md) · [다음: 44. 이동 중 message 연속성](44-internal-relocation-continuity.ko.md)
 
 > **이 장이 답하는 것** — 응답·timeout·취소·종료·연결 끊김이 동시에 도착할 때 무엇이 caller를 완료시키는가.
 >
-> **계약 소유** — 오류 kind는 [Framework 오류 모델](../spec/32-framework-error-model.ko.md)이,
-> 수락 이후 재전송 금지는 [Transport liveness](../spec/29-transport-liveness.ko.md)가 소유한다.
+> **계약 소유** — 오류 kind는 [Framework 오류 모델](32-framework-error-model.ko.md)이,
+> 수락 이후 재전송 금지는 [Transport liveness](29-transport-liveness.ko.md)가 소유한다.
 > 이 장은 그 계약을 만족시키는 **구조**와, 완료 경쟁에서 나타나는 실패를 다룬다.
 
 응답을 기다리는 호출 하나에 대해 응답·timeout·취소·종료·연결 끊김이 **동시에** 도착할
@@ -113,7 +115,7 @@ sequenceDiagram
 대상으로 다시 보내면 두 번 실행될 수 있다.
 
 **결정 — 수락 이후에는 runtime이 자동으로 다시 보내지 않는다.** 연결이 끊겨도
-마찬가지다([Transport liveness 「5. Ready와 장애 판정」](../spec/29-transport-liveness.ko.md#5-ready와-장애-판정)).
+마찬가지다([Transport liveness 「5. Ready와 장애 판정」](29-transport-liveness.ko.md#5-ready와-장애-판정)).
 Application이 새 호출을 시작할 수는 있으며, 그때 중복 실행 위험은 application이
 판단한다.
 
@@ -128,7 +130,7 @@ Application이 새 호출을 시작할 수는 있으며, 그때 중복 실행 �
 
 응답을 기다리지 않는 호출은 **이 process의 송신 경로가 message를 수락한 시점**에
 정상 완료한다. 원격 queue가 받았는지, handler가 실행했는지는 이 결과로 알 수 없다
-([Framework API 「12. Spot, Actor와 STREAM owner」](../spec/06-framework-api.ko.md#12-spot-actor와-stream-owner)).
+([Framework API 「12. Spot, Actor와 STREAM owner」](06-framework-api.ko.md#12-spot-actor와-stream-owner)).
 
 "로컬 수락"과 "전송 수락"은 서로 다른 사건이 아니다. 이 제품에서 송신 경로는 곧
 socket의 송신 큐이므로 같은 완료 경계를 가리킨다. 문서와 코드 주석에서는 send acceptance
@@ -161,6 +163,10 @@ socket의 송신 큐이므로 같은 완료 경계를 가리킨다. 문서와 �
 - 완료 확정 방식이 runtime 안에서 하나다.
 - 취소·시간 초과·종료 분류가 오류 메시지 문자열에 의존하지 않는다.
 
+## Completion과 shared capacity
+
+Pre-receive에 terminal reply/error completion으로 식별되는 supply만 우회한다. Completion이 아닌 control과 새 request의 permit은 [수신과 dispatch loop](46-internal-dispatch-loop.ko.md), payload lease는 [Payload 소유권](50-internal-message-ownership.ko.md)을 따른다.
+
 ---
 
-[내부 구조 목차](README.ko.md) · [이전: 3. application과 infrastructure 실행 분리](03-progress-isolation.ko.md) · [다음: 5. 이동 중 message 연속성](05-relocation-continuity.ko.md)
+[내부 구조 목차](README.ko.md) · [이전: 42. application과 infrastructure 실행 분리](42-internal-progress-isolation.ko.md) · [다음: 44. 이동 중 message 연속성](44-internal-relocation-continuity.ko.md)

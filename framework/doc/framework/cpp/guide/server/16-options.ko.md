@@ -55,8 +55,7 @@ return app.run (argc, argv);
 | `set_message_follow_duration (...)` | 이동 중인 대상으로 온 message를 따라 보내는 기간 | 30초 |
 | `handlers ()` | handler group 등록 | — |
 | `metadata ()` | metadata 전달 정책 | — |
-| `configure_dispatch ()` | 진단 수준과 message flow(§4) | `errors` |
-| `configure_inbound_dispatch ()` | host 전체 수신 상한(§3.2) | 자동 계산 |
+| `configure_dispatch ()` | 진단 수준·message flow(§4), Core HWM·Application job queue(§3.2) | `errors`, 두 profile 모두 `balanced` |
 | `configure_locations ()` | location store 동작(§5) | §5 표 |
 | `add_location_store (...)` | 위치 결정 store | 없으면 단일 node 구성 |
 | `services ()` | DI 등록([18. DI 컨테이너](18-di-container.ko.md)) | — |
@@ -101,22 +100,24 @@ return app.run (argc, argv);
 `mailbox_*` 두 값은 **시작 전에만** 설정한다. `0`은 무제한이 아니라 Framework profile이
 정한 유한 기본값을 고른다.
 
-### 3.2 host 전체 수신 상한
+### 3.2 Core HWM과 Application job queue
 
-`configure_inbound_dispatch ()`가 돌려주는 표면이다. 연결마다 두는 상한과 성격이 다르다 —
-아직 handler 실행을 시작하지 못한 message의 **payload 합계**에 적용한다.
+`configure_dispatch ()`가 돌려주는 `dispatch_options_t`의 값이다. Core HWM은
+ordinary queue의 accounted byte를 제한하고, Application job queue는 handler 시작을 기다리는
+job 수를 host instance 전체에서 제한한다.
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
-| `set_application_hwm_bytes (...)` | host 전체 상한 byte | 지정 안 하면 profile로 자동 계산 |
-| `set_application_hwm_profile (...)` | 자동 계산에 쓸 성향 | `balanced` |
-| `set_process_memory_limit_bytes (...)` | 자동 계산의 기준 memory | container·cgroup 상한 |
+| `set_core_hwm_memory_limit_bytes(...)` | Core budget 계산에 전달할 memory limit hint | 지정 안 함 |
+| `set_core_hwm_budget_bytes(...)` | profile보다 우선하는 manual Core budget | 지정 안 함(Auto) |
+| `set_core_hwm_profile(...)` | Core Auto-budget profile | `balanced` |
+| `set_application_job_queue_profile(...)` | queued job Auto profile | `balanced` |
+| `set_max_queued_application_jobs(...)` | 정확한 manual queued-job 상한 | 지정 안 함(Auto) |
 
-`set_process_memory_limit_bytes`에 `0`을 넣으면 시작 단계에서 거부된다. 무제한을
-뜻하려면 값을 지정하지 않는다.
-
-> 이 단위와 상한은 계약으로 확정되었을 뿐 **아직 runtime이 사용하지 않는다.**
-> [4. Backpressure §6](04-backpressure.ko.md#6-framework-runtime-적용-범위)을 본다.
+Memory limit과 Core budget은 양수만 허용한다. Manual queued-job 상한은
+`1..2,147,483,647`이며 `0`은 unlimited가 아니라 startup configuration error다. 두 profile은
+같은 label을 사용하지만 독립된 enum과 계산이다. 포화 동작과 운영값 측정은
+[4. Backpressure](04-backpressure.ko.md)와 [공통 perf §23](../../../common/perf/README.ko.md#23-core-hwm과-application-job-queue-운영값-측정)이 다룬다.
 
 ## 4. 진단
 
@@ -144,11 +145,6 @@ return app.run (argc, argv);
 | `store_failure_grace` | store 장애를 견디는 기간 | 30초 |
 | `route_cache_max_age` | 경로 캐시 유효 기간 | 15초 |
 | `message_follow_duration` | 이동 중 대상으로 온 message를 따라 보내는 기간 | 30초 |
-| `max_active_outbound_relocations` | 동시에 내보낼 relocation 수 | 64 |
-| `max_active_inbound_relocations` | 동시에 받아들일 relocation 수 | 64 |
-| `max_concurrent_relocation_captures` | 동시에 capture할 수 | 8 |
-| `max_concurrent_relocation_restores` | 동시에 restore할 수 | 8 |
-| `max_relocation_payload_in_flight_bytes` | 이동 중 payload 총량 상한 | 256 MiB |
 | `spot_router_channels` | Spot mesh 이름과 route channel 이름이 다를 때의 대응 | 같은 이름 사용 |
 
 **`owner_lease_ttl`은 `owner_lease_renew_interval`보다 넉넉히 크게 둔다.** 갱신 한 번이
@@ -203,7 +199,7 @@ STREAM socket은 같은 profile에서도 MeshNode보다 작은 상한을 쓴다.
   무제한이다. 자동 계산에 맡기려면 값을 지정하지 않는다.
 - **timeout을 0으로 넣었더니 시작이 실패한다** → 정상이다.
   `set_default_request_timeout`은 0 이하를 거부한다.
-- **`process_memory_limit_bytes`에 0을 넣었더니 거부된다** → 무제한을 뜻하려면 값을
+- **`set_core_hwm_memory_limit_bytes(0)`을 호출했더니 거부된다** → 무제한을 뜻하려면 값을
   지정하지 않는다. `0`은 잘못된 값이다.
 - **lease가 자꾸 뺏긴다** → `owner_lease_ttl`이 `owner_lease_renew_interval`에 비해
   너무 짧다. 갱신 실패 한 번을 견딜 여유를 둔다.

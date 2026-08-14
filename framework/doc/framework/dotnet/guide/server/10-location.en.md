@@ -119,16 +119,13 @@ and manual connection on the same MeshNode.
 
 ## 3. Location Options
 
-`ConfigureLocations()` sets the lease, route cache, and relocation execution ceilings.
+`ConfigureLocations()` sets the lease, route-cache, and message-follow windows.
 
 ```csharp
 var location = options.ConfigureLocations();
 location.OwnerLeaseRenewInterval = TimeSpan.FromSeconds(5);
 location.OwnerLeaseTtl = TimeSpan.FromSeconds(15);
 location.MessageFollowDuration = TimeSpan.FromSeconds(30);
-location.MaxActiveOutboundRelocations = 64;
-location.MaxActiveInboundRelocations = 64;
-location.MaxRelocationPayloadInFlightBytes = 256L * 1024 * 1024;
 ```
 
 | Option | Default | Meaning |
@@ -141,9 +138,12 @@ location.MaxRelocationPayloadInFlightBytes = 256L * 1024 * 1024;
 | `StoreFailureGrace` | 30s | How long the last route decision is kept during a Store outage |
 | `RouteCacheMaxAge` | 15s | The max time before a cached route is re-checked |
 | `MessageFollowDuration` | 30s | How long the previous owner relays messages to the new owner before the move |
-| `MaxActiveOutboundRelocations` | 64 | The ceiling on relocation units a process sends out concurrently |
-| `MaxActiveInboundRelocations` | 64 | The ceiling on relocation units a process restores concurrently |
-| `MaxRelocationPayloadInFlightBytes` | 256 MiB | The ceiling on encoded payload across the whole process |
+
+Relocation has no separate participant, record, concurrency, or in-flight-byte capacity
+setting. Target staging uses the host's shared Application Job Queue reservation and runs a
+backlog larger than the live-job limit progressively. Core memory accounting, negotiated
+frame size, and Store limits still apply; see
+[Relocation Flow §5.3](../../../common/spec/28-relocation-flow.en.md#53-no-relocation-specific-capacity-limit).
 
 **The four lease values are tied together.** Breaking the following relationship is a
 startup error. Look at all four together when changing any one value.

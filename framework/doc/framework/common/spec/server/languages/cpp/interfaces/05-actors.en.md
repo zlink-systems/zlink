@@ -156,10 +156,12 @@ capture/restore the application payload. A whole User Spot relocation
 uses `spot_relocation_adapter_t<TSpot>` for the Spot root, and this
 Actor adapter for each Actor participant.
 
-`capture(...)`'s result is at most 64 MiB, and an empty vector is
-valid. Ownership of the returned byte vector moves to the Framework,
-and the byte vector passed to `restore(...)` is owned by that async
-call. If capture throws or ends as a failed task, admission is
+`capture(...)`'s result has no relocation-adapter-specific size cap, and
+an empty vector is valid. The framework performs any chunking required by
+the registered Relocation Store's ordinary blob and whole-payload limits.
+Ownership of the returned byte vector moves to the Framework, and the
+byte vector passed to `restore(...)` is owned by that async call. If
+capture throws or ends as a failed task, admission is
 restored after durable abort and source normalization. A failed
 restore's instance is discarded, and the same immutable payload is
 applied to the instance the new attempt's factory built. If the

@@ -467,20 +467,22 @@ the connection become not-ready without reconnecting after Shutdown?
 
 ### Track F — Confirm Relocation Lifecycle And Fencing Through Public Results
 
-#### RL-F1 Preserve The Source In A Preflight With Changing Capacity
+#### RL-F1 Preserve The Source On Capacity Or Availability Failure Before RelayReady Acceptance
 
 Priority: `P0`
 
-If target capacity becomes insufficient after preflight, or the target becomes unavailable, source
-admission must be restored.
+If insufficient target capacity or target unavailability is declared before the source accepts the
+RelayReady reply, source admission must be restored. After RelayReady is accepted, the CUTOVER
+submit result isn't a condition for restoring the source.
 
 **Verification question:** Does the source request succeed after a blocked Relocate in a
-target-capacity/availability race?
+target-capacity/availability race before RelayReady acceptance?
 
 - Starting condition: The target capacity's last slot can be raced against another create operation
   using an application gate.
 - Procedure: A capacity variant that starts Relocate together with a competing create, and an
-  availability variant that terminates the target process precommit, are each run.
+  availability variant that makes the target declare failure before its RelayReady reply, are each
+  run.
 - Verification: When Relocate succeeds, state exists exactly once at the target. The blocked variant
   keeps the source location and state, its follow-up request succeeds, and there is no automatic
   switch to a different target.
@@ -664,34 +666,38 @@ original order, at the target?
 Priority: `P0`
 
 Internal permit counts are not an E2E contract. The public E2E confirms that Host operations finish
-within a bound across many units and a size boundary, and do not block source admission too early.
+within a bound across many units and a provider data-chunk boundary, and do not block source
+admission too early.
 
-**Verification question:** Do 80 units and large-state variants each have exactly one success or
-`StateIncompatible` terminal?
+**Verification question:** Do 80 units and both large-state variants each have exactly one
+successful terminal?
 
 - Starting condition: 80 units of 1 MiB state, a unit with exactly 64 MiB of encoded participant
   state, and a unit one byte over are built as separate fixtures.
 - Procedure: Host Relocate is run on each fixture, collecting current locations and operation
   results.
-- Verification: Units at or below 64 MiB preserve checksum and logical length at the target. The
-  one-byte-over unit keeps source authority and is
-  `StateIncompatible` while keeping the source. Every unit and Host operation has a bounded terminal.
-- Detailed behavior: verifies [Host Maintenance §7](../spec/30-host-relocation-flow.en.md).
+- Verification: Both the 64 MiB unit and the one-byte-over unit preserve checksum and logical length
+  at the target. The one-byte-over unit is not `StateIncompatible` because of an adapter-specific
+  size cap. Every unit and Host operation has a bounded successful terminal.
+- Detailed behavior: verifies [Host Maintenance §7](../spec/30-host-relocation-flow.en.md) and
+  [Relocation Store Redis — Reference And Storage Size](../spec/23-relocation-store-redis.en.md#3-reference-and-storage-size).
 
-#### RL-F14 Restore The Source Queue Order After A Precommit Abort
+#### RL-F14 Restore The Source Queue Order After An Explicit Abort Before RelayReady Acceptance
 
 Priority: `P0`
 
-If a target reservation or restore fails before commit, frozen work and work received during the seal
-must be re-processed at the source in original order.
+If a target reservation or restore declares failure before the source accepts the RelayReady reply,
+frozen work and work received during the seal must be re-processed at the source in original order.
+After RelayReady is accepted, the source isn't restored regardless of the CUTOVER submit result.
 
-**Verification question:** After a failed Relocate, does the source process Q1, Q2, H1, H2 once each,
-in order?
+**Verification question:** After a failed Relocate before RelayReady acceptance, does the source
+process Q1, Q2, H1, H2 once each, in order?
 
 - Starting condition: The source User Spot has frozen Q1/Q2, and a target adapter failure can be
   selected with an application marker.
-- Procedure: Relocate is started, and H1/H2 are sent during the seal window. Target-reservation
-  failure and restore-failure variants are each run on fresh objects.
+- Procedure: Relocate is started, and H1/H2 are sent during the seal window. Target-reservation and
+  restore-failure variants that are declared before the RelayReady reply are each run on fresh
+  objects.
 - Verification: Relocate has a blocked or failed terminal, and the public current location is the
   source. Source handler evidence is in the order `Q1, Q2, H1, H2` with no duplicates. A follow-up
   timer also runs normally at the source.

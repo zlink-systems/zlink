@@ -313,8 +313,8 @@ The framework notifies the application of the Join result via an Actor Join
 completion callback, together with a non-zero 128-bit `OperationId`. This callback
 delivers the final result of a Join that proceeded asynchronously after the handler
 ended. `Accepted` is received by the target Actor that committed the location change.
-`Rejected` and `Failed` before commit are received by the existing source Actor. If
-the target process terminates after commit, the completion callback isn't re-run on a
+`Rejected` and `Failed` before relay-ready is accepted are received by the existing
+source Actor. If the target process terminates afterward, the completion callback isn't re-run on a
 different runtime.
 
 Before the target's `OnJoinedActor` callback finishes, the completion callback and
@@ -349,11 +349,11 @@ a cross-node `Accepted`'s relocation manifest.
 |---|---|---|
 | `Accepted` | The target Actor that committed the location change receives it. For a same-target no-op, the current Actor receives it. | Receives the current `ActorRef` and the optional reply the target User Spot's `OnActorJoin` callback returned. |
 | `Rejected` | The existing source Actor receives it. | Receives the optional reply the target User Spot's `OnActorJoin` callback returned. |
-| `Failed` | Before commit, the source Actor receives it. If it fails on the same target runtime after commit, the target Actor may receive it. If the process terminates, the callback isn't re-run on a different runtime. | Receives a typed framework error kind. |
+| `Failed` | Before relay-ready is accepted, the source Actor receives it. If it fails on the same target runtime afterward, the target Actor may receive it. If the process terminates, the callback isn't re-run on a different runtime. | Receives a typed framework error kind. |
 
 After relay-ready, the source relays cached work and sends cutover one-way. It waits for
 no relocation-completion reply and proceeds with Message Follow. An explicit target
-failure before CAS keeps the source owner. After CAS and queue opening, the target sends
+failure before relay-ready is accepted keeps the source owner. After CAS and queue opening, the target sends
 the Session route update one-way. A late or duplicate cutover or Session route update
 only records a Warning and doesn't change owner, membership, or route again.
 
@@ -372,7 +372,7 @@ it's `Rejected`, not `Failed`.
 | The durable relocation payload is missing or fails verification. | `DataLost` |
 | The Actor generation differs from the current value. | `InvalidOperation` |
 | The owner or membership fence differs, or the Actor is moving. | `Unavailable` |
-| Runtime shutdown started first and interrupted before commit. | `ShuttingDown` |
+| Runtime shutdown started first and interrupted before relay-ready was accepted. | `ShuttingDown` |
 
 `Accepted` means location and membership change was committed. It doesn't mean the
 completion callback execution has finished too. The framework runs the completion
@@ -494,7 +494,7 @@ order after the handler ends normally.
    `ingress hold`. The hold has no record-count or byte bound defined specifically
    for relocation. Once target reports the temporary queue and Restore ready, source
    relays the hold over the same ordered TCP connection. The target dispatcher puts it
-   in the same temporary queue.
+   in the temporary queue group's pre-boundary relay span.
 6. After sending the relay lane's current prefix, source sends cutover one-way on that
    connection. Later arrivals enter the post-boundary span, so mailbox drain isn't
    required. After Actor Restore, target runs the
@@ -502,10 +502,11 @@ order after the handler ends normally.
    It does so on cutover, or after a 1,000ms wait from the relay-ready reply while
    recording a Warning. Only target performs this CAS. On success target becomes owner; on failure
    the target queue doesn't open.
-7. After CAS, it calls the target Spot's `OnJoinedActor` and sends the source Spot
-   `OnLeaveActor` one-way. It then calls the Actor's Join completion callback. Saved
-   existing Actor work enters the real Actor queue first and relayed work follows, then
-   dispatch opens. Target sends no completion reply to source.
+7. After CAS, saved Actor work, pre-boundary relay, and remaining temporary work enter the
+   real Actor queue in order, then the regular route is installed while dispatch stays
+   closed. It calls the target Spot's `OnJoinedActor`, sends the source Spot
+   `OnLeaveActor` one-way, and finishes the Actor's Join completion callback. Dispatch
+   opens after this lifecycle. Target sends no completion reply to source.
 8. For a bound Actor, after CAS and queue opening target runtime sends Session owner a
    one-way target-route update. On an exact update within the default 3,000ms
    `SessionRelocationSealTimeout`, Session owner changes route, submits held messages,
@@ -545,7 +546,7 @@ sequenceDiagram
         TargetRuntime->>TargetActor: [local] create the Actor and Restore application state
         TargetRuntime-->>SourceRuntime: [reply] Actor Restore and temporary queue ready · source still owner
         SourceRuntime->>TargetRuntime: [send/request relay] ingress hold
-        TargetRuntime->>TargetTemp: [local] add message to the temporary queue
+        TargetRuntime->>TargetTemp: [local] add message to the pre-boundary relay span
         alt cutover arrives within 1,000ms
             SourceRuntime->>TargetRuntime: [send] cutover · pre-boundary relay sent
         else no cutover for 1,000ms after relay-ready reply
@@ -553,11 +554,12 @@ sequenceDiagram
         end
         TargetRuntime->>LocationStore: [request] CAS membership/owner if source fence still matches
         LocationStore-->>TargetRuntime: [reply] target membership/owner CAS succeeds
+        TargetRuntime->>TargetQueue: [local] merge saved work, pre-boundary relay, remaining temporary work
+        TargetRuntime->>TargetTemp: [local] remove temporary queue, switch regular route · dispatch closed
         TargetRuntime->>TargetSpot: [local] call OnJoinedActor
         SourceRuntime-)SourceSpot: [send] OnLeaveActor
         TargetRuntime->>TargetActor: [local] deliver Accepted via the Join completion callback
-        TargetRuntime->>TargetQueue: [local] move temporary queue work behind existing work
-        TargetRuntime->>TargetTemp: [local] remove the temporary queue, switch to existing dispatch
+        TargetRuntime->>TargetQueue: [local] open application dispatch
         TargetQueue->>TargetActor: [local] process messages in queue order
         opt if a bound session exists
             TargetRuntime->>SessionOwner: [send] apply exact binding route, submit held, release seal
@@ -571,8 +573,8 @@ sequenceDiagram
 ```
 
 This diagram shows only the path that ends normally. If `OnActorJoin` returns
-`Rejected` or fails before commit, source membership is kept. `OnLeaveActor` is only
-sent after commit, so it isn't called on a pre-commit failure. A target that received
+`Rejected` or explicitly fails before relay-ready is accepted, source membership is kept.
+`OnLeaveActor` is only sent after owner commit, so it isn't called on this source-restoration path. A target that received
 the Restore request first registers a relocation temporary queue. Messages and
 requests arriving in that time wait in the temporary queue and aren't run before
 moving to the real Actor queue. If it fails after target commit, it isn't rolled back
@@ -580,14 +582,14 @@ to the source. Only while
 the same target process is running is it retried within the deadline; if the process
 terminates, relocation isn't automatically taken over.
 
-If a reject, timeout, `Capture`/`Restore` failure, or aggregate commit conflict
-happens before commit, the target application instance isn't exposed. The relay
-record the target received is a staging copy, so it's discarded from the temporary
-queue without running or creating a terminal result. The source restores the ingress
-hold's requests and one-way messages to the original Actor queue in arrival order.
-Once the queue is empty, that temporary queue registration is removed. Source owner,
-state, and membership are kept unchanged throughout. If a failure happens after
-commit, it isn't rolled back to the source. If the same target process is running, it
+If a reject, timeout, or `Capture`/`Restore` failure occurs explicitly before relay-ready
+is accepted, the target application instance isn't exposed. The relay record the target
+received is a staging copy, so it's discarded from the temporary queue without running
+or creating a terminal result. The source restores the ingress hold's requests and
+one-way messages to the original Actor queue in arrival order. Once the queue is empty,
+that temporary queue registration is removed. Source owner, state, and membership are
+kept unchanged throughout. A timeout, aggregate commit conflict, or cutover-submit
+failure after relay-ready doesn't roll back to source. If the same target process is running, it
 can retry within the deadline using the confirmed location information and stored
 payload. If the target process terminates, a different runtime doesn't automatically
 recover it.
@@ -604,17 +606,19 @@ source seal is temporarily held in a relocation ingress hold. This hold has no
 relocation-specific record-count or byte bound.
 
 The source runtime keeps relaying the hold's records and later records arriving on the
-previous route to the target temporary queue. If interrupted before commit, the hold's
-records are restored to the source queue in arrival order, and the target temporary
-queue is discarded. If commit succeeds, the temporary queue's records move in behind
-the saved existing work. The source doesn't wait for target dispatch-switchover
+previous route to the target temporary queue. If explicitly interrupted before relay-ready
+is accepted, the hold's records are restored to the source queue in arrival order and
+the target temporary queue is discarded. After that boundary, source isn't restored
+regardless of cutover-submit result. If owner commit succeeds, pre-boundary relay and remaining temporary
+records move in order behind saved existing work. The source doesn't wait for target dispatch-switchover
 completion. After sending cutover, it changes ingress hold to Message Follow relay and
 removes the original when the defined Message Follow duration ends.
 
 In an application-requested User Spot join, the target User Spot's `OnActorJoin`
 first decides admission. In a cross-node Join, after the restore request and source
 relay, the target restore and membership commit finish. Then the target's
-`OnJoinedActor` is called and the source's `OnLeaveActor` is sent one-way.
+`OnJoinedActor` is called, the source's `OnLeaveActor` is sent one-way, Join completion
+finishes, and only then target dispatch opens.
 When returning from User Spot to Entry Spot, `OnActorJoin` isn't called — membership
 is committed directly. Afterward, the target Entry Spot's `OnJoinedActor` and source
 User Spot's `OnLeaveActor` are called. These callbacks are only used for an
@@ -626,9 +630,9 @@ state via the Actor adapter. Owner, membership, queue, timer, and session route 
 move to the target. This infrastructure relocation doesn't call the target's
 `OnJoinedActor` or the source's `OnLeaveActor`. A dedicated relocation application
 callback also isn't provided. During target Actor dispatch, messages arriving during
-Restore are held in the relocation temporary queue. After commit, journal, saved
-queue, and timers are put into the real Actor queue first, then the temporary
-queue's messages move in behind them. After the switchover, Message Follow and
+Restore are held in the relocation temporary queue. After commit, saved queue and timers,
+pre-boundary relay, and remaining temporary messages enter the real Actor queue in order.
+After the switchover, Message Follow and
 target direct messages use the existing Actor queue path.
 
 A Spot's terminal lifecycle callback is `OnClosing(ClosingContext)`. Since an Actor
@@ -786,9 +790,9 @@ User Spot aggregate moves logical membership as-is, it doesn't call application
 membership callbacks for member Actors. Only the Spot/Actor adapters' restore and
 Spot lifecycle callback finish before target admission.
 
-Before commit, the new inventory tree and target staging aren't visible to the
-resolver. If even one participant fails before commit, target staging is discarded
-and the whole aggregate's source state is kept. After commit, it doesn't roll back
+Before commit, the new inventory tree and target staging aren't visible to the resolver.
+If even one participant fails before relay-ready is accepted, target staging is discarded
+and the whole aggregate's source state is kept. Afterward, it doesn't roll back
 just some participants to the source — it keeps the same aggregate identity,
 inventory root, and relocation root. Only while the same target process is running
 is the whole aggregate continued; if the process terminates, a different runtime
@@ -818,16 +822,18 @@ state, Spot authority and every member Actor owner must be the same.
 
 If a `SpotWide` User Spot uses the application-signaled relocation boundary,
 `RelocationReady().Defer()` registers a framework-owned barrier after the current
-turn. The framework calls the Spot's default no-op `OnRelocationReadyCompleted`
-callback on the current owner that confirmed whether to move. This callback isn't an
+turn. After aggregate CAS, queue merge, and the regular-route switch, the framework calls
+the Spot's default no-op `OnRelocationReadyCompleted` callback on the target owner before
+opening dispatch. This callback isn't an
 Actor membership change callback and isn't delivered to member Actors. An
 application that overrides the callback can start the next round or match here.
 
 ## 7. Failure-Handling Scope
 
-A failure before commit finishes an `Aborted` CAS, confirms route and source
-location snapshot cancellation, cleans up relocation root/reservation, and restores
-source state before reopening source admission. After cutover, if a Location Store
+A failure before relay-ready is accepted finishes an `Aborted` CAS, confirms route and
+source location snapshot cancellation, cleans up relocation root/reservation, and restores
+source state before reopening source admission. After that boundary, source isn't restored
+regardless of cutover-submit result. After cutover, if a Location Store
 change result isn't received, target doesn't guess; it re-reads the same authority. If
 the exact target isn't owner, it retries with the same fence until Restore validity
 expires. Failure to confirm owner transition by then records `location_update_failed`,
@@ -912,8 +918,9 @@ affected. The exact Session route contract is defined by
 - A terminal record allows replay of the same operation for 5 minutes after the
   original deadline, and if there's no Ready authority after TTL, it can be
   re-created via a new reservation.
-- The target User Spot's `OnActorJoin` runs before `Capture`, and a pre-commit
-  failure keeps the whole source.
+- The target User Spot's `OnActorJoin` runs before `Capture`, and an explicit failure
+  before the relay-ready reply is accepted keeps the whole source. Source isn't restored
+  afterward.
 - Actor join doesn't provide `Yield`, regardless of execution mode.
 - `Defer()` leaves only Join registration and an inactive barrier on the current
   handler, without a target lookup or Store I/O, and runs once the handler's last
@@ -959,8 +966,8 @@ affected. The exact Session route contract is defined by
 - Saved existing Actor work is put into the real Actor queue first, then the
   temporary queue's work moves in behind it, then it atomically switches to the
   existing dispatch path.
-- On an abort before commit, the target temporary queue is discarded without
-  running, and only the source original is reprocessed.
+- Only on an abort before relay-ready is accepted is the target temporary queue discarded
+  without running and the source original reprocessed.
 - A duplicate Restore with the same `RelocationId`, target attempt, and owner
   generation doesn't restart the work — it uses the existing temporary queue and
   progress state.

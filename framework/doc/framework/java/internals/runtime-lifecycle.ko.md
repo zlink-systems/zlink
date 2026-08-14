@@ -8,7 +8,7 @@
 
 이 문서는 Java와 Kotlin이 공유하는 Spring lifecycle과 내부 runtime 소유권을 설명한다. 사용자가 관찰하는
 validation, timeout, cancellation과 reconnect 계약은 각 기능 spec이 소유한다. 네 언어가 공유하는 runtime
-구조는 [공통 내부 구조](../../common/internals/README.ko.md)를 따른다.
+구조는 [공통 내부 구조](../../common/spec/README.ko.md)를 따른다.
 
 ## 1. 시작 순서
 

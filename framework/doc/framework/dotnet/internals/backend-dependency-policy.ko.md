@@ -3,7 +3,7 @@
 
 [스펙 목차](../../common/README.ko.md)
 
-[.NET 묶음](../README.ko.md) | [인터페이스](../../common/spec/server/languages/dotnet/interfaces/README.ko.md) | [Runtime Lifecycle](../../common/internals/README.ko.md) | [Regression Matrix](regression-test-matrix.ko.md)
+[.NET 묶음](../README.ko.md) | [인터페이스](../../common/spec/server/languages/dotnet/interfaces/README.ko.md) | [Runtime Lifecycle](../../common/spec/README.ko.md) | [Regression Matrix](regression-test-matrix.ko.md)
 
 # ZLink Framework .NET Backend Dependency Policy
 

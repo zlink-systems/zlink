@@ -54,7 +54,7 @@ maintainers. Check the spec for the public API and allowed combinations.
 |------|------|
 | [backend-dependency-policy](internals/backend-dependency-policy.en.md) | Backend replaceability, public-surface isolation |
 | [transport-readiness](internals/01-transport-readiness.en.md) | Transport readiness, liveness, and execution queue defaults |
-| [Common Internals](../common/internals/README.en.md) | Runtime architecture decisions shared across all four languages |
+| [Common Internals](../common/spec/README.en.md) | Runtime architecture decisions shared across all four languages |
 | [regression-test-matrix](internals/regression-test-matrix.en.md) | Regression test criteria |
 
 ## 4. Common Samples

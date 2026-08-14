@@ -420,7 +420,6 @@ typedef enum zlink_option_t {
   ZLINK_OPT_TCP_NODELAY                = 0x3031,
   ZLINK_OPT_ROUTE_VALUE_MAX_SIZE       = 0x3032,
   ZLINK_OPT_RID_DUPLICATE_POLICY       = 0x3033,
-  ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES    = 0x3034,
   ZLINK_OPT_SUBMIT_RETRY_MODE          = 0x3037,
   ZLINK_OPT_SUBMIT_RETRY_TIMEOUT       = 0x3038,
   ZLINK_OPT_SUBMIT_RETRY_ATTEMPTS      = 0x3039
@@ -441,23 +440,26 @@ raw socket과 discovery에 적용된다.
 | `ZLINK_OPT_RCVBUF` | 커널 수신 버퍼 크기 (`int`; -1=OS 기본값 유지, 0 이상=OS에 크기 요청) |
 | `ZLINK_OPT_SNDHWM` | Directional send pipe의 accounted byte HWM (`uint64_t`; 기본값 `4,096,000`, `0`=무제한) |
 | `ZLINK_OPT_RCVHWM` | Directional receive pipe의 accounted byte HWM (`uint64_t`; 기본값 `4,096,000`, `0`=무제한) |
-| `ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES` | 자동 byte HWM을 계산할 때 쓰는 planning unit (`uint64_t`, byte 단위; `0`=소켓 타입 기본값) |
 | `ZLINK_OPT_MAXMSGSIZE` | 최대 인바운드 메시지 크기 (`int64_t`; -1=무제한) |
 
-세 `uint64_t` option은 `zlink_set_option()`과 `zlink_get_option()`에서 정확히
-`sizeof(uint64_t)` byte를 사용해야 합니다. 이전 4-byte 값은 과거 message count로
-해석하지 않고 `ZLINK_CONFIG_INVALID_ARGUMENT`로 거절합니다. 자동 planning unit은
-관찰한 message 크기가 아닙니다. Profile과 connection bucket이 선택한 slot에 이 값을
-곱해 계획 byte HWM을 계산합니다. Pipe admission은 실제로 보관한 byte를 계산합니다.
+두 HWM `uint64_t` option은 `zlink_set_option()`과 `zlink_get_option()`에서 정확히
+`sizeof(uint64_t)` byte를 사용해야 합니다. 4-byte 값은
+`ZLINK_CONFIG_INVALID_ARGUMENT`로 거절합니다. 제거된 socket option 값 `0x3034`도
+알 수 없는 option이므로 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로 실패합니다.
+Pipe admission은 실제로 보관한 byte를 계산합니다.
 
-HWM은 각 directional pipe에 적용합니다. Accounted byte가 limit에 도달하면 receiver가
+HWM은 각 HWM-controlled application directional pipe에 적용합니다. DEALER·ROUTER의
+completion progress lane은 terminal reply와 error reply 전용이며 auto HWM, manual
+`SNDHWM`·`RCVHWM`, LWM과 Core budget reservation을 적용하지 않습니다. Accounted byte가 limit에 도달하면 receiver가
 충분한 byte credit을 반환할 때까지 이후 write가 대기합니다. 비어 있는 pipe에는
 accounted 크기가 HWM보다 큰 message 한 건을 허용할 수 있습니다. 따라서 유효한 큰
 message를 HWM이 작다는 이유만으로 모두 거절하지 않습니다. 이 message도
 `ZLINK_OPT_MAXMSGSIZE`를 만족해야 하며, 한 건을 허용한 뒤에는 이후 write가 대기합니다.
-`ZLINK_OPT_MAXMSGSIZE`가 무제한인 방향에서는 complete message 한 건에만 이 예외를 적용합니다.
-끝나지 않은 multipart에는 일반 byte HWM을 적용하므로 `MORE` frame이 제한 없이 누적되지
-않습니다.
+`ZLINK_OPT_MAXMSGSIZE`가 무제한인 방향에서도 admission 시점에 전체 accounted 크기를 아는
+complete message 한 건, 즉 single-part 또는 total-known message에만 이 예외를 적용합니다.
+최종 전체 크기를 모르는 incremental multipart에는 첫 `MORE` frame부터 일반 byte HWM을 적용하므로
+frame이 제한 없이 누적되지 않습니다. 이 예외를 위해 known-total metadata나 transaction 전체
+reservation을 추가하지 않습니다.
 
 Core는 보통 `ceil(hwm_bytes / 2)`에서 credit을 묶어서 반환합니다. Sender가 실제 HWM에
 도달한 경우에는 이미 읽힌 누적 byte를 직접 확인하고, 그 뒤 receiver가 현재 보이는 입력을
@@ -674,8 +676,7 @@ ZLINK_EXPORT zlink_config_result_t zlink_set_option (void *handle_,
 공통 옵션을 설정한다. `handle_`은 raw socket 또는 discovery다.
 `option_` 매개변수는 `zlink_option_t` enum 값입니다. `optval_`
 포인터는 값을 제공하고 `optvallen_`은 크기를 바이트 단위로 지정합니다.
-`ZLINK_OPT_SNDHWM`, `ZLINK_OPT_RCVHWM`,
-`ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES`는 정확한 `uint64_t` 값을 요구합니다.
+`ZLINK_OPT_SNDHWM`과 `ZLINK_OPT_RCVHWM`은 정확한 `uint64_t` 값을 요구합니다.
 
 Raw socket과 discovery의 설정 시점은 각 option 계약을 따른다.
 
@@ -699,7 +700,7 @@ ZLINK_EXPORT zlink_config_result_t zlink_get_option (void *handle_,
                       size_t *optvallen_);
 ```
 
-공통 옵션의 현재 값을 가져온다. `handle_`은 raw socket 또는 discovery다. 세 HWM
+공통 옵션의 현재 값을 가져온다. `handle_`은 raw socket 또는 discovery다. 두 HWM
 byte-count option에는 `uint64_t` output buffer가 필요하고, 호출할 때
 `*optvallen_`이 정확히 `sizeof(uint64_t)`여야 합니다. 더 큰 임시 buffer나 이전
 4-byte 크기를 포함해 그 밖의 크기는 값을 잘라 쓰거나 일부만 채우지 않고
@@ -955,6 +956,145 @@ readiness 신호 자체는 재시도 성공을 보장하지 않으며, 알림 �
 **반환값:** 성공 시 `ZLINK_HANDLER_OK`, 실패 시 `zlink_handler_result_t` 값. `zlink_errno()`는 진단용 내부 errno를 그대로 유지합니다.
 
 **참고:** `zlink_send_part`, `zlink_send_part_rid`, `zlink_publish_part`
+
+---
+
+### Routed target 송신 readiness
+
+```c
+typedef enum zlink_routed_send_ready_state_t {
+  ZLINK_ROUTED_SEND_WRITABLE = 1,
+  ZLINK_ROUTED_SEND_TERMINAL = 2
+} zlink_routed_send_ready_state_t;
+
+typedef struct zlink_routed_send_ready_event_t {
+  zlink_routing_id_t peer_rid;
+  uint64_t transport_pair_id;
+  uint64_t transport_pair_generation;
+  zlink_routed_send_ready_state_t state;
+  int terminal_errno;
+} zlink_routed_send_ready_event_t;
+
+typedef struct zlink_routed_submit_target_t {
+  zlink_routing_id_t peer_rid;
+  uint64_t transport_pair_id;
+  uint64_t transport_pair_generation;
+} zlink_routed_submit_target_t;
+
+typedef void (*zlink_routed_send_ready_handler_fn) (
+  void *subject_, const zlink_routed_send_ready_event_t *event_,
+  void *userdata_);
+
+ZLINK_EXPORT zlink_handler_result_t zlink_routed_send_ready_handler (
+  void *socket_, zlink_routed_send_ready_handler_fn handler_,
+  void *userdata_);
+
+ZLINK_EXPORT zlink_submit_result_t zlink_select_routed_submit_target (
+  void *socket_, const zlink_routing_id_t *router_rid_or_null_,
+  zlink_routed_submit_target_t *target_out_);
+
+```
+
+Binding은 routed 비동기 operation을 받기 전에 이 handler를 socket에 장기 등록한다.
+`peer_rid`는 callback 동안만 유효한 borrowed 값이다. HWM에 막혔던 application pipe의
+credit이 회복되면 Core는 그 pipe의 exact RID·transport pair identity로 `WRITABLE`을
+전달한다. Pipe detach, socket close와 context 종료는 같은 identity로 `TERMINAL`과
+원인 errno를 전달한다. 다른 RID나 stale generation event를 현재 target의 wake로 사용할
+수 없다. Event는 재시도 시점일 뿐 성공 보장이 아니므로 callback은 blocking submit을
+실행하지 않고 binding scheduler가 같은 key로 `DONTWAIT` 재시도하게 한다. 기존
+socket-wide send-ready는 routed 비동기 admission에 사용하지 않는다.
+
+`zlink_select_routed_submit_target()`은 binding이 pending operation을 등록하기 전에 사용할
+exact value identity를 반환한다. ROUTER에서는 `router_rid_or_null_`에 non-NULL RID를 전달하고,
+DEALER에서는 NULL을 전달한다. ROUTER는 해당 RID의 admitted application pipe를 snapshot한다.
+DEALER는 연결됐고 가중치가 양수인 application pipe 전체를 대상으로 weighted selection 한 단계를
+확정한다. 이 후보 집합에는 HWM으로 일시 정지된 pipe도 포함된다. 따라서 A가 막혔다는 이유로
+선택 자체가 B로 우회되지 않으며, A를 선택한 operation은 A의 exact readiness만 기다린다.
+
+반환값은 pipe lifetime, HWM credit 또는 Core resource를 점유하는 lease가 아니다. 선택 직후에도
+연결 상태나 credit은 바뀔 수 있으므로 exact `DONTWAIT` submit은 `BACKPRESSURED` 또는 terminal
+route 결과를 반환할 수 있다. Binding은 handler를 먼저 등록하고, 선택값으로 pending operation을
+먼저 등록한 뒤 exact submit을 호출한다. Stale pair generation은 다른 연결로 retarget하지 않는다.
+지원 대상은 DEALER와 ROUTER뿐이며 다른 socket은 `ZLINK_SUBMIT_NOT_SUPPORTED`다.
+
+Binding은 socket 내부의 짧은 complete-record attempt gate 아래에서 기존 exact-target part
+API를 `DONTWAIT`로 첫 part부터 FINAL까지 한 번 시도한다. Gate는 한 번의 시도 동안만
+유지하고 `BACKPRESSURED` 뒤 readiness를 기다릴 때는 즉시 해제한다. Core part sequence는
+첫 part가 선택한 exact pair fence를 FINAL까지 유지하고 중간 실패를 전체 rollback하므로
+peer에 prefix가 보이지 않는다. 이 binding 내부 gate는 공개 FIFO, 별도 queue capacity 또는
+새 multipart Core ABI가 아니다.
+
+Request part API는 첫 frame이 wire에 보이기 전에 reply correlation과 timeout lifecycle을
+등록하며, submit 실패 시 이를 제거하고 handler를 호출하지 않는다. `ZLINK_SUBMIT_OK` 뒤에는
+handler가 reply 또는 terminal 결과로 정확히 한 번 호출된다.
+
+`WRITABLE` event의 `terminal_errno`는 `0`이다. `TERMINAL`은 application pipe
+detach·disconnect에 `ENOTCONN`, socket close에 `ECANCELED`, context 종료에 `ETERM`을
+전달한다. 여러 종료 원인이 경합하면 처음 확정된 terminal event 하나만 전달한다.
+
+### Retained-credit receive
+
+```c
+typedef struct zlink_hwm_budget_lease_t zlink_hwm_budget_lease_t;
+
+ZLINK_EXPORT int zlink_recv_with_hwm_budget_lease (
+  void *socket_, zlink_msg_t *message_,
+  zlink_hwm_budget_lease_t **lease_out_, int flags_);
+ZLINK_EXPORT zlink_recv_result_t zlink_recv_part_with_hwm_budget_lease (
+  void *s_, const zlink_routing_id_t **source_rid_out_,
+  zlink_msg_t *part_out_, zlink_hwm_budget_lease_t **lease_out_,
+  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
+ZLINK_EXPORT zlink_recv_result_t
+zlink_dealer_recv_part_with_hwm_budget_lease (
+  void *dealer_, uint8_t *message_type_out_, uint64_t *request_seq_out_,
+  zlink_msg_t *part_out_, zlink_hwm_budget_lease_t **lease_out_,
+  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
+ZLINK_EXPORT zlink_recv_result_t
+zlink_router_recv_part_v2_with_hwm_budget_lease (
+  void *router_, const zlink_routing_id_t **source_node_rid_out_,
+  uint64_t *request_seq_out_, uint64_t *transport_pair_id_out_,
+  uint64_t *transport_pair_generation_out_, zlink_msg_t *part_out_,
+  zlink_hwm_budget_lease_t **lease_out_,
+  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
+ZLINK_EXPORT zlink_recv_result_t
+zlink_subscribe_part_with_hwm_budget_lease (
+  void *sub_, const zlink_routing_id_t **source_rid_out_,
+  char *topic_id_buf_, size_t topic_id_capacity_,
+  size_t *topic_id_len_out_, zlink_msg_t *part_out_,
+  zlink_hwm_budget_lease_t **lease_out_,
+  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
+ZLINK_EXPORT void zlink_hwm_budget_lease_release (
+  zlink_hwm_budget_lease_t **lease_p_);
+```
+
+각 variant는 대응하는 기존 receive의 framing, metadata와 반환값을 그대로 유지하며,
+성공한 호출 하나가 caller-visible physical payload frame 하나를 반환하면 그 frame의
+accounting owner만 queue에서 opaque lease로 원자적으로 옮긴다. 새 multipart transaction을
+만들지 않는다. Part variant는 기존처럼 파트마다 호출하며 호출마다 lease 하나를 반환한다.
+Dealer의 message type·request sequence, Router의 source RID·request sequence·transport pair,
+SUB의 topic과 raw `STREAM`의 source RID는 각 기존 API와 같은 Core-owned parsing 결과다.
+
+Core가 합성한 raw `ROUTER`·`STREAM` routing-ID frame이나 `XPUB` local subscription event처럼
+physical application queue charge가 없는 성공 호출은 `*lease_out_ == NULL`이다. Dealer와
+Router의 내부 envelope, SUB topic metadata, credential과 handshake frame은 caller-visible
+payload가 아니므로 Core가 즉시 소비하고 lease로 노출하지 않는다. 그 뒤 실제 physical
+payload를 반환하는 성공 호출은 non-NULL lease를 반환한다.
+
+Lease는 origin directional queue id·generation과 accounted byte를 보존하고 writer credit을
+즉시 반환하지 않는다. `core_queue_accounted_bytes`에서
+`application_accounted_bytes`로 owner가 이동하지만 두 값을 합한
+`current_accounted_bytes`는 변하지 않는다. 일반 receive는 기존처럼 dequeue에서 credit을
+반환한다. Retained receive를 활성화한 socket의 내부 command worker는 deferred credit만
+처리하며 receive handler가 없으면 caller-visible payload를 대신 소비하지 않는다.
+
+Lease pointer는 복사해 이중 소유하면 안 되며 thread 간 소유권을 이전할 수 있다.
+`zlink_hwm_budget_lease_release()`는 NULL과 `*lease_p_ == NULL`에 안전하고, 성공적으로
+소유권을 반환하면 `*lease_p_`를 NULL로 만든다. 따라서 같은 pointer 변수에 대한 반복
+release는 효과가 없다. Release는 exact origin generation에 credit을 한 번만 반환한다.
+Origin이 먼저 detach되거나 generation이 교체되면 retired record를 유지하고, old lease의
+release는 새 generation의 credit이나 wake를 변경하지 않는다. 마지막 old lease release 뒤
+retired record를 제거한다. Context shutdown은 신규 lease 이전을 막으며 강제 종료는 남은
+lease를 invalid 처리하고 counter를 한 번만 정리한다. 이후 caller의 release는 안전하다.
 
 ---
 

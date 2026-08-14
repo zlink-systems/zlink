@@ -1,18 +1,20 @@
 ---
-title: "6. Target Selection And Route Cache"
+title: "45. Target Selection And Route Cache"
 ---
 
-# 6. Target Selection And Route Cache
+# 45. Target Selection And Route Cache
 
-[Internal structure table of contents](README.en.md) · [Previous: 5. Message Continuity During A Move](05-relocation-continuity.en.md) · [Next: 7. Receive And Dispatch Loop](07-dispatch-loop.en.md)
+> **Document status — internal design, not normative public specification.** This chapter explains implementation structure used to satisfy the linked public contracts. It does not add or change application-visible behavior.
+
+[Internal structure table of contents](README.en.md) · [Previous: 44. Message Continuity During A Move](44-internal-relocation-continuity.en.md) · [Next: 46. Receive And Dispatch Loop](46-internal-dispatch-loop.en.md)
 
 > **What this chapter answers** — the procedure for picking a target
 > from a single name, and how often that location lookup happens.
 >
 > **Contract ownership** — the selection order and tiebreak are owned
-> by [Channel Messaging](../spec/08-channel-messaging.en.md), and the
+> by [Channel Messaging](08-channel-messaging.en.md), and the
 > cache lifetime and invalidation condition by
-> [Spot · Actor Routing](../spec/18-object-routing.en.md). This
+> [Spot · Actor Routing](18-object-routing.en.md). This
 > chapter covers the **structure** that satisfies that contract and
 > the failures that become visible when selection authority is split.
 
@@ -33,7 +35,7 @@ message means **every call makes one round trip to the store.**
 
 The recently confirmed owner route is kept in the source runtime and
 reused. The formal spec defines this as a
-[Positive route cache](../spec/01-glossary.en.md#positive-route-cache).
+[Positive route cache](01-glossary.en.md#positive-route-cache).
 
 What's kept is the owner route of a ready object and the **fence value
 needed for the acceptance judgment.** Caching only the route and
@@ -50,7 +52,7 @@ as long as the cache lifetime.
 ### Preserve Spec States In The Resolver Result Type
 
 The public behavior is defined by
-[Failure Handling And Failover Scope §4.4](../spec/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
+[Failure Handling And Failover Scope §4.4](31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure).
 The resolver passes that contract as a closed `ReadyRoute`, `Missing`,
 `Unavailable`, or `StoreFailure` result so neither the terminal mapper nor
 the activation coordinator has to infer it again.
@@ -75,7 +77,7 @@ The cache lifetime never exceeds the shortest of three values.
 |---|---|
 | `RouteCacheMaxAge` | The cache's own maximum retention time |
 | The owner's acceptance deadline | After this time, that owner no longer accepts |
-| **At least 5 seconds shorter** than the [Message Follow duration](../spec/01-glossary.en.md#message-follow-duration) | The cache must expire before the detour path closes ([Spot/Actor Routing 「2.4 A Message Arriving At A Previous Owner Route」](../spec/18-object-routing.en.md#24-a-message-arriving-at-a-previous-owner-route), [Location Runtime 「6.3 Delivering A Message Arriving At A Previous Owner To The New Owner」](../spec/21-location-runtime.en.md#63-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner)) |
+| **At least 5 seconds shorter** than the [Message Follow duration](01-glossary.en.md#message-follow-duration) | The cache must expire before the detour path closes ([Spot/Actor Routing 「2.4 A Message Arriving At A Previous Owner Route」](18-object-routing.en.md#24-a-message-arriving-at-a-previous-owner-route), [Location Runtime 「6.3 Delivering A Message Arriving At A Previous Owner To The New Owner」](21-location-runtime.en.md#63-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner)) |
 
 ## 1.1 Preserve The Admission Fence For Manual Object Peers
 
@@ -83,7 +85,7 @@ A Location Store object-peer descriptor contains an endpoint, RID, lifecycle gen
 security identity. A manually configured endpoint supplies only an intent to connect. When the
 runtime associates that endpoint with a descriptor and uses it as an object peer, it also passes all
 descriptor values needed by the handshake to transport. The peer handshake in
-[RouteMesh topology](../spec/07-channel-topology.en.md) owns the formal contract.
+[RouteMesh topology](07-channel-topology.en.md) owns the formal contract.
 
 The JVM path passes these values in the following order. MeshNode startup first registers a manual
 endpoint-only intent. When `ZLinkFrameworkRuntime.connectManualObjectPeers`,
@@ -104,7 +106,7 @@ points at the old owner. Two things hold true at once here.
 
 - A message that went to the old owner isn't dropped. Message Follow
   hands it to the new owner
-  ([5. Continuity During A Move](05-relocation-continuity.en.md)).
+  ([44. Continuity During A Move](44-internal-relocation-continuity.en.md)).
 - But **while it's being handed off, every message takes one extra
   hop.**
 
@@ -127,7 +129,7 @@ flowchart LR
 **Decision — notify the sending side that a detour happened, and
 refresh the cache.** The formal spec includes the relay notification
 in the cache-invalidation condition
-([Object Routing](../spec/18-object-routing.en.md)). The runtime that
+([Object Routing](18-object-routing.en.md)). The runtime that
 receives the notification clears that cache entry and looks the owner
 up again on the next call.
 
@@ -174,7 +176,7 @@ therefore neither creates nor changes the original operation's terminal result.
 Picking a target by name requires narrowing candidates first. The
 exclusion conditions are targets with zero weight and targets
 preparing to shut down
-([Channel Messaging 「3.2 ChannelName Select-One」](../spec/08-channel-messaging.en.md#32-channelname-select-one)).
+([Channel Messaging 「3.2 ChannelName Select-One」](08-channel-messaging.en.md#32-channelname-select-one)).
 
 **Decision — build the candidate list at the moment it changes, and
 have calls only read it.** When peer state changes, build a new list
@@ -271,16 +273,16 @@ path's selection order doesn't satisfy the contract.
 **Decision — use smooth weighted round-robin.**
 
 The formal spec fixed this procedure as contract
-([Channel Messaging §Selection Order](../spec/08-channel-messaging.en.md#selection-order)).
+([Channel Messaging §Selection Order](08-channel-messaging.en.md#selection-order)).
 Below is that procedure, and how to lower the per-call cost while
 keeping it.
 
 The formal spec requires two things — that the long-run selection
 ratio converges to the weight ratio
-([Channel Messaging 「3.2 ChannelName Select-One」](../spec/08-channel-messaging.en.md#32-channelname-select-one)),
+([Channel Messaging 「3.2 ChannelName Select-One」](08-channel-messaging.en.md#32-channelname-select-one)),
 and that on the ClientServer path, **targets with the same weight
 rotate among each other**
-([ClientServer Channel 「5. Weight And Target Selection」](../spec/09-client-server-channel.en.md#5-weight-and-target-selection)).
+([ClientServer Channel 「5. Weight And Target Selection」](09-client-server-channel.en.md#5-weight-and-target-selection)).
 
 Multiple algorithms satisfy both, and they **produce different orders
 while both satisfying them.** When nodes built in different languages
@@ -465,7 +467,7 @@ have already run, and there's no way to do that.
 **Decision — publish completes with no result value, and doesn't
 return a per-target result.** A target that wasn't accepted isn't
 counted either in the public result or in monitoring
-([Spot Messaging 「4.4 Processing After Publish Has Started」](../spec/12-spot-messaging.en.md#44-processing-after-publish-has-started)).
+([Spot Messaging 「4.4 Processing After Publish Has Started」](12-spot-messaging.en.md#44-processing-after-publish-has-started)).
 The completion point is when the sending side secures its own slot.
 
 This pairs with §"even if some targets fail, it isn't rolled back" —
@@ -477,7 +479,7 @@ instead of publish.
 ## 8. Result To Confirm
 
 - Consecutive calls to the same object don't cause a
-  [Location Store](../spec/01-glossary.en.md#location-store) lookup
+  [Location Store](01-glossary.en.md#location-store) lookup
   per call.
 - Object-absent, being-created, and store-failure states aren't left
   in the cache.
@@ -510,4 +512,4 @@ instead of publish.
 
 ---
 
-[Internal structure table of contents](README.en.md) · [Previous: 5. Message Continuity During A Move](05-relocation-continuity.en.md) · [Next: 7. Receive And Dispatch Loop](07-dispatch-loop.en.md)
+[Internal structure table of contents](README.en.md) · [Previous: 44. Message Continuity During A Move](44-internal-relocation-continuity.en.md) · [Next: 46. Receive And Dispatch Loop](46-internal-dispatch-loop.en.md)

@@ -310,9 +310,11 @@ Configuration that ends with a single simple value, which `zlink_framework_optio
 ```cpp
 options.services().add_singleton<order_repository_t>();
 options.configure_network().set_bind_host("0.0.0.0");
-options.configure_inbound_dispatch()
-  .set_application_hwm_profile(
-    zlink::framework::application_hwm_profile_t::low_latency);
+auto &dispatch = options.configure_dispatch();
+dispatch
+  .set_core_hwm_profile(zlink::framework::core_hwm_profile_t::low_latency)
+  .set_application_job_queue_profile(
+    zlink::framework::application_job_queue_profile_t::low_latency);
 options.metadata()
   .allow_session_to_actor("trace-id")
   .allow_actor_to_session("server-region");
@@ -329,8 +331,7 @@ options.handler_coroutine_workers(8);
 | `.metadata().allow_session_to_actor(key)` / `.allow_actor_to_session(key)` | Keys not specified are not forwarded | Adds a metadata key to forward across the STREAM session↔Actor relay to a direction-specific allowlist |
 | `.configure_network()` | `bind_host()` is `127.0.0.1` | The default bind/advertise host used unless an individual listen call overrides it |
 | `.worker()` | `worker_options_t` default | The bounded worker pool's minimum/maximum thread count, idle timeout, and queue cap (the pool `RunCpuWorker`/`RunIoWorker` use) |
-| `.configure_inbound_dispatch()` | `application_hwm_profile_t::balanced` | The inbound application HWM size/profile, and the process memory cap |
-| `.configure_dispatch()` | Framework default policy | Dispatch/diagnostics options. See the observability-diagnostics category |
+| `.configure_dispatch()` | Framework dispatch/diagnostics defaults; both profiles are `balanced`; manual values are unset | Configures dispatch/diagnostics and the Core HWM memory/budget/profile inputs plus the host-wide Application Job Queue profile or exact manual permit limit on `dispatch_options_t` |
 | `.configure_stream_compression()` | No compression | The STREAM default compression codec (`use_default()`/`use_lz4()`/`use(codec)`/`disable()`) |
 | `.set_max_pending(count)` | Framework default | The host-wide pending-queue cap |
 | `.set_application_version(version)` / `.set_maintenance_wave(wave)` | `0` / none (no exclusion) | The deployment version and maintenance wave every local MeshNode publishes |
@@ -339,9 +340,14 @@ options.handler_coroutine_workers(8);
 | `.codecs()` | Only JSON registered | `options.codecs().use(extension)`. See the Codec registration entry in messaging-execution category |
 
 **Completion result.** Most execute synchronously with no return value; `.services()`/
-`.configure_network()`/`.worker()`/`.configure_inbound_dispatch()`/`.configure_dispatch()` return
+`.configure_network()`/`.worker()`/`.configure_dispatch()` return
 the corresponding builder or options object to continue further configuration on. Exceeding a
 value's range surfaces as a configuration error in startup validation.
+
+Core owns its byte-budget calculation. The Framework does not divide that budget by connection
+count. The Application Job Queue is a separate job-count limit; its manual range is
+`1..2,147,483,647`, with omission selecting the Auto profile. See the
+[Core/Framework API contract](../../common/spec/06-framework-api.en.md).
 
 **When to use.** Use this to adjust host-wide settings that end with a single simple value and do
 not belong to a dedicated category above (host lifecycle, topology registration, diagnostics).

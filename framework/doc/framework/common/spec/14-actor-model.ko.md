@@ -345,18 +345,18 @@ queue와 timer 정보는 이동 후에도 유지한다. 두 policy 모두 같은
 `AuthorityOwnerGeneration`만 증가한다.
 
 이동하는 Actor가 Session에 bind되어 있으면 target에서 Actor를 복원하고 owner·membership을
-commit한 뒤 Actor message 처리를 시작한다. 그 뒤 target runtime이
-`sessionActorLocationUpdateReqMsg`를 send하여 Session owner에 저장된 해당 Actor binding
-route를 target owner로 갱신하도록 요청한다. 여기서 binding route는 Session owner가 현재
-Actor owner에 message를 보낼 때 사용하는 전달 경로다. Route switch와 함께 bound-session
-accessor가 반환하는 current Actor location snapshot도 같은 ActorId·ObjectGeneration을
-유지한 채 target MeshName·NodeRid로 갱신한다. 같은 Session에서 relocation 대상에 포함되지 않은 다른 Actor의 route와
-physical STREAM connection은 유지한다. Session owner는 갱신한 뒤
-`sessionActorLocationUpdateResMsg`를 send한다. 응답이 없으면 target runtime은 최초 send
-1초 뒤부터 1초, 2초, 4초, 5초 간격으로 같은 요청을 다시 보내고 이후에는 5초 간격을
-유지한다. 응답을 기다리는 동안에도 Target Actor는 message를 처리한다. Route update는 같은
-ObjectGeneration의 relocation에만 허용하며 application은 relocation을 알기 위해 rebind하지
-않는다. 새 incarnation은 explicit bind가 필요하다.
+commit하고 queue 병합, regular route 전환과 lifecycle callback을 끝낸 뒤 Actor dispatch를 연다.
+그 뒤 target runtime이 command 44 `sessionRelocationRoute` commit을 one-way로 보내 Session owner에
+저장된 해당 Actor binding route를 target owner로 갱신한다. 여기서 binding route는 Session owner가
+현재 Actor owner에 message를 보낼 때 사용하는 전달 경로다. Route switch와 함께 bound-session
+accessor가 반환하는 current Actor location snapshot도 같은 ActorId·ObjectGeneration을 유지한 채
+target MeshName·NodeRid로 갱신한다. 같은 Session에서 relocation 대상에 포함되지 않은 다른 Actor의
+route와 physical STREAM connection은 유지한다. Session owner는 exact Session·binding·Actor
+generation과 relocation identity를 확인하고 held message를 target route로 제출한 뒤 matching seal을
+해제한다. 적용 reply는 없으며 exact command 44가 기본 3,000ms
+`SessionRelocationSealTimeout` 안에 없으면 physical Session과 관련 state를 정리한다. Target Actor는
+command 44 적용 reply 없이 message를 처리한다. Route update는 같은 ObjectGeneration의 relocation에만
+허용하며 application은 relocation을 알기 위해 rebind하지 않는다. 새 incarnation은 explicit bind가 필요하다.
 
 다음 .NET 발췌는 factory와 relocation policy를 함께 등록하는 공통 규칙을 이해하기
 위한 예시다. 다른 언어에 같은 signature를 요구하지 않으며, 정확한 .NET 계약은
@@ -674,12 +674,14 @@ ActorId는 metric label로 사용하지 않는다.
   넣으며 Actor 업무 payload를 넣지 않는다.
 - Inbound dispatch가 Actor application instance를 찾기 전에 현재 relocation temporary queue가
   등록되어 있는지 확인한다. 있으면 해당 queue에 넣고, 없으면 기존 Actor dispatch를 사용한다.
-- Restore 중 도착한 message를 temporary queue에서 실행하지 않는다. Commit과 lifecycle 작업이
-  끝난 뒤 저장된 기존 작업을 실제 Actor queue에 먼저 넣고 temporary 작업을 그 뒤에 옮긴다.
-- Temporary queue 제거와 기존 dispatch 전환을 atomic하게 처리하여 message가 중복되거나
+- Restore 중 도착한 message를 temporary queue에서 실행하지 않는다. Commit 뒤 saved work,
+  boundary 전 relay와 나머지 temporary 작업을 실제 Actor queue에 순서대로 넣고 regular route로
+  전환한다. 필요한 lifecycle 작업을 끝낸 뒤 dispatch를 연다.
+- Temporary queue 제거와 regular route 전환을 atomic하게 처리하여 message가 중복되거나
   누락되지 않게 한다.
-- Relocation Restore가 commit 전에 실패하면 target temporary queue를 실행하지 않고 폐기하며
-  source가 소유한 원본을 되돌린다.
+- Relocation Restore가 relay-ready reply accepted 전에 명시적으로 실패하면 target temporary queue를
+  실행하지 않고 폐기하며 source가 소유한 원본을 되돌린다. 그 뒤에는 cutover submit 결과와 관계없이
+  source를 복원하지 않는다.
 - 같은 `RelocationId`, target attempt와 owner generation의 Restore를 여러 번 받아도 temporary
   queue와 application instance를 한 번만 만든다. 이전 attempt의 temporary queue는 사용하지 않는다.
 - 같은 Actor의 payload가 ingress 종류와 관계없이 Actor queue 수락 순서대로 실행된다.

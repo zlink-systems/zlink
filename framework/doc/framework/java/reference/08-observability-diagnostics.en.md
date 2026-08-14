@@ -50,11 +50,12 @@ file path, callback observer, runtime error sink, or raw event DTO.
 ## `ZLinkFrameworkRuntime.status` / `observe` (read/observe)
 
 Queries or observes the host-wide status (lifecycle state, relocation/termination results,
-inbound dispatch backpressure). The exact signature and example are owned by the `status`/
+Core HWM accounting, and Application Job Queue backpressure). The exact signature and example are owned by the `status`/
 `observe` entry in the host-lifecycle category.
 
-**When to use.** Use `ZLinkFrameworkRuntimeStatus.inboundDispatch()`
-(`ZLinkInboundDispatchStatus`) to check application HWM usage and backpressure status. Use the
+**When to use.** Use `ZLinkFrameworkRuntimeStatus.capacity()` to read its independent
+`coreHwm()` and `applicationJobQueue()` snapshots. Correlate accounted bytes with permits in use,
+capacity waiters, wait count, and wait duration rather than treating them as one queue limit. Use the
 status-query entry in the topology-discovery category for a specific MeshName/ChannelName's
 availability.
 

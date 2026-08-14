@@ -408,21 +408,21 @@ Paged query 중 object가 추가·제거되어도 한 scan에서 duplicate ID를
   반영한다. Client는 continuation token을 수정하지 않는다.
 - 세부 동작: [Location runtime — 운영 도구에서 현재 위치를 조회한다](../spec/21-location-runtime.ko.md#64-운영-도구에서-현재-위치를-조회한다)를 검증한다.
 
-#### SF-F7 Large state relocation은 public size limit 안에서 복원한다
+#### SF-F7 Large state relocation은 provider data-chunk 경계를 넘어도 복원한다
 
 우선순위: `P0`
 
-Framework는 participant별 encoded state가 64 MiB 이하일 때 payload를 보존하여 target에 복원한다.
+Framework는 relocation adapter 전용 64 MiB 상한을 두지 않고, provider의 일반 data-chunk 계약에 맞춰
+participant state를 나눠 저장하고 target에 복원한다.
 
-**검증 질문:** 64 MiB 경계는 복원되고 한 byte 초과는 source authority를 유지하는가.
+**검증 질문:** 64 MiB data-chunk 경계와 그보다 한 byte 큰 state를 모두 보존하여 복원하는가.
 
 - 시작 조건: Public application API로 정확히 64 MiB인 deterministic participant state와 한 byte 초과한
   state를 separate fixtures로 만든다.
-- 절차: Object를 target node로 Relocate하고 public request로 state checksum·length를 조회한다. 별도
-  oversize fixture는 maximum을 넘긴다.
-- 검증: 64 MiB state는 target에서 checksum·logical length가 같고 request를 처리한다. 한 byte 초과
-  operation은 source authority를 유지한 채 `Blocked/StateIncompatible` terminal 하나로 끝난다.
-- 세부 동작: [Relocation unit과 실행량 제한](../spec/30-host-relocation-flow.ko.md#7-relocation-unit과-실행량-제한)을 검증한다.
+- 절차: 각 object를 target node로 Relocate하고 public request로 state checksum·length를 조회한다.
+- 검증: 두 state 모두 target에서 checksum·logical length가 같고 request를 처리한다. 한 byte 큰 state는
+  adapter 전용 size 상한을 이유로 `Blocked/StateIncompatible`로 끝나지 않는다.
+- 세부 동작: [Relocation Store Redis — Reference와 저장 크기](../spec/23-relocation-store-redis.ko.md#3-reference와-저장-크기)를 검증한다.
 
 #### SF-F8 Target owner lease가 만료되면 source를 유지한다
 

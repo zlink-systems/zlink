@@ -17,7 +17,10 @@ aren't exposed.
 package systems.zlink.framework.monitoring;
 
 import java.time.Instant;
+import java.time.Duration;
 import java.util.Optional;
+import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
+import systems.zlink.framework.configuration.ZLinkCoreHwmProfile;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationResult;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationResult;
@@ -30,14 +33,51 @@ public record ZLinkObservedStatus<T>(
     T status,
     ZLinkObservationLoss loss) {}
 
-public record ZLinkInboundDispatchStatus(
-    long applicationHwmBytes,
-    long pendingPayloadBytes,
-    long queuedPayloadBytes,
-    long activePayloadBytes,
-    boolean applicationReceivePaused,
-    long pendingCompletionSends,
-    long completionSendLimit) {}
+public record ZLinkCoreHwmStatus(
+    Optional<Long> configuredMemoryLimitBytes,
+    Optional<Long> configuredBudgetBytes,
+    ZLinkCoreHwmProfile configuredProfile,
+    long effectiveBudgetBytes,
+    long totalAppliedHwmBytes,
+    long coreQueueAccountedBytes,
+    long applicationAccountedBytes,
+    long currentAccountedBytes,
+    long provisionalAccountedBytes,
+    long peakAccountedBytes,
+    long completionCurrentAccountedBytes,
+    long completionPeakAccountedBytes,
+    long completionPendingMessageCount,
+    long totalMessagingAccountedBytes,
+    long monitorQueueAppliedHwmBytes,
+    long monitorQueueAccountedBytes,
+    long totalInstanceAppliedHwmBytes,
+    long totalInstanceAccountedBytes,
+    long blockedRatioPpm,
+    long activeDirectionalQueueCount,
+    long activeCompletionDirectionalQueueCount,
+    long activeSendQueueCount,
+    long activeReceiveQueueCount,
+    long outstandingApplicationLeaseCount,
+    long retiredQueueCount,
+    long deferredOriginCreditBytes) {}
+
+public record ZLinkApplicationJobQueueStatus(
+    ZLinkApplicationJobQueueProfile configuredProfile,
+    Optional<Long> configuredManualMax,
+    long effectiveProcessorCount,
+    long effectiveMaxQueuedApplicationJobs,
+    long reservedSupplyPermits,
+    long queuedApplicationJobs,
+    long permitsInUse,
+    long peakPermitsInUse,
+    long capacityWaiters,
+    long capacityWaitCount,
+    Duration capacityWaitDuration) {}
+
+public record ZLinkHostCapacityStatus(
+    long measurementEpoch,
+    ZLinkCoreHwmStatus coreHwm,
+    ZLinkApplicationJobQueueStatus applicationJobQueue) {}
 
 public record ZLinkFrameworkRuntimeStatus(
     ZLinkFrameworkRuntimeState state,
@@ -46,14 +86,16 @@ public record ZLinkFrameworkRuntimeStatus(
     Optional<Instant> deadline,
     Optional<ZLinkFrameworkRelocationResult> relocationResult,
     Optional<ZLinkFrameworkTerminationResult> terminationResult,
-    ZLinkInboundDispatchStatus inboundDispatch,
+    ZLinkHostCapacityStatus capacity,
     long sequence,
     Instant observedAt) {}
 ```
 
 The interface that starts relocation and shutdown is determined by the
 host lifecycle contract. Monitoring doesn't provide separate drain
-control or a per-component termination result.
+control or a per-component termination result. The exact runtime method
+`public void resetCapacityMetrics()` preserves current/configuration, advances the epoch,
+rebases peak to current, and clears count/duration.
 
 ## 3. RouteMesh State
 

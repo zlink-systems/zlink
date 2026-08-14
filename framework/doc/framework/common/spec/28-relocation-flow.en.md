@@ -90,6 +90,11 @@ The source finishes the running handler and timer callback, then starts no new
 application turn. It stores already-accepted but not-yet-executed work, timer
 information, and application state in the Relocation Store.
 
+Once storage is confirmed, the saved queue prefix and timers have one handoff source of
+truth: the Relocation Store payload. The source doesn't put that prefix on the relay
+lane again. An explicit failure before the relay-ready reply reaches its accepted state
+also restores source from that payload in the original queue order.
+
 The source doesn't wait for its mailbox to become empty because messages can keep
 arriving on the mailbox or previous route. After sending Restore, it keeps placing new
 messages in the source ingress hold until the target reports that relay reception is
@@ -101,10 +106,20 @@ The target registers a temporary queue for the relocation target before looking 
 real application instance. It then runs the factory and restores application state,
 existing queue work, and timers. A message arriving directly at the target during
 Restore enters the temporary queue and isn't delivered to an application handler.
+Restored queue work and timers remain in a dispatch-closed saved-work span and aren't
+mixed with source relay.
+
+The temporary queue and saved-work span form an ordered durable backlog before dispatch
+opens. An ordinary Restore, relay, or direct-ingress record in this span still acquires
+the Application Job Queue's shared reserved permit before receive. The target returns
+that reservation immediately after a finite handoff of the record and payload-lifetime
+retained-byte ownership into the backlog. A backlog item that isn't runnable yet neither
+keeps a queued-job permit nor starts an application handler.
 
 Once the temporary queue and Restore are ready, the target reports **ready to receive
 relay** to the source. This isn't relocation completion. Location Store owner is still
-the source and the target doesn't run an application handler.
+the source and the target doesn't run an application handler. The target doesn't send
+this reply until target-side retained-byte ownership exists for every staged payload.
 
 The Restore request does more than ask the target to restore state. It asks the target
 to **install the temporary queue first, restore saved state, existing queue work, and
@@ -114,15 +129,27 @@ owner change or an open queue.
 
 ### 4.4 Ordered Relay And One-Way Cutover
 
-After the target's relay-ready reply, the source relays the saved queue and ingress-hold
-messages on the same TCP connection. At the serialized relay point, it inserts a one-way
+After the target's relay-ready reply, the source relays only messages accepted by the
+post-capture ingress hold on the same TCP connection. It doesn't relay saved queue work
+or timers again because the target already restored them from the Relocation Store. At
+the serialized relay point, it inserts a one-way
 cutover control as `[send]` after every message accepted so far. Cutover tells the target
 that **all pre-boundary relay was sent, so it may run the Location Store owner CAS, merge
 queues, and open application dispatch**. The target sends no cutover reply. Messages
 accepted during this work enter the post-boundary span, so cutover doesn't wait for
 mailbox drain.
 
-Receiving cutover means the cached queue and relay preceding its boundary on that
+The relay-ready reply reaching its accepted state is the irreversible boundary after
+which source restoration is forbidden. The source then submits cutover once as
+`[send]`. It retains its queued-job permit and retained-byte owner for the source payload
+until that submit reaches a terminal result, then permanently closes source dispatch
+and releases both owners exactly once regardless of success or failure. A target
+completion reply is not added as a condition for this cleanup. Only an explicit failure
+before relay-ready preserves source ownership and removes the target staged owner by
+abort cleanup. A cutover-submit failure after relay-ready doesn't restore source; the
+target proceeds through the existing 1,000ms fallback.
+
+Receiving cutover means the ingress-hold relay preceding its boundary on that
 connection have all arrived. The target starts CAS and queue opening immediately.
 
 The target waits 1,000ms for cutover from the time it sends the relay-ready reply. If
@@ -165,21 +192,29 @@ the stale relocation immediately rather than waiting for the deadline.
 
 For an Actor relocation unit, target removes only the prepared target Actor. For a Spot
 relocation unit, it removes the prepared target Spot scope and every staging Actor in
-that unit. Source application execution doesn't reopen after cutover, and Message Follow
-ends after its defined duration.
+that unit. Source application execution doesn't reopen after the relay-ready reply
+reaches its accepted state, and Message Follow ends after its defined duration.
 
 Neither the source nor the Session owner changes the Location Store on the target's
 behalf. If the target isn't prepared, no CAS occurs.
 
-### 4.6 Open The Target Queue With Existing Work First
+### 4.6 Open The Target Queue Progressively With Existing Work First
 
-After CAS succeeds, the target constructs the execution queue in this order:
+After CAS succeeds, the target fixes an ordered durable backlog in this order:
 
 1. Work and timers already accepted by the source queue before relocation.
 2. Work the source relayed before the cutover boundary.
 3. Work accepted into the temporary queue afterward.
-4. Switch the temporary queue to the regular dispatch route.
-5. Finish required lifecycle callbacks and open application dispatch.
+
+It then switches the temporary route to the regular dispatch route and finishes required
+lifecycle callbacks. Once application dispatch is runnable, it acquires one shared
+queued-job permit in order for each backlog application-handler turn and places that turn
+on the live execution queue. Actual handler start returns the permit so the next item can
+progress. The target doesn't reserve permits for the whole backlog first, and this order
+continues when the target limit is smaller than the number of backlog items. An item
+waiting for a permit remains owned by the backlog's retained-byte owner. A timer keeps its
+original timer lifecycle and follows the relevant ingress rule when its callback turn
+becomes runnable.
 
 The target sends no separate completion reply after owner change, queue merge, and
 application dispatch opening. For a bound Actor, the target runtime sends a one-way
@@ -188,9 +223,10 @@ messages, and release the seal.
 
 ### 4.7 Target Session Route Update And Seal Timeout
 
-The source waits for no target completion reply after sending cutover. It ends source
-application execution and forwards old-address messages through Message Follow. The same
-cleanup applies when the target uses the cutover timeout fallback.
+The source waits for no target completion reply after cutover submit reaches a terminal
+success or failure result. It ends source application execution and forwards old-address
+messages through Message Follow. The same cleanup applies when the target uses the
+cutover timeout fallback.
 
 For a bound Actor, after CAS and target queue opening, the target runtime sends the
 Session owner a one-way route update. The Session owner validates the exact Session and
@@ -203,6 +239,12 @@ update arrives in time, it closes the physical Session connection and cleans tha
 Session's bindings, held messages, and seal state. Timeout and route update run in the
 same serialized Session-owner span; the one processed first wins. A route update after
 timeout records only a `late_session_route_update` Warning and is ignored.
+
+On an explicit failure before the relay-ready reply reaches its accepted state, after
+restoring the source queue the source coordinator sends an exact-seal abort one-way. The
+Session owner submits held messages to the source route, releases only the matching seal,
+and sends no response. After relay-ready is accepted, this abort isn't sent and the
+source route isn't reopened.
 
 An inter-component arrow in a diagram includes its completion kind. `[send]` is one-way
 and has no reply. `[request]` always has a corresponding `[reply]`. `[request relay]`
@@ -223,6 +265,7 @@ Relocation control sends wait for no reply.
 |---|---|---|
 | Cutover | Reports that all pre-boundary relay was sent on the same connection. | Target starts CAS and queue opening. A late or duplicate control after the 1,000ms fallback records only a Warning. |
 | Session route update | Reports that target owner and queue are ready. | Session owner changes the exact binding route, submits held messages, and releases the seal. |
+| Session seal abort | Reports that source queue was restored after an explicit failure before relay-ready was accepted. | Session owner submits held messages to the source route and releases only the matching seal. |
 
 ```mermaid
 sequenceDiagram
@@ -244,15 +287,15 @@ sequenceDiagram
     B->>B: [local] register temporary queue and Restore
     B-->>A: [reply] temporary queue and Restore ready · source still owner
     Note over A,B: this isn't relocation completion
-    loop saved queue and pre-boundary messages
+    loop post-capture ingress hold before the boundary
         alt send
             C->>A: [send] one-way message
-            A->>B: [send] relay cached message
+            A->>B: [send] relay ingress-hold message
         else request
             C->>A: [request] includes operation and reply route
             A->>B: [request relay] forward the same operation
         end
-        B->>B: [local] hold in the temporary queue
+        B->>B: [local] hold in the pre-boundary relay span
     end
     alt cutover arrives within 1,000ms
         A->>B: [send] cutover · pre-boundary relay sent
@@ -265,7 +308,8 @@ sequenceDiagram
         L-->>B: [reply] success · retryable failure · current owner
     end
     alt exact target owner confirmed
-        B->>B: [local] open queue with existing work before relayed work
+        B->>B: [local] merge saved work, pre-boundary relay, then remaining temporary work
+        B->>B: [local] switch regular route, finish lifecycle, open dispatch
         opt Actor is bound to a Session
             B->>S: [send] apply exact target route, submit held messages, release seal
             alt exact update is processed within 3,000ms
@@ -292,8 +336,8 @@ sequenceDiagram
     end
 ```
 
-This diagram shows both normal cutover and the cutover-timeout fallback. §9 defines
-explicit pre-CAS failure and a missing Store response.
+This diagram shows both normal cutover and the cutover-timeout fallback. §9 defines an
+explicit failure before relay-ready is accepted and a missing Store response.
 
 ## 5. Message Order And Completion Meaning
 
@@ -334,6 +378,14 @@ If a resource isn't immediately ready, the runtime waits before blocking source
 dispatch. It doesn't fail an already-started relocation because a
 relocation-specific capacity was reached.
 
+The application job queue's shared permit capacity isn't a relocation-specific capacity. Ordinary target
+staging ingress uses a shared reservation before receive and returns it after durable
+handoff; only runnable handler turns after CAS and lifecycle completion hold live
+queued-job permits. An ordered backlog larger than the target live-job limit therefore
+executes progressively without failure or an all-at-once reservation. Backlog payload
+retained-byte ownership continues until the last item transfers to ordinary terminal
+ownership or is cleaned up.
+
 ## 6. Location Store Transition Contract
 
 The Location Store CAS is the boundary that prevents source and target from both being
@@ -343,7 +395,7 @@ new owner generation as new values.
 | CAS result | Handling |
 |---|---|
 | Change succeeds | The target is owner. It opens the target queue and doesn't roll back to the source. |
-| Condition differs | No value changes. Store keeps its current owner, and target removes the object and queue. Source dispatch doesn't reopen after cutover. |
+| Condition differs | No value changes. Store keeps its current owner, and target removes the object and queue. Source dispatch doesn't reopen after relay-ready is accepted. |
 | Store returns a retryable failure | The target doesn't execute its queue and retries the same CAS until Restore validity expires. |
 | Target receives no CAS response | It doesn't guess. It re-reads with the same key and first-read version to check exact target ownership, then retries until Restore validity expires if needed. |
 | A different valid owner or generation is confirmed | Ends the stale relocation immediately and removes the prepared target object and queue. |
@@ -397,19 +449,20 @@ are defined by [Complete Host Relocation Flow](30-host-relocation-flow.en.md).
 | Timing | Owner and queue retained | Result and follow-up |
 |---|---|---|
 | Target selection or pre-preparation failure | Source | Doesn't block source dispatch and fails the operation. |
-| Explicit failure after Session seal but before cutover | Source | Doesn't execute the target temporary queue. Restores source queue and matching Session seal. |
-| Target CAS condition differs after cutover | Owner last confirmed in Store | Target removes the object and queue and sends no Session update. Source dispatch doesn't reopen. |
+| Explicit failure after Session seal but before relay-ready is accepted | Source | Doesn't execute the target temporary queue. Restores source queue and matching Session seal. |
+| Target CAS condition differs after relay-ready | Owner last confirmed in Store | Target removes the object and queue and sends no Session update. Source dispatch doesn't reopen. |
 | Target receives no CAS response | Owner confirmed by re-reading the Store | Target reads and retries until Restore validity expires. It doesn't open its queue before confirming target ownership. |
 | Location Store retry fails until Restore validity expires | Last owner confirmed in the Store | Records `location_update_failed`, removes the prepared target Actor or Spot, queue, and relocation state, and sends no Session update. |
 | Cutover doesn't arrive for 1,000ms after relay-ready reply | Target | Target records a Warning and proceeds with CAS and queue opening. A late cutover is ignored. This fallback doesn't guarantee order between late relay and a new direct target message. |
 | Target process terminates after successful CAS | Target authority remains, but object is unavailable | Doesn't roll back to source or automatically resume on another target. |
 | No route update arrives within `SessionRelocationSealTimeout` | Target owner, Session connection closed | Session owner closes the physical connection and cleans bindings, held messages, and seal. A late update is ignored with a Warning. |
-| Caller cancellation | Shared relocation continues under its current phase rule | Ends only that waiter. A safe pre-CAS abort may start, but post-CAS owner isn't rolled back to source. |
+| Caller cancellation | Shared relocation continues under its current phase rule | Ends only that waiter. A safe abort starts only on an explicit failure before relay-ready is accepted; source isn't restored afterward. |
 | Source shutdown races relocation | The operation that sealed first | After owner change, relocation performs only Message Follow cleanup. If shutdown sealed first, no new relocation starts. |
 
-Before sending cutover, an explicit failure can restore source. After cutover, source
-doesn't await target outcome, so source dispatch doesn't reopen. A later target-CAS
-failure removes prepared target state, while the Session cleans under its own timeout.
+Before relay-ready is accepted, an explicit failure can restore source. After
+relay-ready is accepted, source dispatch doesn't reopen regardless of cutover-submit
+success or failure. A later target-CAS failure removes prepared target state, while the
+Session cleans under its own timeout.
 
 The 1,000ms cutover fallback isn't a loss-recovery protocol replacing TCP retransmission.
 Without cutover, target can't confirm every pre-boundary relay arrived. This path favors
@@ -447,6 +500,7 @@ A cleanup failure isn't a condition for changing owner back to source.
 |---|---|
 | Owner isn't simultaneously source and target. | Before target-only Location Store CAS succeeds, source is owner; afterward, target is owner. |
 | Target doesn't execute a message before preparation. | Factory, Restore, and temporary queue must be ready; then cutover receipt or the 1,000ms fallback and successful CAS precede dispatch opening. |
+| Relocation backlog doesn't bypass the live-job limit. | Ordinary staging receive uses a shared reservation and returns it after durable handoff; runnable post-CAS turns acquire live permits in order. |
 | Normal cutover preserves order on one relay connection. | Cutover arrives after pre-boundary relay on the same TCP connection. |
 | A bound Session's physical connection is conditionally kept. | An exact route update within `SessionRelocationSealTimeout` changes only the route. Timeout closes the connection. |
 | Global order across connections isn't guaranteed. | Relative order of Message Follow relay and direct target message is unspecified. |
@@ -457,10 +511,11 @@ A cleanup failure isn't a condition for changing owner back to source.
 
 - Actor, `PerActor`/`SpotWide` User Spot, and Instance Spot use the same target-only CAS boundary.
 - Source keeps relaying old-address messages to target without waiting for an empty queue.
-- Source sends no cached queue before the target reports relay reception ready.
+- Source sends no ingress-hold relay before the target reports relay reception ready.
+- Source relay never resends the saved queue prefix and timers owned by the Relocation Store.
 - Relay-ready is the only reply; cutover and Session route update are one-way controls.
-- Target doesn't change the Location Store before preparing the temporary queue and Restore.
-- Target neither changes the Location Store nor opens application dispatch before receiving cutover or waiting 1,000ms after relay-ready.
+- Target records no relocation Location Store record, including `Prepared`, before preparing the temporary queue and Restore.
+- Target neither changes Location Store owner/membership/authority nor opens application dispatch before receiving cutover or waiting 1,000ms after relay-ready. A post-Restore `Prepared` record that retains source ownership is not such a change.
 - Source and Session owner don't change Location Store owner.
 - On CAS conflict, target doesn't run a queued message or one-way handler.
 - A retryable Store error or indeterminate response retries the same CAS until Restore
@@ -469,12 +524,15 @@ A cleanup failure isn't a condition for changing owner back to source.
   the prepared Actor or Spot and queue and sends no Session route update.
 - A late Store response for a terminal `RelocationId` doesn't reactivate an object or queue.
 - Saved existing work enters the target queue before relay preceding the cutover boundary.
+- A target backlog larger than the live-job limit progressively runs ordered turns without reserving every permit first.
+- Target retained-byte ownership exists before relay-ready. Source permits and byte ownership remain until the post-acceptance cutover submit reaches a terminal result, and each owner cleans exactly once regardless of submit success or failure.
 - `send` is handled without an application response, while `request` retains operation identity, reply route, and deadline.
 - Relocation requires no numeric high-water, per-message ACK journal, or separate capacity gate.
 - Bound Session messages are held during seal, submitted after target route change, then the seal is released.
 - A late or duplicate cutover records only a Warning and doesn't mutate owner or queue again.
 - Without a Session route update, the default 3,000ms seal timeout closes the physical Session and cleans state.
 - A route update after timeout records only a Warning and doesn't mutate route or seal again.
-- Pre-cutover failure restores source. A post-cutover failure doesn't reopen source
-  dispatch and removes prepared target state.
+- Only an explicit failure before relay-ready is accepted restores source. A later failure
+  doesn't reopen source dispatch regardless of cutover-submit result and removes prepared target state.
+- A bound-Session abort before relay-ready is accepted is one-way, releases only the matching seal, and awaits no application reply.
 - Contract tests and operational logs distinguish the absence of global cross-connection order and exactly-once behavior across process crash.

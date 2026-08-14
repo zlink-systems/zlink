@@ -301,8 +301,10 @@ STREAM handler에는 적용하지 않는다.
 ```java
 options.addHandlersFromPackageOf(GameEntrySpot.class); // annotation으로 표시한 handler를 package에서 찾아 등록
 options.configureNetwork().setBindHost("0.0.0.0");
-options.configureInboundDispatch()
-    .setApplicationHwmProfile(ZLinkApplicationHwmProfile.LOW_LATENCY);
+ZLinkDispatchOptions dispatch = options.configureDispatch();
+dispatch.setCoreHwmProfile(ZLinkCoreHwmProfile.LOW_LATENCY);
+dispatch.setApplicationJobQueueProfile(
+    ZLinkApplicationJobQueueProfile.LOW_LATENCY);
 options.configureMetadata()
     .allowSessionToActor("trace-id")
     .allowActorToSession("server-region");
@@ -319,8 +321,7 @@ options.useVirtualThreadHandlers();
 | `.configureMetadata().allowSessionToActor(key)` / `.allowActorToSession(key)` | 지정하지 않은 key는 forward 안 함 | STREAM session↔Actor relay로 넘길 metadata key를 방향별 allowlist에 추가 |
 | `.configureNetwork()` | `bindHost()`는 `127.0.0.1` | 개별 listen 호출이 override하지 않는 한 쓰는 기본 bind·advertise host |
 | `.configureWorkers()` | `ZLinkWorkerOptions` 기본값 | bounded worker pool의 최소·최대 thread 수, idle timeout, queue 상한 |
-| `.configureInboundDispatch()` | `ZLinkApplicationHwmProfile.BALANCED` | Inbound application HWM 크기·profile, process 메모리 상한 |
-| `.configureDispatch()` | Framework 기본 정책 | Dispatch·diagnostics 옵션. observability-diagnostics category 참고 |
+| `.configureDispatch()` | Framework dispatch·diagnostics 기본값, 두 profile 모두 `BALANCED`, manual 값은 미지정 | `ZLinkDispatchOptions`에서 Dispatch·diagnostics와 Core HWM memory·budget·profile, host-wide Application Job Queue profile 또는 정확한 manual permit limit을 함께 설정 |
 | `.configureStreamCompression()` | 압축 없음 | STREAM 기본 압축 codec(`useDefault()`/`useLz4()`/`use(codec)`/`disable()`) |
 | `.setApplicationVersion(version)` / `.setMaintenanceWave(wave)` | `0` / `null`(exclusion 없음) | 모든 local MeshNode가 게시하는 배포 버전과 maintenance wave |
 | `.setDefaultRequestTimeout(timeout)` | Framework 기본값 | host 전체 request 기본 timeout |
@@ -328,9 +329,14 @@ options.useVirtualThreadHandlers();
 | `.codecs()` | JSON만 등록 | `options.codecs().use(extension)`. messaging-execution category의 Codec 등록 항목을 참고 |
 
 **완료 결과.** 대부분 반환값 없이 동기로 실행되며, `.configureNetwork()`/`.configureWorkers()`/
-`.configureInboundDispatch()`/`.configureDispatch()`/`.configureMetadata()`는 해당 builder나
+`.configureDispatch()`/`.configureMetadata()`는 해당 builder나
 options 객체를 반환해 그 위에서 추가 설정을 이어간다. 값 범위를 벗어나면 startup 검증에서
 configuration error로 드러난다.
+
+Core가 byte budget 계산을 소유하며 Framework는 connection 수로 budget을 나누지 않는다.
+Application Job Queue는 별도의 job-count limit이다. `setMaxQueuedApplicationJobs`는
+`1..2,147,483,647`을 허용하고, 미지정하면 Auto profile을 사용한다.
+[Core/Framework API 계약](../../common/spec/06-framework-api.ko.md)을 참고한다.
 
 **선택 기준.** 위 전용 항목(host lifecycle·topology 등록·diagnostics)에 속하지 않는, 단순 값
 하나로 끝나는 host-wide 설정을 조정할 때 쓴다.

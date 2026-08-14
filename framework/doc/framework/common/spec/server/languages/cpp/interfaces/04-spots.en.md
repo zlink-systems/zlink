@@ -486,10 +486,12 @@ same-node operation and `disable_relocation()`/
 operation that selected `disable_relocation()` is rejected before
 capture.
 
-A Spot adapter's `capture(...)` result is at most 64 MiB, and an empty
-vector is valid. Ownership of the returned vector moves to the
-Framework, and the vector passed to `restore(...)` is owned by that
-async call. If capture throws or ends as a failed task, admission is
+A Spot adapter's `capture(...)` result has no relocation-adapter-specific
+size cap, and an empty vector is valid. The framework performs any
+chunking required by the registered Relocation Store's ordinary blob and
+whole-payload limits. Ownership of the returned vector moves to the
+Framework, and the vector passed to `restore(...)` is owned by that async
+call. If capture throws or ends as a failed task, admission is
 restored after durable abort and source normalization. A failed
 restore's instance is discarded, and the same immutable payload is
 applied to the instance the new attempt's factory built. If the
@@ -831,14 +833,14 @@ object generation, and isn't exposed to public lookup before Spot
 authority. After the authority switch, `ToSpot`, Create, and Join use
 the target, and `ToActor` uses the per-Actor current owner. A stale
 source route is relayed while preserving operation identity,
-generation, deadline, correlation, and reply route. The 1-second window
-from Actor queue seal to target admission is an operational goal — 
+generation, deadline, correlation, and reply route. The source-local 1-second window
+from Actor queue seal to the one-way cutover submit's success or failure terminal is an operational goal —
 exceeding it doesn't cancel or roll back the relocation.
 
 `spot_context_t::relocation_ready().defer()` is only valid in a Spot
 turn that registered both `spot_wide` and `application_signaled`. The
 Framework delivers a `continued` completion from the source if it
-didn't move or aborted before commit, and a `relocated` completion from
+didn't move or aborted before relay-ready was accepted, and a `relocated` completion from
 the target if it moved, to
 `on_relocation_ready_completed(...)`. The default virtual
 implementation is a no-op. Before callback completion, pending

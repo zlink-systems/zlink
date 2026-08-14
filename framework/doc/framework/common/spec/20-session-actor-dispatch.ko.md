@@ -346,11 +346,13 @@ message별 ACK journal 또는 relocation 전용 capacity 조건을 사용하지 
    Session owner가 보관한다. 같은 Session의 다른 binding은 영향을 받지 않는다.
 3. Source와 target은 [Actor와 Spot relocation 전체 흐름 §4](28-relocation-flow.ko.md#4-정상-처리-순서)에
    정의한 공통 절차를 수행한다. Target이 temporary queue와 Restore 준비를 reply하면 source가
-   cached queue와 ingress hold를 relay하고 cutover를 one-way로 보낸다.
+   capture 뒤 ingress hold만 relay하고 cutover를 one-way로 보낸다. Saved queue와 timer는
+   Relocation Store payload에서 target이 한 번만 복원한다.
 4. Target은 cutover를 받으면 Location Store CAS를 실행한다. Relay 준비 reply 뒤 1,000ms 동안
    cutover가 오지 않아도 Warning을 기록하고 CAS와 queue 개방을 진행한다. Late·duplicate cutover는
    Warning만 기록하고 무시한다.
-5. CAS에 성공한 target은 기존 작업과 relay된 작업을 target queue에 넣고 application dispatch를
+5. CAS에 성공한 target은 saved work, cutover 전 relay와 나머지 temporary work를 target queue에
+   넣고 regular route로 전환한다. 필요한 lifecycle callback을 끝낸 뒤 application dispatch를
    연다. 그 뒤 target runtime이 command 44 `sessionRelocationRoute`를 Session owner에 one-way로
    보내 binding route와 current `ActorRef` location snapshot을 target으로 바꾸도록 알린다.
 6. Session owner는 current Session, binding과 relocation identity가 일치하면 route를 한 번 바꾸고
@@ -360,9 +362,10 @@ message별 ACK journal 또는 relocation 전용 capacity 조건을 사용하지 
 8. Session owner는 seal 설치부터 `SessionRelocationSealTimeout`을 적용한다. 기본값은 3,000ms이며
    server 설정으로 변경할 수 있다. Timeout까지 exact route update가 없으면 physical Session을
    종료하고 해당 Session의 binding, held message와 seal을 정리한다.
-9. Target이 cutover 전에 명시적으로 실패하면 matching seal만 해제하고 Session message를 source
-   route로 다시 제출한다. Cutover 뒤 실패에서는 source route를 다시 열지 않으며 seal timeout이
-   physical Session과 held state를 정리한다.
+9. Target이 relay-ready reply가 accepted 상태가 되기 전에 명시적으로 실패하면 matching seal만 해제하고 Session message를 source
+   route로 다시 제출하도록 source coordinator가 command 44 abort를 one-way로 보낸다. Relay-ready 뒤
+   실패와 cutover submit 실패에서는 source route를 다시 열지 않으며 seal timeout이 physical Session과 held state를
+   정리한다.
 
 Cutover와 command 44는 one-way라 response 유실 상태를 만들지 않는다. 짧은 handoff 동안의
 server 간 전송은 TCP의 순서와 재전송에
@@ -372,12 +375,14 @@ deadline과 caller retry 계약을 그대로 사용한다.
 <a id="51-session-actor-위치-갱신-message"></a>
 ### 5.1 Session relocation route message
 
-Command 42와 43은 Session seal의 설치 request와 reply를 전달한다. Command 44는 target runtime이
-보내는 one-way target route update다. 이 command들은 relocation을 조정하기 위한 내부 message이며 Location
-Store owner를 확정하는 protocol이 아니다.
+Command 42와 43은 Session seal의 설치 request와 reply를 전달한다. Command 43은 exact seal 설치
+결과만 전달하며 Session message sequence나 high-water를 포함하지 않는다. Command 44는 target
+runtime의 commit 또는 source coordinator의 relay-ready accepted 전 abort를 전달하는 one-way control이다. 이
+command들은 relocation을 조정하기 위한 내부 message이며 Location Store owner를 확정하는 protocol이 아니다.
 
-`sessionRelocationRoute`에는 relocation identity, ActorId, ObjectGeneration, target
-MeshName·NodeRid, Session identity, SessionRid와 binding generation을 넣는다. Session owner는
+`sessionRelocationRoute` commit에는 relocation identity, ActorId, ObjectGeneration, target
+MeshName·NodeRid, Session identity, SessionRid와 binding generation을 넣는다. Abort에는 matching
+seal identity와 abort action만 넣는다. Session owner는
 자신이 소유한 current Session과 binding에 필요한 값만 대조한다. Target authority가 유효한지는
 이미 target-only Location Store CAS가 결정했으므로 Session owner가 Store나 Actor authority
 mirror를 다시 조회하지 않는다.
@@ -402,7 +407,7 @@ sequenceDiagram
     S-->>C: [reply] command 43 · exact binding seal 설치 완료
     A->>B: [request] temporary queue 설치·Restore 후 dispatch 없이 relay 준비
     B-->>A: [reply] temporary queue·Restore 준비 완료 · source owner 유지
-    A->>B: [send/request relay] cached queue와 ingress hold
+    A->>B: [send/request relay] capture 뒤 ingress hold
     alt cutover가 1,000ms 안에 도착
         A->>B: [send] cutover · boundary 전 relay 전송 완료
     else relay 준비 reply 뒤 1,000ms 동안 cutover 없음
@@ -410,7 +415,7 @@ sequenceDiagram
     end
     B->>L: [request] source fence가 같으면 owner를 target으로 CAS
     L-->>B: [reply] target owner CAS 결과
-    B->>B: [local] target queue 개방
+    B->>B: [local] queue 병합 · regular route 전환 · lifecycle 완료 · dispatch 개방
     B->>S: [send] command 44 · exact target route 적용·held 제출·seal 해제
     alt SessionRelocationSealTimeout 안에 exact update 처리
         S->>S: [local] route 전환 · held Session message 제출 · seal 해제
@@ -421,9 +426,10 @@ sequenceDiagram
 
 ## 6. Failure 처리
 
-Target이 cutover 전에 실패하면 source가 owner다. Relocation coordinator는 matching Session
-seal을 해제하고 보관한 Session message를 source route로 다시 제출한다. Target temporary queue는
-실행하지 않는다. Cutover 뒤 CAS가 실패하면 source route를 다시 열지 않는다. Target은 준비한
+Target이 relay-ready reply가 accepted 상태가 되기 전에 명시적으로 실패하면 source가 owner다. Relocation coordinator는 matching Session
+seal을 해제하고 보관한 Session message를 source route로 다시 제출하도록 command 44 abort를
+one-way로 보낸다. Target temporary queue는
+실행하지 않는다. Relay-ready 뒤 CAS 또는 cutover submit이 실패하면 source route를 다시 열지 않는다. Target은 준비한
 object와 queue를 제거하고 Session owner는 `SessionRelocationSealTimeout`으로 connection과 held
 state를 정리한다.
 
@@ -484,8 +490,8 @@ Actor owner host의 Relocate는 §5 barrier를 사용한다. Session owner host�
 - Relocation commit 뒤 Target Actor가 message 처리를 시작하며 session owner의 해당 Actor
   route와 bound-session current Actor location snapshot은 비동기 send message로 갱신된다.
 - Bound-session request도 수락 시점에 따라 저장한 기존 작업 또는 ingress hold relay에 포함된다.
-- 위치 갱신 응답이 없어도 Join completion과 Target Actor message 처리가 지연되지 않으며,
-  정해진 재전송 간격을 적용한다. Message Follow route는 `MessageFollowDuration` 뒤 제거하고
-  실행 중인 target runtime만 위치 갱신 재전송을 이어가야 한다.
-- Commit 전 failure는 source route를 복원한다. Commit 뒤에는 source로 rollback하거나 다른
-  runtime이 자동 복구하지 않는다.
+- Command 44에는 응답이 없고 request로 재전송하지 않는다. Join completion과 Target Actor message
+  처리는 command 44 적용을 기다리지 않는다. Message Follow route는 `MessageFollowDuration` 뒤
+  제거하며 timeout 뒤 늦은 Session update는 log만 남긴다.
+- Relay-ready reply가 accepted 상태가 되기 전 명시적 failure만 source route를 복원한다. 그 뒤에는
+  cutover submit 결과와 관계없이 source로 rollback하거나 다른 runtime이 자동 복구하지 않는다.

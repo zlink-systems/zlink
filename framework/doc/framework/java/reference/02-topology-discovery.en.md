@@ -312,8 +312,10 @@ Configuration that ends with a single simple value, which `ZLinkFrameworkOptions
 ```java
 options.addHandlersFromPackageOf(GameEntrySpot.class); // finds and registers annotation-marked handlers from the package
 options.configureNetwork().setBindHost("0.0.0.0");
-options.configureInboundDispatch()
-    .setApplicationHwmProfile(ZLinkApplicationHwmProfile.LOW_LATENCY);
+ZLinkDispatchOptions dispatch = options.configureDispatch();
+dispatch.setCoreHwmProfile(ZLinkCoreHwmProfile.LOW_LATENCY);
+dispatch.setApplicationJobQueueProfile(
+    ZLinkApplicationJobQueueProfile.LOW_LATENCY);
 options.configureMetadata()
     .allowSessionToActor("trace-id")
     .allowActorToSession("server-region");
@@ -330,8 +332,7 @@ options.useVirtualThreadHandlers();
 | `.configureMetadata().allowSessionToActor(key)` / `.allowActorToSession(key)` | Keys not specified are not forwarded | Adds a metadata key to forward across the STREAM session↔Actor relay to a direction-specific allowlist |
 | `.configureNetwork()` | `bindHost()` is `127.0.0.1` | The default bind/advertise host used unless an individual listen call overrides it |
 | `.configureWorkers()` | `ZLinkWorkerOptions` default | The bounded worker pool's minimum/maximum thread count, idle timeout, and queue cap |
-| `.configureInboundDispatch()` | `ZLinkApplicationHwmProfile.BALANCED` | The inbound application HWM size/profile, and the process memory cap |
-| `.configureDispatch()` | Framework default policy | Dispatch/diagnostics options. See the observability-diagnostics category |
+| `.configureDispatch()` | Framework dispatch/diagnostics defaults; both profiles are `BALANCED`; manual values are empty | Configures dispatch/diagnostics and the Core HWM memory/budget/profile inputs plus the host-wide Application Job Queue profile or exact manual permit limit on `ZLinkDispatchOptions` |
 | `.configureStreamCompression()` | No compression | The STREAM default compression codec (`useDefault()`/`useLz4()`/`use(codec)`/`disable()`) |
 | `.setApplicationVersion(version)` / `.setMaintenanceWave(wave)` | `0` / `null` (no exclusion) | The deployment version and maintenance wave every local MeshNode publishes |
 | `.setDefaultRequestTimeout(timeout)` | Framework default | The host-wide default request timeout |
@@ -339,9 +340,14 @@ options.useVirtualThreadHandlers();
 | `.codecs()` | Only JSON registered | `options.codecs().use(extension)`. See the Codec registration entry in messaging-execution category |
 
 **Completion result.** Most execute synchronously with no return value; `.configureNetwork()`/
-`.configureWorkers()`/`.configureInboundDispatch()`/`.configureDispatch()`/`.configureMetadata()`
+`.configureWorkers()`/`.configureDispatch()`/`.configureMetadata()`
 return the corresponding builder or options object to continue further configuration on.
 Exceeding a value's range surfaces as a configuration error in startup validation.
+
+Core owns its byte-budget calculation. The Framework does not divide that budget by connection
+count. The Application Job Queue is a separate job-count limit; `setMaxQueuedApplicationJobs`
+accepts `1..2,147,483,647`, while omission selects the Auto profile. See the
+[Core/Framework API contract](../../common/spec/06-framework-api.en.md).
 
 **When to use.** Use this to adjust host-wide settings that end with a single simple value and do
 not belong to a dedicated category above (host lifecycle, topology registration, diagnostics).

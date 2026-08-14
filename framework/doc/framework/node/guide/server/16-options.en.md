@@ -58,8 +58,7 @@ deferred until the first call — it's **blocked by an exception at initializati
 | `codecs()` | Payload serialization format | Built-in JSON |
 | `configureNetwork()` | Listener bind/advertise host defaults | bind `0.0.0.0` |
 | `configureWorker(options)` | The CPU worker pool (§3.2) | The §3.2 table |
-| `configureInboundDispatch()` | Host-wide receive cap (§3.3) | Auto-calculated |
-| `configureDispatch()` | Diagnostics level and message flow (§4) | `"errors"` |
+| `configureDispatch()` | Diagnostics level/message flow (§4), Core HWM, and the application job queue (§3.3) | `"errors"`; both profiles use `Balanced` |
 | `configureLocations()` | Location store behavior (§5) | The §5 table |
 | `configureStreamCompression()` | STREAM compression | No compression |
 | `addLocationStore` · `addRelocationStore` | The location-resolution and relocation stores | Single-node configuration if omitted |
@@ -121,14 +120,25 @@ other languages.
 
 **I/O workers don't use this pool.** `runIoWorker(...)` runs on the event loop.
 
-### 3.3 Host-Wide Receive Cap
+### 3.3 Core HWM And The Application Job Queue
 
-The surface `configureInboundDispatch()` returns. It differs in nature from the per-
-connection cap — it applies to the **total payload** of messages that haven't yet started
-handler execution.
+These are values on `ZLinkDispatchOptionsBuilder`, returned by `configureDispatch()`. Core HWM
+limits accounted bytes in ordinary queues; the
+application job queue limits jobs waiting for handler start across the host instance.
 
-> This unit and cap are confirmed by contract but **the runtime doesn't use them yet.**
-> See [4. Backpressure §6](04-backpressure.en.md#6-framework-runtime-coverage).
+| Method | What it sets | Default |
+| --- | --- | --- |
+| `coreHwmMemoryLimitBytes(bigint | undefined)` | Memory-limit hint forwarded for Core budget calculation | `undefined` |
+| `coreHwmBudgetBytes(bigint | undefined)` | Manual Core budget that takes precedence over the profile | `undefined` (Auto) |
+| `coreHwmProfile(ZLinkCoreHwmProfile)` | Core Auto-budget profile | `Balanced` |
+| `applicationJobQueueProfile(ZLinkApplicationJobQueueProfile)` | Queued-job Auto profile | `Balanced` |
+| `maxQueuedApplicationJobs(bigint | undefined)` | Exact manual queued-job limit | `undefined` (Auto) |
+
+The memory limit and Core budget must be positive. The manual queued-job limit is
+`1..2,147,483,647`; `0n` is a startup configuration error, not unlimited. The two profiles
+use the same labels but are independent enums and calculations. See
+[4. Backpressure](04-backpressure.en.md) and [Common Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
+for saturation behavior and production measurement.
 
 ## 4. Diagnostics
 
@@ -149,7 +159,7 @@ method chains.
 
 | Option | Default |
 | --- | --- |
-| `ownerLeaseRenewIntervalMs(...)` | 10,000 |
+| `ownerLeaseRenewIntervalMs(...)` | 5,000 |
 | `ownerLeaseTtlMs(...)` | 15,000 |
 | `ownerLeaseRenewTimeoutMs(...)` | 3,000 |
 | `ownerLeaseFencingMarginMs(...)` | 5,000 |
@@ -157,14 +167,10 @@ method chains.
 | `storeFailureGraceMs(...)` | 30,000 |
 | `routeCacheMaxAgeMs(...)` | 15,000 |
 | `messageFollowDurationMs(...)` | 30,000 |
-| `maxActiveOutboundRelocations(...)` · `maxActiveInboundRelocations(...)` | 64 |
-| `maxConcurrentRelocationCaptures(...)` · `maxConcurrentRelocationRestores(...)` | 8 |
-| `maxRelocationPayloadInFlightBytes(...)` | 268,435,456 (256 MiB) |
 
 > **The TTL-to-renewal-interval ratio is 3×** (5 seconds : 15 seconds). That means the
-> lease survives up to two missed renewals. All four languages share this value, so mixing
-> nodes from different languages in one mesh doesn't shift when owner determination
-> happens. If you change the value, **change the ratio along with it.**
+> lease survives up to two missed renewals. When changing the values, preserve
+> `renew interval + renew timeout < TTL - fencing margin`.
 
 ## 6. STREAM Options
 

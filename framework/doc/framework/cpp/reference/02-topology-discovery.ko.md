@@ -298,9 +298,11 @@ session에는 적용하지 않는다.
 ```cpp
 options.services().add_singleton<order_repository_t>();
 options.configure_network().set_bind_host("0.0.0.0");
-options.configure_inbound_dispatch()
-  .set_application_hwm_profile(
-    zlink::framework::application_hwm_profile_t::low_latency);
+auto &dispatch = options.configure_dispatch();
+dispatch
+  .set_core_hwm_profile(zlink::framework::core_hwm_profile_t::low_latency)
+  .set_application_job_queue_profile(
+    zlink::framework::application_job_queue_profile_t::low_latency);
 options.metadata()
   .allow_session_to_actor("trace-id")
   .allow_actor_to_session("server-region");
@@ -317,8 +319,7 @@ options.handler_coroutine_workers(8);
 | `.metadata().allow_session_to_actor(key)` / `.allow_actor_to_session(key)` | 지정하지 않은 key는 forward 안 함 | STREAM session↔Actor relay로 넘길 metadata key를 방향별 allowlist에 추가 |
 | `.configure_network()` | `bind_host()`는 `127.0.0.1` | 개별 listen 호출이 override하지 않는 한 쓰는 기본 bind·advertise host |
 | `.worker()` | `worker_options_t` 기본값 | bounded worker pool의 최소·최대 thread 수, idle timeout, queue 상한(`RunCpuWorker`/`RunIoWorker`가 쓰는 pool) |
-| `.configure_inbound_dispatch()` | `application_hwm_profile_t::balanced` | Inbound application HWM 크기·profile, process 메모리 상한 |
-| `.configure_dispatch()` | Framework 기본 정책 | Dispatch·diagnostics 옵션. observability-diagnostics category 참고 |
+| `.configure_dispatch()` | Framework dispatch·diagnostics 기본값, 두 profile 모두 `balanced`, manual 값은 미지정 | `dispatch_options_t`에서 Dispatch·diagnostics와 Core HWM memory·budget·profile, host-wide Application Job Queue profile 또는 정확한 manual permit limit을 함께 설정 |
 | `.configure_stream_compression()` | 압축 없음 | STREAM 기본 압축 codec(`use_default()`/`use_lz4()`/`use(codec)`/`disable()`) |
 | `.set_max_pending(count)` | Framework 기본값 | runtime 전체 pending queue 상한 |
 | `.set_application_version(version)` / `.set_maintenance_wave(wave)` | `0` / 없음(exclusion 없음) | 모든 local MeshNode가 게시하는 배포 버전과 maintenance wave |
@@ -327,9 +328,14 @@ options.handler_coroutine_workers(8);
 | `.codecs()` | JSON만 등록 | `options.codecs().use(extension)`. messaging-execution category의 Codec 등록 항목을 참고 |
 
 **완료 결과.** 대부분 반환값 없이 동기로 실행되며, `.services()`/`.configure_network()`/
-`.worker()`/`.configure_inbound_dispatch()`/`.configure_dispatch()`는 해당 builder나 options
+`.worker()`/`.configure_dispatch()`는 해당 builder나 options
 객체를 반환해 그 위에서 추가 설정을 이어간다. 값 범위를 벗어나면 startup 검증에서
 configuration error로 드러난다.
+
+Core가 byte budget 계산을 소유하며 Framework는 connection 수로 budget을 나누지 않는다.
+Application Job Queue는 별도의 job-count limit이다. Manual 범위는 `1..2,147,483,647`이고,
+미지정하면 Auto profile을 사용한다.
+[Core/Framework API 계약](../../common/spec/06-framework-api.ko.md)을 참고한다.
 
 **선택 기준.** 위 전용 항목(host lifecycle·topology 등록·diagnostics)에 속하지 않는, 단순 값
 하나로 끝나는 host-wide 설정을 조정할 때 쓴다.

@@ -57,8 +57,7 @@ until the first call — it's **blocked by an exception at startup.**
 | `set_message_follow_duration (...)` | How long a message keeps following a target that's relocating | 30 seconds |
 | `handlers ()` | Handler group registration | — |
 | `metadata ()` | Metadata propagation policy | — |
-| `configure_dispatch ()` | Diagnostics level and message flow (§4) | `errors` |
-| `configure_inbound_dispatch ()` | Host-wide receive cap (§3.2) | Auto-calculated |
+| `configure_dispatch ()` | Diagnostics level/message flow (§4), Core HWM, and the application job queue (§3.2) | `errors`; both profiles use `balanced` |
 | `configure_locations ()` | Location store behavior (§5) | The §5 table |
 | `add_location_store (...)` | The location-resolution store | Single-node configuration if omitted |
 | `services ()` | DI registration ([18. DI Container](18-di-container.en.md)) | — |
@@ -104,23 +103,25 @@ auto-calculate.
 The two `mailbox_*` values are set **only before startup.** `0` doesn't mean unlimited —
 it picks the finite default the Framework profile sets.
 
-### 3.2 Host-Wide Receive Cap
+### 3.2 Core HWM And The Application Job Queue
 
-The surface `configure_inbound_dispatch ()` returns. It differs in nature from the per-
-connection cap — it applies to the **total payload** of messages that haven't yet started
-handler execution.
+These are values on `dispatch_options_t`, returned by `configure_dispatch ()`. Core HWM
+limits accounted bytes in ordinary queues; the
+application job queue limits jobs waiting for handler start across the host instance.
 
 | Option | What it sets | Default |
 | --- | --- | --- |
-| `set_application_hwm_bytes (...)` | The host-wide cap, in bytes | Auto-calculated by profile if unset |
-| `set_application_hwm_profile (...)` | The tendency used for auto-calculation | `balanced` |
-| `set_process_memory_limit_bytes (...)` | The memory baseline for auto-calculation | The container/cgroup cap |
+| `set_core_hwm_memory_limit_bytes(...)` | Memory-limit hint forwarded for Core budget calculation | Unset |
+| `set_core_hwm_budget_bytes(...)` | Manual Core budget that takes precedence over the profile | Unset (Auto) |
+| `set_core_hwm_profile(...)` | Core Auto-budget profile | `balanced` |
+| `set_application_job_queue_profile(...)` | Queued-job Auto profile | `balanced` |
+| `set_max_queued_application_jobs(...)` | Exact manual queued-job limit | Unset (Auto) |
 
-Passing `0` to `set_process_memory_limit_bytes` is rejected at startup. Leave the value
-unset to mean unlimited.
-
-> This unit and cap are confirmed by contract but **the runtime doesn't use them yet.**
-> See [4. Backpressure §6](04-backpressure.en.md#6-framework-runtime-coverage).
+The memory limit and Core budget must be positive. The manual queued-job limit is
+`1..2,147,483,647`; `0` is a startup configuration error, not unlimited. The two profiles
+use the same labels but are independent enums and calculations. See
+[4. Backpressure](04-backpressure.en.md) and [Common Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
+for saturation behavior and production measurement.
 
 ## 4. Diagnostics
 
@@ -149,11 +150,6 @@ Fields of the `location_options_t` that `configure_locations ()` returns.
 | `store_failure_grace` | How long a store outage is tolerated | 30 seconds |
 | `route_cache_max_age` | Route cache validity period | 15 seconds |
 | `message_follow_duration` | How long a message keeps following a target that's relocating | 30 seconds |
-| `max_active_outbound_relocations` | Concurrent outbound relocation count | 64 |
-| `max_active_inbound_relocations` | Concurrent inbound relocation count | 64 |
-| `max_concurrent_relocation_captures` | Concurrent capture count | 8 |
-| `max_concurrent_relocation_restores` | Concurrent restore count | 8 |
-| `max_relocation_payload_in_flight_bytes` | Total payload cap while relocating | 256 MiB |
 | `spot_router_channels` | Mapping when the Spot mesh name differs from the route channel name | Uses the same name |
 
 **Keep `owner_lease_ttl` comfortably larger than `owner_lease_renew_interval`.** The lease
@@ -208,7 +204,7 @@ These have no default, so startup fails if you don't specify them.
   default — it means unlimited. Leave the value unset to let it auto-calculate.
 - **I set timeout to 0 and startup fails** → that's expected.
   `set_default_request_timeout` rejects anything at or below 0.
-- **I set `process_memory_limit_bytes` to 0 and it's rejected** → leave the value unset to
+- **I called `set_core_hwm_memory_limit_bytes(0)` and it's rejected** → leave the value unset to
   mean unlimited. `0` is an invalid value.
 - **The lease keeps getting taken away** → `owner_lease_ttl` is too short relative to
   `owner_lease_renew_interval`. Leave margin to survive one failed renewal.

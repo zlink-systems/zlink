@@ -71,9 +71,11 @@ title: "C++ 바인딩 최종 구조"
 - C++는 설치되는 헤더, RAII 클래스, 구체 값, 불투명 구현 상태를 자연스러운 경계로 사용한다.
 
 - C++20은 bindings 라이브러리의 최소 지원 범위다.
-- bindings 라이브러리는 `async_result_t<T>` 기반 완료 객체와 callback submit을 제공할 수 있지만, coroutine awaiter, framework handler executor, framework dispatcher를 소유하지 않는다.
-- framework coroutine은 bindings의 완료 객체나 callback 완료를 framework 실행 경계에서 감싸서 제공한다.
-- 언어별 비동기 실행 표면 기준은 [바인딩 비동기 실행 표면 정책](../async-coroutine-policy.md)을 따른다.
+- bindings 라이브러리는 직접 `co_await`하는 move-only `async_result_t<T>`를 제공하지만,
+  coroutine executor, framework handler executor, framework dispatcher를 소유하지 않는다.
+- framework coroutine은 같은 awaitable을 직접 기다리며 optional promise hook으로 serial turn과
+  ambient context의 continuation handoff만 제공한다.
+- 언어별 비동기 실행 표면 기준은 [바인딩 비동기 실행 표면 정책](../async-coroutine-policy.ko.md)을 따른다.
 
 ## 저장소 레이아웃
 
@@ -428,7 +430,7 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
 - send, routed send, publish, request, reply, SPOT operation, Actor location/session
   operation은 move-only fluent 빌더를 반환한다.
 - 빌더 시작 메서드는 대상 identity, topic, channel, routing id, request sequence만
-  받는다. payload, flag, timeout, callback, async submit 선택은 빌더 단계에서 한다.
+  받는다. payload, flag, timeout, async submit 선택은 빌더 단계에서 한다.
 - SPOT 채널 대상 operation은 `send_to_channel(...)`과 `request_to_channel(...)`을 쓴다.
   SPOT topic publish는 `publish(topic)`을 그대로 쓴다.
 - handler 등록 메서드는 `set_..._handler` 이름을 쓴다. 예를 들어 send readiness는
@@ -449,13 +451,39 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
 - `send_no_wait`, `publish_with_flags`, `request_async` 같은 operation 시작 오버로드
   계열을 추가하지 않는다. operation 이름은 하나로 유지하고 변형은 빌더가 흡수한다. 종단
   빌더 메서드의 언어별 이름은
-  [바인딩 비동기 실행 표면 정책](../async-coroutine-policy.md)을 따른다.
+  [바인딩 비동기 실행 표면 정책](../async-coroutine-policy.ko.md)을 따른다.
+- routed send와 routed request의 `async()`는 Core에 blocking submit을 호출하기 전에
+  완료 객체와 operation-owned multipart record를 만든다. Binding은
+  Core가 선택한 정확한 `(RID, transport pair id, generation)`을 operation key로 고정하고,
+  그 key를 대기 집합에 넣은 뒤 exact-target `DONTWAIT` submit만 시도한다.
+- 같은 native handle의 모든 C++ outbound 경로는 binding-owned record-attempt gate를 공유한다.
+  한 번의 native attempt에서 기존 exact-target part API를 첫 part부터 `FINAL`까지 호출하고
+  즉시 gate를 해제한다. readiness 대기나 continuation 재개 중에는 gate를 보유하지 않는다.
+- backpressure가 발생하면 operation만 기다린다. record-attempt 밖의 socket-wide lock, 호출 thread,
+  coroutine executor나 Framework scheduler를 점유하지 않으며, 다른 target operation은 같은
+  socket에서도 독립적으로 Core에 도달한다. Core의 exact-target writable/terminal event만 해당
+  key를 재개하고 stale generation event는 무시한다. 내부 ready-target ring은 한 target이 다른
+  target을 독점하지 않게 하지만 같은 RID concurrent call에 새 strict FIFO 공개 계약을 추가하지 않는다.
+- Send는 operation 시작 시 socket `SNDTIMEO`를 한 번 읽어 absolute deadline으로 고정한다.
+  `SNDTIMEO=0`도 최초 exact-target `DONTWAIT` 시도 한 번은 수행한다. Request의 최초 absolute
+  deadline도 admission 대기 중 연장하지 않는다. target detach, socket/context
+  종료, deadline과 `async_result_t::cancel()`은 terminal completion을 정확히 한 번만 이긴다.
+  Request는 최종 wire 수용 전에 Core reply correlation을 등록하고, 수용 후에는 Core reply
+  lifecycle이 완료를 소유한다.
+- Send builder의 `.flags(dontwait).submit()`은 one-shot 즉시 호출이다. backpressure면
+  `false`를 즉시 반환한다. `async()`만 binding의 event-driven admission 대기를 사용하고
+  managed callback terminal이나 `get`/`wait` 호환 표면은 제공하지 않는다.
+- Raw ROUTER/`received_t` reply의 terminal은
+  `reply_submit_operation_t::submit() -> void`인 동기 one-shot이다. Terminal reply와 error
+  reply를 HWM 없는 completion lane에 native 호출 한 번으로 제출한다. HWM backpressure는
+  reply 결과가 아니며 `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`와 그 밖의
+  non-HWM submit 실패는 즉시 `submit_error_t`로 전달한다.
 - `on_send_ready(...)`, `on_packet(...)`, `on_event(...)` 같은 표준 이름 우회나 operation
   별칭을 두지 않는다. 호출 지점은 계층화된 별칭 대신 표준 공개 계약을 그대로 쓴다.
 
 ## 64-bit byte HWM과 monitoring 계약
 
-- HWM과 Auto HWM planning unit은 `byte_count_t`로 표현한다.
+- Socket HWM과 context Core HWM memory limit·budget은 `byte_count_t`로 표현한다.
 - 이 값 타입은 `uint64_t` byte만 보관하며 `bytes(...)` 생성 함수와 `bytes()` 조회 함수로 단위를 드러낸다.
 - 이전 `message_count_t`는 alias나 adapter로 유지하지 않는다.
 - `0`은 HWM에서 무제한을 뜻하며, 수동 기본값은 `4,096,000 bytes`다.
@@ -466,24 +494,66 @@ options.send_hwm (zlink::byte_count_t::bytes (send_limit)); // Send pipe의 byte
 options.recv_hwm (zlink::byte_count_t::bytes (0));          // 0은 무제한 receive HWM이다.
 
 auto context_options = context.options ();
-context_options.auto_hwm_msg_unit_bytes (
-  zlink::byte_count_t::bytes (planning_unit)); // Auto HWM 계산용 64-bit byte 입력이다.
+context_options.core_hwm_memory_limit_bytes (
+  zlink::byte_count_t::bytes (memory_limit));
+context_options.core_hwm_budget_bytes (
+  zlink::byte_count_t::bytes (core_budget));
+context_options.core_hwm_profile (zlink::auto_hwm_profile::balanced);
+
+const auto snapshot = context.core_hwm_budget_snapshot ();
+context.reset_core_hwm_budget_metrics ();
 ```
 
-`context_options.auto_hwm_msg_unit_bytes(...)`는 계산 결과가 아니라 Core planner에
-전달할 입력을 설정한다. Core는 선택한 message slot 수에 planning unit을 곱해
-planned byte HWM을 정한다. 사용자가 `send_hwm(...)` 또는 `recv_hwm(...)`을
-호출한 방향은 수동 override가 되므로 Auto-HWM 재계산 대상에서 제외된다.
+`core_hwm_memory_limit_bytes(...)`와 `core_hwm_budget_bytes(...)`의 `0`은 각각
+명시 입력과 수동 Core budget이 없다는 뜻이다. Binding은 profile 비율, connection 수 또는
+queue별 HWM을 계산하지 않고 exact `uint64_t` 값을 Core context option으로 전달한다.
+C++ binding은 runtime memory hint를 만들지 않는다. 입력 우선순위는 수동 Core budget,
+명시 memory limit, Core fallback 순서다. Core가 감지한 finite hard limit보다 명시 입력이
+크면 `EINVAL`을 그대로 전달하고 clamp하지 않는다.
+`core_hwm_budget_snapshot_t`는 Core ABI v1 필드와 flag를 단위 변환 없이 투영하며
+`core_hwm_budget_snapshot()`이 ABI version과 struct size 초기화를 소유한다. 사용자가
+`send_hwm(...)` 또는 `recv_hwm(...)`을 호출한 방향은 기존처럼 수동 override다.
+
+Snapshot은 configured/runtime/resolved memory limit, configured/effective budget,
+planned/applied/manual-reserved HWM, Core queue/application/current/peak/provisional accounted
+byte, completion current/peak/pending과 total messaging byte, monitor/instance aggregate,
+application/completion queue count, `outstanding_application_lease_count`, `retired_queue_count`,
+`deferred_origin_credit_bytes`, oversize·blocked·aggregate flag, `budget_generation`과
+`measurement_epoch`을 빠짐없이 노출한다. Metrics reset은 current·pending·queue count와 위 세
+owner-lifecycle gauge를 유지하고 budgeted/completion peak를 각 current로 재기준화하며 epoch
+counter를 0으로 만든 뒤 `measurement_epoch`을 증가시킨다.
 
 실제 send/receive admission은 C++ 바인딩이 판단하지 않는다. Core pipe가 보관한
 accounted byte가 적용된 HWM에 도달하면 Core가 backpressure를 반환한다. C++
 바인딩은 그 결과와 timeout을 기존 operation builder 계약에 따라 전달한다.
 `0 bytes`는 무제한이며 message 한 건을 허용한다는 뜻이 아니다.
 
-Monitor snapshot은 Core monitoring ABI v2를 투영한다. Planned, applied, deferred와 in-flight
-HWM field는 `_bytes` 접미사와 `uint64_t`를 사용한다. Deferred field의 유효 여부는 별도
-boolean으로 제공한다. Pending message와 profile slot은 count 진단값으로 남으며 byte field와
-이름을 공유하지 않는다.
+`socket.monitor_open(events, monitor_hwm_bytes)`와
+`socket_monitor_t::open(socket, events, monitor_hwm_bytes)`는 `byte_count_t`를 받는다.
+`0`은 Core monitor 기본값을 선택하고, 양수는 정확한 monitor queue byte HWM으로
+변환 없이 전달한다. Message-count overload나 alias는 없다.
+
+Framework backend가 사용하는 `recv_retained(received_t&)`와
+`subscribe_retained(topic_message_t&)`는 기존 framing을 유지하면서 각
+실제 payload part와 함께 반환된 Core HWM budget lease를 출력 객체에 붙인다. ROUTER의
+합성 routing-id frame과 SUB의 내부 topic frame에는 공개 lease를 만들지 않는다. Multipart는
+part별 non-null lease를 출력 객체의 한 내부 소유자에 모으고, 수신 도중 실패하면 이미 받은
+lease를 모두 반환한다.
+
+`received_t` 또는 `topic_message_t`를 복사하면 이 내부 소유자를 공유한다. 한 복사본의
+`close()`는 그 복사본의 part와 소유권만 정리하며, 다른 복사본이 남아 있으면 Core credit을
+반환하지 않는다. 마지막 복사본이 `close()`되거나 소멸할 때 lease를 각각 정확히 한 번
+반환한다. `message_t` part만 따로 복사해도 lease 수명은 늘어나지 않는다. Caller가 payload
+복사만 남기려면 출력 객체를 닫아 credit을 반환한다. 일반 `recv(received_t&)`,
+`subscribe(topic_message_t&)`, `recv(message_t&)`와 `subscribe_part(...)`는 retained lease를
+숨겨서 보관하지 않고 기존처럼 dequeue에서 credit을 즉시 반환한다. 같은 출력 객체를 다음
+retained receive에 다시 넘기면 바인딩은 native receive를
+시작하기 전에 그 복사본의 이전 part와 lease 소유권을 초기화한다.
+
+Legacy `auto_hwm_msg_unit_bytes`, slot·size-cap·connection-bucket planner property는 alias 없이
+제거한다. Monitor snapshot은 Core monitoring ABI v3의 byte pending field를 투영하고,
+pending message count와 `snd_pending_bytes`·`rcv_pending_bytes`를 별도 값으로 유지하며,
+context-wide budget·accounting·queue count는 `core_hwm_budget_snapshot_t`에서 조회한다.
 
 ## 기능 범위
 
@@ -515,6 +585,10 @@ C++ 호출자는 C 핸들 정리를 추론하지 않아도 된다.
 - mutable 핸들을 공유 소유하는 대신 move-only 리소스 클래스를 선호한다.
 - 메시지 값은 효율적인 move를 지원하고, 복사를 요청할 때 명시적 copy를 지원한다.
 - data-plane 수신과 subscribe 경로는 호출자가 제공하는 저장소를 쓴다.
+- `recv_retained`와 `subscribe_retained`가 채운 `received_t`와 `topic_message_t`만 수신
+  part와 함께 Core HWM budget lease의 공유 수명을 소유한다. 일반 receive는 즉시 credit을
+  반환한다. Part만 복사한 값은 lease를 소유하지 않으며 마지막 retained 출력 객체의
+  close/drop이 credit을 반환한다.
 - Actor join 요청 수신처럼 service 제어/입장 수신 경로는 C++ 호출자에게 더 명확하면
   optional이나 타입 지정 결과 반환을 써도 된다. 다만 data 없음과 강한 수신 실패는 여전히
   구분해야 한다.
@@ -577,5 +651,5 @@ C++는 Actor와 Spot 라우트 조회 결과를 구체 계약 타입으로 노�
 
 - C++는 resolve된 Actor ref를 인자로 받는 `spot_node_t::send_to_actor(actor_ref_t)`와 `spot_node_t::request_to_actor(actor_ref_t)`를 노출한다.
 - `send_to_actor`는 submit이 성공하면 하나 이상의 message part 소유권을 넘기고, Actor 소유자 mailbox가 인계를 받으면 완료된다.
-- `request_to_actor`는 submit이 성공하면 요청 part의 소유권을 넘기고, Actor handler가 만든 reply part를 callback 또는 awaitable 결과로 전달한다.
+- `request_to_actor`는 submit이 성공하면 요청 part의 소유권을 넘기고, Actor handler가 만든 reply part를 native awaitable 결과로 전달한다.
 - C++는 제거된 Discovery route table이나 resolver API를 compatibility helper로 되살리면 안 된다.

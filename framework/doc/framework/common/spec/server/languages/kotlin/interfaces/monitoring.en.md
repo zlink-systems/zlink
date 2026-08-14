@@ -8,16 +8,16 @@ publisher to coroutine cancellation — it doesn't define a separate
 status or event value. Each item is a complete status after a change,
 not an event holding only some fields.
 
-The host's inbound dispatch state also uses Java's
-`ZLinkInboundDispatchStatus` unchanged. A Kotlin-only data class or
-`Flow` aggregation isn't added. Every byte value is a non-negative Java
-`long`, and `pendingPayloadBytes == queuedPayloadBytes +
-activePayloadBytes` holds.
+The host's capacity state also uses Java's
+`ZLinkHostCapacityStatus` unchanged. A Kotlin-only data class or
+`Flow` aggregation isn't added. Core HWM runtime snapshot, application job queue
+effective/reserved/queued/in-use/peak/wait values, and
+`resetCapacityMetrics()` therefore use the Java projection unchanged.
 
 Endpoint, lifecycle generation, and descriptor source are kept only for
 the framework to judge a stale descriptor and connection. Admission/
-claim/reservation, pending work, and connection intent also aren't added
-to the Kotlin projection.
+Other than aggregate queue reservation, per-owner admission/claim,
+payload, and connection intent aren't added to the Kotlin projection.
 
 A RouteMesh peer uses Java's `ZLinkPeerState` unchanged.
 `NOT_CONNECTED` is a state where a connection is needed but there's no

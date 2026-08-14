@@ -1,16 +1,18 @@
 ---
-title: "Relocation handoff 상태 전이"
+title: "52. Relocation handoff 상태 전이"
 ---
 
-# Relocation handoff 상태 전이
+# 52. Relocation handoff 상태 전이
 
-[내부 구조 목차](README.ko.md) · [정식 계약](../spec/28-relocation-flow.ko.md) · [이전: 12. Service wire protocol](12-service-wire-protocol.ko.md)
+> **문서 성격 — 공개 규범 스펙이 아닌 내부 설계 문서.** 이 장은 연결된 공개 계약을 만족시키는 구현 구조를 설명한다. Application이 관찰하는 동작을 추가하거나 변경하지 않는다.
+
+[내부 구조 목차](README.ko.md) · [정식 계약](28-relocation-flow.ko.md) · [이전: 51. Service wire protocol](51-internal-service-wire-protocol.ko.md)
 
 > **이 장이 설명하는 것** — C++·.NET·JVM·Node.js runtime이 Actor와 Spot relocation을
 > 같은 순서로 구현하기 위한 source·target·Session의 상태 전이와 queue 소유권.
 
 이 문서는 새 공개 동작을 정의하지 않는다. Application이 관찰하는 결과는
-[Actor와 Spot relocation 전체 흐름](../spec/28-relocation-flow.ko.md)이 소유한다. 여기서는 네
+[Actor와 Spot relocation 전체 흐름](28-relocation-flow.ko.md)이 소유한다. 여기서는 네
 runtime이 그 결과를 만들 때 달라지면 안 되는 내부 결정을 설명한다.
 
 ## 1. 결정: 공통 handoff 하나를 사용한다
@@ -25,7 +27,7 @@ stateDiagram-v2
     SourceRunning --> SourcePaused: current turn 완료
     SourcePaused --> TargetRestoring: temporary queue 설치와 payload Restore 요청
     TargetRestoring --> RelayReady: temporary queue와 Restore 준비
-    RelayReady --> CutoverReceived: cached relay 뒤 cutover 수신
+    RelayReady --> CutoverReceived: ingress-hold relay 뒤 cutover 수신
     RelayReady --> CutoverFallback: 1,000ms timeout과 Warning
     CutoverReceived --> OwnerCommitted: target-only Location Store CAS 성공
     CutoverFallback --> OwnerCommitted: target-only Location Store CAS 성공
@@ -37,11 +39,13 @@ stateDiagram-v2
     OwnerCommitted --> TargetOpen: 기존 작업부터 queue 개방
     TargetOpen --> FollowOnly: source Message Follow 유지
     FollowOnly --> [*]: Message Follow 기간 종료
-    SourcePaused --> SourceRunning: cutover 전 명시적 실패
+    SourcePaused --> SourceRunning: RelayReady 전 명시적 실패
 ```
 
-**결정**: `OwnerCommitted` 전에는 source만 owner이고, 그 뒤에는 target만 owner다. CAS 전
-명시적 실패만 `SourceRunning`으로 돌아갈 수 있다. CAS 뒤에는 source로 rollback하지 않는다.
+**결정**: `OwnerCommitted` 전에는 source만 owner이고, 그 뒤에는 target만 owner다. Source 복구
+경계는 이 owner commit보다 앞선 `RelayReady` accepted 시점이다. 그 전 명시적 실패만
+`SourceRunning`으로 돌아갈 수 있고, 그 뒤에는 cutover submit 결과와 관계없이 source로 rollback하지
+않는다.
 
 **언어별 재량**: phase를 enum 하나로 보관할지 여러 immutable record로 표현할지, lock·actor
 loop·executor 중 무엇으로 직렬화할지는 각 runtime이 정한다. 위 전이 순서와 허용한 역전이는
@@ -77,7 +81,8 @@ Relocation unit마다 handoff state 하나가 다음 값을 소유한다.
 4. 아직 실행하지 않은 queue와 timer, application state를 capture한다.
 5. Target Restore를 시작하고, 그동안 이전 주소의 새 message를 ingress hold에 넣는다.
 6. Target의 relay 수신 준비 통지를 기다린다.
-7. 저장한 queue와 ingress hold를 같은 target relay connection으로 보낸다.
+7. Ingress hold만 같은 target relay connection으로 보낸다. Capture한 queue와 timer는
+   Relocation Store payload에서 target이 복원하며 relay하지 않는다.
 8. Relay lane에 cutover를 one-way로 넣는다. Cutover는 boundary 전 relay를 모두 보냈다고
    target에 알린다. 그 뒤 도착한 message는
    boundary 뒤 구간으로 보낸다.
@@ -87,12 +92,22 @@ message를 수신하는 것은 별도다.
 
 ### 3.2 Ordered relay 경계
 
-Source는 target의 relay 수신 준비 통지를 받기 전에는 cached queue를 보내지 않는다. 통지를
-받으면 capture한 기존 작업과 ingress hold를 같은 TCP connection으로 보내고, relay lane의
+Source는 target의 relay 수신 준비 통지를 받기 전에는 ingress-hold relay를 보내지 않는다. 통지를
+받으면 capture 뒤 ingress hold만 같은 TCP connection으로 보내고, relay lane의
 현재 prefix 뒤에 cutover를 `[send]`로 넣는다. Cutover는 boundary 앞 relay를 모두 보냈다는
 뜻이며 reply가 없다. 새 message는 계속 수락하지만 boundary 뒤 구간에
 넣으므로 mailbox가 비기를 기다리지 않는다. Target이 boundary를 읽었다면 같은 connection에서
 앞서 보낸 relay를 모두 읽은 상태다.
+
+Capture한 기존 queue prefix와 timer는 saved-work reference가 독점한다. Source relay가 같은
+record를 다시 만들거나 target이 saved work와 relay record를 deduplicate하면 안 된다.
+
+Relay-ready reply가 accepted 상태가 되면 source 복구를 금지한다. Source의 각 queued job permit과
+saved-work byte owner는 그 뒤 한 번 수행하는 one-way cutover submit이 성공 또는 실패 terminal에
+도달할 때까지 유지한다. Terminal result 뒤 source dispatch를 영구 종료하면서 이 owner들을 정확히
+한 번 정리하며 target 완료 reply를 기다리지 않는다. Relay-ready 전 명시적 abort만 source owner를
+유지하고 target staged owner를 정리한다. Relay-ready 뒤 submit 실패는 target의 1,000ms fallback으로
+수렴하며 source를 복원하지 않는다.
 
 Boundary 뒤 이전 주소로 도착한 message는 폐기하지 않는다. CAS 전이면 target temporary
 queue로 relay하고, CAS 뒤면 Message Follow로 전달한다. 서로 다른 connection 사이의 순서를
@@ -119,10 +134,19 @@ Source는 relayed request의 caller가 아니다. Caller가 유지한 pending re
 temporary queue를 등록한다. Restore 중 들어온 direct message와 source relay는 handler를 찾지
 않고 이 queue에 넣는다.
 
+Temporary queue group은 cutover 전 source relay 구간과 그 밖의 temporary 구간을 분리해
+보관한다. Saved work는 이 group에 복사하지 않고 Relocation Store payload에서 별도 복원한다.
+
+이 group과 saved work는 dispatch 전 ordered durable backlog다. Ordinary record를 receive할 때는
+Application Job Queue shared reservation을 사용하고, record와 retained-byte ownership을 backlog에
+유한하게 handoff한 직후 reservation을 반환한다. Backlog item은 runnable하지 않은 동안 live queued-job
+permit을 보유하지 않는다.
+
 Temporary queue가 없는 target은 Restore를 시작하거나 Location Store를 변경하면 안 된다.
 Temporary queue와 Restore가 준비되면 target은 relay 수신 준비를 source에 reply한다. Restore
 request는 temporary queue 설치, payload Restore와 dispatch를 열지 않은 relay 준비를 요청한다.
 Cutover와 Session route update는 one-way이며 별도 완료 reply가 없다.
+Target은 staged payload마다 target-side retained-byte owner가 생기기 전에는 relay 준비를 reply하지 않는다.
 
 ### 4.2 Target만 Location Store CAS를 실행한다
 
@@ -152,16 +176,19 @@ Store retry는 별도 timeout이나 새 공개 설정을 만들지 않는다. Re
 operation이 이미 가진 유효시간이 deadline이다. Terminal `RelocationId`에 대한 늦은 Store 응답은
 정리한 object나 queue를 다시 활성화하지 않는다.
 
-### 4.3 Queue 병합 순서
+### 4.3 Ordered backlog와 점진 queue admission
 
-CAS가 성공하면 target은 다음 세 구간을 이 순서로 한 execution queue에 넣는다.
+CAS가 성공하면 target은 다음 세 구간을 이 순서로 ordered durable backlog에 확정한다.
 
 1. Capture 전에 source queue가 수락했지만 실행하지 않은 작업과 timer
 2. Cutover boundary보다 앞서 같은 connection으로 relay된 작업
 3. Restore와 cutover 중 target temporary queue가 수락한 나머지 작업
 
-그 뒤 temporary route를 regular dispatch route로 바꾸고 application dispatch를 연다. Queue를
-먼저 열고 기존 작업을 나중에 넣으면 안 된다.
+그 뒤 temporary route를 regular dispatch route로 바꾸고 필요한 lifecycle callback을 끝낸 다음
+application dispatch를 runnable하게 만든다. Backlog의 application handler turn은 shared queued-job
+permit을 하나씩 얻은 뒤 live execution queue에 들어가며 actual handler start가 permit을 반환한다.
+Backlog 전체 permit을 미리 얻거나 queue를 먼저 열고 기존 작업을 나중에 붙이면 안 된다. Permit을
+기다리는 payload는 target retained-byte owner가 계속 소유한다.
 
 ## 5. Session owner의 유일한 책임
 
@@ -181,8 +208,8 @@ sequenceDiagram
     S->>S: [local] binding별 request·push 보관
     R->>B: [request] temporary queue 설치·payload Restore·relay 준비
     B-->>R: [reply] temporary queue·Restore 준비 완료
-    R->>B: [send] cached relay 뒤 cutover
-    B->>B: [local] target-only CAS · queue 병합과 개방
+    R->>B: [send] ingress-hold relay 뒤 cutover
+    B->>B: [local] target-only CAS · queue 병합 · route 전환 · lifecycle · dispatch 개방
     B->>S: [send] exact target route 적용·held 제출·seal 해제
     alt SessionRelocationSealTimeout 안에 exact update 처리
         S->>S: [local] held message 제출과 matching seal 해제
@@ -206,6 +233,11 @@ Session owner는 다음 일을 하지 않는다.
 Held Session message는 target route를 적용한 뒤 보관한 순서대로 모두 제출한다. 각 제출이
 수락 또는 실패로 끝난 다음 matching seal을 해제한다. Route update는 response를 만들지 않는다.
 Duplicate update는 no-op이며 timeout 뒤 late update는 Warning만 기록한다.
+
+Relay-ready reply가 accepted 상태가 되기 전 명시적인 failure에서는 durable abort와 source queue
+복원을 먼저 확정한 뒤 source coordinator가 command 44 abort를 one-way로 보낸다. Session owner는
+matching seal의 held message를 source route로 제출하고 그 seal만 해제한다. Reply나 ACK를 만들지
+않는다. Relay-ready 뒤 abort와 terminal handoff의 late·duplicate abort는 state를 바꾸지 않는다.
 
 ## 6. 검증은 책임 경계에서 한 번만 수행한다
 
@@ -239,6 +271,7 @@ message와 seal을 정리한다. Late update는 `late_session_route_update` Warn
 - 숫자 high-water로 source와 target queue를 대조하는 방식
 - Durable delivery journal로 정상 TCP 전송을 다시 확인하는 방식
 - Relocation에만 적용하는 record 수·byte 수·동시 unit capacity gate
+- Dispatch 전 backlog 전체에 대한 Application Job Queue permit 선예약
 - Source나 Session owner가 수행하는 Location Store owner 변경
 - ACK timeout 뒤 source owner로 되돌리는 추측성 rollback
 - 서로 다른 TCP connection의 message에 전역 순서를 부여하는 방식
@@ -266,13 +299,17 @@ Session 책임을 adapter별로 다시 구현하지 않는다.
 네 runtime은 같은 scenario table을 production 경로에서 검증한다.
 
 - Source mailbox가 계속 증가해도 cutover boundary가 도착하고 relocation이 끝난다.
-- Target의 relay 수신 준비 통지 전에는 cached queue relay가 0건이다.
+- Target의 relay 수신 준비 통지 전에는 ingress-hold relay가 0건이다.
+- Saved queue prefix와 timer는 Relocation Store에서 한 번만 복원하며 relay record로 만들지 않는다.
 - Relay 수신 준비와 최종 relocation 완료가 같은 state나 callback으로 합쳐지지 않는다.
-- Restore 또는 boundary 전에 Location Store write가 0회다.
+- Restore 전에 relocation Location Store write가 0회이고, boundary 전 owner·membership·authority 변경은 0회다. Restore 뒤 source owner를 유지한 `Prepared` write는 허용한다.
 - CAS 시도는 target에서만 실행되고 source와 Session에서는 0회다. Retry도 같은 fence와
   `RelocationId`를 유지한다.
 - CAS conflict이면 target handler 실행과 Session route 변경이 0회다.
 - Saved work, pre-boundary relay, later temporary work 순서를 유지한다.
+- Staging receive reservation은 durable handoff 뒤 반환되고 post-CAS backlog가 live permit을 순서대로 얻는다.
+- Backlog가 live job limit보다 커도 모든 permit을 선예약하지 않고 terminal까지 진행한다.
+- Relay-ready 전 target byte owner가 존재하고, accepted 상태 뒤 cutover submit이 성공 또는 실패 terminal에 도달할 때까지 source permit·byte owner가 유지되며 각 owner를 한 번만 정리한다.
 - 같은 queue에서 `send`는 response 0회, `request`는 original reply route response 1회를 유지한다.
 - Relocation 중 request의 operation identity와 deadline이 바뀌지 않는다.
 - Bound Session message는 seal 중 보관되고 target route 적용 뒤 제출된다.

@@ -40,11 +40,12 @@ form.
 
 ## Host status/error kind
 
-Host status (`ZLinkFrameworkRuntimeStatus`, `ZLinkInboundDispatchStatus`) and the
+Host status (`ZLinkFrameworkRuntimeStatus`, `ZLinkHostCapacityStatus`,
+`ZLinkCoreHwmStatus`, and `ZLinkApplicationJobQueueStatus`) and the
 `ZLinkFrameworkErrorKind` correspondence table use the Java types directly — no Kotlin-only data
 class or enum is added. See
 [the Java reference's document 08](../../java/reference/08-observability-diagnostics.en.md)
-(Korean-only) for the field meaning and correspondence table of both entries.
+for the field meaning and correspondence table of both entries.
 
 ---
 
@@ -52,4 +53,4 @@ See the
 [Kotlin monitoring exact interface](../../common/spec/server/languages/kotlin/interfaces/monitoring.en.md)
 and
 [Java reference 08. Observability diagnostics](../../java/reference/08-observability-diagnostics.en.md)
-(Korean-only) for the full rationale.
+for the full rationale.

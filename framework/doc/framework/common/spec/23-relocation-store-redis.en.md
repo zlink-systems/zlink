@@ -171,11 +171,15 @@ aren't restored. When extending the retention period too, the existence
 and checksum of each data chunk are confirmed in parallel, and only after
 all succeed is the leading index's retention extended.
 
-The bytes one application state adapter can return are also at most 64
-MiB. The default 256 MiB limit applied when one process concurrently
+The bytes returned by one application state adapter have no separate
+64-MiB cap. The framework splits a larger adapter payload into data chunks
+of at most 64 MiB under the registered Relocation Store's ordinary blob
+contract, and applies the 256-GiB logical-stream limit above to the whole
+payload. The default 256-MiB limit applied when one process concurrently
 processes relocation payloads is the Framework coordinator's in-flight
-memory limit. This value doesn't change the storage size limit of one
-blob or of the whole payload split across multiple blobs.
+memory limit. Reaching that limit waits for additional I/O capacity rather
+than rejecting the adapter payload. This value doesn't change the storage
+size limit of one blob or of the whole payload split across multiple blobs.
 
 The default retention for each data chunk and the leading index is 24
 hours, and the framework uses the point where 12 hours of retention

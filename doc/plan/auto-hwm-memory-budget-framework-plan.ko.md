@@ -39,10 +39,10 @@ Core scheduler를 다시 구현하지 않고 [Bindings의 비동기 수용 계�
 
 근거:
 
-- [C++ Framework HWM resolver](../../framework/languages/cpp/framework/src/runtime/host/application_hwm_resolver.hpp)
-- [.NET Framework HWM resolver](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Configuration/ZLinkApplicationHwmResolver.cs)
-- [Java Framework budget 계산](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/dispatch/ZLinkInboundDispatchBudget.java)
-- [Node.js Framework budget 계산](../../framework/languages/node/packages/framework/src/runtime/dispatch/inbound-dispatch-budget.ts)
+- [C++ Framework Core HWM 설정 전달](../../framework/languages/cpp/framework/src/runtime/host/app.cpp)
+- [.NET Framework Core HWM 설정 전달](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Host/ZLinkFrameworkRuntimeStateFactory.cs)
+- [Java Framework Core HWM 설정 전달](../../framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/binding/ZLinkJavaContext.java)
+- [Node.js Framework Core HWM 설정 전달](../../framework/languages/node/packages/framework/src/runtime/backend/node/node-backend-adapter-factory.ts)
 - [.NET binding backend context](../../framework/languages/dotnet/src/Zlink.Framework/Runtime/Backend/DotNet/Adapters/ZLinkDotNetBackendRuntimeContext.cs)
 - [C++ mesh completion-control 실행 경로](../../framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp)
 - [C++ Router binding bridge](../../framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp)
@@ -209,10 +209,10 @@ Framework는 이 동작을 위해 `pendingByTarget`, RID별 deque, ready ring이
 구현하지 않는다. Backpressure 감지와 전송 가능 시점의 재개는 binding 계약이다. Framework가 소유하는
 것은 기존 operation deadline, cancellation, peer·route lifecycle과 결과 전달뿐이다.
 
-Framework는 Core send-ready callback을 직접 등록하거나 A의 pipe 상태를 polling하지 않는다. Binding은
-A의 수용 실패와 readiness 등록 사이의 wake를 잃지 않고, A가 막힌 동안 B가 writable이어도 A operation을
-정상적으로 재개한다. Pipe detach, socket close와 context 종료는 binding의 terminal 결과로 Framework에
-정확히 한 번 전달된다.
+Framework는 Core의 socket-wide 또는 routed target-ready callback을 직접 등록하거나 A의 pipe 상태를
+polling하지 않는다. Binding은 Core가 전달한 RID와 transport pair generation으로 해당 operation만
+재개한다. A가 막힌 동안 B가 writable이어도 B event가 A를 깨우지 않는다. Pipe detach, socket close와
+context 종료는 binding의 terminal 결과로 Framework에 정확히 한 번 전달된다.
 
 비동기 API가 반환 객체를 만들기 전에 native blocking submit을 실행하면 같은 runtime thread를 사용하는
 다른 operation까지 지연되므로 허용하지 않는다. Binding이 기다리는 동안 Framework socket owner mutex를
@@ -406,6 +406,7 @@ Framework instance는 하나의 Core budget authority를 사용해야 한다. �
 - Legacy MonitorHwm count 설정·환경 변수·CLI가 unknown option으로 거절됨
 - A RID가 계속 backpressured여도 B·C·D의 비동기 submit과 진행이 계속됨
 - A가 막히고 B가 writable인 상태에서도 A의 wake가 유실되지 않고 credit 회복 뒤 진행됨
+- Framework가 Core readiness callback이나 `pendingByTarget`을 직접 소유하지 않고 binding operation만 await함
 - Pipe detach, socket close, context 종료, timeout과 cancellation에서 대기 operation이 정확히 한 번 완료됨
 - Backpressure 대기 중 event loop, runtime worker와 Framework socket owner mutex를 점유하지 않음
 - Framework에 RID별 retry queue, ready ring과 고정 주기 submit polling이 없음

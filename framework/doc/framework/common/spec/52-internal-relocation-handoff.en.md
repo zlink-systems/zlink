@@ -1,17 +1,19 @@
 ---
-title: "Relocation Handoff State Transitions"
+title: "52. Relocation Handoff State Transitions"
 ---
 
-# Relocation Handoff State Transitions
+# 52. Relocation Handoff State Transitions
 
-[Internals index](README.en.md) · [Formal contract](../spec/28-relocation-flow.en.md) · [Previous: 12. Service Wire Protocol](12-service-wire-protocol.en.md)
+> **Document status — internal design, not normative public specification.** This chapter explains implementation structure used to satisfy the linked public contracts. It does not add or change application-visible behavior.
+
+[Internals index](README.en.md) · [Formal contract](28-relocation-flow.en.md) · [Previous: 51. Service Wire Protocol](51-internal-service-wire-protocol.en.md)
 
 > **What this chapter explains** — the source, target, and Session state transitions and
 > queue ownership that the C++, .NET, JVM, and Node.js runtimes use to implement Actor
 > and Spot relocation in the same order.
 
 This document creates no new public behavior. The application-visible result is owned by
-[Complete Actor And Spot Relocation Flow](../spec/28-relocation-flow.en.md). This chapter
+[Complete Actor And Spot Relocation Flow](28-relocation-flow.en.md). This chapter
 explains the internal decisions that must not diverge while the four runtimes produce
 that result.
 
@@ -27,7 +29,7 @@ stateDiagram-v2
     SourceRunning --> SourcePaused: current turn completes
     SourcePaused --> TargetRestoring: install temporary queue and Restore payload
     TargetRestoring --> RelayReady: temporary queue and Restore ready
-    RelayReady --> CutoverReceived: cutover received after cached relay
+    RelayReady --> CutoverReceived: cutover received after ingress-hold relay
     RelayReady --> CutoverFallback: 1,000ms timeout and Warning
     CutoverReceived --> OwnerCommitted: target-only Location Store CAS succeeds
     CutoverFallback --> OwnerCommitted: target-only Location Store CAS succeeds
@@ -39,12 +41,13 @@ stateDiagram-v2
     OwnerCommitted --> TargetOpen: queue opens with existing work first
     TargetOpen --> FollowOnly: source keeps Message Follow
     FollowOnly --> [*]: Message Follow duration ends
-    SourcePaused --> SourceRunning: explicit failure before cutover
+    SourcePaused --> SourceRunning: explicit failure before RelayReady
 ```
 
 **Decision**: before `OwnerCommitted`, only the source is owner; afterward, only the
-target is owner. Only an explicit pre-CAS failure can return to `SourceRunning`. There is
-no rollback to source after CAS.
+target is owner. The source-restoration boundary is the earlier point at which
+`RelayReady` is accepted. Only an explicit failure before it can return to
+`SourceRunning`; afterward, no cutover-submit result rolls back to source.
 
 **Per-language discretion**: each runtime may represent phase as one enum or several
 immutable records, and may serialize it with a lock, actor loop, or executor. It may not
@@ -80,7 +83,8 @@ the transport or request contract already provides a distinct operation identity
 4. Capture not-yet-executed queue work, timers, and application state.
 5. Start target Restore and hold new old-address messages in the ingress hold.
 6. Wait for the target's relay-ready notification.
-7. Send the saved queue and ingress hold over the same target relay connection.
+7. Send only ingress hold over the same target relay connection. The target restores the
+   captured queue and timers from the Relocation Store payload; they aren't relayed.
 8. Insert cutover one-way into the relay lane. Cutover tells target that all
    pre-boundary relay was sent. Place later arrivals after its boundary.
 
@@ -89,13 +93,25 @@ and receiving transport messages are separate operations.
 
 ### 3.2 Ordered Relay Boundary
 
-The source sends no cached queue before the target's relay-ready notification. After that
-notification, it sends captured work and the ingress hold on the same TCP connection,
+The source sends no ingress-hold relay before the target's relay-ready notification. After that
+notification, it sends only post-capture ingress hold on the same TCP connection,
 then inserts cutover as `[send]` after the relay lane's current prefix. Cutover reports
 that all pre-boundary relay was sent and has no reply. New messages
 remain accepted but enter the post-boundary span, so cutover doesn't wait for an empty
 mailbox. Once the target reads this boundary, it has read every earlier relay on that
 connection.
+
+The saved-work reference exclusively owns the captured existing queue prefix and timers.
+Source relay must not recreate those records, and target must not deduplicate saved work
+against relay records.
+
+Once relay-ready is accepted, source restoration is forbidden. Every source queued-job
+permit and saved-work byte owner remains held until the subsequent one-way cutover submit,
+attempted once, reaches a success or failure terminal. That terminal permanently closes
+source dispatch and releases these owners exactly once without waiting for a target
+completion reply. Only an explicit abort before relay-ready preserves source ownership
+and cleans the target staged owner. A later submit failure converges through the target's
+1,000ms fallback and doesn't restore source.
 
 A message arriving at the old address after the boundary isn't discarded. Before CAS it
 is relayed to the target temporary queue; after CAS it is forwarded through Message
@@ -123,6 +139,15 @@ timeout.
 registers a temporary queue for the object identity. A direct message or source relay
 arriving during Restore enters this queue without finding a handler.
 
+The temporary queue group keeps the pre-cutover source-relay span separate from the
+remaining temporary span. Saved work isn't copied into this group and is restored
+separately from the Relocation Store payload.
+
+This group and saved work form an ordered durable backlog before dispatch. Receiving an
+ordinary record uses a shared Application Job Queue reservation, which is returned after
+a finite handoff of the record and retained-byte ownership into the backlog. A backlog
+item holds no live queued-job permit while it isn't runnable.
+
 A target without a temporary queue must neither start Restore nor change the Location
 Store.
 
@@ -130,6 +155,8 @@ Once the temporary queue and Restore are ready, target replies that relay recept
 ready. The Restore request asks for temporary-queue installation, payload Restore, and
 relay preparation without opening dispatch. Cutover and Session route update are
 one-way and have no completion reply.
+The target doesn't reply relay-ready until target-side retained-byte ownership exists for
+every staged payload.
 
 ### 4.2 Only The Target Runs The Location Store CAS
 
@@ -160,16 +187,20 @@ Store retry creates neither another timeout nor a new public setting. Its deadli
 the validity already carried by the relocation payload and Restore operation. A late
 Store response for a terminal `RelocationId` doesn't reactivate a cleaned object or queue.
 
-### 4.3 Queue Merge Order
+### 4.3 Ordered Backlog And Progressive Queue Admission
 
-After CAS succeeds, target places these three spans into one execution queue in order:
+After CAS succeeds, target fixes these three spans in one ordered durable backlog:
 
 1. Work and timers the source queue accepted but didn't execute before Capture
 2. Work relayed on the same connection before the cutover boundary
 3. Remaining work accepted by the target temporary queue during Restore and cutover
 
-It then replaces the temporary route with regular dispatch and opens application
-dispatch. It must not open the queue first and append existing work later.
+It then replaces the temporary route with regular dispatch, finishes required lifecycle
+callbacks, and makes application dispatch runnable. Each backlog application-handler turn
+acquires one shared queued-job permit before entering the live execution queue, and actual
+handler start returns that permit. It must neither reserve permits for the whole backlog
+nor open the queue and append existing work afterward. A payload waiting for a permit
+remains owned by the target retained-byte owner.
 
 ## 5. The Session Owner's Only Responsibility
 
@@ -190,8 +221,8 @@ sequenceDiagram
     S->>S: [local] hold request and push for that binding
     R->>B: [request] install temporary queue, Restore payload, prepare relay
     B-->>R: [reply] temporary queue and Restore ready
-    R->>B: [send] cutover after cached relay
-    B->>B: [local] target-only CAS · merge and open queue
+    R->>B: [send] cutover after ingress-hold relay
+    B->>B: [local] target-only CAS · merge queue · switch route · lifecycle · open dispatch
     B->>S: [send] apply exact target route, submit held, release seal
     alt exact update within SessionRelocationSealTimeout
         S->>S: [local] submit held messages and release matching seal
@@ -216,6 +247,12 @@ Held Session messages are submitted in their held order after applying the targe
 The matching seal is released after every submission settles as accepted or failed.
 Route update produces no response. A duplicate is a no-op; an update after timeout
 records only a Warning.
+
+On an explicit failure before relay-ready is accepted, durable abort and source-queue
+restoration are fixed first, then source coordinator sends command 44 abort one-way.
+Session owner submits the matching seal's held messages to the source route and releases
+only that seal. It creates no reply or ACK. An abort after relay-ready, or a late/duplicate
+abort for a terminal handoff, doesn't mutate state.
 
 ## 6. Validate Once At The Responsible Boundary
 
@@ -252,6 +289,7 @@ The following aren't part of this handoff:
 - comparing source and target queues with a numeric high-water;
 - rechecking normal TCP delivery with a durable delivery journal;
 - a record-count, byte-count, or concurrent-unit capacity gate specific to relocation;
+- reserving Application Job Queue permits for the entire pre-dispatch backlog;
 - Location Store owner changes performed by source or Session owner;
 - guessed rollback to source after an ACK timeout; or
 - global ordering across different TCP connections.
@@ -281,13 +319,17 @@ target-only CAS, timeout, and Session responsibility aren't reimplemented per ad
 Each runtime verifies the same scenario table through its production path.
 
 - Cutover completes while source mailbox input continues.
-- Cached queue relay count is zero before target reports relay reception ready.
+- Ingress-hold relay count is zero before target reports relay reception ready.
+- The saved queue prefix and timers are restored once from the Relocation Store and never made into relay records.
 - Relay-ready and final relocation completion aren't merged into one state or callback.
-- Location Store write count is zero before Restore and cutover boundary.
+- Relocation Location Store write count is zero before Restore, and owner/membership/authority change count is zero before the cutover boundary. A post-Restore `Prepared` write that retains source ownership is allowed.
 - CAS attempts run only at target and zero times at source and Session. Retries keep the
   same fence and `RelocationId`.
 - CAS conflict runs zero target handlers and performs zero Session route changes.
 - Saved work, pre-boundary relay, and later temporary work retain that order.
+- A staging receive reservation returns after durable handoff, and the post-CAS backlog acquires live permits in order.
+- A backlog larger than the live-job limit reaches terminal without reserving every permit first.
+- Target byte ownership exists before relay-ready. Source permits and byte ownership remain until the post-acceptance cutover submit reaches a success or failure terminal, and each owner cleans once.
 - In the same queue, `send` produces zero responses and `request` produces one response through the original reply route.
 - Request operation identity and deadline don't change during relocation.
 - Bound Session work is held during seal and submitted after target route application.

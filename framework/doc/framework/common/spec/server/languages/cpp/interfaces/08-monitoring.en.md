@@ -36,14 +36,53 @@ struct observed_status_t final {
     observation_loss_t loss;
 };
 
-struct inbound_dispatch_status_t {
-    std::uint64_t application_hwm_bytes;
-    std::uint64_t pending_payload_bytes;
-    std::uint64_t queued_payload_bytes;
-    std::uint64_t active_payload_bytes;
-    bool application_receive_paused;
-    std::uint64_t pending_completion_sends;
-    std::uint64_t completion_send_limit;
+struct core_hwm_status_t {
+    std::optional<std::uint64_t> configured_memory_limit_bytes;
+    std::optional<std::uint64_t> configured_budget_bytes;
+    core_hwm_profile_t configured_profile;
+    std::uint64_t effective_budget_bytes;
+    std::uint64_t total_applied_hwm_bytes;
+    std::uint64_t core_queue_accounted_bytes;
+    std::uint64_t application_accounted_bytes;
+    std::uint64_t current_accounted_bytes;
+    std::uint64_t provisional_accounted_bytes;
+    std::uint64_t peak_accounted_bytes;
+    std::uint64_t completion_current_accounted_bytes;
+    std::uint64_t completion_peak_accounted_bytes;
+    std::uint64_t completion_pending_message_count;
+    std::uint64_t total_messaging_accounted_bytes;
+    std::uint64_t monitor_queue_applied_hwm_bytes;
+    std::uint64_t monitor_queue_accounted_bytes;
+    std::uint64_t total_instance_applied_hwm_bytes;
+    std::uint64_t total_instance_accounted_bytes;
+    std::uint64_t blocked_ratio_ppm;
+    std::uint64_t active_directional_queue_count;
+    std::uint64_t active_completion_directional_queue_count;
+    std::uint64_t active_send_queue_count;
+    std::uint64_t active_receive_queue_count;
+    std::uint64_t outstanding_application_lease_count;
+    std::uint64_t retired_queue_count;
+    std::uint64_t deferred_origin_credit_bytes;
+};
+
+struct application_job_queue_status_t {
+    application_job_queue_profile_t configured_profile;
+    std::optional<std::uint32_t> configured_manual_max;
+    std::uint32_t effective_processor_count;
+    std::uint32_t effective_max_queued_application_jobs;
+    std::uint32_t reserved_supply_permits;
+    std::uint32_t queued_application_jobs;
+    std::uint32_t permits_in_use;
+    std::uint32_t peak_permits_in_use;
+    std::uint32_t capacity_waiters;
+    std::uint64_t capacity_wait_count;
+    std::chrono::nanoseconds capacity_wait_duration;
+};
+
+struct host_capacity_status_t {
+    std::uint64_t measurement_epoch;
+    core_hwm_status_t core_hwm;
+    application_job_queue_status_t application_job_queue;
 };
 
 struct framework_runtime_status_t {
@@ -53,7 +92,7 @@ struct framework_runtime_status_t {
     std::optional<std::chrono::system_clock::time_point> operation_deadline;
     std::optional<relocation_result_t> relocation_result;
     std::optional<termination_result_t> termination_result;
-    inbound_dispatch_status_t inbound_dispatch;
+    host_capacity_status_t capacity;
     std::uint64_t sequence;
     std::chrono::system_clock::time_point observed_at;
 };
@@ -62,6 +101,7 @@ class framework_runtime_t {
 public:
     virtual ~framework_runtime_t() = default;
     virtual framework_runtime_status_t status() const = 0;
+    virtual void reset_capacity_metrics() = 0;
     virtual listener_status_t listener_status(
       listener_kind_t kind,
       std::string name) const = 0;
@@ -242,13 +282,22 @@ struct dispatch_options_t {
     dispatch_options_t &message_flow(message_flow_log_mode_t mode);
     dispatch_options_t &trace_sample_rate(double rate);
     dispatch_options_t &include_message_sizes(bool include);
+    dispatch_options_t &set_core_hwm_memory_limit_bytes(
+      std::optional<std::uint64_t> value);
+    dispatch_options_t &set_core_hwm_budget_bytes(
+      std::optional<std::uint64_t> value);
+    dispatch_options_t &set_core_hwm_profile(core_hwm_profile_t value);
+    dispatch_options_t &set_application_job_queue_profile(
+      application_job_queue_profile_t value);
+    dispatch_options_t &set_max_queued_application_jobs(
+      std::optional<std::uint32_t> value);
 };
 ```
 
 `off`, `errors`, `normal`, and `detailed` respectively mean disabled
 diagnostics, errors only, key transitions, and detailed diagnostics. The
-startup diagnostics level defaults to `errors` when omitted. Startup dispatch
-configuration only provides level, sampling rate, and whether to
+startup diagnostics level defaults to `errors` when omitted. The diagnostics part of
+startup dispatch configuration only provides level, sampling rate, and whether to
 include message size. Atomic runtime read/change of the level is owned by
 `app_t::message_flow_mode()` and `app_t::set_message_flow_mode(...)`. The
 application configures logger/trace/metric providers through the host's

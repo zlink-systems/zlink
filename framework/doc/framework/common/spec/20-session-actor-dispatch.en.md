@@ -381,12 +381,14 @@ The complete order is:
 3. Source and target perform the common procedure in
    [Complete Actor And Spot Relocation Flow §4](28-relocation-flow.en.md#4-normal-processing-order).
    Once target replies that the temporary queue and Restore are ready, source relays its
-   cached queue and ingress hold, then sends cutover one-way.
+   post-capture ingress hold only, then sends cutover one-way. Target restores the saved
+   queue and timers exactly once from the Relocation Store payload.
 4. Target runs the Location Store CAS on cutover. If cutover doesn't arrive for 1,000ms
    after the relay-ready reply, it records a Warning and proceeds with CAS and queue
    opening. A late or duplicate cutover records only a Warning and is ignored.
-5. A target whose CAS succeeds puts existing and relayed work into the target queue and
-   opens application dispatch. Target runtime then sends command 44,
+5. A target whose CAS succeeds puts saved work, pre-cutover relay, and remaining temporary
+   work into the target queue and switches to the regular route. Required lifecycle
+   callbacks finish before application dispatch opens. Target runtime then sends command 44,
    `sessionRelocationRoute`, one-way to tell the Session owner to change the binding route
    and current `ActorRef` location snapshot to target.
 6. If current Session, binding, and relocation identity match, Session owner changes the
@@ -398,10 +400,10 @@ The complete order is:
    default is 3,000ms and server configuration can change it. Without an exact route
    update by timeout, it closes the physical Session and cleans bindings, held messages,
    and seal state.
-9. If the target explicitly fails before cutover, only the matching seal is released and
-   held Session messages are resubmitted to the source route. After cutover, failure
-   doesn't reopen the source route; seal timeout cleans the physical Session and held
-   state.
+9. If the target explicitly fails before relay-ready is accepted, only the matching seal is released and
+   held Session messages are resubmitted to the source route after source coordinator
+   sends command 44 abort one-way. After relay-ready, failure, including cutover-submit failure, doesn't reopen the source
+   route; seal timeout cleans the physical Session and held state.
 
 Cutover and command 44 are one-way, so there is no response-loss state for them.
 Server-to-server delivery
@@ -412,12 +414,15 @@ contract.
 <a id="51-session-actor-location-update-message"></a>
 ### 5.1 Session Relocation Route Message
 
-Commands 42 and 43 carry the Session-seal request and reply. Command 44 is a one-way
-target-route update sent by target runtime. They are internal messages used to
-coordinate relocation, not the protocol that decides the Location Store owner.
+Commands 42 and 43 carry the Session-seal request and reply. Command 43 carries only the
+exact seal-install result, with no Session-message sequence or high-water. Command 44 is
+a one-way control sent by target runtime for commit or source coordinator for an abort
+before relay-ready is accepted. They are internal messages used to coordinate relocation, not the protocol that
+decides the Location Store owner.
 
-`sessionRelocationRoute` carries relocation identity, ActorId, ObjectGeneration, target
-MeshName/NodeRid, Session identity, SessionRid, and binding generation. The Session owner
+`sessionRelocationRoute` commit carries relocation identity, ActorId, ObjectGeneration,
+target MeshName/NodeRid, Session identity, SessionRid, and binding generation. Abort
+carries only the matching seal identity and abort action. The Session owner
 compares only values needed for its current Session and binding. Target authority has
 already been decided by the target-only Location Store CAS, so the Session owner doesn't
 re-read the Store or an Actor authority mirror.
@@ -444,7 +449,7 @@ sequenceDiagram
     S-->>C: [reply] command 43 · exact binding seal installed
     A->>B: [request] install temporary queue, Restore, prepare relay without dispatch
     B-->>A: [reply] temporary queue and Restore ready · source still owner
-    A->>B: [send/request relay] cached queue and ingress hold
+    A->>B: [send/request relay] post-capture ingress hold
     alt cutover arrives within 1,000ms
         A->>B: [send] cutover · pre-boundary relay sent
     else no cutover for 1,000ms after relay-ready reply
@@ -452,7 +457,7 @@ sequenceDiagram
     end
     B->>L: [request] CAS owner to target if source fence still matches
     L-->>B: [reply] target owner CAS result
-    B->>B: [local] open target queue
+    B->>B: [local] merge queue · switch regular route · finish lifecycle · open dispatch
     B->>S: [send] command 44 · apply exact target route, submit held, release seal
     alt exact update within SessionRelocationSealTimeout
         S->>S: [local] switch route · submit held Session messages · unseal
@@ -463,9 +468,10 @@ sequenceDiagram
 
 ## 6. Failure Handling
 
-If target fails before cutover, source remains owner. The relocation coordinator releases
-the matching Session seal and resubmits held Session messages to the source route. The
-target temporary queue isn't executed. If CAS fails after cutover, source route doesn't
+If target explicitly fails before relay-ready is accepted, source remains owner. The relocation coordinator sends
+command 44 abort one-way so the matching Session seal is released and held Session
+messages are resubmitted to the source route. The
+target temporary queue isn't executed. If CAS or cutover submit fails after relay-ready, source route doesn't
 reopen. Target removes the prepared object and queue, while
 `SessionRelocationSealTimeout` cleans the connection and held state.
 
@@ -539,5 +545,6 @@ The physical connection isn't moved to a different process.
   saved existing work or ingress-hold relay.
 - Command 44 has no response and isn't retried as a request. Message Follow is removed
   after `MessageFollowDuration`; a late Session update after timeout is only logged.
-- A failure before cutover restores the source route. A failure after cutover doesn't
-  reopen source route; target state and the Session are cleaned by their own deadlines.
+- Only an explicit failure before relay-ready is accepted restores the source route. A
+  later failure doesn't reopen source route regardless of cutover-submit result; target
+  state and the Session are cleaned by their own deadlines.

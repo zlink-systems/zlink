@@ -80,13 +80,14 @@ Values applied across the whole process.
 | Setting | What it sets | Default | When to change it |
 | --- | --- | --- | --- |
 | `DefaultRequestTimeout` | The ceiling a request waits for a response | 30s | The service's response is slower than that, or you want to fail faster |
-| `DefaultSocketSendTimeout` | The ceiling to wait when there's no slot to send into ([backpressure](#31-backpressure--송신-대기-동작)) | 1s | To tolerate congestion longer, or to fail faster |
+| `DefaultSocketSendTimeout` | The ceiling to wait when there's no slot to send into ([backpressure](#31-backpressure--send-wait-behavior)) | 1s | To tolerate congestion longer, or to fail faster |
 | `Codecs.Use(...)` | How the payload is turned into bytes | The built-in default codec | Fixing on Protobuf/MessagePack, or using your own serializer |
 | `AddHandlersFromAssemblyOf<T>()` | The assembly to find handler types in | Not searched | Letting handlers be discovered automatically |
 | `DisableImplicitHandlerAutoRegistration()` | Turns off auto-registration of discovered handlers | On | Controlling which handler opens on which channel purely through registration code |
 | `UseFilter<T>()` | Common processing to put in front of handlers | None | Gathering logging/validation/authorization in one place |
 | `ConfigureMetadata()` | The metadata keys allowed to pass between a client connection and an actor | No key allowed | Something like auth info needs to pass from the connection to the actor |
 | `ConfigureNetwork()` | The default `BindHost`/`AdvertiseHost` for every endpoint | Unspecified | The bind address and advertised address need to differ in a container/Kubernetes |
+| `ConfigureDispatch()` | Unhandled dispatch, diagnostics, Core HWM, and the application job queue | Diagnostics use `Errors`; both profiles use `Balanced` | Tuning dispatch policy, diagnostics, the Core byte budget, or the queued-job limit |
 | `ApplicationVersion` | This process's application version | `0` | Picking a relocation target by version during a zero-downtime deploy |
 | `MaintenanceWave` | The maintenance group name this process belongs to | None | Grouping nodes to maintain/replace in sequence |
 | `Worker` | The thread pool heavy work is handed off to | Max `processor count × 2` (min 2) · 30s idle · 1024 queue | Handing off a lot of slow computation/I/O to a worker |
@@ -157,15 +158,10 @@ the exact contract is covered by [the core guide's socket option](https://zlink-
 ### 3.2 Options That Set The Backpressure Ceiling
 
 `ConfigureRouterSocket()` sets the ceiling for the socket this node uses; `ConfigureSpotPublisher()`
-sets the ceiling for the publish socket Spots use to exchange events with each other. If
-unspecified, the backend default is used — an unspecified socket gets the value the runtime
-computes based on connection count. At the default profile, if there are 64 or fewer
-connections, it's `1,048,576 bytes` (1 MiB) per direction per peer, and the per-connection
-value shrinks as connections grow
-([04-backpressure §4.1](04-backpressure.en.md#41-auto-hwm--automatic-calculation-for-an-unspecified-socket)).
-**Both high-water marks limit the bytes the queue holds, not the message count, and apply
-per connection** — check whether the value multiplied by your target peer count fits your
-process memory budget ([04-backpressure](04-backpressure.en.md#4-options-that-affect-this)).
+sets the manual ceiling for the publish socket Spots use to exchange events. For an unset
+direction, Core calculates the HWM from the context budget and physical-queue census. The
+framework does not calculate a separate connection-count bucket table
+([04-backpressure §4.1](04-backpressure.en.md#41-core-hwm--the-byte-budget-owned-by-core)).
 
 | Setting | What it sets | Raising it | Lowering it |
 | --- | --- | --- | --- |
@@ -176,11 +172,9 @@ process memory budget ([04-backpressure](04-backpressure.en.md#4-options-that-af
 | `ReceiveTimeout` · `SendTimeout` | The socket-level wait ceiling | — | The default behavior is enough in most cases |
 | `Linger` (publish socket) | How long to wait for a remaining message when closing | Doesn't drop the last publish on shutdown | The default is `0`, so it closes immediately |
 
-The two ceilings differ only in direction, not in character. Each sets **how many bytes your
-own node will hold**, and that ceiling carries through to the peer's flow. Replacing the
-per-execution-unit ceiling with a single host-wide byte budget is a settled design; its
-applied status is disclosed by
-[04-backpressure §6](04-backpressure.en.md#6-framework-runtime-coverage).
+The two manual HWMs differ only in direction and apply to that socket-direction physical
+queue. They are not the Core-context-wide byte budget or the application job queue's job
+limit.
 
 **Raising the high-water mark isn't the default response.** A larger ceiling absorbs
 congestion into memory, which makes `DeadlineExceeded` show up later — and that delays
@@ -192,6 +186,24 @@ path, lower the ceiling and shrink `DefaultSocketSendTimeout`.
 Leaving `MaxMessageSize` unlimited means one message can exceed the ceiling by any amount,
 making it impossible to compute the worst-case memory a queue can occupy. If you're planning
 process memory based on the byte ceiling, specify a finite value.
+
+### 3.3 Core HWM And The Application Job Queue
+
+These are values on `IZLinkDispatchOptions`, returned by `ConfigureDispatch()`.
+
+| Setting | What it sets | Default |
+| --- | --- | --- |
+| `CoreHwmMemoryLimitBytes` | Memory-limit hint forwarded for Core budget calculation | `null` |
+| `CoreHwmBudgetBytes` | Manual Core budget that takes precedence over the profile | `null` (Auto) |
+| `CoreHwmProfile` | Core Auto-budget profile | `Balanced` |
+| `ApplicationJobQueueProfile` | Queued-job Auto profile | `Balanced` |
+| `MaxQueuedApplicationJobs` | Exact manual queued-job limit | `null` (Auto) |
+
+The memory limit and Core budget must be positive. The manual queued-job limit is
+`1..2,147,483,647`; `0` is a startup configuration error, not unlimited. The two profiles
+use the same labels but are independent enums and calculations. See
+[4. Backpressure](04-backpressure.en.md) and [Common Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
+for saturation behavior and production measurement.
 
 ## 4. Error Handling And Diagnostics
 
@@ -229,10 +241,8 @@ How to read the record left here is covered by [11-monitoring](11-monitoring.en.
 ## 5. Location Options
 
 `ConfigureLocations()` sets the interval and validity period for refreshing location
-information, and the number of
-[relocations](03-concepts.en.md#5-relocation--moving-to-another-node) — an actor or Spot
-moving to another node — that can proceed at once. How to register it, and its behavior,
-are covered by [10-location](10-location.en.md).
+information. Registration and [relocation](03-concepts.en.md#5-relocation--moving-to-another-node)
+behavior are covered by [10-location](10-location.en.md).
 
 | Setting | What it sets | Default | When to change it |
 | --- | --- | --- | --- |
@@ -244,9 +254,6 @@ are covered by [10-location](10-location.en.md).
 | `StoreFailureGrace` | How long a store outage is tolerated | 30s | Once this passes, no new connection starts. Existing connections are kept |
 | `RouteCacheMaxAge` | How long a looked-up location is reused | 15s | `0` means no caching. Shorten if moves are frequent |
 | `MessageFollowDuration` | How long the previous owner node forwards messages to the new owner | 30s | `0` means it doesn't forward |
-| `MaxActiveOutboundRelocations` · `MaxActiveInboundRelocations` | The number of relocations this process runs concurrently | 64 each | A bulk relocation is pressuring the store or network |
-| `MaxConcurrentRelocationCaptures` · `MaxConcurrentRelocationRestores` | Concurrency of the application callback that saves/restores state | 8 each | That callback is heavy and monopolizes CPU |
-| `MaxRelocationPayloadInFlightBytes` | The memory an in-flight relocation payload can occupy at once | 256 MiB | Moving many Spots with large state |
 
 ## 6. STREAM Options
 
@@ -309,8 +316,6 @@ Everything else starts from its default.
   `DefaultSocketSendTimeout`.
 - **The store slows down when activations pile up** → lower `SetActivationConcurrency`
   (default 128) to reduce concurrent activations.
-- **Memory grows a lot during a relocation** → lower `MaxRelocationPayloadInFlightBytes`
-  (default 256 MiB) and the concurrent relocation count.
 
 ## 10. Related Documents
 

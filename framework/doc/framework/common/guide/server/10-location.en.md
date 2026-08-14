@@ -232,7 +232,7 @@ and manual connection on the same MeshNode.
 
 ## 3. Location Options
 
-`ConfigureLocations()` sets the lease, route cache, and relocation execution ceilings.
+`ConfigureLocations()` sets the lease, route-cache, and message-follow windows.
 
 === "C#/.NET"
 
@@ -241,9 +241,6 @@ and manual connection on the same MeshNode.
     location.OwnerLeaseRenewInterval = TimeSpan.FromSeconds(5);
     location.OwnerLeaseTtl = TimeSpan.FromSeconds(15);
     location.MessageFollowDuration = TimeSpan.FromSeconds(30);
-    location.MaxActiveOutboundRelocations = 64;
-    location.MaxActiveInboundRelocations = 64;
-    location.MaxRelocationPayloadInFlightBytes = 256L * 1024 * 1024;
     ```
 
 === "C++"
@@ -253,9 +250,6 @@ and manual connection on the same MeshNode.
     location.owner_lease_renew_interval = std::chrono::seconds (5);
     location.owner_lease_ttl = std::chrono::seconds (15);
     location.message_follow_duration = std::chrono::seconds (30);
-    location.max_active_outbound_relocations = 64;
-    location.max_active_inbound_relocations = 64;
-    location.max_relocation_payload_in_flight_bytes = 256LL * 1024 * 1024;
     ```
 
 === "Java"
@@ -265,9 +259,6 @@ and manual connection on the same MeshNode.
     location.setOwnerLeaseRenewInterval(Duration.ofSeconds(5));
     location.setOwnerLeaseTtl(Duration.ofSeconds(15));
     location.setMessageFollowDuration(Duration.ofSeconds(30));
-    location.setMaxActiveOutboundRelocations(64);
-    location.setMaxActiveInboundRelocations(64);
-    location.setMaxRelocationPayloadInFlightBytes(256L * 1024 * 1024);
     ```
 
 === "Kotlin"
@@ -277,9 +268,6 @@ and manual connection on the same MeshNode.
     location.setOwnerLeaseRenewInterval(Duration.ofSeconds(5))
     location.setOwnerLeaseTtl(Duration.ofSeconds(15))
     location.setMessageFollowDuration(Duration.ofSeconds(30))
-    location.setMaxActiveOutboundRelocations(64)
-    location.setMaxActiveInboundRelocations(64)
-    location.setMaxRelocationPayloadInFlightBytes(256L * 1024 * 1024)
     ```
 
 === "Node/TypeScript"
@@ -289,9 +277,6 @@ and manual connection on the same MeshNode.
     location.ownerLeaseRenewIntervalMs = 5_000;
     location.ownerLeaseTtlMs = 15_000;
     location.messageFollowDurationMs = 30_000;
-    location.maxActiveOutboundRelocations = 64;
-    location.maxActiveInboundRelocations = 64;
-    location.maxRelocationPayloadInFlightBytes = 256 * 1024 * 1024;
     ```
 
 
@@ -305,9 +290,12 @@ and manual connection on the same MeshNode.
 | `StoreFailureGrace` | 30s | How long the last route decision is kept during a Store outage |
 | `RouteCacheMaxAge` | 15s | The max time before a cached route is re-checked |
 | `MessageFollowDuration` | 30s | How long the previous owner relays messages to the new owner before the move |
-| `MaxActiveOutboundRelocations` | 64 | The ceiling on relocation units a process sends out concurrently |
-| `MaxActiveInboundRelocations` | 64 | The ceiling on relocation units a process restores concurrently |
-| `MaxRelocationPayloadInFlightBytes` | 256 MiB | The ceiling on encoded payload across the whole process |
+
+Relocation has no separate participant, record, concurrency, or in-flight-byte capacity
+setting. Target staging uses the host's shared Application Job Queue reservation and runs a
+backlog larger than the live-job limit progressively. Core memory accounting, negotiated
+frame size, and Store limits still apply; see
+[Relocation Flow §5.3](../../../common/spec/28-relocation-flow.en.md#53-no-relocation-specific-capacity-limit).
 
 **The four lease values are tied together.** Breaking the following relationship is a
 startup error. Look at all four together when changing any one value.

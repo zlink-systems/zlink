@@ -4,7 +4,7 @@ title: "Node.js transport readiness implementation"
 
 # Node.js transport readiness implementation
 
-[Common layering](../../common/internals/01-layering.en.md) ·
+[Common layering](../../common/spec/40-internal-layering.en.md) ·
 [Transport liveness](../../common/spec/29-transport-liveness.en.md) ·
 [MeshNode contract](../../common/spec/13-mesh-node.en.md)
 
@@ -254,8 +254,9 @@ implementation uses these defaults.
 The byte budget adds payload bytes, metadata bytes, and the fixed per-item cost. The
 scheduler returns message and byte capacity after the callback finishes, not when it removes
 the item from the queue, so a running callback continues to consume the budget. These are
-Node internal defaults, not public configuration contracts. Values in the common internals
-are comparison references and must not be read as the actual Node defaults.
+Node internal defaults, not public configuration contracts. Values in the common spec's
+internal-design chapters are comparison references and must not be read as the actual Node
+defaults.
 
 ## 9. Implementation verification
 

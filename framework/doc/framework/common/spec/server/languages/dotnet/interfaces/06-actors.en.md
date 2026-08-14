@@ -298,9 +298,11 @@ also be called again before the authority commit. Both callbacks must be
 retry-safe, producing the same result for the same logical relocation,
 and must not depend on exactly-once execution of an external side
 effect. A capture exception restores admission after a durable abort and
-source normalization. `CaptureAsync(...)`'s result is at most 64 MiB; an
-empty array is valid, and null is a contract violation. The framework
-immediately copies the completed array. `RestoreAsync(...)`'s
+source normalization. `CaptureAsync(...)`'s result has no
+relocation-adapter-specific size cap; the framework performs any chunking
+required by the registered Relocation Store's ordinary blob and
+whole-payload limits. An empty array is valid, and null is a contract
+violation. The framework immediately copies the completed array. `RestoreAsync(...)`'s
 `ReadOnlyMemory<byte>` is only valid until the callback completes. If a
 restore exception occurs, the instance is discarded and the same
 immutable payload is applied to a new instance. A different target isn't

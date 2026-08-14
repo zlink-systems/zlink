@@ -1,19 +1,21 @@
 ---
-title: "4. Operation Completion Confirmation — Only One Finalizes"
+title: "43. Operation Completion Confirmation — Only One Finalizes"
 ---
 
-# 4. Operation Completion Confirmation — Only One Finalizes
+# 43. Operation Completion Confirmation — Only One Finalizes
 
-[Internal structure table of contents](README.en.md) · [Previous: 3. Application And Infrastructure Execution Separation](03-progress-isolation.en.md) · [Next: 5. Message Continuity During A Move](05-relocation-continuity.en.md)
+> **Document status — internal design, not normative public specification.** This chapter explains implementation structure used to satisfy the linked public contracts. It does not add or change application-visible behavior.
+
+[Internal structure table of contents](README.en.md) · [Previous: 42. Application And Infrastructure Execution Separation](42-internal-progress-isolation.en.md) · [Next: 44. Message Continuity During A Move](44-internal-relocation-continuity.en.md)
 
 > **What this chapter answers** — when a response, timeout,
 > cancellation, shutdown, and disconnect all arrive at once, what
 > finalizes the caller.
 >
 > **Contract ownership** — the error kind is owned by
-> [the Framework Error Model](../spec/32-framework-error-model.en.md),
+> [the Framework Error Model](32-framework-error-model.en.md),
 > and the ban on resending after acceptance by
-> [Transport Liveness](../spec/29-transport-liveness.en.md). This
+> [Transport Liveness](29-transport-liveness.en.md). This
 > chapter covers the **structure** that satisfies that contract and
 > the failures that become visible during completion races.
 
@@ -127,7 +129,7 @@ state can cause double execution.
 
 **Decision — the runtime never automatically resends after
 acceptance.** This holds even if the connection drops
-([Transport Liveness 「5. Ready And Failure Determination」](../spec/29-transport-liveness.en.md#5-ready-and-failure-determination)).
+([Transport Liveness 「5. Ready And Failure Determination」](29-transport-liveness.en.md#5-ready-and-failure-determination)).
 The application can start a new call, and at that point the risk of
 duplicate execution is judged by the application.
 
@@ -145,7 +147,7 @@ A call that doesn't wait for a response completes normally **at the
 moment this process's send path accepts the message.** Whether the
 remote queue received it or the handler executed it can't be known
 from this result
-([Framework API 「12. Spot, Actor, And STREAM Owner」](../spec/06-framework-api.en.md#12-spot-actor-and-stream-owner)).
+([Framework API 「12. Spot, Actor, And STREAM Owner」](06-framework-api.en.md#12-spot-actor-and-stream-owner)).
 
 "Local acceptance" and "transport acceptance" are not separate events.
 In this product the send path is the socket's send queue, so both terms
@@ -188,6 +190,10 @@ message string is for humans to read, not a branch condition.
 - Cancellation/timeout/shutdown classification doesn't depend on the
   error message string.
 
+## Completion And Shared Capacity
+
+Only supply identifiable before receive as terminal reply/error completion bypasses. Non-completion control and new-request permits follow [Receive and Dispatch Loop](46-internal-dispatch-loop.en.md); payload leases follow [Payload Ownership](50-internal-message-ownership.en.md).
+
 ---
 
-[Internal structure table of contents](README.en.md) · [Previous: 3. Application And Infrastructure Execution Separation](03-progress-isolation.en.md) · [Next: 5. Message Continuity During A Move](05-relocation-continuity.en.md)
+[Internal structure table of contents](README.en.md) · [Previous: 42. Application And Infrastructure Execution Separation](42-internal-progress-isolation.en.md) · [Next: 44. Message Continuity During A Move](44-internal-relocation-continuity.en.md)

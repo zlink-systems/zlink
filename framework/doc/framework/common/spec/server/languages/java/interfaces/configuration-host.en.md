@@ -42,7 +42,6 @@ public interface ZLinkFrameworkOptions {
     void setApplicationVersion(long version);
     void setMaintenanceWave(String waveId);
     ZLinkLocationOptions configureLocations();
-    ZLinkInboundDispatchOptions configureInboundDispatch();
     ZLinkNetworkOptions configureNetwork();
     ZLinkMeshNodeBuilder addRouteMesh(String meshName);
     ClientServerChannelBuilder addClientServerChannel(String channelName);
@@ -56,20 +55,18 @@ public interface ZLinkFrameworkOptions {
     void useHandlerExecutor(Executor executor);
 }
 
-public enum ZLinkApplicationHwmProfile {
+public enum ZLinkCoreHwmProfile {
     COMPACT,
     LOW_LATENCY,
     BALANCED,
     THROUGHPUT
 }
 
-public interface ZLinkInboundDispatchOptions {
-    java.util.OptionalLong applicationHwmBytes();
-    void setApplicationHwmBytes(long value);
-    ZLinkApplicationHwmProfile applicationHwmProfile();
-    void setApplicationHwmProfile(ZLinkApplicationHwmProfile value);
-    java.util.OptionalLong processMemoryLimitBytes();
-    void setProcessMemoryLimitBytes(long value);
+public enum ZLinkApplicationJobQueueProfile {
+    COMPACT,
+    LOW_LATENCY,
+    BALANCED,
+    THROUGHPUT
 }
 
 public interface ZLinkLocationOptions {
@@ -89,16 +86,8 @@ public interface ZLinkLocationOptions {
     void setRouteCacheMaxAge(Duration value);
     Duration messageFollowDuration();
     void setMessageFollowDuration(Duration value);
-    int maxActiveOutboundRelocations();
-    void setMaxActiveOutboundRelocations(int value);
-    int maxActiveInboundRelocations();
-    void setMaxActiveInboundRelocations(int value);
-    int maxConcurrentRelocationCaptures();
-    void setMaxConcurrentRelocationCaptures(int value);
-    int maxConcurrentRelocationRestores();
-    void setMaxConcurrentRelocationRestores(int value);
-    long maxRelocationPayloadInFlightBytes();
-    void setMaxRelocationPayloadInFlightBytes(long value);
+    Duration sessionRelocationSealTimeout();
+    void setSessionRelocationSealTimeout(Duration value);
 }
 
 public interface ZLinkNetworkOptions {
@@ -237,17 +226,14 @@ public interface FanoutChannelBuilder {
 }
 ```
 
-If `applicationHwmBytes()` is empty, it's Auto mode. The setter's `0`
-means no limit, a positive value is the exact host-wide byte cap, and a
-negative value is a startup configuration error. The profile default is
-`BALANCED`. If `processMemoryLimitBytes()` is empty, it checks the
-finite OS cap applied to the process, such as a container/cgroup/Windows
-Job Object, and the JVM managed heap cap (`Runtime.maxMemory()`). If
-both are confirmed, the smaller value is used; if only one is confirmed,
-that value is used. If neither can be confirmed, the system's total
-physical memory is used. Auto mode boots even without configuration, and
-startup only fails before socket bind when the computed result isn't
-positive. The application listener's default `maxMessageSize()` is
+The `coreHwmMemoryLimitBytes`, `coreHwmBudgetBytes`, and `coreHwmProfile` members of the
+`ZLinkDispatchOptions` returned by `configureDispatch()` are forwarded to Core. The Java
+binding forwards a positive finite `Runtime.maxMemory()` runtime memory
+hint. Core and job-queue profiles are independent enums, both defaulting to `BALANCED`.
+Manual job cap is `1..2,147,483,647`; omission uses the common startup CPU snapshot and
+32/64/128/256 coefficients. Range violation and overflow fail before bind, and runtime does
+not recompute the result. The application
+listener's default `maxMessageSize()` is
 `16_777_216L` bytes.
 
 `configureNetwork()` returns the default host the process's RouteMesh,
@@ -503,12 +489,38 @@ public interface systems.zlink.framework.configuration.ZLinkDiagnosticsOptions {
   public abstract double sampleRate();
   public abstract boolean includeMessageSizes();
 }
+public final class systems.zlink.framework.configuration.ZLinkCoreHwmProfile extends java.lang.Enum<systems.zlink.framework.configuration.ZLinkCoreHwmProfile> {
+  public static final systems.zlink.framework.configuration.ZLinkCoreHwmProfile COMPACT;
+  public static final systems.zlink.framework.configuration.ZLinkCoreHwmProfile LOW_LATENCY;
+  public static final systems.zlink.framework.configuration.ZLinkCoreHwmProfile BALANCED;
+  public static final systems.zlink.framework.configuration.ZLinkCoreHwmProfile THROUGHPUT;
+  public static systems.zlink.framework.configuration.ZLinkCoreHwmProfile[] values();
+  public static systems.zlink.framework.configuration.ZLinkCoreHwmProfile valueOf(java.lang.String);
+}
+public final class systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile extends java.lang.Enum<systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile> {
+  public static final systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile COMPACT;
+  public static final systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile LOW_LATENCY;
+  public static final systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile BALANCED;
+  public static final systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile THROUGHPUT;
+  public static systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile[] values();
+  public static systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile valueOf(java.lang.String);
+}
 public interface systems.zlink.framework.configuration.ZLinkDispatchOptions {
   public abstract systems.zlink.framework.configuration.ZLinkUnhandledDispatchOptions unhandled();
   public abstract systems.zlink.framework.configuration.ZLinkDiagnosticsOptions diagnostics();
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode);
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions traceSampleRate(double);
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions includeMessageSizes(boolean);
+  public abstract java.util.OptionalLong coreHwmMemoryLimitBytes();
+  public abstract void setCoreHwmMemoryLimitBytes(long);
+  public abstract java.util.OptionalLong coreHwmBudgetBytes();
+  public abstract void setCoreHwmBudgetBytes(long);
+  public abstract systems.zlink.framework.configuration.ZLinkCoreHwmProfile coreHwmProfile();
+  public abstract void setCoreHwmProfile(systems.zlink.framework.configuration.ZLinkCoreHwmProfile);
+  public abstract systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile applicationJobQueueProfile();
+  public abstract void setApplicationJobQueueProfile(systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile);
+  public abstract java.util.OptionalLong maxQueuedApplicationJobs();
+  public abstract void setMaxQueuedApplicationJobs(long);
 }
 public interface systems.zlink.framework.configuration.ZLinkEndpointConnections {
   public abstract void connect(java.lang.String);
@@ -619,7 +631,7 @@ The four `ZLinkMessageFlowLogMode` values respectively mean disabled
 diagnostics, errors only, key transitions, and detailed diagnostics. The
 startup diagnostics level defaults to `ERRORS` when omitted. The Framework
 writes structured records to the standard logger/trace/metric
-providers configured by the application. Dispatch configuration only provides
+providers configured by the application. The diagnostics members of dispatch configuration only provide
 level, sampling rate, and whether to include message size; it doesn't take a
 file path, label, exporter lifecycle, or provider sink. A message-flow observer callback,
 runtime error sink, and raw event DTO aren't the public contract. A provider
@@ -659,7 +671,6 @@ public interface systems.zlink.framework.configuration.ZLinkFrameworkOptions {
   public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder addStreamNode(java.lang.String);
   public abstract void addLocationStore(systems.zlink.framework.locations.ZLinkLocationStore);
   public abstract systems.zlink.framework.locations.ZLinkLocationOptions configureLocations();
-  public abstract systems.zlink.framework.configuration.ZLinkInboundDispatchOptions configureInboundDispatch();
   public abstract systems.zlink.framework.configuration.ZLinkNetworkOptions configureNetwork();
   public abstract void useFilter(java.lang.Class<? extends systems.zlink.framework.ZLinkHandlerFilter>);
   public abstract systems.zlink.framework.configuration.ZLinkDispatchOptions configureDispatch();
@@ -685,16 +696,8 @@ public interface systems.zlink.framework.locations.ZLinkLocationOptions {
   public abstract void setRouteCacheMaxAge(java.time.Duration);
   public abstract java.time.Duration messageFollowDuration();
   public abstract void setMessageFollowDuration(java.time.Duration);
-  public abstract int maxActiveOutboundRelocations();
-  public abstract void setMaxActiveOutboundRelocations(int);
-  public abstract int maxActiveInboundRelocations();
-  public abstract void setMaxActiveInboundRelocations(int);
-  public abstract int maxConcurrentRelocationCaptures();
-  public abstract void setMaxConcurrentRelocationCaptures(int);
-  public abstract int maxConcurrentRelocationRestores();
-  public abstract void setMaxConcurrentRelocationRestores(int);
-  public abstract long maxRelocationPayloadInFlightBytes();
-  public abstract void setMaxRelocationPayloadInFlightBytes(long);
+  public abstract java.time.Duration sessionRelocationSealTimeout();
+  public abstract void setSessionRelocationSealTimeout(java.time.Duration);
 }
 public final class systems.zlink.framework.configuration.ZLinkLogLevel extends java.lang.Enum<systems.zlink.framework.configuration.ZLinkLogLevel> {
   public static final systems.zlink.framework.configuration.ZLinkLogLevel TRACE;
@@ -811,3 +814,13 @@ with `assertSame` against the return values of
 service socket isn't started before or after bean creation, and that
 start and shutdown are each delivered once to the same
 `ZLinkFrameworkRuntime`.
+
+## Inbound Queue And Session Seal Options
+
+The Java binding forwards a positive finite `Runtime.maxMemory()` as Core's runtime memory
+hint. Core and job-queue profiles are independent enums, both defaulting to `BALANCED`.
+Manual job cap is `1..2,147,483,647`; omission uses the common startup CPU snapshot and
+32/64/128/256 coefficients. Range violation and overflow fail before bind, and runtime does
+not recompute the result.
+`sessionRelocationSealTimeout` is a startup-only positive `Duration` defaulting to three
+seconds; a value not finitely representable in milliseconds also fails before bind.

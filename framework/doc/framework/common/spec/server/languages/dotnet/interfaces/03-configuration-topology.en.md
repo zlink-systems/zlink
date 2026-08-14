@@ -31,7 +31,6 @@ public interface IZLinkFrameworkOptions
     void AddLocationStore(IZLinkLocationStore store);
     void AddRelocationStore(IZLinkRelocationStore store);
     ZLinkLocationOptions ConfigureLocations();
-    IZLinkInboundDispatchOptions ConfigureInboundDispatch();
     IZLinkNetworkOptions ConfigureNetwork();
     IZLinkDispatchOptions ConfigureDispatch();
     IZLinkStreamCompressionBuilder ConfigureStreamCompression();
@@ -43,7 +42,7 @@ public interface IZLinkFrameworkOptions
     IZLinkStreamNodeBuilder AddStreamNode(string streamNodeName);
 }
 
-public enum ZLinkApplicationHwmProfile
+public enum ZLinkCoreHwmProfile
 {
     Compact = 0,
     LowLatency = 1,
@@ -51,11 +50,12 @@ public enum ZLinkApplicationHwmProfile
     Throughput = 3
 }
 
-public interface IZLinkInboundDispatchOptions
+public enum ZLinkApplicationJobQueueProfile
 {
-    ulong? ApplicationHwmBytes { get; set; }
-    ZLinkApplicationHwmProfile ApplicationHwmProfile { get; set; }
-    ulong? ProcessMemoryLimitBytes { get; set; }
+    Compact = 0,
+    LowLatency = 1,
+    Balanced = 2,
+    Throughput = 3
 }
 
 public interface IZLinkMeshNodeBuilder
@@ -734,10 +734,9 @@ public interface IZLinkMeshNodeSocketConfig
 ```
 
 The ClientServer application listener's default `MaxMessageSize` is `16 MiB`.
-Specifying `0` while using Application HWM as Auto or a positive value is
-a startup configuration error. `MaxMessageSize = 0` can only be used when
-`ApplicationHwmBytes = 0`. This setting doesn't apply to RouteMesh
-ServerServer.
+`0` means the framework adds no separate single-message cap and is not cross-validated
+with the Core HWM budget or application job queue setting. This setting does not apply to
+RouteMesh ServerServer.
 
 `ConfigureSpotPublisher()` doesn't provide a publish-only delivery
 policy option. [Logical Multicast](../../../../01-glossary.en.md#logical-multicast)
@@ -774,18 +773,13 @@ before startup in `ConfigureRouterSocket()`.
 of a Framework-level complete-message cap. HWM, mailbox byte budgets, and
 service-wire representation bounds remain separate resource and wire guards.
 
-`ConfigureInboundDispatch()` returns one host-wide inbound setting.
-`ApplicationHwmBytes`'s default is `null`, meaning Auto mode. `0` means
-no limit, and a positive value is the exact byte cap.
-`ApplicationHwmProfile`'s default is `Balanced`, and it's only used in
-computation for Auto mode. `ProcessMemoryLimitBytes` only allows `null`
-or a positive value. If this value is omitted in Auto mode, it checks the
-finite OS cap applied to the process, such as a container/cgroup/Windows
-Job Object, and the .NET GC managed heap cap
-(`GC.GetGCMemoryInfo().TotalAvailableMemoryBytes`). If both are
-confirmed, the smaller value is used; if only one is confirmed, that
-value is used. If neither can be confirmed, the system's total physical
-memory is used. So Auto mode boots even without configuration.
+`ConfigureDispatch()` returns one host-wide dispatch setting. Core memory limit, manual
+budget, and profile are forwarded to Core. The .NET binding forwards a positive finite
+`GC.GetGCMemoryInfo().TotalAvailableMemoryBytes` as its runtime memory hint. The two
+profiles are independent enums and calculations, both defaulting to `Balanced`. Manual job
+cap is `1..2,147,483,647`; omission uses the common startup CPU snapshot and 32/64/128/256
+coefficients. Range violation and overflow fail before socket bind, and runtime does not
+recompute the result.
 
 ## 6. Messaging Metadata
 

@@ -32,12 +32,8 @@ public sealed class ZLinkLocationOptions
         = TimeSpan.FromSeconds(15);
     public TimeSpan MessageFollowDuration { get; set; }
         = TimeSpan.FromSeconds(30);
-    public int MaxActiveOutboundRelocations { get; set; } = 64;
-    public int MaxActiveInboundRelocations { get; set; } = 64;
-    public int MaxConcurrentRelocationCaptures { get; set; } = 8;
-    public int MaxConcurrentRelocationRestores { get; set; } = 8;
-    public long MaxRelocationPayloadInFlightBytes { get; set; }
-        = 268_435_456;
+    public TimeSpan SessionRelocationSealTimeout { get; set; }
+        = TimeSpan.FromSeconds(3);
 }
 ```
 
@@ -56,9 +52,8 @@ OwnerLeaseRenewInterval + OwnerLeaseRenewTimeout
 `RouteCacheMaxAge`와 `MessageFollowDuration`은 0 이상이다. 둘 다 양수이면 cache age가 Message Follow
 duration보다 최소 5초 작아야 한다. 0은 해당 기능을 끈다.
 
-다섯 relocation 제한 option은 모두 양수다. Active outbound·inbound unit 기본 상한은 각각 64개,
-Capture·Restore callback 기본 상한은 각각 8개, process 전체 encoded payload in-flight 기본 상한은
-268,435,456 bytes다. 실행 중 변경은 새 relocation admission에만 적용한다.
+`SessionRelocationSealTimeout`은 startup-only 양수 duration이고 기본값은 3초다. 0, 음수, 무한대와
+`TimeSpan`을 유한 millisecond로 표현할 수 없는 값은 socket bind 전에 configuration error다.
 
 ## 3. Readiness와 운영 query
 

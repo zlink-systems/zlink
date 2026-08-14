@@ -137,13 +137,14 @@ typedef void (*zlink_monitor_handler_fn)(
 typedef zlink_monitor_event_t zlink_socket_monitor_event_t;
 typedef zlink_monitor_handler_fn zlink_socket_monitor_handler_fn;
 
-#define ZLINK_MONITOR_STATUS_ABI_VERSION 2u
+#define ZLINK_MONITOR_STATUS_ABI_VERSION 3u
 
 ZLINK_EXPORT void zlink_monitor_ignore_handler (const zlink_monitor_event_t *event_,
                                                 void *userdata_);
 
 typedef struct zlink_socket_monitor_open_options_t {
   zlink_socket_monitor_event_mask_t events;
+  uint64_t monitor_hwm_bytes;
 } zlink_socket_monitor_open_options_t;
 
 typedef struct zlink_monitor_status_t {
@@ -154,19 +155,12 @@ typedef struct zlink_monitor_status_t {
   zlink_monitor_status_detail_mask_t detail_flags;
   uint64_t snd_pending_msgs;
   uint64_t rcv_pending_msgs;
+  uint64_t snd_pending_bytes;
+  uint64_t rcv_pending_bytes;
   uint32_t auto_hwm_enabled;
   uint32_t auto_hwm_profile;
   uint32_t auto_hwm_role;
   uint32_t auto_hwm_policy_class;
-  uint64_t auto_hwm_unit_budget_bytes;
-  uint32_t auto_hwm_size_cap;
-  uint64_t auto_hwm_socket_message_slots;
-  uint32_t auto_hwm_connection_bucket_enabled;
-  uint32_t auto_hwm_connection_bucket_count;
-  uint32_t auto_hwm_connection_bucket_index;
-  uint32_t auto_hwm_connection_bucket_hwm_4k;
-  uint32_t auto_hwm_connection_bucket_hysteresis_retained;
-  uint64_t auto_hwm_effective_message_bytes;
   uint64_t auto_hwm_planned_sndhwm_bytes;
   uint64_t auto_hwm_planned_rcvhwm_bytes;
   uint64_t auto_hwm_applied_sndhwm_bytes;
@@ -198,41 +192,60 @@ ZLINK_EXPORT zlink_recv_result_t zlink_socket_monitor_recv(
   void *monitor,
   zlink_socket_monitor_event_t *event_out,
   zlink_recv_flags_t flags);
-ZLINK_EXPORT zlink_recv_result_t zlink_socket_monitor_recv_v2(
-  void *monitor,
-  zlink_socket_monitor_event_t *event_out,
-  zlink_recv_flags_t flags);
 ZLINK_EXPORT zlink_config_result_t zlink_monitor_status(
   void *monitor,
   zlink_monitor_status_t *status_out);
 ZLINK_EXPORT zlink_close_result_t zlink_monitor_close(void **monitor_p);
 ```
 
+`monitor_hwm_bytes`는 monitor source worker와 내부 monitor PAIR 양쪽에 적용하는
+단일 byte 예산이다. 양수는 변환 없이 정확한 SNDHWM·RCVHWM과 worker admission
+상한으로 사용한다. `0`은 unlimited가 아니라 Core가
+`checkedMultiply(4096, sizeof(socket_monitor_internal_event_t) + sizeof(zlink_msg_t))`
+로 계산한 기본 byte 값을 선택한다. Worker도 event count가 아니라 실제 record의
+accounted byte로 수용 여부를 판단하고, 빈 queue의 oversize record 한 건 규칙만
+동일하게 적용한다. Monitor queue는 application Auto HWM water-filling에서 제외한다.
+Context budget snapshot은 내부 monitor PAIR의 고유한 physical ypipe 방향을 한 번씩만
+집계하며 reader와 writer endpoint의 option을 중복해서 더하지 않는다.
+
 `ZLINK_SOCKET_MONITOR_EVENT_*`가 event mask의 정식 이름이며 `ZLINK_EVENT_*`는 같은 숫자의 짧은 이름이다.
 `ZLINK_DISCONNECT_*` macro는 같은 이름의 `ZLINK_DISCONNECT_REASON_*` enum 값에 대한 ABI 유지 alias다.
 `events == 0`은 event를 선택하지 않고 `EVENT_ALL`은 모든 bit를 선택한다. raw socket monitor status의
 `source_kind`는 `ZLINK_MONITOR_SOURCE_SOCKET`이다. `detail_flags`에 없는 선택 field는 0이며
-`auto_hwm_connection_bucket_index`는 bucket이 없으면 `UINT32_MAX`다.
 `abi_version`은 `ZLINK_MONITOR_STATUS_ABI_VERSION`이고, `struct_size`는 반환된 ABI version의
-전체 byte 크기다. Version 2는 이전 32-bit count HWM field를 64-bit byte field로
-교체한다. 이전 layout을 호환 layout으로 받지 않는다.
+전체 byte 크기다. Version 3은 `snd_pending_bytes`와 `rcv_pending_bytes`를 추가하고
+message-unit, slot, size-cap과 connection-bucket 진단 field를 제거한다. 이전 layout을
+호환 layout으로 받지 않는다.
+
+`zlink_socket_monitor_open`, open options와 status 구조체는 0.11.1의 현재 layout으로 기존
+이름에서 교체한다. Caller size/version 협상이나 병렬 versioned entrypoint를 추가하지 않는다.
+`abi_version`과 `struct_size`는 Core가 반환한 현재 layout의 진단값이며 caller 입력이나 호환성
+협상값이 아니다. HWM 범위·계산 또는 allocation 때문에 monitor를 열 수 없으면 open은 `NULL`과
+`errno`로 실패한다. 별도 `RESOURCE_LIMIT` config result나 binding error type을 추가하지 않는다.
 
 각 detail bit가 유효하게 만드는 field는 다음과 같다. 한 field는 한 bit에만 속하며 bit가 없으면 표의
 field를 모두 0으로 채운다.
 
 | detail bit | 유효한 field |
 |---|---|
-| `ZLINK_MONITOR_STATUS_DETAIL_SND_PENDING_MSGS` | `snd_pending_msgs` |
-| `ZLINK_MONITOR_STATUS_DETAIL_RCV_PENDING_MSGS` | `rcv_pending_msgs` |
-| `ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUDGET` | `auto_hwm_enabled`, `auto_hwm_profile`, `auto_hwm_role`, `auto_hwm_policy_class`, `auto_hwm_unit_budget_bytes`, `auto_hwm_size_cap`, `auto_hwm_socket_message_slots`, `auto_hwm_connection_bucket_enabled`, `auto_hwm_connection_bucket_count`, `auto_hwm_connection_bucket_index`, `auto_hwm_connection_bucket_hwm_4k`, `auto_hwm_connection_bucket_hysteresis_retained`, `auto_hwm_effective_message_bytes`, `auto_hwm_planned_sndhwm_bytes`, `auto_hwm_planned_rcvhwm_bytes`, `auto_hwm_last_recalc_ms`, `auto_hwm_last_recalc_reason`, `auto_hwm_send_blocked_ratio_ppm`, `auto_hwm_deferred_sndhwm_bytes`, `auto_hwm_deferred_rcvhwm_bytes`, `auto_hwm_deferred_sndhwm_valid`, `auto_hwm_deferred_rcvhwm_valid` |
+| `ZLINK_MONITOR_STATUS_DETAIL_SND_PENDING_MSGS` | `snd_pending_msgs`, `snd_pending_bytes` |
+| `ZLINK_MONITOR_STATUS_DETAIL_RCV_PENDING_MSGS` | `rcv_pending_msgs`, `rcv_pending_bytes` |
+| `ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUDGET` | `auto_hwm_enabled`, `auto_hwm_profile`, `auto_hwm_role`, `auto_hwm_policy_class`, `auto_hwm_planned_sndhwm_bytes`, `auto_hwm_planned_rcvhwm_bytes`, `auto_hwm_last_recalc_ms`, `auto_hwm_last_recalc_reason`, `auto_hwm_send_blocked_ratio_ppm`, `auto_hwm_deferred_sndhwm_bytes`, `auto_hwm_deferred_rcvhwm_bytes`, `auto_hwm_deferred_sndhwm_valid`, `auto_hwm_deferred_rcvhwm_valid` |
 | `ZLINK_MONITOR_STATUS_DETAIL_AUTO_HWM_BUFFERS` | `auto_hwm_applied_sndhwm_bytes`, `auto_hwm_applied_rcvhwm_bytes`, `auto_hwm_effective_sndbuf`, `auto_hwm_effective_rcvbuf`, `snd_bytes_in_flight`, `rcv_bytes_in_flight`, `minimum_core_message_charge_bytes`, `oversize_message_admission_count`, `oversize_message_admission_max_bytes` |
 
 Planned field는 현재 자동 정책의 계산 결과를 제공한다. Applied field는 수동 override를
 포함해 소켓이 실제로 사용하는 byte HWM을 제공한다. Deferred 값은 대응하는 `_valid`
 field가 0이 아닐 때만 유효하다. `snd_bytes_in_flight`와 `rcv_bytes_in_flight`는 snapshot
-시점의 directional pipe 합계다. Pending message field의 단위는 계속 count다. Minimum
-charge와 oversize field를 사용하면 message마다 allocator를 조회하지 않고도 byte
-회계 결과를 진단할 수 있다.
+시점의 directional pipe 합계다. 현재 version 3에서 `snd_pending_bytes`와
+`rcv_pending_bytes`는 각각 같은 send·receive in-flight 합계를 제공한다. Receive 합계와
+count는 일부 source에서 근삿값이다. Pending message field의 단위는 계속 count이며
+pending byte field는 admission 회계와 같은 byte 단위를 사용하지만 진단값 자체를
+admission 입력으로 사용하지 않는다. Minimum charge와 oversize field를 사용하면
+message마다 allocator를 조회하지 않고도 byte 회계 결과를 진단할 수 있다.
+
+`auto_hwm_send_blocked_ratio_ppm`은 측정 epoch에서 해당 socket의 최초 send admission
+시도 중 application pipe HWM 때문에 block된 비율이다. 같은 submit의 wake 뒤 재시도는
+다시 세지 않으며 transport I/O wait, completion lane과 context aggregate 사용량은 제외한다.
 
 socket monitor는 bind, accept, connect, disconnect, handshake, protocol error와 close event를 제공한다.
 handler mode와 recv mode는 상호 배타이며 두 번째 mode는 `EBUSY`다. event의 address와 routing ID는
@@ -246,19 +259,21 @@ recv에서는 caller-owned output 구조체 안의 값이다. callback의 event 
 consumer처럼 event queue를 소비하되 각 event에 아무 작업도 하지 않는다.
 
 `connection_id`는 현재 프로세스에서 하나의 물리적 transport 시도를 식별한다. Application과
-Completion transport가 한 Framework peer를 구성하는 경우 두 event는 같은 `transport_pair_id`와
-`transport_pair_generation`을 사용하고 `transport_lane`으로 각각의 lane을 구분한다. Pair를 사용하지
+Completion transport가 한 Framework peer를 구성하는 경우 각 lane의 물리 lifecycle event는 같은
+`transport_pair_id`와 `transport_pair_generation`을 사용하고 `transport_lane`으로 lane을 구분한다.
+단, `CONNECTION_READY`는 두 lane이 모두 준비된 pair를 하나의 공개 ready transport로 집계하므로 같은
+pair id와 generation마다 ready edge를 정확히 한 번만 발생시키고 `value`에도 한 번만 센다. 두 lane이
+서로 다른 시점에 routing ID를 알게 되어도 pair를 두 ready transport로 나누지 않는다. Pair를 사용하지
 않는 transport에서는 pair field가 0이며 `transport_lane`은 Application 값이다. Pair id는 프로세스
 재시작 사이에 유지되는 전역 식별자가 아니다.
 
-`CONNECTION_READY`의 `value`는 해당 monitor source가 ready인 transport 수의 현재 count다. Count가
+`CONNECTION_READY`의 `value`는 해당 monitor source가 ready인 공개 transport 수의 현재 count다. Count가
 증가한 순간을 구분해야 하면 `flags`의 `ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE`를 사용한다.
 이 flag가 없는 ready count event는 count snapshot이며 새로운 연결의 ready edge를 뜻하지 않는다.
 
-`zlink_socket_monitor_recv`는 물리 연결 식별자 필드가 추가되기 전의 event prefix만 기록하므로 이전
-layout으로 빌드한 호출자의 buffer를 안전하게 사용할 수 있다. `connection_id` 또는 transport pair
-정보가 필요한 호출자는 `zlink_socket_monitor_recv_v2`를 사용해야 한다. 두 함수는 같은 event stream을
-읽으며 호출자는 선택한 함수의 계약에 맞는 크기의 output buffer를 제공해야 한다.
+`zlink_socket_monitor_recv`는 현재 0.11.1 `zlink_socket_monitor_event_t` layout 전체를 기록한다.
+호출자는 현재 layout 크기의 output buffer를 제공해야 하며, 이전 event prefix를 위한 별도 receive
+entry point나 version 협상 경로는 제공하지 않는다.
 
 ## 2. Ordering, overflow와 thread safety
 

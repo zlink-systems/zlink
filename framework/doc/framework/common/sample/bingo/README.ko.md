@@ -643,8 +643,10 @@ Room은 `SpotWide`와 application-signaled readiness를 사용한다. Game 결�
 logical timer를 하나의 relocation unit으로 이동한다. Application adapter는 room과 Actor의 domain
 state만 저장하며 owner, queue, timer handle과 accepted journal을 중복 저장하지 않는다.
 
-Commit 전 failure는 source state를 유지한다. Commit 뒤 failure는 target에서 같은 relocation을
-recovery한다. 이전 route로 도착한 message는 active Message Follow가 있으면 target으로 전달한다.
+RelayReady reply가 accepted되기 전 명시 failure는 source state를 유지한다. RelayReady accepted
+뒤에는 CUTOVER submit 결과와 무관하게 source를 복원하지 않으며, target은 CUTOVER 수신 또는 기존
+1초 fallback으로 같은 relocation을 완료한다. 이전 route로 도착한 message는 active Message Follow가
+있으면 target으로 전달한다.
 Route가 없거나 만료되었거나 loop가 생기면 `Unavailable`, generation이 다르면 `InvalidOperation`,
 capacity 한도를 넘으면 `CapacityExceeded`로 끝난다. Sample은 이 error를 정상 성공으로 바꾸거나
 다른 node에 새 object를 만들어 우회하지 않는다.

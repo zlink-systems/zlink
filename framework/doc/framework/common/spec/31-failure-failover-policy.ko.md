@@ -40,7 +40,8 @@ generation과 owner 자격도 함께 확인한다.
 2. Transport 또는 target queue가 operation을 수락했는지 확인한다.
 3. Object operation이면 Location Store에서 확인한 owner와 generation이 아직 유효한지
    확인한다.
-4. Stateful relocation이면 owner 변경 commit 전인지 후인지 확인한다.
+4. Stateful relocation이면 relay-ready reply가 accepted 상태가 되기 전인지, 그 뒤 owner 변경 commit
+   전인지, commit 뒤인지 확인한다.
 5. 같은 operation을 계속할 수 없으면 한 번의 terminal 결과로 끝낸다. 다음 호출을 시작할지는
    Application이 결정한다.
 
@@ -173,13 +174,15 @@ graceful handoff만 지원한다.
 
 | 실패 시점 | Framework의 처리 |
 |---|---|
-| Owner 변경 commit 전 | Target instance와 temporary queue를 폐기하고 source owner·membership과 queue를 유지한다. 다른 target을 자동 선택하지 않는다. |
+| Relay-ready reply가 accepted 상태가 되기 전 명시적 실패 | Target instance와 temporary queue를 폐기하고 source owner·membership과 queue를 유지한다. 다른 target을 자동 선택하지 않는다. |
+| Relay-ready reply가 accepted 상태가 된 뒤, owner 변경 commit 전 | Cutover submit 결과와 관계없이 source를 복원하지 않는다. Target은 cutover 수신 또는 1,000ms fallback으로 owner 변경을 계속한다. |
 | Store 변경 결과를 받지 못함 | 성공이나 실패를 추측하지 않고 같은 authority record를 다시 읽어 실제 owner를 확인한다. |
 | Owner 변경 commit 뒤, 같은 target process가 실행 중임 | Source로 rollback하지 않는다. 같은 target에서 lifecycle callback이나 dispatch 전환을 deadline 안에 다시 시도할 수 있다. |
 | Owner 변경 commit 뒤 target process가 종료됨 | Location Store의 target owner는 유지하지만 object는 `Unavailable` 상태가 된다. 다른 runtime이 relocation을 이어받지 않는다. |
 | Source process 또는 target process가 operation 중 종료됨 | 다른 target 선택, process 재시작 뒤 relocation 재개와 source rollback을 수행하지 않는다. |
 
-Commit 전에 source를 유지하는 것은 failover가 아니라 아직 owner를 바꾸지 않은 operation의 취소다.
+Relay-ready reply가 accepted 상태가 되기 전 source를 유지하는 것은 failover가 아니라 비가역
+경계 전 operation의 취소다. 그 뒤에는 owner commit 전이라도 source를 복원하지 않는다.
 Commit 뒤 같은 target에서 계속하는 것도 새로운 target 선택이 아니다. Process 종료 뒤 object
 failover는 현재 계약에 포함되지 않는다. 자세한 단계와 결과는
 [Host relocation 전체 흐름 §1.1](30-host-relocation-flow.ko.md#11-장애-처리-범위)과
@@ -252,7 +255,8 @@ Framework가 수락 전 target을 다시 선택하거나 Store 결과를 재확�
   `Ready` owner 장애 뒤 다른 target을 선택하는 근거로 사용하지 않는다.
 - Instance Spot cold activation recovery를 Actor, User Spot, 이미 `Ready`인 Instance Spot이나 host
   relocation에 사용하지 않는다.
-- Relocation commit 전 failure는 source를 유지하고, commit 뒤 failure는 source로 rollback하지 않는다.
+- Relay-ready reply가 accepted 상태가 되기 전 명시적 failure만 source를 유지하고, 그 뒤 failure는
+  cutover submit 결과와 관계없이 source로 rollback하지 않는다.
 - Source 또는 target process 종료 뒤 다른 runtime이 relocation을 이어받거나 다른 target을 자동 선택하지
   않는다.
 - Store 결과가 불분명하면 authority를 다시 읽기 전까지 source admission과 target dispatch를 열지 않는다.
@@ -263,11 +267,11 @@ Framework가 수락 전 target을 다시 선택하거나 Store 결과를 재확�
 이 문서가 공개 장애 동작의 정본이다. 구현 구조는 다음 internals 문서에서 이어서 설명하며, 해당
 문서는 이 장의 오류 의미나 failover 범위를 다시 정의하지 않는다.
 
-- [6. target 선택과 route cache](../internals/06-routing-and-cache.ko.md)는 `Missing`과
+- [45. target 선택과 route cache](45-internal-routing-and-cache.ko.md)는 `Missing`과
   `Unavailable`을 resolver 결과 타입에서 보존하는 방법을 설명한다.
-- [8. 객체 종류와 활성화](../internals/08-object-lifecycle.ko.md)는 resolver 결과를 activation state
+- [47. 객체 종류와 활성화](47-internal-object-lifecycle.ko.md)는 resolver 결과를 activation state
   machine의 서로 다른 입력으로 전달하는 방법을 설명한다.
-- [10. Liveness와 상태 공개](../internals/10-liveness-and-state.ko.md)는 availability evidence와
+- [49. Liveness와 상태 공개](49-internal-liveness-and-state.ko.md)는 availability evidence와
   authority release의 소유자를 분리한다.
-- [12. Service wire protocol](../internals/12-service-wire-protocol.ko.md#8-instance-spot-cold-activation-recovery)은
+- [51. Service wire protocol](51-internal-service-wire-protocol.ko.md#8-instance-spot-cold-activation-recovery)은
   같은 target의 최초 activation recovery에만 사용하는 durable root와 scan을 설명한다.

@@ -150,7 +150,7 @@ Actor별 closing callback은 제공하지 않는다. Host Shutdown은 Actor memb
 Spot을 닫지 않으므로 이 callback을 호출하지 않는다.
 
 `relocationReady().defer()`는 `SpotWide`와 `ApplicationSignaled`를 함께 등록한
-Spot turn에서만 유효하다. Framework는 이동하지 않았거나 commit 전에 abort했으면
+Spot turn에서만 유효하다. Framework는 이동하지 않았거나 relay-ready reply가 accepted 상태가 되기 전에 abort했으면
 source에서 `Continued`, 이동했으면 target에서 `Relocated` completion을 optional
 `onRelocationReadyCompleted(...)`에 전달한다. Callback이 없으면 no-op으로 완료한다.
 Callback 완료 전에는 보류한 application message와 timer를 실행하지 않는다.

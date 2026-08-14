@@ -1,10 +1,10 @@
 <!-- framework-adapter-nav:start -->
-[Document List](../../../README.en.md) | [Previous: Runtime Execution](../../common/internals/02-serialization.en.md) | [Next: Backend Dependency Policy](backend-dependency-policy.en.md)
+[Document List](../../../README.en.md) | [Previous: Runtime Execution](../../common/spec/41-internal-serialization.en.md) | [Next: Backend Dependency Policy](backend-dependency-policy.en.md)
 <!-- framework-adapter-nav:end -->
 
 [Spec Index](../../common/README.en.md)
 
-[.NET Bundle](../README.en.md) | [Runtime Lifecycle](../../common/internals/README.en.md) | [Runtime Execution](../../common/internals/02-serialization.en.md) | [Backend Policy](backend-dependency-policy.en.md) | [Common E2E](../../common/e2e/README.en.md)
+[.NET Bundle](../README.en.md) | [Runtime Lifecycle](../../common/spec/README.en.md) | [Runtime Execution](../../common/spec/41-internal-serialization.en.md) | [Backend Policy](backend-dependency-policy.en.md) | [Common E2E](../../common/e2e/README.en.md)
 
 # ZLink Framework .NET Regression Test Matrix
 
@@ -251,7 +251,7 @@ follows the [.NET Stream Connector Public Contract](../../common/spec/stream-con
 The `.NET` public input rules for automatic routing id allocation follow
 [Configuration And Topology Exact Interface](../../common/spec/server/languages/dotnet/interfaces/03-configuration-topology.en.md).
 Descriptor claim and startup order are described in
-[Layering Boundaries And Identifiers](../../common/internals/01-layering.en.md).
+[Layering Boundaries And Identifiers](../../common/spec/40-internal-layering.en.md).
 
 | Item | Layer | Pass Criteria |
 |------|------|-----------|
@@ -334,7 +334,7 @@ The target documents are as follows.
 - `06-location-store.ko.md`
 - `dotnet-http-client.ko.md`
 - `regression-test-matrix.ko.md`
-- `../../common/internals/README.ko.md`
+- `../../common/spec/README.ko.md`
 - `public-symbol-delta-v11.ko.md`
 - `backend-dependency-policy.ko.md`
 - `runtime-integration-and-ownership.ko.md`
@@ -354,7 +354,7 @@ The target documents are as follows.
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[Document List](../../../README.en.md) | [Previous: Runtime Execution](../../common/internals/02-serialization.en.md) | [Next: Backend Dependency Policy](backend-dependency-policy.en.md)
+[Document List](../../../README.en.md) | [Previous: Runtime Execution](../../common/spec/41-internal-serialization.en.md) | [Next: Backend Dependency Policy](backend-dependency-policy.en.md)
 <!-- framework-adapter-nav:bottom:end -->
 
 ## 11. Regression Test Items Moved From The Public Contract Documents

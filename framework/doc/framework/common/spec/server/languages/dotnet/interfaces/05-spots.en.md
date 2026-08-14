@@ -393,7 +393,9 @@ cross-node move before capture.
 
 The Spot adapter's capture and restore can be called at-least-once within
 a stable relocation attempt, so they must be retry-safe.
-`CaptureAsync(...)`'s result is at most 64 MiB; an empty array is valid,
+`CaptureAsync(...)`'s result has no relocation-adapter-specific size cap;
+the framework performs any chunking required by the registered Relocation
+Store's ordinary blob and whole-payload limits. An empty array is valid,
 and null is a contract violation. The framework immediately copies the
 completed array and doesn't observe subsequent application mutation.
 `RestoreAsync(...)`'s `ReadOnlyMemory<byte>` is only valid until the
@@ -434,7 +436,8 @@ owner per Actor. The target's runtime-private shell uses the same public
 SpotId and ObjectGeneration, and isn't exposed to public lookup before
 the authority switch. A stale source route is relayed while preserving
 operation identity, generation, deadline, correlation, and reply route.
-The 1-second window from Actor queue seal to target admission is an
+The source-local 1-second window from Actor queue seal to the one-way cutover submit's
+success or failure terminal is an
 operational goal — exceeding it doesn't cancel or roll back the
 relocation.
 
@@ -443,7 +446,7 @@ relocation.
 `Defer()` registers a relocation boundary right before the next
 application turn, after the current handler finishes. The framework
 delivers `Continued` from the source if it didn't move or aborted before
-commit, and `Relocated` from the target if it moved, to
+relay-ready was accepted, and `Relocated` from the target if it moved, to
 `OnRelocationReadyCompletedAsync(...)`'s completion. The default
 implementation is a no-op. Held messages and timers aren't run before the
 callback completes.

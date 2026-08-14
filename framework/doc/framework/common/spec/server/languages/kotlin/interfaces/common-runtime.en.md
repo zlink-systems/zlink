@@ -64,9 +64,9 @@ source, stable type/factory/adapter capability, capacity and a
 different maintenance wave, an `ADMITTED` Core peer matching RID/
 lifecycle generation, placement weight. It doesn't fall back to a
 different version. If there's no version/wave/capacity or exact-ready
-target, it re-checks until the deadline and then it's
-`BLOCKED/TARGET_UNAVAILABLE`. If factory/policy/adapter doesn't match,
-`BLOCKED/STATE_INCOMPATIBLE`; a Store lookup failure is
+target satisfying the registered factory/type/relocation-adapter eligibility, it re-checks until
+the deadline and then it's `BLOCKED/TARGET_UNAVAILABLE`. After target selection, an incompatible
+transferred state schema/type adapter is `BLOCKED/STATE_INCOMPATIBLE`; a Store lookup failure is
 `BLOCKED/STORE_UNAVAILABLE`.
 
 A concurrent call with the same mode and effective target version joins

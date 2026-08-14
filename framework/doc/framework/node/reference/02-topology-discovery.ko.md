@@ -295,8 +295,9 @@ zlinkFramework()
   .bindHost = "0.0.0.0";
 
 zlinkFramework()
-  .configureInboundDispatch()
-  .applicationHwmProfile(ZLinkApplicationHwmProfile.LowLatency);
+  .configureDispatch()
+  .coreHwmProfile(ZLinkCoreHwmProfile.LowLatency)
+  .applicationJobQueueProfile(ZLinkApplicationJobQueueProfile.LowLatency);
 
 zlinkFramework().configureStreamCompression().useLz4();
 zlinkFramework().setApplicationVersion(2n);
@@ -308,16 +309,20 @@ zlinkFramework().options({ requestTimeoutMs: 30_000, worker: { minThreads: 2, ma
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
 | `.configureNetwork()` | `bindHost`는 `127.0.0.1` | 개별 listen 호출이 override하지 않는 한 쓰는 기본 bind·advertise host |
-| `.configureInboundDispatch()` | `ZLinkApplicationHwmProfile.Balanced` | Inbound application HWM 크기·profile, process 메모리 상한 |
-| `.configureDispatch()` | Framework 기본 정책 | Dispatch·diagnostics 옵션. observability-diagnostics category 참고 |
+| `.configureDispatch()` | Framework dispatch·diagnostics 기본값, 두 profile 모두 `Balanced`, manual 값은 `undefined` | `ZLinkDispatchOptionsBuilder`에서 Dispatch·diagnostics와 Core HWM memory·budget·profile, host-wide Application Job Queue profile 또는 정확한 manual permit limit을 함께 설정 |
 | `.configureStreamCompression()` | 압축 없음 | STREAM 기본 압축 codec(`useDefault()`/`useLz4()`/`use(codec)`/`disable()`) |
 | `.setApplicationVersion(version)` / `.setMaintenanceWave(waveId)` | `0n` / 없음(exclusion 없음) | 모든 local MeshNode가 게시하는 배포 버전과 maintenance wave |
 | `.options({ requestTimeoutMs, worker, dispatch, metrics, filters })` | 각 field 기본값 | host 전체 request timeout, worker pool, dispatch 옵션, metrics 연동, filter를 한 번에 지정 |
 | `.codecs()` | JSON만 등록 | `zlinkFramework().codecs().use(extension)`. messaging-execution category의 Codec 등록 항목을 참고 |
 
-**완료 결과.** 대부분 반환값 없이 동기로 실행되며, `.configureNetwork()`/`.configureInboundDispatch()`/
-`.configureDispatch()`/`.codecs()`는 해당 builder나 options 객체를 반환해 그 위에서 추가 설정을
+**완료 결과.** 대부분 반환값 없이 동기로 실행되며, `.configureNetwork()`/`.configureDispatch()`/
+`.codecs()`는 해당 builder나 options 객체를 반환해 그 위에서 추가 설정을
 이어간다. 값 범위를 벗어나면 startup 검증에서 configuration error로 드러난다.
+
+Core가 byte budget 계산을 소유하며 Framework는 connection 수로 budget을 나누지 않는다.
+Application Job Queue는 별도의 job-count limit이다. `maxQueuedApplicationJobs(...)`는
+`1n..2_147_483_647n`을 허용하고 `undefined`이면 Auto profile을 사용한다.
+[Core/Framework API 계약](../../common/spec/06-framework-api.ko.md)을 참고한다.
 
 **선택 기준.** 위 전용 항목(host lifecycle·topology 등록·diagnostics)에 속하지 않는, 단순 값
 하나로 끝나는 host-wide 설정을 조정할 때 쓴다.

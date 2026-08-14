@@ -564,3 +564,11 @@ call wrapper does not offer a blocking `submit()` alongside a coroutine
 terminal for the same arguments — it offers a single `task_t<T> submit()`.
 A callback overload can be provided as `submit(callback)` since its
 parameter list differs.
+
+## 10. Application Job Queue Async Boundary
+
+Only terminal reply/error completion bypasses the shared permit. Every other ordinary
+ingress record acquires before receive/claim. An application permit releases at the actual
+exact-target handler's first instruction, not queue publication or task creation, and is
+not reacquired after an await. Capacity wait is cancellable and does not turn saturation
+into reject/drop.

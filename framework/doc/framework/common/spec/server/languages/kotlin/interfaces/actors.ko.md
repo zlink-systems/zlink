@@ -52,8 +52,9 @@ bind 전에 검증한다. Java interop에서 null adapter class를 전달한 pol
 
 `preserveStateWith(...)`로 등록한 Actor adapter는 maintenance cross-node materialization, remote User·Entry Spot join과 whole [User Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)
 relocation의 각 Actor participant에 사용한다. Same-node join과 `disableRelocation()` 또는 `recreateOnRelocation()`을 선택한 factory에서는 호출하지 않는다.
-Capture가 반환한 `ByteArray`는 최대 64 MiB이며 adapter가 completion까지 소유한다. Java runtime은 completion에서
-복사한다. Restore는 호출마다
+Capture가 반환한 `ByteArray`에는 relocation adapter 전용 size 상한이 없다. Java runtime은
+completion에서 복사하고, 등록한 Relocation Store의 일반 blob·whole-payload 제한에 맞춰 필요한
+chunking을 수행한다. Adapter는 completion까지 배열을 소유한다. Restore는 호출마다
 fresh defensive copy를 받고 completion 뒤 보관하지 않는다. Empty `ByteArray`도 유효한 보존 state다.
 [Factory](../../../../01-glossary.ko.md#factory)는 target attempt마다 fresh Actor instance를 만들며 source나 이전 attempt instance를 재사용하지 않는다.
 같은 attempt의 restore는 반복될 수 있다. Capture exception은 source [authority](../../../../01-glossary.ko.md#authority)와 admission을 유지하고, restore

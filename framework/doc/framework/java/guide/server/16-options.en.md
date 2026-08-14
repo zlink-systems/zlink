@@ -54,8 +54,7 @@ isn't deferred until the first call — it's **blocked by an exception at contex
 | `setDefaultRequestTimeout(Duration)` | The cap on waiting for a request reply | 30 seconds |
 | `addHandlersFromPackageOf(Class)` | Handler-discovery starting point | Doesn't scan |
 | `configureMetadata()` | Metadata propagation policy | — |
-| `configureDispatch()` | Diagnostics level and message flow (§4) | `ERRORS` |
-| `configureInboundDispatch()` | Host-wide receive cap (§3.3) | Auto-calculated |
+| `configureDispatch()` | Diagnostics level/message flow (§4), Core HWM, and the application job queue (§3.3) | `ERRORS`; both profiles use `BALANCED` |
 | `configureLocations()` | Location store behavior (§5) | The §5 table |
 | `configureNetwork()` | Listener bind/advertise host defaults | bind `0.0.0.0` |
 | `configureWorkers()` | The CPU worker pool (§3.2) | The §3.2 table |
@@ -126,25 +125,25 @@ elastic pool that `context.runCpuWorker(...)` uses.
 the caller's thread. Before raising the queue length, first look at how long the work you're
 handing to the worker actually runs.
 
-### 3.3 Host-Wide Receive Cap
+### 3.3 Core HWM And The Application Job Queue
 
-Values of the `ZLinkInboundDispatchOptions` that `configureInboundDispatch()` returns. It
-differs in nature from the per-connection cap (§3.1) — it applies to the **total payload**
-of messages that haven't yet started handler execution.
+These are values on `ZLinkDispatchOptions`, returned by `configureDispatch()`. Core HWM
+limits accounted bytes in ordinary queues; the
+application job queue limits jobs waiting for handler start across the host instance.
 
 | Method | What it sets | Default |
 | --- | --- | --- |
-| `setApplicationHwmBytes(long)` | The host-wide receive cap, in bytes | Auto-calculated if omitted |
-| `setApplicationHwmProfile(ZLinkApplicationHwmProfile)` | The ratio auto-calculation uses | `BALANCED` |
-| `setProcessMemoryLimitBytes(long)` | The process memory baseline for auto-calculation | The detected value |
+| `setCoreHwmMemoryLimitBytes(long)` | Memory-limit hint forwarded for Core budget calculation | Unset |
+| `setCoreHwmBudgetBytes(long)` | Manual Core budget that takes precedence over the profile | Unset (Auto) |
+| `setCoreHwmProfile(ZLinkCoreHwmProfile)` | Core Auto-budget profile | `BALANCED` |
+| `setApplicationJobQueueProfile(ZLinkApplicationJobQueueProfile)` | Queued-job Auto profile | `BALANCED` |
+| `setMaxQueuedApplicationJobs(long)` | Exact manual queued-job limit | Unset (Auto) |
 
-There are four profiles: `COMPACT`, `LOW_LATENCY`, `BALANCED`, `THROUGHPUT`.
-`setApplicationHwmBytes(0)` means **no limit**, and a negative value is rejected.
-`setProcessMemoryLimitBytes` only accepts a positive value. Both throw
-`ZLinkConfigurationException`.
-
-> This unit and cap are confirmed by contract but **the runtime doesn't use them yet.**
-> See [4. Backpressure §6](04-backpressure.en.md#6-framework-runtime-coverage).
+The memory limit and Core budget must be positive. The manual queued-job limit is
+`1..2,147,483,647`; `0` is a startup configuration error, not unlimited. The two profiles
+use the same labels but are independent enums and calculations. See
+[4. Backpressure](04-backpressure.en.md) and [Common Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
+for saturation behavior and production measurement.
 
 ## 4. Diagnostics
 
@@ -176,11 +175,6 @@ Values of the `ZLinkLocationOptions` that `configureLocations()` returns.
 | `setStoreFailureGrace(Duration)` | How long a store outage is tolerated | 30 seconds |
 | `setRouteCacheMaxAge(Duration)` | Route cache validity period | 15 seconds |
 | `setMessageFollowDuration(Duration)` | How long a message keeps following a target that's relocating | 30 seconds |
-| `setMaxActiveOutboundRelocations(int)` | Concurrent outbound relocation count | 64 |
-| `setMaxActiveInboundRelocations(int)` | Concurrent inbound relocation count | 64 |
-| `setMaxConcurrentRelocationCaptures(int)` | Concurrent capture count | 8 |
-| `setMaxConcurrentRelocationRestores(int)` | Concurrent restore count | 8 |
-| `setMaxRelocationPayloadInFlightBytes(long)` | Total payload cap while relocating | 256 MiB |
 
 > **The owner lease default differs across all three languages.** The TTL-to-renewal-
 > interval ratio is 6× for Java (5s : 30s), 3× for C++ (5s : 15s), and 1.5× for Node

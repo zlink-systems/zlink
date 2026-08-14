@@ -18,13 +18,13 @@ View in another language — [C#/.NET](../../../dotnet/guide/server/04-backpress
 # 4. Backpressure — When Arrival Outpaces Processing
 
 > **The documents that own this chapter's contract** — covered by the
-> [Async Execution Policy](../../../common/spec/05-async-execution-policy.en.md) and the
+> [Async Execution Policy](../../../common/spec/05-async-execution-policy.en.md),
+> [Framework API](../../../common/spec/06-framework-api.en.md),
+> [Runtime Monitoring](../../../common/spec/24-runtime-monitoring.en.md), and the
 > [per-language topology public contract](../../../common/spec/server/languages/README.en.md).
 > This chapter explains that behavior as concepts and principles, and covers which options
-> affect it. Option defaults and when they can change are owned by the `16. Options`
-> chapter. Any part of the contract this chapter uses that isn't yet reflected in the
-> runtime is disclosed in
-> [What Isn't Yet Applied To The Framework Runtime](#6-framework-runtime-coverage).
+> affect it. Exact option names, defaults, and mutability are owned by each language's
+> `16. Options` chapter and exact interface.
 
 ## 0. Options When Inflow Exceeds Processing Capacity
 
@@ -43,32 +43,28 @@ already been accepted is never dropped because of load. So under load, what show
 application isn't "the message vanished" — it's "`send` got slow" or "`DeadlineExceeded`
 happened."
 
-## 1. Send/Receive Queues And The High-Water Mark
+## 1. Core HWM And The Application Job Queue
 
-A message sent with `sendToChannel(...)` or `publish(...)` first goes into the **send
-queue** this process keeps per peer, and leaves through the connection from that queue in
-order. The receiving side also has a **receive queue** that holds a message it hasn't
-processed yet. Both queues have a ceiling, called the high-water mark (HWM).
+Framework host backpressure limits two different resources. Core HWM limits accounted bytes
+held by ordinary send/receive queues per origin. The framework's application job queue limits
+the number of jobs waiting to start a handler across the whole host instance. Bytes and jobs
+aren't combined into one ceiling or converted into each other.
 
-**The HWM counts the bytes the queue actually holds, not the message count.** Counting by
-message count means the memory held varies by tens of times at the same ceiling depending on
-payload size, making process memory unpredictable from the configured value. Counting by
-byte fixes how much memory one queue can occupy to the configured value.
-
-The bytes the two queues count aren't the payload size. It's the payload plus the routing
-frame and fixed metadata the runtime carries alongside the message, and a **minimum
-charge** applies per message even when that sum is small. This exists to keep sending a
-huge number of near-zero-size messages from inflating only the queue metadata. So the
-ceiling is reached slightly earlier than a value computed from the payload sum alone.
+An application record removed from Core keeps its origin retained-credit lease until terminal.
+It acquires an application job queue permit immediately before receive/claim and returns that
+permit immediately before the actual user callback's first instruction. A handler that has
+started and is awaiting asynchronous I/O therefore does not reacquire the queue permit, while
+its Core retained-byte credit can remain until the record and required reply submit reach a
+terminal state.
 
 ```mermaid
 %%{init: {'themeVariables': {'edgeLabelBackground':'transparent'}}}%%
 flowchart LR
     H1["sending handler<br/>SendToChannel(...)"]:::app
-    SQ["send queue<br/>SendHighWaterMark (byte)"]:::queue
+    SQ["Core ordinary send queue<br/>accounted-byte HWM"]:::queue
     AC(["Application connection"]):::net
-    RQ["receive queue<br/>ReceiveHighWaterMark (byte)"]:::queue
-    BUD["host application backlog<br/>payload bytes waiting for dispatch"]:::budget
+    RQ["Core ordinary receive queue<br/>accounted-byte HWM"]:::queue
+    BUD["application job queue<br/>reserved + queued permits"]:::budget
     H2["receiving handler"]:::app
     CC(["Completion connection"]):::net
 
@@ -82,14 +78,11 @@ flowchart LR
     classDef net fill:#eceff1,stroke:#546e7a,color:#000000
 ```
 
-On the receiving side, a message passes through the receive queue and enters the
-Framework's **application backlog.** The backlog is the sum of payload bytes the Framework
-has received but **hasn't yet started handler execution for.** It applies as one value
-across the whole host, not split per connection or per node, and drops out of the backlog
-the instant a handler starts processing that message. Once the backlog hits its ceiling, the
-Framework stops receiving new messages, which fills the receive queue by that much, and that
-pressure carries all the way to the sender. **At no stage is an already-accepted message
-dropped** — what the ceiling does isn't drop, it's wait.
+When the application job queue reaches its limit, every ordinary ingress record other than a
+terminal reply/error completion identifiable before receive waits cancellably for a permit
+before a new receive/claim.
+Load does not turn an accepted message into a drop or capacity error. As Core ordinary receive
+queues fill, their per-origin byte HWMs propagate pressure back to the sender.
 
 ## 2. How It Works
 
@@ -108,65 +101,50 @@ ceiling gets reached.
 
 ### 2.2 How Receive-Side Delay Propagates To Sends
 
-It passes through three stages. The first two are handled by the receiving side's runtime
-and TCP; only in the last stage does the sending application actually experience the wait.
+It passes through three stages. The receiving framework and Core handle the first two; the
+sending application encounters a wait only at the last stage.
 
-**Stage 1 — the receiver stops receiving.** If arrival outpaces the speed the handler
-processes at, the message waiting for dispatch piles up and the host's application backlog
-hits its ceiling first. From that point, the Framework stops accepting new application
-messages on that host. A message that already arrived isn't dropped — it stays in the
-receive queue.
+**Stage 1 — application job queue permits fill.** If ordinary ingress outpaces handler
+processing, reserved supply and jobs waiting for handler start reach the host-instance limit.
+The framework waits for a permit before receiving/claiming the next ordinary record. It does
+not turn saturation into reject/drop or an unbounded temporary queue.
 
-**Stage 2 — TCP flow control lowers the send rate.** Once the receiver stops receiving, the
-receive queue fills to its ceiling, and then the receive buffer fills too. TCP tells the
-sender how much room is left (the receive window), and once there's no room, the sender's
-TCP stops sending more and waits until the peer reads some off. The net effect is that
-**the send rate matches the receiver's processing rate.** This stage is a slowdown, not a
-failure, so nothing has changed yet from the sending application's point of view.
+**Stage 2 — Core receive queues fill.** When the framework stops taking ordinary ingress,
+accounted bytes accumulate in Core queues. A queue reaching its per-origin receive HWM slows
+the sender's corresponding path. Other origins and terminal reply/error completion identifiable
+before receive remain separate from this saturated queue.
 
-**Stage 3 — once the send queue hits its ceiling, `send` waits.** As transmission slows, the
-send queue also drains more slowly. If the application keeps putting messages in faster than
-that, they pile up in the queue, and the moment the bytes held reach
-`sendHighWaterMark`, sending to that peer locks. From this point, a `send` call doesn't
-return immediately — it waits for room to open up. This is the first point where the
-receiver's delay shows up as the application's wait.
+**Stage 3 — the sender's Core submit waits.** While the receiver cannot take more records,
+the sender's ordinary send queue stops draining. Once that origin reaches its HWM, an async
+send waits until it can be accepted and ends with the language's timeout result if no slot
+opens by its deadline.
 
 ```text
-The receiving handler can't keep up with the processing speed
-  → the receiving side's application backlog fills and receiving stops   (stage 1: the receiver stops)
-  → the receive queue fills to its byte ceiling and the receive window shrinks
-  → TCP lowers the send rate                                             (stage 2: sending slows)
-  → the sending side's send queue also drains more slowly
-  → if bytes going in outpace bytes draining, it fills to the ceiling
-  → send waits for room                                                  (stage 3: the application waits)
+The receiving handler can't keep up
+  → application job queue permits fill and ordinary receiving waits
+  → Core ordinary receive queues reach their accounted-byte HWM
+  → per-origin backpressure propagates into the sender's Core queue
+  → send waits until it can be accepted
 ```
 
-**In other words, backpressure is an extension of TCP flow control.** TCP stops at lowering
-the send rate, and the HWM carries that effect all the way up to the application call. So
-all the sender can know is the fact "I have no room" — it never gets the information "the
-peer is slow." `DeadlineExceeded` doesn't tell you the peer's status either, so to
-distinguish the cause, check the peer node's processing metrics together
+The sender only knows that its submit wasn't accepted. A timeout result alone cannot
+distinguish a remote handler delay, network delay, or local Core queue pressure, so inspect
+Core HWM and application job queue status on both sides
 ([12-operations](12-operations.en.md) §1).
 
-### 2.3 Lock And Release Thresholds
+### 2.3 Permit Return And Wait Resumption
 
-Once the ceiling is hit, sending locks, but it doesn't unlock the instant one message
-leaves. It becomes sendable again **once roughly half the ceiling has drained.**
+An application job queue permit is returned immediately before the user's callback first
+instruction, not when a queue publishes a job or an executor task is created. A returned
+permit is handed to the oldest live waiting ingress source, and a new acquire does not pass
+an existing waiter. A handler does not reacquire the permit after it starts and awaits.
 
-This is to avoid repeatedly locking and unlocking one message at a time. If you let one in
-every time one leaves from a full state, both sides just keep waking each other up and
-throughput never rises. Conversely, keeping it locked until the queue is completely empty
-stalls longer than necessary. **So the ceiling is both "the point where it locks" and "the
-amount that must drain before it unlocks, at half"** — the larger you set the value, the
-more bytes have to drain before it flows again once locked.
-
-There's one exception. **If the queue is completely empty, even a message larger than the
-ceiling is let through, one at a time.** Otherwise, that message could never be sent under
-any condition. Even so, it's not allowed without limit — it's let through only if it's at or
-under that direction's `maxMessageSize`, and this exception doesn't apply while sending a
-message split across multiple parts. So the instantaneous amount held can exceed the
-ceiling — when computing the worst-case memory one queue can occupy, use whichever is
-larger, the ceiling or `maxMessageSize`.
+Terminal reply/error completion identifiable before receive uses neither an ordinary-ingress
+permit nor the ordinary Core byte HWM. A record received first on an ordinary connection does
+not gain this bypass after classification. Every other control or malformed record acquires
+before receive and returns the permit immediately after classification and finite internal
+processing when it creates no handler job. This separation allows terminal completion of an
+already-started request to progress while ordinary traffic is saturated.
 
 ### 2.4 Splitting The Application Connection And Completion Connection
 
@@ -273,6 +251,8 @@ is neither cancelled nor rolled back.
 | `receiveHighWaterMark` | Bytes that can be held **after receiving**, per peer. `0` means unlimited | `configureRouterSocket()` |
 | `maxMessageSize` | The max size of one message that will be accepted | `configureRouterSocket()` |
 | `sendHighWaterMark` · `linger` | The pub/sub publish socket's ceiling and how long a pending publish waits at shutdown | `configureSpotPublisher()` |
+| `CoreHwmMemoryLimitBytes` · `CoreHwmBudgetBytes` · `CoreHwmProfile` | The Core context's ordinary-queue byte budget | `configureDispatch()` |
+| `ApplicationJobQueueProfile` · `MaxQueuedApplicationJobs` | The host instance's queued-application-job limit | `configureDispatch()` |
 
 **"The ceiling for waiting on a send slot" isn't a single global value.** The value actually
 used is owned by the socket that call uses.
@@ -305,199 +285,89 @@ check the following.
   sooner.
 - **Keep `maxMessageSize` finite.** If it's unlimited, one message can exceed the ceiling by
   any amount, making it impossible to compute the worst-case memory a queue can occupy.
-- **This value is a ceiling that applies to one connection.** It isn't a process-wide
-  ceiling, so check whether the result of multiplying it by your target peer count fits your
-  process memory budget.
+- **This is a manual ceiling for a socket-direction physical queue.** Don't interpret it as
+  a Core-context-wide budget or an application job queue limit.
 - **Raising the high-water mark isn't the default response.** A larger ceiling absorbs
   congestion into memory, which makes `DeadlineExceeded` show up later — and that delays
   diagnosing the cause just as much. If processing delay keeps happening, check the
   processing side (receiving node count, handler execution time) instead of the ceiling.
 
-Neither HWM needs to be specified. If unspecified, the value the runtime plans is applied;
-if specified, that value is applied as-is — the next two sections cover the difference
-between the two cases. Per-option defaults and whether they can change at runtime are
-covered by `16. Options` chapter §3.2.
+Leaving manual socket HWMs unset does not make the framework calculate a connection-count
+bucket table. The framework root forwards Core memory settings to the same Core context;
+Core computes its physical-queue census and directional HWMs. The application job queue
+limits job count independently of that byte calculation.
 
-### 4.1 Auto HWM — Automatic Calculation For An Unspecified Socket
+### 4.1 Core HWM — The Byte Budget Owned By Core
 
-The two high-water marks don't become unlimited just because they're unspecified. The
-runtime computes a ceiling byte value directly, per socket, and applies it — this
-calculation is called **Auto HWM.** It's on by default, and applies only to a socket the
-application hasn't set a value for.
+Set the following values through `configureDispatch()`. See `16. Options` and the
+exact interface for each language's precise spelling.
 
-The result is bytes. There's no step that converts to message count along the way. The
-inputs that decide the value are:
+| Setting | Purpose |
+| --- | --- |
+| `CoreHwmMemoryLimitBytes` | A finite process/runtime memory-limit hint forwarded for Core budget calculation |
+| `CoreHwmBudgetBytes` | A positive manual Core budget that takes precedence over profile calculation |
+| `CoreHwmProfile` | The Core Auto-budget profile. The default is `Balanced` |
 
-- **Profile** — the disposition that decides how much slack this process gives its queues.
-  The default is balanced.
-- **The connection count on that socket** — as connections grow, **the bytes given per
-  connection shrink.**
+The framework and binding do not apply the profile ratio or divide the budget by connection
+count. They read Core's effective budget, directional queue HWMs, accounted bytes, and
+blocked ratio directly from the Core snapshot. `CoreHwmBudgetBytes` is not a hard process
+RSS cap, so observe RSS, the managed heap, and allocator overhead separately
+([Runtime Monitoring](../../../common/spec/24-runtime-monitoring.en.md)).
 
-The second one is the key point. Because the ceiling applies separately per connection,
-fixing a per-connection value means the memory this socket can hold grows right along with
-the peer count. So the connection count is bucketed into ranges, and the ceiling per
-connection drops as the bucket goes up.
-
-| Connections on that socket | balanced (default) | compact | low-latency | throughput |
-| --- | --- | --- | --- | --- |
-| ≤ 64 | 1,048,576 bytes (1 MiB) | 262,144 (256 KiB) | 524,288 (512 KiB) | 2,097,152 (2 MiB) |
-| 65 - 128 | 524,288 (512 KiB) | 262,144 (256 KiB) | 262,144 (256 KiB) | 1,048,576 (1 MiB) |
-| 129 - 512 | 262,144 (256 KiB) | 131,072 (128 KiB) | 131,072 (128 KiB) | 524,288 (512 KiB) |
-| 513 - 2,048 | 131,072 (128 KiB) | 65,536 (64 KiB) | 65,536 (64 KiB) | 262,144 (256 KiB) |
-| > 2,048 | 65,536 (64 KiB) | 32,768 (32 KiB) | 32,768 (32 KiB) | 131,072 (128 KiB) |
-
-The value applies to one one-directional queue. At balanced, if there are 100 peers, the
-bytes this socket can hold in the receive direction is `512 KiB × 100`. As connections grow,
-the per-connection ceiling drops, but the total still keeps growing — compare this product
-against the effective memory budget.
-
-Recalculation happens when connections grow or shrink. There's slack in the threshold for
-switching buckets so the ceiling doesn't keep flipping as the count hovers at a boundary, and
-it never recalculates again within 3 seconds even if connections change several times in a
-short span.
-
-The profile used here **shares the same name** as `ApplicationHwmProfile` in
-[§4.3](#43-application-hwm--the-host-wide-cap). Changing the profile moves the host-wide
-ceiling and this per-connection ceiling together. The formulas differ, though — this one
-picks bytes from the connection-count bucket, the other multiplies the effective memory
-budget by a ratio. If no profile is specified, both use balanced.
-
-A STREAM socket uses a smaller value than this even at the same profile
-([09-stream](09-stream.en.md)).
-
-Don't guess the computed result — read the value the monitor status provides. It gives the
-planned bytes, the actually applied bytes, bytes with a shrink held back, the current
-in-flight bytes, and the count and max size of a message let through over the ceiling,
-separately ([12-operations](12-operations.en.md) §1).
+For a manual production budget, measure current/peak Core-accounted bytes, blocked ratio,
+throughput, latency, and process memory under production-like payload distribution and
+connection count. [Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
+defines the measurement procedure.
 
 ### 4.2 Setting An HWM Directly
 
-If you specify `sendHighWaterMark` or `receiveHighWaterMark`, that socket uses the specified
-value as-is, and the runtime never recalculates that socket's ceiling. **Because the value
-doesn't shrink as connections grow**, when setting it directly, plug in a value computed for
-your target peer count.
+`sendHighWaterMark` and `receiveHighWaterMark` are per-socket-direction manual HWMs. They use
+bytes like `CoreHwmBudgetBytes`, but have a different owner and scope. A manual socket HWM
+applies to that directional queue; it is not a replacement calculation for the Core Auto
+budget.
 
 - **`0` means unlimited.** It removes the ceiling, so don't use `0` to mean "leave it at the
-  default." Leave the value unspecified to hand it to auto calculation.
-- **Each direction applies separately.** If you only specify `sendHighWaterMark`, the
-  receive direction keeps using the auto-calculated value.
-- **Lowering the ceiling may not take effect immediately.** Even if the bytes already held
-  exceed the new ceiling, the runtime never drops a message it's already holding. It only
-  blocks new entries, and applies the lowered ceiling once the held amount comes back down.
-  Raising the ceiling, by contrast, takes effect immediately.
+  default." Leave the manual value unspecified to use Core Auto calculation.
+- **Each direction applies separately.** If only one is set, Core's calculated HWM applies
+  to the opposite direction.
+- **It does not apply to the completion lane.** Public send/receive HWMs are not copied to
+  progress identifiable before receive as terminal reply/error completion.
 
-### 4.3 Application HWM — The Host-Wide Cap
+### 4.3 Application Job Queue HWM — The Host-Wide Job Limit
 
-The two previous sections cover the ceiling for **one connection.** As connections grow, the
-total also grows, so this value alone doesn't fix how much message waiting for dispatch can
-pile up. So the Framework has one more ceiling with a different character — one that applies
-to **the sum of payload for a message that hasn't yet started handler execution.** This is
-called the Application HWM.
+The application job queue HWM limits the number of jobs waiting for handler start across a
+framework host instance. It participates in backpressure alongside Core HWM, but does not
+count bytes or a memory ratio.
 
-| | The per-connection ceiling | The host-wide Application HWM |
+| | Core HWM | Application Job Queue HWM |
 | --- | --- | --- |
-| Scope | One direction's queue on a socket | Every application job on this host |
-| Count | One per connection | One |
-| What it counts | In-flight bytes the peer hasn't taken yet (including routing frame, metadata, minimum charge) | **Only payload bytes** waiting for dispatch |
-| When it drops out | When the peer reads it | The moment the handler **starts** executing that job |
-| When the ceiling is hit | Sending to that peer locks | This host stops starting application receiving |
-| Setting name | `sendHighWaterMark` · `receiveHighWaterMark` | `applicationHwmBytes` · `ApplicationHwmProfile` |
+| Owner | A Core context's per-origin ordinary queues | The framework host instance's shared queue |
+| Unit | Accounted bytes | Reserved supply plus queued application jobs |
+| Acquisition | Core queue admission | Immediately before ordinary receive/claim |
+| Release | Core queue/retained-lease lifecycle | Immediately before the user callback's actual first instruction |
+| Saturation result | The sender for that origin waits | The ordinary ingress source waits for a permit |
+| Settings | `CoreHwmMemoryLimitBytes` · `CoreHwmBudgetBytes` · `CoreHwmProfile` | `ApplicationJobQueueProfile` · `MaxQueuedApplicationJobs` |
 
-**Neither value substitutes for the other.** The Framework doesn't copy the Application HWM
-into each connection's ceiling, or divide it by connection count. The reason it isn't kept
-separately per MeshNode, Channel, or Spot is that splitting it up would mean the allowed
-total automatically grows along with node or connection count.
+Manual `MaxQueuedApplicationJobs` is an exact limit in `1..2,147,483,647`. `0` is not
+unlimited; it is a startup configuration error. Without a manual value, the framework
+calculates the value once at startup from the effective processor count and profile.
 
-What it counts being payload only is also different from the per-connection ceiling. It
-doesn't add the envelope, routing information, metadata, allocator overhead, or the minimum
-charge. A message split across multiple parts sums the length of every application payload
-part. A message an executing handler is referencing, the Core pipe, and the OS socket
-buffer aren't included here — the Application HWM limits **the amount waiting for
-dispatch**, not the entire process memory.
+| Profile | Jobs per effective processor |
+| --- | ---: |
+| `Compact` | 32 |
+| `LowLatency` | 64 |
+| `Balanced` (default) | 128 |
+| `Throughput` | 256 |
 
-#### How To Read The Value
+`CoreHwmProfile` and `ApplicationJobQueueProfile` use the same labels but are different
+public types and calculations. A profile is a bootstrap value for starting a benchmark. In
+production, measure the `reserved + queued` permit distribution at the target CPU usage and
+acceptable latency, then set the manual job limit.
 
-| Setting | Applied result |
-| --- | --- |
-| Unspecified | Auto-calculated from `ApplicationHwmProfile` |
-| `0` | The Application HWM isn't applied (unlimited) |
-| A positive number | The specified bytes are applied as-is |
-
-The auto calculation multiplies the process's usable effective memory budget by the
-profile's ratio. This value isn't memory the Framework pre-allocates or reserves — it's a
-reference point for deciding when to briefly pause receiving.
-
-```text
-Application HWM = floor(effective memory budget bytes × profile ratio)
-```
-
-| profile | Ratio | When to pick it |
-| --- | ---: | --- |
-| `COMPACT` | 2% | Backlog memory must be capped as small as possible |
-| `LOW_LATENCY` | 5% | Short queue delay matters more than absorbing bursts |
-| **`BALANCED`** (default) | **10%** | No other priority condition |
-| `THROUGHPUT` | 20% | Absorb bursts, accepting extra memory and queue delay |
-
-The effective memory budget is decided by the following rule.
-
-1. If `processMemoryLimitBytes` is specified, that value is used as-is.
-2. If unspecified, the finite OS ceiling and the language runtime's managed heap ceiling
-   applied to the process are each checked. If both exist, the smaller value is used; if only
-   one exists, the confirmed value is used.
-3. If neither the OS nor the managed heap ceiling can be confirmed, the total system physical
-   memory is used.
-
-Java and Kotlin use the JVM heap ceiling reported by `Runtime.maxMemory()`. .NET uses
-`GC.GetGCMemoryInfo().TotalAvailableMemoryBytes`, and Node.js uses V8's `heap_size_limit`.
-C++ has no managed heap, so it uses only the OS ceiling and physical memory. Because a
-managed heap isn't the whole process's memory, room is left over for areas like Metaspace,
-native memory, thread stacks, and direct buffers.
-
-For example, if the container ceiling is `1 GiB` and Java's `-Xmx` is `768 MiB`, the
-effective memory budget is `768 MiB`. The default `BALANCED` profile uses 10% of that, about
-`76 MiB`, as the Application HWM. This calculation applies even when the application
-specifies neither `applicationHwmBytes` nor `processMemoryLimitBytes`.
-
-The host's total physical memory, currently free OS memory, process RSS, CPU usage, and
-throughput are not used in this calculation. The calculation runs once before ingress
-starts, and only runs again when the memory limit or profile is explicitly changed.
-
-If setting the profile directly isn't enough, measure sustained throughput under a
-production-like workload and specify a positive value. Sustained throughput is the payload
-bytes a handler finished processing while there was backlog, divided by execution time — not
-the arriving bytes or an instantaneous peak.
-
-```text
-candidate value = measured sustained processing bytes/sec × max acceptable queue wait seconds
-```
-
-If sustained throughput is 200 MiB/sec and you'll tolerate up to 2 seconds of queue wait, the
-candidate value is 400 MiB. Confirm under the same workload that filling the backlog up to
-this value still doesn't exceed the process memory limit, then use it as the production
-value.
-
-#### What Happens When The Ceiling Is Hit
-
-The Framework can't know the next message's size ahead of time, so it **never reserves
-bytes in advance.** The decision is based on comparing the backlog to the ceiling — if the
-backlog is smaller than the ceiling, it starts receiving something new.
-
-- Receiving that starts from a backlog smaller than the ceiling is received **to the end**
-  even if that message turns out to be larger than the ceiling. So exceeding the ceiling
-  doesn't fail a receive already in progress, and even one message larger than the ceiling
-  can be processed if the backlog was empty.
-- Once the ceiling is hit or exceeded, **only a new receive fails to start.** A message
-  isn't removed or ended in error just because the ceiling was exceeded.
-- A job already waiting in the Framework queue keeps being dispatched, and the reply to an
-  already-sent request, along with control needed for progress, keeps being received too.
-- Once a handler starts executing a job and the backlog drops below the ceiling, receiving
-  resumes.
-
-A positive value smaller than `maxMessageSize` isn't a configuration error. The Application
-HWM doesn't set the allowed size of one message — that's `maxMessageSize`'s job.
-
-The current scope of the per-language runtime implementation and packaged E2E verification
-is checked separately in [§6](#6-framework-runtime-coverage).
+At the limit, new ordinary ingress waits for a returned permit in oldest-waiter order. Batch
+and 1:N local dispatch do not create more handler jobs than the permits already secured.
+Terminal reply/error completion identifiable before receive does not use this permit, and
+`maxMessageSize` remains an independent single-message cap.
 
 ## 5. How To Confirm Congestion Is Happening
 
@@ -514,56 +384,46 @@ execution target is causing the delay is narrowed down using handler execution t
 per-node processing metrics (the [11. Monitoring](11-monitoring.en.md) ·
 [12-operations](12-operations.en.md)).
 
+For byte pressure, inspect `zlink.host.core_hwm.effective_budget`, `applied`, `accounted`,
+and `blocked_ratio` together. For pre-handler-start job pressure, inspect
+`zlink.host.application_job_queue.limit`, `jobs`, `capacity_waiters`, `capacity_waits`, and
+`capacity_wait_duration`. A metrics reset preserves current gauges, rebases peak to current,
+and clears only the current epoch's counts and duration.
+
 `zlink.mesh_node.messages.dropped` isn't a backpressure indicator. If this value rises, a
 message was dropped for a separately confirmed reason, not load, so check the `reason`
 attribute first.
 
 ## 6. Framework Runtime Coverage
 
-The sections above describe the common public contract. Whether the actual package provides
-this contract in full has to be checked separately against each language's exact interface,
-runtime tests, and packaged E2E results. This section doesn't treat the common contract as
-fully implemented — it records only the runtime integration items still outstanding in
-current verification.
-
-- **A receive path that splits the two connections apart** — the behavior where only the
-  Application connection's receiving stops while the Completion connection keeps reading
-  ([§2.4](#24-splitting-the-application-connection-and-completion-connection)).
-- **Held-byte attribution observability** — querying which execution target is holding
-  backlog bytes while receiving is stopped. Here, an execution target is a
-  [Spot](03-concepts.en.md#2-spot--a-unit-that-owns-state-and-processes-it-in-order) or an
-  [Actor](03-concepts.en.md#3-actor--a-state-object-identified-by-id), which processes the
-  messages addressed to it one at a time, in a single line. A message with no target decided
-  yet, a message caught between two owners as in relocation, and bytes held by a handler
-  whose execution has already started, are each tallied separately.
+This common guide does not list per-language implementation differences. Common behavior is
+owned by [Framework API §2.1](../../../common/spec/06-framework-api.en.md#21-separating-the-core-memory-budget-from-the-application-job-queue),
+and status/reset semantics are owned by
+[Runtime Monitoring](../../../common/spec/24-runtime-monitoring.en.md). See the language's
+`16. Options`, `11. Monitoring`, and
+[exact interface](../../../common/spec/server/languages/README.en.md) for its spelling and
+call form.
 
 ## 7. Common Problems
 
 - **`send` ends in `DeadlineExceeded`** → a send slot never opened up. Before raising the
-  ceiling, check the receiving handler's execution time and node count.
-- **The count is the same as usual, but it waits sooner** → the ceiling counts bytes. If the
-  payload grows, the same count hits the ceiling sooner. Check whether the average payload
-  size has changed too.
-- **It waits even though the payload sum is well under the ceiling** → what a connection
-  queue counts isn't the payload — it's the payload plus the routing frame and metadata, and
-  a minimum charge applies to a small message. The gap grows the more small messages you
-  send. The host-wide ceiling, conversely, counts only payload, so don't compare the two
-  values on the same basis ([§4.3](#43-application-hwm--the-host-wide-cap)).
-- **A message larger than the host ceiling was sent, and it got processed** → this is
-  normal. The only decision criterion is whether the backlog before receiving is smaller
-  than the ceiling, so even a message larger than the ceiling is received to the end if the
-  backlog was empty. As a result it briefly exceeds the ceiling, and only new receiving
-  stops from that point.
-- **The ceiling kicks in even though you never set an HWM** → an unspecified socket gets the
-  runtime's computed value. At the default profile, if there are 64 or fewer connections,
-  it's 1 MiB per direction per peer, and the per-connection value shrinks as connections grow
-  ([§4.1](#41-auto-hwm--automatic-calculation-for-an-unspecified-socket)).
-- **Setting it to `0` made memory keep growing** → `0` isn't the default — it's unlimited.
-  To hand it to the default calculation, leave the value unspecified
-  ([§4.2](#42-setting-an-hwm-directly)).
-- **Lowering the ceiling didn't take effect right away** → if the bytes already held exceed
-  the new ceiling, it applies only after that queue shrinks. This is because an
-  already-received message is never dropped.
+  ceiling, inspect the receiver's Core `blocked_ratio`, application job queue waiters, and
+  handler execution time.
+- **Core-accounted bytes are low, but receiving waits** → application job queue permits may
+  be full. Inspect `reserved`, `queued`, `in_use`, and capacity waiters.
+- **Application job queue `queued` is low, but the limit is reached** → `in_use` also counts
+  the short pre-receive `reserved` permits. Size a manual limit from `reserved + queued`.
+- **A handler appears scheduled, but the job count has not dropped** → permit release occurs
+  at the user's actual first callback instruction, not executor task publication. Check the
+  handler-start gate.
+- **`MaxQueuedApplicationJobs = 0` fails startup** → `0` is not unlimited. Omit the manual
+  value to select Auto.
+- **Using the same profile label does not move byte and job limits by the same ratio** →
+  `CoreHwmProfile` and `ApplicationJobQueueProfile` share labels only; their units and
+  calculations are independent.
+- **Replies still complete while the application job queue is full** → terminal reply/error
+  completion identifiable before receive bypasses the shared permit and ordinary Core HWM, so
+  this is expected.
 - **Raising the ceiling made the symptom show up later** → this is normal. Once congestion
   is absorbed into memory, the failure surfaces later. To fail fast and switch to a
   different path, lower the ceiling and shrink `DefaultSocketSendTimeout`.
@@ -583,6 +443,11 @@ current verification.
 - Option defaults and when they can change: `16. Options` chapter §3
 - The formal contract for one-way submit and the completion boundary:
   [Async Execution Policy](../../../common/spec/05-async-execution-policy.en.md)
+- Core HWM and application job queue settings:
+  [Framework API §2.1](../../../common/spec/06-framework-api.en.md#21-separating-the-core-memory-budget-from-the-application-job-queue)
+- Status, metrics, and reset semantics:
+  [Runtime Monitoring](../../../common/spec/24-runtime-monitoring.en.md) ·
+  [Runtime Metrics](../../../common/spec/25-runtime-metrics.en.md)
 - The socket configuration surface:
   [per-language topology public contract](../../../common/spec/server/languages/README.en.md)
 - The byte-unit contract for a socket option: [the core guide's socket option](https://zlink-systems.github.io/zlink/guide/12-socket-options/)

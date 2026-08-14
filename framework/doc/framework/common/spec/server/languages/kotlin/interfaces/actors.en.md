@@ -73,9 +73,11 @@ maintenance cross-node materialization, remote User/Entry Spot join, and
 each Actor participant of a whole
 [User Spot](../../../../01-glossary.en.md#entry-user-instance-spot)
 relocation. It isn't called on a same-node join or on a factory that
-selected `disableRelocation()` or `recreateOnRelocation()`. The
-`ByteArray` capture returns is at most 64 MiB, and the adapter owns it
-until completion. The Java runtime copies it at completion. Restore
+selected `disableRelocation()` or `recreateOnRelocation()`. The `ByteArray`
+capture returns has no relocation-adapter-specific size cap. The Java
+runtime copies it at completion and performs any chunking required by the
+registered Relocation Store's ordinary blob and whole-payload limits. The
+adapter owns the array until completion. Restore
 receives a fresh defensive copy per call and doesn't keep it after
 completion. An empty `ByteArray` is also a valid preserved state. The
 [factory](../../../../01-glossary.en.md#factory) creates a fresh Actor

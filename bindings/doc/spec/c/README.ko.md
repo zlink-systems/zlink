@@ -3,7 +3,7 @@ title: "C 바인딩 구현 청사진"
 ---
 
 <!-- bindings-nav:start -->
-[스펙 목록](../README.ko.md) | [이전: Async & Coroutine Policy](../async-coroutine-policy.md) | [다음: .NET](../dotnet/README.ko.md)
+[스펙 목록](../README.ko.md) | [이전: Async & Coroutine Policy](../async-coroutine-policy.ko.md) | [다음: .NET](../dotnet/README.ko.md)
 <!-- bindings-nav:end -->
 
 # C 바인딩 구현 청사진
@@ -142,14 +142,9 @@ C에서는 Core ABI가 HWM 계약을 직접 제공한다. `ZLINK_OPT_SNDHWM`과
 `zlink_set_option()`과 `zlink_get_option()`에 정확히 8-byte 저장 공간을
 전달한다. 수동 기본값은 `4,096,000 bytes`이고 `0`은 무제한이다.
 
-`ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES`는 `zlink_ctx_set_data()`와
-`zlink_ctx_get_data()`로 설정한다. 이 값은 Core planner의 byte 단위 입력이다.
-Core는 profile, socket role과 connection bucket으로 message slot 수를 고른 뒤
-다음 식으로 planned byte HWM을 계산한다.
-
-```text
-planned HWM bytes = selected message slots * planning unit bytes
-```
+Context memory limit·Core budget은 byte 단위 `uint64_t` option으로, profile은 정식
+profile option으로 전달한다. Core가 profile 비율을 정확히 한 번 적용하고 physical
+directional queue 수를 분모로 planned byte HWM을 계산한다.
 
 사용자가 방향별 HWM을 직접 설정하면 그 방향은 수동 override가 된다. Auto-HWM은
 override하지 않은 방향만 다시 계산한다. 실제 admission은 Core pipe에 보관된
@@ -157,9 +152,14 @@ accounted byte를 기준으로 하며 C 호출자가 message 수나 payload 크�
 누적하지 않는다. HWM에 도달한 submit은 해당 socket의 blocking·non-blocking과
 timeout 계약에 따라 backpressure 결과를 반환한다.
 
-`zlink_monitor_status_t` ABI version 2의 planned, applied, deferred HWM과
-in-flight 사용량은 byte 단위다. `snd_pending_msgs`, `rcv_pending_msgs`와
-`auto_hwm_socket_message_slots`는 진단용 count이며 admission 기준이 아니다.
+`zlink_monitor_status_t` ABI version 3의 planned, applied, deferred HWM과
+in-flight 사용량은 byte 단위다. `snd_pending_msgs`와 `rcv_pending_msgs`는 표시용
+count이며 admission 기준이 아니다. Message-unit·slot·size-cap·connection-bucket
+진단은 제공하지 않는다.
+
+`zlink_socket_monitor_open_options_t.monitor_hwm_bytes`가 유일한 monitor queue HWM
+option이다. `0`은 Core 기본값을 선택하고, 양수는 정확한 byte 상한으로 변환 없이
+전달한다. Message-count alias나 변환은 제공하지 않는다.
 
 ## 필수 기능 커버리지
 

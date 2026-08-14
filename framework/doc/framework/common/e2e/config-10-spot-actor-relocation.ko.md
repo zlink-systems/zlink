@@ -244,19 +244,32 @@ Actor 단독 이동, `PerActor` Spot relocation과 `SpotWide` relocation 모두 
 - 검증: 각 client가 재bind 없이 해당 sequence를 한 번 받고 이전 node에서는 같은 sequence를 보내지 않는다.
 - 계약 근거: [Session Actor dispatch](../spec/20-session-actor-dispatch.ko.md)
 
-#### ST-E1C Session location update retry
+#### ST-E1C Session route update와 seal timeout
 
 우선순위: `P0`
 
-Join completion은 Session route 갱신 응답을 기다리지 않는다. 이동한 runtime은 첫 응답을 받지 못하면 1초
-뒤에 다시 요청한다. 이후에도 응답이 없으면 1초, 2초, 4초, 5초 간격으로 요청하고 그 뒤에는 5초 간격을
-유지한다.
+Relocation 뒤 Session route update는 one-way이고 response나 application ACK를 정의하지 않는다. Relocation
+terminal은 Session owner의 적용 완료를 기다리지 않는다. Session owner가 seal 설치 뒤 configurable
+`SessionRelocationSealTimeout` 안에 exact update를 받으면 기존 physical Session과 binding을 유지한다. 기본
+timeout은 3,000ms다. Timeout이면 physical Session을 종료하고 해당 binding, held message와 seal state를
+정리한다. 그 뒤 도착한 update는 Warning만 기록하는 no-op이며 connection이나 binding을 복구하지 않는다.
 
-**검증 질문:** Session owner와의 network path가 일시적으로 끊겨도 Join은 완료되고 기존 binding이 결국 target push를 받는가.
+**검증 질문:** 정상 경로에서는 timeout 전에 기존 binding을 유지하고, 차단 경로에서는 relocation을
+기다리게 하지 않은 채 timeout cleanup 뒤 명시적 reconnect와 rebind만 복구하는가.
 
-- 시작 조건: Proxy가 target runtime과 Session owner 사이의 network path를 차단할 수 있다.
-- 절차: Path를 차단한 상태에서 Remote Join completion을 확인한 뒤 path를 복구하고 bounded polling으로 target push delivery를 기다린다.
-- 검증: Join completion은 Session owner path 단절 때문에 timeout되지 않는다. Path 복구 뒤 재bind 없이 target push를 받으며 duplicate push는 없다. 재전송 시각 자체는 public trace 계약이 있을 때만 진단한다.
+- 시작 조건: 같은 Actor와 bound client를 정상 variant와 차단 variant에 각각 준비한다. Session owner는
+  기본 3,000ms 또는 public server configuration으로 지정한 `SessionRelocationSealTimeout`을 사용한다.
+  Proxy는 차단 variant에서 target runtime과 Session owner 사이의 network path를 timeout 뒤까지 차단할 수
+  있다.
+- 절차: 정상 variant는 Remote Join 뒤 기존 client로 target push를 확인한다. 차단 variant는 path를 막은
+  채 Remote Join terminal과 public connector disconnect를 확인하고 timeout 뒤 path를 복구한다. 이전
+  binding에 push를 보낸 뒤 client가 명시적으로 reconnect하고 Actor를 다시 bind한 다음 다른 push를 보낸다.
+- 검증: 정상 variant는 timeout 전에 재bind 없이 target push를 한 번 받는다. 차단 variant의 relocation은
+  Session route 적용을 기다리지 않고 terminal에 도달하며, timeout 뒤 physical Session은 종료되고 이전
+  binding의 push는 전달되지 않는다. Path 복구 뒤 늦은 update는 Warning만 남기는 no-op이므로 이전
+  binding을 복구하지 않는다. 명시적 reconnect와 rebind가 성공한 뒤의 push만 한 번 전달된다. 통과 판정은
+  public Join result, connector lifecycle, bind result와 client push만 사용하며 route-update packet, held state,
+  내부 retry 횟수나 시각은 검사하지 않는다.
 - 계약 근거: [Session Actor dispatch](../spec/20-session-actor-dispatch.ko.md)
 
 #### ST-E1A New Actor incarnation requires bind
@@ -402,24 +415,39 @@ Actor handler가 `Yield`한 continuation도 같은 Actor turn의 일부다. Relo
 - 검증: Final state가 정해진 두 변경과 follow-up을 모두 포함하고 handler active count는 전체 node에서 1이다.
 - 계약 근거: [비동기 실행 정책](../spec/05-async-execution-policy.ko.md)
 
-#### ST-G2 User Spot aggregate capacity를 all-or-none으로 적용한다
+#### ST-G2 SpotWide durable backlog와 lazy job admission
 
 우선순위: `P0`
 
-`SpotWide` relocation은 Spot과 그 Actor 전체를 하나의 단위로 target capacity에 맞춰야 한다.
+`SpotWide` relocation은 durable ordered backlog 전체에 해당하는 live Application Job Queue permit을 먼저
+예약하지 않는다. Compatible target은 `EffectiveMaxQueuedApplicationJobs`보다 큰 backlog도 보관한 채 owner
+전환을 완료하고, target CAS 뒤 dispatch가 가능해지면 다음 turn 또는 bounded chunk에 필요한 shared permit만
+순차적으로 얻는다. Ordinary placement eligibility와 resource 제한은 유지하지만 relocation을 위해 별도로
+복제한 Spot·Actor·stable-type slot이나 record·byte capacity blocker는 없다.
 
-**검증 질문:** Spot, Actor 또는 stable-type capacity 중 하나라도 부족하면 aggregate 전체가 source에
-유지되고 모두 충분할 때만 target으로 이동하는가.
+**검증 질문:** Target의 live job 상한보다 큰 SpotWide backlog도 capacity blocker 없이 owner 전체를
+target으로 바꾸고, post-CAS lazy permit으로 target에서 순서대로 계속 처리되는가.
 
-- 시작 조건: 같은 크기의 SpotWide aggregate에 대해 Spot slot 부족, Actor slot 부족, stable-type slot 부족과
-  all-sufficient target variant를 fresh source·target으로 각각 준비한다.
-- 절차: 각 variant에서 target 인자 없는 public Host Relocate를 호출하고 terminal 뒤 Spot과 각 Actor에 state
-  request를 보낸다.
-- 검증: 부족 variant는 capacity blocker result로 끝나며 public locations, Spot state와 모든 Actor state가
-  source에 같은 generation으로 유지된다. Sufficient variant는 Spot과 모든 Actor가 target에서 이동 전과
-  같은 state와 generation으로 처리된다. 일부 member만 이동한 결과는 허용하지 않는다.
-- 계약 근거: [Relocation unit과 실행량 제한](../spec/30-host-relocation-flow.ko.md#7-relocation-unit과-실행량-제한)과
-  [SpotWide User Spot](../spec/30-host-relocation-flow.ko.md#85-spotwide-user-spot)
+- 시작 조건: 여러 Actor가 속한 SpotWide Spot과 compatible target factory·application version을 준비한다.
+  Source가 public operation ID `N`개를 수락한 뒤 relocation을 시작하며,
+  `N > target.EffectiveMaxQueuedApplicationJobs`가 되도록 target의 public Application Job Queue 상한을 작게
+  설정한다. 별도 no-candidate variant에서는 compatible target이 없도록 factory·application version을 구성한다.
+  별도 selected-target variant에서는 eligibility를 만족해 target을 선택한 뒤 Restore가 전달된 state
+  schema/type adapter 불일치를 반환하도록 구성한다.
+- 절차: 각 variant에서 target 인자 없는 public Host Relocate를 호출한다. Compatible variant는 public
+  location, Spot·Actor handler와 operation ID evidence를 bounded polling하고, owner 전환 뒤 각 member에
+  follow-up request를 보낸다. 두 failure variant는 terminal result 뒤 source의 Spot과 각 Actor에 state
+  request를 보내고 target staging cleanup evidence를 확인한다.
+- 검증: Compatible variant는 relocation 전용 capacity blocker 없이 Spot과 모든 Actor의 owner를 target으로
+  바꾸며, 일부 member만 source에 남지 않는다. Target handler는 backlog 전체가 live cap에 동시에 들어갈 수
+  없어도 accepted operation ID를 기존 순서대로 한 번씩 처리하고 bounded 관찰 구간마다 진행한다. Follow-up도
+  target에서 같은 state와 generation으로 성공한다. No-candidate variant는 preflight에서
+  `Blocked/TargetUnavailable`, selected-target state mismatch variant는 owner CAS 전에
+  `Blocked/StateIncompatible`로 끝나고 owner, state와 generation을 source에 유지한다. 모든 variant는
+  relocation 전용 numeric cap을 설정하거나 기대하지 않으며, Relocation Store나 temporary queue를 직접
+  검사하지 않는다.
+- 계약 근거: [Framework API](../spec/06-framework-api.ko.md)와
+  [Host relocation flow](../spec/30-host-relocation-flow.ko.md)
 
 #### ST-G3 PerActor Spot의 host relocation
 

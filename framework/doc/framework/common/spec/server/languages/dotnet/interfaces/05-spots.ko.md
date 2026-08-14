@@ -372,8 +372,10 @@ materialize할 때만 호출한다. Whole User Spot relocation에서는 [Spot](.
 않고 application state 없이 instance를 다시 만들며 `DisableRelocation()`은 capture 전에 cross-node 이동을 거부한다.
 
 Spot adapter의 capture와 restore는 stable relocation attempt에서 at-least-once 호출될 수 있으므로 retry-safe해야
-한다. `CaptureAsync(...)` 결과는 최대 64 MiB이며 빈 배열은 유효하고 null은 contract 위반이다. Framework는
-완료된 배열을 즉시 복사하고 이후 application mutation을 관찰하지 않는다. `RestoreAsync(...)`의
+한다. `CaptureAsync(...)` 결과에는 relocation adapter 전용 size 상한이 없으며, Framework는 등록한
+Relocation Store의 일반 blob·whole-payload 제한에 맞춰 필요한 chunking을 수행한다. 빈 배열은
+유효하고 null은 contract 위반이다. Framework는 완료된 배열을 즉시 복사하고 이후 application
+mutation을 관찰하지 않는다. `RestoreAsync(...)`의
 `ReadOnlyMemory<byte>`는 callback 완료까지만 유효하므로 보관하려면 application이 복사해야 한다. Capture
 exception은 durable abort와 source normalization 뒤 admission을 복원한다. Restore exception이 발생한 instance는
 폐기하고, 새 attempt는 [factory](../../../../01-glossary.ko.md#factory)가 만든 새 instance에 같은 immutable payload를 적용한다. Framework가 operation
@@ -401,13 +403,14 @@ application membership callback을 호출하지 않는다.
 `ToSpot`·Create·Join은 Spot authority, `ToActor`는 Actor별 current owner를 사용한다.
 Target runtime-private shell은 같은 public SpotId와 ObjectGeneration을 사용하며 authority
 전환 전에는 public lookup에 노출하지 않는다. Stale source route는 operation identity,
-generation, deadline, correlation과 reply route를 보존해 relay한다. Actor queue seal부터
-target admission까지 1초는 운영 목표이며 초과해도 relocation을 취소하거나 rollback하지 않는다.
+generation, deadline, correlation과 reply route를 보존해 relay한다. Actor queue seal부터 one-way
+cutover submit의 성공 또는 실패 terminal까지 source-local 1초는 운영 목표이며 초과해도 relocation을
+취소하거나 rollback하지 않는다.
 
 `RelocationReady().Defer()`는 `SpotWide` factory가
 `ApplicationSignaled` readiness mode를 선택한 Spot turn에서만 유효하다. `Defer()`는
 현재 handler가 끝난 뒤 다음 application turn 앞에 relocation 경계를 등록한다.
-Framework는 이동하지 않았거나 commit 전에 abort했으면 source에서 `Continued`,
+Framework는 이동하지 않았거나 relay-ready reply가 accepted 상태가 되기 전에 abort했으면 source에서 `Continued`,
 이동했으면 target에서 `Relocated` completion을
 `OnRelocationReadyCompletedAsync(...)`에 전달한다. 기본 구현은 no-op이다.
 Callback 완료 전에는 보류한 message와 timer를 실행하지 않는다.

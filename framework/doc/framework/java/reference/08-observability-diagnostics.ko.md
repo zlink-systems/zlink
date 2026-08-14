@@ -47,12 +47,14 @@ runtime error sink나 raw event DTO를 노출하지 않는다.
 
 ## `ZLinkFrameworkRuntime.status` / `observe` (읽기·관찰)
 
-Host 전체 상태(lifecycle state, relocation·termination 결과, inbound dispatch backpressure)를
+Host 전체 상태(lifecycle state, relocation·termination 결과, Core HWM accounting과
+Application Job Queue backpressure)를
 조회하거나 관찰한다. 정확한 signature와 예제는 host-lifecycle category의 `status`/`observe` 항목이
 소유한다.
 
-**선택 기준.** `ZLinkFrameworkRuntimeStatus.inboundDispatch()`(`ZLinkInboundDispatchStatus`)로
-application HWM 사용량과 backpressure 상태를 확인한다. 특정 MeshName·ChannelName의 가용성은
+**선택 기준.** `ZLinkFrameworkRuntimeStatus.capacity()`에서 서로 독립적인 `coreHwm()`과
+`applicationJobQueue()` snapshot을 읽는다. 하나의 queue limit으로 취급하지 말고 accounted byte와
+사용 중 permit, capacity waiter, wait count·duration을 연관 지어 본다. 특정 MeshName·ChannelName의 가용성은
 topology-discovery category의 상태 조회 항목을 쓴다.
 
 ---

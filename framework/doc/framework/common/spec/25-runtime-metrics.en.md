@@ -50,25 +50,28 @@ cumulative amount, `updown` records the delta when a current count goes up or do
 
 ## 3. Host And MeshNode
 
-### 3.1 Host Inbound Dispatch
+### 3.1 Host Core HWM And Application Job Queue
 
-The host-wide byte total of payload the framework received but whose handler hasn't
-finished yet is limited by [Application HWM](01-glossary.en.md#application-hwm). The
-following observables read existing dispatch accounting values and don't walk the
-queue or handlers to collect the metric.
+The following instance-aggregate instruments read the Core runtime snapshot and application
+job queue accounting. They do not walk queues or handlers to collect metrics.
 
 | Instrument | Kind | Unit | Label | Meaning |
 |---|---|---|---|---|
-| `zlink.host.inbound.application_hwm` | observable | `By` | none | The host-wide HWM applied at startup. `0` means no limit. |
-| `zlink.host.inbound.pending_payload` | observable | `By` | `state` | Application payload bytes not yet in a terminal state. |
-| `zlink.host.inbound.receive_paused` | observable | `{state}` | none | `1` if application receive is stopped due to HWM; `0` otherwise. |
-| `zlink.host.completion.pending_sends` | observable | `{request}` | none | The number of requests waiting for or having secured a reply-send permit. |
-| `zlink.host.completion.send_limit` | observable | `{request}` | none | The host's completion send permit cap. |
+| `zlink.host.core_hwm.effective_budget` | observable | `By` | none | Effective budget Core fixed at startup. |
+| `zlink.host.core_hwm.applied` | observable | `By` | none | Sum of ordinary directional queue HWMs, excluding completion. |
+| `zlink.host.core_hwm.accounted` | observable | `By` | `state` | Core current or epoch-peak accounted bytes. |
+| `zlink.host.core_hwm.completion_accounted` | observable | `By` | `state` | Completion current or epoch-peak accounted bytes. |
+| `zlink.host.core_hwm.blocked_ratio` | observable | `{ppm}` | none | Blocked ratio from the Core snapshot. |
+| `zlink.host.application_job_queue.limit` | observable | `{job}` | none | Effective maximum fixed at startup. |
+| `zlink.host.application_job_queue.jobs` | observable | `{job}` | `state` | Aggregate by `reserved|queued|in_use|peak`. |
+| `zlink.host.application_job_queue.capacity_waiters` | observable | `{waiter}` | none | Current capacity waiters. |
+| `zlink.host.application_job_queue.capacity_waits` | counter | `{wait}` | none | Capacity waits in the current epoch. |
+| `zlink.host.application_job_queue.capacity_wait_duration` | counter | `s` | none | Cumulative capacity-wait duration in the current epoch. |
 
-`zlink.host.inbound.pending_payload`'s `state` only allows `queued|active`.
-MeshName, ChannelName, Actor ID, Spot ID, packet name, and owner aren't used as
-labels. A per-owner top-N diagnostic is provided only via an explicit operational
-query, not a metric.
+Reset preserves current gauges, rebases peak to current, and clears epoch counters and
+duration. Always-on metrics do not timestamp every job or create a queue-wait histogram.
+MeshName, ChannelName, Actor ID, Spot ID, session ID, RID, endpoint, packet name, and owner
+are not labels.
 
 ### 3.2 Peer And Channel
 
@@ -220,7 +223,7 @@ finishes this cleanup and terminates the runtime and infrastructure.
 | `zlink.host.state` | observable | `{runtime}` | `state` | Records value 1 for the single current framework runtime state. |
 | `zlink.host.relocation.duration` | histogram | `s` | `mode`, `outcome` | Records the time from host `Relocate` start to a `Relocated` or `Blocked` result. |
 | `zlink.host.relocation.blocked` | counter | `{operation}` | `mode`, `reason` | Accumulates the count of host `Relocate`s that ended `Blocked`. |
-| `zlink.relocation.interruption` | histogram | `s` | `unit_kind`, optional `execution_mode` | Records the time from one Actor/Instance Spot/User Spot unit's admission seal to target admission-open ACK. `unit_kind` is `actor`, `instance_spot`, `user_spot`. Exceeding 1 second isn't turned into a relocation failure. |
+| `zlink.relocation.interruption` | histogram | `s` | `unit_kind`, optional `execution_mode` | Records the source-local time from one Actor/Instance Spot/User Spot unit's admission seal to the one-way cutover submit's success or failure terminal. `unit_kind` is `actor`, `instance_spot`, `user_spot`. Exceeding 1 second isn't turned into a relocation failure. |
 | `zlink.host.shutdown.duration` | histogram | `s` | `outcome` | Records the time from host `Shutdown` start to terminal result. |
 | `zlink.host.shutdown.forced` | counter | `{operation}` | `reason` | Accumulates the count of host `Shutdown`s that forcibly ended remaining work to finish cleanup within the time limit. |
 

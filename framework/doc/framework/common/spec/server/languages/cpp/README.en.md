@@ -24,7 +24,7 @@ directory.
 **exact public surface** that meaning has in C++.
 
 **The internal runtime structure isn't a public contract** — it's
-owned by [internals/runtime-architecture](../../../../internals/README.en.md).
+owned by [internals/runtime-architecture](../../../README.en.md).
 
 The client connector is owned by the
 [C++ Stream Connector guide](../../../../../cpp/guide/stream-connector/INDEX.en.md)

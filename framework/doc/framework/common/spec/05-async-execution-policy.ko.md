@@ -514,3 +514,10 @@ auto reply = co_await requestCall.submit(); // 비동기 application reply를 �
 반환형만 다른 overload는 만들지 않는다. C++ Messaging call wrapper는 같은 인자의 blocking `submit()`과
 coroutine terminal을 함께 제공하지 않고 `task_t<T> submit()` 하나를 제공한다. Callback overload는
 parameter list가 다르므로 `submit(callback)`으로 제공할 수 있다.
+
+## 10. Application job queue 비동기 경계
+
+Terminal reply/error completion만 shared permit을 우회한다. 그 밖의 ordinary ingress는 receive/claim 전에
+permit을 얻는다. Application permit은 exact-target handler의 실제 첫 instruction에서 반환하며 queue
+게시나 task 생성에서 반환하지 않는다. 이후 await에는 재획득하지 않는다. Capacity wait는 cancellable하며
+포화를 reject/drop으로 바꾸지 않는다.

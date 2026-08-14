@@ -268,8 +268,10 @@ phase API는 제공하지 않는다.
 같은 source와 target process 안의 재시도에서 factory와 `RestoreAsync(...)`를 두 번 이상
 호출할 수 있다. `CaptureAsync(...)`도 authority commit 전에 다시 호출될 수 있다. 두 callback은 같은 logical relocation에 대해 같은
 결과를 내도록 retry-safe해야 하며 외부 side effect의 exactly-once 실행에 의존하면 안 된다. Capture exception은
-durable abort와 source normalization 뒤 admission을 복원한다. `CaptureAsync(...)` 결과는 최대 64 MiB이며 빈
-배열은 유효하고 null은 contract 위반이다. Framework는 완료된 배열을 즉시 복사한다. `RestoreAsync(...)`의
+durable abort와 source normalization 뒤 admission을 복원한다. `CaptureAsync(...)` 결과에는 relocation
+adapter 전용 size 상한이 없으며, Framework는 등록한 Relocation Store의 일반 blob·whole-payload
+제한에 맞춰 필요한 chunking을 수행한다. 빈 배열은 유효하고 null은 contract 위반이다. Framework는
+완료된 배열을 즉시 복사한다. `RestoreAsync(...)`의
 `ReadOnlyMemory<byte>`는 callback 완료까지만 유효하다. Restore exception이 발생한 instance는 폐기하고 새
 instance에 같은 immutable payload를 적용한다. 다른 target을 자동 선택하지 않는다. Framework가 operation deadline 때문에
 callback을 취소하면 `DeadlineExceeded`로 분류한다. Current exact owner와 attempt fence만 completion을 commit하고

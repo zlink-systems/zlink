@@ -1,26 +1,28 @@
 ---
-title: "8. 객체 종류와 활성화"
+title: "47. 객체 종류와 활성화"
 ---
 
-# 8. 객체 종류와 활성화
+# 47. 객체 종류와 활성화
 
-[내부 구조 목차](README.ko.md) · [이전: 7. 수신과 dispatch 루프](07-dispatch-loop.ko.md) · [다음: 9. Session과 Actor 연결](09-session-binding.ko.md)
+> **문서 성격 — 공개 규범 스펙이 아닌 내부 설계 문서.** 이 장은 연결된 공개 계약을 만족시키는 구현 구조를 설명한다. Application이 관찰하는 동작을 추가하거나 변경하지 않는다.
+
+[내부 구조 목차](README.ko.md) · [이전: 46. 수신과 dispatch 루프](46-internal-dispatch-loop.ko.md) · [다음: 48. Session과 Actor 연결](48-internal-session-binding.ko.md)
 
 > **이 장이 답하는 것** — Spot 세 종류를 어떻게 구분하고, 없는 객체를 언제 만들며, 낡은 owner로 온 message를 어떻게 거르는가.
 >
-> **계약 소유** — Spot 종류와 종료 사유는 [Spot 모델](../spec/11-spot-model.ko.md)이,
-> generation을 쓰는 자리는 [Spot·Actor routing](../spec/18-object-routing.ko.md)이,
-> owner 장애 뒤 결과는 [Failure와 failover policy](../spec/31-failure-failover-policy.ko.md)가 소유한다.
+> **계약 소유** — Spot 종류와 종료 사유는 [Spot 모델](11-spot-model.ko.md)이,
+> generation을 쓰는 자리는 [Spot·Actor routing](18-object-routing.ko.md)이,
+> owner 장애 뒤 결과는 [Failure와 failover policy](31-failure-failover-policy.ko.md)가 소유한다.
 > 이 장은 그 계약을 만족시키는 **구조**와, lifecycle 경계를 어겼을 때 나타나는 실패를 다룬다.
 
-Actor와 handler를 담는 실행 단위인 [Spot](../spec/01-glossary.ko.md#spot) 세 종류를 코드에서
+Actor와 handler를 담는 실행 단위인 [Spot](01-glossary.ko.md#spot) 세 종류를 코드에서
 어떻게 구분하고, 없는 객체를 언제 만들며, 낡은 owner에게 보낸
 message를 어떻게 걸러내는지를 다룬다.
 
 ## 1. 종류를 참·거짓 표시로 구분하지 않는다
 
 Spot 종류는 닫힌 값 집합이다 — `Invalid = 0`, `Entry = 1`, `User = 2`, `Instance = 3`
-([용어집](../spec/01-glossary.ko.md#spot-kind)). 세 종류는 동작이 다르다.
+([용어집](01-glossary.ko.md#spot-kind)). 세 종류는 동작이 다르다.
 
 | 종류 | 만드는 시점 | 이동 | 반납 대기 |
 |---|---|---|---|
@@ -41,7 +43,7 @@ Spot 종류는 닫힌 값 집합이다 — `Invalid = 0`, `Entry = 1`, `User = 2
 ## 2. Entry Spot이 이동하지 않는다는 뜻
 
 Entry Spot **인스턴스**는 그 Object Server의 lifecycle에 속하므로 이동 대상 목록에
-들어가지 않는다([Spot 모델 「4.2 Entry Spot의 Actor lifecycle」](../spec/11-spot-model.ko.md#42-entry-spot의-actor-lifecycle)).
+들어가지 않는다([Spot 모델 「4.2 Entry Spot의 Actor lifecycle」](11-spot-model.ko.md#42-entry-spot의-actor-lifecycle)).
 
 여기서 자주 어긋난다 — **Entry Spot에 있던 Actor는 이동한다.** 이동하지 않는 것은 Entry
 Spot 자신이다. 이동 대상을 고를 때 "Entry Spot에 속한 Actor"를 통째로 제외하면 그
@@ -51,11 +53,11 @@ Actor들은 node가 내려갈 때 사라진다.
 
 **일반 message는 없는 객체를 만들지 않는다.** 만들겠다는 의사를 명시한 Spot 전용
 호출만 새로 만들 수 있고, 일반 message와 조회 호출은 이미 준비된 객체만 대상으로 한다
-([Spot·Actor routing 「2.2 최근 Ready route를 사용하는 조건」](../spec/18-object-routing.ko.md#22-최근-ready-route를-사용하는-조건)).
+([Spot·Actor routing 「2.2 최근 Ready route를 사용하는 조건」](18-object-routing.ko.md#22-최근-ready-route를-사용하는-조건)).
 
 ### Spec 상태를 activation state machine에 전달한다
 
-공개 동작은 [장애 대응과 failover 범위 §4.4](../spec/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)가
+공개 동작은 [장애 대응과 failover 범위 §4.4](31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다)가
 정의한다. Resolver는 조회 결과를 아래의 닫힌 내부 상태 중 하나로 만든다. Activation state
 machine은 그 상태를 담당 component 한 곳에만 전달하므로, 뒤 단계가 Store 결과를 다시
 추측하지 않는다.
@@ -85,7 +87,7 @@ owner로 기록하고 만든다. 나머지는 만들어진 객체를 대상으�
 실행된다.
 
 **결정 — 만드는 중 상태를 캐시하지 않는다.** "만드는 중"은 곧 바뀔 상태이므로
-[6. target 선택과 route cache](06-routing-and-cache.ko.md)의 캐시에 넣지 않는다. 넣으면
+[45. target 선택과 route cache](45-internal-routing-and-cache.ko.md)의 캐시에 넣지 않는다. 넣으면
 만들기가 끝난 뒤에도 캐시 수명만큼 "만드는 중"으로 보인다.
 
 ```mermaid
@@ -141,8 +143,8 @@ owner 정보는 캐시되므로, 보내는 쪽이 아는 owner가 이미 바뀌�
 
 **결정 — 걸러내는 기준은 owner 신원과 유효 기간이다. 객체 세대가 아니다.**
 
-[ObjectGeneration](../spec/01-glossary.ko.md#objectgeneration)은 일반 message의 대상
-조건이 **아니다**([Spot·Actor routing 「2.5 ObjectGeneration을 어디에 쓰고 어디에 쓰지 않는가」](../spec/18-object-routing.ko.md#25-objectgeneration을-어디에-쓰고-어디에-쓰지-않는가)).
+[ObjectGeneration](01-glossary.ko.md#objectgeneration)은 일반 message의 대상
+조건이 **아니다**([Spot·Actor routing 「2.5 ObjectGeneration을 어디에 쓰고 어디에 쓰지 않는가」](18-object-routing.ko.md#25-objectgeneration을-어디에-쓰고-어디에-쓰지-않는가)).
 객체 세대까지 일반 message의 조건으로 검사하면, 객체가 다시 만들어진 직후 정상
 message가 전부 거절된다. 객체 세대는 lifecycle 변경과 이동 중계를 걸러낼 때 쓴다.
 
@@ -198,7 +200,7 @@ runtime은 route를 무효화하고 close transaction이 authority release를 �
 Resolver는 idle cleanup이 authority release를 완료한 결과와 owner availability evidence만 바뀐 결과를
 서로 다른 tag로 activation state machine에 전달한다. Creation coordinator는 전자의 tag만 입력으로
 받고, 후자는 terminal completion adapter에 연결한다. 이미 수락된 request의 재제출 금지는
-[장애 대응과 failover 범위 §2](../spec/31-failure-failover-policy.ko.md#2-공통-판단-기준)가 정의한다.
+[장애 대응과 failover 범위 §2](31-failure-failover-policy.ko.md#2-공통-판단-기준)가 정의한다.
 
 언어별 catalog 이름이 달라도 같은 종료 조건을 구현하고 독립된 process evidence로 검증한다.
 한 language mapping의 구조 설명은 다른 mapping의 검증 증거를 대신하지 않는다.
@@ -223,7 +225,7 @@ Resolver는 idle cleanup이 authority release를 완료한 결과와 owner avail
 ### 정리 기준을 무엇으로 삼는가
 
 **결정 — 정리 대상은 Instance Spot뿐이다.** 정식 spec이 `IdleEvicted` 종료 사유를
-Instance Spot 한정으로 추가했다([Spot 모델](../spec/11-spot-model.ko.md)). User Spot을
+Instance Spot 한정으로 추가했다([Spot 모델](11-spot-model.ko.md)). User Spot을
 정리하지 않는 이유는 **정리된 User Spot을 일반 message가 다시 만들지 않기** 때문이다.
 없는 객체를 만들 수 있는 것은 Instance intent를 명시한 호출뿐이다(§3). Entry Spot은
 그 Object Server의 lifecycle에 속하므로 애초에 대상이 아니다(§2).
@@ -233,7 +235,7 @@ Instance Spot 한정으로 추가했다([Spot 모델](../spec/11-spot-model.ko.m
 
 **결정 — Framework는 정리할 때 application 상태를 보존하지 않는다.** 유지해야 하는
 상태는 application이 종료 callback에서 직접 저장한다
-([Spot 모델 「6.2 유휴 Instance Spot 정리」](../spec/11-spot-model.ko.md#62-유휴-instance-spot-정리)). Framework가 상태를 대신 저장하려면 무엇을
+([Spot 모델 「6.2 유휴 Instance Spot 정리」](11-spot-model.ko.md#62-유휴-instance-spot-정리)). Framework가 상태를 대신 저장하려면 무엇을
 저장할지 알아야 하고, 그것은 application의 몫이다.
 
 ## 6. 메모리 회계를 어느 단위로 하는가
@@ -257,7 +259,7 @@ Relocation hold에는 relocation 전용 건수·byte 상한을 두지 않는다.
 
 **결정 — 실행 대기열의 한도는 건수와 byte 두 축을 모두 강제하고, 먼저 걸리는 쪽을
 적용한다.** 정식 spec이 두 축을 의무화했다
-([Framework API](../spec/06-framework-api.ko.md)).
+([Framework API](06-framework-api.ko.md)).
 
 한 축만으로는 다른 축으로 우회할 수 있다. 건수만 두면 큰 payload 몇 건이 memory를
 채우고, byte만 두면 빈 payload를 무한히 쌓아도 한도에 걸리지 않는다.
@@ -285,17 +287,17 @@ process 단위 회계가 이미 byte로 되어 있다(§6 첫 문단). 같은 �
 
 **결정 — 상한이 없는 실행 대기열을 두지 않는다.** 각 lane은 건수와 byte reservation을
 모두 가져야 한다
-([Framework API](../spec/06-framework-api.ko.md)).
+([Framework API](06-framework-api.ko.md)).
 
 초과했을 때의 결과는 **하나가 아니다.** 제출 계열과 대기열 위치에 따라 갈리므로 구현이
-하나로 뭉뚱그리면 안 된다. 표는 [2. Spot·Actor 실행 직렬화 「2. 실행 권한을 만들 때의 함정」](02-serialization.ko.md#2-실행-권한을-만들-때의-함정)에 있다.
+하나로 뭉뚱그리면 안 된다. 표는 [41. Spot·Actor 실행 직렬화 「2. 실행 권한을 만들 때의 함정」](41-internal-serialization.ko.md#2-실행-권한을-만들-때의-함정)에 있다.
 
 대기열이 아닌 두 자리는 그 표에 없으며 각각 `CapacityExceeded`다 — **worker scheduler
 대기열**과 **배치 수용량**이다. 뒤의 것은 대기열 포화가 아니라 admission 판정이다.
 
 이동 중 보류에는 relocation 전용 건수·byte 상한이 없다. 이미 work를 소유한 실행 lane의
 reservation과 transport·deadline·cancellation 제한을 relocation hold의 별도 상한으로 재사용하지 않는다. 정식 spec이 정한 규칙이므로 그대로 따른다
-([Host relocation 전체 흐름 「9. 대기 중인 message, timer와 session을 옮긴다」](../spec/30-host-relocation-flow.ko.md#9-대기-중인-message-timer와-session을-옮긴다)).
+([Host relocation 전체 흐름 「9. 대기 중인 message, timer와 session을 옮긴다」](30-host-relocation-flow.ko.md#9-대기-중인-message-timer와-session을-옮긴다)).
 
 ## 7. 확인할 결과
 
@@ -321,6 +323,10 @@ reservation과 transport·deadline·cancellation 제한을 relocation hold의 �
 - byte 회계에 작업당 고정 비용이 포함되어, 빈 payload도 한도를 소진한다.
 - 상한이 없는 실행 대기열이 없다.
 
+## Object queue와 host shared capacity
+
+Object별 bounded queue는 ordering/owner isolation이고 host shared queue를 대체하지 않는다. Permit·fairness는 [수신과 dispatch loop](46-internal-dispatch-loop.ko.md), pre-start terminal lease cleanup은 [Payload 소유권](50-internal-message-ownership.ko.md)을 따른다.
+
 ---
 
-[내부 구조 목차](README.ko.md) · [이전: 7. 수신과 dispatch 루프](07-dispatch-loop.ko.md) · [다음: 9. Session과 Actor 연결](09-session-binding.ko.md)
+[내부 구조 목차](README.ko.md) · [이전: 46. 수신과 dispatch 루프](46-internal-dispatch-loop.ko.md) · [다음: 48. Session과 Actor 연결](48-internal-session-binding.ko.md)

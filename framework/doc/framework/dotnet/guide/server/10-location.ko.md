@@ -112,16 +112,13 @@ Manual peer를 하나라도 사용한 host에서는 host relocation을 지원하
 
 ## 3. Location 옵션
 
-`ConfigureLocations()`는 lease, route cache와 relocation 실행 상한을 설정한다.
+`ConfigureLocations()`는 lease, route cache와 message-follow window를 설정한다.
 
 ```csharp
 var location = options.ConfigureLocations();
 location.OwnerLeaseRenewInterval = TimeSpan.FromSeconds(5);
 location.OwnerLeaseTtl = TimeSpan.FromSeconds(15);
 location.MessageFollowDuration = TimeSpan.FromSeconds(30);
-location.MaxActiveOutboundRelocations = 64;
-location.MaxActiveInboundRelocations = 64;
-location.MaxRelocationPayloadInFlightBytes = 256L * 1024 * 1024;
 ```
 
 | 옵션 | 기본값 | 의미 |
@@ -134,9 +131,12 @@ location.MaxRelocationPayloadInFlightBytes = 256L * 1024 * 1024;
 | `StoreFailureGrace` | 30초 | Store 장애 중 마지막 route 판단을 유지하는 시간 |
 | `RouteCacheMaxAge` | 15초 | cached route를 다시 확인하기 전 최대 시간 |
 | `MessageFollowDuration` | 30초 | 이동 전 owner가 새 owner로 메시지를 relay하는 기간 |
-| `MaxActiveOutboundRelocations` | 64 | process에서 동시에 내보내는 relocation unit 상한 |
-| `MaxActiveInboundRelocations` | 64 | process에서 동시에 복원하는 relocation unit 상한 |
-| `MaxRelocationPayloadInFlightBytes` | 256 MiB | process 전체 encoded payload 상한 |
+
+Relocation에는 별도 participant·record·동시성·in-flight byte capacity 설정이 없다. Target
+staging은 host의 공유 Application Job Queue reservation을 사용하고, live-job limit보다 큰 backlog도
+점진적으로 실행한다. Core memory accounting, negotiated frame size와 Store limit은 그대로 적용한다.
+[Relocation Flow §5.3](../../../common/spec/28-relocation-flow.ko.md#53-relocation-전용-capacity-제한을-두지-않는다)을
+참고한다.
 
 **lease 값 넷은 서로 묶여 있다.** 다음 관계를 어기면 startup error다. 값을 바꿀 때는
 넷을 함께 본다.

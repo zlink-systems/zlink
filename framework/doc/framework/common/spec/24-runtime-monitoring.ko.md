@@ -107,22 +107,24 @@ application operation을 수락하는지를 나타낸다. 두 값을 별개의 �
 않는다. Relocation option, deadline과 result의 정확한 의미는
 [Host relocation와 shutdown](30-host-relocation-flow.ko.md)이 정한다.
 
-Host status의 inbound dispatch 항목은 Framework가 수신한 application payload가 현재 얼마나 처리 중인지
-보여 준다. 값은 queue를 조회할 때마다 순회해서 만들지 않고 dispatch accounting에서 유지한 누계를 읽는다.
+Host status의 capacity 항목은 같은 measurement epoch에서 Core HWM snapshot과 Application job
+queue snapshot을 coherent하게 읽는다. Queue를 순회해서 snapshot을 만들지 않는다.
 
-| 값 | 의미 |
-|---|---|
-| Applied HWM bytes | startup에서 확정한 [Application HWM](01-glossary.ko.md#application-hwm)이다. `0`은 제한하지 않는다는 뜻이다. |
-| Pending payload bytes | Queue 대기와 handler 실행 중 payload byte의 합계다. |
-| Queued payload bytes | 아직 handler를 시작하지 않은 payload byte다. |
-| Active payload bytes | Handler가 실행 중인 payload byte다. |
-| Application receive paused | HWM 때문에 새 application receive를 시작하지 않는지를 나타낸다. |
-| Pending completion sends | Reply permit을 기다리거나 확보한 request 수다. |
-| Completion send limit | Host가 동시에 보유할 수 있는 completion send permit 상한이다. |
+Core HWM snapshot은 configured memory limit·manual budget·profile, effective budget,
+total applied HWM, core queue·application·current·provisional·peak accounted bytes,
+completion current·peak·pending, total messaging, monitor queue applied/accounted와 total instance
+applied/accounted bytes, blocked ratio, active ordinary/completion/send/receive queue 수,
+outstanding application lease, retired queue와 deferred origin credit를 포함한다. 이 값은 Core runtime
+snapshot을 그대로 투영하며 Framework가 다시 계산하지 않는다.
 
-`PendingPayloadBytes = QueuedPayloadBytes + ActivePayloadBytes`를 만족해야 한다. 이 status는 payload,
-Actor ID, Spot ID, message type이나 owner별 목록을 포함하지 않는다. Owner별 top-N은 public contract로
-제공하지 않는다. 일반 status 갱신과 message hot path에 owner별 label이나 event를 추가하지 않는다.
+Application job queue snapshot은 configured profile·manual max, effective processor count·effective max,
+reserved supply permits, queued application jobs, permits in use·peak, capacity waiters,
+capacity wait count·duration을 포함한다. Reset은 configuration과 current gauge를 유지하고 measurement
+epoch을 증가시킨다. Peak는 같은 경계의 current로 재기준화하고 epoch count·duration은 0으로 만든다.
+동시 event는 이전 또는 새 epoch 중 정확히 하나에만 포함되며 peak는 current보다 작을 수 없다.
+
+이 status는 payload, Actor ID, Spot ID, session ID, RID, endpoint, message type이나 owner별 목록을
+포함하지 않는다. Owner별 top-N은 public contract로 제공하지 않는다.
 
 ### 2.2 Topology 상태
 
@@ -331,12 +333,13 @@ Publisher 상태는 `excluded_draining`, `excluded_stale`, `reconnecting`, `disc
 기록한다. Log는 기록 시점의 판단이며 현재 위치나 상태의 기준이 아니다. 현재 상태는
 fanout status에서 읽는다.
 
-Relocation unit의 source admission seal부터 target admission-open ACK까지 1초를
+Relocation unit의 source admission seal부터 one-way cutover submit의 성공 또는 실패 terminal까지 1초를
 넘기면 `zlink.runtime.relocation.changed`에 `unit_kind`, 필요한 경우
 `execution_mode`, `interruption_target_exceeded=true`와 실제 duration을 기록한다.
 `unit_kind`는 `actor`, `instance_spot`, `user_spot` 중 하나다. 이는 운영
 경고이며 relocation outcome이나 recovery 판단을 바꾸지 않는다. Actor ID와 Spot
-ID는 structured log에 넣지 않고 제한된 trace에서만 확인한다.
+ID는 structured log에 넣지 않고 제한된 trace에서만 확인한다. Target admission open은
+source로 ACK하지 않으며 target-local status와 trace에서 관찰한다.
 
 ## 6. Startup과 실패
 

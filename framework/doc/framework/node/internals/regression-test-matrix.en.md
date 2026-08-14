@@ -1,8 +1,8 @@
 <!-- framework-adapter-nav:start -->
-[Document List](../README.en.md) | [Previous: Runtime Lifecycle](../../common/internals/README.en.md) | [Next: Backend Dependency Policy](backend-dependency-policy.en.md)
+[Document List](../README.en.md) | [Previous: Runtime Lifecycle](../../common/spec/README.en.md) | [Next: Backend Dependency Policy](backend-dependency-policy.en.md)
 <!-- framework-adapter-nav:end -->
 
-[Node.js Bundle](../README.en.md) | [Runtime Lifecycle](../../common/internals/README.en.md) | [Backend Policy](backend-dependency-policy.en.md) | [Common E2E](../../common/e2e/README.en.md)
+[Node.js Bundle](../README.en.md) | [Runtime Lifecycle](../../common/spec/README.en.md) | [Backend Policy](backend-dependency-policy.en.md) | [Common E2E](../../common/e2e/README.en.md)
 
 # ZLink Framework Node.js Regression Test Matrix
 
@@ -347,7 +347,7 @@ exist.
   interface documents
 - `framework/node/README.ko.md`
 - `framework/node/internals/regression-test-matrix.ko.md`
-- `../../common/internals/README.ko.md`
+- `../../common/spec/README.ko.md`
 - `framework/node/internals/backend-dependency-policy.ko.md`
 
 [^public-contract]: The public contract means the API surface exposed to external users, whose compatibility must be maintained on change.
@@ -365,7 +365,7 @@ exist.
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[Document List](../README.en.md) | [Previous: Runtime Lifecycle](../../common/internals/README.en.md) | [Next: Backend Dependency Policy](backend-dependency-policy.en.md)
+[Document List](../README.en.md) | [Previous: Runtime Lifecycle](../../common/spec/README.en.md) | [Next: Backend Dependency Policy](backend-dependency-policy.en.md)
 <!-- framework-adapter-nav:bottom:end -->
 
 ## Regression Items Moved From The Public Contract Documents

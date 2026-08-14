@@ -1391,97 +1391,102 @@ A per-language perf implementation is considered complete once it satisfies the 
 - `run_perf.sh` can run every standard scenario.
 - Repeated Codex agent review confirms no issues remain.
 
-## 23. How To Decide The Application HWM As A Production Workload
+## 23. Measuring Production Values For Core HWM And The Application Job Queue
 
-This section is the common measurement specification for deciding the host-wide HWM of application
-payload received but not yet completed by a handler, as a production workload. The HWM's
-configuration mode and Auto calculation contract are based on
-[Framework API "2.1 Keeping Received Payload From Growing Memory Indefinitely"](../spec/06-framework-api.en.md#21-keeping-received-payload-from-growing-memory-indefinitely).
-This section only defines the execution method for choosing a per-application positive HWM and
-verifying an Auto HWM profile.
+This section defines how to measure the Core ordinary-queue byte budget and the framework
+host instance's queued-application-job limit under a production workload. Settings, errors,
+and status-reset semantics come from
+[Framework API §2.1](../spec/06-framework-api.en.md#21-separating-the-core-memory-budget-from-the-application-job-queue),
+[Runtime Monitoring](../spec/24-runtime-monitoring.en.md), and
+[Runtime Metrics](../spec/25-runtime-metrics.en.md). Perf fixtures verify those values and
+boundaries; they do not redefine the contract.
 
-### 23.1 Conditions To Fix First
+### 23.1 Fixed Workload And CPU Matrix
 
-Use the same CPU quota, process memory limit, connection count, dispatch concurrency, and
-runtime/GC options as production. Fix the following characteristics of the job workload together.
+Fix production-like memory limits, runtime/GC options, connection count, payload
+distribution, request/one-way ratio, handler CPU/I/O ratio, and burst shape. Run the same
+manifest at `4`, `8`, and `16` effective vCPU. The framework does not take a target CPU
+percentage as configuration: the operator chooses the target and uses generator rate or
+dispatch concurrency to produce that range.
 
-- The ratio of request to one-way jobs
-- The application payload size distribution
-- The ratio of CPU-bound to I/O-bound handlers
-- The reply size and nested-request ratio a handler produces
-- Burst ingress rate and duration
+The application job queue Auto-calculation fixture expects these exact values.
 
-HWM doesn't limit CPU usage. If the target is `50%` of the allocated CPU quota, adjust dispatch
-concurrency or a separate rate limit first. Only use a run where normalized process CPU stays in the
-`45–55%` range while backlog persists as the target capacity measurement.
+| Effective vCPU | `Compact` | `LowLatency` | `Balanced` | `Throughput` |
+| ---: | ---: | ---: | ---: | ---: |
+| 4 | 128 | 256 | 512 | 1,024 |
+| 8 | 256 | 512 | 1,024 | 2,048 |
+| 16 | 512 | 1,024 | 2,048 | 4,096 |
 
-### 23.2 Throughput Measurement
+The manual fixture accepts `1` and `2,147,483,647`, and rejects `0`, negative values, and
+representation overflow as a configuration error before socket bind. A configured
+`CoreHwmBudgetBytes` takes precedence over the Core profile calculation; Core memory limit
+and manual budget inputs are finite and positive.
 
-Run a `60`-second measured phase, `5` times, after at least a `30`-second warm-up. If the
-coefficient of variation of throughput across the five runs exceeds `5%`, lengthen the measured
-phase. During measurement, jobs waiting on dispatch must keep existing continuously. A run where
-the handler idled due to insufficient ingress is excluded from the processing-capacity result.
+### 23.2 Measurement Phases And Reset Baseline
 
-Each run's throughput is calculated as follows.
+Run a `60`-second measured phase `5` times after at least a `30`-second warm-up. If the
+throughput coefficient of variation exceeds `5%`, extend the measured phase. Keep the
+operator-selected CPU range during the steady phase; reproduce the manifest's accepted
+burst rate and duration during the burst phase.
+
+Reset the capacity-status and metrics epochs immediately before the measured phase and assert:
+
+- Configuration and current gauges are unchanged across reset.
+- Peak is rebased to current at the same boundary and is not below current.
+- Capacity-wait count/duration and other epoch counters are `0`.
+- An event concurrent with reset belongs to exactly one of the old or new epochs.
+
+Always-on metrics do not create a per-job queue-wait histogram. The perf harness may measure
+queue-wait p50/p95/p99 separately, but does not export it as a public metric.
+
+### 23.3 Selecting A Core HWM Budget
+
+Start from an Auto profile and repeat the same steady/burst test while stepping down
+`CoreHwmBudgetBytes` candidates. For every candidate, record effective budget, applied HWM,
+current/peak accounted bytes, completion-accounted bytes, blocked ratio, outstanding
+application leases, RSS/managed heap, throughput, and latency. A Core budget is not a hard
+RSS cap, so judge the snapshot and process memory separately.
+
+Choose the smallest candidate that satisfies the workload's throughput, latency, and memory
+pass conditions, then apply the operator-selected safety margin. Completion progress must
+remain separate from ordinary Core HWM saturation, and saturation of one target must not
+block another origin.
+
+### 23.4 Selecting A Manual Application Job Queue Limit
+
+A profile is a benchmark bootstrap value. Derive the production manual value from the
+following distribution in the target-CPU steady and burst phases.
 
 ```text
-runDrainBytesPerSecond =
-    terminalPayloadBytes / measuredWallClockSeconds
-
-measuredSustainableDrainBytesPerSecond =
-    minimum(runDrainBytesPerSecond across five valid runs)
+candidateMaxQueuedApplicationJobs =
+    accepted permits-in-use high percentile or accepted burst peak
+    + operator-selected safety margin
 ```
 
-`terminalPayloadBytes` includes, exactly once, the application payload bytes of the original job
-that reached the handler terminal during the measured phase. It doesn't include reply bytes,
-ingress bytes, or instantaneous peak throughput.
+`permits-in-use` is `reserved supply + queued application jobs`. It excludes active handlers
+and async waits after a handler has started. For each manual candidate, verify:
 
-### 23.3 Calculating The HWM Candidate
+- `permits-in-use <= effective limit`, with no permit leak or cap overshoot.
+- Saturation is a cancellable capacity wait, not a public error, typed reject, or drop.
+- Returning one permit resumes one ordinary ingress from the oldest live waiting source.
+- Terminal reply/error completion identifiable before receive progresses while the queue is saturated.
+- Batch and 1:N dispatch do not create more handler jobs than the permits already secured.
 
-Decide the maximum queue delay operations will tolerate, and calculate the throughput-based
-candidate.
+### 23.5 Pass Conditions
 
-```text
-queueDelayCandidateBytes =
-    measuredSustainableDrainBytesPerSecond
-    * maximumQueueDelaySeconds
+- The §23.1 profile matrix and manual validation boundaries match exactly.
+- Steady and burst phases satisfy manifest throughput, p99 latency, deadline-miss, and memory limits.
+- Message drops, duplicate handler starts, permit leaks, and cap overshoots are `0`.
+- Core origin isolation and terminal-completion liveness remain intact.
+- Capacity-wait count/duration increases during saturation and follows §23.2 after reset.
+- `zlink.host.core_hwm.*` and `zlink.host.application_job_queue.*` names, units, and labels
+  match the Runtime Metrics specification.
 
-candidateApplicationHwmBytes =
-    measuredPeakActiveHandlerPayloadBytes
-    + queueDelayCandidateBytes
-```
+### 23.6 Values To Record
 
-`measuredPeakActiveHandlerPayloadBytes` is the maximum, during the measured phase, of the sum of
-payload bytes held by handler contexts currently executing. Since the Application HWM also includes
-payload of an executing handler, this value is added to the queue-delay candidate.
-
-`autoProfileHwmBytes` is the allocated application memory multiplied by the chosen profile ratio.
-`COMPACT` uses `2%`, `LOW_LATENCY` uses `5%`, `BALANCED` uses `10%`, and `THROUGHPUT` uses `20%`.
-When comparing the four Auto profiles, run each with the same workload. Choose the largest profile
-that satisfies the memory and queue-delay conditions, and use `BALANCED` if no separate choice is
-made.
-
-To fix a per-application production value, set `candidateApplicationHwmBytes` as a positive
-`ApplicationHwmBytes` and measure again. Fill the backlog up to the HWM and confirm all of the
-following conditions.
-
-- Peak process memory doesn't exceed the process limit.
-- Queue-delay p99 and maximum satisfy the application's target.
-- Throughput and CPU stay within the range allowed by the capacity test with HWM off.
-- Pause and source backpressure occur without message drops.
-- One message larger than the HWM is received when there's no application job currently being
-  processed.
-
-If the conditions aren't satisfied, lower the HWM and repeat the same test. Use the largest value
-that satisfies the conditions as the production value.
-
-### 23.4 Values That Must Be Recorded In The Result
-
-- CPU quota/core count, process memory limit, runtime/GC configuration, and Framework version
-- Connection count, dispatch concurrency, request/one-way ratio, and job size distribution
-- Per-run terminal job count, terminal payload bytes, wall-clock throughput, and process CPU
-- Peak RSS, peak pending application payload bytes, and active handler payload bytes
-- Queue-delay p50/p95/p99/max, pause count/duration, and backpressure count
-- The chosen Auto HWM profile and the memory value used to calculate it
-- Auto profile HWM, queue-delay candidate, active handler payload, production HWM, and the reasoning
-  for the choice
+- Effective vCPU, CPU quota/affinity/cpuset, target/measured CPU, memory limit, and runtime/GC settings
+- Framework/Core/binding versions, connection count, payload distribution, and workload-manifest hash
+- Core configured memory limit/manual budget/profile, effective budget, and applied/accounted/blocked status
+- Application queue configured profile/manual max, effective processor/limit, and reserved/queued/in-use/peak
+- Capacity waiters, wait count/duration, queue-wait p50/p95/p99, and supply-pause ratio
+- Throughput, latency, timeout/drop/duplicate counts, RSS/managed-heap peak, and selected safety margin

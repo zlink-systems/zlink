@@ -39,12 +39,6 @@ typedef void (*zlink_reply_handler_fn)(
   zlink_msg_t *parts_,
   size_t part_count_,
   void *userdata_);
-
-typedef void (*zlink_completion_control_handler_fn)(
-  const zlink_routing_id_t *source_rid_,
-  zlink_msg_t *parts_,
-  size_t part_count_,
-  void *userdata_);
 ```
 
 `ZLINK_PART_MORE`는 같은 multipart record에 뒤따르는 part가 있음을 뜻한다.
@@ -134,12 +128,53 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid(
 `flags_`는 `ZLINK_SEND_FLAGS_NONE` 또는 `ZLINK_SEND_FLAGS_DONTWAIT`다. 이 API는 request sequence나
 completion handler를 만들지 않는다.
 
+Binding이 routed 비동기 admission을 준비할 때는 다음 API로 현재 RID route의 exact application
+pipe identity를 얻는다.
+
+```c
+ZLINK_EXPORT zlink_submit_result_t zlink_select_routed_submit_target(
+  void *socket_,
+  const zlink_routing_id_t *router_rid_or_null_,
+  zlink_routed_submit_target_t *target_out_);
+
+ZLINK_EXPORT zlink_submit_result_t zlink_send_part_transport_pair(
+  void *s_,
+  const zlink_routing_id_t *target_rid_,
+  uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_,
+  zlink_msg_t *part_,
+  zlink_send_flags_t flags_,
+  zlink_part_flag_t part_flag_);
+```
+
+ROUTER는 `router_rid_or_null_`에 대상 RID를 요구한다. 선택은 pipe나 credit을 예약하지 않는 값
+snapshot이다. Exact submit은 RID·pair ID·generation이 같은 현재 application pipe에만 제출하며,
+HWM이면 `ZLINK_SUBMIT_BACKPRESSURED`, detach나 stale generation이면
+`ZLINK_SUBMIT_NOT_CONNECTED`를 반환한다. 같은 RID의 다른 pipe로 재선택하지 않는다. Multipart 첫
+part가 수용되면 그 exact pipe fence를 FINAL까지 유지하고 실패 시 전체 record를 rollback한다.
+Part 호출마다 public API scope가 따로이므로 binding은 첫 part부터 FINAL까지 한 번의
+`DONTWAIT` 시도 동안만 socket-local attempt gate를 유지한다. 실패하면 Core sequence
+rollback 뒤 gate를 즉시 해제하고, `BACKPRESSURED` readiness 대기 중에는 보유하지 않는다.
+이 gate는 새 Core multipart API나 공개 FIFO 계약이 아니다.
+
 ## 6. Raw request submit
 
 ```c
 ZLINK_EXPORT zlink_submit_result_t zlink_router_request_part(
   void *router_,
   const zlink_routing_id_t *peer_rid_,
+  zlink_msg_t *part_,
+  zlink_send_flags_t flags_,
+  zlink_part_flag_t part_flag_,
+  uint32_t timeout_ms_,
+  zlink_reply_handler_fn handler_,
+  void *userdata_);
+
+ZLINK_EXPORT zlink_submit_result_t zlink_router_request_transport_pair_part(
+  void *router_,
+  const zlink_routing_id_t *peer_rid_,
+  uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_,
   zlink_msg_t *part_,
   zlink_send_flags_t flags_,
   zlink_part_flag_t part_flag_,
@@ -157,6 +192,12 @@ part는 `ZLINK_PART_FINAL`과 0이 아닌 `handler_`를 사용한다. 마지막 
 실패하면 handler를 호출하지 않는다. callback의 `parts_`와 각 message의 소유권은 callback으로
 이동하며 callback은 이를 정확히 한 번 해제한다.
 
+Exact target request는 `zlink_router_request_transport_pair_part()`를 사용한다. RID와 pair
+identity 검증, no-reroute, multipart fence와 rollback은 exact raw submit과 같다. Core는 request
+envelope를 wire에 보이기 전에 pending correlation을 등록하며, submit 실패 시 그 pending entry와
+completion reservation을 제거하고 handler를 호출하지 않는다. Binding은 raw send와 같은 짧은
+socket-local attempt gate 아래에서 첫 request part부터 FINAL까지 한 번 시도한다.
+
 ## 7. Raw request와 message receive
 
 ```c
@@ -167,6 +208,16 @@ ZLINK_EXPORT zlink_recv_result_t zlink_router_recv_part(
   zlink_msg_t *part_out_,
   zlink_part_flag_t *has_more_out_,
   zlink_recv_flags_t flags_);
+
+ZLINK_EXPORT zlink_recv_result_t zlink_router_recv_part_v2(
+  void *router_,
+  const zlink_routing_id_t **source_node_rid_out_,
+  uint64_t *request_seq_out_,
+  uint64_t *transport_pair_id_out_,
+  uint64_t *transport_pair_generation_out_,
+  zlink_msg_t *part_out_,
+  zlink_part_flag_t *has_more_out_,
+  zlink_recv_flags_t flags_);
 ```
 
 완전한 raw record에서 part 하나를 반환한다. 모든 output pointer는 필수다. `flags_`는
@@ -174,6 +225,9 @@ ZLINK_EXPORT zlink_recv_result_t zlink_router_recv_part(
 `ZLINK_RECV_NO_DATA`와 `EAGAIN`을 반환한다.
 
 `has_more_out_ == ZLINK_PART_MORE`이면 다음 호출로 같은 record의 다음 part를 받아야 한다.
+`zlink_router_recv_part_v2()`는 같은 receive·ownership 계약에 source transport pair ID와 generation을
+추가한다. 같은 record의 모든 part는 동일한 RID·pair ID·generation을 반환하며, caller는 reply와
+exact-target 후속 operation에 이 snapshot을 다른 pair로 재선택하지 않고 사용한다.
 `ZLINK_PART_FINAL`이면 record 수신이 끝난다. reply가 필요한지는 §3의 output 조합으로 판단한다.
 
 ## 8. Raw reply submit
@@ -191,43 +245,11 @@ ZLINK_EXPORT zlink_submit_result_t zlink_router_reply_part(
 `request_seq_`는 수신 record가 반환한 값을 그대로 사용한다. 여러 part로 reply할 때 모든 호출에서
 같은 두 값을 사용한다. `ZLINK_PART_FINAL`이 성공하면 reply가 완료된다.
 
-## 9. Raw completion control
-
-```c
-ZLINK_EXPORT zlink_handler_result_t
-zlink_router_completion_control_handler(
-  void *router_,
-  zlink_completion_control_handler_fn handler_,
-  void *userdata_);
-
-ZLINK_EXPORT zlink_submit_result_t
-zlink_router_completion_control_part(
-  void *router_,
-  const zlink_routing_id_t *peer_rid_,
-  zlink_msg_t *part_,
-  zlink_part_flag_t part_flag_);
-```
-
-Completion control은 Core가 내용을 해석하지 않는 bounded raw multipart record다. 기존
-Application·Completion connection pair의 Completion connection을 사용한다. 새 socket이나 connection을
-만들지 않으며 일반 directed message와 request는 Application connection에 그대로 둔다.
-
-Handler는 socket마다 하나이며 다시 등록하면 교체한다. `NULL` handler는
-`ZLINK_HANDLER_INVALID_ARGUMENT`, ROUTER가 아닌 socket은 `ZLINK_HANDLER_NOT_SUPPORTED`다. Handler가
-등록되지 않은 상태에서 받은 record는 폐기한다.
-
-Callback이 실행 중이면 같은 socket의 close는 `ZLINK_CLOSE_BUSY`와 `EBUSY`를 반환한다. Callback이
-끝난 뒤 close를 다시 호출할 수 있다.
-
-Handler는 completion owner가 해당 connection을 처리할 때 실행된다. Application receive API를 호출하지
-않아도 `ZLINK_POLLCOMPLETION` poller가 계속 동작하면 control을 받을 수 있다. `source_rid_`는 callback이
-끝날 때까지만 유효하다. Payload part의 소유권은 callback으로 이동하며 callback은 각 part를 정확히 한 번
-해제하거나 소비한다.
-
-Part sequence와 실패 시 소유권은 §4를 따른다. Completion connection은 유한한 byte HWM을 사용한다.
-각 submit 호출은 결과와 관계없이 전달받은 `part_`를 소비한다. Submit이
-`ZLINK_SUBMIT_BACKPRESSURED`이면 caller는 독립적으로 보관해 둔 전체 record를 send-ready 뒤 처음
-part부터 다시 제출한다. Core는 payload의 command 종류, 허용 목록과 업무 의미를 정의하지 않는다.
+Raw reply와 error reply는 completion progress lane에 한 번만 submit한다. 이 lane은 application
+byte HWM, manual HWM, LWM과 Core budget reservation의 대상이 아니므로 이 함수는 그 capacity를
+이유로 `ZLINK_SUBMIT_BACKPRESSURED`를 반환하지 않으며 `ZLINK_POLLOUT` 또는 send-ready callback을
+기다려 재시도하지 않는다. 연결, lifecycle, argument, state와 allocation failure는 호출 시점의
+해당 `zlink_submit_result_t`로 즉시 끝난다.
 
 ## 10. Result와 readiness
 
@@ -235,6 +257,6 @@ submit은 `zlink_submit_result_t`, receive는 `zlink_recv_result_t`, option은
 `zlink_config_result_t`를 반환한다. 각 result와 `zlink_errno()`의 대응은
 [errno map](../04-errno-map.ko.md)을 따른다.
 
-ROUTER의 `ZLINK_POLLIN`은 완전한 raw record를 수신할 수 있음을 뜻한다. `ZLINK_POLLOUT`과
-`zlink_send_ready_handler()`는 backpressure 뒤 submit을 다시 시도할 가치가 있음을 나타내지만 다음
-submit 성공을 보장하지 않는다.
+ROUTER의 `ZLINK_POLLIN`은 완전한 raw record를 수신할 수 있음을 뜻한다. Ordinary send와 request에서
+`ZLINK_POLLOUT`과 `zlink_send_ready_handler()`는 backpressure 뒤 submit을 다시 시도할 가치가 있음을
+나타내지만 다음 submit 성공을 보장하지 않는다. 이 readiness 계약은 raw reply에 적용하지 않는다.

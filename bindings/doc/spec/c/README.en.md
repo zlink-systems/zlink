@@ -3,7 +3,7 @@ title: "C Bindings Implementation Blueprint"
 ---
 
 <!-- bindings-nav:start -->
-[Spec index](../README.md) | [Previous: Async & Coroutine Policy](../async-coroutine-policy.md) | [Next: .NET](../dotnet/README.md)
+[Spec index](../README.en.md) | [Previous: Async & Coroutine Policy](../async-coroutine-policy.en.md) | [Next: .NET](../dotnet/README.en.md)
 <!-- bindings-nav:end -->
 
 # C Bindings Implementation Blueprint
@@ -137,14 +137,10 @@ and `ZLINK_OPT_RCVHWM` are `uint64_t` accounted-byte limits, and
 `zlink_set_option()` and `zlink_get_option()` receive exactly 8 bytes of
 storage. The manual default is `4,096,000 bytes`, and `0` means unlimited.
 
-`ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` is configured through
-`zlink_ctx_set_data()` and `zlink_ctx_get_data()`. It is a byte input to Core's
-planner. Core selects a message-slot count from the profile, socket role, and
-connection bucket, then calculates the planned byte HWM as follows.
-
-```text
-planned HWM bytes = selected message slots * planning unit bytes
-```
+The context memory limit and Core budget are byte-valued `uint64_t` options;
+the profile uses its canonical option. Core applies the profile ratio exactly
+once and calculates planned byte HWM using physical directional queues as the
+denominator.
 
 Setting a directional HWM makes that direction a manual override. Automatic
 HWM recalculates only directions without an override. Core decides actual
@@ -153,10 +149,15 @@ accumulate a separate message count or payload size. A submit that reaches the
 HWM reports backpressure according to that socket's blocking, non-blocking, and
 timeout contract.
 
-In `zlink_monitor_status_t` ABI version 2, planned, applied, and deferred HWM
-values and in-flight usage use bytes. `snd_pending_msgs`, `rcv_pending_msgs`,
-and `auto_hwm_socket_message_slots` are count diagnostics, not admission
-inputs.
+In `zlink_monitor_status_t` ABI version 3, planned, applied, and deferred HWM
+values and in-flight usage use bytes. `snd_pending_msgs` and
+`rcv_pending_msgs` are display counts, not admission inputs. No message-unit,
+slot, size-cap, or connection-bucket diagnostic is exposed.
+
+`zlink_socket_monitor_open_options_t.monitor_hwm_bytes` is the only monitor
+queue HWM option. Zero selects the Core default; a positive value is forwarded
+unchanged as the exact byte limit. No message-count alias or conversion is
+provided.
 
 ## Required feature coverage
 

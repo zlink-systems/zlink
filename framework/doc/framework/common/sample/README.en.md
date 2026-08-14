@@ -204,7 +204,8 @@ created room User Spot, not the matchmaking request.
 
 A sample demonstrating relocation measures the service interruption time of a single unit the
 application uses, not the host's overall elapsed time. The measurement window is from when the
-source blocks new work to when the target sends an ACK that it has started accepting new work. A
+source blocks new work until the one-way CUTOVER submit attempt reaches a success or failure
+terminal at the source. A target-admission ACK isn't the endpoint of this window. A
 single Actor, a single Instance Spot, and a single SpotWide User Spot aggregate each target a
 default of within 1 second. Exceeding 1 second doesn't cancel or roll back the relocation. The
 detailed standard follows [Graceful Drain And Handoff §7.1](../spec/30-host-relocation-flow.en.md#71-service-interruption-time-target-per-relocation-unit).

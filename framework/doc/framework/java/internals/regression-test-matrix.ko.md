@@ -1,7 +1,7 @@
 # JVM service runtime regression test matrix
 
 [Java 문서](../README.ko.md) · [Kotlin 문서](../../kotlin/README.ko.md) ·
-[Runtime lifecycle](../../common/internals/README.ko.md)
+[Runtime lifecycle](../../common/spec/README.ko.md)
 
 Java와 Kotlin은 JVM service runtime 하나를 검증한다. Java public ABI와 Kotlin metadata·extension ABI는
 각각 검사하지만 protocol state machine과 runtime E2E를 중복 구현하지 않는다.

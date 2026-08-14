@@ -1,18 +1,20 @@
 ---
-title: "3. Application And Infrastructure Execution Separation"
+title: "42. Application And Infrastructure Execution Separation"
 ---
 
-# 3. Application And Infrastructure Execution Separation
+# 42. Application And Infrastructure Execution Separation
 
-[Internal structure table of contents](README.en.md) · [Previous: 2. Spot · Actor Execution Serialization — splitting queue and execution gate](02-serialization.en.md) · [Next: 4. Operation Completion Confirmation — Only One Finalizes](04-completion.en.md)
+> **Document status — internal design, not normative public specification.** This chapter explains implementation structure used to satisfy the linked public contracts. It does not add or change application-visible behavior.
+
+[Internal structure table of contents](README.en.md) · [Previous: 41. Spot · Actor Execution Serialization — splitting queue and execution gate](41-internal-serialization.en.md) · [Next: 43. Operation Completion Confirmation — Only One Finalizes](43-internal-completion.en.md)
 
 > **What this chapter answers** — what must keep progressing while a
 > handler is stuck.
 >
 > **Contract ownership** — the receive bound and backpressure contract
-> is owned by [the Framework API](../spec/06-framework-api.en.md), and
+> is owned by [the Framework API](06-framework-api.en.md), and
 > the meaning of async completion by
-> [the Async Execution Policy](../spec/05-async-execution-policy.en.md).
+> [the Async Execution Policy](05-async-execution-policy.en.md).
 > This chapter covers the **structure** that satisfies that contract and
 > the failures that become visible when execution regions are mixed.
 
@@ -33,7 +35,7 @@ Runtime work splits into two groups of different character.
 The formal spec's requirement is stronger than "progresses
 independently" — infrastructure work progresses in **an execution
 region the application handler can't occupy**
-([Framework API 「8.2 Handler Execution Object And Dependency Lifetime」](../spec/06-framework-api.en.md#82-handler-execution-object-and-dependency-lifetime)).
+([Framework API 「8.2 Handler Execution Object And Dependency Lifetime」](06-framework-api.en.md#82-handler-execution-object-and-dependency-lifetime)).
 
 ```mermaid
 flowchart LR
@@ -54,40 +56,18 @@ waiting for.
 
 ## 2. Why Separation, Not A Reserved Section
 
-The same queue can reserve "N slots for infrastructure only." This
-approach also prevents starvation, but **loses the following
-properties.**
+Reserving infrastructure slots inside one executor can leave queue room without an execution
+agent. Terminal reply/error completion supply and ordinary ingress therefore use separate
+progress regions. This separation does not grant ordinary control a shared-capacity bypass.
+Only supply identifiable before receive as terminal completion bypasses; every application,
+control, or malformed ordinary record first uses the shared permit owned by the
+[dispatch loop](46-internal-dispatch-loop.en.md).
 
-First, the bound overlaps across two axes. When submission is
-rejected, neither the caller nor the operator can tell "did this hit
-the overall bound, or my own share's bound."
-
-Second, and more importantly — a reservation guarantees only a
-**slot**, not **progress**. If application work is waiting while
-running, that execution resource is still tied up. Even with a slot
-free, if there's no one to run it, infrastructure work can't progress.
-
-The way the formal spec solves this problem is also separation, not
-reservation — when pending-processing bytes hit the ceiling, **only
-new application receiving stops**, while response receiving, runtime
-control processing, and send-ready notification keep being processed
-([Framework API 「2.1 Keeping Received Payload From Growing Memory Indefinitely」](../spec/06-framework-api.en.md#21-keeping-received-payload-from-growing-memory-indefinitely)).
-
-**Decision — don't set aside a reserved section that pre-carves out
-execution slots.** Starvation is prevented by region separation. This
-is a part the formal spec left undecided that internals decides.
-
-This doesn't mean "there's only one bound." The spec requires three
-bounds with different purposes to coexist: the per-process
-pending-processing byte ceiling and the internal response-processing
-budget defined by
-[Framework API 「2.1 Keeping Received Payload From Growing Memory
-Indefinitely」](../spec/06-framework-api.en.md#21-keeping-received-payload-from-growing-memory-indefinitely),
-and the send-space waiting-slot bound defined by
-[Asynchronous Execution Policy 「1.3 One-Way
-Submit」](../spec/05-async-execution-policy.en.md#13-one-way-submit).
-Each blocks a different target, so they aren't merged into one. Only
-**splitting shares within the same queue** is what's eliminated.
+Bounds with different purposes are not merged. Core directional byte HWM owns transport
+backpressure through retained credit; the host application job queue limits jobs before
+callback start. Per-owner count/byte queues own ordering and structural isolation, and an
+outbound admission waiter owns its send deadline. A shared profile label or unit does not
+make their type, calculation, or error meaning the same.
 
 ## 3. Observation Doesn't Block Progress
 
@@ -98,7 +78,7 @@ service would get slower simply because observation was turned on.
 The slot sent to a subscriber has a bound, and when it overflows, it
 catches up by **coalescing into the latest status per source**. The
 stream isn't cut just because the slot filled up
-([Runtime Status And Operational Diagnostics 「3. Querying Current State And Observing Changes」](../spec/24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes)).
+([Runtime Status And Operational Diagnostics 「3. Querying Current State And Observing Changes」](24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes)).
 Conversely, it doesn't slow down message processing either.
 
 ## 4. How Resources Are Split Between The Two Regions
@@ -110,10 +90,10 @@ a problem.
 | Allocation | Problem |
 |---|---|
 | Only one resource for infrastructure | Completion processing, peer management, and moves all pass through that one resource. As peers grow, this becomes the bottleneck |
-| Generous for infrastructure too | Conflicts with [2. Spot · Actor Execution Serialization](02-serialization.en.md)'s resource constraint. Combining both allocations exceeds core count |
+| Generous for infrastructure too | Conflicts with [41. Spot · Actor Execution Serialization](41-internal-serialization.en.md)'s resource constraint. Combining both allocations exceeds core count |
 
 **Decision — resources are allocated per process, and don't grow with
-topology or [Spot](../spec/01-glossary.en.md#spot) count.**
+topology or [Spot](01-glossary.en.md#spot) count.**
 Infrastructure work is mostly short and non-blocking, so it's covered
 by fewer resources than application.
 
@@ -163,12 +143,12 @@ one-way family.**
    up until a fixed time.**
 2. If space opens within the time, submit **once.**
 3. If the time runs out first, end with `DeadlineExceeded`
-   ([Async Execution Policy 「1.3 One-way submit」](../spec/05-async-execution-policy.en.md#13-one-way-submit)).
+   ([Async Execution Policy 「1.3 One-way submit」](05-async-execution-policy.en.md#13-one-way-submit)).
 
 **The Request family doesn't wait.** If the same runtime's Spot · Actor
 queue is full, it ends immediately with `CapacityExceeded`; if it's a
 different node's queue, with `Unavailable`
-([Spot Messaging 「5.3 Work Put On The Spot Application Queue」](../spec/12-spot-messaging.en.md#53-work-put-on-the-spot-application-queue)).
+([Spot Messaging 「5.3 Work Put On The Spot Application Queue」](12-spot-messaging.en.md#53-work-put-on-the-spot-application-queue)).
 Request has no reason to wait since the caller can receive a result
 and judge whether to retry. The send family, by contrast, has no
 result to return, so the caller can't judge, and so it waits.
@@ -188,87 +168,43 @@ it waits for send space.
 waiting slots are full, it ends immediately with `DeadlineExceeded`
 without waiting
 ([Asynchronous Execution Policy 「1.3 One-Way
-Submit」](../spec/05-async-execution-policy.en.md#13-one-way-submit)).
+Submit」](05-async-execution-policy.en.md#13-one-way-submit)).
 The fact of being backpressured itself isn't a value the caller receives.
 `Backpressured` isn't a public terminal result. Without a bound, when
 the peer is slow, this side's memory would keep growing indefinitely,
 following the peer's processing speed.
 
-The receive-side bound goes the other direction. When
-pending-processing bytes hit the ceiling, **only new application
-receiving stops**, while response receiving, runtime control
-processing, and send-ready notification keep being processed
-([Framework API 「2.1 Keeping Received Payload From Growing Memory Indefinitely」](../spec/06-framework-api.en.md#21-keeping-received-payload-from-growing-memory-indefinitely)).
-Stopping receiving altogether would also block the responses mixed in
-there, causing a deadlock.
+The receive side combines a Core retained-credit lease with a host-shared application job
+queue permit. An ordinary source receives/claims after permit readiness. An application job
+keeps the permit until actual callback start; a control or malformed ordinary record also
+acquires it and releases immediately after internal processing. A record received on an
+ordinary connection cannot gain terminal-completion bypass after classification.
 
-Some multiplexed receive paths use a binding that does not report the complete message
-length before `Recv`. Such a path cannot distinguish an application message from a control
-message until after the raw `Recv`. To keep control processing available, it must permit a
-limited number of raw receives for classification.
+Terminal reply/error completion supply progresses on a separately identifiable pre-receive
+completion path, so correlation and terminal result remain live while ordinary queues are
+saturated. When a Core receive queue fills, directional byte HWM carries backpressure to the
+sender. Batch and 1:N never publish more jobs than secured permits. [Receive And Dispatch
+Loop](46-internal-dispatch-loop.en.md) owns fairness; [Payload Ownership](50-internal-message-ownership.en.md)
+owns retained-record lifetime.
 
-Let `M` be `MaxMessageSize` and `R` be the number of raw-receive reservations that may be
-held concurrently. The bytes received for classification cannot exceed `HWM + R * M`.
-When a record is classified as control, it is not added to application pending bytes and
-its reservation is returned immediately. An application record adds its payload bytes and
-keeps the reservation until it reaches a terminal state.
-
-The HWM therefore prevents unbounded admission of new application work. Only the finite
-classification span required for control progress may extend beyond it. If a binding can
-inspect the length in advance, it needs no such span and stops a new application `Recv`
-directly at the HWM.
-
-A StreamNode checks its complete client-to-server message separately on
-the Core STREAM inbound path. The measured size is header bytes plus
-payload bytes, excluding the 6-byte prefix, and the StreamNode default is
-`64 KiB`. This cap isn't applied to a server-to-client outbound message.
-
-**Decision — `R` does not grow with load.** The HWM is not an exact cutoff. It signals
-that receive-side processing is approaching its limit, and receiving must stop for that
-state to propagate to the sender as backpressure
-([Framework API 「2.1 Keeping Received Payload From Growing Memory Indefinitely」](../spec/06-framework-api.en.md#21-keeping-received-payload-from-growing-memory-indefinitely)).
-If `R` scales with connection count or pending message count, a larger load also permits
-more raw receives. That weakens the signal when the strongest backpressure is needed.
-`R` is therefore a fixed allowance selected by configuration. The guarantee is not an
-exact cutoff; it is that the excess above the HWM does not grow with load.
-
-`R` is a different axis from the count/byte/elapsed-time bounds in
-[7. Receive And Dispatch Loop 「6. Read Multiple Items At Once From A Socket」](07-dispatch-loop.en.md#6-read-multiple-items-at-once-from-a-socket).
-Those three decide **how much to read from one connection per
-wake-up**, while `R` decides **how many raw receives that haven't
-finished classification can be outstanding at once.** They aren't
-merged into the same value.
+StreamNode client-to-server complete-message `MaxMessageSize` is an independent wire guard.
+It checks header plus payload excluding the 6-byte prefix, defaults to `64 KiB`, and does
+not apply to server-to-client outbound.
 
 ## 6. Don't Silently Drop On Exceeding A Bound
 
-**Decision — when a bounded resource such as ordinary execution or
-processing cannot admit work, it ends in a result the caller can
-observe.** The runtime does not create an unbounded backlog behind that
-bounded resource, silently drop the work, or secretly resubmit it later
-([Async Execution Policy 「1.3 One-way submit」](../spec/05-async-execution-policy.en.md#13-one-way-submit)).
+Terminal meaning depends on the kind of bound. Per-owner structural count/byte violations
+and outbound admission deadline use the existing owner error or `DeadlineExceeded`.
+Host-shared application job queue shortage, however, is a cancellable oldest-waiter wait,
+not a public reject/drop reason. Core byte HWM creates transport backpressure. No path adds
+an unbounded backlog, polling, busy-spin, silent drop, or replay.
 
-If a full temporary response slot **drops and cleans up the response,**
-the waiting caller receives no notice at all
-and hangs until the timeout fires. The cause is "not enough storage
-slot," but what the caller sees is "no response" — nearly impossible
-to diagnose.
-
-A bound records its scope of application together. Even the same unit
-is a different value if the purpose differs.
-
-| Bound | Measured by | Scope |
+| Bound | Measurement | Saturation meaning |
 |---|---|---|
-| Execution queue | Two axes: count and bytes (includes fixed per-work cost, counts running work too) | One execution authority |
-| Pending processing | Sum of payload bytes | One process's application receiving |
-| Pending during a move | No relocation-specific bound | Work accepted before the seal keeps its reservation, but post-seal ingress does not reuse the ordinary execution-lane bound. Transport, deadline, and cancellation limits remain |
-
-Why the bound is measured in bytes rather than count is covered by
-[8. Object Kind And Activation 「6. Which Unit Memory Accounting Uses」](08-object-lifecycle.en.md#6-which-unit-memory-accounting-uses).
-
-The basis for not giving pending-during-a-move a separate bound is
-[Complete Host Relocation Flow 「9. Moving Pending Messages, Timers, And Sessions」](../spec/30-host-relocation-flow.en.md#9-moving-pending-messages-timers-and-sessions),
-and its hold, restore, and relay order is covered by
-[5. Continuity During A Move](05-relocation-continuity.en.md).
+| Core HWM | Directional retained/accounted bytes | Backpressure from Core queue to sender |
+| Application job queue | Host-instance reserved/queued/in-use permits | Cancellable shared-cap wait |
+| Owner FIFO | Per-owner count and bytes | Structural owner-isolation error |
+| Outbound admission waiter | Bounded waiter per operation family | Original send deadline/cancellation result |
 
 ## 7. The Implementation Constraint This Decision Produces
 
@@ -286,7 +222,7 @@ Each owner keeps the two regions in physically separate FIFOs. The application F
 lifecycle FIFO do not share count/byte reservations or admission state. Already-accepted
 lifecycle work must still be enqueued and run when the application FIFO is full. The
 priority and starvation-prevention rule between the FIFOs is described in
-[2. Spot And Actor Execution Serialization](02-serialization.en.md).
+[41. Spot And Actor Execution Serialization](41-internal-serialization.en.md).
 
 Increasing the number of owners does not create one execution thread or executor per owner.
 The owner holds its FIFOs and execution state, while the resources that run work are shared
@@ -321,11 +257,10 @@ fail without waiting in every runtime.
 - With an application handler kept waiting, a new peer connection is
   accepted.
 - A slow status subscriber doesn't slow down message processing speed.
-- When pending-processing bytes hit the ceiling, only application
-  receiving stops while response receiving continues.
-- Work that exceeds a bound within the span before the public result
-  is finalized doesn't silently disappear, and ends in a result the
-  caller observes.
+- When all shared permits are reserved, ordinary ingress waits cancellably while terminal
+  completion progresses.
+- A full Core receive byte HWM carries backpressure to the sender without dropping a record.
+- Owner structural rejection and shared-cap wait have distinct errors and metrics.
 - A failure after an already completed call (a skip after publish has
   started, a target failure of a completed send) doesn't change the
   caller's result and is left only as an observation.
@@ -340,6 +275,10 @@ fail without waiting in every runtime.
 - Work waiting for send space doesn't hold execution authority.
 - When the send-wait slot is full, it fails without waiting.
 
+## Progress Isolation Under Saturation
+
+Only terminal reply/error completion supply bypasses the shared permit. [Receive and Dispatch Loop](46-internal-dispatch-loop.en.md) owns permit ordering for ordinary/completion progress isolation; [Payload Ownership](50-internal-message-ownership.en.md) owns retained leases.
+
 ---
 
-[Internal structure table of contents](README.en.md) · [Previous: 2. Spot · Actor Execution Serialization](02-serialization.en.md) · [Next: 4. Operation Completion Confirmation](04-completion.en.md)
+[Internal structure table of contents](README.en.md) · [Previous: 41. Spot · Actor Execution Serialization](41-internal-serialization.en.md) · [Next: 43. Operation Completion Confirmation](43-internal-completion.en.md)

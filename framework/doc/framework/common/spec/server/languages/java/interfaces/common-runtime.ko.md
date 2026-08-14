@@ -113,8 +113,9 @@ public final class ZLinkFrameworkRuntime
 이전한다. 성공하면 `RELOCATED` 상태가 되며 host process와 infrastructure connection은 유지한다. User Spot은 [Spot](../../../../01-glossary.ko.md#spot)과 current
 member Actor 전체를 하나의 aggregate로 옮긴다. Participant 총수에 고정 상한을 두지 않는다.
 Aggregate participant 하나라도 `disableRelocation()`을 선택했으면
-`Blocked/RelocationDisabled`, target·capacity·reservation을 확보할 수 없으면 `Blocked/TargetUnavailable`,
-application version·type·state 보존 adapter capability가 맞지 않으면 `Blocked/StateIncompatible`로 끝난다. 이
+`Blocked/RelocationDisabled`다. 요청한 application version과 등록 factory/type·relocation adapter eligibility를
+만족하는 target·capacity·reservation을 확보할 수 없으면 `Blocked/TargetUnavailable`로 끝난다. Target 선택 뒤
+전달한 state schema/type adapter가 호환되지 않으면 `Blocked/StateIncompatible`다. 이
 preflight failure는 admission을 변경하지 않는다. [User Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)이 존재한다는 사실만으로 relocation을 차단하지 않는다.
 Local manual RouteMesh peer, ClientServer client endpoint, fanout subscriber endpoint 또는 manual fanout publisher가
 하나라도 있으면 `Blocked/ManualTopologyUnsupported`로 끝난다. Automatic RouteMesh는 source의 Core peer table에서
@@ -154,9 +155,10 @@ Mode와 target version 조합이 위 조건에 맞지 않으면 Framework는 adm
 6. 남은 후보에 node-wide placement weight를 적용한다.
 
 Version 조건을 먼저 적용하므로 capability나 capacity가 충분하더라도 다른 version node로 fallback하지
-않는다. Version·wave·capacity 또는 exact-ready target이 없으면 deadline까지 다시 확인한 뒤
-`Blocked/TargetUnavailable`이다. Stable type, factory, relocation policy 또는 adapter가 맞지 않으면
-`Blocked/StateIncompatible`이다. Store 조회 실패는 `Blocked/StoreUnavailable`이다.
+않는다. Version·wave·capacity 또는 등록 factory/type·relocation adapter eligibility를 만족하는 exact-ready
+target이 없으면 deadline까지 다시 확인한 뒤 `Blocked/TargetUnavailable`이다. Target 선택 뒤 전달한 state
+schema/type adapter가 호환되지 않으면 `Blocked/StateIncompatible`이다. Store 조회 실패는
+`Blocked/StoreUnavailable`이다.
 
 같은 shared relocation이 실행 중일 때 mode와 effective target version이 같은 호출은 기존 operation에
 참여하고 같은 terminal result를 받는다. 첫 호출의 deadline이 shared operation deadline을 고정하며 뒤에
@@ -274,6 +276,21 @@ public final class systems.zlink.framework.runtime.host.ZLinkFrameworkTerminatio
   public systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationResult(systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome, systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason);
   public systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome outcome();
   public systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason reason();
+}
+public final class systems.zlink.framework.monitoring.ZLinkListenerKind extends java.lang.Enum<systems.zlink.framework.monitoring.ZLinkListenerKind> {
+  public static final systems.zlink.framework.monitoring.ZLinkListenerKind ROUTE_MESH;
+  public static final systems.zlink.framework.monitoring.ZLinkListenerKind CLIENT_SERVER;
+  public static final systems.zlink.framework.monitoring.ZLinkListenerKind FANOUT;
+  public static final systems.zlink.framework.monitoring.ZLinkListenerKind STREAM;
+  public static systems.zlink.framework.monitoring.ZLinkListenerKind[] values();
+  public static systems.zlink.framework.monitoring.ZLinkListenerKind valueOf(java.lang.String);
+}
+public final class systems.zlink.framework.monitoring.ZLinkListenerStatus extends java.lang.Record {
+  public systems.zlink.framework.monitoring.ZLinkListenerStatus(systems.zlink.framework.monitoring.ZLinkListenerKind, java.lang.String, java.lang.String, java.time.Instant);
+  public systems.zlink.framework.monitoring.ZLinkListenerKind kind();
+  public java.lang.String name();
+  public java.lang.String endpoint();
+  public java.time.Instant observedAt();
 }
 public interface systems.zlink.framework.ZLinkMessageContext {
   public abstract java.util.Optional<java.lang.String> meshName();

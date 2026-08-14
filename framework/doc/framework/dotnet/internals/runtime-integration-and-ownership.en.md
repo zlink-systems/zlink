@@ -1,7 +1,7 @@
 <!-- framework-adapter-nav:start -->
 [Document List](../../../README.en.md) | [Previous: Backend Policy](backend-dependency-policy.en.md) | [Next: Regression Test Matrix](regression-test-matrix.en.md)<!-- framework-adapter-nav:end -->
 
-[Common layering](../../common/internals/01-layering.en.md) | [Common spec](../../common/spec/README.en.md)
+[Common layering](../../common/spec/40-internal-layering.en.md) | [Common spec](../../common/spec/README.en.md)
 
 # .NET Runtime Integration and Receive Ownership
 
@@ -233,7 +233,7 @@ dotnet build framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Zlink.Fr
 ```
 
 Where the native runtime is available, run the backend factory, client-server channel, fanout,
-stream-concurrency, and receive-dispatch-budget tests together. Release approval also compares
+stream-concurrency, and Application Job Queue admission tests together. Release approval also compares
 throughput, p99 latency, allocation/GC, and lock contention against the pre-change baseline. An
 unexplained regression is not a completed result.
 
@@ -246,7 +246,7 @@ The following tests pin the decisions in this document:
 | `BackendAdapterFactoryTests.BackendFactory_Creates_Backend_Resources_Through_Runtime_Context` | The backend factory creates sockets, Spot, and Stream resources through one generation-scoped semantic context port; the binding context stays inside the .NET integration boundary. |
 | `BackendAdapterFactoryTests.SpotNode_Router_Send_Config_RoundTrips_Through_Binding` | MeshNode topology's MaxMessageSize, directional high-water marks, mailbox caps, and directional timeouts reach the managed ROUTER socket options without losing their direction. |
 | `ClientServerChannelRuntimeTests.BackendWrappers_DeliverUnsolicitedLivenessProbe` | A caller-provided `Received` envelope is reused for control receive and is not retained by the application queue. |
-| `InboundDispatchBudgetTests.Dispatch_queue_rejects_when_full_without_blocking_receive_loop` | A full application queue rejects its owned envelope and keeps the control receive loop nonblocking. |
+| `ApplicationJobQueueAdmissionTests.Saturation_waits_before_receive_and_terminal_completion_bypasses_capacity` | Ordinary ingress acquires a host-wide permit before receive/claim. Saturation is a cancellable wait with no reject, drop, busy spin, or unbounded side queue; only a pre-receive-identifiable terminal reply/error completion may bypass the permit so completion remains live. The reservation is returned at the handler's actual first instruction, and cancellation/teardown leaks no permit or envelope owner. |
 | `test_pubsub.pubsub_topic_message_can_be_released_for_reuse` | The binding public reuse operation clears received parts while allowing the same topic envelope to receive the next publish. |
 | `test_socket_concurrency.dealer_and_router_allow_concurrent_public_sends` | Independent public DEALER and ROUTER send builders complete concurrently without a Framework duplicate gate, while each receive remains single-consumer. |
 | `BackendStreamSocketConcurrencyTests.ConcurrentBoundActorMessages_AreSubmittedSerially` | The Stream semantic adapter preserves the single submit owner required by the binding session service. |

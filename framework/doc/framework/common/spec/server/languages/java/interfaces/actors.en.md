@@ -58,7 +58,9 @@ socket bind. A mismatch is a startup configuration error.
 callback execution.
 
 The Actor adapter captures/restores application state as an opaque
-`byte[]` of at most 64 MiB. A public state DTO, `TState`,
+`byte[]` with no relocation-adapter-specific size cap. The framework
+performs any chunking required by the registered Relocation Store's
+ordinary blob and whole-payload limits. A public state DTO, `TState`,
 `stateContractId`, state class, and `ZLinkMessage` aren't put on the
 relocation surface. The framework immediately copies the array once
 capture completes normally. The array capture returns is still owned by
@@ -144,8 +146,9 @@ the `SpotWide` aggregate is only blocked when even one participant
 selected `disableRelocation()` or a compatible target can't be secured.
 A participant with relocation disabled gets `BLOCKED/RELOCATION_DISABLED`;
 absence of target/capacity/reservation gets
-`BLOCKED/TARGET_UNAVAILABLE`; a mismatch of application
-version/type/state-preservation adapter capability gets
+`BLOCKED/TARGET_UNAVAILABLE`. The same result applies when no target satisfies the requested
+application version and registered factory/type/state-preservation-adapter eligibility. After
+target selection, an incompatible transferred state schema/type adapter gets
 `BLOCKED/STATE_INCOMPATIBLE`. The Actor unit finishes target factory and
 restore, prepares the accepted journal as a staging queue the
 application handler hasn't run, and then performs the `NEW_OWNER` CAS.

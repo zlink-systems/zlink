@@ -1321,91 +1321,96 @@ runner를 다른 host 또는 여러 host에 분산한다.
 - `run_perf.sh`가 모든 표준 시나리오를 실행할 수 있다.
 - Codex 에이전트 리뷰를 반복해서 남은 이슈가 없음을 확인한다.
 
-## 23. Application HWM을 production workload로 결정하는 방법
+## 23. Core HWM과 Application job queue 운영값 측정
 
-이 절은 host 전체에서 수신 후 handler가 완료되지 않은 application payload의 HWM을 production
-workload로 결정하는 공통 측정 규격이다. HWM의 설정 mode와 Auto 계산 계약은
-[Framework API 「2.1 수신 payload가 memory를 계속 늘리지 않게 한다」](../spec/06-framework-api.ko.md)를
-기준으로 한다. 이 절은 application별 양수 HWM을 선택하고 Auto HWM profile을 검증하는 실행
-방법만 정한다.
+이 절은 Core의 ordinary queue byte budget과 Framework host instance의 queued application job
+상한을 production workload에서 측정하는 방법을 정의한다. 설정값·예외와 status reset 계약은
+[Framework API §2.1](../spec/06-framework-api.ko.md#21-core-memory-budget과-application-job-queue를-분리한다),
+[runtime monitoring](../spec/24-runtime-monitoring.ko.md)과
+[runtime metrics](../spec/25-runtime-metrics.ko.md)을 기준으로 한다. Perf fixture는 계약을 다시
+정의하지 않고 그 값과 경계를 검증한다.
 
-### 23.1 먼저 고정할 조건
+### 23.1 고정할 workload와 CPU matrix
 
-Production과 같은 CPU quota, process memory limit, connection 수, dispatch concurrency,
-runtime·GC option을 사용한다. Job workload는 다음 특성을 함께 고정한다.
+Production과 같은 memory limit, runtime·GC option, connection 수, payload 분포, request·one-way
+비율, handler의 CPU·I/O 비율과 burst shape를 고정한다. Effective vCPU `4`, `8`, `16`에서 같은
+manifest를 실행한다. Framework는 목표 CPU 사용률을 설정으로 받지 않으므로 운영자가 목표를
+정하고 load generator의 rate 또는 dispatch concurrency로 그 구간을 만든다.
 
-- Request와 one-way job의 비율
-- Application payload 크기 분포
-- CPU-bound와 I/O-bound handler의 비율
-- Handler가 만드는 reply 크기와 nested request 비율
-- Burst ingress rate와 지속 시간
+Application job queue Auto 계산 fixture는 다음 값을 정확히 기대한다.
 
-HWM은 CPU 사용률을 제한하지 않는다. 목표가 할당된 CPU quota의 `50%`라면 dispatch
-concurrency나 별도 rate limit을 먼저 조정한다. Backlog가 지속되는 동안 정규화한 process CPU가
-`45~55%` 범위에 있는 실행만 목표 capacity 측정값으로 사용한다.
+| Effective vCPU | `Compact` | `LowLatency` | `Balanced` | `Throughput` |
+| ---: | ---: | ---: | ---: | ---: |
+| 4 | 128 | 256 | 512 | 1,024 |
+| 8 | 256 | 512 | 1,024 | 2,048 |
+| 16 | 512 | 1,024 | 2,048 | 4,096 |
 
-### 23.2 처리량 측정
+Manual fixture는 `1`과 `2,147,483,647`을 수락하고 `0`, 음수와 표현 범위 초과를 socket bind
+전에 configuration error로 거부해야 한다. `CoreHwmBudgetBytes`를 지정하면 Core profile 계산보다
+우선하며, Core memory limit과 manual budget은 finite positive 값만 사용한다.
 
-최소 `30초` warm-up 뒤 `60초` measured phase를 `5회` 반복한다. 다섯 실행의 처리량
-변동계수가 `5%`를 넘으면 measured phase를 늘린다. Measurement 동안 dispatch를 기다리는 job이
-계속 존재해야 한다. 유입량이 부족해 handler가 대기한 실행은 처리 capacity 결과에서 제외한다.
+### 23.2 측정 phase와 reset 기준
 
-각 실행의 처리량은 다음처럼 계산한다.
+최소 `30초` warm-up 뒤 `60초` measured phase를 `5회` 반복한다. 처리량 변동계수가 `5%`를
+넘으면 measured phase를 늘린다. Steady phase는 운영 목표 CPU 구간을 유지하고, burst phase는
+manifest가 허용한 burst rate와 지속 시간을 재현한다.
+
+Measured phase 직전에 capacity status와 metric epoch을 reset하고 다음 fixture 기대를 확인한다.
+
+- Configuration과 current gauge는 reset 전후에 같다.
+- Peak는 같은 경계의 current로 재기준화되어 current보다 작지 않다.
+- Capacity wait count·duration과 다른 epoch counter는 `0`이다.
+- Reset과 동시에 발생한 event는 이전 또는 새 epoch 중 정확히 하나에만 포함된다.
+
+Always-on metric은 job마다 queue-wait histogram을 만들지 않는다. Perf harness가 queue wait
+p50·p95·p99를 별도로 측정할 수 있지만 public metric으로 오인해 export하지 않는다.
+
+### 23.3 Core HWM budget 선택
+
+Auto profile에서 시작해 `CoreHwmBudgetBytes` 후보를 단계적으로 낮추며 같은 steady·burst test를
+반복한다. 각 후보에서 effective budget, applied HWM, current·peak accounted byte, completion
+accounted byte, blocked ratio, outstanding application lease, RSS·managed heap, throughput과 latency를
+기록한다. Core budget은 RSS hard cap이 아니므로 snapshot과 process memory를 별도로 판정한다.
+
+Production 값은 workload의 throughput·latency·memory pass condition을 만족하는 가장 작은 후보에
+운영자가 정한 safety margin을 반영해 선택한다. Completion 진행은 ordinary Core HWM 포화와
+분리되어야 하며, target 하나의 포화가 다른 origin을 막아서는 안 된다.
+
+### 23.4 Application job queue manual 상한 선택
+
+Profile은 benchmark bootstrap 값이다. 운영 manual 값은 목표 CPU 구간의 steady·burst phase에서
+다음 분포를 사용해 정한다.
 
 ```text
-runDrainBytesPerSecond =
-    terminalPayloadBytes / measuredWallClockSeconds
-
-measuredSustainableDrainBytesPerSecond =
-    minimum(runDrainBytesPerSecond across five valid runs)
+candidateMaxQueuedApplicationJobs =
+    accepted permits-in-use high percentile or accepted burst peak
+    + operator-selected safety margin
 ```
 
-`terminalPayloadBytes`에는 measured phase 동안 handler terminal에 도달한 원본 job의
-application payload byte를 정확히 한 번 포함한다. Reply byte, ingress byte와 순간 peak
-throughput은 포함하지 않는다.
+`permits-in-use`는 `reserved supply + queued application jobs`다. Active handler와 handler가 시작한
+뒤의 async wait는 포함하지 않는다. Manual 후보마다 다음을 확인한다.
 
-### 23.3 HWM 후보 계산
+- `permits-in-use <= effective limit`이고 permit leak과 cap overshoot가 없다.
+- 포화는 public error·typed reject·drop이 아니라 cancellable capacity wait다.
+- Permit 하나를 반환하면 가장 오래 기다린 live source의 ordinary ingress 하나가 재개된다.
+- Receive 전에 식별할 수 있는 terminal reply·error completion은 queue 포화 중에도 진행한다.
+- Batch와 1:N dispatch는 확보한 permit보다 많은 handler job을 먼저 만들지 않는다.
 
-운영에서 허용할 최대 queue 지연을 정하고 처리량 기준 후보를 계산한다.
+### 23.5 Pass condition
 
-```text
-queueDelayCandidateBytes =
-    measuredSustainableDrainBytesPerSecond
-    * maximumQueueDelaySeconds
+- §23.1의 profile matrix와 manual validation 경계가 정확하다.
+- Steady·burst phase 모두 manifest의 throughput, p99 latency, deadline miss와 memory 한도를 만족한다.
+- Message drop, duplicate handler start, permit leak과 cap overshoot가 `0`이다.
+- Core origin 격리와 terminal completion liveness가 유지된다.
+- Capacity wait count·duration은 포화 구간에서 증가하고 reset 뒤 §23.2 의미를 따른다.
+- `zlink.host.core_hwm.*`와 `zlink.host.application_job_queue.*`의 이름·단위·label이
+  runtime metrics spec과 일치한다.
 
-candidateApplicationHwmBytes =
-    measuredPeakActiveHandlerPayloadBytes
-    + queueDelayCandidateBytes
-```
+### 23.6 결과에 기록할 값
 
-`measuredPeakActiveHandlerPayloadBytes`는 measured phase에서 실행 중인 handler context가 보유한
-payload byte 합계의 최대값이다. Application HWM은 실행 중인 handler payload도 포함하므로 이
-값을 queue 지연 후보에 더한다.
-
-`autoProfileHwmBytes`는 할당된 application memory에 선택한 profile 비율을 곱한 값이다.
-`COMPACT`는 `2%`, `LOW_LATENCY`는 `5%`, `BALANCED`는 `10%`, `THROUGHPUT`은 `20%`를
-사용한다. 네 Auto profile을 비교할 때는 같은 workload로 각각 실행한다. Memory와 queue 지연
-조건을 만족하는 가장 큰 profile을 선택하며, 별도 선택이 없으면 `BALANCED`를 사용한다.
-
-Application별 production 값을 고정하려면 `candidateApplicationHwmBytes`를 양수
-`ApplicationHwmBytes`로 설정한 뒤 다시 측정한다. Backlog를 HWM까지 채우고 다음 조건을 모두
-확인한다.
-
-- Peak process memory가 process limit을 넘지 않는다.
-- Queue 지연 p99와 최대값이 application의 목표를 만족한다.
-- 처리량과 CPU가 HWM을 끈 capacity test에서 허용한 범위 안에 있다.
-- Message drop 없이 pause와 source backpressure가 발생한다.
-- HWM보다 큰 최대 message 한 건도 처리 중인 application job이 없을 때 수신된다.
-
-조건을 만족하지 않으면 HWM을 낮추고 같은 test를 반복한다. 조건을 만족한 가장 큰 값을
-production 값으로 사용한다.
-
-### 23.4 결과에 반드시 기록할 값
-
-- CPU quota·core 수, process memory limit, runtime·GC 설정과 Framework version
-- Connection 수, dispatch concurrency, request·one-way 비율과 job 크기 분포
-- 실행별 terminal job count, terminal payload bytes, wall-clock 처리량과 process CPU
-- Peak RSS, peak pending application payload bytes와 active handler payload bytes
-- Queue 지연 p50·p95·p99·최대값, pause count·duration과 backpressure 횟수
-- 선택한 Auto HWM profile과 계산에 사용한 memory 값
-- Auto profile HWM, queue 지연 후보, active handler payload, production HWM과 선택 근거
+- Effective vCPU, CPU quota·affinity/cpuset, 목표·실측 CPU, memory limit과 runtime·GC 설정
+- Framework·Core·binding version, connection 수, payload 분포와 workload manifest hash
+- Core configured memory limit·manual budget·profile, effective budget, applied/accounted/blocked 상태
+- Application queue configured profile·manual max, effective processor·limit, reserved·queued·in-use·peak
+- Capacity waiter, wait count·duration, queue wait p50·p95·p99와 supply pause 비율
+- Throughput, latency, timeout·drop·duplicate count, RSS·managed heap peak와 선택한 safety margin

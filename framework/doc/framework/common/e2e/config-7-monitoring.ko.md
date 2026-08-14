@@ -181,6 +181,20 @@ Count가 실제 create 결과와 다르면 scale-out 판단이 잘못된다.
 - 세부 동작: [Runtime monitoring §2.2](../spec/24-runtime-monitoring.ko.md)와
   [MeshNode §5](../spec/13-mesh-node.ko.md)를 검증한다.
 
+#### MON-A7 Core HWM과 Application job queue snapshot을 reset한다
+
+우선순위: `P0`
+
+**검증 질문:** 포화 wait 뒤 coherent snapshot을 읽고 reset해도 configuration/current gauge는 유지되며
+epoch·peak·counter가 한 경계에서 바뀌는가.
+
+- 시작 조건: `MaxQueuedApplicationJobs = 1`과 handler-start gate로 reserved/queued 1과 capacity waiter를 만든다.
+- 절차: Core HWM과 job queue snapshot을 읽고 gate를 열어 작업을 완료한 뒤 exact language의
+  `ResetCapacityMetrics`를 호출하고 다시 읽는다.
+- 검증: Reset 전 Core budget/accounted/completion과 job queue effective/reserved/queued/in-use/peak/
+  waiter/count/duration이 같은 epoch에 속한다. Reset 뒤 configuration/current는 유지되고 epoch은 1 증가하며
+  peak는 current, count·duration은 0이다.
+
 ### Track B — Logical Multicast와 topology status를 분리
 
 #### MON-B1 Remote target 일부가 받지 못해도 topology status를 delivery 결과로 바꾸지 않는다
@@ -193,9 +207,9 @@ Logical Multicast는 target별 delivery report를 반환하지 않는다. 한 re
 **검증 질문:** 수락 가능한 target은 message를 처리하고 topology status는 실제 connection 상태를
 그대로 유지하는가.
 
-- 시작 조건: 서로 다른 service node process에 있는 두 remote matching target이 ready다. 한 target의
-  handler를 application gate에서 막고 public HWM보다 큰 deterministic blocker payload를 먼저 보내 handler
-  진입과 public status의 Application receive paused가 `true`인 것을 확인한다.
+- 시작 조건: 서로 다른 service node process에 있는 두 remote matching target이 ready다. 한 target만
+  `MaxQueuedApplicationJobs = 1`과 handler-start gate를 사용한다. Blocker job으로 permit을 예약하고
+  public status에서 reserved/queued 1과 capacity waiter를 확인한다.
 - 절차: Source가 고유 marker를 Logical Multicast로 한 번 제출하고, 수락 가능한 target evidence와 전후
   RouteMesh status를 읽는다.
 - 검증: Public submit은 target별 결과 없이 정식 terminal 의미로 끝나며 수락 가능한 target은 marker를
@@ -213,7 +227,7 @@ Topology status는 target별 delivery count를 대신하지 않는다.
 **검증 질문:** Local target 하나의 handler가 대기해도 다른 matching target이 message를 먼저 처리하는가.
 
 - 시작 조건: 같은 process에 matching target 두 개가 있고 하나의 handler는 application gate에서 대기한다.
-  Network block이나 public HWM 경계는 사용하지 않는다.
+  Network block이나 shared job queue 포화는 사용하지 않는다.
 - 절차: Source가 고유 marker를 한 번 publish하고 gate를 닫은 target과 다른 target의 application
   evidence를 수집한다. 다른 target의 evidence를 확인한 뒤 gate를 연다.
 - 검증: 다른 target은 marker를 gate가 닫힌 동안 한 번 처리하고, gate를 연 target도 이후 한 번 처리한다.

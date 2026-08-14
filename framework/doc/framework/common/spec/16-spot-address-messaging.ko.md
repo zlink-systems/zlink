@@ -403,9 +403,10 @@ source에 남은 Actor의 `ToActor` route는 해당 Actor의 current owner를 �
 Actor가 이전될 때마다 Actor별 source→target Message Follow route를 설치한다.
 
 Relocation unit을 seal한 뒤 source route로 도착한 ingress는 relocation hold에 보관하며,
-application handler는 실행하지 않는다. Owner commit 전에 abort하면 보관한 ingress를 도착
-순서대로 source queue에 되돌린다. Commit 뒤에는 operation ID, generation과 reply route를
-그대로 유지하여 Message Follow route로 target에 relay한다.
+application handler는 실행하지 않는다. Relay-ready reply가 accepted 상태가 되기 전에 명시적으로
+abort하면 보관한 ingress를 도착 순서대로 source queue에 되돌린다. 그 뒤에는 cutover submit 결과와
+관계없이 source를 복원하지 않고 operation ID, generation과 reply route를 그대로 유지하여 Message
+Follow route로 target에 relay한다.
 
 Permit을 기다리는 `Relocating` unit은 아직 seal되지 않았다. 따라서 기존
 [owner route](01-glossary.ko.md#owner-route)에서 application message와 timer를 계속 수락한다.
@@ -459,8 +460,9 @@ Store authority가 target으로 바뀌기 전까지 resolver와 application hand
 노출하지 않는다. 임시 public SpotId를 만들거나 생성 뒤 SpotId를 바꾸지 않는다.
 
 Source seal, durable capture, target reservation·factory·restore, authority commit과 admission 순서는
-[23 Spot과 Actor membership](15-spot-actor.ko.md)이 정한다. Commit 전 failure는 source를 유지하고 commit 뒤에는
-selection이 끝난 같은 target process에서만 절차를 계속한다. Target process가 종료되면
+[23 Spot과 Actor membership](15-spot-actor.ko.md)이 정한다. Relay-ready reply가 accepted 상태가 되기
+전 명시적 failure만 source를 유지한다. 그 뒤에는 cutover submit 결과와 관계없이 source를 복원하지
+않고 selection이 끝난 같은 target process에서만 절차를 계속한다. Target process가 종료되면
 다른 target을 선택하거나 relocation을 자동으로 재개하지 않는다. Seal 시점의 실행하지 않은 message, accepted journal과 timer logical
 registration·pending tick은 relocation payload에 포함하며 target Framework가 timer를 자동 복원한다. Application은
 `Restore`에서 Framework timer를 다시 등록하지 않는다. 이 queue·timer 규칙은

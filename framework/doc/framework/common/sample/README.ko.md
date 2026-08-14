@@ -187,8 +187,9 @@ request가 아니라 생성된 room User Spot이 맡는다.
 ## Relocation과 Message Follow 검증
 
 Relocation을 시연하는 샘플은 host 전체 소요 시간이 아니라 application이 사용하는 단위 하나의
-서비스 중단 시간을 측정한다. 측정 구간은 source가 새 작업을 막은 시점부터 target이 새 작업을
-받기 시작했다는 ACK를 보낸 시점까지다. Actor 하나, Instance Spot 하나와 SpotWide User Spot
+서비스 중단 시간을 측정한다. 측정 구간은 source가 새 작업을 막은 시점부터 one-way CUTOVER
+submit 시도가 source에서 success 또는 failure terminal에 도달한 시점까지다. Target admission
+ACK는 이 구간의 종점이 아니다. Actor 하나, Instance Spot 하나와 SpotWide User Spot
 aggregate 하나는 각각 기본 1초 이내를 목표로 한다. 1초를 넘겨도 relocation을 취소하거나
 rollback하지 않는다. 자세한 기준은
 [graceful drain과 handoff](../spec/30-host-relocation-flow.ko.md#71-relocation-unit별-서비스-중단-시간-목표)를

@@ -243,6 +243,22 @@ result?
   and
   [MeshNode §5](../spec/13-mesh-node.en.md#5-object-placement-capability).
 
+#### MON-A7 Reset Core HWM And Application Job Queue Snapshot
+
+Priority: `P0`
+
+**Verification question:** After saturation wait, is the snapshot coherent, and does reset
+preserve configuration/current while changing epoch, peak, and counters at one boundary?
+
+- Start condition: Use `MaxQueuedApplicationJobs = 1` and a handler-start gate to create
+  reserved/queued 1 and a capacity waiter.
+- Procedure: Read Core HWM and job queue snapshot, open the gate, complete work, call the
+  exact language `ResetCapacityMetrics`, and read again.
+- Verification: Before reset, Core budget/accounted/completion and job-queue effective/
+  reserved/queued/in-use/peak/waiter/count/duration belong to one epoch. After reset,
+  configuration/current stay, epoch increments by one, peak equals current, and
+  count/duration are zero.
+
 ### Track B — Separate Logical Multicast From Topology Status
 
 #### MON-B1 Some Remote Targets Not Receiving Doesn't Change Topology Status Into A Delivery Result
@@ -257,11 +273,10 @@ Channel readiness must not be changed like a delivery statistic.
 message, and does topology status keep exactly the real connection
 state?
 
-- Start condition: Two remote matching targets in different service
-  node processes are ready. One target's handler is blocked at the
-  application gate, and a deterministic blocker payload larger than
-  the public HWM is sent first, confirming handler entry and that
-  public status's Application receive paused is `true`.
+- Start condition: Two remote matching targets in different service node processes are
+  ready. Only one target uses `MaxQueuedApplicationJobs = 1` and a handler-start gate.
+  A blocker job reserves its permit and public status shows reserved/queued 1 and a
+  capacity waiter.
 - Procedure: The source submits a unique marker via Logical Multicast
   once, and reads the admittable target's evidence and RouteMesh
   status before and after.
@@ -287,7 +302,7 @@ waiting, does another matching target process the message first?
 
 - Start condition: There are two matching targets in the same process,
   and one handler waits at the application gate. Neither a network
-  block nor a public HWM boundary is used.
+  block nor shared job queue saturation is used.
 - Procedure: The source publishes a unique marker once, and collects
   application evidence for the gated target and the other target. Once
   the other target's evidence is confirmed, the gate is opened.

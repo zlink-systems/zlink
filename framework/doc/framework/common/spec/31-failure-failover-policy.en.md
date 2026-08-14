@@ -49,8 +49,8 @@ object generation and owner eligibility.
 2. Checks whether transport or the target queue accepted the operation.
 3. For an object operation, checks whether the owner and generation
    confirmed in the Location Store are still valid.
-4. For a stateful relocation, checks whether it's before or after the
-   owner-change commit.
+4. For a stateful relocation, checks whether it's before relay-ready is accepted,
+   after that boundary but before owner-change commit, or after commit.
 5. If the same operation can't continue, it ends with one terminal result.
    The application decides whether to start the next call.
 
@@ -216,14 +216,16 @@ finish the operation.
 
 | Failure timing | Framework handling |
 |---|---|
-| Before the owner-change commit | Discards the target instance and temporary queue, keeps source owner/membership and queue. Doesn't automatically select a different target. |
+| Explicit failure before relay-ready is accepted | Discards the target instance and temporary queue, keeps source owner/membership and queue. Doesn't automatically select a different target. |
+| After relay-ready is accepted but before the owner-change commit | Doesn't restore source regardless of cutover-submit result. Target continues the owner change through cutover receipt or the 1,000ms fallback. |
 | No Store change result received | Doesn't guess success or failure — re-reads the same authority record to confirm the actual owner. |
 | After the owner-change commit, same target process running | Doesn't roll back to the source. Can retry the lifecycle callback or dispatch switchover on the same target within the deadline. |
 | Target process terminated after the owner-change commit | The Location Store keeps the target owner, but the object becomes `Unavailable`. A different runtime doesn't take over the relocation. |
 | Source or target process terminated during the operation | Doesn't select a different target, resume relocation after a process restart, or roll back to the source. |
 
-Keeping the source before commit isn't failover — it's canceling an
-operation that hasn't changed owner yet. Continuing on the same target
+Keeping the source before relay-ready is accepted isn't failover — it's canceling an
+operation before its irreversible boundary. Source isn't restored afterward even before
+owner commit. Continuing on the same target
 after commit also isn't a new target selection. Object failover after
 process termination isn't part of the current contract. The detailed
 stages and result are defined by
@@ -321,8 +323,8 @@ by [Framework Error Model](32-framework-error-model.en.md).
   basis for selecting another target after a steady `Ready` owner failure.
 - Instance Spot cold-activation recovery isn't used for Actor, User Spot,
   an already-`Ready` Instance Spot, or host relocation.
-- A failure before the relocation commit keeps the source; a failure
-  after commit doesn't roll back to the source.
+- Only an explicit failure before relay-ready is accepted keeps the source; a later
+  failure doesn't roll back to source regardless of cutover-submit result.
 - After a source or target process terminates, a different runtime
   doesn't take over the relocation or automatically select a different
   target.
@@ -337,12 +339,12 @@ This document is authoritative for public failure behavior. The following
 internals documents continue with implementation structure and don't redefine
 this chapter's error meaning or failover scope.
 
-- [6. Target Selection And Route Cache](../internals/06-routing-and-cache.en.md)
+- [45. Target Selection And Route Cache](45-internal-routing-and-cache.en.md)
   explains how resolver result types preserve `Missing` and `Unavailable`.
-- [8. Object Kind And Activation](../internals/08-object-lifecycle.en.md)
+- [47. Object Kind And Activation](47-internal-object-lifecycle.en.md)
   explains how resolver results become distinct activation-state-machine inputs.
-- [10. Liveness And Status Publication](../internals/10-liveness-and-state.en.md)
+- [49. Liveness And Status Publication](49-internal-liveness-and-state.en.md)
   separates availability evidence from ownership of authority release.
-- [12. Service Wire Protocol](../internals/12-service-wire-protocol.en.md#8-instance-spot-cold-activation-recovery)
+- [51. Service Wire Protocol](51-internal-service-wire-protocol.en.md#8-instance-spot-cold-activation-recovery)
   explains the durable root and scan used only for first-activation recovery on
   the same target.

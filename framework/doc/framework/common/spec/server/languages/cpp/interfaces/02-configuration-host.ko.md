@@ -577,21 +577,18 @@ public:
     codec_options_builder_t &use(const TExtension &extension);
 };
 
-enum class application_hwm_profile_t {
+enum class core_hwm_profile_t {
     compact = 0,
     low_latency = 1,
     balanced = 2,
     throughput = 3
 };
 
-class inbound_dispatch_options_t {
-public:
-    inbound_dispatch_options_t &set_application_hwm_bytes(
-      std::optional<std::uint64_t> value);
-    inbound_dispatch_options_t &set_application_hwm_profile(
-      application_hwm_profile_t value);
-    inbound_dispatch_options_t &set_process_memory_limit_bytes(
-      std::optional<std::uint64_t> value);
+enum class application_job_queue_profile_t {
+    compact = 0,
+    low_latency = 1,
+    balanced = 2,
+    throughput = 3
 };
 
 class zlink_framework_options_t {
@@ -604,7 +601,6 @@ public:
     dispatch_options_t &configure_dispatch();
     dispatch_options_t dispatch_options() const;
     location_options_t &configure_locations();
-    inbound_dispatch_options_t &configure_inbound_dispatch();
     location_options_t location_options() const;
     zlink_framework_options_t &set_max_pending(std::size_t count);
     zlink_framework_options_t &set_application_version(
@@ -669,12 +665,11 @@ Location runtime을 사용하는 application은 `add_location_store(...)`로 Loc
 재정의한다. `worker()`는 bounded worker pool의 최소·최대 thread 수, idle timeout과 queue 상한을 반환한다.
 두 option은 host 시작 전에만 변경할 수 있다.
 
-`configure_inbound_dispatch()`는 host 전체 설정 하나를 반환한다. HWM을 `std::nullopt`로 지정하면 Auto,
-`0`이면 제한 없음, 양수이면 정확한 byte 상한을 사용한다. Profile 기본값은 `balanced`다. Process memory
-limit은 `std::nullopt` 또는 양수만 허용한다. Auto mode에서 명시한 값이 없으면 process에 적용된 유한한
-container·cgroup·Windows Job Object와 같은 OS 상한을 확인한다. C++에는 managed heap 상한이 없으므로
-확인된 OS 상한을 사용하고, OS 상한도 없으면 시스템 물리 메모리 총량을 사용한다. 계산 결과가 양수가
-아니면 socket bind 전에 configuration error로 실패한다.
+`configure_dispatch()`는 host 전체 dispatch 설정 하나를 반환한다. Core memory limit·manual budget·profile은
+Core에 그대로 전달하며 C++은 managed-runtime hint를 만들지 않는다. 두 profile의 기본값은 각각
+`balanced`지만 독립된 enum과 계산이다. Manual job cap은 `1..2,147,483,647`이고 생략하면 common spec의
+startup CPU snapshot과 32/64/128/256 계수로 계산한다. 범위 위반과 overflow는 socket bind 전에 실패하며
+runtime 중 다시 계산하지 않는다.
 
 Application version과 maintenance wave는 host 전체에 한 번 설정한다. Version은 기본값 0인 non-negative
 signed 64-bit deployment ordinal이고 모든 local MeshNode가 같은 값을 게시한다. Empty optional wave는

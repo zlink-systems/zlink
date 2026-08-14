@@ -3,7 +3,7 @@ title: ".NET Bindings Implementation Blueprint"
 ---
 
 <!-- bindings-nav:start -->
-[Spec index](../README.md) | [Previous: C](../c/README.md) | [Next: C++](../cpp/README.md)
+[Spec index](../README.en.md) | [Previous: C](../c/README.en.md) | [Next: C++](../cpp/README.en.md)
 <!-- bindings-nav:end -->
 
 # .NET Bindings Implementation Blueprint
@@ -52,7 +52,7 @@ user-facing behavior should never be discovered first in a runtime file.
 | [Required feature coverage](#required-feature-coverage) | The user-facing features that must be guaranteed once aligned |
 | [Receive and Subscribe shape](#receive-and-subscribe-shape) | Caller-provided storage and distinguishing no-data |
 | [Service and SPOT shape](#service-and-spot-shape) | The split of responsibility between `ISpotNode`/`ISpot` |
-| [Byte HWM and monitoring ABI v2](#byte-hwm-and-monitoring-abi-v2) | `ulong` byte HWM and the monitor snapshot fields |
+| [Byte HWM and monitoring ABI v3](#byte-hwm-and-monitoring-abi-v3) | `ulong` byte HWM and the monitor snapshot fields |
 | [Error and validation policy](#error-and-validation-policy) | Validation timing and exception mapping |
 | [Performance policy](#performance-policy) | Hot-path constraints |
 | [Implementation checklist](#implementation-checklist) | What to confirm before declaring alignment, and required verification commands |
@@ -66,7 +66,7 @@ user-facing behavior should never be discovered first in a runtime file.
 - Runtime implementation: `bindings/dotnet/src/Zlink/Runtime/`.
 - Internal implementation: P/Invoke declarations, `SafeHandle` or native handle ownership, callback trampolines, the request progress pump, native model converters, the socket kernel, option accessors, buffer codecs, validation helpers.
 - Documentation's role: this README defines the library shape and review rules. `Contracts/` owns the exact public behavior surface.
-- API reference comments: [`api-reference-comments.md`](api-reference-comments.md) defines the XML comment authoring and review criteria for `Contracts/`.
+- API reference comments: [`api-reference-comments.en.md`](api-reference-comments.en.md) defines the XML comment authoring and review criteria for `Contracts/`.
 
 A runtime implementation file does not define a user-facing behavior that
 can't be understood from `Contracts/` or a documented creation entry
@@ -217,7 +217,7 @@ follow is defined by the following .NET types.
 - Socket resource roles: `ISocket`, `IMessageSocket`, the routed socket contract, the pub/sub socket contract, and the pair/dealer/router/pub/sub/xpub/xsub/stream socket-family interfaces. A family interface exists only when that family has native-backed behavior.
 - Eventing resource roles: the monitor socket contract, `IPoller`, the poll event source contract, `IZlinkTimer`. `ISpotNode`, `ISpot`, and, when an Actor handle is exposed, `IActor` or an equivalent actor resource contract.
 - Operation builder roles: send, routed send, request, reply, publish, channel send/request, SPOT send/request/reply, actor create, actor join, actor join reply operations.
-- Callback roles: stream packet handler, monitor handler, poll handler, SPOT dispatch handler, route handler, admission handler, request callback, reply callback.
+- Callback roles: stream packet handler, monitor handler, poll handler, SPOT dispatch handler, route handler, admission handler, reply callback.
 
 ### RoutingId string and binary helpers
 
@@ -253,11 +253,72 @@ behavior are defined only by the immutable byte value.
 - `Send`, routed send, `Publish`, `Request`, `Reply`, SPOT operations, and Actor location/session operations return a fluent operation builder.
 - A builder's start method takes only a target identity, topic, channel, routing id, or request sequence. Payload, flag, timeout, callback, and async submit choices are handled at the builder stage.
 - A reply builder has no send-flag stage. Since the core reply function takes no send-flag argument, the .NET binding does not expose a no-op `Flags(...)` as part of the public contract.
-- No single-payload shortcut overload is added under the same name as an operation's start method. `Send(Message)`, `Send(RoutingId, Message)`, `Publish(string, Message)`, `SendToChannel(string, Message)`, `SendToSpot(..., Message)` are not public contract members. A caller uses `Send(...).Message(message).Submit()`.
+- The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
+  `ReplySubmitOperation.Submit() -> void`. It submits a terminal reply or error
+  reply to the HWM-free completion lane with one native call. HWM backpressure
+  is not a reply result; `NotConnected`, `Terminated`, `InvalidArgument`, and
+  other non-HWM submit failures immediately throw `ZlinkSubmitException`.
+- No single-payload shortcut overload is added under the same name as an operation's start method. `Send(Message)`, `Send(RoutingId, Message)`, `Publish(string, Message)`, `SendToChannel(string, Message)`, `SendToSpot(..., Message)` are not public contract members. A caller uses the builder terminal for that role; `Send(...).Message(message).Async()` is canonical for a DEALER/ROUTER routed send.
 - A multipart payload accumulates via repeated `Message(...)` calls. A `Messages(...)`-style convenience method is allowed, but since it is a public builder contract member, it lives in `Contracts/`.
 - `IDealerSocket` does not expose protocol envelope helpers such as `RequestFrame(...)` or `Reply(requestToken, parts)`. A dealer can start a request with `Request()`, but has no API-level peer routing id, so it cannot reply to an arbitrary token. Reply starts from a received request context, or from an explicit router/SPOT reply surface when the target context requires it.
 - A message payload factory uses `Message.From(...)` overloads. A source-type suffix such as `FromBytes`, or a value-style factory such as `Of`, is not part of the public contract.
-- No operation-start method family such as `SendNoWait`, `PublishWithFlags`, `RequestAsync` is added. Keep one operation name, and let the builder absorb variants. An awaitable terminal builder method is unified as `Async(...)`, and `Submit(callback)` exists only when a callback-completion surface is needed.
+- No operation-start method family such as `SendNoWait`, `PublishWithFlags`,
+  `RequestAsync` is added. Keep one operation name, and let the builder absorb
+  variants. An awaitable terminal on an HWM-managed DEALER/ROUTER routed
+  send/request builder is unified as `Async(...)`.
+
+### DEALER/ROUTER routed asynchronous terminals
+
+- `IDealerSocket.Send()` and `IRouterSocket.Send(RoutingId)` return
+  `RoutedSendOperation`. The only terminal on `RoutedSendSubmitOperation` is
+  `Task Async(CancellationToken)`. Both sockets inherit only
+  `IReceivingMessageSocket` and connect roles, which contain no synchronous
+  `SendOperation`. Conversion to a base interface therefore cannot recover
+  `Flags(...)` or `Submit()`.
+- The only terminal on the `RequestSubmitOperation` returned from
+  `IDealerSocket.Request()` or `IRouterSocket.Request(RoutingId)` is
+  `Task<IReadOnlyList<Message>> Async(CancellationToken)`. These routed builders
+  do not add a blocking submit, polling result, `Flags(...)`, or callback
+  `Submit(...)` terminal.
+- Multipart payloads accumulate through repeated `Message(...)` calls or
+  `Messages(...)`, followed by one `Async(...)`. `Async(...)` transfers payload
+  ownership to the operation and returns a Task without blocking the caller
+  thread.
+- The initially selected target remains fixed until the operation terminates.
+  HWM waiting never reroutes the operation to another target.
+- While HWM credit is unavailable, the operation occupies neither the caller
+  thread nor a worker thread, and it holds no socket-wide lock that prevents
+  another send from progressing.
+- HWM waiting on one target does not delay admission for another target. This
+  independence is not a public strict-FIFO guarantee for a routing id.
+- Routed send fixes `SendTimeout`, and request fixes builder `Timeout(...)`, as
+  an absolute deadline at the start of `Async(...)`, including admission wait.
+  Cancellation, close, disconnect, target loss, timeout,
+  and a fast reply may race, but only one Task terminal wins.
+- Cancellation completes the Task as canceled, so awaiting it throws
+  `OperationCanceledException`. If routed send is not admitted by
+  `SendTimeout`, it faults with `ZlinkSubmitException`
+  (`Result == Backpressured`); if request does not finish by `Timeout(...)`, it
+  faults with `ZlinkRequestException` (`Result == TimedOut`).
+- Not awaiting the returned Task, or discarding its reference, does not cancel
+  the operation. Payload ownership and terminal cleanup remain with the
+  operation until one of the preceding terminal conditions completes it.
+- The public contract has no separate queue capacity or queue-full result and
+  requires no Framework retry or polling.
+- Unrelated common synchronous data-plane builders for roles such as PAIR and
+  STREAM remain separate contracts; they are not canonical terminals for the
+  DEALER/ROUTER HWM-managed routed path.
+- Before accepting an asynchronous operation, the socket runtime registers
+  Core's long-lived routed-target readiness handler. Before its first attempt,
+  an operation places its exact `(socket, RID, transport pair ID, generation)`
+  key, completion state, and complete record in pending state, then attempts
+  `DONTWAIT` on that same target. The callback marks only that key ready; a pump
+  outside the callback performs native submit. An event for another pair
+  generation is a stale wake and is ignored.
+- Outbound paths on one native handle share a short attempt gate that protects
+  one complete multipart attempt from its first part through `FINAL`. The gate
+  is released immediately after success, backpressure, or failure and is never
+  held during readiness waiting.
 
 ## Contract folder layout
 
@@ -274,7 +335,7 @@ Files within each category are split by user-facing concept, not
 implementation order.
 
 - Common messaging operations split into send, request, and reply; the service topology model splits into the SPOT node model and shared topology enums.
-- Request result and callback types belong to the messaging request contract, not a socket enum file.
+- A request result belongs to the messaging request contract, not a socket enum file.
 - A received message kind stays with the received message metadata.
 - SPOT node mode, socket snapshot, Spot snapshot, and actor snapshot belong to the SPOT node model.
 
@@ -367,6 +428,21 @@ allocation-free draining.
   internal topic receive buffers for a later `Subscribe` call. It is valid only while the
   `TopicMessage` is open; after terminal `Dispose()` it throws `ObjectDisposedException` and
   does not reopen the object.
+- Ordinary `Recv(Received, ...)` and `Subscribe(TopicMessage, ...)` keep their existing behavior
+  of returning Core queue credit at dequeue.
+- A Framework backend explicitly selects `RecvRetained(Received, ...)` or
+  `SubscribeRetained(TopicMessage, ...)`. These entry points preserve existing framing and
+  metadata while internally adopting one Core retained-credit lease for each caller-visible
+  physical part. `Received` releases its current parts and all leases exactly once on
+  `Dispose()` or when the same storage starts another receive. `TopicMessage` does the same on
+  `Dispose()`, `ReleaseForReuse()`, or when the same storage starts another subscribe. An
+  internal finalizer is only a leak-prevention fallback; normal paths perform deterministic
+  cleanup first. A retained payload copy does not own the lease.
+- Retained receive is an internal lifetime behavior of the aggregate `Received` and
+  `TopicMessage` paths. Part-level primitives and ordinary aggregate receive keep their existing
+  behavior; the binding adds neither a public lease handle nor separate application capacity.
+  Dealer message type and request sequence, Router source RID and request sequence, and SUB topic
+  and source RID remain the existing typed receive results.
 - `false` means no data only for a non-blocking receive using `RecvFlags.DontWait`.
 - A real receive failure (one that is not simply no-data) throws `ZlinkRecvException`.
 - A control-plane API such as monitor recv or timer recv may keep a nullable return form when no-data is a natural value shape.
@@ -387,7 +463,7 @@ SPOT is a service-layer API — it is never a leak of the raw socket.
 - A channel-targeted SPOT operation uses `SendToChannel(...)` and `RequestToChannel(...)`, so the destination-bearing send/request names stay aligned with `SendToSpot(...)`, `RequestToSpot(...)`, `RequestToRouter(...)`.
 - Actor location and stream session binding are independent of each other. An actor joining a user Spot does not require a bound stream session.
 
-## Byte HWM and monitoring ABI v2
+## Byte HWM and monitoring ABI v3
 
 - HWM is a limit on Core-computed accounted bytes, not a message count on the queue.
 - The public type is `ulong`, which does not shrink Core's `uint64_t` range.
@@ -398,7 +474,15 @@ SPOT is a service-layer API — it is never a leak of the raw socket.
 ```csharp
 public interface IContextOptions
 {
-    ulong AutoHwmMessageUnitBytes { get; set; } // 0 selects the per-socket-type planning unit default.
+    ulong CoreHwmMemoryLimitBytes { get; set; }
+    ulong CoreHwmBudgetBytes { get; set; }
+    CoreHwmProfile CoreHwmProfile { get; set; }
+}
+
+public interface IContext
+{
+    CoreHwmBudgetSnapshot GetCoreHwmBudgetSnapshot();
+    void ResetCoreHwmBudgetMetrics();
 }
 
 public partial class CommonSocketOptions
@@ -408,8 +492,15 @@ public partial class CommonSocketOptions
 }
 ```
 
-`AutoHwmMessageUnitBytes` is an input to Core's planner. Core multiplies the
-selected message-slot count by this value to calculate the planned byte HWM. A
+Input precedence is manual Core budget, explicit memory limit, the available-
+memory limit reported by .NET GC, then Core fallback. Setting either of the
+first two values disables automatic GC-hint detection. The binding does not
+combine the hint with Core's hard limit. If an explicit input exceeds a finite
+hard limit Core detected, the binding preserves the existing configuration
+exception corresponding to `EINVAL` and does not clamp the value.
+
+Core applies the profile ratio to the memory limit exactly once, or uses an
+explicit Core budget unchanged, then calculates planned byte HWM per physical directional queue. A
 direction on which the caller sets `SendHighWaterMark` or
 `ReceiveHighWaterMark` becomes a manual override and is not changed by later
 automatic HWM recalculation.
@@ -419,15 +510,33 @@ accounted bytes in a Core pipe reach the applied HWM, the native submit result
 reports backpressure and the .NET operation preserves it through the existing
 result and timeout contract. `0UL` means unlimited.
 
-- `MonitorStatus` provides the same fields as the native `zlink_monitor_status_t` ABI version 2.
+`MonitorOpen(events, monitorHwmBytes)` accepts an exact `ulong` byte value for
+the monitor queue. `0UL` selects the Core monitor default; a positive value is
+forwarded unchanged. There is no message-count overload or alias.
+
+- `MonitorStatus` provides the same fields as the native `zlink_monitor_status_t` ABI version 3.
 - Planned, applied, and deferred HWM, and in-flight usage, are all `ulong` byte values.
 - A deferred value is valid only when the matching `AutoHwmDeferredSendHighWaterMarkValid` or `AutoHwmDeferredReceiveHighWaterMarkValid` is `true`.
 - A pending-message value stays a count diagnostic value, `SndPendingMsgs` and `RcvPendingMsgs`, and never shares a name with a byte field.
-- If a snapshot's `AbiVersion` is not `2`, or its `StructSize` differs from the binding layout, it throws `NotSupportedException`. The older 32-bit monitoring layout is not accepted.
+- Pending bytes are exposed separately as `SndPendingBytes` and `RcvPendingBytes`.
+- If a snapshot's `AbiVersion` is not `3`, or its `StructSize` differs from the binding layout, it throws `NotSupportedException`. An older monitoring layout is not accepted.
 
-Request/reply APIs take no HWM value as an argument. Core owns backpressure
-and completion handling, and the binding passes through the existing
-request/reply lifetime and ownership contract as-is.
+`CoreHwmBudgetSnapshot` projects ABI version/size, configured/runtime/resolved
+memory limits, configured/effective budgets, planned/applied/manual-reserved
+HWM, Core-queue/application/current/peak/provisional accounted bytes,
+completion current/peak/pending and total-messaging values, monitor/instance
+aggregates, application/completion queue counts,
+`OutstandingApplicationLeaseCount`, `RetiredQueueCount`,
+`DeferredOriginCreditBytes`, oversize/blocked/aggregate flags,
+`BudgetGeneration`, and `MeasurementEpoch` without unit conversion. Reset
+preserves current, pending, queue-count, and those three owner-lifecycle gauges,
+rebases both peaks to current, clears epoch counters, and increments
+`MeasurementEpoch`. A budget snapshot ABI version/size mismatch throws
+`NotSupportedException`.
+
+Request/reply APIs take no HWM value as an argument. While `Async(...)` waits
+for HWM credit on the selected exact target, it preserves the request's
+original deadline. The caller implements neither retry nor polling.
 
 ## Error and validation policy
 

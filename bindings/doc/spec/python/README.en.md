@@ -3,7 +3,7 @@ title: "Python Bindings Public Contract"
 ---
 
 <!-- bindings-nav:start -->
-[Spec index](../README.md) | [Previous: Node.js](../node/README.md) | [Next: Go](../go/README.md)
+[Spec index](../README.en.md) | [Previous: Node.js](../node/README.en.md) | [Next: Go](../go/README.en.md)
 <!-- bindings-nav:end -->
 
 # Python binding Core 0.9.0 public contract
@@ -68,18 +68,42 @@ properties and accept only the non-negative `uint64_t` range. The binding
 passes each value to Core as an exact 8-byte option, and a getter returns
 Core's 64-bit value as a Python `int`. `0` means unlimited.
 
-`ContextOptions.auto_hwm_msg_unit_bytes` is a planning unit passed to Core.
-Core multiplies the selected message-slot count by this value to calculate the
-planned byte HWM. It is neither an average message size nor the actual
-admission charge. Setting a directional HWM makes that direction a manual
+The context passes byte-valued `core_hwm_memory_limit_bytes` and
+`core_hwm_budget_bytes`, plus `core_hwm_profile`, unchanged to Core. Core applies
+the profile ratio and distributes the result across physical directional
+queues exactly once. Setting a directional HWM makes that direction a manual
 override and excludes it from automatic HWM recalculation.
+Context also provides `core_hwm_budget_snapshot()` and
+`reset_core_hwm_budget_metrics()`. Input precedence is manual Core budget,
+explicit memory limit, a runtime hint only when a distinct VM hard limit is
+unambiguous, then Core fallback. Setting either of the first two values disables
+automatic runtime-hint detection. The binding does not combine the hint with
+Core's hard limit. If an explicit input exceeds a finite hard limit Core
+detected, the binding preserves the existing configuration error corresponding
+to `EINVAL` and does not clamp the value.
 
 Core decides backpressure when the accounted bytes retained by a pipe reach
 the applied HWM. The Python binding does not recount messages and passes the
-native result through the existing submit and error contract. Planned,
+native result through the existing submit and error contract.
+`monitor_open(events=..., monitor_hwm_bytes=...)` accepts a non-negative
+`uint64_t`-range Python `int`. Zero selects the Core monitor default; a positive
+value is forwarded unchanged, with no message-count alias or conversion. Planned,
 applied, and deferred HWM and in-flight usage in `MonitorStatus` are byte-valued
-Python `int` fields. Only pending-message fields and
-`auto_hwm_socket_message_slots` are count diagnostics.
+Python `int` fields. Pending-message counts remain display diagnostics; no
+slot, message-unit, size-cap, or connection-bucket property is exposed.
+`snd_pending_bytes` and `rcv_pending_bytes` are separate byte values.
+
+The Core budget snapshot projects ABI version/size, configured/runtime/resolved
+memory limits, configured/effective budgets, planned/applied/manual-reserved
+HWM, Core-queue/application/current/peak/provisional accounted bytes,
+completion current/peak/pending and total-messaging values, monitor/instance
+aggregates, application/completion queue counts,
+`outstanding_application_lease_count`, `retired_queue_count`,
+`deferred_origin_credit_bytes`, oversize/blocked/aggregate flags,
+`budget_generation`, and `measurement_epoch` as Python `int`/boolean values.
+Reset preserves current, pending, queue-count, and those three owner-lifecycle
+gauges, rebases both peaks to current, clears epoch counters, and increments
+`measurement_epoch`. An ABI version/size mismatch is an unsupported error.
 
 ## Ownership and lifetime
 
@@ -90,20 +114,61 @@ Python `int` fields. Only pending-message fields and
 - The native view `Received`'s `parts` provides is valid only while its owner stays open. If it must outlive that, copy the value with `to_bytes()` or `to_bytes_list()`.
 - Once a callback is registered, the callback and any Python references it needs are not released before the native callback registration is. A callback exception is delivered per the binding's callback error policy.
 
+Ordinary `recv_into` and `subscribe_into` return Core queue credit as each
+part is dequeued. Only a Framework backend explicitly selects
+`recv_retained_into` or `subscribe_retained_into`. Those retained paths keep
+the same `Received`/`TopicMessage`, routing id, request sequence, topic, and
+multipart framing as ordinary receive while the aggregate owner privately
+holds one Core credit per caller-visible physical part.
+
+Closing a retained result, leaving its context manager, or starting the next
+retained receive with the same storage returns the native parts and every
+credit exactly once. The old result is therefore not preserved when that reuse
+attempt ends with no data. Framework
+drop, cancellation, and error paths explicitly close their aggregate in the
+normal path; Python reference-count/GC cleanup is a leak-prevention fallback.
+Neither an individual `ReceivedMessage` nor any public API exposes a raw lease
+handle, separate application capacity, allowance, or duplicate accounting
+state.
+
 ## Callback surface
 
-Core FFI's `zlink_recv_handler()` and
-`zlink_router_completion_control_handler()` are private implementation
-primitives the Python package does not expose directly. Python's public
+Core FFI's `zlink_recv_handler()` is a private implementation primitive the
+Python package does not expose directly. Python's public
 callback surface is fixed to `on_packet` for a STREAM packet,
-`on_send_ready` for send readiness, `on_event` for a monitor event, and the
-`request(...)` callback path that delivers ROUTER request completion. It
-provides no separate public method to register a raw receive callback or a
-completion-control handler.
+`on_send_ready` for send readiness, and `on_event` for a monitor event. It
+provides no separate public method to register a raw receive or routed request
+completion callback.
 
 ## Send/receive and no-data
 
-- A send builder adds message parts, then calls `submit()`. A blocking send follows the socket option and Core's timeout contract.
+- Unrelated synchronous builders such as PAIR, PUB, and STREAM sends and a
+  ROUTER reply add message parts, then call `submit()`. Raw ROUTER/`Received`
+  reply `submit()` is a synchronous one-shot returning `None` and submits a
+  terminal reply or error reply to the HWM-free completion lane with one native
+  call. HWM backpressure is not a reply result; `NOT_CONNECTED`, `TERMINATED`,
+  `INVALID_ARGUMENT`, and other non-HWM submit failures immediately raise
+  `SubmitError`. A blocking operation follows the socket option and Core's
+  timeout contract.
+- The sole terminal on DEALER and ROUTER routed send and request builders is
+  `submit()`. Use `await dealer.send().message(message).submit()` and
+  `reply = await dealer.request().message(request).submit()`. `submit()` immediately
+  returns an awaitable coroutine object and does not perform a native
+  blocking submit before returning. Before accepting an operation, the socket
+  runtime registers Core's long-lived routed-target readiness handler. Before
+  its first attempt, the operation places its exact `(socket, RID, transport
+  pair ID, generation)` key, coroutine completion, and complete record in
+  pending state, then attempts `DONTWAIT` on that target. The callback marks
+  only that key ready; a pump outside the callback performs native retry. An
+  event for another pair generation is a stale wake and is ignored. Outbound
+  paths on one native handle share a short gate for one attempt from the first
+  part through `FINAL`, then release it before readiness waiting. Coroutine
+  cancellation terminally resolves that pending operation and request
+  correlation exactly once. Waiting blocks neither another RID's submit nor the Python event loop. A request
+  timeout is one absolute deadline spanning admission and reply wait;
+  retries do not extend it. The same
+  routed operation exposes no flags, callback, blocking terminal, or
+  `submit_async()` compatibility terminal.
 - A caller-provided receive using `RecvFlags.DONT_WAIT` returns `False` when there is no message.
 - A direct-return control API such as a timer or monitor returns `None` when there is no pending value.
 - An actual native failure is delivered as its matching error type, never hidden as no-data.

@@ -296,7 +296,9 @@ services.AddZLinkFramework(options =>
 {
     options.AddHandlersFromAssemblyOf<GameEntrySpot>(); // attribute로 표시한 handler를 assembly에서 찾아 등록
     options.ConfigureNetwork().BindHost = "0.0.0.0";
-    options.ConfigureInboundDispatch().ApplicationHwmProfile = ZLinkApplicationHwmProfile.LowLatency;
+    IZLinkDispatchOptions dispatch = options.ConfigureDispatch();
+    dispatch.CoreHwmProfile = ZLinkCoreHwmProfile.LowLatency;
+    dispatch.ApplicationJobQueueProfile = ZLinkApplicationJobQueueProfile.LowLatency;
     options.ConfigureMetadata()
         .AllowSessionToActor("trace-id")
         .AllowActorToSession("server-region"); // forward할 metadata key allowlist
@@ -312,15 +314,19 @@ services.AddZLinkFramework(options =>
 | `.DisableImplicitHandlerAutoRegistration()` | 활성(자동 scan) | Attribute 기반 자동 등록을 끄고 명시적 builder 등록만 사용 |
 | `.ConfigureMetadata().AllowSessionToActor(key)` / `.AllowActorToSession(key)` | 지정하지 않은 key는 forward 안 함 | STREAM session↔Actor relay로 넘길 metadata key를 각 방향별로 allowlist에 추가 |
 | `.ConfigureNetwork()` | `BindHost`는 전체 인터페이스 | 개별 Listen 호출이 override하지 않는 한 쓰는 기본 bind·advertise host. `IZLinkNetworkOptions`(property-bag)를 반환한다 |
-| `.ConfigureInboundDispatch()` | `ApplicationHwmProfile = Balanced` | Inbound application HWM 크기·profile, process 메모리 상한. `IZLinkInboundDispatchOptions`를 반환한다 |
-| `.ConfigureDispatch().Unhandled` | Framework 기본 정책 | 일치하는 handler가 없는 packet의 처리 방식 |
+| `.ConfigureDispatch()` | Framework dispatch·diagnostics 기본값, 두 profile 모두 `Balanced`, nullable manual 값은 `null` | `IZLinkDispatchOptions`에서 일치하는 handler가 없는 packet의 처리·diagnostics와 Core HWM memory·budget·profile, host-wide Application Job Queue profile 또는 정확한 manual permit limit을 함께 설정한다 |
 | `.ConfigureStreamCompression()` | 압축 없음 | STREAM 기본 압축 codec(`UseDefault()`/`UseLz4()`/`Use(codec)`/`Disable()`) |
 | `.ConfigureRouterSocket()` / `.ConfigureSpotPublisher()`(MeshNodeBuilder) | socket 기본값 | MeshNode ROUTER 소켓, Spot publisher의 HWM·buffer·timeout 개별 조정 |
 
 **완료 결과.** `.AddHandlersFromAssemblyOf(...)`/`.DisableImplicitHandlerAutoRegistration()`은
-반환값 없이 동기로 실행된다. `.ConfigureMetadata()`/`.ConfigureNetwork()`/`.ConfigureInboundDispatch()`/`.ConfigureDispatch()`/`.ConfigureStreamCompression()`은
+반환값 없이 동기로 실행된다. `.ConfigureMetadata()`/`.ConfigureNetwork()`/`.ConfigureDispatch()`/`.ConfigureStreamCompression()`은
 동기적으로 해당 builder나 options 객체를 반환하며, 그 위에서 property를 설정하거나 추가 modifier를
 호출한다. 값 범위를 벗어나면 host startup 검증에서 `ZLinkConfigurationException`으로 드러난다.
+
+Core가 byte budget 계산을 소유하며 Framework는 connection 수로 budget을 나누지 않는다.
+Application Job Queue는 별도의 job-count limit이다. `MaxQueuedApplicationJobs`는
+`1..2,147,483,647`을 허용하고 `null`이면 Auto profile을 사용한다.
+[Core/Framework API 계약](../../common/spec/06-framework-api.ko.md)을 참고한다.
 
 **선택 기준.** 위 전용 항목(host lifecycle·topology 등록·diagnostics)에 속하지 않는, 단순 값 하나로
 끝나는 host-wide 설정을 조정할 때 쓴다. Diagnostics 관련 설정은 observability-diagnostics

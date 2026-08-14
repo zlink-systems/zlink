@@ -6,13 +6,13 @@ Kotlin은 Java의 RouteMesh, ClientServer, automatic fanout과 host runtime stat
 `Flow` projection은 Java publisher를 coroutine cancellation에 연결할 뿐 별도 status나 event value를
 정의하지 않는다. 각 항목은 일부 field만 담은 event가 아니라 변경 뒤의 완전한 status다.
 
-Host의 inbound dispatch 상태도 Java `ZLinkInboundDispatchStatus`를 그대로 사용한다. Kotlin 전용
-data class나 `Flow` 집계를 추가하지 않는다. 모든 byte 값은 음수가 아닌 Java `long`이고
-`pendingPayloadBytes == queuedPayloadBytes + activePayloadBytes`를 만족한다.
+Host capacity 상태도 Java `ZLinkHostCapacityStatus`를 그대로 사용한다. Kotlin 전용
+data class나 `Flow` 집계를 추가하지 않는다. 따라서 Core HWM runtime snapshot, Application job queue의
+effective/reserved/queued/in-use/peak/wait 값과 `resetCapacityMetrics()`도 Java projection 그대로다.
 
 Endpoint, lifecycle generation과 descriptor source는 Framework가 stale descriptor와 connection을
-판정할 때만 유지한다. Admission·claim·reservation, pending work와 connection intent도 Kotlin
-projection에 추가하지 않는다.
+판정할 때만 유지한다. Aggregate queue reservation 외의 owner별 admission·claim, payload와 connection
+intent는 Kotlin projection에 추가하지 않는다.
 
 RouteMesh peer는 Java `ZLinkPeerState`를 그대로 사용한다. `NOT_CONNECTED`는 연결이
 필요하지만 ready connection이 없는 상태이고, `NOT_REQUIRED`는 두 Object Client 모두 RouteMesh

@@ -249,7 +249,7 @@ the state built so far is disposed on the spot and the exception is
 re-thrown.** A half-open socket or hanging context isn't left behind.
 
 The internal cleanup order is owned by
-[runtime-lifecycle](../../../../internals/README.en.md), and the backend
+[runtime-lifecycle](../../../README.en.md), and the backend
 adapter port is owned by
 [backend-dependency-policy](../../../../../node/internals/backend-dependency-policy.en.md).
 

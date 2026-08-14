@@ -64,7 +64,7 @@ Java 타입은 Java spec을 따르고, Kotlin에서 새로 노출하는 `suspend
 | 문서 | 범위 |
 |------|------|
 | [backend-dependency-policy](../java/internals/backend-dependency-policy.ko.md) | Java binding 의존 격리 |
-| [공통 내부 구조](../common/internals/README.ko.md) | 네 언어가 공유하는 runtime 아키텍처 결정 |
+| [공통 내부 구조](../common/spec/README.ko.md) | 네 언어가 공유하는 runtime 아키텍처 결정 |
 | [regression-test-matrix](../java/internals/regression-test-matrix.ko.md) | JVM contract, E2E와 performance smoke 기준 |
 
 ## 4. 샘플 (Kotlin)

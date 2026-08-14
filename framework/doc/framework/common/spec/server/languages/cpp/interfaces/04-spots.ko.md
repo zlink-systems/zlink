@@ -453,8 +453,10 @@ User Spot relocation은 Spot root에 Spot adapter를 사용하고 각 Actor part
 `recreate_on_relocation()`은 Spot adapter를 호출하지 않는다. `disable_relocation()`을 선택한
 cross-node operation은 capture 전에 거부한다.
 
-Spot adapter의 `capture(...)` 결과는 최대 64 MiB이며 빈 vector는 유효하다. 반환한 vector의 소유권은
-Framework로 이동하고 `restore(...)`에 전달한 vector는 해당 비동기 호출이 소유한다. Capture가 throw하거나
+Spot adapter의 `capture(...)` 결과에는 relocation adapter 전용 size 상한이 없으며 빈 vector는
+유효하다. Framework는 등록한 Relocation Store의 일반 blob·whole-payload 제한에 맞춰 필요한
+chunking을 수행한다. 반환한 vector의 소유권은 Framework로 이동하고 `restore(...)`에 전달한
+vector는 해당 비동기 호출이 소유한다. Capture가 throw하거나
 failed task로 끝나면 durable abort와 source normalization 뒤 admission을 복원한다. Restore가 실패한 instance는
 폐기하고 새 attempt의 factory가 만든 instance에 같은 immutable payload를 적용한다. Framework가 operation
 [deadline](../../../../01-glossary.ko.md#deadline) 때문에 callback을 취소하면 `deadline_exceeded`로 분류한다. Recovery 때문에 두 method가 at-least-once
@@ -708,12 +710,13 @@ Target runtime-private shell은 같은 public Spot ID와 object generation을 �
 Spot authority 전에는 public lookup에 노출하지 않는다. Authority 전환 뒤 `ToSpot`,
 Create와 Join은 target, `ToActor`는 Actor별 current owner를 사용한다. Stale source
 route는 operation identity, generation, deadline, correlation과 reply route를 보존해
-relay한다. Actor queue seal부터 target admission까지 1초는 운영 목표이며 초과해도
+relay한다. Actor queue seal부터 one-way cutover submit의 성공 또는 실패 terminal까지 source-local
+1초는 운영 목표이며 초과해도
 relocation을 취소하거나 rollback하지 않는다.
 
 `spot_context_t::relocation_ready().defer()`는 `spot_wide`와
 `application_signaled`을 함께 등록한 Spot turn에서만 유효하다. Framework는 이동하지
-않았거나 commit 전에 abort했으면 source에서 `continued`, 이동했으면 target에서
+않았거나 relay-ready reply가 accepted 상태가 되기 전에 abort했으면 source에서 `continued`, 이동했으면 target에서
 `relocated` completion을 `on_relocation_ready_completed(...)`에 전달한다. 기본
 virtual 구현은 no-op이다. Callback 완료 전에는 보류한 application message와 timer를
 실행하지 않는다.

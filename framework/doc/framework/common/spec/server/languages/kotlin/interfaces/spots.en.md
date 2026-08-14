@@ -158,9 +158,11 @@ A state-preserving whole User Spot relocation uses the Spot adapter for
 the Spot itself and an Actor adapter for each member Actor. A
 state-preserving Instance Spot relocation uses the Spot adapter. The
 adapter isn't called for a same-node operation, `disableRelocation()`,
-or `recreateOnRelocation()`. The capture `ByteArray` is at most 64 MiB,
-and the adapter owns it until completion. The Java runtime copies it at
-completion. Restore receives a fresh defensive copy per call and doesn't
+or `recreateOnRelocation()`. The capture `ByteArray` has no
+relocation-adapter-specific size cap. The Java runtime copies it at
+completion and performs any required chunking under the registered
+Relocation Store's ordinary blob and whole-payload limits. The adapter
+owns the array until completion. Restore receives a fresh defensive copy per call and doesn't
 keep it after completion. An empty `ByteArray` is also a valid
 preserved state. The factory creates a fresh Spot instance per target
 attempt and doesn't reuse the source or a previous attempt's instance.
@@ -476,8 +478,8 @@ authority first. Each Actor is independently relocated, together with
 its queue/accepted journal/Actor timer, in the order it finishes its
 current turn. The target shell isn't exposed to public lookup before
 authority. A stale source route is relayed while preserving operation
-identity, generation, deadline, correlation, and reply route. The
-1-second window from Actor queue seal to target admission is an
+identity, generation, deadline, correlation, and reply route. The source-local
+1-second window from Actor queue seal to the one-way cutover submit's success or failure terminal is an
 operational goal — exceeding it doesn't cancel or roll back the
 relocation.
 

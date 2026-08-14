@@ -41,8 +41,7 @@ Framework root는 process의 host lifecycle과 DI에 한 번 등록한다. Root 
 | worker | bounded worker scheduler의 동시성, idle timeout과 queue 상한을 설정한다 |
 | network identity | listener가 공통으로 사용할 bind host와 advertised host를 설정한다 |
 | deployment identity | target eligibility에 사용할 application version과 maintenance wave를 설정한다 |
-| relocation limits | process 전체 outbound·inbound unit, `Capture`·`Restore` callback과 encoded payload in-flight 상한을 설정한다 |
-| inbound dispatch | 처리 중인 application payload의 host 전체 byte 상한과 Auto 계산에 사용할 memory limit·profile을 설정한다 |
+| inbound dispatch | Core HWM budget 전달값과 host 전체 Application job queue profile/capacity를 설정한다 |
 
 같은 root를 process에 두 번 구성하거나 같은 [MeshName](01-glossary.ko.md#meshname)을 중복 등록하면 startup에서 설정 오류가 발생한다.
 같은 [ChannelName](01-glossary.ko.md#channelname)을 서로 다른 RouteMesh 또는 ClientServer topology에 등록해도 역할과 관계없이 startup에서
@@ -61,94 +60,71 @@ Framework builder는 service liveness interval과 [deadline](01-glossary.ko.md#d
 내부에서 적용하며 orderly disconnect와 half-open 장애를 구분한다. 고정값, service liveness message와 reconnect
 계약은 [55 Transport Liveness](29-transport-liveness.ko.md)가 소유한다.
 
-### 2.1 수신 payload가 memory를 계속 늘리지 않게 한다
+### 2.1 Core memory budget과 application job queue를 분리한다
 
-Framework가 수신했지만 handler가 아직 처리를 끝내지 않은 application payload의 byte 합계를
-[Application HWM](01-glossary.ko.md#application-hwm)이라고 한다. 이 값은 connection이나 MeshNode별로
-나누지 않고 Framework host 전체에 한 번 적용한다.
-
-Application은 root의 inbound dispatch options에서 다음 세 값만 설정한다.
+Framework는 message byte 상한을 따로 계산하지 않는다. Core context 하나가 Core-managed messaging
+budget 하나를 소유하고, Framework는 다음 설정을 binding의 같은 context option으로 전달한다.
 
 | 설정 | 의미 |
 |---|---|
-| `ApplicationHwmBytes` | 생략하면 Auto, `0`이면 제한 없음, 양수이면 지정한 host 전체 byte 상한을 사용한다. |
-| `ApplicationHwmProfile` | Auto 계산 비율이다. 기본값은 `Balanced`다. |
-| `ProcessMemoryLimitBytes` | Auto 계산에 우선 사용하는 유효 memory budget이다. 생략하면 process에 적용된 유한한 OS 상한과 language runtime의 managed heap 상한을 각각 확인해 더 작은 값을 사용하고, 하나만 확인되면 그 값을 사용한다. 둘 다 확인되지 않으면 시스템 물리 메모리 총량을 사용한다. |
+| `CoreHwmMemoryLimitBytes` | Core budget 계산에 사용할 원본 가용 memory byte다. |
+| `CoreHwmBudgetBytes` | Profile 계산을 건너뛰는 정확한 Core-managed messaging budget이다. |
+| `CoreHwmProfile` | Core가 memory budget과 queue별 byte HWM을 계산할 profile이다. 기본값은 `Balanced`다. |
 
-`managed heap 상한`은 language runtime이 application heap에 사용할 수 있는 최대 byte를 뜻한다. Java와
-Kotlin은 `Runtime.maxMemory()`를 사용하고, .NET은 `GC.GetGCMemoryInfo().TotalAvailableMemoryBytes`를
-사용하며, Node.js는 V8의 `heap_size_limit`을 사용한다. C++에는 language runtime managed heap이 없으므로
-OS 상한만 확인한다. 이 값은 실제 process 전체 메모리 상한이나 Framework가 미리 확보하는 메모리가 아니다.
+`CoreHwmBudgetBytes`와 `CoreHwmMemoryLimitBytes`를 함께 지정하면 manual budget이 우선한다. 둘 중 하나가
+Core가 확인한 finite process·container hard limit보다 크거나 값이 양수가 아니면 socket bind 전에
+configuration error로 실패한다. 명시 값이 없으면 managed binding은 GC, JVM 또는 V8의 원본 runtime
+memory hint를 Core에 전달하고, native binding은 Core의 container·process·OS 감지를 사용한다. Framework와
+binding은 profile 비율을 적용하거나 budget을 connection 수로 나누지 않는다.
 
-Auto mode는 다음 순서로 유효 memory budget을 정한 뒤 profile 비율을 곱하고 소수점 아래를 버린다.
+Core queue에서 Framework로 꺼낸 application record는 origin의 retained-credit lease를 함께 옮긴다.
+Queue와 executor 사이에서는 lease 소유권만 이동한다. 정상 완료, validation·routing 실패, cancellation,
+exception과 shutdown에서 정확히 한 번 반환하며, reply가 필요한 request는 reply 또는 error reply submit이
+terminal 상태가 된 뒤 반환한다. Reply와 error reply completion은 ordinary Core byte HWM과 Application
+job queue permit을 적용하지 않는다.
 
-1. `ProcessMemoryLimitBytes`
-2. Process에 적용된 유한한 OS 상한과 language runtime managed heap 상한 중 확인된 값
-   - 둘 다 있으면 더 작은 값
-   - 하나만 있으면 그 값
-3. 시스템 물리 메모리 총량
+Framework host instance는 handler 시작을 기다리는 application job 수를 별도 permit으로 제한한다. Root의
+dispatch option은 다음 값을 제공한다.
 
-OS 상한에는 container·cgroup·Windows Job Object처럼 process가 사용할 수 있는 범위를 제한하는 값이
-포함된다. 3단계는 가용 메모리가 아니라 총량이므로, 유효한 OS 또는 runtime 상한을 확인할 수 없는 환경에서도
-Auto mode는 별도 설정 없이 기동한다.
+| 설정 | 의미 |
+|---|---|
+| `ApplicationJobQueueProfile` | 자동 job 상한 profile이다. 기본값은 `Balanced`다. |
+| `MaxQueuedApplicationJobs` | Profile 계산을 완전히 대체하는 `1..2,147,483,647` 범위의 정확한 상한이다. |
+| `EffectiveMaxQueuedApplicationJobs` | Startup에서 확정한 실제 host instance 상한이다. 읽기 전용 status 값이다. |
 
-| Profile | 비율 |
+Manual 범위 위반은 startup configuration error이며 unlimited mode는 없다. Manual 값이 없으면 effective
+processor 수는 startup에서 알려진 양수 값인 runtime constrained logical count, affinity/cpuset count,
+`floor(quota/period)`(최소 1), explicit executor maximum의 최솟값이다. 알려진 값이 없으면 1이다.
+
+| Profile | Jobs per effective processor |
 |---|---:|
-| `Compact` | 2% |
-| `LowLatency` | 5% |
-| `Balanced` | 10% |
-| `Throughput` | 20% |
+| `Compact` | 32 |
+| `LowLatency` | 64 |
+| `Balanced` | 128 |
+| `Throughput` | 256 |
 
-Auto mode의 계산 결과가 양수가 아니면 socket bind 전에 configuration error로 실패한다. 상한을 설정하지
-않은 것 자체는 오류가 아니다. 선택한 profile은 Framework가 만드는 Core context의 Auto HWM profile에도 적용하지만,
-Application HWM byte를 connection별 Core HWM으로 복사하거나 connection 수로 나누지 않는다.
+곱셈 overflow는 socket bind 전 startup configuration error다. 값은 startup에서 확정하고 runtime CPU·TPS
+측정값에 따라 자동으로 바꾸지 않는다. `CoreHwmProfile`과 `ApplicationJobQueueProfile`은 같은 label을 사용하지만 type,
+owner, 단위와 계산을 공유하지 않는다.
 
-`MaxMessageSize`를 제공하는 application listener에서는 `ApplicationHwmBytes`가 양수이면 그 값도 유한한
-양수여야 한다. Auto mode도 같은 조건을 적용한다. 명시적인 `ApplicationHwmBytes = 0`만 이 검사를
-생략한다. RouteMesh SS에는 `MaxMessageSize` 설정이 없으므로 이 조합 검사를 적용하지 않는다.
-HWM이 `MaxMessageSize`보다 작아도 유효하다. Pending byte가 HWM보다 작을 때 시작한 complete message는
-끝까지 받고, 그 결과 HWM을 넘으면 다음 수신을 멈춘다. 따라서 비어 있는 host는 HWM보다 크고
-`MaxMessageSize` 이하인 message 한 건을 처리할 수 있다.
+Pre-receive에 terminal reply 또는 error reply completion으로 식별되는 supply만 queue permit을 사용하지
+않는다. Ordinary connection에서 먼저 receive한 뒤 classify한 record는 우회하지 않는다. 그 밖의 ordinary ingress는
+application, control 또는 malformed 여부와 관계없이 receive·claim 직전에 같은 shared permit을 얻는다.
+Control·malformed record로 분류되면 내부 처리 직후 반환한다. Application record는 최종 handler turn마다
+permit 하나를 사용하며 executor·mailbox·serial gate에서 기다리는 동안 유지한다. 공통 invocation wrapper가
+사용자 callback의 첫 instruction을 실행하기 직전에 permit을 정확히 한 번 반환한다. Handler가 시작한 뒤의
+비동기 대기와 continuation은 permit을 다시 얻지 않는다.
 
-ClientServer처럼 binding이 complete message의 길이를 `Recv` 전에 제공하지 않는 receive path에서는
-transport `Recv` 자체를 HWM 경계에서 즉시 멈출 수 없다. 이 경우 Framework는 raw receive마다 bounded
-reservation을 먼저 얻고, 받은 뒤 application과 control을 분류한다. control로 분류된 message는
-application pending에 넣지 않고 reservation을 즉시 반환하며, application message는 측정한 payload
-byte와 함께 terminal 상태까지 reservation을 유지한다. HWM에 도달한 뒤에는 이 reservation 범위를
-넘는 raw receive를 시작하지 않는다.
+상한에 도달하면 새 ordinary ingress supply는 permit을 cancellable하게 기다린다. Reject·drop, 별도 LWM,
+polling, busy spin과 unbounded 임시 queue로 바꾸지 않는다. 가장 오래 기다린 live source에 반환 permit을
+직접 넘기고, waiter가 있으면 새 acquire가 앞지르지 않는다. Batch와 1:N local dispatch도 획득한 permit보다
+많은 handler job을 먼저 만들 수 없다. Core receive queue가 채워지면 기존 origin별 byte HWM이 sender까지
+backpressure를 전달한다.
 
-유효한 `MaxMessageSize`를 `M`, 동시에 보유할 수 있는 raw receive reservation 수를 `R`이라고 하면,
-이 경로에서 HWM을 넘겨 받는 양은 최대 `R * M`이다. 위 문단의 "한 건"이 여기서는 최대 `R`건이 된다.
-
-StreamNode는 이 raw classification 경로와 별도로 Core STREAM inbound에서 complete client→server
-message를 검사한다. 이때 크기는 6-byte prefix를 제외한 header와 payload의 합이며 기본값은 `64 KiB`다.
-`0`은 별도 Framework 상한 없이 Core `-1`로 변환하고, server→client outbound에는 이 상한을 적용하지 않는다.
-
-`R`은 configuration 시점에 정해지는 유한한 양수이며 **부하에 따라 늘어나지 않는다.** Connection 수,
-대기 중인 message 수, peer 수에 비례해 `R`을 늘리지 않는다. `R`은 host가 동시에 실행하는 수신
-loop 수를 넘지 않는다. 각 언어는 자신의 `R` 값과 그 근거를 exact interface 문서에 적는다.
-
-`R`을 부하에 비례시키면 압력을 만들어야 할 때 오히려 더 많이 받아들여 backpressure가 약해진다.
-이 조항이 요구하는 것은 정확한 회계가 아니라 **초과분이 부하와 무관한 고정 여유로 남는 것**이다.
-Binding이 길이를 미리 확인할 수 있는 경로에서는 이 여유 없이 HWM에서 새 application `Recv`를 바로
-멈출 수 있다.
-
-Pending byte에는 complete message의 application payload part만 포함한다. Envelope, route, Framework
-metadata와 allocator overhead는 포함하지 않는다. Queue 대기와 handler 실행 중인 job은 포함하고,
-terminal 상태가 된 job과 Core·OS buffer에 아직 남아 있는 message는 포함하지 않는다. Framework는
-queue를 순회하지 않는다. 수신 시 계산한 immutable byte 값을 job에 보관하고, 수신 누계에서 terminal
-완료 누계를 뺀 값으로 현재 합계를 계산한다.
-
-Pending byte가 HWM에 도달하면 새 application `Recv`만 멈춘다. 이미 시작한 receive와 queue dispatch,
-별도 Completion connection의 request reply·bounded Framework service control과 Core의 send-ready callback은
-계속 처리한다. Handler가 정상 완료·실패·취소 중 하나로 끝나 합계가
-HWM보다 작아지면 수신을 재개한다. 받은 message를 HWM 초과만으로 버리거나 오류 reply로 바꾸지 않는다.
-Core receive queue가 채워지면 기존 byte 기반 transport HWM이 source의 새 send를 대기시킨다.
-
-Request handler는 reply를 보낼 내부 permit을 확보한 뒤 실행한다. Permit이 없으면 request는 application
-queue와 pending byte 합계에 남고, reply를 받을 completion connection의 처리는 계속한다. Permit 크기,
-peer별 공정성, connection pair와 reply reserve는 Framework 내부 정책이며 public option으로 노출하지
-않는다.
+Root Location option은 startup-only `SessionRelocationSealTimeout`을 소유한다. 기본값은 `3,000 ms`이며
+finite positive duration만 허용한다. 0, 음수, 무한대와 exact language interface가 유한 millisecond로
+표현할 수 없는 값은 socket bind 전에 configuration error다. Session owner가 relocation seal의 terminal
+cutover/abort를 기다리는 상한이며 runtime 중 변경하지 않는다.
 
 ## 3. RouteMesh 등록
 
@@ -229,11 +205,9 @@ Framework의 `MaxMessageSize = 0`은 Framework가 transport 기본값보다 작�
 뜻이다. 양수는 같은 byte 상한으로 적용하고 음수 값은 설정 오류다. Binding option 표현과 변환은
 언어별 internals가 소유하며 application public API에 노출하지 않는다.
 
-ClientServer application listener의 `MaxMessageSize` 기본값은 `16,777,216` bytes(16 MiB)다. 따라서
-기본 Auto Application HWM 구성은 유한한 단일 message 상한을 가진다. Application이 이를 명시적으로
-`0`으로 바꾸면 별도 상한을 두지 않는 기존 의미를 유지하지만, Application HWM이 Auto 또는 양수이면
-startup validation에서 거부한다. 무제한 message와 무제한 pending payload가 모두 필요한 경우에만
-`MaxMessageSize = 0`과 `ApplicationHwmBytes = 0`을 함께 명시한다.
+ClientServer application listener의 `MaxMessageSize` 기본값은 `16,777,216` bytes(16 MiB)다.
+`MaxMessageSize`는 Core memory budget과 Application job queue capacity에서 독립된 단일 message
+상한이다. `0`은 Framework가 별도 상한을 두지 않는다는 뜻이며 다른 HWM 또는 queue 설정과 결합 검증하지 않는다.
 
 이 일반 application listener 규칙은 ClientServer에 적용하고 RouteMesh ServerServer에는 적용하지 않는다.
 RouteMesh SS는 Framework-level message-size 설정이나 상한을 제공하지 않는다.
@@ -575,18 +549,6 @@ Store interface와 이동별 사용 조건은 [40 Location runtime](21-location-
 Location Store interface와 Relocation Store interface는 서로 상속하지 않는다. Root는 각각의 generic Store instance를
 받는 두 registration operation을 독립적으로 제공한다. Actor·Spot별 Store, 두 Store를 한 번에 등록하는 bundle과
 Redis 전용 registration operation은 public contract에 포함하지 않는다.
-
-Location option은 process 전체 relocation 제한 다섯 개를 제공한다. 기본값은 active outbound 64, active inbound
-64, concurrent `Capture` 8, concurrent `Restore` 8, encoded payload in-flight 268,435,456 bytes(256 MiB)다.
-모든 값은 양수여야 한다. Payload byte에는 application state, 실행하지 않은 message queue, accepted journal,
-timer logical registration·pending tick, relocation manifest와 Framework metadata를 포함한다.
-
-Framework는 active unit, callback과 예상 payload byte permit을 모두 nonblocking으로 확보한 queue turn 경계에서만
-source unit을 seal한다. Permit을 얻지 못하면 application message와 timer dispatch를 계속하고 intent notification을
-다시 예약한다. 단일 User Spot aggregate의 encoded payload reservation이 byte 상한보다 크면 다른 payload가
-in-flight가 아닌 동안에만 oversized aggregate 하나로 진행한다. Standalone Actor와 Instance Spot unit은 configured
-byte gate 안에서만 admit한다. 실행 중 option 변경은 새 relocation admission에만 적용하며 이미 permit을 얻은
-unit의 상한을 줄이지 않는다.
 
 ## 11. Classic fanout
 

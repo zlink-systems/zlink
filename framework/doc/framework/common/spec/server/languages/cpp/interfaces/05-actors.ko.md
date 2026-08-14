@@ -138,8 +138,10 @@ relocation에서는 adapter를 호출하지 않으며 `DisableRelocation` cross-
 `RecreateOnRelocation` policy도 application payload를 capture하거나 restore하지 않는다. Whole User Spot relocation에서는 Spot root에
 `spot_relocation_adapter_t<TSpot>`를 사용하고 각 Actor participant에는 이 Actor adapter를 사용한다.
 
-`capture(...)` 결과는 최대 64 MiB이며 빈 vector는 유효하다. 반환한 byte vector의 소유권은 Framework로 이동하고,
-`restore(...)`에 전달한 byte vector는 해당 비동기 호출이 소유한다. Capture가 throw하거나 failed task로 끝나면
+`capture(...)` 결과에는 relocation adapter 전용 size 상한이 없으며 빈 vector는 유효하다.
+Framework는 등록한 Relocation Store의 일반 blob·whole-payload 제한에 맞춰 필요한 chunking을
+수행한다. 반환한 byte vector의 소유권은 Framework로 이동하고, `restore(...)`에 전달한 byte
+vector는 해당 비동기 호출이 소유한다. Capture가 throw하거나 failed task로 끝나면
 durable abort와 source normalization 뒤 admission을 복원한다. Restore가 실패한 instance는 폐기하고 새 attempt의
 factory가 만든 instance에 같은 immutable payload를 적용한다. Framework가 operation deadline 때문에 callback을
 취소하면 `deadline_exceeded`로 분류한다. 같은 source와 target process 안의 재시도 때문에 두 method는 두 번

@@ -1,18 +1,20 @@
 ---
-title: "11. Payload Ownership And Copy"
+title: "50. Payload Ownership And Copy"
 ---
 
-# 11. Payload Ownership And Copy
+# 50. Payload Ownership And Copy
 
-[Internal structure table of contents](README.en.md) · [Previous: 10. Liveness And Status Publication](10-liveness-and-state.en.md) · [Next: 12. Service Wire Protocol](12-service-wire-protocol.en.md)
+> **Document status — internal design, not normative public specification.** This chapter explains implementation structure used to satisfy the linked public contracts. It does not add or change application-visible behavior.
+
+[Internal structure table of contents](README.en.md) · [Previous: 49. Liveness And Status Publication](49-internal-liveness-and-state.en.md) · [Next: 51. Service Wire Protocol](51-internal-service-wire-protocol.en.md)
 
 > **What this chapter answers** — how many times a byte is copied while
 > one message travels from the socket to the handler.
 >
 > **Contract ownership** — payload-size accounting is owned by
-> [the Framework API](../spec/06-framework-api.en.md), and the
+> [the Framework API](06-framework-api.en.md), and the
 > transfer format by
-> [Channel Messaging](../spec/08-channel-messaging.en.md). This
+> [Channel Messaging](08-channel-messaging.en.md). This
 > chapter covers the **structure** that satisfies that contract and
 > the failures that become visible when payload ownership is violated.
 
@@ -144,7 +146,7 @@ separate no-copy path for internal runtime ownership transfer.
 
 An API dealing with raw bytes is used **only for transport inspection
 and codec extension implementation**
-([Message Model 「1. Typed Messages」](../spec/04-message-model.en.md#1-typed-messages)).
+([Message Model 「1. Typed Messages」](04-message-model.en.md#1-typed-messages)).
 Letting a business handler receive raw payload as an argument is a
 contract violation.
 
@@ -170,20 +172,26 @@ owner to send to. The payload, on the other hand, is seen by no one
 until the handler runs.
 
 **Decision — a message that isn't admitted to the execution queue isn't
-deserialized.** A message rejected because the queue is full or the current
+deserialized.** A message rejected by an object/channel admission rule or because the current
 owner doesn't match never reaches the handler. Deserializing it first
 **performs expensive work for a message that will be rejected, at the time
 when load is highest.**
 
-A message arriving after a relocation seal is not rejected. The Framework
-holds its encoded payload and reply information, then replays it at the target
-after commit or resumes it at the source after abort. This message also remains
-encoded until it acquires execution authority. The hold therefore preserves the
+Application Job Queue saturation is not that rejection. Ordinary ingress waits cancellably for
+its host-wide permit before receive or claim, without reject or drop. Once a permit exists, the
+separate object/channel admission contract still decides whether the encoded message enters its
+execution queue.
+
+A message arriving after a relocation seal is not rejected. The Framework holds its
+encoded payload and reply information. It resumes the message at source on an explicit
+abort before the relay-ready reply is accepted; afterward, regardless of cutover-submit
+result, it hands the message to target handoff or Message Follow. This message also
+remains encoded until it acquires execution authority. The hold therefore preserves the
 message while postponing deserialization until the handler can actually run.
 
 Deserializing **before acquiring execution authority** spends that work
-on a message later rejected inside the authority. Copying before queue
-admission likewise leaves copy cost on a queue-full rejection.
+on a message later rejected inside the authority. Copying before the object/channel admission
+decision likewise leaves copy cost on a rejection that contract permits.
 
 **Decision — don't parse the whole thing twice to determine format.**
 Test-parsing the payload once and then **parsing it again** for actual
@@ -210,9 +218,9 @@ message.
 The **API shape** expressing this selection **differs per language.**
 .NET takes a content-type and a per-type predicate together
 (`AddSerializer(contentType, serializer, canSerialize)`,
-[.NET Serialization Contract](../spec/server/languages/dotnet/interfaces/11-serialization.en.md)).
+[.NET Serialization Contract](server/languages/dotnet/interfaces/11-serialization.en.md)).
 Node's concrete TypeScript representation is defined by the
-[Node Foundation Contract](../spec/server/languages/node/interfaces/01-foundation-configuration.en.md).
+[Node Foundation Contract](server/languages/node/interfaces/01-foundation-configuration.en.md).
 Internals doesn't fix one language's API shape as the common structure.
 The decisions below apply only to **the meaning of the selection.**
 
@@ -224,7 +232,7 @@ And **send and receive are different boundaries.**
 | Receive | The canonical **content-type** carried in the envelope | Ends in `ProtocolError` without re-parsing as JSON |
 
 The basis is
-[Framework API 「9. Codec」](../spec/06-framework-api.en.md#9-codec),
+[Framework API 「9. Codec」](06-framework-api.en.md#9-codec),
 which explicitly states "the default for choosing the send type and
 the validation of the receive wire content-type are different
 boundaries, so the same fallback rule doesn't apply to both."
@@ -271,7 +279,7 @@ and receive.
 
 The send cache **can't be fully fixed at startup.** The Channel API
 takes an arbitrary type per call
-([Channel Messaging](../spec/08-channel-messaging.en.md)), and the
+([Channel Messaging](08-channel-messaging.en.md)), and the
 selector predicate evaluates a declared-type descriptor first
 encountered at runtime. Because the registry is immutable, the result
 for a type that enters the cache is computed once and doesn't change
@@ -283,7 +291,7 @@ after the limit is evaluated against the registration list on every
 send, and its result isn't cached. This keeps lookup cheap for the
 already-frequent types while bounding cache size.
 
-[1. Layer Boundary And Identifier 「5. Registration Declaration Is Validated Only Once, At Start」](01-layering.en.md#5-registration-declaration-is-validated-only-once-at-start)'s
+[40. Layer Boundary And Identifier 「5. Registration Declaration Is Validated Only Once, At Start」](40-internal-layering.en.md#5-registration-declaration-is-validated-only-once-at-start)'s
 "registration declaration is validated only once at startup" applies
 here exactly the same way — if it's immutable after startup, compute
 it ahead of time and read it **without a lock.** Writing lookup results
@@ -345,6 +353,22 @@ distinguishing a non-JSON payload and suppresses the required
   `ProtocolError` instead of falling back to JSON.
 - Reading codec info doesn't require a lock.
 
+## Retained Core Leases And 1:N Child Ownership
+
+A record retained from Core receive has one shared owner for its payload and Core
+receive-credit lease. Each exact-target child releases its application permit at the actual
+callback's first instruction; a pre-start terminal child returns its permit exactly once.
+After enqueueing the first child, remaining child permits are acquired lazily through the
+[dispatch loop](46-internal-dispatch-loop.en.md) FIFO, without copying unacquired child payloads into
+a separate unbounded queue.
+
+The shared retained owner returns the Core lease exactly once after every child terminal and
+any required record-level reply attempt are terminal. If cancellation, decode failure, owner
+close, or shutdown occurs during partial child acquire/enqueue, permits not yet enqueued are
+returned immediately; enqueued children clean up at their pre-start or handler-start
+boundary. For a one-way record requiring no reply attempt, all child terminals establish the
+record terminal.
+
 ---
 
-[Internal structure table of contents](README.en.md) · [Previous: 10. Liveness And Status Publication](10-liveness-and-state.en.md) · [Next: 12. Service Wire Protocol](12-service-wire-protocol.en.md)
+[Internal structure table of contents](README.en.md) · [Previous: 49. Liveness And Status Publication](49-internal-liveness-and-state.en.md) · [Next: 51. Service Wire Protocol](51-internal-service-wire-protocol.en.md)

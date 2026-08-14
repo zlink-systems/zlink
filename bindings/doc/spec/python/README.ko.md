@@ -62,17 +62,36 @@ HWM의 계산과 queue admission은 Core가 담당한다. Python의
 Core에 전달하고 getter도 Core의 64-bit 값을 Python `int`로 반환한다. 값 `0`은
 무제한이다.
 
-`ContextOptions.auto_hwm_msg_unit_bytes`는 Core planner에 전달하는 planning
-unit이다. Core는 선택한 message slot 수에 이 값을 곱해 planned byte HWM을
-계산한다. 이 값은 평균 message 크기나 실제 admission charge가 아니다. Caller가
-방향별 HWM을 설정하면 그 방향은 수동 override가 되어 Auto-HWM 재계산에서
-제외된다.
+Context는 byte 단위 `core_hwm_memory_limit_bytes`, `core_hwm_budget_bytes`와
+`core_hwm_profile`을 Core에 그대로 전달한다. Profile 비율 계산과 physical directional
+queue별 분배는 Core가 정확히 한 번 수행한다. Caller가 방향별 HWM을 설정하면 그 방향은
+manual override가 되어 Auto-HWM 재계산에서 제외된다.
+Context는 `core_hwm_budget_snapshot()`과 `reset_core_hwm_budget_metrics()`도 제공한다.
+입력 우선순위는 수동 Core budget, 명시 memory limit, 명확한 별도 VM hard limit을 얻을 수
+있을 때의 runtime hint, Core fallback 순서다. 앞의 두 값을 지정하면 runtime hint를 자동
+감지하지 않는다. Binding은 hint와 Core hard limit을 직접 결합하지 않는다. 명시 입력이
+Core가 감지한 finite hard limit보다 크면 `EINVAL`에 대응하는 기존 config error를 그대로
+전달하고 clamp하지 않는다.
 
 실제 pipe에 쌓인 accounted byte가 applied HWM에 도달하면 Core가
 backpressure를 결정한다. Python 바인딩은 message 수를 다시 세지 않으며 native
-result를 기존 submit·error 계약으로 전달한다. `MonitorStatus`의 planned,
-applied, deferred HWM과 in-flight 사용량은 byte 단위의 Python `int`다. Pending
-message와 `auto_hwm_socket_message_slots`만 count 진단값이다.
+result를 기존 submit·error 계약으로 전달한다.
+`monitor_open(events=..., monitor_hwm_bytes=...)`는 `uint64_t` 범위의 음수가 아닌
+Python `int`를 받는다. `0`은 Core monitor 기본값을 선택하고, 양수는 변환 없이
+전달한다. Message-count alias나 변환은 없다. `MonitorStatus`의 planned,
+applied, deferred HWM과 in-flight 사용량은 byte 단위의 Python `int`다. Pending message
+count는 표시용 진단이고 `snd_pending_bytes`와 `rcv_pending_bytes`는 별도 byte 값이다.
+slot·message-unit·size-cap·connection-bucket property는 제공하지 않는다.
+
+Core budget snapshot은 ABI version/size, configured/runtime/resolved memory limit,
+configured/effective budget, planned/applied/manual-reserved HWM, Core queue/application/current/
+peak/provisional accounted byte, completion current/peak/pending과 total messaging byte,
+monitor/instance aggregate, application/completion queue count,
+`outstanding_application_lease_count`, `retired_queue_count`, `deferred_origin_credit_bytes`,
+oversize·blocked·aggregate flag, `budget_generation`과 `measurement_epoch`을 Python
+`int`/boolean으로 제공한다. Reset은 current·pending·queue count와 위 세 owner-lifecycle
+gauge를 유지하고 두 peak를 current로 재기준화하며 epoch counter를 0으로 만든 뒤
+`measurement_epoch`을 증가시킨다. ABI version/size 불일치는 unsupported error다.
 
 ## 소유권과 수명
 
@@ -88,18 +107,49 @@ message와 `auto_hwm_socket_message_slots`만 count 진단값이다.
 - callback을 등록하면 callback과 필요한 Python 참조는 native callback 등록보다 먼저 해제되지 않는다.
   callback 예외는 binding의 callback error policy에 따라 전달된다.
 
+일반 `recv_into`와 `subscribe_into`는 Core에서 part를 dequeue할 때 queue credit을 즉시
+반환한다. Framework backend만 `recv_retained_into`와 `subscribe_retained_into`를
+명시적으로 선택한다. 두 retained 경로는 일반 경로와 같은 `Received`/`TopicMessage`,
+routing id, request sequence, topic과 multipart framing을 보존하면서 caller-visible
+physical part마다 Core credit 하나를 aggregate owner가 private하게 보유한다.
+
+Retained 결과의 `close()`, context manager 종료 또는 같은 저장소의 다음 retained
+수신 시작은 native part와 모든 credit을 정확히 한 번 반환한다. 따라서 재사용 수신이
+no-data로 끝나도 이전 결과는 남지 않는다. Framework의 drop·cancel·error 정상 경로도
+소유한 aggregate를 명시적으로 닫아야 하며, Python reference count/GC cleanup은 누락 방지
+fallback이다. 개별 `ReceivedMessage`와 public API에는 raw lease handle, 별도 application
+capacity, allowance나 중복 accounting 상태를 노출하지 않는다.
+
 ## Callback 표면
 
-Core FFI의 `zlink_recv_handler()`와
-`zlink_router_completion_control_handler()`는 Python package가 직접 노출하지 않는
-private 구현 primitive다. Python의 공개 callback 표면은 STREAM packet의 `on_packet`,
-send readiness의 `on_send_ready`, monitor event의 `on_event`, 그리고 ROUTER request
-completion을 전달하는 `request(...)` callback 경로로 고정한다. raw receive callback이나
-completion-control handler를 등록하는 별도 public method는 제공하지 않는다.
+Core FFI의 `zlink_recv_handler()`는 Python package가 직접 노출하지 않는 private 구현
+primitive다. Python의 공개 callback 표면은 STREAM packet의 `on_packet`,
+send readiness의 `on_send_ready`, monitor event의 `on_event`로 고정한다. Raw receive나
+routed request completion callback을 등록하는 별도 public method는 제공하지 않는다.
 
 ## 송수신과 no-data
 
-- 송신 builder는 message part를 추가한 뒤 `submit()`한다. blocking send는 socket option과 Core의 timeout 계약을 따른다.
+- PAIR·PUB·STREAM 송신과 ROUTER reply 같은 unrelated 동기 builder는 message part를 추가한 뒤
+  `submit()`한다. Raw ROUTER/`Received` reply의 `submit()`은 `None`을 반환하는 동기
+  one-shot이며 terminal reply 또는 error reply를 HWM 없는 completion lane에 native 호출
+  한 번으로 제출한다. HWM backpressure는 reply 결과가 아니며 `NOT_CONNECTED`,
+  `TERMINATED`, `INVALID_ARGUMENT`와 그 밖의 non-HWM submit 실패는 즉시 `SubmitError`로
+  발생시킨다. Blocking operation은 socket option과 Core timeout 계약을 따른다.
+- DEALER·ROUTER routed send와 request builder의 유일한 terminal은 `submit()`이다.
+  `await dealer.send().message(message).submit()`과
+  `reply = await dealer.request().message(request).submit()`처럼 사용하며, `submit()`은 await 가능한
+  coroutine object를 즉시 반환한다. 이 메서드는 반환 전에 native blocking submit을 실행하지 않는다.
+  Socket runtime은 operation을 받기 전에 Core routed-target readiness handler를 장기 등록한다.
+  Operation은 최초 시도 전에 정확한 `(socket, RID, transport pair ID, generation)` key,
+  coroutine completion과 complete record를 pending에 넣고 같은 target에 `DONTWAIT`로
+  시도한다. Callback은 그 key만 ready로 표시하며 native retry는 callback 밖의 pump가
+  수행한다. Pair generation이 다른 event는 stale wake로 무시한다. 같은 native handle의
+  outbound 경로는 첫 part부터 `FINAL`까지 한 attempt만 보호하는 짧은 gate를 공유하고
+  readiness 대기 전에 반환한다. Coroutine cancellation은 pending operation과 request
+  correlation을 정확히 한 번 종료한다. 다른 RID의 submit과 Python event loop는 이 대기
+  때문에 막히지 않는다.
+  Request timeout은 최초 admission 대기와 reply 대기를 포함하는 하나의 absolute deadline이며 retry로 연장하지 않는다.
+  같은 routed operation에 flags, callback, blocking terminal이나 `submit_async()`를 함께 제공하지 않는다.
 - `RecvFlags.DONT_WAIT`를 사용한 caller-provided receive는 message가 없을 때 `False`를 반환한다.
 - timer, monitor와 같은 직접 반환 control API는 pending value가 없을 때 `None`을 반환한다.
 - 실제 native failure는 해당 error type으로 전달하며 no-data로 숨기지 않는다.

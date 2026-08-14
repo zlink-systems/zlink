@@ -260,19 +260,20 @@ callback에서 client에 중복 연결 안내를 보낼 수 있지만 connection
 자세한 순서와 fencing 규칙은
 [Session–Actor dispatch §4](20-session-actor-dispatch.ko.md#4-session이-actor-route를-보관하는-방법)가 정의한다.
 
-Bound Actor가 relocation되면 physical STREAM socket과 Session object는 그대로
-유지한다. Target Actor를 복원하고 owner·membership commit을 완료하면 Target Actor가
-message를 처리하기 시작한다. 그 뒤 target runtime이
-`sessionActorLocationUpdateReqMsg`를 send하여 Session owner에 저장된 해당 Actor binding
-route, 즉 현재 Actor owner에 전달할 경로를 target owner로 갱신하도록 요청한다.
-Route switch와 함께 bound-session current Actor location snapshot도 같은 ActorId·ObjectGeneration을
-유지한 채 target MeshName·NodeRid로 갱신한다. 같은 Session에서 relocation 대상에 포함되지 않은 다른 Actor의 route와 location snapshot은
-바꾸지 않는다. Session owner는 갱신한 뒤 `sessionActorLocationUpdateResMsg`를 send한다.
-응답이 없으면 target runtime은 최초 send 1초 뒤부터 1초, 2초, 4초, 5초 간격으로 같은
-요청을 다시 보내고 이후에는 5초 간격을 유지한다. 응답을 기다리는 동안에도 Target Actor는
-message를 처리하며, 이전 route로 도착한 message는 Message Follow route가 전달한다. Route
-update는 같은 ObjectGeneration에만 허용하고 application은 relocation을 알기 위해 rebind하지
-않는다. 새 incarnation은 explicit bind가 필요하다.
+Bound Actor가 relocation되면 physical STREAM socket과 Session object는 그대로 유지한다.
+Target Actor의 Restore, target-only owner·membership CAS, queue 병합, regular route 전환과
+lifecycle callback을 끝낸 뒤 Target Actor dispatch를 연다. 그 뒤 target runtime이 command 44
+`sessionRelocationRoute` commit을 one-way로 보내 Session owner가 보관한 binding route를 target
+owner로 갱신한다. Route switch와 함께 bound-session current Actor location snapshot도 같은
+ActorId·ObjectGeneration을 유지한 채 target MeshName·NodeRid로 갱신한다. 같은 Session에서
+relocation 대상에 포함되지 않은 다른 Actor의 route와 location snapshot은 바꾸지 않는다.
+Session owner는 exact Session·binding·Actor generation과 relocation identity를 확인하고 held
+message를 target route로 제출한 뒤 matching seal을 해제한다. 적용 reply는 없고 reserved command
+45를 보내거나 accept하지 않는다. Exact command 44가 기본 3,000ms
+`SessionRelocationSealTimeout` 안에 없으면 physical Session과 binding·held·seal state를 정리한다.
+Target Actor는 command 44 적용 reply 없이 message를 처리하며, 이전 route로 도착한 message는
+Message Follow route가 전달한다. Route update는 같은 ObjectGeneration에만 허용하고 application은
+relocation을 알기 위해 rebind하지 않는다. 새 incarnation은 explicit bind가 필요하다.
 
 ## 9. 구현 및 contract test 검증 요구
 
@@ -287,3 +288,10 @@ update는 같은 ObjectGeneration에만 허용하고 application은 relocation�
 | reply 상관관계 | `Response`·`Error` header에 packet name이 없고, client가 sequence 단독으로 매칭해 정상 완료한다 |
 | Cross-node Actor 전달 | Physical STREAM은 session owner에 유지되고 command 38·24·36·51 record만 MeshNode 사이에서 전달된다 |
 | 중복 Actor 연결 | 새 bind는 이전 session 처리를 기다리지 않고 완료되며, 이전 session callback terminal 100 ms 뒤 Framework가 연결을 종료한다 |
+
+## 10. Session dispatch와 shared permit
+
+STREAM application packet과 cross-node Session application record는 같은 host shared permit을 쓴다.
+Terminal response/error completion만 우회한다. Handshake, bind, unbind와 malformed ordinary record도
+receive/claim 전에 permit을 얻고 내부 처리 직후 반환한다. Application packet은 실제 session callback
+시작에서 반환하며 batch는 확보한 permit보다 많은 job을 만들지 않는다.

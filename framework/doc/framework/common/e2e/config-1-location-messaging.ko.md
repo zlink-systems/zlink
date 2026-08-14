@@ -390,28 +390,24 @@ scenario는 SS transport에 listener 상한을 추가하지 않고, 여러 크�
   StreamNode 상한은 [STREAM session — Framework 내부 recv loop와 application 표면](../spec/19-stream-session.ko.md#4-framework-내부-recv-loop와-application-표면)에서
   별도로 정의한다.
 
-#### RM-C9 Application HWM 도달 뒤 수신을 재개한다
+#### RM-C9 Application job queue capacity 뒤 수신을 재개한다
 
 우선순위: `P2`
 
-Provider의 handler가 처리 중인 payload가 public Application HWM에 도달하면 Framework는 새 application
-message 수신을 멈춘다. Handler가 완료되어 pending payload가 HWM보다 작아지면 같은 connection에서
-수신을 다시 시작해야 한다.
+Provider의 shared Application job queue permit이 모두 예약되면 Framework는 새 ordinary ingress를
+cancellable하게 기다린다. 실제 handler가 시작해 permit을 반환하면 같은 connection의 수신을 재개해야 한다.
 
-**검증 질문:** Provider의 pending payload가 Application HWM에 도달하면 public status가 수신 중단을
-표시하고, handler 완료 뒤 수신 재개와 정상 request 처리를 표시하는가.
+**검증 질문:** Provider의 queue capacity가 예약되면 public status가 reserved/queued/waiter를 표시하고,
+handler 시작 뒤 수신 재개와 정상 request 처리를 표시하는가.
 
-- 시작 조건: Provider의 `ApplicationHwmBytes`는 1 MiB다. Provider handler는
-  public application control endpoint가 release할 때까지 2 MiB command 처리를 완료하지 않는다.
-  Baseline request는 성공한 상태다.
-- 절차: Client가 consumer를 통해 2 MiB command를 한 번 보낸다. Provider의 public application
-  evidence에서 handler 시작을 확인한 뒤 public host status를 읽는다. Client가 provider의 public control
-  endpoint로 handler를 release하고, public host status에서 pending payload 감소와 수신 재개를 확인한
-  뒤 정상 profile request를 보낸다.
-- 검증: Handler가 대기하는 동안 public status의 pending payload는 HWM 이상이고 application receive
-  paused 값은 `true`다. Handler 완료 뒤 pending payload는 `0`, application receive paused 값은
-  `false`가 된다. 이후 정상 request는 reply를 받고 provider handler가 한 번 실행되며 public RouteMesh
-  status는 ready 상태를 유지한다. Outbound queue 길이나 send timeout 발생 횟수는 판정하지 않는다.
+- 시작 조건: Provider의 `MaxQueuedApplicationJobs`는 1이고 public handler-start gate가 첫 callback
+  진입 직전에 닫혀 있다. Baseline request는 성공한 상태다.
+- 절차: 첫 command를 보내 public status에서 reserved permit과 queued job을 확인한 뒤 두 번째 request를
+  시작해 pending인지 확인한다. Gate를 열어 첫 handler가 시작하도록 하고 두 request의 terminal과 queue
+  status를 읽는다.
+- 검증: Gate 동안 effective max는 1이고 reserved/queued가 1이며 capacity waiter가 관찰된다. Gate를 열면
+  callback 첫 instruction에서 permit이 반환되어 두 request가 각각 정확히 한 번 처리된다. Drop이나 generic
+  capacity error가 없고 public RouteMesh status는 ready를 유지한다.
 - 세부 동작: [Framework API §2.1](../spec/06-framework-api.ko.md),
   [runtime monitoring §2.1](../spec/24-runtime-monitoring.ko.md)과
   [오류 모델 §4](../spec/32-framework-error-model.ko.md)를 검증한다.

@@ -444,22 +444,24 @@ pages and unique IDs?
   reflects the mutations completed by that point. The client does not modify the continuation token.
 - Detailed behavior: verifies [Location Runtime — Querying The Current Location From Operational Tools](../spec/21-location-runtime.en.md#64-querying-the-current-location-from-operational-tools).
 
-#### SF-F7 Large-State Relocation Restores Within The Public Size Limit
+#### SF-F7 Large-State Relocation Restores Across The Provider Data-Chunk Boundary
 
 Priority: `P0`
 
-The Framework preserves and restores encoded participant state at or below the 64 MiB limit.
+The Framework does not impose a relocation-adapter-specific 64 MiB cap. It splits participant state
+under the provider's ordinary data-chunk contract, stores it, and restores it at the target.
 
-**Verification question:** Is the 64 MiB boundary restored while one byte over keeps source authority?
+**Verification question:** Are both the 64 MiB data-chunk boundary and a state one byte larger
+preserved and restored?
 
 - Starting condition: Separate fixtures contain deterministic encoded participant state of exactly
   64 MiB and one byte over.
-- Procedure: The object is relocated to a target node, and its state checksum/length are queried
-  through a public request. A separate oversize fixture exceeds the maximum.
-- Verification: The 64 MiB state has the same checksum/logical length at the target and processes
-  requests. The one-byte-over operation keeps source authority and ends in exactly one
-  `Blocked/StateIncompatible` terminal.
-- Detailed behavior: verifies [Relocation Units And Concurrency Limits](../spec/30-host-relocation-flow.en.md#7-relocation-units-and-concurrency-limits).
+- Procedure: Each object is relocated to a target node, and its state checksum/length is queried
+  through a public request.
+- Verification: Both states have the same checksum/logical length at the target and process
+  requests. The one-byte-larger state does not end in `Blocked/StateIncompatible` solely because of
+  an adapter-specific size cap.
+- Detailed behavior: verifies [Relocation Store Redis — Reference And Storage Size](../spec/23-relocation-store-redis.en.md#3-reference-and-storage-size).
 
 #### SF-F8 The Source Is Kept If The Target Owner's Lease Expires
 

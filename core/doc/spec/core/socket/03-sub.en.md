@@ -10,9 +10,11 @@ subscription management is the control plane.
 ## Automatic HWM defaults
 
 SUB is classified as the `recv_ingress` policy class by the context automatic
-HWM policy. The active auto-HWM profile selects the unit budget and
-message-size cap; the default profile is `balanced`. Manual `RCVHWM` or
-`RCVBUF` settings override the automatic values.
+HWM policy. Core applies the active profile to its byte budget and distributes
+it across physical directional queues; the default profile is `balanced`.
+A manual `RCVHWM` removes that application direction from automatic
+distribution. `RCVBUF` is an operating-system socket-buffer option and is not
+changed by automatic HWM.
 
 ## Sub Options (`zlink_sub_option_t`)
 

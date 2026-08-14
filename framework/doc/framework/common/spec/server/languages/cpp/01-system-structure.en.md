@@ -27,7 +27,7 @@
 > HTTP is owned by [60](60-http-hosting.en.md) ·
 > [61](61-embedded-http-server.en.md).
 > **The internal runtime structure is owned by
-> [internals/runtime-architecture](../../../../internals/README.en.md)**
+> [internals/runtime-architecture](../../../README.en.md)**
 > — it isn't a public contract.
 
 ## 1. Product Position

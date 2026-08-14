@@ -430,17 +430,20 @@ Store fail-static은 established connection의 liveness deadline을 중단하지
 
 ### Track F — Relocation lifecycle과 fencing을 public 결과로 확인
 
-#### RL-F1 Capacity가 바뀐 preflight에서 source를 보존한다
+#### RL-F1 RelayReady 승인 전 capacity·availability 실패에서 source를 보존한다
 
 우선순위: `P0`
 
-Preflight 뒤 target capacity가 부족해지거나 target이 unavailable이면 source admission을 복원해야 한다.
+Source가 RelayReady reply를 accept하기 전에 target capacity 부족 또는 target unavailable이 명시
+실패로 반환되면 source admission을 복원해야 한다. RelayReady accepted 뒤 CUTOVER submit 결과는
+source 복원 조건이 아니다.
 
-**검증 질문:** Target capacity·availability race에서 blocked Relocate 뒤 source request가 성공하는가.
+**검증 질문:** RelayReady 승인 전 target capacity·availability race에서 blocked Relocate 뒤 source
+request가 성공하는가.
 
 - 시작 조건: Target capacity의 마지막 slot을 다른 create operation과 application gate로 경쟁시킬 수 있다.
-- 절차: Relocate와 competing create를 함께 시작하는 capacity variant, target process를 precommit에 종료하는
-  availability variant를 실행한다.
+- 절차: Relocate와 competing create를 함께 시작하는 capacity variant, target이 RelayReady reply 전에
+  명시 실패를 반환하도록 종료하는 availability variant를 실행한다.
 - 검증: Relocate가 성공한 경우 state는 target에 한 번 존재한다. Blocked variant는 source location과 state를
   유지하고 follow-up request가 성공하며 다른 target으로 자동 전환하지 않는다.
 - 세부 동작: [Mode에 맞는 target 선택](../spec/30-host-relocation-flow.ko.md#5-mode에-맞는-target을-선택한다)과
@@ -601,34 +604,35 @@ SpotWide User Spot 또는 Instance Spot relocation은 queued messages와 logical
 
 우선순위: `P0`
 
-Internal permit count는 E2E contract가 아니다. Public E2E는 많은 units와 size boundary에서 Host operation이
+Internal permit count는 E2E contract가 아니다. Public E2E는 많은 units와 provider data-chunk 경계에서 Host operation이
 bounded하게 끝나고 source admission을 너무 일찍 막지 않는지 확인한다.
 
-**검증 질문:** 80 units와 large-state variants가 success 또는 `StateIncompatible` terminal을 하나씩
-가지는가.
+**검증 질문:** 80 units와 두 large-state variants가 각각 success terminal 하나를 가지는가.
 
 - 시작 조건: 1 MiB state units 80개, encoded participant state가 정확히 64 MiB인 unit과 한 byte 초과한
   unit을 separate fixtures로 만든다.
 - 절차: 각 fixture에서 Host Relocate를 실행하고 current locations와 operation results를 수집한다.
-- 검증: 64 MiB 이하 units는 target에서 checksum과 logical length를 보존하고, 한 byte 초과 unit은 source
-  authority를 유지한 채
-  `StateIncompatible`이다. 모든 units와 Host operation은 bounded terminal을 가진다.
-- 세부 동작: [Host maintenance §7](../spec/30-host-relocation-flow.ko.md)을
-  검증한다.
+- 검증: 64 MiB unit과 한 byte 초과 unit 모두 target에서 checksum과 logical length를 보존한다. 한 byte
+  초과 unit은 adapter 전용 size 상한을 이유로 `StateIncompatible`로 분류되지 않으며, 모든 units와
+  Host operation은 bounded success terminal을 가진다.
+- 세부 동작: [Host maintenance §7](../spec/30-host-relocation-flow.ko.md)과
+  [Relocation Store Redis — Reference와 저장 크기](../spec/23-relocation-store-redis.ko.md#3-reference와-저장-크기)를 검증한다.
 
-#### RL-F14 Precommit abort 뒤 source queue 순서를 복원한다
+#### RL-F14 RelayReady 승인 전 명시 abort 뒤 source queue 순서를 복원한다
 
 우선순위: `P0`
 
-Target reservation 또는 restore가 commit 전에 실패하면 frozen work와 seal 중 받은 work를 source에서
-원래 순서로 다시 처리해야 한다.
+Target reservation 또는 restore가 source의 RelayReady reply acceptance 전에 명시 실패하면 frozen
+work와 seal 중 받은 work를 source에서 원래 순서로 다시 처리해야 한다. RelayReady accepted 뒤에는
+CUTOVER submit 결과와 무관하게 source를 복원하지 않는다.
 
-**검증 질문:** Failed Relocate 뒤 source가 Q1·Q2·H1·H2를 한 번씩 순서대로 처리하는가.
+**검증 질문:** RelayReady 승인 전 failed Relocate 뒤 source가 Q1·Q2·H1·H2를 한 번씩 순서대로
+처리하는가.
 
 - 시작 조건: Source User Spot에 frozen Q1·Q2가 있고 target adapter failure를 application marker로 선택할 수
   있다.
-- 절차: Relocate를 시작하고 seal 구간에 H1·H2를 보낸다. Target reservation failure와 restore failure
-  variants를 fresh objects에서 실행한다.
+- 절차: Relocate를 시작하고 seal 구간에 H1·H2를 보낸다. RelayReady reply 전에 명시되는 target
+  reservation failure와 restore failure variants를 fresh objects에서 실행한다.
 - 검증: Relocate는 blocked 또는 failed terminal이고 public current location은 source다. Source handler
   evidence는 `Q1,Q2,H1,H2` 순서이며 중복이 없다. Follow-up timer도 source에서 정상 실행된다.
 - 세부 동작: [Host maintenance §9](../spec/30-host-relocation-flow.ko.md)을

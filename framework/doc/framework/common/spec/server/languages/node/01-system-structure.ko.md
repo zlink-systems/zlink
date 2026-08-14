@@ -206,7 +206,7 @@ operator가 hook 전에 주입받은 `ZLinkFrameworkRuntime.relocate(...)`를 �
 **startup에서 runtime state를 만들다 한 컴포넌트라도 실패하면, 그때까지 만든 state를 그 자리에서
 dispose한 뒤 예외를 다시 던진다.** 반쯤 열린 socket이나 매달린 context를 남기지 않는다.
 
-내부 정리 순서는 [runtime-lifecycle](../../../../internals/README.ko.md)이,
+내부 정리 순서는 [runtime-lifecycle](../../../README.ko.md)이,
 backend 어댑터 포트는
 [backend-dependency-policy](../../../../../node/internals/backend-dependency-policy.ko.md)가 소유한다.
 

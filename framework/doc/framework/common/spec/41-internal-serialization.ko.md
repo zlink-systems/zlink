@@ -1,15 +1,17 @@
 ---
-title: "2. Spot·Actor 실행 직렬화 — queue와 execution gate를 나눈다"
+title: "41. Spot·Actor 실행 직렬화 — queue와 execution gate를 나눈다"
 ---
 
-# 2. Spot·Actor 실행 직렬화 — queue와 execution gate를 나눈다
+# 41. Spot·Actor 실행 직렬화 — queue와 execution gate를 나눈다
 
-[내부 구조 목차](README.ko.md) · [이전: 1. 계층 경계와 식별자](01-layering.ko.md) · [다음: 3. application과 infrastructure 실행 분리](03-progress-isolation.ko.md)
+> **문서 성격 — 공개 규범 스펙이 아닌 내부 설계 문서.** 이 장은 연결된 공개 계약을 만족시키는 구현 구조를 설명한다. Application이 관찰하는 동작을 추가하거나 변경하지 않는다.
+
+[내부 구조 목차](README.ko.md) · [이전: 40. 계층 경계와 식별자](40-internal-layering.ko.md) · [다음: 42. application과 infrastructure 실행 분리](42-internal-progress-isolation.ko.md)
 
 > **이 장이 답하는 것** — application handler에 동기화 코드가 없어도 되는 이유를 만드는 구조.
 >
-> **계약 소유** — queue와 실행 단위의 공개 계약은 [Actor 모델](../spec/14-actor-model.ko.md)과
-> [Spot 위의 Stage wrapper](../spec/17-stage-wrapper-on-spot.ko.md)가 소유한다.
+> **계약 소유** — queue와 실행 단위의 공개 계약은 [Actor 모델](14-actor-model.ko.md)과
+> [Spot 위의 Stage wrapper](17-stage-wrapper-on-spot.ko.md)가 소유한다.
 > 이 장은 그 계약을 만족시키는 **구조**와, 직렬 실행이 깨질 때 나타나는 실패를 다룬다.
 
 Application handler가 별도 동기화 코드 없이 상태를 안전하게 바꿀 수 있게 하는 구조다.
@@ -19,11 +21,11 @@ Application handler가 별도 동기화 코드 없이 상태를 안전하게 바
 정식 spec은 서로 다른 두 가지를 각각 요구한다.
 
 - Actor 앞으로 온 payload는 **실행 모드와 무관하게 항상 그 Actor의 queue에 제출한다**
-  ([Actor 모델 「3. Actor queue」](../spec/14-actor-model.ko.md#3-actor-queue)).
-- `SpotWide`에서는 Actor 여럿을 담는 실행 단위인 그 [Spot](../spec/01-glossary.ko.md#spot)의
+  ([Actor 모델 「3. Actor queue」](14-actor-model.ko.md#3-actor-queue)).
+- `SpotWide`에서는 Actor 여럿을 담는 실행 단위인 그 [Spot](01-glossary.ko.md#spot)의
   Actor handler·Spot handler·timer·lifecycle callback이
   **전체에서 한 번에 하나만** 실행된다
-  ([Actor 모델 「3. Actor queue」](../spec/14-actor-model.ko.md#3-actor-queue)).
+  ([Actor 모델 「3. Actor queue」](14-actor-model.ko.md#3-actor-queue)).
 
 두 문장은 각각 다른 절에 있고, 함께 읽어야 하나의 구조가 나온다. **줄 서는 곳(queue)은
 Actor마다 두고, 실행 권한(gate)은 Spot이 공유한다.**
@@ -60,13 +62,13 @@ flowchart TB
 | Actor마다 queue를 두면서 **실행 권한까지 Actor마다** 둔다 | `SpotWide`에서 같은 Spot의 두 Actor handler가 동시에 실행된다. Application은 그 Spot의 상태를 동기화 없이 만지는 중이므로 곧바로 경쟁 상태가 된다 |
 | `SpotWide`에서 **queue 자체를 하나로 합친다** | 위 첫 번째 요구를 어긴다. 이동할 때 Actor별로 남은 작업을 갈라내야 하는데 이미 섞여 있어 갈라낼 수 없다 |
 
-두 번째가 왜 문제인지는 [5. 이동 중 연속성](05-relocation-continuity.ko.md)에서 다시
+두 번째가 왜 문제인지는 [44. 이동 중 연속성](44-internal-relocation-continuity.ko.md)에서 다시
 나온다 — 이동 단위가 Actor일 때 그 Actor의 남은 작업만 골라내야 한다.
 
 ### PerActor에서 timer를 Spot 줄에 넣지 않는다
 
 `PerActor`는 Actor별·Spot별로 나누는 것으로 끝이 아니라 **timer마다도 따로**다
-([Stage wrapper on Spot 「9. 구현 및 contract test 검증 요구」](../spec/17-stage-wrapper-on-spot.ko.md#9-구현-및-contract-test-검증-요구)). timer 두 개를
+([Stage wrapper on Spot 「9. 구현 및 contract test 검증 요구」](17-stage-wrapper-on-spot.ko.md#9-구현-및-contract-test-검증-요구)). timer 두 개를
 Spot 줄에 함께 넣으면 서로 다른 timer가 서로를 기다린다.
 
 ## 2. 실행 권한을 만들 때의 함정
@@ -95,7 +97,7 @@ thread-local에 문맥을 두면, 다음 작업이 다른 thread에서 실행될
 
 **결과는 제출 계열, 대기열이 어느 runtime에 있는가, 호출의 public 결과가 이미
 확정됐는가로 갈린다.** 정본은
-[Spot 메시징 「5.3 Spot application queue에 들어가는 작업」](../spec/12-spot-messaging.ko.md#53-spot-application-queue에-들어가는-작업)이며 요지는 다음과 같다.
+[Spot 메시징 「5.3 Spot application queue에 들어가는 작업」](12-spot-messaging.ko.md#53-spot-application-queue에-들어가는-작업)이며 요지는 다음과 같다.
 
 | 계열 | 대기열 위치 | 결과 |
 |---|---|---|
@@ -137,7 +139,7 @@ Application work의 byte reservation에는 payload와 work당 고정 retained co
 terminal completion에서만 반환한다.
 
 turn 경계에서 어느 lane을 실행할지 하나의 원자적 판단으로 정한다. 둘 다 ready이면
-lifecycle lane이 먼저다([Actor 모델 「3. Actor queue」](../spec/14-actor-model.ko.md#3-actor-queue)).
+lifecycle lane이 먼저다([Actor 모델 「3. Actor queue」](14-actor-model.ko.md#3-actor-queue)).
 
 **우선순위만으로는 굶주림을 막지 못한다.** 여기에는 서로 다른 두 상한이 관여한다.
 
@@ -154,7 +156,7 @@ ready이면 같은 우선순위 규칙이 lifecycle을 다시 고른다. 그래�
 lifecycle lane 연속 선택이 상한에 도달하면 그 owner에 부채를 표시하고, 부채가 있는 동안에는
 application lane이 ready인 한 application turn을 한 번 실행할 때까지 lifecycle을 고르지
 않는다. 실행하면 부채를 지운다. 경계 조건은
-[Actor 모델 「3. Actor queue」](../spec/14-actor-model.ko.md#3-actor-queue)이 정의한다.
+[Actor 모델 「3. Actor queue」](14-actor-model.ko.md#3-actor-queue)이 정의한다.
 
 이 규칙으로 lifecycle 작업이 계속 도착해도 **handler 경계에서 application turn이 결국
 선택된다.** 10 ms는 실행 중인 handler를 중단하는 제한이 아니다. Handler 하나가 10 ms를
@@ -190,7 +192,7 @@ application lane이 ready인 한 application turn을 한 번 실행할 때까지
 **결정 — 재진입을 허용하지 않는다.** 이것은 선택이 아니라 spec 규정이다. 현재 turn을
 유지한 채 같은 gate가 필요한 결과를 기다리거나 같은 Actor가 자신에게 보낸 요청을
 기다리는 호출은 **제출 전에 `InvalidOperation`으로 거부한다**
-([Stage wrapper on Spot 「5. Timer」](../spec/17-stage-wrapper-on-spot.ko.md#5-timer)).
+([Stage wrapper on Spot 「5. Timer」](17-stage-wrapper-on-spot.ko.md#5-timer)).
 허용된 `SpotWide` User Spot 또는 Instance Spot에서 `Yield`를 선택한 call은 현재 shared gate를
 먼저 반납하므로 재진입이 아니다. 완료 continuation은 원래 queue 뒤에 새 turn으로 들어간다.
 
@@ -265,7 +267,7 @@ handler가 원격 응답을 기다리는 동안 실행 권한을 계속 쥐면, 
 시간만큼 막힌다. 그래서 반납하고 기다리는 방법이 있다.
 
 **반납한 뒤 재개할 때는 새 작업으로 재개한다.** 하나의 작업이 대기 구간을 가로질러
-유지되지 않는다([비동기 실행 정책 「1.1 Submit, Async와 Yield」](../spec/05-async-execution-policy.ko.md#11-submit-async와-yield)).
+유지되지 않는다([비동기 실행 정책 「1.1 Submit, Async와 Yield」](05-async-execution-policy.ko.md#11-submit-async와-yield)).
 
 ```mermaid
 sequenceDiagram
@@ -286,8 +288,8 @@ sequenceDiagram
 정상 경로만 그렸다. 재개를 기다리는 중 Spot이 종료되거나 **그 단위가 이동을 위해 봉인되면**
 재개하지 않고 실패로 끝난다. 이동이 *시작*되는 것만으로는 멈추지 않는다 — 봉인 전까지는
 기존 message와 timer를 계속 처리한다
-([Stage wrapper on Spot 「5. Timer」](../spec/17-stage-wrapper-on-spot.ko.md#5-timer),
-[Host relocation 전체 흐름 「12. State별 admission」](../spec/30-host-relocation-flow.ko.md#12-state별-admission)).
+([Stage wrapper on Spot 「5. Timer」](17-stage-wrapper-on-spot.ko.md#5-timer),
+[Host relocation 전체 흐름 「12. State별 admission」](30-host-relocation-flow.ko.md#12-state별-admission)).
 
 ### 여기서 나오는 설계 제약
 
@@ -303,7 +305,7 @@ sequenceDiagram
 
 반납은 `SpotWide` User Spot과 Instance Spot에서만 쓸 수 있다. 그 밖의 자리에서 호출하면
 **원격 요청을 보내기 전에, queue를 바꾸기 전에** 실패로 끝낸다
-([비동기 실행 정책 「1.1 Submit, Async와 Yield」](../spec/05-async-execution-policy.ko.md#11-submit-async와-yield)). 요청이 나간 뒤에
+([비동기 실행 정책 「1.1 Submit, Async와 Yield」](05-async-execution-policy.ko.md#11-submit-async와-yield)). 요청이 나간 뒤에
 실패하면 원격에 부작용만 남기고 caller는 실패를 받는다.
 
 ## 7. 확인할 결과
@@ -332,6 +334,10 @@ sequenceDiagram
 - 작업을 thread에 넘겨가며 실행하는 구현에서, thread에 매인 저장소로 작업 사이 상태를
   전달하지 않는다.
 
+## Shared queue와 owner 직렬화
+
+Owner FIFO의 structural count/byte reject는 host shared-cap wait와 별개다. Permit 획득·공정성과 retained lease 수명은 각각 [수신과 dispatch loop](46-internal-dispatch-loop.ko.md)와 [Payload 소유권](50-internal-message-ownership.ko.md)이 소유한다.
+
 ---
 
-[내부 구조 목차](README.ko.md) · [이전: 1. 계층 경계와 식별자](01-layering.ko.md) · [다음: 3. application과 infrastructure 실행 분리](03-progress-isolation.ko.md)
+[내부 구조 목차](README.ko.md) · [이전: 40. 계층 경계와 식별자](40-internal-layering.ko.md) · [다음: 42. application과 infrastructure 실행 분리](42-internal-progress-isolation.ko.md)

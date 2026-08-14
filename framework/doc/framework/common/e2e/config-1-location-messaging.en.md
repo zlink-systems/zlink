@@ -544,39 +544,28 @@ sizes without a separate Framework message-size setting?
   ceiling is defined separately in
   [STREAM Session — internal recv loop and application surface](../spec/19-stream-session.en.md#4-the-frameworks-internal-recv-loop-and-the-application-surface).
 
-#### RM-C9 Resume Receiving After Hitting Application HWM
+#### RM-C9 Resume Receiving After Application Job Queue Capacity
 
 Priority: `P2`
 
-When the payload a provider's handler is processing reaches public
-Application HWM, Framework stops receiving new application messages.
-Once the handler finishes and pending payload drops below HWM,
-receiving must resume on the same connection.
+When all shared application job queue permits are reserved, the framework waits
+cancellably for new ordinary ingress. Receiving on the same connection must resume when
+an actual handler starts and returns a permit.
 
-**Verification question:** When a provider's pending payload reaches
-Application HWM, does public status show receive-stopped, and does it
-show receive-resumed and normal request processing after the handler
-finishes?
+**Verification question:** When provider queue capacity is reserved, does public status
+show reserved/queued/waiter values, then normal processing after handler start?
 
-- Start condition: The provider's `ApplicationHwmBytes` is 1 MiB. The
-  provider handler doesn't finish
-  processing a 2 MiB command until released by the public application
-  control endpoint. The baseline request has succeeded.
-- Procedure: The client sends a 2 MiB command via the consumer once.
-  After confirming handler start in the provider's public application
-  evidence, it reads public host status. The client releases the
-  handler via the provider's public control endpoint, and after
-  confirming pending-payload decrease and receive-resume in public
-  host status, sends a normal profile request.
-- Verification: While the handler waits, public status's pending
-  payload is at or above HWM and application receive paused is
-  `true`. After handler completion, pending payload is `0` and
-  application receive paused is `false`. The subsequent normal request
-  receives a reply, the provider handler runs once, and public
-  RouteMesh status stays ready. Outbound queue length or send-timeout
-  occurrence count isn't judged.
+- Start condition: Provider `MaxQueuedApplicationJobs` is 1 and a public handler-start
+  gate is closed immediately before the first callback enters. A baseline request succeeded.
+- Procedure: Send the first command, confirm one reserved permit and queued job in public
+  status, then start a second request and confirm it is pending. Open the gate and read both
+  terminals and queue status.
+- Verification: While gated, effective max is 1, reserved/queued is 1, and a capacity waiter
+  is observed. Opening the gate returns the permit at the callback's first instruction and
+  both requests run exactly once. There is no drop or generic capacity error and RouteMesh
+  status remains ready.
 - Detailed behavior: verifies
-  [Framework API §2.1](../spec/06-framework-api.en.md#21-keeping-received-payload-from-growing-memory-indefinitely),
+  [Framework API §2.1](../spec/06-framework-api.en.md#21-separating-the-core-memory-budget-from-the-application-job-queue),
   [Runtime Monitoring §2.1](../spec/24-runtime-monitoring.en.md#21-host-state),
   and
   [Error Model §4](../spec/32-framework-error-model.en.md#4-send-completion-and-failure).

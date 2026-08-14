@@ -52,12 +52,12 @@ application does not call Store operations directly, nor swap the Store.
 
 ## `configureLocations()` (configuration time)
 
-Tunes owner lease, polling, and the relocation concurrency cap.
+Tunes owner lease, polling, route-cache, and message-follow windows.
 
 ```java
 ZLinkLocationOptions locations = options.configureLocations();
 locations.setOwnerLeaseTtl(Duration.ofSeconds(20));
-locations.setMaxConcurrentRelocationCaptures(16);
+locations.setMessageFollowDuration(Duration.ofSeconds(30));
 ```
 
 **Options.** Commonly tuned values are as follows.
@@ -68,13 +68,15 @@ locations.setMaxConcurrentRelocationCaptures(16);
 | `pollingInterval` | 1 second | The Store status-check interval |
 | `storeFailureGrace` | 30 seconds | The grace period tolerating a Store failure |
 | `routeCacheMaxAge` / `messageFollowDuration` | 15s / 30s | `Duration.ZERO` disables the feature. If both are positive, cache age must be at least 5 seconds smaller than message follow duration |
-| `maxActiveOutboundRelocations` / `maxActiveInboundRelocations` | 64 / 64 | The cap on concurrently in-progress relocation units |
-| `maxConcurrentRelocationCaptures` / `maxConcurrentRelocationRestores` | 8 / 8 | The cap on concurrently executable Capture/Restore callbacks |
-| `maxRelocationPayloadInFlightBytes` | 268,435,456 | The process-wide cap on encoded relocation payload in-flight |
 
 **Completion result.** A synchronous getter/setter. If the lease/polling values are 0 or below,
-or violate the inequality above, it surfaces in startup validation. A value change while running
-applies only to new relocation admissions.
+or violate the inequality above, it surfaces in startup validation before socket bind.
+
+Relocation has no separate participant, record, callback-concurrency, or in-flight-byte cap.
+Target staging briefly acquires the host's shared Application Job Queue reservation before
+receive, returns it after finite durable handoff, and later acquires live permits progressively
+for runnable turns. Core memory accounting, frame-size, and Store limits still apply. See
+[Relocation Flow §5.3](../../common/spec/28-relocation-flow.en.md#53-no-relocation-specific-capacity-limit).
 
 **When to use.** Adjust this only when the defaults do not fit the deployment environment
 (network latency, Store response time).
