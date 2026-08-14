@@ -48,6 +48,7 @@ internal static class ZLinkHandlerInvocationEngine
             }
         }
 
+        ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
         var result = invoker(handler, arg0, arg1, arg2, arg3, arg4);
         return ZLinkHandlerResultAwaiter.AwaitAsync(result);
     }
@@ -61,6 +62,7 @@ internal static class ZLinkHandlerInvocationEngine
         object? arg3 = null,
         object? arg4 = null)
     {
+        ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
         var result = invoker(handler, arg0, arg1, arg2, arg3, arg4);
         return ZLinkHandlerResultAwaiter.AwaitAsync(result);
     }

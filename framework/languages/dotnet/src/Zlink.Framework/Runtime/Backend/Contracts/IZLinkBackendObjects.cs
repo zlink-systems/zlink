@@ -97,7 +97,8 @@ internal readonly record struct ZLinkBackendSpotActorLifecycleInfo(
 
 internal readonly record struct ZLinkBackendSpotActorLifecycleEvent(
     ZLinkBackendActorLifecycleEventKind Kind,
-    ZLinkBackendSpotActorLifecycleInfo Info);
+    ZLinkBackendSpotActorLifecycleInfo Info,
+    ZLinkApplicationJobQueueLease? ApplicationJobAdmission = null);
 
 internal readonly record struct ZLinkBackendActorRouteContext(
     MeshOperationId OperationId,
@@ -165,8 +166,9 @@ internal class ZLinkBackendActorJoinRequest(
     string targetSpotId,
     ulong joinEpoch,
     Message message,
-    IReadOnlyList<Message> parts)
+    IReadOnlyList<Message> parts) : IDisposable
 {
+    private IDisposable? _creditOwner;
     public ZLinkBackendActorRef SourceActor { get; } = sourceActor;
 
     public ZLinkBackendActorRef TargetActor { get; } = targetActor;
@@ -181,7 +183,27 @@ internal class ZLinkBackendActorJoinRequest(
 
     public IReadOnlyList<Message> Parts { get; } = parts;
 
-    internal ZLinkInboundDispatchLease? DispatchLease { get; set; }
+    internal void AttachCreditOwner(IDisposable creditOwner)
+    {
+        ArgumentNullException.ThrowIfNull(creditOwner);
+        if (Interlocked.CompareExchange(ref _creditOwner, creditOwner, null) is not null)
+            throw new InvalidOperationException("Actor join already owns a receive credit.");
+    }
+
+    internal ZLinkApplicationJobQueueLease? ApplicationJobAdmission =>
+        (_creditOwner as ZLinkApplicationJobQueueCreditOwner)?.Admission;
+
+    public void Dispose()
+    {
+        try
+        {
+            ZLinkMessageParts.DisposeAll(Parts);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _creditOwner, null)?.Dispose();
+        }
+    }
 }
 
 internal readonly record struct ZLinkBackendSpotDispatchInfo(
@@ -189,7 +211,7 @@ internal readonly record struct ZLinkBackendSpotDispatchInfo(
     Action? DrainChannelReply = null,
     IReadOnlyList<ZLinkBackendActorPart>? ActorParts = null,
     IReadOnlyList<ZLinkBackendRouteReceived>? RoutedMessages = null,
-    ZLinkInboundDispatchLease? ActorDispatchLease = null);
+    IDisposable? ActorCreditOwner = null);
 
 internal readonly record struct ZLinkBackendSocketMonitorEvent(
     ZLinkSocketNativeEventType NativeEvent,

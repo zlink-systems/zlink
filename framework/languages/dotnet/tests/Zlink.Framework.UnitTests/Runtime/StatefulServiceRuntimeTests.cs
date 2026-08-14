@@ -469,12 +469,10 @@ public sealed class StatefulServiceRuntimeTests
     }
 
     [Fact]
-    public async Task RouteMesh_ApplicationHwm_AdmitsOneMailboxAndResumesAfterRelease()
+    public async Task RouteMesh_MailboxesRemainIndependentlyDispatchable()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = NewNode(context, "route-hwm-node");
-        var budget = new ZLinkInboundDispatchBudget(1);
-        node.SetInboundDispatchBudget(budget);
         var firstActor = node.CreateActor("route-hwm-first");
         var secondActor = node.CreateActor("route-hwm-second");
         DrainAndDispose(node);
@@ -494,34 +492,25 @@ public sealed class StatefulServiceRuntimeTests
                 MeshReadyDomains.Application,
                 ready,
                 RecvFlags.DontWait);
-            Assert.Equal(1, ready.Count);
-            using var claim = ready.TakeClaim(0);
-            using var received = new MeshReceiveBatch();
-            Assert.True(claim.Receive(received, RecvFlags.DontWait));
-            Assert.Equal(MeshRecordKind.ActorSend, received[0].Kind);
-            Assert.Equal(1UL, budget.PendingPayloadBytes);
+            Assert.Equal(2, ready.Count);
+            var deliveredActors = new HashSet<ActorRef>();
+            for (var index = 0; index < ready.Count; index++)
+            {
+                deliveredActors.Add(ready[index].Actor);
+                using var claim = ready.TakeClaim(index);
+                using var received = new MeshReceiveBatch();
+                Assert.True(claim.Receive(received, RecvFlags.DontWait));
+                Assert.Equal(MeshRecordKind.ActorSend, received[0].Kind);
+            }
+            Assert.Equal([firstActor, secondActor], deliveredActors.OrderBy(static actor => actor.ActorId));
         }
-
-        Assert.Equal(0UL, budget.PendingPayloadBytes);
-        using var resumed = new MeshReadyBatch();
-        node.DrainReady(
-            MeshReadyDomains.Application,
-            resumed,
-            RecvFlags.DontWait);
-        Assert.Equal(1, resumed.Count);
-        using var resumedClaim = resumed.TakeClaim(0);
-        using var resumedReceive = new MeshReceiveBatch();
-        Assert.True(resumedClaim.Receive(resumedReceive, RecvFlags.DontWait));
-        Assert.Equal(MeshRecordKind.ActorSend, resumedReceive[0].Kind);
     }
 
     [Fact]
-    public async Task RouteMesh_Pump_DoesNotDrainSecondApplicationRecordAboveHwm()
+    public async Task RouteMesh_PumpDispatchesConsecutiveApplicationRecords()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = NewNode(context, "route-pump-hwm-node");
-        var budget = new ZLinkInboundDispatchBudget(1);
-        node.SetInboundDispatchBudget(budget);
         var entrySpot = node.EntrySpot();
         var firstActor = node.CreateActor("route-pump-hwm-first");
         var secondActor = node.CreateActor("route-pump-hwm-second");
@@ -530,7 +519,6 @@ public sealed class StatefulServiceRuntimeTests
         await using var pump = new ZLinkMeshDispatchPump(
             node,
             new ZLinkMeshCompletionTable());
-        pump.SetInboundDispatchBudget(budget);
 
         using var firstPayload = Message.From(new byte[] { 1 });
         using var secondPayload = Message.From(new byte[] { 2 });
@@ -542,7 +530,6 @@ public sealed class StatefulServiceRuntimeTests
             node.SendToActor(secondActor, [secondPayload]));
 
         var dispatchCount = 0;
-        var maximumPendingBytes = 0L;
         var dispatched = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         pump.SetDispatchHandler(
@@ -555,24 +542,12 @@ public sealed class StatefulServiceRuntimeTests
 
                 try
                 {
-                    var pendingBytes = checked((long)budget.PendingPayloadBytes);
-                    while (true)
-                    {
-                        var observed = Volatile.Read(ref maximumPendingBytes);
-                        if (pendingBytes <= observed
-                            || Interlocked.CompareExchange(
-                                ref maximumPendingBytes,
-                                pendingBytes,
-                                observed) == observed)
-                            break;
-                    }
                     Interlocked.Increment(ref dispatchCount);
                 }
                 finally
                 {
                     foreach (var part in parts)
                         part.Message.Dispose();
-                    info.ActorDispatchLease?.Dispose();
                     if (Volatile.Read(ref dispatchCount) == 2)
                         dispatched.TrySetResult(true);
                 }
@@ -581,17 +556,13 @@ public sealed class StatefulServiceRuntimeTests
 
         await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal(2, dispatchCount);
-        Assert.Equal(1L, maximumPendingBytes);
-        Assert.Equal(0UL, budget.PendingPayloadBytes);
     }
 
     [Fact]
-    public async Task RouteMesh_Pump_DrainsAllRecordsFromOneMailboxWithoutLoss()
+    public async Task RouteMesh_PumpDrainsAllRecordsFromOneMailboxWithoutLoss()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = NewNode(context, "route-pump-same-mailbox-hwm-node");
-        var budget = new ZLinkInboundDispatchBudget(1);
-        node.SetInboundDispatchBudget(budget);
         var entrySpot = node.EntrySpot();
         var actor = node.CreateActor("route-pump-same-mailbox-hwm-actor");
         DrainAndDispose(node);
@@ -624,7 +595,6 @@ public sealed class StatefulServiceRuntimeTests
                 {
                     foreach (var part in parts)
                         part.Message.Dispose();
-                    info.ActorDispatchLease?.Dispose();
                     if (receivedValues.Count == 2)
                         dispatched.TrySetResult(true);
                 }
@@ -633,7 +603,6 @@ public sealed class StatefulServiceRuntimeTests
 
         await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal([1, 2], receivedValues.ToArray());
-        Assert.Equal(0UL, budget.PendingPayloadBytes);
     }
 
     [Fact]
@@ -1332,7 +1301,7 @@ public sealed class StatefulServiceRuntimeTests
     }
 
     [Fact]
-    public void MailboxAccountingExcludesEnvelopeHeaderFromApplicationHwm()
+    public void MailboxAccountingExcludesEnvelopeHeaderFromPayloadAccounting()
     {
         var record = new MeshReceiveRecord(
             MeshRecordKind.ChannelRequest,
@@ -1381,59 +1350,6 @@ public sealed class StatefulServiceRuntimeTests
         {
             queued.Dispose();
         }
-    }
-
-    [Fact]
-    public async Task CompletionOverflowUsesInternalSinkWhenMarkerExceedsByteBudget()
-    {
-        await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var node = NewNode(context, "completion-overflow-node");
-        node.MailboxByteBudget = 1024;
-        var actor = node.CreateActor("completion-overflow-actor");
-        DrainAndDispose(node);
-
-        var overflow = new List<MeshReceiveRecord>();
-        node.SetCompletionOverflowHandlerCore((record, parts) =>
-        {
-            Assert.Empty(parts);
-            overflow.Add(record);
-        });
-
-        using var request = Message.From(new byte[] { 41 });
-        Assert.Equal(
-            SubmitResult.Ok,
-            node.RequestToActor(
-                actor,
-                [request],
-                out var operation,
-                TimeSpan.FromSeconds(2)));
-
-        await WaitUntilAsync(() =>
-        {
-            using var ready = new MeshReadyBatch();
-            node.DrainReady(
-                MeshReadyDomains.Application,
-                ready,
-                RecvFlags.DontWait);
-            if (ready.Count == 0)
-                return false;
-            using var claim = ready.TakeClaim(0);
-            using var received = new MeshReceiveBatch();
-            if (!claim.Receive(received, RecvFlags.DontWait))
-                return false;
-
-            node.MailboxByteBudget = 1;
-            Assert.Equal(
-                SubmitResult.Ok,
-                received[0].Reply(Array.Empty<Message>()));
-            return true;
-        });
-
-        var failure = Assert.Single(overflow);
-        Assert.Equal(operation, failure.OperationId);
-        Assert.Equal(
-            (int)RequestResult.Backpressured,
-            failure.TerminalResult);
     }
 
     [Fact]
@@ -1515,6 +1431,68 @@ public sealed class StatefulServiceRuntimeTests
         Assert.NotEqual(
             first.LifecycleGeneration,
             reactivated.LifecycleGeneration);
+    }
+
+    [Fact]
+    public async Task DirectAsyncSpotSendToLocalOwnerUsesOwnedMailbox()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = NewNode(context, "local-direct-spot");
+        var source = (ZLinkManagedSpot)node.GetOrCreateSpot("source", out _);
+        var target = (ZLinkManagedSpot)node.GetOrCreateSpot("target", out _);
+
+        using var payload = Message.From(new byte[] { 8 });
+        await node.SendToSpotDirectAsync(
+            source.SpotId,
+            node.RoutingId,
+            target.SpotId,
+            target.LifecycleGeneration,
+            [payload],
+            SendFlags.None,
+            default,
+            CancellationToken.None);
+
+        using var ready = new MeshReadyBatch();
+        node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+        using var claim = ready.TakeClaim(0);
+        using var received = new MeshReceiveBatch();
+        Assert.True(claim.Receive(received, RecvFlags.DontWait));
+        Assert.Equal(MeshRecordKind.SpotSend, received[0].Kind);
+    }
+
+    [Fact]
+    public async Task DirectAsyncSpotRequestToLocalOwnerUsesOwnedMailboxReply()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = NewNode(context, "local-direct-spot-request");
+        var source = (ZLinkManagedSpot)node.GetOrCreateSpot("source", out _);
+        var target = (ZLinkManagedSpot)node.GetOrCreateSpot("target", out _);
+
+        using var payload = Message.From(new byte[] { 9 });
+        var request = node.RequestToSpotDirectAsync(
+            source.SpotId,
+            node.RoutingId,
+            target.SpotId,
+            target.LifecycleGeneration,
+            [payload],
+            SendFlags.None,
+            default,
+            TimeSpan.FromSeconds(1),
+            CancellationToken.None).AsTask();
+
+        using var ready = new MeshReadyBatch();
+        node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+        using var claim = ready.TakeClaim(0);
+        using var received = new MeshReceiveBatch();
+        Assert.True(claim.Receive(received, RecvFlags.DontWait));
+        Assert.Equal(MeshRecordKind.SpotRequest, received[0].Kind);
+        using var reply = Message.From(new byte[] { 10 });
+        Assert.Equal(SubmitResult.Ok, received[0].Reply([reply]));
+
+        var replyParts = await request;
+        Assert.Single(replyParts);
+        Assert.Equal(new byte[] { 10 }, replyParts[0].AsReadOnlyMemory().ToArray());
+        foreach (var part in replyParts) part.Dispose();
     }
 
     [Fact]
@@ -2255,7 +2233,6 @@ public sealed class StatefulServiceRuntimeTests
                 node.Registration,
                 node.Node,
                 "objects",
-                runtime.CompletionAdmission,
                 lifecycle: null,
                 timerScheduler: timerScheduler);
             var createGate = ProductionUserSpot.BlockNextCreate();
@@ -2399,7 +2376,6 @@ public sealed class StatefulServiceRuntimeTests
                 nodeRuntime.Registration,
                 nodeRuntime.Node,
                 "objects",
-                runtime.CompletionAdmission,
                 lifecycle: null,
                 timerScheduler: timerScheduler!);
             var total = ZLinkSpotNodeCatalog.IdleEvictionBatchSize + 1;
@@ -2439,7 +2415,6 @@ public sealed class StatefulServiceRuntimeTests
                 nodeRuntime.Registration,
                 nodeRuntime.Node,
                 "objects",
-                runtime.CompletionAdmission,
                 lifecycle: null,
                 timerScheduler: singleTimerScheduler);
             var singlePrepared = await singleCatalog.PrepareInstanceReservedAsync(
@@ -2492,7 +2467,6 @@ public sealed class StatefulServiceRuntimeTests
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
         {
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
             options.UseTestLocationStore();
             options.AddRelocationStore(relocationStore);
             var node = options.AddRouteMesh("objects")
@@ -2829,7 +2803,6 @@ public sealed class StatefulServiceRuntimeTests
             var services = new ServiceCollection();
             services.AddZLinkFramework(options =>
             {
-                options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
                 options.AddLocationStore(locationProvider);
                 var node = options.AddRouteMesh("objects")
                     .Listen(endpoint)

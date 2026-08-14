@@ -60,13 +60,13 @@ final class ZLinkBoundActorRouteContractTest {
                 ZLinkBackendStreamSocket.class.getClassLoader(),
                 new Class<?>[] {ZLinkBackendStreamSocket.class},
                 (proxy, method, arguments) -> {
-                    if (method.getName().equals("reply")
+                    if (method.getName().equals("replyAsync")
                         && arguments[1] instanceof ZLinkStreamHeader header) {
                         sentHeader.set(header);
                         @SuppressWarnings("unchecked")
                         var parts = (java.util.List<Message>) arguments[2];
                         sentPayload.set(parts.getFirst().toUtf8String());
-                        return true;
+                        return CompletableFuture.completedFuture(null);
                     }
                     throw new UnsupportedOperationException(method.getName());
                 });
@@ -124,14 +124,14 @@ final class ZLinkBoundActorRouteContractTest {
                 ZLinkBackendStreamSocket.class.getClassLoader(),
                 new Class<?>[] {ZLinkBackendStreamSocket.class},
                 (proxy, method, arguments) -> {
-                    if (method.getName().equals("relayBoundActor")
-                        && arguments.length == 6
+                    if (method.getName().equals("relayBoundActorAsync")
+                        && arguments.length == 5
                         && arguments[3] instanceof ZLinkStreamHeader header) {
                         @SuppressWarnings("unchecked")
                         var payloadParts = (List<Message>) arguments[4];
                         sentCodec.set(header.codec());
                         sentPayloadPartCount.set(payloadParts.size());
-                        return true;
+                        return CompletableFuture.completedFuture(null);
                     }
                     throw new UnsupportedOperationException(method.getName());
                 });

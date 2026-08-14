@@ -1,5 +1,3 @@
-using Zlink.Framework.Runtime.Dispatch;
-
 namespace Zlink.Framework.Runtime.Streams;
 
 internal sealed class ZLinkSessionContext : IZLinkSessionContext
@@ -9,9 +7,7 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
     private readonly Func<ValueTask> _closeAsync;
     private readonly Func<CancellationToken, ValueTask> _closeByProxyAsync;
     private readonly IZLinkStream _stream;
-    private readonly ZLinkAsyncSubmitter? _sendSubmitter;
     private ZLinkSessionDispatchContext? _currentDispatch;
-    private ZLinkCompletionAdmissionOwner.ResponderLease? _currentCompletionPermit;
     private ZLinkSessionStreamTransport? _transport;
 
     public ZLinkSessionContext(
@@ -20,15 +16,13 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
         IZLinkSessionHandlerRegistry handlers,
         Func<ValueTask> closeAsync,
         Func<CancellationToken, ValueTask> closeByProxyAsync,
-        bool actorDispatchEnabled = true,
-        ZLinkAsyncSubmitter? sendSubmitter = null)
+        bool actorDispatchEnabled = true)
     {
         Runtime = runtime;
         _stream = stream;
         Handlers = handlers;
         _closeAsync = closeAsync;
         _closeByProxyAsync = closeByProxyAsync;
-        _sendSubmitter = sendSubmitter;
         ActorCoordinator = new ZLinkSessionActorCoordinator(runtime, stream, actorDispatchEnabled);
         _client = new ZLinkSessionClientContext(this);
         _actorSurface = new ZLinkSessionActorsContext(this, ActorCoordinator);
@@ -123,8 +117,7 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
     }
 
     internal ZLinkSessionDispatchContext EnterDispatch(
-        ZlinkStreamHeader header,
-        ZLinkCompletionAdmissionOwner.ResponderLease? completionPermit = null)
+        ZlinkStreamHeader header)
     {
         var metadata = header.Metadata.Count == 0
             ? ZLinkMessageMetadata.Empty
@@ -137,14 +130,12 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
             metadata,
             header.RequestSeq.HasValue,
             header);
-        _currentCompletionPermit = completionPermit;
         return _currentDispatch;
     }
 
     internal void ExitDispatch()
     {
         _currentDispatch = null;
-        _currentCompletionPermit = null;
     }
 
     internal bool Write(Message payload)
@@ -158,52 +149,53 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
         bool isReply = false,
         TimeSpan? admissionTimeout = null)
     {
-        var completionPermit = isReply ? _currentCompletionPermit : null;
-        if (completionPermit is not null)
-            await completionPermit.ReserveReplyAsync(
-                    checked((ulong)Math.Max(payload.Size, 1)),
-                    cancellationToken)
-                .ConfigureAwait(false);
-
         try
         {
-            ZLinkOneWaySubmitResult result;
-            if (_sendSubmitter is null)
+            using var deadline = admissionTimeout.HasValue
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+                : null;
+            if (deadline is not null)
+                deadline.CancelAfter(admissionTimeout!.Value);
+            await Transport.SubmitAsync(
+                    payload,
+                    deadline?.Token ?? cancellationToken)
+                .ConfigureAwait(false);
+            return new ZLinkOneWaySubmitResult(
+                ZLinkOneWaySubmitStatus.Submitted);
+        }
+        catch (OperationCanceledException)
+            when (admissionTimeout is not null
+                  && !cancellationToken.IsCancellationRequested)
+        {
+            return new ZLinkOneWaySubmitResult(
+                ZLinkOneWaySubmitStatus.TimedOut);
+        }
+        catch (ZlinkSubmitException failure)
+            when (failure.Result is
+                  ZlinkSubmitException.ErrorCode.Backpressured
+                  or ZlinkSubmitException.ErrorCode.NotFound
+                  or ZlinkSubmitException.ErrorCode.NotConnected
+                  or ZlinkSubmitException.ErrorCode.Terminated)
+        {
+            return failure.Result switch
             {
-                try
-                {
-                    result = new ZLinkOneWaySubmitResult(
-                        Write(payload)
-                            ? ZLinkOneWaySubmitStatus.Submitted
-                            : ZLinkOneWaySubmitStatus.Backpressured);
-                }
-                finally
-                {
-                    payload.Dispose();
-                }
-            }
-            else
-            {
-                result = await _sendSubmitter.SubmitSingleAsync(
-                        payload,
-                        pending => Write(pending),
-                        cancellationToken,
-                        admissionTimeout)
-                    .ConfigureAwait(false);
-            }
-
-            if (completionPermit is not null)
-            {
-                if (result.Status == ZLinkOneWaySubmitStatus.Submitted)
-                    completionPermit.TransferToCore();
-                else
-                    completionPermit.Dispose();
-            }
-            return result;
+                ZlinkSubmitException.ErrorCode.Backpressured =>
+                    new ZLinkOneWaySubmitResult(
+                        ZLinkOneWaySubmitStatus.TimedOut),
+                ZlinkSubmitException.ErrorCode.NotFound =>
+                    new ZLinkOneWaySubmitResult(
+                        ZLinkOneWaySubmitStatus.TargetNotFound),
+                ZlinkSubmitException.ErrorCode.NotConnected =>
+                    new ZLinkOneWaySubmitResult(
+                        ZLinkOneWaySubmitStatus.RouteNotConnected),
+                ZlinkSubmitException.ErrorCode.Terminated =>
+                    new ZLinkOneWaySubmitResult(
+                        ZLinkOneWaySubmitStatus.Shutdown),
+                _ => throw new System.Diagnostics.UnreachableException()
+            };
         }
         catch
         {
-            completionPermit?.Dispose();
             throw;
         }
     }
@@ -241,8 +233,7 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
         return Transport.ReplyRawAsync(
             requestHeader,
             reply,
-            cancellationToken,
-            _currentCompletionPermit);
+            cancellationToken);
     }
 
     internal ValueTask ReplyErrorAsync(
@@ -253,8 +244,7 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
         return Transport.ReplyErrorAsync(
             requestHeader,
             exception,
-            cancellationToken,
-            _currentCompletionPermit);
+            cancellationToken);
     }
 
     private bool TryClaimReply(ZlinkStreamHeader requestHeader)

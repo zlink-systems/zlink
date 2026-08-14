@@ -95,7 +95,7 @@ final class ZLinkActorTransferCommitRegistry {
             Long.toUnsignedString(request.coreFinalSequence()),
             Long.toUnsignedString(request.coreReserveMessageCount()),
             Long.toUnsignedString(request.coreReserveByteCount()),
-            String.valueOf(request.completionManifest()),
+            String.valueOf(request.relocationManifest()),
             Integer.toString(Arrays.hashCode(
                 request.sessionRouteCommand44())));
     }

@@ -934,14 +934,6 @@ internal sealed class ZLinkActorRuntimeState(
                 TargetNodeGeneration = targetNodeGeneration,
                 TargetOwnerLeaseGeneration = targetOwnerLeaseGeneration
             };
-            if (pending.TerminalFingerprint is { } frozen
-                && (ZLinkSessionRelocationWire.CreateCommit(
-                        ActorId,
-                        committed) != frozen
-                    || pending.TargetOwnerLeaseGeneration
-                    != targetOwnerLeaseGeneration))
-                throw new InvalidDataException(
-                    "Committed session authority changed after command 44 was frozen.");
             _pendingSessionRoute = committed;
         }
     }
@@ -971,28 +963,9 @@ internal sealed class ZLinkActorRuntimeState(
         return false;
     }
 
-    internal void RequireRelocationSessionRouteTerminal(string handoffId)
-    {
-        lock (_sessionGate)
-        {
-            if (_pendingSessionRoute is not
-                {
-                    TargetActor: not null,
-                    TargetAuthorityOwnerGeneration: > 0
-                } pending
-                || !string.Equals(
-                    pending.HandoffId,
-                    handoffId,
-                    StringComparison.Ordinal))
-                return;
-        }
-        Handoff.RequireSessionRouteTerminal(handoffId);
-    }
-
     internal ZLinkServiceWireCodec.SessionRelocationRouteRecord
-        FreezeRelocationSessionRouteTerminal(string handoffId)
+        CreateRelocationSessionRoute(string handoffId)
     {
-        ZLinkServiceWireCodec.SessionRelocationRouteRecord fingerprint;
         lock (_sessionGate)
         {
             if (_pendingSessionRoute is not
@@ -1008,18 +981,8 @@ internal sealed class ZLinkActorRuntimeState(
                     ZLinkFrameworkErrorKind.InvalidOperation,
                     $"Actor '{ActorId}' has no committed session route for handoff '{handoffId}'.",
                     ZLinkRetryAdvice.DoNotRetry);
-            fingerprint = pending.TerminalFingerprint
-                          ?? ZLinkSessionRelocationWire.CreateCommit(
-                              ActorId,
-                              pending);
-            if (pending.TerminalFingerprint is null)
-                _pendingSessionRoute = pending with
-                {
-                    TerminalFingerprint = fingerprint
-                };
+            return ZLinkSessionRelocationWire.CreateCommit(ActorId, pending);
         }
-        Handoff.RequireSessionRouteTerminal(handoffId, fingerprint);
-        return fingerprint;
     }
 
     public bool TryGetStagedRelocationSessionRoute(
@@ -1060,7 +1023,6 @@ internal sealed class ZLinkActorRuntimeState(
 
     public void CompleteRelocationSessionRoute(string handoffId)
     {
-        ZLinkServiceWireCodec.SessionRelocationRouteRecord? terminal = null;
         lock (_sessionGate)
         {
             if (_pendingSessionRoute is not { } pending
@@ -1069,77 +1031,9 @@ internal sealed class ZLinkActorRuntimeState(
                     handoffId,
                     StringComparison.Ordinal))
                 return;
-            if (pending.TerminalFingerprint is not null)
-                throw new InvalidOperationException(
-                    "An exact session route requires its command 45 receipt before promotion.");
             _boundSession = CreateCommittedRelocationSession(pending);
-            if (pending.WireContext.IsExact
-                && !string.IsNullOrWhiteSpace(pending.Route.SessionOwnerId)
-                && pending.Route.SessionOwnerLeaseGeneration > 0)
-                terminal = ZLinkSessionRelocationWire.CreateCommit(
-                    ActorId,
-                    pending);
             _pendingSessionRoute = null;
         }
-        if (terminal is { } fingerprint)
-            Handoff.ObserveSessionRouteTerminal(handoffId, fingerprint);
-    }
-
-    internal bool CompleteRelocationSessionRoute(
-        string handoffId,
-        ZLinkServiceWireCodec.SessionRelocationRouteRecord command44,
-        ZLinkServiceWireCodec.SessionRelocationRoutedRecord command45)
-    {
-        lock (_sessionGate)
-        {
-            if (_pendingSessionRoute is not { } pending
-                || !string.Equals(
-                    pending.HandoffId,
-                    handoffId,
-                    StringComparison.Ordinal))
-                return false;
-            if (pending.TerminalFingerprint is not { } frozen
-                || frozen != command44
-                || !ZLinkManagedMeshNode.IsExactSessionRelocationRouteResponse(
-                    frozen,
-                    frozen.Route.ReplayedHighWater,
-                    command45)
-                || command45.Result is not (
-                    ZLinkServiceWireCodec.SessionRelocationRouteResult.Applied
-                    or ZLinkServiceWireCodec.SessionRelocationRouteResult
-                        .AlreadyApplied))
-                throw new InvalidDataException(
-                    "Command 45 does not match the frozen command 44 fingerprint.");
-        }
-
-        if (!Handoff.ValidateSessionRouteTerminal(handoffId, command44))
-            throw new InvalidDataException(
-                "Command 45 has no matching successor-gate fingerprint.");
-
-        lock (_sessionGate)
-        {
-            if (_pendingSessionRoute is not { } pending
-                || !string.Equals(
-                    pending.HandoffId,
-                    handoffId,
-                    StringComparison.Ordinal)
-                || pending.TerminalFingerprint != command44)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    "The staged session route changed before command 45 promotion.",
-                    ZLinkRetryAdvice.RetryAfterBackoff);
-            var frozenRoute = pending.Route with
-            {
-                AcceptedHighWater = command44.Route.ReplayedHighWater
-            };
-            var promoted = pending with { Route = frozenRoute };
-            _boundSession = CreateCommittedRelocationSession(promoted);
-            _pendingSessionRoute = null;
-        }
-        if (!Handoff.ObserveSessionRouteTerminal(handoffId, command44))
-            throw new InvalidDataException(
-                "Command 45 successor gate was already completed.");
-        return true;
     }
 
     public void AbortRelocationSessionRoute(string handoffId)
@@ -2078,9 +1972,7 @@ internal readonly record struct ZLinkPendingActorSessionRoute(
     ZLinkMeshName? TargetMeshName = null,
     ulong TargetNodeGeneration = 0,
     ulong TargetOwnerLeaseGeneration = 0,
-    ZLinkSessionRelocationContext WireContext = default,
-    ZLinkServiceWireCodec.SessionRelocationRouteRecord?
-        TerminalFingerprint = null);
+    ZLinkSessionRelocationContext WireContext = default);
 
 internal readonly record struct ZLinkSourceSessionRelocation(
     string HandoffId,

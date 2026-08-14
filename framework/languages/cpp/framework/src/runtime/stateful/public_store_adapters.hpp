@@ -98,7 +98,7 @@ class public_authority_store_adapter_t final :
       const object_ref_t &source,
       const object_ref_t &target,
       location_owner_token_t target_owner,
-      relocation_capacity_fence_t relocation_capacity_fence,
+      object_creation_target_t target_placement,
       std::string relocation_reference,
       std::uint32_t checksum_crc32c,
       inventory_digest_t inventory_digest,
@@ -145,6 +145,10 @@ class public_authority_store_adapter_t final :
                         decode_current (read)};
             }
 
+            if (target_placement.mesh_name != target.mesh_name
+                || target_placement.node_rid.value () != target.node_id
+                || !same_owner (target_placement.owner, target_owner))
+                return {authority_publish_status_t::failed, std::nullopt};
             authority_relocation_reference_t reference{
               source,
               source,
@@ -161,11 +165,9 @@ class public_authority_store_adapter_t final :
                 ->compare_exchange_authority (
                   key,
                   snapshot->store_version,
-                  authority_put_t{
+                  authority_retarget_t{
                     encode (reference),
-                    authority_generation_transition_t::new_owner,
-                    target_owner,
-                    relocation_capacity_fence})
+                    target_placement})
                 .result ()
                 .value ();
             if (const auto *stored =
@@ -323,29 +325,11 @@ class public_authority_store_adapter_t final :
             ->compare_exchange_authority (
               authority,
               snapshot->store_version,
-              authority_put_t{
-                current->application_payload,
-                authority_generation_transition_t::preserve,
-                std::nullopt,
-                std::nullopt})
+              authority_put_t{current->application_payload})
             .result ()
             .value ();
         return std::holds_alternative<authority_stored_t> (
           exchanged);
-    }
-
-    void abort_capacity (
-      const relocation_capacity_fence_t &fence) noexcept override
-    {
-        if (fence.value.empty ())
-            return;
-        try {
-            (void) _store->abort_relocation_capacity (fence)
-              .result ()
-              .value ();
-        }
-        catch (...) {
-        }
     }
 
   private:
@@ -364,11 +348,7 @@ class public_authority_store_adapter_t final :
             ->compare_exchange_authority (
               key,
               snapshot.store_version,
-              authority_put_t{
-                encode (reference),
-                authority_generation_transition_t::preserve,
-                std::nullopt,
-                std::nullopt})
+              authority_put_t{encode (reference)})
             .result ()
             .value ();
         if (const auto *stored =
@@ -663,26 +643,15 @@ class public_aggregate_authority_adapter_t final :
       const std::vector<object_ref_t> &sources,
       std::string target_node_id,
       location_owner_token_t target_owner,
-      std::vector<relocation_capacity_fence_t> relocation_capacity_fences,
       std::string relocation_reference,
       std::uint32_t checksum_crc32c,
       inventory_digest_t inventory_digest) override
     {
-        if (sources.size () < 2 || relocation_capacity_fences.size () != sources.size ()
+        if (sources.size () < 2
             || target_node_id.empty ()
             || target_owner.owner_id.empty ()
             || target_owner.lease_generation <= 0)
             return {};
-        std::map<std::string, relocation_capacity_fence_t> capacity_by_authority;
-        for (std::size_t index = 0; index < sources.size (); ++index) {
-            if (relocation_capacity_fences[index].value.empty ())
-                return {};
-            const auto [_, inserted] = capacity_by_authority.emplace (
-              public_authority_store_adapter_t::authority_key (sources[index]).value,
-              std::move (relocation_capacity_fences[index]));
-            if (!inserted)
-                return {};
-        }
         std::vector<std::pair<authority_snapshot_t,
                               authority_relocation_reference_t>>
           snapshots;
@@ -752,18 +721,13 @@ class public_aggregate_authority_adapter_t final :
         std::vector<aggregate_participant_t> participants;
         participants.reserve (snapshots.size ());
         for (const auto &[snapshot, reference] : snapshots) {
-            const auto capacity = capacity_by_authority.find (
-              public_authority_store_adapter_t::authority_key (reference.source).value);
-            if (capacity == capacity_by_authority.end ())
-                return {};
             participants.push_back ({
               public_authority_store_adapter_t::authority_key (
                 reference.source),
               snapshot.store_version,
               authority_generation_transition_t::new_owner,
               public_authority_store_adapter_t::encode (reference),
-              {},
-              std::optional<relocation_capacity_fence_t>{capacity->second}});
+              {}});
         }
         std::sort (
           participants.begin (), participants.end (),
@@ -784,11 +748,6 @@ class public_aggregate_authority_adapter_t final :
         request.target_descriptor_lifecycle_generation = target_node->lifecycle_generation;
         request.capacity_bundle = capacity;
         request.target_owner = target_owner;
-        for (const auto &participant : request.participants) {
-            if (!participant.capacity_fence)
-                return {};
-            request.capacity_fences.push_back (*participant.capacity_fence);
-        }
         const auto prepared = _store->prepare_aggregate (std::move (request)).result ().value ();
         const auto *created =
           std::get_if<aggregate_prepared_t> (&prepared);

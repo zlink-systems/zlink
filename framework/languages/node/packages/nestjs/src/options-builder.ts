@@ -178,14 +178,9 @@ abstract class ZLinkNestOptionsBuilder implements ZLinkNestFrameworkOptionsBuild
   }
 
   configureInboundDispatch(): ZLinkInboundDispatchOptions {
-    const inboundDispatch = {
-      ...(this.state.additionalOptions.inboundDispatch ?? {})
-    };
-    this.state.additionalOptions = {
-      ...this.state.additionalOptions,
-      inboundDispatch
-    };
-    return framework.createIntegrationInboundDispatchOptionsBuilder(inboundDispatch);
+    const options = { ...this.state.additionalOptions };
+    this.state.additionalOptions = options;
+    return framework.createIntegrationInboundDispatchOptionsBuilder(options);
   }
 
   addLocationStore(store: ZLinkLocationStore): this {

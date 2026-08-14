@@ -8,6 +8,7 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
 {
     private const int DefaultCapacity = 4096;
     private readonly long _maxMessageSize;
+    private readonly Queue<RetainedCreditSegment> _retainedCreditSegments = new();
     private byte[] _buffer = ArrayPool<byte>.Shared.Rent(DefaultCapacity);
     private int _offset;
     private int _length;
@@ -20,6 +21,73 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
 
     internal void Append(ReadOnlySpan<byte> bytes)
     {
+        AppendCore(bytes, creditOwner: null);
+    }
+
+    internal void Append(ReadOnlySpan<byte> bytes, IDisposable creditOwner)
+    {
+        ArgumentNullException.ThrowIfNull(creditOwner);
+        if (bytes.IsEmpty)
+        {
+            creditOwner.Dispose();
+            return;
+        }
+        try
+        {
+            AppendCore(bytes, creditOwner);
+        }
+        catch
+        {
+            creditOwner.Dispose();
+            throw;
+        }
+    }
+
+    internal void Append(
+        IReadOnlyList<Message> parts,
+        IDisposable creditOwner)
+    {
+        ArgumentNullException.ThrowIfNull(parts);
+        ArgumentNullException.ThrowIfNull(creditOwner);
+        var ownershipTransferred = false;
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var appendedBytes = 0;
+            foreach (var part in parts)
+                appendedBytes = checked(appendedBytes + part.Size);
+            if (appendedBytes == 0)
+                return;
+
+            if (appendedBytes > int.MaxValue - _length)
+                throw new InvalidDataException(
+                    "STREAM frame exceeds the supported size.");
+            var required = _length + appendedBytes;
+            EnsureCapacity(required);
+            var destinationOffset = _offset + _length;
+            foreach (var part in parts)
+            {
+                var bytes = part.AsReadOnlySpan();
+                bytes.CopyTo(_buffer.AsSpan(destinationOffset));
+                destinationOffset += bytes.Length;
+            }
+
+            _length = required;
+            _retainedCreditSegments.Enqueue(
+                new RetainedCreditSegment(
+                    appendedBytes,
+                    new SharedCreditOwner(creditOwner)));
+            ownershipTransferred = true;
+        }
+        finally
+        {
+            if (!ownershipTransferred)
+                creditOwner.Dispose();
+        }
+    }
+
+    private void AppendCore(ReadOnlySpan<byte> bytes, IDisposable? creditOwner)
+    {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (bytes.IsEmpty) return;
 
@@ -29,6 +97,10 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
         EnsureCapacity(required);
         bytes.CopyTo(_buffer.AsSpan(_offset + _length));
         _length = required;
+        _retainedCreditSegments.Enqueue(
+            new RetainedCreditSegment(
+                bytes.Length,
+                creditOwner is null ? null : new SharedCreditOwner(creditOwner)));
     }
 
     internal bool TryTakeFrame(out ZLinkStreamInboundFrame? frame)
@@ -74,8 +146,9 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
             throw new InvalidDataException("STREAM frame contains an invalid length.", exception);
         }
 
+        var frameCreditOwner = TakeFrameCreditOwner((int)totalBytes);
         Consume((int)totalBytes);
-        frame = new ZLinkStreamInboundFrame(header, payload);
+        frame = new ZLinkStreamInboundFrame(header, payload, frameCreditOwner);
         return true;
     }
 
@@ -111,6 +184,8 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
         _buffer = Array.Empty<byte>();
         _offset = 0;
         _length = 0;
+        while (_retainedCreditSegments.TryDequeue(out var segment))
+            segment.CreditOwner?.Dispose();
     }
 
     private void EnsureCapacity(int required)
@@ -165,28 +240,112 @@ internal sealed class ZLinkStreamReceiveBuffer : IDisposable
         ArrayPool<byte>.Shared.Return(_buffer);
         _buffer = ArrayPool<byte>.Shared.Rent(DefaultCapacity);
     }
+
+    private IDisposable? TakeFrameCreditOwner(int bytes)
+    {
+        List<IDisposable>? retained = null;
+        var remaining = bytes;
+        while (remaining > 0 && _retainedCreditSegments.TryPeek(out var segment))
+        {
+            var consumed = Math.Min(remaining, segment.RemainingBytes);
+            if (segment.CreditOwner is { } creditOwner)
+            {
+                retained ??= new List<IDisposable>();
+                retained.Add(creditOwner.Retain());
+            }
+
+            segment.RemainingBytes -= consumed;
+            remaining -= consumed;
+            if (segment.RemainingBytes != 0)
+                continue;
+
+            _retainedCreditSegments.Dequeue();
+            segment.CreditOwner?.Dispose();
+        }
+
+        return retained?.Count switch
+        {
+            null or 0 => null,
+            1 => retained[0],
+            _ => new CompositeCreditOwner(retained)
+        };
+    }
+
+    private sealed class RetainedCreditSegment(
+        int remainingBytes,
+        SharedCreditOwner? creditOwner)
+    {
+        internal int RemainingBytes = remainingBytes;
+        internal readonly SharedCreditOwner? CreditOwner = creditOwner;
+    }
+
+    private sealed class SharedCreditOwner : IDisposable
+    {
+        private IDisposable? _owner;
+        private int _references = 1;
+
+        internal SharedCreditOwner(IDisposable owner)
+        {
+            _owner = owner;
+        }
+
+        internal IDisposable Retain()
+        {
+            while (true)
+            {
+                var current = Volatile.Read(ref _references);
+                if (current == 0)
+                    throw new ObjectDisposedException(nameof(SharedCreditOwner));
+                if (Interlocked.CompareExchange(
+                        ref _references,
+                        checked(current + 1),
+                        current) == current)
+                    return new CreditLease(this);
+            }
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Decrement(ref _references) != 0)
+                return;
+            Interlocked.Exchange(ref _owner, null)?.Dispose();
+        }
+
+        private sealed class CreditLease(SharedCreditOwner owner) : IDisposable
+        {
+            private SharedCreditOwner? _owner = owner;
+
+            public void Dispose() =>
+                Interlocked.Exchange(ref _owner, null)?.Dispose();
+        }
+    }
+
+    private sealed class CompositeCreditOwner(List<IDisposable> owners) : IDisposable
+    {
+        private List<IDisposable>? _owners = owners;
+
+        public void Dispose()
+        {
+            var ownersToDispose = Interlocked.Exchange(ref _owners, null);
+            if (ownersToDispose is null)
+                return;
+            foreach (var owner in ownersToDispose)
+                owner.Dispose();
+        }
+    }
 }
 
-internal sealed class ZLinkStreamInboundFrame(Message header, Message payload) : IDisposable
+internal sealed class ZLinkStreamInboundFrame(
+    Message header,
+    Message payload,
+    IDisposable? coreCreditOwner = null) : IDisposable
 {
-    private ZLinkInboundDispatchLease? _dispatchLease;
-
     internal Message? Header { get; private set; } = header;
     internal Message? Payload { get; private set; } = payload;
 
-    // A frame that was received before the HWM became full keeps its dispatch
-    // reservation while it waits for the session queue. This prevents a
-    // complete frame from being reclassified as a new receive on retry.
-    internal void AttachDispatchLease(ZLinkInboundDispatchLease lease)
-    {
-        ArgumentNullException.ThrowIfNull(lease);
-        if (Interlocked.CompareExchange(ref _dispatchLease, lease, null) is not null)
-            throw new InvalidOperationException(
-                "A STREAM frame already owns an inbound dispatch lease.");
-    }
+    internal ZLinkApplicationJobQueueLease? ApplicationJobAdmission { get; set; }
 
-    internal ZLinkInboundDispatchLease? TakeDispatchLease() =>
-        Interlocked.Exchange(ref _dispatchLease, null);
+    internal IDisposable? CoreCreditOwner { get; private set; } = coreCreditOwner;
 
     internal long ByteLength => checked((long)(Header?.Size ?? 0) + (Payload?.Size ?? 0));
 
@@ -194,15 +353,20 @@ internal sealed class ZLinkStreamInboundFrame(Message header, Message payload) :
     {
         Header = null;
         Payload = null;
+        ApplicationJobAdmission = null;
+        CoreCreditOwner = null;
     }
 
     public void Dispose()
     {
         Header?.Dispose();
         Payload?.Dispose();
-        Interlocked.Exchange(ref _dispatchLease, null)?.Dispose();
         Header = null;
         Payload = null;
+        ApplicationJobAdmission?.Dispose();
+        ApplicationJobAdmission = null;
+        CoreCreditOwner?.Dispose();
+        CoreCreditOwner = null;
     }
 }
 

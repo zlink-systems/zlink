@@ -70,6 +70,9 @@ final class ZLinkRoutedActorTransferHandler {
                 request,
                 null,
                 sourcePeerRid,
+                targetSpotId,
+                targetSurface,
+                joined,
                 actorId -> admission.apply(
                     actorId,
                     ZLinkMessage.fromEncoded(
@@ -119,36 +122,37 @@ final class ZLinkRoutedActorTransferHandler {
             tail = tail.thenCompose(replies -> host.dispatchTransferBacklog(
                     actorRef, packet.header(), packet.payload(),
                     packet.acceptedJournalRecord())
-                .thenApply(reply -> appendReply(replies, actorRef, packet, reply)));
+                .thenCompose(reply ->
+                    appendReply(replies, actorRef, packet, reply)));
         }
         return tail.thenApply(List::copyOf);
     }
 
-    private List<Message> appendReply(
+    private CompletionStage<List<Message>> appendReply(
         List<Message> replies,
         ZLinkBackendActorRef actorRef,
         ZLinkActorSpotRoutePackets.WireHandoffPacket packet,
         Optional<Message> reply) {
-        try {
-            if (packet.replyRoute() == null || reply.isEmpty()) {
+        if (packet.replyRoute() == null || reply.isEmpty()) {
+            try {
                 replies.add(reply.map(Message::from)
                     .orElseGet(() -> Message.from(new byte[0])));
-                return replies;
+                return CompletableFuture.completedFuture(replies);
+            } finally {
+                reply.ifPresent(Message::close);
             }
-            host.replyTransferredRequestDirect(
+        }
+        return host.replyTransferredRequestDirect(
                 actorRef,
                 packet.header(),
                 packet.replyRoute(),
                 reply.map(message -> new LocalActorReply(
                     message,
-                    packet.header().codec())));
-            replies.add(Message.from(new byte[0]));
-            return replies;
-        } finally {
-            if (packet.replyRoute() == null) {
-                reply.ifPresent(Message::close);
-            }
-        }
+                    packet.header().codec())))
+            .thenApply(ignored -> {
+                replies.add(Message.from(new byte[0]));
+                return replies;
+            });
     }
 
     private Message encodeAdmission(ZLinkSpotActorJoinResult response) {

@@ -6,8 +6,7 @@ namespace Zlink.Framework.Runtime.Actors;
 
 /// <summary>
 /// Projects the standalone Actor inventory into the canonical relocation root.
-/// The accepted records remain byte-exact; only the root index and progress
-/// sections are assembled here.
+/// Saved-work records remain byte-exact in their participant order.
 /// </summary>
 internal static class ZLinkCanonicalActorRelocationWriter
 {
@@ -29,10 +28,6 @@ internal static class ZLinkCanonicalActorRelocationWriter
         var accepted = participant.AcceptedJobs
             .OrderBy(static job => job.AcceptedSequence)
             .ToArray();
-        var acceptedBoundary = accepted
-            .Select(static job => job.AcceptedSequence)
-            .DefaultIfEmpty(0UL)
-            .Max();
         using var stream = new MemoryStream();
         stream.Write(inventory.AggregateId.ToByteArray(bigEndian: true));
         stream.WriteByte((byte)ZLinkPlacementObjectKind.Actor);
@@ -64,25 +59,19 @@ internal static class ZLinkCanonicalActorRelocationWriter
             state.CopyTo(stream);
         }
 
-        U32(stream, 1);
-        U64(stream, 1);
-        U64(stream, acceptedBoundary);
-        U64(stream, 0);
-
         U32(stream, checked((uint)accepted.Length));
         foreach (var job in accepted)
         {
             if (!ZLinkRelocationEnvelopeCodec.TryValidateCanonicalFrozenRecord(
                     job.Payload.Span))
                 throw new ZLinkRelocationDataLostException(
-                    "Standalone Actor accepted journal contains a malformed frozen record.");
+                    "Standalone Actor saved work contains a malformed frozen record.");
             U64(stream, 1);
             U64(stream, job.AcceptedSequence);
             stream.Write(job.Payload.Span);
         }
         U32(stream, 0); // logical timers
         U32(stream, 0); // pending timer ticks
-        U32(stream, 0); // terminal completions
 
         stream.Position = 0;
         var canonical = ZLinkRelocationEnvelopeCodec.Decode(
@@ -98,7 +87,6 @@ internal static class ZLinkCanonicalActorRelocationWriter
         {
             Participants = [projected],
             CanonicalLogicalStream = canonical.CanonicalLogicalStream,
-            CanonicalLayout = canonical.CanonicalLayout,
             CanonicalRelocationHigh = canonical.CanonicalRelocationHigh,
             CanonicalRelocationLow = canonical.CanonicalRelocationLow,
             CanonicalApplicationVersion = canonical.CanonicalApplicationVersion

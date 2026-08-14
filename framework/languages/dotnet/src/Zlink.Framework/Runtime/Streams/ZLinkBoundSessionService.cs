@@ -7,9 +7,6 @@ namespace Zlink.Framework.Runtime.Streams;
 internal sealed class ZLinkBoundSessionService(
     ZLinkFrameworkRuntime runtime) : IZLinkBoundSessionService
 {
-    private readonly object _submitterGate = new();
-    private readonly Dictionary<ZLinkMeshName, ZLinkAsyncSubmitter> _submitters = [];
-
     public IZLinkBoundSession Create(string actorId)
     {
         return new ZLinkBoundSession(this, actorId);
@@ -129,52 +126,39 @@ internal sealed class ZLinkBoundSessionService(
             ActorId: actorId));
     }
 
-    private ValueTask<ZLinkOneWaySubmitResult> SubmitFrameAsync(
+    private async ValueTask<ZLinkOneWaySubmitResult> SubmitFrameAsync(
         string actorId,
         byte[] frame,
         CancellationToken cancellationToken)
     {
         var route = ResolveSessionRoute(actorId);
-        var message = Message.From(frame);
-        return GetSubmitter(route.MeshName).SubmitAsync(
-            new[] { message },
-            pending => runtime.SendActorBoundSession(
-                actorId,
-                pending,
-                SendFlags.DontWait),
-            cancellationToken);
-    }
-
-    private ZLinkAsyncSubmitter GetSubmitter(ZLinkMeshName meshName)
-    {
-        lock (_submitterGate)
+        using var message = Message.From(frame);
+        using var terminal = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            runtime.ShutdownToken);
+        terminal.CancelAfter(runtime.Registration.DefaultSocketSendTimeout);
+        try
         {
-            if (_submitters.TryGetValue(meshName, out var submitter))
-                return submitter;
-            submitter = runtime.CreateActorBoundSessionSubmitter(meshName);
-            _submitters.Add(meshName, submitter);
-            return submitter;
+            return await runtime.SendActorBoundSessionIfCurrentAsync(
+                    actorId,
+                    route.BindingToken,
+                    [message],
+                    terminal.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (runtime.ShutdownToken.IsCancellationRequested)
+        {
+            return new ZLinkOneWaySubmitResult(
+                ZLinkOneWaySubmitStatus.Shutdown);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new ZLinkOneWaySubmitResult(
+                ZLinkOneWaySubmitStatus.TimedOut);
         }
     }
 
-    public ValueTask ResetAsync()
-    {
-        ZLinkAsyncSubmitter[] submitters;
-        lock (_submitterGate)
-        {
-            submitters = _submitters.Values.ToArray();
-            _submitters.Clear();
-        }
-
-        return DisposeAllAsync(submitters);
-    }
-
-    private static async ValueTask DisposeAllAsync(
-        IReadOnlyList<ZLinkAsyncSubmitter> submitters)
-    {
-        foreach (var submitter in submitters)
-            await submitter.DisposeAsync().ConfigureAwait(false);
-    }
+    public ValueTask ResetAsync() => ValueTask.CompletedTask;
 
     private ZLinkActorBoundSession ResolveSessionRoute(string actorId)
     {

@@ -9,6 +9,7 @@
 #include "runtime/mesh/service_topology_registry.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include <zlink/Contracts/Core/routing_id.hpp>
+#include <zlink/framework/contracts/dispatch/task.hpp>
 
 #include <chrono>
 #include <cstddef>
@@ -58,8 +59,6 @@ struct raw_mesh_node_options_t
       dispatch_limits::control_mailbox_messages;
     std::size_t infrastructure_byte_budget =
       dispatch_limits::control_mailbox_bytes;
-    std::uint64_t send_high_water_mark = 4'096'000;
-    std::uint64_t receive_high_water_mark = 4'096'000;
     std::optional<std::string> advertise_host;
     zlink::auto_hwm_profile auto_hwm_profile =
       zlink::auto_hwm_profile::balanced;
@@ -120,7 +119,9 @@ class raw_mesh_connection_candidates_t
 class raw_mesh_node_owner_t
 {
   public:
-    explicit raw_mesh_node_owner_t (raw_mesh_node_options_t options);
+    explicit raw_mesh_node_owner_t (
+      raw_mesh_node_options_t options,
+      std::shared_ptr<zlink::context_t> context = {});
     ~raw_mesh_node_owner_t () noexcept;
 
     raw_mesh_node_owner_t (const raw_mesh_node_owner_t &) = delete;
@@ -129,7 +130,6 @@ class raw_mesh_node_owner_t
     void start ();
     void close () noexcept;
     bool started () const noexcept;
-    void set_send_ready_handler (std::function<void ()> handler);
 
     std::string endpoint () const;
     zlink::context_t &context ();
@@ -150,46 +150,50 @@ class raw_mesh_node_owner_t
       service_node_descriptor_t descriptor,
       std::vector<std::uint8_t> connection_id,
       service_liveness_registry_t::clock_t::time_point now);
-    bool send_to_node (const std::vector<std::uint8_t> &target_routing_id,
-                       const protocol::application_payload_t &application_payload);
-    zlink::submit_result_t send_to_node_result (
+    task_t<bool> send_to_node (
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::application_payload_t &application_payload);
-    bool request_to_node (
+    task_t<zlink::submit_result_t> send_to_node_result (
+      const std::vector<std::uint8_t> &target_routing_id,
+      const protocol::application_payload_t &application_payload);
+    task_t<bool> request_to_node (
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::application_payload_t &application_payload,
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback,
       std::optional<std::uint64_t> correlation = std::nullopt);
-    bool request_to_channel (
+    task_t<bool> request_to_channel (
       const std::string &channel_name,
       const protocol::application_payload_t &application_payload,
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback,
       std::optional<std::uint64_t> correlation = std::nullopt);
-    bool reply (const service_mailbox_record_t &request,
-                const protocol::application_payload_t &application_payload);
-    bool reply_failure (const service_mailbox_record_t &request,
-                        std::uint32_t terminal_result,
-                        std::uint32_t failure_code);
+    bool reply (
+      const service_mailbox_record_t &request,
+      const protocol::application_payload_t &application_payload);
+    bool reply_failure (
+      const service_mailbox_record_t &request,
+      std::uint32_t terminal_result,
+      std::uint32_t failure_code);
     std::size_t expire_requests (
       foundation::operation_registry_t::clock_t::time_point now);
-    bool send_to_channel (const std::string &channel_name,
-                          const protocol::application_payload_t &application_payload);
-    zlink::submit_result_t send_to_channel_result (
+    task_t<bool> send_to_channel (
       const std::string &channel_name,
       const protocol::application_payload_t &application_payload);
-    bool send_to_spot (
+    task_t<zlink::submit_result_t> send_to_channel_result (
+      const std::string &channel_name,
+      const protocol::application_payload_t &application_payload);
+    task_t<bool> send_to_spot (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::string &source_spot_id,
       const protocol::spot_route_fence_t &target,
       const protocol::application_payload_t &application_payload);
-    zlink::submit_result_t send_to_spot_result (
+    task_t<zlink::submit_result_t> send_to_spot_result (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::string &source_spot_id,
       const protocol::spot_route_fence_t &target,
       const protocol::application_payload_t &application_payload);
-    bool request_to_spot (
+    task_t<bool> request_to_spot (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::string &source_spot_id,
       const protocol::spot_route_fence_t &target,
@@ -198,21 +202,21 @@ class raw_mesh_node_owner_t
       foundation::operation_registry_t::callback_t callback,
       std::optional<protocol::wire_operation_id_t> operation = std::nullopt,
       std::optional<std::uint64_t> correlation = std::nullopt);
-    bool send_to_actor (
+    task_t<bool> send_to_actor (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
       const protocol::actor_route_fence_t &target,
       const protocol::application_payload_t &application_payload,
       std::optional<protocol::actor_message_header_t::bound_session_source_t>
         bound_session_source = std::nullopt);
-    zlink::submit_result_t send_to_actor_result (
+    task_t<zlink::submit_result_t> send_to_actor_result (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
       const protocol::actor_route_fence_t &target,
       const protocol::application_payload_t &application_payload,
       std::optional<protocol::actor_message_header_t::bound_session_source_t>
         bound_session_source = std::nullopt);
-    bool request_to_actor (
+    task_t<bool> request_to_actor (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
       const protocol::actor_route_fence_t &target,
@@ -223,49 +227,49 @@ class raw_mesh_node_owner_t
       std::optional<protocol::actor_message_header_t::bound_session_source_t>
         bound_session_source = std::nullopt,
       std::optional<std::uint64_t> correlation = std::nullopt);
-    bool send_bound_session (
+    task_t<bool> send_bound_session (
       const std::vector<std::uint8_t> &session_owner_routing_id,
       const protocol::bound_session_send_t &record,
       const protocol::application_payload_t &application_payload);
-    zlink::submit_result_t send_bound_session_result (
+    task_t<zlink::submit_result_t> send_bound_session_result (
       const std::vector<std::uint8_t> &session_owner_routing_id,
       const protocol::bound_session_send_t &record,
       const protocol::application_payload_t &application_payload);
-    bool request_bound_session_bind (
+    task_t<bool> request_bound_session_bind (
       const std::vector<std::uint8_t> &actor_owner_routing_id,
       protocol::bound_session_bind_t record,
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback);
-    bool send_bound_session_replaced (
+    task_t<bool> send_bound_session_replaced (
       const std::vector<std::uint8_t> &retired_session_owner_routing_id,
       const protocol::bound_session_replaced_t &record);
     bool reply_bound_session_bind (
       const service_mailbox_record_t &request,
       std::uint32_t terminal_result = 0,
       std::uint32_t failure_code = 0);
-    bool request_user_spot_create (
+    task_t<bool> request_user_spot_create (
       const std::vector<std::uint8_t> &target_routing_id,
       protocol::user_spot_create_header_t request,
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback);
-    bool request_actor_create (
+    task_t<bool> request_actor_create (
       const std::vector<std::uint8_t> &target_routing_id,
       protocol::actor_create_header_t request,
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback);
-    bool request_instance_spot_activation (
+    task_t<bool> request_instance_spot_activation (
       const std::vector<std::uint8_t> &target_routing_id,
       protocol::instance_spot_activation_header_t request,
       std::optional<std::vector<std::uint8_t>> metadata,
       protocol::application_payload_t application_payload,
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback);
-    bool send_instance_spot_activation (
+    task_t<bool> send_instance_spot_activation (
       const std::vector<std::uint8_t> &target_routing_id,
       protocol::instance_spot_activation_header_t request,
       std::optional<std::vector<std::uint8_t>> metadata,
       protocol::application_payload_t application_payload);
-    bool request_user_spot_close (
+    task_t<bool> request_user_spot_close (
       const std::vector<std::uint8_t> &target_routing_id,
       protocol::user_spot_close_header_t request,
       std::chrono::milliseconds timeout,
@@ -284,47 +288,48 @@ class raw_mesh_node_owner_t
       const service_mailbox_record_t &request,
       std::uint32_t terminal_result,
       std::uint32_t failure_code,
-      std::optional<protocol::application_payload_t> application_reply = std::nullopt);
+      std::optional<protocol::application_payload_t>
+        application_reply = std::nullopt);
     bool reply_user_spot_close (
       const service_mailbox_record_t &request,
       const protocol::user_spot_close_reply_t &reply);
-    bool send_session_relocation_route (
+    task_t<bool> send_session_relocation_route (
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::session_relocation_route_t &route);
-    bool request_session_relocation_route (
-      const std::vector<std::uint8_t> &target_routing_id,
-      const protocol::session_relocation_route_t &route,
-      std::chrono::milliseconds timeout,
-      foundation::operation_registry_t::callback_t callback);
-    bool send_session_relocation_seal (
+    task_t<bool> send_session_relocation_seal (
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::session_relocation_seal_t &seal);
-    bool request_session_relocation_seal (
+    task_t<bool> request_session_relocation_seal (
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::session_relocation_seal_t &seal,
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback);
-    bool send_session_relocation_sealed (
+    task_t<bool> send_session_relocation_sealed (
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::session_relocation_sealed_t &sealed);
-    bool send_session_relocation_routed (
-      const std::vector<std::uint8_t> &target_routing_id,
-      const protocol::session_relocation_routed_t &routed);
-    bool send_reply_relay (
+    task_t<bool> send_reply_relay (
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::reply_relay_t &relay,
       std::optional<protocol::application_payload_t>
         application_reply = std::nullopt);
-    bool send_reply_relay_ack (
+    task_t<bool> send_reply_relay_ack (
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::reply_relay_ack_t &ack);
-    bool send_message_follow (
+    task_t<bool> send_message_follow (
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::message_follow_notice_t &notice);
-    bool send_relocation_control (
+    task_t<bool> send_relocation_control (
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::relocation_control_t &control);
-    raw_mesh_pump_result_t
+    task_t<std::optional<protocol::relocation_ready_t>>
+    request_relocation_prepare (
+      const std::vector<std::uint8_t> &target_routing_id,
+      const protocol::relocation_prepare_t &prepare,
+      std::chrono::milliseconds timeout);
+    bool reply_relocation_ready (
+      const service_mailbox_record_t &request,
+      const protocol::relocation_ready_t &ready);
+    task_t<raw_mesh_pump_result_t>
     pump_one (service_liveness_registry_t::clock_t::time_point now,
               bool accept_application_receive = true);
     /* Wait for ROUTER input or an already admitted mailbox/control record.
@@ -337,9 +342,9 @@ class raw_mesh_node_owner_t
     {
         return _last_pump_bytes;
     }
-    std::size_t drain_monitor_events (
+    task_t<std::size_t> drain_monitor_events (
       service_liveness_registry_t::clock_t::time_point now);
-    service_liveness_tick_t
+    task_t<service_liveness_tick_t>
     tick_liveness (service_liveness_registry_t::clock_t::time_point now);
 
   private:
@@ -347,12 +352,6 @@ class raw_mesh_node_owner_t
     {
         service_mailbox_record_t record;
         raw_mesh_pump_result_t accepted_result;
-    };
-
-    struct pending_unadmitted_application_t
-    {
-        detail::backend::raw_received_t received;
-        std::size_t bytes = 0;
     };
 
     struct pending_admission_t
@@ -368,32 +367,32 @@ class raw_mesh_node_owner_t
     std::uint64_t take_reply_route_id_locked (
       std::optional<std::uint64_t> requested = std::nullopt);
     std::uint64_t next_operation_sequence ();
-    bool request_to_target (
+    task_t<bool> request_to_target (
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::application_payload_t &application_payload,
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback,
       const std::optional<std::string> &channel_name,
       std::optional<std::uint64_t> correlation);
-    bool send_with_header (
+    task_t<bool> send_with_header (
       const std::vector<std::uint8_t> &target_routing_id,
       std::vector<std::uint8_t> header,
       const protocol::application_payload_t &application_payload);
-    zlink::submit_result_t send_with_header_result (
+    task_t<zlink::submit_result_t> send_with_header_result (
       const std::vector<std::uint8_t> &target_routing_id,
       std::vector<std::uint8_t> header,
       const protocol::application_payload_t &application_payload);
-    bool send_header_only (
+    task_t<bool> send_header_only (
       const std::vector<std::uint8_t> &target_routing_id,
       std::vector<std::uint8_t> header);
-    bool request_with_header (
+    task_t<bool> request_with_header (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
       const protocol::application_payload_t &application_payload,
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback,
       std::optional<std::uint64_t> correlation = std::nullopt);
-    bool request_infrastructure (
+    task_t<bool> request_infrastructure (
       const std::vector<std::uint8_t> &target_routing_id,
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
       const std::function<std::vector<std::uint8_t> (
@@ -407,7 +406,7 @@ class raw_mesh_node_owner_t
         foundation::call_id_t operation;
         std::uint64_t correlation = 0;
     };
-    bool submit_request (
+    task_t<bool> submit_request (
       const std::shared_ptr<detail::backend::raw_route_port_t> &port,
       const pending_request_t &request,
       std::chrono::milliseconds timeout);
@@ -416,9 +415,9 @@ class raw_mesh_node_owner_t
       std::uint64_t lifecycle_generation,
       protocol::command command,
       peer_admission_result_t result);
-    void discard_pending_unadmitted_applications (
+    void discard_pending_admissions (
       const std::vector<std::uint8_t> &node_routing_id);
-    void discard_pending_unadmitted_applications_locked (
+    void discard_pending_admissions_locked (
       const std::vector<std::uint8_t> &node_routing_id);
     bool reply_infrastructure (
       const service_mailbox_record_t &request,
@@ -426,58 +425,28 @@ class raw_mesh_node_owner_t
     raw_mesh_pump_result_t enqueue_received_or_retain (
       service_mailbox_record_t record,
       raw_mesh_pump_result_t accepted_result);
-    void accept_completion_control (
-      detail::backend::raw_bytes_t source_routing_id,
-      detail::backend::raw_message_t parts);
-    void disconnect_completion_control_source (
-      const detail::backend::raw_bytes_t &source_routing_id) noexcept;
-    bool send_completion_control (
-      const std::vector<std::uint8_t> &target_routing_id,
-      detail::backend::raw_message_t parts);
-
     raw_mesh_node_options_t _options;
     mutable std::mutex _lifecycle_mutex;
     std::mutex _socket_mutex;
-    std::unique_ptr<zlink::context_t> _context;
+    std::shared_ptr<zlink::context_t> _context;
     std::unique_ptr<zlink::router_socket_t> _router;
     std::unique_ptr<zlink::poller_t> _monitor_poller;
     std::unique_ptr<zlink::socket_monitor_t> _monitor;
-    std::function<void ()> _send_ready_handler;
     std::shared_ptr<detail::backend::raw_route_port_t> _port;
     service_topology_registry_t _topology;
     service_liveness_registry_t _liveness;
     service_mailbox_t _mailbox;
     std::optional<pending_received_mailbox_record_t> _pending_received;
-    std::deque<pending_unadmitted_application_t>
-      _pending_unadmitted_applications;
-    std::size_t _pending_unadmitted_application_bytes = 0;
     std::deque<pending_admission_t> _pending_admissions;
     std::size_t _pending_admission_bytes = 0;
     std::size_t _last_pump_bytes = 0;
-    struct pending_completion_control_t
-    {
-        detail::backend::raw_received_t received;
-        std::optional<std::uint64_t> admitted_peer_generation;
-    };
-    std::mutex _completion_control_mutex;
-    std::deque<pending_completion_control_t> _completion_controls;
-    struct completion_control_failure_t
-    {
-        detail::backend::raw_bytes_t source_routing_id;
-        raw_mesh_pump_result_t result = raw_mesh_pump_result_t::protocol_error;
-    };
-    std::optional<completion_control_failure_t> _completion_control_failure;
-    bool _accept_completion_controls = false;
+    std::shared_ptr<zlink::received_t> _received_owner_for_enqueue;
     std::shared_ptr<foundation::operation_registry_t> _operations;
     std::map<std::vector<std::uint8_t>, service_node_descriptor_t,
              raw_mesh_byte_vector_less_t>
       _expected_peers;
     raw_mesh_connection_candidates_t _connections;
     std::set<std::string> _outbound_endpoints;
-    std::map<std::string, std::vector<std::uint8_t>>
-      _session_relocation_seal_requests;
-    std::map<std::string, std::vector<std::uint8_t>>
-      _session_relocation_route_requests;
     std::uint64_t _next_reply_route_id = 1;
     std::uint64_t _next_operation_sequence = 1;
     bool _closed = false;

@@ -1,13 +1,9 @@
 package systems.zlink.framework.runtime.spots;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -16,11 +12,17 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityEntry;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPage;
@@ -28,35 +30,36 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResu
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanCursor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanExpired;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCanonicalRelocationAuthorityStateCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
-import systems.zlink.framework.runtime.internal.locations
-    .ZLinkCanonicalRelocationAuthorityStateCodec;
-import systems.zlink.framework.runtime.internal.locations
-    .ZLinkDeferredJoinCompletionAuthority;
-import systems.zlink.framework.runtime.internal.locations
-    .ZLinkRelocationStartupScanner;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
-import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.runtime.internal.locations
+    .ZLinkAuthorityGenerationTransition;
+import systems.zlink.framework.runtime.internal.locations
+    .ZLinkMeshNodeDescriptorKey;
+import systems.zlink.framework.runtime.internal.locations
+    .ZLinkPlacementCapacityBundle;
+import systems.zlink.framework.runtime.internal.locations
+    .ZLinkSpotTypeCapacityDelta;
 
-/**
- * Owns commands 30-35/40-41 for one production MeshNode.
- *
- * <p>The control wire carries numeric participant ids. The target resolves
- * their stable identities from the source-owned Location authority and checks
- * the immutable relocation root before creating hidden runtime state.</p>
- */
+/** Owns the exact prepare/ready/data/cutover relocation attempt state. */
 final class ZLinkCanonicalRelocationStateMachine
     implements ZLinkCanonicalRelocationTransitionOwner.StateMachine,
         ZLinkRelocationTransitionClient {
     private static final ZLinkStoreCancellation OPEN = () -> false;
-    private static final int OFFER_MESSAGES_PER_PARTICIPANT = 64;
+    private static final Logger LOGGER = Logger.getLogger(
+        ZLinkCanonicalRelocationStateMachine.class.getName());
     private static final String ACTOR_AUTHORITY_PREFIX = "zla1:a:";
     private static final int SCAN_PAGE_SIZE = 1000;
+    private static final Duration CUTOVER_FALLBACK = Duration.ofSeconds(1);
+    private static final Duration STORE_RETRY_DELAY = Duration.ofMillis(25);
 
     private final ZLinkInternalMeshNode node;
     private final String meshName;
@@ -64,14 +67,16 @@ final class ZLinkCanonicalRelocationStateMachine
     private final ZLinkLocationRepository locations;
     private final ZLinkAggregateRelocationCoordinator coordinator;
     private final ZLinkSpotRetireControl.TargetEndpoint target;
+    private final RetentionScheduler retentionScheduler;
     private final RoutingId localNodeRid;
     private final long localNodeGeneration;
-    private final AtomicLong reservationGeneration = new AtomicLong();
-    private final ConcurrentHashMap<Fence, SourceSlot> sources =
+    private final ConcurrentHashMap<Fence, SourceAttempt> sources =
         new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Fence, TargetSlot> targets =
+    private final ConcurrentHashMap<Fence, TargetAttempt> targets =
         new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Fence, RecoverySlot> recoveries =
+    private final ConcurrentHashMap<Fence, RetryPrepared> retryPrepared =
+        new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Fence, TerminalTarget> terminalTargets =
         new ConcurrentHashMap<>();
 
     ZLinkCanonicalRelocationStateMachine(
@@ -81,67 +86,34 @@ final class ZLinkCanonicalRelocationStateMachine
         ZLinkLocationRepository locations,
         ZLinkAggregateRelocationCoordinator coordinator,
         ZLinkSpotRetireControl.TargetEndpoint target) {
+        this(
+            node,
+            meshName,
+            entrySpotId,
+            locations,
+            coordinator,
+            target,
+            ZLinkCanonicalRelocationStateMachine::scheduleAt);
+    }
+
+    ZLinkCanonicalRelocationStateMachine(
+        ZLinkInternalMeshNode node,
+        String meshName,
+        String entrySpotId,
+        ZLinkLocationRepository locations,
+        ZLinkAggregateRelocationCoordinator coordinator,
+        ZLinkSpotRetireControl.TargetEndpoint target,
+        RetentionScheduler retentionScheduler) {
         this.node = Objects.requireNonNull(node, "node");
         this.meshName = requireText(meshName, "meshName");
         this.entrySpotId = entrySpotId;
         this.locations = Objects.requireNonNull(locations, "locations");
         this.coordinator = Objects.requireNonNull(coordinator, "coordinator");
         this.target = Objects.requireNonNull(target, "target");
+        this.retentionScheduler = Objects.requireNonNull(
+            retentionScheduler, "retentionScheduler");
         localNodeRid = node.status().routingId();
         localNodeGeneration = node.status().lifecycleGeneration();
-    }
-
-    CompletionStage<Void> recoverPublished(
-        ZLinkRelocationStartupScanner.Candidate candidate) {
-        Objects.requireNonNull(candidate, "candidate");
-        if (!candidate.targetNodeRid().equals(localNodeRid)
-            || candidate.targetNodeGeneration() != localNodeGeneration) {
-            return CompletableFuture.completedFuture(null);
-        }
-        ZLinkSpotRetireControl.StageRequest request =
-            recoveryRequest(candidate);
-        Fence fence = Fence.from(request.fence());
-        RecoverySlot created = new RecoverySlot(request);
-        RecoverySlot current = recoveries.putIfAbsent(fence, created);
-        RecoverySlot slot = current == null ? created : current;
-        if (!slot.request().equals(request)) {
-            return failed(new IllegalStateException(
-                "published relocation recovery fence differs"));
-        }
-        if (current == null) {
-            target.stage(request)
-                .thenCompose(ignored -> target.publish(request))
-                .whenComplete((ignored, failure) -> {
-                    if (failure == null) {
-                        created.ready().complete(null);
-                    } else {
-                        recoveries.remove(fence, created);
-                        created.ready().completeExceptionally(unwrap(failure));
-                    }
-                });
-        }
-        return slot.ready().thenCompose(ignored ->
-            candidate.sourceCleanupCompleted()
-                ? finalizeRecovery(fence, slot)
-                : CompletableFuture.completedFuture(null));
-    }
-
-    CompletionStage<Void> recoverRetainedSessionAbort(
-        ZLinkRelocationStartupScanner.RetainedSessionAbort retained) {
-        Objects.requireNonNull(retained, "retained");
-        //  SOURCE abort is authenticated by the retained wire fence, not by
-        //  the process that retransmits it. Any runtime for the same mesh can
-        //  finish the abort after the original source process restarts.
-        if (!retained.targetMeshName().equals(meshName)) {
-            return CompletableFuture.completedFuture(null);
-        }
-        return target.recoverRetainedSessionAbort(retained);
-    }
-
-    boolean canRecoverRetainedSessionAbort(
-        ZLinkRelocationStartupScanner.RetainedSessionAbort retained) {
-        Objects.requireNonNull(retained, "retained");
-        return retained.targetMeshName().equals(meshName);
     }
 
     @Override
@@ -156,26 +128,59 @@ final class ZLinkCanonicalRelocationStateMachine
             return failed(new IllegalArgumentException(
                 "canonical relocation target RID differs"));
         }
-        Fence fence = Fence.from(request.fence());
         return sourcePrepare(request).thenCompose(prepare -> {
-            SourceSlot candidate = new SourceSlot(request, prepare);
-            SourceSlot current = sources.putIfAbsent(fence, candidate);
-            SourceSlot slot = current == null ? candidate : current;
-            if (!slot.request().equals(request)
-                || !Arrays.equals(
+            Fence fence = new Fence(
+                prepare.id(), prepare.targetAttemptGeneration());
+            SourceAttempt created = new SourceAttempt(request, prepare);
+            SourceAttempt current = sources.putIfAbsent(fence, created);
+            SourceAttempt attempt = current == null ? created : current;
+            if (!attempt.request().equals(request)
+                || !java.util.Arrays.equals(
                     ZLinkCanonicalRelocationProtocol.encodePrepare(
-                        slot.prepare()),
+                        attempt.prepare()),
                     ZLinkCanonicalRelocationProtocol.encodePrepare(prepare))) {
                 return failed(new IllegalArgumentException(
-                    "duplicate canonical relocation stage differs"));
+                    "duplicate canonical relocation prepare differs"));
             }
-            CompletionStage<Void> send = current == null
+            attempt.activeWaiters().incrementAndGet();
+            CompletionStage<Void> submitted = current == null
+                    || !attempt.ready().isDone()
                 ? send(targetNodeRid,
                     ZLinkCanonicalRelocationProtocol.encodePrepare(prepare))
                 : CompletableFuture.completedFuture(null);
-            return send.thenCompose(ignored ->
-                timed(slot.reserved(), timeout, "relocation reservation"));
+            return submitted
+                .exceptionallyCompose(failure -> failed(unwrap(failure)))
+                .thenCompose(ignored -> timed(
+                    attempt.ready(), timeout, "relocation relay readiness"))
+                .whenComplete((ignored, failure) -> {
+                    int remaining = attempt.activeWaiters().decrementAndGet();
+                    if (failure != null
+                        && remaining == 0) {
+                        sources.remove(fence, attempt);
+                    }
+                });
         });
+    }
+
+    @Override
+    public CompletionStage<Void> relay(
+        RoutingId targetNodeRid,
+        ZLinkSpotRetireControl.Fence fence,
+        byte[] frozenRecord,
+        Duration timeout) {
+        Objects.requireNonNull(frozenRecord, "frozenRecord");
+        requireTimeout(timeout);
+        SourceAttempt attempt = requireSource(Fence.from(fence), targetNodeRid);
+        var prepare = attempt.prepare();
+        return send(targetNodeRid,
+            ZLinkCanonicalRelocationProtocol.encodeData(
+                new ZLinkCanonicalRelocationProtocol.Data(
+                    prepare.id(),
+                    prepare.targetAttemptGeneration(),
+                    prepare.coordinator(),
+                    ZLinkCanonicalRelocationProtocol.SOURCE,
+                    prepare.object(),
+                    frozenRecord)));
     }
 
     @Override
@@ -184,27 +189,19 @@ final class ZLinkCanonicalRelocationStateMachine
         ZLinkSpotRetireControl.Fence fence,
         Duration timeout) {
         requireTimeout(timeout);
+        SourceAttempt attempt = requireSource(Fence.from(fence), targetNodeRid);
+        var prepare = attempt.prepare();
+        var cutover = new ZLinkCanonicalRelocationProtocol.Cutover(
+            prepare.id(),
+            prepare.targetAttemptGeneration(),
+            prepare.coordinator(),
+            ZLinkCanonicalRelocationProtocol.SOURCE,
+            prepare.object());
         Fence key = Fence.from(fence);
-        SourceSlot slot = requireSource(key, targetNodeRid);
-        ZLinkCanonicalRelocationProtocol.ControlData command =
-            new ZLinkCanonicalRelocationProtocol.ControlData(
-                key.id(),
-                key.attempt(),
-                slot.prepare().coordinator(),
-                ZLinkCanonicalRelocationProtocol.SOURCE,
-                primaryParticipant(slot),
-                1,
-                source(slot.request()),
-                4,
-                slot.prepare().object(),
-                0,
-                0);
-        return sendUntilAck(
-            targetNodeRid,
-            ZLinkCanonicalRelocationProtocol.encodeControlData(command),
-            slot.publishAck(),
-            timeout,
-            "relocation publish ACK");
+        return send(targetNodeRid,
+                ZLinkCanonicalRelocationProtocol.encodeCutover(cutover))
+            .whenComplete((ignored, failure) ->
+                sources.remove(key, attempt));
     }
 
     @Override
@@ -214,77 +211,18 @@ final class ZLinkCanonicalRelocationStateMachine
         Duration timeout) {
         requireTimeout(timeout);
         Fence key = Fence.from(fence);
-        SourceSlot slot = sources.get(key);
-        if (slot == null) {
+        SourceAttempt attempt = sources.get(key);
+        if (attempt == null) {
             return CompletableFuture.completedFuture(null);
         }
-        if (!targetNodeRid.equals(slot.request().targetNodeRid())) {
+        if (!attempt.request().targetNodeRid().equals(targetNodeRid)) {
             return failed(new IllegalArgumentException(
                 "canonical relocation abort target differs"));
         }
-        ZLinkCanonicalRelocationProtocol.ControlData command =
-            new ZLinkCanonicalRelocationProtocol.ControlData(
-                key.id(),
-                key.attempt(),
-                slot.prepare().coordinator(),
-                ZLinkCanonicalRelocationProtocol.SOURCE,
-                primaryParticipant(slot),
-                2,
-                source(slot.request()),
-                9,
-                slot.prepare().object(),
-                0,
-                0);
-        return send(targetNodeRid,
-                ZLinkCanonicalRelocationProtocol.encodeControlData(command))
-            .thenCompose(ignored ->
-                timed(slot.abortAck(), timeout, "relocation abort ACK"))
-            .whenComplete((ignored, failure) -> {
-                if (failure == null) {
-                    sources.remove(key, slot);
-                }
-            });
-    }
-
-    @Override
-    public CompletionStage<Void> finalizeAfterCompletion(
-        RoutingId targetNodeRid,
-        ZLinkSpotRetireControl.Fence fence,
-        Duration timeout) {
-        requireTimeout(timeout);
-        Fence key = Fence.from(fence);
-        SourceSlot slot = requireSource(key, targetNodeRid);
-        List<ZLinkCanonicalRelocationProtocol.Terminal> terminals =
-            terminalHighWater(slot);
-        ZLinkCanonicalRelocationProtocol.Seal seal =
-            new ZLinkCanonicalRelocationProtocol.Seal(
-                key.id(),
-                key.attempt(),
-                slot.prepare().coordinator(),
-                ZLinkCanonicalRelocationProtocol.SOURCE,
-                false,
-                terminals);
-        return send(targetNodeRid,
-                ZLinkCanonicalRelocationProtocol.encodeSeal(seal))
-            .thenCompose(ignored ->
-                timed(slot.sealAck(), timeout, "relocation seal"))
-            .thenCompose(ignored -> {
-                ZLinkCanonicalRelocationProtocol.Complete complete =
-                    new ZLinkCanonicalRelocationProtocol.Complete(
-                        key.id(),
-                        key.attempt(),
-                        slot.prepare().coordinator(),
-                        ZLinkCanonicalRelocationProtocol.SOURCE,
-                        source(slot.request()),
-                        1);
-                return send(targetNodeRid,
-                    ZLinkCanonicalRelocationProtocol.encodeComplete(complete));
-            })
-            .whenComplete((ignored, failure) -> {
-                if (failure == null) {
-                    sources.remove(key, slot);
-                }
-            });
+        sources.remove(key, attempt);
+        return coordinator.abortPreparedFence(
+            new ZLinkAggregateFence(fence.aggregateId(),
+                fence.aggregateGeneration()), OPEN);
     }
 
     @Override
@@ -295,37 +233,17 @@ final class ZLinkCanonicalRelocationStateMachine
         try {
             return switch (command) {
                 case ServiceWireConstants.COMMAND_RELOCATION_PREPARE ->
-                    onPrepare(
-                        transportSource,
-                        ZLinkCanonicalRelocationProtocol.decodePrepare(
-                            encoded));
+                    onPrepare(transportSource,
+                        ZLinkCanonicalRelocationProtocol.decodePrepare(encoded));
                 case ServiceWireConstants.COMMAND_RELOCATION_READY ->
-                    onReady(
-                        transportSource,
+                    onReady(transportSource,
                         ZLinkCanonicalRelocationProtocol.decodeReady(encoded));
-                case ServiceWireConstants.COMMAND_RELOCATION_RESERVED ->
-                    onReserved(
-                        transportSource,
-                        ZLinkCanonicalRelocationProtocol.decodeReserved(
-                            encoded));
                 case ServiceWireConstants.COMMAND_RELOCATION_DATA ->
-                    onControl(
-                        transportSource,
-                        ZLinkCanonicalRelocationProtocol.decodeControlData(
-                            encoded));
-                case ServiceWireConstants.COMMAND_RELOCATION_ACK ->
-                    onAck(
-                        transportSource,
-                        ZLinkCanonicalRelocationProtocol.decodeAck(encoded));
-                case ServiceWireConstants.COMMAND_RELOCATION_SEAL ->
-                    onSeal(
-                        transportSource,
-                        ZLinkCanonicalRelocationProtocol.decodeSeal(encoded));
-                case ServiceWireConstants.COMMAND_RELOCATION_COMPLETE ->
-                    onComplete(
-                        transportSource,
-                        ZLinkCanonicalRelocationProtocol.decodeComplete(
-                            encoded));
+                    onData(transportSource,
+                        ZLinkCanonicalRelocationProtocol.decodeData(encoded));
+                case ServiceWireConstants.COMMAND_RELOCATION_CUTOVER ->
+                    onCutover(transportSource,
+                        ZLinkCanonicalRelocationProtocol.decodeCutover(encoded));
                 default -> failed(new IllegalArgumentException(
                     "unsupported canonical relocation command"));
             };
@@ -337,394 +255,345 @@ final class ZLinkCanonicalRelocationStateMachine
     private CompletionStage<Void> onPrepare(
         RoutingId transportSource,
         ZLinkCanonicalRelocationProtocol.Prepare prepare) {
-        validateTargetCandidate(prepare.candidate());
+        validateTarget(prepare.target());
         if (!transportSource.equals(prepare.sourceNodeRid())
             || prepare.initiatorRole()
                 != ZLinkCanonicalRelocationProtocol.SOURCE) {
             return failed(new IllegalArgumentException(
                 "canonical relocation prepare source differs"));
         }
-        Fence fence = new Fence(prepare.id(), prepare.attempt());
-        TargetSlot candidate = new TargetSlot(prepare);
-        TargetSlot current = targets.putIfAbsent(fence, candidate);
-        TargetSlot slot = current == null ? candidate : current;
-        if (!Arrays.equals(
-                ZLinkCanonicalRelocationProtocol.encodePrepare(slot.prepare()),
+        Fence fence = new Fence(
+            prepare.id(), prepare.targetAttemptGeneration());
+        TerminalTarget terminal = terminalTargets.get(fence);
+        if (terminal != null) {
+            if (terminal.source().equals(transportSource)
+                && java.util.Arrays.equals(
+                    terminal.encodedPrepare(),
+                    ZLinkCanonicalRelocationProtocol.encodePrepare(prepare))) {
+                LOGGER.warning(
+                    "Late or duplicate canonical PREPARE is a no-op: "
+                        + fence.id());
+                return CompletableFuture.completedFuture(null);
+            }
+            return failed(new IllegalArgumentException(
+                "terminal canonical relocation prepare differs"));
+        }
+        RetryPrepared foundRetry = retryPrepared.get(fence);
+        if (foundRetry != null
+            && !Instant.now().isBefore(
+                foundRetry.prepared().stored().expiresAt())) {
+            retryPrepared.remove(fence, foundRetry);
+            foundRetry = null;
+        }
+        RetryPrepared retry = foundRetry;
+        if (retry != null && !java.util.Arrays.equals(
+                retry.encodedPrepare(),
+                ZLinkCanonicalRelocationProtocol.encodePrepare(prepare))) {
+            return failed(new IllegalArgumentException(
+                "retry canonical relocation prepare differs"));
+        }
+        TargetAttempt created = new TargetAttempt(prepare);
+        TargetAttempt current = targets.putIfAbsent(fence, created);
+        TargetAttempt attempt = current == null ? created : current;
+        if (!java.util.Arrays.equals(
+                ZLinkCanonicalRelocationProtocol.encodePrepare(
+                    attempt.prepare()),
                 ZLinkCanonicalRelocationProtocol.encodePrepare(prepare))) {
             return failed(new IllegalArgumentException(
                 "duplicate canonical relocation prepare differs"));
         }
         if (current != null) {
-            return slot.offer().thenCompose(offer ->
-                send(transportSource,
-                    ZLinkCanonicalRelocationProtocol.encodeReady(offer)));
+            return publishReady(fence, attempt, transportSource);
         }
-        reconstruct(prepare).whenComplete((request, failure) -> {
-            if (failure != null) {
-                targets.remove(fence, candidate);
-                candidate.offer().completeExceptionally(unwrap(failure));
-                return;
+
+        reconstruct(prepare)
+            .thenCompose(restore -> {
+                attempt.request().complete(restore.request());
+                return target.stage(restore.request())
+                    .thenCompose(ignored -> retry == null
+                        ? coordinator.prepareExistingRoot(
+                            restore.authority(),
+                            restore.root(),
+                            prepare.root().reference(),
+                            prepare.root().checksum(),
+                            OPEN)
+                        : CompletableFuture.completedFuture(retry.prepared()))
+                    .thenAccept(attempt.prepared()::complete);
+            })
+            .whenComplete((ignored, failure) -> {
+                if (failure == null) {
+                    attempt.ready().complete(null);
+                } else {
+                    targets.remove(fence, attempt);
+                    attempt.ready().completeExceptionally(unwrap(failure));
+                }
+            });
+        return publishReady(fence, attempt, transportSource);
+    }
+
+    private CompletionStage<Void> publishReady(
+        Fence fence,
+        TargetAttempt attempt,
+        RoutingId source) {
+        synchronized (attempt) {
+            if (attempt.readyPublication() != null) {
+                return attempt.readyPublication();
             }
-            candidate.request().complete(request);
-            long generation = nextReservationGeneration();
-            //  relocationReady sentinel: the target offer carries nonzero
-            //  offered capacity and an EMPTY participant vector.
-            ZLinkCanonicalRelocationProtocol.Ready offer =
-                new ZLinkCanonicalRelocationProtocol.Ready(
-                    prepare.id(),
-                    prepare.attempt(),
-                    prepare.round(),
-                    prepare.coordinator(),
-                    prepare.candidate(),
-                    prepare.object(),
-                    ZLinkCanonicalRelocationProtocol.TARGET,
-                    prepare.requiredMessages(),
-                    prepare.requiredBytes(),
-                    List.of(),
-                    prepare.sourceNodeGeneration(),
-                    localNodeGeneration,
-                    generation,
-                    prepare.root(),
-                    prepare.applicationVersion(),
-                    progress(prepare));
-            candidate.reservationGeneration(generation);
-            candidate.offer().complete(offer);
-        });
-        return candidate.offer().thenCompose(offer ->
-            send(transportSource,
-                ZLinkCanonicalRelocationProtocol.encodeReady(offer)));
+            CompletionStage<Void> publication = attempt.ready()
+                .thenCompose(ignored -> sendReady(source, attempt.prepare()))
+                .thenRun(() -> {
+                    RetryPrepared retry = retryPrepared.get(fence);
+                    if (retry != null
+                        && retry.prepared() == attempt.prepared().join()) {
+                        retryPrepared.remove(fence, retry);
+                    }
+                    attempt.fallbackArmed(true);
+                    scheduleCutoverFallback(fence, attempt);
+                })
+                .exceptionallyCompose(failure ->
+                    rollbackReadySubmission(fence, attempt, unwrap(failure)));
+            attempt.readyPublication(publication);
+            return publication;
+        }
+    }
+
+    private CompletionStage<Void> rollbackReadySubmission(
+        Fence fence,
+        TargetAttempt attempt,
+        Throwable readyFailure) {
+        if (attempt.fallbackArmed()) {
+            return failed(readyFailure);
+        }
+        targets.remove(fence, attempt);
+        ZLinkAggregateRelocationCoordinator.Prepared prepared =
+            completedValue(attempt.prepared());
+        if (prepared != null) {
+            RetryPrepared retained = new RetryPrepared(
+                ZLinkCanonicalRelocationProtocol.encodePrepare(
+                    attempt.prepare()),
+                prepared);
+            if (retryPrepared.putIfAbsent(fence, retained) == null) {
+                retentionScheduler.schedule(
+                    prepared.stored().expiresAt(),
+                    () -> retryPrepared.remove(fence, retained));
+            }
+        }
+        ZLinkSpotRetireControl.StageRequest request =
+            completedValue(attempt.request());
+        CompletionStage<Void> rollback = request == null
+            ? CompletableFuture.completedFuture(null)
+            : target.abort(request);
+        return rollback
+            .handle((ignored, targetFailure) -> {
+                if (targetFailure != null) {
+                    readyFailure.addSuppressed(unwrap(targetFailure));
+                }
+                throw new CompletionException(readyFailure);
+            });
+    }
+
+    private static <T> T completedValue(CompletableFuture<T> future) {
+        return future.isDone()
+                && !future.isCompletedExceptionally()
+                && !future.isCancelled()
+            ? future.getNow(null)
+            : null;
+    }
+
+    private static void scheduleAt(Instant deadline, Runnable cleanup) {
+        long delay = Math.max(
+            1L, Duration.between(Instant.now(), deadline).toMillis());
+        CompletableFuture.delayedExecutor(delay, TimeUnit.MILLISECONDS)
+            .execute(cleanup);
+    }
+
+    private CompletionStage<Void> sendReady(
+        RoutingId source,
+        ZLinkCanonicalRelocationProtocol.Prepare prepare) {
+        return send(source, ZLinkCanonicalRelocationProtocol.encodeReady(
+            new ZLinkCanonicalRelocationProtocol.Ready(
+                prepare.id(),
+                prepare.targetAttemptGeneration(),
+                prepare.coordinator(),
+                prepare.target(),
+                prepare.object(),
+                ZLinkCanonicalRelocationProtocol.TARGET)));
     }
 
     private CompletionStage<Void> onReady(
         RoutingId transportSource,
         ZLinkCanonicalRelocationProtocol.Ready ready) {
-        Fence fence = new Fence(ready.id(), ready.attempt());
-        if (ready.role() == ZLinkCanonicalRelocationProtocol.TARGET) {
-            SourceSlot slot = requireSource(fence, transportSource);
-            validateOffer(slot.prepare(), ready, transportSource);
-            //  relocationReady sentinel: the source acceptance zeroes the
-            //  offered capacity and echoes the exact prepare participant set.
-            ZLinkCanonicalRelocationProtocol.Ready acceptance =
-                new ZLinkCanonicalRelocationProtocol.Ready(
-                    ready.id(),
-                    ready.attempt(),
-                    ready.round(),
-                    ready.coordinator(),
-                    ready.candidate(),
-                    ready.object(),
-                    ZLinkCanonicalRelocationProtocol.SOURCE,
-                    0,
-                    0,
-                    slot.prepare().participants(),
-                    slot.prepare().sourceNodeGeneration(),
-                    ready.targetNodeGeneration(),
-                    ready.reservationGeneration(),
-                    ready.root(),
-                    ready.applicationVersion(),
-                    ready.progress());
-            return send(
-                transportSource,
-                ZLinkCanonicalRelocationProtocol.encodeReady(acceptance));
-        }
-        if (ready.role() != ZLinkCanonicalRelocationProtocol.SOURCE) {
-            return failed(new IllegalArgumentException(
-                "canonical relocation ready role is invalid"));
-        }
-        TargetSlot slot = requireTarget(fence, transportSource);
-        validateAcceptance(slot, ready, transportSource);
-        CompletionStage<Void> staged;
-        synchronized (slot) {
-            if (slot.staged() == null) {
-                slot.staged(slot.request().thenCompose(target::stage));
-            }
-            staged = slot.staged();
-        }
-        return staged.thenCompose(ignored -> {
-            ZLinkCanonicalRelocationProtocol.Reserved reserved =
-                new ZLinkCanonicalRelocationProtocol.Reserved(
-                    ready.id(),
-                    ready.attempt(),
-                    ready.round(),
-                    ready.coordinator(),
-                    ready.candidate(),
-                    ready.reservationGeneration(),
-                    ready.participants());
-            return send(
-                transportSource,
-                ZLinkCanonicalRelocationProtocol.encodeReserved(reserved));
-        });
-    }
-
-    private CompletionStage<Void> onReserved(
-        RoutingId transportSource,
-        ZLinkCanonicalRelocationProtocol.Reserved reserved) {
-        Fence fence = new Fence(reserved.id(), reserved.attempt());
-        SourceSlot slot = requireSource(fence, transportSource);
-        if (reserved.reservationGeneration() <= 0
-            || !reserved.participants().equals(
-                slot.prepare().participants())
-            || !reserved.candidate().equals(slot.prepare().candidate())
-            || !reserved.coordinator().equals(
-                slot.prepare().coordinator())) {
-            return failed(new IllegalArgumentException(
-                "canonical relocation reservation differs"));
-        }
-        slot.reserved().complete(null);
-        return CompletableFuture.completedFuture(null);
-    }
-
-    private CompletionStage<Void> onControl(
-        RoutingId transportSource,
-        ZLinkCanonicalRelocationProtocol.ControlData control) {
-        Fence fence = new Fence(control.id(), control.attempt());
-        TargetSlot slot = targets.get(fence);
-        if (slot == null) {
-            RecoverySlot recovery = recoveries.get(fence);
-            return recovery == null
-                ? failed(new IllegalStateException(
-                    "canonical relocation target slot is unavailable"))
-                : onRecoveredControl(
-                    fence, recovery, transportSource, control);
-        }
-        requireTarget(fence, transportSource);
-        if (control.senderRole() != ZLinkCanonicalRelocationProtocol.SOURCE
-            || !control.coordinator().equals(slot.prepare().coordinator())
-            || !control.object().equals(slot.prepare().object())
-            || !control.source().nodeRid().equals(transportSource)
-            || control.source().nodeGeneration()
-                != slot.prepare().sourceNodeGeneration()) {
-            return failed(new IllegalArgumentException(
-                "canonical relocation control fence differs"));
-        }
-        CompletionStage<Void> transition;
-        synchronized (slot) {
-            if (control.phase() == 4 && control.sequence() == 1) {
-                if (slot.published() == null) {
-                    CompletionStage<Void> publish = slot.staged().thenCompose(
-                        ignored -> slot.request().thenCompose(
-                            target::publish));
-                    slot.published(publish);
-                }
-                transition = slot.published();
-            } else if (control.phase() == 9 && control.sequence() == 2) {
-                if (slot.published() != null) {
-                    return failed(new IllegalStateException(
-                        "published relocation cannot be aborted"));
-                }
-                if (slot.aborted() == null) {
-                    slot.aborted(slot.request().thenCompose(target::abort));
-                }
-                transition = slot.aborted();
-            } else {
-                return failed(new IllegalArgumentException(
-                    "canonical relocation control phase is invalid"));
-            }
-        }
-        return transition.thenCompose(ignored -> {
-            ZLinkCanonicalRelocationProtocol.Ack ack =
-                new ZLinkCanonicalRelocationProtocol.Ack(
-                    control.id(),
-                    control.attempt(),
-                    control.coordinator(),
-                    ZLinkCanonicalRelocationProtocol.TARGET,
-                    control.participantId(),
-                    control.sequence());
-            return send(
-                transportSource,
-                ZLinkCanonicalRelocationProtocol.encodeAck(ack));
-        });
-    }
-
-    private CompletionStage<Void> onRecoveredControl(
-        Fence fence,
-        RecoverySlot recovery,
-        RoutingId transportSource,
-        ZLinkCanonicalRelocationProtocol.ControlData control) {
-        ZLinkSpotRetireControl.StageRequest request = recovery.request();
-        ZLinkSpotRetireControl.ParticipantFence primary =
-            primary(request.participants());
-        if (control.senderRole() != ZLinkCanonicalRelocationProtocol.SOURCE
-            || control.phase() != 4
-            || control.sequence() != 1
-            || !transportSource.equals(request.sourceNodeRid())
-            || !control.source().nodeRid().equals(request.sourceNodeRid())
-            || control.source().nodeGeneration()
-                != request.sourceNodeGeneration()
-            || !control.coordinator().ownerId().equals(
-                request.sourceOwnerId())
-            || control.coordinator().ownerLeaseGeneration()
-                != request.sourceOwnerLeaseGeneration()
-            || control.object().kind() != primary.objectKind()
-            || !control.object().objectId().equals(primary.objectId())
-            || control.object().objectGeneration()
-                != primary.objectGeneration()
-            || control.object().expectedAuthorityOwnerGeneration()
-                != primary.sourceAuthorityOwnerGeneration()) {
-            return failed(new IllegalArgumentException(
-                "recovered canonical relocation control fence differs"));
-        }
-        return recovery.ready().thenCompose(ignored -> {
-            ZLinkCanonicalRelocationProtocol.Ack ack =
-                new ZLinkCanonicalRelocationProtocol.Ack(
-                    control.id(),
-                    control.attempt(),
-                    control.coordinator(),
-                    ZLinkCanonicalRelocationProtocol.TARGET,
-                    control.participantId(),
-                    control.sequence());
-            return send(
-                transportSource,
-                ZLinkCanonicalRelocationProtocol.encodeAck(ack));
-        });
-    }
-
-    private CompletionStage<Void> onAck(
-        RoutingId transportSource,
-        ZLinkCanonicalRelocationProtocol.Ack ack) {
-        Fence fence = new Fence(ack.id(), ack.attempt());
-        SourceSlot slot = requireSource(fence, transportSource);
-        if (ack.senderRole() != ZLinkCanonicalRelocationProtocol.TARGET
-            || !ack.coordinator().equals(slot.prepare().coordinator())
-            || ack.participantId() != primaryParticipant(slot)) {
-            return failed(new IllegalArgumentException(
-                "canonical relocation ACK fence differs"));
-        }
-        if (ack.highWater() == 1) {
-            slot.publishAck().complete(null);
-        } else if (ack.highWater() == 2) {
-            slot.abortAck().complete(null);
-        } else {
-            return failed(new IllegalArgumentException(
-                "canonical relocation ACK sequence is invalid"));
-        }
-        return CompletableFuture.completedFuture(null);
-    }
-
-    private CompletionStage<Void> onSeal(
-        RoutingId transportSource,
-        ZLinkCanonicalRelocationProtocol.Seal seal) {
-        Fence fence = new Fence(seal.id(), seal.attempt());
-        if (seal.response()) {
-            SourceSlot slot = requireSource(fence, transportSource);
-            if (seal.senderRole() != ZLinkCanonicalRelocationProtocol.TARGET
-                || !seal.coordinator().equals(slot.prepare().coordinator())
-                || !seal.participants().equals(terminalHighWater(slot))) {
-                return failed(new IllegalArgumentException(
-                    "canonical relocation seal response differs"));
-            }
-            slot.sealAck().complete(null);
+        Fence fence = new Fence(
+            ready.id(), ready.targetAttemptGeneration());
+        SourceAttempt attempt = sources.get(fence);
+        if (attempt == null) {
             return CompletableFuture.completedFuture(null);
         }
-        TargetSlot slot = targets.get(fence);
-        if (slot == null) {
-            RecoverySlot recovery = recoveries.get(fence);
-            if (recovery == null) {
-                return failed(new IllegalStateException(
-                    "canonical relocation target slot is unavailable"));
-            }
-            if (seal.senderRole()
-                    != ZLinkCanonicalRelocationProtocol.SOURCE
-                || !transportSource.equals(
-                    recovery.request().sourceNodeRid())
-                || !matchesRecoveredCoordinator(
-                    seal.coordinator(), recovery.request())) {
-                return failed(new IllegalArgumentException(
-                    "recovered canonical relocation seal fence differs"));
-            }
-            return recovery.ready().thenCompose(ignored -> {
-                ZLinkCanonicalRelocationProtocol.Seal response =
-                    new ZLinkCanonicalRelocationProtocol.Seal(
-                        seal.id(),
-                        seal.attempt(),
-                        seal.coordinator(),
-                        ZLinkCanonicalRelocationProtocol.TARGET,
-                        true,
-                        seal.participants());
-                return send(
-                    transportSource,
-                    ZLinkCanonicalRelocationProtocol.encodeSeal(response));
-            });
+        var prepare = attempt.prepare();
+        if (!transportSource.equals(prepare.target().nodeRid())
+            || !ready.coordinator().equals(prepare.coordinator())
+            || !ready.target().equals(prepare.target())
+            || !ready.object().equals(prepare.object())
+            || ready.senderRole() != ZLinkCanonicalRelocationProtocol.TARGET) {
+            return failed(new IllegalArgumentException(
+                "canonical relocation ready fence differs"));
         }
-        requireTarget(fence, transportSource);
-        if (seal.senderRole() != ZLinkCanonicalRelocationProtocol.SOURCE
-            || !seal.coordinator().equals(slot.prepare().coordinator())
-            || slot.published() == null) {
-            return failed(new IllegalStateException(
-                "canonical relocation cannot be sealed"));
-        }
-        return slot.published().thenCompose(ignored -> {
-            ZLinkCanonicalRelocationProtocol.Seal response =
-                new ZLinkCanonicalRelocationProtocol.Seal(
-                    seal.id(),
-                    seal.attempt(),
-                    seal.coordinator(),
-                    ZLinkCanonicalRelocationProtocol.TARGET,
-                    true,
-                    seal.participants());
-            return send(
-                transportSource,
-                ZLinkCanonicalRelocationProtocol.encodeSeal(response));
-        });
+        attempt.ready().complete(null);
+        return CompletableFuture.completedFuture(null);
     }
 
-    private CompletionStage<Void> onComplete(
+    private CompletionStage<Void> onData(
         RoutingId transportSource,
-        ZLinkCanonicalRelocationProtocol.Complete complete) {
-        Fence fence = new Fence(complete.id(), complete.attempt());
-        TargetSlot slot = targets.get(fence);
-        if (slot == null) {
-            RecoverySlot recovery = recoveries.get(fence);
-            if (recovery == null
-                || complete.senderRole()
-                    != ZLinkCanonicalRelocationProtocol.SOURCE
-                || complete.cleanupState() != 1
-                || !transportSource.equals(
-                    recovery.request().sourceNodeRid())
-                || !complete.source().nodeRid().equals(transportSource)
-                || complete.source().nodeGeneration()
-                    != recovery.request().sourceNodeGeneration()
-                || !matchesRecoveredCoordinator(
-                    complete.coordinator(), recovery.request())) {
-                return failed(new IllegalArgumentException(
-                    "recovered canonical relocation completion fence differs"));
-            }
-            return recovery.ready().thenCompose(ignored ->
-                finalizeRecovery(fence, recovery));
-        }
-        requireTarget(fence, transportSource);
-        if (complete.senderRole() != ZLinkCanonicalRelocationProtocol.SOURCE
-            || complete.cleanupState() != 1
-            || !complete.coordinator().equals(slot.prepare().coordinator())
-            || !complete.source().nodeRid().equals(transportSource)
-            || slot.published() == null) {
+        ZLinkCanonicalRelocationProtocol.Data data) {
+        TargetAttempt attempt = requireTarget(
+            new Fence(data.id(), data.targetAttemptGeneration()),
+            transportSource);
+        if (!data.coordinator().equals(attempt.prepare().coordinator())
+            || !data.object().equals(attempt.prepare().object())) {
             return failed(new IllegalArgumentException(
-                "canonical relocation completion fence differs"));
+                "canonical relocation data fence differs"));
         }
-        CompletionStage<Void> finalized;
-        synchronized (slot) {
-            if (slot.finalized() == null) {
-                //  Admission is already open at publish. A failed finalize
-                //  (for example RelocationDataLost from the async Completed
-                //  verification) surfaces to the source as the command-35
-                //  failure and never closes admission; the memo is reset so
-                //  the next command 35 retries the convergence steps.
-                CompletionStage<Void> attempt = slot.published().thenCompose(
-                    ignored -> slot.request().thenCompose(
-                        target::finalizeAfterCompletion));
-                slot.finalized(attempt);
-                attempt.whenComplete((ignored, failure) -> {
-                    if (failure != null) {
-                        synchronized (slot) {
-                            if (slot.finalized() == attempt) {
-                                slot.finalized(null);
-                            }
-                        }
-                    }
-                });
+        return attempt.ready().thenCompose(ignored -> attempt.request()
+            .thenCompose(request -> target.stageRelayedRecord(
+                request, data.frozenRecord())));
+    }
+
+    private CompletionStage<Void> onCutover(
+        RoutingId transportSource,
+        ZLinkCanonicalRelocationProtocol.Cutover cutover) {
+        Fence fence = new Fence(
+            cutover.id(), cutover.targetAttemptGeneration());
+        TargetAttempt attempt = targets.get(fence);
+        if (attempt == null) {
+            TerminalTarget terminal = terminalTargets.get(fence);
+            if (terminal != null
+                && terminal.source().equals(transportSource)
+                && java.util.Arrays.equals(
+                    terminal.encodedCutover(),
+                    ZLinkCanonicalRelocationProtocol.encodeCutover(cutover))) {
+                LOGGER.warning(
+                    "Late or duplicate canonical CUTOVER is a no-op: "
+                        + fence.id());
+                return CompletableFuture.completedFuture(null);
             }
-            finalized = slot.finalized();
+            return failed(new IllegalStateException(
+                "canonical target relocation is unavailable"));
         }
-        return finalized.thenRun(() -> targets.remove(fence, slot));
+        if (!attempt.prepare().sourceNodeRid().equals(transportSource)) {
+            return failed(new IllegalArgumentException(
+                "canonical relocation cutover source differs"));
+        }
+        if (!cutover.coordinator().equals(attempt.prepare().coordinator())
+            || !cutover.object().equals(attempt.prepare().object())
+            || cutover.senderRole()
+                != ZLinkCanonicalRelocationProtocol.SOURCE) {
+            return failed(new IllegalArgumentException(
+                "canonical relocation cutover fence differs"));
+        }
+        return publishTarget(fence, attempt, false);
+    }
+
+    private void scheduleCutoverFallback(
+        Fence fence, TargetAttempt attempt) {
+        CompletableFuture.delayedExecutor(
+                CUTOVER_FALLBACK.toMillis(), TimeUnit.MILLISECONDS)
+            .execute(() -> publishTarget(fence, attempt, true)
+                .exceptionally(ignored -> null));
+    }
+
+    private CompletionStage<Void> publishTarget(
+        Fence fence,
+        TargetAttempt attempt,
+        boolean fallback) {
+        CompletionStage<Void> publication;
+        synchronized (attempt) {
+            if (attempt.publication() != null) {
+                return attempt.publication();
+            }
+            publication = attempt.prepared()
+                .thenCompose(this::commitUntilRestoreExpiry)
+                .thenApply(published -> {
+                    attempt.committed(true);
+                    return published;
+                })
+                .thenCompose(ignored -> attempt.request())
+                .thenCompose(target::publish);
+            attempt.publication(publication);
+        }
+        publication.whenComplete((ignored, failure) -> {
+            if (failure != null && !attempt.committed()) {
+                attempt.request().thenCompose(target::abort)
+                    .whenComplete((discarded, discardFailure) ->
+                        targets.remove(fence, attempt));
+            } else {
+                retainTerminalTarget(fence, attempt);
+            }
+        });
+        return publication;
+    }
+
+    private void retainTerminalTarget(Fence fence, TargetAttempt attempt) {
+        ZLinkAggregateRelocationCoordinator.Prepared prepared =
+            attempt.prepared().join();
+        var prepare = attempt.prepare();
+        var cutover = new ZLinkCanonicalRelocationProtocol.Cutover(
+            prepare.id(),
+            prepare.targetAttemptGeneration(),
+            prepare.coordinator(),
+            ZLinkCanonicalRelocationProtocol.SOURCE,
+            prepare.object());
+        TerminalTarget terminal = new TerminalTarget(
+            prepare.sourceNodeRid(),
+            ZLinkCanonicalRelocationProtocol.encodePrepare(prepare),
+            ZLinkCanonicalRelocationProtocol.encodeCutover(cutover));
+        TerminalTarget current = terminalTargets.putIfAbsent(fence, terminal);
+        if (current == null) {
+            retentionScheduler.schedule(
+                prepared.stored().expiresAt(),
+                () -> terminalTargets.remove(fence, terminal));
+        }
+        targets.remove(fence, attempt);
+    }
+
+    private CompletionStage<ZLinkAggregateRelocationCoordinator.Published>
+        commitUntilRestoreExpiry(
+            ZLinkAggregateRelocationCoordinator.Prepared prepared) {
+        CompletableFuture<ZLinkAggregateRelocationCoordinator.Published>
+            result = new CompletableFuture<>();
+        commitUntilRestoreExpiry(prepared, result);
+        return result;
+    }
+
+    private void commitUntilRestoreExpiry(
+        ZLinkAggregateRelocationCoordinator.Prepared prepared,
+        CompletableFuture<ZLinkAggregateRelocationCoordinator.Published>
+            result) {
+        if (!Instant.now().isBefore(prepared.stored().expiresAt())) {
+            result.completeExceptionally(new TimeoutException(
+                "relocation Restore validity expired before target owner CAS"));
+            return;
+        }
+        coordinator.commit(prepared, OPEN).whenComplete((published, failure) -> {
+            if (failure == null) {
+                result.complete(published);
+                return;
+            }
+            Throwable cause = unwrap(failure);
+            if (cause instanceof ZLinkAggregateRelocationCoordinator
+                    .AuthorityConflictException
+                || cause instanceof ZLinkAggregateRelocationCoordinator
+                    .RelocationDataLostException
+                || !Instant.now().isBefore(prepared.stored().expiresAt())) {
+                result.completeExceptionally(cause);
+                return;
+            }
+            long remainingMillis = Math.max(1L, Duration.between(
+                Instant.now(), prepared.stored().expiresAt()).toMillis());
+            CompletableFuture.delayedExecutor(
+                    Math.min(STORE_RETRY_DELAY.toMillis(), remainingMillis),
+                    TimeUnit.MILLISECONDS)
+                .execute(() -> commitUntilRestoreExpiry(prepared, result));
+        });
     }
 
     private CompletionStage<ZLinkCanonicalRelocationProtocol.Prepare>
@@ -738,7 +607,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 request.relocationReference(),
                 request.relocationChecksum(),
                 OPEN);
-        return authority.thenCombine(root, (read, value) -> {
+        return authority.thenCombine(root, (read, stored) -> {
             if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
                 || snapshot.objectGeneration() != primary.objectGeneration()
                 || snapshot.authorityOwnerGeneration()
@@ -749,70 +618,18 @@ final class ZLinkCanonicalRelocationStateMachine
                 throw new IllegalStateException(
                     "source relocation authority fence is stale");
             }
-            ZLinkServiceRelocationEnvelopeCodec.Envelope envelope =
-                ZLinkServiceRelocationEnvelopeCodec.decode(value.payload());
-            if (envelope.applicationStates().size()
-                != request.participants().size()) {
-                throw new IllegalStateException(
-                    "relocation root participant count differs");
-            }
-            long requiredBytes = Math.max(1, value.payload().length);
-            long requiredMessages = Math.multiplyExact(
-                request.participants().size(),
-                OFFER_MESSAGES_PER_PARTICIPANT);
-            List<ZLinkCanonicalRelocationProtocol.Participant> participants =
-                allowances(
-                    envelope.applicationStates().stream()
-                        .map(ZLinkServiceRelocationEnvelopeCodec
-                            .ApplicationState::participantId)
-                        .toList(),
-                    requiredMessages,
-                    requiredBytes);
-            if (!request.sessionRoutes().isEmpty()) {
-                List<ZLinkCanonicalRelocationProtocol.Participant> enriched =
-                    new ArrayList<>(participants);
-                for (int index = 0;
-                    index < request.participants().size();
-                    index++) {
-                    ZLinkSpotRetireControl.ParticipantFence participant =
-                        request.participants().get(index);
-                    ZLinkSpotRetireControl.SessionRouteFence route =
-                        request.sessionRoutes().stream()
-                            .filter(routeValue -> routeValue.actorId().equals(
-                                participant.objectId()))
-                            .findFirst()
-                            .orElse(null);
-                    if (route == null) {
-                        continue;
-                    }
-                    var allowance = enriched.get(index);
-                    enriched.set(index,
-                        new ZLinkCanonicalRelocationProtocol.Participant(
-                            allowance.participantId(),
-                            2,
-                            route.sessionOwnerNodeRid(),
-                            route.sessionOwnerNodeGeneration(),
-                            route.sessionOwnerId(),
-                            route.sessionOwnerLeaseGeneration(),
-                            route.sessionRid(),
-                            route.bindingGeneration(),
-                            route.lastAcceptedSessionSequence(),
-                            allowance.allowanceMessages(),
-                            allowance.allowanceBytes()));
-                }
-                participants = List.copyOf(enriched);
-            }
+            var envelope = ZLinkServiceRelocationEnvelopeCodec.decode(
+                stored.payload());
             return new ZLinkCanonicalRelocationProtocol.Prepare(
                 request.fence().aggregateId(),
                 request.fence().aggregateGeneration(),
-                1,
                 new ZLinkCanonicalRelocationProtocol.Coordinator(
                     request.sourceOwnerId(),
                     request.sourceOwnerLeaseGeneration(),
                     request.sourceNodeRid(),
                     request.sourceNodeGeneration(),
                     snapshot.storeVersion()),
-                new ZLinkCanonicalRelocationProtocol.Candidate(
+                new ZLinkCanonicalRelocationProtocol.Target(
                     request.targetNodeRid(),
                     request.targetNodeGeneration(),
                     request.targetOwnerId(),
@@ -826,9 +643,6 @@ final class ZLinkCanonicalRelocationStateMachine
                     primary.sourceAuthorityOwnerGeneration()),
                 request.sourceNodeRid(),
                 request.sourceNodeGeneration(),
-                requiredMessages,
-                requiredBytes,
-                participants,
                 new ZLinkCanonicalRelocationProtocol.Root(
                     request.relocationReference(),
                     request.relocationChecksum()),
@@ -836,260 +650,7 @@ final class ZLinkCanonicalRelocationStateMachine
         });
     }
 
-    private ZLinkSpotRetireControl.StageRequest recoveryRequest(
-        ZLinkRelocationStartupScanner.Candidate candidate) {
-        ZLinkServiceRelocationEnvelopeCodec.Envelope envelope =
-            ZLinkServiceRelocationEnvelopeCodec.decode(
-                candidate.root().payload());
-        if (envelope.relocationHigh()
-                != candidate.fence().aggregateId().getMostSignificantBits()
-            || envelope.relocationLow()
-                != candidate.fence().aggregateId().getLeastSignificantBits()
-            || envelope.applicationStates().size()
-                != candidate.authorities().size()) {
-            throw new IllegalStateException(
-                "published relocation recovery inventory differs");
-        }
-        Map<Long, Boolean> restore = new HashMap<>();
-        for (var state : envelope.applicationStates()) {
-            restore.put(state.participantId(), state.hasState());
-        }
-        ZLinkServiceAuthorityPayloadCodec spotCodec =
-            new ZLinkServiceAuthorityPayloadCodec();
-        ZLinkActorAuthorityPayloadCodec actorCodec =
-            new ZLinkActorAuthorityPayloadCodec();
-        List<ZLinkSpotRetireControl.ParticipantFence> participants =
-            new ArrayList<>(candidate.authorities().size());
-        Map<String, String> actorStoreVersions = new HashMap<>();
-        String stableType = null;
-        String targetSpotId = entrySpotId;
-        boolean restorePrimary = false;
-        for (int index = 0; index < candidate.authorities().size(); index++) {
-            ZLinkAuthorityEntry entry = candidate.authorities().get(index);
-            ZLinkAuthoritySnapshot snapshot = entry.snapshot();
-            long participantId = index + 1L;
-            boolean hasState = Boolean.TRUE.equals(restore.get(participantId));
-            if (!snapshot.ownerId().equals(
-                    candidate.targetOwner().ownerId())
-                || snapshot.ownerLeaseGeneration()
-                    != candidate.targetOwner().leaseGeneration()
-                || !snapshot.allocation().descriptor().meshName().equals(
-                    meshName)
-                || !snapshot.allocation().descriptor().rid().equals(
-                    localNodeRid)
-                || snapshot.allocation().descriptorLifecycleGeneration()
-                    != localNodeGeneration
-                || snapshot.authorityOwnerGeneration() <= 1) {
-                throw new IllegalStateException(
-                    "published relocation recovery authority fence differs");
-            }
-            byte[] application =
-                ZLinkCanonicalRelocationAuthorityStateCodec
-                    .applicationPayloadOrOriginal(snapshot.payload());
-            int objectKind = snapshot.allocation().objectKind().value();
-            String objectId;
-            String participantType;
-            if (snapshot.allocation().objectKind()
-                == systems.zlink.framework.locations
-                    .ZLinkPlacementObjectKind.USER_SPOT) {
-                var decoded = spotCodec.decode(application)
-                    .orElseThrow(() -> new IllegalStateException(
-                        "published User Spot recovery payload is invalid"));
-                objectId = decoded.spotId();
-                participantType = decoded.stableType();
-                if (envelope.object().kind() == objectKind
-                    && envelope.object().objectId().equals(objectId)) {
-                    stableType = participantType;
-                    targetSpotId = objectId;
-                    restorePrimary = hasState;
-                }
-            } else if (snapshot.allocation().objectKind()
-                == systems.zlink.framework.locations
-                    .ZLinkPlacementObjectKind.ACTOR) {
-                var decoded = actorCodec.decode(application)
-                    .orElseThrow(() -> new IllegalStateException(
-                        "published Actor recovery payload is invalid"));
-                objectId = decoded.actorId();
-                participantType = decoded.stableType();
-                actorStoreVersions.put(objectId, snapshot.storeVersion());
-                if (envelope.object().kind() == objectKind
-                    && envelope.object().objectId().equals(objectId)) {
-                    stableType = participantType;
-                    targetSpotId = decoded.currentSpotId();
-                    restorePrimary = hasState;
-                }
-            } else {
-                throw new IllegalStateException(
-                    "published relocation recovery object kind is invalid");
-            }
-            participants.add(new ZLinkSpotRetireControl.ParticipantFence(
-                entry.key(),
-                objectKind,
-                objectId,
-                participantType,
-                hasState,
-                snapshot.objectGeneration(),
-                snapshot.authorityOwnerGeneration() - 1));
-        }
-        if (stableType == null || stableType.isBlank()
-            || targetSpotId == null || targetSpotId.isBlank()) {
-            throw new IllegalStateException(
-                "published relocation recovery primary object is missing");
-        }
-        return new ZLinkSpotRetireControl.StageRequest(
-            new ZLinkSpotRetireControl.Fence(
-                candidate.fence().aggregateId(),
-                candidate.fence().aggregateGeneration()),
-            candidate.sourceNodeRid(),
-            candidate.sourceNodeGeneration(),
-            candidate.sourceOwnerId(),
-            candidate.sourceOwnerLeaseGeneration(),
-            candidate.targetNodeRid(),
-            candidate.targetNodeGeneration(),
-            candidate.targetOwner().ownerId(),
-            candidate.targetOwner().leaseGeneration(),
-            meshName,
-            targetSpotId,
-            stableType,
-            false,
-            restorePrimary,
-            candidate.reference(),
-            candidate.checksumCrc32c(),
-            participants,
-            recoveredSessionRoutes(
-                envelope,
-                participants,
-                actorStoreVersions,
-                candidate));
-    }
-
-    /**
-     * Rebuilds bound-Session route fences after a target restart. A direct
-     * Join completion retains the exact command-44 intent and takes priority;
-     * other aggregate relocations fall back to the greatest accepted Session
-     * source sequence still present in the durable journal.
-     */
-    private static List<ZLinkSpotRetireControl.SessionRouteFence>
-        recoveredSessionRoutes(
-            ZLinkServiceRelocationEnvelopeCodec.Envelope envelope,
-            List<ZLinkSpotRetireControl.ParticipantFence> participants,
-            Map<String, String> actorStoreVersions,
-            ZLinkRelocationStartupScanner.Candidate candidate) {
-        Map<String, ZLinkSpotRetireControl.SessionRouteFence> routes =
-            new HashMap<>();
-        var codec = new ZLinkServiceM6BWireCodec();
-        for (byte[] encoded : ZLinkDeferredJoinCompletionAuthority
-                .retainedSessionRouteCommands(envelope)) {
-            var intent = codec.decodeSessionRelocationRouteIntent(encoded);
-            ZLinkSpotRetireControl.ParticipantFence participant =
-                participants.stream()
-                    .filter(value -> value.objectKind() == 1
-                        && value.objectId().equals(intent.actor().actorId())
-                        && value.objectGeneration()
-                            == intent.actor().generation()
-                        && value.sourceAuthorityOwnerGeneration()
-                            == intent.previousAuthorityOwnerGeneration())
-                    .findFirst()
-                    .orElseThrow(() -> new IllegalStateException(
-                        "direct-Join Session route is outside recovered Actor inventory"));
-            var coordinator = intent.coordinator();
-            if (intent.relocation().high()
-                    != candidate.fence().aggregateId().getMostSignificantBits()
-                || intent.relocation().low()
-                    != candidate.fence().aggregateId().getLeastSignificantBits()
-                || !coordinator.ownerId().equals(candidate.sourceOwnerId())
-                || coordinator.leaseGeneration()
-                    != candidate.sourceOwnerLeaseGeneration()
-                || !coordinator.nodeRid().equals(candidate.sourceNodeRid())
-                || coordinator.nodeGeneration()
-                    != candidate.sourceNodeGeneration()
-                || !intent.targetNodeRid().equals(candidate.targetNodeRid())
-                || intent.targetNodeGeneration()
-                    != candidate.targetNodeGeneration()) {
-                throw new IllegalStateException(
-                    "direct-Join Session route differs from startup authority fence");
-            }
-            var session = intent.session();
-            routes.put(
-                participant.objectId(),
-                new ZLinkSpotRetireControl.SessionRouteFence(
-                    participant.objectId(),
-                    participant.objectGeneration(),
-                    participant.sourceAuthorityOwnerGeneration(),
-                    coordinator.expectedAuthorityStoreVersion(),
-                    session.nodeRid(),
-                    session.nodeGeneration(),
-                    session.ownerId(),
-                    session.ownerLeaseGeneration(),
-                    session.sessionRid(),
-                    session.bindingGeneration(),
-                    intent.lastAcceptedSessionSequence()));
-        }
-        for (var entry : envelope.journal()) {
-            int index = (int) entry.participantId() - 1;
-            if (index < 0 || index >= participants.size()) {
-                continue;
-            }
-            ZLinkSpotRetireControl.ParticipantFence participant =
-                participants.get(index);
-            if (participant.objectKind() != 1) {
-                continue;
-            }
-            if (routes.containsKey(participant.objectId())) {
-                //  The direct-Join completion retains command 44 itself and
-                //  therefore outranks a journal-derived approximation.
-                continue;
-            }
-            ZLinkActorAcceptedJournal.Record record;
-            try {
-                record = ZLinkActorAcceptedJournal.decode(
-                    entry.frozenRecord());
-            } catch (IllegalArgumentException notActorRecord) {
-                continue;
-            }
-            if (record.sourceSessionRid() == null) {
-                continue;
-            }
-            ZLinkSpotRetireControl.SessionRouteFence current =
-                routes.get(participant.objectId());
-            if (current != null && current.lastAcceptedSessionSequence()
-                    >= record.sourceSessionSequence()) {
-                continue;
-            }
-            putRecoveredSessionRoute(
-                routes,
-                new ZLinkSpotRetireControl.SessionRouteFence(
-                    participant.objectId(),
-                    participant.objectGeneration(),
-                    participant.sourceAuthorityOwnerGeneration(),
-                    actorStoreVersions.get(participant.objectId()),
-                    record.sourceNodeRid(),
-                    record.sourceNodeGeneration(),
-                    record.sourceOwnerId(),
-                    record.sourceOwnerLeaseGeneration(),
-                    record.sourceSessionRid(),
-                    record.sourceBindingGeneration(),
-                    record.sourceSessionSequence()));
-        }
-        List<ZLinkSpotRetireControl.SessionRouteFence> ordered =
-            new ArrayList<>(routes.values());
-        ordered.sort((left, right) -> compareUtf8(
-            left.actorId(), right.actorId()));
-        return List.copyOf(ordered);
-    }
-
-    private static void putRecoveredSessionRoute(
-        Map<String, ZLinkSpotRetireControl.SessionRouteFence> routes,
-        ZLinkSpotRetireControl.SessionRouteFence candidate) {
-        var existing = routes.putIfAbsent(candidate.actorId(), candidate);
-        if (existing != null && !existing.equals(candidate)) {
-            throw new IllegalStateException(
-                "recovered Actor has conflicting bound-Session route fences: "
-                    + candidate.actorId());
-        }
-    }
-
-    private CompletionStage<ZLinkSpotRetireControl.StageRequest> reconstruct(
+    private CompletionStage<TargetRestore> reconstruct(
         ZLinkCanonicalRelocationProtocol.Prepare prepare) {
         if (prepare.root() == null) {
             return failed(new IllegalArgumentException(
@@ -1097,15 +658,95 @@ final class ZLinkCanonicalRelocationStateMachine
         }
         CompletionStage<ZLinkAggregateRelocationCoordinator.Root> root =
             coordinator.readRoot(
-                prepare.root().reference(),
-                prepare.root().checksum(),
-                OPEN);
+                prepare.root().reference(), prepare.root().checksum(), OPEN);
         CompletionStage<List<ZLinkAuthorityEntry>> inventory =
             prepare.object().kind() == 1
                 ? readStandaloneActor(prepare)
                 : readUserSpotInventory(prepare);
-        return root.thenCombine(inventory, (stored, entries) ->
-            stageRequest(prepare, stored.payload(), entries));
+        return root.thenCombine(inventory, (stored, entries) -> {
+            ZLinkSpotRetireControl.TargetProfile profile =
+                Objects.requireNonNull(
+                    target.applyTargetProfile(stageRequest(
+                        prepare, stored.payload(), entries),
+                        localNodeGeneration),
+                    "canonical target profile returned null");
+            ZLinkSpotRetireControl.StageRequest request = profile.request();
+            return new TargetRestore(
+                request,
+                authorityRequest(
+                    prepare, stored.payload(), entries, profile),
+                stored);
+        });
+    }
+
+    private ZLinkAggregateRelocationCoordinator.Request authorityRequest(
+        ZLinkCanonicalRelocationProtocol.Prepare prepare,
+        byte[] root,
+        List<ZLinkAuthorityEntry> entries,
+        ZLinkSpotRetireControl.TargetProfile profile) {
+        ZLinkSpotRetireControl.StageRequest request = profile.request();
+        boolean standalone = prepare.object().kind()
+            == ZLinkPlacementObjectKind.ACTOR.value();
+        List<ZLinkAggregateRelocationCoordinator.Participant> participants =
+            new ArrayList<>(entries.size());
+        ZLinkActorAuthorityPayloadCodec actorCodec =
+            new ZLinkActorAuthorityPayloadCodec();
+        for (ZLinkAuthorityEntry entry : entries) {
+            ZLinkAuthoritySnapshot snapshot = entry.snapshot();
+            byte[] authorityPayload = snapshot.payload();
+            byte[] membershipMutation = new byte[0];
+            if (standalone) {
+                var actor = actorCodec.decode(snapshot.payload())
+                    .orElseThrow(() -> new IllegalStateException(
+                        "standalone Actor authority payload is invalid"));
+                authorityPayload = actorCodec.encode(
+                    ZLinkActorAuthorityPayloadCodec.State.READY,
+                    actor.stableType(),
+                    actor.actorId(),
+                    request.spotId(),
+                    profile.actorSpotGeneration(),
+                    profile.actorSpotKind(),
+                    request.targetOwnerId(),
+                    request.targetOwnerLeaseGeneration(),
+                    meshName,
+                    localNodeRid,
+                    localNodeGeneration);
+            }
+            participants.add(new ZLinkAggregateRelocationCoordinator
+                .Participant(
+                    entry.key(),
+                    snapshot.allocation().objectKind(),
+                    snapshot.objectGeneration(),
+                    snapshot.authorityOwnerGeneration(),
+                    snapshot.storeVersion(),
+                    ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                    authorityPayload,
+                    membershipMutation));
+        }
+        long actorCount = participants.stream()
+            .filter(value -> value.objectKind()
+                == ZLinkPlacementObjectKind.ACTOR)
+            .count();
+        ZLinkPlacementCapacityBundle capacity = standalone
+            ? ZLinkPlacementCapacityBundle.actor(1)
+            : new ZLinkPlacementCapacityBundle(
+                Math.toIntExact(actorCount),
+                1,
+                Optional.of(new ZLinkSpotTypeCapacityDelta(
+                    ZLinkPlacementObjectKind.USER_SPOT,
+                    request.stableType(),
+                    1)));
+        return new ZLinkAggregateRelocationCoordinator.Request(
+            prepare.id(),
+            prepare.targetAttemptGeneration(),
+            participants,
+            root,
+            new ZLinkMeshNodeDescriptorKey(meshName, localNodeRid),
+            localNodeGeneration,
+            capacity,
+            new ZLinkLocationOwnerToken(
+                request.targetOwnerId(),
+                request.targetOwnerLeaseGeneration()));
     }
 
     private CompletionStage<List<ZLinkAuthorityEntry>> readStandaloneActor(
@@ -1132,8 +773,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 .thenApply(actors -> {
                     List<ZLinkAuthorityEntry> values = new ArrayList<>();
                     values.add(new ZLinkAuthorityEntry(key, snapshot));
-                    ZLinkActorAuthorityPayloadCodec actorCodec =
-                        new ZLinkActorAuthorityPayloadCodec();
+                    var actorCodec = new ZLinkActorAuthorityPayloadCodec();
                     for (ZLinkAuthorityEntry actor : actors) {
                         var authority = actorCodec.decode(
                             actor.snapshot().payload());
@@ -1155,10 +795,7 @@ final class ZLinkCanonicalRelocationStateMachine
         Optional<ZLinkAuthorityScanCursor> cursor,
         List<ZLinkAuthorityEntry> collected) {
         return locations.list(
-                ACTOR_AUTHORITY_PREFIX,
-                cursor,
-                SCAN_PAGE_SIZE,
-                OPEN)
+                ACTOR_AUTHORITY_PREFIX, cursor, SCAN_PAGE_SIZE, OPEN)
             .thenCompose(result -> {
                 if (result instanceof ZLinkAuthorityScanExpired) {
                     return failed(new IllegalStateException(
@@ -1176,8 +813,7 @@ final class ZLinkCanonicalRelocationStateMachine
         ZLinkCanonicalRelocationProtocol.Prepare prepare,
         byte[] rootBytes,
         List<ZLinkAuthorityEntry> entries) {
-        ZLinkServiceRelocationEnvelopeCodec.Envelope envelope =
-            ZLinkServiceRelocationEnvelopeCodec.decode(rootBytes);
+        var envelope = ZLinkServiceRelocationEnvelopeCodec.decode(rootBytes);
         if (envelope.relocationHigh()
                 != prepare.id().getMostSignificantBits()
             || envelope.relocationLow()
@@ -1190,7 +826,6 @@ final class ZLinkCanonicalRelocationStateMachine
             || envelope.object().expectedAuthorityOwnerGeneration()
                 != prepare.object().expectedAuthorityOwnerGeneration()
             || envelope.applicationVersion() != prepare.applicationVersion()
-            || entries.size() != prepare.participants().size()
             || entries.size() != envelope.applicationStates().size()) {
             throw new IllegalStateException(
                 "target relocation inventory differs from root");
@@ -1201,29 +836,17 @@ final class ZLinkCanonicalRelocationStateMachine
         }
         List<ZLinkSpotRetireControl.ParticipantFence> participants =
             new ArrayList<>(entries.size());
-        List<ZLinkSpotRetireControl.SessionRouteFence> sessionRoutes =
-            new ArrayList<>();
-        ZLinkServiceAuthorityPayloadCodec spotCodec =
-            new ZLinkServiceAuthorityPayloadCodec();
-        ZLinkActorAuthorityPayloadCodec actorCodec =
-            new ZLinkActorAuthorityPayloadCodec();
+        var spotCodec = new ZLinkServiceAuthorityPayloadCodec();
+        var actorCodec = new ZLinkActorAuthorityPayloadCodec();
         String stableType = null;
         String targetSpotId = entrySpotId;
-        boolean restoreSpot = false;
+        boolean restorePrimary = false;
         ZLinkAuthoritySnapshot primarySnapshot = null;
         for (int index = 0; index < entries.size(); index++) {
             ZLinkAuthorityEntry entry = entries.get(index);
             ZLinkAuthoritySnapshot snapshot = entry.snapshot();
-            ZLinkCanonicalRelocationProtocol.Participant wire =
-                prepare.participants().get(index);
-            if (wire.participantId() != index + 1L) {
-                throw new IllegalStateException(
-                    "canonical participant identity order differs");
-            }
-            boolean hasState = Boolean.TRUE.equals(
-                restore.get(wire.participantId()));
-            if (!snapshot.ownerId().equals(
-                    prepare.coordinator().ownerId())
+            boolean hasState = Boolean.TRUE.equals(restore.get(index + 1L));
+            if (!snapshot.ownerId().equals(prepare.coordinator().ownerId())
                 || snapshot.ownerLeaseGeneration()
                     != prepare.coordinator().ownerLeaseGeneration()
                 || !snapshot.allocation().descriptor().meshName().equals(
@@ -1235,59 +858,35 @@ final class ZLinkCanonicalRelocationStateMachine
                 throw new IllegalStateException(
                     "target relocation source authority fence differs");
             }
-            if (snapshot.allocation().objectKind()
-                == systems.zlink.framework.locations
-                    .ZLinkPlacementObjectKind.USER_SPOT) {
+            int kind = snapshot.allocation().objectKind().value();
+            String objectId;
+            String objectType;
+            if (kind == 2) {
                 var decoded = spotCodec.decode(snapshot.payload())
                     .orElseThrow(() -> new IllegalStateException(
                         "User Spot authority payload is invalid"));
-                participants.add(new ZLinkSpotRetireControl.ParticipantFence(
-                    entry.key(),
-                    2,
-                    decoded.spotId(),
-                    decoded.stableType(),
-                    hasState,
-                    snapshot.objectGeneration(),
-                    snapshot.authorityOwnerGeneration()));
-                stableType = decoded.stableType();
-                targetSpotId = decoded.spotId();
-                restoreSpot = hasState;
+                objectId = decoded.spotId();
+                objectType = decoded.stableType();
+                targetSpotId = objectId;
             } else {
                 var decoded = actorCodec.decode(snapshot.payload())
                     .orElseThrow(() -> new IllegalStateException(
                         "Actor authority payload is invalid"));
-                participants.add(new ZLinkSpotRetireControl.ParticipantFence(
-                    entry.key(),
-                    1,
-                    decoded.actorId(),
-                    decoded.stableType(),
-                    hasState,
-                    snapshot.objectGeneration(),
-                    snapshot.authorityOwnerGeneration()));
-                if (prepare.object().kind() == 1) {
-                    stableType = decoded.stableType();
-                    restoreSpot = hasState;
-                }
-                if (wire.kind() == 2) {
-                    sessionRoutes.add(
-                        new ZLinkSpotRetireControl.SessionRouteFence(
-                            decoded.actorId(),
-                            snapshot.objectGeneration(),
-                            snapshot.authorityOwnerGeneration(),
-                            snapshot.storeVersion(),
-                            wire.sessionOwnerNodeRid(),
-                            wire.sessionOwnerNodeGeneration(),
-                            wire.sessionOwnerId(),
-                            wire.sessionOwnerLeaseGeneration(),
-                            wire.sessionRid(),
-                            wire.bindingGeneration(),
-                            wire.lastAcceptedSessionSequence()));
-                }
+                objectId = decoded.actorId();
+                objectType = decoded.stableType();
             }
-            if (snapshot.allocation().objectKind().value()
-                    == prepare.object().kind()
-                && participants.getLast().objectId().equals(
-                    prepare.object().objectId())) {
+            participants.add(new ZLinkSpotRetireControl.ParticipantFence(
+                entry.key(),
+                kind,
+                objectId,
+                objectType,
+                hasState,
+                snapshot.objectGeneration(),
+                snapshot.authorityOwnerGeneration()));
+            if (kind == prepare.object().kind()
+                && objectId.equals(prepare.object().objectId())) {
+                stableType = objectType;
+                restorePrimary = hasState;
                 primarySnapshot = snapshot;
             }
         }
@@ -1298,45 +897,37 @@ final class ZLinkCanonicalRelocationStateMachine
             throw new IllegalStateException(
                 "relocation coordinator authority version differs");
         }
-        if (prepare.object().kind() == 1
-            && (targetSpotId == null || targetSpotId.isBlank())) {
-            throw new IllegalStateException(
-                "target Entry Spot identity is unavailable");
-        }
         return new ZLinkSpotRetireControl.StageRequest(
             new ZLinkSpotRetireControl.Fence(
-                prepare.id(), prepare.attempt()),
+                prepare.id(), prepare.targetAttemptGeneration()),
             prepare.sourceNodeRid(),
             prepare.sourceNodeGeneration(),
             prepare.coordinator().ownerId(),
             prepare.coordinator().ownerLeaseGeneration(),
-            prepare.candidate().nodeRid(),
-            prepare.candidate().nodeGeneration(),
-            prepare.candidate().ownerId(),
-            prepare.candidate().ownerLeaseGeneration(),
+            prepare.target().nodeRid(),
+            prepare.target().nodeGeneration(),
+            prepare.target().ownerId(),
+            prepare.target().ownerLeaseGeneration(),
             meshName,
             targetSpotId,
             stableType,
             false,
-            restoreSpot,
+            restorePrimary,
             prepare.root().reference(),
             prepare.root().checksum(),
             participants,
-            sessionRoutes);
+            List.of());
     }
 
     private static void validateResolvedPrimary(
         ZLinkCanonicalRelocationProtocol.Prepare prepare,
         List<ZLinkSpotRetireControl.ParticipantFence> participants) {
-        ZLinkSpotRetireControl.ParticipantFence primary =
-            participants.stream()
-                .filter(value ->
-                    value.objectKind() == prepare.object().kind()
-                        && value.objectId().equals(
-                            prepare.object().objectId()))
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException(
-                    "relocation primary authority is missing"));
+        ZLinkSpotRetireControl.ParticipantFence primary = participants.stream()
+            .filter(value -> value.objectKind() == prepare.object().kind()
+                && value.objectId().equals(prepare.object().objectId()))
+            .findFirst()
+            .orElseThrow(() -> new IllegalStateException(
+                "relocation primary authority is missing"));
         if (primary.objectGeneration()
                 != prepare.object().objectGeneration()
             || primary.sourceAuthorityOwnerGeneration()
@@ -1346,214 +937,38 @@ final class ZLinkCanonicalRelocationStateMachine
         }
     }
 
-    private static List<ZLinkCanonicalRelocationProtocol.Participant>
-        allowances(
-        List<Long> ids,
-        long messages,
-        long bytes) {
-        long messageBase = messages / ids.size();
-        long messageRemainder = messages % ids.size();
-        long byteBase = bytes / ids.size();
-        long byteRemainder = bytes % ids.size();
-        List<ZLinkCanonicalRelocationProtocol.Participant> result =
-            new ArrayList<>(ids.size());
-        for (int index = 0; index < ids.size(); index++) {
-            result.add(ZLinkCanonicalRelocationProtocol.Participant.plain(
-                ids.get(index),
-                messageBase + (index < messageRemainder ? 1 : 0),
-                byteBase + (index < byteRemainder ? 1 : 0)));
-        }
-        return List.copyOf(result);
-    }
-
-    private static List<ZLinkCanonicalRelocationProtocol.Progress> progress(
-        ZLinkCanonicalRelocationProtocol.Prepare prepare) {
-        return prepare.participants().stream()
-            .map(value -> new ZLinkCanonicalRelocationProtocol.Progress(
-                value.participantId(), 0, 0))
-            .toList();
-    }
-
-    private void validateTargetCandidate(
-        ZLinkCanonicalRelocationProtocol.Candidate candidate) {
-        if (!candidate.nodeRid().equals(localNodeRid)
-            || candidate.nodeGeneration() != localNodeGeneration) {
+    private void validateTarget(
+        ZLinkCanonicalRelocationProtocol.Target targetFence) {
+        if (!targetFence.nodeRid().equals(localNodeRid)
+            || targetFence.nodeGeneration() != localNodeGeneration) {
             throw new IllegalArgumentException(
                 "canonical relocation target node fence is stale");
         }
     }
 
-    private static void validateOffer(
-        ZLinkCanonicalRelocationProtocol.Prepare prepare,
-        ZLinkCanonicalRelocationProtocol.Ready ready,
-        RoutingId transportSource) {
-        if (!ready.candidate().nodeRid().equals(transportSource)
-            || !ready.coordinator().equals(prepare.coordinator())
-            || !ready.candidate().equals(prepare.candidate())
-            || !ready.object().equals(prepare.object())
-            || !ready.participants().isEmpty()
-            || !Objects.equals(ready.root(), prepare.root())
-            || ready.offeredMessages() < prepare.requiredMessages()
-            || ready.offeredBytes() < prepare.requiredBytes()
-            || ready.reservationGeneration() <= 0) {
-            throw new IllegalArgumentException(
-                "canonical relocation offer differs");
-        }
-    }
-
-    private static void validateAcceptance(
-        TargetSlot slot,
-        ZLinkCanonicalRelocationProtocol.Ready ready,
-        RoutingId transportSource) {
-        ZLinkCanonicalRelocationProtocol.Prepare prepare = slot.prepare();
-        if (!transportSource.equals(prepare.sourceNodeRid())
-            || !ready.coordinator().equals(prepare.coordinator())
-            || !ready.candidate().equals(prepare.candidate())
-            || !ready.object().equals(prepare.object())
-            || !ready.participants().equals(prepare.participants())
-            || !Objects.equals(ready.root(), prepare.root())
-            || ready.reservationGeneration() != slot.reservationGeneration()
-            || ready.sourceNodeGeneration()
-                != prepare.sourceNodeGeneration()
-            || ready.targetNodeGeneration()
-                != prepare.candidate().nodeGeneration()) {
-            throw new IllegalArgumentException(
-                "canonical relocation acceptance differs");
-        }
-    }
-
-    private SourceSlot requireSource(Fence fence, RoutingId targetRid) {
-        SourceSlot slot = sources.get(fence);
-        if (slot == null
-            || !slot.request().targetNodeRid().equals(targetRid)) {
+    private SourceAttempt requireSource(Fence fence, RoutingId targetRid) {
+        SourceAttempt attempt = sources.get(fence);
+        if (attempt == null
+            || !attempt.request().targetNodeRid().equals(targetRid)) {
             throw new IllegalStateException(
                 "canonical source relocation is unavailable");
         }
-        return slot;
+        return attempt;
     }
 
-    private TargetSlot requireTarget(Fence fence, RoutingId sourceRid) {
-        TargetSlot slot = targets.get(fence);
-        if (slot == null
-            || !slot.prepare().sourceNodeRid().equals(sourceRid)) {
+    private TargetAttempt requireTarget(Fence fence, RoutingId sourceRid) {
+        TargetAttempt attempt = targets.get(fence);
+        if (attempt == null
+            || !attempt.prepare().sourceNodeRid().equals(sourceRid)) {
             throw new IllegalStateException(
                 "canonical target relocation is unavailable");
         }
-        return slot;
+        return attempt;
     }
 
-    private CompletionStage<Void> finalizeRecovery(
-        Fence fence,
-        RecoverySlot slot) {
-        CompletionStage<Void> finalized;
-        synchronized (slot) {
-            if (slot.finalized() == null) {
-                //  Reset the memo on failure so the next command 35 or
-                //  recovery pass retries finalize instead of caching a
-                //  failed convergence forever.
-                CompletionStage<Void> attempt =
-                    target.finalizeAfterCompletion(slot.request());
-                slot.finalized(attempt);
-                attempt.whenComplete((ignored, failure) -> {
-                    if (failure != null) {
-                        synchronized (slot) {
-                            if (slot.finalized() == attempt) {
-                                slot.finalized(null);
-                            }
-                        }
-                    }
-                });
-            }
-            finalized = slot.finalized();
-        }
-        return finalized.whenComplete((ignored, failure) -> {
-            if (failure == null) {
-                recoveries.remove(fence, slot);
-            }
-        });
-    }
-
-    private CompletionStage<Void> send(RoutingId targetRid, byte[] command) {
+    private CompletionStage<Void> send(
+        RoutingId targetRid, byte[] command) {
         return node.sendCanonicalRelocationControl(targetRid, command);
-    }
-
-    private CompletionStage<Void> sendUntilAck(
-        RoutingId targetRid,
-        byte[] command,
-        CompletableFuture<Void> ack,
-        Duration timeout,
-        String operation) {
-        CompletableFuture<Void> result = new CompletableFuture<>();
-        long deadline = System.nanoTime() + timeout.toNanos();
-        attemptUntilAck(targetRid, command, ack, deadline, result);
-        ack.whenComplete((ignored, failure) -> {
-            if (failure == null) {
-                result.complete(null);
-            } else {
-                result.completeExceptionally(unwrap(failure));
-            }
-        });
-        CompletableFuture.delayedExecutor(
-            timeout.toMillis(),
-            TimeUnit.MILLISECONDS)
-            .execute(() -> result.completeExceptionally(
-                new TimeoutException(
-                    operation + " timed out")));
-        return result;
-    }
-
-    private void attemptUntilAck(
-        RoutingId targetRid,
-        byte[] command,
-        CompletableFuture<Void> ack,
-        long deadline,
-        CompletableFuture<Void> result) {
-        if (result.isDone() || ack.isDone()
-            || System.nanoTime() >= deadline) {
-            return;
-        }
-        send(targetRid, command).whenComplete((ignored, failure) -> {
-            if (result.isDone() || ack.isDone()) {
-                return;
-            }
-            CompletableFuture.delayedExecutor(
-                25,
-                TimeUnit.MILLISECONDS)
-                .execute(() -> attemptUntilAck(
-                    targetRid, command, ack, deadline, result));
-        });
-    }
-
-    private long nextReservationGeneration() {
-        return reservationGeneration.updateAndGet(
-            current -> current == Long.MAX_VALUE ? 1 : current + 1);
-    }
-
-    private static long primaryParticipant(SourceSlot slot) {
-        ZLinkCanonicalRelocationProtocol.ObjectFence object =
-            slot.prepare().object();
-        List<ZLinkSpotRetireControl.ParticipantFence> participants =
-            slot.request().participants();
-        for (int index = 0; index < participants.size(); index++) {
-            var participant = participants.get(index);
-            if (participant.objectKind() == object.kind()
-                && participant.objectId().equals(object.objectId())) {
-                return slot.prepare().participants().get(index)
-                    .participantId();
-            }
-        }
-        throw new IllegalStateException(
-            "canonical primary relocation participant is unavailable");
-    }
-
-    private static List<ZLinkCanonicalRelocationProtocol.Terminal>
-        terminalHighWater(SourceSlot slot) {
-        long primary = primaryParticipant(slot);
-        return slot.prepare().participants().stream()
-            .map(value -> new ZLinkCanonicalRelocationProtocol.Terminal(
-                value.participantId(),
-                value.participantId() == primary ? 1 : 0))
-            .toList();
     }
 
     private static ZLinkSpotRetireControl.ParticipantFence primary(
@@ -1564,35 +979,15 @@ final class ZLinkCanonicalRelocationStateMachine
             .orElse(participants.getFirst());
     }
 
-    private static ZLinkCanonicalRelocationProtocol.Source source(
-        ZLinkSpotRetireControl.StageRequest request) {
-        return new ZLinkCanonicalRelocationProtocol.Source(
-            request.sourceNodeRid(),
-            request.sourceNodeGeneration(),
-            request.sourceOwnerId(),
-            request.sourceOwnerLeaseGeneration());
-    }
-
-    private static boolean matchesRecoveredCoordinator(
-        ZLinkCanonicalRelocationProtocol.Coordinator coordinator,
-        ZLinkSpotRetireControl.StageRequest request) {
-        return coordinator.ownerId().equals(request.sourceOwnerId())
-            && coordinator.ownerLeaseGeneration()
-                == request.sourceOwnerLeaseGeneration()
-            && coordinator.nodeRid().equals(request.sourceNodeRid())
-            && coordinator.nodeGeneration()
-                == request.sourceNodeGeneration();
-    }
-
     private static int compareUtf8(String left, String right) {
-        return Arrays.compareUnsigned(
+        return java.util.Arrays.compareUnsigned(
             left.getBytes(StandardCharsets.UTF_8),
             right.getBytes(StandardCharsets.UTF_8));
     }
 
     private static String requireText(String value, String field) {
         if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException(field + " is required");
+            throw new IllegalArgumentException(field + " must not be blank");
         }
         return value;
     }
@@ -1601,16 +996,16 @@ final class ZLinkCanonicalRelocationStateMachine
         Objects.requireNonNull(timeout, "timeout");
         if (timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException(
-                "canonical relocation timeout must be positive");
+                "relocation timeout must be positive");
         }
     }
 
     private static CompletionStage<Void> timed(
-        CompletableFuture<Void> source,
+        CompletionStage<Void> stage,
         Duration timeout,
         String operation) {
         CompletableFuture<Void> result = new CompletableFuture<>();
-        source.whenComplete((value, failure) -> {
+        stage.whenComplete((ignored, failure) -> {
             if (failure == null) {
                 result.complete(null);
             } else {
@@ -1618,18 +1013,15 @@ final class ZLinkCanonicalRelocationStateMachine
             }
         });
         CompletableFuture.delayedExecutor(
-            timeout.toMillis(),
-            TimeUnit.MILLISECONDS)
+                timeout.toMillis(), TimeUnit.MILLISECONDS)
             .execute(() -> result.completeExceptionally(
-                new TimeoutException(
-                    operation + " timed out")));
+                new TimeoutException(operation + " timed out")));
         return result;
     }
 
     private static Throwable unwrap(Throwable failure) {
         Throwable current = failure;
-        while ((current instanceof CompletionException
-            || current instanceof ExecutionException)
+        while (current instanceof CompletionException
             && current.getCause() != null) {
             current = current.getCause();
         }
@@ -1641,80 +1033,86 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private record Fence(UUID id, long attempt) {
-        private Fence {
-            Objects.requireNonNull(id, "id");
-            if (attempt <= 0) {
-                throw new IllegalArgumentException(
-                    "relocation attempt must be positive");
-            }
-        }
-
-        static Fence from(ZLinkSpotRetireControl.Fence value) {
-            return new Fence(
-                value.aggregateId(), value.aggregateGeneration());
+        static Fence from(ZLinkSpotRetireControl.Fence fence) {
+            return new Fence(fence.aggregateId(), fence.aggregateGeneration());
         }
     }
 
-    private record SourceSlot(
+    private record SourceAttempt(
         ZLinkSpotRetireControl.StageRequest request,
         ZLinkCanonicalRelocationProtocol.Prepare prepare,
-        CompletableFuture<Void> reserved,
-        CompletableFuture<Void> publishAck,
-        CompletableFuture<Void> abortAck,
-        CompletableFuture<Void> sealAck) {
-        SourceSlot(
+        CompletableFuture<Void> ready,
+        AtomicInteger activeWaiters) {
+        SourceAttempt(
             ZLinkSpotRetireControl.StageRequest request,
             ZLinkCanonicalRelocationProtocol.Prepare prepare) {
             this(
                 request,
                 prepare,
                 new CompletableFuture<>(),
-                new CompletableFuture<>(),
-                new CompletableFuture<>(),
-                new CompletableFuture<>());
+                new AtomicInteger());
         }
     }
 
-    private static final class RecoverySlot {
-        private final ZLinkSpotRetireControl.StageRequest request;
-        private final CompletableFuture<Void> ready =
-            new CompletableFuture<>();
-        private CompletionStage<Void> finalized;
+    private record TargetRestore(
+        ZLinkSpotRetireControl.StageRequest request,
+        ZLinkAggregateRelocationCoordinator.Request authority,
+        ZLinkAggregateRelocationCoordinator.Root root) {
+    }
 
-        RecoverySlot(ZLinkSpotRetireControl.StageRequest request) {
-            this.request = request;
+    private record RetryPrepared(
+        byte[] encodedPrepare,
+        ZLinkAggregateRelocationCoordinator.Prepared prepared) {
+        private RetryPrepared {
+            encodedPrepare = encodedPrepare.clone();
+            Objects.requireNonNull(prepared, "prepared");
         }
 
-        ZLinkSpotRetireControl.StageRequest request() {
-            return request;
-        }
-
-        CompletableFuture<Void> ready() {
-            return ready;
-        }
-
-        CompletionStage<Void> finalized() {
-            return finalized;
-        }
-
-        void finalized(CompletionStage<Void> value) {
-            finalized = value;
+        @Override public byte[] encodedPrepare() {
+            return encodedPrepare.clone();
         }
     }
 
-    private static final class TargetSlot {
+    private record TerminalTarget(
+        RoutingId source,
+        byte[] encodedPrepare,
+        byte[] encodedCutover) {
+        private TerminalTarget {
+            Objects.requireNonNull(source, "source");
+            encodedPrepare = Objects.requireNonNull(
+                encodedPrepare, "encodedPrepare").clone();
+            encodedCutover = Objects.requireNonNull(
+                encodedCutover, "encodedCutover").clone();
+        }
+
+        @Override public byte[] encodedPrepare() {
+            return encodedPrepare.clone();
+        }
+
+        @Override public byte[] encodedCutover() {
+            return encodedCutover.clone();
+        }
+    }
+
+    @FunctionalInterface
+    interface RetentionScheduler {
+        void schedule(Instant deadline, Runnable cleanup);
+    }
+
+    private static final class TargetAttempt {
         private final ZLinkCanonicalRelocationProtocol.Prepare prepare;
         private final CompletableFuture<ZLinkSpotRetireControl.StageRequest>
             request = new CompletableFuture<>();
-        private final CompletableFuture<ZLinkCanonicalRelocationProtocol.Ready>
-            offer = new CompletableFuture<>();
-        private volatile long reservationGeneration;
-        private CompletionStage<Void> staged;
-        private CompletionStage<Void> published;
-        private CompletionStage<Void> aborted;
-        private CompletionStage<Void> finalized;
+        private final CompletableFuture<
+            ZLinkAggregateRelocationCoordinator.Prepared> prepared =
+                new CompletableFuture<>();
+        private final CompletableFuture<Void> ready = new CompletableFuture<>();
+        private CompletionStage<Void> publication;
+        private CompletionStage<Void> readyPublication;
+        private boolean fallbackArmed;
+        private boolean committed;
 
-        TargetSlot(ZLinkCanonicalRelocationProtocol.Prepare prepare) {
+        TargetAttempt(ZLinkCanonicalRelocationProtocol.Prepare prepare) {
             this.prepare = prepare;
         }
 
@@ -1726,48 +1124,46 @@ final class ZLinkCanonicalRelocationStateMachine
             return request;
         }
 
-        CompletableFuture<ZLinkCanonicalRelocationProtocol.Ready> offer() {
-            return offer;
+        CompletableFuture<Void> ready() {
+            return ready;
         }
 
-        long reservationGeneration() {
-            return reservationGeneration;
+        CompletableFuture<ZLinkAggregateRelocationCoordinator.Prepared>
+            prepared() {
+            return prepared;
         }
 
-        void reservationGeneration(long value) {
-            reservationGeneration = value;
+        CompletionStage<Void> publication() {
+            return publication;
         }
 
-        CompletionStage<Void> staged() {
-            return staged;
+        void publication(CompletionStage<Void> value) {
+            publication = value;
         }
 
-        void staged(CompletionStage<Void> value) {
-            staged = value;
+        CompletionStage<Void> readyPublication() {
+            return readyPublication;
         }
 
-        CompletionStage<Void> published() {
-            return published;
+        void readyPublication(CompletionStage<Void> value) {
+            readyPublication = value;
         }
 
-        void published(CompletionStage<Void> value) {
-            published = value;
+        synchronized boolean fallbackArmed() {
+            return fallbackArmed;
         }
 
-        CompletionStage<Void> aborted() {
-            return aborted;
+        synchronized void fallbackArmed(boolean value) {
+            fallbackArmed = value;
         }
 
-        void aborted(CompletionStage<Void> value) {
-            aborted = value;
+        synchronized boolean committed() {
+            return committed;
         }
 
-        CompletionStage<Void> finalized() {
-            return finalized;
-        }
-
-        void finalized(CompletionStage<Void> value) {
-            finalized = value;
+        synchronized void committed(boolean value) {
+            committed = value;
         }
     }
+
 }

@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
@@ -32,8 +33,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkAggregateRelocationCoordinator;
-import systems.zlink.framework.runtime.internal.locations
-    .ZLinkRelocationPermitPool;
 import systems.zlink.framework.runtime.internal.relocation
     .ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
@@ -86,15 +85,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
 
             var coordinator = new ZLinkAggregateRelocationCoordinator(
                 repository, relocations);
-            var permits = new ZLinkRelocationPermitPool(
-                new ZLinkLocationOptions());
             var builder = new ZLinkStandaloneActorRelocationSourceBuilder(
                 MESH,
                 nodeRegistration.routingId(),
                 source.lifecycleGeneration(),
                 repository,
                 coordinator,
-                permits,
                 runtime.actorSessions(),
                 new ZLinkRelocationAdapterRegistry(
                     registration,
@@ -110,7 +106,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 .toCompletableFuture().get();
 
             assertNotNull(SnapshotAdapter.captured.get());
-            assertEquals(1, permits.snapshot().outboundUnits());
             assertTrue(runtime.actorSessions()
                 .localActor("actor-a").isPresent());
             var root = coordinator.readRoot(
@@ -128,18 +123,15 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 prepared.targetRequest().objectGeneration(),
                 decoded.objectGeneration());
 
-            prepared.freezeAndPrepare(NEVER)
-                .toCompletableFuture().get();
             prepared.abort().toCompletableFuture().get();
 
-            assertEquals(0, permits.snapshot().outboundUnits());
             assertTrue(runtime.actorSessions()
                 .localActor("actor-a").isPresent());
         }
     }
 
     @Test
-    void productionTargetStagesPostCutRequestUntilPhase4AndReplaysOnceBeforeAdmission()
+    void productionTargetStagesPostCutRequestUntilPhase4AndReplaysAfterAdmission()
         throws Exception {
         SnapshotAdapter.captured.set(null);
         var locations = new ZLinkInMemoryLocationStore();
@@ -173,8 +165,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
 
             var coordinator = new ZLinkAggregateRelocationCoordinator(
                 repository, relocations);
-            var permits = new ZLinkRelocationPermitPool(
-                new ZLinkLocationOptions());
             var adapters = new ZLinkRelocationAdapterRegistry(
                 registration,
                 ZLinkHandlerActivator.reflection());
@@ -184,7 +174,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 source.lifecycleGeneration(),
                 repository,
                 coordinator,
-                permits,
                 runtime.actorSessions(),
                 adapters,
                 nodeRegistration.relocatableActorFactories(),
@@ -203,6 +192,18 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             AtomicInteger targetReplayed = new AtomicInteger();
             var actorStaging =
                 new ZLinkStandaloneActorRelocationStagingOwner(targetBackend);
+            AtomicReference<ZLinkCanonicalRelocationStateMachine>
+                sourceMachine = new AtomicReference<>();
+            AtomicReference<ZLinkCanonicalRelocationStateMachine>
+                targetMachine = new AtomicReference<>();
+            ZLinkInternalMeshNode sourceTransport = canonicalTransport(
+                nodeRegistration.routingId(),
+                source.lifecycleGeneration(),
+                targetMachine);
+            ZLinkInternalMeshNode targetTransport = canonicalTransport(
+                TARGET_RID,
+                9,
+                sourceMachine);
             var endpoint = new ZLinkUserSpotRetireTargetEndpoint(
                 TARGET_RID,
                 9,
@@ -219,7 +220,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 },
                 null,
                 Duration.ZERO,
-                request -> coordinator.normalizeCompletedAggregate(
+                request -> coordinator.normalizePublishedAggregate(
                     request.participants().stream()
                         .map(value -> new ZLinkAggregateRelocationCoordinator
                             .ExpectedParticipant(
@@ -235,22 +236,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                         request.targetOwnerLeaseGeneration()),
                     NEVER),
                 null,
-                null,
+                ZLinkSpotRetireControl.client(targetTransport),
                 repository,
                 actorStaging);
-
-            AtomicReference<ZLinkCanonicalRelocationStateMachine>
-                sourceMachine = new AtomicReference<>();
-            AtomicReference<ZLinkCanonicalRelocationStateMachine>
-                targetMachine = new AtomicReference<>();
-            ZLinkInternalMeshNode sourceTransport = canonicalTransport(
-                nodeRegistration.routingId(),
-                source.lifecycleGeneration(),
-                targetMachine);
-            ZLinkInternalMeshNode targetTransport = canonicalTransport(
-                TARGET_RID,
-                9,
-                sourceMachine);
             sourceMachine.set(new ZLinkCanonicalRelocationStateMachine(
                 sourceTransport,
                 MESH,
@@ -269,7 +257,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             sourceMachine.get().stage(
                     TARGET_RID, prepared.stageRequest(), timeout)
                 .toCompletableFuture().get();
-            prepared.freezeAndPrepare(NEVER).toCompletableFuture().get();
             List<CompletableFuture<Void>> accepted = new java.util.ArrayList<>();
             AtomicInteger released = new AtomicInteger();
             for (int index = 0; index < 1025; index++) {
@@ -288,16 +275,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                         released::incrementAndGet)
                     .toCompletableFuture());
             }
-            var published = prepared.commitAuthority(NEVER)
-                .toCompletableFuture().get();
-            CompletableFuture<Void> cutEntered = new CompletableFuture<>();
-            CompletableFuture<Void> releaseCut = new CompletableFuture<>();
-            AtomicBoolean cancelCut = new AtomicBoolean();
-            relocations.gateNextInternalPut(cutEntered, releaseCut);
-            var sourceCommit = prepared.commitSourceQueue(
-                    published, cancelCut::get)
-                .toCompletableFuture();
-            cutEntered.get(3, TimeUnit.SECONDS);
             byte[] lateRecord = ZLinkAcceptedJournalTestRecords.actor(
                 "actor-b", 0, "post-freeze-late", Map.of(), new byte[] {10});
             AtomicBoolean lateReleased = new AtomicBoolean();
@@ -308,29 +285,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     () -> fail("late source ingress must remain held"),
                     () -> lateReleased.set(true))
                 .toCompletableFuture();
-            cancelCut.set(true);
-            releaseCut.complete(null);
-            assertThrows(
-                java.util.concurrent.CancellationException.class,
-                () -> sourceCommit.get(3, TimeUnit.SECONDS));
             assertTrue(accepted.stream().noneMatch(CompletableFuture::isDone));
             assertFalse(lateAccepted.isDone());
             assertEquals(0, released.get());
             assertFalse(lateReleased.get());
-            var pendingRestart = assertThrows(
-                CompletionException.class,
-                () -> new ZLinkRelocationStartupScanner(
-                        repository, relocations)
-                    .scan(NEVER)
-                    .toCompletableFuture()
-                    .join());
-            assertTrue(pendingRestart.getCause().getMessage()
-                .contains("remained pending"),
-                "a crash before the final forward/cut must fail explicitly");
-            cancelCut.set(false);
-            var activated = prepared.commitSourceQueue(
-                    published, cancelCut::get)
-                .toCompletableFuture().get(3, TimeUnit.SECONDS);
+            prepared.relayCapturedIngress(sourceMachine.get(), timeout)
+                .toCompletableFuture().get();
 
             byte[] stagedTargetRecord = ZLinkAcceptedJournalTestRecords.actor(
                 "actor-b", 41, "target-staged", Map.of(), new byte[] {11});
@@ -356,12 +316,10 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                             .ZLinkBackendActorRef(
                                 TARGET_RID, "actor-b", objectGeneration),
                         9,
-                        published.targetOwnerGeneration(
-                            ZLinkAuthorityKeyCodec.actor("actor-b")),
+                        sourceOwnerGeneration + 1,
                         targetOwner.leaseGeneration())),
                 () -> stagedTargetRecord,
                 List.of(Message.from("target-staged-payload")),
-                null,
                 null,
                 reply -> {
                     targetIngressReplies.add(
@@ -376,9 +334,17 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             sourceMachine.get().publish(
                     TARGET_RID, prepared.stageRequest().fence(), timeout)
                 .toCompletableFuture().get();
-            assertEquals(1026, targetReplayed.get());
-            assertEquals(List.of("target-staged"),
-                targetBackend.replayedPackets);
+            assertEquals(0, targetReplayed.get(),
+                "standalone Actor records must replay through the Actor staging owner");
+            assertEquals(1027, targetBackend.replayedPackets.size());
+            for (int index = 0; index < 1_025; index++) {
+                assertEquals("post-freeze-" + index,
+                    targetBackend.replayedPackets.get(index));
+            }
+            assertEquals("post-freeze-late",
+                targetBackend.replayedPackets.get(1_025));
+            assertEquals("target-staged",
+                targetBackend.replayedPackets.getLast());
             assertEquals(List.of("target-staged-reply"),
                 targetIngressReplies);
             prepared.completeSourceQueueCommit();
@@ -389,16 +355,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             assertEquals(1025, released.get());
             assertTrue(lateReleased.get());
             prepared.cleanupLocal().toCompletableFuture().get();
-            prepared.completeSourceCleanup(activated, NEVER)
-                .toCompletableFuture().get();
-            sourceMachine.get().finalizeAfterCompletion(
-                    TARGET_RID, prepared.stageRequest().fence(), timeout)
-                .toCompletableFuture().get();
             prepared.discardInitialAfterCommit().toCompletableFuture().get();
-            prepared.releasePermitAfterCompletion();
 
             assertTrue(targetBackend.published.get());
             assertTrue(targetBackend.admitted.get());
+            assertEquals(1_027, targetBackend.admittedTurns.get());
+            assertEquals(1, targetBackend.maxActiveTurns.get());
             ZLinkAuthoritySnapshot authority = assertInstanceOf(
                 ZLinkAuthoritySnapshot.class,
                 repository.read(
@@ -408,7 +370,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             assertEquals(
                 sourceOwnerGeneration + 1,
                 authority.authorityOwnerGeneration());
-            assertEquals(0, permits.snapshot().outboundUnits());
         }
     }
 
@@ -590,10 +551,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 return unused();
             }
 
-            @Override public CompletionStage<Void> finalizeAfterCompletion(
-                ZLinkSpotRetireControl.StageRequest request) {
-                return unused();
-            }
         };
     }
 
@@ -603,6 +560,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
         private final AtomicBoolean admitted = new AtomicBoolean();
         private final List<String> replayedPackets =
             new java.util.concurrent.CopyOnWriteArrayList<>();
+        private final AtomicInteger admittedTurns = new AtomicInteger();
+        private final AtomicInteger activeTurns = new AtomicInteger();
+        private final AtomicInteger maxActiveTurns = new AtomicInteger();
 
         @Override public CompletionStage<Object> prepare(
             ZLinkStandaloneActorRelocationStagingOwner.Request request,
@@ -616,11 +576,30 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             Object actor,
             ZLinkStandaloneActorRelocationStagingOwner.Request request,
             ZLinkActorAcceptedJournal.Record record) {
+            assertTrue(published.get());
+            assertTrue(admitted.get(),
+                "durable Actor backlog ran before lifecycle admission");
             replayedPackets.add(record.header().packetName());
             return CompletableFuture.completedFuture(
                 record.header().packetName().equals("target-staged")
                     ? Optional.of("target-staged-reply".getBytes())
                     : Optional.empty());
+        }
+
+        @Override public <T> CompletionStage<T> admitApplicationJob(
+            Supplier<CompletionStage<T>> turn) {
+            admittedTurns.incrementAndGet();
+            int active = activeTurns.incrementAndGet();
+            maxActiveTurns.accumulateAndGet(active, Math::max);
+            CompletionStage<T> result;
+            try {
+                result = turn.get();
+            } catch (RuntimeException | Error failure) {
+                activeTurns.decrementAndGet();
+                throw failure;
+            }
+            return result.whenComplete(
+                (ignored, failure) -> activeTurns.decrementAndGet());
         }
 
         @Override public void publish(
@@ -631,12 +610,14 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
 
         @Override public void openAdmission(Object actor) {
             assertTrue(published.get());
-            assertEquals(List.of("target-staged"), replayedPackets,
-                "target admission must open after the staged suffix replays");
+            assertTrue(replayedPackets.isEmpty(),
+                "durable backlog must not run before lifecycle admission");
             assertTrue(admitted.compareAndSet(false, true));
         }
 
-        @Override public CompletionStage<Void> discard(Object actor) {
+        @Override public CompletionStage<Void> discard(
+            Object actor,
+            ZLinkStandaloneActorRelocationStagingOwner.Request request) {
             return CompletableFuture.completedFuture(null);
         }
     }

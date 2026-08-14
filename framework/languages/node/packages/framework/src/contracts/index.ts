@@ -5,6 +5,8 @@ export * from './Codecs';
 export * from './Configuration';
 export {
   MESSAGE_FLOW_MODE_RANK,
+  ZLinkApplicationJobQueueProfile,
+  ZLinkCoreHwmProfile,
   ZLinkUnhandledDispatchAction
 } from './Dispatch';
 export type {
@@ -13,6 +15,7 @@ export type {
   ZLinkDispatchErrorReason,
   ZLinkDispatchOptions,
   ZLinkDispatchOptionsBuilder,
+  ZLinkInboundDispatchOptions,
   ZLinkMessageFlowLogMode,
   ZLinkMessageFlowControl,
   ZLinkFlowOrigin,

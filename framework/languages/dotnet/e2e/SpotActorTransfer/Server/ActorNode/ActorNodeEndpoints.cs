@@ -408,6 +408,12 @@ internal static class ActorNodeEndpoints
         app.MapPost("/cleanup-gates/{actorId}/arm", (
             string actorId, CleanupGateArmReq request, ActorCleanupGateStore gates) =>
             Results.Ok(new CleanupGateRes(actorId, gates.Arm(actorId, request.Scenario))));
+        app.MapPost("/target-publication-gates/{actorId}/arm", (
+            string actorId, CleanupGateArmReq request,
+            ActorCleanupGateStore gates) =>
+            Results.Ok(new CleanupGateRes(
+                actorId,
+                gates.ArmTargetPublication(actorId, request.Scenario))));
         app.MapPost("/cleanup-gates/{actorId}/allow-attempt", (
             string actorId, ActorCleanupGateStore gates) =>
             Results.Ok(new CleanupGateRes(actorId, gates.AllowAttempt(actorId))));

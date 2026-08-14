@@ -49,6 +49,7 @@ import {
   ZLinkFrameworkInternalErrorKind,
   internalFrameworkErrorKind
 } from '../framework-errors-internal';
+import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
 
 interface ZLinkSpotRoutePacketDispatchOptions {
   readonly packetHandlers: ReadonlyMap<string, readonly ZLinkSpotHandlerRegistration[]>;
@@ -156,6 +157,7 @@ export class ZLinkSpotRoutePacketDispatch {
                 registration.handlerType as Type<ZLinkSpotPacketHandler<ZLinkSpot, unknown> | ZLinkSpotRequestHandler<ZLinkSpot, unknown, unknown>>,
                 this.options.providerResolver
               );
+              releaseApplicationJobPermitBeforeHandler();
               response = await handler.handle(spot, payload, context);
             }
           }, zlinkSerialWorkOptions(
@@ -235,6 +237,7 @@ export class ZLinkSpotRoutePacketDispatch {
             registration.handlerType as Type<ZLinkSpotPacketHandler<ZLinkSpot, unknown> | ZLinkSpotRequestHandler<ZLinkSpot, unknown, unknown>>,
             this.options.providerResolver
           );
+          releaseApplicationJobPermitBeforeHandler();
           response = await handler.handle(spot, envelope.payload, {
             channelName: envelope.channelName,
             packetName: envelope.packetName!,
@@ -243,10 +246,6 @@ export class ZLinkSpotRoutePacketDispatch {
           });
         }
       }, zlinkSerialWorkOptions(
-        //  Wire frame length, matching the sibling admission sites; the
-        //  previous JSON.stringify re-serialized the payload only to measure.
-        //  Spot-direct envelopes are single-part, so the whole frame stands in
-        //  for the payload size.
         received.parts[0]?.size() ?? 0,
         zlinkMetadataByteLength(envelope.metadata)
       ));

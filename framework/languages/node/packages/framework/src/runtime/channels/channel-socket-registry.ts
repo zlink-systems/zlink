@@ -21,9 +21,7 @@ import type {
   ZLinkChannelBackendAdapter,
   ZLinkMonitoringBackendAdapter
 } from '../backend/contracts';
-import { ZLinkAsyncSubmitter } from '../messaging';
 import { throwIfAborted } from '../abort';
-import { ZLinkRouteDisconnectedError } from './route-disconnected-error';
 import { attachEndpointConnections } from '../../contracts/Configuration/RuntimeEndpointConnections';
 import { ZLinkRouteMemberSnapshot } from './route-member-snapshot';
 import {
@@ -141,8 +139,6 @@ export class ZLinkChannelSocketRegistry {
     deadlineAt: number;
     outstandingProbeId?: bigint;
   }>();
-  private readonly submitters = new WeakMap<object, ZLinkAsyncSubmitter>();
-  private readonly ownedSubmitters = new Set<ZLinkAsyncSubmitter>();
   private readonly ownedMonitors = new Set<ZLinkBackendSocketMonitor>();
   private readonly fanoutConnections =
     new Map<string, FanoutPublisherConnection>();
@@ -198,7 +194,6 @@ export class ZLinkChannelSocketRegistry {
     this.publishers.clear();
     this.routeRouters.clear();
     this.routeMembers.clear();
-    this.disposeSubmitters();
     const monitors = [...this.ownedMonitors];
     this.ownedMonitors.clear();
     const cleanup = await Promise.allSettled([
@@ -213,12 +208,6 @@ export class ZLinkChannelSocketRegistry {
     if (errors.length > 1) throw new AggregateError(errors, 'Channel socket cleanup failed.');
   }
 
-  disposeSubmitters(): void {
-    for (const submitter of this.ownedSubmitters) {
-      submitter.dispose();
-    }
-    this.ownedSubmitters.clear();
-  }
 
   clientDealer(channelName: string): ZLinkBackendDealerSocket {
     const existing = this.clientDealers.get(channelName);
@@ -238,7 +227,6 @@ export class ZLinkChannelSocketRegistry {
       dealer.setRoutingId(deriveRoutingId(channel.routingId, 'dealer'));
     }
     applySocketConfig(dealer, client);
-    this.trackSubmitter(dealer);
     this.clientDealers.set(channelName, dealer);
     return dealer;
   }
@@ -270,7 +258,6 @@ export class ZLinkChannelSocketRegistry {
     this.clientServerPublicWeights.set(channelName, publicWeight);
     router.peerWeight = rawAvailabilityWeight(publicWeight);
     applySocketConfig(router, channel.server);
-    this.trackSubmitter(router);
     router.bind(channel.server.bind);
     if (this.monitoringAdapter !== undefined) {
       const monitor = this.monitoringAdapter.openSocketMonitor(router);
@@ -367,14 +354,7 @@ export class ZLinkChannelSocketRegistry {
     dealer.setChannelName(channelName);
     dealer.setRoutingId(`cs-client-${randomUUID()}`);
     applySocketConfig(dealer, client);
-    this.trackSubmitter(dealer);
     const cleanupDealer = (): void => {
-      const submitter = this.submitters.get(dealer);
-      if (submitter !== undefined) {
-        submitter.dispose();
-        this.ownedSubmitters.delete(submitter);
-        this.submitters.delete(dealer);
-      }
       void Promise.allSettled([dealer.dispose()]);
     };
     let readablePoller: ZLinkBackendReadablePoller;
@@ -510,15 +490,6 @@ export class ZLinkChannelSocketRegistry {
       } catch {
         // Disposal below is the terminal cleanup if the transport already closed.
       }
-    }
-    const submitter = this.submitters.get(current.dealer);
-    submitter?.rejectActive(new ZLinkRouteDisconnectedError(
-      `ClientServer connection '${connectionId}' closed.`
-    ));
-    if (submitter !== undefined) {
-      submitter.dispose();
-      this.ownedSubmitters.delete(submitter);
-      this.submitters.delete(current.dealer);
     }
     this.ownedMonitors.delete(current.monitor);
     current.readablePoller.dispose();
@@ -1275,15 +1246,12 @@ export class ZLinkChannelSocketRegistry {
         const record = decodeClientServerControl(received.parts[0]!.data());
         if (record.kind === 'livenessProbe') {
           const ack = RuntimeMessage.from(encodeClientServerLivenessAck(record.probeId));
-          try {
-            if (!connection.dealer.send(ack, 0)) {
-              throw new ZLinkConfigurationException(
-                `ClientServer '${connection.channelName}' liveness ACK was not submitted.`
-              );
-            }
-          } finally {
-            ack.close();
-          }
+          void connection.dealer.send(ack)
+            .catch((error) => {
+              this.removeReadyConnection(connectionId);
+              this.oneWayFailureSink?.(error);
+            })
+            .finally(() => ack.close());
           continue;
         }
         if (record.kind !== 'update') {
@@ -1391,12 +1359,12 @@ export class ZLinkChannelSocketRegistry {
     probeId: bigint
   ): void {
     const message = RuntimeMessage.from(encodeClientServerLivenessProbe(probeId));
-    const submitted = connection.dealer.request(message, (result, parts) => {
-      try {
+    void connection.dealer.request(message, CLIENT_SERVER_PEER_DEADLINE_MS)
+      .then((parts) => {
+        try {
         const current = this.clientServerConnections.get(connectionId);
         if (current === undefined
           || current.physicalConnectionId !== connection.physicalConnectionId
-          || result !== 0
           || parts.length !== 1) return;
         const record = decodeClientServerControl(parts[0]!.data());
         if (record.kind !== 'livenessAck') return;
@@ -1410,12 +1378,12 @@ export class ZLinkChannelSocketRegistry {
         }
         current.outstandingProbeId = undefined;
         current.deadlineAt = performance.now() + CLIENT_SERVER_PEER_DEADLINE_MS;
-      } finally {
-        message.close();
-        closeMessages(parts);
-      }
-    }, 0, CLIENT_SERVER_PEER_DEADLINE_MS);
-    if (!submitted) message.close();
+        } finally {
+          closeMessages(parts);
+        }
+      })
+      .catch((error) => this.oneWayFailureSink?.(error))
+      .finally(() => message.close());
   }
 
   private admitClientServerServerPeer(channelName: string, routingId: RoutingId): void {
@@ -1451,11 +1419,9 @@ export class ZLinkChannelSocketRegistry {
     const router = this.channelRouters.get(peer.channelName);
     if (router === undefined) return;
     const message = RuntimeMessage.from(encodeClientServerLivenessProbe(probeId));
-    try {
-      router.send(peer.routingId, message, 0);
-    } finally {
-      message.close();
-    }
+    void router.send(peer.routingId, message)
+      .catch((error) => this.oneWayFailureSink?.(error))
+      .finally(() => message.close());
   }
 
   private acceptClientServerServerLivenessAck(
@@ -1496,11 +1462,12 @@ export class ZLinkChannelSocketRegistry {
         descriptor,
         normalizedMessageLimit(router.maxMessageSize)
       ));
-      try {
-        if (!router.send(routingId, message, 0)) clients.delete(routingId);
-      } finally {
-        message.close();
-      }
+      void router.send(routingId, message)
+        .catch((error) => {
+          clients.delete(routingId);
+          this.oneWayFailureSink?.(error);
+        })
+        .finally(() => message.close());
     }
   }
 
@@ -1526,7 +1493,6 @@ export class ZLinkChannelSocketRegistry {
 
     const publisher = this.adapter.createPublisherSocket(this.context);
     publisher.setChannelName(channelName);
-    this.trackSubmitter(publisher);
     publisher.bind(channel.publisher.bind);
     this.publishers.set(channelName, publisher);
     this.fanoutPublisherNextBeacon.set(
@@ -1573,7 +1539,6 @@ export class ZLinkChannelSocketRegistry {
     this.routeMeshPublicWeights.set(routerChannelId, publicWeight);
     router.peerWeight = rawAvailabilityWeight(publicWeight);
     applySocketConfig(router, routeChannel);
-    this.trackSubmitter(router);
     this.trackRouteMonitor(routerChannelId, router);
     if ((routeChannel.manualConnections ?? []).length > 0) {
       for (const endpoint of routeChannel.manualConnections ?? []) {
@@ -1604,14 +1569,6 @@ export class ZLinkChannelSocketRegistry {
     router.peerWeight = rawAvailabilityWeight(weight);
   }
 
-  requireSubmitter(socket: ZLinkBackendDealerSocket | ZLinkBackendPublisherSocket | ZLinkBackendRouterSocket): ZLinkAsyncSubmitter {
-    const submitter = this.submitters.get(socket);
-    if (submitter === undefined) {
-      throw new ZLinkConfigurationException('Channel submit runtime is not started.');
-    }
-    return submitter;
-  }
-
   routeMemberStatus(routerChannelId: string, targetNodeRid: string): 'unknown' | 'missing' | 'connected' | 'disconnected' {
     return this.routeMembers.status(routerChannelId, targetNodeRid);
   }
@@ -1632,18 +1589,6 @@ export class ZLinkChannelSocketRegistry {
     });
   }
 
-  private trackSubmitter(socket: ZLinkBackendDealerSocket | ZLinkBackendPublisherSocket | ZLinkBackendRouterSocket): void {
-    const submitter = new ZLinkAsyncSubmitter((handler) => socket.onSendReady(handler), {
-      ...('sendTimeoutMs' in socket && socket.sendTimeoutMs !== -1
-        ? { timeoutMs: socket.sendTimeoutMs }
-        : {}),
-      capacity: Math.max(1, socket.sendHighWaterMark),
-      onCommandFailure: this.oneWayFailureSink
-    });
-    this.submitters.set(socket, submitter);
-    this.ownedSubmitters.add(submitter);
-  }
-
   private trackRouteMonitor(routerChannelId: string, router: ZLinkBackendRouterSocket): void {
     if (this.monitoringAdapter === undefined) {
       return;
@@ -1661,10 +1606,6 @@ export class ZLinkChannelSocketRegistry {
         && event.nativeEvent !== ZLinkSocketNativeEventType.Closed
       ) return;
       this.routeMembers.observeTermination(routerChannelId, routingId, event.remoteAddr);
-      const submitter = this.submitters.get(router);
-      submitter?.rejectActive(new ZLinkRouteDisconnectedError(
-        `Route channel '${routerChannelId}' disconnected: ${event.nativeEvent}/${event.value}`
-      ));
     });
   }
 }
@@ -1681,7 +1622,7 @@ function clientServerServerPeerKey(channelName: string, routingId: RoutingId): s
   return `${channelName.length}:${channelName}:${String(routingId)}`;
 }
 
-function requestClientServerAdmission(
+async function requestClientServerAdmission(
   dealer: ZLinkBackendDealerSocket,
   channelName: string,
   securityIdentity: string,
@@ -1692,50 +1633,32 @@ function requestClientServerAdmission(
     securityIdentity,
     normalizedEffectiveMaxMessageBytes: normalizedMessageLimit(dealer.maxMessageSize)
   }));
-  return new Promise((resolve, reject) => {
-    let submitted = false;
+  try {
+    const parts = await dealer.request(message, timeoutMs);
     try {
-      submitted = dealer.request(message, (result, parts) => {
-        try {
-          if (result !== 0 || parts.length !== 1) {
-            reject(new ZLinkConfigurationException(
-              `ClientServer '${channelName}' admission request failed with result ${result}.`
-            ));
-            return;
-          }
-          const record = decodeClientServerControl(parts[0]!.data());
-          if (record.kind === 'reject') {
-            reject(new ZLinkConfigurationException(
-              `ClientServer '${channelName}' admission was rejected (${record.reason}).`
-            ));
-            return;
-          }
-          if (record.kind !== 'admit') {
-            reject(new ZLinkConfigurationException(
-              `ClientServer '${channelName}' admission reply has an invalid command.`
-            ));
-            return;
-          }
-          resolve(record.admission);
-        } catch (error) {
-          reject(error);
-        } finally {
-          message.close();
-          closeMessages(parts);
-        }
-      }, 0, timeoutMs);
-    } catch (error) {
-      message.close();
-      reject(error);
-      return;
+      if (parts.length !== 1) {
+        throw new ZLinkConfigurationException(
+          `ClientServer '${channelName}' admission request returned an invalid reply.`
+        );
+      }
+      const record = decodeClientServerControl(parts[0]!.data());
+      if (record.kind === 'reject') {
+        throw new ZLinkConfigurationException(
+          `ClientServer '${channelName}' admission was rejected (${record.reason}).`
+        );
+      }
+      if (record.kind !== 'admit') {
+        throw new ZLinkConfigurationException(
+          `ClientServer '${channelName}' admission reply has an invalid command.`
+        );
+      }
+      return record.admission;
+    } finally {
+      closeMessages(parts);
     }
-    if (!submitted) {
-      message.close();
-      reject(new ZLinkConfigurationException(
-        `ClientServer '${channelName}' admission request was not submitted.`
-      ));
-    }
-  });
+  } finally {
+    message.close();
+  }
 }
 
 function admissionToDiscoveryDescriptor(admission: ZLinkClientServerAdmission) {

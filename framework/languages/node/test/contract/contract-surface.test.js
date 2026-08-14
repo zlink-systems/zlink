@@ -100,23 +100,6 @@ test('Nest options builder matches the exact public member set', () => {
   );
   assert.equal('channelName' in builder, false);
 
-  const inbound = builder.configureInboundDispatch();
-  assert.equal(typeof inbound.applicationHwmBytes, 'function');
-  assert.equal(typeof inbound.applicationHwmProfile, 'function');
-  assert.equal(typeof inbound.processMemoryLimitBytes, 'function');
-});
-
-test('Nest inbound dispatch builder keeps fluent HWM changes in build output', () => {
-  const nestjs = require('../../packages/nestjs/dist');
-  const builder = nestjs.zlinkFramework();
-
-  builder.configureInboundDispatch()
-    .applicationHwmBytes(8192n)
-    .processMemoryLimitBytes(16384n);
-
-  const built = builder.build();
-  assert.equal(built.inboundDispatch.applicationHwmBytes, 8192n);
-  assert.equal(built.inboundDispatch.processMemoryLimitBytes, 16384n);
 });
 
 test('Nest RouteMesh builder keeps the formal scheduler limits in build output', () => {
@@ -207,6 +190,24 @@ test('worker options expose the formal scheduler limits', () => {
   assert.equal(workerOptions.includes('maxQueueLength'), true);
   assert.equal(workerOptions.includes('minThreads'), true);
   assert.equal(workerOptions.includes('idleTimeoutMs'), true);
+});
+
+test('inbound dispatch keeps Core HWM and application job queue as independent owners', () => {
+  const declarations = readTree(declarationsRoot);
+  const nestDeclarations = readTree(path.join(workspaceRoot, 'packages', 'nestjs', 'dist'));
+  const frameworkOptions = declarationBody(declarations, 'ZLinkFrameworkOptions');
+  const nestFrameworkOptions = declarationBody(nestDeclarations, 'ZLinkNestFrameworkOptionsBuilder');
+  const inboundDispatch = declarationBody(declarations, 'ZLinkInboundDispatchOptions');
+
+  assert.match(frameworkOptions, /configureInboundDispatch\(\): ZLinkInboundDispatchOptions/);
+  assert.match(nestFrameworkOptions, /configureInboundDispatch\(\): ZLinkInboundDispatchOptions/);
+  assert.doesNotMatch(frameworkOptions, /configureCoreHwm/);
+  assert.doesNotMatch(nestFrameworkOptions, /configureCoreHwm/);
+  assert.match(inboundDispatch, /coreHwmMemoryLimitBytes\(value: bigint \| undefined\): this/);
+  assert.match(inboundDispatch, /coreHwmBudgetBytes\(value: bigint \| undefined\): this/);
+  assert.match(inboundDispatch, /coreHwmProfile\(value: ZLinkCoreHwmProfile\): this/);
+  assert.match(inboundDispatch, /applicationJobQueueProfile\(value: ZLinkApplicationJobQueueProfile\): this/);
+  assert.match(inboundDispatch, /maxQueuedApplicationJobs\(value: bigint \| undefined\): this/);
 });
 
 test('location and relocation stores have separate public registration surfaces', () => {
@@ -308,8 +309,14 @@ test('runtime topology and supporting exact names are declared by their producti
     assert.match(exactInterfaceCatalog, new RegExp(`\\b(?:interface|type|enum) ${name}\\b`));
   }
   const routeMeshRuntime = declarationBody(frameworkDeclarations, 'ZLinkRouteMeshRuntime');
+  const frameworkRuntimeStatus = declarationBody(
+    frameworkDeclarations,
+    'ZLinkFrameworkRuntimeStatus'
+  );
   const frameworkRuntime = declarationBody(frameworkDeclarations, 'ZLinkFrameworkRuntime');
+  assert.match(frameworkRuntimeStatus, /readonly capacity: ZLinkHostCapacityStatus/);
   assert.match(frameworkRuntime, /readonly status: ZLinkFrameworkRuntimeStatus/);
+  assert.match(frameworkRuntime, /resetCapacityMetrics\(\): void/);
   assert.match(frameworkRuntime, /relocate\(options: ZLinkFrameworkRelocationOptions\): Promise<ZLinkFrameworkRelocationResult>/);
   assert.match(frameworkRuntime, /shutdown\(options\?: ZLinkFrameworkLifecycleOptions\): Promise<ZLinkFrameworkTerminationResult>/);
   assert.match(routeMeshRuntime, /snapshot\(meshName: string\): ZLinkRouteMeshStatus/);
@@ -665,12 +672,6 @@ test('formal declarations expose role-specific ClientServer builders and exclude
   ]) {
     assert.equal(nestDeclarations.includes(name), true, `Nest declaration missing ${name}`);
   }
-});
-
-test('Nest declarations expose the common inbound dispatch builder contract', () => {
-  const declarations = readTree(path.join(workspaceRoot, 'packages', 'nestjs', 'dist'));
-  const builder = declarationBody(declarations, 'ZLinkNestFrameworkOptionsBuilder');
-  assert.match(builder, /configureInboundDispatch\(\): ZLinkInboundDispatchOptions/);
 });
 
 test('framework error kind values and exception surface match the shared table', () => {

@@ -28,6 +28,9 @@ import {
 import {
   ZLinkNodeRawBindingPort
 } from '../../packages/framework/src/runtime/backend/node/node-raw-binding-port';
+import {
+  ZLinkActorRuntimeOptionsFactory
+} from '../../packages/framework/src/runtime/host/actor-runtime-options-factory';
 import type {
   RawServiceIngressRecord,
   RawServiceMeshRuntime
@@ -134,8 +137,7 @@ import {
   internalFrameworkErrorKind
 } from '../../packages/framework/src/runtime/framework-errors-internal';
 import {
-  ZLinkSubmitStatus,
-  type ZLinkSubmitResult
+  ZLinkSubmitStatus
 } from '../../packages/framework/src/runtime/messaging/submission-result';
 import { meshActorSessionNodeAdapter } from '../../packages/framework/src/runtime/backend/mesh-actor-session-node-adapter';
 import { ZLinkNativeFallbackBoundSession } from '../../packages/framework/src/runtime/streams/native-fallback-bound-session';
@@ -149,13 +151,13 @@ test('M6B command and flag constants match the generated service wire schema', (
   }
 });
 
-test('stale native bound-session binding falls through to the routed session target', () => {
+test('stale native bound-session binding falls through to the routed session target', async () => {
   const adapter = meshActorSessionNodeAdapter({
-    sendActorBoundSession: () => SubmitResult.InvalidState
+    sendActorBoundSession: async () => SubmitResult.InvalidState
   } as unknown as ZLinkBackendMeshNode);
 
   assert.deepEqual(
-    adapter.sendActorBoundSession(
+    await adapter.sendActorBoundSession(
       { actorId: 'actor-a', nodeRid: 'node-a', generation: 7n },
       3n,
       [],
@@ -304,6 +306,73 @@ test('routed bound-session sends use infrastructure node routing after native bi
   assert.equal(directSubmits, 0);
   assert.equal(infrastructureSubmits, 1);
   assert.equal(spotRoute, undefined);
+});
+
+test('bound-session factory keeps the sealed transfer route ahead of an unfenced binding refresh', async () => {
+  const staleBindingTarget = {
+    routerChannelId: 'mesh',
+    targetNodeRid: 'binding-refresh-node',
+    spotId: 'entry-spot'
+  };
+  const sealedTransferTarget = {
+    routerChannelId: 'mesh',
+    targetNodeRid: 'relocation-target-node',
+    spotId: 'entry-spot',
+    relocationSealId: 'seal-17'
+  };
+  let submittedTarget: string | undefined;
+  const actorState = {
+    actor: undefined,
+    nativeActorRef: undefined,
+    remoteBoundSessionTarget: staleBindingTarget,
+    boundSessionTransferTarget: sealedTransferTarget
+  };
+  const factory = new ZLinkActorRuntimeOptionsFactory({
+    registration: {
+      messageSerializers: new Map(),
+      requestTimeoutMs: 1_000,
+      actorTransferTimeoutMs: 1_000
+    },
+    routeTransport: {
+      async submitInfrastructure(_channelId: string, targetNodeRid: string) {
+        submittedTarget = targetNodeRid;
+        return { status: ZLinkSubmitStatus.Submitted };
+      }
+    },
+    streamBindingRuntime: {},
+    actorManager: () => ({
+      getState: () => actorState
+    }),
+    spotManager: () => undefined,
+    primaryMeshNode: () => ({}),
+    primaryMeshNodeOrUndefined: () => undefined,
+    primaryMeshCompletions: () => undefined,
+    meshNode: () => undefined,
+    meshCompletions: () => undefined,
+    actorMeshName: () => 'mesh',
+    primaryMeshName: () => 'mesh',
+    createLocationSpotRouteResolver: () => ({}) as never,
+    locationLifecycle: () => ({}) as never,
+    actorTransferRuntime: {} as never,
+    createActorLocationResolver: () => undefined,
+    forgetDestroyedActorRef: () => undefined,
+    notifyEntrySpotActorCreated: async () => undefined,
+    invalidateActorRoute: () => undefined,
+    rememberDestroyedActorRef: () => undefined,
+    publishActorAuthority: async () => undefined,
+    reportPostCommitError: () => undefined,
+    reportBoundSessionSendError: () => undefined,
+    shutdownSignal: () => undefined,
+    metrics: {} as never,
+    admission: {} as never,
+    actorPacketTargetForState: () => undefined
+  } as never);
+
+  const boundSession = factory.createActorManagerOptions().boundSessionFactory!('actor-a');
+  class SessionNotice {}
+  await boundSession.send(new SessionNotice()).submit();
+
+  assert.equal(submittedTarget, sealedTransferTarget.targetNodeRid);
 });
 
 test('Message Follow command preserves route fences and rejects mismatched objects', () => {
@@ -1296,7 +1365,7 @@ test('stateful reply decoder rejects a non-canonical terminal and failure pair',
   );
 });
 
-test('outbound stateful routes use resolved authority generations and never object generations', () => {
+test('outbound stateful routes use resolved authority generations and never object generations', async () => {
   const sent: Array<{ readonly target: string; readonly parts: readonly Buffer[] }> = [];
   const raw = {
     topology: {
@@ -1305,7 +1374,7 @@ test('outbound stateful routes use resolved authority generations and never obje
         : undefined
     },
     setServiceIngress: () => {},
-    sendService: (target: string, parts: readonly Buffer[]) => {
+    sendService: async (target: string, parts: readonly Buffer[]) => {
       sent.push({ target, parts });
       return true;
     }
@@ -1317,14 +1386,14 @@ test('outbound stateful routes use resolved authority generations and never obje
     payload: Buffer.from('payload')
   };
   const actor = { nodeRid: 'node-b', actorId: 'actor-a', generation: 5n };
-  assert.equal(runtime.sendToActor(actor, 7n, actor.generation, payload), SubmitResult.NotFound);
+  assert.equal(await runtime.sendToActor(actor, 7n, actor.generation, payload), SubmitResult.NotFound);
   runtime.rememberActorRoute({
     actor,
     targetNodeGeneration: 7n,
     authorityOwnerGeneration: 11n,
     ownerLeaseGeneration: 13n
   });
-  assert.equal(runtime.sendToActor(actor, 7n, actor.generation, payload), SubmitResult.Ok);
+  assert.equal(await runtime.sendToActor(actor, 7n, actor.generation, payload), SubmitResult.Ok);
   const actorHeader = decodeStatefulHeader(sent.at(-1)!.parts[0]!);
   assert.equal(actorHeader.kind, 'actorSend');
   if (actorHeader.kind === 'actorSend') {
@@ -1340,11 +1409,11 @@ test('outbound stateful routes use resolved authority generations and never obje
     ownerLeaseGeneration: 17n,
     storeVersion: 'store-v1'
   };
-  assert.equal(runtime.sendToSpot('source', {
+  assert.equal(await runtime.sendToSpot('source', {
     ...firstRoute,
     targetNodeGeneration: 8n
   }, payload), SubmitResult.NotFound);
-  assert.equal(runtime.sendToSpot('source', firstRoute, payload), SubmitResult.Ok);
+  assert.equal(await runtime.sendToSpot('source', firstRoute, payload), SubmitResult.Ok);
   const firstSpotHeader = decodeStatefulHeader(sent.at(-1)!.parts[0]!);
   assert.equal(firstSpotHeader.kind, 'spotSend');
   if (firstSpotHeader.kind === 'spotSend') {
@@ -1352,7 +1421,7 @@ test('outbound stateful routes use resolved authority generations and never obje
   }
   const advancedRoute = { ...firstRoute, storeVersion: 'store-v2' };
   runtime.rememberSpotRoute(advancedRoute);
-  assert.equal(runtime.sendToSpot('source', advancedRoute, payload), SubmitResult.Ok);
+  assert.equal(await runtime.sendToSpot('source', advancedRoute, payload), SubmitResult.Ok);
   const advancedSpotHeader = decodeStatefulHeader(sent.at(-1)!.parts[0]!);
   assert.equal(advancedSpotHeader.kind, 'spotSend');
   if (advancedSpotHeader.kind === 'spotSend') {
@@ -1366,7 +1435,7 @@ test('outbound stateful routes use resolved authority generations and never obje
   runtime.rememberSpotRoute(reactivatedRoute);
   // Direct application routing uses the logical Spot ID. A caller holding
   // the previous object generation still reaches the current Ready route.
-  assert.equal(runtime.sendToSpot('source', firstRoute, payload), SubmitResult.Ok);
+  assert.equal(await runtime.sendToSpot('source', firstRoute, payload), SubmitResult.Ok);
   const reactivatedHeader = decodeStatefulHeader(sent.at(-1)!.parts[0]!);
   assert.equal(reactivatedHeader.kind, 'spotSend');
   if (reactivatedHeader.kind === 'spotSend') {
@@ -1390,7 +1459,7 @@ test('outbound stateful routes use resolved authority generations and never obje
     storeVersion: 'store-stale-owner'
   });
   runtime.forgetSpotRoute(spot, 13n, 'store-v1');
-  assert.equal(runtime.sendToSpot('source', successorRoute, payload), SubmitResult.Ok);
+  assert.equal(await runtime.sendToSpot('source', successorRoute, payload), SubmitResult.Ok);
   const successorHeader = decodeStatefulHeader(sent.at(-1)!.parts[0]!);
   assert.equal(successorHeader.kind, 'spotSend');
   if (successorHeader.kind === 'spotSend') {
@@ -2167,7 +2236,7 @@ test('Spot Message Follow does not impose a record-count or stored-byte admissio
   runtime.close();
 });
 
-test('Instance activation encoding distinguishes absent metadata from explicit empty metadata', () => {
+test('Instance activation encoding distinguishes absent metadata from explicit empty metadata', async () => {
   const sent: Array<{ readonly target: string; readonly parts: readonly Buffer[] }> = [];
   const raw = {
     topology: {
@@ -2175,7 +2244,7 @@ test('Instance activation encoding distinguishes absent metadata from explicit e
     },
     setServiceIngress: () => {},
     isPeerRouteReady: () => true,
-    sendService: (target: string, parts: readonly Buffer[]) => {
+    sendService: async (target: string, parts: readonly Buffer[]) => {
       sent.push({ target, parts });
       return false;
     }
@@ -2193,18 +2262,18 @@ test('Instance activation encoding distinguishes absent metadata from explicit e
     contentType: 'application/octet-stream',
     payload: Buffer.from('open')
   };
-  assert.equal(runtime.sendToMissingInstanceSpot(
+  assert.equal(await runtime.sendToMissingInstanceSpot(
     target,
     payload,
     BigInt(Date.now() + 1_000)
-  ), SubmitResult.Backpressured);
-  assert.equal(runtime.sendToMissingInstanceSpot(
+  ), SubmitResult.NotConnected);
+  assert.equal(await runtime.sendToMissingInstanceSpot(
     target,
     payload,
     BigInt(Date.now() + 1_000),
     undefined,
     encodeServiceMetadataFrame(new Map())
-  ), SubmitResult.Backpressured);
+  ), SubmitResult.NotConnected);
   assert.equal(sent[0]?.parts.length, 2);
   assert.equal(sent[1]?.parts.length, 3);
   assert.deepEqual(
@@ -2214,54 +2283,7 @@ test('Instance activation encoding distinguishes absent metadata from explicit e
   runtime.close();
 });
 
-test('Missing Instance bounded admission reuses one immutable operation envelope', () => {
-  const sent: Array<readonly Buffer[]> = [];
-  let attempts = 0;
-  const raw = {
-    topology: {
-      peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
-    },
-    setServiceIngress: () => {},
-    isPeerRouteReady: () => true,
-    sendService: (_target: string, parts: readonly Buffer[]) => {
-      sent.push(parts);
-      attempts += 1;
-      return attempts > 1;
-    }
-  } as unknown as RawServiceMeshRuntime;
-  const runtime = new ServiceStatefulRuntime(raw, 'source', 3n);
-  const target = {
-    targetNodeRid: 'target',
-    targetNodeGeneration: 7n,
-    targetSpotId: 'room',
-    stableType: 'Room',
-    descriptorVersion: '1'
-  };
-  const submit = runtime.prepareMissingInstanceSpotSend(
-    target,
-    {
-      packetName: 'Open',
-      contentType: 'application/octet-stream',
-      payload: Buffer.from('open')
-    },
-    BigInt(Date.now() + 1_000)
-  );
-
-  assert.equal(submit(), SubmitResult.Backpressured);
-  assert.equal(submit(), SubmitResult.Ok);
-  assert.equal(sent.length, 2);
-  assert.strictEqual(sent[0], sent[1]);
-  const first = decodeStatefulHeader(sent[0]![0]!);
-  const second = decodeStatefulHeader(sent[1]![0]!);
-  assert.equal(first.kind, 'instanceSpot');
-  assert.equal(second.kind, 'instanceSpot');
-  if (first.kind === 'instanceSpot' && second.kind === 'instanceSpot') {
-    assert.deepEqual(first.operation, second.operation);
-  }
-  runtime.close();
-});
-
-test('retained peer routes may submit while endpoint convergence reports not ready', () => {
+test('retained peer routes may submit while endpoint convergence reports not ready', async () => {
   const sent: Array<{ readonly target: string; readonly parts: readonly Buffer[] }> = [];
   const raw = {
     topology: {
@@ -2271,7 +2293,7 @@ test('retained peer routes may submit while endpoint convergence reports not rea
     },
     setServiceIngress: () => {},
     isPeerRouteReady: () => false,
-    sendService: (target: string, parts: readonly Buffer[]) => {
+    sendService: async (target: string, parts: readonly Buffer[]) => {
       sent.push({ target, parts });
       return true;
     }
@@ -2289,7 +2311,7 @@ test('retained peer routes may submit while endpoint convergence reports not rea
     ownerLeaseGeneration: 13n
   });
 
-  const result = runtime.sendToActor(actor, 7n, 5n, {
+  const result = await runtime.sendToActor(actor, 7n, 5n, {
     packetName: 'RetainedRoute',
     contentType: 'application/octet-stream',
     payload: Buffer.from('payload')
@@ -5082,7 +5104,7 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     closeParts(completion);
 
     const actor = backend.createActor('actor-target');
-    assert.equal(backend.sendToActor(actor, Buffer.from('actor-send')), SubmitResult.Ok);
+    assert.equal(await backend.sendToActor(actor, Buffer.from('actor-send')), SubmitResult.Ok);
     const receivedActor = await drainOne(backend, ReadyDomain.Application);
     assert.equal(receivedActor.kind, ReceiveKind.ActorSend);
     assert.equal(receivedActor.kindData, null);
@@ -5120,7 +5142,7 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
       ownerLeaseGeneration: 37n
     };
     assert.equal(
-      backend.sendActorBoundSession(
+      await backend.sendActorBoundSession(
         actor,
         binding.bindingGeneration,
         Buffer.from('session-message'),
@@ -5131,9 +5153,8 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     );
     assert.deepEqual(delivered.map(value => value.toString()), ['session-message']);
     streamState.disconnected = true;
-    assert.doesNotThrow(() => {
-      assert.equal(
-        backend.sendActorBoundSession(
+    assert.equal(
+        await backend.sendActorBoundSession(
           actor,
           binding.bindingGeneration,
           Buffer.from('late-session-message'),
@@ -5141,8 +5162,7 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
           actorFence
         ),
         SubmitResult.InvalidState
-      );
-    });
+    );
     const unbindOperation = sessionService.unbindActor(
       'session-a',
       actor,
@@ -5210,7 +5230,7 @@ test('public SpotId call reaches production host Missing Instance placement with
         }
       };
     },
-    sendToMissingInstanceSpot(
+    async sendToMissingInstanceSpot(
       target: (typeof submissions)[number]['target'],
       _parts: unknown,
       deadline: bigint,
@@ -5943,11 +5963,6 @@ test('Ready Instance routes use command 39 with the complete authority fence', a
     topic: null,
     metadata: {}
   }, 'instance-reply').map(part => part instanceof Message ? part : toBindingMessage(part));
-  const meshSubmitters = {
-    async submit(_meshName: string, attempt: () => ZLinkSubmitResult) {
-      return attempt();
-    }
-  };
   const transport = new ZLinkRuntimeRouteTransport(
     () => undefined,
     undefined,
@@ -5965,9 +5980,7 @@ test('Ready Instance routes use command 39 with the complete authority fence', a
           };
         }
       }) as never
-    }),
-    undefined,
-    meshSubmitters as never
+    })
   );
 
   const sendResult = await transport.sendToSpot(target, { hello: true }, {
@@ -6039,13 +6052,7 @@ test('stateful request failure codes preserve typed Instance route errors', asyn
             };
           }
         }) as never
-      }),
-      undefined,
-      {
-        async submit(_meshName: string, attempt: () => ZLinkSubmitResult) {
-          return attempt();
-        }
-      } as never
+      })
     );
 
     await assert.rejects(
@@ -6176,7 +6183,7 @@ async function drainOne(
     return backend.drainReady(domain, ready).records.length > 0;
   });
   const claim = ready.takeClaim(0);
-  const receive = backend.createReceiveBatch(4, 8, 64 * 1024);
+  const receive = backend.createReceiveBatch(4, 8);
   const result = claim.recvBatch(receive);
   assert.equal(result.ok, true);
   assert.equal(result.records.length, 1);
@@ -6203,20 +6210,22 @@ function createFakeStream(
   delivered: Buffer[],
   state: { disconnected: boolean }
 ): unknown {
+  const createSubmit = () => {
+    const submit = {
+      message(part: Uint8Array) {
+        delivered.push(Buffer.from(part));
+        return submit;
+      },
+      submit() {
+        if (state.disconnected) throw new Error('stream route is disconnected');
+        return true;
+      }
+    };
+    return submit;
+  };
   return {
-    send() {
-      const submit = {
-        message(part: Uint8Array) {
-          delivered.push(Buffer.from(part));
-          return submit;
-        },
-        submit() {
-          if (state.disconnected) throw new Error('stream route is disconnected');
-          return true;
-        }
-      };
-      return submit;
-    }
+    send: createSubmit,
+    trySend: createSubmit
   };
 }
 

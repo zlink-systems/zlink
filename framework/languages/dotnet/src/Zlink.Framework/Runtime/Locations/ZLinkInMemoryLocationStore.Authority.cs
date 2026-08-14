@@ -13,8 +13,6 @@ internal sealed partial class ZLinkInMemoryLocationStore
         new(StringComparer.Ordinal);
     private readonly Dictionary<ZLinkCreationOperationId, ZLinkCreationTerminalRecord>
         _creationTerminals = [];
-    private readonly Dictionary<string, RelocationCapacityState>
-        _relocationCapacityReservations = new(StringComparer.Ordinal);
     private readonly Dictionary<ZLinkAggregateFence, AggregateState> _authorityAggregates = [];
     private readonly Dictionary<PlacementCapacityKey, long>
         _activePlacementCapacity = [];
@@ -141,36 +139,64 @@ internal sealed partial class ZLinkInMemoryLocationStore
                             : new ZLinkAuthorityReadResult.Found(
                                 current with { StoreNow = now })));
             }
-            RelocationCapacityState? relocationCapacity = null;
-            if (put.RelocationCapacityFence is { } relocationFence
-                && (!_relocationCapacityReservations.TryGetValue(
-                        relocationFence.Value,
-                        out relocationCapacity)
-                    || relocationCapacity.Status
-                    != RelocationCapacityStatus.Reserved
-                    || relocationCapacity.Request.Key != key
-                    || relocationCapacity.Request.ExpectedStoreVersion
-                    != current.StoreVersion
-                    || relocationCapacity.Request.SourceOwner
-                    != new ZLinkLocationOwnerToken(
-                        current.OwnerId,
-                        current.OwnerLeaseGeneration)
-                    || needsOwner
-                    && relocationCapacity.Request.TargetOwner
-                       != put.TargetOwner.GetValueOrDefault()
-                    || !MatchesSourceAllocation(
-                        current.Allocation,
-                        relocationCapacity.Request)
-                    || !MatchesLiveTarget(
-                        relocationCapacity.Request.TargetDescriptor,
-                        relocationCapacity.Request.TargetNodeLifecycleGeneration,
-                        relocationCapacity.Request.TargetOwner,
-                        now)))
+            var nextAllocation = current.Allocation;
+            var nextAuthorityOwnerGeneration =
+                current.AuthorityOwnerGeneration;
+            if (needsOwner)
             {
-                return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
-                    new ZLinkAuthorityCompareExchangeResult.Conflict(
-                        new ZLinkAuthorityReadResult.Found(
-                            current! with { StoreNow = now })));
+                var targetAllocation = put.TargetAllocation!;
+                if (targetAllocation.ObjectKind
+                        != current.Allocation.ObjectKind
+                    || !StringComparer.Ordinal.Equals(
+                        targetAllocation.StableType,
+                        current.Allocation.StableType)
+                    || targetAllocation.Capacity != current.Allocation.Capacity
+                    || !TryGetEligibleTarget(
+                        targetAllocation.Descriptor,
+                        targetAllocation.DescriptorLifecycleGeneration,
+                        requiredOwner,
+                        targetAllocation.ObjectKind,
+                        targetAllocation.StableType,
+                        now,
+                        out _,
+                        requireNewPlacementEligibility: false))
+                {
+                    return ValueTask.FromResult<
+                        ZLinkAuthorityCompareExchangeResult>(
+                        new ZLinkAuthorityCompareExchangeResult.Conflict(
+                            new ZLinkAuthorityReadResult.Found(
+                                current with { StoreNow = now })));
+                }
+
+                if (put.TargetAuthorityOwnerGeneration == 0)
+                {
+                    var highWater = Math.Max(
+                        _authorityOwnerGeneration,
+                        checked((long)current.AuthorityOwnerGeneration));
+                    if (!CanIncrement(highWater))
+                        return ValueTask.FromResult<
+                            ZLinkAuthorityCompareExchangeResult>(
+                            new ZLinkAuthorityCompareExchangeResult
+                                .GenerationExhausted());
+                    nextAuthorityOwnerGeneration =
+                        checked((ulong)(highWater + 1));
+                }
+                else
+                {
+                    if (put.TargetAuthorityOwnerGeneration
+                            <= current.AuthorityOwnerGeneration
+                        || put.TargetAuthorityOwnerGeneration > long.MaxValue)
+                    {
+                        return ValueTask.FromResult<
+                            ZLinkAuthorityCompareExchangeResult>(
+                            new ZLinkAuthorityCompareExchangeResult.Conflict(
+                                new ZLinkAuthorityReadResult.Found(
+                                    current with { StoreNow = now })));
+                    }
+                    nextAuthorityOwnerGeneration =
+                        put.TargetAuthorityOwnerGeneration;
+                }
+                nextAllocation = targetAllocation;
             }
             if (!CanIncrement(_authorityRevision))
                 return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
@@ -185,44 +211,23 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 put.Payload.ToArray(),
                 current.ObjectGeneration,
                 needsOwner
-                    ? relocationCapacity!.TargetAuthorityOwnerGeneration
+                    ? nextAuthorityOwnerGeneration
                     : current.AuthorityOwnerGeneration,
                 owner.OwnerId,
                 owner.LeaseGeneration,
-                needsOwner
-                    ? new ZLinkPlacementAllocation(
-                        ZLinkPlacementAllocationState.Active,
-                        relocationCapacity!.Request.ObjectKind,
-                        relocationCapacity.Request.StableType,
-                        relocationCapacity.Request.TargetDescriptor,
-                        relocationCapacity.Request.TargetNodeLifecycleGeneration,
-                        relocationCapacity.Request.Capacity)
-                    : current.Allocation,
+                nextAllocation,
                 current.ReservedCreation,
                 now);
-            _authorities[key.Value] = stored;
-            if (put.RelocationCapacityFence is { } capacityFence)
+            if (needsOwner)
             {
-                if (needsOwner)
-                {
-                    MoveRelocationCapacity(
-                        current.Allocation,
-                        relocationCapacity!.Request);
-                    _relocationCapacityReservations[capacityFence.Value].Status =
-                        RelocationCapacityStatus.Committed;
-                }
-                else
-                {
-                    // Prepared publication and relocation capacity must become
-                    // one durable fence. Rebind the reserved request to the
-                    // StoreVersion produced by this same authority CAS so the
-                    // following NewOwner CAS can consume the exact fence.
-                    relocationCapacity!.Request = relocationCapacity.Request with
-                    {
-                        ExpectedStoreVersion = stored.StoreVersion
-                    };
-                }
+                _authorityOwnerGeneration = Math.Max(
+                    _authorityOwnerGeneration,
+                    checked((long)nextAuthorityOwnerGeneration));
+                MoveAuthorityAllocationCapacity(
+                    current.Allocation,
+                    nextAllocation);
             }
+            _authorities[key.Value] = stored;
             return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
                 new ZLinkAuthorityCompareExchangeResult.Stored(stored));
         }
@@ -752,132 +757,6 @@ internal sealed partial class ZLinkInMemoryLocationStore
         }
     }
 
-    public ValueTask<ZLinkRelocationCapacityReserveResult>
-        ReserveRelocationCapacityAsync(
-            ZLinkRelocationCapacityReservationRequest request,
-            CancellationToken cancellationToken = default)
-    {
-        ValidateRelocationCapacityRequest(request);
-        cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
-        {
-            var fence = new ZLinkRelocationCapacityFence(
-                request.ReservationId.ToString("N"));
-            if (_relocationCapacityReservations.TryGetValue(
-                    fence.Value,
-                    out var existing))
-            {
-                return ValueTask.FromResult<ZLinkRelocationCapacityReserveResult>(
-                    existing.Status
-                    == RelocationCapacityStatus.Reserved
-                    && existing.Request == request
-                        ? new ZLinkRelocationCapacityReserveResult.AlreadyReserved(
-                            fence)
-                        {
-                            TargetAuthorityOwnerGeneration =
-                                existing.TargetAuthorityOwnerGeneration
-                        }
-                        : new ZLinkRelocationCapacityReserveResult.Conflict(
-                            ReadCurrent(request.Key)));
-            }
-            if (!_authorities.TryGetValue(request.Key.Value, out var current)
-                || current.StoreVersion != request.ExpectedStoreVersion
-                || current.OwnerId != request.SourceOwner.OwnerId
-                || current.OwnerLeaseGeneration
-                != request.SourceOwner.LeaseGeneration
-                || !MatchesSourceAllocation(current.Allocation, request)
-                || IsAuthorityInPreparedAggregate(request.Key))
-                return ValueTask.FromResult<ZLinkRelocationCapacityReserveResult>(
-                    new ZLinkRelocationCapacityReserveResult.Conflict(
-                        ReadCurrent(request.Key)));
-            if (!MatchesLiveTarget(
-                    request.TargetDescriptor,
-                    request.TargetNodeLifecycleGeneration,
-                    request.TargetOwner,
-                    _time.GetUtcNow()))
-                return ValueTask.FromResult<ZLinkRelocationCapacityReserveResult>(
-                    new ZLinkRelocationCapacityReserveResult.TargetUnavailable());
-            if (!TryGetEligibleTarget(
-                    request.TargetDescriptor,
-                    request.TargetNodeLifecycleGeneration,
-                    request.TargetOwner,
-                    request.ObjectKind,
-                    request.StableType,
-                    _time.GetUtcNow(),
-                    out var targetDescriptor))
-                return ValueTask.FromResult<ZLinkRelocationCapacityReserveResult>(
-                    new ZLinkRelocationCapacityReserveResult.TargetUnavailable());
-            if (!HasPlacementCapacity(
-                    targetDescriptor,
-                    request.Capacity))
-                return ValueTask.FromResult<ZLinkRelocationCapacityReserveResult>(
-                    new ZLinkRelocationCapacityReserveResult
-                        .PlacementCapacityExhausted());
-            if (!CanIncrement(_authorityOwnerGeneration))
-                throw new ZLinkAuthorityGenerationExhaustedException(
-                    "reserving relocation capacity");
-            var targetAuthorityOwnerGeneration =
-                checked((ulong)Next(ref _authorityOwnerGeneration));
-            _relocationCapacityReservations[fence.Value] =
-                new RelocationCapacityState(
-                    request,
-                    RelocationCapacityStatus.Reserved,
-                    targetAuthorityOwnerGeneration);
-            AdjustAllocationCapacity(
-                _pendingPlacementCapacity,
-                TargetAllocation(request),
-                1);
-            return ValueTask.FromResult<ZLinkRelocationCapacityReserveResult>(
-                new ZLinkRelocationCapacityReserveResult.Reserved(fence)
-                {
-                    TargetAuthorityOwnerGeneration =
-                        targetAuthorityOwnerGeneration
-                });
-        }
-    }
-
-    public ValueTask<ZLinkRelocationCapacityAbortResult>
-        AbortRelocationCapacityAsync(
-            ZLinkRelocationCapacityFence fence,
-            CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(fence.Value);
-        cancellationToken.ThrowIfCancellationRequested();
-        lock (_gate)
-        {
-            if (!_relocationCapacityReservations.TryGetValue(
-                    fence.Value,
-                    out var state))
-                return ValueTask.FromResult(
-                    ZLinkRelocationCapacityAbortResult.Stale);
-            if (state.Status == RelocationCapacityStatus.Committed)
-                return ValueTask.FromResult(
-                    ZLinkRelocationCapacityAbortResult.AlreadyCommitted);
-            if (state.Status == RelocationCapacityStatus.Aborted)
-                return ValueTask.FromResult(
-                    ZLinkRelocationCapacityAbortResult.AlreadyAborted);
-            if (state.Status == RelocationCapacityStatus.Prepared)
-                return ValueTask.FromResult(
-                    ZLinkRelocationCapacityAbortResult.Stale);
-            state.Status = RelocationCapacityStatus.Aborted;
-            AdjustAllocationCapacity(
-                _pendingPlacementCapacity,
-                TargetAllocation(state.Request),
-                -1);
-            return ValueTask.FromResult(
-                ZLinkRelocationCapacityAbortResult.Aborted);
-        }
-    }
-
-    private ZLinkAuthorityReadResult ReadCurrent(ZLinkAuthorityKey key)
-    {
-        var now = _time.GetUtcNow();
-        return _authorities.TryGetValue(key.Value, out var current)
-            ? new ZLinkAuthorityReadResult.Found(
-                current with { StoreNow = now })
-            : new ZLinkAuthorityReadResult.Missing(now);
-    }
-
     public ValueTask<ZLinkAggregateCommitResult> CommitAggregateAsync(
         ZLinkAggregateFence fence,
         CancellationToken cancellationToken = default)
@@ -1034,7 +913,8 @@ internal sealed partial class ZLinkInMemoryLocationStore
         string stableType,
         DateTimeOffset now,
         out ZLinkMeshNodeDescriptor descriptor,
-        bool allowPreparingTarget = false)
+        bool allowPreparingTarget = false,
+        bool requireNewPlacementEligibility = true)
     {
         descriptor = null!;
         if (!MatchesLiveTarget(
@@ -1049,7 +929,8 @@ internal sealed partial class ZLinkInMemoryLocationStore
             || descriptor.State != ZLinkFrameworkRuntimeState.Serving
             && !(allowPreparingTarget
                  && descriptor.State == ZLinkFrameworkRuntimeState.Preparing)
-            || descriptor.PlacementWeight <= 0)
+            || requireNewPlacementEligibility
+            && descriptor.PlacementWeight <= 0)
             return false;
         var capability = descriptor.ObjectCapabilities.SingleOrDefault(
             value => value.ObjectKind == objectKind
@@ -1245,20 +1126,6 @@ internal sealed partial class ZLinkInMemoryLocationStore
         };
     }
 
-    private static bool MatchesSourceAllocation(
-        ZLinkPlacementAllocation allocation,
-        ZLinkRelocationCapacityReservationRequest request) =>
-        allocation.State == ZLinkPlacementAllocationState.Active
-        && allocation.ObjectKind == request.ObjectKind
-        && string.Equals(
-            allocation.StableType,
-            request.StableType,
-            StringComparison.Ordinal)
-        && allocation.Descriptor == request.SourceDescriptor
-        && allocation.DescriptorLifecycleGeneration
-        == request.SourceNodeLifecycleGeneration
-        && allocation.Capacity == request.Capacity;
-
     internal (long Pending, long Active) GetPlacementCapacityUsage(
         ZLinkMeshNodeDescriptorKey descriptor,
         ulong descriptorLifecycleGeneration,
@@ -1279,27 +1146,17 @@ internal sealed partial class ZLinkInMemoryLocationStore
         }
     }
 
-    private void MoveRelocationCapacity(
+    private void MoveAuthorityAllocationCapacity(
         ZLinkPlacementAllocation source,
-        ZLinkRelocationCapacityReservationRequest request)
+        ZLinkPlacementAllocation target)
     {
         AdjustAllocationCapacity(
             _activePlacementCapacity,
             source,
             -1);
         AdjustAllocationCapacity(
-            _pendingPlacementCapacity,
-            TargetAllocation(request),
-            -1);
-        AdjustAllocationCapacity(
             _activePlacementCapacity,
-            new ZLinkPlacementAllocation(
-                ZLinkPlacementAllocationState.Active,
-                request.ObjectKind,
-                request.StableType,
-                request.TargetDescriptor,
-                request.TargetNodeLifecycleGeneration,
-                request.Capacity),
+            target,
             1);
     }
 
@@ -1323,16 +1180,6 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     spotType.StableType),
                 checked((long)spotType.Count * multiplier));
     }
-
-    private static ZLinkPlacementAllocation TargetAllocation(
-        ZLinkRelocationCapacityReservationRequest request) =>
-        new(
-            ZLinkPlacementAllocationState.Reserved,
-            request.ObjectKind,
-            request.StableType,
-            request.TargetDescriptor,
-            request.TargetNodeLifecycleGeneration,
-            request.Capacity);
 
     private void AdjustPlacementCapacity(
         Dictionary<PlacementCapacityKey, long> counters,
@@ -1426,36 +1273,25 @@ internal sealed partial class ZLinkInMemoryLocationStore
             put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner;
         if (!preserve && !newOwner)
             throw new ArgumentOutOfRangeException(nameof(put));
-        if (preserve && put.TargetOwner is not null
+        if (preserve && (put.TargetOwner is not null
+                        || put.TargetAllocation is not null
+                        || put.TargetAuthorityOwnerGeneration != 0)
             || newOwner && (put.TargetOwner is null
-                            || put.RelocationCapacityFence is null)
+                            || put.TargetAllocation is not
+                            {
+                                State: ZLinkPlacementAllocationState.Active,
+                                DescriptorLifecycleGeneration: > 0
+                            } allocation
+                            || !IsAllocationCapacityValid(
+                                allocation.ObjectKind,
+                                allocation.StableType,
+                                allocation.Capacity))
             || put.TargetOwner is { } owner
             && (string.IsNullOrWhiteSpace(owner.OwnerId)
                 || owner.LeaseGeneration <= 0))
             throw new ArgumentException(
                 "Authority mutation transition, expectation, and target owner are inconsistent.",
                 nameof(put));
-    }
-
-    private static void ValidateRelocationCapacityRequest(
-        ZLinkRelocationCapacityReservationRequest request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        if (request.ReservationId == Guid.Empty
-            || string.IsNullOrWhiteSpace(request.Key.Value)
-            || string.IsNullOrWhiteSpace(request.ExpectedStoreVersion)
-            || string.IsNullOrWhiteSpace(request.StableType)
-            || request.SourceNodeLifecycleGeneration == 0
-            || request.TargetNodeLifecycleGeneration == 0
-            || request.SourceOwner.LeaseGeneration <= 0
-            || request.TargetOwner.LeaseGeneration <= 0
-            || !IsAllocationCapacityValid(
-                request.ObjectKind,
-                request.StableType,
-                request.Capacity))
-            throw new ArgumentException(
-                "The relocation capacity reservation is invalid.",
-                nameof(request));
     }
 
     private static void ValidateReservationRequest(
@@ -1596,20 +1432,9 @@ internal sealed partial class ZLinkInMemoryLocationStore
         internal ZLinkAggregatePrepareRequest Request { get; } = request;
         internal AggregateStatus Status { get; set; } = status;
         internal IReadOnlyDictionary<ZLinkAuthorityKey, ulong>
-            TargetAuthorityOwnerGenerations { get; } =
+            TargetAuthorityOwnerGenerations
+        { get; } =
                 targetAuthorityOwnerGenerations;
-    }
-
-    private sealed class RelocationCapacityState(
-        ZLinkRelocationCapacityReservationRequest request,
-        RelocationCapacityStatus status,
-        ulong targetAuthorityOwnerGeneration)
-    {
-        internal ZLinkRelocationCapacityReservationRequest Request { get; set; } =
-            request;
-        internal RelocationCapacityStatus Status { get; set; } = status;
-        internal ulong TargetAuthorityOwnerGeneration { get; } =
-            targetAuthorityOwnerGeneration;
     }
 
     private readonly record struct PlacementCapacityKey(
@@ -1626,14 +1451,6 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 allocation.ObjectKind,
                 allocation.StableType);
 
-    }
-
-    private enum RelocationCapacityStatus
-    {
-        Reserved,
-        Prepared,
-        Committed,
-        Aborted
     }
 
     private enum ReservationStatus

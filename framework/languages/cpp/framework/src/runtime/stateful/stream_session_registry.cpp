@@ -529,6 +529,50 @@ bool stream_session_registry_t::remote_route_seal_ready (
     return aggregate->active_inbound.empty ();
 }
 
+bool stream_session_registry_t::close_remote_route_seal (
+  const stream_barrier_t &barrier)
+{
+    std::unique_lock lock (_mutex);
+    const auto found = _barriers.find (barrier.token);
+    if (found == _barriers.end ()
+        || !exact_actor (found->second, barrier.actor))
+        return false;
+    auto *aggregate = current_aggregate_unlocked (
+      barrier.actor.key);
+    if (aggregate == nullptr || !aggregate->barrier_token
+        || *aggregate->barrier_token != barrier.token)
+        return false;
+    const auto connection = aggregate->binding.connection;
+    const auto connection_found = _connections.find (
+      connection.connection_id);
+    if (connection_found == _connections.end ()
+        || connection_found->second.connection != connection)
+        return false;
+    std::vector<stream_retained_outbound_t> discarded;
+    for (auto &[actor_id, binding] :
+         connection_found->second.bindings) {
+        _actor_bindings.erase (actor_id);
+        while (!binding.retained_outbound.empty ()) {
+            discarded.push_back (std::move (
+              binding.retained_outbound.front ().completion));
+            binding.retained_outbound.pop_front ();
+        }
+    }
+    for (auto current = _barriers.begin ();
+         current != _barriers.end ();) {
+        if (connection_found->second.bindings.contains (
+              current->second.key))
+            current = _barriers.erase (current);
+        else
+            ++current;
+    }
+    _connections.erase (connection_found);
+    _changed.notify_all ();
+    lock.unlock ();
+    settle_retained_outbound (std::move (discarded), false);
+    return true;
+}
+
 bool stream_session_registry_t::remote_route_sealed (
   const std::string &actor_id) const
 {
@@ -668,7 +712,6 @@ stream_route_admission_t stream_session_registry_t::commit_remote_route (
   object_ref_t target,
   std::uint64_t target_node_generation,
   std::uint64_t target_owner_lease_generation,
-  std::uint64_t replayed_high_water,
   route_terminal_commit_t commit_terminal)
 {
     std::unique_lock lock (_mutex);
@@ -697,8 +740,7 @@ stream_route_admission_t stream_session_registry_t::commit_remote_route (
              <= previous_authority_owner_generation
         || target_node_generation == 0
         || target_owner_lease_generation == 0
-        || !aggregate->active_inbound.empty ()
-        || replayed_high_water != last_sequence) {
+        || !aggregate->active_inbound.empty ()) {
         return {stateful_error_t::conflict,
                 aggregate->binding, last_sequence, {}};
     }

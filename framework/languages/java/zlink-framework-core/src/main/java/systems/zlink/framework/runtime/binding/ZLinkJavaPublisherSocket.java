@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.binding;
 
 import java.util.List;
+import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.PubSocket;
@@ -19,8 +20,12 @@ record ZLinkJavaPublisherSocket(PubSocket socket)
     @Override public boolean publish(String topic, List<Message> parts, SendFlags flags) {
         return ZLinkJavaSocketSupport.submit(socket.publish(topic), parts, flags);
     }
+    @Override public CompletionStage<Void> publishAsync(
+        String topic, List<Message> parts, SendFlags flags) {
+        return ZLinkJavaSocketSupport.submit(
+            socket.publishAsync(topic), parts);
+    }
     @Override public void close() {
-        notifyAdmissionShutdown();
         socket.close();
     }
 }

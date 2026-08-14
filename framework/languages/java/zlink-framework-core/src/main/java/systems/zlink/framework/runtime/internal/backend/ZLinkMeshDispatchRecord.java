@@ -1,11 +1,11 @@
 package systems.zlink.framework.runtime.internal.backend;
 import java.util.function.Consumer;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import java.util.List;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.binding.spot.ReadyRecord;
 import systems.zlink.framework.runtime.internal.binding.spot.ReceiveRecord;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 
 /**
  * One retained RouteMesh dispatch message.
@@ -18,16 +18,17 @@ public record ZLinkMeshDispatchRecord(
     ReceiveRecord receive,
     List<Message> parts,
     Consumer<List<Message>> frameworkReply,
-    ZLinkInboundDispatchBudget.Lease inboundDispatchLease) implements AutoCloseable {
+    Runnable terminalRelease) implements AutoCloseable {
     public ZLinkMeshDispatchRecord {
         parts = List.copyOf(parts);
+        terminalRelease = once(terminalRelease);
     }
 
     public ZLinkMeshDispatchRecord(
         ReadyRecord owner,
         ReceiveRecord receive,
         List<Message> parts) {
-        this(owner, receive, parts, null, null);
+        this(owner, receive, parts, null, () -> { });
     }
 
     public ZLinkMeshDispatchRecord(
@@ -35,7 +36,7 @@ public record ZLinkMeshDispatchRecord(
         ReceiveRecord receive,
         List<Message> parts,
         Consumer<List<Message>> frameworkReply) {
-        this(owner, receive, parts, frameworkReply, null);
+        this(owner, receive, parts, frameworkReply, () -> { });
     }
 
     public boolean canReply() {
@@ -49,7 +50,7 @@ public record ZLinkMeshDispatchRecord(
         frameworkReply.accept(List.copyOf(replyParts));
     }
 
-    /** Releases retained message parts while transferring the admission lease. */
+    /** Releases retained message parts. */
     public void closeParts() {
         parts.forEach(Message::close);
     }
@@ -59,9 +60,17 @@ public record ZLinkMeshDispatchRecord(
         try {
             closeParts();
         } finally {
-            if (inboundDispatchLease != null) {
-                inboundDispatchLease.close();
-            }
+            terminalRelease.run();
         }
+    }
+
+    private static Runnable once(Runnable release) {
+        java.util.Objects.requireNonNull(release, "terminalRelease");
+        AtomicBoolean released = new AtomicBoolean();
+        return () -> {
+            if (released.compareAndSet(false, true)) {
+                release.run();
+            }
+        };
     }
 }

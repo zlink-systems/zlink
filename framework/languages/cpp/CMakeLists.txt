@@ -42,9 +42,9 @@ set(ZLINK_FRAMEWORK_CPP_REPO_ROOT "${ZLINK_FRAMEWORK_CPP_DIR}/../../.." CACHE PA
   "Path to the zlink repository root")
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "0.10.1" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "0.11.1" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "0.10.1" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "0.11.1" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
 if(NOT ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT)
   if(WIN32 AND EXISTS "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/.artifacts/windows/install/zlink-cpp/${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION}")
@@ -104,8 +104,9 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/backend/raw_route_port.cpp
   framework/src/runtime/foundation/operation_registry.cpp
   framework/src/runtime/dispatch/offload_executor.cpp
+  framework/src/runtime/messaging/call_facade_runtime.cpp
+  framework/src/runtime/messaging/logical_multicast_runtime.cpp
   framework/src/runtime/diagnostics/runtime_observation.cpp
-  framework/src/runtime/messaging/async_submit_runtime.cpp
   framework/src/runtime/protocol/service_wire_codec.cpp
   framework/src/runtime/mesh/raw_mesh_node_owner.cpp
   framework/src/runtime/mesh/service_liveness_registry.cpp
@@ -201,11 +202,7 @@ add_library(zlink_framework STATIC
   framework/src/runtime/host/framework_runtime.cpp
   framework/src/runtime/messaging/client_call_codec.cpp
   framework/src/runtime/messaging/envelope_codec.cpp
-  framework/src/runtime/messaging/pending_operation.cpp
-  framework/src/runtime/messaging/pending_submit.cpp
-  framework/src/runtime/messaging/async_submit_runtime.cpp
   framework/src/runtime/messaging/request_failure_mapper.cpp
-  framework/src/runtime/messaging/submit_queue.cpp
   framework/src/runtime/mesh/mesh_metadata_codec.cpp
   framework/src/runtime/mesh/mesh_node_host_service.cpp
   framework/src/runtime/mesh/mesh_node_runtime.cpp
@@ -900,6 +897,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     framework/src/runtime/backend/raw_route_port.cpp)
   target_compile_features(test_cpp_framework_raw_route_port_contract PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_raw_route_port_contract PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
   target_link_libraries(test_cpp_framework_raw_route_port_contract PRIVATE
     zlink::cpp
@@ -998,6 +996,24 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   set_tests_properties(test_cpp_framework_m6b_runtime PROPERTIES
     LABELS "framework-unit;framework-m6-runtime;stateful;spot;actor;stream-session"
     TIMEOUT 30)
+
+  add_executable(test_cpp_framework_reply_submit_claim
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp)
+  target_compile_features(test_cpp_framework_reply_submit_claim PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_reply_submit_claim PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+  target_link_libraries(test_cpp_framework_reply_submit_claim PRIVATE
+    zlink_framework_m6b_runtime
+    zlink_framework
+    Threads::Threads)
+  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_reply_submit_claim)
+  add_test(NAME test_cpp_framework_reply_submit_claim
+    COMMAND test_cpp_framework_reply_submit_claim)
+  set_tests_properties(test_cpp_framework_reply_submit_claim PROPERTIES
+    LABELS "framework-unit;framework-m6-runtime;stateful;reply;claim"
+    TIMEOUT 10)
 
   add_executable(test_cpp_framework_m6c_runtime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_m6c_runtime.cpp)
@@ -1311,6 +1327,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_async_task
     tests/Zlink.Framework.UnitTests/test_cpp_framework_async_task.cpp
     "framework-unit;framework-regression;async")
+  target_include_directories(test_cpp_framework_async_task BEFORE PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/bindings/cpp/include)
   add_zlink_framework_test(
     test_cpp_framework_execution
     tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
@@ -1432,6 +1450,16 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp
     "framework-unit;framework-regression;channel")
   add_zlink_framework_test(
+    test_cpp_framework_channel_reply_admission
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_reply_admission.cpp
+    "framework-unit;framework-regression;channel;reply;admission")
+  target_compile_definitions(test_cpp_framework_channel_reply_admission PRIVATE
+    ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}")
+  target_include_directories(test_cpp_framework_channel_reply_admission PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+  target_link_libraries(test_cpp_framework_channel_reply_admission PRIVATE
+    GTest::gtest_main)
+  add_zlink_framework_test(
     test_cpp_framework_instance_spot_activation
     tests/Zlink.Framework.UnitTests/test_cpp_framework_instance_spot_activation.cpp
     "framework-unit;framework-regression;spot;instance-activation")
@@ -1479,21 +1507,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-regression;messaging")
   target_include_directories(test_cpp_framework_messaging PRIVATE
     ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
-  add_executable(test_cpp_framework_submit_admission
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_submit_admission.cpp
-    framework/src/runtime/messaging/async_submit_runtime.cpp
-    framework/src/runtime/dispatch/offload_executor.cpp)
-  target_link_libraries(test_cpp_framework_submit_admission PRIVATE
-    zlink::cpp
-    Threads::Threads)
-  target_include_directories(test_cpp_framework_submit_admission PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-  add_test(NAME test_cpp_framework_submit_admission
-    COMMAND test_cpp_framework_submit_admission)
-  set_tests_properties(test_cpp_framework_submit_admission PROPERTIES
-    LABELS "framework-unit;framework-regression;messaging;submit-admission"
-    TIMEOUT 30)
   add_executable(test_cpp_framework_gtest_harness
     tests/Zlink.Framework.UnitTests/test_cpp_framework_gtest_harness.cpp)
   target_link_libraries(test_cpp_framework_gtest_harness PRIVATE

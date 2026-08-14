@@ -2,21 +2,25 @@ package systems.zlink.framework.configuration;
 
 import java.util.OptionalLong;
 
-/**
- * Host-wide inbound Application byte budget. Leaving
- * {@code applicationHwmBytes} unset selects Auto sizing, {@code 0} disables the
- * limit, and a positive value applies that exact host-wide byte limit.
- */
+/** Host-wide Core HWM forwarding and Application Job Queue configuration. */
 public interface ZLinkInboundDispatchOptions {
-    OptionalLong applicationHwmBytes();
+    OptionalLong coreHwmMemoryLimitBytes();
 
-    void setApplicationHwmBytes(long value);
+    void setCoreHwmMemoryLimitBytes(long value);
 
-    ZLinkApplicationHwmProfile applicationHwmProfile();
+    OptionalLong coreHwmBudgetBytes();
 
-    void setApplicationHwmProfile(ZLinkApplicationHwmProfile value);
+    void setCoreHwmBudgetBytes(long value);
 
-    OptionalLong processMemoryLimitBytes();
+    ZLinkCoreHwmProfile coreHwmProfile();
 
-    void setProcessMemoryLimitBytes(long value);
+    void setCoreHwmProfile(ZLinkCoreHwmProfile value);
+
+    ZLinkApplicationJobQueueProfile applicationJobQueueProfile();
+
+    void setApplicationJobQueueProfile(ZLinkApplicationJobQueueProfile value);
+
+    OptionalLong maxQueuedApplicationJobs();
+
+    void setMaxQueuedApplicationJobs(long value);
 }

@@ -4,17 +4,12 @@ import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
 import systems.zlink.framework.locations.ZLinkObjectCapability;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateAbortResult;
-import systems.zlink.framework.runtime.internal.locations
-    .ZLinkAggregateAbortCleanupSnapshot;
-import systems.zlink.framework.runtime.internal.locations
-    .ZLinkAggregateAbortRecoverySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareRequest;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateProgress;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateProgressSnapshot;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateProgressWriteResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMutation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
@@ -41,10 +36,6 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRelease
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewStale;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewed;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityAbortResult;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityFence;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReservationRequest;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReserveResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 
 import java.time.Clock;
@@ -234,22 +225,6 @@ public final class ZLinkInMemoryLocationStore
     }
 
     @Override
-    public CompletionStage<ZLinkRelocationCapacityReserveResult>
-        reserveRelocationCapacity(
-            ZLinkRelocationCapacityReservationRequest request,
-            ZLinkStoreCancellation cancellation) {
-        return authority.reserveRelocationCapacity(request, cancellation);
-    }
-
-    @Override
-    public CompletionStage<ZLinkRelocationCapacityAbortResult>
-        abortRelocationCapacity(
-            ZLinkRelocationCapacityFence fence,
-            ZLinkStoreCancellation cancellation) {
-        return authority.abortRelocationCapacity(fence, cancellation);
-    }
-
-    @Override
     public CompletionStage<ZLinkAggregatePrepareResult>
         prepareAggregate(
             ZLinkAggregatePrepareRequest request,
@@ -279,77 +254,6 @@ public final class ZLinkInMemoryLocationStore
             ZLinkAggregateFence fence,
             ZLinkStoreCancellation cancellation) {
         return authority.readAggregateProgress(fence, cancellation);
-    }
-
-    @Override
-    public CompletionStage<ZLinkAggregateProgressWriteResult>
-        compareExchangeAggregateProgress(
-            ZLinkAggregateFence fence,
-            String expectedStoreVersion,
-            ZLinkAggregateProgress progress,
-            ZLinkStoreCancellation cancellation) {
-        return authority.compareExchangeAggregateProgress(
-            fence, expectedStoreVersion, progress, cancellation);
-    }
-
-    @Override
-    public CompletionStage<List<ZLinkAggregateProgressSnapshot>>
-        listAggregateProgress(
-            ZLinkStoreCancellation cancellation) {
-        return authority.listAggregateProgress(cancellation);
-    }
-
-    @Override
-    public CompletionStage<ZLinkAggregateAbortRecoverySnapshot>
-        retainAggregateAbort(
-            ZLinkAggregateFence fence,
-            ZLinkStoreCancellation cancellation) {
-        return authority.retainAggregateAbort(fence, cancellation);
-    }
-
-    @Override
-    public CompletionStage<List<ZLinkAggregateAbortRecoverySnapshot>>
-        listRetainedAggregateAborts(
-            ZLinkStoreCancellation cancellation) {
-        return authority.listRetainedAggregateAborts(cancellation);
-    }
-
-    @Override
-    public CompletionStage<Optional<ZLinkAggregateAbortCleanupSnapshot>>
-        markAggregateAbortTerminal(
-        ZLinkAggregateFence fence,
-        String expectedStoreVersion,
-        String reference,
-        long checksumCrc32c,
-        ZLinkStoreCancellation cancellation) {
-        return authority.markAggregateAbortTerminal(
-            fence,
-            expectedStoreVersion,
-            reference,
-            checksumCrc32c,
-            cancellation);
-    }
-
-    @Override
-    public CompletionStage<List<ZLinkAggregateAbortCleanupSnapshot>>
-        listTerminalAggregateAborts(
-            ZLinkStoreCancellation cancellation) {
-        return authority.listTerminalAggregateAborts(cancellation);
-    }
-
-    @Override
-    public CompletionStage<Boolean> cleanupTerminalAggregateAbortInventory(
-        ZLinkAggregateAbortCleanupSnapshot cleanup,
-        ZLinkStoreCancellation cancellation) {
-        return authority.cleanupTerminalAggregateAbortInventory(
-            cleanup, cancellation);
-    }
-
-    @Override
-    public CompletionStage<Boolean> removeTerminalAggregateAbort(
-        ZLinkAggregateAbortCleanupSnapshot cleanup,
-        ZLinkStoreCancellation cancellation) {
-        return authority.removeTerminalAggregateAbort(cleanup, cancellation);
     }
 
     @Override

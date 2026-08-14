@@ -1,4 +1,3 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
 import type {
   ActorRef,
   RoutingId,
@@ -13,16 +12,14 @@ import type {
   ZLinkSpotRouteResolver
 } from '../spots/spot-routing-internal';
 import type { ZLinkActorJoinCoordinator, ZLinkActorJoinRuntimeResult } from './actor-runtime-contracts';
-import type { ZLinkActorRoutedJoinTransport } from './actor-routed-join-transport';
-import type { ZLinkStoreLocationResolvers } from '../locations';
 import type { ZLinkActorSourceTransfer } from './actor-source-transfer';
 import { ZLinkActorRuntimeState, toFrameworkRoutingId } from './actor-runtime-state';
 import { lookupNativeActorRef } from './actor-native-lookup';
 import { ZLinkPostCommitActorLocation } from './post-commit-actor-location';
 import { ZLinkLocalNativeActorJoin } from './actor-local-native-join';
 import { ZLinkPostCommitActorBinder } from './post-commit-actor-binder';
-import { routingIdsEqual } from '../routing-id';
 import { operationIdentityKey } from '../foundation/operation-identity';
+import type { ZLinkActorJoinRelocation } from './actor-join-relocation';
 
 export interface ZLinkActorNativeJoinCoordinatorOptions {
   readonly messageFlow?: () =>
@@ -30,12 +27,11 @@ export interface ZLinkActorNativeJoinCoordinatorOptions {
   readonly node: ZLinkBackendMeshNode | (() => ZLinkBackendMeshNode);
   readonly completionTableProvider: () => ZLinkMeshCompletionTable | undefined;
   readonly spotRouteResolver?: ZLinkSpotRouteResolver;
-  readonly routedTransport?: ZLinkActorRoutedJoinTransport;
   readonly locationLifecycle?: ZLinkLocationLifecycle;
   readonly remoteActorBinder?: (actorRef: ActorRef, signal?: AbortSignal, force?: boolean) => Promise<void>;
   readonly postCommitErrorReporter?: (error: unknown) => void;
   readonly sourceTransfer?: ZLinkActorSourceTransfer;
-  readonly actorLocationResolver?: () => ZLinkStoreLocationResolvers | undefined;
+  readonly actorJoinRelocation?: ZLinkActorJoinRelocation;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
   readonly shutdownSignal?: AbortSignal;
   readonly actorTransferTimeoutMs?: number;
@@ -68,31 +64,9 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
             signal: options.shutdownSignal
           }),
       completionTableProvider: options.completionTableProvider,
-      sourceTransfer: options.sourceTransfer,
+      actorJoinRelocation: options.actorJoinRelocation,
       messageSerializers: options.messageSerializers,
-      postCommitErrorReporter: options.postCommitErrorReporter,
-      entrySpotIdProvider: options.entrySpotIdProvider,
-      remoteActivationWaiter: async (actorId, targetNodeRid, timeoutMs, signal) => {
-        const deadline = Date.now() + Math.min(timeoutMs ?? 10_000, 10_000);
-        for (;;) {
-          throwIfAborted(signal);
-          const resolver = options.actorLocationResolver?.();
-          if (resolver === undefined) {
-            return undefined;
-          }
-          const actorRef = await resolver.resolveActorRef(actorId, signal);
-          if (actorRef !== undefined && routingIdsEqual(actorRef.nodeRid, targetNodeRid)) {
-            return actorRef;
-          }
-          if (Date.now() >= deadline) {
-            throw createInternalFrameworkException(
-              ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
-              `Actor '${actorId}' target activation was not published before the join deadline.`
-            );
-          }
-          await new Promise<void>((resolve) => setTimeout(resolve, 10));
-        }
-      }
+      entrySpotIdProvider: options.entrySpotIdProvider
     });
   }
 

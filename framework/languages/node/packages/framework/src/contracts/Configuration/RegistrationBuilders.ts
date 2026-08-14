@@ -49,9 +49,15 @@ import type { ZLinkCodecRegistryBuilder } from '../Codecs';
 import type {
   ZLinkDispatchOptions,
   ZLinkDispatchOptionsBuilder,
+  ZLinkInboundDispatchOptions,
   ZLinkMessageFlowLogMode
 } from '../Dispatch';
-import { ZLinkUnhandledDispatchAction } from '../Dispatch';
+import {
+  ZLinkApplicationJobQueueProfile,
+  ZLinkCoreHwmProfile,
+  ZLinkUnhandledDispatchAction
+} from '../Dispatch';
+import { AutoHwmProfile } from '@zlink-systems/zlink';
 import { endpointConnections } from './RuntimeEndpointConnections';
 import type { ZLinkEndpointConnections } from './Connections';
 import type {
@@ -73,7 +79,9 @@ import { DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE } from './InternalDefaults';
 import type {
   ZLinkChannelPublishHandlerRegistration,
   ZLinkActorFactoryConfiguration,
+  ZLinkApplicationJobQueueOptions,
   ZLinkFrameworkRegistrationOptions,
+  ZLinkCoreHwmOptions,
   ZLinkInstanceSpotFactoryConfiguration,
   ZLinkRelocationConfiguration,
   ZLinkSpotRouterPeerConnectionOptions,
@@ -81,11 +89,6 @@ import type {
   ZLinkUserSpotFactoryConfiguration,
   ZLinkWorkerOptions
 } from './RegistrationTypes';
-import {
-  ZLinkApplicationHwmProfile,
-  type ZLinkInboundDispatchOptions,
-  type ZLinkInboundDispatchOptionValues
-} from './InboundDispatch';
 import {
   validateRoutingIdPrefix,
   registerActorFactory,
@@ -128,18 +131,13 @@ class ZLinkFrameworkOptionsBuilder implements ZLinkFrameworkOptions {
     return this;
   }
 
-  configureInboundDispatch(): ZLinkInboundDispatchOptions {
-    this.options.inboundDispatch ??= {
-      applicationHwmProfile: ZLinkApplicationHwmProfile.Balanced
-    };
-    return new DefaultInboundDispatchOptionsBuilder(
-      this.options.inboundDispatch
-    );
-  }
-
   configureDispatch(): ZLinkDispatchOptionsBuilder {
     this.options.dispatch ??= defaultDispatchOptions();
     return new DefaultDispatchOptionsBuilder(this.options.dispatch);
+  }
+
+  configureInboundDispatch(): ZLinkInboundDispatchOptions {
+    return new DefaultInboundDispatchOptionsBuilder(this.options);
   }
 
   addLocationStore(store: ZLinkLocationStore): this {
@@ -236,8 +234,9 @@ class ZLinkFrameworkOptionsBuilder implements ZLinkFrameworkOptions {
       actorTransferTimeoutMs: this.options.actorTransferTimeoutMs,
       messageFollowDurationMs: this.options.messageFollowDurationMs,
       dispatch: this.options.dispatch,
-      inboundDispatch: this.options.inboundDispatch,
       worker: this.options.worker,
+      coreHwm: this.options.coreHwm,
+      applicationJobQueue: this.options.applicationJobQueue,
       locations: this.options.locations
     };
   }
@@ -276,28 +275,6 @@ class ZLinkFrameworkOptionsBuilder implements ZLinkFrameworkOptions {
   }
 }
 
-export class DefaultInboundDispatchOptionsBuilder
-implements ZLinkInboundDispatchOptions {
-  constructor(
-    private readonly values: Partial<ZLinkInboundDispatchOptionValues>
-  ) {}
-
-  applicationHwmBytes(value: bigint | undefined): this {
-    this.values.applicationHwmBytes = value;
-    return this;
-  }
-
-  applicationHwmProfile(value: ZLinkApplicationHwmProfile): this {
-    this.values.applicationHwmProfile = value;
-    return this;
-  }
-
-  processMemoryLimitBytes(value: bigint | undefined): this {
-    this.values.processMemoryLimitBytes = value;
-    return this;
-  }
-}
-
 export class DefaultDispatchOptionsBuilder implements ZLinkDispatchOptionsBuilder {
   constructor(private readonly dispatch: ZLinkDispatchOptions) {}
 
@@ -316,6 +293,59 @@ export class DefaultDispatchOptionsBuilder implements ZLinkDispatchOptionsBuilde
     return this;
   }
 
+}
+
+interface MutableInboundDispatchRegistrationOptions {
+  coreHwm?: ZLinkCoreHwmOptions;
+  applicationJobQueue?: ZLinkApplicationJobQueueOptions;
+}
+
+export class DefaultInboundDispatchOptionsBuilder implements ZLinkInboundDispatchOptions {
+  constructor(private readonly options: MutableInboundDispatchRegistrationOptions) {}
+
+  coreHwmMemoryLimitBytes(value: bigint | undefined): this {
+    this.options.coreHwm = { ...this.options.coreHwm, memoryLimitBytes: value };
+    return this;
+  }
+
+  coreHwmBudgetBytes(value: bigint | undefined): this {
+    this.options.coreHwm = { ...this.options.coreHwm, budgetBytes: value };
+    return this;
+  }
+
+  coreHwmProfile(value: ZLinkCoreHwmProfile): this {
+    this.options.coreHwm = {
+      ...this.options.coreHwm,
+      profile: coreHwmProfileValue(value)
+    };
+    return this;
+  }
+
+  applicationJobQueueProfile(value: ZLinkApplicationJobQueueProfile): this {
+    this.options.applicationJobQueue = {
+      ...this.options.applicationJobQueue,
+      profile: value
+    };
+    return this;
+  }
+
+  maxQueuedApplicationJobs(value: bigint | undefined): this {
+    this.options.applicationJobQueue = {
+      ...this.options.applicationJobQueue,
+      maxQueuedApplicationJobs: value
+    };
+    return this;
+  }
+}
+
+function coreHwmProfileValue(value: ZLinkCoreHwmProfile): (typeof AutoHwmProfile)[keyof typeof AutoHwmProfile] {
+  switch (value) {
+    case ZLinkCoreHwmProfile.Compact: return AutoHwmProfile.Compact;
+    case ZLinkCoreHwmProfile.LowLatency: return AutoHwmProfile.LowLatency;
+    case ZLinkCoreHwmProfile.Balanced: return AutoHwmProfile.Balanced;
+    case ZLinkCoreHwmProfile.Throughput: return AutoHwmProfile.Throughput;
+    default: throw new TypeError('coreHwmProfile must be a supported profile.');
+  }
 }
 
 export class DefaultLocationOptionsBuilder implements ZLinkLocationOptions {
@@ -361,28 +391,8 @@ export class DefaultLocationOptionsBuilder implements ZLinkLocationOptions {
     return this;
   }
 
-  maxActiveOutboundRelocations(value: number): this {
-    this.options.maxActiveOutboundRelocations = value;
-    return this;
-  }
-
-  maxActiveInboundRelocations(value: number): this {
-    this.options.maxActiveInboundRelocations = value;
-    return this;
-  }
-
-  maxConcurrentRelocationCaptures(value: number): this {
-    this.options.maxConcurrentRelocationCaptures = value;
-    return this;
-  }
-
-  maxConcurrentRelocationRestores(value: number): this {
-    this.options.maxConcurrentRelocationRestores = value;
-    return this;
-  }
-
-  maxRelocationPayloadInFlightBytes(value: number): this {
-    this.options.maxRelocationPayloadInFlightBytes = value;
+  sessionRelocationSealTimeoutMs(value: number): this {
+    this.options.sessionRelocationSealTimeoutMs = value;
     return this;
   }
 }
@@ -1445,7 +1455,8 @@ interface MutableFrameworkRegistrationOptions {
   spotFactories: Type<ZLinkSpot>[];
   filters?: Type<ZLinkHandlerFilter>[];
   worker?: ZLinkWorkerOptions;
-  inboundDispatch?: Partial<ZLinkInboundDispatchOptionValues>;
+  coreHwm?: ZLinkCoreHwmOptions;
+  applicationJobQueue?: ZLinkApplicationJobQueueOptions;
   dispatch?: ZLinkDispatchOptions;
   requestTimeoutMs?: number;
   locations?: MutableLocationRegistrationOptions;

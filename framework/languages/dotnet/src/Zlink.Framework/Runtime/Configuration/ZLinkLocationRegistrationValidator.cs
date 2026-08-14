@@ -7,7 +7,6 @@ internal static partial class ZLinkFrameworkRegistrationValidator
         var locations = registration.Locations;
         ValidateLocationPollingTimes(locations.Options);
         ValidateOwnerLeaseTimes(locations.Options);
-        ValidateRelocationLimits(locations.Options);
         ValidateObjectRoutingTimes(locations.Options);
         if (locations.HasExplicitStore && locations.UseInMemoryStores)
         {
@@ -24,17 +23,6 @@ internal static partial class ZLinkFrameworkRegistrationValidator
             || options.StoreFailureGrace <= TimeSpan.Zero)
             throw new ZLinkConfigurationException(
                 "PollingInterval and StoreFailureGrace must both be greater than zero.");
-    }
-
-    private static void ValidateRelocationLimits(ZLinkLocationOptions options)
-    {
-        if (options.MaxActiveOutboundRelocations <= 0
-            || options.MaxActiveInboundRelocations <= 0
-            || options.MaxConcurrentRelocationCaptures <= 0
-            || options.MaxConcurrentRelocationRestores <= 0
-            || options.MaxRelocationPayloadInFlightBytes <= 0)
-            throw new ZLinkConfigurationException(
-                "Relocation unit, callback, and payload in-flight limits must all be greater than zero.");
     }
 
     private static void ValidateOwnerLeaseTimes(ZLinkLocationOptions options)
@@ -68,6 +56,14 @@ internal static partial class ZLinkFrameworkRegistrationValidator
             throw new ZLinkConfigurationException(
                 "RouteCacheMaxAge must be at least five seconds shorter than "
                 + "MessageFollowDuration when both values are enabled.");
+
+        var sealTimeout = options.SessionRelocationSealTimeout;
+        if (sealTimeout <= TimeSpan.Zero
+            || sealTimeout == Timeout.InfiniteTimeSpan
+            || sealTimeout.Ticks % TimeSpan.TicksPerMillisecond != 0)
+            throw new ZLinkConfigurationException(
+                "SessionRelocationSealTimeout must be a positive duration "
+                + "representable as exact whole milliseconds.");
     }
 
 }

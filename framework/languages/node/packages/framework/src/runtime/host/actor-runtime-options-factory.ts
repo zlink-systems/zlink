@@ -18,6 +18,7 @@ import type { ZLinkSpotRouteResolver } from '../spots/spot-routing-internal';
 import {
   DefaultZLinkActorClient,
   ZLinkActorNativeJoinCoordinator,
+  preferredRemoteBoundSessionTarget,
   type ZLinkActorTransferRegistry,
   type ZLinkActorManagerOptions
 } from '../actors';
@@ -36,7 +37,7 @@ import { ZLinkNativeFallbackBoundSession } from '../streams/native-fallback-boun
 import type { ZLinkActorTransferRuntime } from './actor-transfer-runtime';
 import type { ZLinkRuntimeAdmissionGate } from '../admission';
 import type { ZLinkRemoteActorPacketTarget } from '../actors';
-import type { ZLinkMeshSubmitterRegistry } from '../messaging';
+import type { ZLinkActorJoinRelocation } from '../actors/actor-join-relocation';
 
 export interface ZLinkActorRuntimeOptionsFactoryOptions {
   readonly registration: ZLinkFrameworkRegistration;
@@ -79,6 +80,7 @@ export interface ZLinkActorRuntimeOptionsFactoryOptions {
   readonly reportBoundSessionSendError: (error: unknown) => void;
   readonly actorHandoff: ZLinkActorHandoffCoordinator;
   readonly actorTransferRuntime: ZLinkActorTransferRuntime;
+  readonly actorJoinRelocation: ZLinkActorJoinRelocation;
   readonly actorTransferRegistry: ZLinkActorTransferRegistry;
   readonly shutdownSignal: () => AbortSignal | undefined;
   readonly metrics: import('../diagnostics').ZLinkRuntimeMetrics;
@@ -86,7 +88,6 @@ export interface ZLinkActorRuntimeOptionsFactoryOptions {
   readonly flowCreationEnabled?: () => boolean;
   readonly admission: ZLinkRuntimeAdmissionGate;
   readonly actorPacketTargetForState: (actorId: string) => ZLinkRemoteActorPacketTarget | undefined;
-  readonly meshSubmitters: ZLinkMeshSubmitterRegistry;
 }
 
 export class ZLinkActorRuntimeOptionsFactory {
@@ -131,7 +132,7 @@ export class ZLinkActorRuntimeOptionsFactory {
         locationLifecycle: this.options.locationLifecycle(),
         postCommitErrorReporter: this.options.reportPostCommitError,
         sourceTransfer: this.options.actorTransferRuntime,
-        actorLocationResolver: this.options.createActorLocationResolver,
+        actorJoinRelocation: this.options.actorJoinRelocation,
         entrySpotIdProvider: meshName => {
           const resolvedMeshName = meshName ?? this.options.primaryMeshName();
           return resolvedMeshName === undefined
@@ -140,7 +141,6 @@ export class ZLinkActorRuntimeOptionsFactory {
         },
         remoteActorBinder: (actorRef, signal) =>
           this.options.streamBindingRuntime.commitActorRoute(actorRef, signal),
-        routedTransport: this.options.routeTransport,
         messageSerializers: this.options.registration.messageSerializers,
         actorTransferTimeoutMs: this.options.registration.actorTransferTimeoutMs,
         shutdownSignal: this.options.shutdownSignal()
@@ -197,7 +197,10 @@ export class ZLinkActorRuntimeOptionsFactory {
         localActorProvider: () => this.options.actorManager()?.getState(actorId)?.actor !== undefined,
         remoteBoundSessionTargetProvider: () => {
           const state = this.options.actorManager()?.getState(actorId);
-          return state?.remoteBoundSessionTarget ?? state?.boundSessionTransferTarget;
+          return preferredRemoteBoundSessionTarget(
+            state?.remoteBoundSessionTarget,
+            state?.boundSessionTransferTarget
+          );
         },
         remoteActorPacketTargetProvider: () => this.options.actorPacketTargetForState(actorId),
         requestTimeoutMs: this.options.registration.requestTimeoutMs,
@@ -259,8 +262,7 @@ export class ZLinkActorRuntimeOptionsFactory {
             deadlineUnixMs
           )
           : undefined,
-      sendErrorReporter: this.options.reportPostCommitError,
-      meshSubmitters: this.options.meshSubmitters
+      sendErrorReporter: this.options.reportPostCommitError
     };
   }
 

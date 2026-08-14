@@ -22,17 +22,12 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
-import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkAggregateRelocationCoordinator;
-import systems.zlink.framework.runtime.internal.locations
-    .ZLinkRelocationPermitPool;
-import systems.zlink.framework.runtime.internal.locations
-    .ZLinkRelocationStartupScanner;
 import systems.zlink.framework.runtime.internal.relocation
     .ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
@@ -47,10 +42,9 @@ public final class ZLinkUserSpotRetireRuntime {
     private final ZLinkActorRuntime actors;
     private final long applicationVersion;
     private final Optional<String> maintenanceWave;
+    private final Duration sessionRelocationSealTimeout;
     private final Map<String, Lane> lanes;
     private final Map<String, ActorLane> actorLanes;
-    private final ZLinkRelocationStartupScanner startupScanner;
-    private final List<ZLinkCanonicalRelocationStateMachine> recoveryOwners;
 
     public static final class RelocationBlockedException
         extends IllegalStateException {
@@ -79,7 +73,8 @@ public final class ZLinkUserSpotRetireRuntime {
         ZLinkLocationOptions options,
         ZLinkRelocationAdapterRegistry adapters,
         long applicationVersion,
-        Optional<String> maintenanceWave) {
+        Optional<String> maintenanceWave,
+        Duration sessionRelocationSealTimeout) {
         this.spots = Objects.requireNonNull(spots, "spots");
         this.actors = Objects.requireNonNull(actors, "actors");
         if (applicationVersion < 0) {
@@ -89,20 +84,23 @@ public final class ZLinkUserSpotRetireRuntime {
         this.applicationVersion = applicationVersion;
         this.maintenanceWave = Objects.requireNonNull(
             maintenanceWave, "maintenanceWave");
+        if (sessionRelocationSealTimeout == null
+            || sessionRelocationSealTimeout.isZero()
+            || sessionRelocationSealTimeout.isNegative()) {
+            throw new IllegalArgumentException(
+                "session relocation seal timeout must be positive");
+        }
+        this.sessionRelocationSealTimeout = sessionRelocationSealTimeout;
         Objects.requireNonNull(registrations, "registrations");
         Objects.requireNonNull(nodes, "nodes");
         var coordinator = new ZLinkAggregateRelocationCoordinator(
             Objects.requireNonNull(authorities, "authorities"),
             Objects.requireNonNull(relocationStore, "relocationStore"));
-        startupScanner = new ZLinkRelocationStartupScanner(
-            authorities, relocationStore);
-        var permits = new ZLinkRelocationPermitPool(
-            Objects.requireNonNull(options, "options"));
+        Objects.requireNonNull(options, "options");
         LinkedHashMap<String, Lane> configured = new LinkedHashMap<>();
         LinkedHashMap<String, ActorLane> configuredActors =
             new LinkedHashMap<>();
-        ArrayList<ZLinkCanonicalRelocationStateMachine>
-            configuredRecoveryOwners = new ArrayList<>();
+        var actorJoin = new ZLinkActorJoinCanonicalAdapter(actors, spots);
         for (MeshNodeRegistration registration : registrations) {
             ZLinkInternalMeshNode node = nodes.get(registration.meshName());
             Map<String, systems.zlink.framework.runtime.internal.configuration
@@ -150,7 +148,7 @@ public final class ZLinkUserSpotRetireRuntime {
                 null,
                 peerClient,
                 CONTROL_TIMEOUT,
-                request -> coordinator.normalizeCompletedAggregate(
+                request -> coordinator.normalizePublishedAggregate(
                         request.participants().stream()
                             .map(value -> new ZLinkAggregateRelocationCoordinator
                                 .ExpectedParticipant(
@@ -177,7 +175,7 @@ public final class ZLinkUserSpotRetireRuntime {
                     spots.actorSessions(),
                     adapters,
                     spots),
-                permits);
+                actorJoin);
             var relocationClient =
                 new ZLinkCanonicalRelocationStateMachine(
                     node,
@@ -185,8 +183,8 @@ public final class ZLinkUserSpotRetireRuntime {
                     registration.entrySpotId(),
                     locations,
                     coordinator,
-                    target);
-            configuredRecoveryOwners.add(relocationClient);
+                    target,
+                    spots::scheduleRelocationCleanup);
             new ZLinkCanonicalRelocationTransitionOwner(relocationClient)
                 .install(node);
             node.setRelocationReplyRelayHandler(
@@ -200,42 +198,51 @@ public final class ZLinkUserSpotRetireRuntime {
                     node.status().lifecycleGeneration(),
                     locations,
                     coordinator,
-                    permits,
                     spots.spotLifecycle(),
                     spots.actorSessions(),
                     adapters,
                     relocatableSpots,
                     relocatableActors,
                     spots,
-                    peerClient),
-                new ZLinkUserSpotRetireScheduler(coordinator, staging),
+                    peerClient,
+                    sessionRelocationSealTimeout),
+                new ZLinkUserSpotRetireScheduler(),
                     relocationClient,
                     node));
             }
             if (!relocatableActors.isEmpty()) {
+                var actorSource =
+                    new ZLinkStandaloneActorRelocationSourceBuilder(
+                        registration.meshName(),
+                        node.status().routingId(),
+                        node.status().lifecycleGeneration(),
+                        locations,
+                        coordinator,
+                        spots.actorSessions(),
+                        adapters,
+                        relocatableActors,
+                        spots,
+                        peerClient,
+                        sessionRelocationSealTimeout);
                 configuredActors.put(
                     registration.meshName(),
                     new ActorLane(
-                        new ZLinkStandaloneActorRelocationSourceBuilder(
-                            registration.meshName(),
-                            node.status().routingId(),
-                            node.status().lifecycleGeneration(),
-                            locations,
-                            coordinator,
-                            permits,
-                            spots.actorSessions(),
-                            adapters,
-                            relocatableActors,
-                            spots,
-                            peerClient),
+                        actorSource,
                         new ZLinkStandaloneActorRelocationScheduler(),
                         relocationClient,
                         node));
+                actorJoin.register(
+                    node.status().routingId(),
+                    node,
+                    actorSource,
+                    relocationClient);
             }
         }
         lanes = Map.copyOf(configured);
         actorLanes = Map.copyOf(configuredActors);
-        recoveryOwners = List.copyOf(configuredRecoveryOwners);
+        if (!actorLanes.isEmpty()) {
+            actors.setActorJoinRelocationPort(actorJoin);
+        }
     }
 
     private static void restoreBoundSessions(
@@ -258,46 +265,11 @@ public final class ZLinkUserSpotRetireRuntime {
     }
 
     public CompletionStage<Void> startup() {
-        return startupScanner.scanRetainedSessionAborts(() -> false)
-            .thenCompose(retained -> {
-                CompletionStage<Void> chain =
-                    CompletableFuture.completedFuture(null);
-                for (var candidate : retained) {
-                    var owner = recoveryOwners.stream()
-                        .filter(value -> value
-                            .canRecoverRetainedSessionAbort(candidate))
-                        .findFirst()
-                        .orElse(null);
-                    if (owner == null) {
-                        return CompletableFuture.failedFuture(
-                            new IllegalStateException(
-                                "retained Session abort has no recovery owner "
-                                    + "for mesh "
-                                    + candidate.targetMeshName()));
-                    }
-                    chain = chain.thenCompose(ignored ->
-                        owner.recoverRetainedSessionAbort(candidate));
-                }
-                return chain;
-            })
-            .thenCompose(ignored -> recoveryOwners.isEmpty()
-                ? CompletableFuture.completedFuture(List.of())
-                : startupScanner.scan(() -> false))
-            .thenCompose(candidates -> {
-                CompletionStage<Void> chain =
-                    CompletableFuture.completedFuture(null);
-                for (var candidate : candidates) {
-                    for (var owner : recoveryOwners) {
-                        chain = chain.thenCompose(ignored ->
-                            owner.recoverPublished(candidate));
-                    }
-                }
-                return chain;
-            });
+        return CompletableFuture.completedFuture(null);
     }
 
     public boolean requiresStartupRecovery() {
-        return !recoveryOwners.isEmpty();
+        return false;
     }
 
     public boolean supportsActiveInventory() {
@@ -384,13 +356,12 @@ public final class ZLinkUserSpotRetireRuntime {
         }
         actorIds.sort(String::compareTo);
         var plan = new RelocationPlan(spotIds, List.copyOf(actorIds));
-        var capacityPlan = new ZLinkRelocationCapacityPlan();
         return executePlan(
             plan,
             spotId -> preflightSpot(
-                spotId, cancellation, targetPolicy, capacityPlan),
+                spotId, cancellation, targetPolicy),
             actorId -> preflightActor(
-                actorId, cancellation, targetPolicy, capacityPlan),
+                actorId, cancellation, targetPolicy),
             () -> {
                 if (!plan.equals(snapshotPlan())) {
                     throw new RelocationBlockedException(
@@ -401,9 +372,9 @@ public final class ZLinkUserSpotRetireRuntime {
             },
             stopBeforeNextUnit,
             spotId -> relocateOne(
-                spotId, deadline, cancellation, targetPolicy, capacityPlan),
+                spotId, deadline, cancellation, targetPolicy),
             actorId -> relocateActor(
-                actorId, deadline, cancellation, targetPolicy, capacityPlan));
+                actorId, deadline, cancellation, targetPolicy));
     }
 
     private RelocationPlan snapshotPlan() {
@@ -479,11 +450,6 @@ public final class ZLinkUserSpotRetireRuntime {
             return admission.thenCompose(admissionIgnored -> {
                 //  Every unit starts here. The spec unit gate of
                 //  30-host-relocation-flow §7 (outbound 64, inbound 64,
-                //  payload 256 MiB, capture and restore 8) belongs to
-                //  ZLinkRelocationPermitPool, which admits at the turn
-                //  boundary where the actual payload is known. Bounding the
-                //  units a second time here would hold input-order slots
-                //  across a turn wait and starve a unit that is already ready.
                 ArrayList<CompletionStage<Void>> started =
                     new ArrayList<>(
                         plan.spotIds().size() + plan.actorIds().size());
@@ -556,8 +522,7 @@ public final class ZLinkUserSpotRetireRuntime {
     private CompletionStage<Void> preflightSpot(
         String spotId,
         ZLinkStoreCancellation cancellation,
-        ZLinkRelocationTargetPolicy targetPolicy,
-        ZLinkRelocationCapacityPlan capacityPlan) {
+        ZLinkRelocationTargetPolicy targetPolicy) {
         String meshName = spots.userSpotMeshName(spotId);
         Lane lane = lanes.get(meshName);
         if (lane == null) {
@@ -565,15 +530,13 @@ public final class ZLinkUserSpotRetireRuntime {
                 ZLinkFrameworkRelocationReason.STATE_INCOMPATIBLE,
                 "User Spot Retire lane is unavailable: " + meshName));
         }
-        return lane.source().preflight(
-            spotId, targetPolicy, capacityPlan, cancellation);
+        return lane.source().preflight(spotId, targetPolicy, cancellation);
     }
 
     private CompletionStage<Void> preflightActor(
         String actorId,
         ZLinkStoreCancellation cancellation,
-        ZLinkRelocationTargetPolicy targetPolicy,
-        ZLinkRelocationCapacityPlan capacityPlan) {
+        ZLinkRelocationTargetPolicy targetPolicy) {
         String meshName = spots.actorSessions().actorMeshName(actorId);
         ActorLane lane = actorLanes.get(meshName);
         if (lane == null) {
@@ -582,16 +545,14 @@ public final class ZLinkUserSpotRetireRuntime {
                 "Entry Spot Actor relocation lane is unavailable: "
                     + meshName));
         }
-        return lane.source().preflight(
-            actorId, targetPolicy, capacityPlan, cancellation);
+        return lane.source().preflight(actorId, targetPolicy, cancellation);
     }
 
     private CompletionStage<Void> relocateOne(
         String spotId,
         Instant deadline,
         ZLinkStoreCancellation cancellation,
-        ZLinkRelocationTargetPolicy targetPolicy,
-        ZLinkRelocationCapacityPlan capacityPlan) {
+        ZLinkRelocationTargetPolicy targetPolicy) {
         String meshName = spots.userSpotMeshName(spotId);
         Lane lane = lanes.get(meshName);
         if (lane == null) {
@@ -603,23 +564,20 @@ public final class ZLinkUserSpotRetireRuntime {
             return CompletableFuture.failedFuture(new java.util.concurrent
                 .TimeoutException("User Spot Retire deadline elapsed"));
         }
-        ZLinkMeshNodeDescriptor pinned =
-            capacityPlan.userSpotTarget(spotId);
-        requireExactCoreReady(lane.node(), pinned);
-        return lane.source().preparePinned(
-                spotId,
-                targetPolicy,
-                pinned,
-                cancellation)
-            .thenCompose(source -> lane.scheduler().executeRemote(
-                new ZLinkUserSpotRetireScheduler.RemoteRequest(
-                    source,
-                    lane.client(),
-                    timeout.compareTo(CONTROL_TIMEOUT) < 0
-                        ? timeout : CONTROL_TIMEOUT,
-                    () -> source.cleanupLocal(deadline),
-                    source.stagedRoot().request().root()),
-                cancellation))
+        return lane.source().prepare(spotId, targetPolicy, cancellation)
+            .thenCompose(source -> {
+                requireExactCoreReady(
+                    lane.node(), source.stageRequest().targetNodeRid(),
+                    source.stageRequest().targetNodeGeneration());
+                return lane.scheduler().executeRemote(
+                    new ZLinkUserSpotRetireScheduler.RemoteRequest(
+                        source,
+                        lane.client(),
+                        timeout.compareTo(CONTROL_TIMEOUT) < 0
+                            ? timeout : CONTROL_TIMEOUT,
+                        () -> source.cleanupLocal(deadline)),
+                    cancellation);
+            })
             .thenApply(ignored -> null);
     }
 
@@ -627,8 +585,7 @@ public final class ZLinkUserSpotRetireRuntime {
         String actorId,
         Instant deadline,
         ZLinkStoreCancellation cancellation,
-        ZLinkRelocationTargetPolicy targetPolicy,
-        ZLinkRelocationCapacityPlan capacityPlan) {
+        ZLinkRelocationTargetPolicy targetPolicy) {
         String meshName = spots.actorSessions().actorMeshName(actorId);
         ActorLane lane = actorLanes.get(meshName);
         if (lane == null) {
@@ -641,19 +598,18 @@ public final class ZLinkUserSpotRetireRuntime {
             return CompletableFuture.failedFuture(new java.util.concurrent
                 .TimeoutException("Actor relocation deadline elapsed"));
         }
-        ZLinkMeshNodeDescriptor pinned = capacityPlan.actorTarget(actorId);
-        requireExactCoreReady(lane.node(), pinned);
-        return lane.source().preparePinned(
-                actorId,
-                targetPolicy,
-                pinned,
-                cancellation)
-            .thenCompose(source -> lane.scheduler().executeRemote(
-                source,
-                lane.client(),
-                timeout.compareTo(CONTROL_TIMEOUT) < 0
-                    ? timeout : CONTROL_TIMEOUT,
-                cancellation));
+        return lane.source().prepare(actorId, targetPolicy, cancellation)
+            .thenCompose(source -> {
+                requireExactCoreReady(
+                    lane.node(), source.stageRequest().targetNodeRid(),
+                    source.stageRequest().targetNodeGeneration());
+                return lane.scheduler().executeRemote(
+                    source,
+                    lane.client(),
+                    timeout.compareTo(CONTROL_TIMEOUT) < 0
+                        ? timeout : CONTROL_TIMEOUT,
+                    cancellation);
+            });
     }
 
     private record Lane(
@@ -672,19 +628,19 @@ public final class ZLinkUserSpotRetireRuntime {
 
     private static void requireExactCoreReady(
         ZLinkInternalMeshNode node,
-        ZLinkMeshNodeDescriptor target) {
+        systems.zlink.contracts.core.RoutingId targetRid,
+        long targetGeneration) {
         boolean ready = node.peers().stream().anyMatch(peer ->
-            peer.routingId().equals(target.rid())
+            peer.routingId().equals(targetRid)
                 && peer.lifecycleGeneration()
-                    == target.lifecycleGeneration()
+                    == targetGeneration
                 && peer.state()
                     == systems.zlink.framework.runtime.internal.binding.spot
                         .MeshPeerState.ADMITTED);
         if (!ready) {
             throw new RelocationBlockedException(
                 ZLinkFrameworkRelocationReason.TARGET_UNAVAILABLE,
-                "Pinned relocation target is not Core-ready: "
-                    + target.rid());
+                "Relocation target is not Core-ready: " + targetRid);
         }
     }
 

@@ -34,23 +34,24 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
             backend.operations);
 
         owner.publishAndReplay(staged, (lane, record) -> {
-                assertTrue(backend.live.isEmpty());
+                assertEquals(
+                    List.of("actor-a", "actor-b", "spot"), backend.live);
                 backend.operations.add("replay:" + lane + ":" + record.sequence());
                 return CompletableFuture.completedFuture(null);
             })
             .toCompletableFuture().join();
 
         assertEquals(List.of("actor-a", "actor-b", "spot"), backend.live);
-        assertEquals("timers:publish", backend.operations.getLast());
+        assertEquals("replay:actor:actor-a:3", backend.operations.getLast());
         assertEquals(
             1,
             backend.operations.stream()
                 .filter("relocation-ready"::equals)
                 .count());
         assertTrue(backend.operations.indexOf("relocation-ready")
+            < backend.operations.indexOf("publish:spot"));
+        assertTrue(backend.operations.indexOf("timers:publish")
             < backend.operations.indexOf("replay:spot:1"));
-        assertTrue(backend.operations.indexOf("replay:spot:1")
-            < backend.operations.indexOf("timers:publish"));
     }
 
     @Test
@@ -163,12 +164,16 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         var staged = owner.stage(request(), () -> false)
             .toCompletableFuture().join();
 
-        owner.publishAndReplayHidden(
+        var backlog = owner.closeDurableBacklog(
                 staged,
                 request(),
-                (lane, record) -> CompletableFuture.completedFuture(null),
-                Map.of("actor-a", 11L, "actor-b", 12L))
+                (lane, record) -> CompletableFuture.completedFuture(null))
             .toCompletableFuture().join();
+        owner.publishHidden(
+            backlog,
+            Map.of("actor-a", 11L, "actor-b", 12L));
+        owner.openAdmission(staged);
+        owner.drainDurableBacklog(backlog).toCompletableFuture().join();
 
         assertTrue(backend.operations.contains(
             "publish-target:actor-a:room-a:11"));

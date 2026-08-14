@@ -5,9 +5,9 @@
 #include <zlink/framework/contracts/configuration/module.hpp>
 #include <zlink/framework/contracts/streams/stream.hpp>
 
-#include "runtime/dispatch/inbound_dispatch_budget.hpp"
 #include "runtime/host/hosted_service_lifecycle.hpp"
 #include "runtime/diagnostics/listener_status_registry.hpp"
+#include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
 #include <atomic>
@@ -38,9 +38,9 @@ class stream_host_service_t final : public hosted_service_t,
       std::vector<stream_snapshot_t> streams,
       std::map<std::string, detail::stream_session_factory_t> session_factories,
       std::shared_ptr<detail::mesh_node_runtime_t> mesh_node = nullptr,
-      std::shared_ptr<inbound_dispatch_budget_t> inbound_budget = nullptr,
       std::map<std::string, std::optional<std::string>> advertise_hosts = {},
-      std::shared_ptr<listener_status_registry_t> listener_statuses = {});
+      std::shared_ptr<listener_status_registry_t> listener_statuses = {},
+      std::shared_ptr<application_job_queue_t> application_jobs = {});
     ~stream_host_service_t () override;
 
     void start (service_provider_t &services) override;
@@ -94,7 +94,7 @@ class stream_host_service_t final : public hosted_service_t,
     std::map<std::string, std::optional<std::string>> _advertise_hosts;
     std::shared_ptr<listener_status_registry_t> _listener_statuses;
     std::shared_ptr<detail::mesh_node_runtime_t> _mesh_node;
-    std::shared_ptr<inbound_dispatch_budget_t> _inbound_budget;
+    std::shared_ptr<application_job_queue_t> _application_jobs;
     service_provider_t *_services = nullptr;
     std::atomic_bool _stop{false};
     std::vector<std::unique_ptr<listener_t>> _listeners;

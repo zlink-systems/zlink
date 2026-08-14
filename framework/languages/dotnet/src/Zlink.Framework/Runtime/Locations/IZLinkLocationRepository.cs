@@ -109,14 +109,6 @@ internal interface IZLinkLocationRepository
         ZLinkObjectReservation reservation,
         CancellationToken cancellationToken = default);
 
-    ValueTask<ZLinkRelocationCapacityReserveResult> ReserveRelocationCapacityAsync(
-        ZLinkRelocationCapacityReservationRequest request,
-        CancellationToken cancellationToken = default);
-
-    ValueTask<ZLinkRelocationCapacityAbortResult> AbortRelocationCapacityAsync(
-        ZLinkRelocationCapacityFence fence,
-        CancellationToken cancellationToken = default);
-
     ValueTask<ZLinkAggregatePrepareResult> PrepareAggregateAsync(
         ZLinkAggregatePrepareRequest request,
         CancellationToken cancellationToken = default);

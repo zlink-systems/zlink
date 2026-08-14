@@ -17,6 +17,19 @@ const {
   ZLinkMeshCompletionTable,
   closeMeshCompletion
 } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
+const {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} = require('../../packages/framework/dist/runtime/host/application-job-queue');
+const {
+  releaseApplicationJobPermitBeforeHandler
+} = require('../../packages/framework/dist/runtime/application-jobs/application-job-queue-scope');
+
+function applicationJobQueue(maxQueuedApplicationJobs) {
+  return new ApplicationJobQueue(resolveApplicationJobQueueConfiguration(
+    maxQueuedApplicationJobs === undefined ? {} : { maxQueuedApplicationJobs }
+  ));
+}
 
 const removedSpotAdapterContracts = new Set([
   'backend adapter unwraps SpotNode when attaching stream SessionRelay',
@@ -193,7 +206,8 @@ test('backend mesh adapter creates a named MeshNode through the public binding A
   const context = factory.createChannelAdapter().createContext();
   const meshNode = factory.createMeshAdapter().createMeshNode(context, {
     meshName: 'backend.contract',
-    routingId: `backend-node-${process.pid}`
+    routingId: `backend-node-${process.pid}`,
+    applicationJobQueue: applicationJobQueue()
   });
 
   try {
@@ -215,11 +229,13 @@ test('new MeshNode processes receive distinct lifecycle generations', async () =
   const meshAdapter = factory.createMeshAdapter();
   const first = meshAdapter.createMeshNode(context, {
     meshName: 'backend.generation',
-    routingId: 'backend-generation-node'
+    routingId: 'backend-generation-node',
+    applicationJobQueue: applicationJobQueue()
   });
   const second = meshAdapter.createMeshNode(context, {
     meshName: 'backend.generation',
-    routingId: 'backend-generation-node'
+    routingId: 'backend-generation-node',
+    applicationJobQueue: applicationJobQueue()
   });
 
   try {
@@ -243,11 +259,13 @@ test('backend mesh dispatch pump drains a local channel record through claim and
   const meshName = `backend.dispatch.${process.pid}`;
   const receiver = factory.createMeshAdapter().createMeshNode(context, {
     meshName,
-    routingId: `backend-dispatch-receiver-${process.pid}`
+    routingId: `backend-dispatch-receiver-${process.pid}`,
+    applicationJobQueue: applicationJobQueue()
   });
   const sender = factory.createMeshAdapter().createMeshNode(context, {
     meshName,
-    routingId: `backend-dispatch-sender-${process.pid}`
+    routingId: `backend-dispatch-sender-${process.pid}`,
+    applicationJobQueue: applicationJobQueue()
   });
   let pump;
   let senderPump;
@@ -271,6 +289,7 @@ test('backend mesh dispatch pump drains a local channel record through claim and
         5000
       );
       pump = new backend.ZLinkMeshDispatchPump(receiver, {
+        applicationJobQueue: applicationJobQueue(),
         dispatch(_owner, record) {
           clearTimeout(timeout);
           resolve({
@@ -287,6 +306,7 @@ test('backend mesh dispatch pump drains a local channel record through claim and
       pump.start();
     });
     senderPump = new backend.ZLinkMeshDispatchPump(sender, {
+      applicationJobQueue: applicationJobQueue(),
       dispatch() {},
       reportError(error) { throw error; }
     });
@@ -320,7 +340,8 @@ test('backend mesh dispatch pump requeues records beyond the receive batch capac
   const meshName = `backend.dispatch.sequence.${process.pid}`;
   const node = factory.createMeshAdapter().createMeshNode(context, {
     meshName,
-    routingId: `backend-dispatch-sequence-${process.pid}`
+    routingId: `backend-dispatch-sequence-${process.pid}`,
+    applicationJobQueue: applicationJobQueue()
   });
   const received = [];
   let resolveReceived;
@@ -336,15 +357,7 @@ test('backend mesh dispatch pump requeues records beyond the receive batch capac
     node.addChannelName('backend.sequence');
     node.start();
     pump = new backend.ZLinkMeshDispatchPump(node, {
-      // A configured inbound budget makes the receive batch hold one record;
-      // the second record must remain available after the first claim releases.
-      inboundDispatchBudget: {
-        receivePaused: false,
-        onResume() { return () => {}; },
-        enqueue() {},
-        start() {},
-        complete() {}
-      },
+      applicationJobQueue: applicationJobQueue(),
       dispatch(_owner, record) {
         received.push(record.parts[0].data().toString());
         if (received.length === 2) resolveReceived();
@@ -355,8 +368,8 @@ test('backend mesh dispatch pump requeues records beyond the receive batch capac
     });
     pump.start();
 
-    assert.equal(node.sendToChannel('backend.sequence', Buffer.from('first')), zlink.SubmitResult.Ok);
-    assert.equal(node.sendToChannel('backend.sequence', Buffer.from('second')), zlink.SubmitResult.Ok);
+    assert.equal(await node.sendToChannel('backend.sequence', Buffer.from('first')), zlink.SubmitResult.Ok);
+    assert.equal(await node.sendToChannel('backend.sequence', Buffer.from('second')), zlink.SubmitResult.Ok);
     await Promise.race([
       completed,
       new Promise((_, reject) => setTimeout(() => reject(new Error('Sequential mesh records were not both dispatched.')), 2000))
@@ -367,6 +380,100 @@ test('backend mesh dispatch pump requeues records beyond the receive batch capac
     node.shutdown(1000);
     node.close();
     await context.dispose();
+  }
+});
+
+test('backend mesh terminal completion bypasses application job queue capacity', async () => {
+  let readyHandler;
+  let received = false;
+  let completed;
+  const completion = new Promise((resolve) => { completed = resolve; });
+  const claim = {
+    recvBatch() {
+      if (received) return { ok: false, records: [] };
+      received = true;
+      return { ok: true, records: [{ parts: [] }] };
+    },
+    release() {}
+  };
+  const node = {
+    setReadyHandler(handler) { readyHandler = handler; },
+    createReadyBatch() {
+      return { reset() {}, takeClaim() { return claim; }, close() {} };
+    },
+    createReceiveBatch() {
+      return { reset() {}, close() {} };
+    },
+    drainReady() {
+      return {
+        ok: true,
+        hasResidue: false,
+        records: [{
+          ownerKind: framework.ReadyOwnerKind.Node,
+          terminalCompletion: true
+        }]
+      };
+    }
+  };
+  const pump = new backend.ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: {
+      acquire() {
+        throw new Error('terminal completion must not acquire application capacity');
+      }
+    },
+    dispatch() { completed(); }
+  });
+
+  try {
+    pump.start();
+    readyHandler(framework.ReadyDomain.Infrastructure);
+    await completion;
+  } finally {
+    await pump.dispose();
+  }
+});
+
+test('backend mesh dispatch releases a reserved permit when a claim batch is empty', async () => {
+  let readyHandler;
+  let receiveCount = 0;
+  const queue = applicationJobQueue(1n);
+  const claim = {
+    recvBatch() {
+      receiveCount += 1;
+      return receiveCount === 1
+        ? { ok: true, records: [] }
+        : { ok: false, records: [] };
+    },
+    release() {}
+  };
+  const node = {
+    setReadyHandler(handler) { readyHandler = handler; },
+    createReadyBatch() {
+      return { reset() {}, takeClaim() { return claim; }, close() {} };
+    },
+    createReceiveBatch() {
+      return { reset() {}, close() {} };
+    },
+    drainReady() {
+      return {
+        ok: true,
+        hasResidue: false,
+        records: [{ ownerKind: framework.ReadyOwnerKind.Node }]
+      };
+    }
+  };
+  const pump = new backend.ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: queue,
+    dispatch() { throw new Error('empty claim must not dispatch'); }
+  });
+
+  try {
+    pump.start();
+    readyHandler(framework.ReadyDomain.Infrastructure);
+    await waitEventually(() => receiveCount >= 2);
+    assert.equal(queue.snapshot().permitsInUse, 0n);
+  } finally {
+    await pump.dispose();
   }
 });
 
@@ -409,6 +516,7 @@ test('backend mesh dispatch pump yields between continuous receive batches', asy
     }
   };
   const pump = new backend.ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: applicationJobQueue(),
     dispatch() {
       if (receivedBatches === totalBatches) complete();
     }
@@ -462,6 +570,7 @@ test('backend mesh dispatch pump yields when elapsed receive time wins before th
     }
   };
   const pump = new backend.ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: applicationJobQueue(),
     monotonicNowMs: () => {
       nowMs += 3;
       return nowMs;
@@ -526,6 +635,7 @@ test('backend mesh dispatch pump marks application and infrastructure execution 
     }
   };
   const pump = new backend.ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: applicationJobQueue(),
     dispatch(_owner, record) {
       observed.push([record.domain, framework.currentZLinkExecutionArea()]);
       if (observed.length === 2) complete();
@@ -582,7 +692,10 @@ test('backend mesh dispatch pump yields between continuous ready batches without
       };
     }
   };
-  const pump = new backend.ZLinkMeshDispatchPump(node, { dispatch() {} });
+  const pump = new backend.ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: applicationJobQueue(),
+    dispatch() {}
+  });
 
   try {
     pump.start();
@@ -661,6 +774,7 @@ test('backend mesh dispatch pump bounds lifecycle priority so application work i
     }
   };
   const pump = new backend.ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: applicationJobQueue(),
     dispatch(_owner, record) {
       order.push(record.parts[0].getString('utf8'));
     }
@@ -728,6 +842,7 @@ test('backend mesh dispatch pump yields before recursively signaled dispatch wor
     }
   };
   const pump = new backend.ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: applicationJobQueue(),
     dispatch() {
       dispatches += 1;
       if (dispatches === totalDispatches) {
@@ -795,6 +910,7 @@ test('backend mesh dispatch pump drains ready work queued before an async handle
     }
   };
   const pump = new backend.ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: applicationJobQueue(),
     async dispatch(_owner, record) {
       if (record.batch === 1) {
         await firstDispatchReleased;
@@ -864,6 +980,7 @@ test('backend mesh dispatch pump does not claim unrelated owners behind a slow h
     }
   };
   const pump = new backend.ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: applicationJobQueue(),
     async dispatch(_owner, record) {
       if (record.owner === 'slow-owner') {
         await slowReleased;
@@ -1032,7 +1149,8 @@ test('MeshNode runtime manager owns lifecycle and forwards pull-dispatch records
   });
   const sender = factory.createMeshAdapter().createMeshNode(context, {
     meshName,
-    routingId: `runtime-sender-${process.pid}`
+    routingId: `runtime-sender-${process.pid}`,
+    applicationJobQueue: applicationJobQueue()
   });
   let senderPump;
 
@@ -1041,6 +1159,7 @@ test('MeshNode runtime manager owns lifecycle and forwards pull-dispatch records
     sender.setBind(senderEndpoint);
     sender.start();
     senderPump = new backend.ZLinkMeshDispatchPump(sender, {
+      applicationJobQueue: applicationJobQueue(),
       dispatch() {},
       reportError(error) { throw error; }
     });
@@ -1313,7 +1432,8 @@ test('framework host dispatches a MeshNode channel record through registered han
   const context = factory.createChannelAdapter().createContext();
   const sender = factory.createMeshAdapter().createMeshNode(context, {
     meshName,
-    routingId: `host-dispatch-sender-${process.pid}`
+    routingId: `host-dispatch-sender-${process.pid}`,
+    applicationJobQueue: applicationJobQueue()
   });
   let senderPump;
 
@@ -1323,6 +1443,7 @@ test('framework host dispatches a MeshNode channel record through registered han
     sender.setBind(senderEndpoint);
     sender.start();
     senderPump = new backend.ZLinkMeshDispatchPump(sender, {
+      applicationJobQueue: applicationJobQueue(),
       dispatch() {},
       reportError(error) { throw error; }
     });
@@ -1863,7 +1984,8 @@ test('subscriber receive loop never blocks the Node event loop while polling', a
       }
     },
     {},
-    { async dispatch() {} }
+    { async dispatch() {} },
+    applicationJobQueue()
   );
 
   const running = loop.run();
@@ -1881,6 +2003,7 @@ test('subscriber receive loop keeps receiving while an earlier handler is awaiti
   const firstPending = new Promise((resolve) => { releaseFirst = resolve; });
   let observeSecond;
   const secondObserved = new Promise((resolve) => { observeSecond = resolve; });
+  const queue = applicationJobQueue(1n);
   const loop = new framework.ZLinkSubscriberReceiveLoop(
     {
       createReadablePoller() {
@@ -1902,10 +2025,12 @@ test('subscriber receive loop keeps receiving while an earlier handler is awaiti
     },
     {
       async dispatch(topicMessage) {
+        releaseApplicationJobPermitBeforeHandler();
         if (topicMessage.topic === 'first') await firstPending;
         if (topicMessage.topic === 'second') observeSecond();
       }
-    }
+    },
+    queue
   );
 
   const running = loop.run();
@@ -1922,6 +2047,9 @@ test('subscriber receive loop keeps receiving while an earlier handler is awaiti
     await loop.stop();
     await running;
   }
+  assert.equal(queue.snapshot().effectiveMaxQueuedApplicationJobs, 1n);
+  assert.equal(queue.snapshot().peakPermitsInUse, 1n);
+  assert.equal(queue.snapshot().permitsInUse, 0n);
 });
 
 function messageRecord(topic) {

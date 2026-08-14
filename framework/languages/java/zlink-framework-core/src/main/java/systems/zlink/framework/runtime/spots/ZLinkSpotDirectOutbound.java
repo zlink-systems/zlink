@@ -22,7 +22,6 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
@@ -34,38 +33,13 @@ final class ZLinkSpotDirectOutbound {
     private final ZLinkSpotRouteMessages messages;
     private final Executor handlerExecutor;
     private final ZLinkMessageFlowTracer flow;
-    private final ZLinkOneWayCalls oneWayCalls;
-
     ZLinkSpotDirectOutbound(
         ZLinkSpotRouteMessages messages,
         Executor handlerExecutor,
         ZLinkMessageFlowTracer flow) {
-        this(
-            messages,
-            handlerExecutor,
-            flow,
-            new ZLinkOneWayCalls((backend, key) -> (submission, cleanup) -> {
-                try {
-                    return submission.get()
-                        ? CompletableFuture.completedFuture(null)
-                        : CompletableFuture.failedFuture(
-                            new IllegalStateException(
-                                "one-way submission was not admitted"));
-                } finally {
-                    cleanup.run();
-                }
-            }));
-    }
-
-    ZLinkSpotDirectOutbound(
-        ZLinkSpotRouteMessages messages,
-        Executor handlerExecutor,
-        ZLinkMessageFlowTracer flow,
-        ZLinkOneWayCalls oneWayCalls) {
         this.messages = messages;
         this.handlerExecutor = handlerExecutor;
         this.flow = flow;
-        this.oneWayCalls = oneWayCalls;
     }
 
     ZLinkSendCall send(
@@ -181,17 +155,15 @@ final class ZLinkSpotDirectOutbound {
             targetNodeRid,
             spotId);
         List<Message> parts = messages.encode(packetName, payload, contentType);
-        return oneWayCalls.submitOneWay(
-            spot,
-            ZLinkBackendAdmissionKey.spot(targetNodeRid, spotId),
-            () -> spot.sendToSpot(
+        return ZLinkOneWayCalls.adaptOneWay(
+            spot.sendToSpot(
                 targetNodeRid,
                 spotId,
                 spotGeneration,
                 metadata.encode(),
-                parts,
-                SendFlags.DONT_WAIT),
-            () -> parts.forEach(Message::close))
+                parts))
+            .whenComplete((ignored, failure) ->
+                parts.forEach(Message::close))
             // Keep the admission future private. The public stage must not
             // allow callers to complete an operation that is still pending.
             .thenApply(ignored -> null);
@@ -224,13 +196,19 @@ final class ZLinkSpotDirectOutbound {
             targetNodeRid,
             spotId);
         try {
-            boolean submitted = spot.requestToSpot(
+            spot.requestToSpot(
                 targetNodeRid,
                 spotId,
                 spotGeneration,
                 metadata.encode(),
                 requestParts,
-                reply -> {
+                timeout)
+                .whenComplete((reply, failure) -> {
+                if (failure != null) {
+                    closeRequestParts.run();
+                    result.completeExceptionally(failure);
+                    return;
+                }
                 trace(
                     ZLinkMessageFlowOutcome.REPLY_RECEIVED,
                     ZLinkDispatchMessageKind.RESPONSE,
@@ -256,13 +234,7 @@ final class ZLinkSpotDirectOutbound {
                     reply.close();
                     closeRequestParts.run();
                 }
-            }, SendFlags.NONE, timeout);
-            if (!submitted) {
-                closeRequestParts.run();
-                result.completeExceptionally(new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-                    "SPOT direct request was not admitted"));
-            }
+            });
         } catch (RuntimeException ex) {
             closeRequestParts.run();
             result.completeExceptionally(ex);
@@ -286,21 +258,16 @@ final class ZLinkSpotDirectOutbound {
             null,
             null);
         List<Message> parts = messages.encode(packetName, payload, contentType);
-        return oneWayCalls.submitOneWay(
-                spot,
-                ZLinkBackendAdmissionKey.channel(channelName),
-                () -> {
-                    spot.publish(
-                        channelName,
-                        topic,
-                        metadata.encode(),
-                        parts,
-                        SendFlags.DONT_WAIT);
-                    // Target-specific acceptance is outside the publish terminal.
-                    return true;
-                },
-                () -> parts.forEach(Message::close))
-            .thenApply(ignored -> null);
+        CompletionStage<Void> result = ZLinkOneWayCalls.adaptOneWay(
+            spot.publishAsync(
+                channelName,
+                topic,
+                metadata.encode(),
+                parts,
+                SendFlags.DONT_WAIT));
+        result.whenComplete((ignored, failure) ->
+            parts.forEach(Message::close));
+        return result;
     }
 
     private void trace(

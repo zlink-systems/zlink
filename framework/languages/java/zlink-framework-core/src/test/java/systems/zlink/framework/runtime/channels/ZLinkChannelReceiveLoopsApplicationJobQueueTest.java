@@ -1,0 +1,146 @@
+package systems.zlink.framework.runtime.channels;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.List;
+import java.util.Optional;
+import java.util.OptionalLong;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.Test;
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+
+final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
+    @Test
+    void ordinaryReceiveReservesBeforeRecvAndDoesNotBuildAHiddenSerialBacklog()
+        throws Exception {
+        ZLinkApplicationJobQueue queue = new ZLinkApplicationJobQueue(
+            ZLinkApplicationJobQueueProfile.BALANCED,
+            OptionalLong.of(1),
+            new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
+        AtomicBoolean running = new AtomicBoolean(true);
+        FakeRouter router = new FakeRouter();
+        router.inbound.add(received("one"));
+        router.inbound.add(received("two"));
+        var handlerExecutor = Executors.newSingleThreadExecutor();
+        ZLinkAsyncSerialQueue serial = new ZLinkAsyncSerialQueue(handlerExecutor, false);
+        CountDownLatch allowFirstInstruction = new CountDownLatch(1);
+        CountDownLatch bothDispatched = new CountDownLatch(2);
+        AtomicInteger job = new AtomicInteger();
+        ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(running::get, queue);
+
+        try {
+            loops.startRequest(router, ignored -> {
+                int index = job.incrementAndGet();
+                serial.enqueue(() -> {
+                    if (index == 1) {
+                        await(allowFirstInstruction);
+                    }
+                    ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
+                    bothDispatched.countDown();
+                    return CompletableFuture.completedFuture(null);
+                });
+            }, error -> { throw new AssertionError(error); });
+
+            awaitCondition(() -> router.receiveCount.get() == 1);
+            assertEquals(1, queue.snapshot().queuedApplicationJobs());
+            assertEquals(1, queue.snapshot().capacityWaiters());
+
+            allowFirstInstruction.countDown();
+            assertTrue(bothDispatched.await(5, TimeUnit.SECONDS));
+            assertEquals(2, router.receiveCount.get());
+            assertEquals(0, queue.snapshot().permitsInUse());
+        } finally {
+            running.set(false);
+            loops.close();
+            queue.close();
+            handlerExecutor.shutdownNow();
+            loops.awaitTermination();
+        }
+    }
+
+    private static ZLinkBackendReceived received(String value) {
+        return new ZLinkBackendReceived(
+            ZLinkBackendRequestResult.OK,
+            Optional.of(RoutingId.from("job-queue-peer")),
+            Optional.empty(),
+            Optional.of(1L),
+            List.of(Message.from(value)));
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("timed out");
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(interrupted);
+        }
+    }
+
+    private static void awaitCondition(java.util.function.BooleanSupplier condition)
+        throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        assertTrue(condition.getAsBoolean());
+    }
+
+    private static final class FakeRouter implements ZLinkBackendRouterSocket {
+        private final ArrayDeque<ZLinkBackendReceived> inbound = new ArrayDeque<>();
+        private final AtomicInteger receiveCount = new AtomicInteger();
+
+        @Override public void setChannelName(String value) { }
+        @Override public void setRoutingId(RoutingId value) { }
+        @Override public void setConnectRoutingId(RoutingId value) { }
+        @Override public void setProbe(boolean value) { }
+        @Override public long maxMessageSize() { return 0; }
+        @Override public void setMaxMessageSize(long value) { }
+        @Override public int peerWeight() { return 100; }
+        @Override public void setPeerWeight(int value) { }
+        @Override public void bind(String endpoint) { }
+        @Override public void connect(String endpoint) { }
+        @Override public void disconnect(String endpoint) { }
+        @Override public boolean waitForReadable(Duration timeout) {
+            return !inbound.isEmpty();
+        }
+        @Override public ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
+            ZLinkBackendReceived result = inbound.poll();
+            if (result != null) {
+                receiveCount.incrementAndGet();
+            }
+            return result;
+        }
+        @Override public CompletionStage<Void> send(
+            RoutingId routingId, List<Message> parts) {
+            return CompletableFuture.completedFuture(null);
+        }
+        @Override public CompletionStage<ZLinkBackendReceived> request(
+            RoutingId routingId, List<Message> parts, Duration timeout) {
+            return CompletableFuture.failedFuture(new UnsupportedOperationException());
+        }
+        @Override public void reply(
+            RoutingId routingId, long requestSeq, List<Message> parts) { }
+        @Override public String name() { return "job-queue-router"; }
+        @Override public void close() { }
+    }
+}

@@ -14,12 +14,15 @@ import type {
   ZLinkStreamCompressionOptions,
   ZLinkTimerOptions
 } from '../../contracts';
+import type { AutoHwmProfileValue } from '@zlink-systems/zlink';
 import type { ZLinkMessageSerializer } from '../Codecs';
 import type { ZLinkMessageTypeSelector } from '../Codecs';
-import type { ZLinkDispatchOptions } from '../Dispatch';
+import type {
+  ZLinkApplicationJobQueueProfile,
+  ZLinkDispatchOptions
+} from '../Dispatch';
 import type { ZLinkLocationStore, ZLinkRelocationStore } from '../Locations';
 import type { ZLinkNetworkOptions } from './Builders';
-import type { ZLinkInboundDispatchOptionValues } from './InboundDispatch';
 import type { ZLinkLocationOptionValues } from '../RouteMesh';
 import {
   ZLinkSpotRelocationReadinessMode,
@@ -68,10 +71,24 @@ export interface ZLinkFrameworkRegistration {
   readonly spotPublisherClients: ReadonlySet<string>;
   readonly filterTypes: readonly Type<ZLinkHandlerFilter>[];
   readonly worker?: ZLinkWorkerOptions;
-  readonly inboundDispatch: ZLinkInboundDispatchOptionValues;
   readonly dispatch?: ZLinkDispatchOptions;
   readonly metrics?: ZLinkMetricsOptions;
+  readonly coreHwm?: ZLinkCoreHwmOptions;
+  readonly applicationJobQueue?: ZLinkApplicationJobQueueOptions;
   readonly locations: ZLinkLocationRegistration;
+}
+
+/** Core-owned aggregate high-water sizing applied before Framework sockets open. */
+export interface ZLinkCoreHwmOptions {
+  readonly profile?: AutoHwmProfileValue;
+  readonly memoryLimitBytes?: bigint;
+  readonly budgetBytes?: bigint;
+}
+
+/** Host-instance queued-job sizing, independent from the Core byte budget. */
+export interface ZLinkApplicationJobQueueOptions {
+  readonly profile?: ZLinkApplicationJobQueueProfile;
+  readonly maxQueuedApplicationJobs?: bigint;
 }
 
 export interface ZLinkLocationRegistration {
@@ -136,9 +153,10 @@ export interface ZLinkFrameworkRegistrationOptions {
   readonly spotPublisherClients?: readonly string[];
   readonly filters?: readonly Type<ZLinkHandlerFilter>[];
   readonly worker?: ZLinkWorkerOptions;
-  readonly inboundDispatch?: Partial<ZLinkInboundDispatchOptionValues>;
   readonly dispatch?: ZLinkDispatchOptions;
   readonly metrics?: ZLinkMetricsOptions;
+  readonly coreHwm?: ZLinkCoreHwmOptions;
+  readonly applicationJobQueue?: ZLinkApplicationJobQueueOptions;
   readonly locations?: {
     readonly useInMemoryStores?: boolean;
     readonly storeInstance?: ZLinkLocationStore;

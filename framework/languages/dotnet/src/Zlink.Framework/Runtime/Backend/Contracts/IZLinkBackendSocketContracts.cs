@@ -26,10 +26,53 @@ internal interface IZLinkBackendStreamSocket : IAsyncDisposable
         out bool hasMore,
         RecvFlags flags = RecvFlags.None);
 
+    bool RecvRetained(
+        out ZLinkBackendStreamReceive? received,
+        RecvFlags flags = RecvFlags.None)
+    {
+        if (!RecvPart(
+                out var sourceRoutingId,
+                out var part,
+                out var hasMore,
+                flags))
+        {
+            received = null;
+            return false;
+        }
+
+        received = new ZLinkBackendStreamReceive(
+            sourceRoutingId,
+            part is null
+                ? Array.Empty<Message>()
+                : new[] { part },
+            hasMore,
+            part);
+        return true;
+    }
+
     bool Send(
         RoutingId routingId,
         Message payload,
         SendFlags flags);
+
+    ValueTask SendAsync(
+        RoutingId routingId,
+        Message payload,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            if (!Send(routingId, payload, SendFlags.DontWait))
+                throw new ZlinkSubmitException(
+                    ZlinkSubmitException.ErrorCode.Backpressured);
+            return ValueTask.CompletedTask;
+        }
+        finally
+        {
+            payload.Dispose();
+        }
+    }
 
     bool Send(
         RoutingId routingId,
@@ -55,6 +98,23 @@ internal interface IZLinkBackendStreamSocket : IAsyncDisposable
         string actorId,
         IReadOnlyList<Message> parts,
         SendFlags flags);
+}
+
+internal sealed class ZLinkBackendStreamReceive(
+    RoutingId? sourceRoutingId,
+    IReadOnlyList<Message> parts,
+    bool hasMore,
+    IDisposable? owner) : IDisposable
+{
+    private IDisposable? _owner = owner;
+
+    internal RoutingId? SourceRoutingId { get; } = sourceRoutingId;
+
+    internal IReadOnlyList<Message> Parts { get; } = parts;
+
+    internal bool HasMore { get; } = hasMore;
+
+    public void Dispose() => Interlocked.Exchange(ref _owner, null)?.Dispose();
 }
 
 internal interface IZLinkBackendSocketMonitor : IAsyncDisposable

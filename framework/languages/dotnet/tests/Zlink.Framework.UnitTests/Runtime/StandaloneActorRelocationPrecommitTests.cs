@@ -8,7 +8,7 @@ namespace Zlink.Framework.UnitTests;
 public sealed class StandaloneActorRelocationPrecommitTests
 {
     [Fact]
-    public async Task Preparing_Captured_Prepared_and_NewOwner_are_durable()
+    public async Task Preparing_Captured_and_target_cutover_are_durable()
     {
         var store = new ZLinkInMemoryLocationStore();
         var sourceOwner = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
@@ -118,87 +118,28 @@ public sealed class StandaloneActorRelocationPrecommitTests
             target,
             envelope,
             stored,
-            boundSession: null,
             applicationVersion: 1);
-        var capacity = Assert.IsType<
-            ZLinkRelocationCapacityReserveResult.Reserved>(
-            await store.ReserveRelocationCapacityAsync(
-                new ZLinkRelocationCapacityReservationRequest(
-                    relocationId,
-                    key,
-                    captured.StoreVersion,
-                    ZLinkPlacementObjectKind.Actor,
-                    "Game.Actor",
-                    new ZLinkMeshNodeDescriptorKey("mesh", source.Rid),
-                    source.LifecycleGeneration,
-                    sourceOwner,
-                    new ZLinkMeshNodeDescriptorKey("mesh", target.Rid),
-                    target.LifecycleGeneration,
-                    targetOwner,
-                    new ZLinkCapacityVector(1, 0, null))));
-        var finalEnvelope = ZLinkCanonicalActorRelocationWriter.CreateInitial(
-            envelope with
-            {
-                Participants =
-                [
-                    envelope.Participants.Single() with
-                    {
-                        ApplicationState = new byte[] { 7 }
-                    }
-                ]
-            },
-            applicationVersion: 1);
-        var storedFinal = stored with
-        {
-            Reference = "precommit-final-root",
-            ChecksumCrc32c = 0x87654321
-        };
-        lossyStore.LoseNextResponse();
-        var refreshedCaptured = await coordinator.RefreshCapturedRootAsync(
-            captured,
-            finalEnvelope,
-            storedFinal,
-            capacity.Fence,
-            CancellationToken.None);
-        var refreshedState = Projection(refreshedCaptured);
-        Assert.Equal(2, refreshedState.Phase);
-        Assert.Equal(storedFinal.Reference, refreshedState.RelocationReference);
-        Assert.Equal(0UL, refreshedState.TargetAttemptGeneration);
-
-        lossyStore.LoseNextResponse();
-        var prepared = await coordinator.PrepareTargetAsync(
-            refreshedCaptured,
-            finalEnvelope,
-            capacity.Fence,
-            prepare,
-            reservationGeneration: 7,
-            CancellationToken.None);
-        var preparedState = Projection(prepared);
-        Assert.Equal(3, preparedState.Phase);
-        Assert.Equal(1UL, preparedState.TargetAttemptGeneration);
-        Assert.Equal(target.Rid.ToHex(), preparedState.State.TargetNodeRid);
-        Assert.Equal(sourceOwner.OwnerId, prepared.OwnerId);
 
         var targetAuthority = Authority(actorId, target, targetOwner);
         lossyStore.ReturnAuxiliaryConflictNext();
         lossyStore.LoseNextResponse();
         var committed = await coordinator.CommitTargetAsync(
-            prepared,
-            finalEnvelope,
-            capacity.Fence,
+            captured,
+            envelope,
+            prepare,
             targetAuthority,
-            targetOwner,
             CancellationToken.None);
         var committedState = Projection(committed);
         Assert.Equal(4, committedState.Phase);
+        Assert.Equal(
+            prepare.TargetAttemptGeneration,
+            committedState.TargetAttemptGeneration);
+        Assert.Equal(target.Rid.ToHex(), committedState.State.TargetNodeRid);
         Assert.Equal(targetOwner.OwnerId, committed.OwnerId);
         Assert.Equal(ready.Snapshot.ObjectGeneration, committed.ObjectGeneration);
         Assert.Equal(
             checked(ready.Snapshot.AuthorityOwnerGeneration + 1),
             committed.AuthorityOwnerGeneration);
-        Assert.Equal(
-            ZLinkRelocationCapacityAbortResult.AlreadyCommitted,
-            await store.AbortRelocationCapacityAsync(capacity.Fence));
     }
 
     [Fact]
@@ -280,9 +221,9 @@ public sealed class StandaloneActorRelocationPrecommitTests
             actor.NodeRid.ToHex(), actor.NodeGeneration,
             actor.OwnerId, actor.OwnerLeaseGeneration,
             "target", 1, "target-owner", 1,
-            1, actor.OwnerId, actor.OwnerLeaseGeneration,
+            actor.OwnerId, actor.OwnerLeaseGeneration,
             actor.NodeRid.ToHex(), actor.NodeGeneration,
-            1, string.Empty, 0, 1, 0);
+            1, string.Empty, 0, 1);
 
         Assert.Throws<ArgumentException>(() =>
             ZLinkCanonicalRelocationAuthorityStateCodec.ReplaceRelocationState(

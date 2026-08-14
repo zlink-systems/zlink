@@ -15,11 +15,7 @@ export interface ZLinkLocationOptionValues {
   readonly ownerLeaseRenewTimeoutMs: number;
   readonly routeCacheMaxAgeMs: number;
   readonly messageFollowDurationMs: number;
-  readonly maxActiveOutboundRelocations: number;
-  readonly maxActiveInboundRelocations: number;
-  readonly maxConcurrentRelocationCaptures: number;
-  readonly maxConcurrentRelocationRestores: number;
-  readonly maxRelocationPayloadInFlightBytes: number;
+  readonly sessionRelocationSealTimeoutMs: number;
 }
 
 export type ZLinkMessageSurface =

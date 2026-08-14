@@ -41,16 +41,15 @@ import {
 import { ZLinkChannelDispatchServices } from './channel-dispatch-services';
 import type { ZLinkChannelEnvelopeCodecRegistry } from './channel-envelope';
 import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
-import { ZLinkSpotRouteBridgeRawReplyRegistry } from './spot-route-bridge-raw-reply';
 import { ZLinkSpotRouteDispatchStrategy } from './spot-route-dispatch-strategy';
 import { ZLinkClientServerLocationRuntime } from './client-server-location-runtime';
 import { ZLinkFanoutLocationRuntime } from './fanout-location-runtime';
-import type { ZLinkInboundDispatchBudget } from '../dispatch/inbound-dispatch-budget';
 import {
   attachEndpointConnections,
   detachEndpointConnections,
   endpointConnections
 } from '../../contracts/Configuration/RuntimeEndpointConnections';
+import type { ApplicationJobQueue } from '../host/application-job-queue';
 
 interface ManualFanoutSubscriberState {
   readonly channelName: string;
@@ -77,12 +76,11 @@ export interface ZLinkChannelRuntimeLifecycleOptions {
   readonly sockets: ZLinkChannelSocketRegistry;
   readonly codecs: ZLinkChannelEnvelopeCodecRegistry;
   readonly dispatchServices: ZLinkChannelDispatchServices;
+  readonly applicationJobQueue: ApplicationJobQueue;
   readonly spotRoutes: ZLinkSpotRouteDispatchStrategy;
   readonly spotRouteBridges: Map<string, ZLinkBackendSpotRouteBridge>;
-  readonly spotRouteBridgeRawReplies: ZLinkSpotRouteBridgeRawReplyRegistry;
   readonly internalRouteSendHandlers?: ReadonlyMap<string, ZLinkRouteRuntimeSendHandler>;
   readonly internalRouteRequestHandlers?: ReadonlyMap<string, ZLinkRouteRuntimeRequestHandler>;
-  readonly inboundDispatchBudget?: ZLinkInboundDispatchBudget;
 }
 
 export class ZLinkChannelRuntimeLifecycle {
@@ -344,9 +342,6 @@ export class ZLinkChannelRuntimeLifecycle {
     const fanoutDescriptorStopped = fanoutLocation === undefined
       ? []
       : await Promise.allSettled([fanoutLocation.stop(signal)]);
-    this.options.spotRouteBridgeRawReplies.rejectAll(
-      new ZLinkConfigurationException('Channel runtime disposed before the SPOT route reply arrived.')
-    );
     const cleanup = await Promise.allSettled([
       ...spotRouteBridges.map((bridge) => bridge.dispose()),
       this.options.sockets.dispose()
@@ -407,7 +402,6 @@ export class ZLinkChannelRuntimeLifecycle {
         ])),
         filters: this.options.dispatchServices.handlerFilters(),
         unhandled: this.options.registration.dispatch?.unhandled,
-        replySubmitter: this.options.sockets.requireSubmitter(router)
       });
       const spotRouteBridge = this.createSpotRouteBridgeForRouter(channelName, router);
       const loop = new ZLinkChannelReceiveLoop(
@@ -417,8 +411,8 @@ export class ZLinkChannelRuntimeLifecycle {
         spotRouteBridge,
         (received, socket) =>
           this.options.sockets.tryHandleClientServerControl(channelName, received, socket),
-        this.options.inboundDispatchBudget,
         this.options.adapter.createReadablePoller(router),
+        this.options.applicationJobQueue,
         error => taskRunner.errorSink.reportRuntimeTaskException(
           `channel:${channelName}:dispatch`,
           error
@@ -614,12 +608,12 @@ export class ZLinkChannelRuntimeLifecycle {
         this.options.adapter,
         subscriber,
         dispatcher,
+        this.options.applicationJobQueue,
         message => this.options.sockets.handleFanoutInboundResult(
           connectionId,
           message,
           subscriber
         ),
-        this.options.inboundDispatchBudget,
         this.receiveRoundRobin,
         error => taskRunner.errorSink.reportRuntimeTaskException(
           `subscriber:${state.channelName}:manual:${state.index}:dispatch`,
@@ -717,12 +711,12 @@ export class ZLinkChannelRuntimeLifecycle {
       this.options.adapter,
       subscriber,
       dispatcher,
+      this.options.applicationJobQueue,
       message => this.options.sockets.handleFanoutInboundResult(
         connectionId,
         message,
         subscriber
       ),
-      this.options.inboundDispatchBudget,
       undefined,
       error => taskRunner.errorSink.reportRuntimeTaskException(
         `subscriber:${channelName}:automatic:${connectionId}:dispatch`,
@@ -774,16 +768,13 @@ export class ZLinkChannelRuntimeLifecycle {
         dispatchErrors: this.options.dispatchServices.dispatchErrorReporter(taskRunner.errorSink),
         handlers,
         unhandled: this.options.registration.dispatch?.unhandled,
-        replySubmitter: this.options.sockets.requireSubmitter(router),
-        spotRouteBridge,
-        rawBridgeReplyHandler: (received) =>
-          this.options.spotRouteBridgeRawReplies.tryComplete(routeChannel.routerChannelId, received)
+        spotRouteBridge
       });
       const loop = new ZLinkRouteReceiveLoop(
         router,
         dispatcher,
-        this.options.inboundDispatchBudget,
         this.options.adapter.createReadablePoller(router),
+        this.options.applicationJobQueue,
         this.receiveRoundRobin,
         error => taskRunner.errorSink.reportRuntimeTaskException(
           `route:${routeChannel.routerChannelId}:dispatch`,

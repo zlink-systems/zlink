@@ -30,6 +30,7 @@ const INTEGER_ENCODINGS = new Map([
 const VECTOR_COMPARISONS = new Set([
   "canonical-authority-key-bytes",
   "utf-8-bytes",
+  "wire-value",
   "wire-value-then-utf-8-bytes",
   "unsigned-wire-value",
 ]);
@@ -101,7 +102,6 @@ function validateSchema(schema) {
     ["creationIntentBytes", 1048576n],
     ["creationTerminalEnvelopeBytes", 1048576n],
     ["maintenanceAggregateParticipants", 1024n],
-    ["relocationResourceParticipants", 2048n],
     ["maintenanceAggregateBytes", 1048576n],
     ["messageFollowHopCount", 8n],
     ["messageFollowControlEnvelopeBytes", 16777216n],
@@ -1065,8 +1065,7 @@ function validateSemanticConstraints(constraints, contexts, fail) {
           spotKind: "instance",
           instanceAuthorityStates: ["ready"],
           relocationState: "absent",
-          activationRecoveryState:
-            "optional-until-durable-first-handler-terminal-and-replay-cursor-update",
+          activationRecoveryState: "optional-until-durable-first-handler-terminal",
         },
         {
           operationKind: "coldActivation",
@@ -1118,49 +1117,33 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       kindTransition: "requires-prior-row-delete-then-new-object-cas-on-same-key",
       providerPayloadInterpretation: "forbidden",
     }],
-    ["relocation-journal-integrity", {
+    ["relocation-saved-work-integrity", {
       relocationType: "relocation-envelope-v1",
-      progressField: "participantProgress",
-      journalField: "journal",
-      completionField: "terminalCompletions",
+      savedWorkField: "savedWork",
       participantField: "participantId",
-      sequenceField: "sequence",
-      acceptedBoundaryField: "acceptedBoundary",
-      operationField: "operationId",
-      participantMustExistInProgress: true,
-      sequenceAtOrBelowAcceptedBoundary: true,
-      terminalCompletionMustMatchRequestRecord: true,
-      requestReplayBinding: "operation-id-exact-request-source-fence-and-reply-route-id-are-one-immutable-accepted-record-identity",
-      operationIdRole: "dedupe-identity-never-a-reply-route-substitute",
-      authorityRelocationAtomicity: {
-        mutationEvents: ["completion-append", "replyRelayAck", "requestSourceLeaseExpired"],
-        writeOrder: "new-immutable-relocation-root-then-one-expected-store-version-authority-cas",
-        casFields: ["relocation-reference", "relocation-checksum", "terminalCompletionCount", "pendingRelayCount"],
-        terminalCompletionCount: "equals-referenced-relocation-terminal-completion-entry-count",
-        pendingRelayCount: "equals-referenced-relocation-deliveryState-pending-count",
-        completedGate: "accepted-request-count-equals-terminal-completion-count-and-pending-relay-count-zero",
-        deliveryStateTransition: "pending-to-terminalReceived-or-alreadyTerminal-or-sourceLeaseExpired-only",
-        mismatch: "recovery-error-and-completed-forbidden",
-      },
-      requestRecordKinds: [
-        "nodeRequest", "channelRequest", "spotRequest", "actorRequest", "instanceSpotActivation",
-      ],
-      instanceRequestDiscriminator: "request",
+      orderField: "order",
+      ownership: "relocation-store-payload-is-the-only-handoff-source-for-work-and-timers-accepted-before-capture",
+      sourceRestore: "pre-cutover-abort-restores-the-same-payload-to-source-in-original-queue-order",
+      targetRestore: "target-materializes-the-same-payload-once-before-relay-ready",
+      relayExclusion: "relocationData-never-carries-saved-work-or-timers-from-the-relocation-store-payload",
+      queueOrder: "saved-work-and-pending-timer-ticks-share-one-strictly-increasing-order-per-participant",
+      requestIdentity: "operation-id-source-fence-and-reply-route-remain-part-of-the-frozen-record",
+      duplicateTransmission: "same-payload-may-be-accepted-twice-no-hidden-delivery-deduplication-or-ack-journal",
     }],
     ["location-relocation-storage-integrity", {
       locationAuthorityOwns: [
         "descriptor-and-owner-lease",
-        "object-authority-and-reservation",
+        "object-authority-and-normal-host-capacity-accounting",
         "aggregate-generation-and-canonical-participant-mutations",
         "inventory-digest-and-relocation-reference",
-        "participant-replay-cursors-and-terminal-completion-count",
+        "relocation-phase-and-exact-target-attempt",
       ],
       relocationRootRole: "immutable-payload-lookup-projection-never-authority",
       publicationOrder: [
         "write-all-immutable-relocation-chunks",
         "write-immutable-relocation-root-manifest",
         "read-and-verify-complete-root-from-relocation-provider",
-        "one-location-expected-store-version-cas-publishes-reference-checksum-replay-and-completion-counts",
+        "one-location-expected-store-version-cas-publishes-reference-checksum-and-captured-phase",
       ],
       aggregateAuthority: {
         format: "maintenance-aggregate-v1",
@@ -1175,7 +1158,7 @@ function validateSemanticConstraints(constraints, contexts, fail) {
         relocationManifestDigest: "must-equal-location-authority-inventory-digest",
         manifestAuthority: "forbidden",
       },
-      replacement: "write-and-verify-new-root-before-one-location-authority-cas-replaces-reference-and-counts",
+      replacement: "write-and-verify-new-root-before-one-location-authority-cas-replaces-reference",
       orphanCleanup: "unpublished-or-replaced-root-is-not-authority-and-is-deleted-or-expires",
       deleteOrder: "release-or-replace-location-authority-reference-before-idempotent-relocation-root-delete",
       backend: "location-and-relocation-providers-may-use-different-backends-connections-and-failure-domains",
@@ -1204,7 +1187,7 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       maintenanceRelocation: {
         requiresRelocationId: true,
         requiresTargetAttemptGenerationAsPeerFence: true,
-        requiresParticipantSequence: true,
+        requiresOriginalOperationIdentity: true,
       },
       acknowledgement: {
         command: "replyRelayAck",
@@ -1215,7 +1198,6 @@ function validateSemanticConstraints(constraints, contexts, fail) {
         targetPersistence: "relocation-root-cas-before-ack-effect",
         targetRetry: "retransmit-same-terminal-across-connection-replacement-until-ack-or-exact-request-source-owner-lease-expiry",
         sourceDuplicate: "reply-already-terminal-still-emits-alreadyTerminal-ack",
-        completionGate: "pending-relay-count-zero-and-each-accepted-request-has-authenticated-ack-or-store-confirmed-exact-request-source-owner-lease-expiry",
         physicalConnectionClose: "never-terminal-proof",
         retireWhileSourceLeaseValid: "forceStopped-and-retain-relocation-root-and-reply-bytes-for-retention-window",
       },
@@ -1238,7 +1220,7 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       durableActivationIntent: "coldActivating-row-owned-by-exact-target-host-with-provider-issued-pending-creation-projection",
       targetRecovery: "serving-gate-initial-authority-scan-and-background-bounded-reconcile-resume-owned-coldActivating-with-exact-reservation-and-complete-first-message-envelope",
       readyOrdering: "durable-activation-inbox-first-record-before-ready-commit-handler-behind-barrier-ready-retains-recovery-root-and-cursor-queue-head-restore-before-barrier-open",
-      recoveryRelease: "durable-first-handler-terminal-completion-then-replay-cursor-equals-inbox-sequence-then-preserve-cas-release-never-queue-admission",
+      recoveryRelease: "durable-first-handler-terminal-before-preserve-cas-release-never-queue-admission",
       orphanRule: "recovery-root-put-before-reserve-or-conflict-loser-is-unpublished-orphan-retention-or-idempotent-delete",
       activationRegistry: "object-key-object-generation-authority-owner-generation-and-owner-token-converge-late-submit-and-scan-to-one-local-barrier",
       staleTargetRecovery: "expected-store-version-newOwner-cas-preserves-object-generation-and-selects-eligible-owner",
@@ -1346,36 +1328,34 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       rules: [
         {
           phase: "preparing",
-          after: ["local-admission-seal", "accepted-boundaries-fixed"],
+          after: ["local-admission-seal", "current-application-turn-finished"],
           relocation: "absent",
-          targetReservation: "absent",
         },
         {
           phase: "captured",
           after: ["immutable-relocation-put"],
           relocation: "present",
-          targetReservation: "absent",
         },
         {
           phase: "prepared",
           after: [
-            "relocation-reserved-ack-validated",
             "target-factory-restore-complete",
-            "journal-timer-staging-complete",
+            "temporary-queue-installed",
+            "saved-work-and-timer-staging-complete",
+            "relocation-ready-reply-sent",
           ],
           relocation: "present",
-          targetReservation: "present",
         },
       ],
       closedOwnerTargetRules: {
-        preparingAndCaptured: "main-owner-is-immutable-source-target-attempt-token-and-reservation-absent",
-        prepared: "main-owner-is-source-exact-nonzero-target-attempt-owner-lease-node-reservation-and-relocation-present",
-        committedThroughCompleted: "main-owner-is-exact-current-target-and-same-attempt-reservation-relocation-present",
-        aborted: "main-owner-is-source-no-route-abort-or-routed-ack-wait-orphan-cleanup-and-relocation-progress-removal-then-reopen-admission",
+        preparingAndCaptured: "main-owner-is-immutable-source-no-relocation-capacity-reservation",
+        prepared: "main-owner-is-source-exact-nonzero-target-attempt-owner-lease-node-and-relocation-present",
+        committedThroughCompleted: "main-owner-is-exact-current-target-and-same-attempt-relocation-present",
+        aborted: "before-cutover-source-remains-owner-target-temporary-queue-is-discarded-and-source-payload-is-restored",
       },
-      preparedToCommitted: "one-newOwner-cas",
+      preparedToCommitted: "target-only-one-newOwner-cas-after-cutover-or-1000ms-ready-fallback",
       sourceFence: "source-owner-id-lease-generation-node-rid-and-generation-immutable-through-terminal",
-      replacementMutation: "target-attempt-target-owner-lease-node-and-reservation-only-same-target-retry-never-reenters-committed",
+      replacementMutation: "target-attempt-target-owner-lease-and-node-only-same-target-process-retry-never-reenters-committed",
       readyProjection: "ready-derives-from-target-admission-open-retained-relocation-payload-or-maintenance-metadata-does-not-block",
     }],
     ["complete-message-bound-integrity", {
@@ -1404,26 +1384,21 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       admissionMessageSizeField: "forbidden",
       remainingBounds: ["schema-and-wire-representation", "application-hwm", "mailbox-byte-budget"],
     }],
-    ["participant-sequence-domain", {
-      sequenceFields: [
-        "journal-entry.sequence",
-        "relocation-pending-timer-tick.sequence",
-        "request-completion-entry.sequence",
-        "relocationData.sequence",
-        "reply-relay-context.maintenanceRelocation.sequence",
+    ["saved-work-order-domain", {
+      orderFields: [
+        "saved-work-entry.order",
+        "relocation-pending-timer-tick.order",
       ],
-      relocationQueueOrdering: "journal-entry-and-pending-timer-tick-share-one-strictly-increasing-participant-sequence",
-      crossVectorDuplicate: "forbidden-between-journal-entry-and-relocation-pending-timer-tick-only-completion-and-relay-reference-the-original-sequence",
-      sequenceStart: 1,
-      zeroMeaning: "no-accepted-or-replayed-record",
-      progressFields: ["acceptedBoundary", "replayCursor", "highWater"],
-      overflow: "seal-participant-and-fail-new-admission-terminally",
+      relocationQueueOrdering: "saved-work-and-pending-timer-tick-share-one-strictly-increasing-participant-order",
+      crossVectorDuplicate: "forbidden-between-saved-work-entry-and-relocation-pending-timer-tick",
+      orderStart: 1,
+      zeroMeaning: "no-saved-work",
+      overflow: "capture-fails-before-publication",
       wrap: "forbidden",
     }],
     ["terminal-failure-integrity", {
       failureCodeType: "framework-error-code",
       fields: [
-        "request-completion-entry.failureCode",
         "frozen-record-body.completion.failureCode",
         "reply.failureCode",
         "replyRelay.failureCode",
@@ -1512,121 +1487,41 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       },
       authorityOwnerGenerationOverflow: "terminal-authority-error-no-wire-emission",
     }],
-    ["relocation-participant-resource-integrity", {
-      participantIdentity: {
-        standaloneObjectMailbox: "exactly-participant-id-1-no-binding-fields",
-        userSpotObjectMailboxes: "participant-id-1-is-user-spot-then-member-actors-from-2-in-ascending-global-actor-id-order-no-binding-fields",
-        boundSession: "participant-id-after-all-object-mailboxes-in-owning-object-participant-id-then-ascending-session-rid-order-with-nonzero-binding-generation",
-        boundSessionOwner: "exact-owning-actor-from-current-binding-record",
-        sessionOwnerRoute: "node-rid-lifecycle-generation-owner-id-and-lease-generation-match-current-descriptor-and-host-lease-before-seal-or-route-switch",
-        sessionRid: "unique-within-relocation-transaction",
-        stability: "same-id-and-fence-for-relocation-recovery-and-retransmit",
-      },
-      cardinality: {
-        actor: "exactly-one-objectMailbox-and-zero-or-one-boundSession",
-        instanceSpot: "exactly-one-objectMailbox-and-no-boundSession",
-        userSpotAggregate: "exactly-one-user-spot-objectMailbox-and-one-objectMailbox-per-canonical-member-actor-plus-zero-or-one-boundSession-per-member-actor",
-        userSpotObjectMaximum: { $bound: "maintenanceAggregateParticipants" },
-        resourceMaximum: { $bound: "relocationResourceParticipants" },
-      },
-      relocationReady: {
-        targetToSource: {
-          role: "target",
-          offeredMessages: "nonzero",
-          offeredBytes: "nonzero",
-          participants: "empty",
-        },
-        sourceToTarget: {
-          role: "source",
-          offeredMessages: 0,
-          offeredBytes: 0,
-          participants: "nonempty",
-          participantIdentity: "required-with-zero-capable-exact-allowances",
-          checkedAllowanceSums: "less-than-or-equal-stored-target-offer",
-        },
-      },
-      relocationData: {
-        participant: "must-be-negotiated",
-        sequence: "nonzero-and-less-than-or-equal-allowanceMessages",
-        cumulativeBytes: "sum-unique-canonical-frozen-record-encoded-bytes-less-than-or-equal-allowanceBytes",
-        duplicateSameBytes: "idempotent-no-capacity-recharge",
-        duplicateDifferentBytes: "protocol-error",
-      },
-      relocationAck: {
-        participant: "must-be-negotiated",
-        highWater: "less-than-or-equal-allowanceMessages",
-      },
-      relocationSeal: {
-        request: {
-          response: false,
-          direction: "target-to-source",
-          participants: "empty",
-        },
-        response: {
-          response: true,
-          direction: "source-to-target",
-          participants: "exact-negotiated-set-once",
-          highWater: "less-than-or-equal-allowanceMessages",
-        },
-      },
-      checkedU64Overflow: "protocol-error",
-    }],
-    ["relocation-reservation-handshake-integrity", {
-      sequence: [
-        "source-relocationPrepare-exact-sealed-inventory",
-        "target-relocationReady-capacity-offer",
-        "source-relocationReady-exact-accept",
-        "target-relocationReserved-reservation-ack",
-        "source-prepared-authority-cas",
+    ["relocation-handoff-integrity", {
+      identity: [
+        "stable-relocation-id",
+        "exact-target-attempt-generation",
+        "exact-object-identity",
+        "exact-source-and-target-owner-lease-fences",
       ],
-      identity: ["stable-relocation-id", "target-attempt-generation", "object-identity"],
-      prepare: {
-        phase: "captured",
-        relocation: "required",
-        requirements: "exact-participant-set-and-checked-message-byte-sums",
-      },
-      offer: "nonzero-capacity-and-empty-participant-vector",
-      accept: "exact-prepare-participant-set-and-requirements-within-offer",
-      reservationAck: "exact-accepted-participants-target-node-owner-lease-and-nonzero-reservation-generation",
-      preparedGate: "matching-reservation-ack-and-exact-current-target-host-lease-read-before-cas",
-      committedGate: "exact-current-target-host-lease-read-before-cas",
-      activationGate: "exact-current-target-host-lease-read-before-activation",
-      duplicate: "idempotent-if-identical-else-protocol-error",
-      crossCandidateReplay: "forbidden",
+      sequence: [
+        "source-captures-existing-work-and-timers-into-relocation-store",
+        "source-relocationPrepare-request",
+        "target-installs-temporary-queue-restores-store-payload-and-keeps-dispatch-closed",
+        "target-relocationReady-reply",
+        "source-relocationData-for-post-capture-ingress-only",
+        "source-relocationCutover-one-way-after-current-relay-prefix",
+        "target-only-owner-membership-cas-after-cutover-or-1000ms-ready-fallback",
+        "target-merges-saved-work-pre-boundary-relay-and-remaining-temporary-work",
+        "target-switches-regular-route-finishes-lifecycle-and-opens-dispatch",
+      ],
+      savedPrefixOwner: "relocation-store-only-never-relocationData",
+      relocationData: "post-capture-ingress-hold-record-only-same-ordered-connection-as-cutover-no-ack-no-numeric-high-water",
+      cutover: "one-way-no-reply-late-or-duplicate-only-warning-and-no-state-change",
+      capacity: "normal-host-admission-and-core-backpressure-only-no-relocation-message-byte-or-participant-reservation",
+      duplicatePayload: "may-be-accepted-twice-no-hidden-delivery-deduplication",
     }],
-    ["relocation-replacement-round-integrity", {
+    ["relocation-target-attempt-integrity", {
       authorityType: "authority-payload-v1",
       fenceType: "relocation-coordinator-fence",
-      rounds: {
-        initial: {
-          phase: "captured",
-          initiatorRoles: ["source"],
-          proposedTargetAttemptGeneration: "one",
-        },
-        preparedReplacement: {
-          phase: "prepared",
-          initiatorRoles: ["source"],
-          proposedTargetAttemptGeneration: "current-target-attempt-generation-plus-one",
-        },
-      },
-      reservedRounds: "postCommitReplacement-wire-value-3-reserved-never-sent-or-accepted-in-this-version",
-      requirementsSource: "exact-current-relocation-participant-inventory",
-      sequence: [
-        "initiator-relocationPrepare",
-        "candidate-relocationReady-offer",
-        "initiator-relocationReady-accept",
-        "candidate-relocationReserved-ack",
-        "expected-version-authority-cas",
-      ],
-      replacementCas: "after-ack-atomically-replace-target-attempt-generation-and-reservation-same-target-only-prepared-stays-prepared",
+      prepare: "source-only-captured-phase-exact-relocation-root-target-fence-object-and-application-version",
+      ready: "target-only-reply-after-factory-restore-temporary-queue-and-relay-reception-are-ready-with-dispatch-closed",
       oldTargetFence: "old-target-attempt-generation-or-authority-store-version-rejected",
-      relocationIdentity: "stable-relocation-id-relocation-root-and-journal-never-rewritten-same-target-retry-only-no-target-process-replacement-in-this-version",
-      targetActivationRetry: "factory-and-restore-are-at-least-once-across-attempts-and-stale-attempts-may-overlap",
-      targetCommitFence: "only-current-exact-owner-and-target-attempt-may-commit-completion-or-open-admission",
+      sameTargetRetry: "factory-and-restore-may-repeat-only-on-the-same-target-process-before-commit",
+      targetCommitFence: "only-current-exact-target-owner-lease-and-attempt-may-perform-owner-cas-or-open-admission",
       callbackContract: "retry-safe-no-exactly-once-external-side-effect-guarantee-and-no-public-relocation-id",
-      crossCandidateReplay: "candidate-node-rid-and-generation-must-match-admitted-peer",
-      ackBeforeCasCrash: "retry-identical-round-or-release-orphan-reservation-before-new-candidate",
-      casBeforeReplyCrash: "read-current-authority-and-continue-current-target-attempt-without-second-cas",
+      crossTargetReplay: "target-node-rid-generation-owner-id-and-lease-generation-must-match-admitted-peer",
+      uncertainCas: "read-current-authority-and-retry-the-same-fence-until-the-existing-relocation-deadline",
     }],
     ["relocation-coordinator-authorization-integrity", {
       authorityType: "authority-payload-v1",
@@ -1640,60 +1535,33 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       sequence: [
         "source-sessionRelocationSeal",
         "session-owner-reversible-ingress-seal",
-        "post-seal-ingress-waits-with-payload-and-reply-context-without-advancing-sealed-high-water-or-entering-application-dispatch",
-        "session-owner-sessionRelocationSealed-high-water",
-        "source-receives-every-sequence-through-high-water",
+        "session-owner-holds-post-seal-ingress-with-payload-and-reply-context",
+        "session-owner-sessionRelocationSealed-exact-result-without-sequence-or-high-water",
         "source-captured-relocation",
-        "target-restores-and-replays-through-high-water",
-        "target-stage-bound-session-route-without-switch-or-unseal",
-        "target-open-application-admission-and-publish-ready-after-owner-membership-cas-lifecycle-callbacks-pending-work-and-timer-restore-ordered-queue-merge-temporary-queue-registration-removal-and-atomic-dispatch-switch",
+        "target-restores-saved-session-work-once-and-receives-post-capture-ingress-relay",
+        "target-owner-membership-cas",
+        "target-merges-queues-switches-regular-route-finishes-lifecycle-and-opens-dispatch",
+        "target-sessionRelocationRoute-commit-one-way",
+        "session-owner-atomically-switches-route-submits-held-and-releases-seal",
       ],
       asyncConvergence: [
-        "durable-source-cleanup-state-cas",
         "completed-authority-cas",
-        "target-sessionRelocationRoute-commit",
-        "session-owner-atomic-route-switch-after-completed",
-        "session-owner-sessionRelocationRouted-ack",
         "maintenance-authority-normalized-to-steady",
         "source-ingress-hold-origin-removal",
       ],
-      participantIdentity: "session-owner-node-rid-generation-owner-id-lease-generation-session-rid-binding-generation",
-      recordSequence: "bound-session-actorSend-or-actorRequest-sourceSessionSequence",
-      relocationRelation: "participant-sequence-equals-session-sequence-and-accepted-boundary-equals-sealed-high-water",
+      bindingIdentity: "session-owner-node-rid-generation-owner-id-lease-generation-session-rid-binding-generation",
       commitFence: "binding-generation-actor-object-generation-previous-and-target-owner-generation-session-owner-node-generation",
       sessionOwnerLeaseFence: "owner-id-and-lease-generation-exact-descriptor-and-current-host-lease-read",
       senderAdmissionDeadline: "local-monotonic-deadline-derived-from-last-successful-host-lease-read",
       staleSessionOwnerLease: "protocol-error-no-seal-or-route-switch",
       sourceIngressHold: "no-relocation-specific-record-or-byte-cap-normal-application-lane-transport-deadline-and-cancellation-rules-remain",
       targetTemporaryQueue: "no-relocation-specific-record-or-byte-cap-normal-application-lane-transport-deadline-and-cancellation-rules-remain",
-      commitPhase: "completed-only",
-      targetAdmission: "sealed-until-owner-membership-cas-lifecycle-callbacks-pending-work-and-timer-restore-ordered-queue-merge-temporary-queue-registration-removal-and-atomic-dispatch-switch-then-open-source-cleanup-completed-cas-route-ack-and-steady-normalization-never-gate",
-      abort: "aborted-authority-cas-first-source-sends-matching-sessionRelocationRoute-abort-session-owner-releases-only-the-exact-seal-and-acks-then-source-discards-temporary-queue-restores-source-queue-in-original-order-cleans-reserved-target-space-and-orphan-payload-removes-relocation-progress-and-reopens-admission",
+      commitPhase: "after-target-cas-queue-merge-route-switch-lifecycle-and-dispatch-open",
+      routeControl: "one-way-no-response-command-45-reserved-never-sent-or-accepted",
+      sealTimeout: "3000ms-then-close-physical-session-and-clean-binding-held-messages-and-seal",
+      abort: "before-cutover-source-sends-matching-sessionRelocationRoute-abort-one-way-session-owner-releases-only-exact-seal-and-resubmits-held-to-source-route-target-discards-temporary-queue-and-source-restores-store-payload",
       duplicate: "idempotent-if-identical-else-protocol-error",
-      missingSequence: "do-not-capture-or-commit",
-      missingSealEvidence: "abort-relocation-no-estimated-high-water-or-session-route-fallback",
       sessionOwnerRestart: "stale-node-generation-protocol-error-no-route-switch",
-    }],
-    ["relocation-complete-integrity", {
-      command: "relocationComplete",
-      direction: "source-to-current-target",
-      preconditions: [
-        "all-negotiated-participants-sealed",
-        "target-activation-succeeded",
-        "durable-source-cleanup-state-is-completed-or-sourceLeaseExpired",
-        "authority-phase-activated-or-cleaning-or-completed",
-      ],
-      sourceProof: "completed-requires-authenticated-exact-stored-source-token-sourceLeaseExpired-requires-target-exact-read-of-that-token-as-missing-or-stale",
-      targetEffect: "validate-durable-source-cleanup-state-and-notify-finalization-once",
-      cleanupGate: "target-activation-complete-and-durable-source-cleanup-state-terminal",
-      servingGate: "owner-membership-cas-lifecycle-callbacks-pending-work-and-timer-restore-ordered-queue-merge-temporary-queue-registration-removal-and-atomic-dispatch-switch-before-application-admission-or-ready-publish-completed-cas-and-route-acks-converge-async",
-      retryWindow: "same-target-reprepare-before-committed-from-immutable-relocation-no-target-replacement",
-      afterCompletedFailure: "ordinary-owner-loss-never-replays-retired-relocation",
-      finalization: "after-completed-and-bound-session-route-acks-cas-maintenance-authority-to-steady-without-relocation-as-async-convergence-never-gating-admission-or-ready",
-      resolverProjection: "maintenance-relocation-authority-projects-ready-from-target-admission-open-not-from-steady-normalization",
-      duplicate: "idempotent-by-stable-relocation-id-and-durable-source-cleanup-state-target-attempt-is-only-a-peer-fence",
-      reorder: "hold-until-preconditions",
-      wrongDirection: "protocol-error",
     }],
     ["transport-admission-integrity", {
       admissionType: "service-admission",
@@ -1771,12 +1639,12 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       sourceIdentity: {
         applicationRecordKinds: "node-spot-actor-or-boundSession-closed-union-with-node-lifecycle-generation",
         infrastructureRecordKinds: "node-source-only-with-lifecycle-generation",
-        boundSession: "actor-session-rid-sequence-and-nonzero-binding-generation-all-required",
+        boundSession: "actor-session-rid-and-nonzero-binding-generation-all-required",
         remoteUseFence: "source-node-generation-must-exactly-match-current-admitted-descriptor-and-connection-without-numeric-comparison",
         runtimeLifetimeUnion: "leaseBacked-owner-id-and-lease-generation-or-connectionBound-current-physical-connection-lifetime",
         durableRecord: "leaseBacked-only-all-frozen-sources-carry-exact-owner-id-and-lease-generation",
         preCapturedDrain: "all-connectionBound-accepted-work-must-reach-terminal-before-captured-cas-boundSession-requests-are-not-drained",
-        boundSessionJournal: "pre-seal-accepted-requests-frozen-with-source-fence-operation-identity-and-reply-route-post-seal-requests-relay-from-ingress-hold-after-commit",
+        boundSessionSavedWork: "requests-accepted-before-capture-are-stored-once-with-source-fence-operation-identity-and-reply-route-requests-accepted-after-capture-relay-from-ingress-hold",
         drainFailure: "pre-captured-abort-and-retire-blocked-deadlineExceeded-then-restore-admission",
         connectionBoundFrozenRecord: "forbidden",
       },
@@ -1828,11 +1696,11 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       userSpotMember: "preflight-blocked-relocationDisabled-state-and-admission-unchanged",
       targetOffer: "compatible-initialized-target-entry-spot-id-object-generation-and-kind",
       commit: "newOwner-cas-atomically-updates-owner-authority-owner-generation-and-current-target-entry-spot",
-      callbackOrder: "factory-restore-and-staging-then-owner-entry-membership-commit-then-target-entry-onActorRelocated-then-journal-replay-then-source-entry-onLeaveActor-and-old-entry-membership-durable-cleanup-or-source-crash-durable-cleanup-terminal",
+      callbackOrder: "factory-restore-and-temporary-staging-then-target-only-owner-entry-membership-cas-then-saved-pre-boundary-relay-and-remaining-temporary-queue-merge-then-regular-route-switch-then-target-entry-onActorRelocated-then-dispatch-open-source-entry-onLeaveActor-and-old-entry-membership-cleanup-converge-asynchronously",
       targetCallback: "target-entry-onActorRelocated-after-commit-never-onJoinedActor",
       sourceCleanup: "source-entry-onLeaveActor-and-old-entry-membership-removal-durable-after-replay-as-async-convergence-or-source-crash-durable-cleanup-terminal-substitutes",
       userSpotAggregateCallbacks: "onActorJoin-onJoinedActor-onActorRelocated-onLeaveActor-all-forbidden",
-      targetAdmission: "sealed-until-owner-membership-cas-restore-replay-queue-merge-and-dispatch-switch-then-open-route-acks-and-steady-normalization-converge-async",
+      targetAdmission: "sealed-until-owner-membership-cas-saved-relay-temporary-queue-merge-regular-route-switch-and-target-lifecycle-callback-then-open-session-route-and-steady-normalization-converge-async",
       callbacks: "retry-safe-at-least-once-failure-never-rolls-back-committed-authority",
     }],
     ["stateful-capability-integrity", {
@@ -2178,9 +2046,6 @@ const FIXTURE_ENUMS = {
     [108, "busy"], [109, "notConnected"], [110, "invalidArgument"], [111, "invalidState"],
     [112, "notSupported"], [113, "backpressured"],
   ]),
-  completionDelivery: new Map([
-    [0, "pending"], [1, "terminalReceived"], [2, "alreadyTerminal"], [3, "sourceLeaseExpired"],
-  ]),
   sourceCleanup: new Map([[0, "pending"], [1, "completed"], [2, "sourceLeaseExpired"]]),
 };
 
@@ -2302,19 +2167,6 @@ function decodeApplicationPayload(reader) {
   return decoded;
 }
 
-function decodeParticipantProgress(reader) {
-  const count = reader.u32();
-  const progress = [];
-  for (let index = 0; index < count; index += 1) {
-    progress.push({
-      participantId: reader.u64(),
-      acceptedBoundary: reader.u64(),
-      replayCursor: reader.u64(),
-    });
-  }
-  return progress;
-}
-
 function decodeRelocationApplicationState(reader) {
   const hasState = reader.u8();
   const stateBody = new FixtureReader(reader.bytes64());
@@ -2385,7 +2237,7 @@ function decodePendingTimerTicks(reader) {
   for (let index = 0; index < count; index += 1) {
     ticks.push({
       participantId: reader.u64(),
-      sequence: reader.u64(),
+      order: reader.u64(),
       timerName: reader.text8(),
       deliveryIndex: reader.u64(),
       scheduledIndex: reader.u64(),
@@ -2394,48 +2246,6 @@ function decodePendingTimerTicks(reader) {
     });
   }
   return ticks;
-}
-
-function decodeRequestCompletion(reader) {
-  const operationId = decodeOperationId(reader);
-  const requestSource = {
-    sourceOwnerId: reader.text8(),
-    sourceOwnerLeaseGeneration: reader.u64(),
-    sourceNodeRidUtf8Fixture: reader.text8(),
-    sourceNodeGeneration: reader.u64(),
-  };
-  const participantId = reader.u64();
-  const sequence = reader.u64();
-  const terminalResult = fixtureEnum(FIXTURE_ENUMS.terminalResult, reader.u32(), "terminal result");
-  const failureCode = reader.u32();
-  const deliveryState = fixtureEnum(
-    FIXTURE_ENUMS.completionDelivery,
-    reader.u8(),
-    "completion delivery state",
-  );
-  const hasPayload = reader.u8();
-  if (hasPayload !== 0 && hasPayload !== 1) {
-    throw new Error("completion has invalid payload presence flag");
-  }
-  return {
-    operationId,
-    requestSource,
-    participantId,
-    sequence,
-    terminalResult,
-    failureCode,
-    deliveryState,
-    payload: hasPayload === 1 ? decodeApplicationPayload(reader) : null,
-  };
-}
-
-function decodeCompletionVector(reader) {
-  const count = reader.u32();
-  const completions = [];
-  for (let index = 0; index < count; index += 1) {
-    completions.push(decodeRequestCompletion(reader));
-  }
-  return completions;
 }
 
 function decodeRelocationRootPointer(reader) {
@@ -2560,17 +2370,17 @@ function decodeFrozenRecord(reader) {
   };
 }
 
-function decodeJournal(reader) {
+function decodeSavedWork(reader) {
   const count = reader.u32();
-  const journal = [];
+  const savedWork = [];
   for (let index = 0; index < count; index += 1) {
-    journal.push({
+    savedWork.push({
       participantId: reader.u64(),
-      sequence: reader.u64(),
+      order: reader.u64(),
       record: decodeFrozenRecord(reader),
     });
   }
-  return journal;
+  return savedWork;
 }
 
 function decodeGoldenBody(formatName, bytes) {
@@ -2607,7 +2417,6 @@ function decodeGoldenBody(formatName, bytes) {
         targetNodeGeneration: relocationBody.u64(),
         targetOwnerId: relocationBody.text8(),
         targetOwnerLeaseGeneration: relocationBody.u64(),
-        reservationGeneration: relocationBody.u64(),
         coordinatorOwnerId: relocationBody.text8(),
         coordinatorLeaseGeneration: relocationBody.u64(),
         coordinatorNodeRidUtf8Fixture: relocationBody.text8(),
@@ -2615,9 +2424,6 @@ function decodeGoldenBody(formatName, bytes) {
         phase: fixtureEnum(FIXTURE_ENUMS.relocationPhase, relocationBody.u8(), "relocation phase"),
         relocationRoot: decodeRelocationRootPointer(relocationBody),
         applicationVersion: relocationBody.i64(),
-        participantProgress: decodeParticipantProgress(relocationBody),
-        terminalCompletionCount: relocationBody.u32(),
-        pendingRelayCount: relocationBody.u32(),
         sourceCleanupState: fixtureEnum(
           FIXTURE_ENUMS.sourceCleanup,
           relocationBody.u8(),
@@ -2636,7 +2442,6 @@ function decodeGoldenBody(formatName, bytes) {
         sha256Hex: activationBody.bytesOf(32).toString("hex"),
         encodedSize: activationBody.u32(),
         inboxSequence: activationBody.u64(),
-        replayCursor: activationBody.u64(),
       };
     } else if (hasActivationRecovery !== 0) {
       throw new Error("authority activation recovery state has invalid presence flag");
@@ -2748,11 +2553,9 @@ function decodeGoldenBody(formatName, bytes) {
       object,
       applicationVersion,
       applicationStates: decodeParticipantApplicationStates(reader),
-      participantProgress: decodeParticipantProgress(reader),
-      journal: decodeJournal(reader),
+      savedWork: decodeSavedWork(reader),
       timerRegistrations: decodeTimerRegistrations(reader),
       pendingTimerTicks: decodePendingTimerTicks(reader),
-      terminalCompletions: decodeCompletionVector(reader),
     };
   } else {
     throw new Error(`no golden decoder for ${formatName}`);
@@ -2822,13 +2625,6 @@ function encodeApplicationPayload(writer, payload) {
   writer.u8(1).u32(bytes.length).raw(bytes);
 }
 
-function encodeParticipantProgress(writer, progress) {
-  writer.u32(progress.length);
-  for (const entry of progress) {
-    writer.u64(entry.participantId).u64(entry.acceptedBoundary).u64(entry.replayCursor);
-  }
-}
-
 function encodeRelocationApplicationState(writer, applicationState) {
   const state = new FixtureWriter();
   if (applicationState.hasState) {
@@ -2870,39 +2666,12 @@ function encodePendingTimerTicks(writer, ticks) {
   writer.u32(ticks.length);
   for (const tick of ticks) {
     writer.u64(tick.participantId)
-      .u64(tick.sequence)
+      .u64(tick.order)
       .text8(tick.timerName)
       .u64(tick.deliveryIndex)
       .u64(tick.scheduledIndex)
       .u64(tick.scheduledAtUnixMilliseconds)
       .u64(tick.skippedTicks);
-  }
-}
-
-function encodeRequestCompletion(writer, completion) {
-  encodeOperationId(writer, completion.operationId);
-  writer.text8(completion.requestSource.sourceOwnerId)
-    .u64(completion.requestSource.sourceOwnerLeaseGeneration)
-    .text8(completion.requestSource.sourceNodeRidUtf8Fixture)
-    .u64(completion.requestSource.sourceNodeGeneration)
-    .u64(completion.participantId).u64(completion.sequence)
-    .u32(fixtureEnumValue(FIXTURE_ENUMS.terminalResult, completion.terminalResult, "terminal result"))
-    .u32(completion.failureCode)
-    .u8(fixtureEnumValue(
-      FIXTURE_ENUMS.completionDelivery,
-      completion.deliveryState,
-      "completion delivery state",
-    ))
-    .u8(completion.payload === null ? 0 : 1);
-  if (completion.payload !== null) {
-    encodeApplicationPayload(writer, completion.payload);
-  }
-}
-
-function encodeCompletionVector(writer, completions) {
-  writer.u32(completions.length);
-  for (const completion of completions) {
-    encodeRequestCompletion(writer, completion);
   }
 }
 
@@ -2979,10 +2748,10 @@ function encodeFrozenRecord(writer, record) {
   encodeApplicationPayload(writer, record.body.payload);
 }
 
-function encodeJournal(writer, journal) {
-  writer.u32(journal.length);
-  for (const entry of journal) {
-    writer.u64(entry.participantId).u64(entry.sequence);
+function encodeSavedWork(writer, savedWork) {
+  writer.u32(savedWork.length);
+  for (const entry of savedWork) {
+    writer.u64(entry.participantId).u64(entry.order);
     encodeFrozenRecord(writer, entry.record);
   }
 }
@@ -3012,7 +2781,6 @@ function encodeGoldenBody(formatName, decoded) {
         .u64(decoded.relocationState.targetNodeGeneration)
         .text8(decoded.relocationState.targetOwnerId)
         .u64(decoded.relocationState.targetOwnerLeaseGeneration)
-        .u64(decoded.relocationState.reservationGeneration)
         .text8(decoded.relocationState.coordinatorOwnerId)
         .u64(decoded.relocationState.coordinatorLeaseGeneration)
         .text8(decoded.relocationState.coordinatorNodeRidUtf8Fixture)
@@ -3020,10 +2788,7 @@ function encodeGoldenBody(formatName, decoded) {
         .u8(fixtureEnumValue(FIXTURE_ENUMS.relocationPhase, decoded.relocationState.phase, "relocation phase"));
       encodeRelocationRootPointer(relocation, decoded.relocationState.relocationRoot);
       relocation.i64(decoded.relocationState.applicationVersion);
-      encodeParticipantProgress(relocation, decoded.relocationState.participantProgress);
-      relocation.u32(decoded.relocationState.terminalCompletionCount)
-        .u32(decoded.relocationState.pendingRelayCount)
-        .u8(fixtureEnumValue(
+      relocation.u8(fixtureEnumValue(
           FIXTURE_ENUMS.sourceCleanup,
           decoded.relocationState.sourceCleanupState,
           "source cleanup state",
@@ -3036,8 +2801,7 @@ function encodeGoldenBody(formatName, decoded) {
       activation.text8(decoded.activationRecoveryState.referenceUtf8Fixture)
         .raw(Buffer.from(decoded.activationRecoveryState.sha256Hex, "hex"))
         .u32(decoded.activationRecoveryState.encodedSize)
-        .u64(decoded.activationRecoveryState.inboxSequence)
-        .u64(decoded.activationRecoveryState.replayCursor);
+        .u64(decoded.activationRecoveryState.inboxSequence);
     }
     const activationBytes = activation.finish();
     writer.u8(decoded.activationRecoveryState === null ? 0 : 1)
@@ -3091,11 +2855,9 @@ function encodeGoldenBody(formatName, decoded) {
     encodeRelocationObject(writer, decoded.object);
     writer.i64(decoded.applicationVersion);
     encodeParticipantApplicationStates(writer, decoded.applicationStates);
-    encodeParticipantProgress(writer, decoded.participantProgress);
-    encodeJournal(writer, decoded.journal);
+    encodeSavedWork(writer, decoded.savedWork);
     encodeTimerRegistrations(writer, decoded.timerRegistrations);
     encodePendingTimerTicks(writer, decoded.pendingTimerTicks);
-    encodeCompletionVector(writer, decoded.terminalCompletions);
     return writer.finish();
   }
   if (formatName === "relocation-data-chunk-v1") {
@@ -3168,9 +2930,7 @@ function validateGoldenFixtureSemantics(formatName, decoded, location, fail) {
         || decoded.activationRecoveryState === null
         || !/^[0-9a-f]{64}$/.test(decoded.activationRecoveryState.sha256Hex)
         || decoded.activationRecoveryState.encodedSize <= 0
-        || BigInt(decoded.activationRecoveryState.inboxSequence) === 0n
-        || BigInt(decoded.activationRecoveryState.replayCursor)
-          > BigInt(decoded.activationRecoveryState.inboxSequence)) {
+        || BigInt(decoded.activationRecoveryState.inboxSequence) === 0n) {
       fail(location, "authority golden must exercise Ready Instance cold activation recovery state");
       return;
     }
@@ -3215,8 +2975,6 @@ function validateGoldenFixtureSemantics(formatName, decoded, location, fail) {
   if (formatName !== "relocation-envelope-v1") {
     return;
   }
-  const progress = decoded.participantProgress;
-  validateGoldenOrder(progress, (entry) => [entry.participantId], `${location}.participantProgress`, fail);
   validateGoldenOrder(
     decoded.applicationStates,
     (entry) => [entry.participantId],
@@ -3224,15 +2982,9 @@ function validateGoldenFixtureSemantics(formatName, decoded, location, fail) {
     fail,
   );
   validateGoldenOrder(
-    decoded.journal,
-    (entry) => [entry.participantId, entry.sequence],
-    `${location}.journal`,
-    fail,
-  );
-  validateGoldenOrder(
-    decoded.terminalCompletions,
-    (entry) => [entry.participantId, entry.sequence],
-    `${location}.terminalCompletions`,
+    decoded.savedWork,
+    (entry) => [entry.participantId, entry.order],
+    `${location}.savedWork`,
     fail,
   );
   validateGoldenOrder(
@@ -3246,70 +2998,25 @@ function validateGoldenFixtureSemantics(formatName, decoded, location, fail) {
   );
   validateGoldenOrder(
     decoded.pendingTimerTicks,
-    (entry) => [entry.participantId, entry.sequence],
+    (entry) => [entry.participantId, entry.order],
     `${location}.pendingTimerTicks`,
     fail,
   );
-  const participantIds = progress.map((entry) => entry.participantId);
-  const applicationStateParticipantIds = decoded.applicationStates.map(
-    (entry) => entry.participantId,
-  );
-  if (JSON.stringify(applicationStateParticipantIds) !== JSON.stringify(participantIds)
-      || !decoded.applicationStates.some(
+  if (!decoded.applicationStates.some(
         (entry) => entry.applicationState.hasState
           && entry.applicationState.payloadUtf8Fixture.length === 0,
       )) {
-    fail(location, "relocation golden must carry one application-state entry per participant and exercise an empty Snapshot payload");
+    fail(location, "relocation golden must exercise an empty Snapshot payload");
   }
-  if (decoded.journal.length === 0 || decoded.timerRegistrations.length === 0
-      || decoded.pendingTimerTicks.length === 0
-      || decoded.terminalCompletions.length === 0 || progress.length === 0) {
-    fail(location, "relocation golden must contain progress, a frozen request, logical timer state and a completion");
+  if (decoded.savedWork.length === 0 || decoded.timerRegistrations.length === 0
+      || decoded.pendingTimerTicks.length === 0 || decoded.applicationStates.length === 0) {
+    fail(location, "relocation golden must contain saved work, application state and logical timer state");
     return;
   }
-  for (const entry of decoded.journal) {
-    const participant = progress.find((candidate) => candidate.participantId === entry.participantId);
-    if (!participant || BigInt(entry.sequence) > BigInt(participant.acceptedBoundary)) {
-      fail(location, "journal entry must stay within its participant accepted boundary");
-    }
+  for (const entry of decoded.savedWork) {
     if (entry.record.source.sourceOwnerId.length === 0
         || BigInt(entry.record.source.sourceOwnerLeaseGeneration) === 0n) {
-      fail(location, "every durable journal record must have an exact lease-backed source fence");
-    }
-    if (entry.record.source.sourceKind === "boundSession"
-        && entry.record.operationKind === "actorRequest") {
-      fail(location, "bound-session requests must reach terminal before Captured and cannot enter the journal");
-    }
-  }
-  for (const completion of decoded.terminalCompletions) {
-    const matching = decoded.journal.find((entry) => (
-      entry.participantId === completion.participantId
-      && entry.sequence === completion.sequence
-      && JSON.stringify(entry.record.operationId) === JSON.stringify(completion.operationId)
-      && entry.record.source.sourceOwnerId === completion.requestSource.sourceOwnerId
-      && entry.record.source.sourceOwnerLeaseGeneration
-        === completion.requestSource.sourceOwnerLeaseGeneration
-      && entry.record.source.sourceNodeRidUtf8Fixture
-        === completion.requestSource.sourceNodeRidUtf8Fixture
-      && entry.record.source.sourceNodeGeneration
-        === completion.requestSource.sourceNodeGeneration
-      && entry.record.replyRouteId !== null
-      && entry.record.source.sourceOwnerId.length > 0
-      && BigInt(entry.record.source.sourceOwnerLeaseGeneration) > 0n
-      && (
-        (entry.record.recordKind === "instanceSpotActivation"
-          && entry.record.body.operationKind === "request")
-        || (entry.record.recordKind === "spotRequest"
-          && entry.record.operationKind === "spotRequest")
-      )
-    ));
-    if (!matching) {
-      fail(location, "terminal completion must match an accepted request record");
-    }
-    if (!["pending", "terminalReceived", "alreadyTerminal", "sourceLeaseExpired"].includes(
-      completion.deliveryState,
-    )) {
-      fail(location, "terminal completion must carry a closed monotonic delivery state");
+      fail(location, "every saved work record must have an exact lease-backed source fence");
     }
   }
   for (const registration of decoded.timerRegistrations) {
@@ -3321,35 +3028,33 @@ function validateGoldenFixtureSemantics(formatName, decoded, location, fail) {
     }
   }
   for (const tick of decoded.pendingTimerTicks) {
-    const participant = progress.find((candidate) => candidate.participantId === tick.participantId);
     const registration = decoded.timerRegistrations.find(
       (candidate) => candidate.participantId === tick.participantId
         && candidate.name === tick.timerName,
     );
-    if (!participant || BigInt(tick.sequence) > BigInt(participant.acceptedBoundary)
-        || !registration) {
-      fail(location, "pending timer tick must reference a registered timer within its participant boundary");
+    if (!registration) {
+      fail(location, "pending timer tick must reference a registered timer for the same participant");
     }
   }
   const mergedQueue = [
-    ...decoded.journal.map((entry) => ({
+    ...decoded.savedWork.map((entry) => ({
       participantId: entry.participantId,
-      sequence: entry.sequence,
+      order: entry.order,
     })),
     ...decoded.pendingTimerTicks.map((entry) => ({
       participantId: entry.participantId,
-      sequence: entry.sequence,
+      order: entry.order,
     })),
   ].sort((left, right) => compareUnsignedTuple(
-    [left.participantId, left.sequence],
-    [right.participantId, right.sequence],
+    [left.participantId, left.order],
+    [right.participantId, right.order],
   ));
   for (let index = 1; index < mergedQueue.length; index += 1) {
     if (compareUnsignedTuple(
-      [mergedQueue[index - 1].participantId, mergedQueue[index - 1].sequence],
-      [mergedQueue[index].participantId, mergedQueue[index].sequence],
+      [mergedQueue[index - 1].participantId, mergedQueue[index - 1].order],
+      [mergedQueue[index].participantId, mergedQueue[index].order],
     ) === 0) {
-      fail(location, "journal and pending timer tick cannot reuse one participant sequence");
+      fail(location, "saved work and pending timer tick cannot reuse one participant order");
     }
   }
 }
@@ -3519,11 +3224,11 @@ function runRelocationLogicalFixtureSelfTests(schema, schemaPath) {
   const fixturePath = path.resolve(path.dirname(schemaPath), profile.goldenFixture);
   const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
   const tests = [
-    ["journal and timer reuse participant sequence", (candidate) => {
-      candidate.decoded.pendingTimerTicks[0].sequence = candidate.decoded.journal[0].sequence;
+    ["saved work and timer reuse participant order", (candidate) => {
+      candidate.decoded.pendingTimerTicks[0].order = candidate.decoded.savedWork[0].order;
     }],
-    ["participant application state omitted", (candidate) => {
-      candidate.decoded.applicationStates.pop();
+    ["participant application states omitted", (candidate) => {
+      candidate.decoded.applicationStates = [];
     }],
     ["participant application states out of order", (candidate) => {
       candidate.decoded.applicationStates.reverse();
@@ -3957,25 +3662,23 @@ function validateRelocationStateMachine(machine, commands, types, fail) {
   const expectedCommitOrder = [
     {
       phase: "preparing",
-      after: ["local-admission-seal", "accepted-boundaries-fixed"],
+      after: ["local-admission-seal", "current-application-turn-finished"],
       relocation: "absent",
-      targetReservation: "absent",
     },
     {
       phase: "captured",
       after: ["immutable-relocation-put"],
       relocation: "present",
-      targetReservation: "absent",
     },
     {
       phase: "prepared",
       after: [
-        "relocation-reserved-ack-validated",
         "target-factory-restore-complete",
-        "journal-timer-staging-complete",
+        "temporary-queue-installed",
+        "saved-work-and-timer-staging-complete",
+        "relocation-ready-reply-sent",
       ],
       relocation: "present",
-      targetReservation: "present",
     },
   ];
   if (JSON.stringify(machine.authorityCommitOrder) !== JSON.stringify(expectedCommitOrder)) {
@@ -4053,20 +3756,8 @@ function validateRelocationStateMachine(machine, commands, types, fail) {
         abort: { senderRoles: ["source"], phases: ["aborted"] },
       },
       duplicate: "idempotent-if-identical-else-protocol-error",
-      reorder: "commit-after-replay",
-      loss: "retransmit-until-routed-ack",
-    }],
-    ["sessionRelocationRouted", {
-      command: "sessionRelocationRouted",
-      senderKind: "sessionOwner",
-      phases: ["aborted", "completed"],
-      actionRules: {
-        commit: { phases: ["completed"] },
-        abort: { phases: ["aborted"] },
-      },
-      duplicate: "idempotent-if-identical-else-protocol-error",
-      reorder: "hold-until-matching-route-action",
-      loss: "retransmit-until-target-ready",
+      reorder: "commit-after-target-dispatch-open-abort-before-cutover-only",
+      loss: "no-reply-session-seal-timeout-closes-session",
     }],
     ["relocationPrepare", {
       command: "relocationPrepare",
@@ -4078,35 +3769,27 @@ function validateRelocationStateMachine(machine, commands, types, fail) {
     }],
     ["relocationReady", {
       command: "relocationReady",
-      senderRoles: ["source", "target"],
-      phases: ["captured", "prepared"],
-      duplicate: "idempotent-if-identical-else-protocol-error",
-      reorder: "hold-until-matching-relocationPrepare-or-target-offer",
-      loss: "retransmit-until-matching-handshake-response-or-phase-advance-or-deadline",
-    }],
-    ["relocationReserved", {
-      command: "relocationReserved",
       senderRoles: ["target"],
-      phases: ["captured", "prepared"],
+      phases: ["prepared"],
       duplicate: "idempotent-if-identical-else-protocol-error",
-      reorder: "hold-until-matching-source-accept",
-      loss: "retransmit-until-prepared-or-deadline",
+      reorder: "reply-only-to-matching-relocationPrepare",
+      loss: "request-reply-transport-semantics-until-deadline",
     }],
     ["relocationData", {
       command: "relocationData",
       senderRoles: ["source"],
       phases: ["prepared", "committed", "activating"],
-      duplicate: "idempotent-by-stable-relocation-id-target-attempt-generation-participant-sequence",
-      reorder: "stage-by-participant-sequence",
-      loss: "recover-from-relocation-or-retransmit",
+      duplicate: "same-payload-may-be-accepted-twice-no-hidden-delivery-deduplication",
+      reorder: "append-to-pre-boundary-or-post-boundary-temporary-span-in-arrival-order",
+      loss: "normal-ordered-transport-only-no-per-record-ack",
     }],
-    ["relocationAck", {
-      command: "relocationAck",
-      senderRoles: ["target"],
+    ["relocationCutover", {
+      command: "relocationCutover",
+      senderRoles: ["source"],
       phases: ["prepared", "committed", "activating"],
-      duplicate: "keep-monotonic-high-water-by-stable-relocation-id-target-attempt-generation-participant",
-      reorder: "ignore-lower-high-water",
-      loss: "data-retransmit-regenerates-ack",
+      duplicate: "late-or-duplicate-warning-no-state-change",
+      reorder: "same-connection-after-current-relocationData-prefix",
+      loss: "no-reply-target-proceeds-1000ms-after-ready-reply",
     }],
     ["replyRelay", {
       command: "replyRelay",
@@ -4128,33 +3811,17 @@ function validateRelocationStateMachine(machine, commands, types, fail) {
           phases: ["committed", "activating", "activated", "cleaning"],
           duplicate: "terminal-once-by-stable-relocation-id-exact-request-source-fence-and-operation-id-target-attempt-is-peer-fence-only",
           reorder: "hold-until-operation-known",
-          loss: "recover-from-durable-completion",
+          loss: "source-operation-deadline-only-no-relocation-replay-restart",
         },
       ],
-    }],
-    ["relocationSeal", {
-      command: "relocationSeal",
-      senderRoles: ["source", "target"],
-      phases: ["prepared", "committed", "activating"],
-      duplicate: "idempotent-if-identical-else-protocol-error",
-      reorder: "hold-until-participant-boundary-reached",
-      loss: "retransmit-until-deadline",
     }],
     ["replyRelayAck", {
       command: "replyRelayAck",
       senderKind: "requestSource",
       phases: ["committed", "activating", "activated", "cleaning"],
       duplicate: "idempotent-by-stable-relocation-id-exact-request-source-fence-operation-id-reply-route-id-and-status",
-      reorder: "hold-until-matching-durable-completion-or-retransmit-causes-source-reack",
+      reorder: "hold-until-matching-live-reply-relay-or-source-operation-timeout",
       loss: "target-retransmits-terminal-until-ack-or-exact-request-source-owner-lease-expiry",
-    }],
-    ["relocationComplete", {
-      command: "relocationComplete",
-      senderRoles: ["source"],
-      phases: ["activated", "cleaning", "completed"],
-      duplicate: "idempotent-by-stable-relocation-id-target-attempt-generation-and-source-cleanup-state",
-      reorder: "hold-until-activated-sealed-and-durable-source-cleanup-terminal",
-      loss: "recover-from-durable-authority",
     }],
   ]);
   machine.commandRules.forEach((rule, index) => {
@@ -4171,9 +3838,9 @@ function validateRelocationStateMachine(machine, commands, types, fail) {
     }
   });
   for (const command of [
-    "sessionRelocationSeal", "sessionRelocationSealed", "sessionRelocationRoute", "sessionRelocationRouted",
-    "relocationPrepare", "relocationReady", "relocationReserved", "relocationData", "relocationAck",
-    "replyRelay", "replyRelayAck", "relocationSeal", "relocationComplete",
+    "sessionRelocationSeal", "sessionRelocationSealed", "sessionRelocationRoute",
+    "relocationPrepare", "relocationReady", "relocationData", "relocationCutover",
+    "replyRelay", "replyRelayAck",
   ]) {
     if (!ruleCommands.has(command)) {
       fail("$.relocationStateMachine.commandRules", `missing state rule for ${command}`);
@@ -4195,6 +3862,33 @@ function validateServiceInvariants(schema, types, fail) {
     }
   };
   const commands = new Map(schema.commands.map((command) => [command.name, command]));
+  for (const [name, id] of [
+    ["relocationReady", 30],
+    ["relocationData", 31],
+    ["relocationCutover", 34],
+    ["relocationPrepare", 40],
+    ["sessionRelocationSeal", 42],
+    ["sessionRelocationSealed", 43],
+    ["sessionRelocationRoute", 44],
+  ]) {
+    const command = commands.get(name);
+    if (command?.id !== id
+        || command?.domain !== "infrastructure"
+        || command?.payload !== "forbidden"
+        || JSON.stringify(command?.allowedFlags) !== "[]"
+        || JSON.stringify(command?.requiredFlags) !== "[]") {
+      fail("$.commands", `${name} must use fixed infrastructure command ID ${id} without flags or payload`);
+    }
+  }
+  const reservedSingletons = new Set(
+    (schema.reservedCommandRanges ?? [])
+      .filter((range) => range.first === range.last)
+      .map((range) => range.first),
+  );
+  if (JSON.stringify([...reservedSingletons].sort((left, right) => left - right))
+      !== JSON.stringify([32, 35, 41, 45])) {
+    fail("$.reservedCommandRanges", "must reserve removed relocation command IDs 32, 35, 41 and 45 as singletons");
+  }
   const obsoleteFenceNames = new Set([
     "transactionGeneration", "authorityTransactionGeneration", "membershipEpoch",
     "activationEpoch", "locationGeneration", "sourceConnectionClosed", "ownerGeneration",
@@ -4261,23 +3955,13 @@ function validateServiceInvariants(schema, types, fail) {
       || JSON.stringify(rejectReason.values) !== JSON.stringify(expectedRejectReasons)) {
     fail("$.types", "admission reject reason must use the stable closed v1 table");
   }
-  const expectedDeliveryStates = [
-    { name: "pending", value: 0 },
-    { name: "terminalReceived", value: 1 },
-    { name: "alreadyTerminal", value: 2 },
-    { name: "sourceLeaseExpired", value: 3 },
-  ];
-  if (JSON.stringify(types.get("completion-delivery-state")?.values)
-      !== JSON.stringify(expectedDeliveryStates)) {
-    fail("$.types", "completion delivery state must exclude physical connection closure and remain monotonic");
-  }
   if (JSON.stringify(types.get("reply-relay-ack-status")?.values) !== JSON.stringify([
     { name: "terminalReceived", value: 1 },
     { name: "alreadyTerminal", value: 2 },
   ])) {
     fail("$.types", "reply relay acknowledgement status must use the closed two-value terminal table");
   }
-  for (const name of ["relocationData", "relocationAck", "relocationSeal", "relocationComplete"]) {
+  for (const name of ["relocationReady", "relocationData", "relocationCutover", "relocationPrepare"]) {
     const body = commands.get(name)?.body ?? [];
     if (body[0]?.name !== "relocation" || body[1]?.name !== "targetAttemptGeneration"
         || body[1]?.$ref !== "nonzero-u64") {
@@ -4285,9 +3969,8 @@ function validateServiceInvariants(schema, types, fail) {
     }
   }
   for (const name of [
-    "relocationReady", "relocationData", "relocationAck", "relocationSeal", "relocationComplete",
-    "relocationPrepare", "relocationReserved", "sessionRelocationSeal", "sessionRelocationSealed",
-    "sessionRelocationRoute", "sessionRelocationRouted", "replyRelayAck",
+    "relocationReady", "relocationData", "relocationCutover", "relocationPrepare",
+    "sessionRelocationSeal", "sessionRelocationSealed", "sessionRelocationRoute", "replyRelayAck",
   ]) {
     const coordinator = commands.get(name)?.body?.find((field) => field.name === "coordinator");
     if (coordinator?.$ref !== "relocation-coordinator-fence") {
@@ -4295,7 +3978,7 @@ function validateServiceInvariants(schema, types, fail) {
     }
   }
   for (const name of [
-    "relocationData", "relocationAck", "relocationSeal", "relocationComplete",
+    "relocationReady", "relocationData", "relocationCutover",
     "sessionRelocationSeal", "sessionRelocationRoute",
   ]) {
     const senderRole = commands.get(name)?.body?.find((field) => field.name === "senderRole");
@@ -4308,34 +3991,16 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "targetAttemptGeneration", $ref: "nonzero-u64" },
     { name: "coordinator", $ref: "relocation-coordinator-fence" },
     { name: "senderRole", $ref: "relocation-role" },
-    { name: "participantId", $ref: "nonzero-u64" },
-    { name: "sequence", $ref: "nonzero-u64" },
+    { name: "object", $ref: "relocation-object-identity" },
     { name: "record", $ref: "frozen-record" },
-  ], "$.commands", "relocationData must carry its sender and current coordinator authorization fence");
-  requireFields(commands.get("relocationAck")?.body, [
+  ], "$.commands", "relocationData must carry one post-capture ingress record and its exact relocation fences");
+  requireFields(commands.get("relocationCutover")?.body, [
     { name: "relocation", $ref: "relocation-id" },
     { name: "targetAttemptGeneration", $ref: "nonzero-u64" },
     { name: "coordinator", $ref: "relocation-coordinator-fence" },
     { name: "senderRole", $ref: "relocation-role" },
-    { name: "participantId", $ref: "nonzero-u64" },
-    { name: "highWater", $ref: "ordinal-or-zero" },
-  ], "$.commands", "relocationAck must carry its target role and current coordinator fence");
-  requireFields(commands.get("relocationSeal")?.body, [
-    { name: "relocation", $ref: "relocation-id" },
-    { name: "targetAttemptGeneration", $ref: "nonzero-u64" },
-    { name: "coordinator", $ref: "relocation-coordinator-fence" },
-    { name: "senderRole", $ref: "relocation-role" },
-    { name: "response", $ref: "bool8" },
-    { name: "participants", $ref: "participant-terminal-vector" },
-  ], "$.commands", "relocationSeal must carry its sender and current coordinator fence");
-  requireFields(commands.get("relocationComplete")?.body, [
-    { name: "relocation", $ref: "relocation-id" },
-    { name: "targetAttemptGeneration", $ref: "nonzero-u64" },
-    { name: "coordinator", $ref: "relocation-coordinator-fence" },
-    { name: "senderRole", $ref: "relocation-role" },
-    { name: "source", $ref: "relocation-source-cleanup-fence" },
-    { name: "sourceCleanupState", $ref: "source-cleanup-state" },
-  ], "$.commands", "relocationComplete must carry its source or coordinator authorization");
+    { name: "object", $ref: "relocation-object-identity" },
+  ], "$.commands", "relocationCutover must be one fenced source-to-target boundary without ACK or HWM state");
   requireFields(commands.get("replyRelayAck")?.body, [
     { name: "relocation", $ref: "relocation-id" },
     { name: "coordinator", $ref: "relocation-coordinator-fence" },
@@ -4945,13 +4610,6 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "currentMembership", $ref: "spot-membership" },
     { name: "currentAuthorityOwnerGeneration", $ref: "nonzero-u64" },
   ], "$.commands", "actorJoined must carry canonical memberships and the current authority owner generation");
-  const participant = types.get("participant-entry");
-  requireFields(participant?.fields, [
-    { name: "participantId", $ref: "nonzero-u64" },
-    { name: "identity", $ref: "relocation-participant-identity" },
-    { name: "allowanceMessages", $ref: "ordinal-or-zero" },
-    { name: "allowanceBytes", $ref: "ordinal-or-zero" },
-  ], "$.types", "negotiated participant must use its closed mailbox or bound-session identity");
   requireFields(types.get("optional-bound-session-tail")?.fields, [
     { name: "sourceSessionRid", $ref: "rid" },
     { name: "sourceBindingGeneration", $ref: "nonzero-u64" },
@@ -4960,41 +4618,23 @@ function validateServiceInvariants(schema, types, fail) {
   requireFields(commands.get("relocationPrepare")?.body, [
     { name: "relocation", $ref: "relocation-id" },
     { name: "targetAttemptGeneration", $ref: "nonzero-u64" },
-    { name: "roundKind", $ref: "relocation-reservation-round-kind" },
     { name: "coordinator", $ref: "relocation-coordinator-fence" },
-    { name: "candidate", $ref: "relocation-reservation-candidate" },
+    { name: "target", $ref: "relocation-target-fence" },
     { name: "initiatorRole", $ref: "relocation-role" },
     { name: "object", $ref: "relocation-object-identity" },
     { name: "sourceNodeRid", $ref: "rid" },
     { name: "sourceNodeGeneration", $ref: "nonzero-u64" },
-    { name: "requiredMessages", $ref: "ordinal-or-zero" },
-    { name: "requiredBytes", $ref: "ordinal-or-zero" },
-    { name: "requirements", $ref: "participant-vector" },
     { name: "relocationRoot", $ref: "relocation-root-pointer" },
     { name: "applicationVersion", $ref: "application-version" },
-  ], "$.commands", "relocationPrepare must carry the exact sealed inventory and durable relocation pointer");
+  ], "$.commands", "relocationPrepare must carry the exact target, object and durable relocation pointer without capacity negotiation");
   requireFields(commands.get("relocationReady")?.body, [
     { name: "relocation", $ref: "relocation-id" },
     { name: "targetAttemptGeneration", $ref: "nonzero-u64" },
-    { name: "roundKind", $ref: "relocation-reservation-round-kind" },
     { name: "coordinator", $ref: "relocation-coordinator-fence" },
-    { name: "candidate", $ref: "relocation-reservation-candidate" },
+    { name: "target", $ref: "relocation-target-fence" },
     { name: "object", $ref: "relocation-object-identity" },
-    { name: "role", $ref: "relocation-role" },
-    { name: "offeredMessages", $ref: "ordinal-or-zero" },
-    { name: "offeredBytes", $ref: "ordinal-or-zero" },
-    { name: "participants", $ref: "participant-vector" },
-    { name: "extension", $ref: "relocation-extension" },
-  ], "$.commands", "relocationReady must bind offer and acceptance to one target attempt");
-  requireFields(commands.get("relocationReserved")?.body, [
-    { name: "relocation", $ref: "relocation-id" },
-    { name: "targetAttemptGeneration", $ref: "nonzero-u64" },
-    { name: "roundKind", $ref: "relocation-reservation-round-kind" },
-    { name: "coordinator", $ref: "relocation-coordinator-fence" },
-    { name: "candidate", $ref: "relocation-reservation-candidate" },
-    { name: "reservationGeneration", $ref: "nonzero-u64" },
-    { name: "participants", $ref: "participant-vector" },
-  ], "$.commands", "relocationReserved must acknowledge the exact accepted participant reservation");
+    { name: "senderRole", $ref: "relocation-role" },
+  ], "$.commands", "relocationReady must be the exact target reply after restore and temporary-queue installation");
   const sessionCommandFields = {
     sessionRelocationSeal: [
       { name: "relocation", $ref: "relocation-id" },
@@ -5018,7 +4658,6 @@ function validateServiceInvariants(schema, types, fail) {
       { name: "sessionOwnerLeaseGeneration", $ref: "nonzero-u64" },
       { name: "sessionRid", $ref: "rid" },
       { name: "bindingGeneration", $ref: "nonzero-u64" },
-      { name: "lastAcceptedSessionSequence", $ref: "ordinal-or-zero" },
     ],
     sessionRelocationRoute: [
       { name: "relocation", $ref: "relocation-id" },
@@ -5032,21 +4671,6 @@ function validateServiceInvariants(schema, types, fail) {
       { name: "sessionRid", $ref: "rid" },
       { name: "bindingGeneration", $ref: "nonzero-u64" },
       { name: "route", $ref: "session-relocation-route-update" },
-    ],
-    sessionRelocationRouted: [
-      { name: "relocation", $ref: "relocation-id" },
-      { name: "coordinator", $ref: "relocation-coordinator-fence" },
-      { name: "actor", $ref: "actor-ref" },
-      { name: "sessionOwnerNodeRid", $ref: "rid" },
-      { name: "sessionOwnerNodeGeneration", $ref: "nonzero-u64" },
-      { name: "sessionOwnerId", $ref: "text8" },
-      { name: "sessionOwnerLeaseGeneration", $ref: "nonzero-u64" },
-      { name: "sessionRid", $ref: "rid" },
-      { name: "bindingGeneration", $ref: "nonzero-u64" },
-      { name: "action", $ref: "session-relocation-route-action" },
-      { name: "result", $ref: "session-relocation-route-result" },
-      { name: "currentAuthorityOwnerGeneration", $ref: "nonzero-u64" },
-      { name: "lastAcceptedSessionSequence", $ref: "ordinal-or-zero" },
     ],
   };
   for (const [commandName, fields] of Object.entries(sessionCommandFields)) {
@@ -5062,78 +4686,29 @@ function validateServiceInvariants(schema, types, fail) {
         { name: "targetAuthorityOwnerGeneration", $ref: "nonzero-u64" },
         { name: "targetNodeRid", $ref: "rid" },
         { name: "targetNodeGeneration", $ref: "nonzero-u64" },
-        { name: "replayedHighWater", $ref: "ordinal-or-zero" },
       ])
       || JSON.stringify(fieldShape(sessionAbort?.fields)) !== JSON.stringify([
         { name: "currentAuthorityOwnerGeneration", $ref: "nonzero-u64" },
       ])) {
     fail("$.types", "session relocation route must be a closed commit or abort update");
   }
-  const participantIdentity = types.get("relocation-participant-identity");
-  const mailboxIdentity = participantIdentity?.cases?.find(
-    (entry) => entry.when?.participantKind === "objectMailbox",
-  );
-  const sessionIdentity = participantIdentity?.cases?.find(
-    (entry) => entry.when?.participantKind === "boundSession",
-  );
-  if (participantIdentity?.bodyLengthType?.$ref !== "u16"
-      || JSON.stringify(mailboxIdentity?.fields) !== "[]"
-      || JSON.stringify(fieldShape(sessionIdentity?.fields)) !== JSON.stringify([
-        { name: "sessionOwnerNodeRid", $ref: "rid" },
-        { name: "sessionOwnerNodeGeneration", $ref: "nonzero-u64" },
-        { name: "sessionOwnerId", $ref: "text8" },
-        { name: "sessionOwnerLeaseGeneration", $ref: "nonzero-u64" },
-        { name: "sessionRid", $ref: "rid" },
-        { name: "bindingGeneration", $ref: "nonzero-u64" },
-        { name: "lastAcceptedSessionSequence", $ref: "ordinal-or-zero" },
-      ])) {
-    fail("$.types", "relocation participant identity must distinguish object mailbox and bound session");
-  }
-
-  const expectedParticipantConstraints = [
-    { kind: "sorted", field: "participantId", comparison: "unsigned-wire-value" },
-    { kind: "unique", field: "participantId" },
-  ];
-  for (const name of [
-    "participant-vector", "participant-terminal-vector", "participant-progress-vector",
-  ]) {
-    const vector = types.get(name);
-    if (vector?.maximumItems?.$bound !== "relocationResourceParticipants"
-        || JSON.stringify(vector.constraints) !== JSON.stringify(expectedParticipantConstraints)) {
-      fail("$.types", `${name} must use the common bounded, sorted and unique participant contract`);
-    }
-  }
-  const completions = types.get("request-completion-vector");
-  const expectedCompletionConstraints = [
+  const expectedSavedWorkConstraints = [
     {
       kind: "sorted",
-      fields: ["participantId", "sequence"],
+      fields: ["participantId", "order"],
       comparison: "unsigned-wire-value",
     },
-    { kind: "unique", fields: ["participantId", "sequence"] },
-    {
-      kind: "unique",
-      fields: [
-        "requestSource.sourceOwnerId",
-        "requestSource.sourceOwnerLeaseGeneration",
-        "requestSource.sourceNodeRid",
-        "requestSource.sourceNodeGeneration",
-        "operationId.high",
-        "operationId.low",
-      ],
-    },
+    { kind: "unique", fields: ["participantId", "order"] },
   ];
-  if (completions?.maximumItems?.$bound !== "journalRecordCount"
-      || JSON.stringify(completions.constraints) !== JSON.stringify(expectedCompletionConstraints)) {
-    fail("$.types", "terminal completion vector must use the common bound and canonical operation order");
+  for (const name of ["saved-work-vector", "relocation-pending-timer-tick-vector"]) {
+    const vector = types.get(name);
+    if (hasOwn(vector ?? {}, "maximumItems")
+        || JSON.stringify(vector?.constraints) !== JSON.stringify(expectedSavedWorkConstraints)) {
+      fail("$.types", `${name} must use uncapped canonical participant/order sorting and uniqueness`);
+    }
   }
 
-  const extensionFields = new Set((types.get("relocation-extension")?.fields ?? []).map((field) => field.name));
-  if (!extensionFields.has("participantProgress")
-      || extensionFields.has("acceptedBoundary") || extensionFields.has("replayCursor")) {
-    fail("$.types", "relocation extension must use participant progress vector boundaries");
-  }
-  for (const name of ["descriptor-extension", "relocation-extension"]) {
+  for (const name of ["descriptor-extension"]) {
     const extension = types.get(name);
     if (extension?.kind !== "tlv32" || extension?.totalLengthType?.$ref !== "u32"
         || extension?.fieldLengthType?.$ref !== "u32") {
@@ -5208,12 +4783,12 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "coordinatorNodeGeneration", $ref: "nonzero-u64" },
     { name: "expectedAuthorityStoreVersion", $ref: "authority-store-version" },
   ], "$.types", "relocation coordinator fence must bind lease, admitted node and authority version");
-  requireFields(types.get("relocation-reservation-candidate")?.fields, [
+  requireFields(types.get("relocation-target-fence")?.fields, [
     { name: "targetNodeRid", $ref: "rid" },
     { name: "targetNodeGeneration", $ref: "nonzero-u64" },
     { name: "targetOwnerId", $ref: "text8" },
     { name: "targetOwnerLeaseGeneration", $ref: "nonzero-u64" },
-  ], "$.types", "relocation reservation candidate must carry the admitted target lifecycle identity");
+  ], "$.types", "relocation target fence must carry the admitted target lifecycle identity");
 
   requireFields(types.get("authority-payload-v1")?.fields, [
     { name: "operationKind", $ref: "authority-operation-kind" },
@@ -5243,7 +4818,6 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "targetNodeGeneration", $ref: "ordinal-or-zero" },
     { name: "targetOwnerId", $ref: "optional-text8" },
     { name: "targetOwnerLeaseGeneration", $ref: "ordinal-or-zero" },
-    { name: "reservationGeneration", $ref: "ordinal-or-zero" },
     { name: "coordinatorOwnerId", $ref: "text8" },
     { name: "coordinatorLeaseGeneration", $ref: "nonzero-u64" },
     { name: "coordinatorNodeRid", $ref: "rid" },
@@ -5251,9 +4825,6 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "phase", $ref: "relocation-phase" },
     { name: "relocationRoot", $ref: "relocation-root-pointer" },
     { name: "applicationVersion", $ref: "application-version" },
-    { name: "participantProgress", $ref: "participant-progress-vector" },
-    { name: "terminalCompletionCount", $ref: "u32" },
-    { name: "pendingRelayCount", $ref: "u32" },
     { name: "sourceCleanupState", $ref: "source-cleanup-state" },
   ], "$.types", "early relocation phases must allow an absent target fence until Prepared");
   const activationRecovery = types.get("authority-activation-recovery-state");
@@ -5265,15 +4836,13 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "sha256", $ref: "sha256-bytes" },
     { name: "encodedSize", $ref: "creation-request-size" },
     { name: "inboxSequence", $ref: "nonzero-u64" },
-    { name: "replayCursor", $ref: "ordinal-or-zero" },
-  ], "$.types", "Ready Instance activation recovery must preserve exact root and cursor");
+  ], "$.types", "Ready Instance activation recovery must preserve its exact root");
   if (activationRecovery?.presence
         !== "ready-instance-spot-cold-activation-only-and-forbidden-for-actor-entry-user-closing-relocating-or-coldActivating-authority"
       || activationRecovery?.release
-        !== "expected-store-version-preserve-cas-only-after-durable-first-handler-terminal-completion-and-replay-cursor-equals-inbox-sequence-before-relocation-store-delete"
-      || activationRecovery?.constraints?.[0]?.rule
-        !== "replayCursor-less-than-or-equal-to-inboxSequence") {
-    fail("$.types", "activation recovery pointer must be Ready Instance-only and release only after durable terminal completion and cursor update");
+        !== "expected-store-version-preserve-cas-only-after-durable-first-handler-terminal-before-relocation-store-delete"
+      || (activationRecovery?.constraints ?? []).length !== 0) {
+    fail("$.types", "activation recovery pointer must be Ready Instance-only without a replay cursor");
   }
 
   const authorityOperation = types.get("authority-operation-kind");
@@ -5379,17 +4948,6 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "failureCode", $ref: "framework-error-code" },
     { name: "tail", $ref: "request-specific-tail" },
   ], "$.commands", "reply must carry the closed terminal result and Framework failure code");
-  requireFields(types.get("request-completion-entry")?.fields, [
-    { name: "operationId", $ref: "operation-id" },
-    { name: "requestSource", $ref: "request-source-fence" },
-    { name: "participantId", $ref: "nonzero-u64" },
-    { name: "sequence", $ref: "nonzero-u64" },
-    { name: "terminalResult", $ref: "request-terminal-result" },
-    { name: "failureCode", $ref: "framework-error-code" },
-    { name: "deliveryState", $ref: "completion-delivery-state" },
-    { name: "hasPayload", $ref: "bool8" },
-    { name: "payload", $ref: "application-payload-envelope-v1" },
-  ], "$.types", "durable completion must use the stable Framework failure code");
   requireFields(types.get("relocation-control-data")?.fields, [
     { name: "phase", $ref: "relocation-phase" },
     { name: "role", $ref: "relocation-role" },
@@ -5427,12 +4985,10 @@ function validateServiceInvariants(schema, types, fail) {
       name: "applicationStates",
       $ref: "relocation-participant-application-state-vector",
     },
-    { name: "participantProgress", $ref: "participant-progress-vector" },
-    { name: "journal", $ref: "journal-vector" },
+    { name: "savedWork", $ref: "saved-work-vector" },
     { name: "timerRegistrations", $ref: "relocation-timer-registration-vector" },
     { name: "pendingTimerTicks", $ref: "relocation-pending-timer-tick-vector" },
-    { name: "terminalCompletions", $ref: "request-completion-vector" },
-  ], "$.types", "Relocation envelope must carry deterministic queue, timer and completion state");
+  ], "$.types", "Relocation envelope must carry deterministic queue and timer state");
   requireFields(types.get("relocation-manifest-v1")?.fields, [
     { name: "logicalFormatVersion", $ref: "u8", constant: 1 },
     { name: "totalLength", $ref: "relocation-logical-length" },
@@ -5478,7 +5034,7 @@ function validateServiceInvariants(schema, types, fail) {
   }
   requireFields(types.get("relocation-pending-timer-tick")?.fields, [
     { name: "participantId", $ref: "nonzero-u64" },
-    { name: "sequence", $ref: "nonzero-u64" },
+    { name: "order", $ref: "nonzero-u64" },
     { name: "timerName", $ref: "text8" },
     { name: "deliveryIndex", $ref: "nonzero-u64" },
     { name: "scheduledIndex", $ref: "nonzero-u64" },
@@ -5600,16 +5156,12 @@ function validateServiceInvariants(schema, types, fail) {
     fail("$.types", "frozen Instance activation must not copy the source-owned operation timeout");
   }
   for (const [typeName, fieldName] of [
-    ["journal-entry", "sequence"],
-    ["request-completion-entry", "sequence"],
+    ["saved-work-entry", "order"],
+    ["relocation-pending-timer-tick", "order"],
   ]) {
     if (types.get(typeName)?.fields?.find((field) => field.name === fieldName)?.$ref !== "nonzero-u64") {
-      fail("$.types", `${typeName}.${fieldName} must start at one; zero means no record only in progress values`);
+      fail("$.types", `${typeName}.${fieldName} must start at one and must never wrap`);
     }
-  }
-  if (commands.get("relocationData")?.body?.find((field) => field.name === "sequence")?.$ref
-      !== "nonzero-u64") {
-    fail("$.commands", "relocationData sequence must be non-zero and must never wrap");
   }
   for (const type of types.values()) {
     if (type.kind === "struct") {
@@ -6439,7 +5991,7 @@ function runSelfTests(schema) {
       candidate.bounds.find((bound) => bound.name === "packetNameBytes").value = 256;
     }],
     ["vector maximum exceeds count capacity", (candidate) => {
-      candidate.bounds.find((bound) => bound.name === "journalRecordCount").value = "4294967296";
+      candidate.bounds.find((bound) => bound.name === "maintenanceAggregateParticipants").value = "4294967296";
     }],
     ["sorted vector references missing field", (candidate) => {
       const vector = candidate.types.find((type) => type.name === "stateful-capability-vector");
@@ -6465,18 +6017,18 @@ function runSelfTests(schema) {
       delete candidate.commands.find((entry) => entry.name === "nodeSend").payloadType;
     }],
     ["relocation generation omitted", (candidate) => {
-      const command = candidate.commands.find((entry) => entry.name === "relocationAck");
+      const command = candidate.commands.find((entry) => entry.name === "relocationData");
       command.body.splice(1, 1);
     }],
     ["opaque frozen kind data restored", (candidate) => {
       const frozen = candidate.types.find((type) => type.name === "frozen-record");
       frozen.fields.push({ name: "kindData", $ref: "blob16" });
     }],
-    ["scalar accepted boundary restored", (candidate) => {
-      const extension = candidate.types.find((type) => type.name === "relocation-extension");
-      extension.fields.push({
-        id: 10, name: "acceptedBoundary", $ref: "u64", required: true,
-      });
+    ["removed relocation acknowledgement restored", (candidate) => {
+      const command = clone(candidate.commands.find((entry) => entry.name === "relocationData"));
+      command.id = 32;
+      command.name = "relocationAck";
+      candidate.commands.push(command);
     }],
     ["obsolete Instance redirect restored", (candidate) => {
       const command = candidate.commands.find((entry) => entry.name === "instanceSpot");
@@ -6631,35 +6183,21 @@ function runSelfTests(schema) {
       route.cases.find((entry) => entry.when.routeKind === "coldActivation")
         .fields.push({ name: "authority", $ref: "authority-generation-fence" });
     }],
-    ["participant progress ordering removed", (candidate) => {
-      const progress = candidate.types.find((type) => type.name === "participant-progress-vector");
-      progress.constraints = [];
+    ["saved work ordering removed", (candidate) => {
+      const savedWork = candidate.types.find((type) => type.name === "saved-work-vector");
+      savedWork.constraints = [];
     }],
-    ["participant progress aggregate bound reduced", (candidate) => {
-      const progress = candidate.types.find((type) => type.name === "participant-progress-vector");
-      progress.maximumItems = 2;
+    ["pending timer ordering removed", (candidate) => {
+      const ticks = candidate.types.find(
+        (type) => type.name === "relocation-pending-timer-tick-vector",
+      );
+      ticks.constraints = [];
     }],
     ["relocation application state aggregate bound removed", (candidate) => {
       const states = candidate.types.find(
         (type) => type.name === "relocation-participant-application-state-vector",
       );
       delete states.maximumItems;
-    }],
-    ["terminal completion bound diverges", (candidate) => {
-      const completions = candidate.types.find((type) => type.name === "request-completion-vector");
-      completions.maximumItems = 1;
-    }],
-    ["terminal completion request source removed", (candidate) => {
-      const completion = candidate.types.find((type) => type.name === "request-completion-entry");
-      completion.fields = completion.fields.filter((field) => field.name !== "requestSource");
-    }],
-    ["terminal completion identity weakened", (candidate) => {
-      const completions = candidate.types.find((type) => type.name === "request-completion-vector");
-      completions.constraints = [{
-        kind: "sorted",
-        fields: ["operationId.high", "operationId.low"],
-        comparison: "unsigned-wire-value",
-      }];
     }],
     ["unknown struct constraint", (candidate) => {
       const operation = candidate.types.find((type) => type.name === "operation-id");
@@ -6783,11 +6321,11 @@ function runSelfTests(schema) {
       const operation = candidate.types.find((type) => type.name === "authority-operation-kind");
       operation.values.shift();
     }],
-    ["relocation cross-vector rule weakened", (candidate) => {
+    ["relocation saved-work ownership weakened", (candidate) => {
       const constraint = candidate.semanticConstraints.find(
-        (entry) => entry.kind === "relocation-journal-integrity",
+        (entry) => entry.kind === "relocation-saved-work-integrity",
       );
-      delete constraint.sequenceAtOrBelowAcceptedBoundary;
+      delete constraint.ownership;
     }],
     ["reply relay state pair changed", (candidate) => {
       const relayRule = candidate.relocationStateMachine.commandRules.find(
@@ -6904,10 +6442,9 @@ function runSelfTests(schema) {
       const aggregate = candidate.types.find((type) => type.name === "maintenance-aggregate-v1");
       aggregate.body = aggregate.body.filter((field) => field.name !== "relocationRoot");
     }],
-    ["relocation TLV narrowed to u16", (candidate) => {
-      const extension = candidate.types.find((type) => type.name === "relocation-extension");
-      extension.totalLengthType.$ref = "u16";
-      extension.fieldLengthType.$ref = "u16";
+    ["saved work participant identity omitted", (candidate) => {
+      const entry = candidate.types.find((type) => type.name === "saved-work-entry");
+      entry.fields = entry.fields.filter((field) => field.name !== "participantId");
     }],
     ["relocation Snapshot adds application contract metadata", (candidate) => {
       const state = candidate.types.find((type) => type.name === "relocation-application-state");
@@ -6961,12 +6498,12 @@ function runSelfTests(schema) {
       );
       constraint.userSpotAggregateCallbacks = "onActorRelocated-allowed";
     }],
-    ["pending timer tick leaves shared sequence domain", (candidate) => {
+    ["pending timer tick leaves shared order domain", (candidate) => {
       const constraint = candidate.semanticConstraints.find(
-        (entry) => entry.kind === "participant-sequence-domain",
+        (entry) => entry.kind === "saved-work-order-domain",
       );
-      constraint.sequenceFields = constraint.sequenceFields.filter(
-        (field) => field !== "relocation-pending-timer-tick.sequence",
+      constraint.orderFields = constraint.orderFields.filter(
+        (field) => field !== "relocation-pending-timer-tick.order",
       );
     }],
     ["maintenance permit defaults narrowed", (candidate) => {
@@ -6996,11 +6533,11 @@ function runSelfTests(schema) {
     }],
     ["Prepared CAS precedes target restore", (candidate) => {
       candidate.relocationStateMachine.authorityCommitOrder[2].after =
-        ["relocation-reserved-ack-validated"];
+        ["relocation-ready-reply-sent"];
     }],
-    ["participant sequence accepts zero", (candidate) => {
-      const command = candidate.commands.find((entry) => entry.name === "relocationData");
-      command.body.find((field) => field.name === "sequence").$ref = "u64";
+    ["saved work order accepts zero", (candidate) => {
+      const entry = candidate.types.find((type) => type.name === "saved-work-entry");
+      entry.fields.find((field) => field.name === "order").$ref = "u64";
     }],
     ["authority key escaping changed", (candidate) => {
       candidate.authorityKeyFormat.escaping = "lowercase-percent-hex";
@@ -7077,15 +6614,11 @@ function runSelfTests(schema) {
         fields: [{ name: "replyRouteId", $ref: "nonzero-u64" }],
       });
     }],
-    ["physical connection closure restored as terminal proof", (candidate) => {
-      const delivery = candidate.types.find((type) => type.name === "completion-delivery-state");
-      delivery.values[3].name = "sourceConnectionClosed";
-    }],
-    ["authority relocation relay count atomicity removed", (candidate) => {
+    ["saved work relay exclusion removed", (candidate) => {
       const constraint = candidate.semanticConstraints.find(
-        (entry) => entry.kind === "relocation-journal-integrity",
+        (entry) => entry.kind === "relocation-saved-work-integrity",
       );
-      delete constraint.authorityRelocationAtomicity.pendingRelayCount;
+      delete constraint.relayExclusion;
     }],
     ["authority phase owner shape weakened", (candidate) => {
       const constraint = candidate.semanticConstraints.find(
@@ -7136,11 +6669,11 @@ function runSelfTests(schema) {
     ["staged relocation can link without renew", (candidate) => {
       candidate.relocationRetentionPolicy.preLinkGate = "skip";
     }],
-    ["target replacement claims exactly once callbacks", (candidate) => {
+    ["target retry claims exactly once callbacks", (candidate) => {
       const constraint = candidate.semanticConstraints.find(
-        (entry) => entry.kind === "relocation-replacement-round-integrity",
+        (entry) => entry.kind === "relocation-target-attempt-integrity",
       );
-      constraint.targetActivationRetry = "exactly-once";
+      constraint.callbackContract = "exactly-once";
     }],
     ["authority generation exhaustion mutates state", (candidate) => {
       candidate.authorityStoreGenerationProfile.overflow = "GenerationExhausted-after-row-mutation";
@@ -7194,11 +6727,6 @@ function runGoldenFixtureSelfTests(schema, schemaPath) {
         }],
         ["activation pointer missing from Ready golden", (candidate) => {
           candidate.decoded.activationRecoveryState = null;
-          reencode(format, candidate);
-        }],
-        ["activation replay cursor beyond inbox sequence", (candidate) => {
-          candidate.decoded.activationRecoveryState.replayCursor = "2";
-          candidate.decoded.activationRecoveryState.inboxSequence = "1";
           reencode(format, candidate);
         }],
       );

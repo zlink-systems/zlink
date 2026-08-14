@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import java.util.concurrent.Executor;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
@@ -86,9 +87,13 @@ final class ZLinkSessionPacketDispatcherRuntime<TSessionContext extends ZLinkSes
     private <T> CompletionStage<T> executeHandler(
         Supplier<CompletionStage<T>> operation) {
         CompletableFuture<T> result = new CompletableFuture<>();
+        var applicationJob = ZLinkApplicationJobContext.transferToQueuedJob();
         try {
             handlerExecutor.execute(() -> {
-                try {
+                try (var ignored =
+                         ZLinkApplicationJobContext.enterQueued(applicationJob)) {
+                    ZLinkApplicationJobContext
+                        .beforeFirstApplicationInstruction();
                     operation.get().whenComplete((value, error) -> {
                         if (error != null) {
                             result.completeExceptionally(error);
@@ -98,9 +103,16 @@ final class ZLinkSessionPacketDispatcherRuntime<TSessionContext extends ZLinkSes
                     });
                 } catch (RuntimeException ex) {
                     result.completeExceptionally(ex);
+                } finally {
+                    if (applicationJob != null) {
+                        applicationJob.close();
+                    }
                 }
             });
         } catch (RuntimeException ex) {
+            if (applicationJob != null) {
+                applicationJob.close();
+            }
             result.completeExceptionally(ex);
         }
         return result;

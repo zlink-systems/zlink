@@ -174,6 +174,65 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
+    public async Task Stream_request_retains_core_credit_until_the_awaited_reply_send_is_terminal()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        var lifetime = new StreamFlowLifetime();
+        ZLinkFrameworkRuntime runtime = null!;
+        var services = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(lifetime)
+            .AddSingleton(_ => runtime);
+        await using var provider = services.BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        var socket = new TestStreamSocket
+        {
+            BlockSendAsync = true
+        };
+        var session = await ZLinkStreamSessionRuntime.CreateAsync(
+            provider,
+            socket,
+            RoutingId.From("stream-retained-reply-client"),
+            typeof(StreamFlowSession),
+            static _ => { },
+            "test",
+            TimeProvider.System);
+        var retainedCredit = new CountingCreditOwner();
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Request,
+            ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.HasRequestSeq,
+            new ZlinkStreamRequestSeq(23),
+            nameof(StreamFlowRequest),
+            ZlinkStreamMetadata.Empty);
+
+        try
+        {
+            var admission = session.TryEnqueuePacket(
+                Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
+                Message.From(ZLinkStreamPacketPayloadCodec.EncodeJson(
+                    new StreamFlowRequest("request"),
+                    typeof(StreamFlowRequest))),
+                coreCreditOwner: retainedCredit);
+            Assert.Equal(ZLinkSerialPostAdmission.Accepted, admission);
+
+            await socket.SendAsyncStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(0, retainedCredit.DisposeCount);
+            Assert.False(lifetime.ReplyCompleted.Task.IsCompleted);
+
+            socket.AllowSendAsync.TrySetResult();
+            await lifetime.ReplyCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await WaitUntilAsync(() => retainedCredit.DisposeCount == 1);
+            Assert.Equal(1, retainedCredit.DisposeCount);
+        }
+        finally
+        {
+            socket.AllowSendAsync.TrySetResult();
+            await session.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task Native_Callbacks_Are_Offloaded_Serialized_Per_Session_And_Parallel_Across_Sessions()
     {
         var registration = new ZLinkFrameworkRegistration();
@@ -493,16 +552,76 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
-    public async Task Stream_receive_stops_before_next_recv_when_application_hwm_is_paused()
+    public async Task Stream_receive_retains_raw_credit_after_a_later_frame_parse_failure_until_the_admitted_handler_finishes()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        var lifetime = new SessionOrderingLifetime();
+        ZLinkFrameworkRuntime runtime = null!;
+        var services = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(lifetime)
+            .AddSingleton(_ => runtime);
+        await using var provider = services.BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        var socket = new TestStreamSocket();
+        var monitor = new TestSocketMonitor();
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ZLinkRuntimeErrorSink(),
+            CancellationToken.None,
+            runtime.ExecutionOwner);
+        var node = new ZLinkStreamNodeRuntime(
+            "stream-retained-credit-parse-failure",
+            provider,
+            socket,
+            monitor,
+            typeof(SessionOrderingSession),
+            runner,
+            "test");
+        var routingId = RoutingId.From("session-a");
+        var retainedCredit = new CountingCreditOwner();
+        try
+        {
+            node.Start();
+            monitor.Emit(new ZLinkBackendSocketMonitorEvent(
+                ZLinkSocketNativeEventType.ConnectionReady,
+                routingId,
+                "local",
+                "remote",
+                0));
+            await lifetime.WaitConnectedAsync(routingId);
+
+            var validFrame = EncodeJsonFrame(new SessionOrderingMessage());
+            byte[] invalidSecondPrefix = [0, 0, 0x80, 0, 0, 0];
+            socket.EnqueueRetainedRawPart(
+                routingId,
+                validFrame.Concat(invalidSecondPrefix).ToArray(),
+                retainedCredit);
+
+            await lifetime.WaitDispatchStartedAsync(routingId);
+            await WaitUntilAsync(() => socket.DisconnectCount == 1);
+            Assert.Equal(0, retainedCredit.DisposeCount);
+
+            lifetime.ReleaseFirst.TrySetResult();
+            await lifetime.WaitDispatchCompletedAsync(routingId);
+            await WaitUntilAsync(() => retainedCredit.DisposeCount == 1);
+            Assert.Equal(1, retainedCredit.DisposeCount);
+        }
+        finally
+        {
+            lifetime.ReleaseFirst.TrySetResult();
+            await node.DisposeAsync();
+            await runner.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Stream_receive_keeps_the_next_packet_until_the_prior_handler_completes()
     {
         var registration = new ZLinkFrameworkRegistration();
         var lifetime = new SessionOrderingLifetime();
         // This path cannot classify an application frame before RecvPart. A
         // single bounded receive reservation preserves the HWM test's
         // one-message overshoot while preventing a second raw receive.
-        var budget = new ZLinkInboundDispatchBudget(
-            1,
-            maximumConcurrentReceives: 1);
         ZLinkFrameworkRuntime runtime = null!;
         var services = new ServiceCollection()
             .AddSingleton(registration)
@@ -523,8 +642,7 @@ public sealed class StreamSessionForcedCleanupTests
             monitor,
             typeof(SessionOrderingSession),
             runner,
-            "test",
-            inboundDispatchBudget: budget);
+            "test");
         var routingId = RoutingId.From("session-a");
         try
         {
@@ -536,18 +654,17 @@ public sealed class StreamSessionForcedCleanupTests
                 "remote",
                 0));
             EmitJson(socket, routingId, new SessionOrderingMessage());
-            // Queue a second raw part before the first handler releases. The
-            // receive batch must stop at the HWM instead of pulling it too.
+            // The serial session queue owns the second packet while the first
+            // handler retains the first packet's binding receive owner.
             EmitJson(socket, routingId, new SessionOrderingMessage());
             await lifetime.WaitDispatchStartedAsync(routingId);
-            Assert.False(budget.CanStartApplicationReceive);
 
-            var receivedBeforePausedSend = socket.RecvPartCount;
             await Task.Delay(100);
-            Assert.Equal(receivedBeforePausedSend, socket.RecvPartCount);
+            Assert.Equal(
+                1,
+                lifetime.Events(routingId).Count(static value => value == "dispatch-start"));
 
             lifetime.ReleaseFirst.TrySetResult();
-            await WaitUntilAsync(() => socket.RecvPartCount > receivedBeforePausedSend);
             await WaitUntilAsync(
                 () => lifetime.Events(routingId)
                     .Count(static value => value == "dispatch-end") >= 2);
@@ -561,15 +678,10 @@ public sealed class StreamSessionForcedCleanupTests
     }
 
     [Fact]
-    public async Task Stream_receive_finishes_active_multipart_after_hwm_fills_at_batch_boundary()
+    public async Task Stream_receive_keeps_multipart_and_next_packet_owned_until_serial_dispatch()
     {
         var registration = new ZLinkFrameworkRegistration();
         var lifetime = new SessionOrderingLifetime();
-        // Keep the raw receive reservation explicit so this test verifies the
-        // configured overshoot bound at the multipart boundary.
-        var budget = new ZLinkInboundDispatchBudget(
-            1,
-            maximumConcurrentReceives: 1);
         ZLinkFrameworkRuntime runtime = null!;
         var services = new ServiceCollection()
             .AddSingleton(registration)
@@ -590,8 +702,7 @@ public sealed class StreamSessionForcedCleanupTests
             monitor,
             typeof(SessionOrderingSession),
             runner,
-            "test",
-            inboundDispatchBudget: budget);
+            "test");
         var routingId = RoutingId.From("session-a");
         try
         {
@@ -617,15 +728,10 @@ public sealed class StreamSessionForcedCleanupTests
             await lifetime.WaitDispatchStartedAsync(routingId);
             await WaitUntilAsync(() => socket.DequeuedPartCount >= 64);
             Assert.Equal(64, socket.DequeuedPartCount);
-            Assert.False(budget.CanStartApplicationReceive);
 
             socket.EnqueueRawPart(routingId, secondFrame.AsSpan(1), hasMore: false);
             socket.EnqueueRawPart(routingId, thirdFrame, hasMore: false);
-            await WaitUntilAsync(() => socket.DequeuedPartCount >= 65);
-            Assert.Equal(65, socket.DequeuedPartCount);
-            var dequeuedBeforePausedSend = socket.DequeuedPartCount;
-            await Task.Delay(100);
-            Assert.Equal(dequeuedBeforePausedSend, socket.DequeuedPartCount);
+            await WaitUntilAsync(() => socket.DequeuedPartCount >= 66);
             Assert.Equal(
                 1,
                 lifetime.Events(routingId).Count(static value => value == "dispatch-start"));
@@ -633,7 +739,7 @@ public sealed class StreamSessionForcedCleanupTests
             lifetime.ReleaseFirst.TrySetResult();
             await WaitUntilAsync(
                 () => lifetime.Events(routingId)
-                    .Count(static value => value == "dispatch-end") >= 2);
+                    .Count(static value => value == "dispatch-end") >= 3);
         }
         finally
         {
@@ -1896,7 +2002,8 @@ public sealed class StreamSessionForcedCleanupTests
         private readonly System.Collections.Concurrent.ConcurrentQueue<(
             RoutingId? RoutingId,
             Message Part,
-            bool HasMore)>
+            bool HasMore,
+            IDisposable? RetainedCreditOwner)>
             _receivedParts = new();
         private readonly AutoResetEvent _receiveSignal = new(false);
         private int _recvPartCount;
@@ -1918,6 +2025,14 @@ public sealed class StreamSessionForcedCleanupTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TaskCompletionSource<byte[]> SentFrame { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool BlockSendAsync { get; init; }
+
+        public TaskCompletionSource SendAsyncStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource AllowSendAsync { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TaskCompletionSource UnidentifiedPartConsumed { get; } =
@@ -1955,6 +2070,7 @@ public sealed class StreamSessionForcedCleanupTests
                     UnidentifiedPartConsumed.TrySetResult();
                 part = received.Part;
                 hasMore = received.HasMore;
+                received.RetainedCreditOwner?.Dispose();
                 return true;
             }
 
@@ -1964,11 +2080,50 @@ public sealed class StreamSessionForcedCleanupTests
             return false;
         }
 
+        public bool RecvRetained(
+            out ZLinkBackendStreamReceive? received,
+            RecvFlags flags = RecvFlags.None)
+        {
+            Interlocked.Increment(ref _recvPartCount);
+            if (_receivedParts.TryDequeue(out var part))
+            {
+                Interlocked.Increment(ref _dequeuedPartCount);
+                if (_receivedParts.IsEmpty)
+                    _receiveSignal.Reset();
+                if (part.RoutingId is null)
+                    UnidentifiedPartConsumed.TrySetResult();
+                received = new ZLinkBackendStreamReceive(
+                    part.RoutingId,
+                    new[] { part.Part },
+                    part.HasMore,
+                    part.RetainedCreditOwner is null
+                        ? part.Part
+                        : new RetainedPartOwner(
+                            part.Part,
+                            part.RetainedCreditOwner));
+                return true;
+            }
+
+            received = null;
+            return false;
+        }
+
         public void EnqueueRawPart(
             RoutingId routingId,
             ReadOnlySpan<byte> bytes,
             bool hasMore = false) =>
             EnqueuePart(routingId, Message.From(bytes), hasMore);
+
+        public void EnqueueRetainedRawPart(
+            RoutingId routingId,
+            ReadOnlySpan<byte> bytes,
+            IDisposable retainedCreditOwner,
+            bool hasMore = false) =>
+            EnqueuePart(
+                routingId,
+                Message.From(bytes),
+                hasMore,
+                retainedCreditOwner);
 
         public void EnqueueUnidentifiedRawPart(ReadOnlySpan<byte> bytes) =>
             EnqueuePart(null, Message.From(bytes), false);
@@ -1976,9 +2131,14 @@ public sealed class StreamSessionForcedCleanupTests
         private void EnqueuePart(
             RoutingId? routingId,
             Message part,
-            bool hasMore)
+            bool hasMore,
+            IDisposable? retainedCreditOwner = null)
         {
-            _receivedParts.Enqueue((routingId, part, hasMore));
+            _receivedParts.Enqueue((
+                routingId,
+                part,
+                hasMore,
+                retainedCreditOwner));
             _receiveSignal.Set();
         }
 
@@ -2001,6 +2161,28 @@ public sealed class StreamSessionForcedCleanupTests
         {
             SentFrame.TrySetResult(payload.ToArray());
             return true;
+        }
+
+        public async ValueTask SendAsync(
+            RoutingId routingId,
+            Message payload,
+            CancellationToken cancellationToken)
+        {
+            _ = routingId;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                SentFrame.TrySetResult(payload.ToArray());
+                SendAsyncStarted.TrySetResult();
+                if (BlockSendAsync)
+                    await AllowSendAsync.Task
+                        .WaitAsync(cancellationToken)
+                        .ConfigureAwait(false);
+            }
+            finally
+            {
+                payload.Dispose();
+            }
         }
 
         public bool Send(RoutingId routingId, IReadOnlyList<Message> parts, SendFlags flags) => true;
@@ -2038,11 +2220,45 @@ public sealed class StreamSessionForcedCleanupTests
             DisposeStarted.TrySetResult();
             if (BlockDispose) await AllowDispose.Task.ConfigureAwait(false);
             while (_receivedParts.TryDequeue(out var received))
+            {
                 received.Part.Dispose();
+                received.RetainedCreditOwner?.Dispose();
+            }
             _receiveSignal.Set();
             if (DisposeFailure is not null)
                 System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(DisposeFailure).Throw();
         }
+
+        private sealed class RetainedPartOwner(
+            Message part,
+            IDisposable retainedCreditOwner) : IDisposable
+        {
+            private Message? _part = part;
+            private IDisposable? _retainedCreditOwner = retainedCreditOwner;
+
+            public void Dispose()
+            {
+                try
+                {
+                    Interlocked.Exchange(ref _part, null)?.Dispose();
+                }
+                finally
+                {
+                    Interlocked.Exchange(
+                        ref _retainedCreditOwner,
+                        null)?.Dispose();
+                }
+            }
+        }
+    }
+
+    private sealed class CountingCreditOwner : IDisposable
+    {
+        private int _disposeCount;
+
+        internal int DisposeCount => Volatile.Read(ref _disposeCount);
+
+        public void Dispose() => Interlocked.Increment(ref _disposeCount);
     }
 
     private sealed class TestStreamSocketPoller(

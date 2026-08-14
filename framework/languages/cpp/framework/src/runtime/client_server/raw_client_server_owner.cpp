@@ -72,16 +72,6 @@ std::size_t raw_message_bytes (
     return result;
 }
 
-std::uint64_t client_server_hwm_bytes (
-  std::uint32_t max_message_bytes) noexcept
-{
-    const auto maximum = std::numeric_limits<std::uint64_t>::max ();
-    const auto message_bytes = static_cast<std::uint64_t> (max_message_bytes);
-    return message_bytes > maximum - client_server_wire_hwm_margin
-             ? maximum
-             : message_bytes + client_server_wire_hwm_margin;
-}
-
 std::vector<std::uint8_t> liveness_connection_identity (
   const protocol::client_server_server_admission_t &server)
 {
@@ -103,13 +93,37 @@ foundation::operation_terminal_t request_failure (
     return foundation::operation_terminal_t::transport_failed;
 }
 
+class pending_request_guard_t
+{
+  public:
+    explicit pending_request_guard_t (std::atomic_size_t &pending) :
+        _pending (&pending)
+    {
+        _pending->fetch_add (1, std::memory_order_relaxed);
+    }
+
+    ~pending_request_guard_t ()
+    {
+        _pending->fetch_sub (1, std::memory_order_relaxed);
+    }
+
+    pending_request_guard_t (const pending_request_guard_t &) = delete;
+    pending_request_guard_t &operator= (const pending_request_guard_t &) = delete;
+
+  private:
+    std::atomic_size_t *_pending;
+};
+
 } // namespace
 
 raw_client_server_server_t::raw_client_server_server_t (
-  raw_client_server_server_options_t options) :
+  raw_client_server_server_options_t options,
+  std::shared_ptr<zlink::context_t> context) :
     _options (std::move (options)),
-    _mailbox (_options.mailbox_message_budget,
-              _options.mailbox_byte_budget,
+    _context (
+      context ? std::move (context) : std::make_shared<zlink::context_t> ()),
+    _mailbox (dispatch_limits::application_mailbox_messages,
+              dispatch_limits::application_mailbox_bytes,
               dispatch_limits::control_mailbox_messages,
               dispatch_limits::control_mailbox_bytes)
 {
@@ -135,31 +149,21 @@ void raw_client_server_server_t::start ()
         throw std::logic_error (
           "ClientServer server cannot restart after close");
     }
-    auto context = std::make_unique<zlink::context_t> ();
-    auto router = std::make_unique<zlink::router_socket_t> (*context);
+    auto router = std::make_unique<zlink::router_socket_t> (*_context);
     router->options ().handover (true);
     router->options ().mandatory (true);
     router->options ().linger (std::chrono::milliseconds (0));
+    router->options ().send_timeout (std::chrono::seconds (1));
     router->options ().max_message_size (
       zlink::byte_size_t::bytes (
         _options.descriptor.effective_max_message_bytes));
-    const auto server_hwm_bytes = client_server_hwm_bytes (
-      _options.descriptor.effective_max_message_bytes);
-    router->options ().send_hwm (
-      zlink::byte_count_t::bytes (server_hwm_bytes));
-    router->options ().recv_hwm (
-      zlink::byte_count_t::bytes (server_hwm_bytes));
     trace_client_server_lazy (
       "server-socket-options",
       [&] {
           return "endpoint=" + _options.descriptor.advertised_endpoint
                  + " max_message_bytes="
                  + std::to_string (
-                     router->options ().max_message_size ().bytes ())
-                 + " send_hwm_bytes="
-                 + std::to_string (router->options ().send_hwm ().bytes ())
-                 + " recv_hwm_bytes="
-                 + std::to_string (router->options ().recv_hwm ().bytes ());
+                     router->options ().max_message_size ().bytes ());
       });
     router->set_routing_id (
       zlink::routing_id_t::from (
@@ -189,7 +193,6 @@ void raw_client_server_server_t::start ()
     _monitor_poller = std::move (monitor_poller);
     _monitor = std::move (monitor);
     _router = std::move (router);
-    _context = std::move (context);
 }
 
 void raw_client_server_server_t::close () noexcept
@@ -198,7 +201,6 @@ void raw_client_server_server_t::close () noexcept
     std::unique_ptr<zlink::router_socket_t> router;
     std::unique_ptr<zlink::poller_t> monitor_poller;
     std::unique_ptr<zlink::socket_monitor_t> monitor;
-    std::unique_ptr<zlink::context_t> context;
     {
         std::lock_guard lock (_mutex);
         if (_closed) {
@@ -209,7 +211,6 @@ void raw_client_server_server_t::close () noexcept
         router = std::move (_router);
         monitor_poller = std::move (_monitor_poller);
         monitor = std::move (_monitor);
-        context = std::move (_context);
     }
     _mailbox.close ();
     if (port) {
@@ -230,14 +231,6 @@ void raw_client_server_server_t::close () noexcept
         }
     }
     router.reset ();
-    if (context) {
-        try {
-            context->shutdown ();
-            context->term ();
-        }
-        catch (...) {
-        }
-    }
 }
 
 std::string raw_client_server_server_t::endpoint () const
@@ -256,38 +249,24 @@ raw_client_server_server_t::descriptor () const
 void raw_client_server_server_t::update_descriptor (
   protocol::client_server_server_admission_t descriptor)
 {
-    std::shared_ptr<detail::backend::raw_route_port_t> port;
-    std::vector<std::vector<std::uint8_t>> clients;
-    {
-        std::lock_guard lock (_mutex);
-        if (descriptor.channel_name
-              != _options.descriptor.channel_name
-            || descriptor.server_routing_id
-                 != _options.descriptor.server_routing_id
-            || descriptor.lifecycle_generation
-                 != _options.descriptor.lifecycle_generation
-            || descriptor.security_identity
-                 != _options.descriptor.security_identity
-            || descriptor.advertised_endpoint
-                 != _options.descriptor.advertised_endpoint
-            || descriptor.descriptor_revision
-                 <= _options.descriptor.descriptor_revision) {
-            throw std::invalid_argument (
-              "ClientServer descriptor update violates its immutable fence");
-        }
-        _options.descriptor = descriptor;
-        port = _port;
-        clients.reserve (_connections.size ());
-        for (const auto &[client, _] : _connections)
-            clients.push_back (client);
+    std::lock_guard lock (_mutex);
+    if (descriptor.channel_name
+          != _options.descriptor.channel_name
+        || descriptor.server_routing_id
+             != _options.descriptor.server_routing_id
+        || descriptor.lifecycle_generation
+             != _options.descriptor.lifecycle_generation
+        || descriptor.security_identity
+             != _options.descriptor.security_identity
+        || descriptor.advertised_endpoint
+             != _options.descriptor.advertised_endpoint
+        || descriptor.descriptor_revision
+             <= _options.descriptor.descriptor_revision) {
+        throw std::invalid_argument (
+          "ClientServer descriptor update violates its immutable fence");
     }
-    if (!port)
-        return;
-    const auto update =
-      protocol::encode_client_server_server_admission (
-        protocol::command::update, descriptor);
-    for (const auto &client : clients)
-        (void) port->send (client, {update});
+    _options.descriptor = std::move (descriptor);
+    _descriptor_update_pending = true;
 }
 
 mesh::service_mailbox_t &
@@ -377,8 +356,9 @@ std::size_t raw_client_server_server_t::drain_monitor_events (
     }
 }
 
-client_server_pump_result_t raw_client_server_server_t::pump_one (
-  mesh::service_liveness_registry_t::clock_t::time_point now)
+task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
+  mesh::service_liveness_registry_t::clock_t::time_point now,
+  std::shared_ptr<application_job_queue_t::permit_t> application_permit)
 {
     _last_pump_bytes = 0;
     std::shared_ptr<detail::backend::raw_route_port_t> port;
@@ -387,27 +367,27 @@ client_server_pump_result_t raw_client_server_server_t::pump_one (
         port = _port;
     }
     if (!port) {
-        return client_server_pump_result_t::no_data;
+        co_return client_server_pump_result_t::no_data;
     }
     if (_pending_received) {
         for (const auto &part : _pending_received->parts)
             _last_pump_bytes += part.size ();
         if (!_mailbox.try_enqueue (
               std::move (*_pending_received))) {
-            return client_server_pump_result_t::backpressured;
+            co_return client_server_pump_result_t::backpressured;
         }
         _pending_received.reset ();
-        return client_server_pump_result_t::application;
+        co_return client_server_pump_result_t::application;
     }
     std::optional<detail::backend::raw_received_t> received;
     received = port->try_receive ();
     if (!received) {
-        return client_server_pump_result_t::no_data;
+        co_return client_server_pump_result_t::no_data;
     }
     for (const auto &part : received->parts)
         _last_pump_bytes += part.size ();
     if (received->parts.empty ()) {
-        return client_server_pump_result_t::protocol_error;
+        co_return client_server_pump_result_t::protocol_error;
     }
     try {
         const auto header =
@@ -438,7 +418,7 @@ client_server_pump_result_t raw_client_server_server_t::pump_one (
         }
         if (header.kind == protocol::command::hello) {
             if (received->parts.size () != 1) {
-                return client_server_pump_result_t::protocol_error;
+                co_return client_server_pump_result_t::protocol_error;
             }
             const auto client =
               protocol::decode_client_server_client_admission (
@@ -455,10 +435,12 @@ client_server_pump_result_t raw_client_server_server_t::pump_one (
             if (client.channel_name != _options.descriptor.channel_name
                 || client.security_identity
                      != _options.descriptor.security_identity) {
-                (void) port->send (
+                const detail::backend::raw_message_t reject_message{
+                  protocol::encode_reject (3)};
+                (void) co_await port->send (
                   received->source_routing_id,
-                  {protocol::encode_reject (3)});
-                return client_server_pump_result_t::infrastructure;
+                  reject_message);
+                co_return client_server_pump_result_t::infrastructure;
             }
             {
                 std::lock_guard lock (_mutex);
@@ -468,11 +450,13 @@ client_server_pump_result_t raw_client_server_server_t::pump_one (
             }
             _liveness.admit (
               received->source_routing_id, received->source_routing_id, now);
-            if (!port->send (
-                  received->source_routing_id,
-                  {protocol::encode_client_server_server_admission (
-                    protocol::command::admit, _options.descriptor)})) {
-                return client_server_pump_result_t::protocol_error;
+            const detail::backend::raw_message_t admit_message{
+              protocol::encode_client_server_server_admission (
+                protocol::command::admit, _options.descriptor)};
+            const auto admitted = co_await port->send (
+              received->source_routing_id, admit_message);
+            if (!admitted) {
+                co_return client_server_pump_result_t::protocol_error;
             }
             trace_client_server_lazy (
               "server-admit-sent",
@@ -483,47 +467,51 @@ client_server_pump_result_t raw_client_server_server_t::pump_one (
                          + " endpoint="
                          + _options.descriptor.advertised_endpoint;
               });
-            return client_server_pump_result_t::infrastructure;
+            co_return client_server_pump_result_t::infrastructure;
         }
-        std::vector<std::uint8_t> connection;
+        std::optional<std::vector<std::uint8_t>> connection;
         {
             std::lock_guard lock (_mutex);
             const auto found =
               _connections.find (received->source_routing_id);
-            if (found == _connections.end ()) {
-                return client_server_pump_result_t::protocol_error;
-            }
-            connection = found->second;
+            if (found != _connections.end ())
+                connection = found->second;
         }
+        if (!connection)
+            co_return client_server_pump_result_t::protocol_error;
         if (header.kind == protocol::command::livenessProbe
             || header.kind == protocol::command::livenessAck) {
             if (received->parts.size () != 1) {
-                return client_server_pump_result_t::protocol_error;
+                co_return client_server_pump_result_t::protocol_error;
             }
             const auto liveness =
               protocol::decode_liveness (received->parts.front ());
             if (liveness.kind == protocol::command::livenessProbe) {
-                if (!_liveness.acknowledge_probe (
-                      received->source_routing_id, connection,
-                      liveness.probe_id)
-                    || !port->send (
-                      received->source_routing_id,
-                      {protocol::encode_liveness (
-                        protocol::command::livenessAck,
-                        liveness.probe_id)})) {
-                    return client_server_pump_result_t::protocol_error;
+                const auto acknowledged = _liveness.acknowledge_probe (
+                  received->source_routing_id, *connection,
+                  liveness.probe_id);
+                const detail::backend::raw_message_t ack_message{
+                  protocol::encode_liveness (
+                    protocol::command::livenessAck,
+                    liveness.probe_id)};
+                if (!acknowledged)
+                    co_return client_server_pump_result_t::protocol_error;
+                const auto ack_sent = co_await port->send (
+                  received->source_routing_id, ack_message);
+                if (!ack_sent) {
+                    co_return client_server_pump_result_t::protocol_error;
                 }
             } else {
                 (void) _liveness.acknowledge (
-                  received->source_routing_id, connection,
+                  received->source_routing_id, *connection,
                   liveness.probe_id, now);
             }
-            return client_server_pump_result_t::infrastructure;
+            co_return client_server_pump_result_t::infrastructure;
         }
         if ((header.kind != protocol::command::channelSend
              && header.kind != protocol::command::channelRequest)
             || received->parts.size () != 2) {
-            return client_server_pump_result_t::protocol_error;
+            co_return client_server_pump_result_t::protocol_error;
         }
         std::optional<std::uint64_t> correlation;
         std::string channel;
@@ -532,7 +520,7 @@ client_server_pump_result_t raw_client_server_server_t::pump_one (
               received->parts.front ());
         } else {
             if (!received->request_sequence) {
-                return client_server_pump_result_t::protocol_error;
+                co_return client_server_pump_result_t::protocol_error;
             }
             auto request = protocol::decode_channel_request_header (
               received->parts.front ());
@@ -540,46 +528,80 @@ client_server_pump_result_t raw_client_server_server_t::pump_one (
             channel = std::move (request.channel_name);
         }
         if (channel != _options.descriptor.channel_name) {
-            return client_server_pump_result_t::protocol_error;
+            co_return client_server_pump_result_t::protocol_error;
         }
         (void) protocol::decode_application_payload (received->parts[1]);
+        if (application_permit)
+            application_permit->mark_queued ();
         mesh::service_mailbox_record_t record{
           std::move (channel),
           mesh::service_mailbox_domain_t::application,
           std::move (received->parts),
           std::move (received->source_routing_id),
           received->request_sequence,
-          correlation};
+          correlation,
+          0,
+          std::nullopt,
+          std::nullopt,
+          std::move (received->retained),
+          [permit = std::move (application_permit)] () mutable {
+              if (!permit)
+                  return;
+              permit->release_for_handler_entry ();
+              permit.reset ();
+          }};
         if (!_mailbox.try_enqueue (std::move (record))) {
             _pending_received.emplace (std::move (record));
-            return client_server_pump_result_t::backpressured;
+            co_return client_server_pump_result_t::backpressured;
         }
-        return client_server_pump_result_t::application;
+        co_return client_server_pump_result_t::application;
     }
     catch (const protocol::service_wire_error_t &) {
-        return client_server_pump_result_t::protocol_error;
+        co_return client_server_pump_result_t::protocol_error;
     }
 }
 
-mesh::service_liveness_tick_t
+bool raw_client_server_server_t::has_pending_application () const noexcept
+{
+    return _pending_received.has_value ();
+}
+
+task_t<mesh::service_liveness_tick_t>
 raw_client_server_server_t::tick_liveness (
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
     auto result = _liveness.tick (now);
     std::shared_ptr<detail::backend::raw_route_port_t> port;
+    std::optional<protocol::client_server_server_admission_t> update;
+    std::vector<std::vector<std::uint8_t>> clients;
     {
         std::lock_guard lock (_mutex);
         port = _port;
-    }
-    if (port) {
-        for (const auto &probe : result.probes) {
-            (void) port->send (
-              probe.node_routing_id,
-              {protocol::encode_liveness (
-                protocol::command::livenessProbe, probe.probe_id)});
+        if (_descriptor_update_pending) {
+            update = _options.descriptor;
+            clients.reserve (_connections.size ());
+            for (const auto &[client, _] : _connections)
+                clients.push_back (client);
+            _descriptor_update_pending = false;
         }
     }
-    return result;
+    if (port) {
+        if (update) {
+            const detail::backend::raw_message_t update_message{
+              protocol::encode_client_server_server_admission (
+                protocol::command::update, *update)};
+            for (const auto &client : clients)
+                (void) co_await port->send (client, update_message);
+        }
+        for (const auto &probe : result.probes) {
+            const detail::backend::raw_message_t probe_message{
+              protocol::encode_liveness (
+                protocol::command::livenessProbe, probe.probe_id)};
+            (void) co_await port->send (
+              probe.node_routing_id, probe_message);
+        }
+    }
+    co_return result;
 }
 
 std::optional<mesh::service_liveness_registry_t::clock_t::time_point>
@@ -602,12 +624,15 @@ bool raw_client_server_server_t::reply (
         std::lock_guard lock (_mutex);
         port = _port;
     }
-    return port
-           && port->reply (
-             {request.source_routing_id, request.request_sequence, {}},
-             {protocol::encode_reply_header (
-                *request.correlation, 0, 0),
-              protocol::encode_application_payload (payload)});
+    if (!port)
+        return false;
+    detail::backend::raw_message_t parts{
+      protocol::encode_reply_header (*request.correlation, 0, 0),
+      protocol::encode_application_payload (payload)};
+    return port->reply (
+      {request.source_routing_id, request.request_sequence, {},
+       request.retained},
+      parts);
 }
 
 bool raw_client_server_server_t::reply (
@@ -629,12 +654,17 @@ bool raw_client_server_server_t::reply (
         std::lock_guard lock (_mutex);
         port = _port;
     }
-    return port
-           && port->reply (
-             {request.source_routing_id, request.request_sequence, {}},
-             {protocol::encode_reply_header (
-               *request.correlation, terminal_result,
-               static_cast<std::uint32_t> (failure_code))});
+    if (!port)
+        return false;
+    detail::backend::raw_message_t parts{
+      protocol::encode_reply_header (
+        *request.correlation,
+        terminal_result,
+        static_cast<std::uint32_t> (failure_code))};
+    return port->reply (
+      {request.source_routing_id, request.request_sequence, {},
+       request.retained},
+      parts);
 }
 
 bool raw_client_server_server_t::byte_vector_less_t::operator() (
@@ -646,11 +676,11 @@ bool raw_client_server_server_t::byte_vector_less_t::operator() (
 }
 
 raw_client_server_client_t::raw_client_server_client_t (
-  raw_client_server_client_options_t options) :
+  raw_client_server_client_options_t options,
+  std::shared_ptr<zlink::context_t> context) :
     _options (std::move (options)),
-    _operations (
-      std::make_shared<foundation::operation_registry_t> (
-        foundation::default_operation_capacity))
+    _context (
+      context ? std::move (context) : std::make_shared<zlink::context_t> ())
 {
     if (_options.client_routing_id.empty ()
         || _options.admission.channel_name.empty ()
@@ -675,29 +705,19 @@ void raw_client_server_client_t::start ()
         throw std::logic_error (
           "ClientServer client cannot restart after close");
     }
-    auto context = std::make_unique<zlink::context_t> ();
-    auto dealer = std::make_unique<zlink::dealer_socket_t> (*context);
+    auto dealer = std::make_unique<zlink::dealer_socket_t> (*_context);
     dealer->options ().linger (std::chrono::milliseconds (0));
+    dealer->options ().send_timeout (std::chrono::seconds (1));
     dealer->options ().max_message_size (
       zlink::byte_size_t::bytes (
         _options.admission.effective_max_message_bytes));
-    const auto client_hwm_bytes = client_server_hwm_bytes (
-      _options.admission.effective_max_message_bytes);
-    dealer->options ().send_hwm (
-      zlink::byte_count_t::bytes (client_hwm_bytes));
-    dealer->options ().recv_hwm (
-      zlink::byte_count_t::bytes (client_hwm_bytes));
     trace_client_server_lazy (
       "client-socket-options",
       [&] {
           return "endpoint=" + _options.expected_server.advertised_endpoint
                  + " max_message_bytes="
                  + std::to_string (
-                     dealer->options ().max_message_size ().bytes ())
-                 + " send_hwm_bytes="
-                 + std::to_string (dealer->options ().send_hwm ().bytes ())
-                 + " recv_hwm_bytes="
-                 + std::to_string (dealer->options ().recv_hwm ().bytes ());
+                     dealer->options ().max_message_size ().bytes ());
       });
     dealer->set_routing_id (
       zlink::routing_id_t::from (_options.client_routing_id));
@@ -715,7 +735,6 @@ void raw_client_server_client_t::start ()
     _monitor_poller = std::move (monitor_poller);
     _monitor = std::move (monitor);
     _dealer = std::move (dealer);
-    _context = std::move (context);
 }
 
 void raw_client_server_client_t::close () noexcept
@@ -724,7 +743,6 @@ void raw_client_server_client_t::close () noexcept
     std::unique_ptr<zlink::dealer_socket_t> dealer;
     std::unique_ptr<zlink::poller_t> monitor_poller;
     std::unique_ptr<zlink::socket_monitor_t> monitor;
-    std::unique_ptr<zlink::context_t> context;
     {
         std::lock_guard lock (_mutex);
         if (_closed) {
@@ -736,9 +754,7 @@ void raw_client_server_client_t::close () noexcept
         dealer = std::move (_dealer);
         monitor_poller = std::move (_monitor_poller);
         monitor = std::move (_monitor);
-        context = std::move (_context);
     }
-    _operations->shutdown ();
     if (port) {
         port->close ();
     }
@@ -757,14 +773,6 @@ void raw_client_server_client_t::close () noexcept
         }
     }
     dealer.reset ();
-    if (context) {
-        try {
-            context->shutdown ();
-            context->term ();
-        }
-        catch (...) {
-        }
-    }
 }
 
 bool raw_client_server_client_t::ready () const noexcept
@@ -773,7 +781,7 @@ bool raw_client_server_client_t::ready () const noexcept
     return _ready;
 }
 
-std::size_t raw_client_server_client_t::drain_monitor_events (
+task_t<std::size_t> raw_client_server_client_t::drain_monitor_events (
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
     static_cast<void> (now);
@@ -783,32 +791,31 @@ std::size_t raw_client_server_client_t::drain_monitor_events (
         std::shared_ptr<detail::backend::raw_dealer_port_t> port;
         {
             std::lock_guard lock (_mutex);
-            if (!_monitor || !_monitor->valid ()) {
-                return count;
-            }
-            if (!_monitor_poller) {
-                return count;
-            }
-            zlink::poll_event_t readiness;
-            try {
-                if (_monitor_poller->wait (
-                      &readiness, 1, std::chrono::milliseconds::zero ())
-                      != 1
-                    || readiness.slot != 1
-                    || (static_cast<short> (readiness.revents)
-                        & static_cast<short> (zlink::poll_event_flag_t::pollin))
-                         == 0) {
-                    return count;
+            if (_monitor && _monitor->valid () && _monitor_poller) {
+                zlink::poll_event_t readiness;
+                bool readable = false;
+                try {
+                    readable =
+                      _monitor_poller->wait (
+                        &readiness, 1, std::chrono::milliseconds::zero ())
+                        == 1
+                      && readiness.slot == 1
+                      && (static_cast<short> (readiness.revents)
+                          & static_cast<short> (
+                            zlink::poll_event_flag_t::pollin))
+                           != 0;
+                }
+                catch (...) {
+                }
+                if (readable) {
+                    event = _monitor->recv (
+                      zlink::recv_flags_t::dontwait);
+                    port = _port;
                 }
             }
-            catch (...) {
-                return count;
-            }
-            event = _monitor->recv (zlink::recv_flags_t::dontwait);
-            port = _port;
         }
         if (!event) {
-            return count;
+            co_return count;
         }
         ++count;
         trace_client_server_lazy (
@@ -840,9 +847,10 @@ std::size_t raw_client_server_client_t::drain_monitor_events (
                 _ready = false;
             }
             if (port) {
-                (void) port->send (
-                  {protocol::encode_client_server_client_admission (
-                    protocol::command::hello, _options.admission)});
+                const detail::backend::raw_message_t hello_message{
+                  protocol::encode_client_server_client_admission (
+                    protocol::command::hello, _options.admission)};
+                (void) co_await port->send (hello_message);
             }
         } else if (event->event == zlink::monitor_event::disconnected) {
             trace_client_server_lazy (
@@ -874,7 +882,7 @@ std::size_t raw_client_server_client_t::drain_monitor_events (
     }
 }
 
-client_server_pump_result_t raw_client_server_client_t::pump_one (
+task_t<client_server_pump_result_t> raw_client_server_client_t::pump_one (
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
     _last_pump_bytes = 0;
@@ -884,34 +892,36 @@ client_server_pump_result_t raw_client_server_client_t::pump_one (
         port = _port;
     }
     if (!port) {
-        return client_server_pump_result_t::no_data;
+        co_return client_server_pump_result_t::no_data;
     }
     const auto received = port->try_receive ();
     if (!received) {
-        return client_server_pump_result_t::no_data;
+        co_return client_server_pump_result_t::no_data;
     }
     for (const auto &part : *received)
         _last_pump_bytes += part.size ();
     if (received->empty ()) {
-        return client_server_pump_result_t::protocol_error;
+        co_return client_server_pump_result_t::protocol_error;
     }
     try {
         const auto header = protocol::decode_header (received->front ());
         if (header.kind == protocol::command::admit
             || header.kind == protocol::command::update) {
             if (received->size () != 1) {
-                return client_server_pump_result_t::protocol_error;
+                co_return client_server_pump_result_t::protocol_error;
             }
             const auto server =
               protocol::decode_client_server_server_admission (
                 received->front (), header.kind);
             std::vector<std::uint8_t> connection;
+            bool invalid = false;
+            bool ready = false;
             {
                 std::lock_guard lock (_mutex);
                 const auto identity_is_not_pinned =
                   _options.expected_server.server_routing_id.empty ()
                   && _options.expected_server.lifecycle_generation == 0;
-                const bool invalid =
+                invalid =
                   server.channel_name
                       != _options.expected_server.channel_name
                     || (!identity_is_not_pinned
@@ -928,38 +938,41 @@ client_server_pump_result_t raw_client_server_client_t::pump_one (
                     || server.server_routing_id.empty ()
                     || server.lifecycle_generation == 0
                     || _connection_id.empty ();
-                if (invalid) {
-                    return client_server_pump_result_t::protocol_error;
+                if (!invalid) {
+                    _options.expected_server = server;
+                    _ready =
+                      server.state == mesh::service_node_state_t::serving
+                      && server.weight > 0;
+                    ready = _ready;
+                    connection = _connection_id;
                 }
-                _options.expected_server = server;
-                _ready =
-                  server.state == mesh::service_node_state_t::serving
-                  && server.weight > 0;
-                trace_client_server_lazy (
-                  "client-admitted",
-                  [&] {
-                      return "endpoint=" + server.advertised_endpoint
-                             + " channel=" + server.channel_name
-                             + " client="
-                             + routing_id_label (_options.client_routing_id)
-                             + " ready=" + (_ready ? "true" : "false");
-                  });
-                connection = _connection_id;
             }
+            if (invalid)
+                co_return client_server_pump_result_t::protocol_error;
+            trace_client_server_lazy (
+              "client-admitted",
+              [&] {
+                  return "endpoint=" + server.advertised_endpoint
+                         + " channel=" + server.channel_name + " client="
+                         + routing_id_label (_options.client_routing_id)
+                         + " ready=" + (ready ? "true" : "false");
+              });
             _liveness.admit (
               server.server_routing_id, connection, now);
-            return client_server_pump_result_t::infrastructure;
+            co_return client_server_pump_result_t::infrastructure;
         }
         if (header.kind == protocol::command::reject) {
             (void) protocol::decode_reject (received->front ());
-            std::lock_guard lock (_mutex);
-            _ready = false;
-            return client_server_pump_result_t::infrastructure;
+            {
+                std::lock_guard lock (_mutex);
+                _ready = false;
+            }
+            co_return client_server_pump_result_t::infrastructure;
         }
         if (header.kind == protocol::command::livenessProbe
             || header.kind == protocol::command::livenessAck) {
             if (received->size () != 1) {
-                return client_server_pump_result_t::protocol_error;
+                co_return client_server_pump_result_t::protocol_error;
             }
             std::vector<std::uint8_t> connection;
             {
@@ -969,30 +982,34 @@ client_server_pump_result_t raw_client_server_client_t::pump_one (
             const auto liveness =
               protocol::decode_liveness (received->front ());
             if (liveness.kind == protocol::command::livenessProbe) {
-                if (!_liveness.acknowledge_probe (
-                      _options.expected_server.server_routing_id,
-                      connection, liveness.probe_id)
-                    || !port->send (
-                      {protocol::encode_liveness (
-                        protocol::command::livenessAck,
-                        liveness.probe_id)})) {
-                    return client_server_pump_result_t::protocol_error;
+                const auto acknowledged = _liveness.acknowledge_probe (
+                  _options.expected_server.server_routing_id,
+                  connection, liveness.probe_id);
+                const detail::backend::raw_message_t ack_message{
+                  protocol::encode_liveness (
+                    protocol::command::livenessAck,
+                    liveness.probe_id)};
+                if (!acknowledged)
+                    co_return client_server_pump_result_t::protocol_error;
+                const auto ack_sent = co_await port->send (ack_message);
+                if (!ack_sent) {
+                    co_return client_server_pump_result_t::protocol_error;
                 }
             } else {
                 (void) _liveness.acknowledge (
                   _options.expected_server.server_routing_id,
                   connection, liveness.probe_id, now);
             }
-            return client_server_pump_result_t::infrastructure;
+            co_return client_server_pump_result_t::infrastructure;
         }
-        return client_server_pump_result_t::protocol_error;
+        co_return client_server_pump_result_t::protocol_error;
     }
     catch (const protocol::service_wire_error_t &) {
-        return client_server_pump_result_t::protocol_error;
+        co_return client_server_pump_result_t::protocol_error;
     }
 }
 
-mesh::service_liveness_tick_t
+task_t<mesh::service_liveness_tick_t>
 raw_client_server_client_t::tick_liveness (
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
@@ -1004,16 +1021,17 @@ raw_client_server_client_t::tick_liveness (
     }
     if (port) {
         for (const auto &probe : result.probes) {
-            (void) port->send (
-              {protocol::encode_liveness (
-                protocol::command::livenessProbe, probe.probe_id)});
+            const detail::backend::raw_message_t probe_message{
+              protocol::encode_liveness (
+                protocol::command::livenessProbe, probe.probe_id)};
+            (void) co_await port->send (probe_message);
         }
     }
     if (!result.timed_out_nodes.empty ()) {
         std::lock_guard lock (_mutex);
         _ready = false;
     }
-    return result;
+    co_return result;
 }
 
 std::optional<mesh::service_liveness_registry_t::clock_t::time_point>
@@ -1022,19 +1040,27 @@ raw_client_server_client_t::next_liveness_activity () const
     return _liveness.next_activity ();
 }
 
-bool raw_client_server_client_t::send (
-  const protocol::application_payload_t &payload)
+task_t<zlink::submit_result_t> raw_client_server_client_t::send (
+  const protocol::application_payload_t &payload,
+  std::chrono::milliseconds timeout)
 {
+    if (timeout <= std::chrono::milliseconds::zero ()) {
+        throw std::invalid_argument (
+          "ClientServer send timeout must be positive");
+    }
     std::shared_ptr<detail::backend::raw_dealer_port_t> port;
     std::string channel;
+    bool ready = false;
     {
         std::lock_guard lock (_mutex);
-        if (!_ready) {
-            return false;
+        ready = _ready;
+        if (ready) {
+            port = _port;
+            channel = _options.admission.channel_name;
         }
-        port = _port;
-        channel = _options.admission.channel_name;
     }
+    if (!ready)
+        co_return zlink::submit_result_t::not_connected;
     const auto wire = detail::backend::raw_message_t{
       protocol::encode_channel_send_header (channel),
       protocol::encode_application_payload (payload)};
@@ -1046,21 +1072,24 @@ bool raw_client_server_client_t::send (
                  + " payload_bytes=" + std::to_string (wire[1].size ())
                  + " wire_bytes=" + std::to_string (raw_message_bytes (wire));
       });
-    const auto submitted = port && port->send (wire);
+    if (!port)
+        co_return zlink::submit_result_t::terminated;
+    const auto submitted = co_await port->send (wire, timeout);
     trace_client_server_lazy (
       "client-send-result",
       [&] {
           return "endpoint=" + _options.expected_server.advertised_endpoint
                  + " packet=" + payload.packet_name
-                 + " submitted=" + std::to_string (submitted);
+                 + " submitted="
+                 + std::to_string (static_cast<int> (submitted));
       });
-    return submitted;
+    co_return submitted;
 }
 
-bool raw_client_server_client_t::request (
+task_t<client_server_request_completion_t>
+raw_client_server_client_t::request (
   const protocol::application_payload_t &payload,
-  std::chrono::milliseconds timeout,
-  client_server_request_callback_t callback)
+  std::chrono::milliseconds timeout)
 {
     if (timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument (
@@ -1070,25 +1099,28 @@ bool raw_client_server_client_t::request (
     std::string channel;
     std::string endpoint;
     std::uint64_t correlation = 0;
-    std::uint64_t lifecycle = 0;
+    bool ready = false;
     {
         std::lock_guard lock (_mutex);
-        if (!_ready || !_port) {
-            return false;
+        ready = _ready && static_cast<bool> (_port);
+        if (ready) {
+            port = _port;
+            channel = _options.admission.channel_name;
+            endpoint = _options.expected_server.advertised_endpoint;
+            if (_next_correlation == 0) {
+                throw std::overflow_error (
+                  "ClientServer correlation is exhausted");
+            }
+            correlation = _next_correlation;
+            _next_correlation =
+              correlation == std::numeric_limits<std::uint64_t>::max ()
+                ? 0
+                : correlation + 1;
         }
-        port = _port;
-        channel = _options.admission.channel_name;
-        endpoint = _options.expected_server.advertised_endpoint;
-        lifecycle = _options.expected_server.lifecycle_generation;
-        if (_next_correlation == 0) {
-            throw std::overflow_error (
-              "ClientServer correlation is exhausted");
-        }
-        correlation = _next_correlation;
-        _next_correlation =
-          correlation == std::numeric_limits<std::uint64_t>::max ()
-            ? 0
-            : correlation + 1;
+    }
+    if (!ready) {
+        co_return client_server_request_completion_t{
+          foundation::operation_terminal_t::transport_failed, {}, {}};
     }
     trace_client_server_lazy (
       "client-request-submit",
@@ -1097,28 +1129,6 @@ bool raw_client_server_client_t::request (
                  + " client=" + routing_id_label (_options.client_routing_id)
                  + " correlation=" + std::to_string (correlation);
       });
-    const auto id = operation_id (lifecycle, correlation);
-    struct reply_state_t
-    {
-        std::mutex mutex;
-        protocol::reply_header_t header{};
-    };
-    auto reply_state = std::make_shared<reply_state_t> ();
-    if (!_operations->register_operation (
-          id, foundation::operation_registry_t::clock_t::now () + timeout,
-          [callback = std::move (callback), reply_state] (
-            foundation::operation_terminal_t terminal,
-            std::vector<std::uint8_t> reply_payload) mutable {
-              protocol::reply_header_t reply_header{};
-              {
-                  std::lock_guard lock (reply_state->mutex);
-                  reply_header = reply_state->header;
-              }
-              callback (client_server_request_completion_t{
-                terminal, reply_header, std::move (reply_payload)});
-          })) {
-        return false;
-    }
     const auto wire = detail::backend::raw_message_t{
       protocol::encode_channel_request_header (correlation, channel),
       protocol::encode_application_payload (payload)};
@@ -1131,100 +1141,67 @@ bool raw_client_server_client_t::request (
                  + std::to_string (wire[1].size ()) + " wire_bytes="
                  + std::to_string (raw_message_bytes (wire));
       });
-    const auto operations = _operations;
-    const auto submitted = port->request (
-      wire,
-      timeout,
-      [operations, id, correlation, reply_state] (
-        detail::backend::raw_request_result_t result,
-        detail::backend::raw_message_t parts) {
-          trace_client_server_lazy (
-            "client-request-complete",
-            [&] {
-                return "correlation=" + std::to_string (correlation)
-                       + " result="
-                       + std::to_string (static_cast<int> (result))
-                       + " parts=" + std::to_string (parts.size ());
-            });
-          if (result != detail::backend::raw_request_result_t::ok) {
-              (void) operations->fail (id, request_failure (result));
-              return;
-          }
-          try {
-              if (parts.empty () || parts.size () > 2) {
-                  throw protocol::service_wire_error_t (
-                    "ClientServer reply has an invalid part count");
-              }
-              const auto reply =
-                protocol::decode_reply_header (parts.front ());
-              trace_client_server_lazy (
-                "client-request-header",
-                [&] {
-                    return "correlation=" + std::to_string (correlation)
-                           + " terminal_result="
-                           + std::to_string (reply.terminal_result)
-                           + " failure_code="
-                           + std::to_string (reply.failure_code);
-                });
-              if (reply.correlation != correlation) {
-                  throw protocol::service_wire_error_t (
-                    "ClientServer reply correlation does not match");
-              }
-              {
-                  std::lock_guard lock (reply_state->mutex);
-                  reply_state->header = reply;
-              }
-              if (reply.terminal_result != 0) {
-                  if (parts.size () != 1) {
-                      throw protocol::service_wire_error_t (
-                        "failed ClientServer reply cannot carry payload");
-                  }
-                  (void) operations->complete (id, {});
-                  return;
-              }
-              if (parts.size () != 2) {
-                  throw protocol::service_wire_error_t (
-                    "successful ClientServer reply requires payload");
-              }
-              (void) protocol::decode_application_payload (parts[1]);
-              (void) operations->complete (id, std::move (parts[1]));
-          }
-          catch (const protocol::service_wire_error_t &) {
-              (void) operations->fail (
-                id, foundation::operation_terminal_t::transport_failed);
-          }
-      });
-    if (!submitted) {
-        (void) _operations->fail (
-          id, foundation::operation_terminal_t::transport_failed);
-    }
+    pending_request_guard_t pending_request (_pending_requests);
+    auto completion = co_await port->request (wire, timeout);
     trace_client_server_lazy (
-      "client-request-submitted",
+      "client-request-complete",
       [&] {
           return "endpoint=" + endpoint + " correlation="
-                 + std::to_string (correlation) + " submitted="
-                 + std::to_string (submitted);
+                 + std::to_string (correlation) + " result="
+                 + std::to_string (static_cast<int> (completion.result))
+                 + " parts=" + std::to_string (completion.parts.size ());
       });
-    return submitted;
+    if (completion.result != detail::backend::raw_request_result_t::ok) {
+        co_return client_server_request_completion_t{
+          request_failure (completion.result), {}, {}};
+    }
+    try {
+        auto &parts = completion.parts;
+        if (parts.empty () || parts.size () > 2) {
+            throw protocol::service_wire_error_t (
+              "ClientServer reply has an invalid part count");
+        }
+        const auto reply = protocol::decode_reply_header (parts.front ());
+        trace_client_server_lazy (
+          "client-request-header",
+          [&] {
+              return "correlation=" + std::to_string (correlation)
+                     + " terminal_result="
+                     + std::to_string (reply.terminal_result)
+                     + " failure_code="
+                     + std::to_string (reply.failure_code);
+          });
+        if (reply.correlation != correlation) {
+            throw protocol::service_wire_error_t (
+              "ClientServer reply correlation does not match");
+        }
+        if (reply.terminal_result != 0) {
+            if (parts.size () != 1) {
+                throw protocol::service_wire_error_t (
+                  "failed ClientServer reply cannot carry payload");
+            }
+            co_return client_server_request_completion_t{
+              foundation::operation_terminal_t::completed, reply, {}};
+        }
+        if (parts.size () != 2) {
+            throw protocol::service_wire_error_t (
+              "successful ClientServer reply requires payload");
+        }
+        (void) protocol::decode_application_payload (parts[1]);
+        co_return client_server_request_completion_t{
+          foundation::operation_terminal_t::completed,
+          reply,
+          std::move (parts[1])};
+    }
+    catch (const protocol::service_wire_error_t &) {
+        co_return client_server_request_completion_t{
+          foundation::operation_terminal_t::transport_failed, {}, {}};
+    }
 }
 
 std::size_t raw_client_server_client_t::pending_request_count () const noexcept
 {
-    return _operations->size ();
-}
-
-std::size_t raw_client_server_client_t::expire_requests (
-  foundation::operation_registry_t::clock_t::time_point now)
-{
-    return _operations->expire (now);
-}
-
-foundation::call_id_t
-raw_client_server_client_t::operation_id (
-  std::uint64_t lifecycle_generation,
-  std::uint64_t correlation)
-{
-    return foundation::call_id_t{lifecycle_generation, correlation};
+    return _pending_requests.load (std::memory_order_relaxed);
 }
 
 } // namespace zlink::framework::runtime::client_server

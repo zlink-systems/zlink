@@ -22,7 +22,6 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityConflict;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRestore;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
@@ -59,7 +58,6 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewed
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.locations.ZLinkPlacementCapacity;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityFence;
 
 class ZLinkInMemoryLocationStoreTest {
     private static final Instant NOW = Instant.parse("2026-07-03T00:00:00Z");
@@ -365,40 +363,6 @@ class ZLinkInMemoryLocationStoreTest {
                 .toCompletableFuture().get());
     }
 
-    @Test
-    void newOwnerRejectsAnUnreservedCapacityFenceWithoutMutation()
-        throws Exception {
-        ZLinkInMemoryAuthorityStore store = newAuthorityStore();
-        var source = new ZLinkLocationOwnerToken("source", 1);
-        var target = new ZLinkLocationOwnerToken("target", 2);
-        String key = "zla1:a:4:mesh:4:test";
-        var created = createActive(store, key, source);
-
-        assertInstanceOf(
-            ZLinkAuthorityConflict.class,
-            store.compareExchange(
-                    key,
-                    new ZLinkAuthorityExpectFound(created.storeVersion()),
-                    new ZLinkAuthorityPut(
-                        new byte[] {2},
-                        ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                        Optional.of(target),
-                        Optional.of(
-                            new ZLinkRelocationCapacityFence("missing"))),
-                    () -> false)
-                .toCompletableFuture().get());
-
-        var current = assertInstanceOf(
-            ZLinkAuthoritySnapshot.class,
-            store.read(key, () -> false).toCompletableFuture().get());
-        assertEquals(created.storeVersion(), current.storeVersion());
-        assertEquals(source.ownerId(), current.ownerId());
-        assertEquals(
-            source.leaseGeneration(),
-            current.ownerLeaseGeneration());
-    }
-
-    @Test
     void preservePutCanSealAnActiveAuthorityWithoutChangingItsOwnerFence()
         throws Exception {
         ZLinkInMemoryAuthorityStore store = newAuthorityStore();
@@ -411,11 +375,7 @@ class ZLinkInMemoryLocationStoreTest {
             store.compareExchange(
                     key,
                     new ZLinkAuthorityExpectFound(active.storeVersion()),
-                    new ZLinkAuthorityPut(
-                        new byte[] {2},
-                        ZLinkAuthorityGenerationTransition.PRESERVE,
-                        Optional.empty(),
-                        Optional.empty()),
+                    new ZLinkAuthorityPut(new byte[] {2}),
                     () -> false)
                 .toCompletableFuture().get());
 
@@ -452,11 +412,7 @@ class ZLinkInMemoryLocationStoreTest {
                 () -> store.compareExchange(
                         key,
                         expected,
-                        new ZLinkAuthorityPut(
-                            new byte[] {2},
-                            ZLinkAuthorityGenerationTransition.PRESERVE,
-                            Optional.empty(),
-                            Optional.empty()),
+                        new ZLinkAuthorityPut(new byte[] {2}),
                         () -> false)
                     .toCompletableFuture()
                     .join());
@@ -465,11 +421,7 @@ class ZLinkInMemoryLocationStoreTest {
                 () -> store.compareExchange(
                         key,
                         expected,
-                        new ZLinkAuthorityPut(
-                            new byte[] {3},
-                            ZLinkAuthorityGenerationTransition.PRESERVE,
-                            Optional.empty(),
-                            Optional.empty()),
+                        new ZLinkAuthorityPut(new byte[] {3}),
                         () -> false)
                     .toCompletableFuture()
                     .join());

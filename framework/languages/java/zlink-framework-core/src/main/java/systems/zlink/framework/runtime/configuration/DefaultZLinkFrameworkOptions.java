@@ -1,7 +1,6 @@
 package systems.zlink.framework.runtime.configuration;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
-import systems.zlink.framework.configuration.ZLinkInboundDispatchOptions;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -17,6 +16,7 @@ import systems.zlink.framework.runtime.internal.configuration.RouteMeshChannelBu
 import systems.zlink.framework.configuration.ZLinkCodecRegistryBuilder;
 import systems.zlink.framework.configuration.ZLinkDispatchOptions;
 import systems.zlink.framework.configuration.ZLinkFrameworkOptions;
+import systems.zlink.framework.configuration.ZLinkInboundDispatchOptions;
 import systems.zlink.framework.configuration.ZLinkMetadataPolicyBuilder;
 import systems.zlink.framework.configuration.ZLinkNetworkOptions;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
@@ -191,8 +191,7 @@ public final class DefaultZLinkFrameworkOptions
     }
 
     @Override
-    public ZLinkInboundDispatchOptions
-        configureInboundDispatch() {
+    public ZLinkInboundDispatchOptions configureInboundDispatch() {
         return registration.inboundDispatch();
     }
 

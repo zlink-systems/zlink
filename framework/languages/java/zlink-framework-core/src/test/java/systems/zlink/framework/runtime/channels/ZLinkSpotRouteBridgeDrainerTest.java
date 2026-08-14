@@ -10,14 +10,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.SendFlags;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestCallback;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
 
@@ -73,25 +73,22 @@ final class ZLinkSpotRouteBridgeDrainerTest {
         }
 
         @Override
-        public boolean send(
+        public CompletionStage<Void> send(
             String channelName,
             RoutingId targetNodeRid,
             String targetSpotId,
-            List<Message> parts,
-            SendFlags flags) {
-            return true;
+            List<Message> parts) {
+            return CompletableFuture.completedFuture(null);
         }
 
         @Override
-        public boolean request(
+        public CompletionStage<List<Message>> request(
             String channelName,
             RoutingId targetNodeRid,
             String targetSpotId,
             List<Message> parts,
-            ZLinkBackendRequestCallback callback,
-            SendFlags flags,
             Duration timeout) {
-            return true;
+            return CompletableFuture.completedFuture(List.of());
         }
 
         @Override

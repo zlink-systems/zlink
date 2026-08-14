@@ -10,7 +10,6 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -27,7 +26,6 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestCallback;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
@@ -35,7 +33,6 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 final class ZLinkChannelCallRuntime {
     private static final Logger LOGGER = Logger.getLogger(ZLinkChannelCallRuntime.class.getName());
-    private static final long ROUTE_RETRY_DELAY_MILLIS = 10;
     @FunctionalInterface
     interface SpotSend {
         CompletionStage<Void> send(
@@ -59,8 +56,6 @@ final class ZLinkChannelCallRuntime {
 
     private final ZLinkMessageFlowTracer flow;
     private final ScheduledExecutorService timeoutExecutor;
-    private final Executor infrastructureExecutor;
-    private final ZLinkChannelRequestSubmitter requestSubmitter;
     private final ZLinkChannelReplyDecoder replyDecoder;
     private final SpotSend spotSend;
     private final SpotRequest spotRequest;
@@ -76,19 +71,12 @@ final class ZLinkChannelCallRuntime {
     ZLinkChannelCallRuntime(
         ZLinkMessageFlowTracer flow,
         ScheduledExecutorService timeoutExecutor,
-        Executor infrastructureExecutor,
-        Duration defaultTimeout,
         ZLinkChannelReplyDecoder replyDecoder,
         SpotSend spotSend,
         SpotRequest spotRequest,
         ZLinkOneWayCalls oneWayCalls) {
         this.flow = flow;
         this.timeoutExecutor = timeoutExecutor;
-        this.infrastructureExecutor = infrastructureExecutor;
-        this.requestSubmitter = new ZLinkChannelRequestSubmitter(
-            timeoutExecutor,
-            infrastructureExecutor,
-            defaultTimeout);
         this.replyDecoder = replyDecoder;
         this.spotSend = spotSend;
         this.spotRequest = spotRequest;
@@ -146,56 +134,48 @@ final class ZLinkChannelCallRuntime {
         });
     }
 
-    void retryRouteRequest(Runnable attempt) {
-        // Keep the deadline callback limited to handing off the one retry
-        // owned by this pending request.
-        timeoutExecutor.schedule(
-            () -> infrastructureExecutor.execute(attempt),
-            ROUTE_RETRY_DELAY_MILLIS,
-            TimeUnit.MILLISECONDS);
-    }
-
-    void submitClient(
+    CompletionStage<ZLinkBackendReceived> requestClient(
         ZLinkBackendDealerSocket client,
         List<Message> requestParts,
-        Duration timeout,
-        ZLinkBackendRequestCallback callback,
-        CompletableFuture<?> result) {
-        requestSubmitter.submitClient(
-            client,
-            requestParts,
-            timeout,
-            preserveCurrentFlow(callback),
-            result);
+        Duration timeout) {
+        return preserveCurrentFlow(client.request(requestParts, timeout));
     }
 
-    void submitRoute(
+    CompletionStage<ZLinkBackendReceived> requestRoute(
         ZLinkBackendRouterSocket router,
         RoutingId target,
         List<Message> requestParts,
-        ZLinkBackendRequestCallback callback,
-        Duration timeout,
-        CompletableFuture<?> result) {
-        requestSubmitter.submitRoute(
-            router,
-            target,
-            requestParts,
-            preserveCurrentFlow(callback),
-            timeout,
-            result);
+        Duration timeout) {
+        return preserveCurrentFlow(
+            router.request(target, requestParts, timeout));
     }
 
-    private static ZLinkBackendRequestCallback preserveCurrentFlow(
-        ZLinkBackendRequestCallback callback) {
+    static Throwable unwrap(Throwable failure) {
+        Throwable current = failure;
+        while (current instanceof java.util.concurrent.CompletionException
+            && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
+    }
+
+    private static <T> CompletionStage<T> preserveCurrentFlow(
+        CompletionStage<T> request) {
         ZLinkFlowContext.State captured = ZLinkFlowContext.current();
         if (captured == null) {
-            return callback;
+            return request;
         }
-        return reply -> {
+        CompletableFuture<T> contextual = new CompletableFuture<>();
+        request.whenComplete((reply, failure) -> {
             try (ZLinkFlowContext.Scope ignored = ZLinkFlowContext.enter(captured)) {
-                callback.handle(reply);
+                if (failure == null) {
+                    contextual.complete(reply);
+                } else {
+                    contextual.completeExceptionally(unwrap(failure));
+                }
             }
-        };
+        });
+        return contextual;
     }
 
     <TReply> void completeReply(

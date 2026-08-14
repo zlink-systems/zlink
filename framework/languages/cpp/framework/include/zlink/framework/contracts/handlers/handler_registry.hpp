@@ -26,6 +26,7 @@ namespace detail
 {
 class handler_registry_state_t;
 class route_handler_invoker_t;
+class channel_runtime_t;
 } // namespace detail
 
 enum class handler_kind_t
@@ -378,6 +379,8 @@ class handler_registry_t
                                        const detail::inbound_message_context_t &inbound = {}) const;
 
   private:
+    friend class detail::channel_runtime_t;
+
     using terminal_invoker_t = std::function<task_t<zlink::message_t> ()>;
 
     task_t<zlink::message_t>

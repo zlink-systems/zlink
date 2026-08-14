@@ -196,18 +196,13 @@ public sealed partial class EntrySpotActorDispatchTests
         var taskRunner = new ZLinkRuntimeTaskRunner(
             new ThrowingRuntimeErrorSink(),
             CancellationToken.None);
-        using var completionAdmission = new ZLinkCompletionAdmissionOwner(
-            16,
-            16,
-            1024 * 1024);
         var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
             ZLinkMeshNodeRouteDispatcher.Create(
                 services,
                 registration,
                 spotNode,
                 runtime,
-                taskRunner,
-                completionAdmission));
+                taskRunner));
         if (sealAdmission)
             runtime.SealApplicationAdmissionsForDrain();
 
@@ -259,9 +254,6 @@ public sealed partial class EntrySpotActorDispatchTests
 
         var result = await reply.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await taskRunner.StopAsync();
-
-        Assert.Equal(0, completionAdmission.Snapshot().PendingCompletionSends);
-        Assert.Equal(0UL, completionAdmission.Snapshot().ResponderReserveBytes);
 
         var matching = loggerFactory.Messages
             .Where(line => line.Contains($"surface={expectedSurface}", StringComparison.Ordinal))

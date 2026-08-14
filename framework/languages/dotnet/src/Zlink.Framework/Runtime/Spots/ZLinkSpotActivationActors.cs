@@ -277,6 +277,7 @@ internal abstract partial class ZLinkSpotActivation
     internal ValueTask CompleteTransferredActorJoinLifecycleAsync(
         ZLinkActorRuntimeState actorState,
         string handoffId,
+        ZLinkRemoteActorJoinReply reply,
         CancellationToken cancellationToken)
     {
         var actor = actorState.Actor
@@ -288,8 +289,9 @@ internal abstract partial class ZLinkSpotActivation
                 state.Actor,
                 state.ActorState,
                 state.HandoffId,
+                state.Reply,
                 ct),
-            (Actor: actor, ActorState: actorState, HandoffId: handoffId),
+            (Actor: actor, ActorState: actorState, HandoffId: handoffId, Reply: reply),
             cancellationToken);
     }
 
@@ -297,14 +299,22 @@ internal abstract partial class ZLinkSpotActivation
         IZLinkActor actor,
         ZLinkActorRuntimeState actorState,
         string handoffId,
+        ZLinkRemoteActorJoinReply reply,
         CancellationToken cancellationToken)
     {
-        if (!actorState.Handoff.TryBeginJoinedNotification(handoffId)) return;
+        if (!actorState.Handoff.TryBeginJoinedNotification(handoffId))
+        {
+            _ = await actorState.Handoff.WaitForPreparationAsync(
+                    handoffId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
         try
         {
             await NotifyJoinedActorCoreAsync(actor, cancellationToken)
                 .ConfigureAwait(false);
-            actorState.Handoff.CompleteJoinedNotification(handoffId);
+            actorState.Handoff.CompleteJoinedNotification(handoffId, reply);
         }
         catch
         {

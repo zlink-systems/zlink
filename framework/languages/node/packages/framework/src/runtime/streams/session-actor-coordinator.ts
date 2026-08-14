@@ -63,7 +63,7 @@ export class ZLinkSessionActorCoordinator {
     actorRef: ActorRef,
     signal?: AbortSignal,
     confirmRemoteSessionBinding: boolean | 'send' = true,
-    releaseSeal?: { readonly sealId: string; readonly acceptedHighWater: bigint }
+    releaseSeal?: { readonly sealId: string }
   ): Promise<DefaultZLinkSessionActor> {
     return await this.replaceBindingCore(
       context,
@@ -79,7 +79,7 @@ export class ZLinkSessionActorCoordinator {
     actorRef: ActorRef,
     signal?: AbortSignal,
     confirmRemoteSessionBinding: boolean | 'send' = true,
-    releaseSeal?: { readonly sealId: string; readonly acceptedHighWater: bigint }
+    releaseSeal?: { readonly sealId: string }
   ): Promise<DefaultZLinkSessionActor> {
     throwIfAborted(signal);
     if (actorRef.actorId.trim().length === 0) {
@@ -143,7 +143,6 @@ export class ZLinkSessionActorCoordinator {
         sessionActor,
         bindingToken,
         releaseSeal.sealId,
-        releaseSeal.acceptedHighWater,
         authorityFence,
         sessionIdentity
       );
@@ -278,7 +277,6 @@ export class ZLinkSessionActorCoordinator {
       readonly confirmRemoteSessionBinding?: boolean | 'send';
       readonly releaseSeal?: {
         readonly sealId: string;
-        readonly acceptedHighWater: bigint;
       };
     } = {}
   ): Promise<void> {
@@ -296,8 +294,7 @@ export class ZLinkSessionActorCoordinator {
         if (options.releaseSeal !== undefined
           && !this.routes.validateSeal(
             normalizedActorRef.actorId,
-            options.releaseSeal.sealId,
-            options.releaseSeal.acceptedHighWater
+            options.releaseSeal.sealId
           )) {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.ActorLocationStale,
@@ -368,18 +365,13 @@ export class ZLinkSessionActorCoordinator {
     readonly actor: ActorRef;
     readonly sessionRid: ActorRef['nodeRid'];
     readonly bindingGeneration: bigint;
-    readonly authorityOwnerGeneration: bigint;
-    readonly ownerLeaseGeneration: bigint;
-    readonly acceptedHighWater: bigint;
   } | undefined {
     const route = this.routes.route(actorId);
     const sessionRid = route?.sessionIdentity;
-    const authority = route?.authorityFence;
     const actor = route?.actor.ref as (ActorRef & { readonly bindingGeneration?: bigint }) | undefined;
     if (
       route === undefined
       || sessionRid === undefined
-      || authority === undefined
       || actor?.bindingGeneration === undefined
     ) {
       return undefined;
@@ -387,10 +379,7 @@ export class ZLinkSessionActorCoordinator {
     return {
       actor,
       sessionRid,
-      bindingGeneration: actor.bindingGeneration,
-      authorityOwnerGeneration: authority.authorityOwnerGeneration,
-      ownerLeaseGeneration: authority.ownerLeaseGeneration,
-      acceptedHighWater: route.acceptedHighWater
+      bindingGeneration: actor.bindingGeneration
     };
   }
 

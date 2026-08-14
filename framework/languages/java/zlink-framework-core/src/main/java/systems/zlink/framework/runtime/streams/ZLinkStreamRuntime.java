@@ -48,7 +48,6 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
@@ -63,6 +62,7 @@ import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
 import systems.zlink.framework.streams.ZLinkSession;
@@ -94,6 +94,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final ZLinkBackendContext context;
     private final boolean ownsContext;
     private final ZLinkFrameworkRegistration registration;
+    private final systems.zlink.framework.runtime.internal.dispatch
+        .ZLinkApplicationJobQueue applicationJobQueue;
     private final ZLinkMessageSerializer serializer;
     private final ZLinkActorRuntime actors;
     private final Map<String, ZLinkInternalMeshNode> meshNodes;
@@ -107,6 +109,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final Predicate<RoutingId> sessionRelayRouteReady;
     private final ZLinkSessionActorsRuntime.LocalActorDispatcher localActorDispatcher;
     private final ZLinkMetadataPolicyRegistration metadataPolicy;
+    private final Duration sessionRelocationSealTimeout;
     private final List<ZLinkBackendStreamSocket> streams = new ArrayList<>();
     private final Map<String, ZLinkBackendStreamSocket> streamsByName = new HashMap<>();
     private final Map<String, Boolean> streamSessionRelayAttached = new HashMap<>();
@@ -115,7 +118,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final ScheduledExecutorService livenessExecutor;
     private final ScheduledExecutorService replyRetryExecutor;
     private final ExecutorService receiveExecutor;
-    private final ZLinkInboundDispatchBudget inboundDispatchBudget;
     private final List<StreamReceiveLoop> receiveLoops = new ArrayList<>();
     private final Set<ZLinkStreamSessionContextState> sessionContexts =
         ConcurrentHashMap.newKeySet();
@@ -231,6 +233,10 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
         this.registration = Objects.requireNonNull(
             registration, "registration");
+        this.sessionRelocationSealTimeout = registration.locations()
+            .options()
+            .sessionRelocationSealTimeout();
+        this.applicationJobQueue = registration.applicationJobQueue();
         this.serializer = serializer;
         this.actors = actors;
         this.meshNodes = Map.copyOf(meshNodes);
@@ -248,8 +254,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             sessionRelayRouteReady == null ? ignored -> true : sessionRelayRouteReady;
         this.localActorDispatcher = spots == null ? null : spots::dispatchLocalSessionActor;
         this.metadataPolicy = registration.metadataPolicy();
-        this.oneWayCalls = new ZLinkOneWayCalls(admission);
-        this.inboundDispatchBudget = registration.inboundDispatchBudget();
+        this.oneWayCalls = new ZLinkOneWayCalls();
         this.livenessExecutor = Executors.newSingleThreadScheduledExecutor(task -> {
             Thread thread = new Thread(task, "zlink-stream-liveness");
             thread.setDaemon(true);
@@ -351,7 +356,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             localActorDispatcher,
             streamSessionRelayAttached.getOrDefault(streamNodeName, false),
             defaultCodec,
-            flow)
+            flow,
+            sessionRelocationSealTimeout)
             .metadataPolicy(
                 metadataPolicy.sessionToActorKeys(),
                 metadataPolicy.actorToSessionKeys());
@@ -379,7 +385,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         return registration.advertisedEndpoint(actual);
     }
 
-    public CompletionStage<byte[]> handleSessionRelocationRoute(
+    public CompletionStage<Void> handleSessionRelocationRoute(
         RoutingId transportSource,
         byte[] command44) {
         var codec = new systems.zlink.framework.runtime.internal.service
@@ -407,16 +413,15 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 "command 44 requires one exact local Session"));
         }
         return matches.getFirst().context()
-            .applyRelocationRouteCommand(command)
-            .thenApply(codec::encodeSessionRelocationRouted);
+            .applyRelocationRouteCommand(command);
     }
 
     /**
      * Command 42 endpoint. The relocation source addresses the seal to this
      * Session owner; the sender fence is the Actor owner node the binding
-     * still points at (senderRole `source`) or the coordinator node
-     * (senderRole `coordinator`), mirroring the C++ admission check in
-     * `raw_mesh_node_owner.cpp:2937-2960`.
+     * still points at. The exact command 42 contract permits only the source
+     * role; command 43 echoes the seal fields without adding completion
+     * state.
      */
     public CompletionStage<byte[]> handleSessionRelocationSeal(
         RoutingId transportSource,
@@ -708,8 +713,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
 
         private void start() {
-            capacityRegistration = inboundDispatchBudget.onCapacityAvailable(
-                this::signalCapacity);
             try {
                 receiveExecutor.execute(this::runLoop);
             } catch (RuntimeException rejected) {
@@ -774,12 +777,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     if (!dispatchBatch.canReceiveNext()) {
                         continue;
                     }
-                    // The receive path cannot classify a complete multiplexed
-                    // message before recv(). The inner loop grants one fixed
-                    // raw classification slot when the application HWM is
-                    // full; a received application frame then becomes the
-                    // pending frame that makes the next iteration wait for
-                    // terminal completion.
                     if (!stream.waitForReadable(RECEIVE_POLL_TIMEOUT)) {
                         continue;
                     }
@@ -788,16 +785,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     }
                     ZLinkReceiveBatchBudget transportBatch =
                         new ZLinkReceiveBatchBudget();
-                    boolean rawClassificationReservationAvailable = true;
                     while (transportBatch.canReceiveNext()
-                        && dispatchBatch.canReceiveNext()
-                        && (inboundDispatchBudget.canStartApplicationReceive()
-                            || rawClassificationReservationAvailable)) {
-                        boolean startedAtApplicationHwm =
-                            !inboundDispatchBudget.canStartApplicationReceive();
-                        if (startedAtApplicationHwm) {
-                            rawClassificationReservationAvailable = false;
-                        }
+                        && dispatchBatch.canReceiveNext()) {
                         if (transportBatch.messageCount() > 0
                             && !stream.waitForReadable(Duration.ZERO)) {
                             break;
@@ -808,13 +797,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                         }
                         transportBatch.record(ZLinkReceiveBatchBudget.bytesOf(
                             received.parts()));
+                        boolean transferred = false;
                         try {
-                            processReceived(received, dispatchBatch);
+                            transferred = processReceived(received, dispatchBatch);
                         } finally {
-                            received.close();
-                        }
-                        if (startedAtApplicationHwm) {
-                            break;
+                            if (!transferred) {
+                                received.close();
+                            }
                         }
                     }
                 } catch (RuntimeException | Error failure) {
@@ -828,31 +817,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             }
         }
 
-        private void signalCapacity() {
-            synchronized (receiveLock) {
-                capacitySignal = true;
-                receiveLock.notifyAll();
-            }
-        }
-
         private boolean awaitCapacity() {
-            synchronized (receiveLock) {
-                while (!closed
-                    && !inboundDispatchBudget.canStartApplicationReceive()) {
-                    if (capacitySignal) {
-                        capacitySignal = false;
-                        continue;
-                    }
-                    try {
-                        receiveLock.wait();
-                    } catch (InterruptedException interrupted) {
-                        Thread.currentThread().interrupt();
-                        return false;
-                    }
-                }
-                capacitySignal = false;
-                return !closed;
-            }
+            return !isClosed();
         }
 
         private boolean flushReceiveStates(ZLinkReceiveBatchBudget batch) {
@@ -886,25 +852,25 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             return true;
         }
 
-        private void processReceived(
+        private boolean processReceived(
             ZLinkBackendStreamReceived received,
             ZLinkReceiveBatchBudget batch) {
             RoutingId routingId = received.routingId().orElse(null);
             if (routingId == null) {
                 LOGGER.warning("STREAM receive did not provide a source routing id or part: "
                     + streamNode.name());
-                return;
+                return false;
             }
             List<Message> parts = received.parts();
             if (isClosed()) {
-                return;
+                return false;
             }
             if (parts.isEmpty()) {
                 isolatePeer(
                     routingId,
                     new IllegalArgumentException(
                         "STREAM receive did not provide a message part"));
-                return;
+                return false;
             }
             if (parts.size() == 1
                 && parts.getFirst().size() == 0
@@ -912,29 +878,32 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 if (ignoredPeers.remove(routingId)) {
                     trace("stream-node ignored quarantined peer notification node="
                         + streamNode.name() + " routingId=" + routingId);
-                    return;
+                    return false;
                 }
                 try {
                     handleNotification(routingId);
                 } catch (RuntimeException | Error failure) {
                     isolatePeer(routingId, failure);
                 }
-                return;
+                return false;
             }
             if (ignoredPeers.contains(routingId)) {
-                return;
+                return false;
             }
             StreamReceiveState state = receiveStates.computeIfAbsent(
                 routingId,
                 ignored -> new StreamReceiveState(routingId));
+            boolean transferred = false;
             try {
-                if (!state.append(parts)) {
-                    return;
+                if (!state.append(parts, received)) {
+                    return false;
                 }
+                transferred = true;
                 drainReceiveState(state, batch);
             } catch (RuntimeException | Error failure) {
                 isolatePeer(routingId, failure);
             }
+            return transferred;
         }
 
         private boolean drainReceiveState(
@@ -961,10 +930,9 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         private boolean tryAdmitFrame(
             RoutingId routingId,
             ZLinkStreamInboundFrame frame) {
-            ZLinkInboundDispatchBudget.Lease lease = null;
-            boolean retainForRetry = false;
             try {
                 if (isClosed()) {
+                    frame.close();
                     return true;
                 }
                 ZLinkStreamHeader header = ZLinkStreamHeaderCodec.decodeOrPlain(
@@ -972,34 +940,44 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 if (header.kind() != ZLinkStreamMessageKind.CONTROL) {
                     if (draining) {
                         sendSessionClosing(stream, routingId);
+                        frame.close();
                         return true;
                     }
-                    if (!inboundDispatchBudget.canStartApplicationReceive()) {
-                        retainForRetry = true;
-                        return false;
-                    }
-                    lease = inboundDispatchBudget.tryTrack(frame.payload().size());
-                    if (lease == null) {
-                        retainForRetry = true;
-                        return false;
+                }
+                boolean ordinaryApplication =
+                    header.kind() == ZLinkStreamMessageKind.SEND
+                        || header.kind() == ZLinkStreamMessageKind.REQUEST;
+                systems.zlink.framework.runtime.internal.dispatch
+                    .ZLinkApplicationJobQueue.Permit permit = null;
+                if (ordinaryApplication) {
+                    try {
+                        permit = applicationJobQueue.acquireBlocking();
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        frame.close();
+                        return true;
                     }
                 }
-                dispatchToSession(
-                    streamNode,
-                    routingId,
-                    header,
-                    frame.payload(),
-                    lease);
+                try (var ignored = permit == null
+                    ? (systems.zlink.framework.runtime.internal.dispatch
+                        .ZLinkApplicationJobContext.Scope) () -> { }
+                    : systems.zlink.framework.runtime.internal.dispatch
+                        .ZLinkApplicationJobContext.enter(permit)) {
+                    dispatchToSession(
+                        streamNode,
+                        routingId,
+                        header,
+                        frame.payload()).whenComplete(
+                            (ignoredResult, error) -> frame.close());
+                } finally {
+                    if (permit != null) {
+                        permit.abandonReservation();
+                    }
+                }
                 return true;
             } catch (RuntimeException | Error failure) {
-                if (lease != null) {
-                    lease.close();
-                }
+                frame.close();
                 throw failure;
-            } finally {
-                if (!retainForRetry) {
-                    frame.close();
-                }
             }
         }
 
@@ -1098,13 +1076,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 return closed;
             }
 
-            private synchronized boolean append(List<Message> parts) {
+            private synchronized boolean append(
+                List<Message> parts,
+                ZLinkBackendStreamReceived received) {
                 if (closed) {
                     return false;
                 }
-                for (Message part : parts) {
-                    buffer.append(part.toByteArray());
-                }
+                buffer.append(parts, received);
                 return true;
             }
 
@@ -1153,8 +1131,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         StreamNodeRegistration streamNode,
         RoutingId routingId,
         ZLinkStreamHeader streamHeader,
-        Message payload,
-        ZLinkInboundDispatchBudget.Lease lease) {
+        Message payload) {
         ZLinkBackendStreamSocket stream = streamsByName.get(streamNode.name());
         ZLinkFlowContext.State incomingFlow = streamHeader.flowId().isPresent()
             ? new ZLinkFlowContext.State(streamHeader.flowId().orElseThrow(),
@@ -1181,17 +1158,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
         if (draining) {
             sendSessionClosing(stream, routingId);
-            if (lease != null) {
-                lease.close();
-            }
             return CompletableFuture.completedFuture(null);
         }
         SessionState state = getOrCreateSessionState(streamNode, stream, routingId);
         if (state.replacementClosing()) {
             sendSessionClosing(stream, routingId);
-            if (lease != null) {
-                lease.close();
-            }
             return CompletableFuture.completedFuture(null);
         }
         state.markApplicationReceived();
@@ -1216,19 +1187,14 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             ZLinkMessagePayloads.encoded(payloadCopy),
             ZLinkCodecRegistration.serializerForReceivedStreamCodec(
                 serializer, dispatchHeader.codec()));
-        long payloadBytes = payloadCopy.size();
         payloadCopy.close();
         trace("stream-node dispatch-enqueue node=" + streamNode.name()
             + " routingId=" + routingId
             + " name=" + dispatchHeader.packetName()
             + " requestSeq=" + dispatchHeader.requestSequence().orElse(null)
             + " correlation=" + dispatchHeader.correlationId().orElse(null));
-        CompletionStage<Void> completion = state.queue().enqueueWithPayloadBytes(
-            payloadBytes,
+        CompletionStage<Void> completion = state.queue().enqueue(
             () -> {
-            if (lease != null) {
-                lease.handlerStarted();
-            }
             if (incomingFlow == null) {
                 return executeHandler(() ->
                     state.context().dispatchStage(dispatchHeader, sessionPayload, state.session()));
@@ -1238,10 +1204,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     state.context().dispatchStage(dispatchHeader, sessionPayload, state.session()));
             }
         });
-        if (lease != null) {
-            completion.whenComplete((ignored, failure) -> lease.close());
-        }
-        return completion;
+          return completion;
     }
 
     private void dispatchControl(
@@ -1379,7 +1342,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     localActorDispatcher,
                     streamSessionRelayAttached.getOrDefault(streamNode.name(), false),
                     defaultCodec,
-                    flow)
+                    flow,
+                    sessionRelocationSealTimeout)
                     .metadataPolicy(
                         metadataPolicy.sessionToActorKeys(),
                         metadataPolicy.actorToSessionKeys());
@@ -1656,18 +1620,30 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         Supplier<CompletionStage<T>> operation) {
         CompletableFuture<CompletionStage<T>> entered = new CompletableFuture<>();
         ZLinkFlowContext.State capturedFlow = ZLinkFlowContext.current();
+        var applicationJob = ZLinkApplicationJobContext.transferToQueuedJob();
         try {
             handlerExecutor.execute(() -> {
                 try (ZLinkFlowContext.Scope ignored = capturedFlow == null
                     ? () -> { }
-                    : ZLinkFlowContext.enter(capturedFlow)) {
+                    : ZLinkFlowContext.enter(capturedFlow);
+                     var ignoredApplicationJob =
+                         ZLinkApplicationJobContext.enterQueued(applicationJob)) {
+                    ZLinkApplicationJobContext
+                        .beforeFirstApplicationInstruction();
                     entered.complete(Objects.requireNonNull(
                         operation.get(), "handler result"));
                 } catch (RuntimeException ex) {
                     entered.completeExceptionally(ex);
+                } finally {
+                    if (applicationJob != null) {
+                        applicationJob.close();
+                    }
                 }
             });
         } catch (RuntimeException ex) {
+            if (applicationJob != null) {
+                applicationJob.close();
+            }
             entered.completeExceptionally(ex);
         }
         // The session queue owns callback ordering. Keep its turn until the

@@ -52,7 +52,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendPublisherSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestCallback;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
@@ -69,7 +68,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMonitoringBackendAd
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
@@ -386,8 +384,7 @@ final class EntrySpotActorDispatchTests {
                 RoutingId.from("source-node"),
                 17,
                 RoutingId.from("source-session"),
-                sessionOwnerBindingGeneration,
-                0));
+                sessionOwnerBindingGeneration));
         try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
             runtime.actorManager().create("actor-a", "probe").submit()
                 .toCompletableFuture().get(5, TimeUnit.SECONDS);
@@ -407,26 +404,6 @@ final class EntrySpotActorDispatchTests {
         }
     }
 
-    @Test
-    void entrySpotActorDispatchKeepsInboundLeaseUntilActorTurnCompletes() throws Exception {
-        TestBackend backend = startBackend();
-        try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
-            runtime.actorManager().create("actor-a", "probe").submit()
-                .toCompletableFuture().get(5, TimeUnit.SECONDS);
-
-            ZLinkInboundDispatchBudget budget = new ZLinkInboundDispatchBudget(0);
-            try (ZLinkInboundDispatchBudget.Lease lease = budget.track(1)) {
-                backend.entrySpot.raiseActorReadable(actorRequestParts(
-                    "actor-a", "request", "lease", 45, NO_BIND, lease));
-
-                ReplyRecord reply = awaitSingle(backend.node.noBindReplies);
-                DecodedFrame frame = decodeFrame(reply.parts().get(0));
-                assertEquals(ZLinkStreamMessageKind.RESPONSE, frame.header().kind());
-                assertEquals("lease:actor-a", deserializeReply(frame).value());
-                assertEquals(0, budget.snapshot().pendingPayloadBytes());
-            }
-        }
-    }
 
     @Test
     void entrySpotActorDispatchNoBindHandlerExceptionRepliesNoBindError() throws Exception {
@@ -675,15 +652,15 @@ final class EntrySpotActorDispatchTests {
             acceptedJournalRecord,
             parts,
             "application/zlink-framework-json-v1",
-            null,
             replyParts -> {
                 replies.incrementAndGet();
                 replyParts.forEach(Message::close);
             },
-            failure -> {
-                failures.incrementAndGet();
-                lastFailure.compareAndSet(null, failure);
-            });
+              failure -> {
+                  failures.incrementAndGet();
+                  lastFailure.compareAndSet(null, failure);
+              },
+              () -> { });
         if (!owned) {
             parts.forEach(Message::close);
         }
@@ -824,45 +801,6 @@ final class EntrySpotActorDispatchTests {
                 false));
     }
 
-    private static List<ZLinkBackendActorReceived> actorRequestParts(
-        String actorId,
-        String packetName,
-        String value,
-        long requestId,
-        int flags,
-        ZLinkInboundDispatchBudget.Lease bodyLease) {
-        ZLinkBackendActorRef actorRef =
-            new ZLinkBackendActorRef(RoutingId.from("entry-node"), actorId, 1);
-        ZLinkStreamHeader header = new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.REQUEST,
-            ZLinkStreamCodec.JSON,
-            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-            Optional.of(1L),
-            packetName,
-            Map.of());
-        return List.of(
-            new ZLinkBackendActorReceived(
-                actorRef,
-                RoutingId.from("source-node"),
-                RoutingId.from("source-session"),
-                Optional.empty(),
-                requestId,
-                flags,
-                Message.from(ZLinkStreamHeaderCodec.encode(header)),
-                true),
-            new ZLinkBackendActorReceived(
-                actorRef,
-                RoutingId.from("source-node"),
-                RoutingId.from("source-session"),
-                Optional.empty(),
-                0,
-                0,
-                Message.from(SERIALIZER.serialize(new ProbeRequest(value)).bytes()),
-                false,
-                new byte[0],
-                null,
-                bodyLease));
-    }
 
     private static ReplyRecord awaitSingle(List<ReplyRecord> replies) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
@@ -1082,8 +1020,7 @@ final class EntrySpotActorDispatchTests {
                     RoutingId.from("source-node"),
                     1,
                     RoutingId.from("source-session"),
-                    7,
-                    0));
+                    7));
 
         @Override public RoutingId routingId() { return routingId; }
         @Override public void setRoutingId(RoutingId routingId) {
@@ -1180,13 +1117,13 @@ final class EntrySpotActorDispatchTests {
             return routes.poll();
         }
         @Override public boolean publish(String channelName, String topic, List<Message> parts, SendFlags flags) { throw new UnsupportedOperationException(); }
+        @Override public CompletionStage<Void> publishAsync(String channelName, String topic, List<Message> parts, SendFlags flags) { throw new UnsupportedOperationException(); }
         @Override
-        public boolean sendToSpot(
+        public CompletionStage<Void> sendToSpot(
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
-            List<Message> parts,
-            SendFlags flags) {
+            List<Message> parts) {
             routes.add(new ZLinkBackendReceived(
                 ZLinkBackendRequestResult.OK,
                 Optional.of(RoutingId.from("message-follow-source")),
@@ -1199,18 +1136,18 @@ final class EntrySpotActorDispatchTests {
             handler.handle(new ZLinkBackendSpotDispatchInfo(
                 ZLinkBackendSpotDispatchEvent.ROUTED_READABLE,
                 List.of()));
-            return true;
+            return CompletableFuture.completedFuture(null);
         }
 
         @Override
-        public boolean requestToSpot(
+        public CompletionStage<ZLinkBackendReceived> requestToSpot(
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
             List<Message> parts,
-            ZLinkBackendRequestCallback callback,
-            SendFlags flags,
             Duration timeout) {
+            CompletableFuture<ZLinkBackendReceived> result =
+                new CompletableFuture<>();
             long requestSequence = routeRequestSequence.getAndIncrement();
             routes.add(new ZLinkBackendReceived(
                 ZLinkBackendRequestResult.OK,
@@ -1219,7 +1156,7 @@ final class EntrySpotActorDispatchTests {
                 Optional.of(requestSequence),
                 new byte[0],
                 copyParts(parts),
-                replyParts -> callback.handle(new ZLinkBackendReceived(
+                replyParts -> result.complete(new ZLinkBackendReceived(
                     ZLinkBackendRequestResult.OK,
                     Optional.of(RoutingId.from("entry-node")),
                     Optional.of(routingId),
@@ -1229,7 +1166,7 @@ final class EntrySpotActorDispatchTests {
             handler.handle(new ZLinkBackendSpotDispatchInfo(
                 ZLinkBackendSpotDispatchEvent.ROUTED_READABLE,
                 List.of()));
-            return true;
+            return result;
         }
         @Override public void onDispatchEvent(ZLinkBackendSpotDispatchHandler handler) { this.handler = handler; }
         @Override public ZLinkBackendActorJoinRequest recvActorJoin(ZLinkBackendRecvMode mode) { return null; }

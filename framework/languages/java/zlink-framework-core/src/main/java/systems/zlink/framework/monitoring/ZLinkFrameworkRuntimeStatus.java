@@ -14,7 +14,7 @@ public record ZLinkFrameworkRuntimeStatus(
     Optional<Instant> deadline,
     Optional<ZLinkFrameworkRelocationResult> relocationResult,
     Optional<ZLinkFrameworkTerminationResult> terminationResult,
-    ZLinkInboundDispatchStatus inboundDispatch,
+    ZLinkHostCapacityStatus capacity,
     long sequence,
     Instant observedAt) {
     public ZLinkFrameworkRuntimeStatus {
@@ -24,7 +24,7 @@ public record ZLinkFrameworkRuntimeStatus(
             relocationResult == null ? Optional.empty() : relocationResult;
         terminationResult =
             terminationResult == null ? Optional.empty() : terminationResult;
-        Objects.requireNonNull(inboundDispatch, "inboundDispatch");
+        Objects.requireNonNull(capacity, "capacity");
         Objects.requireNonNull(observedAt, "observedAt");
     }
 }

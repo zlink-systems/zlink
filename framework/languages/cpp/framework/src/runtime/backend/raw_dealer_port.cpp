@@ -33,68 +33,119 @@ raw_dealer_port_t::raw_dealer_port_t (
     _socket_mutex (shared_socket_mutex != nullptr ? shared_socket_mutex
                                                   : &_owned_socket_mutex)
 {
-    // The same poller owns both raw receive readiness and asynchronous
-    // request-reply completion callbacks for this DEALER socket.
-    _poller->add (
-      socket,
-      zlink::poll_event_flag_t::pollin
-        | zlink::poll_event_flag_t::pollcompletion,
-      _poller_slot);
+    _poller->add (socket, zlink::poll_event_flag_t::pollin, _poller_slot);
 }
 
-bool raw_dealer_port_t::send (const raw_message_t &parts)
+task_t<bool> raw_dealer_port_t::send (const raw_message_t &parts)
 {
     if (parts.empty ()) {
         throw std::invalid_argument (
           "raw dealer send requires message parts");
     }
-    std::lock_guard lock (*_socket_mutex);
-    if (!_socket) {
-        return false;
-    }
     auto messages = materialize_binding_parts (parts);
-    auto operation = std::move (_socket->send ()).message (messages[0]);
-    for (std::size_t index = 1; index < messages.size (); ++index) {
-        operation = std::move (operation).message (messages[index]);
+    std::optional<zlink::async_result_t<void>> pending;
+    {
+        std::lock_guard lock (*_socket_mutex);
+        if (!_socket) {
+            co_return false;
+        }
+        auto operation = std::move (_socket->send ()).message (messages[0]);
+        for (std::size_t index = 1; index < messages.size (); ++index) {
+            operation = std::move (operation).message (messages[index]);
+        }
+        pending.emplace (std::move (operation).async ());
     }
     try {
-        return std::move (operation).submit ();
+        co_await std::move (*pending);
+        co_return true;
     }
     catch (const zlink::submit_error_t &) {
-        return false;
+        co_return false;
     }
 }
 
-bool raw_dealer_port_t::request (
+task_t<zlink::submit_result_t> raw_dealer_port_t::send (
   const raw_message_t &parts,
-  std::chrono::milliseconds timeout,
-  raw_route_port_t::request_callback_t callback)
+  std::chrono::milliseconds timeout)
 {
-    if (parts.empty () || !callback) {
+    if (parts.empty () || timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument (
-          "raw dealer request requires parts and callback");
-    }
-    std::lock_guard lock (*_socket_mutex);
-    if (!_socket) {
-        return false;
+          "raw dealer send requires message parts and a positive timeout");
     }
     auto messages = materialize_binding_parts (parts);
-    auto operation =
-      std::move (_socket->request ()).message (messages[0]);
-    for (std::size_t index = 1; index < messages.size (); ++index) {
-        operation = std::move (operation).message (messages[index]);
+    std::optional<zlink::async_result_t<void>> pending;
+    {
+        std::lock_guard lock (*_socket_mutex);
+        if (!_socket) {
+            co_return zlink::submit_result_t::terminated;
+        }
+        const auto configured_timeout = _socket->options ().send_timeout ();
+        _socket->options ().send_timeout (timeout);
+        try {
+            auto operation = std::move (_socket->send ()).message (messages[0]);
+            for (std::size_t index = 1; index < messages.size (); ++index) {
+                operation = std::move (operation).message (messages[index]);
+            }
+            pending.emplace (std::move (operation).async ());
+            _socket->options ().send_timeout (configured_timeout);
+        }
+        catch (...) {
+            _socket->options ().send_timeout (configured_timeout);
+            throw;
+        }
     }
     try {
-        return std::move (operation).timeout (timeout).submit (
-          [callback = std::move (callback)] (
-            zlink::request_result_t result,
-            std::vector<zlink::message_t> reply) mutable {
-              callback (map_binding_request_result (result),
-                        copy_binding_parts (reply));
-          });
+        co_await std::move (*pending);
+        co_return zlink::submit_result_t::ok;
     }
-    catch (const zlink::submit_error_t &) {
-        return false;
+    catch (const zlink::submit_error_t &error) {
+        co_return error.result ();
+    }
+}
+
+task_t<raw_request_completion_t> raw_dealer_port_t::request (
+  const raw_message_t &parts,
+  std::chrono::milliseconds timeout)
+{
+    if (parts.empty ()
+        || timeout <= std::chrono::milliseconds::zero ()) {
+        throw std::invalid_argument (
+          "raw dealer request requires parts and timeout");
+    }
+    auto messages = materialize_binding_parts (parts);
+    std::optional<zlink::async_result_t<std::vector<zlink::message_t>>> pending;
+    {
+        std::lock_guard lock (*_socket_mutex);
+        if (!_socket) {
+            co_return raw_request_completion_t{
+              raw_request_result_t::terminated, {}};
+        }
+        auto operation =
+          std::move (_socket->request ()).message (messages[0]);
+        for (std::size_t index = 1; index < messages.size (); ++index) {
+            operation = std::move (operation).message (messages[index]);
+        }
+        pending.emplace (std::move (operation).timeout (timeout).async ());
+    }
+    try {
+        auto reply = co_await std::move (*pending);
+        co_return raw_request_completion_t{
+          raw_request_result_t::ok, copy_binding_parts (reply)};
+    }
+    catch (const zlink::request_error_t &error) {
+        co_return raw_request_completion_t{
+          map_binding_request_result (error.result ()), {}};
+    }
+    catch (const zlink::submit_error_t &error) {
+        const auto result =
+          error.result () == zlink::submit_result_t::backpressured
+            ? raw_request_result_t::timed_out
+          : error.result () == zlink::submit_result_t::not_connected
+            ? raw_request_result_t::not_connected
+          : error.result () == zlink::submit_result_t::terminated
+            ? raw_request_result_t::terminated
+            : raw_request_result_t::failed;
+        co_return raw_request_completion_t{result, {}};
     }
 }
 

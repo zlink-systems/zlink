@@ -29,7 +29,6 @@ import {
   type ServiceInstanceActivationRecoveryEnvelope
 } from '../foundation/service-instance-activation-recovery-codec';
 import {
-  decodePreparingAuthorityEnvelope,
   ServiceRelocationAuthorityPayloadCodec,
   serviceRelocationAuthorityApplicationPayload
 } from '../foundation/service-relocation-runtime';
@@ -96,7 +95,6 @@ interface CompleteAuthoritySnapshot {
   readonly routes: Map<string, AppliedAuthorityRoute>;
   readonly pending: readonly PendingInstanceActivationRecovery[];
   readonly actors: readonly ZLinkAuthoritySnapshot[];
-  readonly relocations: readonly ZLinkAuthoritySnapshot[];
 }
 
 export interface ZLinkStatefulAuthorityRouteRuntimeOptions {
@@ -108,10 +106,6 @@ export interface ZLinkStatefulAuthorityRouteRuntimeOptions {
   readonly pageSize: number;
   readonly reportError: (error: unknown) => void;
   readonly recoverActor?: (
-    authority: ZLinkAuthoritySnapshot,
-    signal?: AbortSignal
-  ) => Promise<void>;
-  readonly recoverRelocation?: (
     authority: ZLinkAuthoritySnapshot,
     signal?: AbortSignal
   ) => Promise<void>;
@@ -164,12 +158,6 @@ export class ZLinkStatefulAuthorityRouteRuntime {
     }
     const current = snapshot.routes;
 
-    // Durable relocation and Actor recovery must finish before a route becomes
-    // visible. Otherwise ingress can resolve a committed authority while its
-    // queue, timers, session barrier, or hidden object is still being restored.
-    for (const relocation of snapshot.relocations) {
-      await this.options.recoverRelocation?.(relocation, signal);
-    }
     for (const actor of snapshot.actors) {
       await this.options.recoverActor?.(actor, signal);
     }
@@ -482,38 +470,12 @@ export class ZLinkStatefulAuthorityRouteRuntime {
     const result = new Map<string, AppliedAuthorityRoute>();
     const pending: PendingInstanceActivationRecovery[] = [];
     const actors: ZLinkAuthoritySnapshot[] = [];
-    const relocations: ZLinkAuthoritySnapshot[] = [];
     const relocationCodec = new ServiceRelocationAuthorityPayloadCodec();
     for (const { key, snapshot: scanned } of candidates.values()) {
       let current: ZLinkAuthorityReadResult = scanned;
       if (authorityNeedsExactRead(scanned, relocationCodec)) {
         current = await this.options.store.readAuthority(key, signal);
         if (current.kind !== 'snapshot') continue;
-      }
-      const steadyPayload = decodePreparingAuthorityEnvelope(current.payload);
-      if (steadyPayload !== undefined) {
-        const restored = await this.options.store.compareExchangeAuthority(
-          key,
-          current.storeVersion,
-          {
-            kind: 'restore',
-            payload: steadyPayload,
-            expectedOwner: {
-              ownerId: current.ownerId,
-              leaseGeneration: current.ownerLeaseGeneration
-            }
-          },
-          signal
-        );
-        if (restored.kind === 'stored') {
-          const { kind: _kind, ...snapshot } = restored;
-          current = { kind: 'snapshot', ...snapshot };
-        } else if (restored.kind === 'conflict') {
-          current = restored.current;
-          if (current.kind !== 'snapshot') continue;
-        } else {
-          throw new Error('Preparing authority recovery exhausted its StoreVersion.');
-        }
       }
       const route = authorityRoute(current);
       if (route !== undefined) result.set(authorityRouteKey(route), route);
@@ -526,13 +488,10 @@ export class ZLinkStatefulAuthorityRouteRuntime {
       ) {
         actors.push(current);
       }
-      if (relocationCodec.read(current.payload) !== undefined) {
-        relocations.push(current);
-      }
       const pendingRecovery = pendingInstanceActivation(current);
       if (pendingRecovery !== undefined) pending.push(pendingRecovery);
     }
-    return { routes: result, pending, actors, relocations };
+    return { routes: result, pending, actors };
   }
 }
 
@@ -540,7 +499,6 @@ function authorityNeedsExactRead(
   snapshot: ZLinkAuthoritySnapshot,
   relocationCodec: ServiceRelocationAuthorityPayloadCodec
 ): boolean {
-  if (decodePreparingAuthorityEnvelope(snapshot.payload) !== undefined) return true;
   if (pendingInstanceActivation(snapshot) !== undefined) return true;
   if (relocationCodec.read(snapshot.payload) !== undefined) return true;
   if (decodeServiceReadySpotAuthority(

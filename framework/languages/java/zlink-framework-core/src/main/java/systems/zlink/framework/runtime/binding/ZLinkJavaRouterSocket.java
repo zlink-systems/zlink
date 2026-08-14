@@ -2,15 +2,14 @@ package systems.zlink.framework.runtime.binding;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.RouterSocket;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestCallback;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 
 final class ZLinkJavaRouterSocket
@@ -52,22 +51,20 @@ final class ZLinkJavaRouterSocket
     }
 
     @Override
-    public synchronized boolean send(RoutingId routingId, List<Message> parts, SendFlags flags) {
-        return ZLinkJavaSocketSupport.submit(socket.send(routingId), parts, flags);
+    public synchronized CompletionStage<Void> send(
+        RoutingId routingId,
+        List<Message> parts) {
+        return ZLinkJavaSocketSupport.submit(socket.send(routingId), parts);
     }
 
     @Override
-    public synchronized boolean request(
+    public synchronized CompletionStage<ZLinkBackendReceived> request(
         RoutingId routingId,
         List<Message> parts,
-        ZLinkBackendRequestCallback callback,
-        SendFlags flags,
         Duration timeout) {
         return ZLinkJavaSocketSupport.submitRequest(
             socket.request(routingId),
             parts,
-            callback,
-            flags,
             timeout);
     }
 
@@ -81,7 +78,6 @@ final class ZLinkJavaRouterSocket
     }
 
     @Override public synchronized void close() {
-        notifyAdmissionShutdown();
         receivePoller.close();
         socket.close();
     }

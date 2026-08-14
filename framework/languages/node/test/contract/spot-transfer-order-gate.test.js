@@ -74,39 +74,25 @@ test('committed Actor transfer reports source cleanup after source membership re
     },
     storeNow: new Date(0)
   };
+  const targetAuthority = {
+    ...sourceAuthority,
+    storeVersion: { value: 'target-version' },
+    ownerId: 'target-owner',
+    ownerLeaseGeneration: 13n,
+    authorityOwnerGeneration: 11n,
+    allocation: {
+      ...sourceAuthority.allocation,
+      descriptor: { meshName: 'mesh', rid: 'target-node' },
+      descriptorLifecycleGeneration: 7n
+    }
+  };
+  let targetCommitted = false;
   const authorityStore = {
     async readAuthority() {
-      return sourceAuthority;
+      return targetCommitted ? targetAuthority : sourceAuthority;
     },
-    async reserveRelocationCapacity(request) {
-      events.push('authority-reserved');
-      assert.equal(request.expectedStoreVersion.value, 'source-version');
-      assert.equal(request.targetDescriptor.rid, 'target-node');
-      return { kind: 'reserved', fence: { value: 'target-reservation' } };
-    },
-    async compareExchangeAuthority(_key, expectedStoreVersion, mutation) {
-      events.push('authority-committed');
-      assert.equal(expectedStoreVersion.value, 'source-version');
-      assert.equal(mutation.generationTransition, 'newOwner');
-      assert.equal(mutation.relocationCapacityFence.value, 'target-reservation');
-      return {
-        kind: 'stored',
-        storeVersion: { value: 'target-version' },
-        payload: mutation.payload,
-        objectGeneration: 9n,
-        authorityOwnerGeneration: 11n,
-        ownerId: 'target-owner',
-        ownerLeaseGeneration: 13n,
-        allocation: {
-          state: 'active',
-          objectKind: 'actor',
-          stableType: 'player',
-          descriptor: { meshName: 'mesh', rid: 'target-node' },
-          descriptorLifecycleGeneration: 7n,
-          capacity: { actors: 1, spots: 0 }
-        },
-        storeNow: new Date(0)
-      };
+    async compareExchangeAuthority() {
+      assert.fail('the source transfer must not mutate Actor authority');
     }
   };
   const runtime = new ZLinkActorTransferRuntime({
@@ -160,8 +146,8 @@ test('committed Actor transfer reports source cleanup after source membership re
     objectGeneration: 9n,
     meshName: 'mesh'
   };
-  await prepared.reserveTarget(target);
-  await prepared.commitAuthority(target, targetActorRef);
+  targetCommitted = true;
+  await prepared.observeTargetAuthority(target, targetActorRef);
   prepared.commit(target, targetActorRef, []);
   await cleanup;
 

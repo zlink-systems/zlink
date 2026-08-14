@@ -120,7 +120,7 @@ public sealed partial class UnhandledDispatchPolicyTests
                     null);
                 try
                 {
-                    publisher.Publish("events.child").Messages(parts).Submit();
+                    publisher.TryPublish("events.child").Messages(parts).Submit();
                 }
                 finally
                 {
@@ -443,7 +443,7 @@ public sealed partial class UnhandledDispatchPolicyTests
                 null);
             try
             {
-                publisher.Publish("events").Messages(parts).Submit();
+                publisher.TryPublish("events").Messages(parts).Submit();
             }
             finally
             {
@@ -727,7 +727,7 @@ public sealed partial class UnhandledDispatchPolicyTests
                 var parts = CreateParts();
                 try
                 {
-                    publisher.Publish("events.child").Messages(parts).Submit();
+                    publisher.TryPublish("events.child").Messages(parts).Submit();
                 }
                 finally
                 {
@@ -1071,7 +1071,7 @@ public sealed partial class UnhandledDispatchPolicyTests
         public bool RequestToChannel(
             string channelName,
             Message message,
-            RequestCallback callback,
+            ZLinkBackendRequestCallback callback,
             SendFlags flags,
             TimeSpan? timeout,
             ReadOnlyMemory<byte> metadata)
@@ -1082,7 +1082,7 @@ public sealed partial class UnhandledDispatchPolicyTests
         public bool RequestToChannel(
             string channelName,
             IReadOnlyList<Message> parts,
-            RequestCallback callback,
+            ZLinkBackendRequestCallback callback,
             SendFlags flags,
             TimeSpan? timeout,
             ReadOnlyMemory<byte> metadata)
@@ -1139,7 +1139,7 @@ public sealed partial class UnhandledDispatchPolicyTests
             string targetSpotId,
             ulong spotGeneration,
             Message message,
-            RequestCallback callback,
+            ZLinkBackendRequestCallback callback,
             SendFlags flags,
             TimeSpan? timeout,
             ReadOnlyMemory<byte> metadata)
@@ -1152,7 +1152,7 @@ public sealed partial class UnhandledDispatchPolicyTests
             string targetSpotId,
             ulong spotGeneration,
             IReadOnlyList<Message> parts,
-            RequestCallback callback,
+            ZLinkBackendRequestCallback callback,
             SendFlags flags,
             TimeSpan? timeout,
             ReadOnlyMemory<byte> metadata)

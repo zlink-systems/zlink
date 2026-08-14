@@ -84,9 +84,6 @@ class SubmitAdmissionApplication {
     fun configureFramework(state: RoleState): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { options ->
             val config = state.config
-            config.applicationHwmBytes?.let { bytes ->
-                options.configureInboundDispatch().setApplicationHwmBytes(bytes)
-            }
             options.setDefaultRequestTimeout(Duration.ofMillis(config.defaultRequestTimeoutMillis))
             if (config.role != "publisher" && config.role != "subscriber") {
                 val mesh = options.addRouteMesh(MESH)
@@ -578,7 +575,6 @@ data class RoleConfig(
     val gateFile: String,
     val evidenceFile: String,
     val peerConnections: List<Pair<String, String>>,
-    val applicationHwmBytes: Long?,
     val defaultRequestTimeoutMillis: Long,
     val clientServerRole: String,
     val clientServerEndpoint: String,
@@ -606,7 +602,6 @@ data class RoleConfig(
                     values["peerRids"].orEmpty(),
                     values["peerEndpoints"].orEmpty(),
                 ),
-                applicationHwmBytes = values["applicationHwmBytes"]?.toLongOrNull(),
                 defaultRequestTimeoutMillis =
                     values["defaultRequestTimeoutMillis"]?.toLongOrNull() ?: 1_000L,
                 clientServerRole = values["clientServerRole"].orEmpty(),

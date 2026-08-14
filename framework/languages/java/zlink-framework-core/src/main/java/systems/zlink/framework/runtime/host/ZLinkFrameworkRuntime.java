@@ -28,7 +28,6 @@ import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.monitoring.ZLinkClientServerRuntime;
 import systems.zlink.framework.monitoring.ZLinkFanoutRuntime;
 import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
-import systems.zlink.framework.monitoring.ZLinkInboundDispatchStatus;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.monitoring.ZLinkListenerStatus;
 import systems.zlink.framework.monitoring.ZLinkObservedStatus;
@@ -109,6 +108,15 @@ public final class ZLinkFrameworkRuntime
     private final ZLinkActorClient actorClient;
     private final ZLinkStreamRuntime streams;
     private final ZLinkBackendContext backendContext;
+    private final systems.zlink.framework.runtime.internal.dispatch
+        .ZLinkApplicationJobQueue applicationJobQueue;
+    private final Object capacityLock = new Object();
+    private AutoCloseable capacityMetricRegistration = () -> { };
+    private long capacityMeasurementEpoch;
+    private systems.zlink.framework.monitoring.ZLinkCoreHwmStatus
+        lastCoreHwmStatus;
+    private final AtomicBoolean coreHwmContextActive =
+        new AtomicBoolean(false);
     private final ZLinkFrameworkRegistration registration;
     private final ZLinkRegisteredLocationStores locationStores;
     private final ZLinkMeshDrainCoordinator
@@ -185,10 +193,10 @@ public final class ZLinkFrameworkRuntime
                     status.state(),
                     status.isReady(),
                     status.acceptingWork(),
+                    status.capacity(),
                     status.deadline(),
                     status.relocationResult(),
-                    status.terminationResult(),
-                    status.inboundDispatch()),
+                    status.terminationResult()),
                 ignored -> runtimeState,
                 64,
                 status -> status.state() == ZLinkFrameworkRuntimeState.STOPPED
@@ -223,6 +231,7 @@ public final class ZLinkFrameworkRuntime
         options.registration().codecs().freeze();
         this.eventDispatcher = eventDispatcher;
         this.registration = options.registration();
+        this.applicationJobQueue = this.registration.applicationJobQueue();
         this.meshDrains = new systems.zlink.framework.runtime.internal.drain
             .ZLinkMeshDrainCoordinator(this.registration.meshNodes().stream()
                 .map(MeshNodeRegistration::meshName)
@@ -289,6 +298,7 @@ public final class ZLinkFrameworkRuntime
             runtimeHandlers,
             eventDispatcher);
         this.backendContext = channelSubsystem.backendContext();
+        this.coreHwmContextActive.set(true);
         this.channels = channelSubsystem.channels();
         this.channels.setHostStateSupplier(runtimeState::get);
         if (this.registration.meshNodes().isEmpty()) {
@@ -305,9 +315,9 @@ public final class ZLinkFrameworkRuntime
                     serializer,
                     this.registration,
                     handlerFactory,
-                    this.meshDrains,
-                    this.registration.inboundDispatchBudget()),
-                true);
+                    this.meshDrains),
+                true,
+                this.applicationJobQueue);
         }
         this.meshNodes.nodesByName().forEach((meshName, node) ->
             this.channels.registerSpotRouterNode(meshName, node.spotNode()));
@@ -469,9 +479,13 @@ public final class ZLinkFrameworkRuntime
                     this.registration.locations().options(),
                     relocationAdapters,
                     this.registration.applicationVersion(),
-                    this.registration.maintenanceWave())
+                    this.registration.maintenanceWave(),
+                    this.registration.locations().options()
+                        .sessionRelocationSealTimeout())
             : null;
 
+        this.capacityMetricRegistration =
+            ZLinkRuntimeMetrics.registerHostCapacity(this::capacityStatus);
         locationSubsystem.startup()
             .thenCompose(ignored ->
                 this.objectDescriptors == null
@@ -927,6 +941,25 @@ public final class ZLinkFrameworkRuntime
     public ZLinkFrameworkRuntimeStatus
         status() {
         return runtimeStatus(terminationSequence.get());
+    }
+
+    public void resetCapacityMetrics() {
+        if (!coreHwmContextActive.get()) {
+            throw inactiveCapacityContext();
+        }
+        synchronized (capacityLock) {
+            try {
+                backendContext.resetCoreHwmBudgetMetrics();
+                applicationJobQueue.resetMetrics();
+                capacityMeasurementEpoch = Math.incrementExact(
+                    capacityMeasurementEpoch);
+            } catch (RuntimeException failure) {
+                if (!coreHwmContextActive.get()) {
+                    throw inactiveCapacityContext(failure);
+                }
+                throw failure;
+            }
+        }
     }
 
     public Flow.Publisher<
@@ -1641,18 +1674,6 @@ public final class ZLinkFrameworkRuntime
     private systems.zlink.framework.monitoring
         .ZLinkFrameworkRuntimeStatus runtimeStatus(long sequence) {
         ZLinkFrameworkRuntimeState state = runtimeState.get();
-        systems.zlink.framework.runtime.internal.dispatch
-            .ZLinkInboundDispatchBudget.Snapshot inbound =
-            registration.inboundDispatchBudget().snapshot();
-        ZLinkInboundDispatchStatus inboundStatus =
-            new ZLinkInboundDispatchStatus(
-                inbound.applicationHwmBytes(),
-                inbound.pendingPayloadBytes(),
-                inbound.queuedPayloadBytes(),
-                inbound.activePayloadBytes(),
-                inbound.applicationReceivePaused(),
-                registration.inboundDispatchBudget().pendingCompletionSends(),
-                registration.inboundDispatchBudget().completionSendLimit());
         return new systems.zlink.framework.monitoring
             .ZLinkFrameworkRuntimeStatus(
                 state,
@@ -1661,9 +1682,143 @@ public final class ZLinkFrameworkRuntime
                 Optional.ofNullable(terminationDeadline.get()),
                 Optional.ofNullable(lastRelocationResult.get()),
                 Optional.ofNullable(lastTerminationResult.get()),
-                inboundStatus,
+                capacityStatus(),
                 sequence,
                 Instant.now());
+    }
+
+    private systems.zlink.framework.monitoring.ZLinkHostCapacityStatus
+        capacityStatus() {
+        synchronized (capacityLock) {
+            systems.zlink.framework.monitoring.ZLinkCoreHwmStatus core =
+                coreHwmBudgetSnapshot()
+                    .map(this::projectCoreHwm)
+                    .orElseGet(() -> lastCoreHwmStatus == null
+                        ? initialCoreHwmStatus()
+                        : lastCoreHwmStatus);
+            lastCoreHwmStatus = core;
+            var queue = applicationJobQueue.snapshot();
+            var queueStatus = new systems.zlink.framework.monitoring
+                .ZLinkApplicationJobQueueStatus(
+                    queue.configuredProfile(),
+                    queue.configuredManualMax().isPresent()
+                        ? Optional.of(queue.configuredManualMax().getAsLong())
+                        : Optional.empty(),
+                    queue.effectiveProcessorCount(),
+                    queue.effectiveMaxQueuedApplicationJobs(),
+                    queue.reservedSupplyPermits(),
+                    queue.queuedApplicationJobs(),
+                    queue.permitsInUse(),
+                    queue.peakPermitsInUse(),
+                    queue.capacityWaiters(),
+                    queue.capacityWaitCount(),
+                    queue.capacityWaitDuration());
+            return new systems.zlink.framework.monitoring
+                .ZLinkHostCapacityStatus(
+                    capacityMeasurementEpoch,
+                    core,
+                    queueStatus);
+        }
+    }
+
+    private systems.zlink.framework.monitoring.ZLinkCoreHwmStatus
+        initialCoreHwmStatus() {
+        var inbound = registration.inboundDispatch();
+        return new systems.zlink.framework.monitoring.ZLinkCoreHwmStatus(
+            inbound.coreHwmMemoryLimitBytes().isPresent()
+                ? Optional.of(inbound.coreHwmMemoryLimitBytes().getAsLong())
+                : Optional.empty(),
+            inbound.coreHwmBudgetBytes().isPresent()
+                ? Optional.of(inbound.coreHwmBudgetBytes().getAsLong())
+                : Optional.empty(),
+            inbound.coreHwmProfile(),
+            inbound.coreHwmBudgetBytes().orElse(0L),
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L);
+    }
+
+    private systems.zlink.framework.monitoring.ZLinkCoreHwmStatus
+        projectCoreHwm(
+            systems.zlink.contracts.core.CoreHwmBudgetSnapshot snapshot) {
+        var inbound = registration.inboundDispatch();
+        return new systems.zlink.framework.monitoring.ZLinkCoreHwmStatus(
+            inbound.coreHwmMemoryLimitBytes().isPresent()
+                ? Optional.of(inbound.coreHwmMemoryLimitBytes().getAsLong())
+                : Optional.empty(),
+            inbound.coreHwmBudgetBytes().isPresent()
+                ? Optional.of(inbound.coreHwmBudgetBytes().getAsLong())
+                : Optional.empty(),
+            inbound.coreHwmProfile(),
+            snapshot.effectiveCoreBudgetBytes(),
+            snapshot.totalAppliedHwmBytes(),
+            snapshot.coreQueueAccountedBytes(),
+            snapshot.applicationAccountedBytes(),
+            snapshot.currentAccountedBytes(),
+            snapshot.provisionalAccountedBytes(),
+            snapshot.peakAccountedBytes(),
+            snapshot.completionCurrentAccountedBytes(),
+            snapshot.completionPeakAccountedBytes(),
+            snapshot.completionPendingMessageCount(),
+            snapshot.totalMessagingAccountedBytes(),
+            snapshot.monitorQueueAppliedHwmBytes(),
+            snapshot.monitorQueueAccountedBytes(),
+            snapshot.totalInstanceAppliedHwmBytes(),
+            snapshot.totalInstanceAccountedBytes(),
+            snapshot.blockedRatioPpm(),
+            snapshot.activeDirectionalQueueCount(),
+            snapshot.activeCompletionDirectionalQueueCount(),
+            snapshot.activeSendQueueCount(),
+            snapshot.activeReceiveQueueCount(),
+            snapshot.outstandingApplicationLeaseCount(),
+            snapshot.retiredQueueCount(),
+            snapshot.deferredOriginCreditBytes());
+    }
+
+    private Optional<systems.zlink.contracts.core.CoreHwmBudgetSnapshot>
+        coreHwmBudgetSnapshot() {
+        if (!coreHwmContextActive.get()) {
+            return Optional.empty();
+        }
+        try {
+            return backendContext.coreHwmBudgetSnapshot();
+        } catch (RuntimeException failure) {
+            if (!coreHwmContextActive.get()) {
+                return Optional.empty();
+            }
+            throw failure;
+        }
+    }
+
+    private static IllegalStateException inactiveCapacityContext() {
+        return new IllegalStateException(
+            "Capacity metrics reset requires an active Framework runtime context");
+    }
+
+    private static IllegalStateException inactiveCapacityContext(
+        RuntimeException cause) {
+        return new IllegalStateException(
+            "Capacity metrics reset requires an active Framework runtime context",
+            cause);
     }
 
     private ZLinkFrameworkTerminationResult toPublicTerminationResult(
@@ -1761,6 +1916,21 @@ public final class ZLinkFrameworkRuntime
         return closeGate.close(this::closeCoreAsync);
     }
 
+    private void closeBackendContext() {
+        synchronized (capacityLock) {
+            coreHwmBudgetSnapshot().ifPresent(snapshot ->
+                lastCoreHwmStatus = projectCoreHwm(snapshot));
+            coreHwmContextActive.set(false);
+        }
+        applicationJobQueue.close();
+        try {
+            capacityMetricRegistration.close();
+        } catch (Exception ignored) {
+            // Metrics are observational and cannot make runtime teardown fail.
+        }
+        backendContext.close();
+    }
+
     private CompletionStage<Void> closeCoreAsync() {
         ZLinkFrameworkRuntimeState currentState = runtimeState.get();
         if (currentState != ZLinkFrameworkRuntimeState.STOPPED
@@ -1777,9 +1947,8 @@ public final class ZLinkFrameworkRuntime
         // Close completion admission after accepted runtime components have
         // finished their teardown, so graceful drain can still publish the
         // replies it already accepted.
-        shutdown.defer(registration.inboundDispatchBudget()::close);
         shutdown.defer(this::closeHandlerExecutor);
-        shutdown.defer(backendContext::close);
+        shutdown.defer(this::closeBackendContext);
         shutdown.defer(routeMeshRuntime::close);
         if (authorityRouteRuntime != null) {
             shutdown.defer(authorityRouteRuntime::close);
@@ -2029,14 +2198,9 @@ public final class ZLinkFrameworkRuntime
     }
 
     private boolean workloadsDrained() {
-        systems.zlink.framework.runtime.internal.dispatch
-            .ZLinkInboundDispatchBudget.Snapshot inbound =
-                registration.inboundDispatchBudget().snapshot();
         return (spots == null || spots.drainComplete())
             && (actors == null || actors.drainComplete())
-            && inbound.pendingPayloadBytes() == 0
-            && registration.inboundDispatchBudget()
-                .pendingCompletionSends() == 0;
+            ;
     }
 
     private void completeDrain() {

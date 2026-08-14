@@ -84,16 +84,6 @@ internal static class ProviderEndpoints
                 status.StoreHealthy,
                 status.OwnerLeaseHealthy));
         });
-        app.MapGet("/runtime/status", (IZLinkFrameworkRuntime runtime) =>
-        {
-            var inbound = runtime.Status.InboundDispatch;
-            return Results.Ok(new RuntimeInboundStatusRes(
-                inbound.ApplicationHwmBytes,
-                inbound.PendingPayloadBytes,
-                inbound.QueuedPayloadBytes,
-                inbound.ActivePayloadBytes,
-                inbound.ApplicationReceivePaused));
-        });
         app.MapPost("/profile/backpressure/reset", (BackpressureGate gate) =>
         {
             gate.Reset();

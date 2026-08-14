@@ -12,11 +12,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 
 import systems.zlink.framework.streams.ZLinkSessionClient;
@@ -206,15 +204,13 @@ record ZLinkStreamSessionSendCall(
             metadata,
             Optional.of(ZLinkStreamCorrelation.next()));
         List<Message> parts = List.of(Message.from(encoded.payload()));
-        return oneWayCalls.submitOneWay(
-            stream,
-            ZLinkBackendAdmissionKey.socket(),
-            () -> stream.send(routingId, header, parts, SendFlags.DONT_WAIT),
-            () -> {
-                parts.forEach(Message::close);
-                payload.close();
-            },
-            timeout);
+        CompletionStage<Void> result = ZLinkOneWayCalls.adaptOneWay(
+            stream.sendAsync(routingId, header, parts, timeout));
+        result.whenComplete((ignored, failure) -> {
+            parts.forEach(Message::close);
+            payload.close();
+        });
+        return result;
     }
 }
 
@@ -290,20 +286,18 @@ record ZLinkStreamSessionReplyCall(
             encoded.flags(),
             packetName,
             Map.of());
-        return context.oneWayCalls().submitOneWay(
-            stream,
-            ZLinkBackendAdmissionKey.socket(),
-            () -> {
-                boolean accepted = stream.reply(
-                    routingId, replyHeader, parts, SendFlags.DONT_WAIT);
-                if (accepted) {
+        CompletionStage<Void> result = ZLinkOneWayCalls.adaptOneWay(
+            stream.replyAsync(routingId, replyHeader, parts));
+        result.whenComplete((ignored, failure) -> {
+            try {
+                if (failure == null) {
                     context.traceStreamReplied(current);
                 }
-                return accepted;
-            },
-            () -> {
+            } finally {
                 parts.forEach(Message::close);
                 payload.close();
-            });
+            }
+        });
+        return result;
     }
 }

@@ -328,8 +328,7 @@ export class ZLinkStoreLocationResolvers implements
       return {
         ...direct.actorRef,
         ownershipGeneration: direct.authorityOwnerGeneration,
-        ownerLeaseGeneration: direct.ownerLeaseGeneration,
-        acceptedHighWater: 0n
+        ownerLeaseGeneration: direct.ownerLeaseGeneration
       } as ActorRef;
     }
     // An authority row is the canonical Actor location. If it exists but its

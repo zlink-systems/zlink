@@ -76,27 +76,6 @@ public readonly record struct ZLinkFrameworkTerminationResult(
     ZLinkFrameworkTerminationOutcome Outcome,
     ZLinkFrameworkTerminationReason Reason);
 
-/// <summary>Reports the host-wide byte budget for inbound application dispatch.</summary>
-/// <param name="ApplicationHwmBytes">Applied byte limit. Zero means unlimited.</param>
-/// <param name="PendingPayloadBytes">Payload bytes that have not reached terminal completion.</param>
-/// <param name="QueuedPayloadBytes">Pending payload bytes waiting to enter a handler.</param>
-/// <param name="ActivePayloadBytes">Pending payload bytes currently owned by handlers.</param>
-/// <param name="ApplicationReceivePaused">Whether the byte limit has paused new application receives.</param>
-/// <param name="PendingCompletionSends">Replies waiting for or holding a completion send permit.</param>
-/// <param name="CompletionSendLimit">Host-wide completion send permit limit.</param>
-/// <remarks>
-/// <paramref name="PendingPayloadBytes"/> equals the sum of
-/// <paramref name="QueuedPayloadBytes"/> and <paramref name="ActivePayloadBytes"/>.
-/// </remarks>
-public readonly record struct ZLinkInboundDispatchStatus(
-    ulong ApplicationHwmBytes,
-    ulong PendingPayloadBytes,
-    ulong QueuedPayloadBytes,
-    ulong ActivePayloadBytes,
-    bool ApplicationReceivePaused,
-    ulong PendingCompletionSends,
-    ulong CompletionSendLimit);
-
 /// <summary>Counts status updates that were coalesced or discarded for one observer.</summary>
 public readonly record struct ZLinkObservationLoss(
     ulong CoalescedCount,
@@ -108,6 +87,52 @@ public readonly record struct ZLinkObservedStatus<TStatus>(
     ZLinkObservationLoss Loss)
     where TStatus : notnull;
 
+public readonly record struct ZLinkCoreHwmStatus(
+    ulong? ConfiguredMemoryLimitBytes,
+    ulong? ConfiguredBudgetBytes,
+    ZLinkCoreHwmProfile ConfiguredProfile,
+    ulong EffectiveBudgetBytes,
+    ulong TotalAppliedHwmBytes,
+    ulong CoreQueueAccountedBytes,
+    ulong ApplicationAccountedBytes,
+    ulong CurrentAccountedBytes,
+    ulong ProvisionalAccountedBytes,
+    ulong PeakAccountedBytes,
+    ulong CompletionCurrentAccountedBytes,
+    ulong CompletionPeakAccountedBytes,
+    ulong CompletionPendingMessageCount,
+    ulong TotalMessagingAccountedBytes,
+    ulong MonitorQueueAppliedHwmBytes,
+    ulong MonitorQueueAccountedBytes,
+    ulong TotalInstanceAppliedHwmBytes,
+    ulong TotalInstanceAccountedBytes,
+    ulong BlockedRatioPpm,
+    ulong ActiveDirectionalQueueCount,
+    ulong ActiveCompletionDirectionalQueueCount,
+    ulong ActiveSendQueueCount,
+    ulong ActiveReceiveQueueCount,
+    ulong OutstandingApplicationLeaseCount,
+    ulong RetiredQueueCount,
+    ulong DeferredOriginCreditBytes);
+
+public readonly record struct ZLinkApplicationJobQueueStatus(
+    ZLinkApplicationJobQueueProfile ConfiguredProfile,
+    ulong? ConfiguredManualMax,
+    ulong EffectiveProcessorCount,
+    ulong EffectiveMaxQueuedApplicationJobs,
+    ulong ReservedSupplyPermits,
+    ulong QueuedApplicationJobs,
+    ulong PermitsInUse,
+    ulong PeakPermitsInUse,
+    ulong CapacityWaiters,
+    ulong CapacityWaitCount,
+    TimeSpan CapacityWaitDuration);
+
+public readonly record struct ZLinkHostCapacityStatus(
+    ulong MeasurementEpoch,
+    ZLinkCoreHwmStatus CoreHwm,
+    ZLinkApplicationJobQueueStatus ApplicationJobQueue);
+
 public sealed record ZLinkFrameworkRuntimeStatus(
     ZLinkFrameworkRuntimeState State,
     bool IsReady,
@@ -117,7 +142,7 @@ public sealed record ZLinkFrameworkRuntimeStatus(
     ZLinkFrameworkTerminationResult? TerminationResult,
     ulong Sequence,
     DateTimeOffset ObservedAt,
-    ZLinkInboundDispatchStatus InboundDispatch = default);
+    ZLinkHostCapacityStatus Capacity = default);
 
 public interface IZLinkFrameworkRuntime
 {
@@ -127,6 +152,12 @@ public interface IZLinkFrameworkRuntime
     /// <summary>Observes the latest host status without changing host lifecycle.</summary>
     IAsyncEnumerable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>> ObserveAsync(
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resets host-capacity epoch counters while preserving configuration and
+    /// current gauges. The Framework runtime must be active.
+    /// </summary>
+    void ResetCapacityMetrics();
 
     /// <summary>
     /// Moves stateful workload from this host. Successful completion leaves

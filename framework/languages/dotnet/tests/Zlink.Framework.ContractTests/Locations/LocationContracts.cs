@@ -8,6 +8,22 @@ public sealed class LocationContracts
         new(2026, 7, 2, 0, 0, 0, TimeSpan.Zero);
 
     [Fact]
+    public void SessionRelocationSealTimeout_is_owned_only_by_location_options()
+    {
+        const string propertyName = "SessionRelocationSealTimeout";
+        var property = typeof(ZLinkLocationOptions).GetProperty(propertyName);
+
+        Assert.NotNull(property);
+        Assert.Equal(typeof(TimeSpan), property.PropertyType);
+        Assert.True(property.CanRead);
+        Assert.True(property.CanWrite);
+        Assert.Equal(
+            TimeSpan.FromSeconds(3),
+            property.GetValue(new ZLinkLocationOptions()));
+        Assert.Null(typeof(IZLinkFrameworkOptions).GetProperty(propertyName));
+    }
+
+    [Fact]
     public void Location_contract_excludes_compatibility_lease_and_slot_allocation_surface()
     {
         var assembly = typeof(IZLinkLocationRepository).Assembly;

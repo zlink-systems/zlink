@@ -2,62 +2,113 @@ package systems.zlink.framework.runtime.configuration;
 
 import java.util.Objects;
 import java.util.OptionalLong;
-import systems.zlink.framework.configuration.ZLinkApplicationHwmProfile;
+import java.util.concurrent.Executor;
+import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
+import systems.zlink.framework.configuration.ZLinkCoreHwmProfile;
 import systems.zlink.framework.configuration.ZLinkInboundDispatchOptions;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
-/**
- * Host-wide inbound Application byte budget. Mirrors the .NET
- * {@code ZLinkInboundDispatchOptionsModel}, including the profile and process
- * memory limit validation.
- */
+/** Startup-only model for the host's single inbound-dispatch policy. */
 public final class ZLinkInboundDispatchRegistration
     implements ZLinkInboundDispatchOptions {
-    private Long applicationHwmBytes;
-    private ZLinkApplicationHwmProfile applicationHwmProfile =
-        ZLinkApplicationHwmProfile.BALANCED;
-    private Long processMemoryLimitBytes;
+    private Long coreHwmMemoryLimitBytes;
+    private Long coreHwmBudgetBytes;
+    private ZLinkCoreHwmProfile coreHwmProfile = ZLinkCoreHwmProfile.BALANCED;
+    private ZLinkApplicationJobQueueProfile applicationJobQueueProfile =
+        ZLinkApplicationJobQueueProfile.BALANCED;
+    private Long maxQueuedApplicationJobs;
+    private ZLinkApplicationJobQueue applicationJobQueue;
 
     @Override
-    public OptionalLong applicationHwmBytes() {
-        return applicationHwmBytes == null
-            ? OptionalLong.empty()
-            : OptionalLong.of(applicationHwmBytes);
+    public synchronized OptionalLong coreHwmMemoryLimitBytes() {
+        return optional(coreHwmMemoryLimitBytes);
     }
 
     @Override
-    public void setApplicationHwmBytes(long value) {
-        if (value < 0) {
+    public synchronized void setCoreHwmMemoryLimitBytes(long value) {
+        requireMutable();
+        coreHwmMemoryLimitBytes = positive(value, "CoreHwmMemoryLimitBytes");
+    }
+
+    @Override
+    public synchronized OptionalLong coreHwmBudgetBytes() {
+        return optional(coreHwmBudgetBytes);
+    }
+
+    @Override
+    public synchronized void setCoreHwmBudgetBytes(long value) {
+        requireMutable();
+        coreHwmBudgetBytes = positive(value, "CoreHwmBudgetBytes");
+    }
+
+    @Override
+    public synchronized ZLinkCoreHwmProfile coreHwmProfile() {
+        return coreHwmProfile;
+    }
+
+    @Override
+    public synchronized void setCoreHwmProfile(ZLinkCoreHwmProfile value) {
+        requireMutable();
+        coreHwmProfile = Objects.requireNonNull(value, "coreHwmProfile");
+    }
+
+    @Override
+    public synchronized ZLinkApplicationJobQueueProfile
+        applicationJobQueueProfile() {
+        return applicationJobQueueProfile;
+    }
+
+    @Override
+    public synchronized void setApplicationJobQueueProfile(
+        ZLinkApplicationJobQueueProfile value) {
+        requireMutable();
+        applicationJobQueueProfile = Objects.requireNonNull(
+            value, "applicationJobQueueProfile");
+    }
+
+    @Override
+    public synchronized OptionalLong maxQueuedApplicationJobs() {
+        return optional(maxQueuedApplicationJobs);
+    }
+
+    @Override
+    public synchronized void setMaxQueuedApplicationJobs(long value) {
+        requireMutable();
+        if (value < 1 || value > Integer.MAX_VALUE) {
             throw new ZLinkConfigurationException(
-                "Application HWM bytes must be zero or positive.");
+                "MaxQueuedApplicationJobs must be in 1..2147483647");
         }
-        applicationHwmBytes = value;
+        maxQueuedApplicationJobs = value;
     }
 
-    @Override
-    public ZLinkApplicationHwmProfile applicationHwmProfile() {
-        return applicationHwmProfile;
+    public synchronized ZLinkApplicationJobQueue applicationJobQueue(
+        Executor handlerExecutor) {
+        if (applicationJobQueue == null) {
+            applicationJobQueue = new ZLinkApplicationJobQueue(
+                applicationJobQueueProfile,
+                optional(maxQueuedApplicationJobs),
+                ZLinkApplicationJobQueue.productionProcessorCandidates(
+                    handlerExecutor));
+        }
+        return applicationJobQueue;
     }
 
-    @Override
-    public void setApplicationHwmProfile(ZLinkApplicationHwmProfile value) {
-        applicationHwmProfile =
-            Objects.requireNonNull(value, "applicationHwmProfile");
+    private void requireMutable() {
+        if (applicationJobQueue != null) {
+            throw new ZLinkConfigurationException(
+                "Inbound dispatch options are fixed at startup");
+        }
     }
 
-    @Override
-    public OptionalLong processMemoryLimitBytes() {
-        return processMemoryLimitBytes == null
-            ? OptionalLong.empty()
-            : OptionalLong.of(processMemoryLimitBytes);
+    private static OptionalLong optional(Long value) {
+        return value == null ? OptionalLong.empty() : OptionalLong.of(value);
     }
 
-    @Override
-    public void setProcessMemoryLimitBytes(long value) {
+    private static long positive(long value, String name) {
         if (value <= 0) {
-            throw new ZLinkConfigurationException(
-                "ProcessMemoryLimitBytes must be a positive finite byte value.");
+            throw new ZLinkConfigurationException(name + " must be positive");
         }
-        processMemoryLimitBytes = value;
+        return value;
     }
 }

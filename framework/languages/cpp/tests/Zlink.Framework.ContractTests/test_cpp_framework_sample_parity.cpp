@@ -1705,6 +1705,32 @@ TEST (CppFrameworkSampleParity, SampleRunnersDoNotEnableInternalAutoConnectTraci
     }
 }
 
+TEST (CppFrameworkSampleParity, TicTacToeRunnerRetriesOnlyConcretePortCollisions)
+{
+    const auto runner = read_file (
+      cpp_language_root () / "samples/TicTacToe/run_sample.sh");
+
+    const auto wait_port_begin = runner.find ("wait_port() {");
+    const auto wait_grep_begin = runner.find ("wait_grep() {");
+    const auto wait_any_grep_begin = runner.find ("wait_any_grep() {");
+    ASSERT_NE (wait_port_begin, std::string::npos);
+    ASSERT_NE (wait_grep_begin, std::string::npos);
+    ASSERT_NE (wait_any_grep_begin, std::string::npos);
+    ASSERT_LT (wait_port_begin, wait_grep_begin);
+    ASSERT_LT (wait_grep_begin, wait_any_grep_begin);
+
+    const auto wait_port = runner.substr (
+      wait_port_begin, wait_grep_begin - wait_port_begin);
+    const auto wait_grep = runner.substr (
+      wait_grep_begin, wait_any_grep_begin - wait_grep_begin);
+    EXPECT_NE (wait_port.find ("Address already in use"), std::string::npos);
+    EXPECT_NE (wait_port.find ("return 75"), std::string::npos);
+    EXPECT_EQ (wait_grep.find ("return 75"), std::string::npos)
+      << "functional readiness failures must preserve their original status";
+    EXPECT_EQ (wait_grep.find ("tictactoe play route ready"), std::string::npos)
+      << "a missing readiness marker is not evidence of a port collision";
+}
+
 TEST (CppFrameworkSampleParity, SampleRunnersBuildBeforeStartingRedis)
 {
     const auto samples = cpp_language_root () / "samples";

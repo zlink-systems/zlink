@@ -11,7 +11,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <condition_variable>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -46,12 +45,6 @@ struct pending_actor_admission_t
     std::string session_relocation_actor_type;
     std::uint64_t session_relocation_target_owner_lease_generation = 0;
     std::uint64_t session_relocation_committed_authority_owner_generation = 0;
-    // Deferred-commit completion-loss window: the target process retains the
-    // admitted OperationId and reply while the completion-only leg is still
-    // outstanding. next_completion_poll_at paces process-local convergence.
-    bool commit_finalized = false;
-    bool completion_poll_due = false;
-    std::chrono::steady_clock::time_point next_completion_poll_at{};
 
     bool matches_prepare (const actor_ref_t &actor,
                           const spot_id_t &source_spot,
@@ -61,12 +54,6 @@ struct pending_actor_admission_t
 };
 
 struct expired_actor_admission_t
-{
-    std::string transfer_id;
-    pending_actor_admission_t admission;
-};
-
-struct deferred_actor_completion_t
 {
     std::string transfer_id;
     pending_actor_admission_t admission;
@@ -135,13 +122,6 @@ struct actor_move_completion_t
 };
 
 
-// Deferred-commit completion-loss convergence: the pace of the process-local
-// re-poll, and how long a converged commit stays visible so a late
-// completion-only leg still terminates idempotently.
-inline constexpr std::chrono::milliseconds
-  actor_deferred_completion_retry_interval{250};
-inline constexpr std::chrono::seconds actor_deferred_completion_retention{30};
-
 enum class handoff_append_result_t
 {
     appended,
@@ -157,9 +137,7 @@ class actor_transfer_coordinator_t
     // handoff markers under the final transfer correlation.
     bool try_reserve_source (
       const std::string &actor_key,
-      std::string transfer_id = {},
-      std::chrono::milliseconds terminal_wait =
-        std::chrono::milliseconds::zero ());
+      std::string transfer_id = {});
     bool try_begin_local (const std::string &actor_key);
     bool try_begin_source_remote (const std::string &actor_key, std::string transfer_id = {});
     void cancel_move (const std::string &actor_key);
@@ -182,6 +160,10 @@ class actor_transfer_coordinator_t
     bool blocks_dispatch (const std::string &actor_key) const;
     std::optional<actor_move_phase_t> phase (const std::string &actor_key) const;
     std::optional<std::string> transfer_id (const std::string &actor_key) const;
+    bool try_submit_source_leave (const std::string &actor_key,
+                                  const std::string &transfer_id);
+    bool source_leave_submitted (const std::string &actor_key,
+                                 const std::string &transfer_id) const;
 
     // In-flight handoff (spot-actor spec §10). Packets are preserved in arrival
     // order until the commit path drains them into the commit request.
@@ -266,23 +248,10 @@ class actor_transfer_coordinator_t
     bool commit_session_relocation_route_authority (
       const std::string &transfer_id,
       std::uint64_t authority_owner_generation);
-    bool complete_session_relocation_route_terminal (
-      const std::string &transfer_id,
-      const std::string &actor_type,
-      const std::vector<std::uint8_t> &route,
-      std::uint64_t target_owner_lease_generation);
     std::optional<pending_actor_admission_t>
     session_relocation_admission (const std::string &transfer_id) const;
     void fail_commit (const std::string &transfer_id, bool reconcile);
     void complete_commit (const std::string &transfer_id);
-    // Deferred-commit convergence (completion-loss window): marks a commit
-    // whose completion-only leg is still outstanding, and returns the
-    // process-local admissions whose join window elapsed without that leg.
-    // Each returned attempt re-arms after the retry interval; the admission
-    // deadline is extended so a late leg stays idempotent.
-    bool mark_commit_finalized (const std::string &transfer_id);
-    std::vector<deferred_actor_completion_t>
-    due_deferred_completions (std::chrono::steady_clock::time_point now);
     std::vector<expired_actor_admission_t>
     cleanup_expired (std::chrono::steady_clock::time_point now);
     std::size_t pending_count () const;
@@ -295,6 +264,7 @@ class actor_transfer_coordinator_t
         actor_move_phase_t phase;
         std::string transfer_id;
         std::optional<std::chrono::steady_clock::time_point> transfer_started_at;
+        bool source_leave_submitted = false;
     };
 
     struct message_follow_route_t
@@ -310,35 +280,10 @@ class actor_transfer_coordinator_t
         message_follow_suppression_key_t suppression_key;
     };
 
-    struct session_route_terminal_fingerprint_t
-    {
-        std::string actor_key;
-        std::string transfer_id;
-        std::string actor_type;
-        std::vector<std::uint8_t> route;
-        std::uint64_t target_owner_lease_generation = 0;
-        std::chrono::steady_clock::time_point admission_deadline;
-
-        friend bool operator== (
-          const session_route_terminal_fingerprint_t &,
-          const session_route_terminal_fingerprint_t &) = default;
-    };
-
-    void stage_session_route_terminal_gate_unlocked (
-      const std::string &transfer_id,
-      const pending_actor_admission_t &admission);
-    bool has_pending_session_route_terminal_unlocked (
-      const std::string &actor_key) const;
-
     mutable std::mutex _mutex;
-    std::condition_variable _changed;
     std::map<std::string, move_state_t> _moves;
     std::map<std::string, pending_actor_admission_t> _admissions;
     std::map<std::string, pending_actor_admission_t> _completed_admissions;
-    std::map<std::string, session_route_terminal_fingerprint_t>
-      _pending_session_route_terminals;
-    std::map<std::string, session_route_terminal_fingerprint_t>
-      _completed_session_route_terminals;
     std::map<std::string, std::vector<handoff_packet_t>> _backlogs;
     std::map<std::string, std::vector<message_follow_route_t>> _message_follow_routes;
     message_follow_suppression_registry_t _message_follow_suppression;

@@ -537,7 +537,7 @@ final class ZLinkActorSessionCoordinator {
             sourceNodeRid,
             sourceSessionRid,
             route.bindingGeneration(),
-            route.lastAcceptedSessionSequence());
+            0);
     }
 
     boolean isJoinedTo(

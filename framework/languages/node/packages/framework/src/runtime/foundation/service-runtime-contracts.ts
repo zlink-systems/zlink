@@ -7,6 +7,7 @@ import type {
   ZLinkBackendMessageLike as MessageLike
 } from '../backend/runtime-values';
 import type { RoutingId } from '../../contracts';
+import type { ApplicationJobPermitPort } from '../application-jobs/contracts';
 import type { ServiceActorRef } from './service-stateful-registry';
 import type {
   ServiceDirectSpotRouteFence,
@@ -169,6 +170,10 @@ export interface ReadyRecord {
   readonly domain: number;
   readonly spotId: RoutingId | null;
   readonly actor: ServiceActorRef | null;
+  /** True only for a terminal reply/error completion supply. */
+  readonly terminalCompletion?: boolean;
+  /** Raw ingress already reserved its host permit before the Core receive. */
+  readonly ordinaryIngressPreAdmitted?: boolean;
 }
 
 export interface ReceiveRequirements {
@@ -207,6 +212,8 @@ export interface ReceiveRecord {
   readonly deadlineUnixMs?: bigint;
   readonly messageFollowOrigin?: ZLinkMessageFollowOrigin;
   readonly onTerminalCompletion?: () => void | Promise<void>;
+  readonly applicationJobPermit?: ApplicationJobPermitPort;
+  readonly releaseRetainedIngress?: () => void;
   reply(parts: MessageLike | readonly MessageLike[], flags?: number): SubmitResult;
   replyActorJoin(
     joinResult: number,
@@ -312,7 +319,7 @@ export interface StreamSessionService {
     actor: ServiceActorRef,
     parts: MessageLike | readonly MessageLike[],
     options?: { flags?: number }
-  ): SubmitResult;
+  ): Promise<SubmitResult>;
 }
 
 export interface MeshPublisher {
@@ -321,7 +328,7 @@ export interface MeshPublisher {
     topic: string,
     parts: MessageLike | readonly MessageLike[],
     options?: { flags?: number }
-  ): void;
+  ): Promise<void>;
   publishAsync(
     channelName: string,
     topic: string,
@@ -339,7 +346,7 @@ export interface ServiceSpot {
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
     options?: { flags?: number }
-  ): SubmitResult;
+  ): Promise<SubmitResult>;
   requestToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
@@ -355,7 +362,7 @@ export interface ServiceSpot {
       routeFence?: ServiceDirectSpotRouteFence;
       entrySpot?: boolean;
     }
-  ): SubmitResult;
+  ): Promise<SubmitResult>;
   requestToSpot(
     targetNodeRid: unknown,
     targetSpotId: unknown,
@@ -374,7 +381,7 @@ export interface ServiceSpot {
     topic: string,
     parts: MessageLike | readonly MessageLike[],
     options?: { flags?: number }
-  ): void;
+  ): Promise<void>;
   setSubscription(channelName: string, topicFilter: string, kind?: number): void;
   unsetSubscription(channelName: string, topicFilter: string, kind?: number): void;
   close(): void;

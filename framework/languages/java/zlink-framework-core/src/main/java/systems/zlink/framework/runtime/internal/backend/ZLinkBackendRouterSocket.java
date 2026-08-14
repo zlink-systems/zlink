@@ -2,9 +2,9 @@ package systems.zlink.framework.runtime.internal.backend;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.SendFlags;
 
 public interface ZLinkBackendRouterSocket
     extends ZLinkBackendConnectableSocket, ZLinkBackendReceiveSocket {
@@ -30,13 +30,13 @@ public interface ZLinkBackendRouterSocket
 
     ZLinkBackendReceived recv(ZLinkBackendRecvMode mode);
 
-    boolean send(RoutingId routingId, List<Message> parts, SendFlags flags);
+    CompletionStage<Void> send(
+        RoutingId routingId,
+        List<Message> parts);
 
-    boolean request(
+    CompletionStage<ZLinkBackendReceived> request(
         RoutingId routingId,
         List<Message> parts,
-        ZLinkBackendRequestCallback callback,
-        SendFlags flags,
         Duration timeout);
 
     void reply(RoutingId routingId, long requestSeq, List<Message> parts);

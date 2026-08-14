@@ -21,14 +21,14 @@ export function meshActorSessionNodeAdapter(
         ? status.lifecycleGeneration
         : undefined;
     },
-    sendActorBoundSession(actor, expectedBindingGeneration, parts, flags, actorFence) {
-      const result = node.sendActorBoundSession(
+    async sendActorBoundSession(actor, expectedBindingGeneration, parts, flags, actorFence) {
+      const result = await node.sendActorBoundSession(
         actor,
         expectedBindingGeneration,
         parts as never,
         flags,
         actorFence
-      ) as unknown as SubmitResult;
+      );
       switch (result) {
         case SubmitResult.Ok:
           return { status: ZLinkSubmitStatus.Submitted };

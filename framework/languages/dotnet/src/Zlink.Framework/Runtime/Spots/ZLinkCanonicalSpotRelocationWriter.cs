@@ -70,20 +70,6 @@ internal static class ZLinkCanonicalSpotRelocationWriter
             state.Position = 0;
             state.CopyTo(stream);
         }
-        U32(stream, checked((uint)ordered.Length));
-        for (var index = 0; index < ordered.Length; index++)
-        {
-            var participant = ordered[index];
-            var acceptedBoundary = participant.AcceptedJobs
-                .Select(static job => job.AcceptedSequence)
-                .Concat(participant.LogicalTimers.Select(
-                    static timer => timer.PendingAcceptedSequence))
-                .DefaultIfEmpty(0UL)
-                .Max();
-            U64(stream, checked((ulong)index + 1));
-            U64(stream, acceptedBoundary);
-            U64(stream, 0);
-        }
         U32(stream, checked((uint)ordered.Sum(
             static participant => participant.AcceptedJobs.Count)));
         for (var index = 0; index < ordered.Length; index++)
@@ -151,7 +137,6 @@ internal static class ZLinkCanonicalSpotRelocationWriter
             U64(stream, checked((ulong)tick.ScheduledAt.ToUnixTimeMilliseconds()));
             U64(stream, tick.SkippedTicks);
         }
-        U32(stream, 0);
         stream.Position = 0;
         var canonical = ZLinkRelocationEnvelopeCodec.Decode(
             stream, inventory.InventoryDigest);
@@ -163,17 +148,13 @@ internal static class ZLinkCanonicalSpotRelocationWriter
                 AcceptedJobs = state.AcceptedJobs,
                 LogicalTimers = state.LogicalTimers,
                 CompletionPayload = participant.CompletionPayload,
-                CanonicalParticipantId = state.CanonicalParticipantId,
-                AcceptedBoundary = state.AcceptedBoundary,
-                ReplayCursor = state.ReplayCursor,
-                TerminalCompletions = state.TerminalCompletions
+                CanonicalParticipantId = state.CanonicalParticipantId
             };
         }).ToArray();
         return inventory with
         {
             Participants = projected,
             CanonicalLogicalStream = canonical.CanonicalLogicalStream,
-            CanonicalLayout = canonical.CanonicalLayout,
             CanonicalRelocationHigh = canonical.CanonicalRelocationHigh,
             CanonicalRelocationLow = canonical.CanonicalRelocationLow,
             CanonicalApplicationVersion = canonical.CanonicalApplicationVersion

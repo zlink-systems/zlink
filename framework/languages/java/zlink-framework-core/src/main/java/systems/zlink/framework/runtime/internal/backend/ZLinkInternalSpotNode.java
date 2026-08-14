@@ -8,10 +8,9 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinRes
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestCallback;
-
 import java.util.List;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -22,9 +21,10 @@ import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferPrepar
 import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferPrepareResult;
 import systems.zlink.framework.runtime.internal.binding.spot.ActorTransferToken;
 import systems.zlink.framework.runtime.internal.binding.spot.PrepareActorTransferResult;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.contracts.sockets.SendFlags;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.sockets.SubmitResult;
 
 
 public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
@@ -95,7 +95,7 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             "raw Actor relocation forwarding is unavailable");
     }
 
-    default Optional<Integer> submitLocalNodeSend(
+    default Optional<CompletionStage<Integer>> submitLocalNodeSend(
         RoutingId targetNodeRid,
         byte[] metadata,
         List<Message> parts) {
@@ -136,82 +136,70 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
 
     ZLinkBackendSpot entrySpot();
 
-    default boolean sendToNode(
+    default CompletionStage<Void> sendToNode(
         RoutingId targetNodeRid,
-        List<Message> parts,
-        SendFlags flags) {
+        List<Message> parts) {
         throw new UnsupportedOperationException("MeshNode node send is unavailable");
     }
 
-    default boolean sendToNode(
+    default CompletionStage<Void> sendToNode(
         RoutingId targetNodeRid,
         byte[] metadata,
-        List<Message> parts,
-        SendFlags flags) {
+        List<Message> parts) {
         if (metadata == null || metadata.length == 0) {
-            return sendToNode(targetNodeRid, parts, flags);
+            return sendToNode(targetNodeRid, parts);
         }
         throw new UnsupportedOperationException("MeshNode node metadata is unavailable");
     }
 
-    default boolean requestToNode(
+    default CompletionStage<ZLinkBackendReceived> requestToNode(
         RoutingId targetNodeRid,
         List<Message> parts,
-        ZLinkBackendRequestCallback callback,
-        SendFlags flags,
         Duration timeout) {
         throw new UnsupportedOperationException("MeshNode node request is unavailable");
     }
 
-    default boolean requestToNode(
+    default CompletionStage<ZLinkBackendReceived> requestToNode(
         RoutingId targetNodeRid,
         byte[] metadata,
         List<Message> parts,
-        ZLinkBackendRequestCallback callback,
-        SendFlags flags,
         Duration timeout) {
         if (metadata == null || metadata.length == 0) {
-            return requestToNode(targetNodeRid, parts, callback, flags, timeout);
+            return requestToNode(targetNodeRid, parts, timeout);
         }
         throw new UnsupportedOperationException("MeshNode node request metadata is unavailable");
     }
 
-    default boolean sendToChannel(
+    default CompletionStage<Void> sendToChannel(
         String channelName,
-        List<Message> parts,
-        SendFlags flags) {
+        List<Message> parts) {
         throw new UnsupportedOperationException("MeshNode channel send is unavailable");
     }
 
-    default boolean sendToChannel(
+    default CompletionStage<Void> sendToChannel(
         String channelName,
         byte[] metadata,
-        List<Message> parts,
-        SendFlags flags) {
+        List<Message> parts) {
         if (metadata == null || metadata.length == 0) {
-            return sendToChannel(channelName, parts, flags);
+            return sendToChannel(channelName, parts);
         }
         throw new UnsupportedOperationException("MeshNode channel metadata is unavailable");
     }
 
-    default boolean requestToChannel(
+    default CompletionStage<ZLinkBackendReceived> requestToChannel(
         String channelName,
         List<Message> parts,
-        ZLinkBackendRequestCallback callback,
-        SendFlags flags,
         Duration timeout) {
         throw new UnsupportedOperationException("MeshNode channel request is unavailable");
     }
 
-    default boolean requestToChannel(
+    default CompletionStage<ZLinkBackendReceived> requestToChannel(
         String channelName,
         byte[] metadata,
         List<Message> parts,
-        ZLinkBackendRequestCallback callback,
-        SendFlags flags,
         Duration timeout) {
         if (metadata == null || metadata.length == 0) {
-            return requestToChannel(channelName, parts, callback, flags, timeout);
+            return requestToChannel(channelName, parts, timeout);
         }
         throw new UnsupportedOperationException(
             "MeshNode channel request metadata is unavailable");
@@ -361,6 +349,53 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
 
     boolean sendActorBoundSession(ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags);
 
+    /**
+     * Reports the logical remote bound-Session route only. The subsequent
+     * physical ROUTER admission is owned by {@link #sendRemoteActorBoundSession}.
+     */
+    default boolean hasRemoteActorBoundSessionRoute(
+        ZLinkBackendActorRef actor) {
+        return boundSessionRoute(actor).isPresent();
+    }
+
+    /** Reports whether this Node owns the Actor's physical STREAM binding. */
+    default boolean hasLocalActorBoundSessionRoute(
+        ZLinkBackendActorRef actor) {
+        return false;
+    }
+
+    /** Retains the existing synchronous STREAM admission path. */
+    default boolean sendLocalActorBoundSession(
+        ZLinkBackendActorRef actor,
+        List<Message> parts,
+        SendFlags flags) {
+        return sendActorBoundSession(actor, parts, flags);
+    }
+
+    /** Submits one local bound-Session frame through binding-owned admission. */
+    default CompletionStage<Void> sendLocalActorBoundSessionAsync(
+        ZLinkBackendActorRef actor,
+        List<Message> parts,
+        Duration timeout) {
+        return CompletableFuture.failedFuture(
+            new UnsupportedOperationException(
+                "local bound-Session async admission is unavailable"));
+    }
+
+    /** Submits one remote bound-Session frame through binding-owned admission. */
+    default CompletionStage<Void> sendRemoteActorBoundSession(
+        ZLinkBackendActorRef actor,
+        List<Message> parts) {
+        try {
+            return sendActorBoundSession(actor, parts, SendFlags.DONT_WAIT)
+                ? CompletableFuture.completedFuture(null)
+                : CompletableFuture.failedFuture(
+                    new ZlinkSubmitException(SubmitResult.BACKPRESSURED));
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+    }
+
     void replyActorNoBind(
         ZLinkBackendActorRef actor,
         RoutingId sourceNodeRid,
@@ -370,6 +405,20 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         List<Message> parts);
 
     boolean sendToActor(ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags);
+
+    /** Submits one remote Actor send through binding-owned admission. */
+    default CompletionStage<Void> sendToActorAsync(
+        ZLinkBackendActorRef actor,
+        List<Message> parts) {
+        try {
+            return sendToActor(actor, parts, SendFlags.DONT_WAIT)
+                ? CompletableFuture.completedFuture(null)
+                : CompletableFuture.failedFuture(
+                    new ZlinkSubmitException(SubmitResult.BACKPRESSURED));
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+    }
 
     CompletionStage<List<Message>> requestToActor(
         ZLinkBackendActorRef actor,
@@ -419,8 +468,7 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         RoutingId sessionOwnerNodeRid,
         long sessionOwnerNodeGeneration,
         RoutingId sessionRid,
-        long bindingGeneration,
-        long lastAcceptedSessionSequence) {
+        long bindingGeneration) {
     }
 
     @FunctionalInterface
@@ -432,9 +480,9 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             byte[] acceptedJournalRecord,
             List<Message> parts,
             String contentType,
-            ZLinkInboundDispatchBudget.Lease inboundDispatchLease,
             Consumer<List<Message>> reply,
-            Consumer<Throwable> failure);
+            Consumer<Throwable> failure,
+            Runnable terminalRelease);
     }
 
     interface RelocationStagingIngressHandler {
@@ -446,7 +494,6 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             int acceptedJournalRecordSizeHint,
             List<Message> parts,
             String contentType,
-            ZLinkInboundDispatchBudget.Lease inboundDispatchLease,
             Consumer<List<Message>> reply,
             Consumer<Throwable> failure);
 
@@ -456,7 +503,6 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             Supplier<byte[]> acceptedJournalRecord,
             List<Message> parts,
             String contentType,
-            ZLinkInboundDispatchBudget.Lease inboundDispatchLease,
             Consumer<List<Message>> reply,
             Consumer<Throwable> failure);
     }

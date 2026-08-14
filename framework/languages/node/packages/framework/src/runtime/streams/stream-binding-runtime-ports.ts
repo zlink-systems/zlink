@@ -14,9 +14,6 @@ export interface ZLinkStreamActorLookupPort {
     readonly actor: ActorRef;
     readonly sessionRid: ActorRef['nodeRid'];
     readonly bindingGeneration: bigint;
-    readonly authorityOwnerGeneration: bigint;
-    readonly ownerLeaseGeneration: bigint;
-    readonly acceptedHighWater: bigint;
   } | undefined;
 }
 
@@ -28,16 +25,8 @@ export interface ZLinkStreamActorLifecyclePort {
     signal?: AbortSignal,
     options?: ZLinkActorRouteCommitOptions
   ): Promise<void>;
-  sealActorRoute(input: {
-    readonly actorId: string;
-    readonly actorGeneration: bigint;
-    readonly actorOwnershipGeneration: bigint;
-    readonly bindingGeneration: bigint;
-    readonly ownerLeaseGeneration: bigint;
-    readonly sealId: string;
-  }): bigint;
   abortActorRouteSeal(actorId: string, sealId: string): boolean;
-  validateActorRouteSeal(actorId: string, sealId: string, acceptedHighWater: bigint): boolean;
+  validateActorRouteSeal(actorId: string, sealId: string): boolean;
   unbindActor(actorId: string): void;
 }
 
@@ -55,7 +44,6 @@ export interface ZLinkActorRouteCommitOptions {
    */
   readonly releaseSeal?: {
     readonly sealId: string;
-    readonly acceptedHighWater: bigint;
   };
 }
 
@@ -72,6 +60,7 @@ export interface ZLinkBoundSessionResponsePort {
 }
 
 export interface ZLinkRemoteBoundSessionPort extends ZLinkStreamActorLifecyclePort {
+  disconnectBoundSession(actorId: string, signal?: AbortSignal): Promise<void>;
   sendLocalBoundSession(
     actorId: string, message: unknown, packetName: string | undefined,
     metadata: ReadonlyMap<string, string>

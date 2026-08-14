@@ -176,13 +176,6 @@ public sealed record SpotBackpressurePublishRes(
     int AcceptedCount,
     long ElapsedMilliseconds);
 
-public sealed record RuntimeInboundStatusRes(
-    ulong ApplicationHwmBytes,
-    ulong PendingPayloadBytes,
-    ulong QueuedPayloadBytes,
-    ulong ActivePayloadBytes,
-    bool ApplicationReceivePaused);
-
 public sealed record SpotOutboundMsg(string Marker);
 
 public sealed record SpotOutboundNegativeMsg(string Marker);

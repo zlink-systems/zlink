@@ -220,7 +220,7 @@ int replaced_session_find_is_exact_and_disconnects_once ()
     int disconnected = 0;
     gateway.on_disconnect ([&] (const actor_ref_t &) {
         ++disconnected;
-        return result_t<void>::success ();
+        return task_t<void> (result_t<void>::success ());
     });
 
     if (old_session.find ("actor-replaced"))
@@ -285,7 +285,7 @@ int direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ()
       [&] (const actor_ref_t &) {
           binder_entered_source.set_value ();
           release_binder.wait ();
-          return result_t<void>::success ();
+          return task_t<void> (result_t<void>::success ());
       });
     std::optional<result_t<session_actor_t>> rebound;
     std::thread rebind_thread ([&] {
@@ -296,7 +296,7 @@ int direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ()
     int disconnected = 0;
     gateway.on_disconnect ([&] (const actor_ref_t &) {
         ++disconnected;
-        return result_t<void>::success ();
+        return task_t<void> (result_t<void>::success ());
     });
     const auto stale_disconnect = stale_handle.notify_disconnected ().result ();
     if (stale_disconnect
@@ -337,9 +337,9 @@ int direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ()
     session_actor_manager_access_t::bind_native (
       new_session,
       [] (const actor_ref_t &) {
-          return result_t<void>::failure (
+          return task_t<void> (result_t<void>::failure (
             framework_error_kind_t::unavailable,
-            "deterministic native binding rejection");
+            "deterministic native binding rejection"));
       });
     const auto rejected = new_session.bind (actor).submit ().result ();
     if (rejected
@@ -386,7 +386,7 @@ int destroyed_or_recreated_actor_ignores_stale_disconnect_handle ()
     int disconnected = 0;
     gateway.on_disconnect ([&] (const actor_ref_t &) {
         ++disconnected;
-        return result_t<void>::success ();
+        return task_t<void> (result_t<void>::success ());
     });
     if (!gateway.destroy_actor (original)
         || !stale_handle.notify_disconnected ().result ()
@@ -554,11 +554,12 @@ int session_disconnect_is_all_settled_and_token_fenced ()
     gateway.on_disconnect (
       [&] (const actor_ref_t &actor) {
           disconnected.emplace_back (actor.actor_id ().value ());
-          return actor.actor_id ().value () == "actor-a"
-                   ? result_t<void>::failure (
-                       framework_error_kind_t::not_found,
-                       "actor-a callback failed")
-                   : result_t<void>::success ();
+          return task_t<void> (
+            actor.actor_id ().value () == "actor-a"
+              ? result_t<void>::failure (
+                  framework_error_kind_t::not_found,
+                  "actor-a callback failed")
+              : result_t<void>::success ());
       });
     session_actor_manager_access_t::disconnect (manager);
     std::sort (disconnected.begin (), disconnected.end ());
@@ -596,7 +597,7 @@ int logical_disconnect_is_selected_and_keeps_session_live ()
     gateway.on_disconnect (
       [&] (const actor_ref_t &actor) {
           disconnected.emplace_back (actor.actor_id ().value ());
-          return result_t<void>::success ();
+          return task_t<void> (result_t<void>::success ());
       });
 
     if (!first_binding.notify_disconnected ().result ()) {
@@ -643,10 +644,10 @@ int route_update_preserves_object_generation ()
            const actor_context_t &,
            const stream_header_t &,
            const zlink::message_t &,
-           std::optional<bound_session_relay_source_t>) {
+          std::optional<bound_session_relay_source_t>) {
           relay_routes.push_back (actor);
-          return result_t<std::optional<zlink::message_t>>::success (
-            std::nullopt);
+          return task_t<std::optional<zlink::message_t>> (
+            result_t<std::optional<zlink::message_t>>::success (std::nullopt));
       });
 
     const actor_ref_t relocated =
@@ -1148,9 +1149,10 @@ int authority_only_route_update_keeps_physical_session_current ()
     runtime.attach_transport_writer (
       stream,
       [&local_stream_calls] (const stream_header_t &,
-                             const zlink::message_t &) {
+                             const zlink::message_t &,
+                             std::optional<std::chrono::milliseconds>) {
           ++local_stream_calls;
-          return result_t<void>::success ();
+          return task_t<void> (result_t<void>::success ());
       });
     local_gateway.bind_session_stream (
       "actor-local-stream", stream, stream_codec_t::message_pack,
@@ -1314,7 +1316,8 @@ int session_relay_queue_is_ordered_without_blocking_other_actors ()
 
     std::mutex mutex;
     std::condition_variable changed;
-    bool release_first = false;
+    auto first_completion = std::make_shared<
+      task_completion_source_t<std::optional<zlink::message_t>>> ();
     std::vector<std::string> started;
     std::vector<std::pair<std::string, std::uint64_t>> sources;
     gateway.on_relay (
@@ -1329,10 +1332,10 @@ int session_relay_queue_is_ordered_without_blocking_other_actors ()
           }
           changed.notify_all ();
           if (actor.actor_id ().value () == "relay-a" && marker == "A1") {
-              std::unique_lock lock (mutex);
-              changed.wait (lock, [&] { return release_first; });
+              return first_completion->task ();
           }
-          return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
+          return task_t<std::optional<zlink::message_t>> (
+            result_t<std::optional<zlink::message_t>>::success (std::nullopt));
       });
 
     auto first = bound_a.relay ("A1", zlink::message_t{});
@@ -1348,9 +1351,9 @@ int session_relay_queue_is_ordered_without_blocking_other_actors ()
         }
         if (std::find (started.begin (), started.end (), "A2") != started.end ())
             return 3;
-        release_first = true;
     }
-    changed.notify_all ();
+    first_completion->complete (
+      result_t<std::optional<zlink::message_t>>::success (std::nullopt));
     if (!first.result () || !second.result () || !independent.result ())
         return 4;
     const auto a1 = std::find (started.begin (), started.end (), "A1");
@@ -1366,10 +1369,199 @@ int session_relay_queue_is_ordered_without_blocking_other_actors ()
     return 0;
 }
 
+zlink::framework::task_t<std::optional<zlink::message_t>>
+inspect_pending_relay_arguments (
+  const zlink::framework::actor_ref_t &actor,
+  const zlink::framework::detail::stream_header_t &header,
+  const zlink::message_t &payload,
+  const std::shared_ptr<
+    zlink::framework::detail::task_completion_source_t<void>> &pending,
+  const std::shared_ptr<std::atomic_bool> &started,
+  std::string expected_actor_id,
+  std::string expected_packet_name,
+  std::string expected_payload)
+{
+    started->store (true, std::memory_order_release);
+    co_await pending->task ();
+    if (actor.actor_id ().value () != expected_actor_id
+        || header.packet_name () != expected_packet_name
+        || payload.to_string () != expected_payload) {
+        throw std::runtime_error (
+          "pending actor relay did not retain its request arguments");
+    }
+    co_return zlink::message_t::from ("delayed-reply");
+}
+
+zlink::framework::task_t<void>
+inspect_pending_disconnect_argument (
+  const zlink::framework::actor_ref_t &actor,
+  const std::shared_ptr<
+    zlink::framework::detail::task_completion_source_t<void>> &pending,
+  const std::shared_ptr<std::atomic_bool> &started,
+  std::string expected_actor_id)
+{
+    started->store (true, std::memory_order_release);
+    co_await pending->task ();
+    if (actor.actor_id ().value () != expected_actor_id) {
+        throw std::runtime_error (
+          "pending actor disconnect did not retain its actor argument");
+    }
+    co_return;
+}
+
+int disconnect_notification_survives_pending_dispatcher_completion ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    auto manager = gateway.manager ();
+    session_actor_manager_access_t::attach (manager, stream_t{});
+    const std::string actor_id (96, 'd');
+    const auto actor =
+      test_actor_ref ("actor-owner", "game.actor", actor_id, 1);
+    auto bound = manager.bind (actor).submit ().result ().value ();
+    auto pending = std::make_shared<task_completion_source_t<void>> ();
+    auto disconnect_started = std::make_shared<std::atomic_bool> (false);
+    gateway.on_disconnect (
+      [pending, disconnect_started, actor_id] (const actor_ref_t &disconnected_actor) {
+          return inspect_pending_disconnect_argument (
+            disconnected_actor, pending, disconnect_started, actor_id);
+      });
+
+    auto notification = bound.notify_disconnected ();
+    if (!disconnect_started->load (std::memory_order_acquire))
+        return 1;
+
+    std::vector<std::string> reclaimed_storage;
+    reclaimed_storage.reserve (8192);
+    for (std::size_t index = 0; index < 8192; ++index) {
+        reclaimed_storage.emplace_back (
+          96, static_cast<char> ('A' + (index % 26)));
+    }
+    std::thread completion ([pending] {
+        pending->complete (result_t<void>::success ());
+    });
+    completion.join ();
+    if (!notification.result ())
+        return 2;
+
+    const std::lock_guard lock (state->mutex);
+    const auto found = state->actors_by_id.find (actor_id);
+    return found != state->actors_by_id.end ()
+               && found->second.binding_token == 0
+               && found->second.binding_session_id.empty ()
+             ? 0
+             : 3;
+}
+
+int relay_request_survives_pending_dispatcher_completion ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    actor_gateway_runtime_t gateway;
+    auto manager = gateway.manager ();
+    session_actor_manager_access_t::attach (manager, stream_t{});
+    const std::string actor_id (96, 'a');
+    const std::string packet_name (96, 'p');
+    const std::string payload_text (4096, 'v');
+    const auto actor =
+      test_actor_ref ("actor-owner", "game.actor", actor_id, 1);
+    auto bound = manager.bind (actor).submit ().result ().value ();
+    auto pending = std::make_shared<task_completion_source_t<void>> ();
+    auto relay_started = std::make_shared<std::atomic_bool> (false);
+    gateway.on_relay (
+      [pending, relay_started, actor_id, packet_name, payload_text] (
+           const actor_ref_t &relayed_actor, actor_context_t,
+           const stream_header_t &header, const zlink::message_t &payload,
+           std::optional<bound_session_relay_source_t>) {
+          return inspect_pending_relay_arguments (
+            relayed_actor, header, payload, pending, relay_started,
+            actor_id, packet_name, payload_text);
+      });
+
+    auto request = bound.relay_request (
+      packet_name, zlink::message_t::from (payload_text)).submit ();
+    if (!relay_started->load (std::memory_order_acquire))
+        return 1;
+
+    std::vector<std::string> reclaimed_storage;
+    reclaimed_storage.reserve (8192);
+    for (std::size_t index = 0; index < 8192; ++index) {
+        reclaimed_storage.emplace_back (4096, static_cast<char> ('A' + (index % 26)));
+    }
+    std::thread completion ([pending] {
+        pending->complete (result_t<void>::success ());
+    });
+    completion.join ();
+    const auto completed = request.result ();
+    return completed && completed.value ().to_string () == "delayed-reply" ? 0 : 2;
+}
+
+int relay_send_survives_pending_dispatcher_completion ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    actor_gateway_runtime_t gateway;
+    auto manager = gateway.manager ();
+    session_actor_manager_access_t::attach (manager, stream_t{});
+    const std::string actor_id (96, 's');
+    const std::string packet_name (96, 'n');
+    const std::string payload_text (4096, 'b');
+    const auto actor =
+      test_actor_ref ("actor-owner", "game.actor", actor_id, 1);
+    auto bound = manager.bind (actor).submit ().result ().value ();
+    auto pending = std::make_shared<task_completion_source_t<void>> ();
+    auto relay_started = std::make_shared<std::atomic_bool> (false);
+    gateway.on_relay (
+      [pending, relay_started, actor_id, packet_name, payload_text] (
+           const actor_ref_t &relayed_actor, actor_context_t,
+           const stream_header_t &header, const zlink::message_t &payload,
+           std::optional<bound_session_relay_source_t>) {
+          return inspect_pending_relay_arguments (
+            relayed_actor, header, payload, pending, relay_started,
+            actor_id, packet_name, payload_text);
+      });
+
+    auto relayed = bound.relay (
+      packet_name, zlink::message_t::from (payload_text));
+    if (!relay_started->load (std::memory_order_acquire))
+        return 1;
+
+    std::vector<std::string> reclaimed_storage;
+    reclaimed_storage.reserve (8192);
+    for (std::size_t index = 0; index < 8192; ++index) {
+        reclaimed_storage.emplace_back (4096, static_cast<char> ('A' + (index % 26)));
+    }
+    std::thread completion ([pending] {
+        pending->complete (result_t<void>::success ());
+    });
+    completion.join ();
+    return relayed.result () ? 0 : 2;
+}
+
 } // namespace
 
 int main ()
 {
+    if (const auto pending =
+          disconnect_notification_survives_pending_dispatcher_completion ();
+        pending != 0) {
+        return 190 + pending;
+    }
+    if (const auto pending =
+          relay_request_survives_pending_dispatcher_completion ();
+        pending != 0) {
+        return 160 + pending;
+    }
+    if (const auto pending =
+          relay_send_survives_pending_dispatcher_completion ();
+        pending != 0) {
+        return 170 + pending;
+    }
     if (const auto queue = session_relay_queue_is_ordered_without_blocking_other_actors ();
         queue != 0) {
         return 150 + queue;

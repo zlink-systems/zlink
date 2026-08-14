@@ -4,6 +4,8 @@
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
+#include <functional>
+
 namespace zlink::framework::detail
 {
 
@@ -17,7 +19,8 @@ class channel_packet_dispatcher_t
                              const runtime::messaging::message_parts_t &parts,
                              service_provider_t &services,
                              serializer_registry_t &serializers,
-                             const handler_registry_t &handlers) const;
+                             const handler_registry_t &handlers,
+                             std::function<void ()> before_application_handler = {}) const;
 
   private:
     channel_runtime_t _runtime;

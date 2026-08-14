@@ -1,6 +1,5 @@
 package systems.zlink.framework.runtime.binding;
 import java.util.Optional;
-import java.util.function.Supplier;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import java.time.Duration;
@@ -29,6 +28,7 @@ import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.StreamSocket;
 import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.runtime.framework.FrameworkStreamOperations;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorBindOperation;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorUnbindOperation;
@@ -51,7 +51,6 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     private final AtomicLong nextBoundSessionRequestSequence =
         new AtomicLong(1);
     private final AtomicBoolean closed = new AtomicBoolean();
-    private final Received receiveStorage = new Received();
     private final ZLinkJavaSocketReceivePoller receivePoller;
     private SocketMonitor monitor;
     private boolean sessionServiceStarted;
@@ -118,13 +117,23 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         return receivePoller.waitForReadable(timeout);
     }
     @Override public synchronized ZLinkBackendStreamReceived recv() {
-        if (!socket.recv(receiveStorage, RecvFlags.DONT_WAIT)) {
-            return null;
+        Received received = new Received();
+        boolean transferred = false;
+        try {
+            if (!socket.recvRetained(received, RecvFlags.DONT_WAIT)) {
+                return null;
+            }
+            ZLinkBackendStreamReceived result = new ZLinkBackendStreamReceived(
+                received.getRoutingId(),
+                received.parts(),
+                received::close);
+            transferred = true;
+            return result;
+        } finally {
+            if (!transferred) {
+                received.close();
+            }
         }
-        return new ZLinkBackendStreamReceived(
-            receiveStorage.getRoutingId(),
-            receiveStorage.parts(),
-            receiveStorage::close);
     }
     @Override public synchronized void disconnectPeer(RoutingId routingId) {
         socket.disconnectRid(routingId);
@@ -160,76 +169,26 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             .submit();
     }
 
-    static CompletionStage<Void> submitBoundSessionUntilAccepted(
-        Duration timeout,
-        Supplier<Boolean> submit) {
-        if (timeout == null || timeout.isZero() || timeout.isNegative()) {
+    CompletionStage<Void> sendBoundSessionPushAsync(
+        RoutingId routingId,
+        List<Message> parts,
+        Duration timeout) {
+        if (boundSessionSink != null) {
+            return boundSessionSink.sendAsync(routingId, parts, timeout);
+        }
+        if (parts == null || parts.size() != 1) {
             throw new IllegalArgumentException(
-                "bound Session submission timeout must be positive");
+                "bound Session push requires one encoded STREAM frame");
         }
-        if (submit == null) {
-            throw new IllegalArgumentException(
-                "bound Session submission callback is required");
-        }
-        long timeoutNanos;
-        try {
-            timeoutNanos = timeout.toNanos();
-        } catch (ArithmeticException overflow) {
-            timeoutNanos = Long.MAX_VALUE;
-        }
-        long deadlineValue;
-        try {
-            deadlineValue = Math.addExact(System.nanoTime(), timeoutNanos);
-        } catch (ArithmeticException overflow) {
-            deadlineValue = Long.MAX_VALUE;
-        }
-        final long deadline = deadlineValue;
-        CompletableFuture<Void> result = new CompletableFuture<>();
-        class Attempt implements Runnable {
-            @Override
-            public void run() {
-                if (result.isDone()) {
-                    return;
-                }
-                boolean accepted;
-                try {
-                    accepted = Boolean.TRUE.equals(submit.get());
-                } catch (ZlinkSubmitException failure) {
-                    if (!isRetryableSubmit(failure.getResult())) {
-                        result.completeExceptionally(failure);
-                        return;
-                    }
-                    accepted = false;
-                } catch (RuntimeException failure) {
-                    result.completeExceptionally(failure);
-                    return;
-                }
-                if (accepted) {
-                    result.complete(null);
-                    return;
-                }
-                if (System.nanoTime() >= deadline) {
-                    result.completeExceptionally(new TimeoutException(
-                        "bound Session submission was not accepted before timeout"));
-                    return;
-                }
-                try {
-                    CompletableFuture.delayedExecutor(
-                        10,
-                        TimeUnit.MILLISECONDS).execute(this);
-                } catch (RuntimeException schedulingFailure) {
-                    result.completeExceptionally(schedulingFailure);
-                }
-            }
-        }
-        new Attempt().run();
-        return result;
+        return FrameworkStreamOperations.send(
+            socket, routingId, parts, timeout);
     }
 
-    private static boolean isRetryableSubmit(SubmitResult result) {
-        return result == SubmitResult.NOT_CONNECTED
-            || result == SubmitResult.BACKPRESSURED
-            || result == SubmitResult.NOT_FOUND;
+    @Override public CompletionStage<Void> sendBoundSessionPushAsync(
+        RoutingId routingId,
+        List<Message> parts) {
+        return sendBoundSessionPushAsync(
+            routingId, parts, admissionTimeout());
     }
     @Override public synchronized boolean send(RoutingId routingId, String packetName, List<Message> parts, SendFlags flags) {
         return ZLinkJavaStreamFraming.submit(socket.send(routingId), 1, null, packetName, parts, flags);
@@ -237,11 +196,50 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     @Override public synchronized boolean send(RoutingId routingId, ZLinkStreamHeader header, List<Message> parts, SendFlags flags) {
         return ZLinkJavaStreamFraming.submit(socket.send(routingId), header, parts, flags);
     }
+    @Override public CompletionStage<Void> sendAsync(
+        RoutingId routingId,
+        ZLinkStreamHeader header,
+        List<Message> parts) {
+        return sendAsync(routingId, header, parts, admissionTimeout());
+    }
+    @Override public CompletionStage<Void> sendAsync(
+        RoutingId routingId,
+        ZLinkStreamHeader header,
+        List<Message> parts,
+        Duration timeout) {
+        return submitStreamFrameAsync(routingId, header, parts, timeout);
+    }
     @Override public synchronized boolean reply(RoutingId routingId, long requestSeq, String packetName, List<Message> parts, SendFlags flags) {
         return ZLinkJavaStreamFraming.submit(socket.send(routingId), 3, requestSeq, packetName, parts, flags);
     }
     @Override public synchronized boolean reply(RoutingId routingId, ZLinkStreamHeader header, List<Message> parts, SendFlags flags) {
         return ZLinkJavaStreamFraming.submit(socket.send(routingId), header, parts, flags);
+    }
+    @Override public CompletionStage<Void> replyAsync(
+        RoutingId routingId,
+        ZLinkStreamHeader header,
+        List<Message> parts) {
+        return submitStreamFrameAsync(
+            routingId, header, parts, admissionTimeout());
+    }
+
+    private CompletionStage<Void> submitStreamFrameAsync(
+        RoutingId routingId,
+        ZLinkStreamHeader header,
+        List<Message> parts,
+        Duration timeout) {
+        Message frame;
+        try {
+            frame = ZLinkJavaStreamFraming.frame(header, parts);
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+        try {
+            return FrameworkStreamOperations.send(
+                socket, routingId, List.of(frame), timeout);
+        } finally {
+            frame.close();
+        }
     }
     @Override public ZLinkBackendActorBindOperation bindActor(RoutingId sessionRid, ZLinkBackendActorRef actor) {
         return timeout -> {
@@ -307,6 +305,51 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             streamHeader,
             parts,
             flags);
+    }
+
+    @Override public CompletionStage<Void> relayBoundActorAsync(
+        RoutingId sessionRid,
+        String actorId,
+        ZLinkStreamHeader streamHeader,
+        List<Message> parts) {
+        return relayBoundActorAsync(
+            sessionRid,
+            actorId,
+            allocateBoundSessionSequence(),
+            streamHeader,
+            parts);
+    }
+
+    @Override public CompletionStage<Void> relayBoundActorAsync(
+        RoutingId sessionRid,
+        String actorId,
+        long sourceSessionSequence,
+        ZLinkStreamHeader streamHeader,
+        List<Message> parts) {
+        if (sourceSessionSequence <= 0) {
+            return CompletableFuture.failedFuture(
+                new IllegalArgumentException(
+                    "bound Session ingress sequence must be positive"));
+        }
+        Message header = Message.from(
+            ZLinkStreamHeaderCodec.encode(streamHeader));
+        CompletionStage<Void> submission;
+        try {
+            SessionBinding binding = requireBinding(sessionRid, actorId);
+            submission = rawSpotNode().forwardBoundStreamSessionAsync(
+                binding.actor(),
+                sessionRid,
+                binding.generation(),
+                sourceSessionSequence,
+                this,
+                streamHeader,
+                prepend(header, parts));
+        } catch (RuntimeException failure) {
+            header.close();
+            return CompletableFuture.failedFuture(failure);
+        }
+        submission.whenComplete((ignored, failure) -> header.close());
+        return submission;
     }
 
     @Override public boolean relayBoundActor(
@@ -410,9 +453,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        receiveStorage.close();
         receivePoller.close();
-        notifyAdmissionShutdown();
         closeMonitor();
         Throwable cleanupFailure = null;
         if (meshNode != null) {
@@ -702,6 +743,20 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             RoutingId sessionRid,
             List<Message> parts,
             SendFlags flags);
+
+        default CompletionStage<Void> sendAsync(
+            RoutingId sessionRid,
+            List<Message> parts,
+            Duration timeout) {
+            try {
+                return send(sessionRid, parts, SendFlags.DONT_WAIT)
+                    ? CompletableFuture.completedFuture(null)
+                    : CompletableFuture.failedFuture(
+                        new ZlinkSubmitException(SubmitResult.BACKPRESSURED));
+            } catch (RuntimeException failure) {
+                return CompletableFuture.failedFuture(failure);
+            }
+        }
     }
 
     interface BoundSessionLifecycle {

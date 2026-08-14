@@ -153,6 +153,10 @@ internal sealed class ZLinkSpotSubscriptionRegistry
 
             if (message is null) return;
 
+            using var applicationAdmission =
+                message.ApplicationJobAdmission is { } admission
+                    ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+                    : null;
             using (message)
                 await DispatchMessageAsync(
                         message, codecs, dispatchErrors, logger, dispatchAsync, cancellationToken)
@@ -169,7 +173,6 @@ internal sealed class ZLinkSpotSubscriptionRegistry
             dispatchAsync,
         CancellationToken cancellationToken)
     {
-        message.StartDispatch();
         if (message.Parts.Count == 0)
         {
             using var invalidFlow = ZLinkFlowContext.Enter(

@@ -1,4 +1,10 @@
-import type { ActorRef, RoutingId, ZLinkActor } from '../../contracts';
+import type {
+  ActorRef,
+  RoutingId,
+  ZLinkActor,
+  ZLinkActorJoinOperationId
+} from '../../contracts';
+import type { ZLinkDeferredJoinAcceptedRoot } from '../actors/deferred-join-accepted-journal';
 
 const ADMISSION_RETENTION_MS = 30_000;
 
@@ -19,12 +25,15 @@ export interface ZLinkFormalRemoteActorAdmission {
   readonly expectedMembershipEpoch: bigint;
   readonly requestFingerprint: string;
   readonly transferId: string;
+  readonly completionOperationId?: ZLinkActorJoinOperationId;
+  readonly sourceSpotId?: RoutingId;
 }
 
 export interface ZLinkFormalRemoteActorAdmissionOutcome {
   readonly accepted: boolean;
   readonly actorRef: ActorRef;
   readonly reply?: Buffer;
+  readonly deferredJoinRoot?: ZLinkDeferredJoinAcceptedRoot;
 }
 
 export interface ZLinkFormalRemoteActorAdmissionFailure {
@@ -99,7 +108,10 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
     entry.result = {
       accepted: outcome.accepted,
       actorRef: { ...outcome.actorRef },
-      ...(outcome.reply === undefined ? {} : { reply: Buffer.from(outcome.reply) })
+      ...(outcome.reply === undefined ? {} : { reply: Buffer.from(outcome.reply) }),
+      ...(outcome.deferredJoinRoot === undefined
+        ? {}
+        : { deferredJoinRoot: outcome.deferredJoinRoot })
     };
     entry.resolveResult(entry.result);
   }
@@ -152,7 +164,18 @@ function sameAdmission(
     && left.targetSpotGeneration === right.targetSpotGeneration
     && left.expectedMembershipEpoch === right.expectedMembershipEpoch
     && left.requestFingerprint === right.requestFingerprint
+    && sameOperationId(left.completionOperationId, right.completionOperationId)
+    && String(left.sourceSpotId ?? '') === String(right.sourceSpotId ?? '')
     && left.actorRef.actorId === right.actorRef.actorId
     && String(left.actorRef.nodeRid) === String(right.actorRef.nodeRid)
     && left.actorRef.objectGeneration === right.actorRef.objectGeneration;
+}
+
+function sameOperationId(
+  left: ZLinkActorJoinOperationId | undefined,
+  right: ZLinkActorJoinOperationId | undefined
+): boolean {
+  return left === undefined || right === undefined
+    ? left === right
+    : left.high === right.high && left.low === right.low;
 }

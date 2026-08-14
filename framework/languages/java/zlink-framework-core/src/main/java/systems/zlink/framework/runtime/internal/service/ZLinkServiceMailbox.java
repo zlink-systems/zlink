@@ -11,7 +11,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
-/** Bounded owner-serialized mailbox with an independent infrastructure reserve. */
+/**
+ * Owner-serialized mailbox. Its reservations isolate one owner from another;
+ * they are not a second, process-wide transport admission authority.
+ */
 public final class ZLinkServiceMailbox implements AutoCloseable {
     private static final long RECORD_FIXED_BYTES = 96;
     private static final long PART_FIXED_BYTES = 16;
@@ -21,14 +24,16 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
     private boolean closed;
 
     public ZLinkServiceMailbox(
-        long applicationMessageBudget,
-        long applicationByteBudget,
-        long infrastructureMessageBudget,
-        long infrastructureByteBudget) {
+        long applicationOwnerMessageLimit,
+        long applicationOwnerByteLimit,
+        long infrastructureOwnerMessageLimit,
+        long infrastructureOwnerByteLimit) {
         application = new DomainState(
-            applicationMessageBudget, applicationByteBudget);
+            applicationOwnerMessageLimit,
+            applicationOwnerByteLimit);
         infrastructure = new DomainState(
-            infrastructureMessageBudget, infrastructureByteBudget);
+            infrastructureOwnerMessageLimit,
+            infrastructureOwnerByteLimit);
     }
 
     public synchronized boolean tryEnqueue(Record record) {
@@ -56,12 +61,10 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
             removeUnclaimedEmptyOwner(domain, record.owner(), queue);
             return false;
         }
-        if (reservedMessages >= domain.messageBudget
-            || reservedBytes > domain.byteBudget
-            || bytes > domain.byteBudget - reservedBytes) {
-            if (queue.records.isEmpty() && !queue.claimed) {
-                domain.owners.remove(record.owner());
-            }
+        if (reservedMessages >= domain.ownerMessageLimit
+            || reservedBytes > domain.ownerByteLimit
+            || bytes > domain.ownerByteLimit - reservedBytes) {
+            removeUnclaimedEmptyOwner(domain, record.owner(), queue);
             return false;
         }
         // Record owns immutable copies of all caller-provided byte arrays at
@@ -245,18 +248,18 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
         private final Map<String, OwnerQueue> owners = new HashMap<>();
         private final Deque<String> ready = new ArrayDeque<>();
         private final Set<String> indexed = new HashSet<>();
-        private final long messageBudget;
-        private final long byteBudget;
+        private final long ownerMessageLimit;
+        private final long ownerByteLimit;
         private long messages;
         private long bytes;
 
-        private DomainState(long messageBudget, long byteBudget) {
-            if (messageBudget <= 0 || byteBudget <= 0) {
+        private DomainState(long ownerMessageLimit, long ownerByteLimit) {
+            if (ownerMessageLimit <= 0 || ownerByteLimit <= 0) {
                 throw new IllegalArgumentException(
-                    "mailbox budgets must be positive");
+                    "owner mailbox limits must be positive");
             }
-            this.messageBudget = messageBudget;
-            this.byteBudget = byteBudget;
+            this.ownerMessageLimit = ownerMessageLimit;
+            this.ownerByteLimit = ownerByteLimit;
         }
 
         private void clear() {

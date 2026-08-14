@@ -27,12 +27,6 @@ import type {
   ZLinkBackendStreamSocket
 } from '../backend/contracts';
 import type { ZLinkMeshCompletionTable } from '../backend/mesh-completion-table';
-import type { ZLinkApplicationWorkClaim } from '../admission';
-import type { ZLinkInboundDispatchBudget } from '../dispatch/inbound-dispatch-budget';
-import {
-  createStandaloneMeshSubmitterRegistry,
-  type ZLinkMeshSubmitterRegistry
-} from '../messaging';
 import type { StreamSessionService } from '../foundation/service-runtime-contracts';
 import { registerServiceSessionBindingIngressPort } from
   '../foundation/service-session-binding-ingress-port';
@@ -54,6 +48,10 @@ import {
   resolveStreamCompressionCodec,
   ZLinkStreamFrameMessageFactory
 } from './stream-frame-factory';
+import {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} from '../host/application-job-queue';
 import { simpleMessage } from './stream-message-utils';
 import {
   DefaultZLinkBoundSession,
@@ -85,7 +83,6 @@ import {
   type ZLinkStreamSessionNodeRuntimeOptions as ZLinkStreamSessionNodeRuntimeCoreOptions,
   type ZLinkStreamSessionRuntimeOptions as ZLinkStreamSessionRuntimeCoreOptions
 } from './stream-session-runtime';
-import { ZLinkStreamDispatchCapacity } from './stream-dispatch-capacity';
 import type { ZLinkActorRouteCommitOptions } from './stream-binding-runtime-ports';
 export { ZLinkPendingSessionRequest } from './session-requests';
 export { ZLinkActorSessionLifecycleCoordinator } from './actor-session-lifecycle-coordinator';
@@ -112,7 +109,6 @@ export interface ZLinkStreamBindingRuntimeOptions {
   readonly streamCompression?: ZLinkStreamCompressionOptions;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
   readonly actorBindTimeoutMs?: number;
-  readonly meshSubmitters?: ZLinkMeshSubmitterRegistry;
   readonly nativeActorMeshNameProvider?: () => string | undefined;
   readonly actorRefResolver?: (actor: ZLinkActor) => ActorRef;
   readonly actorAuthorityFenceResolver?: (
@@ -169,12 +165,11 @@ export interface ZLinkStreamRuntimeManagerOptions {
   readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly acceptNewSession?: (meshName?: string) => boolean;
   readonly primaryMeshName?: string;
-  readonly claimApplicationWork?: (meshName: string) => ZLinkApplicationWorkClaim;
-  readonly inboundDispatchBudget?: ZLinkInboundDispatchBudget;
   readonly nativeMeshNode?: ZLinkBackendMeshNode;
   readonly meshCompletions?: ZLinkMeshCompletionTable;
   readonly nativeMeshNodeForName?: (meshName: string) => ZLinkBackendMeshNode | undefined;
   readonly meshCompletionsForName?: (meshName: string) => ZLinkMeshCompletionTable | undefined;
+  readonly applicationJobQueue?: ApplicationJobQueue;
 }
 
 interface ZLinkStartedStreamNode {
@@ -188,9 +183,12 @@ interface ZLinkStartedStreamNode {
 
 export class ZLinkStreamRuntimeManager {
   private readonly nodes = new Map<string, ZLinkStartedStreamNode>();
-  private readonly dispatchCapacity = new ZLinkStreamDispatchCapacity();
+  private readonly applicationJobQueue: ApplicationJobQueue;
 
-  constructor(private readonly options: ZLinkStreamRuntimeManagerOptions) {}
+  constructor(private readonly options: ZLinkStreamRuntimeManagerOptions) {
+    this.applicationJobQueue = options.applicationJobQueue
+      ?? new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
+  }
 
   start(): void {
     if (this.options.registration.streamNodes.size === 0) {
@@ -259,22 +257,17 @@ export class ZLinkStreamRuntimeManager {
       const sessionHandlerTypes = (
         streamNode as unknown as Record<symbol, readonly Type[] | undefined>
       )[Symbol.for('@zlink-systems/framework:session-handler-types')] ?? [];
-      const claimApplicationWork = this.options.claimApplicationWork;
       const runtime = new ZLinkStreamSessionNodeRuntimeCore({
         nodeName,
         socket,
         readablePoller,
+        applicationJobQueue: this.applicationJobQueue,
         nativeSessionService,
         meshCompletions,
         nativeSessionRouteForMesh: meshName => nativeSessionRoutes.get(meshName),
         monitor,
         bindingRuntime: this.options.bindingRuntime,
         acceptNewSession: () => this.options.acceptNewSession?.(applicationMeshName) !== false,
-        claimApplicationWork: applicationMeshName === undefined
-          || claimApplicationWork === undefined
-          ? undefined
-          : () => claimApplicationWork(applicationMeshName),
-        inboundDispatchBudget: this.options.inboundDispatchBudget,
         dispatchErrors: this.options.dispatchErrors,
         metrics: this.options.metrics,
         providerResolver: this.options.providerResolver,
@@ -286,7 +279,7 @@ export class ZLinkStreamRuntimeManager {
           context,
           sessionHandlerTypes
         )
-      }, this.dispatchCapacity);
+        });
       runtime.start();
       this.nodes.set(nodeName, {
         meshName: applicationMeshName,
@@ -329,19 +322,7 @@ export class ZLinkStreamRuntimeManager {
 
 }
 
-const ownedStreamBindingRuntimeSubmitters =
-  new WeakMap<ZLinkStreamBindingRuntime, ZLinkMeshSubmitterRegistry>();
-
-function disposeOwnedStreamBindingRuntime(runtime: ZLinkStreamBindingRuntime): void {
-  const submitters = ownedStreamBindingRuntimeSubmitters.get(runtime);
-  if (submitters === undefined) return;
-  ownedStreamBindingRuntimeSubmitters.delete(runtime);
-  submitters.dispose();
-}
-
 export class ZLinkStreamSessionRuntime extends ZLinkStreamSessionRuntimeCore {
-  private readonly ownedBindingRuntime: ZLinkStreamBindingRuntime | undefined;
-
   constructor(
     options: ZLinkStreamSessionRuntimeOptions,
     routingId: unknown,
@@ -358,40 +339,16 @@ export class ZLinkStreamSessionRuntime extends ZLinkStreamSessionRuntimeCore {
         ? undefined
         : (sessionId, session) => removeSession(sessionId, session as unknown as ZLinkStreamSessionRuntime)
     );
-    this.ownedBindingRuntime = options.bindingRuntime === undefined ? bindingRuntime : undefined;
-  }
-
-  override async dispose(): Promise<void> {
-    try {
-      await super.dispose();
-    } finally {
-      if (this.ownedBindingRuntime !== undefined) {
-        disposeOwnedStreamBindingRuntime(this.ownedBindingRuntime);
-      }
-    }
   }
 }
 
 export class ZLinkStreamSessionNodeRuntime extends ZLinkStreamSessionNodeRuntimeCore {
-  private readonly ownedBindingRuntime: ZLinkStreamBindingRuntime | undefined;
-
   constructor(options: ZLinkStreamSessionNodeRuntimeOptions) {
     const bindingRuntime = options.bindingRuntime ?? new ZLinkStreamBindingRuntime();
     super({
       ...options,
       bindingRuntime
     });
-    this.ownedBindingRuntime = options.bindingRuntime === undefined ? bindingRuntime : undefined;
-  }
-
-  override async dispose(): Promise<void> {
-    try {
-      await super.dispose();
-    } finally {
-      if (this.ownedBindingRuntime !== undefined) {
-        disposeOwnedStreamBindingRuntime(this.ownedBindingRuntime);
-      }
-    }
   }
 }
 
@@ -404,13 +361,8 @@ export class ZLinkStreamBindingRuntime {
   private readonly boundActorRelay: ZLinkBoundActorRelaySender;
 
   constructor(options: ZLinkStreamBindingRuntimeOptions = {}) {
-    const meshSubmitters = options.meshSubmitters ?? createStandaloneMeshSubmitterRegistry();
-    if (options.meshSubmitters === undefined) {
-      ownedStreamBindingRuntimeSubmitters.set(this, meshSubmitters);
-    }
     const runtimeOptions = {
       ...options,
-      meshSubmitters,
       actorBindTimeoutMs: options.actorBindTimeoutMs ?? DEFAULT_ACTOR_BIND_TIMEOUT_MS
     };
     this.routes = new ZLinkActorSessionBindingRegistry<DefaultZLinkSessionContext, DefaultZLinkSessionActor>();
@@ -441,7 +393,6 @@ export class ZLinkStreamBindingRuntime {
         this.routes.admitRelocationOutbound(claim, operation),
       discardRelocationOutbound: (actorId, sealId, error) =>
         this.routes.discardRelocationOutbound(actorId, sealId, error),
-      advanceRelocationOwner: (...args) => this.routes.advanceRelocationOwner(...args),
       applyRelocation: (...args) => this.routes.applyRelocation(...args),
       observeRelocationTerminal: (...args) => this.routes.observeRelocationTerminal(...args),
       clearRelocation: (actorId, error) => this.routes.clearRelocation(actorId, error),
@@ -550,28 +501,12 @@ export class ZLinkStreamBindingRuntime {
     return this.sessionActors.sessionRouteFence(actorId);
   }
 
-  sealActorRoute(input: {
-    readonly actorId: string;
-    readonly actorGeneration: bigint;
-    readonly actorOwnershipGeneration: bigint;
-    readonly bindingGeneration: bigint;
-    readonly ownerLeaseGeneration: bigint;
-    readonly sealId: string;
-  }): bigint {
-    return this.routes.seal(input.actorId, input.sealId, {
-      objectGeneration: input.actorGeneration,
-      authorityOwnerGeneration: input.actorOwnershipGeneration,
-      bindingGeneration: input.bindingGeneration,
-      ownerLeaseGeneration: input.ownerLeaseGeneration
-    });
-  }
-
   abortActorRouteSeal(actorId: string, sealId: string): boolean {
     return this.routes.abortSeal(actorId, sealId);
   }
 
-  validateActorRouteSeal(actorId: string, sealId: string, acceptedHighWater: bigint): boolean {
-    return this.routes.validateSeal(actorId, sealId, acceptedHighWater);
+  validateActorRouteSeal(actorId: string, sealId: string): boolean {
+    return this.routes.validateSeal(actorId, sealId);
   }
 
   unbind(actorId: string, context: DefaultZLinkSessionContext, bindingToken: string): void {

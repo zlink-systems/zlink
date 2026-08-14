@@ -8,6 +8,7 @@ internal sealed class ZLinkLocationRegistration
     private ZLinkInMemoryProviderLocationStore? _inMemoryStore;
     private IZLinkLocationRepository? _repository;
     private IZLinkRelocationRepository? _relocationRepository;
+    private TimeSpan? _sessionRelocationSealTimeoutAtStartup;
 
     public bool UseInMemoryStores { get; set; }
 
@@ -19,11 +20,21 @@ internal sealed class ZLinkLocationRegistration
 
     public ZLinkLocationOptions Options { get; } = new();
 
+    internal TimeSpan SessionRelocationSealTimeoutAtStartup =>
+        _sessionRelocationSealTimeoutAtStartup
+        ?? Options.SessionRelocationSealTimeout;
+
     public bool Enabled =>
         UseInMemoryStores || StoreInstance is not null;
 
     internal bool HasExplicitStore =>
         StoreInstance is not null;
+
+    internal void CaptureStartupOptions()
+    {
+        _sessionRelocationSealTimeoutAtStartup ??=
+            Options.SessionRelocationSealTimeout;
+    }
 
     internal IZLinkLocationRepository? ResolveStore()
     {

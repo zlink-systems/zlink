@@ -11,6 +11,25 @@ export interface ZLinkBindingSendOperation {
   flags(flags: number): { submit(): boolean };
 }
 
+export interface ZLinkBindingAsyncSendOperation {
+  message(message: unknown): ZLinkBindingAsyncSendSubmitOperation;
+}
+
+interface ZLinkBindingAsyncSendSubmitOperation {
+  message(message: unknown): ZLinkBindingAsyncSendSubmitOperation;
+  timeout(timeoutMs: number): ZLinkBindingAsyncSendSubmitOperation;
+  submit(): Promise<void>;
+}
+
+export interface ZLinkBindingRoutedSendOperation {
+  message(message: unknown): ZLinkBindingRoutedSendSubmitOperation;
+}
+
+interface ZLinkBindingRoutedSendSubmitOperation {
+  message(message: unknown): ZLinkBindingRoutedSendSubmitOperation;
+  submit(): Promise<void>;
+}
+
 export interface ZLinkBindingRequestOperation {
   message(message: unknown): ZLinkBindingRequestSubmitOperation;
 }
@@ -18,43 +37,7 @@ export interface ZLinkBindingRequestOperation {
 interface ZLinkBindingRequestSubmitOperation {
   message(message: unknown): ZLinkBindingRequestSubmitOperation;
   timeout(timeoutMs: number): ZLinkBindingRequestSubmitOperation;
-  flags(flags: number): { submit(callback: unknown): boolean };
-  submit(callback: unknown): boolean;
-}
-
-export function submitRequestOperation(
-  operation: unknown,
-  payload: unknown,
-  callback: unknown,
-  flags: number,
-  timeoutMs?: number
-): boolean {
-  let current = appendOperationParts(operation, payload);
-  if (timeoutMs !== undefined && timeoutMs > 0 && hasOperationMethod(current, 'timeout')) {
-    current = current.timeout(timeoutMs) as ZLinkBindingOperation;
-  }
-  if (flags !== 0 && hasOperationMethod(current, 'flags')) {
-    current = current.flags(flags) as ZLinkBindingOperation;
-  }
-  if (!hasOperationMethod(current, 'submit')) {
-    throw new TypeError('Binding request operation does not expose submit().');
-  }
-  return Boolean(current.submit(callback));
-}
-
-function appendOperationParts(operation: unknown, payload: unknown): ZLinkBindingOperation {
-  const parts = Array.isArray(payload) ? payload : [payload];
-  if (parts.length === 0) {
-    throw new TypeError('Binding operation payload must contain at least one part.');
-  }
-  let current: unknown = operation;
-  for (const part of parts) {
-    if (!hasOperationMethod(current, 'message')) {
-      throw new TypeError('Binding operation does not expose message().');
-    }
-    current = current.message(toNativeMessageLike(part));
-  }
-  return current as ZLinkBindingOperation;
+  submit(): Promise<readonly unknown[]>;
 }
 
 export function hasOperationMethod(value: unknown, method: string): value is ZLinkBindingOperation {
@@ -105,13 +88,48 @@ export function submitBindingSend(
   }
 }
 
-export function submitBindingRequestCallback(
+export async function submitBindingAsyncSend(
+  operation: ZLinkBindingAsyncSendOperation,
+  payload: unknown,
+  timeoutMs?: number
+): Promise<void> {
+  try {
+    let current: ZLinkBindingAsyncSendSubmitOperation | undefined;
+    const parts = Array.isArray(payload) ? payload : [payload];
+    for (const part of parts) {
+      const nativePart = toNativeMessageLike(part);
+      current = current === undefined ? operation.message(nativePart) : current.message(nativePart);
+    }
+    current ??= operation.message(Buffer.alloc(0));
+    if (timeoutMs !== undefined) current = current.timeout(timeoutMs);
+    await current.submit();
+  } catch (error) {
+    throw translateBindingResultError(error);
+  }
+}
+
+export async function submitBindingRoutedSend(
+  operation: ZLinkBindingRoutedSendOperation,
+  payload: unknown
+): Promise<void> {
+  try {
+    let current: ZLinkBindingRoutedSendSubmitOperation | undefined;
+    const parts = Array.isArray(payload) ? payload : [payload];
+    for (const part of parts.length === 0 ? [Buffer.alloc(0)] : parts) {
+      const nativePart = toNativeMessageLike(part);
+      current = current === undefined ? operation.message(nativePart) : current.message(nativePart);
+    }
+    await current!.submit();
+  } catch (error) {
+    throw translateBindingResultError(error);
+  }
+}
+
+export async function submitBindingRequest(
   operation: ZLinkBindingRequestOperation,
   payload: unknown,
-  callback: unknown,
-  flags: number,
   timeoutMs: number | undefined
-): boolean {
+): Promise<readonly unknown[]> {
   try {
     let current: ZLinkBindingRequestSubmitOperation | undefined;
     if (Array.isArray(payload)) {
@@ -126,10 +144,7 @@ export function submitBindingRequestCallback(
     if (timeoutMs !== undefined) {
       current = current.timeout(timeoutMs);
     }
-    if (flags !== 0) {
-      return current.flags(flags).submit(callback);
-    }
-    return current.submit(callback);
+    return await current.submit();
   } catch (error) {
     throw translateBindingResultError(error);
   }

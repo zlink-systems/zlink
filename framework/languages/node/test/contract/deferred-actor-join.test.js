@@ -23,6 +23,9 @@ const {
 const {
   ZLinkSpotSerialExecutor
 } = require('../../packages/framework/dist/runtime/spots/spot-serial-executor');
+const {
+  ServiceStatefulRuntime
+} = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
 
 function actorHarness(events, completionResult = { accepted: true }) {
   const state = new ZLinkActorRuntimeState('alice');
@@ -88,6 +91,181 @@ test('deferred Actor Join starts after the handler continuation and preserves it
   assert.equal(events[3], 'completion:accepted:7');
   assert.equal(context.objectGeneration, 1n);
 });
+
+for (const targetKind of ['entry', 'user']) {
+  test(`same-node ${targetKind} Spot Actor Join waits for the gated target lifecycle before public completion`, async () => {
+    const queued = [];
+    const serviceRuntime = new ServiceStatefulRuntime({
+      setServiceIngress() {},
+      async reserveLocalIngress() {
+        return {
+          takeInitial() {
+            return {
+              markApplicationQueued() {},
+              releaseBeforeHandler() {},
+              releaseAfterInternalProcessing() {},
+              close() {}
+            };
+          },
+          close() {}
+        };
+      },
+      mailbox: {
+        tryEnqueue(record) {
+          queued.push(record);
+          return true;
+        }
+      }
+    }, 'node-a', 1n);
+    const sourceSpot = targetKind === 'entry'
+      ? serviceRuntime.createSpot('source-room', 'user', 'source-room')
+      : undefined;
+    const serviceActor = sourceSpot === undefined
+      ? serviceRuntime.createActor('alice', 'player')
+      : serviceRuntime.restoreActorAuthority(
+          'alice',
+          'player',
+          1n,
+          1n,
+          sourceSpot.ref.spotId,
+          sourceSpot.ref.generation,
+          1n
+        );
+    const targetSpot = targetKind === 'entry'
+      ? serviceRuntime.entrySpot()
+      : serviceRuntime.createSpot('room-a', 'user', 'room');
+    const events = [];
+    let signalJoinSubmitted;
+    const joinSubmitted = new Promise((resolve) => {
+      signalJoinSubmitted = resolve;
+    });
+    const submitJoin = async () => {
+      const pending = targetKind === 'entry'
+        ? serviceRuntime.joinActorEntrySpot(
+            serviceActor.ref,
+            'node-a',
+            undefined,
+            5_000
+          )
+        : serviceRuntime.joinActor(
+            serviceActor.ref,
+            'node-a',
+            targetSpot.ref,
+            targetSpot.ref.generation,
+            undefined,
+            5_000
+          );
+      while (!queued.some(record =>
+        record.stateful?.operationKind === framework.OperationKind.ActorJoin)) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      signalJoinSubmitted();
+      const result = await pending.promise;
+      const completion = result.kindData;
+      assert.equal(completion?.kind, 'actorJoinCompletion');
+      return {
+        accepted: completion.joinResult === 0,
+        actor: {
+          actorId: completion.actor.actorId,
+          objectGeneration: completion.actor.generation,
+          meshName: 'game',
+          nodeRid: completion.actor.nodeRid
+        }
+      };
+    };
+    const coordinator = {
+      async joinSpot() {
+        assert.equal(targetKind, 'user');
+        return await submitJoin();
+      },
+      async joinEntrySpot() {
+        assert.equal(targetKind, 'entry');
+        return await submitJoin();
+      }
+    };
+    const state = new ZLinkActorRuntimeState('alice');
+    state.setNativeActorRef(serviceActor.ref);
+    const context = new DefaultZLinkActorContext(
+      state,
+      coordinator,
+      undefined,
+      undefined,
+      () => 'game',
+      undefined
+    );
+    const actor = {
+      actorId: 'alice',
+      context,
+      async onJoinCompleted(completion) {
+        events.push(`completion:${completion.status}`);
+      }
+    };
+    state.bindActor(actor, context);
+
+    let releaseLifecycle;
+    const lifecycleGate = new Promise((resolve) => {
+      releaseLifecycle = resolve;
+    });
+    let lifecycleTask;
+    const handlerTask = runActorHandlerWithDeferredJoins(() => {
+      const call = targetKind === 'entry'
+        ? context.joinEntrySpot()
+        : context.joinSpot(targetSpot.ref.spotId);
+      call.defer();
+    });
+    try {
+      await joinSubmitted;
+      const joinRecord = queued.shift();
+      assert.equal(joinRecord?.stateful?.operationKind, framework.OperationKind.ActorJoin);
+      assert.equal(joinRecord.stateful.reply(
+        0,
+        0,
+        undefined,
+        {
+          kind: 'actorJoin',
+          joinResult: 0,
+          spot: targetSpot.ref,
+          membershipEpoch: 2n
+        }
+      ), true);
+      assert.equal(
+        serviceRuntime.registry.actor('alice').spot.spotId,
+        targetSpot.ref.spotId,
+        'target membership must commit before lifecycle starts'
+      );
+
+      let lifecycleRecord = targetKind === 'entry'
+        ? joinRecord
+        : queued.find((record) =>
+            record.stateful?.kindData?.lifecycleKind === framework.ActorLifecycleKind.Joined);
+      for (let attempt = 0; lifecycleRecord === undefined && attempt < 20; attempt += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+        lifecycleRecord = queued.find((record) =>
+          record.stateful?.kindData?.lifecycleKind === framework.ActorLifecycleKind.Joined);
+      }
+      assert.ok(lifecycleRecord, 'membership commit must publish the target lifecycle');
+      lifecycleTask = (async () => {
+        events.push('target-lifecycle:start');
+        await lifecycleGate;
+        events.push('target-lifecycle:end');
+        await lifecycleRecord.stateful.onTerminalCompletion?.();
+      })();
+
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(events, ['target-lifecycle:start']);
+    } finally {
+      releaseLifecycle();
+      await lifecycleTask;
+      await handlerTask;
+      serviceRuntime.close();
+    }
+    assert.deepEqual(events, [
+      'target-lifecycle:start',
+      'target-lifecycle:end',
+      'completion:accepted'
+    ]);
+  });
+}
 
 test('deferred Actor Join starts admission before the original reply but completes after it', async () => {
   const events = [];
@@ -184,7 +362,7 @@ test('deferred Actor Join barrier keeps the next Actor mailbox turn behind compl
   ]);
 });
 
-test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait policy', async (t) => {
+test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait policy', async () => {
   const events = [];
   const { actor, context } = actorHarness(events);
   const serial = new ZLinkSpotSerialExecutor(true, 'spot-a');
@@ -197,8 +375,6 @@ test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait 
   const invalidOperation = (error) =>
     error instanceof framework.ZLinkFrameworkException
     && error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation;
-  const meshSubmitters = framework.createStandaloneMeshSubmitterRegistry();
-  t.after(() => meshSubmitters.dispose());
   const client = new framework.DefaultZLinkActorClient({
     nodeProvider: () => undefined,
     completionTableProvider: () => undefined,
@@ -243,8 +419,7 @@ test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait 
             return 'pong';
           }))
         : undefined;
-    },
-    meshSubmitters
+    }
   });
 
   actor.onJoinCompleted = async (completion) => {

@@ -1,5 +1,6 @@
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Dispatch;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -36,6 +37,68 @@ public sealed class MaintenanceRuntimeTests
         Assert.Equal(first, replay);
         Assert.Equal(1, fixture.Executor.ShutdownRequestCount);
         Assert.Equal(1, fixture.Executor.ExecuteCount);
+    }
+
+    [Fact]
+    public async Task Runtime_Status_And_Reset_Expose_One_Host_Capacity_Epoch()
+    {
+        await using var context = new ZLinkDotNetBackendAdapterFactory()
+            .CreateRuntimeContext();
+        const ulong budgetBytes = 2 * 1024 * 1024;
+        context.ConfigureCoreHwm(
+            AutoHwmProfile.LowLatency,
+            memoryLimitBytes: 0,
+            budgetBytes);
+        var configuration = new ZLinkInboundDispatchOptionsModel
+        {
+            CoreHwmProfile = ZLinkCoreHwmProfile.LowLatency,
+            CoreHwmBudgetBytes = budgetBytes,
+            MaxQueuedApplicationJobs = 8
+        };
+        using var queue = new ZLinkApplicationJobQueue(
+            ZLinkApplicationJobQueueCapacityResolver.Resolve(
+                configuration.ApplicationJobQueueProfile,
+                configuration.MaxQueuedApplicationJobs,
+                4));
+        var capacity = new ZLinkHostCapacityProjection(
+            context,
+            configuration,
+            queue);
+        var executor = new MaintenanceExecutor();
+        using var drain = new ZLinkDrainCoordinator(
+            new ZLinkDrainAdmissionGate(),
+            executor);
+        using var runtime = new ZLinkFrameworkMaintenanceRuntime(
+            drain,
+            new ZLinkFrameworkHostLifecycleState(),
+            static (_, _, _) =>
+                ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
+            static _ => ValueTask.FromResult(true),
+            capacitySnapshot: () => capacity.GetStatus(),
+            resetCapacityMetrics: capacity.ResetMetrics);
+        runtime.MarkServing();
+
+        var before = runtime.Status.Capacity;
+        Assert.Equal(budgetBytes, before.CoreHwm.ConfiguredBudgetBytes);
+        Assert.Equal(8UL, before.ApplicationJobQueue.EffectiveMaxQueuedApplicationJobs);
+
+        runtime.ResetCapacityMetrics();
+        var after = runtime.Status.Capacity;
+
+        Assert.True(after.MeasurementEpoch > before.MeasurementEpoch);
+        Assert.Equal(
+            before.CoreHwm.EffectiveBudgetBytes,
+            after.CoreHwm.EffectiveBudgetBytes);
+    }
+
+    [Fact]
+    public void Runtime_Without_Active_Capacity_Reports_Default_And_Rejects_Reset()
+    {
+        using var fixture = Create();
+
+        Assert.Equal(default, fixture.Runtime.Status.Capacity);
+        Assert.Throws<InvalidOperationException>(
+            fixture.Runtime.ResetCapacityMetrics);
     }
 
     [Fact]
@@ -424,39 +487,13 @@ public sealed class MaintenanceRuntimeTests
             result.Reason);
     }
 
-    [Fact]
-    public void Status_Reads_Current_Inbound_Dispatch_Snapshot()
-    {
-        var inbound = new ZLinkInboundDispatchStatus(
-            4096,
-            1024,
-            768,
-            256,
-            true,
-            4,
-            64);
-        using var fixture = Create(inboundDispatchSnapshot: () => inbound);
-
-        Assert.Equal(inbound, fixture.Runtime.Status.InboundDispatch);
-
-        inbound = inbound with
-        {
-            PendingPayloadBytes = 0,
-            QueuedPayloadBytes = 0,
-            ActivePayloadBytes = 0,
-            ApplicationReceivePaused = false
-        };
-        Assert.Equal(inbound, fixture.Runtime.Status.InboundDispatch);
-    }
-
     private static Fixture Create(
         Func<
             ZLinkFrameworkRelocationMode,
             long,
             CancellationToken,
             ValueTask<ZLinkFrameworkRelocationReason?>>? preflight = null,
-        long sourceApplicationVersion = 0,
-        Func<ZLinkInboundDispatchStatus>? inboundDispatchSnapshot = null)
+        long sourceApplicationVersion = 0)
     {
         var executor = new MaintenanceExecutor();
         var drain = new ZLinkDrainCoordinator(
@@ -468,8 +505,7 @@ public sealed class MaintenanceRuntimeTests
             preflight ?? (static (_, _, _) =>
                 ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null)),
             static _ => ValueTask.FromResult(true),
-            sourceApplicationVersion,
-            inboundDispatchSnapshot);
+            sourceApplicationVersion);
         return new Fixture(runtime, drain, executor);
     }
 

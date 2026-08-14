@@ -1,4 +1,10 @@
-import type { Context, Received, TopicMessage } from '@zlink-systems/zlink';
+import type {
+  Context,
+  CoreHwmBudgetSnapshot,
+  Received,
+  TopicMessage
+} from '@zlink-systems/zlink';
+import type { ZLinkCoreHwmOptions } from '../../../contracts/Configuration';
 import type {
   ZLinkBackendAdapterFactory,
   ZLinkBackendContext,
@@ -87,7 +93,7 @@ class ZLinkNodeStreamBackendAdapter implements ZLinkStreamBackendAdapter {
   createStreamSocket(context: ZLinkBackendContext): ZLinkBackendStreamSocket {
     return wrapSocket(
       zlink.createStreamSocket(asNodeContext(context)),
-      { reuseReceived: true }
+      { retainReceived: true }
     ) as unknown as ZLinkBackendStreamSocket;
   }
 
@@ -112,6 +118,21 @@ class ZLinkNodeBackendContext implements ZLinkBackendContext {
 
   shutdown(): void {
     this.nativeInstance.shutdown();
+  }
+
+  configureCoreHwm(options: ZLinkCoreHwmOptions | undefined): void {
+    if (options === undefined) return;
+    if (options.profile !== undefined) this.nativeInstance.options.coreHwmProfile = options.profile;
+    if (options.memoryLimitBytes !== undefined) this.nativeInstance.options.coreHwmMemoryLimitBytes = options.memoryLimitBytes;
+    if (options.budgetBytes !== undefined) this.nativeInstance.options.coreHwmBudgetBytes = options.budgetBytes;
+  }
+
+  getCoreHwmBudgetSnapshot(): CoreHwmBudgetSnapshot {
+    return this.nativeInstance.getCoreHwmBudgetSnapshot();
+  }
+
+  resetCoreHwmBudgetMetrics(): void {
+    this.nativeInstance.resetCoreHwmBudgetMetrics();
   }
 
   async dispose(): Promise<void> {

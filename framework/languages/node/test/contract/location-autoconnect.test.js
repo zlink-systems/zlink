@@ -26,7 +26,7 @@ test('backend routing-id conversion preserves opaque ids from another package in
   );
 });
 
-test('spot auto-connect carries the expected lifecycle and removes an unresolved pending intent', () => {
+test('spot auto-connect carries the expected lifecycle and removes an unresolved pending intent', async () => {
   const calls = [];
   const node = {
     status() {
@@ -74,7 +74,7 @@ test('spot auto-connect carries the expected lifecycle and removes an unresolved
     metadata: { securityIdentity: 'remote-security' }
   };
 
-  assert.equal(capability.executor.connect(target), true);
+  assert.equal(await capability.executor.connect(target), true);
   capability.executor.disconnect(target);
 
   assert.deepEqual(calls, [{
@@ -86,7 +86,7 @@ test('spot auto-connect carries the expected lifecycle and removes an unresolved
   assert.equal(capability.executor.isDisconnected(target), true);
 });
 
-test('spot auto-connect treats a synchronous unavailable endpoint as a retryable target', () => {
+test('spot auto-connect treats a synchronous unavailable endpoint as a retryable target', async () => {
   let attempts = 0;
   const node = {
     status() {
@@ -116,8 +116,8 @@ test('spot auto-connect treats a synchronous unavailable endpoint as a retryable
     role: internal.ZLinkLocationRole.Router
   };
 
-  assert.equal(capability.executor.connect(target), false);
-  assert.equal(capability.executor.connect(target), false);
+  assert.equal(await capability.executor.connect(target), false);
+  assert.equal(await capability.executor.connect(target), false);
   assert.equal(attempts, 2);
 });
 

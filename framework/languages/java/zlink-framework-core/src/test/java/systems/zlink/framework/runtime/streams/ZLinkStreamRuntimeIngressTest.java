@@ -128,7 +128,7 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
-    void continuesReceivingButSerializesSessionDispatchAtApplicationHwm()
+    void continuesReceivingAcrossSerializedSessionDispatch()
         throws Exception {
         TestSession.holdFirstDispatch = true;
         FakeStream stream = new FakeStream();
@@ -151,6 +151,41 @@ final class ZLinkStreamRuntimeIngressTest {
         assertTrue(session.secondDispatchLatch.await(5, TimeUnit.SECONDS));
         assertEquals(2, session.dispatchCount.get());
         assertEquals(List.of("first", "second"), session.packetNames);
+    }
+
+    @Test
+    void retainsOneRawReceiveThroughEveryHandlerTerminalAndThenProgresses()
+        throws Exception {
+        TestSession.holdFirstDispatch = true;
+        byte[] first = frame("first-retained", "a");
+        byte[] second = frame("second-retained", "b");
+        byte[] combined = new byte[first.length + second.length];
+        System.arraycopy(first, 0, combined, 0, first.length);
+        System.arraycopy(second, 0, combined, first.length, second.length);
+        AtomicInteger ownerCloses = new AtomicInteger();
+        FakeStream stream = new FakeStream();
+        stream.enqueueTracked(PEER_A, combined, ownerCloses);
+
+        ZLinkStreamRuntime runtime = start(stream, 1);
+        runtimes.add(runtime);
+
+        TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+        assertFalse(session.firstDispatch.isDone());
+        assertEquals(0, ownerCloses.get());
+
+        session.firstDispatch.complete(null);
+        assertTrue(session.secondDispatchLatch.await(5, TimeUnit.SECONDS));
+        awaitValue(ownerCloses, 1);
+        assertEquals(
+            List.of("first-retained", "second-retained"),
+            session.packetNames);
+
+        stream.enqueue(PEER_A, frame("after-release", "c"));
+        awaitValue(session.dispatchCount, 3);
+        assertEquals(
+            List.of("first-retained", "second-retained", "after-release"),
+            session.packetNames);
     }
 
     @Test
@@ -271,9 +306,6 @@ final class ZLinkStreamRuntimeIngressTest {
             Thread.sleep(1);
         }
         assertEquals(1, stream.sessionClosingSends.get());
-        assertEquals(
-            0,
-            lastRegistration.inboundDispatchBudget().snapshot().pendingPayloadBytes());
         assertNull(TestSession.lastSession.get());
     }
 
@@ -394,7 +426,6 @@ final class ZLinkStreamRuntimeIngressTest {
             0,
             7,
             null,
-            0,
             0);
 
         assertThrows(CompletionException.class, () ->
@@ -402,16 +433,11 @@ final class ZLinkStreamRuntimeIngressTest {
                     PEER_B,
                     codec.encodeSessionRelocationRoute(abort))
                 .toCompletableFuture().join());
-        var ack = codec.decodeSessionRelocationRouted(
-            fixture.runtime().handleSessionRelocationRoute(
-                    actorRef.nodeRid(),
-                    codec.encodeSessionRelocationRoute(abort))
-                .toCompletableFuture().join());
-
-        assertEquals(sealed.lastAcceptedSessionSequence(),
-            ack.lastAcceptedSessionSequence());
-        assertEquals(ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.ABORT,
-            ack.action());
+        fixture.runtime().handleSessionRelocationRoute(
+                actorRef.nodeRid(),
+                codec.encodeSessionRelocationRoute(abort))
+            .toCompletableFuture().join();
+        assertEquals(relocation, sealed.relocation());
     }
 
     @Test
@@ -512,7 +538,6 @@ final class ZLinkStreamRuntimeIngressTest {
         options.addStreamNode("stream")
             .bind("tcp://127.0.0.1:18081")
             .registerSession(TestSession.class);
-        options.configureInboundDispatch().setApplicationHwmBytes(0);
         ZLinkFrameworkRegistration registration = options.registration();
         ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
         ZLinkInternalSpotNode spotNode = (ZLinkInternalSpotNode) Proxy.newProxyInstance(
@@ -639,7 +664,6 @@ final class ZLinkStreamRuntimeIngressTest {
             .bind("tcp://127.0.0.1:18081")
             .registerSession(TestSession.class);
         streamNode.configureSocket().setMaxMessageSize(maxMessageSize);
-        options.configureInboundDispatch().setApplicationHwmBytes(hwm);
         ZLinkFrameworkRegistration registration = options.registration();
         lastRegistration = registration;
         FakeProvider provider = new FakeProvider(stream);
@@ -708,6 +732,18 @@ final class ZLinkStreamRuntimeIngressTest {
             Thread.sleep(1);
         }
         throw new AssertionError("STREAM session was not created");
+    }
+
+    private static void awaitValue(AtomicInteger value, int expected)
+        throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            if (value.get() == expected) {
+                return;
+            }
+            Thread.sleep(1);
+        }
+        assertEquals(expected, value.get());
     }
 
     private static byte[] frame(String packetName, String payload) {
@@ -890,6 +926,20 @@ final class ZLinkStreamRuntimeIngressTest {
                 Optional.of(routingId),
                 List.of(part),
                 part::close));
+        }
+
+        private void enqueueTracked(
+            RoutingId routingId,
+            byte[] bytes,
+            AtomicInteger ownerCloses) {
+            Message part = Message.from(bytes);
+            received.add(new ZLinkBackendStreamReceived(
+                Optional.of(routingId),
+                List.of(part),
+                () -> {
+                    part.close();
+                    ownerCloses.incrementAndGet();
+                }));
         }
 
         private void enqueueEmptyParts(RoutingId routingId) {

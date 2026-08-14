@@ -9,32 +9,17 @@ public sealed class RuntimeConformanceFixtureTests
     private static bool _insideAdmissionCall;
 
     [Fact]
-    public void Serial_execution_limits_match_the_shared_fixture()
+    public void Serial_execution_arbitration_limits_match_the_shared_fixture()
     {
         using var document = Load("serial-execution-v1.json");
         var limits = document.RootElement.GetProperty("limits");
 
-        Assert.Equal(
-            ZLinkSerialExecutionQueue.DefaultApplicationCapacity,
-            limits.GetProperty("application").GetProperty("messageCapacity").GetInt32());
-        Assert.Equal(
-            ZLinkSerialExecutionQueue.DefaultApplicationByteCapacity,
-            limits.GetProperty("application").GetProperty("byteCapacity").GetInt64());
-        Assert.Equal(
-            ZLinkSerialExecutionQueue.DefaultLifecycleCapacity,
-            limits.GetProperty("lifecycle").GetProperty("messageCapacity").GetInt32());
-        Assert.Equal(
-            ZLinkSerialExecutionQueue.DefaultLifecycleByteCapacity,
-            limits.GetProperty("lifecycle").GetProperty("byteCapacity").GetInt64());
         Assert.Equal(
             ZLinkSerialExecutionQueue.OwnerTimeSliceMilliseconds,
             limits.GetProperty("ownerTimeBudgetMilliseconds").GetInt32());
         Assert.Equal(
             ZLinkSerialExecutionQueue.LifecycleTurnLimit,
             limits.GetProperty("lifecycleBurstLimit").GetInt32());
-        Assert.Equal(
-            ZLinkSerialExecutionQueue.WorkItemFixedCostBytes,
-            limits.GetProperty("fixedWorkByteCost").GetInt64());
     }
 
     [Fact]
@@ -139,7 +124,7 @@ public sealed class RuntimeConformanceFixtureTests
                     out _));
         Assert.Equal(applicationCount, queue.ApplicationPendingCount);
         Assert.Equal(
-            ZLinkSerialPostAdmission.QueueFull,
+            ZLinkSerialPostAdmission.Accepted,
             queue.TryPostApplicationWithAdmission(
                 static _ => ValueTask.CompletedTask,
                 out _));
@@ -156,7 +141,7 @@ public sealed class RuntimeConformanceFixtureTests
         }
         Assert.Equal(lifecycleCount, queue.LifecyclePendingCount);
         Assert.Equal(
-            ZLinkSerialPostAdmission.QueueFull,
+            ZLinkSerialPostAdmission.Accepted,
             queue.TryPostNextWithAdmission(
                 static _ => ValueTask.CompletedTask,
                 out _));
@@ -184,12 +169,10 @@ public sealed class RuntimeConformanceFixtureTests
             Assert.Equal(
                 ZLinkSerialPostAdmission.Accepted,
                 queue.TryPostApplicationWithAdmission(
-                    applicationBytes,
                     async _ => await releaseApplication.Task.ConfigureAwait(false),
                     out var application));
-            Assert.Equal(applicationBytes, queue.ApplicationPendingRetainedBytes);
             Assert.Equal(
-                ZLinkSerialPostAdmission.QueueFull,
+                ZLinkSerialPostAdmission.Accepted,
                 queue.TryPostApplicationWithAdmission(
                     static _ => ValueTask.CompletedTask,
                     out _));
@@ -197,12 +180,10 @@ public sealed class RuntimeConformanceFixtureTests
             Assert.Equal(
                 ZLinkSerialPostAdmission.Accepted,
                 queue.TryPostNextWithAdmission(
-                    lifecycleBytes,
                     async _ => await releaseLifecycle.Task.ConfigureAwait(false),
                     out var lifecycle));
-            Assert.Equal(lifecycleBytes, queue.LifecyclePendingRetainedBytes);
             Assert.Equal(
-                ZLinkSerialPostAdmission.QueueFull,
+                ZLinkSerialPostAdmission.Accepted,
                 queue.TryPostNextWithAdmission(
                     static _ => ValueTask.CompletedTask,
                     out _));
@@ -222,7 +203,7 @@ public sealed class RuntimeConformanceFixtureTests
     }
 
     [Fact]
-    public async Task Rejected_or_failed_preparation_preserves_count_bytes_and_sequence()
+    public async Task Accepted_work_preserves_sequence_and_post_release_progress()
     {
         using var document = Load("serial-execution-v1.json");
         Assert.True(document.RootElement
@@ -233,8 +214,7 @@ public sealed class RuntimeConformanceFixtureTests
         await using var queue = new ZLinkSerialExecutionQueue(
             new ZLinkRuntimeTaskRunner(errorSink, CancellationToken.None),
             errorSink,
-            CancellationToken.None,
-            capacity: 1);
+            CancellationToken.None);
         var release = Signal();
         try
         {
@@ -247,27 +227,19 @@ public sealed class RuntimeConformanceFixtureTests
                     out var first));
             Assert.Equal(1UL, first.AcceptedSequence);
             Assert.Equal(1, queue.ApplicationPendingCount);
-            Assert.Equal(5, queue.ApplicationPendingRetainedBytes);
             Assert.Equal(
-                ZLinkAcceptedWorkAdmission.QueueFull,
+                ZLinkAcceptedWorkAdmission.Accepted,
                 queue.TryPostAccepted(
                     new byte[13],
                     static _ => ValueTask.CompletedTask,
                     static () => { },
                     out _));
-            Assert.Throws<OverflowException>(() =>
-                queue.TryPostApplicationWithAdmission(
-                    long.MaxValue,
-                    static _ => ValueTask.CompletedTask,
-                    out _));
-            Assert.Equal(1, queue.ApplicationPendingCount);
-            Assert.Equal(5, queue.ApplicationPendingRetainedBytes);
+            Assert.Equal(2, queue.ApplicationPendingCount);
 
             release.TrySetResult();
             await first.Completion.WaitAsync(TimeSpan.FromSeconds(5));
             await queue.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(0, queue.ApplicationPendingCount);
-            Assert.Equal(0, queue.ApplicationPendingRetainedBytes);
             Assert.Equal(
                 ZLinkAcceptedWorkAdmission.Accepted,
                 queue.TryPostAccepted(
@@ -275,9 +247,8 @@ public sealed class RuntimeConformanceFixtureTests
                     static _ => ValueTask.CompletedTask,
                     static () => { },
                     out var second));
-            Assert.Equal(2UL, second.AcceptedSequence);
+            Assert.Equal(3UL, second.AcceptedSequence);
             Assert.Equal(1, queue.ApplicationPendingCount);
-            Assert.Equal(7, queue.ApplicationPendingRetainedBytes);
             await second.Completion.WaitAsync(TimeSpan.FromSeconds(5));
         }
         finally

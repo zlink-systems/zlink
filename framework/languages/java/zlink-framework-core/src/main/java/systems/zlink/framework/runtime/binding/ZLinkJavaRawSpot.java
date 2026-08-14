@@ -17,10 +17,8 @@ import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinRequest;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorLifecycleEvent;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestCallback;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchEvent;
@@ -63,11 +61,6 @@ final class ZLinkJavaRawSpot
     @Override
     public String name() {
         return "rawSpot." + spotId;
-    }
-
-    @Override
-    public ZLinkBackendObject admissionSource() {
-        return owner;
     }
 
     @Override
@@ -160,36 +153,53 @@ final class ZLinkJavaRawSpot
     }
 
     @Override
-    public boolean sendToSpot(
+    public CompletionStage<Void> publishAsync(
+        String channelName,
+        String topic,
+        List<Message> parts,
+        SendFlags flags) {
+        return owner.publishAsync(
+            this, channelName, topic, new byte[0], parts);
+    }
+
+    @Override
+    public CompletionStage<Void> publishAsync(
+        String channelName,
+        String topic,
+        byte[] metadata,
+        List<Message> parts,
+        SendFlags flags) {
+        return owner.publishAsync(
+            this, channelName, topic, metadata, parts);
+    }
+
+    @Override
+    public CompletionStage<Void> sendToSpot(
         RoutingId targetNodeRid,
         String spotId,
         long spotGeneration,
-        List<Message> parts,
-        SendFlags flags) {
+        List<Message> parts) {
         return owner.sendToSpot(
             this, targetNodeRid, spotId, spotGeneration, new byte[0], parts);
     }
 
     @Override
-    public boolean sendToSpot(
+    public CompletionStage<Void> sendToSpot(
         RoutingId targetNodeRid,
         String spotId,
         long spotGeneration,
         byte[] metadata,
-        List<Message> parts,
-        SendFlags flags) {
+        List<Message> parts) {
         return owner.sendToSpot(
             this, targetNodeRid, spotId, spotGeneration, metadata, parts);
     }
 
     @Override
-    public boolean requestToSpot(
+    public CompletionStage<ZLinkBackendReceived> requestToSpot(
         RoutingId targetNodeRid,
         String spotId,
         long spotGeneration,
         List<Message> parts,
-        ZLinkBackendRequestCallback callback,
-        SendFlags flags,
         Duration timeout) {
         return owner.requestToSpot(
             this,
@@ -198,19 +208,16 @@ final class ZLinkJavaRawSpot
             spotGeneration,
             new byte[0],
             parts,
-            callback,
             timeout);
     }
 
     @Override
-    public boolean requestToSpot(
+    public CompletionStage<ZLinkBackendReceived> requestToSpot(
         RoutingId targetNodeRid,
         String spotId,
         long spotGeneration,
         byte[] metadata,
         List<Message> parts,
-        ZLinkBackendRequestCallback callback,
-        SendFlags flags,
         Duration timeout) {
         return owner.requestToSpot(
             this,
@@ -219,7 +226,6 @@ final class ZLinkJavaRawSpot
             spotGeneration,
             metadata,
             parts,
-            callback,
             timeout);
     }
 
@@ -267,7 +273,6 @@ final class ZLinkJavaRawSpot
     boolean enqueueTopic(ZLinkBackendTopicMessage message) {
         if (closed.get()) {
             message.parts().forEach(Message::close);
-            message.closeAdmission();
             return false;
         }
         subscriptions.add(message);
@@ -346,7 +351,6 @@ final class ZLinkJavaRawSpot
         ZLinkBackendTopicMessage topic;
         while ((topic = subscriptions.poll()) != null) {
             topic.parts().forEach(Message::close);
-            topic.closeAdmission();
         }
         ZLinkBackendActorJoinRequest join;
         while ((join = actorJoins.poll()) != null) {

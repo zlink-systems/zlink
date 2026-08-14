@@ -37,6 +37,7 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
     void reached (serial_execution_queue_t::async_completion_t complete)
     {
         std::function<void ()> work;
+        async_work_t async_work;
         {
             std::lock_guard lock (_mutex);
             if (_reached)
@@ -48,9 +49,10 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
             work = _state == state_t::activated
                      ? std::move (_work)
                      : std::function<void ()>{};
+            async_work = _state == state_t::activated ? std::move (_async_work) : async_work_t{};
             complete = std::move (_complete);
         }
-        finish (std::move (complete), std::move (work));
+        finish (std::move (complete), std::move (work), std::move (async_work));
     }
 
     result_t<void> activate (std::function<void ()> work) override
@@ -75,7 +77,33 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
             complete = std::move (_complete);
             work = std::move (_work);
         }
-        finish (std::move (complete), std::move (work));
+        finish (std::move (complete), std::move (work), {});
+        return result_t<void>::success ();
+    }
+
+    result_t<void> activate_async (async_work_t work) override
+    {
+        if (!work) {
+            return result_t<void>::failure (
+              framework_error_kind_t::not_configured,
+              "Deferred Actor join barrier async work is empty");
+        }
+        serial_execution_queue_t::async_completion_t complete;
+        {
+            std::lock_guard lock (_mutex);
+            if (_state != state_t::pending) {
+                return result_t<void>::failure (
+                  framework_error_kind_t::invalid_operation,
+                  "Deferred Actor join barrier is already terminal");
+            }
+            _state = state_t::activated;
+            _async_work = std::move (work);
+            if (!_reached)
+                return result_t<void>::success ();
+            complete = std::move (_complete);
+            work = std::move (_async_work);
+        }
+        finish (std::move (complete), {}, std::move (work));
         return result_t<void>::success ();
     }
 
@@ -92,7 +120,7 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
             complete = std::move (_complete);
         }
         try {
-            finish (std::move (complete), {});
+            finish (std::move (complete), {}, {});
         }
         catch (...) {
         }
@@ -107,10 +135,27 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
     };
 
     static void finish (serial_execution_queue_t::async_completion_t complete,
-                        std::function<void ()> work)
+                        std::function<void ()> work,
+                        async_work_t async_work)
     {
         if (!complete)
             return;
+        if (async_work) {
+            auto completion = std::make_shared<serial_execution_queue_t::async_completion_t> (
+              std::move (complete));
+            try {
+                async_work ([completion] (result_t<void> result) mutable {
+                    (*completion) ([result = std::move (result)] () mutable {
+                        result.value ();
+                    });
+                });
+            }
+            catch (...) {
+                const auto error = std::current_exception ();
+                (*completion) ([error] { std::rethrow_exception (error); });
+            }
+            return;
+        }
         complete ([work = std::move (work)] () mutable {
             if (work)
                 work ();
@@ -122,6 +167,7 @@ class serial_deferred_barrier_t final : public detail::deferred_barrier_t
     bool _reached = false;
     serial_execution_queue_t::async_completion_t _complete;
     std::function<void ()> _work;
+    async_work_t _async_work;
 };
 
 class serial_turn_handle_impl_t final : public detail::serial_turn_t,
@@ -782,6 +828,10 @@ serial_execution_queue_t::lane_locked (serial_work_lane_t lane) const noexcept
 bool serial_execution_queue_t::can_enqueue_locked (
   const serial_work_options_t &options) const noexcept
 {
+    if (options.lane == serial_work_lane_t::application
+        && options.host_application_capacity_reserved) {
+        return true;
+    }
     const auto &lane = lane_locked (options.lane);
     const auto bytes = normalized_byte_cost (options);
     return lane.messages < lane.message_capacity

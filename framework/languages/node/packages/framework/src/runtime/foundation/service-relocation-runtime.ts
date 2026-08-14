@@ -1,33 +1,5 @@
 import { createHash } from 'node:crypto';
-import type {
-  ZLinkAuthorityCompareExchangeResult,
-  ZLinkAuthorityKey,
-  ZLinkAuthorityMutation,
-  ZLinkAuthorityReadResult,
-  ZLinkAuthoritySnapshot,
-  ZLinkAuthorityStoreVersion,
-  ZLinkLocationOwnerToken,
-  ZLinkPlacementObjectKind,
-  ZLinkRelocationCapacityFence
-} from '../../contracts/Locations';
-
-const RELOCATION_RETENTION_MS = 24 * 60 * 60 * 1_000;
-const MAX_RELOCATION_ITEMS_PER_PARTICIPANT = 65_536;
-
-type Awaitable<T> = T | Promise<T>;
-
-export interface ServiceAuthorityProvider {
-  readAuthority(
-    key: ZLinkAuthorityKey,
-    signal?: AbortSignal
-  ): Awaitable<ZLinkAuthorityReadResult>;
-  compareExchangeAuthority(
-    key: ZLinkAuthorityKey,
-    expectedStoreVersion: ZLinkAuthorityStoreVersion,
-    mutation: ZLinkAuthorityMutation,
-    signal?: AbortSignal
-  ): Awaitable<ZLinkAuthorityCompareExchangeResult>;
-}
+import type { ZLinkPlacementObjectKind } from '../../contracts/Locations';
 
 export interface ServiceRelocationStored {
   readonly reference: string;
@@ -56,10 +28,7 @@ export interface ServiceRelocationParticipant {
   readonly objectGeneration: bigint;
   readonly authorityOwnerGeneration: bigint;
   readonly applicationState: Uint8Array;
-  readonly acceptedJournal: Uint8Array;
-  readonly replayCursor: bigint;
-  readonly terminalReplies: Uint8Array;
-  readonly pendingRelayCount: number;
+  readonly boundSessionState: Uint8Array;
   readonly queuedMessages: readonly ServiceRelocationQueuedMessage[];
   readonly timers: readonly ServiceRelocationTimer[];
 }
@@ -92,24 +61,11 @@ export interface ServiceRelocationMembership {
 export interface ServiceRelocationEnvelope {
   readonly aggregateId: string;
   readonly aggregateGeneration: bigint;
-  readonly sourceCleanup: 'pending' | 'completed';
   readonly participants: readonly ServiceRelocationParticipant[];
   readonly memberships: readonly ServiceRelocationMembership[];
 }
 
-export interface ServiceRelocationParticipantProgress {
-  readonly replayCursor: bigint;
-  readonly terminalReplies: Uint8Array;
-  readonly pendingRelayCount: number;
-}
-
-export type ServiceRelocationSuccessorProgress = ReadonlyMap<
-  string,
-  ServiceRelocationParticipantProgress
->;
-
 export interface ServiceRelocationPublication {
-  readonly phase: 'sourceCleanupPending' | 'sourceCleanupCompleted';
   readonly reference: string;
   readonly checksumCrc32c: number;
   readonly aggregateId: string;
@@ -120,18 +76,11 @@ export interface ServiceRelocationPublication {
 }
 
 export interface ServiceRelocationAuthorityCodec {
-  prepare(currentPayload: Uint8Array): Uint8Array;
-  readPreparing(payload: Uint8Array): Uint8Array | undefined;
   publish(
     currentPayload: Uint8Array,
     publication: ServiceRelocationPublication
   ): Uint8Array;
   read(payload: Uint8Array): ServiceRelocationPublication | undefined;
-  replace(
-    currentPayload: Uint8Array,
-    expected: ServiceRelocationPublication,
-    next: ServiceRelocationPublication
-  ): Uint8Array;
   clear(currentPayload: Uint8Array, expectedReference: string): Uint8Array;
 }
 
@@ -143,17 +92,6 @@ interface ServiceRelocationAuthorityEnvelope {
 /** Deterministic Location authority wrapper for one immutable relocation root. */
 export class ServiceRelocationAuthorityPayloadCodec
 implements ServiceRelocationAuthorityCodec {
-  prepare(currentPayload: Uint8Array): Uint8Array {
-    if (this.read(currentPayload) !== undefined || this.readPreparing(currentPayload) !== undefined) {
-      throw new TypeError('Location authority already contains relocation state.');
-    }
-    return encodePreparingAuthorityEnvelope(currentPayload);
-  }
-
-  readPreparing(payload: Uint8Array): Uint8Array | undefined {
-    return decodePreparingAuthorityEnvelope(payload);
-  }
-
   publish(
     currentPayload: Uint8Array,
     publication: ServiceRelocationPublication
@@ -166,18 +104,6 @@ implements ServiceRelocationAuthorityCodec {
 
   read(payload: Uint8Array): ServiceRelocationPublication | undefined {
     return decodeAuthorityEnvelope(payload)?.publication;
-  }
-
-  replace(
-    currentPayload: Uint8Array,
-    expected: ServiceRelocationPublication,
-    next: ServiceRelocationPublication
-  ): Uint8Array {
-    const current = decodeAuthorityEnvelope(currentPayload);
-    if (current === undefined || !samePublication(current.publication, expected)) {
-      throw new TypeError('Location authority relocation publication changed.');
-    }
-    return encodeAuthorityEnvelope(current.base, next);
   }
 
   clear(currentPayload: Uint8Array, expectedReference: string): Uint8Array {
@@ -213,578 +139,8 @@ export function replaceServiceRelocationAuthorityApplicationPayload(
     : encodeAuthorityEnvelope(Buffer.from(applicationPayload), current.publication);
 }
 
-export interface ServicePublishedRelocation {
-  readonly authority: ZLinkAuthoritySnapshot;
-  readonly publication: ServiceRelocationPublication;
-}
-
-export class ServiceRelocationDataLostError extends Error {
-  constructor(readonly reference: string, message: string) {
-    super(message);
-    this.name = 'ServiceRelocationDataLostError';
-  }
-}
-
-/**
- * Stores immutable relocation input first and publishes it with one Location
- * authority CAS. The two providers never need a shared transaction.
- */
-export class ServiceDurableRelocationRuntime {
-  constructor(
-    private readonly authority: ServiceAuthorityProvider,
-    private readonly store: ServiceRelocationStorePort,
-    private readonly codec: ServiceRelocationAuthorityCodec
-  ) {}
-
-  async captureAndPublish(
-    key: ZLinkAuthorityKey,
-    expected: ZLinkAuthoritySnapshot,
-    targetOwner: ZLinkLocationOwnerToken,
-    envelope: ServiceRelocationEnvelope,
-    signal?: AbortSignal,
-    beforePublish?: (publication: ServiceRelocationPublication) => Promise<void>
-  ): Promise<ServicePublishedRelocation> {
-    signal?.throwIfAborted();
-    if (envelope.sourceCleanup !== 'pending') {
-      throw new TypeError('Initial relocation source cleanup must be pending.');
-    }
-    const preparingPayload = this.codec.prepare(expected.payload);
-    let preparing: ZLinkAuthorityCompareExchangeResult;
-    try {
-      preparing = await this.authority.compareExchangeAuthority(
-        key,
-        expected.storeVersion,
-        {
-          kind: 'put',
-          generationTransition: 'preserve',
-          payload: preparingPayload
-        },
-        signal
-      );
-    } catch (error) {
-      const current = await this.authority.readAuthority(key, signal);
-      if (
-        current.kind !== 'snapshot'
-        || !Buffer.from(current.payload).equals(preparingPayload)
-        || current.objectGeneration !== expected.objectGeneration
-        || current.authorityOwnerGeneration !== expected.authorityOwnerGeneration
-      ) {
-        throw error;
-      }
-      const { kind: _kind, ...stored } = current;
-      preparing = { kind: 'stored', ...stored };
-    }
-    if (
-      preparing.kind !== 'stored'
-      || preparing.objectGeneration !== expected.objectGeneration
-      || preparing.authorityOwnerGeneration !== expected.authorityOwnerGeneration
-    ) {
-      throw new Error('Location authority rejected relocation Preparing publication.');
-    }
-    const prepared = storedSnapshot(preparing);
-    const encoded = encodeServiceRelocationEnvelope(envelope);
-    const checksumCrc32c = crc32c(encoded);
-    let stored: Awaited<ReturnType<ServiceRelocationStorePort['put']>>;
-    try {
-      stored = await this.store.put(encoded, RELOCATION_RETENTION_MS, signal);
-    } catch (error) {
-      await this.restorePreparing(key, prepared, expected.payload, signal);
-      throw error;
-    }
-    if (
-      stored.reference.length === 0
-      || stored.checksumCrc32c !== checksumCrc32c
-      || stored.expiresAtMs <= stored.storeNowMs
-    ) {
-      await this.store.delete(stored.reference, signal);
-      await this.restorePreparing(key, prepared, expected.payload, signal);
-      throw new Error('Relocation Store returned an invalid immutable payload receipt.');
-    }
-    const publication: ServiceRelocationPublication = {
-      phase: 'sourceCleanupPending',
-      reference: stored.reference,
-      checksumCrc32c,
-      aggregateId: canonicalUuid(envelope.aggregateId, 'aggregate id'),
-      aggregateGeneration: positiveBigInt(
-        envelope.aggregateGeneration,
-        'aggregate generation'
-      ),
-      inventoryDigest: inventoryDigest(envelope.participants, envelope.memberships),
-      targetOwnerId: requireText(targetOwner.ownerId, 'target owner id'),
-      targetOwnerLeaseGeneration: positiveBigInt(
-        targetOwner.leaseGeneration,
-        'target owner lease generation'
-      )
-    };
-    let result: ZLinkAuthorityCompareExchangeResult;
-    try {
-      await beforePublish?.(publication);
-      result = await this.authority.compareExchangeAuthority(
-        key,
-        prepared.storeVersion,
-        {
-          kind: 'put',
-          generationTransition: 'preserve',
-          payload: this.codec.publish(expected.payload, publication)
-        },
-        signal
-      );
-    } catch (error) {
-      const reconciled = await this.reconcilePublication(
-        key,
-        prepared,
-        publication,
-        signal
-      );
-      if (reconciled.kind === 'published') {
-        return { authority: reconciled.authority, publication };
-      }
-      if (reconciled.kind === 'notCommitted') {
-        await this.store.delete(stored.reference, signal);
-        await this.restorePreparing(key, prepared, expected.payload, signal);
-      }
-      throw error;
-    }
-    if (
-      result.kind !== 'stored'
-      || result.objectGeneration !== expected.objectGeneration
-      || result.authorityOwnerGeneration !== expected.authorityOwnerGeneration
-    ) {
-      await this.store.delete(stored.reference, signal);
-      await this.restorePreparing(key, prepared, expected.payload, signal);
-      throw new Error('Location authority rejected relocation publication.');
-    }
-    return { authority: storedSnapshot(result), publication };
-  }
-
-  private async restorePreparing(
-    key: ZLinkAuthorityKey,
-    prepared: ZLinkAuthoritySnapshot,
-    steadyPayload: Uint8Array,
-    signal?: AbortSignal
-  ): Promise<void> {
-    await this.authority.compareExchangeAuthority(
-      key,
-      prepared.storeVersion,
-      {
-        kind: 'restore',
-        payload: steadyPayload,
-        expectedOwner: {
-          ownerId: prepared.ownerId,
-          leaseGeneration: prepared.ownerLeaseGeneration
-        }
-      },
-      signal
-    );
-  }
-
-  readPublication(authority: ZLinkAuthoritySnapshot): ServiceRelocationPublication {
-    const publication = this.codec.read(authority.payload);
-    if (publication === undefined) {
-      throw new Error('Location authority has no published relocation reference.');
-    }
-    return publication;
-  }
-
-  private async reconcilePublication(
-    key: ZLinkAuthorityKey,
-    expected: ZLinkAuthoritySnapshot,
-    publication: ServiceRelocationPublication,
-    signal?: AbortSignal
-  ): Promise<
-    | { readonly kind: 'published'; readonly authority: ZLinkAuthoritySnapshot }
-    | { readonly kind: 'notCommitted' }
-    | { readonly kind: 'unknown' }
-  > {
-    let current: ZLinkAuthorityReadResult;
-    try {
-      current = await this.authority.readAuthority(key, signal);
-    } catch {
-      return { kind: 'unknown' };
-    }
-    if (current.kind !== 'snapshot') {
-      return { kind: 'unknown' };
-    }
-    const observed = this.codec.read(current.payload);
-    if (samePublication(observed, publication)) {
-      return { kind: 'published', authority: current };
-    }
-    return current.storeVersion.value === expected.storeVersion.value
-      ? { kind: 'notCommitted' }
-      : { kind: 'unknown' };
-  }
-
-  async restore(
-    authority: ZLinkAuthoritySnapshot,
-    signal?: AbortSignal
-  ): Promise<ServiceRelocationEnvelope> {
-    signal?.throwIfAborted();
-    const publication = this.codec.read(authority.payload);
-    if (publication === undefined) {
-      throw new Error('Location authority has no published relocation reference.');
-    }
-    const read = await this.store.get(publication.reference, signal);
-    if (read.kind === 'missing') {
-      throw new ServiceRelocationDataLostError(
-        publication.reference,
-        'Location authority references missing relocation data.'
-      );
-    }
-    if (crc32c(read.payload) !== publication.checksumCrc32c) {
-      throw new ServiceRelocationDataLostError(
-        publication.reference,
-        'Published relocation checksum does not match the immutable payload.'
-      );
-    }
-    const envelope = decodeServiceRelocationEnvelope(read.payload);
-    if (inventoryDigest(envelope.participants, envelope.memberships) !== publication.inventoryDigest) {
-      throw new ServiceRelocationDataLostError(
-        publication.reference,
-        'Published relocation inventory does not match Location authority.'
-      );
-    }
-    return envelope;
-  }
-
-  async commitOwner(
-    key: ZLinkAuthorityKey,
-    expected: ZLinkAuthoritySnapshot,
-    targetOwner: ZLinkLocationOwnerToken,
-    relocationCapacityFence?: ZLinkRelocationCapacityFence,
-    signal?: AbortSignal
-  ): Promise<ZLinkAuthoritySnapshot> {
-    signal?.throwIfAborted();
-    const publication = this.codec.read(expected.payload);
-    if (publication === undefined) {
-      throw new Error('Location authority has no published relocation reference.');
-    }
-    if (
-      publication.targetOwnerId !== targetOwner.ownerId
-      || publication.targetOwnerLeaseGeneration !== targetOwner.leaseGeneration
-    ) {
-      throw new Error('Relocation target owner does not match the published owner fence.');
-    }
-    const result = await this.authority.compareExchangeAuthority(
-      key,
-      expected.storeVersion,
-      {
-        kind: 'put',
-        generationTransition: 'newOwner',
-        targetOwner,
-        ...(relocationCapacityFence === undefined ? {} : { relocationCapacityFence }),
-        payload: expected.payload
-      },
-      signal
-    );
-    if (
-      result.kind !== 'stored'
-      || result.objectGeneration !== expected.objectGeneration
-      || result.authorityOwnerGeneration <= expected.authorityOwnerGeneration
-      || result.ownerId !== targetOwner.ownerId
-      || result.ownerLeaseGeneration !== targetOwner.leaseGeneration
-    ) {
-      throw new Error('Location authority rejected relocation owner commit.');
-    }
-    return storedSnapshot(result);
-  }
-
-  /**
-   * Replaces the pending immutable root with a completed root. The old root is
-   * deleted only after Location authority exposes the completed reference.
-   */
-  async completeSourceCleanup(
-    key: ZLinkAuthorityKey,
-    expected: ZLinkAuthoritySnapshot,
-    progress?: ServiceRelocationSuccessorProgress,
-    signal?: AbortSignal,
-    options?: { readonly retainPreviousRoot?: boolean }
-  ): Promise<ZLinkAuthoritySnapshot> {
-    signal?.throwIfAborted();
-    const pending = this.codec.read(expected.payload);
-    if (pending === undefined) {
-      throw new Error('Location authority has no published relocation reference.');
-    }
-    if (pending.phase === 'sourceCleanupCompleted') return expected;
-    validatePublicationOwner(expected, pending);
-
-    const retried = await this.readCompletedSourceCleanup(key, pending, signal);
-    if (retried !== undefined) {
-      if (options?.retainPreviousRoot !== true) {
-        await this.store.delete(pending.reference, signal);
-      }
-      return retried;
-    }
-
-    const restored = await this.restore(expected, signal);
-    if (
-      restored.sourceCleanup !== 'pending'
-      || restored.aggregateId !== pending.aggregateId
-      || restored.aggregateGeneration !== pending.aggregateGeneration
-    ) {
-      throw new ServiceRelocationDataLostError(
-        pending.reference,
-        'Published relocation root is not the exact source-cleanup pending aggregate.'
-      );
-    }
-    const completedEnvelope: ServiceRelocationEnvelope = {
-      ...restored,
-      aggregateGeneration: pending.aggregateGeneration + 1n,
-      sourceCleanup: 'completed',
-      participants: restored.participants.map(participant => {
-        const completed = progress?.get(participant.key);
-        return completed === undefined
-          ? participant
-          : {
-              ...participant,
-              replayCursor: completed.replayCursor,
-              terminalReplies: Buffer.from(completed.terminalReplies),
-              pendingRelayCount: completed.pendingRelayCount
-            };
-      })
-    };
-    const encoded = encodeServiceRelocationEnvelope(completedEnvelope);
-    const checksumCrc32c = crc32c(encoded);
-    const stored = await this.store.put(encoded, RELOCATION_RETENTION_MS, signal);
-    if (
-      stored.reference.length === 0
-      || stored.checksumCrc32c !== checksumCrc32c
-      || stored.expiresAtMs <= stored.storeNowMs
-    ) {
-      await this.store.delete(stored.reference, signal);
-      throw new Error('Relocation Store returned an invalid completed payload receipt.');
-    }
-    const completed: ServiceRelocationPublication = {
-      ...pending,
-      phase: 'sourceCleanupCompleted',
-      reference: stored.reference,
-      checksumCrc32c,
-      aggregateGeneration: completedEnvelope.aggregateGeneration
-    };
-
-    let authority: ZLinkAuthoritySnapshot | undefined;
-    let result: ZLinkAuthorityCompareExchangeResult | undefined;
-    try {
-      result = await this.authority.compareExchangeAuthority(
-        key,
-        expected.storeVersion,
-        {
-          kind: 'put',
-          generationTransition: 'preserve',
-          payload: this.codec.replace(expected.payload, pending, completed)
-        },
-        signal
-      );
-    } catch (error) {
-      const reconciled = await this.reconcilePublication(
-        key,
-        expected,
-        completed,
-        signal
-      );
-      if (reconciled.kind !== 'published') {
-        await this.store.delete(stored.reference, signal);
-        throw error;
-      }
-      authority = reconciled.authority;
-    }
-    if (result !== undefined) {
-      if (
-        result.kind === 'stored'
-        && result.objectGeneration === expected.objectGeneration
-        && result.authorityOwnerGeneration === expected.authorityOwnerGeneration
-        && result.ownerId === pending.targetOwnerId
-        && result.ownerLeaseGeneration === pending.targetOwnerLeaseGeneration
-      ) {
-        authority = storedSnapshot(result);
-      } else {
-        const reconciled = await this.reconcilePublication(
-          key,
-          expected,
-          completed,
-          signal
-        );
-        if (reconciled.kind !== 'published') {
-          await this.store.delete(stored.reference, signal);
-          throw new Error('Location authority rejected source-cleanup completion.');
-        }
-        authority = reconciled.authority;
-      }
-    }
-
-    if (authority === undefined) {
-      await this.store.delete(stored.reference, signal);
-      throw new Error('Source-cleanup completion has no authority result.');
-    }
-    if (options?.retainPreviousRoot !== true) {
-      await this.store.delete(pending.reference, signal);
-    }
-    return authority;
-  }
-
-  deleteRetainedRoot(reference: string, signal?: AbortSignal): Promise<'deleted' | 'missing'> {
-    return this.store.delete(reference, signal);
-  }
-
-  async advanceCompletedProgress(
-    key: ZLinkAuthorityKey,
-    expected: ZLinkAuthoritySnapshot,
-    progress: ServiceRelocationSuccessorProgress,
-    signal?: AbortSignal,
-    options?: { readonly retainPreviousRoot?: boolean }
-  ): Promise<ZLinkAuthoritySnapshot> {
-    signal?.throwIfAborted();
-    const currentPublication = this.codec.read(expected.payload);
-    if (currentPublication?.phase !== 'sourceCleanupCompleted') {
-      throw new Error('Completed relocation progress requires a completed authority root.');
-    }
-    const restored = await this.restore(expected, signal);
-    if (restored.sourceCleanup !== 'completed') {
-      throw new ServiceRelocationDataLostError(
-        currentPublication.reference,
-        'Completed relocation authority references a pending root.'
-      );
-    }
-    const nextEnvelope: ServiceRelocationEnvelope = {
-      ...restored,
-      aggregateGeneration: restored.aggregateGeneration + 1n,
-      participants: restored.participants.map(participant => {
-        const next = progress.get(participant.key);
-        return next === undefined ? participant : {
-          ...participant,
-          replayCursor: next.replayCursor,
-          terminalReplies: Buffer.from(next.terminalReplies),
-          pendingRelayCount: next.pendingRelayCount
-        };
-      })
-    };
-    const encoded = encodeServiceRelocationEnvelope(nextEnvelope);
-    const checksumCrc32c = crc32c(encoded);
-    const stored = await this.store.put(encoded, RELOCATION_RETENTION_MS, signal);
-    if (stored.reference.length === 0 || stored.checksumCrc32c !== checksumCrc32c
-      || stored.expiresAtMs <= stored.storeNowMs) {
-      await this.store.delete(stored.reference, signal);
-      throw new Error('Relocation Store returned an invalid delivery payload receipt.');
-    }
-    const nextPublication: ServiceRelocationPublication = {
-      ...currentPublication,
-      reference: stored.reference,
-      checksumCrc32c,
-      aggregateGeneration: nextEnvelope.aggregateGeneration
-    };
-    let authority: ZLinkAuthoritySnapshot | undefined;
-    try {
-      const result = await this.authority.compareExchangeAuthority(
-        key,
-        expected.storeVersion,
-        {
-          kind: 'put',
-          generationTransition: 'preserve',
-          payload: this.codec.replace(expected.payload, currentPublication, nextPublication)
-        },
-        signal
-      );
-      if (result.kind === 'stored'
-        && result.objectGeneration === expected.objectGeneration
-        && result.authorityOwnerGeneration === expected.authorityOwnerGeneration) {
-        authority = storedSnapshot(result);
-      }
-    } catch (error) {
-      const reconciled = await this.reconcilePublication(
-        key, expected, nextPublication, signal
-      );
-      if (reconciled.kind !== 'published') {
-        await this.store.delete(stored.reference, signal);
-        throw error;
-      }
-      authority = reconciled.authority;
-    }
-    if (authority === undefined) {
-      const reconciled = await this.reconcilePublication(
-        key, expected, nextPublication, signal
-      );
-      if (reconciled.kind !== 'published') {
-        await this.store.delete(stored.reference, signal);
-        throw new Error('Location authority rejected terminal delivery progress.');
-      }
-      authority = reconciled.authority;
-    }
-    if (options?.retainPreviousRoot !== true) {
-      await this.store.delete(currentPublication.reference, signal);
-    }
-    return authority;
-  }
-
-  private async readCompletedSourceCleanup(
-    key: ZLinkAuthorityKey,
-    pending: ServiceRelocationPublication,
-    signal?: AbortSignal
-  ): Promise<ZLinkAuthoritySnapshot | undefined> {
-    const current = await this.authority.readAuthority(key, signal);
-    if (current.kind !== 'snapshot') return undefined;
-    const publication = this.codec.read(current.payload);
-    if (
-      publication?.phase !== 'sourceCleanupCompleted'
-      || publication.aggregateId !== pending.aggregateId
-      || publication.aggregateGeneration !== pending.aggregateGeneration + 1n
-      || publication.inventoryDigest !== pending.inventoryDigest
-      || publication.targetOwnerId !== pending.targetOwnerId
-      || publication.targetOwnerLeaseGeneration
-        !== pending.targetOwnerLeaseGeneration
-    ) {
-      return undefined;
-    }
-    validatePublicationOwner(current, publication);
-    const envelope = await this.restore(current, signal);
-    if (
-      envelope.sourceCleanup !== 'completed'
-      || envelope.aggregateId !== publication.aggregateId
-      || envelope.aggregateGeneration !== publication.aggregateGeneration
-    ) {
-      throw new ServiceRelocationDataLostError(
-        publication.reference,
-        'Completed relocation root does not match its authority phase.'
-      );
-    }
-    return current;
-  }
-
-  async release(
-    key: ZLinkAuthorityKey,
-    expected: ZLinkAuthoritySnapshot,
-    signal?: AbortSignal
-  ): Promise<ZLinkAuthoritySnapshot> {
-    signal?.throwIfAborted();
-    const publication = this.codec.read(expected.payload);
-    if (publication === undefined) return expected;
-    const result = await this.authority.compareExchangeAuthority(
-      key,
-      expected.storeVersion,
-      {
-        kind: 'put',
-        generationTransition: 'preserve',
-        payload: this.codec.clear(expected.payload, publication.reference)
-      },
-      signal
-    );
-    if (result.kind !== 'stored') {
-      throw new Error('Location authority rejected relocation release.');
-    }
-    await this.store.delete(publication.reference, signal);
-    return storedSnapshot(result);
-  }
-}
-
-function storedSnapshot(
-  result: Extract<ZLinkAuthorityCompareExchangeResult, { readonly kind: 'stored' }>
-): ZLinkAuthoritySnapshot {
-  const { kind: _kind, ...snapshot } = result;
-  return { kind: 'snapshot', ...snapshot };
-}
-
 export function encodeServiceRelocationEnvelope(envelope: ServiceRelocationEnvelope): Buffer {
-  if (
-    envelope.participants.length < 1
-  ) {
+  if (envelope.participants.length < 1) {
     throw new TypeError('Relocation participant count is outside its bound.');
   }
   const aggregateId = canonicalUuid(envelope.aggregateId, 'aggregate id');
@@ -800,12 +156,11 @@ export function encodeServiceRelocationEnvelope(envelope: ServiceRelocationEnvel
   }
   const memberships = encodeMemberships(envelope.memberships, envelope.participants);
   return Buffer.from(JSON.stringify({
-    version: 2,
+    version: 3,
     aggregateId,
     aggregateGeneration: aggregateGeneration.toString(),
     inventoryDigest: inventoryDigest(envelope.participants, envelope.memberships),
     memberships,
-    sourceCleanup: envelope.sourceCleanup,
     participants
   }), 'utf8');
 }
@@ -817,7 +172,6 @@ export function decodeServiceRelocationEnvelope(payload: Uint8Array): ServiceRel
     readonly aggregateGeneration?: unknown;
     readonly inventoryDigest?: unknown;
     readonly memberships?: unknown;
-    readonly sourceCleanup?: unknown;
     readonly participants?: unknown;
   };
   requireExactKeys(parsed, [
@@ -826,13 +180,11 @@ export function decodeServiceRelocationEnvelope(payload: Uint8Array): ServiceRel
     'inventoryDigest',
     'memberships',
     'participants',
-    'sourceCleanup',
     'version'
   ], 'envelope');
   if (
-    parsed.version !== 2
+    parsed.version !== 3
     || typeof parsed.inventoryDigest !== 'string'
-    || (parsed.sourceCleanup !== 'pending' && parsed.sourceCleanup !== 'completed')
     || !Array.isArray(parsed.participants)
     || !Array.isArray(parsed.memberships)
     || parsed.participants.length < 1
@@ -845,28 +197,22 @@ export function decodeServiceRelocationEnvelope(payload: Uint8Array): ServiceRel
       parsed.aggregateGeneration,
       'aggregate generation'
     ),
-    sourceCleanup: parsed.sourceCleanup,
     participants: parsed.participants.map((value: unknown) => {
       const item = record(value, 'participant');
       requireExactKeys(item, [
-        'acceptedJournal',
         'applicationState',
         'authorityOwnerGeneration',
+        'boundSessionState',
         'key',
         'objectGeneration',
         'objectKind',
-        'pendingRelayCount',
         'queuedMessages',
-        'replayCursor',
         'stableType',
-        'terminalReplies',
         'timers'
       ], 'participant');
       if (
         !Array.isArray(item.queuedMessages)
         || !Array.isArray(item.timers)
-        || item.queuedMessages.length > MAX_RELOCATION_ITEMS_PER_PARTICIPANT
-        || item.timers.length > MAX_RELOCATION_ITEMS_PER_PARTICIPANT
       ) {
         throw new TypeError('Invalid relocation participant work inventory.');
       }
@@ -880,13 +226,7 @@ export function decodeServiceRelocationEnvelope(payload: Uint8Array): ServiceRel
           'authority owner generation'
         ),
         applicationState: base64(item.applicationState, 'application state'),
-        acceptedJournal: base64(item.acceptedJournal, 'accepted journal'),
-        replayCursor: nonNegativeBigInt(item.replayCursor, 'replay cursor'),
-        terminalReplies: base64(item.terminalReplies, 'terminal replies'),
-        pendingRelayCount: nonNegativeInteger(
-          item.pendingRelayCount,
-          'pending relay count'
-        ),
+        boundSessionState: base64(item.boundSessionState, 'bound Session state'),
         queuedMessages: item.queuedMessages.map(decodeQueuedMessage),
         timers: item.timers.map(decodeTimer)
       };
@@ -935,7 +275,7 @@ function encodeAuthorityEnvelope(
 ): Buffer {
   const encoded = {
     magic: 'ZLAR',
-    version: 1,
+    version: 2,
     base: Buffer.from(base).toString('base64'),
     publication: encodePublication(publication)
   };
@@ -944,32 +284,6 @@ function encodeAuthorityEnvelope(
     throw new TypeError('Location authority relocation payload exceeds 1 MiB.');
   }
   return payload;
-}
-
-function encodePreparingAuthorityEnvelope(base: Uint8Array): Buffer {
-  const payload = Buffer.from(JSON.stringify({
-    magic: 'ZLAP',
-    version: 1,
-    base: Buffer.from(base).toString('base64')
-  }), 'utf8');
-  if (payload.byteLength > 1024 * 1024) {
-    throw new TypeError('Location authority Preparing payload exceeds 1 MiB.');
-  }
-  return payload;
-}
-
-export function decodePreparingAuthorityEnvelope(payload: Uint8Array): Buffer | undefined {
-  try {
-    const decoded = record(
-      JSON.parse(Buffer.from(payload).toString('utf8')),
-      'Preparing authority payload'
-    );
-    requireExactKeys(decoded, ['base', 'magic', 'version'], 'Preparing authority payload');
-    if (decoded.magic !== 'ZLAP' || decoded.version !== 1) return undefined;
-    return base64(decoded.base, 'Preparing authority application payload');
-  } catch {
-    return undefined;
-  }
 }
 
 function decodeAuthorityEnvelope(
@@ -981,24 +295,17 @@ function decodeAuthorityEnvelope(
       'authority payload'
     );
     requireExactKeys(decoded, ['base', 'magic', 'publication', 'version'], 'authority payload');
-    if (decoded.magic !== 'ZLAR' || decoded.version !== 1) return undefined;
+    if (decoded.magic !== 'ZLAR' || decoded.version !== 2) return undefined;
     const publication = record(decoded.publication, 'authority publication');
     requireExactKeys(publication, [
       'aggregateGeneration',
       'aggregateId',
       'checksumCrc32c',
       'inventoryDigest',
-      'phase',
       'reference',
       'targetOwnerId',
       'targetOwnerLeaseGeneration'
     ], 'authority publication');
-    if (
-      publication.phase !== 'sourceCleanupPending'
-      && publication.phase !== 'sourceCleanupCompleted'
-    ) {
-      return undefined;
-    }
     const checksum = safeInteger(publication.checksumCrc32c, 'relocation checksum');
     if (checksum < 0 || checksum > 0xffff_ffff) return undefined;
     if (
@@ -1010,7 +317,6 @@ function decodeAuthorityEnvelope(
     return {
       base: base64(decoded.base, 'authority application payload'),
       publication: {
-        phase: publication.phase,
         reference: requireText(publication.reference, 'relocation reference'),
         checksumCrc32c: checksum,
         aggregateId: canonicalUuid(publication.aggregateId, 'aggregate id'),
@@ -1040,7 +346,6 @@ function encodePublication(publication: ServiceRelocationPublication) {
     throw new TypeError('Relocation inventory digest must be lowercase SHA-256.');
   }
   return {
-    phase: publication.phase,
     reference: requireText(publication.reference, 'relocation reference'),
     checksumCrc32c: checksum,
     aggregateId: canonicalUuid(publication.aggregateId, 'aggregate id'),
@@ -1061,9 +366,6 @@ function encodeMemberships(
   memberships: readonly ServiceRelocationMembership[],
   participants: readonly ServiceRelocationParticipant[]
 ) {
-  if (memberships.length > MAX_RELOCATION_ITEMS_PER_PARTICIPANT) {
-    throw new TypeError('Relocation membership inventory exceeds its bound.');
-  }
   validateMemberships(memberships, participants);
   return memberships.map(membership => ({
     actorKey: requireText(membership.actorKey, 'membership actor key'),
@@ -1132,12 +434,6 @@ function validateMemberships(
 }
 
 function encodeParticipant(participant: ServiceRelocationParticipant) {
-  if (
-    participant.queuedMessages.length > MAX_RELOCATION_ITEMS_PER_PARTICIPANT
-    || participant.timers.length > MAX_RELOCATION_ITEMS_PER_PARTICIPANT
-  ) {
-    throw new TypeError('Relocation participant work inventory exceeds its bound.');
-  }
   const queuedMessages = [...participant.queuedMessages]
     .map(message => ({
       sequence: positiveBigInt(message.sequence, 'queue sequence').toString(),
@@ -1187,13 +483,7 @@ function encodeParticipant(participant: ServiceRelocationParticipant) {
       'authority owner generation'
     ).toString(),
     applicationState: Buffer.from(participant.applicationState).toString('base64'),
-    acceptedJournal: Buffer.from(participant.acceptedJournal).toString('base64'),
-    replayCursor: nonNegativeBigInt(participant.replayCursor, 'replay cursor').toString(),
-    terminalReplies: Buffer.from(participant.terminalReplies).toString('base64'),
-    pendingRelayCount: nonNegativeInteger(
-      participant.pendingRelayCount,
-      'pending relay count'
-    ),
+    boundSessionState: Buffer.from(participant.boundSessionState).toString('base64'),
     queuedMessages,
     timers
   };
@@ -1263,35 +553,6 @@ export function crc32c(payload: Uint8Array): number {
     crc = CRC32C_TABLE[(crc ^ byte) & 0xff]! ^ (crc >>> 8);
   }
   return (crc ^ 0xffff_ffff) >>> 0;
-}
-
-function samePublication(
-  left: ServiceRelocationPublication | undefined,
-  right: ServiceRelocationPublication
-): boolean {
-  return left?.phase === right.phase
-    && left.reference === right.reference
-    && left.checksumCrc32c === right.checksumCrc32c
-    && left.aggregateId === right.aggregateId
-    && left.aggregateGeneration === right.aggregateGeneration
-    && left.inventoryDigest === right.inventoryDigest
-    && left.targetOwnerId === right.targetOwnerId
-    && left.targetOwnerLeaseGeneration === right.targetOwnerLeaseGeneration;
-}
-
-function validatePublicationOwner(
-  authority: ZLinkAuthoritySnapshot,
-  publication: ServiceRelocationPublication
-): void {
-  if (
-    authority.ownerId !== publication.targetOwnerId
-    || authority.ownerLeaseGeneration !== publication.targetOwnerLeaseGeneration
-  ) {
-    throw new ServiceRelocationDataLostError(
-      publication.reference,
-      'Relocation authority owner fence does not match its published target.'
-    );
-  }
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {

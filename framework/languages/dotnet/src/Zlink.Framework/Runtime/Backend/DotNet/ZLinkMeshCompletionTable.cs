@@ -86,7 +86,7 @@ internal sealed class ZLinkMeshCompletionTable
 
     public bool RegisterRequest(
         MeshOperationId correlationId,
-        RequestCallback callback)
+        ZLinkBackendRequestCallback callback)
     {
         ArgumentNullException.ThrowIfNull(callback);
         return Register(correlationId, (record, parts) =>
@@ -124,7 +124,7 @@ internal sealed class ZLinkMeshCompletionTable
 
     public SubmitResult RegisterRequestBeforeSubmit(
         MeshOperationId correlationId,
-        RequestCallback callback,
+        ZLinkBackendRequestCallback callback,
         Func<MeshOperationId, SubmitResult> submit)
     {
         ArgumentNullException.ThrowIfNull(callback);

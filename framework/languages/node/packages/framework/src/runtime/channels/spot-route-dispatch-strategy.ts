@@ -11,7 +11,6 @@ import {
 import { codecsForFrameworkPacket } from './channel-framework-packets';
 import { throwIfAborted } from '../abort';
 import type { ZLinkChannelSocketRegistry } from './channel-socket-registry';
-import type { ZLinkSpotRouteBridgeRawReplyRegistry } from './spot-route-bridge-raw-reply';
 import { ZLinkSourceSpotRouter } from './source-spot-router';
 import { ZLinkSpotRouteTargetResolver } from './spot-route-target-resolver';
 import { ZLinkSpotNodeRouteTransport } from './spot-node-route-transport';
@@ -50,7 +49,6 @@ export interface ZLinkSpotRouteDispatchStrategyOptions {
   readonly sockets: ZLinkChannelSocketRegistry;
   readonly codecs: ZLinkChannelEnvelopeCodecRegistry;
   readonly spotRouteBridges: ReadonlyMap<string, ZLinkBackendSpotRouteBridge>;
-  readonly rawReplies: ZLinkSpotRouteBridgeRawReplyRegistry;
   readonly localSpotRouteDispatcher?: ZLinkLocalSpotRouteDispatcher;
   readonly flowCreationEnabled?: () => boolean;
 }
@@ -74,8 +72,6 @@ export class ZLinkSpotRouteDispatchStrategy {
     );
     this.bridgeTransport = new ZLinkSpotRouteBridgeTransport(
       options.spotRouteBridges,
-      options.sockets,
-      options.rawReplies,
       options.registration.requestTimeoutMs
     );
   }

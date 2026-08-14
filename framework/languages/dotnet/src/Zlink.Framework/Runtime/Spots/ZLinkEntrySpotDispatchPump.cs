@@ -7,12 +7,9 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
     private readonly ZLinkFrameworkRuntime _runtime;
     private readonly ZLinkEntrySpotActivation? _activation;
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
-    private readonly int _actorLaneCapacity;
-    private readonly long _actorLaneByteCapacity;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<
         string,
         ActorLane> _actorLanes;
-    private readonly ZLinkBoundedIngressAdmission _actorIngress;
     private readonly ZLinkActorInboundPipeline _actorPipeline;
     private int _stopping;
     private IZLinkBackendSpot? _entrySpot;
@@ -20,23 +17,12 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
     public ZLinkEntrySpotDispatchPump(
         ZLinkFrameworkRuntime runtime,
         ZLinkEntrySpotActivation? activation,
-        ZLinkRuntimeTaskRunner taskRunner,
-        int actorIngressCapacity = 4096,
-        long actorIngressByteCapacity = 64L * 1024 * 1024,
-        int actorLaneCapacity =
-            ZLinkSerialExecutionQueue.DefaultApplicationCapacity,
-        long actorLaneByteCapacity =
-            ZLinkSerialExecutionQueue.DefaultApplicationByteCapacity)
+        ZLinkRuntimeTaskRunner taskRunner)
     {
         _runtime = runtime;
         _activation = activation;
         _taskRunner = taskRunner;
-        _actorLaneCapacity = actorLaneCapacity;
-        _actorLaneByteCapacity = actorLaneByteCapacity;
         _actorLanes = new(StringComparer.Ordinal);
-        _actorIngress = new(
-            actorIngressCapacity,
-            actorIngressByteCapacity);
         _actorPipeline = new(
             runtime,
             new ZLinkEntrySpotActorInboundEndpoint(runtime));
@@ -62,8 +48,6 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         RequestStop();
-        await _actorIngress.CloseAndWaitForEmptyAsync(CancellationToken.None)
-            .ConfigureAwait(false);
         foreach (var lane in _actorLanes.Values)
             await lane.DisposeAsync().ConfigureAwait(false);
         _actorLanes.Clear();
@@ -161,7 +145,7 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
         var dispatchable = ZLinkActorHandoffIngress.CaptureMovingFrames(
             _runtime,
             actorParts,
-            info.ActorDispatchLease);
+            info.ActorCreditOwner);
         if (dispatchable.Count == 0)
         {
             dispatchable.Dispose();
@@ -179,13 +163,9 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
 
     private void EnqueueActorBatch(ZLinkSpotActorFrameBatch frames)
     {
-        var retainedBytes = frames.RetainedBytes;
-        var ingressBytes = checked(
-            retainedBytes + ZLinkSerialExecutionQueue.WorkItemFixedCostBytes);
-        if (Volatile.Read(ref _stopping) != 0
-            || !_actorIngress.TryAcquire(ingressBytes))
+        if (Volatile.Read(ref _stopping) != 0)
         {
-            RejectActorBatch(frames);
+            RejectActorBatch(frames, ZLinkFrameworkErrorKind.ShuttingDown);
             return;
         }
 
@@ -194,7 +174,6 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
             : string.Empty;
         if (string.IsNullOrWhiteSpace(actorId))
         {
-            _actorIngress.Release(ingressBytes);
             frames.Dispose();
             return;
         }
@@ -205,28 +184,22 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
                 actorId,
                 static (id, pump) => new ActorLane(
                     pump,
-                    id,
-                    pump._actorLaneCapacity,
-                    pump._actorLaneByteCapacity),
+                    id),
                 this);
-            var admission = lane.TryEnqueue(frames, retainedBytes, ingressBytes);
+            var admission = lane.TryEnqueue(frames);
             if (admission == ZLinkSerialPostAdmission.Accepted)
                 return;
-            if (admission == ZLinkSerialPostAdmission.Closed)
-                continue;
-
-            _actorIngress.Release(ingressBytes);
-            RejectActorBatch(frames);
-            return;
+            continue;
         }
     }
 
-    private void RejectActorBatch(ZLinkSpotActorFrameBatch frames)
+    private void RejectActorBatch(
+        ZLinkSpotActorFrameBatch frames,
+        ZLinkFrameworkErrorKind errorKind)
     {
         var error = new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.CapacityExceeded,
-            "Entry Actor ingress reached its count or byte bound.",
-            ZLinkRetryAdvice.RetryAfterBackoff);
+            errorKind,
+            "Entry Actor dispatch is shutting down.");
         if (!_taskRunner.TryRunDetached(
                 "entry-spot-actor-reject",
                 cancellationToken => _actorPipeline.RejectAsync(
@@ -253,44 +226,30 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
 
     private sealed class ActorLane(
         ZLinkEntrySpotDispatchPump owner,
-        string actorId,
-        int capacity,
-        long byteCapacity) : IAsyncDisposable
+        string actorId) : IAsyncDisposable
     {
         private readonly object _lifecycleGate = new();
         private readonly ZLinkSerialExecutionQueue _queue = new(
             owner._taskRunner,
             owner._runtime.ErrorSink,
-            owner._runtime.ShutdownToken,
-            capacity,
-            byteCapacity);
+            owner._runtime.ShutdownToken);
         private bool _retired;
         private bool _retirementScheduled;
 
         internal ZLinkSerialPostAdmission TryEnqueue(
-            ZLinkSpotActorFrameBatch frames,
-            long retainedBytes,
-            long ingressBytes)
+            ZLinkSpotActorFrameBatch frames)
         {
             lock (_lifecycleGate)
             {
                 if (_retired) return ZLinkSerialPostAdmission.Closed;
                 var admission = _queue.TryPostApplicationWithAdmission(
-                    retainedBytes,
                     async cancellationToken =>
                     {
-                        try
-                        {
-                            await owner.ObserveActorDispatchAsync(
-                                    owner._actorPipeline.DispatchAsync(
-                                        frames,
-                                        cancellationToken))
-                                .ConfigureAwait(false);
-                        }
-                        finally
-                        {
-                            owner._actorIngress.Release(ingressBytes);
-                        }
+                        await owner.ObserveActorDispatchAsync(
+                                owner._actorPipeline.DispatchAsync(
+                                    frames,
+                                    cancellationToken))
+                            .ConfigureAwait(false);
                     },
                     out _);
                 if (admission == ZLinkSerialPostAdmission.Accepted
@@ -348,6 +307,10 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
             }
             var lifecycle = entrySpot.RecvActorLifecycle(RecvFlags.DontWait);
             if (lifecycle is null) return;
+            using var applicationAdmission =
+                lifecycle.Value.ApplicationJobAdmission is { } admission
+                    ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+                    : null;
             count++;
             bytes = checked(
                 bytes + (lifecycle.Value.Info.CurrentActor?.ActorId?.Length ?? 0));

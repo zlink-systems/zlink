@@ -88,7 +88,8 @@ namespace SpotActorTransfer.ActorNode
 
     internal sealed class TransferActorRelocationAdapter(
         EvidenceStore evidence,
-        TransferGateStore transferGates)
+        TransferGateStore transferGates,
+        ActorCleanupGateStore cleanupGates)
         : IZLinkActorRelocationAdapter<TransferActor>
     {
         public async ValueTask<byte[]> CaptureAsync(
@@ -213,6 +214,7 @@ namespace SpotActorTransfer.ActorNode
                 "application_state_restored",
                 $"bytes={actor.ApplicationState.Length};sha256="
                 + TransferActorStateCodec.Sha256(actor.ApplicationState));
+            cleanupGates.ActivateTargetPublicationAfterRestore(actorId);
         }
     }
 

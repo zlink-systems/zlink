@@ -1,9 +1,11 @@
 namespace Zlink.Framework.Runtime.Backend.Contracts;
 
+internal delegate void ZLinkBackendRequestCallback(
+    RequestResult result,
+    IReadOnlyList<Message> reply);
+
 internal interface IZLinkBackendSpotNode : IAsyncDisposable
 {
-    void SetInboundDispatchBudget(ZLinkInboundDispatchBudget budget) { }
-
     ValueTask ForceStopAsync(CancellationToken cancellationToken) => DisposeAsync();
 
     RoutingId RoutingId { get; }
@@ -148,16 +150,35 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         return SendToNode(targetNodeRid, parts, flags);
     }
 
+    ValueTask SendToNodeAsync(
+        RoutingId targetNodeRid,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> metadata = default) =>
+        ValueTask.FromException(new NotSupportedException(
+            "This MeshNode backend does not support direct node sends."));
+
     bool RequestToNode(
         RoutingId targetNodeRid,
         IReadOnlyList<Message> parts,
-        RequestCallback callback,
+        ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan timeout,
         ReadOnlyMemory<byte> metadata = default)
     {
         throw new NotSupportedException("This MeshNode backend does not support node requests.");
     }
+
+    ValueTask<IReadOnlyList<Message>> RequestToNodeAsync(
+        RoutingId targetNodeRid,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> metadata = default) =>
+        ValueTask.FromException<IReadOnlyList<Message>>(new NotSupportedException(
+            "This MeshNode backend does not support direct node requests."));
 
     ZLinkBackendActorRef CreateActor(string actorId, Message createRequest);
 
@@ -176,7 +197,7 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         RoutingId destNodeRid,
         string destSpotId,
         Message message,
-        RequestCallback callback,
+        ZLinkBackendRequestCallback callback,
         TimeSpan? timeout);
 
     bool JoinActor(
@@ -204,10 +225,26 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         IReadOnlyList<Message> parts,
         SendFlags flags);
 
+    ValueTask SendActorBoundSessionAsync(
+        ZLinkBackendActorRef actor,
+        ulong expectedBindingGeneration,
+        IReadOnlyList<Message> parts,
+        CancellationToken cancellationToken) =>
+        ValueTask.FromException(new NotSupportedException(
+            "This MeshNode backend does not support async bound-session sends."));
+
     SubmitResult SendToActor(
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
         SendFlags flags);
+
+    ValueTask SendToActorAsync(
+        ZLinkBackendActorRef actor,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        CancellationToken cancellationToken) =>
+        ValueTask.FromException(new NotSupportedException(
+            "This MeshNode backend does not support direct Actor sends."));
 
     ValueTask<IReadOnlyList<Message>> RequestToActorAsync(
         ZLinkBackendActorRef actor,
@@ -337,35 +374,27 @@ internal interface IZLinkBackendRelocationReplyRelay
         CancellationToken cancellationToken);
 }
 
-internal interface IZLinkBackendCanonicalRelocationReservation
+internal interface IZLinkBackendCanonicalRelocation
 {
-    void SetCanonicalRelocationReservationTarget(
-        ICanonicalRelocationReservationTarget target);
+    void SetCanonicalRelocationTarget(
+        ICanonicalRelocationTarget target);
 
-    ValueTask<ZLinkServiceWireCodec.RelocationReservedRecord>
-        ReserveCanonicalRelocationAsync(
+    ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord>
+        PrepareCanonicalRelocationAsync(
             RoutingId targetNodeRid,
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
             TimeSpan timeout,
             CancellationToken cancellationToken);
 
-    ValueTask StageCanonicalRelocationAsync(
+    ValueTask SendCanonicalRelocationDataAsync(
         RoutingId targetNodeRid,
-        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-        IReadOnlyList<ZLinkServiceWireCodec.RelocationDataRecord> data,
-        TimeSpan timeout,
+        ZLinkServiceWireCodec.RelocationDataRecord data,
         CancellationToken cancellationToken);
 
-    ValueTask CompleteCanonicalRelocationAsync(
+    ValueTask SendCanonicalRelocationCutoverAsync(
         RoutingId targetNodeRid,
-        ZLinkServiceWireCodec.RelocationCompleteRecord complete,
+        ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
         CancellationToken cancellationToken);
-
-    void CancelCanonicalRelocation(
-        RoutingId targetNodeRid,
-        ZLinkServiceWireCodec.RelocationWireId relocationId,
-        ulong targetAttemptGeneration,
-        ZLinkServiceWireCodec.RelocationCoordinatorFence coordinator);
 }
 
 internal interface IZLinkBackendSessionRelocationBarrier
@@ -380,12 +409,9 @@ internal interface IZLinkBackendSessionRelocationBarrier
             TimeSpan timeout,
             CancellationToken cancellationToken);
 
-    ValueTask<ZLinkServiceWireCodec.SessionRelocationRoutedRecord>
-        RouteSessionRelocationAsync(
+    ValueTask RouteSessionRelocationAsync(
             RoutingId sessionOwnerNodeRid,
             ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
-            ulong expectedSealedHighWater,
-            TimeSpan timeout,
             CancellationToken cancellationToken);
 }
 
@@ -417,7 +443,7 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
     bool RequestToChannel(
         string channelName,
         Message message,
-        RequestCallback callback,
+        ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan? timeout,
         ReadOnlyMemory<byte> metadata);
@@ -425,7 +451,7 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
     bool RequestToChannel(
         string channelName,
         IReadOnlyList<Message> parts,
-        RequestCallback callback,
+        ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan? timeout,
         ReadOnlyMemory<byte> metadata);
@@ -441,6 +467,25 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
         IReadOnlyList<Message> parts,
         SendFlags flags,
         ReadOnlyMemory<byte> metadata);
+
+    ValueTask SendToChannelAsync(
+        string channelName,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> metadata = default) =>
+        ValueTask.FromException(new NotSupportedException(
+            "This Spot backend does not support direct channel sends."));
+
+    ValueTask<IReadOnlyList<Message>> RequestToChannelAsync(
+        string channelName,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> metadata = default) =>
+        ValueTask.FromException<IReadOnlyList<Message>>(new NotSupportedException(
+            "This Spot backend does not support direct channel requests."));
 
     void Publish(
         string channelName,
@@ -474,12 +519,35 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
         SendFlags flags,
         ReadOnlyMemory<byte> metadata);
 
+    ValueTask SendToSpotAsync(
+        RoutingId targetRid,
+        string spotId,
+        ulong spotGeneration,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> metadata = default) =>
+        ValueTask.FromException(new NotSupportedException(
+            "This Spot backend does not support direct Spot sends."));
+
+    ValueTask<IReadOnlyList<Message>> RequestToSpotAsync(
+        RoutingId targetRid,
+        string spotId,
+        ulong spotGeneration,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> metadata = default) =>
+        ValueTask.FromException<IReadOnlyList<Message>>(new NotSupportedException(
+            "This Spot backend does not support direct Spot requests."));
+
     bool RequestToSpot(
         RoutingId targetRid,
         string spotId,
         ulong spotGeneration,
         Message message,
-        RequestCallback callback,
+        ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan? timeout,
         ReadOnlyMemory<byte> metadata);
@@ -489,7 +557,7 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
         string spotId,
         ulong spotGeneration,
         IReadOnlyList<Message> parts,
-        RequestCallback callback,
+        ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan? timeout,
         ReadOnlyMemory<byte> metadata);
@@ -511,7 +579,7 @@ internal interface IZLinkBackendSpot : IAsyncDisposable
 
 internal interface IZLinkBackendSpotMessageFollower
 {
-    SubmitResult MessageFollowSendToSpot(
+    ValueTask MessageFollowSendToSpotAsync(
         RoutingId targetRid,
         string spotId,
         ulong spotGeneration,
@@ -521,8 +589,8 @@ internal interface IZLinkBackendSpotMessageFollower
         ulong ownerLeaseGeneration,
         byte messageFollowHopCount,
         IReadOnlyList<Message> parts,
-        SendFlags flags,
-        ReadOnlyMemory<byte> metadata);
+        ReadOnlyMemory<byte> metadata,
+        CancellationToken cancellationToken);
 
     bool MessageFollowRequestToSpot(
         RoutingId targetRid,
@@ -535,7 +603,7 @@ internal interface IZLinkBackendSpotMessageFollower
         byte messageFollowHopCount,
         ulong deadlineUnixMs,
         IReadOnlyList<Message> parts,
-        RequestCallback callback,
+        ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan? timeout,
         ReadOnlyMemory<byte> metadata);

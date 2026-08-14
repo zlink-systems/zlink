@@ -15,7 +15,6 @@ internal sealed record ZLinkCanonicalRelocationAuthorityState(
     ulong TargetNodeGeneration,
     string TargetOwnerId,
     ulong TargetOwnerLeaseGeneration,
-    ulong ReservationGeneration,
     string CoordinatorOwnerId,
     ulong CoordinatorLeaseGeneration,
     string CoordinatorNodeRid,
@@ -23,8 +22,7 @@ internal sealed record ZLinkCanonicalRelocationAuthorityState(
     byte Phase,
     string RelocationReference,
     uint RelocationChecksumCrc32c,
-    long ApplicationVersion,
-    byte SourceCleanupState)
+    long ApplicationVersion)
 {
     internal ulong AggregateGeneration { get; init; }
     internal string CoordinatorExpectedAuthorityStoreVersion { get; init; } = "";
@@ -40,9 +38,6 @@ internal sealed record ZLinkCanonicalRelocationAuthorityProjection(
     string RelocationReference,
     uint RelocationChecksumCrc32c,
     long ApplicationVersion,
-    uint TerminalCompletionCount,
-    uint PendingRelayCount,
-    byte SourceCleanupState,
     ReadOnlyMemory<byte> SteadyAuthorityPayload,
     ZLinkCanonicalRelocationAuthorityState State)
 {
@@ -94,7 +89,6 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             var targetNodeGeneration = relocation.U64();
             var targetOwner = relocation.OptionalText8();
             var targetLease = relocation.U64();
-            var reservationGeneration = relocation.U64();
             var coordinatorOwner = relocation.Text8();
             var coordinatorLease = relocation.U64();
             var coordinatorNodeRid = relocation.Text8();
@@ -113,11 +107,7 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             }
             if (!pointer.End) return false;
             var applicationVersion = relocation.I64();
-            var progressCount = relocation.U32AsInt();
-            _ = relocation.Bytes(checked(progressCount * 3 * sizeof(ulong)));
-            var terminalCount = relocation.U32();
-            var pendingCount = relocation.U32();
-            var cleanup = relocation.U8();
+            _ = relocation.U8();
             var aggregateGeneration = 0UL;
             var coordinatorExpectedStoreVersion = string.Empty;
             if (!relocation.End)
@@ -150,10 +140,9 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
                 sourceOwner, sourceOwnerLease,
                 targetNodeRid, targetNodeGeneration,
                 targetOwner, targetLease,
-                reservationGeneration,
                 coordinatorOwner, coordinatorLease,
                 coordinatorNodeRid, coordinatorNodeGeneration,
-                phase, reference, checksum, applicationVersion, cleanup)
+                phase, reference, checksum, applicationVersion)
             {
                 AggregateGeneration = aggregateGeneration,
                 CoordinatorExpectedAuthorityStoreVersion =
@@ -162,7 +151,7 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             projection = new ZLinkCanonicalRelocationAuthorityProjection(
                 high, low, attempt, targetOwner, targetLease, phase,
                 reference, checksum, applicationVersion,
-                terminalCount, pendingCount, cleanup, steady.ToArray(), state)
+                steady.ToArray(), state)
             {
                 AggregateGeneration = aggregateGeneration
             };
@@ -175,54 +164,6 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
         {
             return false;
         }
-    }
-
-    internal static (uint TerminalCompletionCount, uint PendingRelayCount)
-        ReadCounts(ReadOnlySpan<byte> authorityPayload)
-    {
-        var source = new Reader(authorityPayload);
-        if (!source.Bytes(4).SequenceEqual(Magic) || source.U8() != 1)
-            throw new InvalidDataException();
-        _ = source.U16();
-        var body = new Reader(source.Bytes(source.U32AsInt()));
-        _ = body.U8();
-        _ = body.U8();
-        _ = body.Bytes(body.U16());
-        _ = body.Text8();
-        _ = body.U64();
-        _ = body.Text8();
-        _ = body.Text8();
-        _ = body.U64();
-        if (body.U8() != 1)
-            throw new InvalidDataException("Canonical authority has no relocation state.");
-        var relocation = new Reader(body.Bytes(body.U32AsInt()));
-        _ = relocation.U64();
-        _ = relocation.U64();
-        _ = relocation.U64();
-        _ = relocation.Text8();
-        _ = relocation.U64();
-        _ = relocation.Text8();
-        _ = relocation.U64();
-        _ = relocation.OptionalText8();
-        _ = relocation.U64();
-        _ = relocation.OptionalText8();
-        _ = relocation.U64();
-        _ = relocation.U64();
-        _ = relocation.Text8();
-        _ = relocation.U64();
-        _ = relocation.Text8();
-        _ = relocation.U64();
-        _ = relocation.U8();
-        var pointerPresence = relocation.U8();
-        if (pointerPresence > 1)
-            throw new InvalidDataException();
-        var pointer = relocation.Bytes(relocation.U16());
-        if (pointerPresence == 0 && pointer.Length != 0)
-            throw new InvalidDataException();
-        _ = relocation.U64();
-        var progressCount = relocation.U32AsInt();
-        _ = relocation.Bytes(checked(progressCount * 3 * sizeof(ulong)));
-        return (relocation.U32(), relocation.U32());
     }
 
     internal static byte[] ReplaceRelocationState(
@@ -355,8 +296,7 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
         ZLinkCanonicalRelocationAuthorityState value,
         ZLinkRelocationEnvelope? root)
     {
-        if (value.Phase is < 1 or > 9 || value.SourceCleanupState > 2
-            || value.ApplicationVersion < 0)
+        if (value.Phase is < 1 or > 9 || value.ApplicationVersion < 0)
             throw new ArgumentOutOfRangeException(nameof(value));
         foreach (var fence in new[]
                  {
@@ -372,7 +312,6 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             && (value.TargetAttemptGeneration != 0
                 || value.TargetNodeGeneration != 0
                 || value.TargetOwnerLeaseGeneration != 0
-                || value.ReservationGeneration != 0
                 || value.TargetNodeRid.Length != 0
                 || value.TargetOwnerId.Length != 0)
             || !sourceOnly
@@ -380,7 +319,6 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             && (value.TargetAttemptGeneration == 0
                 || value.TargetNodeGeneration == 0
                 || value.TargetOwnerLeaseGeneration == 0
-                || value.ReservationGeneration == 0
                 || value.TargetNodeRid.Length == 0
                 || value.TargetOwnerId.Length == 0))
             throw new ArgumentException(
@@ -408,7 +346,6 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
         WriteU64(body, value.TargetNodeGeneration);
         WriteText8(body, value.TargetOwnerId, optional: true);
         WriteU64(body, value.TargetOwnerLeaseGeneration);
-        WriteU64(body, value.ReservationGeneration);
         WriteText8(body, value.CoordinatorOwnerId, optional: false);
         WriteU64(body, value.CoordinatorLeaseGeneration);
         WriteText8(body, value.CoordinatorNodeRid, optional: false);
@@ -430,23 +367,9 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             pointer.CopyTo(body);
         }
         WriteI64(body, value.ApplicationVersion);
-        WriteU32(body, checked((uint)(root?.Participants.Count ?? 0)));
-        foreach (var participant in (root?.Participants
-                     ?? Array.Empty<ZLinkRelocationParticipantEnvelope>()).OrderBy(
-                     static participant => participant.CanonicalParticipantId))
-        {
-            if (participant.CanonicalParticipantId == 0)
-                throw new ArgumentException(
-                    "Canonical root participant progress is unavailable.", nameof(root));
-            WriteU64(body, participant.CanonicalParticipantId);
-            WriteU64(body, participant.AcceptedBoundary);
-            WriteU64(body, participant.ReplayCursor);
-        }
-        WriteU32(body, checked((uint)(root?.Participants.Sum(
-            static participant => participant.TerminalCompletions.Count) ?? 0)));
-        WriteU32(body, checked((uint)(root?.Participants.Sum(
-            static participant => participant.PendingRelayCount) ?? 0)));
-        body.WriteByte(value.SourceCleanupState);
+        // ZLAU v1 keeps this byte for wire compatibility. It has no durable
+        // source-cleanup meaning; target authority publication is terminal.
+        body.WriteByte(0);
         body.WriteByte(1);
         WriteU64(
             body,

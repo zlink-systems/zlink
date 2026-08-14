@@ -31,7 +31,6 @@ import {
 import {
   type ZLinkChannelEnvelopeCodecRegistry
 } from './channel-envelope';
-import { ZLinkSpotRouteBridgeRawReplyRegistry } from './spot-route-bridge-raw-reply';
 import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
 import {
   type ZLinkRouteRuntimeRequestHandler,
@@ -41,7 +40,10 @@ import { ZLinkChannelDispatchServices } from './channel-dispatch-services';
 import { ZLinkChannelOutboundOperations } from './channel-outbound-operations';
 import { ZLinkChannelRuntimeLifecycle } from './channel-runtime-lifecycle';
 import { ZLinkSpotRouteDispatchStrategy } from './spot-route-dispatch-strategy';
-import type { ZLinkInboundDispatchBudget } from '../dispatch/inbound-dispatch-budget';
+import {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} from '../host/application-job-queue';
 
 export class ZLinkChannelRuntimeManager {
   private readonly registration: ZLinkFrameworkRegistration;
@@ -72,13 +74,13 @@ export class ZLinkChannelRuntimeManager {
       options.messageFlowModeCell
     );
     const spotRouteBridges = new Map<string, ZLinkBackendSpotRouteBridge>();
-    const spotRouteBridgeRawReplies = new ZLinkSpotRouteBridgeRawReplyRegistry();
+    const applicationJobQueue = options.applicationJobQueue
+      ?? new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
     this.spotRoutes = new ZLinkSpotRouteDispatchStrategy({
       registration,
       sockets: this.sockets,
       codecs,
       spotRouteBridges,
-      rawReplies: spotRouteBridgeRawReplies,
       localSpotRouteDispatcher: options.localSpotRouteDispatcher,
       flowCreationEnabled: () => dispatchServices.flowCreationEnabled()
     });
@@ -93,12 +95,11 @@ export class ZLinkChannelRuntimeManager {
       sockets: this.sockets,
       codecs,
       dispatchServices,
+      applicationJobQueue,
       spotRoutes: this.spotRoutes,
       spotRouteBridges,
-      spotRouteBridgeRawReplies,
       internalRouteSendHandlers: options.internalRouteSendHandlers,
       internalRouteRequestHandlers: options.internalRouteRequestHandlers,
-      inboundDispatchBudget: options.inboundDispatchBudget
     });
   }
 
@@ -230,15 +231,6 @@ export class ZLinkChannelRuntimeManager {
     return this.lifecycle.canDispatchLocalMeshRoute(meshName);
   }
 
-  trySend(
-    channelName: string,
-    packetName: string | undefined,
-    message: unknown,
-    metadata?: ReadonlyMap<string, string>
-  ): ZLinkSubmitResult {
-    return this.outbound.trySend(channelName, packetName, message, metadata);
-  }
-
   send(
     channelName: string,
     packetName: string | undefined,
@@ -279,16 +271,6 @@ export class ZLinkChannelRuntimeManager {
     metadata?: ReadonlyMap<string, string>
   ) {
     return this.outbound.publish(channelName, topic, packetName, event, signal, metadata);
-  }
-
-  tryRouteSubmit(
-    routerChannelId: string,
-    targetNodeRid: string,
-    packetName: string | undefined,
-    message: unknown,
-    metadata?: ReadonlyMap<string, string>
-  ): ZLinkSubmitResult {
-    return this.outbound.tryRouteSubmit(routerChannelId, targetNodeRid, packetName, message, metadata);
   }
 
   routeSubmit(
@@ -457,5 +439,5 @@ export interface ZLinkChannelRuntimeManagerOptions {
   };
   readonly messageFlowModeCell?: ZLinkMessageFlowModeCell;
   readonly oneWayFailureSink?: (error: unknown) => void;
-  readonly inboundDispatchBudget?: ZLinkInboundDispatchBudget;
+  readonly applicationJobQueue?: ApplicationJobQueue;
 }

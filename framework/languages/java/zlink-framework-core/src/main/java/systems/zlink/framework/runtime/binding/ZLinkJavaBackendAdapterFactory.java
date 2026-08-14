@@ -1,10 +1,6 @@
 package systems.zlink.framework.runtime.binding;
 import java.time.Duration;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.function.ToIntFunction;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
@@ -24,40 +20,8 @@ public final class ZLinkJavaBackendAdapterFactory implements ZLinkBackendAdapter
     @Override
     public Function<
         ZLinkBackendObject,
-        ZLinkBackendObject> admissionSource() {
-        return backend -> admission(backend).admissionSource();
-    }
-
-    @Override
-    public Function<
-        ZLinkBackendObject,
         Duration> admissionTimeout() {
         return backend -> admission(backend).admissionTimeout();
-    }
-
-    @Override
-    public ToIntFunction<
-        ZLinkBackendObject>
-        admissionPendingCapacity() {
-        return backend -> admission(backend).admissionPendingCapacity();
-    }
-
-    @Override
-    public BiConsumer<
-        ZLinkBackendObject,
-        Consumer<
-            ZLinkBackendAdmissionKey>>
-        admissionReadyRegistrar() {
-        return (backend, handler) ->
-            admission(backend).setAdmissionReadyHandler(handler);
-    }
-
-    @Override
-    public BiConsumer<
-        ZLinkBackendObject,
-        Runnable> admissionShutdownRegistrar() {
-        return (backend, handler) ->
-            admission(backend).setAdmissionShutdownHandler(handler);
     }
 
     @Override

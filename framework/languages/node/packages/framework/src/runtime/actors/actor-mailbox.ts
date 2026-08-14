@@ -1,14 +1,18 @@
 import {
-  ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
-} from '../framework-errors-internal';
-import {
   ZLinkBoundedSerialScheduler,
   type ZLinkSerialSchedulerOptions,
   type ZLinkSerialWorkOptions,
   type ZLinkSerialWorkRecord
 } from '../execution/serial-scheduler';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import { runZLinkActorExecution } from './actor-execution-context';
+import {
+  bindApplicationJobPermit,
+  hasApplicationJobPermit
+} from '../application-jobs/application-job-queue-scope';
 
 export class ZLinkActorDispatchMailbox {
   private readonly scheduler: ZLinkBoundedSerialScheduler;
@@ -31,7 +35,10 @@ export class ZLinkActorDispatchMailbox {
     operation: () => Promise<T> | T,
     workOptions?: ZLinkSerialWorkOptions
   ): Promise<T> {
-    return this.scheduler.submit(operation, workOptions);
+    const boundOperation = bindApplicationJobPermit(operation);
+    return hasApplicationJobPermit()
+      ? this.scheduler.submitPreAdmitted(boundOperation, workOptions)
+      : this.scheduler.submit(boundOperation, workOptions);
   }
 
   private async runRecord(record: ZLinkSerialWorkRecord<unknown>): Promise<void> {

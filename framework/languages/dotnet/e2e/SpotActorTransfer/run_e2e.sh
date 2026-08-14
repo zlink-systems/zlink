@@ -21,12 +21,14 @@ RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 LOG_DIR="$ROOT_DIR/logs/$RUN_ID"
 mkdir -p "$LOG_DIR"
 CONFIG_DIR="$(mktemp -d)"
+TARGET_CRASH_COMPLETED_ACK_FILE="$LOG_DIR/st-b5-target-crash-completed"
 
 SERVER_PROJECT="$ROOT_DIR/Server/ActorNode/SpotActorTransfer.ActorNode.csproj"
 SERVER_BINARY="$ROOT_DIR/Server/ActorNode/bin/Debug/net8.0/SpotActorTransfer.ActorNode"
 SESSION_GATEWAY_PROJECT="$ROOT_DIR/Server/SessionGateway/SpotActorTransfer.SessionGateway.csproj"
 CLIENT_PROJECT="$ROOT_DIR/Client/SpotActorTransfer.Client.csproj"
 LOCAL_READINESS_TIMEOUT_SECONDS=3
+INITIAL_CLUSTER_READINESS_TIMEOUT_SECONDS=15
 PROCESS_EXIT_TIMEOUT_SECONDS=30
 LOCAL_READINESS_POLL_SECONDS=0.1
 REDIS_READINESS_TIMEOUT_SECONDS=60
@@ -65,15 +67,27 @@ trap cleanup EXIT
 wait_health() {
   local url="$1"
   local name="$2"
+  local timeout_seconds="${3:-$LOCAL_READINESS_TIMEOUT_SECONDS}"
+  local process_pid="${4:-}"
   local attempts
   attempts="$(
-    python3 - "$LOCAL_READINESS_TIMEOUT_SECONDS" "$LOCAL_READINESS_POLL_SECONDS" <<'PY'
+    python3 - "$timeout_seconds" "$LOCAL_READINESS_POLL_SECONDS" <<'PY'
 import math
 import sys
 print(max(1, math.ceil(float(sys.argv[1]) / float(sys.argv[2]))))
 PY
   )"
   for _ in $(seq 1 "$attempts"); do
+    if [[ -n "$process_pid" ]] && ! kill -0 "$process_pid" >/dev/null 2>&1; then
+      local process_status
+      if wait "$process_pid"; then
+        process_status=0
+      else
+        process_status=$?
+      fi
+      echo "$name process $process_pid exited before health with status $process_status at $url" >&2
+      return 1
+    fi
     if curl --max-time "$HTTP_PROBE_TIMEOUT_SECONDS" \
       --connect-timeout "$HTTP_PROBE_TIMEOUT_SECONDS" \
       -fsS "$url/health" >/dev/null 2>&1; then
@@ -81,7 +95,7 @@ PY
     fi
     sleep "$LOCAL_READINESS_POLL_SECONDS"
   done
-  echo "Timed out waiting ${LOCAL_READINESS_TIMEOUT_SECONDS}s for $name at $url" >&2
+  echo "Timed out waiting ${timeout_seconds}s for $name at $url" >&2
   return 1
 }
 
@@ -241,7 +255,6 @@ start_node() {
   local router="$3"
   local advertise_host="$4"
   local caller_only="${5:-false}"
-  local crash_at_complete_gate="${6:-false}"
   local config="$CONFIG_DIR/$rid.json"
   python3 "$ROOT_DIR/../write_role_config.py" "$config" -- \
     --rid "$rid" \
@@ -251,7 +264,6 @@ start_node() {
     --router-endpoint "$router" \
     --router-advertise-host "$advertise_host" \
     --caller-only "$caller_only" \
-    --crash-at-target-complete-gate "$crash_at_complete_gate" \
     --request-timeout-milliseconds 3000 \
     --evidence-file "$LOG_DIR/${rid}.evidence.log" \
     --log-dir "$LOG_DIR"
@@ -310,6 +322,7 @@ run_client() {
     --transport-proxy-admin "$NODE_D_PROXY_ADMIN" \
     --node-a-stream-endpoint "$SESSION_A_STREAM" \
     --node-b-stream-endpoint "$SESSION_B_STREAM" \
+    --target-crash-completed-ack-file "$TARGET_CRASH_COMPLETED_ACK_FILE" \
     --scenario "$scenario"
   echo "client_config=$config node-a-stream=$SESSION_A_STREAM node-b-stream=$SESSION_B_STREAM" >&2
   cp "$config" "$LOG_DIR/client-$scenario.config.json"
@@ -385,17 +398,12 @@ wait_health "$NODE_D_PROXY_ADMIN" actor-d-proxy
 
 start_node actor-a "$NODE_A_URL" "$NODE_A_ROUTER" 127.0.0.1
 NODE_A_PID="${pids[${#pids[@]}-1]}"
-TARGET_CRASH_AT_COMPLETE_GATE=false
-if [[ "$SCENARIO" == "ST-B5" ]]; then
-  TARGET_CRASH_AT_COMPLETE_GATE=true
-fi
-start_node actor-b "$NODE_B_URL" "$NODE_B_ROUTER" 127.0.0.1 \
-  false "$TARGET_CRASH_AT_COMPLETE_GATE"
+start_node actor-b "$NODE_B_URL" "$NODE_B_ROUTER" 127.0.0.1
 NODE_B_PID="${pids[${#pids[@]}-1]}"
 start_node actor-c "$NODE_C_URL" "$NODE_C_ROUTER" 127.0.0.1
 start_node actor-d "$NODE_D_URL" "$NODE_D_ROUTER" 127.0.0.1 true
 
-wait_health "$NODE_A_URL" actor-a
+wait_health "$NODE_A_URL" actor-a "$INITIAL_CLUSTER_READINESS_TIMEOUT_SECONDS" "$NODE_A_PID"
 wait_health "$NODE_B_URL" actor-b
 wait_health "$NODE_C_URL" actor-c
 wait_health "$NODE_D_URL" actor-d
@@ -414,14 +422,15 @@ wait_mesh_ready "$SESSION_B_URL" session-b "actor-a,actor-b,actor-c"
 if [[ "$SCENARIO" == "ST-B5" ]]; then
   python3 "$ROOT_DIR/Support/kill_on_file_marker.py" \
     --pid "$NODE_B_PID" \
-    --path "$LOG_DIR/actor-b.stderr.log" \
-    --marker "aggregate_target_complete_gate" \
+    --path "$LOG_DIR/client.stderr.log" \
+    --marker "st_b5_target_publication_gate" \
     --timeout 60 &
   TARGET_CRASH_WATCHER_PID="$!"
   run_client "ST-B5" &
   TARGET_CRASH_CLIENT_PID="$!"
   wait "$TARGET_CRASH_WATCHER_PID"
   wait_process_exit "$NODE_B_PID" actor-b
+  : >"$TARGET_CRASH_COMPLETED_ACK_FILE"
   # Replacement is allowed only after the exact old owner lease expires.
   wait_replacement_lease_expiry actor-b "$NODE_C_URL" actor-c
   start_node actor-b "$NODE_B_URL" "$NODE_B_ROUTER" 127.0.0.1
@@ -491,6 +500,41 @@ if first_index is None or second_index is None or first_index >= second_index:
     raise SystemExit(f"Marker order failed for {actor}: {first}={first_index}, {second}={second_index}")
 PY
 }
+
+require_st_b5_target_publication_gate_order() {
+  python3 - "$LOG_DIR/actor-b.evidence.log" <<'PY'
+import pathlib
+import sys
+
+lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+gates = [
+    (index, line.split("|"))
+    for index, line in enumerate(lines)
+    if "|target_publication_gate|opaque-delete-batch|actor-b" in line
+]
+if len(gates) != 1:
+    raise SystemExit(
+        f"Expected one ST-B5 target publication gate, got {len(gates)}")
+gate_index, gate = gates[0]
+if len(gate) != 5 or gate[0] != "ST-B5" or not gate[1].startswith(
+        "st-b5-target-crash-"):
+    raise SystemExit(f"Invalid ST-B5 target publication gate: {'|'.join(gate)}")
+actor_id = gate[1]
+restore_index = next((
+    index
+    for index, line in enumerate(lines)
+    if line.startswith(f"transfer|{actor_id}|application_state_restored|")
+), None)
+if restore_index is None or restore_index >= gate_index:
+    raise SystemExit(
+        f"Target Actor restore did not precede the publication gate: "
+        f"restore={restore_index} gate={gate_index}")
+PY
+}
+
+if [[ "$SCENARIO" == "ST-B5" ]]; then
+  require_st_b5_target_publication_gate_order
+fi
 
 if [[ "$SCENARIO" == "all" || "$SCENARIO" == *"ST-C1"* ]]; then
   require_runtime_marker pending_admission_expired

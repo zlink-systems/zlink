@@ -164,6 +164,11 @@ internal sealed class TestContext : IContext
     {
     }
 
+    public CoreHwmBudgetSnapshot GetCoreHwmBudgetSnapshot() =>
+        throw NotSupported();
+
+    public void ResetCoreHwmBudgetMetrics() => throw NotSupported();
+
     public void Dispose()
     {
     }

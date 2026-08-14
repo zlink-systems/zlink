@@ -16,7 +16,7 @@ import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 
 final class ZLinkStandaloneActorRelocationStagingOwnerTest {
     @Test
-    void actorStaysHiddenUntilReplayAndExplicitPublication() {
+    void actorStaysHiddenUntilDurableBacklogIsSealedAndPublished() {
         FakeBackend backend = new FakeBackend();
         var owner = new ZLinkStandaloneActorRelocationStagingOwner(backend);
         UUID relocationId = UUID.randomUUID();
@@ -36,13 +36,15 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         assertEquals(List.of("prepare"), backend.operations);
         assertFalse(backend.visible);
 
-        owner.replayHidden(staged).toCompletableFuture().join();
+        var backlog = owner.closeDurableBacklog(
+            staged, root, actorReplayer(owner, staged));
         assertFalse(backend.visible);
-        owner.publish(staged);
+        owner.publishHidden(backlog, 0);
         assertTrue(backend.visible);
         assertFalse(backend.admitted);
         owner.openAdmission(staged);
         assertTrue(backend.admitted);
+        owner.drainDurableBacklog(backlog).toCompletableFuture().join();
         assertEquals(
             List.of("prepare", "publish", "open"),
             backend.operations);
@@ -53,16 +55,16 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         FakeBackend backend = new FakeBackend();
         var owner = new ZLinkStandaloneActorRelocationStagingOwner(backend);
         UUID relocationId = UUID.randomUUID();
+        byte[] root = ZLinkCanonicalActorRelocationEnvelope.encode(
+            relocationId,
+            "actor-a",
+            7,
+            11,
+            false,
+            new byte[0],
+            List.of());
         var staged = owner.stage(
-                request(relocationId, false),
-                ZLinkCanonicalActorRelocationEnvelope.encode(
-                    relocationId,
-                    "actor-a",
-                    7,
-                    11,
-                    false,
-                    new byte[0],
-                    List.of()))
+                request(relocationId, false), root)
             .toCompletableFuture().join();
         AtomicReference<Throwable> stagedFailure = new AtomicReference<>();
         assertTrue(owner.acceptIngress(
@@ -73,7 +75,9 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         assertFalse(backend.visible);
         assertTrue(backend.discarded);
         assertInstanceOf(IllegalStateException.class, stagedFailure.get());
-        assertThrows(IllegalStateException.class, () -> owner.publish(staged));
+        assertThrows(IllegalStateException.class, () ->
+            owner.closeDurableBacklog(
+                staged, root, actorReplayer(owner, staged)));
     }
 
     @Test
@@ -92,13 +96,15 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         var staged = owner.stage(request(relocationId, true), root)
             .toCompletableFuture().join();
 
-        owner.publishAndReplayHidden(staged, root)
-            .toCompletableFuture().join();
+        var backlog = owner.closeDurableBacklog(
+            staged, root, actorReplayer(owner, staged));
+        owner.publishHidden(backlog, 0);
 
         assertTrue(backend.visible);
         assertFalse(backend.admitted);
         assertEquals(List.of("prepare", "publish"), backend.operations);
         owner.openAdmission(staged);
+        owner.drainDurableBacklog(backlog).toCompletableFuture().join();
         assertEquals(List.of("prepare", "publish", "open"), backend.operations);
     }
 
@@ -160,14 +166,17 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                 }
             });
 
-        owner.publishAndReplayHidden(staged, root, replayer)
-            .toCompletableFuture().join();
+        var backlog = owner.closeDurableBacklog(staged, root, replayer);
+        assertNull(relayed.get());
+        owner.publishHidden(backlog, 0);
+        owner.openAdmission(staged);
+        owner.drainDurableBacklog(backlog).toCompletableFuture().join();
 
         assertNotNull(relayed.get());
         assertTrue(backend.visible);
-        assertFalse(backend.admitted);
+        assertTrue(backend.admitted);
         assertEquals(
-            List.of("prepare", "replay", "publish"),
+            List.of("prepare", "publish", "open", "replay"),
             backend.operations);
     }
 
@@ -198,7 +207,8 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
 
         assertThrows(
             IllegalArgumentException.class,
-            () -> owner.publishAndReplayHidden(staged, changed));
+            () -> owner.closeDurableBacklog(
+                staged, changed, actorReplayer(owner, staged)));
         assertFalse(backend.visible);
     }
 
@@ -233,6 +243,16 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
             11,
             restoreSnapshot,
             "target-entry");
+    }
+
+    private static ZLinkUserSpotAggregateStagingOwner.JournalReplayer
+        actorReplayer(
+            ZLinkStandaloneActorRelocationStagingOwner owner,
+            ZLinkStandaloneActorRelocationStagingOwner.Staged staged) {
+        return (laneId, record) -> owner.replayActor(
+                staged,
+                ZLinkActorAcceptedJournal.decode(record.payload()))
+            .thenApply(ignored -> null);
     }
 
     private static final class FakeBackend
@@ -283,7 +303,9 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
         }
 
         @Override
-        public CompletionStage<Void> discard(Object actor) {
+        public CompletionStage<Void> discard(
+            Object actor,
+            ZLinkStandaloneActorRelocationStagingOwner.Request request) {
             operations.add("discard");
             discarded = true;
             return CompletableFuture.completedFuture(null);

@@ -132,7 +132,7 @@ internal sealed class ZLinkBackendSpotWrapper :
     public bool RequestToChannel(
         string channelName,
         Message message,
-        RequestCallback callback,
+        ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan? timeout,
         ReadOnlyMemory<byte> metadata)
@@ -144,7 +144,7 @@ internal sealed class ZLinkBackendSpotWrapper :
     public bool RequestToChannel(
         string channelName,
         IReadOnlyList<Message> parts,
-        RequestCallback callback,
+        ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan? timeout,
         ReadOnlyMemory<byte> metadata)
@@ -168,6 +168,25 @@ internal sealed class ZLinkBackendSpotWrapper :
     {
         return _spot.SendToChannel(channelName, parts, flags, metadata);
     }
+
+    public ValueTask SendToChannelAsync(
+        string channelName,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> metadata = default) =>
+        RequireManagedNode().SendToChannelDirectAsync(
+            SpotId, channelName, parts, flags, metadata, cancellationToken);
+
+    public ValueTask<IReadOnlyList<Message>> RequestToChannelAsync(
+        string channelName,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> metadata = default) =>
+        RequireManagedNode().RequestToChannelDirectAsync(
+            SpotId, channelName, parts, flags, metadata, timeout, cancellationToken);
 
     public void Publish(
         string channelName, string topic, Message message, SendFlags flags,
@@ -199,12 +218,50 @@ internal sealed class ZLinkBackendSpotWrapper :
             targetRid, spotId, spotGeneration, parts, flags, metadata);
     }
 
+    public ValueTask SendToSpotAsync(
+        RoutingId targetRid,
+        string spotId,
+        ulong spotGeneration,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> metadata = default) =>
+        RequireManagedNode().SendToSpotDirectAsync(
+            SpotId,
+            targetRid,
+            spotId,
+            spotGeneration,
+            parts,
+            flags,
+            metadata,
+            cancellationToken);
+
+    public ValueTask<IReadOnlyList<Message>> RequestToSpotAsync(
+        RoutingId targetRid,
+        string spotId,
+        ulong spotGeneration,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> metadata = default) =>
+        RequireManagedNode().RequestToSpotDirectAsync(
+            SpotId,
+            targetRid,
+            spotId,
+            spotGeneration,
+            parts,
+            flags,
+            metadata,
+            timeout,
+            cancellationToken);
+
     public bool RequestToSpot(
         RoutingId targetRid,
         string spotId,
         ulong spotGeneration,
         Message message,
-        RequestCallback callback,
+        ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan? timeout,
         ReadOnlyMemory<byte> metadata)
@@ -219,7 +276,7 @@ internal sealed class ZLinkBackendSpotWrapper :
         string spotId,
         ulong spotGeneration,
         IReadOnlyList<Message> parts,
-        RequestCallback callback,
+        ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan? timeout,
         ReadOnlyMemory<byte> metadata)
@@ -240,7 +297,7 @@ internal sealed class ZLinkBackendSpotWrapper :
         return AcceptRequestSubmit(submit, $"SPOT '{spotId}' on node '{targetRid}'");
     }
 
-    public SubmitResult MessageFollowSendToSpot(
+    public ValueTask MessageFollowSendToSpotAsync(
         RoutingId targetRid,
         string spotId,
         ulong spotGeneration,
@@ -250,9 +307,9 @@ internal sealed class ZLinkBackendSpotWrapper :
         ulong ownerLeaseGeneration,
         byte messageFollowHopCount,
         IReadOnlyList<Message> parts,
-        SendFlags flags,
-        ReadOnlyMemory<byte> metadata) =>
-        RequireManagedNode().MessageFollowSendToSpot(
+        ReadOnlyMemory<byte> metadata,
+        CancellationToken cancellationToken) =>
+        RequireManagedNode().MessageFollowSendToSpotAsync(
             SpotId,
             targetRid,
             spotId,
@@ -263,8 +320,8 @@ internal sealed class ZLinkBackendSpotWrapper :
             ownerLeaseGeneration,
             messageFollowHopCount,
             parts,
-            flags,
-            metadata);
+            metadata,
+            cancellationToken);
 
     public bool MessageFollowRequestToSpot(
         RoutingId targetRid,
@@ -277,7 +334,7 @@ internal sealed class ZLinkBackendSpotWrapper :
         byte messageFollowHopCount,
         ulong deadlineUnixMs,
         IReadOnlyList<Message> parts,
-        RequestCallback callback,
+        ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan? timeout,
         ReadOnlyMemory<byte> metadata)

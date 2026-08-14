@@ -526,25 +526,7 @@ public sealed class LocationLifecycleTests
             ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
                 sourceSnapshot.Payload.Span,
                 out var sourceAuthority));
-        var sourceOwner = new ZLinkLocationOwnerToken(
-            sourceSnapshot.OwnerId,
-            sourceSnapshot.OwnerLeaseGeneration);
         var targetOwner = nodeB.Runtime.OwnerToken;
-        var capacity = Assert.IsType<ZLinkRelocationCapacityReserveResult.Reserved>(
-            await fixture.Store.ReserveRelocationCapacityAsync(
-                new ZLinkRelocationCapacityReservationRequest(
-                    Guid.NewGuid(),
-                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(ActorId),
-                    sourceSnapshot.StoreVersion,
-                    ZLinkPlacementObjectKind.Actor,
-                    sourceAuthority.StableType,
-                    new ZLinkMeshNodeDescriptorKey(MeshName, nodeA.NodeRid),
-                    1,
-                    sourceOwner,
-                    new ZLinkMeshNodeDescriptorKey(MeshName, nodeB.NodeRid),
-                    1,
-                    targetOwner,
-                    sourceSnapshot.Allocation.Capacity)));
         var targetPayload = ZLinkActorAuthorityPayloadCodec.Encode(
             sourceAuthority with
             {
@@ -562,7 +544,14 @@ public sealed class LocationLifecycleTests
                     targetPayload,
                     ZLinkAuthorityGenerationTransition.NewOwner,
                     targetOwner,
-                    capacity.Fence)));
+                    sourceSnapshot.Allocation with
+                    {
+                        Descriptor = new ZLinkMeshNodeDescriptorKey(
+                            MeshName,
+                            nodeB.NodeRid),
+                        DescriptorLifecycleGeneration = 1
+                    },
+                    sourceSnapshot.AuthorityOwnerGeneration + 1)));
 
         await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await nodeA.ActorOwnership.NotifyActorJoinedSpotAsync(
@@ -1168,18 +1157,6 @@ public sealed class LocationLifecycleTests
             ZLinkObjectReservation reservation,
             CancellationToken cancellationToken = default) =>
             inner.AbortAsync(reservation, cancellationToken);
-
-        public override ValueTask<ZLinkRelocationCapacityReserveResult>
-            ReserveRelocationCapacityAsync(
-                ZLinkRelocationCapacityReservationRequest request,
-                CancellationToken cancellationToken = default) =>
-            inner.ReserveRelocationCapacityAsync(request, cancellationToken);
-
-        public override ValueTask<ZLinkRelocationCapacityAbortResult>
-            AbortRelocationCapacityAsync(
-                ZLinkRelocationCapacityFence fence,
-                CancellationToken cancellationToken = default) =>
-            inner.AbortRelocationCapacityAsync(fence, cancellationToken);
 
         public override ValueTask<ZLinkAggregatePrepareResult> PrepareAggregateAsync(
             ZLinkAggregatePrepareRequest request,

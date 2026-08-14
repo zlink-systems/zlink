@@ -1,5 +1,3 @@
-using Zlink.Framework.Runtime.Dispatch;
-
 namespace Zlink.Framework.Runtime.Streams;
 
 internal sealed class ZLinkSessionStreamTransport(
@@ -14,18 +12,39 @@ internal sealed class ZLinkSessionStreamTransport(
         return stream.Write(ZLinkMessage.From(payload.ToArray()), SendFlags.DontWait);
     }
 
+    public ValueTask SubmitAsync(
+        Message payload,
+        CancellationToken cancellationToken)
+    {
+        if (stream is ZLinkManagedStream managedStream)
+            return managedStream.SubmitRawAsync(payload, cancellationToken);
+
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            if (!stream.Write(
+                    ZLinkMessage.From(payload.ToArray()),
+                    SendFlags.DontWait))
+                throw new ZlinkSubmitException(
+                    ZlinkSubmitException.ErrorCode.Backpressured);
+        }
+        finally
+        {
+            payload.Dispose();
+        }
+        return ValueTask.CompletedTask;
+    }
+
     public ValueTask ReplyRawAsync(
         ZlinkStreamHeader requestHeader,
         ZLinkActorReply reply,
-        CancellationToken cancellationToken,
-        ZLinkCompletionAdmissionOwner.ResponderLease? completionPermit = null)
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var responseHeader = reply.CreateResponseHeader(requestHeader);
         var frame = reply.EncodeFrame(responseHeader);
         return SendReplyAsync(
             Message.From(frame),
-            completionPermit,
             cancellationToken,
             "Client stream reply send failed.",
             responseHeader);
@@ -34,8 +53,7 @@ internal sealed class ZLinkSessionStreamTransport(
     public ValueTask ReplyErrorAsync(
         ZlinkStreamHeader requestHeader,
         Exception exception,
-        CancellationToken cancellationToken,
-        ZLinkCompletionAdmissionOwner.ResponderLease? completionPermit = null)
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (requestHeader.RequestSeq is not { } requestSeq) return ValueTask.CompletedTask;
@@ -54,15 +72,13 @@ internal sealed class ZLinkSessionStreamTransport(
             payload);
         return SendReplyAsync(
             Message.From(frame),
-            completionPermit,
             cancellationToken,
             "Client stream error reply send failed.",
             header);
     }
 
-    private async ValueTask SendReplyAsync(
+    private ValueTask SendReplyAsync(
         Message frame,
-        ZLinkCompletionAdmissionOwner.ResponderLease? completionPermit,
         CancellationToken cancellationToken,
         string failureMessage,
         ZlinkStreamHeader responseHeader)
@@ -70,22 +86,16 @@ internal sealed class ZLinkSessionStreamTransport(
         using (frame)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (completionPermit is not null)
-                await completionPermit.ReserveReplyAsync(
-                        checked((ulong)Math.Max(frame.Size, 1)),
-                        cancellationToken)
-                    .ConfigureAwait(false);
             try
             {
                 if (!Write(frame)) throw new InvalidOperationException(failureMessage);
-                completionPermit?.TransferToCore();
             }
             catch
             {
-                completionPermit?.Dispose();
                 throw;
             }
         }
         traceWritten(responseHeader);
+        return ValueTask.CompletedTask;
     }
 }

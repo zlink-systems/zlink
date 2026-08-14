@@ -27,8 +27,7 @@ internal sealed record ZLinkStandaloneActorRelocationProgress(
 }
 
 /// <summary>
-/// Publishes standalone Actor replay progress by storing a new immutable root
-/// and replacing its Location Store reference and terminal counts in one CAS.
+/// Reads and advances the target-owned standalone Actor relocation phase.
 /// </summary>
 internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
     IZLinkLocationRepository authorityStore,
@@ -36,154 +35,12 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
     ZLinkStandaloneActorRelocationTargetFence? targetFence = null)
 {
     private const int MaxConflictRetries = 8;
-    private static readonly TimeSpan Retention = TimeSpan.FromHours(24);
 
     internal ValueTask<ZLinkStandaloneActorRelocationProgress> ReadAsync(
         ZLinkRelocationEnvelope identity,
         ZLinkLocationOwnerToken targetOwner,
         CancellationToken cancellationToken) =>
         ReadCurrentAsync(identity, targetOwner, cancellationToken);
-
-    internal ValueTask<ZLinkStandaloneActorRelocationProgress> AdvanceReplayAsync(
-        ZLinkRelocationEnvelope identity,
-        ulong acceptedSequence,
-        ZLinkCanonicalTerminalCompletion? completion,
-        ZLinkLocationOwnerToken targetOwner,
-        CancellationToken cancellationToken) =>
-        UpdateAsync(
-            identity,
-            current =>
-            {
-                var participant = current.Participants.Single();
-                if (acceptedSequence != 0
-                    && participant.ReplayCursor == acceptedSequence)
-                    return current;
-                if (participant.ReplayCursor == ulong.MaxValue
-                    || acceptedSequence != participant.ReplayCursor + 1)
-                    throw new ZLinkRelocationDataLostException(
-                        $"Standalone Actor replay sequence '{acceptedSequence}' does not follow cursor '{participant.ReplayCursor}'.");
-                var successor = current;
-                if (completion is not null
-                    && !participant.TerminalCompletions.Any(candidate =>
-                        SameCompletion(candidate, completion)))
-                    successor = ZLinkRelocationEnvelopeCodec
-                        .AppendCanonicalTerminalCompletion(successor, completion);
-                return ZLinkRelocationEnvelopeCodec.AdvanceCanonicalReplayCursor(
-                    successor,
-                    participant.CanonicalParticipantId,
-                    acceptedSequence);
-            },
-            targetOwner,
-            cancellationToken);
-
-    internal ValueTask<ZLinkStandaloneActorRelocationProgress> CompleteReplyAsync(
-        ZLinkRelocationEnvelope identity,
-        ZLinkCanonicalTerminalCompletion completion,
-        byte deliveryState,
-        ZLinkLocationOwnerToken targetOwner,
-        CancellationToken cancellationToken) =>
-        UpdateAsync(
-            identity,
-            current => ZLinkRelocationEnvelopeCodec
-                .CompleteCanonicalTerminalDelivery(
-                    current,
-                    completion.OperationHigh,
-                    completion.OperationLow,
-                    completion.SourceOwnerId,
-                    completion.SourceOwnerLeaseGeneration,
-                    completion.SourceNodeRid,
-                    completion.SourceNodeGeneration,
-                    deliveryState),
-            targetOwner,
-            cancellationToken);
-
-    internal async ValueTask<ZLinkStandaloneActorRelocationProgress>
-        AdvancePhaseAsync(
-        ZLinkRelocationEnvelope identity,
-        ZLinkActorRelocationAuthorityPhase expected,
-        ZLinkActorRelocationAuthorityPhase next,
-        ZLinkLocationOwnerToken targetOwner,
-        CancellationToken cancellationToken)
-    {
-        if (IsCanonicalRoot(identity))
-        {
-            var canonical = (expected, next) switch
-            {
-                (ZLinkActorRelocationAuthorityPhase.Activated,
-                    ZLinkActorRelocationAuthorityPhase.Cleaning) =>
-                    (ZLinkStandaloneActorCanonicalPhase.Activated,
-                        ZLinkStandaloneActorCanonicalPhase.Cleaning),
-                (ZLinkActorRelocationAuthorityPhase.Cleaning,
-                    ZLinkActorRelocationAuthorityPhase.Completed) =>
-                    (ZLinkStandaloneActorCanonicalPhase.Cleaning,
-                        ZLinkStandaloneActorCanonicalPhase.Completed),
-                _ => throw new InvalidOperationException(
-                    "Canonical standalone Actor phase transition is invalid.")
-            };
-            return await AdvanceCanonicalPhaseAsync(
-                    identity,
-                    canonical.Item1,
-                    canonical.Item2,
-                    targetOwner,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
-        for (var attempt = 0; attempt < MaxConflictRetries; attempt++)
-        {
-            var current = await ReadCurrentAsync(
-                    identity,
-                    targetOwner,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (current.Phase.Phase == next) return current;
-            if (current.Phase.Phase != expected)
-                throw new ZLinkRelocationDataLostException(
-                    $"Standalone Actor relocation phase is '{current.Phase.Phase}', not '{expected}'.");
-            if (!ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                    current.Authority.Payload.Span,
-                    out var publication))
-                throw new ZLinkRelocationDataLostException(
-                    "Standalone Actor relocation publication disappeared during phase advance.");
-            var payload = ZLinkRelocationAuthorityPayloadCodec.Encode(
-                publication with
-                {
-                    ApplicationPayload = ZLinkActorRelocationAuthorityPayloadCodec
-                        .Encode(current.Phase with { Phase = next })
-                });
-            var exchanged = await authorityStore.CompareExchangeAuthorityAsync(
-                    identity.Participants.Single().AuthorityKey,
-                    current.Authority.StoreVersion,
-                    new ZLinkAuthorityMutation.Put(
-                        payload,
-                        ZLinkAuthorityGenerationTransition.Preserve,
-                        null,
-                        null),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (exchanged is ZLinkAuthorityCompareExchangeResult.Stored)
-                continue;
-            if (exchanged is not ZLinkAuthorityCompareExchangeResult.Conflict)
-                throw new InvalidOperationException(
-                    "Authority Store rejected standalone Actor phase progress.");
-        }
-        throw Moving("phase advance conflicted after the bounded retry limit");
-    }
-
-    private static bool IsCanonicalRoot(
-        ZLinkRelocationEnvelope envelope)
-    {
-        try
-        {
-            _ = ZLinkCanonicalParticipantRecoveryCodec.Decode(
-                envelope.Participants.Single().RecoveryPayload.Span);
-            return true;
-        }
-        catch (Exception error) when (error is InvalidDataException
-                                      or EndOfStreamException)
-        {
-            return false;
-        }
-    }
 
     internal async ValueTask<ZLinkStandaloneActorRelocationProgress>
         AdvanceCanonicalPhaseAsync(
@@ -194,7 +51,7 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
             CancellationToken cancellationToken)
     {
         if ((byte)expected < (byte)ZLinkStandaloneActorCanonicalPhase.Committed
-            || (byte)next > (byte)ZLinkStandaloneActorCanonicalPhase.Completed
+            || (byte)next > (byte)ZLinkStandaloneActorCanonicalPhase.Activated
             || (byte)next != (byte)expected + 1)
             throw new ArgumentOutOfRangeException(
                 nameof(next),
@@ -250,10 +107,15 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                     targetOwner,
                     cancellationToken)
                 .ConfigureAwait(false);
-            if (current.Phase.Phase != ZLinkActorRelocationAuthorityPhase.Completed
-                || current.Phase.TerminalCompletionCount
-                   != current.Phase.AcceptedRequestCount
-                || current.Phase.PendingRelayCount != 0)
+            var phaseReady = current.Canonical is { } canonicalPhase
+                ? canonicalPhase.Phase is >=
+                    (byte)ZLinkStandaloneActorCanonicalPhase.Activated and <=
+                    (byte)ZLinkStandaloneActorCanonicalPhase.Completed
+                : current.Phase.Phase is
+                    ZLinkActorRelocationAuthorityPhase.Activated
+                    or ZLinkActorRelocationAuthorityPhase.Cleaning
+                    or ZLinkActorRelocationAuthorityPhase.Completed;
+            if (!phaseReady)
                 throw new ZLinkRelocationDataLostException(
                     "Standalone Actor relocation is not ready for steady normalization.");
             var payload = current.Canonical is { } canonical
@@ -300,217 +162,6 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
         throw Moving("steady normalization conflicted after the bounded retry limit");
     }
 
-    internal async ValueTask<ZLinkStandaloneActorRelocationProgress>
-        PublishAdmissionReadyAuthorityAsync(
-        ZLinkRelocationEnvelope identity,
-        ZLinkLocationOwnerToken targetOwner,
-        CancellationToken cancellationToken)
-    {
-        for (var attempt = 0; attempt < MaxConflictRetries; attempt++)
-        {
-            var current = await ReadCurrentAsync(
-                    identity,
-                    targetOwner,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            var canonical = current.Canonical
-                            ?? throw new ZLinkRelocationDataLostException(
-                                "Standalone Actor source cleanup requires canonical authority.");
-            if (canonical.SourceCleanupState == 1) return current;
-            if (canonical.SourceCleanupState != 0
-                || current.Phase.Phase
-                != ZLinkActorRelocationAuthorityPhase.Cleaning)
-                throw new ZLinkRelocationDataLostException(
-                    "Standalone Actor source cleanup phase is not recoverable.");
-            var payload = ZLinkCanonicalRelocationAuthorityStateCodec
-                .ReplaceRelocationState(
-                    current.Authority.Payload.Span,
-                    canonical.State with { SourceCleanupState = 1 },
-                    current.Root);
-            var exchanged = await authorityStore.CompareExchangeAuthorityAsync(
-                    identity.Participants.Single().AuthorityKey,
-                    current.Authority.StoreVersion,
-                    new ZLinkAuthorityMutation.Put(
-                        payload,
-                        ZLinkAuthorityGenerationTransition.Preserve,
-                        null,
-                        null),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (exchanged is ZLinkAuthorityCompareExchangeResult.Stored)
-                continue;
-            if (exchanged is not ZLinkAuthorityCompareExchangeResult.Conflict)
-                throw new InvalidOperationException(
-                    "Authority Store rejected standalone Actor source cleanup.");
-        }
-        throw Moving("source cleanup conflicted after the bounded retry limit");
-    }
-
-    private async ValueTask<ZLinkStandaloneActorRelocationProgress> UpdateAsync(
-        ZLinkRelocationEnvelope identity,
-        Func<ZLinkRelocationEnvelope, ZLinkRelocationEnvelope> update,
-        ZLinkLocationOwnerToken targetOwner,
-        CancellationToken cancellationToken)
-    {
-        if (identity.CanonicalLogicalStream.IsEmpty)
-            throw new ArgumentException(
-                "Standalone Actor replay requires a canonical relocation root.",
-                nameof(identity));
-        for (var attempt = 0; attempt < MaxConflictRetries; attempt++)
-        {
-            var current = await ReadCurrentAsync(
-                    identity,
-                    targetOwner,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            var successor = update(current.Root);
-            if (successor.CanonicalLogicalStream.Span.SequenceEqual(
-                    current.Root.CanonicalLogicalStream.Span))
-                return current;
-
-            var stored = await ZLinkRelocationTreeStore.PutAsync(
-                    relocationStore,
-                    successor,
-                    Retention,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            var terminalCount = checked((uint)successor.Participants.Sum(
-                static participant => participant.TerminalCompletions.Count));
-            var pendingCount = checked((uint)successor.Participants.Sum(
-                static participant => participant.PendingRelayCount));
-            var nextPhase = current.Phase with
-            {
-                TerminalCompletionCount = terminalCount,
-                PendingRelayCount = pendingCount
-            };
-            if (!ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                    current.Authority.Payload.Span,
-                    out var publication))
-                throw new ZLinkRelocationDataLostException(
-                    "Standalone Actor relocation publication disappeared during replay.");
-            var nextPayload = current.Canonical is { } canonical
-                ? ZLinkCanonicalRelocationAuthorityStateCodec
-                    .ReplaceRelocationState(
-                        current.Authority.Payload.Span,
-                        canonical.State with
-                        {
-                            RelocationReference = stored.Root.Reference,
-                            RelocationChecksumCrc32c = stored.Root.ChecksumCrc32c
-                        },
-                        successor)
-                : ZLinkRelocationAuthorityPayloadCodec.Encode(
-                    publication with
-                    {
-                        Reference = stored.Root.Reference,
-                        ChecksumCrc32c = stored.Root.ChecksumCrc32c,
-                        ApplicationPayload = ZLinkActorRelocationAuthorityPayloadCodec
-                            .Encode(nextPhase)
-                    });
-            ZLinkAuthorityCompareExchangeResult result;
-            try
-            {
-                result = await authorityStore.CompareExchangeAuthorityAsync(
-                        successor.Participants.Single().AuthorityKey,
-                        current.Authority.StoreVersion,
-                        new ZLinkAuthorityMutation.Put(
-                            nextPayload,
-                            ZLinkAuthorityGenerationTransition.Preserve,
-                            null,
-                            null),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch
-            {
-                var reconciled = await TryReadPublishedSuccessorAsync(
-                        identity,
-                        successor,
-                        stored.Root,
-                        targetOwner)
-                    .ConfigureAwait(false);
-                if (reconciled is not null) return reconciled;
-
-                // A failed response does not prove that this content-addressed
-                // root is unused. Another writer may have published the same
-                // reference, so retention owns any later orphan cleanup.
-                throw;
-            }
-            if (result is ZLinkAuthorityCompareExchangeResult.Stored success)
-            {
-                // Command 35 retries prove that a published progress root is a
-                // monotonic successor of the sealed root. Keep predecessor
-                // roots until retention expires so a restarted target can
-                // verify that chain after the authority pointer advances.
-                return new ZLinkStandaloneActorRelocationProgress(
-                    success.Snapshot,
-                    nextPhase,
-                    successor)
-                {
-                    Canonical = current.Canonical is null
-                        ? null
-                        : ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                            success.Snapshot.Payload.Span,
-                            out var advancedCanonical)
-                            ? advancedCanonical
-                            : throw new ZLinkRelocationDataLostException(
-                                "Standalone Actor replay regressed from canonical authority.")
-                };
-            }
-            var published = await TryReadPublishedSuccessorAsync(
-                    identity,
-                    successor,
-                    stored.Root,
-                    targetOwner)
-                .ConfigureAwait(false);
-            if (published is not null) return published;
-
-            // The CAS result alone cannot prove that this content-addressed
-            // root is an orphan: another concurrent writer can still publish
-            // the same reference. Leave it to retention instead of deleting a
-            // root that may become authoritative.
-            if (result is not ZLinkAuthorityCompareExchangeResult.Conflict)
-                throw new InvalidOperationException(
-                    "Authority Store rejected standalone Actor replay progress.");
-        }
-        throw Moving("replay progress conflicted after the bounded retry limit");
-    }
-
-    private async ValueTask<ZLinkStandaloneActorRelocationProgress?>
-        TryReadPublishedSuccessorAsync(
-        ZLinkRelocationEnvelope identity,
-        ZLinkRelocationEnvelope successor,
-        ZLinkRelocationStored stored,
-        ZLinkLocationOwnerToken targetOwner)
-    {
-        try
-        {
-            var current = await ReadCurrentAsync(
-                    identity,
-                    targetOwner,
-                    CancellationToken.None)
-                .ConfigureAwait(false);
-            if (!ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                    current.Authority.Payload.Span,
-                    out var publication)
-                || !string.Equals(
-                    publication.Reference,
-                    stored.Reference,
-                    StringComparison.Ordinal)
-                || publication.ChecksumCrc32c != stored.ChecksumCrc32c
-                || !current.Root.CanonicalLogicalStream.Span.SequenceEqual(
-                    successor.CanonicalLogicalStream.Span))
-                return null;
-            return current;
-        }
-        catch
-        {
-            // Reconciliation is best-effort. If the exact authority cannot be
-            // observed, the caller retains the original CAS outcome and the
-            // immutable root remains protected by retention.
-            return null;
-        }
-    }
-
     private async ValueTask<ZLinkStandaloneActorRelocationProgress> ReadCurrentAsync(
         ZLinkRelocationEnvelope identity,
         ZLinkLocationOwnerToken targetOwner,
@@ -541,10 +192,6 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
             || root.CanonicalRelocationLow != identity.CanonicalRelocationLow)
             throw new ZLinkRelocationDataLostException(
                 "Standalone Actor replay root does not match its authority.");
-        var terminalCount = checked((uint)root.Participants.Sum(
-            static item => item.TerminalCompletions.Count));
-        var pendingCount = checked((uint)root.Participants.Sum(
-            static item => item.PendingRelayCount));
         ZLinkActorRelocationAuthorityPayload phase;
         ZLinkCanonicalRelocationAuthorityProjection? canonical = null;
         if (publication.IsCanonical)
@@ -564,9 +211,7 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
             ValidateCanonicalFence(found.Snapshot, canonical);
             phase = rootPhase with
             {
-                Phase = CanonicalActorPhase(canonical.Phase),
-                TerminalCompletionCount = canonical.TerminalCompletionCount,
-                PendingRelayCount = canonical.PendingRelayCount
+                Phase = CanonicalActorPhase(canonical.Phase)
             };
         }
         else if (!ZLinkActorRelocationAuthorityPayloadCodec.TryDecode(
@@ -575,10 +220,6 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                  || phase.RelocationId != identity.AggregateId)
             throw new ZLinkRelocationDataLostException(
                 "Standalone Actor legacy relocation phase is invalid.");
-        if (phase.TerminalCompletionCount != terminalCount
-            || phase.PendingRelayCount != pendingCount)
-            throw new ZLinkRelocationDataLostException(
-                "Standalone Actor authority terminal counts do not match its root.");
         return new ZLinkStandaloneActorRelocationProgress(
             found.Snapshot,
             phase,
@@ -654,13 +295,4 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
         $"Standalone Actor relocation {reason}.",
         retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff);
 
-    private static bool SameCompletion(
-        ZLinkCanonicalTerminalCompletion left,
-        ZLinkCanonicalTerminalCompletion right) =>
-        left.OperationHigh == right.OperationHigh
-        && left.OperationLow == right.OperationLow
-        && left.SourceOwnerId == right.SourceOwnerId
-        && left.SourceOwnerLeaseGeneration == right.SourceOwnerLeaseGeneration
-        && left.SourceNodeRid == right.SourceNodeRid
-        && left.SourceNodeGeneration == right.SourceNodeGeneration;
 }

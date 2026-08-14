@@ -21,10 +21,14 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
 public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
+    default void setApplicationJobQueue(ZLinkApplicationJobQueue value) {
+        // Alternate backends may provide their own ordinary-claim boundary.
+    }
+
     default RoutingId routingId() {
         return null;
     }
@@ -90,16 +94,6 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     default void setRouterPendingAdmissionCapacity(int value) {
         // Optional for test and alternate backends that do not expose bounded
         // asynchronous RouteMesh admission yet.
-    }
-
-    default void setMailboxMessageBudget(long value) {
-        // Optional for test and alternate backends that do not expose Core
-        // mailbox admission yet.
-    }
-
-    default void setMailboxByteBudget(long value) {
-        // Optional for test and alternate backends that do not expose Core
-        // mailbox admission yet.
     }
 
     void setRoutingId(RoutingId routingId);
@@ -205,11 +199,6 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         // Alternate backends may not support process-local Node direct dispatch.
     }
 
-    default void setApplicationDispatchBudget(
-        ZLinkInboundDispatchBudget budget) {
-        // Alternate backends may not retain Framework application admission.
-    }
-
     /**
      * Installs the immutable content-type to stream-codec mapping used by
      * typed Actor ingress. Unknown incoming content types must return an
@@ -297,6 +286,19 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 "Canonical relocation control is unavailable"));
     }
 
+    default void setActorLeftHandler(ActorLeftHandler handler) {
+        // Alternate backends may not yet support command 29 dispatch.
+    }
+
+    /** Submits one command 29 source-leave record; no reply or ACK exists. */
+    default CompletionStage<Void> sendActorLeft(
+        RoutingId sourceNodeRid,
+        ZLinkServiceM6BWireCodec.ActorLeft left) {
+        return CompletableFuture.failedFuture(
+            new UnsupportedOperationException(
+                "Actor Left notification is unavailable"));
+    }
+
     /**
      * Installs the infrastructure-only Message Follow notification endpoint.
      * The notice carries only route fences and queue accounting; it never
@@ -343,7 +345,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
 
     default void setSessionRelocationRouteHandler(
         SessionRelocationRouteHandler handler) {
-        // Alternate backends may not support command 44/45 dispatch.
+        // Alternate backends may not support command 44 dispatch.
     }
 
     default void setSessionRelocationSealHandler(
@@ -356,11 +358,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         // Alternate backends may not support command 36 dispatch.
     }
 
-    /**
-     * Submits one exact command 42 record and returns its command 43 ACK.
-     * The Session owner answers with its accepted bound-Session high-water at
-     * the seal point; an identical retransmit returns the cached ACK.
-     */
+    /** Submits one exact command 42 record and returns its command 43 ACK. */
     default CompletionStage<byte[]> requestSessionRelocationSeal(
         RoutingId sessionOwnerNodeRid,
         byte[] command42,
@@ -370,14 +368,10 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 "Session relocation seal is unavailable"));
     }
 
-    /**
-     * Submits one exact command 44 record and returns its command 45 ACK.
-     * The same operation is never re-resolved or submitted to another owner.
-     */
-    default CompletionStage<byte[]> requestSessionRelocationRoute(
+    /** Submits the one-way command 44 to the exact Session owner. */
+    default CompletionStage<Void> sendSessionRelocationRoute(
         RoutingId sessionOwnerNodeRid,
-        byte[] command44,
-        Duration timeout) {
+        byte[] command44) {
         return CompletableFuture.failedFuture(
             new UnsupportedOperationException(
                 "Session relocation routing is unavailable"));
@@ -569,6 +563,13 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     }
 
     @FunctionalInterface
+    interface ActorLeftHandler {
+        CompletionStage<Void> handle(
+            RoutingId targetNodeRid,
+            ZLinkServiceM6BWireCodec.ActorLeft left);
+    }
+
+    @FunctionalInterface
     interface MessageFollowHandler {
         void handle(
             RoutingId sourceNodeRid,
@@ -585,7 +586,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
 
     @FunctionalInterface
     interface SessionRelocationRouteHandler {
-        CompletionStage<byte[]> handle(
+        CompletionStage<Void> handle(
             RoutingId sourceNodeRid,
             byte[] command44);
     }

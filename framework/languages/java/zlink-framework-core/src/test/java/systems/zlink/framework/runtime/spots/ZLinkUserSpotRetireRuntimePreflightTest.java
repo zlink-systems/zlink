@@ -174,61 +174,7 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
         completion.toCompletableFuture().join();
     }
 
-    @Test
-    void hostPreflightAccountsForCapacityAcrossAllKnownUnits() {
-        var capacity = new ZLinkRelocationCapacityPlan();
-        ZLinkMeshNodeDescriptor target = targetWithCapacity(2, 1);
-
-        assertEquals(
-            true,
-            capacity.canReserveUserSpot(target, "room", 1));
-        capacity.reserveUserSpot("room-1", target, "room", 1);
-
-        assertEquals(
-            false,
-            capacity.canReserveUserSpot(target, "room", 0));
-        assertEquals(true, capacity.canReserveActor(target));
-        capacity.reserveActor("actor-1", target);
-        assertEquals(false, capacity.canReserveActor(target));
-    }
-
-    private static ZLinkMeshNodeDescriptor targetWithCapacity(
-        int actorLimit,
-        int spotLimit) {
-        return new ZLinkMeshNodeDescriptor(
-            "mesh",
-            RoutingId.from("target"),
-            1,
-            1,
-            "inproc://target",
-            Map.of(),
-            2,
-            List.of(),
-            ZLinkMeshNodeObjectRole.SERVER,
-            Optional.of(
-                "target-entry-00000000-0000-4000-8000-000000000001"),
-            100,
-            new ZLinkPlacementCapacity(
-                new ZLinkCapacityUsage(0, 0, actorLimit),
-                new ZLinkCapacityUsage(0, 0, spotLimit),
-                List.of(new ZLinkSpotTypeCapacity(
-                    ZLinkPlacementObjectKind.USER_SPOT,
-                    "room",
-                    new ZLinkCapacityUsage(0, 0, spotLimit)))),
-            new ZLinkActivationConcurrency(0, 1),
-            Optional.empty(),
-            ZLinkFrameworkRuntimeState.SERVING,
-            "security",
-            "owner",
-            1,
-            Instant.now());
-    }
-
-    //  BLK-043 acceptance. The spec unit gate of 30-host-relocation-flow §7
-    //  belongs to ZLinkRelocationPermitPool, which admits at the turn boundary
-    //  where the actual payload is known. executePlan must therefore not bound
-    //  the units a second time: a unit waiting on its own turn boundary must
-    //  not hold a slot that a later unit needs.
+    // Relocation has no separate unit-concurrency correctness bound.
     @Test
     void executePlanStartsEveryUnitWithoutASecondConcurrencyBound() {
         var held = new ArrayList<CompletableFuture<Void>>();

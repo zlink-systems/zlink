@@ -7,7 +7,6 @@ using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Dispatch;
 using Zlink.Framework.Locations.Redis;
-using Zlink.Framework.Runtime.Spots;
 
 namespace SpotActorTransfer.ActorNode;
 
@@ -16,20 +15,6 @@ internal static class ActorNodeHostFactory
     public static (WebApplication App, ServerOptions Options) Create(string[] args)
     {
         var options = ServerOptions.Parse(args, "actor-node");
-        ZLinkSpotRetireTargetRuntime
-            .PostPublicationBeforeNormalizationTestHook =
-            options.CrashAtTargetCompleteGate
-                ? static async cancellationToken =>
-                {
-                    Console.Error.WriteLine(
-                        "aggregate_target_complete_gate");
-                    Console.Error.Flush();
-                    await Task.Delay(
-                            Timeout.InfiniteTimeSpan,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                : null;
         Directory.CreateDirectory(options.LogDir);
         var builder = WebApplication.CreateBuilder(args);
         builder.Configuration.Sources.Clear();
@@ -67,7 +52,7 @@ internal static class ActorNodeHostFactory
             // This E2E host is not started inside a memory-limited container.
             // Supply a deterministic finite limit so the default Auto HWM
             // contract does not depend on the developer or CI host.
-            framework.ConfigureInboundDispatch().ProcessMemoryLimitBytes =
+            framework.ConfigureCoreHwm().CoreHwmMemoryLimitBytes =
                 1UL * 1024 * 1024 * 1024;
             // Normal diagnostics emits the received/replied Activity pairs used
             // by the relocation workload's public correlation assertion.

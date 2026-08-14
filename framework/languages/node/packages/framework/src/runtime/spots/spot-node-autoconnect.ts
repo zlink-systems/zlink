@@ -162,9 +162,9 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
     this.node.onPeerDisconnected?.(handler);
   }
 
-  connect(target: ZLinkAutoConnectTarget): boolean {
+  async connect(target: ZLinkAutoConnectTarget): Promise<boolean> {
     if (this.manualConnections) return false;
-    return this.connectPeer(target);
+    return await this.connectPeer(target);
   }
 
   disconnect(target: ZLinkAutoConnectTarget): void {
@@ -229,13 +229,13 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
     }
   }
 
-  private connectPeer(target: ZLinkAutoConnectTarget): boolean {
+  private async connectPeer(target: ZLinkAutoConnectTarget): Promise<boolean> {
     const key = connectionKey(target);
     if (this.connectionIntents.has(key)) {
       return true;
     }
     try {
-      const connectionIntentId = this.node.connectPeer({
+      const connectionIntentId = await this.node.connectPeer({
         endpoint: target.endpoint,
         expectedRid: target.nodeRid === undefined
           ? undefined

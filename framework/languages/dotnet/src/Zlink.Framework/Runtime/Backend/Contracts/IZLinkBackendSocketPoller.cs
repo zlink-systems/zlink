@@ -7,8 +7,7 @@ internal enum ZLinkBackendSocketReadiness
     Readable = 1,
     Writable = 2,
     Error = 4,
-    Priority = 8,
-    Completion = 16
+    Priority = 8
 }
 
 // Framework receive loops use this seam to wait for native socket readiness.

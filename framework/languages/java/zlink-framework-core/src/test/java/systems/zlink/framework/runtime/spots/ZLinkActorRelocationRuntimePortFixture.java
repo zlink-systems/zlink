@@ -59,6 +59,9 @@ public final class ZLinkActorRelocationRuntimePortFixture {
                     request,
                     null,
                     request.actorNodeRid(),
+                    spotId,
+                    spot,
+                    joined,
                     ignored -> java.util.concurrent.CompletableFuture
                         .completedFuture(ZLinkSpotActorJoinResult.accept()))
                 .thenApply(response -> List.of(

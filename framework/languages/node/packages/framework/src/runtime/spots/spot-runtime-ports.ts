@@ -10,8 +10,7 @@ import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-con
 import type {
   ZLinkRemoteActorPacketTarget,
   ZLinkRemoteBoundSessionTarget,
-  ZLinkDeferredJoinAcceptedRoot,
-  ZLinkDeferredJoinRecoveryInput
+  ZLinkDeferredJoinAcceptedRoot
 } from '../actors';
 import type { ZLinkActorHandoffDispatch } from '../actors/actor-handoff';
 import type { ZLinkActorResponseOptions } from './spot-actor-packet-dispatch';
@@ -50,66 +49,24 @@ export interface ZLinkSpotActorTransferRuntime {
     operationId: ZLinkActorJoinOperationId,
     actorRef: ActorRef,
     rawReply: Uint8Array,
-    signal?: AbortSignal,
-    recovery?: ZLinkDeferredJoinRecoveryInput
-  ): Promise<ZLinkDeferredJoinAcceptedRoot>;
-  recoverDeferredJoinAccepted(
-    actorId: string,
     signal?: AbortSignal
-  ): Promise<ZLinkDeferredJoinAcceptedRoot | undefined>;
+  ): Promise<ZLinkDeferredJoinAcceptedRoot>;
   discardDeferredJoinAccepted(
     root: ZLinkDeferredJoinAcceptedRoot,
     signal?: AbortSignal
   ): Promise<void>;
-  markDeferredJoinRecoveryMessageReplayed(
-    root: ZLinkDeferredJoinAcceptedRoot,
-    nextReplayCursor: number,
-    signal?: AbortSignal
-  ): Promise<ZLinkDeferredJoinAcceptedRoot>;
   markDeferredJoinAcceptedCommitted(
     root: ZLinkDeferredJoinAcceptedRoot,
     actorRef: ActorRef,
     signal?: AbortSignal
   ): Promise<ZLinkDeferredJoinAcceptedRoot>;
-  readDeferredJoinRecoveryPayload(
-    root: ZLinkDeferredJoinAcceptedRoot,
-    signal?: AbortSignal
-  ): Promise<Buffer>;
-  takeOverDeferredJoinRecoveryAuthority(
-    root: ZLinkDeferredJoinAcceptedRoot,
-    targetActorRef: ActorRef,
-    target: {
-      readonly meshName: string;
-      readonly nodeRid: RoutingId;
-      readonly nodeGeneration: bigint;
-      readonly owner: {
-        readonly ownerId: string;
-        readonly leaseGeneration: bigint;
-      };
-      readonly spotId: string;
-      readonly spotGeneration: bigint;
-      readonly membershipEpoch: bigint;
-      readonly spotAuthority: import('../../contracts/Locations').ZLinkAuthoritySnapshot;
-      readonly spotAuthorityPayload: Uint8Array;
-    },
-    signal?: AbortSignal
-  ): Promise<{
-    readonly root: ZLinkDeferredJoinAcceptedRoot;
-    readonly actorAuthority: import('../../contracts/Locations').ZLinkAuthoritySnapshot;
-    readonly spotAuthority: import('../../contracts/Locations').ZLinkAuthoritySnapshot;
-  } | undefined>;
   commitAndDeliverDeferredJoinAccepted(
     root: ZLinkDeferredJoinAcceptedRoot,
     actor: ZLinkActor,
     actorRef: ActorRef,
     submitMailbox: <T>(operation: () => Promise<T>) => Promise<T>,
-    signal?: AbortSignal,
-    retainRecoveryRoot?: boolean
-  ): Promise<ZLinkDeferredJoinAcceptedRoot>;
-  releaseDeferredJoinRecovery(
-    root: ZLinkDeferredJoinAcceptedRoot,
     signal?: AbortSignal
-  ): Promise<void>;
+  ): Promise<ZLinkDeferredJoinAcceptedRoot>;
   getOrCreateRoutedActor(
     actorId: string,
     actorType: string,
@@ -119,24 +76,20 @@ export interface ZLinkSpotActorTransferRuntime {
     signal?: AbortSignal
   ): Promise<ZLinkRemoteActorJoinActor>;
   materializeRoutedActor: ZLinkRoutedActorTransferProvider;
+  commitRoutedActorAuthority(
+    actor: ZLinkActor,
+    sourceActorRef: ActorRef,
+    transferId: string,
+    spotId: RoutingId,
+    spotGeneration: bigint,
+    membershipEpoch: bigint,
+    deadlineAtMs: number,
+    signal?: AbortSignal
+  ): Promise<import('../../contracts/Locations').ZLinkAuthoritySnapshot>;
   rememberRoutedActorTransferTarget(
     actorId: string,
     target: ZLinkRemoteBoundSessionTarget | undefined
   ): void;
-  prepareRecoveryRoutedActor(
-    actorId: string,
-    actorType: string,
-    actorRef: ActorRef,
-    authorityOwnerGeneration: bigint,
-    spotId: RoutingId,
-    spotGeneration: bigint,
-    membershipEpoch: bigint,
-    adapterKey: string | undefined,
-    transferState: Message,
-    actorEntryNodeRid: RoutingId | undefined,
-    remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-    signal?: AbortSignal
-  ): Promise<ZLinkActor>;
   claimNativeActorLocation(
     actor: ZLinkActor,
     spotId: RoutingId,
@@ -152,17 +105,8 @@ export interface ZLinkSpotActorTransferRuntime {
     }
   ): Promise<void>;
   publishRoutedActorOwnership(actor: ZLinkActor): Promise<void>;
-  publishRecoveryRoutedActor(actor: ZLinkActor): void;
   openRoutedActorSession(actor: ZLinkActor): Promise<void>;
   bindRoutedActorRef(actor: ZLinkActor, actorRef: ActorRef): void;
-  currentRoutedActorRef(actor: ZLinkActor): ActorRef | undefined;
-  adoptRoutedActorAuthority(
-    actor: ZLinkActor,
-    authority: import('../../contracts/Locations').ZLinkAuthoritySnapshot,
-    spotId: RoutingId,
-    spot: ZLinkSpot,
-    membershipEpoch: bigint
-  ): void;
   commitRoutedActor(actor: ZLinkActor, spotId: RoutingId, spot: ZLinkSpot): void;
   clearRoutedActor(actor: ZLinkActor): void;
   rollbackNativeActorJoin(
@@ -213,20 +157,6 @@ export interface ZLinkSpotBoundSessionRuntime {
     actorPacketTarget?: unknown,
     signal?: AbortSignal
   ): Promise<void>;
-  receiveRemoteBoundSessionOwnership(payload: unknown): Promise<{
-    readonly actorId: string;
-    readonly actorGeneration: string;
-    readonly actorOwnershipGeneration: string;
-    readonly bindingGeneration: string;
-    readonly targetOwnerLeaseGeneration: string;
-    readonly acceptedHighWater: string;
-    readonly sealId: string;
-  }>;
-  receiveRemoteBoundSessionSeal(payload: unknown): Promise<{
-    readonly actorId: string;
-    readonly sealId: string;
-    readonly acceptedHighWater: string;
-  }>;
   rememberRemoteBoundSessionTarget(actorId: string, target: ZLinkRemoteBoundSessionTarget | undefined): void;
   resolveRemoteBoundSessionTarget(
     sourceNodeRid: RoutingId,

@@ -29,7 +29,6 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
@@ -42,7 +41,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestCallback;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
@@ -686,7 +684,8 @@ final class ZLinkClientServerM6ARuntimeTest {
                 case "hashCode" -> System.identityHashCode(proxy);
                 case "close", "connect", "disconnect", "bind",
                     "setChannelName" -> null;
-                case "send", "request" -> false;
+                case "send" -> CompletableFuture.completedFuture(null);
+                case "request" -> new CompletableFuture<ZLinkBackendReceived>();
                 case "recv" -> null;
                 default -> throw new UnsupportedOperationException(
                     method.getName());
@@ -706,20 +705,18 @@ final class ZLinkClientServerM6ARuntimeTest {
                 case "close", "connect", "disconnect", "bind",
                     "setChannelName" -> null;
                 case "request" -> {
-                    ZLinkBackendRequestCallback callback =
-                        (ZLinkBackendRequestCallback) arguments[1];
                     Message response = Message.from(
                         ZLinkClientServerServiceWire.encodeAdmit(
                             descriptor, Integer.MAX_VALUE));
-                    callback.handle(new ZLinkBackendReceived(
+                    yield CompletableFuture.completedFuture(
+                        new ZLinkBackendReceived(
                         ZLinkBackendRequestResult.OK,
                         Optional.empty(),
                         Optional.empty(),
                         Optional.empty(),
                         List.of(response)));
-                    yield true;
                 }
-                case "send" -> true;
+                case "send" -> CompletableFuture.completedFuture(null);
                 case "recv" -> null;
                 default -> throw new UnsupportedOperationException(
                     method.getName());
@@ -903,20 +900,16 @@ final class ZLinkClientServerM6ARuntimeTest {
         @Override public void disconnect(String endpoint) {
         }
 
-        @Override public boolean send(
-            List<Message> parts,
-            SendFlags flags) {
+        @Override public CompletionStage<Void> send(List<Message> parts) {
             sent.add(parts.get(0).toByteArray());
-            return true;
+            return CompletableFuture.completedFuture(null);
         }
 
-        @Override public boolean request(
+        @Override public CompletionStage<ZLinkBackendReceived> request(
             List<Message> parts,
-            ZLinkBackendRequestCallback callback,
-            SendFlags flags,
             Duration timeout) {
             requests.add(parts.get(0).toByteArray());
-            return true;
+            return new CompletableFuture<>();
         }
 
         @Override public ZLinkBackendReceived recv(
@@ -977,23 +970,23 @@ final class ZLinkClientServerM6ARuntimeTest {
         @Override public boolean waitForReadable(Duration timeout) {
             return false;
         }
-        @Override public boolean send(
+        @Override public CompletionStage<Void> send(
             RoutingId routingId,
-            List<Message> parts,
-            SendFlags flags) {
+            List<Message> parts) {
             if (sendFailure != null) {
-                throw sendFailure;
+                return CompletableFuture.failedFuture(sendFailure);
             }
             sent.add(parts.get(0).toByteArray());
-            return acceptSend;
+            return acceptSend
+                ? CompletableFuture.completedFuture(null)
+                : CompletableFuture.failedFuture(
+                    new ZlinkSubmitException(SubmitResult.NOT_ADMITTED));
         }
-        @Override public boolean request(
+        @Override public CompletionStage<ZLinkBackendReceived> request(
             RoutingId routingId,
             List<Message> parts,
-            ZLinkBackendRequestCallback callback,
-            SendFlags flags,
             Duration timeout) {
-            return false;
+            return new CompletableFuture<>();
         }
         @Override public void reply(
             RoutingId routingId,

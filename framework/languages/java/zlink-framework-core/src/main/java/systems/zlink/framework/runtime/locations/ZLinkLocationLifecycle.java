@@ -159,11 +159,7 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
                         actorKey,
                         new ZLinkAuthorityExpectFound(
                             actorSnapshot.storeVersion()),
-                        new ZLinkAuthorityPut(
-                            next,
-                            ZLinkAuthorityGenerationTransition.PRESERVE,
-                            Optional.empty(),
-                            Optional.empty()),
+                        new ZLinkAuthorityPut(next),
                         NEVER_CANCEL)
                     .thenCompose(result -> result instanceof ZLinkAuthorityStored
                         ? CompletableFuture.completedFuture(null)

@@ -2,16 +2,18 @@ package systems.zlink.framework.runtime.internal.backend;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.SendFlags;
 
 public interface ZLinkBackendDealerSocket
     extends ZLinkBackendConnectableSocket, ZLinkBackendReceiveSocket {
     void setChannelName(String channelName);
 
-    boolean send(List<Message> parts, SendFlags flags);
+    CompletionStage<Void> send(List<Message> parts);
 
-    boolean request(List<Message> parts, ZLinkBackendRequestCallback callback, SendFlags flags, Duration timeout);
+    CompletionStage<ZLinkBackendReceived> request(
+        List<Message> parts,
+        Duration timeout);
 
     ZLinkBackendReceived recv(ZLinkBackendRecvMode mode);
 }

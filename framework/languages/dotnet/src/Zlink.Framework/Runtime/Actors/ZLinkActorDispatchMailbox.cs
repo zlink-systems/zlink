@@ -156,12 +156,8 @@ internal sealed class ZLinkActorDispatchMailbox
         if (countAsPendingRequest) _pendingRequests--;
         waiter.Dispose();
         throw new ZLinkFrameworkException(
-            admission == ZLinkSerialPostAdmission.Closed
-                ? ZLinkFrameworkErrorKind.ShuttingDown
-                : ZLinkFrameworkErrorKind.CapacityExceeded,
-            admission == ZLinkSerialPostAdmission.Closed
-                ? "Actor dispatch queue is closed."
-                : "Actor dispatch queue reached its count or byte bound.");
+            ZLinkFrameworkErrorKind.ShuttingDown,
+            "Actor dispatch queue is closed.");
     }
 
     private void OnWaiterStarted(Waiter waiter)

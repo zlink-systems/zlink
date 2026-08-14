@@ -7,7 +7,6 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
-import java.time.Duration;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -16,55 +15,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 
 /** Shared one-way admission and error mapping for all runtime families. */
 public final class ZLinkOneWayCalls {
-    @FunctionalInterface
-    public interface Admission extends BiFunction<
-        ZLinkBackendObject,
-        ZLinkBackendAdmissionKey,
-        BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>> {
-        CompletionStage<Void> submit(
-            ZLinkBackendObject backend,
-            ZLinkBackendAdmissionKey key,
-            Supplier<Boolean> submission,
-            Runnable cleanup,
-            Duration timeoutOverride);
-
-        /**
-         * Accepts a one-way operation into the bounded local outbound queue
-         * while this admission owner continues the transport attempt. The
-         * default keeps custom/test admissions source-compatible; the host
-         * runtime overrides it with detached queue ownership.
-         */
-        default CompletionStage<Void> submitDetached(
-            ZLinkBackendObject backend,
-            ZLinkBackendAdmissionKey key,
-            Supplier<Boolean> submission,
-            Runnable cleanup,
-            Duration timeoutOverride) {
-            return submit(backend, key, submission, cleanup, timeoutOverride);
-        }
-
-        /** Starts the ordinary post-route delivery deadline for retained calls. */
-        default void releaseDetached(
-            ZLinkBackendObject backend,
-            ZLinkBackendAdmissionKey key) {
-        }
-
-        /** Removes retained calls when their exact route can no longer open. */
-        default void terminateDetached(
-            ZLinkBackendObject backend,
-            ZLinkBackendAdmissionKey key,
-            Throwable failure) {
-        }
-
-        @Override
-        default BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>> apply(
-            ZLinkBackendObject backend,
-            ZLinkBackendAdmissionKey key) {
-            return (submission, cleanup) ->
-                submit(backend, key, submission, cleanup, null);
-        }
-    }
-
     public static final int SUBMITTED = 0;
     public static final int BACKPRESSURED = 1;
     public static final int TIMED_OUT = 2;
@@ -72,73 +22,18 @@ public final class ZLinkOneWayCalls {
     public static final int TARGET_NOT_FOUND = 4;
     public static final int SHUTDOWN = 5;
 
-    private final BiFunction<
-        ZLinkBackendObject,
-        ZLinkBackendAdmissionKey,
-        BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>> admission;
-    private final Admission timedAdmission;
+    public ZLinkOneWayCalls() {
+    }
 
+    /**
+     * Retained as an internal source-compatible constructor while callers
+     * migrate away from Framework-owned admission. The binding owns retries.
+     */
     public ZLinkOneWayCalls(BiFunction<
         ZLinkBackendObject,
         ZLinkBackendAdmissionKey,
-        BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>> admission) {
-        this.admission = Objects.requireNonNull(admission, "admission");
-        this.timedAdmission = admission instanceof Admission supported
-            ? supported
-            : null;
-    }
-
-    public CompletionStage<Void> submitOneWay(
-        ZLinkBackendObject backend,
-        ZLinkBackendAdmissionKey key,
-        Supplier<Boolean> submission,
-        Runnable cleanup,
-        Duration timeoutOverride) {
-        if (timeoutOverride == null || timedAdmission == null) {
-            return submitOneWay(backend, key, submission, cleanup);
-        }
-        return timedAdmission.submit(
-            backend, key, submission, cleanup, timeoutOverride);
-    }
-
-    public CompletionStage<Void> submitDetachedOneWay(
-        ZLinkBackendObject backend,
-        ZLinkBackendAdmissionKey key,
-        Supplier<Boolean> submission,
-        Runnable cleanup,
-        Duration timeoutOverride) {
-        if (timedAdmission == null) {
-            return submitOneWay(
-                backend, key, submission, cleanup, timeoutOverride);
-        }
-        return timedAdmission.submitDetached(
-            backend, key, submission, cleanup, timeoutOverride);
-    }
-
-    public void releaseDetachedOneWay(
-        ZLinkBackendObject backend,
-        ZLinkBackendAdmissionKey key) {
-        if (timedAdmission != null) {
-            timedAdmission.releaseDetached(backend, key);
-        }
-    }
-
-    public void terminateDetachedOneWay(
-        ZLinkBackendObject backend,
-        ZLinkBackendAdmissionKey key,
-        Throwable failure) {
-        if (timedAdmission != null) {
-            timedAdmission.terminateDetached(
-                backend, key, Objects.requireNonNull(failure, "failure"));
-        }
-    }
-
-    public CompletionStage<Void> submitOneWay(
-        ZLinkBackendObject backend,
-        ZLinkBackendAdmissionKey key,
-        Supplier<Boolean> submission,
-        Runnable cleanup) {
-        return admission.apply(backend, key).apply(submission, cleanup);
+        BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>> ignored) {
+        this();
     }
 
     public static <T> CompletionStage<T> beginOneWay(AtomicBoolean submitted) {
@@ -178,7 +73,17 @@ public final class ZLinkOneWayCalls {
     }
 
     public static CompletionStage<Void> adaptOneWay(CompletionStage<Void> submission) {
-        CompletableFuture<Void> result = new CompletableFuture<>();
+        CompletableFuture<Void> source = submission.toCompletableFuture();
+        CompletableFuture<Void> result = new CompletableFuture<>() {
+            @Override
+            public boolean cancel(boolean mayInterruptIfRunning) {
+                boolean cancelled = super.cancel(mayInterruptIfRunning);
+                if (cancelled) {
+                    source.cancel(mayInterruptIfRunning);
+                }
+                return cancelled;
+            }
+        };
         submission.whenComplete((ignored, error) -> {
             if (error == null) {
                 result.complete(null);

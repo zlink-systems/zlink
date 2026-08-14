@@ -20,6 +20,7 @@ import { ZLinkRemoteActorJoinReceiver } from './remote-actor-join-receiver';
 
 export interface ZLinkBoundSessionRelayOptions {
   readonly requestTimeoutMs?: number;
+  readonly sessionRelocationSealTimeoutMs: number;
   readonly routeTransport: ZLinkActorRoutedJoinTransport;
   readonly streamBindingRuntime: () =>
     ZLinkBoundSessionResponsePort & ZLinkRemoteBoundSessionPort & ZLinkStreamActorLookupPort;
@@ -55,6 +56,7 @@ export class ZLinkBoundSessionRelay {
     });
     this.boundSessions = new ZLinkRemoteBoundSessionRelay({
       requestTimeoutMs: options.requestTimeoutMs,
+      sessionRelocationSealTimeoutMs: options.sessionRelocationSealTimeoutMs,
       routeTransport: options.routeTransport,
       streamBindingRuntime: options.streamBindingRuntime,
       actorManager: options.actorManager,

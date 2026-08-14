@@ -1,4 +1,4 @@
-// ST-E1C: Session location update retry 시나리오를 검증한다.
+// ST-E1C: Session route update와 seal timeout 시나리오를 검증한다.
 import { runSpotActorCoverage } from '../Support/coverage-scenarios';
 
 export async function runSTE1C(): Promise<void> {

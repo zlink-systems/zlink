@@ -6,6 +6,8 @@ export interface ZLinkRawReceivedRecord {
   readonly transportPairGeneration?: bigint;
   readonly reply?: (parts: readonly Uint8Array[]) => void;
   readonly parts: readonly Buffer[];
+  /** Releases the retained Core receive credit exactly once. */
+  close(): void;
 }
 
 export interface ZLinkRawMonitorRecord {
@@ -41,23 +43,9 @@ export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
   localEndpoint(): string;
   setRoutingId(routingId: string): void;
   connectToRoutingId(routingId: string, endpoint: string): void;
-  send(targetRid: string, parts: readonly Uint8Array[], dontWait?: boolean): boolean;
-  sendTransportPair(
-    targetRid: string,
-    transportPairId: bigint,
-    transportPairGeneration: bigint,
-    parts: readonly Uint8Array[],
-    dontWait?: boolean
-  ): boolean;
+  send(targetRid: string, parts: readonly Uint8Array[]): Promise<void>;
   request(
     targetRid: string,
-    parts: readonly Uint8Array[],
-    timeoutMs: number
-  ): Promise<readonly Buffer[]>;
-  requestTransportPair(
-    targetRid: string,
-    transportPairId: bigint,
-    transportPairGeneration: bigint,
     parts: readonly Uint8Array[],
     timeoutMs: number
   ): Promise<readonly Buffer[]>;
@@ -67,25 +55,11 @@ export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
     requestSeq: bigint,
     parts: readonly Uint8Array[]
   ): void;
-  trySendCompletionControl?(
-    targetRid: string,
-    parts: readonly Uint8Array[]
-  ): boolean;
-  trySendCompletionControlTransportPair?(
-    targetRid: string,
-    transportPairId: bigint,
-    transportPairGeneration: bigint,
-    parts: readonly Uint8Array[]
-  ): boolean;
-  setCompletionControlHandler?(
-    handler: (sourceRid: string, parts: readonly Buffer[]) => void
-  ): void;
-  progressCompletion?(): number;
 }
 
 export interface ZLinkRawDealerPort extends ZLinkRawSocketPort {
   setRoutingId(routingId: string): void;
-  send(parts: readonly Uint8Array[], dontWait?: boolean): boolean;
+  send(parts: readonly Uint8Array[]): Promise<void>;
   request(parts: readonly Uint8Array[], timeoutMs: number): Promise<readonly Buffer[]>;
   receive(dontWait?: boolean): ZLinkRawReceivedRecord | undefined;
 }

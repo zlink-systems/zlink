@@ -176,7 +176,11 @@ final class EntrySpotActivation
             actorRef,
             actor,
             context.spotId());
-        return transition == null ? tail : context.enqueueDispatch(transition);
+        return transition == null ? tail : context.enqueueDispatch(() -> {
+            systems.zlink.framework.runtime.internal.dispatch
+                .ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
+            return transition.get();
+        });
     }
 
     CompletionStage<Void> handleDispatchEvent(ZLinkBackendSpotDispatchInfo info) {
@@ -209,21 +213,31 @@ final class EntrySpotActivation
     private void drainRoutes() {
         ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
         while (batch.canReceiveNext()) {
-            ZLinkBackendReceived received =
-                backendSpot.recvRoute(ZLinkBackendRecvMode.DONT_WAIT);
-            if (received == null) {
+            var permit = host.reserveApplicationJob();
+            if (permit == null) {
                 return;
             }
-            batch.record(ZLinkReceiveBatchBudget.bytesOf(
-                received.parts(),
-                received.applicationMetadataSize(),
-                received.acceptedJournalRecordSize()));
-            ZLinkSpotRuntime.traceSpotRouteInbound("entry-recv", backendSpot, received);
-            if (host.dispatchSpotRouteBridgePacket(received)) {
-                received.close();
-                continue;
+            try (var ignored = systems.zlink.framework.runtime.internal.dispatch
+                     .ZLinkApplicationJobContext.enter(permit)) {
+                ZLinkBackendReceived received =
+                    backendSpot.recvRoute(ZLinkBackendRecvMode.DONT_WAIT);
+                if (received == null) {
+                    return;
+                }
+                batch.record(ZLinkReceiveBatchBudget.bytesOf(
+                    received.parts(),
+                    received.applicationMetadataSize(),
+                    received.acceptedJournalRecordSize()));
+                ZLinkSpotRuntime.traceSpotRouteInbound(
+                    "entry-recv", backendSpot, received);
+                if (host.dispatchSpotRouteBridgePacket(received)) {
+                    received.close();
+                    continue;
+                }
+                dispatchRoute(received);
+            } finally {
+                permit.abandonReservation();
             }
-            dispatchRoute(received);
         }
     }
 
@@ -386,16 +400,25 @@ final class EntrySpotActivation
     private void drainSubscriptions() {
         ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
         while (batch.canReceiveNext()) {
-            ZLinkBackendTopicMessage received =
-                backendSpot.subscribe(ZLinkBackendRecvMode.DONT_WAIT);
-            if (received == null) {
+            var permit = host.reserveApplicationJob();
+            if (permit == null) {
                 return;
             }
-            batch.record(ZLinkReceiveBatchBudget.bytesOf(
-                received.parts(),
-                received.applicationMetadataSize(),
-                received.topic().getBytes(StandardCharsets.UTF_8).length));
-            dispatchSpotSubscription(received);
+            try (var ignored = systems.zlink.framework.runtime.internal.dispatch
+                     .ZLinkApplicationJobContext.enter(permit)) {
+                ZLinkBackendTopicMessage received =
+                    backendSpot.subscribe(ZLinkBackendRecvMode.DONT_WAIT);
+                if (received == null) {
+                    return;
+                }
+                batch.record(ZLinkReceiveBatchBudget.bytesOf(
+                    received.parts(),
+                    received.applicationMetadataSize(),
+                    received.topic().getBytes(StandardCharsets.UTF_8).length));
+                dispatchSpotSubscription(received);
+            } finally {
+                permit.abandonReservation();
+            }
         }
     }
 

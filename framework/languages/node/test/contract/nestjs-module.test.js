@@ -40,7 +40,7 @@ function fakeSpotRouteBridge(calls, reply) {
       calls.push(`bridge:attachRouter:${channelName}`);
     },
     send() {
-      return { message() { return this; }, submit() { return true; } };
+      return { message() { return this; }, submit() { return Promise.resolve(); } };
     },
     request(channelName, targetNodeRid, spotId) {
       calls.push(`bridge:request:${channelName}:${targetNodeRid}:${spotId}`);
@@ -55,11 +55,8 @@ function fakeSpotRouteBridge(calls, reply) {
           calls.push(`bridge:timeout:${timeoutMs}`);
           return this;
         },
-        submit(callback) {
-          if (reply !== undefined) {
-            callback(0, [reply]);
-          }
-          return true;
+        submit() {
+          return Promise.resolve(reply === undefined ? [] : [reply]);
         }
       };
     },
@@ -134,6 +131,68 @@ function createNoopMonitoringAdapter() {
         async dispose() {}
       };
     }
+  };
+}
+
+const EMPTY_CORE_HWM_BUDGET_SNAPSHOT = Object.freeze({
+  abiVersion: 1,
+  structSize: 0,
+  budgetGeneration: 0n,
+  measurementEpoch: 0n,
+  configuredMemoryLimitBytes: 0n,
+  runtimeMemoryLimitBytes: 0n,
+  resolvedMemoryLimitBytes: 0n,
+  configuredCoreBudgetBytes: 0n,
+  effectiveCoreBudgetBytes: 0n,
+  totalPlannedHwmBytes: 0n,
+  totalAppliedHwmBytes: 0n,
+  manualReservedHwmBytes: 0n,
+  coreQueueAccountedBytes: 0n,
+  applicationAccountedBytes: 0n,
+  currentAccountedBytes: 0n,
+  provisionalAccountedBytes: 0n,
+  peakAccountedBytes: 0n,
+  completionCurrentAccountedBytes: 0n,
+  completionPeakAccountedBytes: 0n,
+  completionPendingMessageCount: 0n,
+  totalMessagingAccountedBytes: 0n,
+  monitorQueueAppliedHwmBytes: 0n,
+  monitorQueueAccountedBytes: 0n,
+  totalInstanceAppliedHwmBytes: 0n,
+  totalInstanceAccountedBytes: 0n,
+  oversizeAdmissionCount: 0n,
+  largestOversizeMessageBytes: 0n,
+  activeDirectionalQueueCount: 0n,
+  activeCompletionDirectionalQueueCount: 0n,
+  activeSendQueueCount: 0n,
+  activeReceiveQueueCount: 0n,
+  outstandingApplicationLeaseCount: 0n,
+  retiredQueueCount: 0n,
+  deferredOriginCreditBytes: 0n,
+  unlimitedManualQueueCount: 0n,
+  blockedRatioPpm: 0,
+  flags: 0,
+  reservedUInt64: Object.freeze(Array(8).fill(0n)),
+  budgetPlanningActive: false,
+  budgetInsufficient: false,
+  aggregateHwmValid: true,
+  aggregateOverflow: false
+});
+
+function fakeCoreHwmContext(expectedOptions) {
+  return {
+    configureCoreHwm(options) {
+      assert.notEqual(
+        expectedOptions,
+        undefined,
+        'Core HWM configuration must not be invoked when no explicit options are registered.'
+      );
+      assert.deepEqual(options, expectedOptions);
+    },
+    getCoreHwmBudgetSnapshot() {
+      return EMPTY_CORE_HWM_BUDGET_SNAPSHOT;
+    },
+    resetCoreHwmBudgetMetrics() {}
   };
 }
 
@@ -1705,6 +1764,29 @@ test('Nest builders preserve process listener identity and global Actor dispatch
   assert.equal(registration.streamNodes.get('gateway').actorDispatchEnabled, true);
 });
 
+test('Nest configureInboundDispatch forwards Core HWM and job queue options', async () => {
+  const builder = nestjs.zlinkFramework();
+  builder.configureInboundDispatch()
+    .coreHwmProfile(framework.ZLinkCoreHwmProfile.Balanced)
+    .coreHwmMemoryLimitBytes(536870912n)
+    .coreHwmBudgetBytes(134217728n)
+    .applicationJobQueueProfile(framework.ZLinkApplicationJobQueueProfile.LowLatency)
+    .maxQueuedApplicationJobs(17n);
+  const registration = await resolveFrameworkRegistration(
+    nestjs.ZLinkModule.forRoot(builder.build())
+  );
+
+  assert.deepEqual(registration.coreHwm, {
+    profile: zlink.AutoHwmProfile.Balanced,
+    memoryLimitBytes: 536870912n,
+    budgetBytes: 134217728n
+  });
+  assert.deepEqual(registration.applicationJobQueue, {
+    profile: framework.ZLinkApplicationJobQueueProfile.LowLatency,
+    maxQueuedApplicationJobs: 17n
+  });
+});
+
 test('ZLinkModule.forRoot maps route mesh channel options into runtime registration', async () => {
   const builder = nestjs.zlinkFramework();
   const mesh = builder.addRouteMesh('route')
@@ -1955,7 +2037,6 @@ test('ZLinkModule.forRoot maps stream node options into runtime registration', a
   assert.equal(registration.spotNodes.get('game.spot').router.bind, 'tcp://127.0.0.1:9110');
 
   const configuredOptions = framework.createFrameworkOptions((builder) => {
-    builder.configureInboundDispatch().applicationHwmBytes(0n);
     const stream = builder.addStreamNode('configured-stream')
       .bind('tcp://127.0.0.1:9111')
       .registerSession(ClientHeaderSession);
@@ -2296,6 +2377,7 @@ test('framework runtime host start and stop are idempotent and ordered', async (
           createContext() {
             contextCreated += 1;
             return {
+              ...fakeCoreHwmContext(),
               nativeInstance: {},
               shutdown() {},
               async dispose() {
@@ -2330,8 +2412,14 @@ test('framework runtime host starts registered stream nodes and disposes their r
     }
   }
   const calls = [];
+  const coreHwm = {
+    profile: zlink.AutoHwmProfile.LowLatency,
+    memoryLimitBytes: 268435456n,
+    budgetBytes: 67108864n
+  };
   const runtime = new framework.ZLinkFrameworkRuntimeHost({
     registration: framework.createFrameworkRegistration({
+      coreHwm,
       streamNodes: {
         'client.stream': {
           bind: 'tcp://127.0.0.1:9100',
@@ -2346,6 +2434,7 @@ test('framework runtime host starts registered stream nodes and disposes their r
           createContext() {
             calls.push('context:create');
             return {
+              ...fakeCoreHwmContext(coreHwm),
               nativeInstance: {},
               shutdown() {},
               async dispose() {
@@ -2496,6 +2585,7 @@ test('framework runtime host attaches stream SessionRelay to registered SpotNode
         return {
           createContext() {
             return {
+              ...fakeCoreHwmContext(),
               nativeInstance: {},
               shutdown() {},
               async dispose() {
@@ -2700,6 +2790,7 @@ test('framework runtime host applies formal MeshNode router and peer options', a
         return {
           createContext() {
             return {
+              ...fakeCoreHwmContext(),
               nativeInstance: {},
               shutdown() {},
               async dispose() {
@@ -2818,9 +2909,8 @@ test('framework runtime host lets the formal MeshNode own its accepted route cha
               calls.push(`bridge:timeout:${timeoutMs}`);
               return this;
             },
-            submit(callback) {
-              callback(0, [reply]);
-              return true;
+            submit() {
+              return Promise.resolve([reply]);
             }
           };
         }
@@ -2848,6 +2938,7 @@ test('framework runtime host lets the formal MeshNode own its accepted route cha
         return {
           createContext() {
             return {
+              ...fakeCoreHwmContext(),
               nativeInstance: {},
               shutdown() {},
               async dispose() {
@@ -2967,9 +3058,8 @@ test('framework runtime host drains accepted Spot route channel without route ro
               calls.push(`bridge:timeout:${timeoutMs}`);
               return this;
             },
-            submit(callback) {
-              callback(0, [reply]);
-              return true;
+            submit() {
+              return Promise.resolve([reply]);
             }
           };
         }
@@ -2994,6 +3084,7 @@ test('framework runtime host drains accepted Spot route channel without route ro
         return {
           createContext() {
             return {
+              ...fakeCoreHwmContext(),
               nativeInstance: {},
               shutdown() {},
               async dispose() {
@@ -3155,6 +3246,7 @@ test('framework route transport sends Spot request through accepted Spot route c
         return {
           createContext() {
             return {
+              ...fakeCoreHwmContext(),
               nativeInstance: {},
               shutdown() {},
               async dispose() {
@@ -3309,6 +3401,7 @@ test('framework route transport sends Spot request through accepted Spot route c
         return {
           createContext() {
             return {
+              ...fakeCoreHwmContext(),
               nativeInstance: {},
               shutdown() {},
               async dispose() {
@@ -3450,6 +3543,7 @@ test('framework runtime host starts router-only SessionRelay SpotNode without Di
         return {
           createContext() {
             return {
+              ...fakeCoreHwmContext(),
               nativeInstance: {},
               shutdown() {},
               async dispose() {
@@ -3571,6 +3665,7 @@ test('framework runtime host starts a formal MeshNode without Discovery after bi
         return {
           createContext() {
             return {
+              ...fakeCoreHwmContext(),
               nativeInstance: {},
               shutdown() {},
               async dispose() {
@@ -3733,6 +3828,7 @@ test('framework runtime host defers Entry Spot lifecycle until Core materializes
         return {
           createContext() {
             return {
+              ...fakeCoreHwmContext(),
               nativeInstance: {},
               shutdown() {},
               async dispose() {

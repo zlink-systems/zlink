@@ -22,7 +22,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     private IZLinkSession _handler = null!;
     private readonly Action<string> _removeSession;
     private readonly ZLinkFrameworkRuntime _runtime;
-    private readonly ZLinkCompletionAdmissionOwner? _completionAdmission;
     private readonly AsyncServiceScope _scope;
     private readonly ZLinkStreamSessionSerialExecutor _serial;
     private readonly IZLinkBackendStreamSocket _socket;
@@ -67,9 +66,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         string transport,
         TimeProvider timeProvider,
         bool actorDispatchEnabled = true,
-        ZLinkAsyncSubmitter? sendSubmitter = null,
-        bool requireConnectionReady = false,
-        ZLinkCompletionAdmissionOwner? completionAdmission = null)
+        bool requireConnectionReady = false)
     {
         AsyncServiceScope scope = default;
         var scopeCreated = false;
@@ -86,9 +83,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 transport,
                 timeProvider,
                 actorDispatchEnabled,
-                sendSubmitter,
-                requireConnectionReady,
-                completionAdmission);
+                requireConnectionReady);
             session.Initialize(headerSessionType);
             return session;
         }
@@ -112,9 +107,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         string transport,
         TimeProvider timeProvider,
         bool actorDispatchEnabled,
-        ZLinkAsyncSubmitter? sendSubmitter,
-        bool requireConnectionReady,
-        ZLinkCompletionAdmissionOwner? completionAdmission)
+        bool requireConnectionReady)
     {
         _scope = scope;
         _socket = socket;
@@ -122,7 +115,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         _timeProvider = timeProvider;
         _removeSession = removeSession;
         _runtime = scope.ServiceProvider.GetRequiredService<ZLinkFrameworkRuntime>();
-        _completionAdmission = completionAdmission;
         _requireConnectionReady = requireConnectionReady;
         _handlerInstances = new ZLinkScopedHandlerInstanceOwner(scope.ServiceProvider);
         Stream = new ZLinkManagedStream(socket, routingId, _runtime.Registration.Codecs, transport);
@@ -139,8 +131,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             handlers,
             CloseAsync,
             CloseByProxyAsync,
-            actorDispatchEnabled,
-            sendSubmitter);
+            actorDispatchEnabled);
         _context.SessionRuntime = this;
         Handlers = handlers;
         _serial = new ZLinkStreamSessionSerialExecutor(_runtime.ExecutionOwner, _runtime.ErrorSink);
@@ -259,30 +250,37 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     public void EnqueuePacket(
         Message header,
-        Message payload,
-        ZLinkInboundDispatchLease? inboundDispatchLease = null)
+        Message payload)
     {
-        if (TryEnqueuePacket(header, payload, inboundDispatchLease)
+        if (TryEnqueuePacket(header, payload)
             == ZLinkSerialPostAdmission.Accepted)
             return;
-        DisposeRejectedPacket(header, payload, inboundDispatchLease);
+        DisposeRejectedPacket(header, payload);
     }
 
     public ZLinkSerialPostAdmission TryEnqueuePacket(
         Message header,
         Message payload,
-        ZLinkInboundDispatchLease? inboundDispatchLease = null)
+        ZLinkApplicationJobQueueLease? applicationJobAdmission = null,
+        IDisposable? coreCreditOwner = null)
     {
         if (Volatile.Read(ref _applicationDispatchClosed) != 0)
             return ZLinkSerialPostAdmission.Closed;
         var signal = ClassifyInboundLiveness(header, payload);
         var admission = _serial.EnqueueApplication(
-            RetainedPacketBytes(header, payload),
-            cancellationToken => DispatchPacketAsync(
-                header,
-                payload,
-                inboundDispatchLease,
-                cancellationToken));
+            async cancellationToken =>
+            {
+                using var coreCreditScope = coreCreditOwner;
+                using var admissionScope =
+                    applicationJobAdmission is { } admission
+                        ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+                        : null;
+                await DispatchPacketAsync(
+                        header,
+                        payload,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            });
         if (admission == ZLinkSerialPostAdmission.Accepted)
             ApplyInboundLiveness(signal);
         return admission;
@@ -324,20 +322,27 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         return false;
     }
 
-    internal static long RetainedPacketBytes(Message header, Message payload) =>
-        checked((long)header.Size + payload.Size);
-
     public ZLinkSerialPostAdmission TryEnqueueControlPacket(
         Message header,
-        Message payload)
+        Message payload,
+        ZLinkApplicationJobQueueLease? applicationJobAdmission = null,
+        IDisposable? coreCreditOwner = null)
     {
         var signal = ClassifyInboundLiveness(header, payload);
         var admission = _serial.EnqueueControl(
-            cancellationToken => DispatchPacketAsync(
-                header,
-                payload,
-                inboundDispatchLease: null,
-                cancellationToken: cancellationToken));
+            async cancellationToken =>
+            {
+                using var coreCreditScope = coreCreditOwner;
+                using var admissionScope =
+                    applicationJobAdmission is { } admission
+                        ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+                        : null;
+                await DispatchPacketAsync(
+                        header,
+                        payload,
+                        cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+            });
         if (admission == ZLinkSerialPostAdmission.Accepted)
             ApplyInboundLiveness(signal);
         return admission;
@@ -484,13 +489,9 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     private async ValueTask DispatchPacketAsync(
         Message header,
         Message payload,
-        ZLinkInboundDispatchLease? inboundDispatchLease,
         CancellationToken cancellationToken)
     {
-        inboundDispatchLease?.StartDispatch();
-        try
-        {
-            using (header)
+        using (header)
             using (payload)
             {
                 if (IsClosing) return;
@@ -512,12 +513,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                     return;
                 }
 
-                using var completionPermit = decoded.RequestSeq.HasValue
-                    && _completionAdmission is not null
-                    ? await _completionAdmission.AcquireResponderAsync(cancellationToken)
-                        .ConfigureAwait(false)
-                    : null;
-
                 using var currentFlow = ZLinkFlowContext.Enter(
                     decoded.FlowId,
                     decoded.FlowOrigin is { } streamOrigin ? (ZLinkFlowOrigin)(byte)streamOrigin : null,
@@ -534,16 +529,21 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                         decoded.Name,
                         CorrelationId: decoded.CorrelationId));
 
-                var dispatch = _context.EnterDispatch(decoded, completionPermit);
+                var dispatch = _context.EnterDispatch(decoded);
                 try
                 {
+                    var decodedPayload = ZLinkStreamPacketPayloadCodec.DecodeMessage(
+                        decoded,
+                        payload,
+                        _runtime.Registration.Codecs,
+                        _runtime.Registration.StreamCompressionCodec);
+                    await ZLinkApplicationJobQueueInvocation
+                        .EnsureQueuedPermitAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
                     await _handler.OnDispatchAsync(
                         dispatch,
-                        ZLinkStreamPacketPayloadCodec.DecodeMessage(
-                            decoded,
-                            payload,
-                            _runtime.Registration.Codecs,
-                            _runtime.Registration.StreamCompressionCodec),
+                        decodedPayload,
                         cancellationToken);
 
                     if (!decoded.RequestSeq.HasValue
@@ -576,11 +576,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 {
                     _context.ExitDispatch();
                 }
-            }
-        }
-        finally
-        {
-            inboundDispatchLease?.Dispose();
         }
     }
 
@@ -738,6 +733,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         callbackDeadline.CancelAfter(_runtime.Registration.DefaultRequestTimeout);
         try
         {
+            await ZLinkApplicationJobQueueInvocation
+                .EnsureQueuedPermitAsync(callbackDeadline.Token)
+                .ConfigureAwait(false);
+            ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
             var operation = _handler.OnActorBindingReplacedAsync(
                 identity.ActorId,
                 callbackDeadline.Token);
@@ -917,18 +916,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     private static void DisposeRejectedPacket(
         Message header,
-        Message payload,
-        ZLinkInboundDispatchLease? inboundDispatchLease)
+        Message payload)
     {
-        try
-        {
-            header.Dispose();
-            payload.Dispose();
-        }
-        finally
-        {
-            inboundDispatchLease?.Dispose();
-        }
+        header.Dispose();
+        payload.Dispose();
     }
 
     private async ValueTask<bool> EnsureConnectedAsync(CancellationToken cancellationToken)
@@ -976,6 +967,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             null,
             _flow.CaptureEnabled,
             ZLinkFlowOrigin.Lifecycle);
+        await ZLinkApplicationJobQueueInvocation
+            .EnsureQueuedPermitAsync(cancellationToken)
+            .ConfigureAwait(false);
+        ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
         await _handler.OnConnectedAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -1041,6 +1036,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         Func<CancellationToken, ValueTask> callback)
     {
         _terminalCallbackStop.Token.ThrowIfCancellationRequested();
+        await ZLinkApplicationJobQueueInvocation
+            .EnsureQueuedPermitAsync(_terminalCallbackStop.Token)
+            .ConfigureAwait(false);
+        ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
         var operation = callback(_terminalCallbackStop.Token);
         if (operation.IsCompletedSuccessfully) return;
 

@@ -50,8 +50,14 @@ inline std::optional<serial_resume_failure_t> take_serial_resume_failure ()
 class deferred_barrier_t
 {
   public:
+    using async_completion_t = std::function<void (result_t<void>)>;
+    using async_work_t = std::function<void (async_completion_t)>;
+
     virtual ~deferred_barrier_t () = default;
     virtual result_t<void> activate (std::function<void ()> work) = 0;
+    // The barrier owns the serial turn until `complete` is invoked.  This is
+    // used by deferred Actor operations whose transport tail is asynchronous.
+    virtual result_t<void> activate_async (async_work_t work) = 0;
     virtual void cancel () noexcept = 0;
 };
 
@@ -185,6 +191,30 @@ inline std::shared_ptr<void> enter_ambient_context (const std::shared_ptr<void> 
     return hooks != nullptr && snapshot ? hooks->enter (snapshot) : nullptr;
 }
 
+// Native binding awaitables can ask the active Framework promise for this
+// handoff. It carries only the currently-held serial turn and ambient context;
+// admission retry/readiness remains owned by the binding.
+inline task_scheduler_t capture_native_continuation_scheduler ()
+{
+    auto turn_plan = prepare_serial_turn_await (false);
+    task_scheduler_t turn_scheduler =
+      turn_plan ? std::move (turn_plan->scheduler) : task_scheduler_t{};
+    std::shared_ptr<void> ambient = capture_ambient_context ();
+    return [turn_scheduler = std::move (turn_scheduler),
+            ambient = std::move (ambient)] (std::function<void ()> work) mutable {
+        auto resume = [ambient, work = std::move (work)] () mutable {
+            const auto ambient_guard = enter_ambient_context (ambient);
+            if (work)
+                work ();
+        };
+        if (turn_scheduler) {
+            turn_scheduler (std::move (resume));
+        } else {
+            resume ();
+        }
+    };
+}
+
 template <typename T>
 class task_shared_state_t : public std::enable_shared_from_this<task_shared_state_t<T>>
 {
@@ -199,6 +229,8 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         std::vector<std::pair<std::coroutine_handle<>, std::shared_ptr<void>>> continuations;
         std::vector<std::pair<std::function<void (const result_t<T> &)>, std::shared_ptr<void>>>
           callbacks;
+        std::vector<std::pair<std::function<void (const result_t<T> &)>, std::shared_ptr<void>>>
+          terminal_callbacks;
         auto self = this->shared_from_this ();
         {
             std::lock_guard lock (_mutex);
@@ -208,8 +240,13 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             _result = std::move (result);
             continuations = std::move (_continuations);
             callbacks = std::move (_callbacks);
+            terminal_callbacks = std::move (_terminal_callbacks);
         }
         _ready.notify_all ();
+        for (auto &callback : terminal_callbacks) {
+            const auto ambient_guard = enter_ambient_context (callback.second);
+            callback.first (*_result);
+        }
         for (auto &callback : callbacks) {
             schedule ([self, callback = std::move (callback)] {
                 const auto ambient_guard = enter_ambient_context (callback.second);
@@ -282,6 +319,21 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         }
     }
 
+    void on_terminal (std::function<void (const result_t<T> &)> callback)
+    {
+        auto snapshot = capture_ambient_context ();
+        {
+            std::lock_guard lock (_mutex);
+            if (!_result) {
+                _terminal_callbacks.emplace_back (
+                  std::move (callback), std::move (snapshot));
+                return;
+            }
+        }
+        const auto ambient_guard = enter_ambient_context (snapshot);
+        callback (*_result);
+    }
+
   private:
     void schedule (std::function<void ()> work) const
     {
@@ -303,6 +355,8 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     std::vector<std::pair<std::coroutine_handle<>, std::shared_ptr<void>>> _continuations;
     std::vector<std::pair<std::function<void (const result_t<T> &)>, std::shared_ptr<void>>>
       _callbacks;
+    std::vector<std::pair<std::function<void (const result_t<T> &)>, std::shared_ptr<void>>>
+      _terminal_callbacks;
 };
 
 template <typename T> class task_completion_source_t
@@ -324,6 +378,12 @@ template <typename T> class task_completion_source_t
 template <typename T, typename TCallback>
 void observe_task_completion (task_t<T> &task, TCallback &&callback);
 
+// Explicit terminal owners may need to release a held serial turn at the
+// physical task terminal. Unlike ordinary continuations, this observer does
+// not schedule back through that same turn.
+template <typename T, typename TCallback>
+void observe_task_terminal (task_t<T> &task, TCallback &&callback);
+
 template <typename T> task_t<T> reschedule_task (task_t<T> task, task_scheduler_t scheduler);
 
 } // namespace detail
@@ -334,6 +394,11 @@ template <typename T> class task_t
     struct promise_type
     {
         detail::task_completion_source_t<T> completion;
+
+        detail::task_scheduler_t zlink_continuation_scheduler ()
+        {
+            return detail::capture_native_continuation_scheduler ();
+        }
 
         task_t get_return_object () { return completion.task (); }
         std::suspend_never initial_suspend () noexcept { return {}; }
@@ -404,6 +469,8 @@ template <typename T> class task_t
     friend class detail::task_completion_source_t<T>;
     template <typename TObserved, typename TCallback>
     friend void detail::observe_task_completion (task_t<TObserved> &, TCallback &&);
+    template <typename TObserved, typename TCallback>
+    friend void detail::observe_task_terminal (task_t<TObserved> &, TCallback &&);
 };
 
 template <> class task_t<void>
@@ -412,6 +479,11 @@ template <> class task_t<void>
     struct promise_type
     {
         detail::task_completion_source_t<void> completion;
+
+        detail::task_scheduler_t zlink_continuation_scheduler ()
+        {
+            return detail::capture_native_continuation_scheduler ();
+        }
 
         task_t get_return_object () { return completion.task (); }
         std::suspend_never initial_suspend () noexcept { return {}; }
@@ -474,6 +546,8 @@ template <> class task_t<void>
     friend class detail::task_completion_source_t<void>;
     template <typename TObserved, typename TCallback>
     friend void detail::observe_task_completion (task_t<TObserved> &, TCallback &&);
+    template <typename TObserved, typename TCallback>
+    friend void detail::observe_task_terminal (task_t<TObserved> &, TCallback &&);
 };
 
 namespace detail
@@ -488,6 +562,13 @@ template <typename T, typename TCallback>
 void observe_task_completion (task_t<T> &task, TCallback &&callback)
 {
     task._state->on_completed (
+      std::function<void (const result_t<T> &)> (std::forward<TCallback> (callback)));
+}
+
+template <typename T, typename TCallback>
+void observe_task_terminal (task_t<T> &task, TCallback &&callback)
+{
+    task._state->on_terminal (
       std::function<void (const result_t<T> &)> (std::forward<TCallback> (callback)));
 }
 

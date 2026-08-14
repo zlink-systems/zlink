@@ -57,7 +57,8 @@ route_packet_dispatcher_t::route_packet_dispatcher_t (
   dispatch_options_t dispatch_options,
   const handler_registry_t *filters,
   handler_dispatch_kind_t send_dispatch_kind,
-  handler_dispatch_kind_t request_dispatch_kind) :
+  handler_dispatch_kind_t request_dispatch_kind,
+  std::function<void ()> before_application_handler) :
     _router_channel_id (std::move (router_channel_id)),
     _services (&services),
     _serializers (&serializers),
@@ -66,7 +67,8 @@ route_packet_dispatcher_t::route_packet_dispatcher_t (
     _internal_packets (&internal_packets),
     _dispatch_options (std::move (dispatch_options)),
     _send_dispatch_kind (send_dispatch_kind),
-    _request_dispatch_kind (request_dispatch_kind)
+    _request_dispatch_kind (request_dispatch_kind),
+    _before_application_handler (std::move (before_application_handler))
 {
 }
 
@@ -165,7 +167,8 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
       _invoker
         .invoke_send (*_handlers, filters, _send_dispatch_kind,
                       _router_channel_id, header.message_name, *_services,
-                      *_serializers, body.value (), context)
+                      *_serializers, body.value (), context,
+                      _before_application_handler)
         .result ();
     if (!dispatched) {
         dispatch_error_reporter_t (_dispatch_options)
@@ -231,7 +234,8 @@ result_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispa
       _invoker
         .invoke_request (*_handlers, filters, _request_dispatch_kind,
                          _router_channel_id, header.message_name, *_services,
-                         *_serializers, body.value (), context)
+                         *_serializers, body.value (), context,
+                         _before_application_handler)
         .result ();
     if (!reply) {
         framework_exception_t error (reply.error_kind (), reply.error ()

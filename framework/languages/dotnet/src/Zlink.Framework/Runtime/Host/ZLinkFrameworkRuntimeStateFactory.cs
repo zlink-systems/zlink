@@ -10,8 +10,18 @@ internal sealed class ZLinkFrameworkComponentStateFactory(
 {
     public async ValueTask<ZLinkFrameworkComponentState> CreateAsync()
     {
-        // Resolve all memory-limited ingress settings before any socket is bound.
-        ZLinkFrameworkRegistrationValidator.ValidateInboundDispatch(registration);
+        var effectiveProcessorCount =
+            ZLinkApplicationJobQueueCapacityResolver.ResolveEffectiveProcessorCount(
+                Environment.ProcessorCount,
+                registration.WorkerOptions.MaxThreads);
+        ZLinkFrameworkRegistrationValidator.ValidateInboundDispatch(
+            registration,
+            effectiveProcessorCount);
+        var applicationJobQueueCapacity =
+            ZLinkApplicationJobQueueCapacityResolver.Resolve(
+                registration.InboundDispatchOptions.ApplicationJobQueueProfile,
+                registration.InboundDispatchOptions.MaxQueuedApplicationJobs,
+                effectiveProcessorCount);
         await ZLinkSpotStartupValidator.ValidateAsync(
                 frameworkRuntime.Services,
                 registration)
@@ -23,14 +33,18 @@ internal sealed class ZLinkFrameworkComponentStateFactory(
         try
         {
             context = backendAdapterFactory.CreateRuntimeContext();
-            context.ConfigureAutoHwm(
-                registration.InboundDispatchOptions.ApplicationHwmProfile);
+            context.ConfigureCoreHwm(
+                ToBindingProfile(
+                    registration.InboundDispatchOptions.CoreHwmProfile),
+                registration.InboundDispatchOptions.CoreHwmMemoryLimitBytes ?? 0,
+                registration.InboundDispatchOptions.CoreHwmBudgetBytes ?? 0);
             state = new ZLinkFrameworkComponentState(
                 context,
                 registration,
                 frameworkRuntime.Services,
                 frameworkRuntime.PrepareErrorSink(),
-                frameworkRuntime.ExecutionOwner);
+                frameworkRuntime.ExecutionOwner,
+                applicationJobQueueCapacity);
             await channels.InitializeInboundChannelsAsync(state).ConfigureAwait(false);
             await channels.InitializePublisherChannelsAsync(state).ConfigureAwait(false);
             await spots.InitializeSpotNodesAsync(state).ConfigureAwait(false);
@@ -53,5 +67,17 @@ internal sealed class ZLinkFrameworkComponentStateFactory(
             throw new InvalidOperationException("Unreachable after startup cleanup failure propagation.");
         }
     }
+
+    private static AutoHwmProfile ToBindingProfile(
+        ZLinkCoreHwmProfile profile) =>
+        profile switch
+        {
+            ZLinkCoreHwmProfile.Compact => AutoHwmProfile.Compact,
+            ZLinkCoreHwmProfile.LowLatency => AutoHwmProfile.LowLatency,
+            ZLinkCoreHwmProfile.Balanced => AutoHwmProfile.Balanced,
+            ZLinkCoreHwmProfile.Throughput => AutoHwmProfile.Throughput,
+            _ => throw new ZLinkConfigurationException(
+                $"Unknown CoreHwmProfile value '{(int)profile}'.")
+        };
 
 }

@@ -60,7 +60,6 @@ internal abstract partial class ZLinkSpotActivation :
         ZLinkSpotRelocationReadinessMode relocationReadiness =
             ZLinkSpotRelocationReadinessMode.AnyTurnBoundary,
         bool restoreLogicalTimers = false,
-        ZLinkCompletionAdmissionOwner? completionAdmission = null,
         ZLinkTimerScheduler? timerScheduler = null)
     {
         _runtime = runtime;
@@ -86,8 +85,7 @@ internal abstract partial class ZLinkSpotActivation :
         _outbound = new ZLinkSpotOutboundTransport(
             nativeSpot,
             sendTimeout,
-            _stopSource.Token,
-            completionAdmission);
+            _stopSource.Token);
         _outboundEndpoint = new ZLinkSpotOutboundEndpoint(
             this,
             _outbound,
@@ -110,9 +108,7 @@ internal abstract partial class ZLinkSpotActivation :
             _subscriptions,
             () => _actorHandlers,
             () => HandlerInvoker,
-            CommitNativeActorJoinAsync,
-            _outbound.Submitter,
-            completionAdmission);
+            CommitNativeActorJoinAsync);
         _actorDispatchSubmitter = new ZLinkSpotActorDispatchSubmitter(_serial, _dispatcher.ActorPackets);
     }
 
@@ -287,7 +283,6 @@ internal sealed class ZLinkUserSpotActivation :
         ZLinkSpotRelocationReadinessMode relocationReadiness =
             ZLinkSpotRelocationReadinessMode.AnyTurnBoundary,
         bool restoreLogicalTimers = false,
-        ZLinkCompletionAdmissionOwner? completionAdmission = null,
         ZLinkTimerScheduler? timerScheduler = null)
         : base(
             runtime,
@@ -302,7 +297,6 @@ internal sealed class ZLinkUserSpotActivation :
             executionMode,
             relocationReadiness,
             restoreLogicalTimers,
-            completionAdmission,
             timerScheduler)
     {
         Handlers = new ZLinkSpotHandlerRegistrySurface(this);
@@ -384,7 +378,6 @@ internal sealed class ZLinkInstanceSpotActivation :
         TimeSpan defaultRequestTimeout,
         TimeSpan? sendTimeout,
         bool restoreLogicalTimers = false,
-        ZLinkCompletionAdmissionOwner? completionAdmission = null,
         ZLinkTimerScheduler? timerScheduler = null)
         : base(
             runtime,
@@ -397,7 +390,6 @@ internal sealed class ZLinkInstanceSpotActivation :
             defaultRequestTimeout,
             sendTimeout,
             restoreLogicalTimers: restoreLogicalTimers,
-            completionAdmission: completionAdmission,
             timerScheduler: timerScheduler)
     {
         Handlers = new ZLinkInstanceSpotHandlerRegistrySurface(this);

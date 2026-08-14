@@ -4,6 +4,7 @@
 #include <zlink/Contracts/Core/routing_id.hpp>
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -113,6 +114,7 @@ struct inbound_message_context_t
     message_context_t message;
     std::string topic;
     std::optional<std::string> source;
+    std::function<void ()> before_application_handler;
 
     publish_message_context_t as_publish_context () const
     {

@@ -23,6 +23,10 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
         ZLinkBackendActorJoinRequest joinRequest,
         CancellationToken cancellationToken)
     {
+        using var applicationAdmission =
+            joinRequest.ApplicationJobAdmission is { } admission
+                ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+                : null;
         var payload = DecodeJoinPayload(joinRequest);
         using var currentFlow = ZLinkFlowContext.Enter(
             payload.FlowId,

@@ -17,12 +17,17 @@ route_handler_invoker_t::invoke_send (const route_handler_registry_t &handlers,
                                       service_provider_t &services,
                                       serializer_registry_t &serializers,
                                       const zlink::message_t &message,
-                                      const framework::route_message_context_t &context) const
+                                      const framework::route_message_context_t &context,
+                                      std::function<void ()>
+                                        before_application_handler) const
 {
     return runtime::handler_coroutine_executor ().submit<void> (
       [&handlers, &filters, dispatch_kind, router_channel_id = std::string (router_channel_id),
        packet_name = std::string (packet_name), &services, &serializers, message,
-       context] () mutable -> boost::asio::awaitable<result_t<void>> {
+       context,
+       before_application_handler =
+         std::move (before_application_handler)] () mutable
+        -> boost::asio::awaitable<result_t<void>> {
           try {
               auto invocation_scope = service_scope_t::create (
                 services, service_scope_kind_t::handler_invocation);
@@ -31,7 +36,11 @@ route_handler_invoker_t::invoke_send (const route_handler_registry_t &handlers,
                 filters.invoke_filters_async (
                   dispatch_kind, invocation_services, serializers, context,
                   [&handlers, router_channel_id, packet_name, &invocation_services,
-                   &serializers, message, context] {
+                   &serializers, message, context,
+                   before_application_handler] {
+                      if (before_application_handler) {
+                          before_application_handler ();
+                      }
                       return handlers.invoke_async (
                         router_channel_id, runtime::messaging::message_kind_t::command,
                         packet_name, invocation_services, serializers, message, context);
@@ -60,12 +69,17 @@ route_handler_invoker_t::invoke_request (const route_handler_registry_t &handler
                                          service_provider_t &services,
                                          serializer_registry_t &serializers,
                                          const zlink::message_t &message,
-                                         const framework::route_message_context_t &context) const
+                                         const framework::route_message_context_t &context,
+                                         std::function<void ()>
+                                           before_application_handler) const
 {
     return runtime::handler_coroutine_executor ().submit<zlink::message_t> (
       [&handlers, &filters, dispatch_kind, router_channel_id = std::string (router_channel_id),
        packet_name = std::string (packet_name), &services, &serializers, message,
-       context] () mutable -> boost::asio::awaitable<result_t<zlink::message_t>> {
+       context,
+       before_application_handler =
+         std::move (before_application_handler)] () mutable
+        -> boost::asio::awaitable<result_t<zlink::message_t>> {
           try {
               auto invocation_scope = service_scope_t::create (
                 services, service_scope_kind_t::handler_invocation);
@@ -74,7 +88,11 @@ route_handler_invoker_t::invoke_request (const route_handler_registry_t &handler
                 filters.invoke_filters_async (
                   dispatch_kind, invocation_services, serializers, context,
                   [&handlers, router_channel_id, packet_name, &invocation_services,
-                   &serializers, message, context] {
+                   &serializers, message, context,
+                   before_application_handler] {
+                      if (before_application_handler) {
+                          before_application_handler ();
+                      }
                       return handlers.invoke_async (
                         router_channel_id, runtime::messaging::message_kind_t::request,
                         packet_name, invocation_services, serializers, message, context);

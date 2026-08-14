@@ -256,11 +256,9 @@ public sealed class RelocationStartupRecoveryTests
             new ZLinkRelocationPublicationRequest(
                 actor.AuthorityKey,
                 $"v-{actor.ObjectGeneration}",
-                ZLinkAuthorityGenerationTransition.Preserve,
                 "target-owner",
                 7,
                 new byte[] { 9 },
-                null,
                 envelope),
             prepared);
 
@@ -433,7 +431,6 @@ public sealed class RelocationStartupRecoveryTests
             targetOwnedFields ? 6UL : 0,
             targetOwnedFields ? "target-owner" : string.Empty,
             targetOwnedFields ? 4UL : 0,
-            targetOwnedFields ? 1UL : 0,
             "source-owner",
             3,
             RoutingId.From("startup-source").ToHex(),
@@ -441,8 +438,7 @@ public sealed class RelocationStartupRecoveryTests
             phase,
             reference,
             checksum,
-            7,
-            0);
+            7);
     }
 
     private static ZLinkAuthorityEntry CanonicalEntry(

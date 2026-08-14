@@ -6,6 +6,10 @@ const framework = require('../../../packages/framework/dist/internal');
 const {
   ZLinkSubmitStatus
 } = require('../../../packages/framework/dist/runtime/messaging/submission-result');
+const {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} = require('../../../packages/framework/dist/runtime/host/application-job-queue');
 
 async function waitFor(condition, label) {
   const deadline = Date.now() + 2000;
@@ -22,7 +26,10 @@ async function main() {
   const meshName = `framework-publish-commit-${process.pid}`;
   const node = backendFactory.createMeshAdapter().createMeshNode(context, {
     meshName,
-    routingId: meshName
+    routingId: meshName,
+    applicationJobQueue: new ApplicationJobQueue(
+      resolveApplicationJobQueueConfiguration()
+    )
   });
   node.setBind(`inproc://${meshName}`);
   node.addChannelName('events');

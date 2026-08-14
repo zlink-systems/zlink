@@ -276,9 +276,9 @@ void to_json (nlohmann::json &json, const spot_actor_commit_route_request_t &val
                           {"targetOwnerId", value.target_owner_id},
                           {"targetOwnerLeaseGeneration",
                            value.target_owner_lease_generation},
-                          {"relocationCapacityFence",
-                           value.relocation_capacity_fence},
                           {"sourceSpotId", value.source_spot_id},
+                          {"sourceSpotGeneration",
+                           value.source_spot_generation},
                           {"boundSessionNodeRid", value.bound_session_node_rid},
                           {"boundSessionRid", value.bound_session_rid},
                           {"sessionRelocationRoute",
@@ -290,13 +290,9 @@ void to_json (nlohmann::json &json, const spot_actor_commit_route_request_t &val
                           {"coreTransferIdLow", value.core_transfer_id_low},
                           {"coreMembershipEpoch", value.core_membership_epoch},
                           {"coreFinalSequence", value.core_final_sequence},
-                          {"coreReserveMessageCount", value.core_reserve_message_count},
-                          {"coreReserveByteCount", value.core_reserve_byte_count},
                           {"finalizeTimeoutMs", value.finalize_timeout_ms},
                           {"prepare", value.prepare},
-                          {"finalize", value.finalize},
-                          {"deferCompletion", value.defer_completion},
-                          {"completionOnly", value.completion_only}};
+                          {"finalize", value.finalize}};
 }
 
 void from_json (const nlohmann::json &json, spot_actor_commit_route_request_t &value)
@@ -322,9 +318,9 @@ void from_json (const nlohmann::json &json, spot_actor_commit_route_request_t &v
     value.target_owner_id = json.value ("targetOwnerId", "");
     value.target_owner_lease_generation =
       json.value ("targetOwnerLeaseGeneration", std::uint64_t{0});
-    value.relocation_capacity_fence =
-      json.value ("relocationCapacityFence", "");
     value.source_spot_id = json.value ("sourceSpotId", "");
+    value.source_spot_generation =
+      json.value ("sourceSpotGeneration", std::uint64_t{0});
     value.bound_session_node_rid = json.value ("boundSessionNodeRid", "");
     value.bound_session_rid = json.value ("boundSessionRid", "");
     value.session_relocation_route =
@@ -345,16 +341,49 @@ void from_json (const nlohmann::json &json, spot_actor_commit_route_request_t &v
     value.core_transfer_id_low = json.value ("coreTransferIdLow", std::uint64_t{0});
     value.core_membership_epoch = json.value ("coreMembershipEpoch", std::uint64_t{0});
     value.core_final_sequence = json.value ("coreFinalSequence", std::uint64_t{0});
-    value.core_reserve_message_count =
-      json.value ("coreReserveMessageCount", std::uint64_t{0});
-    value.core_reserve_byte_count =
-      json.value ("coreReserveByteCount", std::uint64_t{0});
     value.finalize_timeout_ms =
       json.value ("finalizeTimeoutMs", std::uint64_t{0});
     value.prepare = json.value ("prepare", false);
     value.finalize = json.value ("finalize", false);
-    value.defer_completion = json.value ("deferCompletion", false);
-    value.completion_only = json.value ("completionOnly", false);
+}
+
+void to_json (nlohmann::json &json, const spot_actor_leave_route_command_t &value)
+{
+    json = nlohmann::json{
+      {"transferId", value.transfer_id},
+      {"actorNodeRid", value.actor_node_rid},
+      {"actorType", value.actor_type},
+      {"actorId", value.actor_id},
+      {"actorGeneration", value.actor_generation},
+      {"sourceSpotId", value.source_spot_id},
+      {"sourceSpotGeneration", value.source_spot_generation},
+      {"targetSpotId", value.target_spot_id},
+      {"targetNodeRid", value.target_node_rid},
+      {"targetNodeGeneration", value.target_node_generation},
+      {"targetAuthorityOwnerGeneration",
+       value.target_authority_owner_generation},
+      {"targetOwnerLeaseGeneration", value.target_owner_lease_generation}};
+}
+
+void from_json (const nlohmann::json &json,
+                spot_actor_leave_route_command_t &value)
+{
+    value.transfer_id = json.at ("transferId").get<std::string> ();
+    value.actor_node_rid = json.at ("actorNodeRid").get<std::string> ();
+    value.actor_type = json.at ("actorType").get<std::string> ();
+    value.actor_id = json.at ("actorId").get<std::string> ();
+    value.actor_generation = json.at ("actorGeneration").get<std::uint64_t> ();
+    value.source_spot_id = json.at ("sourceSpotId").get<std::string> ();
+    value.source_spot_generation =
+      json.at ("sourceSpotGeneration").get<std::uint64_t> ();
+    value.target_spot_id = json.at ("targetSpotId").get<std::string> ();
+    value.target_node_rid = json.at ("targetNodeRid").get<std::string> ();
+    value.target_node_generation =
+      json.at ("targetNodeGeneration").get<std::uint64_t> ();
+    value.target_authority_owner_generation =
+      json.at ("targetAuthorityOwnerGeneration").get<std::uint64_t> ();
+    value.target_owner_lease_generation =
+      json.at ("targetOwnerLeaseGeneration").get<std::uint64_t> ();
 }
 
 void to_json (nlohmann::json &json, const spot_actor_join_route_request_t &value)

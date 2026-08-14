@@ -392,17 +392,6 @@ public final class ChannelRegistration {
      * This method is called during registration validation; it is not a
      * runtime socket mutation API.
      */
-    public void validateApplicationHwm(long applicationHwmBytes) {
-        if (applicationHwmBytes == 0 || !clientServer.serverEnabled) {
-            return;
-        }
-        if (serverSocketOptions.maxMessageSize() <= 0) {
-            throw new ZLinkConfigurationException(
-                "Application HWM requires a finite positive MaxMessageSize on channel: "
-                    + name);
-        }
-    }
-
     private void validateClientServer(
         boolean locationAutoConnectEnabled,
         ZLinkScannedHandlerCatalog handlerCatalog) {

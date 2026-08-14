@@ -98,10 +98,6 @@ test('Node-direct operations classify Object Client targets as NotFound', async 
   const packet = typedPacket('NodeProbe', { value: 1 });
 
   assert.equal(
-    transport.trySubmit('mesh', 'client-node', undefined, packet).status,
-    ZLinkSubmitStatus.TargetNotFound
-  );
-  assert.equal(
     (await transport.submit(
       'mesh',
       'client-node',
@@ -127,8 +123,8 @@ test('Node-direct operations classify Object Client targets as NotFound', async 
 function fakeSpotRouteBridge() {
   return {
     attachRouterChannel() {},
-    send() { return { message() { return this; }, submit() { return true; } }; },
-    request() { return { message() { return this; }, timeout() { return this; }, submit() { return true; } }; },
+    send() { return { message() { return this; }, async submit() {} }; },
+    request() { return { message() { return this; }, timeout() { return this; }, async submit() { return []; } }; },
     handleRouterReceived() { return false; },
     async dispose() {}
   };
@@ -857,9 +853,7 @@ test('ZLinkDealerChannelClientTransport maps native request connectivity failure
   const transport = new framework.ZLinkDealerChannelClientTransport({
     request() {
       return createMultipartRequestOperation({
-        submit() {
-          throw nativeError;
-        }
+        async submit() { throw nativeError; }
       });
     }
   });
@@ -917,6 +911,7 @@ test('ZLinkChannelClient sends through public dealer/router binding sockets', as
       .sendToChannel('api', typedPacket('Greeting', 'hello'))
       .metadata('trace-id', 'send-1')
       .submit();
+    assert.equal(await submit, undefined);
 
     const received = new zlink.Received();
     try {
@@ -927,7 +922,6 @@ test('ZLinkChannelClient sends through public dealer/router binding sockets', as
       assert.equal(envelope.header.messageName, 'Greeting');
       assert.deepEqual(envelope.header.metadata, { 'trace-id': 'send-1' });
       assert.equal(envelope.body, 'hello');
-      assert.equal(await submit, undefined);
     } finally {
       received.close();
     }
@@ -998,13 +992,13 @@ test('ZLinkChannelClient request/reply round-trips through public binding socket
   }
 });
 
-test('route raw SPOT requests through SpotNode router are serialized per route channel', async () => {
+test('route raw SPOT requests await independent binding request promises', async () => {
   let active = 0;
   let maxActive = 0;
   const calls = [];
   const releases = [];
   const fakeSpot = {
-    requestToSpot(targetNodeRid, targetSpot, request, callback) {
+    requestToSpot(targetNodeRid, targetSpot, request) {
       active += 1;
       maxActive = Math.max(maxActive, active);
       calls.push({
@@ -1012,11 +1006,11 @@ test('route raw SPOT requests through SpotNode router are serialized per route c
         spotId: targetSpot,
         request: request.data().toString()
       });
-      releases.push(() => {
+      const sequence = calls.length;
+      return new Promise((resolve) => releases.push(() => {
         active -= 1;
-        callback(0, [zlink.Message.from(Buffer.from(`reply-${calls.length}`))]);
-      });
-      return true;
+        resolve([zlink.Message.from(Buffer.from(`reply-${sequence}`))]);
+      }));
     }
   };
   const registration = framework.createFrameworkRegistration({
@@ -1057,11 +1051,10 @@ test('route raw SPOT requests through SpotNode router are serialized per route c
     1000
   );
 
-  await waitUntil(() => calls.length === 1);
-  assert.equal(active, 1);
+  await waitUntil(() => calls.length === 2);
+  assert.equal(active, 2);
   assert.equal(calls[0].request, 'first');
   releases.shift()();
-  await waitUntil(() => calls.length === 2);
   assert.equal(active, 1);
   assert.equal(calls[1].request, 'second');
   releases.shift()();
@@ -1071,17 +1064,16 @@ test('route raw SPOT requests through SpotNode router are serialized per route c
   assert.equal(secondReply[0].data().toString(), 'reply-2');
   firstReply[0].close();
   secondReply[0].close();
-  assert.equal(maxActive, 1);
+  assert.equal(maxActive, 2);
 });
 
-test('aborted raw SPOT request retains the physical route slot until its late reply arrives', async () => {
+test('aborted raw SPOT request closes its late binding reply', async () => {
   const calls = [];
   const releases = [];
   const fakeSpot = {
-    requestToSpot(_targetNodeRid, _targetSpot, request, callback) {
+    requestToSpot(_targetNodeRid, _targetSpot, request) {
       calls.push(request.data().toString());
-      releases.push(callback);
-      return true;
+      return new Promise((resolve) => releases.push(resolve));
     }
   };
   const manager = new framework.ZLinkChannelRuntimeManager(
@@ -1112,31 +1104,30 @@ test('aborted raw SPOT request retains the physical route slot until its late re
     1000
   );
 
-  await waitUntil(() => calls.length === 1);
+  await waitUntil(() => calls.length === 2);
   abort.abort();
   await assert.rejects(first, /aborted/i);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(calls, ['first']);
+  assert.deepEqual(calls, ['first', 'second']);
 
   let lateReplyClosed = 0;
   const lateReply = { close() { lateReplyClosed++; } };
-  releases.shift()(0, [lateReply]);
-  await waitUntil(() => calls.length === 2);
+  releases.shift()([lateReply]);
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(lateReplyClosed, 1);
-  releases.shift()(0, [zlink.Message.from(Buffer.from('second-reply'))]);
+  releases.shift()([zlink.Message.from(Buffer.from('second-reply'))]);
   const secondReply = await second;
   assert.equal(secondReply[0].data().toString(), 'second-reply');
   secondReply[0].close();
 });
 
-test('timed-out raw SPOT request closes its late reply before releasing the route slot', async () => {
+test('raw SPOT request timeout is delegated to the binding request promise', async () => {
   const calls = [];
   const releases = [];
   const fakeSpot = {
-    requestToSpot(_targetNodeRid, _targetSpot, request, callback) {
+    requestToSpot(_targetNodeRid, _targetSpot, request) {
       calls.push(request.data().toString());
-      releases.push(callback);
-      return true;
+      return new Promise((resolve) => releases.push(resolve));
     }
   };
   const manager = new framework.ZLinkChannelRuntimeManager(
@@ -1158,15 +1149,11 @@ test('timed-out raw SPOT request closes its late reply before releasing the rout
   const first = manager.routeRequestRawToSpot(address, zlink.Message.from(Buffer.from('first')));
   const second = manager.routeRequestRawToSpot(address, zlink.Message.from(Buffer.from('second')), 1000);
 
-  await assert.rejects(first, /not ready|timed out/i);
-  assert.deepEqual(calls, ['first']);
-  let lateClosed = 0;
-  releases.shift()(0, [{ close() { lateClosed++; } }]);
   await waitUntil(() => calls.length === 2);
-  assert.equal(lateClosed, 1);
-  releases.shift()(0, [zlink.Message.from(Buffer.from('second-reply'))]);
-  const reply = await second;
-  reply[0].close();
+  releases.shift()([zlink.Message.from(Buffer.from('first-reply'))]);
+  releases.shift()([zlink.Message.from(Buffer.from('second-reply'))]);
+  const replies = await Promise.all([first, second]);
+  replies.flat().forEach(part => part.close());
 });
 
 test('SpotNode router is not classified as packet route channel', () => {
@@ -1195,16 +1182,12 @@ test('SpotNode router is not classified as packet route channel', () => {
   assert.equal(manager.canRoutePacketChannel('play-node'), false);
 });
 
-test('route raw SPOT request through SpotNode router retries until route is ready', async () => {
+test('route raw SPOT request awaits the binding request once', async () => {
   let attempts = 0;
   const fakeSpot = {
-    requestToSpot(_targetNodeRid, _targetSpot, _request, callback) {
+    async requestToSpot() {
       attempts += 1;
-      if (attempts === 1) {
-        return false;
-      }
-      callback(0, [zlink.Message.from(Buffer.from('ready-reply'))]);
-      return true;
+      return [zlink.Message.from(Buffer.from('ready-reply'))];
     }
   };
   const manager = new framework.ZLinkChannelRuntimeManager(
@@ -1239,19 +1222,17 @@ test('route raw SPOT request through SpotNode router retries until route is read
     1000
   );
 
-  assert.equal(attempts, 2);
+  assert.equal(attempts, 1);
   assert.equal(reply[0].data().toString(), 'ready-reply');
   reply[0].close();
 });
 
-test('route raw SPOT request from a user spot waits for replacement route readiness', async () => {
+test('route raw SPOT request from a user spot awaits the binding request once', async () => {
   let attempts = 0;
   const sourceSpot = {
-    requestToSpot(_targetNodeRid, _targetSpot, _request, callback) {
+    async requestToSpot() {
       attempts += 1;
-      if (attempts === 1) return false;
-      callback(0, [zlink.Message.from(Buffer.from('replacement-ready'))]);
-      return true;
+      return [zlink.Message.from(Buffer.from('replacement-ready'))];
     }
   };
   const manager = new framework.ZLinkChannelRuntimeManager(
@@ -1272,12 +1253,12 @@ test('route raw SPOT request from a user spot waits for replacement route readin
     1000
   );
 
-  assert.equal(attempts, 2);
+  assert.equal(attempts, 1);
   assert.equal(reply[0].data().toString(), 'replacement-ready');
   reply[0].close();
 });
 
-test('route raw SPOT request stops SpotNode readiness retries when aborted', async () => {
+test('route raw SPOT request aborts its wait without resubmitting', async () => {
   let attempts = 0;
   const manager = new framework.ZLinkChannelRuntimeManager(
     framework.createFrameworkRegistration({
@@ -1295,7 +1276,7 @@ test('route raw SPOT request stops SpotNode readiness retries when aborted', asy
       return {
         requestToSpot() {
           attempts += 1;
-          return false;
+          return new Promise(() => undefined);
         }
       };
     }
@@ -1321,9 +1302,8 @@ test('route raw SPOT request stops SpotNode readiness retries when aborted', asy
 test('source Spot raw request aborts after native submission and closes a late reply', async () => {
   let complete;
   const sourceSpot = {
-    requestToSpot(_targetNodeRid, _spotId, _request, callback) {
-      complete = callback;
-      return true;
+    requestToSpot() {
+      return new Promise((resolve) => { complete = resolve; });
     }
   };
   const manager = new framework.ZLinkChannelRuntimeManager(
@@ -1343,12 +1323,13 @@ test('source Spot raw request aborts after native submission and closes a late r
   await assert.rejects(pending, /The operation was aborted/);
   let closeCount = 0;
   const lateReply = { close() { closeCount += 1; } };
-  complete(0, [lateReply]);
+  complete([lateReply]);
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(closeCount, 1);
   request.close();
 });
 
-test('route channel request rejects when native router does not accept submit', async () => {
+test('route channel request propagates binding route rejection', async () => {
   const router = fakeRouteRouter();
   const manager = new framework.ZLinkChannelRuntimeManager(
     framework.createFrameworkRegistration({
@@ -1364,12 +1345,12 @@ test('route channel request rejects when native router does not accept submit', 
 
   await assert.rejects(
     () => manager.routeRequest('room.route', 'play-node', 'EnsurePlayerActorReq', { actorId: 'player-1' }, 100),
-    /Route channel 'room\.route' is not ready for request/
+    /Route channel is not connected/
   );
   assert.equal(router.requestAttempts, 1);
 });
 
-test('route channel request uses call timeout after native router accepts submit', async () => {
+test('route channel request delegates its timeout to the binding Promise', async () => {
   const router = fakeRouteRouter({ acceptWithoutReply: true });
   const manager = new framework.ZLinkChannelRuntimeManager(
     framework.createFrameworkRegistration({
@@ -1383,15 +1364,13 @@ test('route channel request uses call timeout after native router accepts submit
     fakeContext()
   );
 
-  const startedAt = Date.now();
   await assert.rejects(
-    () => manager.routeRequest('room.route', 'play-node', 'EnsurePlayerActorReq', { actorId: 'player-1' }, 30),
-    (error) => error instanceof framework.ZLinkFrameworkException
-      && error.kind === framework.ZLinkFrameworkErrorKind.InternalFailure
-      && /ZLink async submit timed out/.test(error.message)
+    manager.routeRequest(
+      'room.route', 'play-node', 'EnsurePlayerActorReq', { actorId: 'player-1' }, 30
+    ),
+    /binding request timed out/
   );
   assert.equal(router.requestAttempts, 1);
-  assert.ok(Date.now() - startedAt < 1000);
 });
 
 test('route channel with SPOT acceptance starts one route receive loop for shared router frames', async () => {
@@ -1439,7 +1418,7 @@ test('route channel with SPOT acceptance starts one route receive loop for share
   await manager.dispose();
 });
 
-test('route bridge raw request completes when shared route receive loop observes raw reply', async () => {
+test('route bridge raw request awaits its binding Promise reply', async () => {
   const router = fakeRouteRouter();
   const bridge = {
     attachRouterChannel() {},
@@ -1451,8 +1430,8 @@ test('route bridge raw request completes when shared route receive loop observes
         timeout() {
           return this;
         },
-        submit() {
-          return true;
+        async submit() {
+          return [zlink.Message.from(Buffer.from(JSON.stringify({ ok: true, response: { value: 'reply' } })))];
         }
       };
     },
@@ -1509,17 +1488,6 @@ test('route bridge raw request completes when shared route receive loop observes
     spotId: 'room-1'
   }, zlink.Message.from(Buffer.from('request')), 100);
   await new Promise((resolve) => setImmediate(resolve));
-  router.recvQueue.push({
-    parts: [zlink.Message.from(Buffer.from(JSON.stringify({ ok: true, response: { value: 'reply' } })))],
-    routingId: 'play-node',
-    spotId: null,
-    requestSeq: null,
-    close() {
-      this.parts.forEach((part) => part.close());
-    }
-  });
-  await new Promise((resolve) => setImmediate(resolve));
-
   const reply = await request;
   assert.deepEqual(JSON.parse(reply[0].data().toString()), { ok: true, response: { value: 'reply' } });
   reply[0].close();
@@ -1527,14 +1495,14 @@ test('route bridge raw request completes when shared route receive loop observes
   await manager.dispose();
 });
 
-test('channel runtime dispose rejects pending raw Spot route bridge requests', async () => {
+test('channel runtime disposal does not add a Framework request owner around the binding Promise', async () => {
   const bridge = {
     attachRouterChannel() {},
     request() {
       return {
         message() { return this; },
         timeout() { return this; },
-        submit() { return true; }
+        submit() { return new Promise(() => undefined); }
       };
     },
     handleRouterReceived() { return false; },
@@ -1564,15 +1532,13 @@ test('channel runtime dispose rejects pending raw Spot route bridge requests', a
   }, request, undefined);
 
   await new Promise((resolve) => setImmediate(resolve));
-  const rejected = assert.rejects(pending, /Channel runtime disposed/);
   await manager.dispose();
-  await rejected;
+  void pending.catch(() => undefined);
   request.close();
 });
 
-test('route bridge queued sends keep each target on its submitted operation', async () => {
+test('route bridge sends await each binding Promise directly', async () => {
   const router = fakeRouteRouter();
-  let bridgeWritable = false;
   const submittedTargets = [];
   const bridge = {
     attachRouterChannel() {},
@@ -1584,12 +1550,8 @@ test('route bridge queued sends keep each target on its submitted operation', as
         flags() {
           return this;
         },
-        submit() {
-          if (!bridgeWritable) {
-            return false;
-          }
+        async submit() {
           submittedTargets.push(String(targetNodeRid));
-          return true;
         }
       };
     },
@@ -1648,9 +1610,6 @@ test('route bridge queued sends keep each target on its submitted operation', as
     spotId: 'session-node-b'
   }, 'Notify', { value: 2 });
 
-  await new Promise((resolve) => setImmediate(resolve));
-  bridgeWritable = true;
-  router.ready();
   await Promise.all([first, second]);
 
   assert.deepEqual(submittedTargets, ['session-node-a', 'session-node-b']);
@@ -1677,10 +1636,9 @@ test('route raw SPOT request uses route bridge before SpotNode router fallback',
           call.timeoutMs = timeoutMs;
           return this;
         },
-        submit(callback) {
+        async submit() {
           call.submitted = true;
-          callback(0, [zlink.Message.from(Buffer.from('bridge-reply'))]);
-          return true;
+          return [zlink.Message.from(Buffer.from('bridge-reply'))];
         }
       };
     },
@@ -1786,10 +1744,9 @@ test('route raw SPOT request prefers the named Spot mesh when route and Spot mes
     },
     entrySpot() {
       return {
-        requestToSpot(_targetNodeRid, _spotId, _request, callback) {
+        async requestToSpot() {
           spotRequests += 1;
-          callback(0, [zlink.Message.from(Buffer.from('spot-reply'))]);
-          return true;
+          return [zlink.Message.from(Buffer.from('spot-reply'))];
         }
       };
     }
@@ -3858,15 +3815,8 @@ test('DERR-006 ZLinkChannelRequestDispatcher replies error and reports provider 
   assert.deepEqual(afterEnvelope.body, { value: 'known:after-decode-error' });
 });
 
-test('ZLinkChannelRequestDispatcher waits for send-ready before completing backpressured error replies', async () => {
-  let readyHandler = () => undefined;
+test('ZLinkChannelRequestDispatcher submits error replies directly to the completion lane', async () => {
   const replies = [];
-  const replySubmitter = new framework.ZLinkAsyncSubmitter(
-    (handler) => {
-      readyHandler = handler;
-    },
-    { timeoutMs: 1000 }
-  );
   const dispatcher = new framework.ZLinkChannelRequestDispatcher({
     channelName: 'api',
     dispatchErrors: noDispatchErrorReporter(),
@@ -3877,21 +3827,21 @@ test('ZLinkChannelRequestDispatcher waits for send-ready before completing backp
         }
       }]
     ]),
-    sendHandlers: new Map(),
-    replySubmitter
+    sendHandlers: new Map()
   });
   const router = {
-    writable: false,
     attempts: 0,
-    reply() {
-      return captureBackpressuredMultipart(replies, () => {
-        this.attempts += 1;
-        return this.writable;
-      });
+    routingId: undefined,
+    requestSeq: undefined,
+    reply(routingId, requestSeq) {
+      this.attempts += 1;
+      this.routingId = routingId;
+      this.requestSeq = requestSeq;
+      return captureMultipart(replies);
     }
   };
 
-  const dispatchPromise = dispatcher.dispatch({
+  await dispatcher.dispatch({
     parts: encodeDotnetEnvelope({
       kind: 1,
       channelName: 'api',
@@ -3907,15 +3857,9 @@ test('ZLinkChannelRequestDispatcher waits for send-ready before completing backp
     requestSeq: 17n
   }, router);
 
-  await waitUntil(() => router.attempts === 1);
   assert.equal(router.attempts, 1);
-  assert.equal(replies.length, 0);
-
-  router.writable = true;
-  readyHandler();
-  await dispatchPromise;
-
-  assert.equal(router.attempts, 2);
+  assert.equal(router.routingId, 'client-1');
+  assert.equal(router.requestSeq, 17n);
   assert.equal(replies.length, 2);
   const replyEnvelope = decodeDotnetEnvelope(replies);
   assert.equal(replyEnvelope.header.kind, 5);
@@ -3923,418 +3867,18 @@ test('ZLinkChannelRequestDispatcher waits for send-ready before completing backp
   assert.match(replyEnvelope.header.errorMessage, /deterministic handler failure/);
 });
 
-test('ZLinkAsyncSubmitter discards queued ownership exactly once when aborted before submit', async () => {
-  const controller = new AbortController();
-  let readyHandler = () => undefined;
-  let discarded = 0;
-  const submitter = new framework.ZLinkAsyncSubmitter((handler) => { readyHandler = handler; });
-  const pending = submitter.submitCommand(
-    () => false,
-    controller.signal,
-    () => { discarded++; }
-  );
-
-  controller.abort();
-  await assert.rejects(() => pending, /aborted/i);
-  readyHandler();
-  submitter.dispose();
-  assert.equal(discarded, 1);
-});
-
-test('ZLinkAsyncSubmitter one-way submission waits for full local queue capacity', async () => {
-  const failures = [];
-  const submitter = new framework.ZLinkAsyncSubmitter(() => undefined, {
-    capacity: 1,
-    timeoutMs: 5,
-    onCommandFailure: (error) => failures.push(error)
-  });
-  submitter.submitCommandOneWay(() => false);
-  submitter.submitCommandOneWay(() => false);
-
-  assert.equal(failures.length, 0);
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.equal(failures.length, 2);
-  assert.match(failures[0].message, /timed out/i);
-  assert.match(failures[1].message, /timed out/i);
-  submitter.dispose();
-});
-
-test('ZLinkAsyncSubmitter one-way submission preserves immediate transport errors', () => {
-  const submitter = new framework.ZLinkAsyncSubmitter(() => undefined);
-
-  assert.throws(
-    () => submitter.submitCommandOneWay(() => { throw new Error('immediate transport failure'); }),
-    /immediate transport failure/
-  );
-  submitter.dispose();
-});
-
-test('ZLinkAsyncSubmitter reports one-way failures that happen after queue acceptance', async () => {
-  const controller = new AbortController();
-  const failures = [];
-  const submitter = new framework.ZLinkAsyncSubmitter(() => undefined, {
-    onCommandFailure: (error) => failures.push(error)
-  });
-  submitter.submitCommandOneWay(() => false, controller.signal);
-
-  controller.abort();
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(failures.length, 1);
-  assert.match(failures[0].message, /aborted/i);
-  submitter.dispose();
-});
-
-test('ZLinkAsyncSubmitter does not discard an accepted synchronous rejection', async () => {
-  let discarded = 0;
-  const submitter = new framework.ZLinkAsyncSubmitter(() => undefined);
-  const pending = submitter.submitRequest(
-    (_resolve, reject) => {
-      reject(new Error('synchronous transport failure'));
-      return true;
-    },
-    undefined,
-    1000,
-    () => { discarded++; }
-  );
-
-  await assert.rejects(pending, /synchronous transport failure/);
-  assert.equal(discarded, 0);
-  submitter.dispose();
-});
-
-test('ZLinkAsyncSubmitter settles with both abort and discard failures', async () => {
-  const controller = new AbortController();
-  const submitter = new framework.ZLinkAsyncSubmitter(() => undefined);
-  const pending = submitter.submitCommand(
-    () => false,
-    controller.signal,
-    () => { throw new Error('discard failed'); }
-  );
-
-  controller.abort();
-  await assert.rejects(pending, (error) => {
-    assert.equal(error instanceof AggregateError, true);
-    assert.match(error.message, /discard failed/i);
-    assert.equal(error.errors.length, 2);
-    return true;
-  });
-  submitter.dispose();
-});
-
-test('ZLinkAsyncSubmitter waits for bounded executor capacity instead of rejecting immediately', async () => {
-  let ready = () => undefined;
-  const submitter = new framework.ZLinkAsyncSubmitter(
-    (handler) => { ready = handler; },
-    { capacity: 1, timeoutMs: 1000 }
-  );
-  const firstController = new AbortController();
-  let firstAttempts = 0;
-  const first = submitter.submitCommand(() => {
-    firstAttempts += 1;
-    return false;
-  }, firstController.signal);
-
-  let acceptedAttempts = 0;
-  await submitter.submitCommand(() => {
-    acceptedAttempts += 1;
-    return true;
-  });
-  assert.equal(firstAttempts, 1);
-  assert.equal(acceptedAttempts, 1);
-
-  let rejectedAttempts = 0;
-  let thirdSettled = false;
-  const third = submitter.submitCommand(() => ++rejectedAttempts >= 2);
-  void third.finally(() => { thirdSettled = true; });
-  assert.equal(rejectedAttempts, 1);
-  await Promise.resolve();
-  assert.equal(thirdSettled, false);
-
-  firstController.abort();
-  await assert.rejects(first, (error) => error?.name === 'AbortError');
-  ready();
-  await third;
-  assert.equal(rejectedAttempts, 2);
-  assert.equal(firstAttempts, 1);
-  submitter.dispose();
-});
-
-test('ZLinkAsyncSubmitter retries at most one queued command for each ready signal', async () => {
-  let ready = () => undefined;
-  const submitter = new framework.ZLinkAsyncSubmitter(
-    (handler) => { ready = handler; },
-    { capacity: 2, timeoutMs: 1000 }
-  );
-  let firstAttempts = 0;
-  let secondAttempts = 0;
-  const first = submitter.submitCommand(() => ++firstAttempts >= 2);
-  const second = submitter.submitCommand(() => ++secondAttempts >= 2);
-
-  assert.deepEqual([firstAttempts, secondAttempts], [1, 1]);
-  await Promise.resolve();
-  assert.deepEqual([firstAttempts, secondAttempts], [1, 1]);
-
-  ready();
-  await first;
-  assert.deepEqual([firstAttempts, secondAttempts], [2, 1]);
-  ready();
-  await second;
-  assert.deepEqual([firstAttempts, secondAttempts], [2, 2]);
-  submitter.dispose();
-});
-
-test('ZLinkAsyncSubmitter preserves a ready edge raised during the first backpressured attempt', async () => {
-  let ready = () => undefined;
-  const submitter = new framework.ZLinkAsyncSubmitter(
-    (handler) => { ready = handler; },
-    { capacity: 1, timeoutMs: 1000 }
-  );
-  let attempts = 0;
-  const submitted = submitter.submitCommand(() => {
-    attempts += 1;
-    if (attempts === 1) {
-      ready();
-      return false;
-    }
-    return true;
-  });
-
-  await submitted;
-  assert.equal(attempts, 2);
-  submitter.dispose();
-});
-
-test('ZLinkAsyncSubmitter disposal races release each pending payload exactly once', async () => {
-  for (let iteration = 0; iteration < 100; iteration += 1) {
-    let ready = () => undefined;
-    let attempts = 0;
-    let discarded = 0;
-    const controller = new AbortController();
-    const submitter = new framework.ZLinkAsyncSubmitter(
-      (handler) => { ready = handler; },
-      { capacity: 1, timeoutMs: 1000 }
-    );
-    const pending = submitter.submitCommand(
-      () => {
-        attempts += 1;
-        return false;
-      },
-      controller.signal,
-      () => { discarded += 1; }
-    );
-
-    if (iteration % 2 === 0) {
-      controller.abort();
-      submitter.dispose();
-    } else {
-      submitter.dispose();
-      controller.abort();
-    }
-    await assert.rejects(pending);
-    ready();
-    submitter.dispose();
-
-    assert.equal(attempts, 1);
-    assert.equal(discarded, 1);
-  }
-});
-
-test('ZLinkAsyncSubmitter request completion does not retry another request without ready', async () => {
-  let ready = () => undefined;
-  const submitter = new framework.ZLinkAsyncSubmitter(
-    (handler) => { ready = handler; },
-    { capacity: 2, timeoutMs: 1000 }
-  );
-  let completeFirst;
-  let firstAttempts = 0;
-  const first = submitter.submitRequest((resolve) => {
-    firstAttempts += 1;
-    completeFirst = resolve;
-    return true;
-  });
-  let secondAttempts = 0;
-  const second = submitter.submitRequest((resolve) => {
-    secondAttempts += 1;
-    resolve('second');
-    return true;
-  });
-
-  completeFirst('first');
-  assert.equal(await first, 'first');
-  await Promise.resolve();
-  assert.equal(secondAttempts, 0);
-  ready();
-  assert.equal(await second, 'second');
-  assert.deepEqual([firstAttempts, secondAttempts], [1, 1]);
-  submitter.dispose();
-});
-
-test('ZLinkAsyncSubmitter terminal cleanup restores waiter capacity without late replay', async () => {
-  let ready = () => undefined;
-  const submitter = new framework.ZLinkAsyncSubmitter(
-    (handler) => { ready = handler; },
-    { capacity: 1, timeoutMs: 5 }
-  );
-  let timedOutAttempts = 0;
-  const timedOut = submitter.submitCommand(() => {
-    timedOutAttempts += 1;
-    return false;
-  });
-  await assert.rejects(timedOut, /timed out/);
-
-  let replacementAttempts = 0;
-  const replacement = submitter.submitCommand(() => ++replacementAttempts >= 2);
-  assert.equal(replacementAttempts, 1);
-  ready();
-  await replacement;
-  assert.equal(replacementAttempts, 2);
-  assert.equal(timedOutAttempts, 1);
-
-  const cancelledController = new AbortController();
-  let cancelledAttempts = 0;
-  const cancelled = submitter.submitCommand(() => {
-    cancelledAttempts += 1;
-    return false;
-  }, cancelledController.signal);
-  cancelledController.abort();
-  await assert.rejects(cancelled, (error) => error?.name === 'AbortError');
-
-  let afterCancelAttempts = 0;
-  const afterCancel = submitter.submitCommand(() => ++afterCancelAttempts >= 2);
-  assert.equal(afterCancelAttempts, 1);
-  ready();
-  await afterCancel;
-  assert.equal(afterCancelAttempts, 2);
-  assert.equal(cancelledAttempts, 1);
-  submitter.dispose();
-});
-
-test('ZLinkAsyncSubmitter hard cap retains no closure or payload and recovers', async () => {
-  let ready = () => undefined;
-  let accepting = false;
-  let coreCalls = 0;
-  let discarded = 0;
-  const submitter = new framework.ZLinkAsyncSubmitter(
-    (handler) => { ready = handler; },
-    {
-      capacity: 1,
-      waiterCapacity: 1,
-      timeoutMs: 1_000
-    }
-  );
-  const attempt = () => {
-    coreCalls += 1;
-    return accepting;
-  };
-  const first = submitter.submitCommand(attempt);
-  const second = submitter.submitCommand(attempt);
-  const overflow = Array.from({ length: 5_000 }, () =>
-    submitter.submitCommand(
-      () => {
-        coreCalls += 1;
-        return true;
-      },
-      undefined,
-      () => { discarded += 1; }
-    )
-  );
-
-  assert.equal(coreCalls, 2);
-  assert.equal(submitter.queue.length, 1);
-  assert.equal(submitter.capacityWaiters.length, 1);
-  assert.equal(submitter.active.size, 2);
-  const overflowResults = await Promise.allSettled(overflow);
-  assert.equal(overflowResults.every((result) =>
-    result.status === 'rejected'
-      && result.reason instanceof framework.ZLinkFrameworkException
-      && result.reason.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
-  ), true);
-  assert.equal(discarded, 5_000);
-  assert.equal(coreCalls, 2);
-  assert.equal(submitter.active.size, 2);
-
-  accepting = true;
-  ready();
-  await first;
-  ready();
-  await second;
-  assert.equal(submitter.active.size, 0);
-  assert.equal(submitter.queue.length, 0);
-  assert.equal(submitter.capacityWaiters.length, 0);
-
-  await submitter.submitCommand(attempt);
-  assert.equal(coreCalls, 5);
-  submitter.dispose();
-});
-
-test('ZLinkAsyncSubmitter ready callback cannot admit work after its absolute deadline', async () => {
-  let ready = () => undefined;
-  let coreCalls = 0;
-  const submitter = new framework.ZLinkAsyncSubmitter(
-    (handler) => { ready = handler; },
-    {
-      capacity: 1,
-      waiterCapacity: 1,
-      timeoutMs: 5
-    }
-  );
-  const expired = submitter.submitCommand(() => {
-    coreCalls += 1;
-    return false;
-  });
-  const blockedUntil = Date.now() + 15;
-  while (Date.now() < blockedUntil) {
-    // Keep the turn active so SEND_READY wins the event-loop race with timer dispatch.
-  }
-  ready();
-
-  await assert.rejects(expired, (error) => {
-    assert.equal(error instanceof framework.ZLinkFrameworkException, true);
-    assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
-    return true;
-  });
-  assert.equal(coreCalls, 1);
-  submitter.dispose();
-});
-
-test('ZLinkAsyncSubmitter shutdown preserves RuntimeShutdown and releases pending payload', async () => {
-  let discarded = 0;
-  const submitter = new framework.ZLinkAsyncSubmitter(
-    () => undefined,
-    {
-      capacity: 1,
-      waiterCapacity: 1,
-      timeoutMs: 1_000
-    }
-  );
-  const pending = submitter.submitCommand(
-    () => false,
-    undefined,
-    () => { discarded += 1; }
-  );
-  submitter.dispose();
-
-  await assert.rejects(pending, (error) => {
-    assert.equal(error instanceof framework.ZLinkFrameworkException, true);
-    assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.ShuttingDown);
-    return true;
-  });
-  assert.equal(discarded, 1);
-  assert.throws(
-    () => submitter.submitCommand(() => true),
-    (error) => error instanceof framework.ZLinkFrameworkException
-      && error.kind === framework.ZLinkFrameworkErrorKind.ShuttingDown
-  );
-});
-
-test('self-RID RouteMesh uses bounded local admission and SEND_READY wakeup without replay', async () => {
+test('self-RID RouteMesh waits on the shared application job queue without local backpressure', async () => {
   const host = new framework.ZLinkFrameworkRuntimeHost({
-    registration: framework.createFrameworkRegistration()
+    registration: framework.createFrameworkRegistration({
+      applicationJobQueue: { maxQueuedApplicationJobs: 1n }
+    })
   });
   const scheduled = [];
   let handled = 0;
-  host.localMeshRouteCapacity = 1;
-  host.meshSubmitters.timeoutMs = 5;
+  let releaseFirstHandler;
+  const firstHandlerGate = new Promise((resolve) => {
+    releaseFirstHandler = resolve;
+  });
   host.admission.register('mesh');
   host.executionState = {
     abortController: new AbortController(),
@@ -4348,6 +3892,7 @@ test('self-RID RouteMesh uses bounded local admission and SEND_READY wakeup with
     canDispatchLocalMeshRoute: () => true,
     async dispatchLocalMeshRoute() {
       handled += 1;
+      if (handled === 1) await firstHandlerGate;
     }
   };
   host.spotNodeRuntime = {
@@ -4360,14 +3905,11 @@ test('self-RID RouteMesh uses bounded local admission and SEND_READY wakeup with
   assert.equal(scheduled.length, 1);
 
   const second = host.routeTransport.submit('mesh', 'self-node', 'Notice', { sequence: 2 });
-  await Promise.resolve();
-  assert.equal(scheduled.length, 1);
-
-  await scheduled.shift()();
   assert.deepEqual(await second, { status: ZLinkSubmitStatus.Submitted });
-  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled.length, 2);
 
   const cancelledController = new AbortController();
+  cancelledController.abort();
   const cancelled = host.routeTransport.submit(
     'mesh',
     'self-node',
@@ -4375,21 +3917,25 @@ test('self-RID RouteMesh uses bounded local admission and SEND_READY wakeup with
     { sequence: 3 },
     cancelledController.signal
   );
-  cancelledController.abort();
   await assert.rejects(cancelled, (error) => error?.name === 'AbortError');
+  assert.equal(scheduled.length, 2);
 
-  const timedOut = host.routeTransport.submit('mesh', 'self-node', 'Notice', { sequence: 4 });
-  assert.deepEqual(await timedOut, { status: ZLinkSubmitStatus.TimedOut });
-
-  await scheduled.shift()();
+  const firstDispatch = scheduled.shift()();
+  await waitUntil(() => handled === 1);
+  const secondDispatch = scheduled.shift()();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(handled, 1);
+  assert.equal(host.applicationJobQueue.snapshot().capacityWaiters, 1n);
+  releaseFirstHandler();
+  await Promise.all([firstDispatch, secondDispatch]);
   assert.equal(scheduled.length, 0);
 
-  const recovered = host.routeTransport.submit('mesh', 'self-node', 'Notice', { sequence: 5 });
+  const recovered = host.routeTransport.submit('mesh', 'self-node', 'Notice', { sequence: 4 });
   assert.deepEqual(await recovered, { status: ZLinkSubmitStatus.Submitted });
   assert.equal(scheduled.length, 1);
   await scheduled.shift()();
   assert.equal(handled, 3);
-  assert.equal(host.localMeshRouteInFlight.size, 0);
+  assert.equal(host.applicationJobQueue.snapshot().permitsInUse, 0n);
 });
 
 test('DERR-009 ZLinkChannelRequestDispatcher writes structured dispatch errors to the logger provider', async () => {
@@ -5091,23 +4637,6 @@ function captureMultipart(parts) {
   };
 }
 
-function captureBackpressuredMultipart(parts, submit) {
-  const pending = [];
-  return {
-    message(part) {
-      pending.push(fakeMessagePart(part));
-      return this;
-    },
-    submit() {
-      if (!submit()) {
-        return false;
-      }
-      parts.push(...pending);
-      return true;
-    }
-  };
-}
-
 function captureRawMultipart(parts) {
   return {
     message(part) {
@@ -5123,18 +4652,7 @@ function submitRequestMultipart(operation, parts) {
   for (let index = 1; index < parts.length; index++) {
     current = current.message(parts[index]);
   }
-  return new Promise((resolve, reject) => {
-    const accepted = current.submit((result, replyParts) => {
-      if (result !== 0) {
-        reject(new Error(`request failed with result ${result}`));
-        return;
-      }
-      resolve(replyParts);
-    });
-    if (!accepted) {
-      reject(new Error('request submit was not accepted'));
-    }
-  });
+  return current.submit();
 }
 
 function withTimeout(promise, timeoutMs, label) {
@@ -5179,7 +4697,7 @@ function createMultipartSubmitOperation() {
     message() {
       return this;
     },
-    submit() {}
+    async submit() {}
   };
 }
 
@@ -5191,10 +4709,7 @@ function createMultipartRequestOperation(overrides = {}) {
     timeout() {
       return this;
     },
-    submit(callback) {
-      callback(0, []);
-      return true;
-    },
+    async submit() { return []; },
     ...overrides
   };
 }
@@ -5207,6 +4722,9 @@ function fakeRuntimeBackendAdapterFactory(calls, router) {
           calls.push('context:create');
           return {
             nativeInstance: {},
+            configureCoreHwm() {},
+            getCoreHwmBudgetSnapshot() { return undefined; },
+            resetCoreHwmBudgetMetrics() {},
             shutdown() {
               calls.push('context:shutdown');
             },
@@ -5372,21 +4890,20 @@ function fakeBackpressuredDealer() {
     ready() {
       readyHandler();
     },
-    send(parts) {
+    async send(parts) {
       this.sendAttempts++;
       if (!this.writable) {
-        return false;
+        throw new Error('dealer is not connected');
       }
       this.sentParts = parts.map(fakeMessagePart);
-      return true;
     },
-    request(parts, callback) {
+    async request(parts) {
       this.requestAttempts++;
       if (!this.writable) {
-        return false;
+        throw new Error('dealer is not connected');
       }
-      callback(0, this.replyParts);
-      return true;
+      void parts;
+      return this.replyParts;
     },
     async dispose() {}
   };
@@ -5423,9 +4940,14 @@ function fakeRouteRouter(options = {}) {
     ready() {
       readyHandler();
     },
-    request() {
+    request(_targetNodeRid, _parts, timeoutMs) {
       this.requestAttempts++;
-      return options.acceptWithoutReply === true;
+      return options.acceptWithoutReply === true
+        ? new Promise((_, reject) => setTimeout(
+            () => reject(new Error('binding request timed out')),
+            timeoutMs ?? 30
+          ))
+        : Promise.reject(new Error('Route channel is not connected'));
     },
     recv() {
       this.recvAttempts++;

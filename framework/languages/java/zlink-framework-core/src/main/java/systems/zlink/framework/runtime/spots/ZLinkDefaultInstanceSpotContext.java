@@ -143,14 +143,14 @@ final class DefaultInstanceSpotContext
     public CompletionStage<Void> enqueueDispatch(
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation) {
-        return dispatchQueue.enqueueWithPayloadBytes(payloadBytes, operation);
+        return dispatchQueue.enqueue(operation);
     }
 
     @Override
     public CompletionStage<Void> enqueueInfrastructureDispatch(
         Supplier<CompletionStage<Void>> operation) {
         Objects.requireNonNull(operation, "operation");
-        return infrastructureQueue.enqueueWithPayloadBytes(0, operation);
+        return infrastructureQueue.enqueue(operation);
     }
 
     @Override

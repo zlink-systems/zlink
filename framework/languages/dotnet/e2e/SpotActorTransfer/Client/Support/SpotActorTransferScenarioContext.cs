@@ -371,6 +371,22 @@ internal sealed class SpotActorTransferScenarioContext : IDisposable
             $"{scenario} cleanup gate for actor '{actorId}' was already armed.");
     }
 
+    public async Task ArmTargetPublicationGateAsync(
+        ZLinkHttpClient client,
+        string actorId,
+        string scenario)
+    {
+        var result = (await client
+                .Post($"/target-publication-gates/{actorId}/arm")
+                .Body(new CleanupGateArmReq(scenario))
+                .Async<CleanupGateRes>()).Body
+            ?? throw new InvalidOperationException(
+                "Target publication gate arm response was null.");
+        ZlinkStreamAssert.Ensure(
+            result.Changed,
+            $"{scenario} target publication gate for actor '{actorId}' was already armed.");
+    }
+
     public async Task ReleaseCleanupGateAsync(
         ZLinkHttpClient client,
         string actorId,
@@ -672,7 +688,7 @@ internal sealed class SpotActorTransferScenarioContext : IDisposable
         await WaitUnavailableAsync(Options.NodeAUrl, "SIGKILL");
     }
 
-    private static async Task WaitUnavailableAsync(string url, string operation)
+    public static async Task WaitUnavailableAsync(string url, string operation)
     {
         using var probe = ZLinkHttpClient.Create(url)
             .Timeout(TimeSpan.FromMilliseconds(250))
@@ -705,6 +721,43 @@ internal sealed class SpotActorTransferScenarioContext : IDisposable
             await Task.Delay(50);
         }
         throw new TimeoutException($"Source node at '{url}' remained reachable after {operation}.");
+    }
+
+    internal static async Task WaitAvailableAsync(
+        string url,
+        string operation,
+        TimeSpan timeout)
+    {
+        using var probe = ZLinkHttpClient.Create(url)
+            .Timeout(TimeSpan.FromMilliseconds(250))
+            .Build();
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            try
+            {
+                await probe.Get("/health").AsyncRaw();
+                return;
+            }
+            catch (Exception error) when (
+                error is HttpRequestException or IOException
+                or TaskCanceledException or TimeoutException
+                || error is ZLinkFrameworkException
+                {
+                    Kind: ZLinkFrameworkErrorKind.Unavailable
+                        or ZLinkFrameworkErrorKind.InternalFailure
+                }
+                || HasConnectionFailure(error))
+            {
+                // The replacement is not serving health yet.
+            }
+
+            await Task.Delay(50);
+        }
+
+        throw new TimeoutException(
+            $"Node at '{url}' did not become reachable during {operation} "
+            + $"within {timeout}.");
     }
 
     private static bool HasConnectionFailure(Exception error)
@@ -1033,7 +1086,8 @@ internal sealed record ClientOptions(
     string NodeAStreamEndpoint,
     string NodeBStreamEndpoint,
     string[] TransportProxyAdmins,
-    string Scenario)
+    string Scenario,
+    string? TargetCrashCompletedAckFile = null)
 {
     public static ClientOptions Parse(string[] args)
         => E2eConfiguration.Load<ClientOptions>(args);

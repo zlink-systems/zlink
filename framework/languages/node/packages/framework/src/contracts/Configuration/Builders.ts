@@ -7,7 +7,7 @@ import type {
 import type { ZLinkSession, ZLinkSessionFactory, ZLinkStreamCompressionCodec } from '../Streams';
 import type { ZLinkEndpointConnections } from './Connections';
 import type { ZLinkCodecRegistryBuilder } from '../Codecs';
-import type { ZLinkDispatchOptionsBuilder } from '../Dispatch';
+import type { ZLinkDispatchOptionsBuilder, ZLinkInboundDispatchOptions } from '../Dispatch';
 import type {
   ZLinkLocationOptions,
   ZLinkLocationStore,
@@ -16,7 +16,6 @@ import type {
 import type { RoutingId, Type } from '../Common';
 import type { ZLinkWorkerOptions } from './RegistrationTypes';
 import type { ZLinkSpotPublisherConfig } from './Configs';
-import type { ZLinkInboundDispatchOptions } from './InboundDispatch';
 import type {
   ZLinkActorFactoryBuilder,
   ZLinkInstanceSpotFactoryBuilder,
@@ -37,8 +36,8 @@ export interface ZLinkFrameworkOptions {
    * I/O workers do not consume these threads.
    */
   configureWorker(options: ZLinkWorkerOptions): this;
-  configureInboundDispatch(): ZLinkInboundDispatchOptions;
   configureDispatch(): ZLinkDispatchOptionsBuilder;
+  configureInboundDispatch(): ZLinkInboundDispatchOptions;
   addLocationStore(store: ZLinkLocationStore): this;
   addRelocationStore(store: ZLinkRelocationStore): this;
   setApplicationVersion(version: bigint): this;

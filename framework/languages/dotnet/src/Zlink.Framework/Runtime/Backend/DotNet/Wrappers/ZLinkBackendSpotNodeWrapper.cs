@@ -13,7 +13,7 @@ namespace Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 internal sealed class ZLinkBackendSpotNodeWrapper :
     IZLinkBackendSpotNode,
     IZLinkBackendRelocationReplyRelay,
-    IZLinkBackendCanonicalRelocationReservation,
+    IZLinkBackendCanonicalRelocation,
     IZLinkBackendSessionRelocationBarrier,
     IZLinkBackendAuthorityObserver,
     IZLinkBackendRequestSourceFenceObserver,
@@ -41,11 +41,16 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     private bool _started;
     private bool _disposed;
 
-    public ZLinkBackendSpotNodeWrapper(ZLinkManagedMeshNode node)
+    public ZLinkBackendSpotNodeWrapper(
+        ZLinkManagedMeshNode node,
+        ZLinkApplicationJobQueue? applicationJobQueue = null)
     {
         _node = node;
         _completions = new ZLinkMeshCompletionTable();
-        _pump = new ZLinkMeshDispatchPump(node, _completions);
+        _pump = new ZLinkMeshDispatchPump(
+            node,
+            _completions,
+            applicationJobQueue);
         _node.SetCompletionOverflowHandlerCore(
             (record, parts) => _completions.Complete(record, parts));
         _messageFollowIngress = new ActorMessageFollowIngressAdapter(_pump);
@@ -238,12 +243,6 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             _node.MailboxByteBudget = byteBudget;
     }
 
-    public void SetInboundDispatchBudget(ZLinkInboundDispatchBudget budget)
-    {
-        _node.SetInboundDispatchBudget(budget);
-        _pump.SetInboundDispatchBudget(budget);
-    }
-
     // Explicit host startup calls Start after routing id, bind, and channels
     // are configured. Pull dispatch is activated separately after every
     // framework ingress owner has been installed.
@@ -301,55 +300,42 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         IReadOnlyList<Message> payload) =>
         _node.TryCompleteRelocationReply(relay, payload);
 
-    public void SetCanonicalRelocationReservationTarget(
-        ICanonicalRelocationReservationTarget target)
+    public void SetCanonicalRelocationTarget(
+        ICanonicalRelocationTarget target)
     {
-        _node.SetCanonicalRelocationReservationTarget(target);
+        _node.SetCanonicalRelocationTarget(target);
     }
 
-    public ValueTask<ZLinkServiceWireCodec.RelocationReservedRecord>
-        ReserveCanonicalRelocationAsync(
+    public ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord>
+        PrepareCanonicalRelocationAsync(
             RoutingId targetNodeRid,
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
             TimeSpan timeout,
             CancellationToken cancellationToken)
     {
         EnsureStarted();
-        return _node.ReserveCanonicalRelocationAsync(
+        return _node.PrepareCanonicalRelocationAsync(
             targetNodeRid, prepare, timeout, cancellationToken);
     }
 
-    public ValueTask StageCanonicalRelocationAsync(
+    public ValueTask SendCanonicalRelocationDataAsync(
         RoutingId targetNodeRid,
-        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-        IReadOnlyList<ZLinkServiceWireCodec.RelocationDataRecord> data,
-        TimeSpan timeout,
+        ZLinkServiceWireCodec.RelocationDataRecord data,
         CancellationToken cancellationToken)
     {
         EnsureStarted();
-        return _node.StageCanonicalRelocationAsync(
-            targetNodeRid, prepare, data, timeout, cancellationToken);
+        return _node.SendCanonicalRelocationDataAsync(
+            targetNodeRid, data, cancellationToken);
     }
 
-    public ValueTask CompleteCanonicalRelocationAsync(
+    public ValueTask SendCanonicalRelocationCutoverAsync(
         RoutingId targetNodeRid,
-        ZLinkServiceWireCodec.RelocationCompleteRecord complete,
+        ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
         CancellationToken cancellationToken)
     {
         EnsureStarted();
-        return _node.CompleteCanonicalRelocationAsync(
-            targetNodeRid, complete, cancellationToken);
-    }
-
-    public void CancelCanonicalRelocation(
-        RoutingId targetNodeRid,
-        ZLinkServiceWireCodec.RelocationWireId relocationId,
-        ulong targetAttemptGeneration,
-        ZLinkServiceWireCodec.RelocationCoordinatorFence coordinator)
-    {
-        EnsureStarted();
-        _node.CancelCanonicalRelocation(targetNodeRid,
-            relocationId, targetAttemptGeneration, coordinator);
+        return _node.SendCanonicalRelocationCutoverAsync(
+            targetNodeRid, cutover, cancellationToken);
     }
 
     public void SetSessionRelocationBarrierTarget(
@@ -373,20 +359,15 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             cancellationToken);
     }
 
-    public ValueTask<ZLinkServiceWireCodec.SessionRelocationRoutedRecord>
-        RouteSessionRelocationAsync(
+    public ValueTask RouteSessionRelocationAsync(
             RoutingId sessionOwnerNodeRid,
             ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
-            ulong expectedSealedHighWater,
-            TimeSpan timeout,
             CancellationToken cancellationToken)
     {
         EnsureStarted();
         return _node.RouteSessionRelocationAsync(
             sessionOwnerNodeRid,
             route,
-            expectedSealedHighWater,
-            timeout,
             cancellationToken);
     }
 
@@ -1014,7 +995,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         RoutingId destNodeRid,
         string destSpotId,
         Message message,
-        RequestCallback callback,
+        ZLinkBackendRequestCallback callback,
         TimeSpan? timeout)
     {
         var correlationId = _node.AllocateOperationId();
@@ -1152,6 +1133,17 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         return _node.SendBoundSession(ToNativeActor(actor), parts, flags) == SubmitResult.Ok;
     }
 
+    public ValueTask SendActorBoundSessionAsync(
+        ZLinkBackendActorRef actor,
+        ulong expectedBindingGeneration,
+        IReadOnlyList<Message> parts,
+        CancellationToken cancellationToken) =>
+        _node.SendBoundSessionAsync(
+            ToNativeActor(actor),
+            expectedBindingGeneration,
+            parts,
+            cancellationToken);
+
     public SubmitResult SendToNode(
         RoutingId targetNodeRid,
         IReadOnlyList<Message> parts,
@@ -1169,10 +1161,19 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         return _node.SendToNode(targetNodeRid, parts, flags, metadata);
     }
 
+    public ValueTask SendToNodeAsync(
+        RoutingId targetNodeRid,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> metadata = default) =>
+        _node.SendToNodeDirectAsync(
+            targetNodeRid, parts, flags, metadata, cancellationToken);
+
     public bool RequestToNode(
         RoutingId targetNodeRid,
         IReadOnlyList<Message> parts,
-        RequestCallback callback,
+        ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan timeout,
         ReadOnlyMemory<byte> metadata = default)
@@ -1191,6 +1192,16 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         return true;
     }
 
+    public ValueTask<IReadOnlyList<Message>> RequestToNodeAsync(
+        RoutingId targetNodeRid,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> metadata = default) =>
+        _node.RequestToNodeDirectAsync(
+            targetNodeRid, parts, flags, metadata, timeout, cancellationToken);
+
     public SubmitResult SendToActor(
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
@@ -1198,6 +1209,14 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     {
         return _node.SendToActor(ToNativeActor(actor), parts, flags);
     }
+
+    public ValueTask SendToActorAsync(
+        ZLinkBackendActorRef actor,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        CancellationToken cancellationToken) =>
+        _node.SendToActorDirectAsync(
+            ToNativeActor(actor), parts, flags, cancellationToken);
 
     public async ValueTask<IReadOnlyList<Message>> RequestToActorAsync(
         ZLinkBackendActorRef actor,

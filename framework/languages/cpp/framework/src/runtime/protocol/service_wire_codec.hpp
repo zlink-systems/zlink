@@ -230,13 +230,6 @@ enum class relocation_role_t : std::uint8_t
     coordinator = 3
 };
 
-enum class relocation_round_t : std::uint8_t
-{
-    initial = 1,
-    prepared_replacement = 2,
-    post_commit_replacement = 3
-};
-
 enum class relocation_object_kind_t : std::uint8_t
 {
     actor = 1,
@@ -244,14 +237,14 @@ enum class relocation_object_kind_t : std::uint8_t
     instance_spot = 3
 };
 
-struct relocation_candidate_t
+struct relocation_target_fence_t
 {
-    std::vector<std::uint8_t> node_routing_id;
-    std::uint64_t node_generation = 0;
-    std::string owner_id;
-    std::uint64_t owner_lease_generation = 0;
-    friend bool operator== (const relocation_candidate_t &,
-                            const relocation_candidate_t &) = default;
+    std::vector<std::uint8_t> target_node_routing_id;
+    std::uint64_t target_node_generation = 0;
+    std::string target_owner_id;
+    std::uint64_t target_owner_lease_generation = 0;
+    friend bool operator== (const relocation_target_fence_t &,
+                            const relocation_target_fence_t &) = default;
 };
 
 struct relocation_object_t
@@ -261,49 +254,17 @@ struct relocation_object_t
     std::string object_id;
     std::uint64_t object_generation = 0;
     std::uint64_t expected_authority_owner_generation = 0;
-    friend bool operator== (const relocation_object_t &,
-                            const relocation_object_t &) = default;
-};
-
-enum class relocation_participant_kind_t : std::uint8_t
-{
-    object_mailbox = 1,
-    bound_session = 2
-};
-
-struct relocation_participant_t
-{
-    std::uint64_t participant_id = 0;
-    relocation_participant_kind_t kind =
-      relocation_participant_kind_t::object_mailbox;
-    std::vector<std::uint8_t> session_owner_node_routing_id;
-    std::uint64_t session_owner_node_generation = 0;
-    std::string session_owner_id;
-    std::uint64_t session_owner_lease_generation = 0;
-    std::vector<std::uint8_t> session_routing_id;
-    std::uint64_t binding_generation = 0;
-    std::uint64_t last_accepted_session_sequence = 0;
-    std::uint64_t allowance_messages = 0;
-    std::uint64_t allowance_bytes = 0;
-    friend bool operator== (const relocation_participant_t &,
-                            const relocation_participant_t &) = default;
-};
-
-struct relocation_participant_progress_t
-{
-    std::uint64_t participant_id = 0;
-    std::uint64_t accepted_boundary = 0;
-    std::uint64_t replay_cursor = 0;
-    friend bool operator== (const relocation_participant_progress_t &,
-                            const relocation_participant_progress_t &) = default;
-};
-
-struct relocation_participant_terminal_t
-{
-    std::uint64_t participant_id = 0;
-    std::uint64_t high_water = 0;
-    friend bool operator== (const relocation_participant_terminal_t &,
-                            const relocation_participant_terminal_t &) = default;
+    friend bool operator== (const relocation_object_t &left,
+                            const relocation_object_t &right) noexcept
+    {
+        return left.kind == right.kind
+               && left.object_id == right.object_id
+               && left.object_generation == right.object_generation
+               && left.expected_authority_owner_generation
+                    == right.expected_authority_owner_generation
+               && (left.kind != relocation_object_kind_t::instance_spot
+                   || left.stable_type == right.stable_type);
+    }
 };
 
 struct relocation_root_t
@@ -318,16 +279,12 @@ struct relocation_prepare_t
 {
     relocation_id_t relocation;
     std::uint64_t target_attempt_generation = 0;
-    relocation_round_t round = relocation_round_t::initial;
     relocation_coordinator_fence_t coordinator;
-    relocation_candidate_t candidate;
+    relocation_target_fence_t target;
     relocation_role_t initiator_role = relocation_role_t::source;
     relocation_object_t object;
     std::vector<std::uint8_t> source_node_routing_id;
     std::uint64_t source_node_generation = 0;
-    std::uint64_t required_messages = 0;
-    std::uint64_t required_bytes = 0;
-    std::vector<relocation_participant_t> participants;
     std::optional<relocation_root_t> root;
     std::uint64_t application_version = 0;
     friend bool operator== (const relocation_prepare_t &,
@@ -338,49 +295,23 @@ struct relocation_ready_t
 {
     relocation_id_t relocation;
     std::uint64_t target_attempt_generation = 0;
-    relocation_round_t round = relocation_round_t::initial;
     relocation_coordinator_fence_t coordinator;
-    relocation_candidate_t candidate;
+    relocation_target_fence_t target;
     relocation_object_t object;
-    relocation_role_t role = relocation_role_t::target;
-    std::uint64_t offered_messages = 0;
-    std::uint64_t offered_bytes = 0;
-    std::vector<relocation_participant_t> participants;
-    std::uint64_t source_node_generation = 0;
-    std::uint64_t target_node_generation = 0;
-    std::uint64_t reservation_generation = 0;
-    std::optional<relocation_root_t> root;
-    std::uint64_t application_version = 0;
-    std::vector<relocation_participant_progress_t> participant_progress;
+    relocation_role_t sender_role = relocation_role_t::target;
     friend bool operator== (const relocation_ready_t &,
                             const relocation_ready_t &) = default;
 };
 
-struct relocation_reserved_t
+struct relocation_cutover_t
 {
     relocation_id_t relocation;
     std::uint64_t target_attempt_generation = 0;
-    relocation_round_t round = relocation_round_t::initial;
     relocation_coordinator_fence_t coordinator;
-    relocation_candidate_t candidate;
-    std::uint64_t reservation_generation = 0;
-    std::vector<relocation_participant_t> participants;
-    friend bool operator== (const relocation_reserved_t &,
-                            const relocation_reserved_t &) = default;
-};
-
-enum class relocation_phase_t : std::uint8_t
-{
-    none = 0,
-    preparing = 1,
-    captured = 2,
-    prepared = 3,
-    committed = 4,
-    activating = 5,
-    activated = 6,
-    cleaning = 7,
-    completed = 8,
-    aborted = 9
+    relocation_role_t sender_role = relocation_role_t::source;
+    relocation_object_t object;
+    friend bool operator== (const relocation_cutover_t &,
+                            const relocation_cutover_t &) = default;
 };
 
 enum class frozen_record_kind_t : std::uint8_t
@@ -499,66 +430,15 @@ struct relocation_data_t
     std::uint64_t target_attempt_generation = 0;
     relocation_coordinator_fence_t coordinator;
     relocation_role_t sender_role = relocation_role_t::source;
-    std::uint64_t participant_id = 0;
-    std::uint64_t sequence = 0;
-    request_source_fence_t source;
     relocation_object_t object;
-    relocation_phase_t phase = relocation_phase_t::prepared;
-    std::uint32_t terminal_result = 0;
-    framework_error_code failure_code = framework_error_code::none;
-    std::optional<frozen_record_t> frozen_record;
+    frozen_record_t record;
     friend bool operator== (const relocation_data_t &,
                             const relocation_data_t &) = default;
 };
 
-struct relocation_ack_t
-{
-    relocation_id_t relocation;
-    std::uint64_t target_attempt_generation = 0;
-    relocation_coordinator_fence_t coordinator;
-    relocation_role_t sender_role = relocation_role_t::target;
-    std::uint64_t participant_id = 0;
-    std::uint64_t high_water = 0;
-    friend bool operator== (const relocation_ack_t &,
-                            const relocation_ack_t &) = default;
-};
-
-struct relocation_seal_t
-{
-    relocation_id_t relocation;
-    std::uint64_t target_attempt_generation = 0;
-    relocation_coordinator_fence_t coordinator;
-    relocation_role_t sender_role = relocation_role_t::source;
-    bool response = false;
-    std::vector<relocation_participant_terminal_t> participants;
-    friend bool operator== (const relocation_seal_t &,
-                            const relocation_seal_t &) = default;
-};
-
-enum class source_cleanup_state_t : std::uint8_t
-{
-    pending = 0,
-    completed = 1,
-    source_lease_expired = 2
-};
-
-struct relocation_complete_t
-{
-    relocation_id_t relocation;
-    std::uint64_t target_attempt_generation = 0;
-    relocation_coordinator_fence_t coordinator;
-    relocation_role_t sender_role = relocation_role_t::source;
-    request_source_fence_t source;
-    source_cleanup_state_t source_cleanup_state =
-      source_cleanup_state_t::pending;
-    friend bool operator== (const relocation_complete_t &,
-                            const relocation_complete_t &) = default;
-};
-
 using relocation_control_t = std::variant<
-  relocation_prepare_t, relocation_ready_t, relocation_reserved_t,
-  relocation_data_t, relocation_ack_t, relocation_seal_t,
-  relocation_complete_t>;
+  relocation_prepare_t, relocation_ready_t, relocation_data_t,
+  relocation_cutover_t>;
 
 struct reply_relay_t
 {
@@ -611,14 +491,6 @@ enum class session_relocation_route_action_t : std::uint8_t
     abort = 2
 };
 
-enum class session_relocation_route_result_t : std::uint8_t
-{
-    applied = 0,
-    already_applied = 1,
-    stale = 2,
-    session_or_binding_closed = 3
-};
-
 struct session_relocation_route_update_t
 {
     session_relocation_route_action_t action =
@@ -627,7 +499,6 @@ struct session_relocation_route_update_t
     std::uint64_t target_authority_owner_generation = 0;
     std::vector<std::uint8_t> target_node_routing_id;
     std::uint64_t target_node_generation = 0;
-    std::uint64_t replayed_high_water = 0;
     std::uint64_t current_authority_owner_generation = 0;
 
     friend bool operator== (const session_relocation_route_update_t &,
@@ -662,7 +533,6 @@ struct session_relocation_sealed_t
     std::uint64_t session_owner_lease_generation = 0;
     std::vector<std::uint8_t> session_routing_id;
     std::uint64_t binding_generation = 0;
-    std::uint64_t last_accepted_session_sequence = 0;
 
     friend bool operator== (const session_relocation_sealed_t &,
                             const session_relocation_sealed_t &) = default;
@@ -684,28 +554,6 @@ struct session_relocation_route_t
 
     friend bool operator== (const session_relocation_route_t &,
                             const session_relocation_route_t &) = default;
-};
-
-struct session_relocation_routed_t
-{
-    relocation_id_t relocation;
-    relocation_coordinator_fence_t coordinator;
-    actor_identity_t actor;
-    std::vector<std::uint8_t> session_owner_node_routing_id;
-    std::uint64_t session_owner_node_generation = 0;
-    std::string session_owner_id;
-    std::uint64_t session_owner_lease_generation = 0;
-    std::vector<std::uint8_t> session_routing_id;
-    std::uint64_t binding_generation = 0;
-    session_relocation_route_action_t action =
-      session_relocation_route_action_t::commit;
-    session_relocation_route_result_t result =
-      session_relocation_route_result_t::applied;
-    std::uint64_t current_authority_owner_generation = 0;
-    std::uint64_t last_accepted_session_sequence = 0;
-
-    friend bool operator== (const session_relocation_routed_t &,
-                            const session_relocation_routed_t &) = default;
 };
 
 struct reply_header_t
@@ -959,10 +807,6 @@ session_relocation_seal_t decode_session_relocation_seal (
 std::vector<std::uint8_t> encode_session_relocation_sealed (
   const session_relocation_sealed_t &record);
 session_relocation_sealed_t decode_session_relocation_sealed (
-  std::span<const std::uint8_t> bytes);
-std::vector<std::uint8_t> encode_session_relocation_routed (
-  const session_relocation_routed_t &record);
-session_relocation_routed_t decode_session_relocation_routed (
   std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_reply_relay (const reply_relay_t &record);
 reply_relay_t decode_reply_relay (std::span<const std::uint8_t> bytes);

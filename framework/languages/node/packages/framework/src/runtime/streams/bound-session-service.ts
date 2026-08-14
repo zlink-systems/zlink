@@ -36,7 +36,6 @@ import {
 import {
   ZLinkManagedStream
 } from './managed-stream';
-import type { ZLinkMeshSubmitterRegistry } from '../messaging';
 
 const ZLINK_SEND_DONT_WAIT = 1;
 
@@ -62,20 +61,15 @@ export interface ZLinkBoundSessionDisconnectOptions {
 export interface ZLinkBoundSessionServiceOptions {
   readonly transport?: ZLinkBoundSessionTransport;
   readonly actorBindTimeoutMs?: number;
-  readonly meshSubmitters: ZLinkMeshSubmitterRegistry;
   readonly nativeActorMeshNameProvider?: () => string | undefined;
 }
 
 export class ZLinkBoundSessionService {
-  private readonly meshSubmitters: ZLinkMeshSubmitterRegistry;
-
   constructor(
     private readonly routes: ZLinkActorSessionBindingRegistry<DefaultZLinkSessionContext, DefaultZLinkSessionActor>,
     private readonly frameMessages: ZLinkStreamFrameMessageFactory,
     private readonly options: ZLinkBoundSessionServiceOptions
-  ) {
-    this.meshSubmitters = options.meshSubmitters;
-  }
+  ) {}
 
   async sendBoundSession(
     actorId: string,
@@ -306,7 +300,10 @@ export class ZLinkBoundSessionService {
     }
   }
 
-  relayRemoteBoundSessionBind(stream: ZLinkManagedStream, actorRef: ActorRef): void {
+  async relayRemoteBoundSessionBind(
+    stream: ZLinkManagedStream,
+    actorRef: ActorRef
+  ): Promise<void> {
     const header = ZLinkBindingMessage.fromOwned(Buffer.from(encodeStreamHeader({
       kind: ZLinkStreamMessageKind.Send,
       codec: ZLinkStreamCodec.Raw,
@@ -316,7 +313,7 @@ export class ZLinkBoundSessionService {
     })));
     const body = ZLinkBindingMessage.fromOwned(Buffer.alloc(0));
     try {
-      if (!stream.sendBoundActor(actorRef.actorId, [header, body], 0)) {
+      if (!await stream.sendBoundActor(actorRef.actorId, [header, body], 0)) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
           `Actor '${actorRef.actorId}' remote bound session bind relay failed.`
@@ -424,15 +421,14 @@ export class ZLinkBoundSessionService {
     signal?: AbortSignal
   ): Promise<ZLinkSubmitResult> {
     const backendActorRef = toBoundSessionSendActorRef(actorRef);
-    const meshName = this.options.nativeActorMeshNameProvider?.() ?? '__native_bound_session';
-    return await this.meshSubmitters.submit(meshName, () =>
-      node.sendActorBoundSession(
-          backendActorRef,
-          requireBoundSessionGeneration(actorRef),
-          [frame],
-          ZLINK_SEND_DONT_WAIT,
-          boundSessionSendFence(node, backendActorRef, actorRef)
-      ), signal);
+    throwIfAborted(signal);
+    return await node.sendActorBoundSession(
+      backendActorRef,
+      requireBoundSessionGeneration(actorRef),
+      [frame],
+      ZLINK_SEND_DONT_WAIT,
+      boundSessionSendFence(node, backendActorRef, actorRef)
+    );
   }
 
   private requireTransport(): ZLinkBoundSessionTransport {

@@ -3,8 +3,8 @@ import java.util.Objects;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 public final class ZLinkBackendActorReceived implements AutoCloseable {
@@ -20,7 +20,8 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
     private final boolean acceptedJournalRecordAvailable;
     private volatile byte[] acceptedJournalRecord;
     private final String contentType;
-    private final ZLinkInboundDispatchBudget.Lease inboundDispatchLease;
+    private final Runnable terminalRelease;
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     public ZLinkBackendActorReceived(
         ZLinkBackendActorRef actor,
@@ -32,14 +33,14 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
         Message message,
         boolean hasMore,
         byte[] acceptedJournalRecord,
-        String contentType,
-        ZLinkInboundDispatchBudget.Lease inboundDispatchLease) {
+        String contentType) {
         this(
             actor, sourceNodeRid, sourceSessionRid, requestSeq, requestId,
             flags, message, hasMore,
             () -> acceptedJournalRecord == null ? new byte[0] : acceptedJournalRecord,
             acceptedJournalRecord != null && acceptedJournalRecord.length > 0,
-            contentType, inboundDispatchLease);
+            contentType,
+            () -> { });
         this.acceptedJournalRecord = acceptedJournalRecord == null
             ? new byte[0]
             : acceptedJournalRecord;
@@ -57,7 +58,7 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
         Supplier<byte[]> acceptedJournalRecordSupplier,
         boolean acceptedJournalRecordAvailable,
         String contentType,
-        ZLinkInboundDispatchBudget.Lease inboundDispatchLease) {
+        Runnable terminalRelease) {
         this.actor = Objects.requireNonNull(actor, "actor");
         this.sourceNodeRid = Objects.requireNonNull(
             sourceNodeRid, "sourceNodeRid");
@@ -71,7 +72,25 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
             acceptedJournalRecordSupplier, "acceptedJournalRecordSupplier");
         this.acceptedJournalRecordAvailable = acceptedJournalRecordAvailable;
         this.contentType = contentType;
-        this.inboundDispatchLease = inboundDispatchLease;
+        this.terminalRelease = Objects.requireNonNull(
+            terminalRelease, "terminal release");
+    }
+
+    public static ZLinkBackendActorReceived lazyJournal(
+        ZLinkBackendActorRef actor,
+        RoutingId sourceNodeRid,
+        RoutingId sourceSessionRid,
+        Optional<Long> requestSeq,
+        long requestId,
+        int flags,
+        Message message,
+        boolean hasMore,
+        Supplier<byte[]> acceptedJournalRecord,
+        String contentType) {
+        return new ZLinkBackendActorReceived(
+            actor, sourceNodeRid, sourceSessionRid, requestSeq, requestId,
+            flags, message, hasMore, acceptedJournalRecord, true, contentType,
+            () -> { });
     }
 
     public static ZLinkBackendActorReceived lazyJournal(
@@ -85,11 +104,34 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
         boolean hasMore,
         Supplier<byte[]> acceptedJournalRecord,
         String contentType,
-        ZLinkInboundDispatchBudget.Lease inboundDispatchLease) {
+        Runnable terminalRelease) {
         return new ZLinkBackendActorReceived(
             actor, sourceNodeRid, sourceSessionRid, requestSeq, requestId,
             flags, message, hasMore, acceptedJournalRecord, true, contentType,
-            inboundDispatchLease);
+            terminalRelease);
+    }
+
+    public ZLinkBackendActorReceived(
+        ZLinkBackendActorRef actor,
+        RoutingId sourceNodeRid,
+        RoutingId sourceSessionRid,
+        Optional<Long> requestSeq,
+        long requestId,
+        int flags,
+        Message message,
+        boolean hasMore,
+        byte[] acceptedJournalRecord,
+        String contentType,
+        Runnable terminalRelease) {
+        this(
+            actor, sourceNodeRid, sourceSessionRid, requestSeq, requestId,
+            flags, message, hasMore,
+            () -> acceptedJournalRecord == null ? new byte[0] : acceptedJournalRecord,
+            acceptedJournalRecord != null && acceptedJournalRecord.length > 0,
+            contentType, terminalRelease);
+        this.acceptedJournalRecord = acceptedJournalRecord == null
+            ? new byte[0]
+            : acceptedJournalRecord;
     }
 
     public ZLinkBackendActorRef actor() { return actor; }
@@ -104,10 +146,6 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
         return acceptedJournalRecordAvailable;
     }
     public String contentType() { return contentType; }
-    public ZLinkInboundDispatchBudget.Lease inboundDispatchLease() {
-        return inboundDispatchLease;
-    }
-
     /** Backward-compatible constructor without an inbound content type. */
     public ZLinkBackendActorReceived(
         ZLinkBackendActorRef actor,
@@ -118,8 +156,7 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
         int flags,
         Message message,
         boolean hasMore,
-        byte[] acceptedJournalRecord,
-        ZLinkInboundDispatchBudget.Lease inboundDispatchLease) {
+        byte[] acceptedJournalRecord) {
         this(
             actor,
             sourceNodeRid,
@@ -130,8 +167,7 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
             message,
             hasMore,
             acceptedJournalRecord,
-            null,
-            inboundDispatchLease);
+            null);
     }
 
     public ZLinkBackendActorReceived(
@@ -153,31 +189,6 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
             message,
             hasMore,
             new byte[0],
-            null,
-            null);
-    }
-
-    public ZLinkBackendActorReceived(
-        ZLinkBackendActorRef actor,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        Optional<Long> requestSeq,
-        long requestId,
-        int flags,
-        Message message,
-        boolean hasMore,
-        byte[] acceptedJournalRecord) {
-        this(
-            actor,
-            sourceNodeRid,
-            sourceSessionRid,
-            requestSeq,
-            requestId,
-            flags,
-            message,
-            hasMore,
-            acceptedJournalRecord,
-            null,
             null);
     }
 
@@ -196,18 +207,13 @@ public final class ZLinkBackendActorReceived implements AutoCloseable {
         }
     }
 
-    public void closeAdmission() {
-        if (inboundDispatchLease != null) {
-            inboundDispatchLease.close();
-        }
-    }
-
     @Override
     public void close() {
+        if (!closed.compareAndSet(false, true)) return;
         try {
             message.close();
         } finally {
-            closeAdmission();
+            terminalRelease.run();
         }
     }
 }

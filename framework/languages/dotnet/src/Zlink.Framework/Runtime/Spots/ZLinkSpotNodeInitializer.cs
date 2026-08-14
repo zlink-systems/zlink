@@ -45,7 +45,6 @@ internal sealed class ZLinkSpotNodeInitializer(
                     router.SocketConfig.MailboxMessageBudget,
                     router.SocketConfig.MailboxByteBudget);
             }
-            node.SetInboundDispatchBudget(state.InboundDispatchBudget);
             foreach (var membership in spotNodeRegistration.ChannelMemberships)
             {
                 if (!membership.IsServer)
@@ -112,7 +111,6 @@ internal sealed class ZLinkSpotNodeInitializer(
                     registration,
                     spotNodeRegistration,
                     node,
-                    state.CompletionAdmission,
                     state.TimerScheduler,
                     meshName,
                     locationLifecycle,

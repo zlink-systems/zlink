@@ -2753,7 +2753,7 @@ test('Mesh actor join drops a callback result when the source ends before target
   assert.equal(replyCalls, 0);
 });
 
-test('Mesh actor return to Entry Spot completes after the lifecycle callback', async () => {
+test('Mesh actor return to Entry Spot commits before the lifecycle callback', async () => {
   const entryNodeRid = zlink.RoutingId.from('entry-node');
   const actor = { actorId: 'player-1' };
   const replies = [];
@@ -2793,7 +2793,59 @@ test('Mesh actor return to Entry Spot completes after the lifecycle callback', a
   });
 
   assert.deepEqual(replies, [0]);
-  assert.deepEqual(events, ['lifecycle', ['test.mesh', actor], 'reply']);
+  assert.deepEqual(events, ['reply', 'lifecycle', ['test.mesh', actor]]);
+});
+
+test('Mesh actor return to Entry Spot commits admission before a gated lifecycle callback', async () => {
+  const entryNodeRid = zlink.RoutingId.from('entry-node');
+  const actor = { actorId: 'player-1' };
+  const replies = [];
+  let releaseLifecycle;
+  const lifecycleGate = new Promise((resolve) => {
+    releaseLifecycle = resolve;
+  });
+  let lifecycleStarted = false;
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [],
+    entryNodeRidProvider: () => entryNodeRid,
+    actorResolver(actorId) {
+      return actorId === actor.actorId ? actor : undefined;
+    },
+    async dispatchEntryActorJoin() {
+      lifecycleStarted = true;
+      await lifecycleGate;
+    }
+  });
+
+  const pending = manager.dispatchMeshActorJoin('test.mesh', {
+    spotId: entryNodeRid,
+    actor: null
+  }, {
+    kind: framework.ReceiveKind.SpotControl,
+    kindData: {
+      kind: 'actorControl',
+      currentActor: {
+        nodeRid: entryNodeRid,
+        actorId: actor.actorId,
+        generation: 1n
+      },
+      currentMembershipEpoch: 2n
+    },
+    parts: [],
+    replyActorJoin(code) {
+      replies.push(code);
+      return zlink.SubmitResult.Ok;
+    }
+  });
+
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(lifecycleStarted, true);
+    assert.deepEqual(replies, [0]);
+  } finally {
+    releaseLifecycle();
+    await pending;
+  }
 });
 
 test('Mesh actor return to Entry Spot resolves a moving actor through the lifecycle resolver', async () => {
@@ -2878,6 +2930,7 @@ test('formal remote Actor transfer to Entry Spot materializes state before commi
         materialized = true;
         return { actor, actorRef: { actorId, nodeRid: entryNodeRid, generation: 2n } };
       },
+      async commitRoutedActorAuthority() {},
       rememberRoutedActorTransferTarget() {},
       async rollbackRoutedActor() {}
     },
@@ -2989,6 +3042,7 @@ test('formal remote Actor transfer admits the target before reading referenced s
         events.push(['materialize', transferState.getString('utf8')]);
         return { actor, actorRef: { actorId: actor.context.actorId, nodeRid: 'target-node', generation: 2n } };
       },
+      async commitRoutedActorAuthority() {},
       rememberRoutedActorTransferTarget() {},
       async rollbackRoutedActor() {}
     }
@@ -3178,9 +3232,10 @@ test('formal Actor Join runtime port preserves fixture order through target Read
       rememberRoutedActorTransferTarget() {},
       bindRoutedActorRef() {},
       commitRoutedActor() {},
-      async claimRoutedActorLocation() {
+      async commitRoutedActorAuthority() {
         events.push('actor-location-claimed');
       },
+      async claimRoutedActorLocation() {},
       async publishRoutedActorOwnership() {
         events.push('session-ownership-published');
       },
@@ -3396,6 +3451,7 @@ test('formal remote Actor admission and commit retries are idempotent', async ()
         events.push(`materialize:${transferState.getString('utf8')}`);
         return { actor, actorRef: { actorId: actor.context.actorId, nodeRid: 'target-node', generation: 2n } };
       },
+      async commitRoutedActorAuthority() {},
       rememberRoutedActorTransferTarget() {},
       async rollbackRoutedActor() {}
     }

@@ -78,10 +78,8 @@ export interface ZLinkRemoteActorJoinWirePayload {
   readonly boundSessionBindingGeneration?: unknown;
   readonly boundSessionPreviousAuthorityOwnerGeneration?: unknown;
   readonly boundSessionPreviousOwnerLeaseGeneration?: unknown;
-  readonly boundSessionAcceptedHighWater?: unknown;
   readonly boundSessionRelocationSealId?: unknown;
-  readonly boundSessionAcceptedJournalReference?: unknown;
-  readonly boundSessionAcceptedJournalChecksumCrc32c?: unknown;
+  readonly boundSessionServiceWireRelocation?: unknown;
   readonly request?: unknown;
   readonly requestContentType?: unknown;
   readonly handoffBacklog?: unknown;
@@ -120,10 +118,22 @@ export interface ZLinkRemoteActorJoinRequestPayload {
   readonly boundSessionBindingGeneration?: string;
   readonly boundSessionPreviousAuthorityOwnerGeneration?: string;
   readonly boundSessionPreviousOwnerLeaseGeneration?: string;
-  readonly boundSessionAcceptedHighWater?: string;
   readonly boundSessionRelocationSealId?: string;
-  readonly boundSessionAcceptedJournalReference?: string;
-  readonly boundSessionAcceptedJournalChecksumCrc32c?: number;
+  readonly boundSessionServiceWireRelocation?: {
+    readonly relocationHigh: string;
+    readonly relocationLow: string;
+    readonly coordinatorOwnerId: string;
+    readonly coordinatorLeaseGeneration: string;
+    readonly coordinatorNodeRid: string;
+    readonly coordinatorNodeGeneration: string;
+    readonly coordinatorExpectedAuthorityStoreVersion: string;
+    readonly sessionOwnerNodeRid: string;
+    readonly sessionOwnerNodeGeneration: string;
+    readonly sessionOwnerId: string;
+    readonly sessionOwnerLeaseGeneration: string;
+    readonly sessionRid: string;
+    readonly bindingGeneration: string;
+  };
   readonly request?: string;
   readonly requestContentType?: string;
   readonly handoffBacklog?: readonly ZLinkActorHandoffPacket[];
@@ -204,10 +214,30 @@ export function buildRemoteActorJoinRequestPayload(
       boundSessionTarget?.previousAuthorityOwnerGeneration?.toString(),
     boundSessionPreviousOwnerLeaseGeneration:
       boundSessionTarget?.previousOwnerLeaseGeneration?.toString(),
-    boundSessionAcceptedHighWater: boundSessionTarget?.acceptedHighWater?.toString(),
     boundSessionRelocationSealId: boundSessionTarget?.relocationSealId,
-    boundSessionAcceptedJournalReference: boundSessionTarget?.acceptedJournalReference,
-    boundSessionAcceptedJournalChecksumCrc32c: boundSessionTarget?.acceptedJournalChecksumCrc32c,
+    boundSessionServiceWireRelocation: boundSessionTarget?.serviceWireRelocation === undefined
+      ? undefined
+      : {
+          relocationHigh: boundSessionTarget.serviceWireRelocation.relocation.high.toString(),
+          relocationLow: boundSessionTarget.serviceWireRelocation.relocation.low.toString(),
+          coordinatorOwnerId: boundSessionTarget.serviceWireRelocation.coordinator.ownerId,
+          coordinatorLeaseGeneration:
+            boundSessionTarget.serviceWireRelocation.coordinator.leaseGeneration.toString(),
+          coordinatorNodeRid: boundSessionTarget.serviceWireRelocation.coordinator.nodeRid,
+          coordinatorNodeGeneration:
+            boundSessionTarget.serviceWireRelocation.coordinator.nodeGeneration.toString(),
+          coordinatorExpectedAuthorityStoreVersion:
+            boundSessionTarget.serviceWireRelocation.coordinator.expectedAuthorityStoreVersion,
+          sessionOwnerNodeRid: boundSessionTarget.serviceWireRelocation.session.sessionOwnerNodeRid,
+          sessionOwnerNodeGeneration:
+            boundSessionTarget.serviceWireRelocation.session.sessionOwnerNodeGeneration.toString(),
+          sessionOwnerId: boundSessionTarget.serviceWireRelocation.session.sessionOwnerId,
+          sessionOwnerLeaseGeneration:
+            boundSessionTarget.serviceWireRelocation.session.sessionOwnerLeaseGeneration.toString(),
+          sessionRid: boundSessionTarget.serviceWireRelocation.session.sessionRid,
+          bindingGeneration:
+            boundSessionTarget.serviceWireRelocation.session.bindingGeneration.toString()
+        },
     request: options.request === undefined ? undefined : options.request.data().toString('base64'),
     requestContentType: options.request === undefined
       ? undefined

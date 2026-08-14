@@ -20,7 +20,8 @@ namespace
 /// see the same universal fields.
 inbound_message_context_t
 make_inbound_context (const std::string &channel_name,
-                      runtime::messaging::envelope_header_t &header)
+                      runtime::messaging::envelope_header_t &header,
+                      std::function<void ()> before_application_handler)
 {
     inbound_message_context_t inbound;
     inbound.message.channel_name = channel_name;
@@ -32,6 +33,8 @@ make_inbound_context (const std::string &channel_name,
     }
     inbound.topic = header.topic.value_or ("");
     inbound.source = header.source;
+    inbound.before_application_handler =
+      std::move (before_application_handler);
     return inbound;
 }
 
@@ -47,7 +50,8 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
   const runtime::messaging::message_parts_t &parts,
   service_provider_t &services,
   serializer_registry_t &serializers,
-  const handler_registry_t &handlers) const
+  const handler_registry_t &handlers,
+  std::function<void ()> before_application_handler) const
 {
     runtime::messaging::envelope_codec_t codec;
     auto header = codec.decode_header (parts);
@@ -113,7 +117,8 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
         auto reply = _runtime.dispatch_request (
           channel_name, header.value ().topic.value_or (""), header.value ().message_name, services,
           serializers, handlers, body.value (),
-          make_inbound_context (channel_name, header.value ()));
+          make_inbound_context (channel_name, header.value (),
+                                before_application_handler));
         channel_reply_writer_t writer;
         if (!reply) {
             framework_exception_t error (reply.error_kind (), reply.error ()
@@ -156,7 +161,8 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
         auto result = _runtime.dispatch_send (
           channel_name, header.value ().topic.value_or (""), header.value ().message_name, services,
           serializers, handlers, body.value (),
-          make_inbound_context (channel_name, header.value ()));
+          make_inbound_context (channel_name, header.value (),
+                                before_application_handler));
         if (!result) {
             dispatch_error_reporter_t (_runtime.dispatch_options ())
               .report (message_dispatch_error_event_t{

@@ -72,13 +72,6 @@ export interface ZLinkHostSpotAddressTransportOptions {
   /** Resolves the send timeout for a resolved Spot route channel. */
   readonly sendTimeoutMsForRouteChannel?: (routeChannelId: string) => number;
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
-  /** Internal admission hook; public Spot calls do not expose this transport. */
-  readonly submitMissingInstance?: (
-    meshName: string,
-    attempt: () => ZLinkSubmitResult,
-    signal: AbortSignal,
-    timeoutMs: number
-  ) => Promise<ZLinkSubmitResult>;
 }
 
 export function hasObjectClientCapability(
@@ -228,33 +221,16 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     const sourceSpotId = call.sourceSpot === undefined
       ? undefined
       : String(call.sourceSpot.routingId);
-    const prepared = selected.node.prepareMissingInstanceSpotSend?.(
-      selected.target,
-      encoded,
-      BigInt(deadline.deadlineMs),
-      sourceSpotId,
-      call.metadata
-    );
-    const submit = prepared === undefined
-      ? () => mapSubmitResult(selected.node.sendToMissingInstanceSpot(
-          selected.target,
-          encoded,
-          BigInt(deadline.deadlineMs),
-          sourceSpotId,
-          call.metadata
-        ))
-      : () => mapSubmitResult(prepared());
-    const mapped = this.options.submitMissingInstance === undefined
-      ? submit()
-      : await awaitWithAbort(
-          this.options.submitMissingInstance(
-            selected.meshName,
-            submit,
-            deadline.signal,
-            deadline.requireRemaining()
-          ),
-          deadline.signal
-        );
+    const mapped = mapSubmitResult(await awaitWithAbort(
+      selected.node.sendToMissingInstanceSpot(
+        selected.target,
+        encoded,
+        BigInt(deadline.deadlineMs),
+        sourceSpotId,
+        call.metadata
+      ),
+      deadline.signal
+    ));
     this.traceInstanceAddress(
       mapped.status === ZLinkSubmitStatus.Submitted
         ? ZLinkMessageFlowOutcome.Sent

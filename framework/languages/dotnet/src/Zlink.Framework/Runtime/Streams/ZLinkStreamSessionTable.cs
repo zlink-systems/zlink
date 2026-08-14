@@ -10,9 +10,7 @@ internal sealed class ZLinkStreamSessionTable(
     ZLinkDrainAdmissionGate drainAdmission,
     string transport,
     TimeProvider timeProvider,
-    bool actorDispatchEnabled,
-    ZLinkAsyncSubmitter sendSubmitter,
-    ZLinkCompletionAdmissionOwner? completionAdmission)
+    bool actorDispatchEnabled)
 {
     private readonly object _gate = new();
     private readonly Dictionary<RoutingId, ZLinkStreamSessionRuntime> _sessions = [];
@@ -105,9 +103,7 @@ internal sealed class ZLinkStreamSessionTable(
                         transport,
                         timeProvider,
                         actorDispatchEnabled,
-                        sendSubmitter,
-                        requireConnectionReady: true,
-                        completionAdmission: completionAdmission)
+                        requireConnectionReady: true)
                     .ConfigureAwait(false);
                 var result = created;
                 var disposeCreated = false;

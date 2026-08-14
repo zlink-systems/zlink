@@ -4,7 +4,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
 import systems.zlink.framework.runtime.internal.backend.*;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -155,11 +154,12 @@ final class PublishCall implements ZLinkFanoutPublishCall {
         }
         List<Message> publishParts = ZLinkChannelCallRuntime.parts(
             packetName, payload, contentType);
-        return runtime.oneWayCalls().submitOneWay(
-            publisher,
-            ZLinkBackendAdmissionKey.socket(),
-            () -> publisher.publish(topic, publishParts, SendFlags.DONT_WAIT),
-            () -> publishParts.forEach(Message::close));
+        CompletionStage<Void> result = ZLinkOneWayCalls.adaptOneWay(
+            publisher.publishAsync(
+                topic, publishParts, SendFlags.DONT_WAIT));
+        result.whenComplete((ignored, failure) ->
+            publishParts.forEach(Message::close));
+        return result;
     }
 }
 
@@ -230,11 +230,9 @@ final class SendCall implements ZLinkSendCall {
         }
         List<Message> parts = ZLinkChannelCallRuntime.parts(
             packetName, payload, contentType);
-        return runtime.oneWayCalls().submitOneWay(
-            client,
-            ZLinkBackendAdmissionKey.socket(),
-            () -> client.send(parts, SendFlags.DONT_WAIT),
-            () -> parts.forEach(Message::close));
+        return ZLinkOneWayCalls.adaptOneWay(client.send(parts))
+            .whenComplete((ignored, failure) ->
+                parts.forEach(Message::close));
     }
 }
 
@@ -346,11 +344,17 @@ final class RequestCall implements ZLinkRequestCall {
                 ZLinkDispatchMessageKind.REQUEST,
                 reqPacket, null, null, null, null, null, null, null));
         }
-        runtime.submitClient(
-            client,
-            requestParts,
-            timeout,
-            reply -> {
+        runtime.requestClient(client, requestParts, timeout)
+            .whenComplete((reply, failure) -> {
+                if (failure != null) {
+                    result.completeExceptionally(
+                        ZLinkChannelCallRuntime.unwrap(failure));
+                    return;
+                }
+                if (result.isDone()) {
+                    reply.close();
+                    return;
+                }
                 try {
                     runtime.completeReply(reply, replyType, result);
                         if (runtime.flow().enabled(ZLinkMessageFlowOutcome.REPLY_RECEIVED)) {
@@ -363,10 +367,9 @@ final class RequestCall implements ZLinkRequestCall {
                 } catch (RuntimeException ex) {
                     result.completeExceptionally(ex);
                 } finally {
-                    reply.parts().forEach(Message::close);
+                    reply.close();
                 }
-            },
-            result);
+            });
         return ZLinkAsyncSerialQueue.manageCurrent(result);
     }
 

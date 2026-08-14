@@ -5,9 +5,9 @@ using Zlink.Framework.Runtime.Service;
 namespace Zlink.Framework.Runtime.Actors;
 
 /// <summary>
-/// Persists the standalone Actor precommit phases on the source authority.
-/// The Prepared CAS also rebinds its reserved capacity fence, allowing the
-/// following NewOwner CAS to consume the same fence without a version gap.
+/// Persists the standalone Actor source capture and the target-owned cutover
+/// CAS. Target preparation never reserves Location Store capacity or changes
+/// the source-owned authority row.
 /// </summary>
 internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
     IZLinkLocationRepository store)
@@ -36,7 +36,6 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             TargetNodeGeneration: 0,
             TargetOwnerId: string.Empty,
             TargetOwnerLeaseGeneration: 0,
-            ReservationGeneration: 0,
             source.OwnerId,
             checked((ulong)source.OwnerLeaseGeneration),
             sourceAuthority.NodeRid.ToHex(),
@@ -44,8 +43,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             Phase: 1,
             RelocationReference: string.Empty,
             RelocationChecksumCrc32c: 0,
-            applicationVersion,
-            SourceCleanupState: 0)
+            applicationVersion)
         {
             CoordinatorExpectedAuthorityStoreVersion = source.StoreVersion
         };
@@ -107,114 +105,55 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             .ConfigureAwait(false);
     }
 
-    internal async ValueTask<ZLinkAuthoritySnapshot> PrepareTargetAsync(
+    internal ValueTask<ZLinkAuthoritySnapshot> CommitTargetAsync(
         ZLinkAuthoritySnapshot captured,
         ZLinkRelocationEnvelope root,
-        ZLinkRelocationCapacityFence capacityFence,
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-        ulong reservationGeneration,
-        CancellationToken cancellationToken)
-    {
-        if (reservationGeneration == 0)
-            throw new ArgumentOutOfRangeException(nameof(reservationGeneration));
-        var projection = RequirePhase(captured, root.AggregateId, 2);
-        var targetOwner = new ZLinkLocationOwnerToken(
-            prepare.Candidate.OwnerId,
-            checked((long)prepare.Candidate.OwnerLeaseGeneration));
-        var state = projection.State with
-        {
-            Phase = 3,
-            TargetAttemptGeneration = prepare.TargetAttemptGeneration,
-            TargetNodeRid = prepare.Candidate.NodeRid.ToHex(),
-            TargetNodeGeneration = prepare.Candidate.NodeGeneration,
-            TargetOwnerId = targetOwner.OwnerId,
-            TargetOwnerLeaseGeneration = checked((ulong)
-                targetOwner.LeaseGeneration),
-            ReservationGeneration = reservationGeneration
-        };
-        var payload = ZLinkCanonicalRelocationAuthorityStateCodec
-            .ReplaceRelocationState(captured.Payload.Span, state, root);
-        return await StoreAsync(
-                root.Participants.Single().AuthorityKey,
-                captured,
-                new ZLinkAuthorityMutation.Put(
-                    payload,
-                    ZLinkAuthorityGenerationTransition.Preserve,
-                    null,
-                    capacityFence),
-                current => MatchesPrepared(
-                    current,
-                    root.AggregateId,
-                    captured,
-                    targetOwner,
-                    prepare,
-                    reservationGeneration,
-                    projection.RelocationReference),
-                cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    internal async ValueTask<ZLinkAuthoritySnapshot> RefreshCapturedRootAsync(
-        ZLinkAuthoritySnapshot captured,
-        ZLinkRelocationEnvelope finalRoot,
-        ZLinkRelocationStored storedFinalRoot,
-        ZLinkRelocationCapacityFence capacityFence,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(captured);
-        ArgumentNullException.ThrowIfNull(finalRoot);
-        ArgumentNullException.ThrowIfNull(storedFinalRoot);
-        var projection = RequirePhase(captured, finalRoot.AggregateId, 2);
-        var state = projection.State with
-        {
-            RelocationReference = storedFinalRoot.Reference,
-            RelocationChecksumCrc32c = storedFinalRoot.ChecksumCrc32c
-        };
-        var payload = ZLinkCanonicalRelocationAuthorityStateCodec
-            .ReplaceRelocationState(captured.Payload.Span, state, finalRoot);
-        return await StoreAsync(
-                finalRoot.Participants.Single().AuthorityKey,
-                captured,
-                new ZLinkAuthorityMutation.Put(
-                    payload,
-                    ZLinkAuthorityGenerationTransition.Preserve,
-                    null,
-                    capacityFence),
-                current => Matches(
-                    current,
-                    finalRoot.AggregateId,
-                    phase: 2,
-                    captured,
-                    target: null,
-                    attempt: 0,
-                    storedFinalRoot.Reference),
-                cancellationToken)
-            .ConfigureAwait(false);
-    }
+        ZLinkActorAuthorityPayload targetAuthority,
+        CancellationToken cancellationToken) =>
+        CommitTargetAsync(
+            captured,
+            root,
+            prepare,
+            targetAuthority,
+            checked(captured.AuthorityOwnerGeneration + 1),
+            cancellationToken);
 
     internal async ValueTask<ZLinkAuthoritySnapshot> CommitTargetAsync(
-        ZLinkAuthoritySnapshot prepared,
+        ZLinkAuthoritySnapshot captured,
         ZLinkRelocationEnvelope root,
-        ZLinkRelocationCapacityFence capacityFence,
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         ZLinkActorAuthorityPayload targetAuthority,
-        ZLinkLocationOwnerToken targetOwner,
+        ulong targetAuthorityOwnerGeneration,
         CancellationToken cancellationToken)
     {
-        var projection = RequirePhase(prepared, root.AggregateId, 3);
-        if (!StringComparer.Ordinal.Equals(
-                projection.TargetOwnerId,
-                targetOwner.OwnerId)
-            || projection.TargetOwnerLeaseGeneration
-               != checked((ulong)targetOwner.LeaseGeneration)
+        var projection = RequirePhase(captured, root.AggregateId, 2);
+        var targetOwner = new ZLinkLocationOwnerToken(
+            prepare.Target.OwnerId,
+            checked((long)prepare.Target.OwnerLeaseGeneration));
+        if (prepare.RelocationId != new ZLinkServiceWireCodec.RelocationWireId(
+                projection.RelocationHigh,
+                projection.RelocationLow)
+            || prepare.TargetAttemptGeneration == 0
+            || prepare.Target.NodeRid != targetAuthority.NodeRid
+            || prepare.Target.NodeGeneration != targetAuthority.NodeGeneration
             || !StringComparer.Ordinal.Equals(
-                projection.State.TargetNodeRid,
-                targetAuthority.NodeRid.ToHex())
-            || projection.State.TargetNodeGeneration
-               != targetAuthority.NodeGeneration)
-            throw DataLost("Prepared target fence changed before owner commit.");
+                targetOwner.OwnerId,
+                targetAuthority.OwnerId)
+            || checked((ulong)targetOwner.LeaseGeneration)
+               != targetAuthority.OwnerLeaseGeneration
+            || targetAuthorityOwnerGeneration
+               <= captured.AuthorityOwnerGeneration)
+            throw DataLost("Target cutover changed its prepared attempt fence.");
         var state = projection.State with
         {
-            Phase = (byte)ZLinkStandaloneActorCanonicalPhase.Committed
+            Phase = (byte)ZLinkStandaloneActorCanonicalPhase.Committed,
+            TargetAttemptGeneration = prepare.TargetAttemptGeneration,
+            TargetNodeRid = prepare.Target.NodeRid.ToHex(),
+            TargetNodeGeneration = prepare.Target.NodeGeneration,
+            TargetOwnerId = targetOwner.OwnerId,
+            TargetOwnerLeaseGeneration = checked((ulong)
+                targetOwner.LeaseGeneration)
         };
         var payload = ZLinkCanonicalRelocationAuthorityStateCodec
             .ReplaceRelocationState(
@@ -223,19 +162,27 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                 root);
         return await StoreAsync(
                 root.Participants.Single().AuthorityKey,
-                prepared,
+                captured,
                 new ZLinkAuthorityMutation.Put(
                     payload,
                     ZLinkAuthorityGenerationTransition.NewOwner,
                     targetOwner,
-                    capacityFence),
-                current => Matches(
+                    captured.Allocation with
+                    {
+                        State = ZLinkPlacementAllocationState.Active,
+                        Descriptor = new ZLinkMeshNodeDescriptorKey(
+                            captured.Allocation.Descriptor.MeshName,
+                            prepare.Target.NodeRid),
+                        DescriptorLifecycleGeneration =
+                            prepare.Target.NodeGeneration
+                    },
+                    targetAuthorityOwnerGeneration),
+                current => MatchesCommitted(
                     current,
                     root.AggregateId,
-                    phase: 4,
-                    prepared,
+                    captured,
                     targetOwner,
-                    projection.TargetAttemptGeneration,
+                    prepare,
                     projection.RelocationReference),
                 cancellationToken,
                 retryAuxiliaryConflicts: true)
@@ -259,7 +206,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     out var projection))
                 return found.Snapshot;
             if (!SameRelocation(projection, relocationId)
-                || projection.Phase is not (1 or 2 or 3 or 9)
+                || projection.Phase is not (1 or 2 or 9)
                 || !StringComparer.Ordinal.Equals(
                     found.Snapshot.OwnerId,
                     projection.State.SourceOwnerId)
@@ -370,7 +317,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                 snapshot.Payload.Span,
                 out var projection)
             || !SameRelocation(projection, relocationId)
-            || projection.Phase is not (1 or 2 or 3 or 9))
+            || projection.Phase is not (1 or 2 or 9))
             return false;
         return StringComparer.Ordinal.Equals(
                    snapshot.OwnerId,
@@ -482,21 +429,20 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                == expectedOwner.LeaseGeneration;
     }
 
-    private static bool MatchesPrepared(
+    private static bool MatchesCommitted(
         ZLinkAuthoritySnapshot current,
         Guid relocationId,
         ZLinkAuthoritySnapshot source,
         ZLinkLocationOwnerToken targetOwner,
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-        ulong reservationGeneration,
         string reference)
     {
         if (!Matches(
                 current,
                 relocationId,
-                phase: 3,
+                phase: (byte)ZLinkStandaloneActorCanonicalPhase.Committed,
                 source,
-                target: null,
+                targetOwner,
                 prepare.TargetAttemptGeneration,
                 reference)
             || !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
@@ -505,16 +451,14 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             return false;
         return StringComparer.Ordinal.Equals(
                    projection.State.TargetNodeRid,
-                   prepare.Candidate.NodeRid.ToHex())
+                   prepare.Target.NodeRid.ToHex())
                && projection.State.TargetNodeGeneration
-               == prepare.Candidate.NodeGeneration
+               == prepare.Target.NodeGeneration
                && StringComparer.Ordinal.Equals(
                    projection.TargetOwnerId,
                    targetOwner.OwnerId)
                && projection.TargetOwnerLeaseGeneration
-               == checked((ulong)targetOwner.LeaseGeneration)
-               && projection.State.ReservationGeneration
-               == reservationGeneration;
+               == checked((ulong)targetOwner.LeaseGeneration);
     }
 
     private static bool SameRelocation(

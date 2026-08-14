@@ -92,7 +92,7 @@ export class ZLinkAutoConnectReconciler {
     try {
       await this.publishLocal(signal);
     } catch {
-      this.recordStoreFailure();
+      await this.recordStoreFailure();
       return;
     }
 
@@ -109,7 +109,7 @@ export class ZLinkAutoConnectReconciler {
         meshName: this.local.meshName
       }, signal);
     } catch {
-      this.recordStoreFailure();
+      await this.recordStoreFailure();
       return;
     }
 
@@ -128,11 +128,11 @@ export class ZLinkAutoConnectReconciler {
       try {
         const republished = await this.publishLocal(signal);
         if (!republished) {
-          this.recordStoreFailure();
+          await this.recordStoreFailure();
           return;
         }
       } catch {
-        this.recordStoreFailure();
+        await this.recordStoreFailure();
         return;
       }
     }
@@ -195,7 +195,7 @@ export class ZLinkAutoConnectReconciler {
           continue;
         }
         this.pendingDisconnects.delete(key);
-        const connected = this.executor.connect(target);
+        const connected = await this.executor.connect(target);
         if (connected) {
           connectedEndpoints.push(target.endpoint);
           this.active.set(key, target);
@@ -214,7 +214,7 @@ export class ZLinkAutoConnectReconciler {
           continue;
         }
         this.pendingDisconnects.delete(key);
-        const connected = this.executor.connect(target);
+        const connected = await this.executor.connect(target);
         if (connected) {
           connectedEndpoints.push(target.endpoint);
           this.active.set(key, target);
@@ -312,7 +312,7 @@ export class ZLinkAutoConnectReconciler {
     return false;
   }
 
-  private recordStoreFailure(): void {
+  private async recordStoreFailure(): Promise<void> {
     const nowMs = this.monotonicNowMs();
     this.storeFailureStartedAtMs ??= nowMs;
     this.storeFailedValue = true;
@@ -324,7 +324,11 @@ export class ZLinkAutoConnectReconciler {
       return;
     }
     for (const [key, target] of this.lastDesired) {
-      if (!this.active.has(key) && !this.failedEndpoints.has(target.endpoint) && this.executor.connect(target)) {
+      if (
+        !this.active.has(key)
+        && !this.failedEndpoints.has(target.endpoint)
+        && await this.executor.connect(target)
+      ) {
         this.active.set(key, target);
       }
     }

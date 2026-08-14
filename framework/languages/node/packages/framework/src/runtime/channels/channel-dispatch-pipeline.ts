@@ -26,6 +26,7 @@ import {
 } from './channel-envelope';
 import type { ZLinkDispatchErrorReporter } from './dispatch-error-reporter';
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
+import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
 
 export interface ZLinkChannelDispatchPipelineOptions {
   readonly dispatchErrors: ZLinkDispatchErrorReporter;
@@ -215,6 +216,7 @@ export class ZLinkChannelDispatchPipeline {
     signal?: AbortSignal
   ): Promise<{ readonly handlerInvoked: boolean; readonly value?: TResult }> {
     let value: TResult | undefined;
+    releaseApplicationJobPermitBeforeHandler();
     const handlerInvoked = await invokeZLinkHandlerFilters(
       this.filters,
       this.createFilterContext(context, fields),

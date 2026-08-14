@@ -94,40 +94,6 @@ internal sealed class ZLinkClientServerDispatcher(
         }
     }
 
-    internal void RejectOverloaded(
-        string channelName,
-        IRouterSocket router,
-        Received received,
-        ZLinkChannelReplyGate replyGate,
-        uint maximumMessageBytes)
-    {
-        try
-        {
-            var header = ZLinkEnvelopeCodec.DecodeHeader(received.Parts);
-            if (header.Kind != ZLinkMessageKind.Request
-                || !StringComparer.Ordinal.Equals(header.ChannelName, channelName))
-                return;
-            Reply(
-                replyGate,
-                router,
-                received,
-                header,
-                ZLinkChannelReplyWriter.CreateErrorHeader(
-                    channelName,
-                    header,
-                    new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.Rejected,
-                        $"ClientServer channel '{channelName}' application queue is full.",
-                        retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff)),
-                null,
-                null,
-                maximumMessageBytes);
-        }
-        catch (ZLinkEnvelopeProtocolException)
-        {
-        }
-    }
-
     private void ReplyProtocolError(
         string channelName,
         IRouterSocket router,

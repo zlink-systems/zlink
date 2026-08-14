@@ -93,8 +93,11 @@ import type {
   ZLinkSpotBoundSessionRuntime
 } from './spot-runtime-ports';
 import { createAbortError } from '../abort';
-import type { ZLinkInboundDispatchBudget } from '../dispatch/inbound-dispatch-budget';
 import type { ServiceMessageFollowRecord } from '../foundation/service-stateful-wire-codec';
+import {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} from '../host/application-job-queue';
 
 const ZLINK_SEND_DONT_WAIT = 1;
 
@@ -119,12 +122,12 @@ export interface ZLinkSpotNodeRuntimeManagerOptions {
   readonly boundSessionRuntime?: ZLinkSpotBoundSessionRuntime;
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;
   readonly detachedTaskRunner?: ZLinkDetachedTaskRunner;
+  readonly applicationJobQueue?: ApplicationJobQueue;
   readonly meshRecordDispatcher?: (
     meshName: string,
     owner: ReadyRecord,
     record: ReceiveRecord
   ) => void | Promise<void>;
-  readonly inboundDispatchBudget?: ZLinkInboundDispatchBudget;
   readonly messageFollowReceiver?: (record: ServiceMessageFollowRecord) => void;
   readonly instanceActivationConcurrencyProvider?: (meshName: string) => {
     readonly active: number;
@@ -175,8 +178,12 @@ export class ZLinkSpotNodeRuntimeManager {
   private runtimeWeightPublication = Promise.resolve();
   private statePublication = Promise.resolve();
   private locationAutoConnect?: ZLinkSpotNodeLocationAutoConnectContext;
+  private readonly applicationJobQueue: ApplicationJobQueue;
 
-  constructor(private readonly options: ZLinkSpotNodeRuntimeManagerOptions) {}
+  constructor(private readonly options: ZLinkSpotNodeRuntimeManagerOptions) {
+    this.applicationJobQueue = options.applicationJobQueue
+      ?? new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
+  }
 
   createReceived() {
     return this.options.backendAdapterFactory.createReceived();
@@ -270,17 +277,18 @@ export class ZLinkSpotNodeRuntimeManager {
       }
       const node = meshAdapter.createMeshNode(this.options.context, {
         meshName: spotNodeName,
-        routingId
+        routingId,
+        applicationJobQueue: this.applicationJobQueue
       });
       node.setMailboxRecordDroppedHandler?.((record) =>
         this.options.dispatchErrors?.report({
           surface: ZLinkDispatchErrorSurface.RouteMeshChannel,
           messageKind: ZLinkDispatchMessageKind.Send,
-          reason: ZLinkDispatchErrorReason.Backpressure,
+          reason: ZLinkDispatchErrorReason.StaleTarget,
           action: ZLinkDispatchErrorAction.Drop,
           channelName: spotNodeName,
           error: new Error(
-            `MeshNode '${spotNodeName}' dropped ${record.kind} for '${record.owner}' because its mailbox is full.`
+            `MeshNode '${spotNodeName}' no longer accepts ${record.kind} for '${record.owner}'.`
           )
         }));
       node.setProtocolErrorHandler?.((record) =>
@@ -344,23 +352,23 @@ export class ZLinkSpotNodeRuntimeManager {
           }
           node.addChannelName(channelName);
           if (channel.weight !== undefined) {
-            node.setChannelWeight(channelName, channel.weight);
+            await node.setChannelWeight(channelName, channel.weight);
           }
         }
         node.setMessageFollowHandler?.((record) => this.options.messageFollowReceiver?.(record));
         node.start();
         this.publishers.set(spotNodeName, node.createPublisher());
         for (const endpoint of spotNode.router?.manualConnections ?? []) {
-          node.connectPeer({ endpoint });
+          await node.connectPeer({ endpoint });
         }
         for (const peer of spotNode.router?.manualPeerConnections ?? []) {
-          node.connectPeer({
+          await node.connectPeer({
             endpoint: peer.endpoint,
             expectedRid: toBackendRoutingId(peer.peerRid)
           });
         }
         pump = new ZLinkMeshDispatchPump(node, {
-          inboundDispatchBudget: this.options.inboundDispatchBudget,
+          applicationJobQueue: this.applicationJobQueue,
           dispatch: (owner, record) => this.dispatchMeshRecord(spotNodeName, owner, record),
           reportError: (error) => this.options.dispatchErrors?.report({
             surface: ZLinkDispatchErrorSurface.RouteMeshChannel,
@@ -594,15 +602,15 @@ export class ZLinkSpotNodeRuntimeManager {
     return this.meshNodes.get(meshName);
   }
 
-  sendMessageFollowNotification(
+  async sendMessageFollowNotification(
     sourceNodeRid: RoutingId,
     targetNodeRid: RoutingId,
     record: Omit<ServiceMessageFollowRecord, 'kind'>
-  ): boolean {
+  ): Promise<boolean> {
     for (const node of this.meshNodes.values()) {
       if (!routingIdsEqual(node.status().routingId, sourceNodeRid)) continue;
       if (node.sendMessageFollowNotification === undefined) return false;
-      return node.sendMessageFollowNotification(targetNodeRid, record);
+      return await node.sendMessageFollowNotification(targetNodeRid, record);
     }
     return false;
   }
@@ -642,9 +650,10 @@ export class ZLinkSpotNodeRuntimeManager {
     }
     const validated = requirePublicRuntimeWeight(weight, 'Placement weight');
     if (this.placementWeight(meshName) === validated) return;
-    node.setPlacementWeight(validated);
     this.runtimePlacementWeights.set(meshName, validated);
-    this.scheduleRuntimeWeightPublication(meshName);
+    this.scheduleRuntimeWeightPublication(meshName, async () => {
+      await node.setPlacementWeight(validated);
+    });
   }
 
   setRuntimeChannelWeight(channelName: string, weight: number): void {
@@ -657,14 +666,15 @@ export class ZLinkSpotNodeRuntimeManager {
     }
     const validated = requirePublicRuntimeWeight(weight, 'Channel weight');
     if (this.effectiveChannelWeight(match.meshName, channelName, match.configuredWeight) === validated) return;
-    node.setChannelWeight(channelName, validated);
     let weights = this.runtimeChannelWeights.get(match.meshName);
     if (weights === undefined) {
       weights = new Map();
       this.runtimeChannelWeights.set(match.meshName, weights);
     }
     weights.set(channelName, validated);
-    this.scheduleRuntimeWeightPublication(match.meshName);
+    this.scheduleRuntimeWeightPublication(match.meshName, async () => {
+      await node.setChannelWeight(channelName, validated);
+    });
   }
 
   waitForRuntimeWeightPublication(): Promise<void> {
@@ -711,8 +721,12 @@ export class ZLinkSpotNodeRuntimeManager {
     return matches[0]!;
   }
 
-  private scheduleRuntimeWeightPublication(meshName: string): void {
+  private scheduleRuntimeWeightPublication(
+    meshName: string,
+    applyWeight: () => Promise<void>
+  ): void {
     const publish = this.runtimeWeightPublication.catch(() => undefined).then(async () => {
+      await applyWeight();
       const state = this.publishedMeshNodeDescriptors.get(meshName)?.state
         ?? ZLinkFrameworkRuntimeState.Serving;
       await this.publishMeshNodeState(state, undefined, meshName);

@@ -98,6 +98,7 @@ import type {
   ZLinkBackendMeshNode
 } from '../contracts';
 import type { ZLinkRawBindingPort } from '../raw-binding-port';
+import type { ApplicationJobQueuePort } from '../../application-jobs/contracts';
 
 const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
@@ -161,11 +162,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private pendingCapacityLimit = 128;
   private objectCapabilities: readonly string[] = [];
   private maintenanceWave?: string;
-  private inboundMessageDropped?: (
-    surface: 'node' | 'channel',
-    messageKind: 'send',
-    reason: 'backpressure'
-  ) => void;
   private mailboxRecordDropped?: (record: {
     readonly kind: 'spot_multicast' | 'actor_control' | 'actor_binding';
     readonly owner: string;
@@ -197,7 +193,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   constructor(
     private readonly meshName: string,
     routingId: string | undefined,
-    private readonly bindingPort: ZLinkRawBindingPort
+    private readonly bindingPort: ZLinkRawBindingPort,
+    private readonly applicationJobQueue?: ApplicationJobQueuePort
   ) {
     if (meshName.length === 0) throw new TypeError('MeshName must be non-empty.');
     if (routingId === undefined || routingId.length === 0) {
@@ -231,14 +228,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     );
     this.objectCapabilities = [...new Set(options.objectCapabilities)].sort();
     this.maintenanceWave = options.maintenanceWave;
-  }
-
-  setInboundMessageDroppedHandler(handler: (
-    surface: 'node' | 'channel',
-    messageKind: 'send',
-    reason: 'backpressure'
-  ) => void): void {
-    this.inboundMessageDropped = handler;
   }
 
   setMailboxRecordDroppedHandler(handler: (record: {
@@ -292,14 +281,14 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return this.requireRuntime().topology.instanceSpotPlacementTypes();
   }
 
-  sendToMissingInstanceSpot(
+  async sendToMissingInstanceSpot(
     target: ServiceInstanceActivationTarget,
     parts: MessageLike | readonly MessageLike[],
     deadlineUnixMs: bigint,
     sourceSpotId?: string,
     metadata?: ReadonlyMap<string, string>
-  ): SubmitResult {
-    const result = this.requireStateful().sendToMissingInstanceSpotFrame(
+  ): Promise<SubmitResult> {
+    const result = await this.requireStateful().sendToMissingInstanceSpotFrame(
       target,
       encodeMultipartApplicationFrame(parts),
       deadlineUnixMs,
@@ -307,23 +296,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata)
     );
     return result as SubmitResult;
-  }
-
-  prepareMissingInstanceSpotSend(
-    target: ServiceInstanceActivationTarget,
-    parts: MessageLike | readonly MessageLike[],
-    deadlineUnixMs: bigint,
-    sourceSpotId?: string,
-    metadata?: ReadonlyMap<string, string>
-  ): () => SubmitResult {
-    const submit = this.requireStateful().prepareMissingInstanceSpotSendFrame(
-      target,
-      encodeMultipartApplicationFrame(parts),
-      deadlineUnixMs,
-      sourceSpotId,
-      metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata)
-    );
-    return () => submit() as SubmitResult;
   }
 
   requestToMissingInstanceSpot(
@@ -365,8 +337,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const runtime = new RawServiceMeshRuntime({
       descriptor,
       bindingPort: this.bindingPort,
-      onInboundMessageDropped: (surface, messageKind, reason) =>
-        this.inboundMessageDropped?.(surface, messageKind, reason),
+      applicationJobQueue: this.requireApplicationJobQueue(),
+      onMailboxReady: (domain) => this.readyHandler?.(
+        domain === 'application' ? ReadyDomain.Application : ReadyDomain.Infrastructure
+      ),
       onProtocolError: (record) => this.protocolError?.({
         sourceNodeRid: record.sourceRoutingId,
         request: record.request,
@@ -418,14 +392,14 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.messageFollowHandler = handler;
   }
 
-  sendMessageFollowNotification(
+  async sendMessageFollowNotification(
     targetNodeRid: string,
     record: Omit<
       import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord,
       'kind'
     >
-  ): boolean {
-    return this.requireStateful().sendMessageFollowNotification(targetNodeRid, record);
+  ): Promise<boolean> {
+    return await this.requireStateful().sendMessageFollowNotification(targetNodeRid, record);
   }
 
   shutdown(_timeoutMs: number): RequestResultValue {
@@ -451,30 +425,34 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.channels.set(name, this.channels.get(name) ?? 100);
   }
 
-  setChannelWeight(name: string, weight: number): void {
+  async setChannelWeight(name: string, weight: number): Promise<void> {
     if (!this.channels.has(name)) throw new Error(`Channel '${name}' is not registered.`);
     const validated = requirePublicWeight(weight, 'Channel weight');
     if (this.channels.get(name) === validated) return;
     this.channels.set(name, validated);
-    this.runtime?.updateLocalWeights({
-      channelName: name,
-      channelWeight: validated
-    });
+    if (this.runtime !== undefined) {
+      await this.runtime.updateLocalWeights({
+        channelName: name,
+        channelWeight: validated
+      });
+    }
   }
 
-  setPlacementWeight(weight: number): void {
+  async setPlacementWeight(weight: number): Promise<void> {
     const validated = requirePublicWeight(weight, 'Placement weight');
     if (this.placementWeight === validated) return;
     this.placementWeight = validated;
-    this.runtime?.updateLocalWeights({ placementWeight: validated });
+    if (this.runtime !== undefined) {
+      await this.runtime.updateLocalWeights({ placementWeight: validated });
+    }
   }
 
-  connectPeer(options: {
+  async connectPeer(options: {
     readonly endpoint: string;
     readonly expectedRid?: unknown;
     readonly expectedSecurityIdentity?: string;
     readonly expectedLifecycleGeneration?: bigint;
-  }): bigint {
+  }): Promise<bigint> {
     const runtime = this.requireRuntime();
     const nodeRoutingId = options.expectedRid === undefined
       ? undefined
@@ -498,7 +476,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         lifecycleGeneration: options.expectedLifecycleGeneration
       })
     });
-    if (nodeRoutingId !== undefined) runtime.announcePeer(nodeRoutingId);
+    if (nodeRoutingId !== undefined) await runtime.announcePeer(nodeRoutingId);
     return intent;
   }
 
@@ -594,11 +572,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return this.requireRuntime().isPeerRouteReady(String(targetRid), lifecycleGeneration);
   }
 
-  sendToNode(
+  async sendToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[]
-  ): SubmitResultValue {
-    return this.requireRuntime().sendToNode(
+  ): Promise<SubmitResultValue> {
+    return await this.requireRuntime().sendToNode(
       String(targetRid),
       encodeMultipart(parts)
     ) ? SubmitResult.Ok : SubmitResult.NotConnected;
@@ -617,11 +595,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return this.observeCompletion(pending.id, OperationKind.NodeRequest, pending.promise);
   }
 
-  sendToChannel(
+  async sendToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[]
-  ): SubmitResultValue {
-    return this.requireRuntime().sendToChannel(
+  ): Promise<SubmitResultValue> {
+    return await this.requireRuntime().sendToChannel(
       channelName,
       encodeMultipart(parts)
     ) ? SubmitResult.Ok : SubmitResult.NotConnected;
@@ -756,13 +734,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   createPublisher(): MeshPublisher {
     let publisherClosed = false;
-    const publish = (
+    const publish = async (
       channelName: string,
       topic: string,
       parts: MessageLike | readonly MessageLike[]
-    ): void => {
+    ): Promise<void> => {
       if (publisherClosed) throw new Error('Mesh publisher is closed.');
-      this.requireStateful().publishLogicalMulticast(
+      await this.requireStateful().publishLogicalMulticast(
         channelName,
         topic,
         encodeMultipart(parts)
@@ -772,7 +750,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       publish,
       publishAsync: async (channelName, topic, parts, _options, signal) => {
         signal?.throwIfAborted();
-        publish(channelName, topic, parts);
+        await publish(channelName, topic, parts);
       },
       close: () => {
         publisherClosed = true;
@@ -791,10 +769,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   createReceiveBatch(
     messageCapacity: number,
-    partCapacity: number,
-    byteCapacity: number
+    partCapacity: number
   ): ReceiveBatch {
-    return new RawReceiveBatch(messageCapacity, partCapacity, byteCapacity);
+    return new RawReceiveBatch(messageCapacity, partCapacity);
   }
 
   drainReady(
@@ -1079,13 +1056,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.requireStateful().forgetSpotRoute(spot, authorityOwnerGeneration, storeVersion);
   }
 
-  sendToInstanceSpot(
+  async sendToInstanceSpot(
     route: ServiceInstanceRouteFence,
     parts: MessageLike | readonly MessageLike[],
     sourceSpotId?: string,
     metadata?: ReadonlyMap<string, string>
-  ): SubmitResult {
-    const result = this.requireStateful().sendToInstanceSpot(
+  ): Promise<SubmitResult> {
+    const result = await this.requireStateful().sendToInstanceSpot(
       route,
       encodeMultipart(parts),
       sourceSpotId,
@@ -1179,11 +1156,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     );
   }
 
-  sendToActor(
+  async sendToActor(
     actor: ZLinkBackendActorRef,
     parts: MessageLike | readonly MessageLike[]
-  ): SubmitResultValue {
-    return this.requireStateful().sendToActor(
+  ): Promise<SubmitResultValue> {
+    return await this.requireStateful().sendToActor(
       actor,
       this.peerGeneration(String(actor.nodeRid)),
       actor.generation,
@@ -1208,12 +1185,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     );
   }
 
-  actorSendToActor(
+  async actorSendToActor(
     source: ZLinkBackendActorRef,
     target: ZLinkBackendActorRef,
     parts: MessageLike | readonly MessageLike[]
-  ): SubmitResultValue {
-    return this.requireStateful().sendToActor(
+  ): Promise<SubmitResultValue> {
+    return await this.requireStateful().sendToActor(
       target,
       this.peerGeneration(String(target.nodeRid)),
       target.generation,
@@ -1241,14 +1218,14 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     );
   }
 
-  sendActorBoundSession(
+  async sendActorBoundSession(
     actor: ZLinkBackendActorRef,
     expectedBindingGeneration: bigint,
     parts: MessageLike | readonly MessageLike[],
     _flags?: number,
     actorFence?: ZLinkBackendActorSessionSendFence
-  ): SubmitResultValue {
-    return this.requireStateful().sendBoundSession(
+  ): Promise<SubmitResultValue> {
+    return await this.requireStateful().sendBoundSession(
       actor,
       expectedBindingGeneration,
       encodeMultipart(parts),
@@ -1295,12 +1272,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     );
   }
 
-  sendFromSpot(
+  async sendFromSpot(
     source: ServiceSpotState,
     target: ServiceDirectSpotRouteFence,
     parts: MessageLike | readonly MessageLike[]
-  ): SubmitResultValue {
-    return this.requireStateful().sendToSpot(
+  ): Promise<SubmitResultValue> {
+    return await this.requireStateful().sendToSpot(
       source.ref.spotId,
       target,
       encodeMultipart(parts)
@@ -1328,13 +1305,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return this.requireStateful().registry.closeSpot(state.ref);
   }
 
-  publishFromSpot(
+  async publishFromSpot(
     state: ServiceSpotState,
     channelName: string,
     topic: string,
     parts: MessageLike | readonly MessageLike[]
-  ): void {
-    this.requireStateful().publishLogicalMulticast(
+  ): Promise<void> {
+    await this.requireStateful().publishLogicalMulticast(
       channelName,
       topic,
       encodeMultipart(parts),
@@ -1393,10 +1370,10 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   private schedulePoll(): void {
     if (this.closed || this.pollTimer !== undefined) return;
-    this.pollTimer = setTimeout(() => {
+    this.pollTimer = setTimeout(async () => {
       this.pollTimer = undefined;
       try {
-        this.poll();
+        await this.poll();
       } finally {
         this.schedulePoll();
       }
@@ -1404,17 +1381,14 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.pollTimer.unref();
   }
 
-  private poll(): void {
+  private async poll(): Promise<void> {
     const runtime = this.runtime;
     if (runtime === undefined) return;
-    runtime.drainMonitorEvents();
-    // Completion progress is independent from Application receive. A future
-    // Application HWM pause may skip pumpOne(), but must keep this call.
-    runtime.progressCompletion();
+    await runtime.drainMonitorEvents();
     this.receiveBatchBudget.reset(performance.now());
     for (;;) {
       this.observedPumpSourceRoutingId = undefined;
-      const result = runtime.pumpOne(performance.now(), this.observePump);
+      const result = await runtime.pumpOne(performance.now(), this.observePump);
       if (result === 'noData') break;
       if (result === 'application') this.readyHandler?.(ReadyDomain.Application);
       const observation = this.takePumpObservation();
@@ -1429,8 +1403,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         )
       ) break;
     }
-    runtime.announceExpectedPeers();
-    runtime.tickLiveness();
+    await runtime.announceExpectedPeers();
+    await runtime.tickLiveness();
     this.notifyReady();
   }
 
@@ -1501,7 +1475,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
           ownerKind: ReadyOwnerKind.Node,
           domain: ReadyDomain.Infrastructure,
           spotId: null,
-          actor: null
+          actor: null,
+          terminalCompletion: true
         },
         new CompletionClaim(completion)
       );
@@ -1562,6 +1537,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return this.runtime;
   }
 
+  private requireApplicationJobQueue(): ApplicationJobQueuePort {
+    if (this.applicationJobQueue === undefined) {
+      throw new Error('Raw MeshNode requires the host Application Job Queue.');
+    }
+    return this.applicationJobQueue;
+  }
+
   private requireStateful(): ServiceStatefulRuntime {
     if (this.stateful === undefined) throw new Error('Stateful MeshNode is not started.');
     return this.stateful;
@@ -1615,11 +1597,11 @@ class RawServiceSpot implements ServiceSpot {
     };
   }
 
-  sendToChannel(
+  async sendToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
     options?: { readonly flags?: number }
-  ): SubmitResultValue {
+  ): Promise<SubmitResultValue> {
     this.requireOpen();
     void options;
     return this.backend.sendToChannel(channelName, parts);
@@ -1634,7 +1616,7 @@ class RawServiceSpot implements ServiceSpot {
     return this.backend.requestToChannel(channelName, parts, options);
   }
 
-  sendToSpot(
+  async sendToSpot(
     targetNodeRid: unknown,
     targetSpotId: unknown,
     targetSpotGeneration: bigint,
@@ -1643,7 +1625,7 @@ class RawServiceSpot implements ServiceSpot {
       readonly routeFence?: ServiceDirectSpotRouteFence;
       readonly entrySpot?: boolean;
     }
-  ): SubmitResultValue {
+  ): Promise<SubmitResultValue> {
     this.requireOpen();
     const routeFence = requireDirectSpotRouteFence(
       options?.routeFence,
@@ -1696,15 +1678,15 @@ class RawServiceSpot implements ServiceSpot {
     );
   }
 
-  publish(
+  async publish(
     channelName: string,
     topic: string,
     parts: MessageLike | readonly MessageLike[],
     options?: { readonly flags?: number }
-  ): void {
+  ): Promise<void> {
     this.requireOpen();
     void options;
-    this.backend.publishFromSpot(this.state, channelName, topic, parts);
+    await this.backend.publishFromSpot(this.state, channelName, topic, parts);
   }
 
   setSubscription(channelName: string, topicFilter: string, kind = 0): void {
@@ -1869,13 +1851,13 @@ class RawStreamSessionService implements StreamSessionService {
     return this.stateful.sessionBindings(String(sessionRid));
   }
 
-  sendToActor(
+  async sendToActor(
     sessionRid: RoutingId,
     actor: ServiceActorRef,
     parts: MessageLike | readonly MessageLike[]
-  ): SubmitResultValue {
+  ): Promise<SubmitResultValue> {
     this.requireStarted();
-    return this.stateful.sendSessionToActor(
+    return await this.stateful.sendSessionToActor(
       String(sessionRid),
       actor,
       encodeMultipart(parts)
@@ -1886,7 +1868,7 @@ class RawStreamSessionService implements StreamSessionService {
     const target = this.sessionTargets.get(sessionRid);
     if (target === undefined) return false;
     try {
-      const operation = this.stream.send(target as unknown as BindingRoutingId);
+      const operation = this.stream.trySend(target as unknown as BindingRoutingId);
       const parts = decodeMultipartBuffers(decodeApplicationPayloadView(payload).payload);
       if (parts.length === 0) return false;
       let submit = operation.message(parts[0]!);
@@ -1950,10 +1932,9 @@ class RawReadyBatch implements ReadyBatch {
 class RawReceiveBatch implements ReceiveBatch {
   constructor(
     readonly messageCapacity: number,
-    readonly partCapacity: number,
-    readonly byteCapacity: number
+    readonly partCapacity: number
   ) {
-    if ([messageCapacity, partCapacity, byteCapacity].some(value => !Number.isInteger(value) || value < 1)) {
+    if ([messageCapacity, partCapacity].some(value => !Number.isInteger(value) || value < 1)) {
       throw new RangeError('Receive batch capacities must be positive.');
     }
   }
@@ -1979,33 +1960,31 @@ class MailboxClaim implements RawClaim {
     const capacity = batch as RawReceiveBatch;
     const records: ReceiveRecord[] = [];
     let parts = 0;
-    let bytes = 0;
     for (let index = 0; index < this.claim.records.length; index += 1) {
       const record = this.claim.records[index]!;
       let decoded: ReceiveRecord;
       try {
         decoded = decodeMultipartRecord(this.runtime, record);
       } catch (error) {
+        record.applicationJob?.close();
         if (error instanceof ServiceWireProtocolError) {
           this.runtime.mailbox.releaseClaimedPayload(record);
           continue;
         }
+        this.runtime.mailbox.releaseClaimedPayload(record);
+        this.remaining = this.claim.records.slice(index + 1);
         throw error;
       }
       const nextParts = decoded.parts.length;
-      let nextBytes = 0;
-      for (const part of decoded.parts) nextBytes += part.size();
       if (
         records.length >= capacity.messageCapacity
         || parts + nextParts > capacity.partCapacity
-        || bytes + nextBytes > capacity.byteCapacity
       ) {
         for (const part of decoded.parts) part.close();
         this.remaining = this.claim.records.slice(index);
         break;
       }
       parts += nextParts;
-      bytes += nextBytes;
       records.push(decoded);
       this.runtime.mailbox.releaseClaimedPayload(record);
     }
@@ -2086,6 +2065,7 @@ function decodeMultipartRecord(
     : kind === ReceiveKind.ChannelRequest
       ? OperationKind.ChannelRequest
       : 0;
+  const ingressLifecycle = receiveIngressLifecycle(record);
   return {
     kind,
     domain: readyDomain(record.domain),
@@ -2103,6 +2083,7 @@ function decodeMultipartRecord(
     kindData: null,
     terminalResult: 0,
     failureErrno: 0,
+    ...ingressLifecycle,
     parts: decodeMultipart(application.payload),
     reply(parts) {
       if (record.correlation === undefined) return SubmitResult.InvalidState;
@@ -2124,6 +2105,7 @@ function decodeStatefulRecord(
   const operationId = record.correlation === undefined
     ? { high: 0n, low: 0n }
     : { high: 2n, low: record.correlation };
+  const ingressLifecycle = receiveIngressLifecycle(record);
   return {
     kind: stateful.receiveKind,
     domain: readyDomain(record.domain),
@@ -2145,6 +2127,7 @@ function decodeStatefulRecord(
     kindData: stateful.kindData ?? null,
     terminalResult: 0,
     failureErrno: 0,
+    ...ingressLifecycle,
     parts: application === undefined ? [] : decodeMultipart(application.payload),
     ...(stateful.isPending === undefined ? {} : { isPending: stateful.isPending }),
     ...(stateful.deadlineUnixMs === undefined ? {} : { deadlineUnixMs: stateful.deadlineUnixMs }),
@@ -2189,6 +2172,19 @@ function decodeStatefulRecord(
   };
 }
 
+function receiveIngressLifecycle(record: ServiceMailboxRecord): {
+  readonly applicationJobPermit?: import('../../application-jobs/contracts').ApplicationJobPermitPort;
+  readonly releaseRetainedIngress?: () => void;
+} {
+  const applicationJob = record.applicationJob;
+  return applicationJob === undefined
+    ? {}
+    : {
+        applicationJobPermit: applicationJob,
+        releaseRetainedIngress: () => applicationJob.close()
+      };
+}
+
 function readyOwner(
   owner: string,
   nodeRid: string,
@@ -2199,6 +2195,7 @@ function readyOwner(
     return {
       ownerKind: ReadyOwnerKind.Spot,
       domain: readyDomain(domain),
+      ordinaryIngressPreAdmitted: true,
       spotId: owner.slice('spot:'.length),
       actor: null
     };
@@ -2213,6 +2210,7 @@ function readyOwner(
     return {
       ownerKind: ReadyOwnerKind.Actor,
       domain: readyDomain(domain),
+      ordinaryIngressPreAdmitted: true,
       spotId: current?.spot.spotId ?? null,
       actor: current?.ref ?? {
         nodeRid,
@@ -2224,6 +2222,7 @@ function readyOwner(
   return {
     ownerKind: ReadyOwnerKind.Node,
     domain: readyDomain(domain),
+    ordinaryIngressPreAdmitted: true,
     spotId: null,
     actor: null
   };

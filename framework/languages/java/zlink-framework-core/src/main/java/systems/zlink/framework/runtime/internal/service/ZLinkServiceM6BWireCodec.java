@@ -19,7 +19,6 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
  */
 public final class ZLinkServiceM6BWireCodec {
     private static final int PREFIX_BYTES = 5;
-    private static final int SESSION_ROUTE_INTENT_MARKER = 0xD1;
 
     public byte[] encodeSpotHeader(
         boolean request,
@@ -1026,41 +1025,10 @@ public final class ZLinkServiceM6BWireCodec {
                 "targetAuthorityOwnerGeneration");
             selected.rid(route.targetNodeRid(), "targetNodeRid");
             selected.nonzero(route.targetNodeGeneration(), "targetNodeGeneration");
-            selected.u64(route.lastAcceptedSessionSequence());
         } else {
             selected.nonzero(route.currentAuthorityOwnerGeneration(),
                 "currentAuthorityOwnerGeneration");
         }
-        byte[] body = selected.toByteArray();
-        writer.u16(body.length);
-        writer.bytes(body);
-        return writer.toByteArray();
-    }
-
-    /**
-     * Encodes the direct-Join route intent before the target owner generation
-     * has been assigned by the Location authority.
-     */
-    public byte[] encodeSessionRelocationRouteIntent(
-        SessionRelocationRouteIntent intent) {
-        Objects.requireNonNull(intent, "intent");
-        Writer writer = prefix(
-            ServiceWireConstants.COMMAND_SESSION_RELOCATION_ROUTE, 0);
-        writeSessionRelocationRoutePrefix(
-            writer,
-            intent.relocation(),
-            intent.coordinator(),
-            intent.senderRole(),
-            intent.actor(),
-            intent.session(),
-            intent.action());
-        Writer selected = new Writer();
-        selected.u8(SESSION_ROUTE_INTENT_MARKER);
-        selected.nonzero(intent.previousAuthorityOwnerGeneration(),
-            "previousAuthorityOwnerGeneration");
-        selected.rid(intent.targetNodeRid(), "targetNodeRid");
-        selected.nonzero(intent.targetNodeGeneration(), "targetNodeGeneration");
-        selected.u64(intent.lastAcceptedSessionSequence());
         byte[] body = selected.toByteArray();
         writer.u16(body.length);
         writer.bytes(body);
@@ -1086,13 +1054,11 @@ public final class ZLinkServiceM6BWireCodec {
         long current;
         RoutingId targetNodeRid = null;
         long targetNodeGeneration = 0;
-        long highWater = 0;
         if (action == SessionRelocationRouteAction.COMMIT) {
             previous = selected.nonzeroU64("previousAuthorityOwnerGeneration");
             current = selected.nonzeroU64("targetAuthorityOwnerGeneration");
             targetNodeRid = selected.rid("targetNodeRid");
             targetNodeGeneration = selected.nonzeroU64("targetNodeGeneration");
-            highWater = selected.u64("replayedHighWater");
         } else {
             current = selected.nonzeroU64("currentAuthorityOwnerGeneration");
         }
@@ -1100,49 +1066,41 @@ public final class ZLinkServiceM6BWireCodec {
         reader.end();
         return new SessionRelocationRoute(relocation, coordinator, senderRole,
             actor, session, action, previous, current, targetNodeRid,
-            targetNodeGeneration, highWater);
+            targetNodeGeneration);
     }
 
-    /** Decodes the direct-Join route intent stored in the transfer root. */
-    public SessionRelocationRouteIntent decodeSessionRelocationRouteIntent(
-        byte[] frame) {
+    public byte[] encodeActorLeft(ActorLeft left) {
+        Objects.requireNonNull(left, "left");
+        Writer writer = prefix(ServiceWireConstants.COMMAND_ACTOR_LEFT, 0);
+        writeActorIdentity(writer, left.actor());
+        writer.text8(left.previousSpotId(), "previousSpotId");
+        writer.nonzero(
+            left.previousSpotGeneration(), "previousSpotGeneration");
+        writer.nonzero(
+            left.currentAuthorityOwnerGeneration(),
+            "currentAuthorityOwnerGeneration");
+        return writer.toByteArray();
+    }
+
+    public ActorLeft decodeActorLeft(byte[] frame) {
         Reader reader = new Reader(frame);
         Header header = reader.prefix();
-        if (header.command() != ServiceWireConstants.COMMAND_SESSION_RELOCATION_ROUTE
+        if (header.command() != ServiceWireConstants.COMMAND_ACTOR_LEFT
             || header.flags() != 0) {
-            throw protocol("frame is not a Session relocation route intent");
+            throw protocol("command is not actorLeft");
         }
-        RelocationIdentity relocation = readRelocationIdentity(reader);
-        RelocationCoordinatorFence coordinator = readCoordinatorFence(reader);
-        RelocationRole senderRole = RelocationRole.fromWire(reader.u8("senderRole"));
         ActorIdentity actor = readActorIdentity(reader);
-        SessionOwnerFence session = readSessionOwner(reader);
-        SessionRelocationRouteAction action =
-            SessionRelocationRouteAction.fromWire(reader.u8("action"));
-        if (action != SessionRelocationRouteAction.COMMIT) {
-            throw protocol("Session relocation route intent must commit");
-        }
-        Reader selected = reader.reader(reader.u16("routeBodyLength"));
-        if (selected.u8("intentMarker") != SESSION_ROUTE_INTENT_MARKER) {
-            throw protocol("invalid Session relocation route intent marker");
-        }
-        long previous = selected.nonzeroU64("previousAuthorityOwnerGeneration");
-        RoutingId targetNodeRid = selected.rid("targetNodeRid");
-        long targetNodeGeneration = selected.nonzeroU64("targetNodeGeneration");
-        long highWater = selected.u64("replayedHighWater");
-        selected.end();
+        String previousSpotId = reader.text8("previousSpotId");
+        long previousSpotGeneration = reader.nonzeroU64(
+            "previousSpotGeneration");
+        long currentAuthorityOwnerGeneration = reader.nonzeroU64(
+            "currentAuthorityOwnerGeneration");
         reader.end();
-        return new SessionRelocationRouteIntent(
-            relocation,
-            coordinator,
-            senderRole,
+        return new ActorLeft(
             actor,
-            session,
-            action,
-            previous,
-            targetNodeRid,
-            targetNodeGeneration,
-            highWater);
+            previousSpotId,
+            previousSpotGeneration,
+            currentAuthorityOwnerGeneration);
     }
 
     private static void writeSessionRelocationRoutePrefix(
@@ -1159,40 +1117,6 @@ public final class ZLinkServiceM6BWireCodec {
         writeActorIdentity(writer, actor);
         writeSessionOwner(writer, session);
         writer.u8(action.wireValue);
-    }
-
-    public byte[] encodeSessionRelocationRouted(SessionRelocationRouted routed) {
-        Objects.requireNonNull(routed, "routed");
-        Writer writer = prefix(
-            ServiceWireConstants.COMMAND_SESSION_RELOCATION_ROUTED, 0);
-        writeRelocationIdentity(writer, routed.relocation());
-        writeCoordinatorFence(writer, routed.coordinator());
-        writeActorIdentity(writer, routed.actor());
-        writeSessionOwner(writer, routed.session());
-        writer.u8(routed.action().wireValue);
-        writer.u8(routed.result().wireValue);
-        writer.nonzero(routed.currentAuthorityOwnerGeneration(),
-            "currentAuthorityOwnerGeneration");
-        writer.u64(routed.lastAcceptedSessionSequence());
-        return writer.toByteArray();
-    }
-
-    public SessionRelocationRouted decodeSessionRelocationRouted(byte[] frame) {
-        Reader reader = new Reader(frame);
-        Header header = reader.prefix();
-        if (header.command() != ServiceWireConstants.COMMAND_SESSION_RELOCATION_ROUTED
-            || header.flags() != 0) {
-            throw protocol("command is not sessionRelocationRouted");
-        }
-        SessionRelocationRouted routed = new SessionRelocationRouted(
-            readRelocationIdentity(reader), readCoordinatorFence(reader),
-            readActorIdentity(reader), readSessionOwner(reader),
-            SessionRelocationRouteAction.fromWire(reader.u8("action")),
-            SessionRelocationRouteResult.fromWire(reader.u8("result")),
-            reader.nonzeroU64("currentAuthorityOwnerGeneration"),
-            reader.u64("lastAcceptedSessionSequence"));
-        reader.end();
-        return routed;
     }
 
     //  Command 42 `sessionRelocationSeal`. Body order is fixed by
@@ -1230,11 +1154,8 @@ public final class ZLinkServiceM6BWireCodec {
         return seal;
     }
 
-    //  Command 43 `sessionRelocationSealed`. Identical to 42 minus the
-    //  senderRole byte, plus the owner's `lastAcceptedSessionSequence` as an
-    //  `ordinal-or-zero` u64 - zero is legal for a Session that never
-    //  forwarded a bound message. Mirrors
-    //  `encode_session_relocation_sealed` (service_wire_codec.cpp:1238).
+    //  Command 43 `sessionRelocationSealed` is command 42 without senderRole.
+    //  It confirms only that the exact binding seal was installed.
     public byte[] encodeSessionRelocationSealed(
         SessionRelocationSealed sealed) {
         Objects.requireNonNull(sealed, "sealed");
@@ -1244,7 +1165,6 @@ public final class ZLinkServiceM6BWireCodec {
         writeCoordinatorFence(writer, sealed.coordinator());
         writeActorRoute(writer, sealed.actor());
         writeSessionOwner(writer, sealed.session());
-        writer.u64(sealed.lastAcceptedSessionSequence());
         return writer.toByteArray();
     }
 
@@ -1259,8 +1179,7 @@ public final class ZLinkServiceM6BWireCodec {
             readRelocationIdentity(reader),
             readCoordinatorFence(reader),
             readActorRoute(reader),
-            readSessionOwner(reader),
-            reader.u64("lastAcceptedSessionSequence"));
+            readSessionOwner(reader));
         reader.end();
         return sealed;
     }
@@ -1275,24 +1194,6 @@ public final class ZLinkServiceM6BWireCodec {
                 case 2 -> TARGET;
                 case 3 -> COORDINATOR;
                 default -> throw protocol("unknown relocation role");
-            };
-        }
-    }
-
-    //  Command 45 result, schema `session-relocation-route-result`. Spec 20
-    //  §5 defines the four outcomes the Session owner answers with; the
-    //  target stops retransmitting once it receives any of them.
-    public enum SessionRelocationRouteResult {
-        APPLIED(0), ALREADY_APPLIED(1), STALE(2), SESSION_OR_BINDING_CLOSED(3);
-        private final int wireValue;
-        SessionRelocationRouteResult(int wireValue) { this.wireValue = wireValue; }
-        private static SessionRelocationRouteResult fromWire(int value) {
-            return switch (value) {
-                case 0 -> APPLIED;
-                case 1 -> ALREADY_APPLIED;
-                case 2 -> STALE;
-                case 3 -> SESSION_OR_BINDING_CLOSED;
-                default -> throw protocol("unknown Session relocation route result");
             };
         }
     }
@@ -1348,10 +1249,7 @@ public final class ZLinkServiceM6BWireCodec {
     /**
      * Command 42. The relocation source asks the Session owner to seal this
      * binding's ingress boundary. `commandRules` in the service wire schema
-     * fixes senderRole to `source` and the phase to `preparing`; the C++
-     * encoder additionally tolerates `coordinator`, so the byte-level check
-     * mirrors that and the state-machine role restriction stays a caller
-     * concern.
+     * fixes senderRole to `source` and the phase to `preparing`.
      */
     public record SessionRelocationSeal(
         RelocationIdentity relocation, RelocationCoordinatorFence coordinator,
@@ -1363,29 +1261,21 @@ public final class ZLinkServiceM6BWireCodec {
             Objects.requireNonNull(senderRole, "senderRole");
             Objects.requireNonNull(actor, "actor");
             Objects.requireNonNull(session, "session");
-            if (senderRole != RelocationRole.SOURCE
-                && senderRole != RelocationRole.COORDINATOR) {
+            if (senderRole != RelocationRole.SOURCE) {
                 throw protocol("Session relocation seal sender is invalid");
             }
         }
     }
 
-    /**
-     * Command 43. Echoes every command 42 field except senderRole and adds the
-     * Session owner's accepted bound-Session high-water at the seal point.
-     */
+    /** Command 43. Echoes every command 42 field except senderRole. */
     public record SessionRelocationSealed(
         RelocationIdentity relocation, RelocationCoordinatorFence coordinator,
-        ActorRouteFence actor, SessionOwnerFence session,
-        long lastAcceptedSessionSequence) {
+        ActorRouteFence actor, SessionOwnerFence session) {
         public SessionRelocationSealed {
             Objects.requireNonNull(relocation, "relocation");
             Objects.requireNonNull(coordinator, "coordinator");
             Objects.requireNonNull(actor, "actor");
             Objects.requireNonNull(session, "session");
-            if (lastAcceptedSessionSequence < 0) {
-                throw protocol("sealed high-water is invalid");
-            }
         }
 
         /** True when this ACK echoes the seal it answers, field for field. */
@@ -1404,7 +1294,7 @@ public final class ZLinkServiceM6BWireCodec {
         SessionOwnerFence session, SessionRelocationRouteAction action,
         long previousAuthorityOwnerGeneration,
         long currentAuthorityOwnerGeneration, RoutingId targetNodeRid,
-        long targetNodeGeneration, long lastAcceptedSessionSequence) {
+        long targetNodeGeneration) {
         public SessionRelocationRoute {
             Objects.requireNonNull(relocation, "relocation");
             Objects.requireNonNull(coordinator, "coordinator");
@@ -1412,8 +1302,7 @@ public final class ZLinkServiceM6BWireCodec {
             Objects.requireNonNull(actor, "actor");
             Objects.requireNonNull(session, "session");
             Objects.requireNonNull(action, "action");
-            if (currentAuthorityOwnerGeneration <= 0
-                || lastAcceptedSessionSequence < 0) {
+            if (currentAuthorityOwnerGeneration <= 0) {
                 throw protocol("route update generations are invalid");
             }
             if (action == SessionRelocationRouteAction.COMMIT) {
@@ -1432,75 +1321,9 @@ public final class ZLinkServiceM6BWireCodec {
                     throw protocol("route abort sender must be source");
                 }
                 if (previousAuthorityOwnerGeneration != 0
-                    || targetNodeRid != null || targetNodeGeneration != 0
-                    || lastAcceptedSessionSequence != 0) {
+                    || targetNodeRid != null || targetNodeGeneration != 0) {
                     throw protocol("abort route update contains commit fields");
                 }
-            }
-        }
-    }
-
-    public record SessionRelocationRouteIntent(
-        RelocationIdentity relocation, RelocationCoordinatorFence coordinator,
-        RelocationRole senderRole, ActorIdentity actor,
-        SessionOwnerFence session, SessionRelocationRouteAction action,
-        long previousAuthorityOwnerGeneration, RoutingId targetNodeRid,
-        long targetNodeGeneration, long lastAcceptedSessionSequence) {
-        public SessionRelocationRouteIntent {
-            Objects.requireNonNull(relocation, "relocation");
-            Objects.requireNonNull(coordinator, "coordinator");
-            Objects.requireNonNull(senderRole, "senderRole");
-            Objects.requireNonNull(actor, "actor");
-            Objects.requireNonNull(session, "session");
-            Objects.requireNonNull(action, "action");
-            Objects.requireNonNull(targetNodeRid, "targetNodeRid");
-            if (senderRole != RelocationRole.TARGET
-                || action != SessionRelocationRouteAction.COMMIT
-                || previousAuthorityOwnerGeneration <= 0
-                || targetNodeGeneration <= 0
-                || lastAcceptedSessionSequence < 0) {
-                throw protocol("Session relocation route intent is invalid");
-            }
-        }
-
-        public SessionRelocationRoute materialize(
-            long currentAuthorityOwnerGeneration) {
-            return new SessionRelocationRoute(
-                relocation,
-                coordinator,
-                senderRole,
-                actor,
-                session,
-                action,
-                previousAuthorityOwnerGeneration,
-                currentAuthorityOwnerGeneration,
-                targetNodeRid,
-                targetNodeGeneration,
-                lastAcceptedSessionSequence);
-        }
-    }
-
-    public record SessionRelocationRouted(
-        RelocationIdentity relocation, RelocationCoordinatorFence coordinator,
-        ActorIdentity actor, SessionOwnerFence session,
-        SessionRelocationRouteAction action,
-        SessionRelocationRouteResult result,
-        long currentAuthorityOwnerGeneration,
-        long lastAcceptedSessionSequence) {
-        public SessionRelocationRouted {
-            Objects.requireNonNull(relocation, "relocation");
-            Objects.requireNonNull(coordinator, "coordinator");
-            Objects.requireNonNull(actor, "actor");
-            Objects.requireNonNull(session, "session");
-            Objects.requireNonNull(action, "action");
-            Objects.requireNonNull(result, "result");
-            boolean refusal = result == SessionRelocationRouteResult.STALE
-                || result
-                    == SessionRelocationRouteResult.SESSION_OR_BINDING_CLOSED;
-            if (currentAuthorityOwnerGeneration <= 0
-                || lastAcceptedSessionSequence < 0
-                || refusal && lastAcceptedSessionSequence != 0) {
-                throw protocol("route ACK generations are invalid");
             }
         }
     }
@@ -1637,6 +1460,21 @@ public final class ZLinkServiceM6BWireCodec {
         public ActorIdentity {
             if (actorId == null || actorId.isBlank() || generation <= 0) {
                 throw protocol("invalid Actor identity");
+            }
+        }
+    }
+
+    public record ActorLeft(
+        ActorIdentity actor,
+        String previousSpotId,
+        long previousSpotGeneration,
+        long currentAuthorityOwnerGeneration) {
+        public ActorLeft {
+            Objects.requireNonNull(actor, "actor");
+            if (previousSpotId == null || previousSpotId.isBlank()
+                || previousSpotGeneration <= 0
+                || currentAuthorityOwnerGeneration <= 0) {
+                throw protocol("Actor Left fence is invalid");
             }
         }
     }

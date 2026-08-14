@@ -387,17 +387,6 @@ static_assert (
   std::is_same_v<decltype (std::declval<zlink::framework::session_actor_t &> ().relay (
                    std::declval<const zlink::message_t &> ())),
                  zlink::framework::task_t<void>>);
-static_assert (
-  std::is_same_v<
-    decltype (std::declval<zlink::framework::mesh_node_socket_config_t> ()
-                .mailbox_message_budget),
-    std::uint64_t>);
-static_assert (
-  std::is_same_v<
-    decltype (std::declval<zlink::framework::mesh_node_socket_config_t> ()
-                .mailbox_byte_budget),
-    std::uint64_t>);
-
 template <typename T> concept has_blocking_wait = requires (T value)
 {
     value.wait ();
@@ -523,6 +512,12 @@ static_assert (
       std::declval<zlink::framework::store_value_t> ()
         .version),
     zlink::framework::store_version_t>);
+static_assert (
+  std::is_same_v<
+    decltype (
+      std::declval<zlink::framework::location_options_t> ()
+        .session_relocation_seal_timeout),
+    std::chrono::milliseconds>);
 static_assert (
   std::is_same_v<
     zlink::framework::store_condition_t,
@@ -678,10 +673,14 @@ static_assert (
 
 template <typename T> concept has_channel_capability_socket_options = requires (T value)
 {
-    value.send_high_water_mark (zlink::byte_count_t::bytes (8));
-    value.receive_high_water_mark (zlink::byte_count_t::bytes (8));
     value.max_message_size (zlink::byte_size_t::bytes (4096));
     value.peer_weight (zlink::peer_weight_t::value (75));
+};
+
+template <typename T> concept has_legacy_channel_hwm_options = requires (T value)
+{
+    value.send_high_water_mark (zlink::byte_count_t::bytes (8));
+    value.receive_high_water_mark (zlink::byte_count_t::bytes (8));
 };
 
 template <typename T>
@@ -692,6 +691,7 @@ concept has_legacy_client_server_role_methods = requires (T value)
 };
 
 static_assert (has_channel_capability_socket_options<zlink::framework::capability_builder_t>);
+static_assert (!has_legacy_channel_hwm_options<zlink::framework::capability_builder_t>);
 static_assert (
   !has_legacy_client_server_role_methods<
     zlink::framework::client_server_channel_builder_t>);
@@ -1173,27 +1173,47 @@ static_assert (
   std::is_same_v<
     decltype (
       std::declval<zlink::framework::zlink_framework_options_t &> ()
+        .configure_core_hwm ()),
+    zlink::framework::core_hwm_options_t &>);
+static_assert (
+  std::is_same_v<
+    decltype (
+      std::declval<zlink::framework::zlink_framework_options_t &> ()
         .configure_inbound_dispatch ()),
     zlink::framework::inbound_dispatch_options_t &>);
 static_assert (
   std::is_same_v<
     decltype (
       std::declval<zlink::framework::inbound_dispatch_options_t &> ()
-        .set_application_hwm_bytes (
-          std::declval<std::optional<std::uint64_t>> ())),
+        .set_core_hwm_profile (
+          zlink::framework::core_hwm_profile_t::balanced)),
     zlink::framework::inbound_dispatch_options_t &>);
 static_assert (
   std::is_same_v<
     decltype (
-      std::declval<zlink::framework::inbound_dispatch_status_t> ()
-        .pending_payload_bytes),
-    std::uint64_t>);
+      std::declval<zlink::framework::inbound_dispatch_options_t &> ()
+        .set_application_job_queue_profile (
+          zlink::framework::application_job_queue_profile_t::balanced)),
+    zlink::framework::inbound_dispatch_options_t &>);
 static_assert (
   std::is_same_v<
     decltype (
-      std::declval<zlink::framework::inbound_dispatch_status_t> ()
-        .application_receive_paused),
-    bool>);
+      std::declval<zlink::framework::inbound_dispatch_options_t &> ()
+        .set_max_queued_application_jobs (
+          std::optional<std::uint32_t>{1})),
+    zlink::framework::inbound_dispatch_options_t &>);
+static_assert (
+  std::is_same_v<
+    decltype (
+      std::declval<zlink::framework::core_hwm_options_t &> ()
+        .set_core_hwm_memory_limit_bytes (std::uint64_t{1})),
+    zlink::framework::core_hwm_options_t &>);
+static_assert (
+  std::is_same_v<
+    decltype (
+      std::declval<zlink::framework::core_hwm_options_t &> ()
+        .set_core_hwm_budget_bytes (std::uint64_t{1})),
+    zlink::framework::core_hwm_options_t &>);
 static_assert (
   std::is_abstract_v<zlink::framework::framework_runtime_t>);
 static_assert (
@@ -1208,6 +1228,17 @@ static_assert (
   std::is_same_v<
     decltype (
       std::declval<zlink::framework::framework_runtime_t &> ()
+        .reset_capacity_metrics ()),
+    void>);
+static_assert (
+  std::is_same_v<
+    decltype (
+      std::declval<zlink::framework::framework_runtime_status_t> ().capacity),
+    zlink::framework::host_capacity_status_t>);
+static_assert (
+  std::is_same_v<
+    decltype (
+      std::declval<zlink::framework::framework_runtime_t &> ()
         .observe (
           std::size_t{1},
           std::declval<std::function<void (
@@ -1217,17 +1248,9 @@ static_assert (
 static_assert (
   std::is_same_v<
     decltype (
-      std::declval<zlink::framework::inbound_dispatch_options_t &> ()
-        .set_application_hwm_profile (
-          zlink::framework::application_hwm_profile_t::balanced)),
-    zlink::framework::inbound_dispatch_options_t &>);
-static_assert (
-  std::is_same_v<
-    decltype (
-      std::declval<zlink::framework::inbound_dispatch_options_t &> ()
-        .set_process_memory_limit_bytes (
-          std::declval<std::optional<std::uint64_t>> ())),
-    zlink::framework::inbound_dispatch_options_t &>);
+      std::declval<zlink::framework::core_hwm_options_t &> ()
+        .set_core_hwm_profile (zlink::auto_hwm_profile::balanced)),
+    zlink::framework::core_hwm_options_t &>);
 
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::http_context_t &> ()
                                           .response_header ("X-Test", "value")),
@@ -1971,6 +1994,56 @@ int main ()
     zlink::framework::zlink_builder_t zlink;
     zlink::framework::zlink_framework_options_t options (services, option_handlers, serializers,
                                                          zlink);
+    if (options.location_options ().session_relocation_seal_timeout
+        != std::chrono::milliseconds (3000)) {
+        return 10;
+    }
+    {
+        zlink::framework::service_collection_t invalid_services;
+        zlink::framework::handler_registry_t invalid_handlers;
+        zlink::framework::serializer_registry_t invalid_serializers;
+        zlink::framework::zlink_builder_t invalid_zlink;
+        zlink::framework::zlink_framework_options_t invalid_options (
+          invalid_services, invalid_handlers, invalid_serializers,
+          invalid_zlink);
+        invalid_options.configure_locations ()
+          .session_relocation_seal_timeout =
+          std::chrono::milliseconds::zero ();
+        bool invalid_timeout_rejected = false;
+        try {
+            invalid_options.apply ();
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            invalid_timeout_rejected =
+              error.kind ()
+              == zlink::framework::framework_error_kind_t::protocol_error;
+        }
+        if (!invalid_timeout_rejected)
+            return 11;
+    }
+    {
+        zlink::framework::service_collection_t invalid_services;
+        zlink::framework::handler_registry_t invalid_handlers;
+        zlink::framework::serializer_registry_t invalid_serializers;
+        zlink::framework::zlink_builder_t invalid_zlink;
+        zlink::framework::zlink_framework_options_t invalid_options (
+          invalid_services, invalid_handlers, invalid_serializers,
+          invalid_zlink);
+        invalid_options.configure_locations ()
+          .session_relocation_seal_timeout =
+          std::chrono::milliseconds (-1);
+        bool invalid_timeout_rejected = false;
+        try {
+            invalid_options.apply ();
+        }
+        catch (const zlink::framework::framework_exception_t &error) {
+            invalid_timeout_rejected =
+              error.kind ()
+              == zlink::framework::framework_error_kind_t::protocol_error;
+        }
+        if (!invalid_timeout_rejected)
+            return 12;
+    }
     auto &worker_options = options.worker ();
     worker_options.min_threads (2)
       .max_threads (3)

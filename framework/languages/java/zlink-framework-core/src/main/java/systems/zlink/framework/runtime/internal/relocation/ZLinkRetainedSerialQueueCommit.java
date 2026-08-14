@@ -73,6 +73,8 @@ public final class ZLinkRetainedSerialQueueCommit {
         boolean matches(Cut cut);
         void establish(Cut cut);
         void finish(Cut cut);
+        boolean canAbort();
+        void abort();
         void complete();
     }
 
@@ -142,6 +144,19 @@ public final class ZLinkRetainedSerialQueueCommit {
             return establishDurableCut(List.of(this), List.of(cut));
         }
 
+        public boolean tryEstablishAndFinishCapture(Cut cut) {
+            return establishAndFinishCapture(List.of(this), List.of(cut));
+        }
+
+        /** Restores the retained entries when the relocation fails before the
+         * one-way cutover has been accepted. */
+        public boolean abort() {
+            if (completed.get()) {
+                return false;
+            }
+            return abortRetained(List.of(this));
+        }
+
         public void complete() {
             if (completed.compareAndSet(false, true)) {
                 owner.complete();
@@ -189,6 +204,31 @@ public final class ZLinkRetainedSerialQueueCommit {
                 "retained lane commits and cuts must have the same size");
         }
         return withLocks(owners, snapshots, 0, true, true);
+    }
+
+    public static boolean abortRetained(List<Commit> commits) {
+        List<Commit> owners = List.copyOf(commits);
+        if (owners.isEmpty() || owners.stream().anyMatch(
+                commit -> commit.completed.get())) {
+            return false;
+        }
+        return withAbortLocks(owners, 0);
+    }
+
+    private static boolean withAbortLocks(
+        List<Commit> commits,
+        int index) {
+        if (index == commits.size()) {
+            if (commits.stream().anyMatch(
+                    commit -> !commit.owner.canAbort())) {
+                return false;
+            }
+            commits.forEach(commit -> commit.owner.abort());
+            return true;
+        }
+        synchronized (commits.get(index).owner.monitor()) {
+            return withAbortLocks(commits, index + 1);
+        }
     }
 
     private static boolean withLocks(

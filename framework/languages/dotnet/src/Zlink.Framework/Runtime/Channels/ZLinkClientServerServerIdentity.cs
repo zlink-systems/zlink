@@ -194,7 +194,9 @@ internal sealed class ZLinkClientServerServerIdentity(
         Interlocked.Increment(ref _receivedLivenessProbeCount);
     }
 
-    internal void TickLiveness(IRouterSocket router)
+    internal async ValueTask TickLivenessAsync(
+        IRouterSocket router,
+        CancellationToken cancellationToken)
     {
         List<(RoutingId RoutingId, ulong ProbeId)> probes = [];
         List<RoutingId> expired = [];
@@ -225,11 +227,12 @@ internal sealed class ZLinkClientServerServerIdentity(
             {
         }
         foreach (var probe in probes)
-            if (TrySend(
+            if (await SendOwnedAsync(
                     router,
                     probe.RoutingId,
                     ZLinkClientServerControlProtocol.EncodeLivenessProbe(
-                        probe.ProbeId)))
+                        probe.ProbeId),
+                    cancellationToken).ConfigureAwait(false))
                 Interlocked.Increment(ref _livenessProbeCount);
     }
 
@@ -249,7 +252,7 @@ internal sealed class ZLinkClientServerServerIdentity(
         if (router is null)
             return;
         foreach (var peer in peers)
-            _ = TrySend(
+            _ = SendOwnedAsync(
                 router,
                 peer.RoutingId,
                 ZLinkClientServerControlProtocol.EncodeUpdate(
@@ -257,7 +260,8 @@ internal sealed class ZLinkClientServerServerIdentity(
                     {
                         NormalizedEffectiveMaxMessageBytes =
                             peer.MaximumMessageBytes
-                    }));
+                    }),
+                CancellationToken.None);
     }
 
     internal ZLinkClientServerControlProtocol.Admission ToAdmission(
@@ -280,24 +284,28 @@ internal sealed class ZLinkClientServerServerIdentity(
         return result;
     }
 
-    private static bool TrySend(
+    private static async ValueTask<bool> SendOwnedAsync(
         IRouterSocket router,
         RoutingId routingId,
-        Message message)
+        Message message,
+        CancellationToken cancellationToken)
     {
         try
         {
-            if (router.Send(routingId)
+            await router.Send(routingId)
                 .Message(message)
-                .Flags(SendFlags.DontWait)
-                .Submit())
-                return true;
+                .Async(cancellationToken)
+                .ConfigureAwait(false);
+            return true;
         }
         catch
         {
+            return false;
         }
-        message.Dispose();
-        return false;
+        finally
+        {
+            message.Dispose();
+        }
     }
 
 

@@ -144,7 +144,6 @@ public sealed class CanonicalAuthorityAggregateGenerationTests
             TargetNodeGeneration: 13,
             "target-owner",
             TargetOwnerLeaseGeneration: 9,
-            ReservationGeneration: 13,
             "target-owner",
             CoordinatorLeaseGeneration: 9,
             "target-node",
@@ -152,8 +151,7 @@ public sealed class CanonicalAuthorityAggregateGenerationTests
             Phase: 4,
             RelocationReference: "root-reference",
             RelocationChecksumCrc32c: 17,
-            ApplicationVersion: 3,
-            SourceCleanupState: 0);
+            ApplicationVersion: 3);
     }
 
     private static byte[] RemoveAggregateGenerationExtension(

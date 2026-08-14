@@ -19,7 +19,6 @@ import {
   type ZLinkRouteChannelOptions
 } from '../configuration';
 import type { ZLinkBackendSpotRouteBridge } from '../backend/contracts';
-import type { ZLinkAsyncSubmitter } from '../messaging';
 import type { ZLinkRuntimeMetrics } from '../diagnostics';
 import {
   decodeChannelEnvelope,
@@ -57,7 +56,6 @@ export interface ZLinkChannelRequestDispatcherOptions {
   readonly sendHandlers?: ReadonlyMap<string, ZLinkChannelSendHandler>;
   readonly filters?: readonly ZLinkHandlerFilter[];
   readonly unhandled?: ZLinkUnhandledDispatchOptions;
-  readonly replySubmitter?: ZLinkAsyncSubmitter;
 }
 
 export interface ZLinkChannelRequestHandler {
@@ -256,12 +254,9 @@ export class ZLinkChannelRequestDispatcher {
   }
 
   private submitReply(operation: ZLinkMultipartReplyOperation, signal?: AbortSignal): Promise<void> {
-    const submit = () => operation.submit() !== false;
-    if (this.options.replySubmitter !== undefined) {
-      return this.options.replySubmitter.submitCommand(submit, signal);
-    }
-    if (!submit()) {
-      throw new ZLinkConfigurationException('Channel reply submit was backpressured but no submitter is available.');
+    void signal;
+    if (operation.submit() === false) {
+      throw new ZLinkConfigurationException('Channel reply was not accepted by Core.');
     }
     return Promise.resolve();
   }
@@ -380,14 +375,7 @@ export interface ZLinkRoutePacketDispatcherOptions {
   readonly handlers: readonly ZLinkRouteHandlerRegistration[];
   readonly filters?: readonly ZLinkHandlerFilter[];
   readonly unhandled?: ZLinkUnhandledDispatchOptions;
-  readonly replySubmitter?: ZLinkAsyncSubmitter;
   readonly spotRouteBridge?: ZLinkBackendSpotRouteBridge;
-  readonly rawBridgeReplyHandler?: (received: {
-    readonly parts: readonly Message[];
-    readonly routingId: unknown;
-    readonly spotId?: unknown;
-    readonly requestSeq: bigint | null;
-  }) => boolean;
 }
 
 export function collectRouteChannelHandlers(routeChannel: ZLinkRouteChannelOptions): ZLinkRouteHandlerRegistration[] {
@@ -411,7 +399,6 @@ export class ZLinkRoutePacketDispatcher {
   private readonly requestHandlers = new Map<string, ZLinkRouteRuntimeRequestHandler>();
   private readonly codecs?: ZLinkChannelEnvelopeCodecRegistry;
   private readonly pipeline: ZLinkChannelDispatchPipeline;
-  private readonly replySubmitter?: ZLinkAsyncSubmitter;
 
   constructor(options: ZLinkRoutePacketDispatcherOptions) {
     this.routerChannelId = options.routerChannelId;
@@ -423,9 +410,7 @@ export class ZLinkRoutePacketDispatcher {
       filters: options.filters,
       unhandled: options.unhandled
     });
-    this.replySubmitter = options.replySubmitter;
     this.spotRouteBridge = options.spotRouteBridge;
-    this.rawBridgeReplyHandler = options.rawBridgeReplyHandler;
     for (const handler of options.handlers) {
       const target = handler.kind === 'send' ? this.sendHandlers : this.requestHandlers;
       if (target.has(handler.packetName)) {
@@ -437,7 +422,6 @@ export class ZLinkRoutePacketDispatcher {
 
   private readonly routerChannelId: string;
   private readonly spotRouteBridge?: ZLinkBackendSpotRouteBridge;
-  private readonly rawBridgeReplyHandler?: ZLinkRoutePacketDispatcherOptions['rawBridgeReplyHandler'];
 
   dispatchInfrastructure(received: {
     parts: readonly Message[];
@@ -466,7 +450,7 @@ export class ZLinkRoutePacketDispatcher {
       appendParts(received.send(), received.parts).submit();
       return true;
     }
-    return this.rawBridgeReplyHandler?.(received) === true;
+    return false;
   }
 
   async dispatch(received: {
@@ -650,12 +634,8 @@ export class ZLinkRoutePacketDispatcher {
   }
 
   private submitReply(operation: ZLinkMultipartReplyOperation): Promise<void> {
-    const submit = () => operation.submit() !== false;
-    if (this.replySubmitter !== undefined) {
-      return this.replySubmitter.submitCommand(submit);
-    }
-    if (!submit()) {
-      throw new ZLinkConfigurationException('Route reply submit was backpressured but no submitter is available.');
+    if (operation.submit() === false) {
+      throw new ZLinkConfigurationException('Route reply was not accepted by Core.');
     }
     return Promise.resolve();
   }

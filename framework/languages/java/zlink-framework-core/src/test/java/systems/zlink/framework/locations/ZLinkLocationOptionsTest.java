@@ -4,9 +4,40 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.time.Duration;
+import java.lang.reflect.InvocationTargetException;
 import org.junit.jupiter.api.Test;
 
 final class ZLinkLocationOptionsTest {
+    @Test
+    void sessionRelocationSealTimeoutHasTheExactRootLocationContract()
+        throws Exception {
+        ZLinkLocationOptions options = new ZLinkLocationOptions();
+        var getter = ZLinkLocationOptions.class.getMethod(
+            "sessionRelocationSealTimeout");
+        var setter = ZLinkLocationOptions.class.getMethod(
+            "setSessionRelocationSealTimeout", Duration.class);
+
+        assertEquals(Duration.ofMillis(3_000), getter.invoke(options));
+        setter.invoke(options, Duration.ofMillis(17));
+        assertEquals(Duration.ofMillis(17), getter.invoke(options));
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> options.setSessionRelocationSealTimeout(null));
+
+        for (Duration invalid : new Duration[] {
+            Duration.ZERO,
+            Duration.ofMillis(-1),
+            Duration.ofNanos(1),
+            Duration.ofSeconds(Long.MAX_VALUE)}) {
+            InvocationTargetException failure = assertThrows(
+                InvocationTargetException.class,
+                () -> setter.invoke(options, invalid));
+            assertEquals(
+                IllegalArgumentException.class,
+                failure.getCause().getClass());
+        }
+    }
+
     @Test
     void objectRoutingAndRelocationDefaultsMatchTheExactContract() {
         ZLinkLocationOptions options = new ZLinkLocationOptions();

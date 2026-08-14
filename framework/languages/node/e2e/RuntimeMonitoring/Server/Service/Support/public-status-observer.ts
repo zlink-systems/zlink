@@ -147,17 +147,8 @@ export function serializeHostStatus(status: ZLinkFrameworkRuntimeStatus): object
           effectiveTargetApplicationVersion: String(status.relocationResult.effectiveTargetApplicationVersion),
           outcome: status.relocationResult.outcome,
           reason: status.relocationResult.reason
-        },
-    terminationResult: status.terminationResult,
-    inboundDispatch: {
-      applicationHwmBytes: String(status.inboundDispatch.applicationHwmBytes),
-      pendingPayloadBytes: String(status.inboundDispatch.pendingPayloadBytes),
-      queuedPayloadBytes: String(status.inboundDispatch.queuedPayloadBytes),
-      activePayloadBytes: String(status.inboundDispatch.activePayloadBytes),
-      applicationReceivePaused: status.inboundDispatch.applicationReceivePaused,
-      pendingCompletionSends: String(status.inboundDispatch.pendingCompletionSends),
-      completionSendLimit: String(status.inboundDispatch.completionSendLimit)
     },
+    terminationResult: status.terminationResult,
     sequence: String(status.sequence),
     observedAt: status.observedAt.toISOString()
   };

@@ -49,6 +49,60 @@ test('runtime state projections consume the shared public authority fixture', ()
   }
 });
 
+test('runtime status exposes one host capacity snapshot and resets its epoch', async () => {
+  const runtime = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration()
+  });
+
+  assert.equal(runtime.status.capacity.measurementEpoch, 0n);
+  assert.equal(runtime.status.capacity.coreHwm.effectiveBudgetBytes, 0n);
+  assert.equal(
+    runtime.status.capacity.applicationJobQueue.configuredProfile,
+    framework.ZLinkApplicationJobQueueProfile.Balanced
+  );
+  assert.throws(
+    () => runtime.resetCapacityMetrics(),
+    /requires a started Framework runtime/u
+  );
+
+  try {
+    await runtime.start();
+    const before = runtime.status.capacity;
+    const nativeBefore = runtime.context.getCoreHwmBudgetSnapshot();
+    assert.equal(before.measurementEpoch, nativeBefore.measurementEpoch);
+    assert.equal(before.coreHwm.effectiveBudgetBytes, nativeBefore.effectiveCoreBudgetBytes);
+    assert.equal(before.coreHwm.currentAccountedBytes, nativeBefore.currentAccountedBytes);
+    assert.equal(
+      before.applicationJobQueue.effectiveMaxQueuedApplicationJobs,
+      128n * before.applicationJobQueue.effectiveProcessorCount
+    );
+
+    runtime.resetCapacityMetrics();
+    const after = runtime.status.capacity;
+    assert.ok(after.measurementEpoch > before.measurementEpoch);
+    assert.equal(after.coreHwm.currentAccountedBytes, before.coreHwm.currentAccountedBytes);
+    assert.equal(
+      after.coreHwm.completionCurrentAccountedBytes,
+      before.coreHwm.completionCurrentAccountedBytes
+    );
+    assert.equal(
+      after.applicationJobQueue.permitsInUse,
+      before.applicationJobQueue.permitsInUse
+    );
+    assert.equal(
+      after.applicationJobQueue.peakPermitsInUse,
+      after.applicationJobQueue.permitsInUse
+    );
+    assert.equal(after.applicationJobQueue.capacityWaitCount, 0n);
+    assert.equal(after.applicationJobQueue.capacityWaitDurationSeconds, 0);
+  } finally {
+    await runtime.stop();
+  }
+
+  assert.equal(runtime.status.capacity.coreHwm.effectiveBudgetBytes, 0n);
+  assert.ok(runtime.status.capacity.applicationJobQueue.effectiveMaxQueuedApplicationJobs > 0n);
+});
+
 test('maintenance and discovery are one-way bounded-context projections', () => {
   for (const [name, expected] of Object.entries(
     fixture.maintenanceAdmissionProjection

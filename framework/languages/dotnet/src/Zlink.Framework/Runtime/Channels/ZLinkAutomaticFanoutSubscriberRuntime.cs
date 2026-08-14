@@ -1,5 +1,3 @@
-using Zlink.Framework.Runtime.Dispatch;
-
 namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed record ZLinkFanoutConnectionPlan(
@@ -23,8 +21,9 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
     private readonly IZLinkSocketConfig _socketConfig;
     private readonly ZLinkChannelReceiveLoop _receiveLoop;
     private readonly ZLinkFanoutRuntimeService _monitoring;
+    private readonly ZLinkApplicationJobQueue _applicationJobQueue;
+    private readonly bool _ownsApplicationJobQueue;
     private readonly IZLinkRuntimeFailureReporter _errorSink;
-    private readonly ZLinkInboundDispatchBudget _inboundDispatchBudget;
     private readonly CancellationToken _runtimeStopToken;
     private readonly TimeProvider _time;
     private readonly object _gate = new();
@@ -50,7 +49,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
         IZLinkRuntimeFailureReporter errorSink,
         CancellationToken runtimeStopToken,
         TimeProvider? timeProvider = null,
-        ZLinkInboundDispatchBudget? inboundDispatchBudget = null)
+        ZLinkApplicationJobQueue? applicationJobQueue = null)
     {
         _channelName = ZLinkChannelName.FromBoundary(
             channelName,
@@ -59,10 +58,15 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
         _socketConfig = socketConfig;
         _receiveLoop = receiveLoop;
         _monitoring = monitoring;
+        _ownsApplicationJobQueue = applicationJobQueue is null;
+        _applicationJobQueue = applicationJobQueue
+            ?? new ZLinkApplicationJobQueue(
+                ZLinkApplicationJobQueueCapacityResolver.Resolve(
+                    ZLinkApplicationJobQueueProfile.Balanced,
+                    int.MaxValue,
+                    1));
         _errorSink = errorSink;
         _runtimeStopToken = runtimeStopToken;
-        _inboundDispatchBudget = inboundDispatchBudget
-                                 ?? new ZLinkInboundDispatchBudget(0);
         _time = timeProvider ?? TimeProvider.System;
     }
 
@@ -148,6 +152,8 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
         }
         foreach (var connection in connections)
             await connection.DisposeAsync().ConfigureAwait(false);
+        if (_ownsApplicationJobQueue)
+            _applicationJobQueue.Dispose();
     }
 
     private void ConnectionChanged()
@@ -295,8 +301,8 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
                         lock (_gate)
                             _lastFailure = "invalid fanout liveness beacon";
                     },
+                    owner._applicationJobQueue,
                     owner._errorSink,
-                    owner._inboundDispatchBudget,
                     attempt.Token);
                 var watchdog = WatchInboundAsync(attempt);
                 _ = await Task.WhenAny(receive, watchdog)

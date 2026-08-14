@@ -106,7 +106,6 @@ function createServiceModule(role: ServiceRoleOptions): Function {
           const options = value as ServiceOptions;
           fs.mkdirSync(options.logDir, { recursive: true });
           const builder = zlinkFramework();
-          builder.configureInboundDispatch().applicationHwmBytes(4096n);
           builder
             .configureDispatch()
               .messageFlow('normal');

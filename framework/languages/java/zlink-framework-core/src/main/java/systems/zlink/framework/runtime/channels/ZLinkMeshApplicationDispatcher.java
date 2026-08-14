@@ -31,6 +31,8 @@ import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationReceiver;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
@@ -44,7 +46,6 @@ import systems.zlink.framework.runtime.handlers.ZLinkScannedHandler;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerSurface;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkInboundDispatchBudget;
 
 /**
  * Dispatches MeshNode application records through the framework's typed
@@ -63,9 +64,8 @@ public final class ZLinkMeshApplicationDispatcher
     private final ReplySender replies;
     private final String meshName;
     private final ZLinkMeshDrainCoordinator drains;
-    private final ZLinkInboundDispatchBudget inboundDispatchBudget;
+    private final ZLinkApplicationJobQueue applicationJobQueue;
     private final ZLinkMessageFlowTracer flow;
-    private AutoCloseable inboundCapacityRegistration;
     private final Map<String, Namespace> namespaces = new HashMap<>();
 
     public ZLinkMeshApplicationDispatcher(
@@ -74,8 +74,7 @@ public final class ZLinkMeshApplicationDispatcher
         ZLinkFrameworkRegistration framework,
         ZLinkHandlerActivator handlerFactory) {
         this(mesh, serializer, framework, handlerFactory,
-            (token, parts) -> Dispatch.reply(token, parts, SendFlags.NONE), null,
-            new ZLinkInboundDispatchBudget(0));
+            (token, parts) -> Dispatch.reply(token, parts, SendFlags.NONE), null);
     }
 
     public ZLinkMeshApplicationDispatcher(
@@ -85,20 +84,7 @@ public final class ZLinkMeshApplicationDispatcher
         ZLinkHandlerActivator handlerFactory,
         ZLinkMeshDrainCoordinator drains) {
         this(mesh, serializer, framework, handlerFactory,
-            (token, parts) -> Dispatch.reply(token, parts, SendFlags.NONE), drains,
-            new ZLinkInboundDispatchBudget(0));
-    }
-
-    public ZLinkMeshApplicationDispatcher(
-        MeshNodeRegistration mesh,
-        ZLinkMessageSerializer serializer,
-        ZLinkFrameworkRegistration framework,
-        ZLinkHandlerActivator handlerFactory,
-        ZLinkMeshDrainCoordinator drains,
-        ZLinkInboundDispatchBudget inboundDispatchBudget) {
-        this(mesh, serializer, framework, handlerFactory,
-            (token, parts) -> Dispatch.reply(token, parts, SendFlags.NONE),
-            drains, inboundDispatchBudget);
+            (token, parts) -> Dispatch.reply(token, parts, SendFlags.NONE), drains);
     }
 
     ZLinkMeshApplicationDispatcher(
@@ -117,24 +103,11 @@ public final class ZLinkMeshApplicationDispatcher
         ZLinkHandlerActivator handlerFactory,
         ReplySender replies,
         ZLinkMeshDrainCoordinator drains) {
-        this(mesh, serializer, framework, handlerFactory, replies, drains,
-            new ZLinkInboundDispatchBudget(0));
-    }
-
-    ZLinkMeshApplicationDispatcher(
-        MeshNodeRegistration mesh,
-        ZLinkMessageSerializer serializer,
-        ZLinkFrameworkRegistration framework,
-        ZLinkHandlerActivator handlerFactory,
-        ReplySender replies,
-        ZLinkMeshDrainCoordinator drains,
-        ZLinkInboundDispatchBudget inboundDispatchBudget) {
         Objects.requireNonNull(mesh, "mesh");
         Objects.requireNonNull(framework, "framework");
         this.meshName = mesh.meshName();
         this.drains = drains;
-        this.inboundDispatchBudget = Objects.requireNonNull(
-            inboundDispatchBudget, "inboundDispatchBudget");
+        this.applicationJobQueue = framework.applicationJobQueue();
         this.flow = new ZLinkMessageFlowTracer(
             framework.dispatchOptions(),
             handlerFactory,
@@ -150,24 +123,10 @@ public final class ZLinkMeshApplicationDispatcher
             meshName);
         ZLinkScannedHandlerCatalog scannedHandlers =
             ZLinkHandlerScanner.scan(framework.handlerPackageMarkers());
-        //  The receive HWM is an accounted byte count. This capacity is a message
-        //  count, so saturate rather than wrap when the HWM exceeds int range.
-        long receiveHighWaterMark = mesh.configureRouterSocket().receiveHighWaterMark();
-        int localPendingCapacity =
-            receiveHighWaterMark > 0
-                ? (int) Math.min(receiveHighWaterMark, Integer.MAX_VALUE)
-                : 4096;
-        // The socket HWM describes pending application records. The serial
-        // queue accounts the active record as well, so retain one execution
-        // slot in addition to the configured pending capacity.
-        int localQueueCapacity = localPendingCapacity == Integer.MAX_VALUE
-            ? Integer.MAX_VALUE
-            : localPendingCapacity + 1;
         namespaces.put(
             NODE_NAMESPACE,
             routeNamespace(
                 mesh.nodeHandlers(),
-                localQueueCapacity,
                 framework.serialExecutor()));
         mesh.channelHandlers().forEach((name, handlers) ->
             namespaces.put(name, channelNamespace(
@@ -197,11 +156,6 @@ public final class ZLinkMeshApplicationDispatcher
 
         String packetName = record.parts().get(0).toUtf8String();
         Message payload = record.parts().get(1);
-        ZLinkInboundDispatchBudget.Lease lease =
-            record.inboundDispatchLease();
-        if (lease == null) {
-            lease = inboundDispatchBudget.track(payload.size());
-        }
         String contentType = record.receive().contentType() != null
             ? record.receive().contentType()
             : ZLinkChannelContentTypeFrame.decode(record.parts());
@@ -210,122 +164,132 @@ public final class ZLinkMeshApplicationDispatcher
             metadata = ZLinkApplicationMetadata.decode(
                 record.receive().applicationMetadata());
         } catch (IllegalArgumentException error) {
-            reject(record, error.getMessage(), claim, lease);
+            reject(record, error.getMessage(), claim);
             return;
         }
         switch (kind) {
             case NODE_SEND, CHANNEL_SEND ->
-                dispatchSend(
-                    record, namespace, packetName, payload, metadata, contentType, claim,
-                    lease);
+                  dispatchSend(
+                      record, namespace, packetName, payload, metadata, contentType, claim);
             case NODE_REQUEST, CHANNEL_REQUEST ->
-                dispatchRequest(
-                    record, namespace, packetName, payload, metadata, contentType, claim,
-                    lease);
-            default -> closeRecord(record, claim, lease);
+                  dispatchRequest(
+                      record, namespace, packetName, payload, metadata, contentType, claim);
+            default -> closeRecord(record, claim);
         }
     }
 
     @Override
     public void setLocalNodeReadyHandler(Runnable handler) {
-        namespaces.get(NODE_NAMESPACE).sendQueue.onCapacityAvailable(handler);
+        Objects.requireNonNull(handler, "handler");
     }
 
     @Override
-    public ZLinkInboundDispatchBudget applicationDispatchBudget() {
-        return inboundDispatchBudget;
-    }
-
-    @Override
-    public boolean canReceiveApplication() {
-        return inboundDispatchBudget.canStartApplicationReceive();
-    }
-
-    @Override
-    public void setApplicationReceiveReadyHandler(Runnable handler) {
-        try {
-            if (inboundCapacityRegistration != null) {
-                inboundCapacityRegistration.close();
-            }
-            inboundCapacityRegistration = inboundDispatchBudget.onCapacityAvailable(handler);
-        } catch (Exception error) {
-            throw new IllegalStateException(
-                "failed to install inbound dispatch capacity handler", error);
-        }
-    }
-
-    @Override
-    public int submitLocalNodeSend(
+    public CompletionStage<Integer> submitLocalNodeSend(
         RoutingId sourceNodeRid,
         byte[] metadataBytes,
         List<Message> parts) {
         Namespace namespace = namespaces.get(NODE_NAMESPACE);
         if (namespace == null || parts.size() < 2) {
-            return ZLinkOneWayCalls.TARGET_NOT_FOUND;
+            return CompletableFuture.completedFuture(
+                ZLinkOneWayCalls.TARGET_NOT_FOUND);
         }
         String packetName = parts.get(0).toUtf8String();
         ChannelRouteSendHandlerRegistration route = namespace.routeSends.get(packetName);
         if (route == null) {
-            return ZLinkOneWayCalls.TARGET_NOT_FOUND;
+            return CompletableFuture.completedFuture(
+                ZLinkOneWayCalls.TARGET_NOT_FOUND);
         }
         ZLinkMeshDrainCoordinator.Claim claim = drains == null
             ? null
             : drains.tryClaim(meshName);
         if (drains != null && claim == null) {
-            return ZLinkOneWayCalls.SHUTDOWN;
+            return CompletableFuture.completedFuture(
+                ZLinkOneWayCalls.SHUTDOWN);
         }
 
         Message payload = null;
-        ZLinkInboundDispatchBudget.Lease lease = null;
         try {
             payload = Message.from(parts.get(1));
-            lease = inboundDispatchBudget.track(payload.size());
             Map<String, String> metadata = ZLinkApplicationMetadata.decode(metadataBytes);
             String contentType = ZLinkChannelContentTypeFrame.decode(parts);
             Message ownedPayload = payload;
-            ZLinkInboundDispatchBudget.Lease ownedLease = lease;
-            boolean accepted = namespace.sendQueue.tryEnqueueWithPayloadBytes(
-                payload.size(), () -> {
-                try {
-                    ownedLease.handlerStarted();
-                    return invoker.executeHandler(() -> invoker.invokeRouteSendHandler(
-                            null, route, sourceNodeRid, ownedPayload, metadata, contentType))
-                        .whenComplete((ignored, error) -> {
-                            ownedPayload.close();
-                            ownedLease.close();
-                            if (claim != null) {
-                                claim.close();
-                            }
-                        });
-                } catch (RuntimeException failure) {
-                    ownedPayload.close();
-                    ownedLease.close();
-                    if (claim != null) {
-                        claim.close();
-                    }
-                    return CompletableFuture.failedFuture(failure);
+            CompletableFuture<ZLinkApplicationJobQueue.Permit> acquisition =
+                applicationJobQueue.acquire().toCompletableFuture();
+            CompletableFuture<Integer> admission = new CompletableFuture<>();
+            admission.whenComplete((ignored, failure) -> {
+                if (admission.isCancelled()) {
+                    acquisition.cancel(false);
                 }
             });
-            if (!accepted) {
-                payload.close();
-                lease.close();
-                if (claim != null) {
-                    claim.close();
+            acquisition.whenComplete((permit, failure) -> {
+                if (failure != null) {
+                    closeLocalSubmission(ownedPayload, claim);
+                    if (!admission.isCancelled()) {
+                        admission.completeExceptionally(failure);
+                    }
+                    return;
                 }
-                return ZLinkOneWayCalls.BACKPRESSURED;
-            }
-            return ZLinkOneWayCalls.SUBMITTED;
+                if (admission.isCancelled()) {
+                    permit.close();
+                    closeLocalSubmission(ownedPayload, claim);
+                    return;
+                }
+                try (ZLinkApplicationJobContext.Scope ignored =
+                         ZLinkApplicationJobContext.enter(permit)) {
+                    boolean accepted = namespace.sendQueue.tryEnqueue(() -> {
+                        try {
+                            return invoker.executeHandler(() ->
+                                    invoker.invokeRouteSendHandler(
+                                        null,
+                                        route,
+                                        sourceNodeRid,
+                                        ownedPayload,
+                                        metadata,
+                                        contentType))
+                                .whenComplete((unused, error) ->
+                                    closeLocalSubmission(
+                                        ownedPayload, claim));
+                        } catch (RuntimeException handlerFailure) {
+                            closeLocalSubmission(ownedPayload, claim);
+                            return CompletableFuture.failedFuture(
+                                handlerFailure);
+                        }
+                    });
+                    if (!accepted) {
+                        permit.abandonReservation();
+                        closeLocalSubmission(ownedPayload, claim);
+                        admission.complete(ZLinkOneWayCalls.BACKPRESSURED);
+                        return;
+                    }
+                    permit.abandonReservation();
+                    admission.complete(ZLinkOneWayCalls.SUBMITTED);
+                } catch (RuntimeException dispatchFailure) {
+                    permit.abandonReservation();
+                    closeLocalSubmission(ownedPayload, claim);
+                    admission.completeExceptionally(dispatchFailure);
+                }
+            });
+            return admission;
         } catch (RuntimeException failure) {
             if (payload != null) {
                 payload.close();
-            }
-            if (lease != null) {
-                lease.close();
             }
             if (claim != null) {
                 claim.close();
             }
             throw failure;
+        }
+    }
+
+    private static void closeLocalSubmission(
+        Message payload,
+        ZLinkMeshDrainCoordinator.Claim claim) {
+        try {
+            payload.close();
+        } finally {
+            if (claim != null) {
+                claim.close();
+            }
         }
     }
 
@@ -336,12 +300,11 @@ public final class ZLinkMeshApplicationDispatcher
         Message payload,
         Map<String, String> metadata,
         String contentType,
-        ZLinkMeshDrainCoordinator.Claim claim,
-        ZLinkInboundDispatchBudget.Lease lease) {
+        ZLinkMeshDrainCoordinator.Claim claim) {
         ChannelRouteSendHandlerRegistration route = namespace.routeSends.get(packetName);
         ChannelSendHandlerRegistration channel = namespace.channelSends.get(packetName);
         if (route == null && channel == null) {
-            closeRecord(record, claim, lease);
+            closeRecord(record, claim);
             return;
         }
         traceFlow(
@@ -350,8 +313,7 @@ public final class ZLinkMeshApplicationDispatcher
             packetName);
         try {
             CompletionStage<Void> queued = namespace.sendQueue
-                .enqueueWithPayloadBytes(payload.size(), () -> {
-                lease.handlerStarted();
+                .enqueue(() -> {
                 CompletionStage<Void> invocation = route != null
                     ? invoker.executeHandler(() -> invoker.invokeRouteSendHandler(
                         null,
@@ -374,16 +336,16 @@ public final class ZLinkMeshApplicationDispatcher
                             record,
                             packetName);
                     }
-                    closeRecord(record, claim, lease);
+                    closeRecord(record, claim);
                 });
             });
             queued.whenComplete((ignored, error) -> {
                 if (error != null) {
-                    closeRecord(record, claim, lease);
+                    closeRecord(record, claim);
                 }
             });
         } catch (RuntimeException error) {
-            closeRecord(record, claim, lease);
+            closeRecord(record, claim);
             throw error;
         }
     }
@@ -395,14 +357,13 @@ public final class ZLinkMeshApplicationDispatcher
         Message payload,
         Map<String, String> metadata,
         String contentType,
-        ZLinkMeshDrainCoordinator.Claim claim,
-        ZLinkInboundDispatchBudget.Lease lease) {
+        ZLinkMeshDrainCoordinator.Claim claim) {
         ReplyToken token = record.receive().replyToken();
         ChannelRouteRequestHandlerRegistration route = namespace.routeRequests.get(packetName);
         ChannelRequestHandlerRegistration channel = namespace.channelRequests.get(packetName);
         if ((token == null && !record.canReply())
             || (route == null && channel == null)) {
-            reject(record, "MeshNode request handler is not registered: " + packetName, claim, lease);
+            reject(record, "MeshNode request handler is not registered: " + packetName, claim);
             return;
         }
         traceFlow(
@@ -411,11 +372,8 @@ public final class ZLinkMeshApplicationDispatcher
             packetName);
         try {
             CompletionStage<Void> queued = namespace.requestQueue
-                .enqueueWithPayloadBytes(payload.size(), () -> {
-                return inboundDispatchBudget.acquireCompletionPermit()
-                    .thenCompose(permit -> {
-                        try {
-                            lease.handlerStarted();
+                .enqueue(() -> {
+                try {
                             CompletionStage<Message> invocation = route != null
                                 ? invoker.executeHandler(() -> invoker.invokeRouteRequestHandler(
                                     null,
@@ -432,37 +390,29 @@ public final class ZLinkMeshApplicationDispatcher
                                         metadata,
                                         contentType));
                             return invocation.<Void>handle((reply, error) -> {
-                                try {
-                                    if (error == null) {
-                                        replyAndClose(record, token, List.of(reply));
-                                        traceFlow(
-                                            ZLinkMessageFlowOutcome.REPLIED,
-                                            record,
-                                            packetName);
-                                    } else {
-                                        replyError(record, token, error);
-                                    }
-                                } finally {
-                                    permit.close();
+                                if (error == null) {
+                                    replyAndClose(record, token, List.of(reply));
+                                    traceFlow(
+                                        ZLinkMessageFlowOutcome.REPLIED,
+                                        record,
+                                        packetName);
+                                } else {
+                                    replyError(record, token, error);
                                 }
                                 return null;
                             });
-                        } catch (RuntimeException failure) {
-                            permit.close();
-                            return CompletableFuture
-                                .<Void>failedFuture(failure);
-                        }
-                    })
-                    .whenComplete((ignored, error) ->
-                    closeRecord(record, claim, lease));
-            });
+                } catch (RuntimeException failure) {
+                    return CompletableFuture.<Void>failedFuture(failure);
+                }
+            }).whenComplete((ignored, error) ->
+                closeRecord(record, claim));
             queued.whenComplete((ignored, error) -> {
                 if (error != null) {
-                    closeRecord(record, claim, lease);
+                    closeRecord(record, claim);
                 }
             });
         } catch (RuntimeException error) {
-            closeRecord(record, claim, lease);
+            closeRecord(record, claim);
             throw error;
         }
     }
@@ -475,40 +425,22 @@ public final class ZLinkMeshApplicationDispatcher
         ZLinkMeshDispatchRecord record,
         String message,
         ZLinkMeshDrainCoordinator.Claim claim) {
-        reject(record, message, claim, null);
-    }
-
-    private void reject(
-        ZLinkMeshDispatchRecord record,
-        String message,
-        ZLinkMeshDrainCoordinator.Claim claim,
-        ZLinkInboundDispatchBudget.Lease lease) {
         ReplyToken token = record.receive().replyToken();
         try {
             if (token != null || record.canReply()) {
                 replyError(record, token, message);
             }
         } finally {
-            closeRecord(record, claim, lease);
+            closeRecord(record, claim);
         }
     }
 
     private static void closeRecord(
         ZLinkMeshDispatchRecord record,
         ZLinkMeshDrainCoordinator.Claim claim) {
-        closeRecord(record, claim, null);
-    }
-
-    private static void closeRecord(
-        ZLinkMeshDispatchRecord record,
-        ZLinkMeshDrainCoordinator.Claim claim,
-        ZLinkInboundDispatchBudget.Lease lease) {
         try {
             record.close();
         } finally {
-            if (lease != null) {
-                lease.close();
-            }
             if (claim != null) {
                 claim.close();
             }
@@ -604,9 +536,8 @@ public final class ZLinkMeshApplicationDispatcher
 
     private static Namespace routeNamespace(
         List<MeshNodeRegistration.DispatchHandler> handlers,
-        int sendPendingCapacity,
         Executor executor) {
-        Namespace namespace = new Namespace(sendPendingCapacity, executor);
+        Namespace namespace = new Namespace(executor);
         for (MeshNodeRegistration.DispatchHandler handler : handlers) {
             String packetName = ZLinkPacketNames.resolve(handler.messageType());
             if (handler.request()) {
@@ -634,7 +565,7 @@ public final class ZLinkMeshApplicationDispatcher
         List<String> handlerGroups,
         ZLinkScannedHandlerCatalog scannedHandlers,
         Executor executor) {
-        Namespace namespace = new Namespace(Integer.MAX_VALUE, executor);
+        Namespace namespace = new Namespace(executor);
         Set<String> groups = handlerGroups.isEmpty()
             ? Set.of(channelName)
             : Set.copyOf(handlerGroups);
@@ -700,11 +631,8 @@ public final class ZLinkMeshApplicationDispatcher
         private final ZLinkAsyncSerialQueue sendQueue;
         private final ZLinkAsyncSerialQueue requestQueue;
 
-        Namespace(
-            int sendPendingCapacity,
-            Executor executor) {
-            sendQueue = new ZLinkAsyncSerialQueue(
-                executor, false, sendPendingCapacity);
+        Namespace(Executor executor) {
+            sendQueue = new ZLinkAsyncSerialQueue(executor, false);
             requestQueue = new ZLinkAsyncSerialQueue(executor, false);
         }
     }

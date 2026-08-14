@@ -154,6 +154,8 @@ class stream_session_registry_t
       std::uint64_t owner_lease_generation);
     bool remote_route_seal_ready (
       const stream_barrier_t &barrier) const;
+    bool close_remote_route_seal (
+      const stream_barrier_t &barrier);
     bool remote_route_sealed (const std::string &actor_id) const;
     std::optional<stream_remote_tenure_proof_t>
     remote_tenure_proof (
@@ -189,7 +191,6 @@ class stream_session_registry_t
       object_ref_t target,
       std::uint64_t target_node_generation,
       std::uint64_t target_owner_lease_generation,
-      std::uint64_t replayed_high_water,
       route_terminal_commit_t commit_terminal = {});
     stream_route_admission_t acknowledge_remote_abort (
       const std::string &connection_id,

@@ -76,7 +76,7 @@ class raw_stateful_dispatch_t
     stateful_error_t ingest (const object_ref_t &owner);
     std::pair<stateful_error_t, std::optional<stateful_delivery_t>>
     try_claim (const object_ref_t &owner);
-    stateful_error_t complete (
+    task_t<stateful_error_t> complete_async (
       const stateful_delivery_t &delivery,
       std::optional<protocol::application_payload_t> reply = std::nullopt);
     stateful_error_t stage_relocated (
@@ -84,14 +84,11 @@ class raw_stateful_dispatch_t
       turn_record_t turn,
       std::function<bool (
         const std::optional<protocol::application_payload_t> &)> terminal);
-    bool complete_relocated_source (
+    task_t<bool> complete_relocated_source_async (
       const object_ref_t &owner,
       std::uint64_t sequence,
       const protocol::reply_relay_t &relay,
       const std::optional<protocol::application_payload_t> &reply);
-    bool acknowledge_relocated_source (
-      const object_ref_t &owner,
-      const protocol::wire_operation_id_t &operation);
     stateful_error_t discard_pending (const object_ref_t &owner);
     stateful_error_t discard_pending (
       const object_ref_t &owner,
@@ -154,8 +151,6 @@ enum class raw_relocation_replay_result_t
 {
     no_data,
     applied,
-    duplicate,
-    ack_advanced,
     ack_ignored,
     not_registered,
     stale_fence,
@@ -175,25 +170,11 @@ struct raw_relocation_target_registration_t
     protocol::relocation_id_t relocation;
     std::uint64_t target_attempt_generation = 0;
     protocol::relocation_coordinator_fence_t coordinator;
-    std::uint64_t participant_id = 0;
     std::vector<std::uint8_t> relocation_source_node_routing_id;
     std::uint64_t relocation_source_node_generation = 0;
     protocol::relocation_object_t object;
     std::function<bool (const protocol::relocation_data_t &)> stage;
     std::function<void (const protocol::relocation_data_t &)> rollback;
-};
-
-struct raw_relocation_source_registration_t
-{
-    protocol::relocation_id_t relocation;
-    std::uint64_t target_attempt_generation = 0;
-    protocol::relocation_coordinator_fence_t coordinator;
-    std::uint64_t participant_id = 0;
-    std::vector<std::uint8_t> target_node_routing_id;
-    std::uint64_t target_node_generation = 0;
-    std::uint64_t sent_high_water = 0;
-    std::function<void (std::uint64_t)> acknowledged;
-    std::vector<protocol::relocation_data_t> records;
 };
 
 struct raw_relocation_terminal_source_registration_t
@@ -240,22 +221,15 @@ class raw_relocation_replay_coordinator_t
     bool seal_target (
       const protocol::relocation_id_t &relocation,
       std::uint64_t target_attempt_generation,
-      std::uint64_t participant_id);
+      const protocol::relocation_object_t &object);
     bool drain_target (
       const protocol::relocation_id_t &relocation,
       std::uint64_t target_attempt_generation,
-      std::uint64_t participant_id);
+      const protocol::relocation_object_t &object);
     bool unregister_target (
       const protocol::relocation_id_t &relocation,
       std::uint64_t target_attempt_generation,
-      std::uint64_t participant_id);
-    bool register_source (raw_relocation_source_registration_t registration);
-    bool arm_source (
-      const protocol::relocation_id_t &relocation,
-      std::uint64_t target_attempt_generation,
-      std::uint64_t participant_id);
-    bool unregister_source (
-      const protocol::relocation_id_t &, std::uint64_t, std::uint64_t);
+      const protocol::relocation_object_t &object);
     bool register_terminal_source (
       raw_relocation_terminal_source_registration_t registration);
     bool unregister_terminal_source (
@@ -263,8 +237,7 @@ class raw_relocation_replay_coordinator_t
       const protocol::wire_operation_id_t &);
     bool register_terminal_target (
       raw_relocation_terminal_target_registration_t registration);
-    std::size_t retry_terminal_relays (clock_t::time_point now);
-    std::size_t retry_source_replays (clock_t::time_point now);
+    task_t<std::size_t> retry_terminal_relays (clock_t::time_point now);
     std::size_t reap_terminal_tombstones (clock_t::time_point now);
     bool confirm_terminal_source_lease_expired (
       const protocol::relocation_id_t &relocation,
@@ -272,28 +245,16 @@ class raw_relocation_replay_coordinator_t
       const protocol::request_source_fence_t &exact_source);
     std::size_t pending_terminal_relays () const;
     std::size_t terminal_retained_bytes () const;
-    raw_relocation_replay_result_t pump_one ();
-    raw_relocation_replay_result_t process (
+    task_t<raw_relocation_replay_result_t> pump_one ();
+    task_t<raw_relocation_replay_result_t> process (
       const mesh::service_mailbox_record_t &record);
-    std::uint64_t target_high_water (
-      const protocol::relocation_id_t &relocation,
-      std::uint64_t target_attempt_generation,
-      std::uint64_t participant_id) const;
-    std::uint64_t source_ack_high_water (
-      const protocol::relocation_id_t &relocation,
-      std::uint64_t target_attempt_generation,
-      std::uint64_t participant_id) const;
-    std::size_t target_retained_identity_bytes (
-      const protocol::relocation_id_t &relocation,
-      std::uint64_t target_attempt_generation,
-      std::uint64_t participant_id) const;
 
   private:
     struct key_t
     {
         protocol::relocation_id_t relocation;
         std::uint64_t target_attempt_generation = 0;
-        std::uint64_t participant_id = 0;
+        protocol::relocation_object_t object;
         bool operator< (const key_t &other) const noexcept;
     };
     struct target_activity_guard_t
@@ -311,28 +272,9 @@ class raw_relocation_replay_coordinator_t
     struct target_state_t
     {
         raw_relocation_target_registration_t registration;
-        std::uint64_t high_water = 0;
-        std::map<std::uint64_t, std::array<std::byte, 32>> accepted;
-        std::map<std::pair<std::uint64_t, std::uint64_t>, std::uint64_t>
-          accepted_operations;
-        std::optional<std::uint64_t> staging_sequence;
         std::size_t active_stages = 0;
         bool closing = false;
         bool removing = false;
-    };
-    struct target_group_state_t
-    {
-        std::size_t participant_count = 0;
-        std::map<std::pair<std::uint64_t, std::uint64_t>, key_t>
-          staging_operations;
-    };
-    struct source_state_t
-    {
-        raw_relocation_source_registration_t registration;
-        std::uint64_t high_water = 0;
-        bool armed = false;
-        bool acknowledging = false;
-        clock_t::time_point next_retry{};
     };
     struct terminal_key_t
     {
@@ -358,19 +300,16 @@ class raw_relocation_replay_coordinator_t
 
     static key_t key (const protocol::relocation_id_t &relocation,
                       std::uint64_t target_attempt_generation,
-                      std::uint64_t participant_id);
+                      const protocol::relocation_object_t &object);
     void release_target_activity (const key_t &target) noexcept;
     static std::string mailbox_owner (const std::vector<std::uint8_t> &rid);
     raw_relocation_replay_result_t process_data (
       const mesh::service_mailbox_record_t &record,
       const protocol::relocation_data_t &data);
-    raw_relocation_replay_result_t process_ack (
-      const mesh::service_mailbox_record_t &record,
-      const protocol::relocation_ack_t &ack);
-    raw_relocation_replay_result_t process_reply_relay (
+    task_t<raw_relocation_replay_result_t> process_reply_relay (
       const mesh::service_mailbox_record_t &record,
       const protocol::reply_relay_t &relay);
-    raw_relocation_replay_result_t process_reply_relay_ack (
+    task_t<raw_relocation_replay_result_t> process_reply_relay_ack (
       const mesh::service_mailbox_record_t &record,
       const protocol::reply_relay_ack_t &ack);
     static terminal_key_t terminal_key (
@@ -381,8 +320,6 @@ class raw_relocation_replay_coordinator_t
     mutable std::mutex _gate;
     std::condition_variable _gate_condition;
     std::map<key_t, target_state_t> _targets;
-    std::map<key_t, target_group_state_t> _target_groups;
-    std::map<key_t, source_state_t> _sources;
     std::map<terminal_key_t, terminal_source_state_t> _terminal_sources;
     std::map<terminal_key_t, terminal_target_state_t> _terminal_targets;
     std::size_t _terminal_record_limit;

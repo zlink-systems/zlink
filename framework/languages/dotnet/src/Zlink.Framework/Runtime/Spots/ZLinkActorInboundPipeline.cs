@@ -35,6 +35,10 @@ internal sealed class ZLinkActorInboundPipeline(
         ZLinkSpotActorFrameBatch frames,
         CancellationToken cancellationToken)
     {
+        using var applicationAdmission =
+            frames.ApplicationJobAdmission is { } admission
+                ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+                : null;
         Exception? dispatchFailure = null;
         try
         {
@@ -99,6 +103,10 @@ internal sealed class ZLinkActorInboundPipeline(
         ZLinkSpotSerialExecutor executor,
         CancellationToken cancellationToken)
     {
+        using var applicationAdmission =
+            frames.ApplicationJobAdmission is { } admission
+                ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+                : null;
         ArgumentNullException.ThrowIfNull(executor);
         var dispatches = new Task[frames.Count];
         try

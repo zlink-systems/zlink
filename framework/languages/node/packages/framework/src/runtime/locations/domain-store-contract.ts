@@ -38,11 +38,7 @@ import type {
   ZLinkObjectCreationCompleteRequest,
   ZLinkObjectCreationCompleteResult,
   ZLinkObjectReserveRequest,
-  ZLinkObjectReserveResult,
-  ZLinkRelocationCapacityAbortResult,
-  ZLinkRelocationCapacityFence,
-  ZLinkRelocationCapacityReservationRequest,
-  ZLinkRelocationCapacityReserveResult
+  ZLinkObjectReserveResult
 } from '../../contracts/Locations/Authority';
 
 /**
@@ -141,14 +137,6 @@ export interface ZLinkDomainLocationStore {
   ): Promise<ZLinkObjectCreationCompleteResult>;
   abort(request: ZLinkObjectAbortRequest, signal?: AbortSignal): Promise<ZLinkObjectAbortResult>;
 
-  reserveRelocationCapacity(
-    request: ZLinkRelocationCapacityReservationRequest,
-    signal?: AbortSignal
-  ): Promise<ZLinkRelocationCapacityReserveResult>;
-  abortRelocationCapacity(
-    fence: ZLinkRelocationCapacityFence,
-    signal?: AbortSignal
-  ): Promise<ZLinkRelocationCapacityAbortResult>;
   prepareAggregate(
     request: ZLinkAggregatePrepareRequest,
     signal?: AbortSignal

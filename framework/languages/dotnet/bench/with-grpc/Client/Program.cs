@@ -497,11 +497,8 @@ static async ValueTask<BenchResult> RunRawSendAsync(
         payloadSize,
         options,
         options.ZLinkRawStatsUrl,
-        (_, payload, _) =>
-        {
-            RawSend(socket, payload);
-            return ValueTask.CompletedTask;
-        });
+        (_, payload, cancellationToken) =>
+            RawSendAsync(socket, payload, cancellationToken));
 }
 
 static async ValueTask<BenchResult> RunRawRequestSerialAsync(
@@ -553,7 +550,14 @@ static async ValueTask<BenchResult> RunRawRequestSerialBytesAsync(
     for (var i = 0; i < options.Warmup; i++)
     {
         var payload = BenchMetricHeaders.CreatePayload(payloadSize, options.RunId, BenchPhase.Warmup, (ulong)i);
-        await RawRequestCallbackAsync(socket, payload, options.RunId, BenchPhase.Warmup, payloadSize, (ulong)i, cts.Token);
+        await RawRequestAsync(
+            socket,
+            payload,
+            options.RunId,
+            BenchPhase.Warmup,
+            payloadSize,
+            (ulong)i,
+            cts.Token);
     }
 
     using var reset = await http.PostAsync($"{statsUrl}/bench/reset", null, cts.Token);
@@ -577,7 +581,14 @@ static async ValueTask<BenchResult> RunRawRequestSerialBytesAsync(
         var started = Stopwatch.GetTimestamp();
         try
         {
-            await RawRequestCallbackAsync(socket, payload, options.RunId, BenchPhase.Active, payloadSize, (ulong)index, cts.Token);
+            await RawRequestAsync(
+                socket,
+                payload,
+                options.RunId,
+                BenchPhase.Active,
+                payloadSize,
+                (ulong)index,
+                cts.Token);
             completed++;
         }
         catch
@@ -625,84 +636,109 @@ static async ValueTask<BenchResult> RunRawRequestBytesAsync(
     IDealerSocket socket)
 {
     using var cts = new CancellationTokenSource(options.Timeout);
+    using var requestStop = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
     using var http = new HttpClient();
-    using var poller = Systems.Zlink.Zlink.CreatePoller();
-    poller.Add(socket, PollEventFlags.PollCompletion, 0);
-    var pollEvents = new PollEvent[1];
-    var callback = new RawRequestWindowState(
-        options.RunId,
-        payloadSize,
-        options.LatencySampleLimit);
 
     for (var i = 0; i < options.Warmup; i++)
     {
-        callback.Reset(BenchPhase.Warmup);
-        SubmitRawRequestMessage(socket, payloadSize, options.RunId,
-            BenchPhase.Warmup, (ulong)i, callback, SendFlags.None);
-        while (Volatile.Read(ref callback.Outstanding) > 0)
-        {
-            poller.Wait(pollEvents, TimeSpan.FromMilliseconds(50));
-            cts.Token.ThrowIfCancellationRequested();
-        }
+        await RawRequestBytesAsync(
+            socket,
+            payloadSize,
+            options.RunId,
+            BenchPhase.Warmup,
+            (ulong)i,
+            requestStop.Token);
     }
 
     using var reset = await http.PostAsync($"{statsUrl}/bench/reset", null, cts.Token);
     reset.EnsureSuccessStatusCode();
 
-    var next = 0L;
-    var submittedSincePoll = 0;
-    callback.Reset(BenchPhase.Active);
+    var pending = new List<PendingRawRequest>(options.RequestWindow);
+    var metrics = new RawRequestWindowMetrics(options.LatencySampleLimit);
+    var next = 0UL;
     var resources = ResourceSample.Start();
     var total = Stopwatch.StartNew();
     var activeUntil = total.Elapsed + TimeSpan.FromSeconds(options.DurationSeconds);
 
     while (total.Elapsed < activeUntil)
     {
-        var submittedAny = false;
         while (total.Elapsed < activeUntil
-               && Volatile.Read(ref callback.Outstanding) < options.RequestWindow)
+               && pending.Count < options.RequestWindow)
         {
-            var sequence = (ulong)Interlocked.Increment(ref next) - 1UL;
-            if (!SubmitRawRequestMessage(socket, payloadSize, options.RunId,
-                    BenchPhase.Active, sequence, callback,
-                    SendFlags.DontWait))
+            var sequence = next++;
+            try
             {
-                Interlocked.Increment(ref callback.SubmitErrors);
-                break;
+                var request = RawRequestBytesAsync(
+                    socket,
+                    payloadSize,
+                    options.RunId,
+                    BenchPhase.Active,
+                    sequence,
+                    requestStop.Token);
+                if (request.IsCompletedSuccessfully)
+                {
+                    metrics.RecordSuccess(request.Result);
+                }
+                else
+                {
+                    pending.Add(new PendingRawRequest(request.AsTask()));
+                }
             }
-
-            submittedAny = true;
-            if (++submittedSincePoll >= 64)
+            catch
             {
-                submittedSincePoll = 0;
-                poller.Wait(pollEvents, TimeSpan.Zero);
+                metrics.RecordError();
             }
         }
 
-        if (!submittedAny && Volatile.Read(ref callback.Outstanding) == 0)
+        if (DrainCompletedRawRequests(
+                pending,
+                metrics) == 0
+            && pending.Count > 0)
         {
-            await Task.Delay(1, cts.Token);
-            continue;
+            await WaitAnyPendingRawRequestAsync(
+                pending,
+                Timeout.InfiniteTimeSpan,
+                cts.Token);
+            DrainCompletedRawRequests(
+                pending,
+                metrics);
         }
-
-        poller.Wait(pollEvents, TimeSpan.FromMilliseconds(1));
-        cts.Token.ThrowIfCancellationRequested();
     }
 
     var drainUntil = total.Elapsed + TimeSpan.FromMilliseconds(5000);
-    while (Volatile.Read(ref callback.Outstanding) > 0
-           && total.Elapsed < drainUntil)
+    while (pending.Count > 0 && total.Elapsed < drainUntil)
     {
-        poller.Wait(pollEvents, TimeSpan.FromMilliseconds(50));
-        cts.Token.ThrowIfCancellationRequested();
+        if (DrainCompletedRawRequests(
+                pending,
+                metrics) != 0)
+            continue;
+
+        var remaining = drainUntil - total.Elapsed;
+        if (remaining <= TimeSpan.Zero
+            || !await WaitAnyPendingRawRequestAsync(
+                pending,
+                remaining,
+                cts.Token))
+            break;
     }
 
-    var pending = Math.Max(0, Volatile.Read(ref callback.Outstanding));
-    if (pending > 0)
+    DrainCompletedRawRequests(
+        pending,
+        metrics);
+    if (pending.Count > 0)
     {
-        Interlocked.Add(ref callback.Errors, pending);
-        while (Volatile.Read(ref callback.Outstanding) > 0)
-            Interlocked.Decrement(ref callback.Outstanding);
+        metrics.RecordErrors(pending.Count);
+        var abandoned = pending.Select(static item => item.Task).ToArray();
+        requestStop.Cancel();
+        try
+        {
+            await Task.WhenAll(abandoned).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The requests were already counted as failed at the drain bound.
+        }
+        pending.Clear();
     }
 
     total.Stop();
@@ -716,15 +752,15 @@ static async ValueTask<BenchResult> RunRawRequestBytesAsync(
         "KOPS",
         payloadSize,
         options.DurationSeconds,
-        callback.Completed,
-        callback.Errors + callback.SubmitErrors,
+        metrics.Completed,
+        metrics.Errors,
         server.Errors,
         options.Warmup,
         Math.Max(1.0, options.DurationSeconds),
-        callback.Completed / Math.Max(1.0, options.DurationSeconds),
-        callback.Percentile(0.95),
-        callback.Percentile(0.99),
-        callback.Mean,
+        metrics.Completed / Math.Max(1.0, options.DurationSeconds),
+        metrics.Percentile(0.95),
+        metrics.Percentile(0.99),
+        metrics.Mean,
         null,
         null,
         null,
@@ -734,115 +770,74 @@ static async ValueTask<BenchResult> RunRawRequestBytesAsync(
         server.WorkingSetMb);
 }
 
-static bool SubmitRawRequestMessage(
+static ValueTask<long> RawRequestAsync(
+    IDealerSocket socket,
+    BenchPayload payload,
+    uint runId,
+    BenchPhase phase,
+    int payloadSize,
+    ulong sequence,
+    CancellationToken cancellationToken) =>
+    RawRequestMessageAsync(
+        socket,
+        EncodeRawPayload(payload),
+        runId,
+        phase,
+        payloadSize,
+        sequence,
+        cancellationToken);
+
+static ValueTask<long> RawRequestBytesAsync(
     IDealerSocket socket,
     int payloadSize,
     uint runId,
     BenchPhase phase,
     ulong sequence,
-    RawRequestWindowState state,
-    SendFlags flags)
-{
-    var header = Message.From(RawEnvelopeHeaders.Request);
-    Message? body = null;
-    try
-    {
-        body = RawPayloadCodec.Encode(payloadSize, runId, phase, sequence);
-        Interlocked.Increment(ref state.Outstanding);
-        var submitted = socket.Request()
-            .Message(header)
-            .Message(body)
-            .Flags(flags)
-            .Submit(state.Callback);
-        if (!submitted)
-            Interlocked.Decrement(ref state.Outstanding);
-        return submitted;
-    }
-    catch
-    {
-        Interlocked.Decrement(ref state.Outstanding);
-        throw;
-    }
-    finally
-    {
-        header.Dispose();
-        body?.Dispose();
-    }
-}
+    CancellationToken cancellationToken) =>
+    RawRequestMessageAsync(
+        socket,
+        RawPayloadCodec.Encode(payloadSize, runId, phase, sequence),
+        runId,
+        phase,
+        payloadSize,
+        sequence,
+        cancellationToken);
 
-static async ValueTask RawRequestCallbackAsync(
+static async ValueTask<long> RawRequestMessageAsync(
     IDealerSocket socket,
-    BenchPayload payload,
+    Message body,
     uint runId,
     BenchPhase phase,
     int payloadSize,
     ulong sequence,
     CancellationToken cancellationToken)
 {
-    var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-
+    Message? header = null;
+    IReadOnlyList<Message>? parts = null;
     try
     {
-        SubmitRawRequestCallback(
-            socket,
-            payload,
-            (result, parts) =>
-            {
-                try
-                {
-                    if (result != RequestResult.Ok)
-                    {
-                        completion.TrySetException(
-                            new InvalidOperationException($"Raw zlink request failed: {result}."));
-                        return;
-                    }
-
-                    var replyPart = parts.Count == 1 ? parts[0] : parts[^1];
-                    ValidateRawReply(replyPart.AsReadOnlySpan(), runId, phase, payloadSize, sequence);
-                    completion.TrySetResult();
-                }
-                catch (Exception ex)
-                {
-                    completion.TrySetException(ex);
-                }
-                finally
-                {
-                    foreach (var part in parts)
-                    {
-                        part.Dispose();
-                    }
-                }
-            });
-    }
-    catch (Exception ex)
-    {
-        completion.TrySetException(ex);
-    }
-
-    await completion.Task.WaitAsync(cancellationToken);
-}
-
-static bool SubmitRawRequestCallback(
-    IDealerSocket socket,
-    BenchPayload payload,
-    RequestCallback callback)
-{
-    var header = Message.From(RawEnvelopeHeaders.Request);
-    var body = EncodeRawPayload(payload);
-    try
-    {
-        return socket.Request()
+        header = Message.From(RawEnvelopeHeaders.Request);
+        var request = socket.Request()
             .Message(header)
             .Message(body)
-            .Submit(callback);
-    }
-    catch
-    {
-        throw;
+            .Async(cancellationToken);
+        parts = await request.ConfigureAwait(false);
+        if (parts.Count == 0)
+            throw new InvalidOperationException("Raw zlink request returned no reply parts.");
+        var replyPart = parts.Count == 1 ? parts[0] : parts[^1];
+        return ValidateRawReply(
+            replyPart.AsReadOnlySpan(),
+            runId,
+            phase,
+            payloadSize,
+            sequence);
     }
     finally
     {
-        header.Dispose();
+        if (parts is not null)
+            foreach (var part in parts)
+                part.Dispose();
+        header?.Dispose();
         body.Dispose();
     }
 }
@@ -886,35 +881,36 @@ static void ValidateReply(BenchPayload reply, uint runId, BenchPhase phase, int 
     }
 }
 
-static void ValidateRawReply(ReadOnlySpan<byte> reply, uint runId, BenchPhase phase, int payloadSize, ulong sequence)
+static long ValidateRawReply(ReadOnlySpan<byte> reply, uint runId, BenchPhase phase, int payloadSize, ulong sequence)
 {
     if (!RawPayloadCodec.TryDecodeHeader(reply, out var header)
         || !BenchMetricHeaders.IsExpected(header, runId, phase, payloadSize, sequence))
     {
         throw new InvalidOperationException($"Raw echo reply did not carry the expected {phase} metric header.");
     }
+
+    return Math.Max(0, BenchMetricHeaders.NowNs() - header.SentTimestampNs) / 1000;
 }
 
-static void RawSend(IDealerSocket socket, BenchPayload payload)
+static async ValueTask RawSendAsync(
+    IDealerSocket socket,
+    BenchPayload payload,
+    CancellationToken cancellationToken)
 {
-    var header = Message.From(RawEnvelopeHeaders.Request);
     var body = EncodeRawPayload(payload);
+    Message? header = null;
     try
     {
-        if (!socket.Send().Message(header).Message(body).Submit())
-        {
-            header.Dispose();
-            body.Dispose();
-            throw new InvalidOperationException("Raw zlink send was not accepted.");
-        }
-    }
-    catch
-    {
-        throw;
+        header = Message.From(RawEnvelopeHeaders.Request);
+        await socket.Send()
+            .Message(header)
+            .Message(body)
+            .Async(cancellationToken)
+            .ConfigureAwait(false);
     }
     finally
     {
-        header.Dispose();
+        header?.Dispose();
         body.Dispose();
     }
 }
@@ -1019,6 +1015,68 @@ static async ValueTask WaitAnyPendingRequestAsync(
     {
         Array.Clear(tasks, 0, pending.Count);
         ArrayPool<Task<BenchPayload>>.Shared.Return(tasks);
+    }
+}
+
+static int DrainCompletedRawRequests(
+    List<PendingRawRequest> pending,
+    RawRequestWindowMetrics metrics)
+{
+    var drained = 0;
+    for (var index = pending.Count - 1; index >= 0; index--)
+    {
+        var item = pending[index];
+        if (!item.Task.IsCompleted)
+            continue;
+
+        pending.RemoveAt(index);
+        drained++;
+        try
+        {
+            metrics.RecordSuccess(item.Task.GetAwaiter().GetResult());
+        }
+        catch
+        {
+            metrics.RecordError();
+        }
+    }
+
+    return drained;
+}
+
+static async ValueTask<bool> WaitAnyPendingRawRequestAsync(
+    List<PendingRawRequest> pending,
+    TimeSpan timeout,
+    CancellationToken cancellationToken)
+{
+    var tasks = ArrayPool<Task<long>>.Shared.Rent(pending.Count);
+    try
+    {
+        for (var index = 0; index < pending.Count; index++)
+            tasks[index] = pending[index].Task;
+
+        var completion = Task.WhenAny(
+            new ArraySegment<Task<long>>(tasks, 0, pending.Count));
+        if (timeout == Timeout.InfiniteTimeSpan)
+        {
+            await completion.WaitAsync(cancellationToken);
+            return true;
+        }
+
+        try
+        {
+            await completion.WaitAsync(timeout, cancellationToken);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+    }
+    finally
+    {
+        Array.Clear(tasks, 0, pending.Count);
+        ArrayPool<Task<long>>.Shared.Return(tasks);
     }
 }
 
@@ -1179,106 +1237,50 @@ internal readonly record struct PendingBenchRequest(
     long Started,
     ulong Sequence);
 
-internal sealed class RawRequestWindowState
+internal readonly record struct PendingRawRequest(Task<long> Task);
+
+internal sealed class RawRequestWindowMetrics
 {
     private readonly int _latencySampleLimit;
-    private readonly int _payloadSize;
-    private readonly uint _runId;
     private readonly List<long> _samples;
-    private BenchPhase _phase;
     private long _sampleCount;
     private long _sampleSum;
 
-    internal RawRequestWindowState(uint runId, int payloadSize, int latencySampleLimit)
+    internal RawRequestWindowMetrics(int latencySampleLimit)
     {
-        _runId = runId;
-        _payloadSize = payloadSize;
         _latencySampleLimit = latencySampleLimit;
         _samples = new List<long>(latencySampleLimit);
-        Callback = OnReply;
     }
 
-    internal RequestCallback Callback { get; }
-    internal int Completed;
-    internal int Errors;
-    internal int Outstanding;
-    internal int SubmitErrors;
-
+    internal int Completed { get; private set; }
+    internal int Errors { get; private set; }
     internal double Mean => _sampleCount == 0
         ? 0
         : (double)_sampleSum / _sampleCount;
 
-    internal void Reset(BenchPhase phase)
+    internal void RecordSuccess(long elapsedMicros)
     {
-        _phase = phase;
-        Completed = 0;
-        Errors = 0;
-        Outstanding = 0;
-        SubmitErrors = 0;
-        _sampleCount = 0;
-        _sampleSum = 0;
-        _samples.Clear();
+        _sampleSum += elapsedMicros;
+        _sampleCount++;
+        if (_samples.Count < _latencySampleLimit)
+            _samples.Add(elapsedMicros);
+        Completed++;
     }
+
+    internal void RecordError() => Errors++;
+
+    internal void RecordErrors(int count) => Errors += count;
 
     internal long Percentile(double q)
     {
         if (_samples.Count == 0)
-        {
             return (long)Mean;
-        }
 
         _samples.Sort();
         var index = (int)Math.Min(
             _samples.Count - 1,
             q * Math.Max(0, _samples.Count - 1));
         return _samples[index];
-    }
-
-    private void OnReply(RequestResult result, IReadOnlyList<Message> parts)
-    {
-        try
-        {
-            if (result != RequestResult.Ok || parts.Count == 0)
-            {
-                Errors++;
-                return;
-            }
-
-            var replyPart = parts.Count == 1 ? parts[0] : parts[^1];
-            if (!RawPayloadCodec.TryDecodeHeader(replyPart.AsReadOnlySpan(), out var header)
-                || header.RunId != _runId
-                || header.Phase != _phase
-                || header.PayloadSize != _payloadSize)
-            {
-                Errors++;
-                return;
-            }
-
-            var elapsedNs = Math.Max(0,
-                BenchMetricHeaders.NowNs() - header.SentTimestampNs);
-            var elapsedUs = elapsedNs / 1000;
-            _sampleSum += elapsedUs;
-            _sampleCount++;
-            if (_samples.Count < _latencySampleLimit)
-            {
-                _samples.Add(elapsedUs);
-            }
-
-            Completed++;
-        }
-        catch
-        {
-            Errors++;
-        }
-        finally
-        {
-            foreach (var part in parts)
-            {
-                part.Dispose();
-            }
-
-            Interlocked.Decrement(ref Outstanding);
-        }
     }
 }
 

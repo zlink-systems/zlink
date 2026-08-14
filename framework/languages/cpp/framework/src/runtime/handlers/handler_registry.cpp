@@ -375,6 +375,11 @@ result_t<zlink::message_t> handler_registry_t::invoke (std::string_view channel_
                 owned_inbound.message,
                 [&services, &serializers, entry, owned_message,
                  &owned_inbound] {
+                    if (owned_inbound.before_application_handler) {
+                        auto before = std::exchange (
+                          owned_inbound.before_application_handler, {});
+                        before ();
+                    }
                     return entry->invoker (services, serializers, *owned_message,
                                            owned_inbound);
                 })
@@ -465,6 +470,11 @@ task_t<zlink::message_t> handler_registry_t::invoke_async (std::string_view chan
                 owned_inbound.message,
                 [&services, &serializers, entry, owned_message,
                  &owned_inbound] {
+                    if (owned_inbound.before_application_handler) {
+                        auto before = std::exchange (
+                          owned_inbound.before_application_handler, {});
+                        before ();
+                    }
                     return entry->invoker (services, serializers, *owned_message,
                                            owned_inbound);
                 }));

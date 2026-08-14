@@ -71,10 +71,3 @@ public sealed record ExpectedFailureRes(string ErrorKind);
 public sealed record DrainResultRes(string Result, string? Reason = null);
 
 public sealed record RequestOutcomeRes(string Value, string Outcome);
-
-public sealed record RuntimeInboundStatusRes(
-    ulong ApplicationHwmBytes,
-    ulong PendingPayloadBytes,
-    ulong QueuedPayloadBytes,
-    ulong ActivePayloadBytes,
-    bool ApplicationReceivePaused);

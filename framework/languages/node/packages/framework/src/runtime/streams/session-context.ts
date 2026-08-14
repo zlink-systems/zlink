@@ -42,6 +42,7 @@ import {
 import { ZLinkSessionLocalActorBindings } from './session-local-actors';
 import type { ServiceActorRef } from '../foundation/service-stateful-registry';
 import type { ServiceRetiredBoundSessionRouteFence } from '../foundation/service-stateful-wire-codec';
+import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
 
 export interface ZLinkSessionContextStream extends ZLinkStream {
   writeRaw(payload: Message, flags?: number): boolean;
@@ -358,6 +359,7 @@ class DefaultZLinkSessionHandlerRegistry implements ZLinkSessionHandlerRegistry 
       return false;
     }
     const handler = await this.resolveHandler(registration);
+    releaseApplicationJobPermitBeforeHandler();
     await handler.handle(this.context, dispatch, payload);
     return true;
   }

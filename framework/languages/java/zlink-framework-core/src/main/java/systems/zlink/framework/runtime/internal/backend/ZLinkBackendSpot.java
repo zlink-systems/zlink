@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.backend;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
@@ -50,6 +51,12 @@ public interface ZLinkBackendSpot extends ZLinkBackendObject {
         List<Message> parts,
         SendFlags flags);
 
+    CompletionStage<Void> publishAsync(
+        String channelName,
+        String topic,
+        List<Message> parts,
+        SendFlags flags);
+
     default boolean publish(
         String channelName,
         String topic,
@@ -62,44 +69,51 @@ public interface ZLinkBackendSpot extends ZLinkBackendObject {
         throw new UnsupportedOperationException("Spot publish metadata is unavailable");
     }
 
-    boolean sendToSpot(
-        RoutingId targetNodeRid,
-        String spotId,
-        long spotGeneration,
-        List<Message> parts,
-        SendFlags flags);
-
-    default boolean sendToSpot(
-        RoutingId targetNodeRid,
-        String spotId,
-        long spotGeneration,
+    default CompletionStage<Void> publishAsync(
+        String channelName,
+        String topic,
         byte[] metadata,
         List<Message> parts,
         SendFlags flags) {
         if (metadata == null || metadata.length == 0) {
+            return publishAsync(channelName, topic, parts, flags);
+        }
+        throw new UnsupportedOperationException(
+            "Spot publish metadata is unavailable");
+    }
+
+    CompletionStage<Void> sendToSpot(
+        RoutingId targetNodeRid,
+        String spotId,
+        long spotGeneration,
+        List<Message> parts);
+
+    default CompletionStage<Void> sendToSpot(
+        RoutingId targetNodeRid,
+        String spotId,
+        long spotGeneration,
+        byte[] metadata,
+        List<Message> parts) {
+        if (metadata == null || metadata.length == 0) {
             return sendToSpot(
-                targetNodeRid, spotId, spotGeneration, parts, flags);
+                targetNodeRid, spotId, spotGeneration, parts);
         }
         throw new UnsupportedOperationException("Spot send metadata is unavailable");
     }
 
-    boolean requestToSpot(
+    CompletionStage<ZLinkBackendReceived> requestToSpot(
         RoutingId targetNodeRid,
         String spotId,
         long spotGeneration,
         List<Message> parts,
-        ZLinkBackendRequestCallback callback,
-        SendFlags flags,
         Duration timeout);
 
-    default boolean requestToSpot(
+    default CompletionStage<ZLinkBackendReceived> requestToSpot(
         RoutingId targetNodeRid,
         String spotId,
         long spotGeneration,
         byte[] metadata,
         List<Message> parts,
-        ZLinkBackendRequestCallback callback,
-        SendFlags flags,
         Duration timeout) {
         if (metadata == null || metadata.length == 0) {
             return requestToSpot(
@@ -107,8 +121,6 @@ public interface ZLinkBackendSpot extends ZLinkBackendObject {
                 spotId,
                 spotGeneration,
                 parts,
-                callback,
-                flags,
                 timeout);
         }
         throw new UnsupportedOperationException("Spot request metadata is unavailable");

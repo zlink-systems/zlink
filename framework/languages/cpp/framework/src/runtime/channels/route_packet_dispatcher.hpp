@@ -9,6 +9,7 @@
 
 #include "runtime/diagnostics/dispatch_events.hpp"
 
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -29,7 +30,9 @@ class route_packet_dispatcher_t
                                handler_dispatch_kind_t send_dispatch_kind =
                                  handler_dispatch_kind_t::node_direct_send,
                                handler_dispatch_kind_t request_dispatch_kind =
-                                 handler_dispatch_kind_t::node_direct_request);
+                                 handler_dispatch_kind_t::node_direct_request,
+                               std::function<void ()>
+                                 before_application_handler = {});
 
     result_t<std::optional<route_dispatch_reply_t>>
     dispatch (const route_received_packet_t &received) const;
@@ -65,6 +68,7 @@ class route_packet_dispatcher_t
       handler_dispatch_kind_t::node_direct_send;
     handler_dispatch_kind_t _request_dispatch_kind =
       handler_dispatch_kind_t::node_direct_request;
+    std::function<void ()> _before_application_handler;
 };
 
 } // namespace zlink::framework::detail

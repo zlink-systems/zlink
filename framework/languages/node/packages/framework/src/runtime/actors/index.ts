@@ -78,9 +78,7 @@ export {
 export {
   ZLinkDeferredJoinAcceptedJournal,
   type ZLinkDeferredJoinAcceptedRoot,
-  type ZLinkDeferredJoinDeliveryCursor,
-  type ZLinkDeferredJoinRecoveryInput,
-  type ZLinkDeferredJoinRecoveryManifest
+  type ZLinkDeferredJoinDeliveryCursor
 } from './deferred-join-accepted-journal';
 export {
   decodeActorAuthorityIdentity,
@@ -129,20 +127,13 @@ export {
 } from './actor-packet-relay-wire';
 export {
   ZLINK_REMOTE_BOUND_SESSION_ERROR_PACKET,
-  ZLINK_REMOTE_BOUND_SESSION_ABORT_SEAL_PACKET,
   ZLINK_REMOTE_BOUND_SESSION_FENCE_NACK_CODE,
-  ZLINK_REMOTE_BOUND_SESSION_OWNERSHIP_PACKET,
   ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET,
-  ZLINK_REMOTE_BOUND_SESSION_SEAL_PACKET,
   ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET,
   encodeRemoteBoundSessionNack,
   isRemoteBoundSessionFenceError,
   ZLinkRemoteBoundSessionFenceError
 } from './bound-session-wire';
-export {
-  ZLinkBoundSessionAcceptedJournal,
-  type ZLinkBoundSessionAcceptedJournalRoot
-} from './bound-session-accepted-journal';
 export {
   actorJoinIdentity,
   createActorJoinRequest,
@@ -497,10 +488,25 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
   }
 
   async abortRelocationActor(actorId: string): Promise<void> {
+    await this.removeRelocationActor(actorId);
+  }
+
+  async completeRelocationSource(
+    actorId: string,
+    sourceActorRef?: ZLinkBackendActorRef
+  ): Promise<void> {
+    await this.removeRelocationActor(actorId, sourceActorRef);
+  }
+
+  private async removeRelocationActor(
+    actorId: string,
+    exactNativeActorRef?: ZLinkBackendActorRef
+  ): Promise<void> {
     const state = this.states.get(actorId);
     const node = this.options.nativeActorNodeProvider?.() ?? this.options.nativeActorNode;
-    if (state?.nativeActorRef !== undefined) {
-      node?.discardRelocatedActor?.(state.nativeActorRef);
+    const nativeActorRef = exactNativeActorRef ?? state?.nativeActorRef;
+    if (nativeActorRef !== undefined) {
+      node?.discardRelocatedActor?.(nativeActorRef);
     }
     if (state?.actor !== undefined) {
       await disposeLifecycleHandlers(state.actor);
@@ -509,10 +515,6 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     this.states.delete(actorId);
     this.actorMeshNames.delete(actorId);
     this.relocationStaged.delete(actorId);
-  }
-
-  async completeRelocationSource(actorId: string): Promise<void> {
-    await this.abortRelocationActor(actorId);
   }
 
   async completeCoreRelocationSource(actorId: string): Promise<void> {

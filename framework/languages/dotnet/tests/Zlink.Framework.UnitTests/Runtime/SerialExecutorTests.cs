@@ -441,15 +441,12 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
-    public async Task StreamSessionSerialExecutor_ReservesRetainedApplicationBytes()
+    public async Task StreamSessionSerialExecutor_PreservesQueuedMessagesUntilTerminal()
     {
         using var errorSink = new ZLinkRuntimeErrorSink();
         await using var executor = new ZLinkStreamSessionSerialExecutor(
             new object(),
-            errorSink,
-            capacity: 8,
-            applicationByteCapacity:
-                ZLinkSerialExecutionQueue.WorkItemFixedCostBytes + 4);
+            errorSink);
         var started = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(
@@ -458,7 +455,6 @@ public sealed class SerialExecutorTests
         Assert.Equal(
             ZLinkSerialPostAdmission.Accepted,
             executor.EnqueueApplication(
-                retainedBytes: 4,
                 async _ =>
                 {
                     started.TrySetResult();
@@ -466,29 +462,17 @@ public sealed class SerialExecutorTests
                 }));
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(
-            ZLinkSerialPostAdmission.QueueFull,
+            ZLinkSerialPostAdmission.Accepted,
             executor.EnqueueApplication(
-                retainedBytes: 1,
                 static _ => ValueTask.CompletedTask));
 
         release.TrySetResult();
     }
 
     [Fact]
-    public void StreamSessionExecutionAccountingIncludesHeaderAndPayload()
-    {
-        using var header = Message.From(new byte[] { 1, 2, 3 });
-        using var payload = Message.From(new byte[] { 4, 5, 6, 7, 8 });
-
-        Assert.Equal(
-            8,
-            ZLinkStreamSessionRuntime.RetainedPacketBytes(header, payload));
-    }
-
-    [Fact]
     public async Task SerialExecutionQueue_FinalTurn_BypassesCapacity_AndSealsAdmission()
     {
-        await using var queue = CreateQueue(CancellationToken.None, capacity: 1);
+        await using var queue = CreateQueue(CancellationToken.None);
         var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finalRan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -808,15 +792,15 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
-    public async Task SerialExecutionQueue_TryPost_ReturnsFalse_WhenQueueIsFull()
+    public async Task SerialExecutionQueue_TryPost_AdmitsWhileApplicationWorkIsPending()
     {
-        await using var queue = CreateQueue(CancellationToken.None, 1);
+        await using var queue = CreateQueue(CancellationToken.None);
         var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         Assert.True(queue.TryPost(
             async _ => await releaseFirst.Task.ConfigureAwait(false),
             out _));
-        Assert.False(queue.TryPost(
+        Assert.True(queue.TryPost(
             _ => ValueTask.CompletedTask,
             out _));
 
@@ -824,15 +808,14 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
-    public async Task SerialExecutionQueue_Distinguishes_QueueFull_From_Closed()
+    public async Task SerialExecutionQueue_ReportsClosedOnlyAfterCompletion()
     {
         await using var queue = new ZLinkSerialExecutionQueue(
             new ZLinkRuntimeTaskRunner(
                 new ZLinkRuntimeErrorSink(),
                 CancellationToken.None),
             new ZLinkRuntimeErrorSink(),
-            CancellationToken.None,
-            capacity: 1);
+            CancellationToken.None);
         var releaseFirst = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -840,7 +823,7 @@ public sealed class SerialExecutorTests
             async _ => await releaseFirst.Task.ConfigureAwait(false),
             out _));
         Assert.Equal(
-            ZLinkSerialPostAdmission.QueueFull,
+            ZLinkSerialPostAdmission.Accepted,
             queue.TryPostApplicationWithAdmission(
                 static _ => ValueTask.CompletedTask,
                 out _));
@@ -886,19 +869,14 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
-    public async Task SerialExecutionQueue_Reserves_Count_And_Bytes_Per_Lane()
+    public async Task SerialExecutionQueue_Preserves_Lane_Order_Without_Framework_Byte_Admission()
     {
         await using var queue = new ZLinkSerialExecutionQueue(
             new ZLinkRuntimeTaskRunner(
                 new ZLinkRuntimeErrorSink(),
                 CancellationToken.None),
             new ZLinkRuntimeErrorSink(),
-            CancellationToken.None,
-            capacity: 8,
-            applicationByteCapacity:
-                ZLinkSerialExecutionQueue.WorkItemFixedCostBytes + 4,
-            lifecycleByteCapacity:
-                ZLinkSerialExecutionQueue.WorkItemFixedCostBytes);
+            CancellationToken.None);
 
         var release = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -910,7 +888,7 @@ public sealed class SerialExecutorTests
                 static () => { },
                 out var accepted));
         Assert.Equal(
-            ZLinkSerialPostAdmission.QueueFull,
+            ZLinkSerialPostAdmission.Accepted,
             queue.TryPostApplicationWithAdmission(
                 static _ => ValueTask.CompletedTask,
                 out _));
@@ -936,30 +914,25 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
-    public async Task SerialExecutionQueue_ApplicationAdmissionCountsRetainedBytes()
+    public async Task SerialExecutionQueue_ApplicationAdmissionMakesPostReleaseProgress()
     {
         await using var queue = new ZLinkSerialExecutionQueue(
             new ZLinkRuntimeTaskRunner(
                 new ZLinkRuntimeErrorSink(),
                 CancellationToken.None),
             new ZLinkRuntimeErrorSink(),
-            CancellationToken.None,
-            capacity: 8,
-            applicationByteCapacity:
-                ZLinkSerialExecutionQueue.WorkItemFixedCostBytes + 4);
+            CancellationToken.None);
         var release = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         Assert.Equal(
             ZLinkSerialPostAdmission.Accepted,
             queue.TryPostApplicationWithAdmission(
-                retainedBytes: 4,
                 async _ => await release.Task.ConfigureAwait(false),
                 out var accepted));
         Assert.Equal(
-            ZLinkSerialPostAdmission.QueueFull,
+            ZLinkSerialPostAdmission.Accepted,
             queue.TryPostApplicationWithAdmission(
-                retainedBytes: 1,
                 static _ => ValueTask.CompletedTask,
                 out _));
 
@@ -968,7 +941,6 @@ public sealed class SerialExecutorTests
         Assert.Equal(
             ZLinkSerialPostAdmission.Accepted,
             queue.TryPostApplicationWithAdmission(
-                retainedBytes: 4,
                 static _ => ValueTask.CompletedTask,
                 out var next));
         await next.Completion.WaitAsync(TimeSpan.FromSeconds(5));
@@ -1100,20 +1072,21 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
-    public async Task SerialExecutionQueue_PostAsync_Throws_WhenQueueIsFull()
+    public async Task SerialExecutionQueue_PostAsync_Throws_AfterQueueCloses()
     {
-        await using var queue = CreateQueue(CancellationToken.None, 1);
+        await using var queue = CreateQueue(CancellationToken.None);
         var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         Assert.True(queue.TryPost(
             async _ => await releaseFirst.Task.ConfigureAwait(false),
             out _));
 
+        queue.Complete();
         var exception = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => queue.PostAsync(
             _ => ValueTask.CompletedTask,
             CancellationToken.None).AsTask());
         Assert.Equal(
-            ZLinkFrameworkErrorKind.CapacityExceeded,
+            ZLinkFrameworkErrorKind.ShuttingDown,
             exception.Kind);
 
         releaseFirst.SetResult();
@@ -1512,14 +1485,12 @@ public sealed class SerialExecutorTests
 
     private static ZLinkSerialExecutionQueue CreateQueue(
         CancellationToken executionToken,
-        int capacity = 4096,
         ZLinkRuntimeErrorSink? errorSink = null)
     {
         errorSink ??= new ZLinkRuntimeErrorSink();
         return new ZLinkSerialExecutionQueue(
             new ZLinkRuntimeTaskRunner(errorSink, executionToken),
             errorSink,
-            executionToken,
-            capacity);
+            executionToken);
     }
 }

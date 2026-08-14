@@ -62,7 +62,6 @@ import {
   type ZLinkSpotSerialTurn
 } from '../execution';
 import { ZLinkConfigurationException } from '../configuration';
-import type { ZLinkMeshSubmitterRegistry } from '../messaging';
 import { currentZLinkActorExecution } from './actor-execution-context';
 
 export interface ZLinkActorClientOptions {
@@ -82,7 +81,6 @@ export interface ZLinkActorClientOptions {
     deadlineUnixMs?: number
   ) => Promise<unknown> | undefined;
   readonly sendErrorReporter?: (error: unknown) => void;
-  readonly meshSubmitters: ZLinkMeshSubmitterRegistry;
   readonly routeTransport?: ZLinkActorRoutedJoinTransport;
   readonly transportDeliveryGate?: () => {
     waitBeforeSubmit(
@@ -184,11 +182,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
         );
         return submitted();
       }
-      return await this.options.meshSubmitters.submit(
-        meshName,
-        () => this.submitActorSend(meshName, toBackendActorRef(actor), parts),
-        signal
-      );
+      return await this.submitActorSend(meshName, toBackendActorRef(actor), parts);
     } catch (error) {
       if (isStaleActorError(error)) {
         this.invalidateActorRoute(actorId);
@@ -380,15 +374,15 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     }
   }
 
-  private submitActorSend(
+  private async submitActorSend(
     meshName: string,
     actor: ZLinkBackendActorRef,
     parts: readonly Message[]
-  ): ZLinkSubmitResult {
+  ): Promise<ZLinkSubmitResult> {
     const node = this.requireNode(meshName);
     try {
       return mapSubmitResult(
-        node.sendToActor(actor, toMessageLikeParts(parts), { flags: ZLINK_BACKEND_SEND_NONE }),
+        await node.sendToActor(actor, toMessageLikeParts(parts), { flags: ZLINK_BACKEND_SEND_NONE }),
         'Actor send'
       );
     } catch (error) {
@@ -605,7 +599,11 @@ export async function forwardEncodedActorPacket(
   const parts = [header, payload];
   const packetName = decodeStreamHeader(header).name;
   if (!returnResponse) {
-    if (node.sendToActor(target, parts, { flags: ZLINK_BACKEND_SEND_NONE }) !== SubmitResult.Ok) {
+    if (await node.sendToActor(
+      target,
+      parts,
+      { flags: ZLINK_BACKEND_SEND_NONE }
+    ) !== SubmitResult.Ok) {
       throw routeNotConnected('Actor handoff send submit was not accepted.');
     }
     return undefined;

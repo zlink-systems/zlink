@@ -118,7 +118,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         this.locations = Objects.requireNonNull(locations, "locations");
         this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.defaultTimeout = defaultTimeout == null ? Duration.ZERO : defaultTimeout;
-        this.oneWayCalls = new ZLinkOneWayCalls(admission);
+        this.oneWayCalls = new ZLinkOneWayCalls();
         this.runtimeReady = Objects.requireNonNull(
             runtimeReady,
             "runtimeReady");
@@ -206,14 +206,16 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                 message,
                 metadata);
             ZLinkInternalSpotNode node = spotNode.get();
-            return oneWayCalls.submitOneWay(
-                    node,
-                    ZLinkBackendAdmissionKey.actor(
-                        actor.nodeRid(), actor.actorId(), actor.generation()),
-                    () -> node.sendToActor(
-                        actor, parts, SendFlags.DONT_WAIT),
-                    () -> closeAll(parts))
+            CompletionStage<Void> submission;
+            try {
+                submission = node.sendToActorAsync(actor, parts);
+            } catch (RuntimeException failure) {
+                closeAll(parts);
+                return CompletableFuture.failedFuture(failure);
+            }
+            return ZLinkOneWayCalls.adaptOneWay(submission)
                 .whenComplete((ignored, error) -> {
+                    closeAll(parts);
                     if (error != null && isStaleActorError(error)) {
                         locations.invalidateActorRoute(actorId);
                     }
@@ -487,12 +489,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     }
 
     private static void closeAll(List<Message> parts) {
-        if (parts == null) {
-            return;
-        }
-        for (Message part : parts) {
-            part.close();
-        }
+        Message.closeAll(parts);
     }
 
     private final class SendCall implements ZLinkActorSendCall {

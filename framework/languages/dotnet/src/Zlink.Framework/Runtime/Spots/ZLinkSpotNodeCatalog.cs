@@ -18,7 +18,6 @@ internal sealed class ZLinkSpotNodeCatalog(
     ZLinkSpotNodeRegistration registration,
     IZLinkBackendSpotNode node,
     string spotChannelName,
-    ZLinkCompletionAdmissionOwner completionAdmission,
     ZLinkLocationLifecycle? lifecycle,
     ZLinkTimerScheduler timerScheduler,
     ZLinkActivationConcurrencyAdmission? activationAdmission = null) : IAsyncDisposable
@@ -49,7 +48,6 @@ internal sealed class ZLinkSpotNodeCatalog(
         ZLinkChannelName.FromBoundary(
             spotChannelName,
             nameof(spotChannelName)).Value,
-        completionAdmission,
         timerScheduler);
     private readonly ZLinkActivationConcurrencyAdmission _activationAdmission =
         activationAdmission ?? new(registration.MaxPendingActivations);
@@ -373,7 +371,6 @@ internal sealed class ZLinkSpotNodeCatalog(
                 location,
                 relocation,
                 target,
-                runtime.RelocationPermits,
                 runtime);
     }
 

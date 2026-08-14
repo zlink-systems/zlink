@@ -19,7 +19,9 @@ class route_handler_invoker_t
                               service_provider_t &services,
                               serializer_registry_t &serializers,
                               const zlink::message_t &message,
-                              const framework::route_message_context_t &context) const;
+                              const framework::route_message_context_t &context,
+                              std::function<void ()>
+                                before_application_handler = {}) const;
 
     task_t<zlink::message_t>
     invoke_request (const route_handler_registry_t &handlers,
@@ -30,7 +32,9 @@ class route_handler_invoker_t
                     service_provider_t &services,
                     serializer_registry_t &serializers,
                     const zlink::message_t &message,
-                    const framework::route_message_context_t &context) const;
+                    const framework::route_message_context_t &context,
+                    std::function<void ()>
+                      before_application_handler = {}) const;
 };
 
 } // namespace zlink::framework::detail

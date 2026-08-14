@@ -5,8 +5,6 @@
 #include "runtime/fanout/raw_fanout_owner.hpp"
 #include "runtime/client_server/raw_client_server_owner.hpp"
 #include "runtime/client_server/weighted_selector.hpp"
-#include "runtime/dispatch/inbound_dispatch_budget.hpp"
-#include "runtime/dispatch/completion_admission_owner.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 
 #include <algorithm>
@@ -33,94 +31,20 @@ using namespace std::chrono_literals;
 namespace
 {
 
+template <typename T>
+T await_task (zlink::framework::task_t<T> task)
+{
+    return std::move (task).result ().value ();
+}
+
+void await_task (zlink::framework::task_t<void> task)
+{
+    std::move (task).result ().value ();
+}
+
 std::vector<std::uint8_t> bytes (std::string value)
 {
     return {value.begin (), value.end ()};
-}
-
-void verify_host_wide_application_byte_budget ()
-{
-    runtime::inbound_dispatch_budget_t budget (100);
-    assert (budget.can_start_application_receive ());
-
-    budget.received (120);
-    auto paused = budget.snapshot ();
-    assert (paused.application_hwm_bytes == 100);
-    assert (paused.pending_payload_bytes == 120);
-    assert (paused.queued_payload_bytes == 120);
-    assert (paused.active_payload_bytes == 0);
-    assert (paused.application_receive_paused);
-    assert (!budget.can_start_application_receive ());
-
-    budget.handler_started (120);
-    auto active = budget.snapshot ();
-    assert (active.pending_payload_bytes == 120);
-    assert (active.queued_payload_bytes == 0);
-    assert (active.active_payload_bytes == 120);
-    assert (active.application_receive_paused);
-
-    budget.completed (120, true);
-    auto resumed = budget.snapshot ();
-    assert (resumed.pending_payload_bytes == 0);
-    assert (resumed.queued_payload_bytes == 0);
-    assert (resumed.active_payload_bytes == 0);
-    assert (!resumed.application_receive_paused);
-    assert (budget.can_start_application_receive ());
-
-    runtime::inbound_dispatch_budget_t exact (100);
-    exact.received (99);
-    assert (exact.can_start_application_receive ());
-    exact.received (1);
-    const auto at_limit = exact.snapshot ();
-    assert (at_limit.pending_payload_bytes == 100);
-    assert (at_limit.application_receive_paused);
-    assert (!exact.can_start_application_receive ());
-    exact.completed (1, false);
-    const auto below_limit = exact.snapshot ();
-    assert (below_limit.pending_payload_bytes == 99);
-    assert (!below_limit.application_receive_paused);
-    assert (exact.can_start_application_receive ());
-    exact.completed (99, false);
-
-    runtime::inbound_dispatch_budget_t unlimited (0);
-    unlimited.received (1024);
-    assert (unlimited.can_start_application_receive ());
-    unlimited.completed (1024, false);
-    assert (unlimited.snapshot ().pending_payload_bytes == 0);
-}
-
-void verify_host_wide_budget_waits_for_terminal_completion ()
-{
-    runtime::inbound_dispatch_budget_t budget (10);
-    budget.received (10);
-    auto waiting = std::async (
-      std::launch::async, [&budget] { return budget.wait_for_application_capacity (); });
-    assert (waiting.wait_for (20ms) == std::future_status::timeout);
-
-    budget.completed (10, false);
-    assert (waiting.wait_for (1s) == std::future_status::ready);
-    assert (waiting.get ());
-}
-
-void verify_host_wide_completion_send_permits ()
-{
-    auto owner =
-      std::make_shared<runtime::completion_admission_owner_t> (1);
-    auto first = owner->acquire ();
-    assert (first);
-    auto waiting = std::async (
-      std::launch::async, [owner] { return owner->acquire (); });
-    while (owner->snapshot ().pending_completion_sends != 2)
-        std::this_thread::yield ();
-    const auto saturated = owner->snapshot ();
-    assert (saturated.pending_completion_sends == 2);
-    assert (saturated.completion_send_limit == 1);
-    first = {};
-    auto second = waiting.get ();
-    assert (second);
-    assert (owner->snapshot ().pending_completion_sends == 1);
-    second = {};
-    assert (owner->snapshot ().pending_completion_sends == 0);
 }
 
 void verify_actor_create_command_49_roundtrip ()
@@ -426,8 +350,8 @@ void verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ()
           mesh::service_liveness_registry_t::clock_t::now ();
         (void) lower.drain_monitor_events (now);
         (void) higher.drain_monitor_events (now);
-        (void) lower.pump_one (now);
-        (void) higher.pump_one (now);
+        (void) await_task (lower.pump_one (now));
+        (void) await_task (higher.pump_one (now));
         const auto lower_peer =
           lower.topology ().peer (
             higher_descriptor.node_routing_id);
@@ -464,8 +388,8 @@ void verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ()
           mesh::service_liveness_registry_t::clock_t::now ();
         (void) lower.drain_monitor_events (now);
         (void) higher.drain_monitor_events (now);
-        (void) lower.pump_one (now);
-        (void) higher.pump_one (now);
+        (void) await_task (lower.pump_one (now));
+        (void) await_task (higher.pump_one (now));
         std::this_thread::sleep_for (1ms);
     }
     assert (lower.topology ().peer (
@@ -501,8 +425,8 @@ void verify_raw_admission_rejects_lifecycle_mismatch ()
           mesh::service_liveness_registry_t::clock_t::now ();
         (void) first.drain_monitor_events (now);
         (void) second.drain_monitor_events (now);
-        (void) first.pump_one (now);
-        (void) second.pump_one (now);
+        (void) await_task (first.pump_one (now));
+        (void) await_task (second.pump_one (now));
         std::this_thread::sleep_for (1ms);
     }
     assert (!first.topology ().peer (
@@ -587,8 +511,8 @@ void verify_manual_object_client_pair_ends_not_required ()
           mesh::service_liveness_registry_t::clock_t::now ();
         (void) first.drain_monitor_events (now);
         (void) second.drain_monitor_events (now);
-        (void) first.pump_one (now);
-        (void) second.pump_one (now);
+        (void) await_task (first.pump_one (now));
+        (void) await_task (second.pump_one (now));
         std::this_thread::sleep_for (1ms);
     }
 
@@ -596,12 +520,12 @@ void verify_manual_object_client_pair_ends_not_required ()
     assert (second.topology ().peers ().empty ());
     assert (first.topology ().not_required_peers ().size () == 1);
     assert (second.topology ().not_required_peers ().size () == 1);
-    assert (first.tick_liveness (
+    assert (await_task (first.tick_liveness (
               mesh::service_liveness_registry_t::clock_t::now ()
-              + 5s).probes.empty ());
-    assert (second.tick_liveness (
+              + 5s)).probes.empty ());
+    assert (await_task (second.tick_liveness (
               mesh::service_liveness_registry_t::clock_t::now ()
-              + 5s).probes.empty ());
+              + 5s)).probes.empty ());
 
     first.close ();
     second.close ();
@@ -938,7 +862,7 @@ void verify_manual_and_automatic_classic_fanout ()
     bool application_received = false;
     for (std::size_t attempt = 0; attempt < 100 && !application_received;
          ++attempt) {
-        assert (publisher.publish (
+        await_task (publisher.publish (
           "topic-a",
           {"FanoutProbe", "application/json", bytes ("fanout")}));
         const auto [status, received] = manual.try_receive (receive_now);
@@ -998,12 +922,14 @@ void verify_manual_and_automatic_classic_fanout ()
 
     bool reserved_rejected = false;
     try {
-        static_cast<void> (publisher.publish (
+        await_task (publisher.publish (
           fanout::raw_fanout_publisher_t::reserved_topic (),
           {"Reserved", "application/json", {}}));
     }
-    catch (const std::invalid_argument &) {
-        reserved_rejected = true;
+    catch (const zlink::framework::framework_exception_t &error) {
+        reserved_rejected =
+          error.kind ()
+          == zlink::framework::framework_error_kind_t::internal_failure;
     }
     assert (reserved_rejected);
 }
@@ -1041,9 +967,9 @@ void verify_client_server_independent_raw_path ()
     while (!client.ready () && std::chrono::steady_clock::now () < deadline) {
         const auto now = std::chrono::steady_clock::now ();
         (void) server.drain_monitor_events (now);
-        (void) client.drain_monitor_events (now);
-        const auto server_pump = server.pump_one (now);
-        const auto client_pump = client.pump_one (now);
+        (void) client.drain_monitor_events (now).result ().value ();
+        const auto server_pump = server.pump_one (now).result ().value ();
+        const auto client_pump = client.pump_one (now).result ().value ();
         assert (
           server_pump
           != client_server::client_server_pump_result_t::protocol_error);
@@ -1056,14 +982,15 @@ void verify_client_server_independent_raw_path ()
 
     const auto liveness_base = std::chrono::steady_clock::now ();
     const auto first_probe =
-      client.tick_liveness (liveness_base + 5s);
+      client.tick_liveness (liveness_base + 5s).result ().value ();
     assert (first_probe.probes.size () == 1);
     client_server::client_server_pump_result_t probe_pump =
       client_server::client_server_pump_result_t::no_data;
     while (probe_pump
              == client_server::client_server_pump_result_t::no_data
            && std::chrono::steady_clock::now () < deadline) {
-        probe_pump = server.pump_one (std::chrono::steady_clock::now ());
+        probe_pump = server.pump_one (std::chrono::steady_clock::now ())
+                       .result ().value ();
     }
     assert (probe_pump
             == client_server::client_server_pump_result_t::infrastructure);
@@ -1072,24 +999,28 @@ void verify_client_server_independent_raw_path ()
     while (ack_pump
              == client_server::client_server_pump_result_t::no_data
            && std::chrono::steady_clock::now () < deadline) {
-        ack_pump = client.pump_one (std::chrono::steady_clock::now ());
+        ack_pump = client.pump_one (std::chrono::steady_clock::now ())
+                     .result ().value ();
     }
     assert (ack_pump
             == client_server::client_server_pump_result_t::infrastructure);
     const auto next_probe =
-      client.tick_liveness (liveness_base + 10s);
+      client.tick_liveness (liveness_base + 10s).result ().value ();
     assert (next_probe.probes.size () == 1);
     assert (next_probe.probes.front ().probe_id
             != first_probe.probes.front ().probe_id);
 
     assert (client.send (
-      {"ClientServerSend", "application/json", bytes ("send")}));
+      {"ClientServerSend", "application/json", bytes ("send")}, 2s)
+              .result ().value ()
+            == zlink::submit_result_t::ok);
     client_server::client_server_pump_result_t send_pump =
       client_server::client_server_pump_result_t::no_data;
     while (send_pump
              != client_server::client_server_pump_result_t::application
            && std::chrono::steady_clock::now () < deadline) {
-        send_pump = server.pump_one (std::chrono::steady_clock::now ());
+        send_pump = server.pump_one (std::chrono::steady_clock::now ())
+                      .result ().value ();
     }
     assert (send_pump
             == client_server::client_server_pump_result_t::application);
@@ -1101,22 +1032,16 @@ void verify_client_server_independent_raw_path ()
             == expected_server.channel_name);
     assert (server.mailbox ().release (*send_claim));
 
-    using request_result_t =
-      client_server::client_server_request_completion_t;
-    std::promise<request_result_t> promise;
-    auto future = promise.get_future ();
-    assert (client.request (
+    auto request_task = client.request (
       {"ClientServerRequest", "application/json", bytes ("request")},
-      2s,
-      [&promise] (request_result_t completion) {
-          promise.set_value (std::move (completion));
-      }));
+      2s);
     client_server::client_server_pump_result_t request_pump =
       client_server::client_server_pump_result_t::no_data;
     while (request_pump
              != client_server::client_server_pump_result_t::application
            && std::chrono::steady_clock::now () < deadline) {
-        request_pump = server.pump_one (std::chrono::steady_clock::now ());
+        request_pump = server.pump_one (std::chrono::steady_clock::now ())
+                         .result ().value ();
     }
     assert (request_pump
             == client_server::client_server_pump_result_t::application);
@@ -1129,15 +1054,16 @@ void verify_client_server_independent_raw_path ()
       request_claim->records.front (),
       {"ClientServerReply", "application/json", bytes ("reply")}));
     assert (server.mailbox ().release (*request_claim));
-    while (future.wait_for (0ms) != std::future_status::ready
+    while (!request_task.await_ready ()
            && std::chrono::steady_clock::now () < deadline) {
-        const auto pump = client.pump_one (std::chrono::steady_clock::now ());
+        const auto pump = client.pump_one (std::chrono::steady_clock::now ())
+                            .result ().value ();
         assert (
           pump != client_server::client_server_pump_result_t::protocol_error);
         std::this_thread::sleep_for (1ms);
     }
-    assert (future.wait_for (0ms) == std::future_status::ready);
-    const auto result = future.get ();
+    assert (request_task.await_ready ());
+    const auto result = request_task.result ().value ();
     assert (result.terminal
             == foundation::operation_terminal_t::completed);
     assert (result.reply_header.terminal_result == 0);
@@ -1147,21 +1073,16 @@ void verify_client_server_independent_raw_path ()
     assert (protocol::decode_application_payload (result.payload)
             == expected_reply);
 
-    std::promise<request_result_t> rejected_promise;
-    auto rejected_future = rejected_promise.get_future ();
-    assert (client.request (
+    auto rejected_task = client.request (
       {"RejectedRequest", "application/json", bytes ("request")},
-      2s,
-      [&rejected_promise] (request_result_t completion) {
-          rejected_promise.set_value (std::move (completion));
-      }));
+      2s);
     request_pump =
       client_server::client_server_pump_result_t::no_data;
     while (request_pump
              != client_server::client_server_pump_result_t::application
            && std::chrono::steady_clock::now () < deadline) {
         request_pump = server.pump_one (
-          std::chrono::steady_clock::now ());
+          std::chrono::steady_clock::now ()).result ().value ();
     }
     assert (request_pump
             == client_server::client_server_pump_result_t::application);
@@ -1172,18 +1093,16 @@ void verify_client_server_independent_raw_path ()
       request_claim->records.front (), 106,
       protocol::framework_error_code::requestRejected));
     assert (server.mailbox ().release (*request_claim));
-    while (rejected_future.wait_for (0ms)
-             != std::future_status::ready
+    while (!rejected_task.await_ready ()
            && std::chrono::steady_clock::now () < deadline) {
         const auto pump = client.pump_one (
-          std::chrono::steady_clock::now ());
+          std::chrono::steady_clock::now ()).result ().value ();
         assert (
           pump != client_server::client_server_pump_result_t::protocol_error);
         std::this_thread::sleep_for (1ms);
     }
-    assert (rejected_future.wait_for (0ms)
-            == std::future_status::ready);
-    const auto rejected = rejected_future.get ();
+    assert (rejected_task.await_ready ());
+    const auto rejected = rejected_task.result ().value ();
     assert (rejected.terminal
             == foundation::operation_terminal_t::completed);
     assert (rejected.reply_header.terminal_result == 106);
@@ -1197,21 +1116,16 @@ void verify_client_server_independent_raw_path ()
     // is larger than the core automatic HWM default.
     const auto large_payload = std::vector<std::uint8_t> (
       1024u * 1024u, static_cast<std::uint8_t> ('p'));
-    std::promise<request_result_t> large_promise;
-    auto large_future = large_promise.get_future ();
-    assert (client.request (
+    auto large_task = client.request (
       {"LargePayloadRequest", "application/json", large_payload},
-      3s,
-      [&large_promise] (request_result_t completion) {
-          large_promise.set_value (std::move (completion));
-      }));
+      3s);
     const auto large_deadline = std::chrono::steady_clock::now () + 5s;
     auto large_claim = server.mailbox ().try_claim (
       mesh::service_mailbox_domain_t::application, 1, 2u * 1024u * 1024u);
     while (!large_claim
            && std::chrono::steady_clock::now () < large_deadline) {
         const auto pump = server.pump_one (
-          std::chrono::steady_clock::now ());
+          std::chrono::steady_clock::now ()).result ().value ();
         assert (
           pump != client_server::client_server_pump_result_t::protocol_error);
         large_claim = server.mailbox ().try_claim (
@@ -1227,15 +1141,16 @@ void verify_client_server_independent_raw_path ()
       large_claim->records.front (),
       {"LargePayloadReply", "application/json", large_reply}));
     assert (server.mailbox ().release (*large_claim));
-    while (large_future.wait_for (0ms) != std::future_status::ready
+    while (!large_task.await_ready ()
            && std::chrono::steady_clock::now () < large_deadline) {
-        const auto pump = client.pump_one (std::chrono::steady_clock::now ());
+        const auto pump = client.pump_one (std::chrono::steady_clock::now ())
+                            .result ().value ();
         assert (
           pump != client_server::client_server_pump_result_t::protocol_error);
         std::this_thread::sleep_for (1ms);
     }
-    assert (large_future.wait_for (0ms) == std::future_status::ready);
-    const auto large_result = large_future.get ();
+    assert (large_task.await_ready ());
+    const auto large_result = large_task.result ().value ();
     assert (large_result.terminal
             == foundation::operation_terminal_t::completed);
     assert (large_result.reply_header.terminal_result == 0);
@@ -1280,8 +1195,9 @@ void verify_client_server_admits_before_monitor_drain ()
     while (std::chrono::steady_clock::now () < deadline) {
         const auto now = std::chrono::steady_clock::now ();
         for (auto &client : clients) {
-            (void) client->drain_monitor_events (now);
-            const auto client_pump = client->pump_one (now);
+            (void) client->drain_monitor_events (now).result ().value ();
+            const auto client_pump =
+              client->pump_one (now).result ().value ();
             assert (
               client_pump
               != client_server::client_server_pump_result_t::protocol_error);
@@ -1290,14 +1206,15 @@ void verify_client_server_admits_before_monitor_drain ()
         // The server monitor queue is deliberately not drained here. A
         // received hello already identifies the route that must receive the
         // admission response.
-        const auto server_pump = server.pump_one (now);
+        const auto server_pump =
+          server.pump_one (now).result ().value ();
         assert (
           server_pump
           != client_server::client_server_pump_result_t::protocol_error);
 
         bool all_ready = true;
         for (auto &client : clients) {
-            (void) client->pump_one (now);
+            (void) client->pump_one (now).result ().value ();
             all_ready = all_ready && client->ready ();
         }
         if (all_ready)
@@ -1444,8 +1361,8 @@ void verify_raw_owner_node_send_and_liveness ()
           mesh::service_liveness_registry_t::clock_t::now ();
         (void) first.drain_monitor_events (progress_now);
         (void) second.drain_monitor_events (progress_now);
-        (void) first.pump_one (progress_now);
-        (void) second.pump_one (progress_now);
+        (void) await_task (first.pump_one (progress_now));
+        (void) await_task (second.pump_one (progress_now));
         std::this_thread::sleep_for (1ms);
     }
     assert (first.topology ().peer (second_descriptor.node_routing_id));
@@ -1455,9 +1372,9 @@ void verify_raw_owner_node_send_and_liveness ()
     while (!submitted && mesh::service_liveness_registry_t::clock_t::now ()
                            < deadline) {
         try {
-            submitted = first.send_to_node (
+            submitted = await_task (first.send_to_node (
               second_descriptor.node_routing_id,
-              {"Probe", "application/json", bytes ("payload")});
+              {"Probe", "application/json", bytes ("payload")}));
         }
         catch (...) {
         }
@@ -1467,12 +1384,24 @@ void verify_raw_owner_node_send_and_liveness ()
     }
     assert (submitted);
 
+    // A missing host-wide Application Job Queue permit fences the ordinary
+    // ROUTER before Core receive.  Poll readiness alone must not consume or
+    // retain the application record in the Framework owner.
+    assert (second.wait_for_activity (1s, false));
+    const auto without_shared_permit = await_task (second.pump_one (
+      mesh::service_liveness_registry_t::clock_t::now (), false));
+    assert (without_shared_permit == mesh::raw_mesh_pump_result_t::no_data);
+    assert (second.last_pump_bytes () == 0);
+    assert (second.mailbox ().pending_messages (
+              mesh::service_mailbox_domain_t::application)
+            == 0);
+
     mesh::raw_mesh_pump_result_t pumped =
       mesh::raw_mesh_pump_result_t::no_data;
     while (pumped != mesh::raw_mesh_pump_result_t::application
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
-        pumped = second.pump_one (
-          mesh::service_liveness_registry_t::clock_t::now ());
+        pumped = await_task (second.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
         assert (pumped != mesh::raw_mesh_pump_result_t::protocol_error);
         if (pumped != mesh::raw_mesh_pump_result_t::application) {
             std::this_thread::sleep_for (2ms);
@@ -1483,9 +1412,9 @@ void verify_raw_owner_node_send_and_liveness ()
     bool retained_submitted = false;
     while (!retained_submitted
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
-        retained_submitted = first.send_to_node (
+        retained_submitted = await_task (first.send_to_node (
           second_descriptor.node_routing_id,
-          {"Probe", "application/json", bytes ("retained")});
+          {"Probe", "application/json", bytes ("retained")}));
         if (!retained_submitted)
             std::this_thread::sleep_for (1ms);
     }
@@ -1494,29 +1423,34 @@ void verify_raw_owner_node_send_and_liveness ()
       mesh::raw_mesh_pump_result_t::no_data;
     while (retained_pump == mesh::raw_mesh_pump_result_t::no_data
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
-        retained_pump = second.pump_one (
-          mesh::service_liveness_registry_t::clock_t::now ());
+        retained_pump = await_task (second.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
     }
     assert (retained_pump
             == mesh::raw_mesh_pump_result_t::backpressured);
 
-    // A full owner mailbox drops the second one-way payload. Liveness still
-    // crosses the existing Completion connection while application admission
-    // for that owner is unavailable.
+    // A full owner mailbox drops the second one-way payload. Liveness is a
+    // finite ordinary control record: it shares the pre-receive permit, then
+    // returns that permit as soon as its internal processing completes.
     const auto paused_liveness_base =
       mesh::service_liveness_registry_t::clock_t::now ();
-    const auto paused_probe =
-      first.tick_liveness (paused_liveness_base + 5s);
+    const auto paused_probe = await_task (
+      first.tick_liveness (paused_liveness_base + 5s));
     assert (paused_probe.probes.size () == 1);
+    assert (second.wait_for_activity (1s, false));
+    const auto paused_without_shared_permit = await_task (second.pump_one (
+      mesh::service_liveness_registry_t::clock_t::now (), false));
+    assert (paused_without_shared_permit
+            == mesh::raw_mesh_pump_result_t::no_data);
+    assert (second.last_pump_bytes () == 0);
     mesh::raw_mesh_pump_result_t paused_probe_pump =
       mesh::raw_mesh_pump_result_t::no_data;
     while (paused_probe_pump
              != mesh::raw_mesh_pump_result_t::infrastructure
            && mesh::service_liveness_registry_t::clock_t::now ()
                 < deadline) {
-        paused_probe_pump = second.pump_one (
-          mesh::service_liveness_registry_t::clock_t::now (),
-          false);
+        paused_probe_pump = await_task (second.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
         assert (paused_probe_pump
                 != mesh::raw_mesh_pump_result_t::protocol_error);
         if (paused_probe_pump
@@ -1531,8 +1465,8 @@ void verify_raw_owner_node_send_and_liveness ()
              != mesh::raw_mesh_pump_result_t::infrastructure
            && mesh::service_liveness_registry_t::clock_t::now ()
                 < deadline) {
-        paused_ack_pump = first.pump_one (
-          mesh::service_liveness_registry_t::clock_t::now ());
+        paused_ack_pump = await_task (first.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
         assert (paused_ack_pump
                 != mesh::raw_mesh_pump_result_t::protocol_error);
         if (paused_ack_pump
@@ -1557,8 +1491,8 @@ void verify_raw_owner_node_send_and_liveness ()
     assert (second.mailbox ().release (*claim));
 
     for (std::size_t attempt = 0; attempt < 10; ++attempt) {
-        const auto after_release = second.pump_one (
-          mesh::service_liveness_registry_t::clock_t::now ());
+        const auto after_release = await_task (second.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
         assert (after_release
                 != mesh::raw_mesh_pump_result_t::protocol_error);
         assert (after_release
@@ -1574,8 +1508,8 @@ void verify_raw_owner_node_send_and_liveness ()
     while (!channel_submitted
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         try {
-            channel_submitted = first.send_to_channel (
-              "alpha", {"ChannelProbe", "application/json", bytes ("channel")});
+            channel_submitted = await_task (first.send_to_channel (
+              "alpha", {"ChannelProbe", "application/json", bytes ("channel")}));
         }
         catch (...) {
         }
@@ -1585,8 +1519,8 @@ void verify_raw_owner_node_send_and_liveness ()
       mesh::raw_mesh_pump_result_t::no_data;
     while (channel_pump != mesh::raw_mesh_pump_result_t::application
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
-        channel_pump = second.pump_one (
-          mesh::service_liveness_registry_t::clock_t::now ());
+        channel_pump = await_task (second.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
         assert (channel_pump != mesh::raw_mesh_pump_result_t::protocol_error);
     }
     assert (channel_pump == mesh::raw_mesh_pump_result_t::application);
@@ -1603,7 +1537,7 @@ void verify_raw_owner_node_send_and_liveness ()
                 std::vector<std::uint8_t>>;
     std::promise<request_result_t> request_promise;
     auto request_future = request_promise.get_future ();
-    assert (first.request_to_node (
+    assert (await_task (first.request_to_node (
       second_descriptor.node_routing_id,
       {"RequestProbe", "application/json", bytes ("request")},
       2s,
@@ -1612,13 +1546,13 @@ void verify_raw_owner_node_send_and_liveness ()
         std::vector<std::uint8_t> payload) mutable {
           request_promise.set_value (
             {terminal, std::move (payload)});
-      }));
+      })));
     mesh::raw_mesh_pump_result_t request_pump =
       mesh::raw_mesh_pump_result_t::no_data;
     while (request_pump != mesh::raw_mesh_pump_result_t::application
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
-        request_pump = second.pump_one (
-          mesh::service_liveness_registry_t::clock_t::now ());
+        request_pump = await_task (second.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
         assert (request_pump != mesh::raw_mesh_pump_result_t::protocol_error);
     }
     assert (request_pump == mesh::raw_mesh_pump_result_t::application);
@@ -1637,12 +1571,15 @@ void verify_raw_owner_node_send_and_liveness ()
     assert (second.mailbox ().release (*request_claim));
     const auto request_deadline =
       mesh::service_liveness_registry_t::clock_t::now () + 2s;
+    // Reply/error completion is pre-classified on the binding completion
+    // path, so it must settle even while ordinary receive has no shared
+    // Application Job Queue permit.
     while (request_future.wait_for (0ms) != std::future_status::ready
            && mesh::service_liveness_registry_t::clock_t::now ()
                 < request_deadline) {
-        const auto client_pump = first.pump_one (
-          mesh::service_liveness_registry_t::clock_t::now ());
-        assert (client_pump != mesh::raw_mesh_pump_result_t::protocol_error);
+        const auto client_pump = await_task (first.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now (), false));
+        assert (client_pump == mesh::raw_mesh_pump_result_t::no_data);
         std::this_thread::sleep_for (1ms);
     }
     assert (request_future.wait_for (0ms) == std::future_status::ready);
@@ -1671,22 +1608,22 @@ void verify_raw_owner_node_send_and_liveness ()
         std::chrono::duration_cast<std::chrono::milliseconds> (
           std::chrono::system_clock::now ().time_since_epoch () + 2s)
           .count ())};
-    assert (first.request_actor_create (
+    assert (await_task (first.request_actor_create (
       second_descriptor.node_routing_id, actor_create, 2s,
       [&actor_create_promise] (
         foundation::operation_terminal_t terminal,
         std::vector<std::uint8_t> payload) mutable {
           actor_create_promise.set_value (
             {terminal, std::move (payload)});
-      }));
+      })));
     mesh::raw_mesh_pump_result_t actor_create_pump =
       mesh::raw_mesh_pump_result_t::no_data;
     while (actor_create_pump
              != mesh::raw_mesh_pump_result_t::infrastructure
            && mesh::service_liveness_registry_t::clock_t::now ()
                 < deadline) {
-        actor_create_pump = second.pump_one (
-          mesh::service_liveness_registry_t::clock_t::now ());
+        actor_create_pump = await_task (second.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
         assert (actor_create_pump
                 != mesh::raw_mesh_pump_result_t::protocol_error);
     }
@@ -1716,8 +1653,8 @@ void verify_raw_owner_node_send_and_liveness ()
              != std::future_status::ready
            && mesh::service_liveness_registry_t::clock_t::now ()
                 < deadline) {
-        const auto pump = first.pump_one (
-          mesh::service_liveness_registry_t::clock_t::now ());
+        const auto pump = await_task (first.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
         assert (pump != mesh::raw_mesh_pump_result_t::protocol_error);
     }
     assert (actor_create_future.wait_for (0ms)
@@ -1727,18 +1664,94 @@ void verify_raw_owner_node_send_and_liveness ()
             == foundation::operation_terminal_t::completed);
     assert (!actor_create_result.second.empty ());
 
+    constexpr std::size_t actor_create_burst_size = 8;
+    std::vector<std::future<request_result_t>> actor_create_burst_futures;
+    actor_create_burst_futures.reserve (actor_create_burst_size);
+    for (std::size_t index = 0; index < actor_create_burst_size; ++index) {
+        auto promise = std::make_shared<std::promise<request_result_t>> ();
+        actor_create_burst_futures.push_back (promise->get_future ());
+        auto burst_request = actor_create;
+        burst_request.operation.low = 100 + index;
+        burst_request.actor_id = "actor-burst-" + std::to_string (index);
+        assert (await_task (first.request_actor_create (
+          second_descriptor.node_routing_id, burst_request, 2s,
+          [promise] (foundation::operation_terminal_t terminal,
+                     std::vector<std::uint8_t> payload) mutable {
+              promise->set_value ({terminal, std::move (payload)});
+          })));
+    }
+
+    std::size_t burst_received = 0;
+    while (burst_received < actor_create_burst_size
+           && mesh::service_liveness_registry_t::clock_t::now ()
+                < deadline) {
+        const auto pump = await_task (second.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
+        assert (pump != mesh::raw_mesh_pump_result_t::protocol_error);
+        if (pump == mesh::raw_mesh_pump_result_t::infrastructure)
+            ++burst_received;
+    }
+    assert (burst_received == actor_create_burst_size);
+
+    std::size_t burst_replied = 0;
+    while (burst_replied < actor_create_burst_size) {
+        auto claim = second.mailbox ().try_claim (
+          mesh::service_mailbox_domain_t::infrastructure,
+          actor_create_burst_size - burst_replied,
+          256 * 1024);
+        assert (claim && !claim->records.empty ());
+        for (const auto &record : claim->records) {
+            const auto decoded = protocol::decode_actor_create_header (
+              record.parts.front ());
+            protocol::actor_create_reply_t burst_reply{
+              {*record.correlation, 0, 0},
+              protocol::actor_create_result_t::created,
+              second_descriptor.node_routing_id,
+              decoded.actor_id,
+              1};
+            assert (second.reply_actor_create (
+              record, burst_reply));
+            ++burst_replied;
+        }
+        assert (second.mailbox ().release (*claim));
+    }
+
+    std::size_t burst_completed = 0;
+    while (burst_completed < actor_create_burst_size
+           && mesh::service_liveness_registry_t::clock_t::now ()
+                < deadline) {
+        burst_completed = static_cast<std::size_t> (std::count_if (
+          actor_create_burst_futures.begin (),
+          actor_create_burst_futures.end (),
+          [] (std::future<request_result_t> &future) {
+              return future.wait_for (0ms) == std::future_status::ready;
+          }));
+        if (burst_completed < actor_create_burst_size) {
+            const auto pump = await_task (first.pump_one (
+              mesh::service_liveness_registry_t::clock_t::now ()));
+            assert (pump != mesh::raw_mesh_pump_result_t::protocol_error);
+        }
+    }
+    assert (burst_completed == actor_create_burst_size);
+    for (auto &future : actor_create_burst_futures) {
+        const auto result = future.get ();
+        assert (result.first
+                == foundation::operation_terminal_t::completed);
+        assert (!result.second.empty ());
+    }
+
     // The paused probe advanced the registry's logical next-probe time by
     // one interval. Continue from that same logical clock instead of mixing
     // the synthetic probe time with the wall clock used by the pump loop.
     const auto liveness_base = paused_liveness_base + 5s;
-    const auto first_probe = first.tick_liveness (liveness_base + 5s);
+    const auto first_probe = await_task (first.tick_liveness (liveness_base + 5s));
     assert (first_probe.probes.size () == 1);
     mesh::raw_mesh_pump_result_t probe_pump =
       mesh::raw_mesh_pump_result_t::no_data;
     while (probe_pump == mesh::raw_mesh_pump_result_t::no_data
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
-        probe_pump = second.pump_one (
-          mesh::service_liveness_registry_t::clock_t::now ());
+        probe_pump = await_task (second.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
     }
     assert (probe_pump == mesh::raw_mesh_pump_result_t::infrastructure);
 
@@ -1746,11 +1759,11 @@ void verify_raw_owner_node_send_and_liveness ()
       mesh::raw_mesh_pump_result_t::no_data;
     while (ack_pump == mesh::raw_mesh_pump_result_t::no_data
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
-        ack_pump = first.pump_one (
-          mesh::service_liveness_registry_t::clock_t::now ());
+        ack_pump = await_task (first.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
     }
     assert (ack_pump == mesh::raw_mesh_pump_result_t::infrastructure);
-    const auto next_probe = first.tick_liveness (liveness_base + 10s);
+    const auto next_probe = await_task (first.tick_liveness (liveness_base + 10s));
     assert (next_probe.probes.size () == 1);
     assert (next_probe.probes.front ().probe_id
             != first_probe.probes.front ().probe_id);
@@ -1763,9 +1776,6 @@ void verify_raw_owner_node_send_and_liveness ()
 
 int main ()
 {
-    verify_host_wide_application_byte_budget ();
-    verify_host_wide_budget_waits_for_terminal_completion ();
-    verify_host_wide_completion_send_permits ();
     verify_actor_create_command_49_roundtrip ();
     verify_topology_snapshot_and_connection_fence ();
     verify_duplicate_connection_survivor_is_symmetric ();

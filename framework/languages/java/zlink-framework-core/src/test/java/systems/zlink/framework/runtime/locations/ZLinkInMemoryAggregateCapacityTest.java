@@ -118,74 +118,6 @@ final class ZLinkInMemoryAggregateCapacityTest {
     }
 
     @Test
-    void retainedAbortCannotBeReleasedByGenericAbort() throws Exception {
-        Fixture fixture = fixture();
-        fixture.sourceLive.set(false);
-        ZLinkAggregatePrepareRequest request = aggregateRequest(
-            UUID.randomUUID(), fixture.current, fixture.target, new byte[] {2});
-        var prepared = assertInstanceOf(
-            ZLinkAggregatePrepared.class,
-            fixture.store.prepareAggregate(request, () -> false)
-                .toCompletableFuture().get());
-
-        var retained = fixture.store.retainAggregateAbort(
-                prepared.fence(), () -> false)
-            .toCompletableFuture().get();
-
-        assertEquals(
-            ZLinkAggregateAbortResult.STALE,
-            fixture.store.abortAggregate(prepared.fence(), () -> false)
-                .toCompletableFuture().get());
-        assertEquals(
-            1,
-            fixture.store.listRetainedAggregateAborts(() -> false)
-                .toCompletableFuture().get().size());
-        assertEquals(
-            1,
-            fixture.store.pendingCapacity(TARGET_DESCRIPTOR, 9));
-        var cleanup = fixture.store.markAggregateAbortTerminal(
-                prepared.fence(),
-                retained.storeVersion(),
-                "root-reference",
-                17,
-                () -> false)
-            .toCompletableFuture().get().orElseThrow();
-        assertEquals(
-            0,
-            fixture.store.pendingCapacity(TARGET_DESCRIPTOR, 9));
-        assertEquals(
-            ZLinkAggregateAbortResult.STALE,
-            fixture.store.abortAggregate(prepared.fence(), () -> false)
-                .toCompletableFuture().get());
-        assertEquals(
-            0,
-            fixture.store.listRetainedAggregateAborts(() -> false)
-                .toCompletableFuture().get().size());
-        assertEquals(
-            List.of(cleanup),
-            fixture.store.listTerminalAggregateAborts(() -> false)
-                .toCompletableFuture().get());
-        assertEquals(
-            true,
-            fixture.store.cleanupTerminalAggregateAbortInventory(
-                    cleanup, () -> false)
-                .toCompletableFuture().get());
-        assertEquals(
-            List.of(cleanup),
-            fixture.store.listTerminalAggregateAborts(() -> false)
-                .toCompletableFuture().get(),
-            "inventory cleanup must retain the terminal tombstone");
-        assertEquals(
-            true,
-            fixture.store.removeTerminalAggregateAbort(cleanup, () -> false)
-                .toCompletableFuture().get());
-        assertEquals(
-            List.of(),
-            fixture.store.listTerminalAggregateAborts(() -> false)
-                .toCompletableFuture().get());
-    }
-
-    @Test
     void aggregateRejectsDuplicateParticipantBeforeBindingCapacity()
         throws Exception {
         Fixture fixture = fixture();
@@ -261,8 +193,7 @@ final class ZLinkInMemoryAggregateCapacityTest {
             TARGET_DESCRIPTOR,
             current.allocation().descriptor());
         assertEquals(
-            fixture.capacityRequest
-                .targetDescriptorLifecycleGeneration(),
+            9,
             current.allocation().descriptorLifecycleGeneration());
         assertArrayEquals(new byte[] {2}, current.payload());
         assertArrayEquals(
@@ -439,27 +370,12 @@ final class ZLinkInMemoryAggregateCapacityTest {
         String key = "zla1:a:4:mesh:7:actor-1";
         ZLinkAuthoritySnapshot current =
             createActive(store, key, source);
-        ZLinkRelocationCapacityReservationRequest capacityRequest =
-            new ZLinkRelocationCapacityReservationRequest(
-                UUID.randomUUID(),
-                key,
-                current.storeVersion(),
-                current.allocation().objectKind(),
-                current.allocation().stableType(),
-                current.allocation().descriptor(),
-                current.allocation().descriptorLifecycleGeneration(),
-                source,
-                TARGET_DESCRIPTOR,
-                9,
-                target,
-                current.allocation().capacityBundle());
         return new Fixture(
             store,
             key,
             source,
             target,
             current,
-            capacityRequest,
             sourceLive,
             targetLive,
             targetDescriptorLive);
@@ -580,7 +496,6 @@ final class ZLinkInMemoryAggregateCapacityTest {
         ZLinkLocationOwnerToken source,
         ZLinkLocationOwnerToken target,
         ZLinkAuthoritySnapshot current,
-        ZLinkRelocationCapacityReservationRequest capacityRequest,
         AtomicBoolean sourceLive,
         AtomicBoolean targetLive,
         AtomicBoolean targetDescriptorLive) {

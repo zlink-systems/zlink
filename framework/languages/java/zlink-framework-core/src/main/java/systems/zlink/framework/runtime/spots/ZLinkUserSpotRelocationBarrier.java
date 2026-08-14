@@ -570,6 +570,15 @@ final class ZLinkUserSpotRelocationBarrier {
             return retained.tryEstablishDurableCut(cut.retained);
         }
 
+        boolean tryEstablishAndFinishCapture(Cut cut) {
+            Objects.requireNonNull(cut, "cut");
+            return retained.tryEstablishAndFinishCapture(cut.retained);
+        }
+
+        boolean abort() {
+            return retained.abort();
+        }
+
         void complete() {
             retained.complete();
         }

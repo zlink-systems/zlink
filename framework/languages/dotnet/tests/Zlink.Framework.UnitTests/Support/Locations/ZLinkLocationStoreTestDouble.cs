@@ -132,18 +132,6 @@ internal abstract class ZLinkLocationStoreTestDouble : IZLinkLocationRepository
         CancellationToken cancellationToken = default) =>
         Unsupported<ZLinkObjectAbortResult>();
 
-    public virtual ValueTask<ZLinkRelocationCapacityReserveResult>
-        ReserveRelocationCapacityAsync(
-            ZLinkRelocationCapacityReservationRequest request,
-            CancellationToken cancellationToken = default) =>
-        Unsupported<ZLinkRelocationCapacityReserveResult>();
-
-    public virtual ValueTask<ZLinkRelocationCapacityAbortResult>
-        AbortRelocationCapacityAsync(
-            ZLinkRelocationCapacityFence fence,
-            CancellationToken cancellationToken = default) =>
-        Unsupported<ZLinkRelocationCapacityAbortResult>();
-
     public virtual ValueTask<ZLinkAggregatePrepareResult> PrepareAggregateAsync(
         ZLinkAggregatePrepareRequest request,
         CancellationToken cancellationToken = default) =>

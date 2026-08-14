@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
+import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -31,8 +33,60 @@ import systems.zlink.framework.spots.ZLinkSpotTimerHandler;
 import systems.zlink.framework.spots.ZLinkTimerTick;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.monitoring.ZLinkPeerState;
 
 final class SpotManagerTest {
+    @Test
+    void spotManager_createWaitsForFixedPeerAdmissionAfterManualReplacement()
+        throws Exception {
+        Zlink.version();
+        RemoteCreateSpot.reset();
+        String suffix = Long.toUnsignedString(System.nanoTime(), 36);
+        String targetEndpoint = tcpEndpoint();
+        RoutingId targetRid = RoutingId.from("remote-create-target-" + suffix);
+        var store = new ZLinkInMemoryLocationStore();
+
+        var targetOptions = new DefaultZLinkFrameworkOptions();
+        targetOptions.addLocationStore(store);
+        targetOptions.configureLocations().setPollingInterval(
+            Duration.ofMillis(20));
+        var targetNode = targetOptions.addRouteMesh("game");
+        targetNode.listen(targetEndpoint).setRoutingId(targetRid);
+        targetNode.objects().server().addSpotFactory(
+            "RemoteCreateSpot", RemoteCreateSpot.class,
+            factory -> factory.disableRelocation());
+
+        var sourceOptions = new DefaultZLinkFrameworkOptions();
+        sourceOptions.addLocationStore(store);
+        sourceOptions.configureLocations().setPollingInterval(
+            Duration.ofMillis(20));
+        var sourceNode = sourceOptions.addRouteMesh("game");
+        sourceNode.listen(tcpEndpoint())
+            .setRoutingId(RoutingId.from("remote-create-source-" + suffix));
+        sourceNode.objects().client();
+        // This deliberately begins as the generic endpoint peer which the
+        // User-Spot route replaces with the descriptor-fenced RID peer.
+        sourceNode.peerConnections().connect(targetEndpoint);
+
+        try (ZLinkFrameworkRuntime target = RuntimeTestSupport.startFramework(
+                 targetOptions, new ZLinkJavaBackendAdapterFactory());
+             ZLinkFrameworkRuntime source = RuntimeTestSupport.startFramework(
+                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
+            waitForPeer(source, targetRid, 3_000);
+
+            ZLinkSpotCreateResult created = source.spotManager()
+                .create("RemoteCreateSpot")
+                .request(ZLinkMessage.of("remote-create"))
+                .submit()
+                .toCompletableFuture()
+                .get(5, TimeUnit.SECONDS);
+
+            assertEquals(ZLinkSpotCreateState.CREATED, created.state());
+            assertEquals(1, RemoteCreateSpot.createCalls.get());
+            assertEquals("remote-create", RemoteCreateSpot.request.get());
+        }
+    }
+
     @Test
     void spotManager_createListCloseAndPublish_workThroughFrameworkRuntime() {
         Zlink.version();
@@ -199,6 +253,64 @@ final class SpotManagerTest {
         @Override
         public CompletionStage<Void> onInitialize() {
             return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class RemoteCreateSpot implements ZLinkSpot<ZLinkActor> {
+        static final AtomicInteger createCalls = new AtomicInteger();
+        static final AtomicReference<String> request = new AtomicReference<>();
+        private final ZLinkSpotContext context;
+
+        public RemoteCreateSpot(ZLinkSpotContext context) {
+            this.context = context;
+        }
+
+        static void reset() {
+            createCalls.set(0);
+            request.set(null);
+        }
+
+        @Override public ZLinkSpotContext context() { return context; }
+
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<ZLinkSpotCreateResponse> onCreate(
+            ZLinkMessage message) {
+            createCalls.incrementAndGet();
+            request.set(message.decode(String.class));
+            return CompletableFuture.completedFuture(ZLinkSpotCreateResponse.accept());
+        }
+    }
+
+    private static void waitForPeer(
+        ZLinkFrameworkRuntime runtime,
+        RoutingId targetRid,
+        long timeoutMillis) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
+            timeoutMillis);
+        while (System.nanoTime() < deadline) {
+            boolean ready = runtime.routeMeshRuntime().snapshot("game").peers()
+                .stream()
+                .anyMatch(peer -> peer.nodeRid().equals(targetRid)
+                    && peer.state() == ZLinkPeerState.READY);
+            if (ready) return;
+            Thread.sleep(10);
+        }
+        throw new AssertionError("generic peer never reached READY before replacement");
+    }
+
+    private static String tcpEndpoint() throws IOException {
+        try (ServerSocket socket = new ServerSocket(0)) {
+            return "tcp://127.0.0.1:" + socket.getLocalPort();
         }
     }
 

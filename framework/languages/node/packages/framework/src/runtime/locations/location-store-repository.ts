@@ -53,11 +53,7 @@ import type {
   ZLinkOwnerLeaseReadResult,
   ZLinkOwnerLeaseReleaseResult,
   ZLinkOwnerLeaseRenewResult,
-  ZLinkPlacementAllocation,
-  ZLinkRelocationCapacityAbortResult,
-  ZLinkRelocationCapacityFence,
-  ZLinkRelocationCapacityReservationRequest,
-  ZLinkRelocationCapacityReserveResult
+  ZLinkPlacementAllocation
 } from '../../contracts/Locations';
 import { ZLinkLocationWriteIntent } from '../../contracts/Locations';
 import type {
@@ -112,11 +108,6 @@ interface CapacityUsage {
   readonly spotTypes: Readonly<Record<string, number>>;
 }
 
-interface RelocationCapacityRecord {
-  readonly request: ZLinkRelocationCapacityReservationRequest;
-  readonly state: 'reserved' | 'prepared' | 'committed' | 'aborted';
-}
-
 interface AggregateParticipantFenceRecord {
   readonly aggregateId: string;
   readonly aggregateGeneration: bigint;
@@ -137,13 +128,7 @@ interface AggregateRecord {
   readonly targetDescriptorLifecycleGeneration: bigint;
   readonly capacity: ZLinkCapacityVector;
   readonly targetOwner: ZLinkLocationOwnerToken;
-  readonly capacityReservationId?: string;
 }
-
-type NewOwnerAuthorityMutation = Omit<
-  Extract<ZLinkAuthorityMutation, { readonly kind: 'put' }>,
-  'generationTransition'
-> & { readonly generationTransition: 'newOwner' };
 
 interface OwnerRecord {
   readonly ownerId: string;
@@ -335,18 +320,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         const { kind: _kind, ...withoutKind } = stored;
         return { kind: 'stored', ...withoutKind };
       }
-      if (mutation.kind === 'put' && mutation.generationTransition === 'newOwner') {
-        const committed = await this.commitRelocationAuthority(
-          rowKey,
-          current,
-          record,
-          snapshot,
-          mutation as NewOwnerAuthorityMutation,
-          signal
-        );
-        if (committed.kind === 'retry') continue;
-        return committed;
-      }
       if (
         mutation.kind === 'restore'
         && (
@@ -431,317 +404,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const stored = authoritySnapshot(nextRecord!.snapshot, storeVersion, result.storeNow);
       const { kind: _kind, ...withoutKind } = stored;
       return { kind: 'stored', ...withoutKind };
-    }
-  }
-
-  override async reserveRelocationCapacity(
-    request: ZLinkRelocationCapacityReservationRequest,
-    signal?: AbortSignal
-  ): Promise<ZLinkRelocationCapacityReserveResult> {
-    requireText(request.reservationId, 'relocation reservation ID');
-    requireText(request.stableType, 'stable type');
-    const reservationKey = relocationCapacityKey(request.reservationId);
-    const rowKey = authorityKey(request.authorityKey.value);
-    const descriptorKey = meshKey(
-      request.targetDescriptor.meshName,
-      String(request.targetDescriptor.rid)
-    );
-    const leaseKey = ownerKey(request.targetOwner.ownerId);
-    const capacityRowKey = capacityKey(
-      request.targetDescriptor.meshName,
-      String(request.targetDescriptor.rid)
-    );
-    for (;;) {
-      signal?.throwIfAborted();
-      const [existing, authority, descriptorRead, leaseRead, capacityRead] =
-        await Promise.all([
-          this.provider.read(reservationKey, signal),
-          this.provider.read(rowKey, signal),
-          this.provider.read(descriptorKey, signal),
-          this.provider.read(leaseKey, signal),
-          this.provider.read(capacityRowKey, signal)
-        ]);
-      if (existing.kind === 'found') {
-        const stored = decodeJson<RelocationCapacityRecord>(existing.value.bytes);
-        if (!sameRelocationRequest(stored.request, request)) {
-          return {
-            kind: 'conflict',
-            current: authority.kind === 'missing'
-              ? { kind: 'missing', storeNow: authority.storeNow }
-              : authoritySnapshot(
-                  decodeJson<AuthorityRecord>(authority.value.bytes).snapshot,
-                  authority.value.version,
-                  authority.value.storeNow
-                )
-          };
-        }
-        return stored.state === 'reserved'
-          ? { kind: 'alreadyReserved', fence: relocationCapacityFence(request.reservationId) }
-          : {
-              kind: 'conflict',
-              current: authority.kind === 'missing'
-                ? { kind: 'missing', storeNow: authority.storeNow }
-                : authoritySnapshot(
-                    decodeJson<AuthorityRecord>(authority.value.bytes).snapshot,
-                    authority.value.version,
-                    authority.value.storeNow
-                  )
-            };
-      }
-      if (authority.kind === 'missing') {
-        return { kind: 'conflict', current: { kind: 'missing', storeNow: authority.storeNow } };
-      }
-      const authorityRecord = decodeJson<AuthorityRecord>(authority.value.bytes);
-      const current = authoritySnapshot(
-        authorityRecord.snapshot,
-        authority.value.version,
-        authority.value.storeNow
-      );
-      if (!sameRelocationAuthority(request, authorityRecord.snapshot, authority.value.version)) {
-        return { kind: 'conflict', current };
-      }
-      const descriptor = liveTargetDescriptor(descriptorRead, leaseRead, {
-        meshName: request.targetDescriptor.meshName,
-        nodeRid: request.targetDescriptor.rid,
-        nodeLifecycleGeneration: request.targetNodeLifecycleGeneration,
-        owner: request.targetOwner
-      });
-      if (descriptor === undefined) return { kind: 'targetUnavailable' };
-      const capacity = capacityRead.kind === 'missing'
-        ? emptyCapacityRecord()
-        : decodeJson<CapacityRecord>(capacityRead.value.bytes);
-      if (!capacityAvailable(descriptor, request.capacity, capacity)) {
-        return { kind: 'placementCapacityExhausted' };
-      }
-      const result = await this.provider.write({
-        conditions: [
-          { kind: 'missing', key: reservationKey },
-          { kind: 'version', key: rowKey, expected: authority.value.version },
-          versionCondition(descriptorKey, descriptorRead),
-          versionCondition(leaseKey, leaseRead),
-          conditionFor(capacityRowKey, capacityRead)
-        ],
-        mutations: [
-          {
-            kind: 'put',
-            key: reservationKey,
-            bytes: encodeJson({
-              request,
-              state: 'reserved'
-            } satisfies RelocationCapacityRecord)
-          },
-          {
-            kind: 'put',
-            key: capacityRowKey,
-            bytes: encodeJson({
-              active: capacity.active,
-              pending: addCapacity(capacity.pending, request.capacity)
-            } satisfies CapacityRecord)
-          }
-        ]
-      }, signal);
-      if (result.kind === 'conflict') continue;
-      return {
-        kind: 'reserved',
-        fence: relocationCapacityFence(request.reservationId)
-      };
-    }
-  }
-
-  private async commitRelocationAuthority(
-    rowKey: ZLinkStoreKey,
-    current: Extract<ZLinkStoreReadResult, { readonly kind: 'found' }>,
-    record: AuthorityRecord,
-    snapshot: ZLinkAuthoritySnapshot,
-    mutation: NewOwnerAuthorityMutation,
-    signal?: AbortSignal
-  ): Promise<ZLinkAuthorityCompareExchangeResult | { readonly kind: 'retry' }> {
-    const targetOwner = mutation.targetOwner;
-    const fence = mutation.relocationCapacityFence;
-    if (targetOwner === undefined || fence === undefined) {
-      throw new TypeError('A new owner authority mutation requires its target owner and capacity fence.');
-    }
-    const reservationKey = relocationCapacityKey(fence.value);
-    const reservationRead = await this.provider.read(reservationKey, signal);
-    if (reservationRead.kind === 'missing') {
-      return { kind: 'conflict', current: snapshot };
-    }
-    const reservation = decodeJson<RelocationCapacityRecord>(reservationRead.value.bytes);
-    const request = reservation.request;
-    if (
-      reservation.state !== 'reserved'
-      || request.reservationId !== fence.value
-      || authorityKey(request.authorityKey.value).value !== rowKey.value
-      || request.targetOwner.ownerId !== targetOwner.ownerId
-      || request.targetOwner.leaseGeneration !== targetOwner.leaseGeneration
-      || !sameRelocationAuthority(request, record.snapshot, current.value.version, false)
-    ) {
-      return { kind: 'conflict', current: snapshot };
-    }
-    if (record.snapshot.authorityOwnerGeneration >= MAX_GENERATION) {
-      return { kind: 'generationExhausted' };
-    }
-    const targetDescriptorKey = meshKey(
-      request.targetDescriptor.meshName,
-      String(request.targetDescriptor.rid)
-    );
-    const targetLeaseKey = ownerKey(targetOwner.ownerId);
-    const sourceCapacityKey = capacityKey(
-      record.snapshot.allocation.descriptor.meshName,
-      String(record.snapshot.allocation.descriptor.rid)
-    );
-    const targetCapacityKey = capacityKey(
-      request.targetDescriptor.meshName,
-      String(request.targetDescriptor.rid)
-    );
-    const [targetDescriptorRead, targetLeaseRead, sourceCapacityRead, targetCapacityRead] =
-      await Promise.all([
-        this.provider.read(targetDescriptorKey, signal),
-        this.provider.read(targetLeaseKey, signal),
-        this.provider.read(sourceCapacityKey, signal),
-        this.provider.read(targetCapacityKey, signal)
-      ]);
-    if (liveTargetDescriptor(targetDescriptorRead, targetLeaseRead, {
-      meshName: request.targetDescriptor.meshName,
-      nodeRid: request.targetDescriptor.rid,
-      nodeLifecycleGeneration: request.targetNodeLifecycleGeneration,
-      owner: targetOwner
-    }) === undefined) {
-      return { kind: 'conflict', current: snapshot };
-    }
-    if (sourceCapacityRead.kind === 'missing' || targetCapacityRead.kind === 'missing') {
-      return { kind: 'conflict', current: snapshot };
-    }
-    const sourceCapacity = decodeJson<CapacityRecord>(sourceCapacityRead.value.bytes);
-    const targetCapacity = decodeJson<CapacityRecord>(targetCapacityRead.value.bytes);
-    const nextRecord: AuthorityRecord = {
-      ...record,
-      visibleStoreVersion: undefined,
-      snapshot: {
-        ...record.snapshot,
-        payload: Buffer.from(mutation.payload),
-        authorityOwnerGeneration: record.snapshot.authorityOwnerGeneration + 1n,
-        ownerId: targetOwner.ownerId,
-        ownerLeaseGeneration: targetOwner.leaseGeneration,
-        allocation: relocationTargetAllocation(request)
-      }
-    };
-    const sameCapacityRow = sourceCapacityKey.value === targetCapacityKey.value;
-    const nextTargetCapacity: CapacityRecord = sameCapacityRow
-      ? {
-          active: targetCapacity.active,
-          pending: subtractCapacity(targetCapacity.pending, request.capacity)
-        }
-      : {
-          active: addCapacity(targetCapacity.active, request.capacity),
-          pending: subtractCapacity(targetCapacity.pending, request.capacity)
-        };
-    const result = await this.provider.write({
-      conditions: [
-        { kind: 'version', key: rowKey, expected: current.value.version },
-        { kind: 'version', key: reservationKey, expected: reservationRead.value.version },
-        versionCondition(targetDescriptorKey, targetDescriptorRead),
-        versionCondition(targetLeaseKey, targetLeaseRead),
-        { kind: 'version', key: sourceCapacityKey, expected: sourceCapacityRead.value.version },
-        ...(sameCapacityRow
-          ? []
-          : [{ kind: 'version' as const, key: targetCapacityKey, expected: targetCapacityRead.value.version }])
-      ],
-      mutations: [
-        { kind: 'put', key: rowKey, bytes: encodeJson(nextRecord) },
-        {
-          kind: 'put',
-          key: reservationKey,
-          bytes: encodeJson({ ...reservation, state: 'committed' } satisfies RelocationCapacityRecord)
-        },
-        ...(sameCapacityRow
-          ? [{
-              kind: 'put' as const,
-              key: targetCapacityKey,
-              bytes: encodeJson(nextTargetCapacity)
-            }]
-          : [
-              {
-                kind: 'put' as const,
-                key: sourceCapacityKey,
-                bytes: encodeJson({
-                  active: subtractCapacity(sourceCapacity.active, request.capacity),
-                  pending: sourceCapacity.pending
-                } satisfies CapacityRecord)
-              },
-              {
-                kind: 'put' as const,
-                key: targetCapacityKey,
-                bytes: encodeJson(nextTargetCapacity)
-              }
-            ])
-      ]
-    }, signal);
-    if (result.kind === 'conflict') {
-      const latest = await this.readAuthority(request.authorityKey, signal);
-      if (
-        latest.kind === 'snapshot'
-        && latest.storeVersion.value === current.value.version.value
-      ) {
-        // Another relocation can update a shared capacity row without changing
-        // this authority. Re-read every dependency and retry that transaction;
-        // the caller should observe conflict only when this authority changed.
-        return { kind: 'retry' };
-      }
-      return { kind: 'conflict', current: latest };
-    }
-    const storeVersion = result.putVersions.find(entry =>
-      entry.key.value === rowKey.value)?.version;
-    if (storeVersion === undefined) {
-      throw new Error('Relocation authority commit did not return an authority row version.');
-    }
-    const stored = authoritySnapshot(nextRecord.snapshot, storeVersion, result.storeNow);
-    const { kind: _kind, ...withoutKind } = stored;
-    return { kind: 'stored', ...withoutKind };
-  }
-
-  override async abortRelocationCapacity(
-    fence: ZLinkRelocationCapacityFence,
-    signal?: AbortSignal
-  ): Promise<ZLinkRelocationCapacityAbortResult> {
-    const rowKey = relocationCapacityKey(requireText(fence.value, 'relocation capacity fence'));
-    for (;;) {
-      const current = await this.provider.read(rowKey, signal);
-      if (current.kind === 'missing') return 'stale';
-      const record = decodeJson<RelocationCapacityRecord>(current.value.bytes);
-      if (record.state === 'aborted') return 'alreadyAborted';
-      if (record.state === 'committed') return 'alreadyCommitted';
-      if (record.state === 'prepared') return 'stale';
-      const capacityRowKey = capacityKey(
-        record.request.targetDescriptor.meshName,
-        String(record.request.targetDescriptor.rid)
-      );
-      const capacityRead = await this.provider.read(capacityRowKey, signal);
-      if (capacityRead.kind === 'missing') return 'stale';
-      const capacity = decodeJson<CapacityRecord>(capacityRead.value.bytes);
-      const result = await this.provider.write({
-        conditions: [
-          { kind: 'version', key: rowKey, expected: current.value.version },
-          { kind: 'version', key: capacityRowKey, expected: capacityRead.value.version }
-        ],
-        mutations: [
-          {
-            kind: 'put',
-            key: rowKey,
-            bytes: encodeJson({ ...record, state: 'aborted' } satisfies RelocationCapacityRecord)
-          },
-          {
-            kind: 'put',
-            key: capacityRowKey,
-            bytes: encodeJson({
-              active: capacity.active,
-              pending: subtractCapacity(capacity.pending, record.request.capacity)
-            } satisfies CapacityRecord)
-          }
-        ]
-      }, signal);
-      if (result.kind === 'conflict') continue;
-      return 'aborted';
     }
   }
 
@@ -838,19 +500,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         request.targetDescriptor.meshName,
         String(request.targetDescriptor.rid)
       );
-      const capacityReservationKey = relocationCapacityKey(
-        request.aggregateId.value
-      );
       const [
         descriptorRead,
         leaseRead,
-        targetCapacityRead,
-        capacityReservationRead
+        targetCapacityRead
       ] = await Promise.all([
         this.provider.read(targetDescriptorKey, signal),
         this.provider.read(targetLeaseKey, signal),
-        this.provider.read(targetCapacityKey, signal),
-        this.provider.read(capacityReservationKey, signal)
+        this.provider.read(targetCapacityKey, signal)
       ]);
       const descriptor = liveTargetDescriptor(
         descriptorRead,
@@ -860,20 +517,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const targetCapacity = targetCapacityRead.kind === 'missing'
         ? emptyCapacityRecord()
         : decodeJson<CapacityRecord>(targetCapacityRead.value.bytes);
-      const capacityReservation = capacityReservationRead.kind === 'found'
-        ? decodeJson<RelocationCapacityRecord>(capacityReservationRead.value.bytes)
-        : undefined;
-      const capacityReservationVersion = capacityReservationRead.kind === 'found'
-        ? capacityReservationRead.value.version
-        : undefined;
-      const adoptsCapacityReservation = capacityReservation !== undefined
-        && capacityReservationVersion !== undefined
-        && capacityReservation.state === 'reserved'
-        && sameAggregateCapacityReservation(capacityReservation.request, request);
       if (
         descriptor === undefined
-        || !adoptsCapacityReservation
-          && !capacityAvailable(descriptor, request.capacity, targetCapacity)
+        || !capacityAvailable(descriptor, request.capacity, targetCapacity)
       ) {
         await this.abortAggregateStaging(fence, signal);
         return { kind: 'conflict' };
@@ -1011,47 +657,22 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
           versionCondition(targetDescriptorKey, descriptorRead),
           versionCondition(targetLeaseKey, leaseRead),
-          conditionFor(targetCapacityKey, targetCapacityRead),
-          ...(adoptsCapacityReservation
-            ? [{
-                kind: 'version' as const,
-                key: capacityReservationKey,
-                expected: capacityReservationVersion!
-              }]
-            : [])
+          conditionFor(targetCapacityKey, targetCapacityRead)
         ],
         mutations: [
           {
             kind: 'put',
             key: rowKey,
-            bytes: encodeJson({
-              ...latest,
-              state: 'prepared',
-              ...(adoptsCapacityReservation
-                ? { capacityReservationId: request.aggregateId.value }
-                : {})
-            } satisfies AggregateRecord)
+            bytes: encodeJson({ ...latest, state: 'prepared' } satisfies AggregateRecord)
           },
           {
             kind: 'put',
             key: targetCapacityKey,
             bytes: encodeJson({
               active: targetCapacity.active,
-              pending: adoptsCapacityReservation
-                ? targetCapacity.pending
-                : addCapacity(targetCapacity.pending, request.capacity)
+              pending: addCapacity(targetCapacity.pending, request.capacity)
             } satisfies CapacityRecord)
-          },
-          ...(adoptsCapacityReservation
-            ? [{
-                kind: 'put' as const,
-                key: capacityReservationKey,
-                bytes: encodeJson({
-                  ...capacityReservation,
-                  state: 'prepared'
-                } satisfies RelocationCapacityRecord)
-              }]
-            : [])
+          }
         ]
       }, signal);
       if (reserved.kind === 'conflict') {
@@ -1197,33 +818,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         bytes: encodeJson(capacity)
       });
     }
-    const capacityReservationKey = aggregate.capacityReservationId === undefined
-      ? undefined
-      : relocationCapacityKey(aggregate.capacityReservationId);
-    const capacityReservationRead = capacityReservationKey === undefined
-      ? undefined
-      : await this.provider.read(capacityReservationKey, signal);
-    const capacityReservation = capacityReservationRead?.kind === 'found'
-      ? decodeJson<RelocationCapacityRecord>(capacityReservationRead.value.bytes)
-      : undefined;
-    if (capacityReservationKey !== undefined
-      && (capacityReservation === undefined
-        || capacityReservation.state !== 'prepared')) {
-      return { kind: 'stale' };
-    }
     const published = await this.provider.write({
       conditions: [
         { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
         versionCondition(targetDescriptorKey, descriptorRead),
         versionCondition(targetLeaseKey, leaseRead),
-        ...(capacityReservationKey !== undefined
-          && capacityReservationRead?.kind === 'found'
-          ? [{
-              kind: 'version' as const,
-              key: capacityReservationKey,
-              expected: capacityReservationRead.value.version
-            }]
-          : []),
         ...[...capacityReads.entries()].map(([value, read]) => ({
           kind: 'version' as const,
           key: capacityKeys.get(value)!,
@@ -1236,16 +835,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           key: rowKey,
           bytes: encodeJson({ ...aggregate, state: 'committed' } satisfies AggregateRecord)
         },
-        ...(capacityReservationKey !== undefined && capacityReservation !== undefined
-          ? [{
-              kind: 'put' as const,
-              key: capacityReservationKey,
-              bytes: encodeJson({
-                ...capacityReservation,
-                state: 'committed'
-              } satisfies RelocationCapacityRecord)
-            }]
-          : []),
         ...capacityMutations
       ]
     }, signal);
@@ -1286,33 +875,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         key: rowKey,
         bytes: encodeJson({ ...aggregate, state: 'aborted' } satisfies AggregateRecord)
       }];
-      if (aggregate.capacityReservationId !== undefined) {
-        const capacityReservationKey = relocationCapacityKey(
-          aggregate.capacityReservationId
-        );
-        const capacityReservationRead = await this.provider.read(
-          capacityReservationKey,
-          signal
-        );
-        if (capacityReservationRead.kind === 'missing') return { kind: 'stale' };
-        const capacityReservation = decodeJson<RelocationCapacityRecord>(
-          capacityReservationRead.value.bytes
-        );
-        if (capacityReservation.state !== 'prepared') return { kind: 'stale' };
-        conditions.push({
-          kind: 'version',
-          key: capacityReservationKey,
-          expected: capacityReservationRead.value.version
-        });
-        mutations.push({
-          kind: 'put',
-          key: capacityReservationKey,
-          bytes: encodeJson({
-            ...capacityReservation,
-            state: 'aborted'
-          } satisfies RelocationCapacityRecord)
-        });
-      }
       if (aggregate.state === 'prepared') {
         const targetCapacityKey = capacityKey(
           aggregate.targetDescriptor.meshName,
@@ -3418,10 +2980,6 @@ function capacityKey(meshName: string, nodeRid: string) {
   );
 }
 
-function relocationCapacityKey(reservationId: string) {
-  return storeKey(`${PREFIX}relocation-capacity:${encodeURIComponent(reservationId)}`);
-}
-
 function creationTerminalKey(operation: ZLinkCreationOperationIdentity) {
   validateCreationOperation(operation);
   return storeKey(`${PREFIX}creation-terminal:${[
@@ -3747,64 +3305,6 @@ function cloneCapacity(value: ZLinkCapacityVector): ZLinkCapacityVector {
     spots: value.spots,
     spotType: value.spotType === undefined ? undefined : { ...value.spotType }
   };
-}
-
-function relocationCapacityFence(value: string): ZLinkRelocationCapacityFence {
-  return { value } as ZLinkRelocationCapacityFence;
-}
-
-function relocationTargetAllocation(
-  request: ZLinkRelocationCapacityReservationRequest
-): ZLinkPlacementAllocation {
-  return {
-    state: 'active',
-    objectKind: request.objectKind,
-    stableType: request.stableType,
-    descriptor: { ...request.targetDescriptor },
-    descriptorLifecycleGeneration: request.targetNodeLifecycleGeneration,
-    capacity: cloneCapacity(request.capacity)
-  };
-}
-
-function sameRelocationAuthority(
-  request: ZLinkRelocationCapacityReservationRequest,
-  current: StoredAuthoritySnapshot,
-  version: ZLinkStoreVersion,
-  requireStoreVersion = true
-): boolean {
-  return (!requireStoreVersion || request.expectedStoreVersion.value === version.value)
-    && current.allocation.state === 'active'
-    && current.allocation.objectKind === request.objectKind
-    && current.allocation.stableType === request.stableType
-    && current.allocation.descriptor.meshName === request.sourceDescriptor.meshName
-    && String(current.allocation.descriptor.rid) === String(request.sourceDescriptor.rid)
-    && current.allocation.descriptorLifecycleGeneration === request.sourceNodeLifecycleGeneration
-    && current.ownerId === request.sourceOwner.ownerId
-    && current.ownerLeaseGeneration === request.sourceOwner.leaseGeneration;
-}
-
-function sameRelocationRequest(
-  left: ZLinkRelocationCapacityReservationRequest,
-  right: ZLinkRelocationCapacityReservationRequest
-): boolean {
-  return Buffer.from(encodeJson(left)).equals(Buffer.from(encodeJson(right)));
-}
-
-function sameAggregateCapacityReservation(
-  reservation: ZLinkRelocationCapacityReservationRequest,
-  aggregate: ZLinkAggregatePrepareRequest
-): boolean {
-  return reservation.reservationId === aggregate.aggregateId.value
-    && reservation.targetOwner.ownerId === aggregate.targetOwner.ownerId
-    && reservation.targetOwner.leaseGeneration
-      === aggregate.targetOwner.leaseGeneration
-    && reservation.targetDescriptor.meshName
-      === aggregate.targetDescriptor.meshName
-    && String(reservation.targetDescriptor.rid)
-      === String(aggregate.targetDescriptor.rid)
-    && reservation.targetNodeLifecycleGeneration
-      === aggregate.targetDescriptorLifecycleGeneration
-    && sameCapacityVector(reservation.capacity, aggregate.capacity);
 }
 
 function sameCapacityVector(left: ZLinkCapacityVector, right: ZLinkCapacityVector): boolean {

@@ -1,20 +1,18 @@
 import type { ZLinkAuthorityKey, ZLinkAuthoritySnapshot } from '../../contracts/Locations';
 import type {
   ServiceRelocationRestoreOwner,
-  ServiceRelocationSourceCompletion,
   ServiceRelocationStaging
 } from './service-relocation-coordinator';
 import type {
   ServiceRelocationEnvelope,
   ServiceRelocationMembership,
   ServiceRelocationParticipant,
-  ServiceRelocationParticipantProgress,
   ServiceRelocationQueuedMessage,
   ServiceRelocationTimer
 } from './service-relocation-runtime';
 
 export interface ServiceRelocationSealedWork {
-  readonly acceptedJournal: Uint8Array;
+  readonly boundSessionState: Uint8Array;
   readonly queuedMessages: readonly ServiceRelocationQueuedMessage[];
   readonly timers: readonly ServiceRelocationTimer[];
 }
@@ -171,10 +169,7 @@ export class ServiceRelocationObjectCaptureOwner {
           objectGeneration: unit.objectGeneration,
           authorityOwnerGeneration: unit.authorityOwnerGeneration,
           applicationState: Buffer.from(await unit.captureApplicationState(signal)),
-          acceptedJournal: Buffer.from(work.acceptedJournal),
-          replayCursor: 0n,
-          terminalReplies: Buffer.alloc(0),
-          pendingRelayCount: 0,
+          boundSessionState: Buffer.from(work.boundSessionState),
           queuedMessages: work.queuedMessages.map(message => ({
             sequence: message.sequence,
             payload: Buffer.from(message.payload)
@@ -186,7 +181,6 @@ export class ServiceRelocationObjectCaptureOwner {
       return new ServiceCapturedObjectRelocation({
         aggregateId,
         aggregateGeneration,
-        sourceCleanup: 'pending',
         participants,
         memberships
       }, units);
@@ -223,11 +217,11 @@ export interface ServiceRelocationTargetObjectPort<
     authority: ZLinkAuthoritySnapshot,
     signal?: AbortSignal
   ): Promise<void>;
-  replayAcceptedJournal(
+  restoreBoundSession(
     hidden: THidden,
     payload: Uint8Array,
     signal?: AbortSignal
-  ): Promise<ServiceRelocationParticipantProgress | void>;
+  ): Promise<void>;
   replayQueuedMessage(
     hidden: THidden,
     message: ServiceRelocationQueuedMessage,
@@ -253,7 +247,6 @@ export interface ServiceObjectRelocationStaging<
   readonly primaryAuthorityKey: ZLinkAuthorityKey;
   readonly envelope: ServiceRelocationEnvelope;
   readonly hidden: ReadonlyMap<string, THidden>;
-  readonly successorProgress: ReadonlyMap<string, ServiceRelocationParticipantProgress>;
 }
 
 /** Restores an exact User Spot aggregate or standalone Actor into hidden objects. */
@@ -307,8 +300,7 @@ export class ServiceRelocationObjectRestoreOwner<
         id: `${envelope.aggregateId}:${envelope.aggregateGeneration}`,
         primaryAuthorityKey: this.authorityKey(primary.key),
         envelope,
-        hidden,
-        successorProgress: new Map()
+        hidden
       };
     } catch (error) {
       for (const value of [...hidden.values()].reverse()) await this.target.abort(value);
@@ -326,21 +318,17 @@ export class ServiceRelocationObjectRestoreOwner<
     }
   }
 
-  async replayAcceptedJournal(
+  async restoreSavedWork(
     staging: ServiceObjectRelocationStaging<THidden>,
     signal?: AbortSignal
   ): Promise<void> {
     for (const participant of staging.envelope.participants) {
       const hidden = staging.hidden.get(participant.key)!;
-      const progress = await this.target.replayAcceptedJournal(
+      await this.target.restoreBoundSession(
         hidden,
-        participant.acceptedJournal,
+        participant.boundSessionState,
         signal
       );
-      if (progress !== undefined) {
-        (staging.successorProgress as Map<string, ServiceRelocationParticipantProgress>)
-          .set(participant.key, progress);
-      }
       for (const message of participant.queuedMessages) {
         await this.target.replayQueuedMessage(hidden, message, signal);
       }
@@ -348,6 +336,20 @@ export class ServiceRelocationObjectRestoreOwner<
         await this.target.restoreTimer(hidden, timer, signal);
       }
     }
+  }
+
+  /** Appends one post-capture relay to the already restored temporary queue. */
+  async replayRelayedMessage(
+    staging: ServiceObjectRelocationStaging<THidden>,
+    authorityKey: string,
+    message: ServiceRelocationQueuedMessage,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const hidden = staging.hidden.get(authorityKey);
+    if (hidden === undefined) {
+      throw new Error(`Relocation relay target '${authorityKey}' is not staged.`);
+    }
+    await this.target.replayQueuedMessage(hidden, message, signal);
   }
 
   async normalize(
@@ -373,30 +375,6 @@ export class ServiceRelocationObjectRestoreOwner<
     for (const hidden of [...staging.hidden.values()].reverse()) {
       await this.target.abort(hidden);
     }
-  }
-}
-
-export class ServiceCapturedRelocationSourceCompletion<
-  TStaging extends ServiceRelocationStaging
-> implements ServiceRelocationSourceCompletion<TStaging> {
-  constructor(
-    private readonly captured: ServiceCapturedObjectRelocation,
-    private readonly durable: ServiceRelocationSourceCompletion<TStaging>,
-    private readonly afterComplete?: (
-      authority: ZLinkAuthoritySnapshot,
-      signal?: AbortSignal
-    ) => Promise<void> | void
-  ) {}
-
-  async complete(
-    staging: TStaging,
-    authority: ZLinkAuthoritySnapshot,
-    signal?: AbortSignal
-  ): Promise<ZLinkAuthoritySnapshot> {
-    await this.captured.commitSource();
-    const completed = await this.durable.complete(staging, authority, signal);
-    await this.afterComplete?.(completed, signal);
-    return completed;
   }
 }
 

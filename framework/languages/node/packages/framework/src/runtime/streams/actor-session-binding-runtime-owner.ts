@@ -17,7 +17,7 @@ export interface ZLinkActorSessionBindingRuntimeOwner {
     claim: ZLinkActorSessionRelocationClaim,
     expected: ZLinkActorSessionRouteFence,
     signal?: AbortSignal
-  ): Promise<bigint>;
+  ): Promise<void>;
   relocationSnapshot(
     actorId: string,
     sealId: string
@@ -31,18 +31,9 @@ export interface ZLinkActorSessionBindingRuntimeOwner {
     operation: ZLinkActorSessionRetainedOutbound
   ): ServiceSessionBindingAdmissionResult;
   discardRelocationOutbound(actorId: string, sealId: string, error: unknown): void;
-  advanceRelocationOwner(
-    actorId: string,
-    sealId: string,
-    previousOwnershipGeneration: bigint,
-    previousOwnerLeaseGeneration: bigint,
-    targetOwnershipGeneration: bigint,
-    targetOwnerLeaseGeneration: bigint
-  ): void;
   applyRelocation(
     actorId: string,
     sealId: string,
-    acceptedHighWater: bigint,
     applyFingerprint: string,
     action: 'commit' | 'abort',
     commitOwnerTransition: () => Promise<void>,
@@ -51,7 +42,6 @@ export interface ZLinkActorSessionBindingRuntimeOwner {
   observeRelocationTerminal(
     actorId: string,
     sealId: string,
-    acceptedHighWater: bigint,
     applyFingerprint: string
   ): void;
   clearRelocation(actorId: string, error: unknown): void;

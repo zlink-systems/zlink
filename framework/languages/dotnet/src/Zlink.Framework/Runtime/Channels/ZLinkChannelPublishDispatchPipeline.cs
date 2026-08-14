@@ -90,6 +90,9 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
                 header.Source);
             try
             {
+                await ZLinkApplicationJobQueueInvocation
+                    .EnsureQueuedPermitAsync(cancellationToken)
+                    .ConfigureAwait(false);
                 await dispatcher.DispatchAsync(
                         endpoint,
                         message,

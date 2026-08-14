@@ -38,6 +38,37 @@ namespace zlink::framework
 class client_server_channel_server_builder_t;
 class app_t;
 
+class core_hwm_options_t
+{
+  public:
+    explicit core_hwm_options_t (
+      std::shared_ptr<detail::framework_options_state_t> options) :
+        _options (std::move (options))
+    {
+    }
+
+    core_hwm_options_t &set_core_hwm_memory_limit_bytes (std::uint64_t value)
+    {
+        _options->core_hwm_memory_limit_bytes = value;
+        return *this;
+    }
+
+    core_hwm_options_t &set_core_hwm_budget_bytes (std::uint64_t value)
+    {
+        _options->core_hwm_budget_bytes = value;
+        return *this;
+    }
+
+    core_hwm_options_t &set_core_hwm_profile (zlink::auto_hwm_profile value)
+    {
+        _options->core_hwm_profile = static_cast<core_hwm_profile_t> (value);
+        return *this;
+    }
+
+  private:
+    std::shared_ptr<detail::framework_options_state_t> _options;
+};
+
 class inbound_dispatch_options_t
 {
   public:
@@ -47,29 +78,38 @@ class inbound_dispatch_options_t
     {
     }
 
-    inbound_dispatch_options_t &
-    set_application_hwm_bytes (std::optional<std::uint64_t> value)
+    inbound_dispatch_options_t &set_core_hwm_memory_limit_bytes (
+      std::optional<std::uint64_t> value)
     {
-        _options->application_hwm_bytes = value;
+        _options->core_hwm_memory_limit_bytes = value.value_or (0);
         return *this;
     }
 
-    inbound_dispatch_options_t &
-    set_application_hwm_profile (application_hwm_profile_t value)
+    inbound_dispatch_options_t &set_core_hwm_budget_bytes (
+      std::optional<std::uint64_t> value)
     {
-        _options->application_hwm_profile = value;
+        _options->core_hwm_budget_bytes = value.value_or (0);
         return *this;
     }
 
-    inbound_dispatch_options_t &
-    set_process_memory_limit_bytes (std::optional<std::uint64_t> value)
+    inbound_dispatch_options_t &set_core_hwm_profile (
+      core_hwm_profile_t value)
     {
-        if (value && *value == 0) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "process memory limit must be positive when specified");
-        }
-        _options->process_memory_limit_bytes = value;
+        _options->core_hwm_profile = value;
+        return *this;
+    }
+
+    inbound_dispatch_options_t &set_application_job_queue_profile (
+      application_job_queue_profile_t value)
+    {
+        _options->application_job_queue_profile = value;
+        return *this;
+    }
+
+    inbound_dispatch_options_t &set_max_queued_application_jobs (
+      std::optional<std::uint32_t> value)
+    {
+        _options->max_queued_application_jobs = value;
         return *this;
     }
 
@@ -1414,6 +1454,7 @@ class zlink_framework_options_t
         _handler_groups (std::make_shared<detail::handler_group_options_state_t> ()),
         _options (std::make_shared<detail::framework_options_state_t> ())
     {
+        _core_hwm.emplace (_options);
         _inbound_dispatch.emplace (_options);
         _options->http.bind_services (services, serializers);
         _network.emplace (_options);
@@ -1444,24 +1485,39 @@ class zlink_framework_options_t
 
     worker_options_t &worker () { return _options->worker; }
 
+    core_hwm_options_t &configure_core_hwm ()
+    {
+        return *_core_hwm;
+    }
+
     inbound_dispatch_options_t &configure_inbound_dispatch ()
     {
         return *_inbound_dispatch;
     }
 
-    std::optional<std::uint64_t> application_hwm_bytes () const noexcept
+    std::uint64_t core_hwm_memory_limit_bytes () const noexcept
     {
-        return _options->application_hwm_bytes;
+        return _options->core_hwm_memory_limit_bytes;
     }
 
-    application_hwm_profile_t application_hwm_profile () const noexcept
+    std::uint64_t core_hwm_budget_bytes () const noexcept
     {
-        return _options->application_hwm_profile;
+        return _options->core_hwm_budget_bytes;
     }
 
-    std::optional<std::uint64_t> process_memory_limit_bytes () const noexcept
+    core_hwm_profile_t core_hwm_profile () const noexcept
     {
-        return _options->process_memory_limit_bytes;
+        return _options->core_hwm_profile;
+    }
+
+    application_job_queue_profile_t application_job_queue_profile () const noexcept
+    {
+        return _options->application_job_queue_profile;
+    }
+
+    std::optional<std::uint32_t> max_queued_application_jobs () const noexcept
+    {
+        return _options->max_queued_application_jobs;
     }
 
     location_options_t &configure_locations () { return _options->locations; }
@@ -1676,6 +1732,7 @@ class zlink_framework_options_t
     std::shared_ptr<detail::handler_group_options_state_t> _handler_groups;
     std::shared_ptr<detail::framework_options_state_t> _options;
     std::optional<network_options_t> _network;
+    std::optional<core_hwm_options_t> _core_hwm;
     std::optional<inbound_dispatch_options_t> _inbound_dispatch;
     std::size_t _handler_coroutine_workers = 0;
 };

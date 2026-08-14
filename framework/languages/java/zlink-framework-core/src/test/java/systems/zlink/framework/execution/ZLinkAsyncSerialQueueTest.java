@@ -1,4 +1,5 @@
 package systems.zlink.framework.execution;
+import java.time.Duration;
 import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -12,15 +13,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.time.Duration;
 import org.junit.jupiter.api.Test;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
@@ -42,7 +40,7 @@ final class ZLinkAsyncSerialQueueTest {
                 materializations.incrementAndGet();
                 return new byte[] {1};
             },
-            1,
+            1L,
             () -> CompletableFuture.completedFuture(null),
             () -> { }).toCompletableFuture();
 
@@ -72,7 +70,7 @@ final class ZLinkAsyncSerialQueueTest {
                 materializations.incrementAndGet();
                 return new byte[] {4, 2};
             },
-            2,
+            2L,
             () -> CompletableFuture.completedFuture(null),
             () -> { });
 
@@ -238,28 +236,7 @@ final class ZLinkAsyncSerialQueueTest {
     }
 
     @Test
-    void boundedQueueSignalsWhenOnePendingSlotBecomesAvailable() throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(false, 1);
-        CompletableFuture<Void> firstGate = new CompletableFuture<>();
-        CompletableFuture<Void> firstStarted = new CompletableFuture<>();
-        CompletableFuture<Void> capacityAvailable = new CompletableFuture<>();
-        queue.onCapacityAvailable(() -> capacityAvailable.complete(null));
-
-        assertTrue(queue.tryEnqueue(() -> {
-            firstStarted.complete(null);
-            return firstGate;
-        }));
-        firstStarted.get(3, TimeUnit.SECONDS);
-        assertFalse(queue.tryEnqueue(() -> CompletableFuture.completedFuture(null)));
-
-        firstGate.complete(null);
-
-        capacityAvailable.get(3, TimeUnit.SECONDS);
-        assertTrue(queue.tryEnqueue(() -> CompletableFuture.completedFuture(null)));
-    }
-
-    @Test
-    void byteBudgetRejectsLargeApplicationRecordAndReturnsCapacityAfterCompletion()
+    void ownerByteReservationRejectsLargeRecordAndReturnsAfterCompletion()
         throws Exception {
         ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
             null,
@@ -288,7 +265,7 @@ final class ZLinkAsyncSerialQueueTest {
     }
 
     @Test
-    void regularApplicationTurnsChargePayloadBytesAndEmptyTurnsUseCountCapacity()
+    void ownerReservationChargesPayloadAndCountsEmptyTurns()
         throws Exception {
         ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
             null,
@@ -316,36 +293,7 @@ final class ZLinkAsyncSerialQueueTest {
     }
 
     @Test
-    void unrepresentablePayloadCostCompletesWithCapacityExceeded() {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
-            null,
-            false,
-            2,
-            Long.MAX_VALUE,
-            2,
-            Long.MAX_VALUE,
-            4,
-            2,
-            Duration.ofSeconds(1));
-
-        CompletionException failure = assertThrows(
-            CompletionException.class,
-            () -> queue.enqueueWithPayloadBytes(
-                Long.MAX_VALUE,
-                () -> CompletableFuture.completedFuture(null))
-                .toCompletableFuture()
-                .join());
-        ZLinkFrameworkException error = assertInstanceOf(
-            ZLinkFrameworkException.class,
-            failure.getCause());
-        assertEquals(ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED, error.kind());
-        assertFalse(queue.tryEnqueueWithPayloadBytes(
-            Long.MAX_VALUE,
-            () -> CompletableFuture.completedFuture(null)));
-    }
-
-    @Test
-    void lifecycleCapacityIsSeparateAndDoesNotBypassItsOwnLimit() {
+    void lifecycleOwnerReservationIsSeparateAndStillBounded() {
         ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
             null,
             false,
@@ -373,11 +321,11 @@ final class ZLinkAsyncSerialQueueTest {
         ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
             null,
             false,
-            8,
-            128,
-            8,
-            128,
-            4,
+            16,
+            4096,
+            16,
+            4096,
+            1,
             2,
             Duration.ofSeconds(1));
         CompletableFuture<Void> active = new CompletableFuture<>();
@@ -660,10 +608,10 @@ final class ZLinkAsyncSerialQueueTest {
     }
 
     @Test
-    void relocationCommitReleasesSourceResourcesWithoutRunningHandler()
+    void relocationCommitReleasesSourceResourcesAndFencesSourceOwner()
         throws Exception {
         ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
-        AtomicReference<Boolean> released = new AtomicReference<>(false);
+        AtomicInteger releases = new AtomicInteger();
         AtomicReference<Boolean> ran = new AtomicReference<>(false);
         ZLinkAsyncSerialQueue.RelocationSeal seal =
             queue.trySealRelocation().orElseThrow();
@@ -673,27 +621,24 @@ final class ZLinkAsyncSerialQueueTest {
                 ran.set(true);
                 return CompletableFuture.completedFuture(null);
             },
-            () -> released.set(true)).toCompletableFuture();
+            releases::incrementAndGet).toCompletableFuture();
 
         assertEquals(1, queue.commitRelocation(seal).orElseThrow().size());
         held.get(3, TimeUnit.SECONDS);
-        assertTrue(released.get());
+        assertEquals(1, releases.get());
         assertFalse(ran.get());
+        ExecutionException sourceFenced = assertThrows(
+            ExecutionException.class,
+            () -> queue.enqueue(() -> CompletableFuture.completedFuture(null))
+                .toCompletableFuture().get(3, TimeUnit.SECONDS));
+        assertInstanceOf(IllegalStateException.class, sourceFenced.getCause());
+        assertEquals(1, releases.get());
     }
 
     @Test
     void relocationIngressContinuesHoldingAfterFreezeUntilTargetAck()
         throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
-            null,
-            false,
-            1,
-            5,
-            1,
-            5,
-            4,
-            1,
-            Duration.ofSeconds(1));
+        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
         ZLinkAsyncSerialQueue.RelocationSeal seal =
             queue.trySealRelocation().orElseThrow();
         CompletableFuture<Void> held = queue.enqueueRelocatable(
@@ -742,18 +687,9 @@ final class ZLinkAsyncSerialQueueTest {
     }
 
     @Test
-    void relocationHoldDoesNotReuseNormalApplicationCountOrByteCapacity()
+    void relocationHoldReleasesRecordsAndMakesPostReleaseProgress()
         throws Exception {
-        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue(
-            null,
-            false,
-            1,
-            5,
-            1,
-            5,
-            4,
-            1,
-            Duration.ofSeconds(1));
+        ZLinkAsyncSerialQueue queue = new ZLinkAsyncSerialQueue();
         ZLinkAsyncSerialQueue.RelocationSeal seal =
             queue.trySealRelocation().orElseThrow();
         List<String> handled = new CopyOnWriteArrayList<>();
@@ -768,14 +704,13 @@ final class ZLinkAsyncSerialQueueTest {
             .orElseThrow().size());
         CompletableFuture<Void> second = queue.enqueueRelocatableLazyRecord(
             () -> new byte[] {2},
-            Long.MAX_VALUE,
+            1L,
             () -> {
                 handled.add("second");
                 return CompletableFuture.completedFuture(null);
             },
             () -> { }).toCompletableFuture();
-        CompletableFuture<Void> third = queue.enqueueWithPayloadBytes(
-            Long.MAX_VALUE,
+        CompletableFuture<Void> third = queue.enqueue(
             () -> {
                 handled.add("third");
                 return CompletableFuture.completedFuture(null);
@@ -794,12 +729,6 @@ final class ZLinkAsyncSerialQueueTest {
         assertEquals(
             List.of("first", "second", "third", "fourth"),
             handled);
-
-        CompletableFuture<Void> active = new CompletableFuture<>();
-        assertTrue(queue.tryEnqueue(() -> active));
-        assertFalse(queue.tryEnqueue(
-            () -> CompletableFuture.completedFuture(null)));
-        active.complete(null);
     }
 
     @Test

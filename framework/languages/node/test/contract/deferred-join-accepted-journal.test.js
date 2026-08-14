@@ -233,7 +233,7 @@ test('generation fence rejects a replacement Actor before mailbox admission', as
   assert.equal(admitted, false);
 });
 
-test('a replacement runtime replays backlog before Accepted callback and does not redeliver after Delivered', async () => {
+test('a replacement runtime preserves committed Accepted completion ordering without duplicating relocation backlog', async () => {
   const { journal, restartJournal } = harness();
   const sourceActorRef = {
     nodeRid: 'node-a',
@@ -246,21 +246,12 @@ test('a replacement runtime replays backlog before Accepted callback and does no
     nodeRid: 'node-b'
   };
   const operationId = { high: 91n, low: 37n };
-  let prepared = await journal.prepare(
+  const prepared = await journal.prepare(
     sourceActorRef.actorId,
     operationId,
     sourceActorRef,
-    Buffer.from('"accepted"'),
-    undefined,
-    {
-      targetMeshName: 'game',
-      targetSpotId: 'room-a',
-      targetSpotGeneration: 5n,
-      membershipEpoch: 9n,
-      request: Buffer.from('immutable-transfer-request')
-    }
+    Buffer.from('"accepted"')
   );
-  prepared = await journal.markRecoveryMessageReplayed(prepared, 1);
   const committed = await journal.markCommitted(prepared, targetActorRef);
 
   // Recreate every process-local coordinator while retaining only the two
@@ -270,14 +261,6 @@ test('a replacement runtime replays backlog before Accepted callback and does no
   assert.equal(recovered.cursor, 'committed');
   assert.deepEqual(recovered.operationId, operationId);
   assert.equal(recovered.actor.objectGeneration, 17n);
-  assert.equal(recovered.replayCursor, 1);
-  assert.equal(recovered.recovery.targetSpotId, 'room-a');
-  assert.equal(recovered.recovery.targetSpotGeneration, 5n);
-  assert.equal(recovered.recovery.membershipEpoch, 9n);
-  assert.equal(
-    (await recoveredRuntime.readRecoveryPayload(recovered)).toString(),
-    'immutable-transfer-request'
-  );
 
   const mailbox = new ZLinkActorDispatchMailbox();
   const events = [];
@@ -412,7 +395,7 @@ test('Delivered reference release CAS conflict is retried without invoking the c
   assert.equal(callbacks, 1);
 });
 
-test('callback completion retains recovery payload until backlog replay and admission release', async () => {
+test('callback completion releases the Accepted journal independently of relocation durable backlog', async () => {
   const { journal, restartJournal } = harness();
   const sourceActorRef = {
     nodeRid: 'node-a',
@@ -426,15 +409,7 @@ test('callback completion retains recovery payload until backlog replay and admi
     sourceActorRef.actorId,
     operationId,
     sourceActorRef,
-    Buffer.from('"accepted"'),
-    undefined,
-    {
-      targetMeshName: 'game',
-      targetSpotId: 'room-a',
-      targetSpotGeneration: 5n,
-      membershipEpoch: 9n,
-      request: Buffer.from('state-and-backlog')
-    }
+    Buffer.from('"accepted"')
   );
   const committed = await journal.markCommitted(prepared, targetActorRef);
   let callbacks = 0;
@@ -447,24 +422,12 @@ test('callback completion retains recovery payload until backlog replay and admi
       }
     },
     targetActorRef,
-    operation => operation(),
-    undefined,
-    true
+    operation => operation()
   );
   assert.equal(delivered.cursor, 'delivered');
-
-  // Simulate a process crash after the callback but before backlog replay.
-  const replacement = restartJournal();
-  const recovered = await replacement.recover(targetActorRef.actorId);
-  assert.equal(recovered.cursor, 'delivered');
   assert.equal(callbacks, 1);
-  assert.equal(
-    (await replacement.readRecoveryPayload(recovered)).toString(),
-    'state-and-backlog'
-  );
-
-  const replayed = await replacement.markRecoveryMessageReplayed(recovered, 1);
-  await replacement.releaseRecovery(replayed);
+  // Relocation queue/state lives in the canonical relocation manifest, not in
+  // this completion journal. Delivery therefore releases only this root.
   assert.equal(await restartJournal().recover(targetActorRef.actorId), undefined);
   assert.equal(callbacks, 1);
 });

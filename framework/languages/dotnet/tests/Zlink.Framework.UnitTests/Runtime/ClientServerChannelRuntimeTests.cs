@@ -1284,7 +1284,9 @@ public sealed class ClientServerChannelRuntimeTests
 
         var probe =
             ZLinkClientServerControlProtocol.EncodeLivenessProbe(17);
-        Assert.True(router.Send(sourceRid).Message(probe).Submit());
+        await router.Send(sourceRid)
+            .Message(probe)
+            .Async(CancellationToken.None);
         using var delivered = await PollReceivedAsync(
             storage => dealer.Recv(storage, RecvFlags.DontWait),
             TimeSpan.FromSeconds(2));
@@ -1408,14 +1410,12 @@ public sealed class ClientServerChannelRuntimeTests
 
             var malformed = Message.From(
                 new byte[] { 0x5a, 0x4d, 0x01, 0xff, 0x00 });
-            Assert.True(
-                router.Send(
+            await router.Send(
                     firstHello.RoutingId
                         ?? throw new InvalidOperationException(
                             "missing client routing id"))
                     .Message(malformed)
-                    .Flags(SendFlags.DontWait)
-                    .Submit());
+                    .Async(CancellationToken.None);
 
             Received secondHello;
             try
@@ -1498,7 +1498,9 @@ public sealed class ClientServerChannelRuntimeTests
             await Task.Delay(100);
             var malformed = Message.From(
                 new byte[] { 0x5a, 0x4d, 0x01, 0xff, 0x00 });
-            Assert.True(dealer.Send().Message(malformed).Submit());
+            await dealer.Send()
+                .Message(malformed)
+                .Async(CancellationToken.None);
             await Task.Delay(250);
             Assert.False(
                 server.GetRequiredService<EchoProbe>().Received.Task.IsCompleted);
@@ -1518,7 +1520,6 @@ public sealed class ClientServerChannelRuntimeTests
         services.AddSingleton(new ServerIdentity(string.Empty));
         services.AddZLinkFramework(options =>
         {
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
             options.AddClientServerChannel("work")
                 .Server()
                 .Listen(port)
@@ -1540,7 +1541,6 @@ public sealed class ClientServerChannelRuntimeTests
         services.AddSingleton(new ServerIdentity(string.Empty));
         services.AddZLinkFramework(options =>
         {
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
             options.AddClientServerChannel("work")
                 .Server()
                 .Listen(port)
@@ -1560,7 +1560,6 @@ public sealed class ClientServerChannelRuntimeTests
         services.AddSingleton(new ServerIdentity(string.Empty));
         services.AddZLinkFramework(options =>
         {
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
             options.AddClientServerChannel("work")
                 .Server()
                 .Listen(port)
@@ -1576,7 +1575,6 @@ public sealed class ClientServerChannelRuntimeTests
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
         {
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
             options.AddClientServerChannel("work")
                 .Client()
                 .Connect($"tcp://127.0.0.1:{port}");
@@ -1599,7 +1597,6 @@ public sealed class ClientServerChannelRuntimeTests
         services.AddSingleton(new ServerIdentity(name));
         services.AddZLinkFramework(options =>
         {
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
             options.AddLocationStore(store);
             options.AddClientServerChannel("work")
                 .Server()
@@ -1617,7 +1614,6 @@ public sealed class ClientServerChannelRuntimeTests
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
         {
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
             options.AddLocationStore(store);
             options.AddClientServerChannel("work").Client();
         });
@@ -1634,7 +1630,6 @@ public sealed class ClientServerChannelRuntimeTests
         services.AddSingleton(new ServerIdentity(name));
         services.AddZLinkFramework(options =>
         {
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
             options.AddLocationStore(store);
             options.AddClientServerChannel("work").Client();
             options.AddClientServerChannel("work")
@@ -1654,7 +1649,6 @@ public sealed class ClientServerChannelRuntimeTests
         services.AddSingleton(new ServerIdentity("local"));
         services.AddZLinkFramework(options =>
         {
-            options.ConfigureInboundDispatch().ApplicationHwmBytes = 0;
             options.AddClientServerChannel("work").Client();
             options.AddClientServerChannel("work")
                 .Server()

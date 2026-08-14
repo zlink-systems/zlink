@@ -29,13 +29,15 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     private readonly publisher?: PubSocket
   ) {}
 
-  trySend(
+  async send(
     channelName: string,
     packetName: string | undefined,
     message: Message,
+    signal?: AbortSignal,
     metadata: ReadonlyMap<string, string> = EMPTY_METADATA
-  ): ZLinkSubmitResult {
-    const result = appendParts(
+  ): Promise<ZLinkSubmitResult> {
+    throwIfAborted(signal);
+    await appendParts(
       this.dealer.send(),
       encodeChannelEnvelopeParts(
         ZLinkChannelMessageKind.Command,
@@ -50,20 +52,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
         metadata
       )
     ).submit();
-    return {
-      status: result === false ? ZLinkSubmitStatus.Backpressured : ZLinkSubmitStatus.Submitted
-    };
-  }
-
-  async send(
-    channelName: string,
-    packetName: string | undefined,
-    message: Message,
-    signal?: AbortSignal,
-    metadata: ReadonlyMap<string, string> = EMPTY_METADATA
-  ): Promise<ZLinkSubmitResult> {
-    throwIfAborted(signal);
-    return this.trySend(channelName, packetName, message, metadata);
+    return { status: ZLinkSubmitStatus.Submitted };
   }
 
   async request<TReply>(

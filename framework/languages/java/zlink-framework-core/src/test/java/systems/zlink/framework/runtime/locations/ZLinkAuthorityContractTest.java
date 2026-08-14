@@ -12,8 +12,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.time.Instant;
 import java.util.Optional;
-import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
@@ -24,7 +22,6 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareR
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerationTransition;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMutation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRestore;
@@ -47,10 +44,6 @@ import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityAbortResult;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityFence;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReservationRequest;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationCapacityReserveResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 
@@ -88,112 +81,8 @@ final class ZLinkAuthorityContractTest {
         assertEquals(
             CompletionStage.class,
             ZLinkLocationRepository.class.getMethod(
-                "reserveRelocationCapacity",
-                ZLinkRelocationCapacityReservationRequest.class,
-                ZLinkStoreCancellation.class).getReturnType());
-        assertEquals(
-            CompletionStage.class,
-            ZLinkLocationRepository.class.getMethod(
-                "abortRelocationCapacity",
-                ZLinkRelocationCapacityFence.class,
-                ZLinkStoreCancellation.class).getReturnType());
-        assertEquals(
-            CompletionStage.class,
-            ZLinkLocationRepository.class.getMethod(
                 "getMeshNodeChangeStamp",
                 String.class).getReturnType());
-    }
-
-    @Test
-    void authorityPutRequiresTheExactOwnerAndCapacityFenceCombination() {
-        var owner = new ZLinkLocationOwnerToken("owner", 1);
-        var fence = new ZLinkRelocationCapacityFence("capacity");
-
-        ZLinkAuthorityPut relocation = new ZLinkAuthorityPut(
-            new byte[0],
-            ZLinkAuthorityGenerationTransition.NEW_OWNER,
-            Optional.of(owner),
-            Optional.of(fence));
-        assertEquals(fence, relocation.relocationCapacityFence().orElseThrow());
-
-        assertThrows(IllegalArgumentException.class, () ->
-            new ZLinkAuthorityPut(
-                new byte[0],
-                ZLinkAuthorityGenerationTransition.PRESERVE,
-                Optional.of(owner),
-                Optional.empty()));
-        assertThrows(IllegalArgumentException.class, () ->
-            new ZLinkAuthorityPut(
-                new byte[0],
-                ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                Optional.of(owner),
-                Optional.empty()));
-        assertEquals(
-            2,
-            ZLinkAuthorityGenerationTransition.values().length);
-        assertArrayEquals(
-            new Class<?>[] {ZLinkAuthorityExpectFound.class},
-            ZLinkAuthorityExpectation.class.getPermittedSubclasses());
-        assertEquals(
-            Set.of(
-                ZLinkAuthorityPut.class,
-                ZLinkAuthorityRestore.class,
-                ZLinkAuthorityDelete.class),
-            Set.of(ZLinkAuthorityMutation.class.getPermittedSubclasses()));
-    }
-
-    @Test
-    void relocationCapacityRequestRequiresBothDescriptorLifecycles() {
-        var descriptor = new ZLinkMeshNodeDescriptorKey(
-            "mesh",
-            RoutingId.from("node"));
-        var source = new ZLinkLocationOwnerToken("source", 1);
-        var target = new ZLinkLocationOwnerToken("target", 2);
-
-        var request = new ZLinkRelocationCapacityReservationRequest(
-            UUID.randomUUID(),
-            "authority",
-            "version",
-            ZLinkPlacementObjectKind.ACTOR,
-            "player",
-            descriptor,
-            3,
-            source,
-            descriptor,
-            4,
-            target,
-            ZLinkPlacementCapacityBundle.actor(1));
-        assertEquals(3, request.sourceDescriptorLifecycleGeneration());
-        assertEquals(4, request.targetDescriptorLifecycleGeneration());
-        assertThrows(IllegalArgumentException.class, () ->
-            new ZLinkRelocationCapacityReservationRequest(
-                UUID.randomUUID(),
-                "authority",
-                "version",
-                ZLinkPlacementObjectKind.ACTOR,
-                "player",
-                descriptor,
-                0,
-                source,
-                descriptor,
-                4,
-                target,
-                ZLinkPlacementCapacityBundle.actor(1)));
-        assertThrows(IllegalArgumentException.class, () ->
-            new ZLinkRelocationCapacityReservationRequest(
-                UUID.randomUUID(),
-                "authority",
-                "version",
-                ZLinkPlacementObjectKind.ACTOR,
-                "player",
-                descriptor,
-                3,
-                source,
-                descriptor,
-                4,
-                target,
-                new ZLinkPlacementCapacityBundle(
-                    0, 0, Optional.empty())));
     }
 
     @Test
@@ -218,11 +107,7 @@ final class ZLinkAuthorityContractTest {
             13,
             allocation,
             Instant.EPOCH);
-        ZLinkAuthorityPut put = new ZLinkAuthorityPut(
-            payload,
-            ZLinkAuthorityGenerationTransition.PRESERVE,
-            Optional.empty(),
-            Optional.empty());
+        ZLinkAuthorityPut put = new ZLinkAuthorityPut(payload);
         ZLinkAuthorityStored stored = new ZLinkAuthorityStored(
             "v2",
             payload,
@@ -332,22 +217,6 @@ final class ZLinkAuthorityContractTest {
         public CompletionStage<ZLinkCreationTerminalReadResult>
             readCreationTerminal(
                 ZLinkCreationOperationIdentity operation,
-                ZLinkStoreCancellation cancellation) {
-            throw new AssertionError();
-        }
-
-        @Override
-        public CompletionStage<ZLinkRelocationCapacityReserveResult>
-            reserveRelocationCapacity(
-                ZLinkRelocationCapacityReservationRequest request,
-                ZLinkStoreCancellation cancellation) {
-            throw new AssertionError();
-        }
-
-        @Override
-        public CompletionStage<ZLinkRelocationCapacityAbortResult>
-            abortRelocationCapacity(
-                ZLinkRelocationCapacityFence fence,
                 ZLinkStoreCancellation cancellation) {
             throw new AssertionError();
         }

@@ -281,7 +281,7 @@ public sealed class ActorManagerProductionTests
         services.AddZLinkFramework(options =>
         {
             options.AddLocationStore(store);
-            options.ConfigureInboundDispatch().ProcessMemoryLimitBytes =
+            options.ConfigureInboundDispatch().CoreHwmMemoryLimitBytes =
                 1UL * 1024 * 1024 * 1024;
             var node = options.AddRouteMesh("objects")
                 .Listen(endpoint);
@@ -306,7 +306,7 @@ public sealed class ActorManagerProductionTests
         services.AddZLinkFramework(options =>
         {
             options.AddLocationStore(store);
-            options.ConfigureInboundDispatch().ProcessMemoryLimitBytes =
+            options.ConfigureInboundDispatch().CoreHwmMemoryLimitBytes =
                 1UL * 1024 * 1024 * 1024;
             var node = options.AddRouteMesh("objects")
                 .Listen(endpoint);

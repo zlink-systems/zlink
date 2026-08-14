@@ -5,16 +5,20 @@ import {
   isBindingNotFound,
   isContextTerminatedError,
   isRouteRecvRetryable,
-  submitBindingRequestCallback,
+  submitBindingRequest,
+  submitBindingRoutedSend,
   submitBindingSend,
+  submitBindingAsyncSend,
   toNativeRoutingId,
   zlink,
   type ZLinkBindingRequestOperation,
+  type ZLinkBindingAsyncSendOperation,
+  type ZLinkBindingRoutedSendOperation,
   type ZLinkBindingSendOperation
 } from './node-backend-adapter-support';
 
 export interface ZLinkNodeSocketWrapOptions {
-  readonly reuseReceived?: boolean;
+  readonly retainReceived?: boolean;
 }
 
 export function wrapSocket<T extends { close(): void }>(
@@ -24,10 +28,6 @@ export function wrapSocket<T extends { close(): void }>(
   const boundEndpoints = new Set<string>();
   const connectedEndpoints = new Set<string>();
   const peerRoutingIds = new Set<unknown>();
-  // STREAM Framework ingress closes each envelope before the next recv. Reuse
-  // the caller-provided envelope there so an idle/steady receive loop does not
-  // allocate another JavaScript Received object for every poll.
-  const reusableReceived = options.reuseReceived === true ? new zlink.Received() : undefined;
   const socket = nativeInstance as T & {
     options?: {
       probe?: boolean;
@@ -39,17 +39,19 @@ export function wrapSocket<T extends { close(): void }>(
       lastEndpoint?: string;
     };
   };
+  const hasRequest = typeof (nativeInstance as { request?: unknown }).request === 'function';
+  const hasRoutedPeer = hasRequest
+    && typeof (nativeInstance as { reply?: unknown }).reply === 'function';
+  const hasStream = typeof (nativeInstance as { trySend?: unknown }).trySend === 'function';
   const adapter = {
     nativeInstance,
     async dispose(): Promise<void> {
-      reusableReceived?.close();
       disableSocketLinger(nativeInstance);
       closeSocketRoutes(nativeInstance, peerRoutingIds);
       closeSocketEndpoints(nativeInstance, boundEndpoints, connectedEndpoints);
       await closeWithBusyRetry(nativeInstance);
     },
     close(): void {
-      reusableReceived?.close();
       nativeInstance.close();
     },
     bind(endpoint: string): void {
@@ -131,49 +133,68 @@ export function wrapSocket<T extends { close(): void }>(
       requireSocketOptions(socket).maxMsgSize = BigInt(value);
     },
     send(...args: unknown[]): unknown {
-      if (args.length >= 3) {
-        const [routingId, payload, flags] = args as [unknown, unknown, number];
+      if (hasStream) {
+        const [routingId, payload, flags] = args as [unknown, unknown, number | undefined];
         peerRoutingIds.add(routingId);
         return submitBindingSend(
-          (nativeInstance as T & { send(routingId: unknown): ZLinkBindingSendOperation })
-            .send(toNativeRoutingId(routingId)),
+          (nativeInstance as T & { trySend(routingId: unknown): ZLinkBindingSendOperation })
+            .trySend(toNativeRoutingId(routingId)),
           payload,
-          flags
+          flags ?? 0
+        );
+      }
+      if (hasRoutedPeer) {
+        const [routingId, payload] = args as [unknown, unknown];
+        peerRoutingIds.add(routingId);
+        return submitBindingRoutedSend(
+          (nativeInstance as T & { send(routingId: unknown): ZLinkBindingRoutedSendOperation })
+            .send(toNativeRoutingId(routingId)),
+          payload
         );
       }
       const [payload, flags] = args as [unknown, number | undefined];
+      if (hasRequest) {
+        return submitBindingRoutedSend(
+          (nativeInstance as T & { send(): ZLinkBindingRoutedSendOperation }).send(),
+          payload
+        );
+      }
       return submitBindingSend(
         (nativeInstance as T & { send(): ZLinkBindingSendOperation }).send(),
         payload,
         flags ?? 0
       );
     },
+    sendAsync(routingId: unknown, payload: unknown, timeoutMs?: number): Promise<void> {
+      if (!hasStream) throw new TypeError('Async stream send requires a STREAM socket.');
+      peerRoutingIds.add(routingId);
+      return submitBindingAsyncSend(
+        (nativeInstance as T & { send(routingId: unknown): ZLinkBindingAsyncSendOperation })
+          .send(toNativeRoutingId(routingId)),
+        payload,
+        timeoutMs
+      );
+    },
     request(...args: unknown[]): unknown {
-      if (args.length >= 5) {
-        const [routingId, payload, callback, flags, timeoutMs] = args as [
-          unknown, unknown, unknown, number, number | undefined
-        ];
+      if (hasRoutedPeer) {
+        const [routingId, payload, timeoutMs] = args as [unknown, unknown, number | undefined];
         peerRoutingIds.add(routingId);
-        return submitBindingRequestCallback(
+        return submitBindingRequest(
           (nativeInstance as T & { request(routingId: unknown): ZLinkBindingRequestOperation })
             .request(toNativeRoutingId(routingId)),
           payload,
-          callback,
-          flags,
           timeoutMs
         );
       }
-      if (args.length >= 4) {
-        const [payload, callback, flags, timeoutMs] = args as [unknown, unknown, number, number | undefined];
-        return submitBindingRequestCallback(
+      if (hasRequest) {
+        const [payload, timeoutMs] = args as [unknown, number | undefined];
+        return submitBindingRequest(
           (nativeInstance as T & { request(): ZLinkBindingRequestOperation }).request(),
           payload,
-          callback,
-          flags,
           timeoutMs
         );
       }
-      throw new TypeError('Backend request requires a payload and callback.');
+      throw new TypeError('Backend request requires a DEALER or ROUTER socket.');
     },
     reply(...args: unknown[]): unknown {
       const [routingId, requestSeq, payload] = args as [unknown, bigint, unknown];
@@ -184,10 +205,16 @@ export function wrapSocket<T extends { close(): void }>(
       return args.length < 3 ? operation : submitBindingSend(operation, payload, 0);
     },
     recv(flags?: number): unknown {
-      const received = reusableReceived ?? new zlink.Received();
+      const received = new zlink.Received();
       let ok = false;
       try {
-        ok = (nativeInstance as T & { recv(result: unknown, flags?: number): boolean }).recv(received, flags);
+        ok = options.retainReceived === true
+          ? (nativeInstance as T & {
+            recvRetained(result: unknown, flags?: number): boolean;
+          }).recvRetained(received, flags)
+          : (nativeInstance as T & {
+            recv(result: unknown, flags?: number): boolean;
+          }).recv(received, flags);
       } catch (error) {
         received.close();
         if (isRouteRecvRetryable(error)) {
@@ -212,30 +239,34 @@ export function wrapSocket<T extends { close(): void }>(
       }
       throw new TypeError('Backend publish requires a topic, payload, and flags.');
     },
-    sendToSpot(targetRid: unknown, targetSpot: unknown, payload: unknown, flags: number): boolean {
-      return submitBindingSend(
+    publishAsync(topic: string, payload: unknown, timeoutMs?: number): Promise<void> {
+      return submitBindingAsyncSend(
         (nativeInstance as T & {
-          sendToSpot(targetRid: unknown, targetSpot: unknown): ZLinkBindingSendOperation;
-        }).sendToSpot(toNativeRoutingId(targetRid), toNativeRoutingId(targetSpot)),
+          publishAsync(value: string): ZLinkBindingAsyncSendOperation;
+        }).publishAsync(topic),
         payload,
-        flags
+        timeoutMs
+      );
+    },
+    sendToSpot(targetRid: unknown, targetSpot: unknown, payload: unknown): Promise<void> {
+      return submitBindingRoutedSend(
+        (nativeInstance as T & {
+          sendToSpot(targetRid: unknown, targetSpot: unknown): ZLinkBindingRoutedSendOperation;
+        }).sendToSpot(toNativeRoutingId(targetRid), toNativeRoutingId(targetSpot)),
+        payload
       );
     },
     requestToSpot(
       targetRid: unknown,
       targetSpot: unknown,
       payload: unknown,
-      callback: unknown,
-      flags: number,
       timeoutMs?: number
-    ): boolean {
-      return submitBindingRequestCallback(
+    ): Promise<readonly unknown[]> {
+      return submitBindingRequest(
         (nativeInstance as T & {
           requestToSpot(targetRid: unknown, targetSpot: unknown): ZLinkBindingRequestOperation;
         }).requestToSpot(toNativeRoutingId(targetRid), toNativeRoutingId(targetSpot)),
         payload,
-        callback,
-        flags,
         timeoutMs
       );
     },

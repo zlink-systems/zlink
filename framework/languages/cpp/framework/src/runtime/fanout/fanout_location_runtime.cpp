@@ -3,7 +3,6 @@
 #include "runtime/fanout/fanout_location_runtime.hpp"
 #include "runtime/transport/listener_identity.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
-#include "runtime/messaging/async_submit_runtime.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/configuration/service_scope.hpp"
 
@@ -138,7 +137,8 @@ fanout_location_runtime_t::fanout_location_runtime_t (
   serializer_registry_t &serializers,
   const handler_registry_t &handlers,
   std::map<std::string, std::string> publisher_advertise_hosts,
-  std::shared_ptr<listener_status_registry_t> listener_statuses) :
+  std::shared_ptr<listener_status_registry_t> listener_statuses,
+  std::shared_ptr<application_job_queue_t> application_jobs) :
     _bus (std::move (bus)),
     _channel_runtime (detail::channel_runtime_t::from (_bus)),
     _channels (std::move (channels)),
@@ -149,7 +149,18 @@ fanout_location_runtime_t::fanout_location_runtime_t (
     _leases (&leases),
     _services (services),
     _serializers (&serializers),
-    _handlers (&handlers)
+    _handlers (&handlers),
+    _application_jobs (
+      application_jobs
+        ? std::move (application_jobs)
+        : std::make_shared<application_job_queue_t> (
+            application_job_queue_configuration_t{
+              application_job_queue_profile_t::balanced,
+              static_cast<std::uint32_t> (
+                std::numeric_limits<std::int32_t>::max ()),
+              1,
+              static_cast<std::uint32_t> (
+                std::numeric_limits<std::int32_t>::max ())}))
 {
 }
 
@@ -182,6 +193,8 @@ void fanout_location_runtime_t::start ()
     try {
         _subscriber_poller = std::make_unique<zlink::poller_t> ();
         _wake_timer.attach (*_subscriber_poller);
+        _application_supply = std::make_unique<application_supply_slot_t> (
+          _application_jobs, [this] { _wake_timer.signal (); });
         for (const auto &channel : _channels) {
             if (channel.publisher.enabled
                 && channel.publisher.discovery)
@@ -210,7 +223,7 @@ void fanout_location_runtime_t::start_publisher (
         throw std::invalid_argument (
           "discovery fanout publisher requires one routing id and one bind endpoint");
     auto raw = std::make_shared<raw_fanout_publisher_t> (
-      channel.publisher.bind_endpoints.front ());
+      channel.publisher.bind_endpoints.front (), _channel_runtime.core_context ());
     raw->start ();
     std::optional<std::string> advertise_host;
     if (const auto found = _publisher_advertise_hosts.find (channel.name);
@@ -274,7 +287,8 @@ void fanout_location_runtime_t::start_subscriber (
     auto entry = std::make_unique<subscriber_entry_t> ();
     entry->channel_name = channel.name;
     entry->owner =
-      std::make_unique<raw_fanout_subscriber_t> (_subscriber_poller.get ());
+      std::make_unique<raw_fanout_subscriber_t> (
+        _channel_runtime.core_context (), _subscriber_poller.get ());
     _subscribers.emplace (
       channel.name, std::move (entry));
 }
@@ -687,6 +701,13 @@ void fanout_location_runtime_t::pump ()
         auto &subscriber = *subscribers[(start + offset) % subscribers.size ()];
         receive_batch_budget_t budget;
         while (budget.can_receive ()) {
+            _application_supply->ensure_waiter ();
+            auto reserved = _application_supply->take ();
+            if (!reserved)
+                break;
+            auto application_permit = std::make_shared<
+              application_job_queue_t::permit_t> (
+                std::move (*reserved));
             auto [status, received] =
               subscriber.owner->try_receive (now);
             if (status == fanout_receive_status_t::no_data)
@@ -700,11 +721,19 @@ void fanout_location_runtime_t::pump ()
                 continue;
             }
             try {
+                application_permit->mark_queued ();
                 const auto message =
                   zlink::message_t::from (
                     received->payload.payload);
                 detail::inbound_message_context_t
                   inbound;
+                inbound.before_application_handler =
+                  [permit = application_permit] () mutable {
+                      if (!permit)
+                          return;
+                      permit->release_for_handler_entry ();
+                      permit.reset ();
+                  };
                 inbound.message.channel_name =
                   subscriber.channel_name;
                 inbound.message.packet_name =
@@ -712,33 +741,50 @@ void fanout_location_runtime_t::pump ()
                 inbound.message.content_type =
                   received->payload.content_type;
                 inbound.topic = received->topic;
-                auto scope =
+                auto scope = std::make_shared<
+                  zlink::framework::detail::service_scope_t> (
                   zlink::framework::detail::service_scope_t::create (
-                  _services,
-                  zlink::framework::detail::service_scope_kind_t::
-                    handler_invocation);
-                auto dispatched = _channel_runtime.dispatch_send (
+                    _services,
+                    zlink::framework::detail::service_scope_kind_t::
+                      handler_invocation));
+                auto dispatched = _channel_runtime.dispatch_send_async (
                   subscriber.channel_name,
                   received->topic,
                   received->payload.packet_name,
-                  scope.provider (), *_serializers, *_handlers,
-                  message, inbound);
-                if (!dispatched) {
-                    zlink::framework::detail::dispatch_error_reporter_t (
-                      _channel_runtime.dispatch_options ())
-                      .report (message_dispatch_error_event_t{
-                        .surface = dispatch_error_surface_t::channel,
-                        .message_kind = dispatch_message_kind_t::publish,
-                        .reason = zlink::framework::detail::dispatch_reason_from_error (
-                          dispatched.error ()),
-                        .action = dispatch_error_action_t::drop,
-                        .packet_name = received->payload.packet_name,
-                        .channel_name = subscriber.channel_name,
-                        .topic = received->topic,
-                        .exception = dispatched.error ()
-                          ? std::make_exception_ptr (*dispatched.error ())
-                          : std::exception_ptr{}});
-                }
+                  scope->provider (), *_serializers, *_handlers,
+                  std::move (message), std::move (inbound));
+                auto retained = std::move (received->retained);
+                auto runtime = _channel_runtime;
+                auto packet_name = received->payload.packet_name;
+                auto channel_name = subscriber.channel_name;
+                auto topic = received->topic;
+                detail::observe_task_completion (
+                  dispatched,
+                  [scope = std::move (scope), retained = std::move (retained),
+                   runtime = std::move (runtime),
+                   packet_name = std::move (packet_name),
+                   channel_name = std::move (channel_name),
+                   topic = std::move (topic)] (const result_t<void> &result) {
+                      static_cast<void> (scope);
+                      static_cast<void> (retained);
+                      if (result) {
+                          return;
+                      }
+                      zlink::framework::detail::dispatch_error_reporter_t (
+                        runtime.dispatch_options ())
+                        .report (message_dispatch_error_event_t{
+                          .surface = dispatch_error_surface_t::channel,
+                          .message_kind = dispatch_message_kind_t::publish,
+                          .reason = zlink::framework::detail::dispatch_reason_from_error (
+                            result.error ()),
+                          .action = dispatch_error_action_t::drop,
+                          .packet_name = packet_name,
+                          .channel_name = channel_name,
+                          .topic = topic,
+                          .exception = result.error ()
+                            ? std::make_exception_ptr (*result.error ())
+                            : std::exception_ptr{}});
+                  });
             }
             catch (...) {
             }
@@ -750,7 +796,7 @@ void fanout_location_runtime_t::pump ()
     _subscriber_pump_cursor = (start + 1) % subscribers.size ();
 }
 
-result_t<void> fanout_location_runtime_t::publish (
+task_t<void> fanout_location_runtime_t::publish (
   const std::string &channel_name,
   std::string topic,
   std::string packet_name,
@@ -759,7 +805,7 @@ result_t<void> fanout_location_runtime_t::publish (
   std::chrono::milliseconds timeout)
 {
     if (_stop.load (std::memory_order_acquire))
-        return result_t<void>::failure (
+        throw framework_exception_t (
           framework_error_kind_t::shutting_down,
           "fanout runtime is shutting down");
     std::shared_ptr<raw_fanout_publisher_t> publisher;
@@ -769,28 +815,20 @@ result_t<void> fanout_location_runtime_t::publish (
         if (found == _publishers.end ()
             || found->second->descriptor.state
                  != framework_runtime_state_t::serving)
-            return result_t<void>::failure (
+            throw framework_exception_t (
               framework_error_kind_t::unavailable,
               "fanout publisher is not serving");
         publisher = found->second->owner;
     }
     if (_stop.load (std::memory_order_acquire))
-        return result_t<void>::failure (
+        throw framework_exception_t (
           framework_error_kind_t::shutting_down,
           "fanout runtime is shutting down");
     auto encoded = protocol::application_payload_t{
       std::move (packet_name),
       std::move (content_type),
       message.to_bytes ()};
-    runtime::messaging::note_submit_attempt (
-      "fanout:" + channel_name, publisher.get (), timeout,
-      _channel_runtime.pending_limit ());
-    const auto submitted = publisher->publish (topic, encoded);
-    return submitted
-             ? result_t<void>::success ()
-             : result_t<void>::failure (
-                 framework_error_kind_t::capacity_exceeded,
-                 "fanout publish is backpressured");
+    co_await publisher->publish (topic, encoded, timeout);
 }
 
 void fanout_location_runtime_t::stop () noexcept
@@ -800,6 +838,10 @@ void fanout_location_runtime_t::stop () noexcept
     _wake_timer.signal ();
     if (_thread.joinable ())
         _thread.join ();
+    if (_application_supply) {
+        _application_supply->close ();
+        _application_supply.reset ();
+    }
     _wake_timer.detach ();
     std::vector<std::string> publisher_channels;
     bool has_publishers = false;

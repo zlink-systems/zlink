@@ -8,18 +8,15 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.time.Duration;
-import java.util.function.BiConsumer;
-import java.util.function.Predicate;
+import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
-import systems.zlink.contracts.messaging.SendSubmitOperation;
+import systems.zlink.contracts.messaging.RequestSubmitOperation;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RouterSocket;
-import systems.zlink.contracts.sockets.SendFlags;
-import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
@@ -29,40 +26,30 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
  * Private binding-facing port for the JVM service runtime.
  *
  * <p>This is the only service runtime class that constructs binding Context,
- * RouterSocket, Received, and Message objects. It copies received frames before
- * returning so binding-owned storage never reaches a handler or mailbox.
+ * RouterSocket, Received, and Message objects. Inbound application dispatch
+ * retains its native receive owner until the framework record is terminal.
  */
 final class ZLinkJavaRawServicePort implements AutoCloseable {
     private final Context context;
     private final boolean ownsContext;
-    private final Predicate<List<byte[]>> completionControlSelector;
     private final List<RouterSocket> routers = new ArrayList<>();
     private final Map<RouterSocket, ZLinkJavaSocketReceivePoller> receivePollers =
         new IdentityHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
 
     ZLinkJavaRawServicePort() {
-        this(Zlink.createContext(), true, ignored -> false);
+        this(Zlink.createContext(), true);
     }
 
     ZLinkJavaRawServicePort(Context context) {
-        this(context, false, ignored -> false);
-    }
-
-    ZLinkJavaRawServicePort(
-        Context context,
-        Predicate<List<byte[]>> completionControlSelector) {
-        this(context, false, completionControlSelector);
+        this(context, false);
     }
 
     private ZLinkJavaRawServicePort(
         Context context,
-        boolean ownsContext,
-        Predicate<List<byte[]>> completionControlSelector) {
+        boolean ownsContext) {
         this.context = Objects.requireNonNull(context, "context");
         this.ownsContext = ownsContext;
-        this.completionControlSelector = Objects.requireNonNull(
-            completionControlSelector, "completionControlSelector");
     }
 
     synchronized RouterSocket openRouter(RoutingId routingId) {
@@ -72,7 +59,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         try {
             router.setRoutingId(Objects.requireNonNull(routingId, "routingId"));
             routers.add(router);
-            receivePollers.put(router, new ZLinkJavaSocketReceivePoller(router, true));
+            receivePollers.put(router, new ZLinkJavaSocketReceivePoller(router));
             accepted = true;
             return router;
         } finally {
@@ -88,7 +75,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         receivePollers.get(router).ensureRegistered();
     }
 
-    synchronized boolean send(
+    synchronized CompletionStage<Void> send(
         RouterSocket router,
         RoutingId target,
         List<byte[]> frames) {
@@ -97,48 +84,28 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         if (frames.isEmpty()) {
             throw new IllegalArgumentException("service multipart must not be empty");
         }
-        if (completionControlSelector.test(frames)) {
-            return sendCompletionControl(router, target, frames);
-        }
         List<Message> messages = frames.stream()
             .map(frame -> Message.from(Objects.requireNonNull(frame, "frame")))
             .toList();
         boolean submitted = false;
         try {
-            SendSubmitOperation submit = router.send(target).message(messages.getFirst());
+            var submit = router.send(target).message(messages.getFirst());
             for (int index = 1; index < messages.size(); index++) {
                 submit.message(messages.get(index));
             }
-            submitted = submit.flags(SendFlags.DONT_WAIT).submit();
-            return submitted;
+            CompletionStage<Void> completion = submit.submit()
+                .whenComplete((ignored, failure) ->
+                    Message.closeAll(messages));
+            submitted = true;
+            return completion;
         } finally {
             if (!submitted) {
-                messages.forEach(Message::close);
+                Message.closeAll(messages);
             }
         }
     }
 
-    synchronized boolean sendCompletionControl(
-        RouterSocket router,
-        RoutingId target,
-        List<byte[]> frames) {
-        ensureOwned(router);
-        Objects.requireNonNull(target, "target");
-        if (frames.isEmpty()) {
-            throw new IllegalArgumentException(
-                "completion control multipart must not be empty");
-        }
-        List<Message> messages = frames.stream()
-            .map(frame -> Message.from(Objects.requireNonNull(frame, "frame")))
-            .toList();
-        try {
-            return router.trySendCompletionControl(target, messages);
-        } finally {
-            messages.forEach(Message::close);
-        }
-    }
-
-    boolean sendService(
+    CompletionStage<Void> sendService(
         RouterSocket router,
         RoutingId target,
         int command,
@@ -148,27 +115,24 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             new ZLinkServiceWireFrame(command, flags, frames)));
     }
 
-    synchronized boolean request(
+    synchronized CompletionStage<List<byte[]>> request(
         RouterSocket router,
         RoutingId target,
         List<byte[]> frames,
-        Duration timeout,
-        BiConsumer<RequestResult, List<byte[]>> completion) {
-        return request(router, target, 0L, 0L, frames, timeout, completion);
+        Duration timeout) {
+        return request(router, target, 0L, 0L, frames, timeout);
     }
 
-    synchronized boolean request(
+    synchronized CompletionStage<List<byte[]>> request(
         RouterSocket router,
         RoutingId target,
         long transportPairId,
         long transportPairGeneration,
         List<byte[]> frames,
-        Duration timeout,
-        BiConsumer<RequestResult, List<byte[]>> completion) {
+        Duration timeout) {
         ensureOwned(router);
         Objects.requireNonNull(target, "target");
         Objects.requireNonNull(timeout, "timeout");
-        Objects.requireNonNull(completion, "completion");
         if (frames.isEmpty()) {
             throw new IllegalArgumentException("service request must not be empty");
         }
@@ -181,25 +145,26 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 ? router.request(target)
                 : router.request(target, transportPairId,
                     transportPairGeneration);
-            var submit = request.message(messages.getFirst());
+            RequestSubmitOperation submit = request.message(messages.getFirst());
             for (int index = 1; index < messages.size(); index++) {
                 submit.message(messages.get(index));
             }
-            submitted = submit.timeout(timeout)
-                .flags(SendFlags.DONT_WAIT)
-                .submit((result, reply) -> {
+            CompletionStage<List<byte[]>> completion = submit.timeout(timeout)
+                .submit()
+                .thenApply(reply -> {
                     try {
-                        completion.accept(
-                            result,
-                            reply.stream().map(Message::toByteArray).toList());
+                        return reply.stream().map(Message::toByteArray).toList();
                     } finally {
                         reply.forEach(Message::close);
                     }
-                });
-            return submitted;
+                })
+                .whenComplete((ignored, failure) ->
+                    Message.closeAll(messages));
+            submitted = true;
+            return completion;
         } finally {
             if (!submitted) {
-                messages.forEach(Message::close);
+                Message.closeAll(messages);
             }
         }
     }
@@ -228,7 +193,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             submitted = true;
         } finally {
             if (!submitted) {
-                messages.forEach(Message::close);
+                Message.closeAll(messages);
             }
         }
     }
@@ -247,17 +212,26 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             || !receivePoller.waitForReadable(Duration.ZERO)) {
             return Optional.empty();
         }
-        try (Received received = new Received()) {
-            if (!router.recv(received, RecvFlags.DONT_WAIT)) {
+        Received received = new Received();
+        boolean transferred = false;
+        try {
+            if (!router.recvRetained(received, RecvFlags.DONT_WAIT)) {
                 return Optional.empty();
             }
             RoutingId source = received.getRoutingId().orElseThrow(
                 () -> new IllegalStateException("service ROUTER receive has no routing id"));
             List<byte[]> frames = received.parts().stream().map(Message::toByteArray).toList();
-            return Optional.of(new Inbound(
+            Inbound inbound = new Inbound(
                 source,
                 received.requestSeq().orElse(null),
-                frames));
+                frames,
+                received);
+            transferred = true;
+            return Optional.of(inbound);
+        } finally {
+            if (!transferred) {
+                received.close();
+            }
         }
     }
 
@@ -303,15 +277,22 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     record Inbound(
         RoutingId source,
         Long requestSequence,
-        List<byte[]> frames) {
+        List<byte[]> frames,
+        Received retained) implements AutoCloseable {
         Inbound {
             Objects.requireNonNull(source, "source");
             frames = frames.stream().map(byte[]::clone).toList();
+            Objects.requireNonNull(retained, "retained");
         }
 
         @Override
         public List<byte[]> frames() {
             return frames.stream().map(byte[]::clone).toList();
+        }
+
+        @Override
+        public void close() {
+            retained.close();
         }
     }
 }

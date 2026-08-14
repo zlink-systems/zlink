@@ -4,7 +4,6 @@ import type { ZLinkLocationOwnerToken } from './Writes';
 
 declare const zlinkAuthorityKeyBrand: unique symbol;
 declare const zlinkAuthorityVersionBrand: unique symbol;
-declare const zlinkRelocationCapacityFenceBrand: unique symbol;
 declare const zlinkAggregateIdBrand: unique symbol;
 
 export interface ZLinkAuthorityKey {
@@ -68,18 +67,11 @@ export type ZLinkAuthorityReadResult =
   | { readonly kind: 'missing'; readonly storeNow: Date }
   | ZLinkAuthoritySnapshot;
 
-export interface ZLinkRelocationCapacityFence {
-  readonly value: string;
-  readonly [zlinkRelocationCapacityFenceBrand]: true;
-}
-
 export type ZLinkAuthorityMutation =
   | {
       readonly kind: 'put';
       readonly payload: Uint8Array;
-      readonly generationTransition: 'preserve' | 'newOwner';
-      readonly targetOwner?: ZLinkLocationOwnerToken;
-      readonly relocationCapacityFence?: ZLinkRelocationCapacityFence;
+      readonly generationTransition: 'preserve';
     }
   | {
       /** Rebinds an authority retained by the same owner after lease recovery. */
@@ -267,34 +259,6 @@ export type ZLinkObjectAbortResult =
   | { readonly kind: 'aborted' }
   | { readonly kind: 'alreadyAborted' }
   | { readonly kind: 'stale' };
-
-export interface ZLinkRelocationCapacityReservationRequest {
-  readonly reservationId: string;
-  readonly authorityKey: ZLinkAuthorityKey;
-  readonly expectedStoreVersion: ZLinkAuthorityStoreVersion;
-  readonly objectKind: ZLinkPlacementObjectKind;
-  readonly stableType: string;
-  readonly sourceDescriptor: ZLinkMeshNodeDescriptorKey;
-  readonly sourceNodeLifecycleGeneration: bigint;
-  readonly sourceOwner: ZLinkLocationOwnerToken;
-  readonly targetDescriptor: ZLinkMeshNodeDescriptorKey;
-  readonly targetNodeLifecycleGeneration: bigint;
-  readonly targetOwner: ZLinkLocationOwnerToken;
-  readonly capacity: ZLinkCapacityVector;
-}
-
-export type ZLinkRelocationCapacityReserveResult =
-  | { readonly kind: 'reserved'; readonly fence: ZLinkRelocationCapacityFence }
-  | { readonly kind: 'alreadyReserved'; readonly fence: ZLinkRelocationCapacityFence }
-  | { readonly kind: 'conflict'; readonly current: ZLinkAuthorityReadResult }
-  | { readonly kind: 'targetUnavailable' }
-  | { readonly kind: 'placementCapacityExhausted' };
-
-export type ZLinkRelocationCapacityAbortResult =
-  | 'aborted'
-  | 'alreadyAborted'
-  | 'alreadyCommitted'
-  | 'stale';
 
 export interface ZLinkAggregateId {
   readonly value: string;

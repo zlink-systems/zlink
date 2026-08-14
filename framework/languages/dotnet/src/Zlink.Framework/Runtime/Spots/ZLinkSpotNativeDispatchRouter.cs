@@ -1,5 +1,3 @@
-using Zlink.Framework.Runtime.Dispatch;
-
 namespace Zlink.Framework.Runtime.Spots;
 
 internal static class ZLinkSpotNativeDispatchRouter
@@ -11,7 +9,7 @@ internal static class ZLinkSpotNativeDispatchRouter
         Action subscribeReadable,
         Action actorJoinReadable,
         Action actorLifecycleReadable,
-        Action<IReadOnlyList<ZLinkBackendActorPart>, ZLinkInboundDispatchLease?> actorPartsReadable)
+        Action<IReadOnlyList<ZLinkBackendActorPart>, IDisposable?> actorPartsReadable)
     {
         try
         {
@@ -36,7 +34,7 @@ internal static class ZLinkSpotNativeDispatchRouter
                         break;
                     case ZLinkBackendSpotDispatchEvent.ActorReadable
                         when info.ActorParts is { Count: > 0 } actorParts:
-                        actorPartsReadable(actorParts, info.ActorDispatchLease);
+                        actorPartsReadable(actorParts, info.ActorCreditOwner);
                         break;
                 }
             });

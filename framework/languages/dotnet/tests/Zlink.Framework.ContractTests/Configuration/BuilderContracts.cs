@@ -39,7 +39,9 @@ public sealed class BuilderContracts
             .ToHashSet(StringComparer.Ordinal);
 
         Assert.Contains(nameof(IZLinkFrameworkOptions.AddRouteMesh), methods);
-        Assert.Contains(nameof(IZLinkFrameworkOptions.ConfigureInboundDispatch), methods);
+        Assert.Contains(
+            nameof(IZLinkFrameworkOptions.ConfigureInboundDispatch),
+            methods);
         Assert.Contains(nameof(IZLinkFrameworkOptions.AddFanoutChannel), methods);
         Assert.Contains(nameof(IZLinkFrameworkOptions.AddStreamNode), methods);
     }

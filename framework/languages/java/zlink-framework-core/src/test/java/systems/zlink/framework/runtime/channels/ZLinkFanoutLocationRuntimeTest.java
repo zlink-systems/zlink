@@ -114,8 +114,6 @@ final class ZLinkFanoutLocationRuntimeTest {
             ZLinkChannelCallRuntime calls = new ZLinkChannelCallRuntime(
                 null,
                 fixture.scheduler,
-                fixture.infrastructure,
-                Duration.ofMillis(40),
                 new ZLinkChannelReplyDecoder(
                     new ZLinkJsonMessageSerializer()),
                 (channel, node, spot, generation, parts) ->

@@ -616,17 +616,69 @@ class in_memory_location_repository_t : public location_repository_t
                 authority_stored_t{std::move (snapshot)}});
         }
 
-        auto put = std::get<authority_put_t> (std::move (mutation));
-        const auto transition = put.generation_transition;
-        if ((transition == authority_generation_transition_t::preserve
-             && (put.target_owner
-                 || put.relocation_capacity_fence))
-            || (transition == authority_generation_transition_t::new_owner
-                && (!put.target_owner
-                    || !put.relocation_capacity_fence)))
-            throw std::invalid_argument (
-              "authority owner or relocation capacity fence does not match generation transition");
+        if (auto *retarget =
+              std::get_if<authority_retarget_t> (&mutation)) {
+            if (found->second.allocation.state
+                  != placement_allocation_state_t::active
+                || !owner_token_is_live (found->second.owner, now)
+                || !capacity_bundle_present (
+                  _active_by_placement,
+                  found->second.allocation.target,
+                  found->second.allocation.capacity_bundle))
+                return completed (
+                  authority_compare_exchange_result_t{
+                    authority_conflict_t{found->second}});
+            const auto target_descriptor = live_target_descriptor (
+              retarget->target,
+              found->second.allocation.object_kind,
+              found->second.allocation.stable_type,
+              now);
+            if (!target_descriptor
+                || (!same_target (
+                      found->second.allocation.target,
+                      retarget->target)
+                    && !capacity_available (
+                      *target_descriptor,
+                      retarget->target,
+                      found->second.allocation.capacity_bundle)))
+                return completed (
+                  authority_compare_exchange_result_t{
+                    authority_conflict_t{found->second}});
+            if (!store_revisions_available ()
+                || !next_generation (_authority_owner_generation))
+                return completed (
+                  authority_compare_exchange_result_t{
+                    authority_generation_exhausted_t{}});
+            auto snapshot = found->second;
+            snapshot.store_version = next_store_version ();
+            snapshot.payload = std::move (retarget->payload);
+            snapshot.authority_owner_generation =
+              _authority_owner_generation;
+            snapshot.owner = retarget->target.owner;
+            snapshot.store_now = now;
+            const auto source_allocation = snapshot.allocation;
+            snapshot.allocation.target = retarget->target;
+            if (!same_target (
+                  source_allocation.target,
+                  snapshot.allocation.target)) {
+                apply_capacity_bundle (
+                  _active_by_placement,
+                  source_allocation.target,
+                  source_allocation.capacity_bundle,
+                  false);
+                apply_capacity_bundle (
+                  _active_by_placement,
+                  snapshot.allocation.target,
+                  snapshot.allocation.capacity_bundle,
+                  true);
+            }
+            _authorities[key.value] = snapshot;
+            return completed (
+              authority_compare_exchange_result_t{
+                authority_stored_t{std::move (snapshot)}});
+        }
 
+        auto put = std::get<authority_put_t> (std::move (mutation));
         if (found == _authorities.end ()
             || found->second.allocation.state
                  != placement_allocation_state_t::active)
@@ -643,61 +695,14 @@ class in_memory_location_repository_t : public location_repository_t
         auto owner_generation =
           found->second.authority_owner_generation;
         auto allocation = found->second.allocation;
-        if (transition
-            == authority_generation_transition_t::new_owner) {
-                const auto capacity =
-                  _relocation_capacity_reservations.find (
-                    put.relocation_capacity_fence->value);
-                if (capacity
-                      == _relocation_capacity_reservations.end ()
-                    || capacity->second.status
-                         != relocation_reservation_status_t::reserved
-                    || capacity->second.request.key.value != key.value
-                    || capacity->second.request.expected_store_version
-                         != found->second.store_version
-                    || !same_owner (
-                      capacity->second.request.source.owner,
-                      found->second.owner)
-                    || !same_owner (
-                      capacity->second.request.target.owner,
-                      *put.target_owner)
-                    || !allocation_matches_source (
-                      found->second.allocation,
-                      capacity->second.request)
-                    || !live_target_descriptor (
-                      capacity->second.request.target,
-                      capacity->second.request.object_kind,
-                      capacity->second.request.stable_type,
-                      now)
-                    || !relocation_capacity_counters_available (
-                      capacity->second))
-                    return completed (
-                      authority_compare_exchange_result_t{
-                        authority_conflict_t{found->second}});
-                if (!store_revisions_available ())
-                    return completed (
-                      authority_compare_exchange_result_t{
-                        authority_generation_exhausted_t{}});
-                if (!next_generation (_authority_owner_generation))
-                    return completed (
-                      authority_compare_exchange_result_t{
-                        authority_generation_exhausted_t{}});
-                owner_generation = _authority_owner_generation;
-                owner = *put.target_owner;
-                allocation = allocation_from_relocation (
-                  capacity->second.request);
-                consume_relocation_capacity (
-                  capacity->second);
-        } else {
-                if (!owner_token_is_live (found->second.owner, now))
-                    return completed (
-                      authority_compare_exchange_result_t{
-                        authority_conflict_t{found->second}});
-                if (!store_revisions_available ())
-                    return completed (
-                      authority_compare_exchange_result_t{
-                        authority_generation_exhausted_t{}});
-        }
+        if (!owner_token_is_live (found->second.owner, now))
+            return completed (
+              authority_compare_exchange_result_t{
+                authority_conflict_t{found->second}});
+        if (!store_revisions_available ())
+            return completed (
+              authority_compare_exchange_result_t{
+                authority_generation_exhausted_t{}});
 
         authority_snapshot_t snapshot{
           next_store_version (),
@@ -1174,145 +1179,6 @@ class in_memory_location_repository_t : public location_repository_t
           object_abort_result_t{object_aborted_t{}});
     }
 
-    task_t<relocation_capacity_reserve_result_t>
-    reserve_relocation_capacity (
-      relocation_capacity_reserve_request_t request,
-      std::stop_token cancellation = {}) override
-    {
-        if (cancellation.stop_requested ())
-            return cancelled<relocation_capacity_reserve_result_t> ();
-        if (all_zero (request.reservation_id)
-            || request.key.value.empty ()
-            || request.expected_store_version.empty ()
-            || request.stable_type.empty ()
-            || !bundle_matches_object (
-              request.capacity_bundle,
-              request.object_kind,
-              request.stable_type))
-            throw std::invalid_argument (
-              "relocation capacity reservation is incomplete");
-
-        std::lock_guard lock (_gate);
-        const auto now = clock_t::now ();
-        const auto reservation_key =
-          reservation_id_key (request.reservation_id);
-        const auto existing_id =
-          _relocation_capacity_by_id.find (reservation_key);
-        if (existing_id != _relocation_capacity_by_id.end ()) {
-            const auto existing =
-              _relocation_capacity_reservations.find (
-                existing_id->second);
-            if (existing
-                  != _relocation_capacity_reservations.end ()
-                && same_relocation_capacity_request (
-                  existing->second.request, request)) {
-                return completed (
-                  relocation_capacity_reserve_result_t{
-                    relocation_capacity_already_reserved_t{
-                      existing->second.fence}});
-            }
-            const auto authority =
-              _authorities.find (request.key.value);
-            return completed (
-              relocation_capacity_reserve_result_t{
-                relocation_capacity_conflict_t{
-                  authority == _authorities.end ()
-                    ? authority_read_result_t{
-                        authority_missing_t{now}}
-                    : authority_read_result_t{
-                        authority->second}}});
-        }
-
-        const auto authority =
-          _authorities.find (request.key.value);
-        if (authority == _authorities.end ()
-            || authority->second.store_version
-                 != request.expected_store_version
-            || !same_owner (
-              authority->second.owner, request.source.owner)
-            || !allocation_matches_source (
-              authority->second.allocation, request)) {
-            return completed (
-              relocation_capacity_reserve_result_t{
-                relocation_capacity_conflict_t{
-                  authority == _authorities.end ()
-                    ? authority_read_result_t{
-                        authority_missing_t{now}}
-                    : authority_read_result_t{
-                        authority->second}}});
-        }
-        const auto target_descriptor =
-          live_target_descriptor (
-            request.target,
-            request.object_kind,
-            request.stable_type,
-            now);
-        if (!target_descriptor)
-            return completed (
-              relocation_capacity_reserve_result_t{
-                relocation_capacity_target_unavailable_t{}});
-        if (!capacity_available (
-              *target_descriptor,
-              request.target,
-              request.capacity_bundle))
-            return completed (
-              relocation_capacity_reserve_result_t{
-                relocation_capacity_exhausted_t{}});
-
-        relocation_capacity_fence_t fence{
-          "relocation-" + reservation_key};
-        relocation_capacity_state_t state{
-          request, fence, relocation_reservation_status_t::reserved};
-        apply_capacity_bundle (
-          _pending_by_placement,
-          request.target,
-          request.capacity_bundle,
-          true);
-        _relocation_capacity_by_id.emplace (
-          reservation_key, fence.value);
-        _relocation_capacity_reservations.emplace (
-          fence.value, std::move (state));
-        return completed (
-          relocation_capacity_reserve_result_t{
-            relocation_capacity_reserved_t{
-              std::move (fence)}});
-    }
-
-    task_t<relocation_capacity_abort_result_t>
-    abort_relocation_capacity (
-      relocation_capacity_fence_t fence,
-      std::stop_token cancellation = {}) override
-    {
-        if (cancellation.stop_requested ())
-            return cancelled<relocation_capacity_abort_result_t> ();
-        std::lock_guard lock (_gate);
-        const auto reservation =
-          _relocation_capacity_reservations.find (fence.value);
-        if (reservation
-            == _relocation_capacity_reservations.end ())
-            return completed (
-              relocation_capacity_abort_result_t::stale);
-        if (reservation->second.status
-            == relocation_reservation_status_t::committed)
-            return completed (
-              relocation_capacity_abort_result_t::
-                already_committed);
-        if (reservation->second.status
-            == relocation_reservation_status_t::aborted)
-            return completed (
-              relocation_capacity_abort_result_t::
-                already_aborted);
-        if (reservation->second.status
-            != relocation_reservation_status_t::reserved)
-            return completed (
-              relocation_capacity_abort_result_t::stale);
-        release_relocation_pending (reservation->second);
-        reservation->second.status =
-          relocation_reservation_status_t::aborted;
-        return completed (
-          relocation_capacity_abort_result_t::aborted);
-    }
-
     task_t<aggregate_prepare_result_t> prepare_aggregate (
       aggregate_prepare_request_t request,
       std::stop_token cancellation = {}) override
@@ -1358,46 +1224,6 @@ class in_memory_location_repository_t : public location_repository_t
             return completed (
               aggregate_prepare_result_t{
                 aggregate_prepare_stale_t{}});
-        }
-
-        if (!request.capacity_fences.empty ()
-            && request.capacity_fences.size () != request.participants.size ())
-            return completed (
-              aggregate_prepare_result_t{
-                aggregate_prepare_conflict_t{}});
-        for (std::size_t index = 0;
-             index < request.participants.size ();
-             ++index) {
-            const auto &participant = request.participants[index];
-            if (request.capacity_fences.empty ()) {
-                if (participant.capacity_fence)
-                    return completed (
-                      aggregate_prepare_result_t{
-                        aggregate_prepare_conflict_t{}});
-                continue;
-            }
-            const auto &fence = request.capacity_fences[index];
-            if (fence.value.empty ()
-                || !participant.capacity_fence
-                || participant.capacity_fence->value != fence.value)
-                return completed (
-                  aggregate_prepare_result_t{
-                    aggregate_prepare_conflict_t{}});
-            const auto reservation =
-              _relocation_capacity_reservations.find (fence.value);
-            if (reservation == _relocation_capacity_reservations.end ()
-                || reservation->second.status
-                     != relocation_reservation_status_t::reserved
-                || reservation->second.request.key.value
-                     != participant.key.value
-                || reservation->second.request.expected_store_version
-                     != participant.expected_store_version
-                || !same_owner (
-                  reservation->second.request.target.owner,
-                  request.target_owner))
-                return completed (
-                  aggregate_prepare_result_t{
-                    aggregate_prepare_conflict_t{}});
         }
 
         std::string previous;
@@ -1470,16 +1296,10 @@ class in_memory_location_repository_t : public location_repository_t
           request.capacity_bundle.spot_type->stable_type,
           clock_t::now ());
         if (!target_descriptor
-            || (request.capacity_fences.empty ()
-                && !capacity_available (
-                  *target_descriptor,
-                  target,
-                  request.capacity_bundle))
-            || (!request.capacity_fences.empty ()
-                && !capacity_bundle_present (
-                  _pending_by_placement,
-                  target,
-                  request.capacity_bundle)))
+            || !capacity_available (
+              *target_descriptor,
+              target,
+              request.capacity_bundle))
             return completed (
               aggregate_prepare_result_t{
                 aggregate_prepare_conflict_t{}});
@@ -1489,23 +1309,11 @@ class in_memory_location_repository_t : public location_repository_t
         state.inventory = *inventory_tree;
         _aggregates.emplace (aggregate_key, std::move (state));
         const auto &stored = _aggregates.at (aggregate_key).request;
-        if (stored.capacity_fences.empty ())
-            apply_capacity_bundle (
-              _pending_by_placement,
-              target,
-              stored.capacity_bundle,
-              true);
-        else {
-            for (const auto &capacity : stored.capacity_fences) {
-                auto &reservation =
-                  _relocation_capacity_reservations.at (capacity.value);
-                reservation.status =
-                  relocation_reservation_status_t::prepared;
-                reservation.aggregate_id = stored.aggregate_id;
-                reservation.aggregate_generation =
-                  stored.aggregate_generation;
-            }
-        }
+        apply_capacity_bundle (
+          _pending_by_placement,
+          target,
+          stored.capacity_bundle,
+          true);
         return completed (
           aggregate_prepare_result_t{
             aggregate_prepared_t{
@@ -1582,11 +1390,10 @@ class in_memory_location_repository_t : public location_repository_t
             : std::string{},
           now);
         if (!target_descriptor
-            || (aggregate->second.request.capacity_fences.empty ()
-                && !capacity_bundle_present (
-                  _pending_by_placement,
-                  target,
-                  aggregate->second.request.capacity_bundle)))
+            || !capacity_bundle_present (
+              _pending_by_placement,
+              target,
+              aggregate->second.request.capacity_bundle))
             return completed (
               aggregate_commit_result_t::stale);
         for (const auto &participant :
@@ -1603,43 +1410,6 @@ class in_memory_location_repository_t : public location_repository_t
                 return completed (
                   aggregate_commit_result_t::stale);
         }
-        if (!aggregate->second.request.capacity_fences.empty ()) {
-            for (std::size_t index = 0;
-                 index < aggregate->second.request.capacity_fences.size ();
-                 ++index) {
-                const auto &participant =
-                  aggregate->second.request.participants[index];
-                const auto reservation =
-                  _relocation_capacity_reservations.find (
-                    aggregate->second.request.capacity_fences[index].value);
-                const auto authority =
-                  _authorities.find (participant.key.value);
-                if (reservation == _relocation_capacity_reservations.end ()
-                    || authority == _authorities.end ()
-                    || reservation->second.status
-                         != relocation_reservation_status_t::prepared
-                    || !reservation->second.aggregate_id
-                    || reservation->second.aggregate_id->value
-                         != fence.aggregate_id.value
-                    || reservation->second.aggregate_generation
-                         != fence.aggregate_generation
-                    || reservation->second.request.key.value
-                         != participant.key.value
-                    || reservation->second.request.expected_store_version
-                         != participant.expected_store_version
-                    || !same_owner (
-                      reservation->second.request.target.owner,
-                      aggregate->second.request.target_owner)
-                    || !allocation_matches_source (
-                      authority->second.allocation,
-                      reservation->second.request)
-                    || !relocation_capacity_counters_available (
-                      reservation->second))
-                    return completed (
-                      aggregate_commit_result_t::stale);
-            }
-        }
-
         for (std::size_t index = 0;
              index < aggregate->second.request.participants.size ();
              ++index) {
@@ -1660,31 +1430,23 @@ class in_memory_location_repository_t : public location_repository_t
                 const auto source_allocation =
                   snapshot.allocation;
                 snapshot.allocation.target = target;
-                if (aggregate->second.request.capacity_fences.empty ()) {
-                    apply_capacity_bundle (
-                      _active_by_placement,
-                      source_allocation.target,
-                      source_allocation.capacity_bundle,
-                      false);
-                    apply_capacity_bundle (
-                      _active_by_placement,
-                      target,
-                      snapshot.allocation.capacity_bundle,
-                      true);
-                } else {
-                    auto &reservation =
-                      _relocation_capacity_reservations.at (
-                        aggregate->second.request.capacity_fences[index].value);
-                    consume_relocation_capacity (reservation);
-                }
+                apply_capacity_bundle (
+                  _active_by_placement,
+                  source_allocation.target,
+                  source_allocation.capacity_bundle,
+                  false);
+                apply_capacity_bundle (
+                  _active_by_placement,
+                  target,
+                  snapshot.allocation.capacity_bundle,
+                  true);
             }
         }
-        if (aggregate->second.request.capacity_fences.empty ())
-            apply_capacity_bundle (
-              _pending_by_placement,
-              target,
-              aggregate->second.request.capacity_bundle,
-              false);
+        apply_capacity_bundle (
+          _pending_by_placement,
+          target,
+          aggregate->second.request.capacity_bundle,
+          false);
         aggregate->second.status = aggregate_status_t::committed;
         return completed (
           aggregate_commit_result_t::committed);
@@ -1717,31 +1479,11 @@ class in_memory_location_repository_t : public location_repository_t
           aggregate->second.request
             .target_descriptor_lifecycle_generation,
           aggregate->second.request.target_owner};
-        if (aggregate->second.request.capacity_fences.empty ())
-            apply_capacity_bundle (
-              _pending_by_placement,
-              target,
-              aggregate->second.request.capacity_bundle,
-              false);
-        else {
-            for (const auto &capacity :
-                 aggregate->second.request.capacity_fences) {
-                const auto reservation =
-                  _relocation_capacity_reservations.find (capacity.value);
-                if (reservation == _relocation_capacity_reservations.end ()
-                    || reservation->second.status
-                         != relocation_reservation_status_t::prepared
-                    || !reservation->second.aggregate_id
-                    || reservation->second.aggregate_id->value
-                         != fence.aggregate_id.value
-                    || reservation->second.aggregate_generation
-                         != fence.aggregate_generation)
-                    return completed (aggregate_abort_result_t::stale);
-                release_relocation_pending (reservation->second);
-                reservation->second.status =
-                  relocation_reservation_status_t::aborted;
-            }
-        }
+        apply_capacity_bundle (
+          _pending_by_placement,
+          target,
+          aggregate->second.request.capacity_bundle,
+          false);
         aggregate->second.status = aggregate_status_t::aborted;
         return completed (aggregate_abort_result_t::aborted);
     }
@@ -1833,24 +1575,6 @@ class in_memory_location_repository_t : public location_repository_t
         object_reservation_fence_t fence;
         authority_snapshot_t snapshot;
         reservation_status_t status = reservation_status_t::prepared;
-    };
-
-    enum class relocation_reservation_status_t
-    {
-        reserved,
-        prepared,
-        committed,
-        aborted
-    };
-
-    struct relocation_capacity_state_t
-    {
-        relocation_capacity_reserve_request_t request;
-        relocation_capacity_fence_t fence;
-        relocation_reservation_status_t status =
-          relocation_reservation_status_t::reserved;
-        std::optional<aggregate_id_t> aggregate_id;
-        std::uint64_t aggregate_generation = 0;
     };
 
     enum class aggregate_status_t
@@ -2440,35 +2164,6 @@ class in_memory_location_repository_t : public location_repository_t
                && same_owner (left.owner, right.owner);
     }
 
-    static bool allocation_matches_source (
-      const placement_allocation_t &allocation,
-      const relocation_capacity_reserve_request_t &request)
-    {
-        return allocation.state
-                 == placement_allocation_state_t::active
-               && allocation.object_kind == request.object_kind
-               && allocation.stable_type == request.stable_type
-               && allocation.target.mesh_name == request.source.mesh_name
-               && allocation.target.node_rid.value ()
-                    == request.source.node_rid.value ()
-               && allocation.target.node_lifecycle_generation
-                    == request.source.node_lifecycle_generation
-               && same_capacity_bundle (
-                 allocation.capacity_bundle,
-                 request.capacity_bundle);
-    }
-
-    static placement_allocation_t allocation_from_relocation (
-      const relocation_capacity_reserve_request_t &request)
-    {
-        return {
-          placement_allocation_state_t::active,
-          request.object_kind,
-          request.stable_type,
-          request.target,
-          request.capacity_bundle};
-    }
-
     static bool same_fence (
       const object_reservation_fence_t &left,
       const object_reservation_fence_t &right)
@@ -2483,23 +2178,6 @@ class in_memory_location_repository_t : public location_repository_t
                  left.capacity_bundle,
                  right.capacity_bundle)
                && same_target (left.target, right.target);
-    }
-
-    static bool same_relocation_capacity_request (
-      const relocation_capacity_reserve_request_t &left,
-      const relocation_capacity_reserve_request_t &right)
-    {
-        return left.reservation_id == right.reservation_id
-               && left.key.value == right.key.value
-               && left.expected_store_version
-                    == right.expected_store_version
-               && left.object_kind == right.object_kind
-               && left.stable_type == right.stable_type
-               && same_target (left.source, right.source)
-               && same_target (left.target, right.target)
-               && same_capacity_bundle (
-                 left.capacity_bundle,
-                 right.capacity_bundle);
     }
 
     static bool same_aggregate_request (
@@ -2519,8 +2197,6 @@ class in_memory_location_repository_t : public location_repository_t
                  != right.target_descriptor.rid
             || left.target_descriptor_lifecycle_generation
                  != right.target_descriptor_lifecycle_generation
-            || left.capacity_fences.size ()
-                 != right.capacity_fences.size ()
             || !same_capacity_bundle (
               left.capacity_bundle,
               right.capacity_bundle))
@@ -2535,15 +2211,7 @@ class in_memory_location_repository_t : public location_repository_t
                 || l.authority_payload != r.authority_payload
                 || l.membership_mutation
                      != r.membership_mutation
-                || l.owner_transition != r.owner_transition
-                || l.capacity_fence.has_value ()
-                     != r.capacity_fence.has_value ()
-                || (l.capacity_fence
-                    && l.capacity_fence->value
-                         != r.capacity_fence->value)
-                || (index < left.capacity_fences.size ()
-                    && left.capacity_fences[index].value
-                         != right.capacity_fences[index].value))
+                || l.owner_transition != r.owner_transition)
                 return false;
         }
         return true;
@@ -2792,47 +2460,6 @@ class in_memory_location_repository_t : public location_repository_t
           false);
     }
 
-    void release_relocation_pending (
-      const relocation_capacity_state_t &reservation)
-    {
-        apply_capacity_bundle (
-          _pending_by_placement,
-          reservation.request.target,
-          reservation.request.capacity_bundle,
-          false);
-    }
-
-    bool relocation_capacity_counters_available (
-      const relocation_capacity_state_t &reservation) const
-    {
-        return capacity_bundle_present (
-                 _active_by_placement,
-                 reservation.request.source,
-                 reservation.request.capacity_bundle)
-               && capacity_bundle_present (
-                 _pending_by_placement,
-                 reservation.request.target,
-                 reservation.request.capacity_bundle);
-    }
-
-    void consume_relocation_capacity (
-      relocation_capacity_state_t &reservation)
-    {
-        release_relocation_pending (reservation);
-        apply_capacity_bundle (
-          _active_by_placement,
-          reservation.request.source,
-          reservation.request.capacity_bundle,
-          false);
-        apply_capacity_bundle (
-          _active_by_placement,
-          reservation.request.target,
-          reservation.request.capacity_bundle,
-          true);
-        reservation.status =
-          relocation_reservation_status_t::committed;
-    }
-
     static bool all_zero (
       const std::array<std::byte, 16> &value)
     {
@@ -2853,12 +2480,6 @@ class in_memory_location_repository_t : public location_repository_t
             result.push_back (hex[byte & 0x0f]);
         }
         return result;
-    }
-
-    static std::string reservation_id_key (
-      const std::array<std::byte, 16> &id)
-    {
-        return aggregate_id_key (aggregate_id_t{id});
     }
 
     void cleanup_scans (clock_t::time_point now)
@@ -2898,10 +2519,6 @@ class in_memory_location_repository_t : public location_repository_t
     std::map<std::string, reservation_state_t> _reservations;
     std::map<std::string, creation_terminal_record_t>
       _creation_terminals;
-    std::map<std::string, relocation_capacity_state_t>
-      _relocation_capacity_reservations;
-    std::map<std::string, std::string>
-      _relocation_capacity_by_id;
     std::map<std::string, aggregate_state_t> _aggregates;
     std::map<std::string, std::uint64_t> _pending_by_placement;
     std::map<std::string, std::uint64_t> _active_by_placement;

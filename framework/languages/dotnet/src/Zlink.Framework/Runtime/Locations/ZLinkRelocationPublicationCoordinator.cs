@@ -7,11 +7,9 @@ namespace Zlink.Framework.Runtime.Locations;
 internal sealed record ZLinkRelocationPublicationRequest(
     ZLinkAuthorityKey AuthorityKey,
     string ExpectedStoreVersion,
-    ZLinkAuthorityGenerationTransition GenerationTransition,
     string TargetOwnerId,
     long TargetOwnerLeaseGeneration,
     ReadOnlyMemory<byte> ApplicationAuthorityPayload,
-    ZLinkRelocationCapacityFence? RelocationCapacityFence,
     ZLinkRelocationEnvelope Envelope);
 
 internal sealed record ZLinkPublishedRelocation(
@@ -166,14 +164,9 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
                     request.ExpectedStoreVersion,
                     new ZLinkAuthorityMutation.Put(
                         publishedPayload,
-                        request.GenerationTransition,
-                        request.GenerationTransition
-                        == ZLinkAuthorityGenerationTransition.Preserve
-                            ? null
-                            : new ZLinkLocationOwnerToken(
-                                request.TargetOwnerId,
-                                request.TargetOwnerLeaseGeneration),
-                        request.RelocationCapacityFence),
+                        ZLinkAuthorityGenerationTransition.Preserve,
+                        TargetOwner: null,
+                        TargetAllocation: null),
                     cancellationToken)
                 .ConfigureAwait(false);
             switch (result)
@@ -400,15 +393,6 @@ internal sealed class ZLinkRelocationPublicationCoordinator(
             throw new ArgumentOutOfRangeException(
                 nameof(request),
                 "The target owner lease generation must be positive.");
-        if (request.GenerationTransition
-                == ZLinkAuthorityGenerationTransition.NewOwner
-            && request.RelocationCapacityFence is null
-            || request.GenerationTransition
-                != ZLinkAuthorityGenerationTransition.NewOwner
-            && request.RelocationCapacityFence is not null)
-            throw new ArgumentException(
-                "Only NewOwner publication requires a relocation capacity fence.",
-                nameof(request));
         if (request.ApplicationAuthorityPayload.Length > 1024 * 1024)
             throw new ArgumentOutOfRangeException(
                 nameof(request),
@@ -516,10 +500,7 @@ internal sealed record ZLinkRelocationAuthorityPayload(
     ReadOnlyMemory<byte> ApplicationPayload)
 {
     internal bool IsCanonical { get; init; }
-    internal uint TerminalCompletionCount { get; init; }
-    internal uint PendingRelayCount { get; init; }
     internal long ApplicationVersion { get; init; }
-    internal byte SourceCleanupState { get; init; }
 }
 
 internal static class ZLinkRelocationAuthorityPayloadCodec
@@ -583,10 +564,7 @@ internal static class ZLinkRelocationAuthorityPayloadCodec
                 canonical.SteadyAuthorityPayload)
             {
                 IsCanonical = true,
-                TerminalCompletionCount = canonical.TerminalCompletionCount,
-                PendingRelayCount = canonical.PendingRelayCount,
-                ApplicationVersion = canonical.ApplicationVersion,
-                SourceCleanupState = canonical.SourceCleanupState
+                ApplicationVersion = canonical.ApplicationVersion
             };
             return true;
         }

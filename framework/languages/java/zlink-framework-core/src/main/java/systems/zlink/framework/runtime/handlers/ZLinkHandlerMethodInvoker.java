@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.handlers;
 
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -101,6 +102,7 @@ public final class ZLinkHandlerMethodInvoker {
         if (!isKotlinSuspendMethod(method)) {
             try {
                 method.setAccessible(true);
+                ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
                 Object result = method.invoke(handler, logicalArguments);
                 if (result instanceof CompletionStage<?> stage) {
                     return stage.thenApply(value -> (Object) value);
@@ -123,6 +125,7 @@ public final class ZLinkHandlerMethodInvoker {
                 : suspendInvokers;
         for (ZLinkSuspendInvocationAdapter invoker : effectiveInvokers) {
             if (invoker.supports(method)) {
+                ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
                 return invoker.invoke(handler, method, logicalArguments);
             }
         }

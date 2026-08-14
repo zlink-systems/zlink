@@ -2,7 +2,6 @@
 
 #include "runtime/fanout/raw_fanout_owner.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
-#include "runtime/messaging/async_submit_runtime.hpp"
 
 #include <zlink/Contracts/Core/context.hpp>
 #include <zlink/Contracts/Eventing/poll_event.hpp>
@@ -28,25 +27,14 @@ namespace
 
 std::atomic<std::uintptr_t> next_fanout_poller_slot{1};
 
-bool submit_publish (zlink::pub_socket_t &socket,
-                     const std::string &topic,
-                     std::vector<zlink::message_t> parts,
-                     int flags = static_cast<int> (zlink::send_flags_t::dontwait))
-{
-    if (parts.empty ()) {
-        return false;
-    }
-    auto operation = std::move (socket.publish (topic)).message (parts[0]);
-    for (std::size_t index = 1; index < parts.size (); ++index) {
-        operation = std::move (operation).message (parts[index]);
-    }
-    return std::move (operation).flags (flags).submit ();
-}
-
 } // namespace
 
-raw_fanout_publisher_t::raw_fanout_publisher_t (std::string endpoint) :
-    _configured_endpoint (std::move (endpoint))
+raw_fanout_publisher_t::raw_fanout_publisher_t (
+  std::string endpoint,
+  std::shared_ptr<zlink::context_t> context) :
+    _configured_endpoint (std::move (endpoint)),
+    _context (
+      context ? std::move (context) : std::make_shared<zlink::context_t> ())
 {
     if (_configured_endpoint.empty ()) {
         throw std::invalid_argument ("fanout publisher endpoint is required");
@@ -67,43 +55,26 @@ void raw_fanout_publisher_t::start ()
     if (_closed) {
         throw std::logic_error ("fanout publisher cannot restart after close");
     }
-    auto context = std::make_unique<zlink::context_t> ();
-    auto socket = std::make_unique<zlink::pub_socket_t> (*context);
+    auto socket = std::make_unique<zlink::pub_socket_t> (*_context);
     socket->options ().linger (std::chrono::milliseconds (0));
     socket->bind (_configured_endpoint);
-    socket->set_send_ready_handler ([this] {
-        runtime::messaging::notify_submit_ready (this);
-    });
     _endpoint = socket->options ().last_endpoint ();
     _next_beacon =
       std::chrono::steady_clock::now () + fanout_beacon_interval;
     _socket = std::move (socket);
-    _context = std::move (context);
-    runtime::messaging::activate_submit_owner (this);
 }
 
 void raw_fanout_publisher_t::close () noexcept
 {
-    runtime::messaging::shutdown_submit_owner (this);
     std::unique_ptr<zlink::pub_socket_t> socket;
-    std::unique_ptr<zlink::context_t> context;
     {
         std::lock_guard lock (_mutex);
         _closed = true;
         socket = std::move (_socket);
-        context = std::move (_context);
     }
     if (socket) {
         try {
             socket->close ();
-        }
-        catch (...) {
-        }
-    }
-    if (context) {
-        try {
-            context->shutdown ();
-            context->term ();
         }
         catch (...) {
         }
@@ -124,9 +95,10 @@ raw_fanout_publisher_t::next_activity () const
                    : std::chrono::steady_clock::now () + fanout_beacon_interval;
 }
 
-bool raw_fanout_publisher_t::publish (
-  const std::string &topic,
-  const protocol::application_payload_t &payload)
+task_t<void> raw_fanout_publisher_t::publish (
+  std::string topic,
+  protocol::application_payload_t payload,
+  std::chrono::milliseconds timeout)
 {
     if (topic.empty () || topic == reserved_topic ()) {
         throw std::invalid_argument (
@@ -136,8 +108,22 @@ bool raw_fanout_publisher_t::publish (
     std::vector<zlink::message_t> messages;
     messages.reserve (1);
     messages.push_back (zlink::message_t::from (std::move (encoded)));
-    std::lock_guard lock (_mutex);
-    return _socket && submit_publish (*_socket, topic, std::move (messages));
+    std::optional<zlink::async_result_t<void>> submitted;
+    {
+        std::lock_guard lock (_mutex);
+        if (!_socket) {
+            throw framework_exception_t (
+              framework_error_kind_t::unavailable,
+              "fanout publisher is stopped");
+        }
+        auto operation =
+          std::move (_socket->publish (topic)).message (std::move (messages[0]));
+        submitted.emplace (
+          timeout.count () > 0
+            ? std::move (operation).timeout (timeout).async ()
+            : std::move (operation).async ());
+    }
+    co_await std::move (*submitted);
 }
 
 bool raw_fanout_publisher_t::tick (
@@ -157,8 +143,9 @@ bool raw_fanout_publisher_t::tick (
     if (!_socket || now < _next_beacon) {
         return false;
     }
-    const auto submitted = submit_publish (
-      *_socket, reserved_topic (), std::move (messages));
+    const auto submitted = std::move (
+      _socket->publish (reserved_topic ())).message (messages[0])
+      .flags (static_cast<int> (zlink::send_flags_t::dontwait)).submit ();
     do {
         _next_beacon += fanout_beacon_interval;
     } while (_next_beacon <= now);
@@ -182,7 +169,15 @@ raw_fanout_publisher_t::beacon_payload ()
 }
 
 raw_fanout_subscriber_t::raw_fanout_subscriber_t (zlink::poller_t *poller) :
-    _context (std::make_unique<zlink::context_t> ()),
+    raw_fanout_subscriber_t (std::make_shared<zlink::context_t> (), poller)
+{
+}
+
+raw_fanout_subscriber_t::raw_fanout_subscriber_t (
+  std::shared_ptr<zlink::context_t> context,
+  zlink::poller_t *poller) :
+    _context (
+      context ? std::move (context) : std::make_shared<zlink::context_t> ()),
     _owned_poller (poller == nullptr
                      ? std::make_unique<zlink::poller_t> ()
                      : nullptr),
@@ -268,7 +263,6 @@ bool raw_fanout_subscriber_t::disconnect (
 
 void raw_fanout_subscriber_t::close () noexcept
 {
-    std::unique_ptr<zlink::context_t> context;
     {
         std::lock_guard lock (_mutex);
         if (_closed) {
@@ -286,15 +280,6 @@ void raw_fanout_subscriber_t::close () noexcept
             }
             catch (...) {
             }
-        }
-        context = std::move (_context);
-    }
-    if (context) {
-        try {
-            context->shutdown ();
-            context->term ();
-        }
-        catch (...) {
         }
     }
 }
@@ -383,9 +368,11 @@ raw_fanout_subscriber_t::try_receive (
             connection.reconnecting = false;
             connection.deadline = now + fanout_receive_deadline;
             auto topic = _received.topic ();
+            auto retained = std::make_shared<zlink::topic_message_t> (_received);
             return {
               fanout_receive_status_t::application,
-              fanout_received_t{intent.routing_id, std::move (topic), std::move (payload)}};
+              fanout_received_t{intent.routing_id, std::move (topic),
+                                std::move (payload), std::move (retained)}};
         }
         catch (const protocol::service_wire_error_t &) {
             reopen_locked (connection);

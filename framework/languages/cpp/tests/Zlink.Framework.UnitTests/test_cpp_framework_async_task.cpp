@@ -2,7 +2,9 @@
 
 #include <zlink/framework/contracts/channels/call.hpp>
 #include <zlink/framework/contracts/dispatch/task.hpp>
+#include <zlink/Contracts/Messaging/operation_contracts.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <coroutine>
@@ -13,6 +15,130 @@
 
 namespace
 {
+
+thread_local int native_await_ambient_value = 0;
+
+struct ambient_guard_t
+{
+    explicit ambient_guard_t (int value) : previous (native_await_ambient_value)
+    {
+        native_await_ambient_value = value;
+    }
+    ~ambient_guard_t () { native_await_ambient_value = previous; }
+    int previous;
+};
+
+std::shared_ptr<void> capture_test_ambient ()
+{
+    return std::make_shared<int> (native_await_ambient_value);
+}
+
+std::shared_ptr<void> enter_test_ambient (const std::shared_ptr<void> &snapshot)
+{
+    return std::make_shared<ambient_guard_t> (
+      *std::static_pointer_cast<int> (snapshot));
+}
+
+class test_serial_turn_t final : public zlink::framework::detail::serial_turn_t
+{
+  public:
+    bool release () override
+    {
+        released_value = true;
+        return true;
+    }
+    bool released () const override { return released_value; }
+    zlink::framework::detail::task_scheduler_t resume_scheduler () override
+    {
+        return [] (std::function<void ()> work) { work (); };
+    }
+    bool belongs_to (const void *owner) const noexcept override
+    {
+        return owner == this;
+    }
+    bool is_after_active_phase () const noexcept override { return false; }
+    bool allows_yield () const noexcept override { return true; }
+    zlink::framework::result_t<void> defer (
+      std::function<void ()> work, std::function<void ()>) override
+    {
+        work ();
+        return zlink::framework::result_t<void>::success ();
+    }
+    void cancel_deferred () noexcept override {}
+
+  private:
+    bool released_value = false;
+};
+
+class native_async_state_t final : public zlink::detail::async_result_state_t<int>
+{
+  public:
+    bool ready () const noexcept override
+    {
+        std::lock_guard<std::mutex> lock (mutex);
+        return terminal;
+    }
+
+    bool suspend (
+      std::coroutine_handle<> continuation_,
+      zlink::detail::async_continuation_scheduler_t scheduler_) override
+    {
+        std::lock_guard<std::mutex> lock (mutex);
+        if (terminal)
+            return false;
+        continuation = continuation_;
+        scheduler = std::move (scheduler_);
+        return true;
+    }
+
+    int take () override { return value; }
+    bool cancel () noexcept override { return false; }
+    void abandon (std::coroutine_handle<> continuation_) noexcept override
+    {
+        std::lock_guard<std::mutex> lock (mutex);
+        if (continuation == continuation_)
+            continuation = {};
+    }
+
+    void complete (int value_)
+    {
+        std::coroutine_handle<> next;
+        zlink::detail::async_continuation_scheduler_t next_scheduler;
+        {
+            std::lock_guard<std::mutex> lock (mutex);
+            value = value_;
+            terminal = true;
+            next = std::exchange (continuation, {});
+            next_scheduler = std::move (scheduler);
+        }
+        auto work = [next] { next.resume (); };
+        if (next_scheduler)
+            next_scheduler (std::move (work));
+        else
+            work ();
+    }
+
+  private:
+    mutable std::mutex mutex;
+    std::coroutine_handle<> continuation{};
+    zlink::detail::async_continuation_scheduler_t scheduler;
+    int value = 0;
+    bool terminal = false;
+};
+
+zlink::framework::task_t<int> await_native_binding_result (
+  const std::shared_ptr<native_async_state_t> &state,
+  const std::shared_ptr<test_serial_turn_t> &turn,
+  std::atomic<int> &observed_ambient,
+  std::atomic<bool> &observed_serial_turn)
+{
+    const int value = co_await zlink::detail::async_result_access_t::make<int> (state);
+    observed_ambient.store (native_await_ambient_value, std::memory_order_release);
+    observed_serial_turn.store (
+      zlink::framework::detail::capture_current_serial_turn () == turn,
+      std::memory_order_release);
+    co_return value;
+}
 
 zlink::framework::task_t<int> delayed_value (int value)
 {
@@ -234,6 +360,35 @@ int main ()
             return 16;
         }
     }
+
+    const zlink::framework::detail::ambient_context_hooks_t test_ambient_hooks{
+      &capture_test_ambient, &enter_test_ambient};
+    zlink::framework::detail::ambient_context_hooks.store (
+      &test_ambient_hooks, std::memory_order_release);
+    native_await_ambient_value = 42;
+    auto native_state = std::make_shared<native_async_state_t> ();
+    auto serial_turn = std::make_shared<test_serial_turn_t> ();
+    std::atomic<int> observed_ambient{0};
+    std::atomic<bool> observed_serial_turn{false};
+    auto native_task = [&] {
+        zlink::framework::detail::serial_turn_scope_t scope (serial_turn);
+        return await_native_binding_result (
+          native_state, serial_turn, observed_ambient,
+          observed_serial_turn);
+    } ();
+    std::thread completion_thread ([native_state] {
+        native_await_ambient_value = 999;
+        native_state->complete (700);
+    });
+    completion_thread.join ();
+    if (native_task.result ().value () != 700
+        || observed_ambient.load (std::memory_order_acquire) != 42
+        || !observed_serial_turn.load (std::memory_order_acquire)
+        || serial_turn->released ()) {
+        return 17;
+    }
+    zlink::framework::detail::ambient_context_hooks.store (
+      nullptr, std::memory_order_release);
 
     return 0;
 }

@@ -3,6 +3,49 @@ using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Service;
 
+// A single retained binding envelope can fan out to more than one framework
+// mailbox. Each mailbox receives a terminal lease; the underlying envelope (and
+// therefore Core's receive credit) is released only after the final consumer.
+internal sealed class ZLinkSharedCreditOwner : IDisposable
+{
+    private IDisposable? _owner;
+    private int _references = 1;
+
+    internal ZLinkSharedCreditOwner(IDisposable owner)
+    {
+        _owner = owner ?? throw new ArgumentNullException(nameof(owner));
+    }
+
+    internal IDisposable Retain()
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref _references);
+            if (current == 0)
+                throw new ObjectDisposedException(nameof(ZLinkSharedCreditOwner));
+            if (Interlocked.CompareExchange(
+                    ref _references,
+                    checked(current + 1),
+                    current) == current)
+                return new Lease(this);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Decrement(ref _references) != 0)
+            return;
+        Interlocked.Exchange(ref _owner, null)?.Dispose();
+    }
+
+    private sealed class Lease(ZLinkSharedCreditOwner owner) : IDisposable
+    {
+        private ZLinkSharedCreditOwner? _owner = owner;
+
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.Dispose();
+    }
+}
+
 /// <summary>
 /// Bounded mailbox for records owned by one node, Spot or Actor.
 /// </summary>
@@ -59,58 +102,22 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
         return true;
     }
 
-    internal bool TryClaim(ZLinkInboundDispatchBudget? inboundDispatchBudget)
+    internal bool TryClaim()
     {
-        ZLinkMeshQueuedRecord? candidate;
         lock (_gate)
         {
             if (_claimed || _records.Count == 0)
                 return false;
             _claimed = true;
-            candidate = _records.Peek();
-            if (!candidate.Record.RequiresApplicationDispatchLease
-                || candidate.Record.InboundDispatchLease is not null
-                || inboundDispatchBudget is null)
-                return true;
-        }
-
-        if (!inboundDispatchBudget.TryTrack(
-                candidate.PayloadBytes,
-                out var lease))
-        {
-            lock (_gate)
-            {
-                if (_records.Count != 0
-                    && ReferenceEquals(_records.Peek(), candidate))
-                    _claimed = false;
-            }
-            return false;
-        }
-
-        lock (_gate)
-        {
-            if (_records.Count == 0
-                || !ReferenceEquals(_records.Peek(), candidate))
-            {
-                _claimed = false;
-                lease!.Dispose();
-                return false;
-            }
-
-            candidate.AttachLease(lease!);
             return true;
         }
     }
 
     internal bool TryDequeue(
         MeshReceiveBatch batch,
-        ZLinkInboundDispatchBudget? inboundDispatchBudget,
         out ZLinkMeshQueuedRecord record)
     {
-        ZLinkMeshQueuedRecord candidate;
-        ZLinkInboundDispatchLease? lease = null;
         ulong pendingBytes = 0;
-        var requiresLease = false;
         record = null!;
         lock (_gate)
         {
@@ -119,57 +126,16 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
                 record = null!;
                 return false;
             }
-            candidate = _records.Peek();
+            var candidate = _records.Peek();
             if (!batch.CanAdd(checked((long)candidate.PayloadBytes)))
             {
                 record = null!;
                 return false;
             }
 
-            requiresLease = candidate.Record.RequiresApplicationDispatchLease
-                && candidate.Record.InboundDispatchLease is null
-                && inboundDispatchBudget is not null;
-            if (!requiresLease)
-            {
-                record = _records.Dequeue();
-                pendingBytes = record.PendingBytes;
-                _pendingBytes -= pendingBytes;
-            }
-        }
-
-        if (!requiresLease)
-        {
-            onRecordDequeued(pendingBytes);
-            return true;
-        }
-
-        // A mailbox can contain more than one application record. Acquire a
-        // lease for the record at the dequeue boundary so every record in a
-        // drained batch remains accounted for. If HWM admission is closed,
-        // leave the head in place and let the ready signal retry it later.
-        if (!inboundDispatchBudget!.TryTrack(
-                candidate.PayloadBytes,
-                out lease))
-        {
-            record = null!;
-            return false;
-        }
-
-        lock (_gate)
-        {
-            if (_records.Count == 0
-                || !ReferenceEquals(_records.Peek(), candidate))
-            {
-                lease!.Dispose();
-                record = null!;
-                return false;
-            }
-
-            candidate.AttachLease(lease!);
             record = _records.Dequeue();
             pendingBytes = record.PendingBytes;
             _pendingBytes -= pendingBytes;
-            lease = null;
         }
 
         onRecordDequeued(pendingBytes);
@@ -212,6 +178,7 @@ internal sealed class ZLinkMeshQueuedRecord : IDisposable
     // payload bytes only.
     internal const ulong FixedRecordBytes = 256;
     private IReadOnlyList<Message>? _parts;
+    private IDisposable? _creditOwner;
     private readonly ulong _payloadBytes;
     private readonly ulong _pendingBytes;
     internal MeshReceiveRecord Record { get; private set; }
@@ -219,7 +186,8 @@ internal sealed class ZLinkMeshQueuedRecord : IDisposable
     internal ZLinkMeshQueuedRecord(
         MeshReceiveRecord record,
         IReadOnlyList<Message> parts,
-        ulong? applicationPayloadBytes = null)
+        ulong? applicationPayloadBytes = null,
+        IDisposable? creditOwner = null)
     {
         _parts = parts;
         _payloadBytes = applicationPayloadBytes
@@ -230,6 +198,7 @@ internal sealed class ZLinkMeshQueuedRecord : IDisposable
                                 "Queued mesh records must carry application payload bytes."));
         record.ApplicationPayloadBytes = _payloadBytes;
         Record = record;
+        _creditOwner = creditOwner;
         _pendingBytes = ComputePendingBytes(
             _payloadBytes,
             (ulong)(record.ApplicationMetadata?.Length ?? 0));
@@ -241,12 +210,8 @@ internal sealed class ZLinkMeshQueuedRecord : IDisposable
     internal IReadOnlyList<Message> TakeParts() =>
         Interlocked.Exchange(ref _parts, null) ?? Array.Empty<Message>();
 
-    internal void AttachLease(ZLinkInboundDispatchLease lease)
-    {
-        var current = Record;
-        current.InboundDispatchLease = lease;
-        Record = current;
-    }
+    internal IDisposable? TakeCreditOwner() =>
+        Interlocked.Exchange(ref _creditOwner, null);
 
     private static ulong ComputePendingBytes(ulong payload, ulong metadata)
     {
@@ -264,6 +229,6 @@ internal sealed class ZLinkMeshQueuedRecord : IDisposable
         if (owned is not null)
             foreach (var part in owned)
                 part.Dispose();
-        Record.InboundDispatchLease?.Dispose();
+        Interlocked.Exchange(ref _creditOwner, null)?.Dispose();
     }
 }

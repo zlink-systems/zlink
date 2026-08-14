@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using System.Reflection;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Runtime.Backend.Contracts;
@@ -8,6 +9,94 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class MonitoringTests : RegistrationValidationSupport
 {
+    [Fact]
+    public void SessionRelocationSealTimeout_LocationOwner_DefaultsToThreeSeconds()
+    {
+        const string propertyName = "SessionRelocationSealTimeout";
+        var property = typeof(ZLinkLocationOptions).GetProperty(propertyName);
+
+        Assert.NotNull(property);
+        Assert.Equal(
+            TimeSpan.FromSeconds(3),
+            property.GetValue(new ZLinkLocationOptions()));
+        Assert.Null(typeof(IZLinkFrameworkOptions).GetProperty(propertyName));
+    }
+
+    [Fact]
+    public void SessionRelocationSealTimeout_RejectsNonPositiveOrNonExactMilliseconds()
+    {
+        var invalidValues = new[]
+        {
+            TimeSpan.Zero,
+            TimeSpan.FromMilliseconds(-2),
+            Timeout.InfiniteTimeSpan,
+            TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1)
+        };
+
+        foreach (var invalid in invalidValues)
+        {
+            var exception = Assert.Throws<ZLinkConfigurationException>(() =>
+                new ServiceCollection().AddZLinkFramework(options =>
+                    SetSessionRelocationSealTimeout(
+                        options.ConfigureLocations(),
+                        invalid)));
+            Assert.Contains(
+                "SessionRelocationSealTimeout",
+                exception.Message,
+                StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void SessionRelocationSealTimeout_IsSnapshottedAtStartup_AndReachesSessionOwner()
+    {
+        var services = new ServiceCollection();
+        ZLinkLocationOptions? locations = null;
+        services.AddZLinkFramework(options =>
+        {
+            locations = options.ConfigureLocations();
+            SetSessionRelocationSealTimeout(
+                locations,
+                TimeSpan.FromMilliseconds(17));
+        });
+
+        Assert.NotNull(locations);
+        SetSessionRelocationSealTimeout(
+            locations,
+            TimeSpan.FromMilliseconds(29));
+        using var provider = services.BuildServiceProvider();
+        var registration = provider.GetRequiredService<ZLinkFrameworkRegistration>();
+        var coordinator = new ZLinkActorBoundSessionCoordinator(
+            static _ => throw new NotSupportedException(),
+            static () => null,
+            static _ => null,
+            registration,
+            static () => CancellationToken.None);
+        var bindings = Assert.IsType<ZLinkSessionActorBindingTable>(
+            typeof(ZLinkActorBoundSessionCoordinator)
+                .GetField(
+                    "_sessionBindings",
+                    BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(coordinator));
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(17),
+            typeof(ZLinkSessionActorBindingTable)
+                .GetField(
+                    "_canonicalRelocationSealTimeout",
+                    BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(bindings));
+    }
+
+    private static void SetSessionRelocationSealTimeout(
+        ZLinkLocationOptions options,
+        TimeSpan value)
+    {
+        var property = typeof(ZLinkLocationOptions).GetProperty(
+            "SessionRelocationSealTimeout");
+        Assert.NotNull(property);
+        property.SetValue(options, value);
+    }
+
     [Fact]
     public void RemovedSpotEgressClient_DI_IsNotExposed_AsPublicCapability()
     {

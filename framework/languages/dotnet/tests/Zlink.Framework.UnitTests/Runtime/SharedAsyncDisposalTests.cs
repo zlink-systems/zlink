@@ -171,10 +171,7 @@ public sealed class SharedAsyncDisposalTests
     {
         var node = DispatchProxy.Create<IZLinkBackendSpotNode, SpotNodeProxy>();
         var proxy = (SpotNodeProxy)(object)node;
-        var registry = new ZLinkSpotNodeBundleRegistry(
-            new ZLinkFrameworkRegistration(),
-            node,
-            CancellationToken.None);
+        var registry = new ZLinkSpotNodeBundleRegistry(node);
 
         var operations = Enumerable.Range(0, 100)
             .Select(index => Task.Run(() =>
@@ -213,7 +210,11 @@ public sealed class SharedAsyncDisposalTests
             new ZLinkFrameworkRegistration(),
             services,
             new ZLinkRuntimeErrorSink(),
-            new object());
+            new object(),
+            ZLinkApplicationJobQueueCapacityResolver.Resolve(
+                ZLinkApplicationJobQueueProfile.Balanced,
+                8,
+                1));
 
         var first = state.DisposeAsync().AsTask();
         await proxy.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));

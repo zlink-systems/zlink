@@ -1,5 +1,4 @@
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
-using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Channels;
 
@@ -22,12 +21,6 @@ internal sealed class ZLinkChannelBundleFactory(
                 dealer,
                 dealer.Connect,
                 dealer.Disconnect,
-                new ZLinkAsyncSubmitter(
-                    dealer.OnSendReady,
-                    channel.Client.SocketConfig.SendTimeout
-                    ?? registration.DefaultSocketSendTimeout,
-                    state.StopTokenSource.Token,
-                    ZLinkAsyncSubmitter.ResolvePendingCapacity()),
                 socketRole: "client");
 
             bundle.OwnManualConnectionAttachment(channel.Client.ManualConnections.Attach(
@@ -156,10 +149,6 @@ internal sealed class ZLinkChannelBundleFactory(
                     registration.NetworkOptions));
             bundle = new ZLinkChannelRuntimeBundle(
                 socket: publisher,
-                submitter: new ZLinkAsyncSubmitter(
-                    publisher.OnSendReady,
-                    channel.Publisher.SocketConfig.SendTimeout ?? registration.DefaultSocketSendTimeout,
-                    state.StopTokenSource.Token),
                 localRid: localRid,
                 socketRole: "pub",
                 fanoutPublisher: publisherIdentity);

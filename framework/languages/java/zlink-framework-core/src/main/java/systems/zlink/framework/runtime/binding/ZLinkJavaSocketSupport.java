@@ -4,19 +4,20 @@ import java.util.function.BooleanSupplier;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.errors.ZlinkRecvException;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.AsyncSendOperation;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.ReplyOperation;
 import systems.zlink.contracts.messaging.RequestOperation;
+import systems.zlink.contracts.messaging.RoutedSendOperation;
 import systems.zlink.contracts.messaging.SendOperation;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestCallback;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 
 final class ZLinkJavaSocketSupport {
@@ -46,7 +47,30 @@ final class ZLinkJavaSocketSupport {
         return mode == ZLinkBackendRecvMode.DONT_WAIT ? RecvFlags.DONT_WAIT : RecvFlags.NONE;
     }
 
-    static boolean submit(SendOperation operation, List<Message> parts, SendFlags flags) {
+    static CompletionStage<Void> submit(
+        RoutedSendOperation operation,
+        List<Message> parts) {
+        var submit = operation.message(parts.get(0));
+        for (int i = 1; i < parts.size(); i++) {
+            submit.message(parts.get(i));
+        }
+        return submit.submit();
+    }
+
+    static CompletionStage<Void> submit(
+        AsyncSendOperation operation,
+        List<Message> parts) {
+        var submit = operation.message(parts.get(0));
+        for (int i = 1; i < parts.size(); i++) {
+            submit.message(parts.get(i));
+        }
+        return submit.submit();
+    }
+
+    static boolean submit(
+        SendOperation operation,
+        List<Message> parts,
+        SendFlags flags) {
         var submit = operation.message(parts.get(0));
         for (int i = 1; i < parts.size(); i++) {
             submit.message(parts.get(i));
@@ -62,28 +86,26 @@ final class ZLinkJavaSocketSupport {
         submit.submit();
     }
 
-    static boolean submitRequest(
+    static CompletionStage<ZLinkBackendReceived> submitRequest(
         RequestOperation operation,
         List<Message> parts,
-        ZLinkBackendRequestCallback callback,
-        SendFlags flags,
         Duration timeout) {
-        var submit = operation.message(parts.get(0)).timeout(timeout).flags(flags);
+        var submit = operation.message(parts.get(0)).timeout(timeout);
         for (int i = 1; i < parts.size(); i++) {
             submit.message(parts.get(i));
         }
-        try {
-            return submit.submit((result, replyParts) -> callback.handle(new ZLinkBackendReceived(
-                ZLinkBackendRequestResult.valueOf(result.name()),
+        return submit.submit().thenApply(replyParts -> {
+            try {
+                return new ZLinkBackendReceived(
+                ZLinkBackendRequestResult.OK,
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
-                replyParts.stream().map(Message::from).toList())));
-        } catch (ZlinkSubmitException ex) {
-            // Preserve the typed submission result so Framework control-plane
-            // callers can distinguish an expected admission race from a bug.
-            throw ex;
-        }
+                replyParts.stream().map(Message::from).toList());
+            } finally {
+                replyParts.forEach(Message::close);
+            }
+        });
     }
 
     static ZLinkBackendReceived fromReceived(Received received) {
