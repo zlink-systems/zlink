@@ -11,7 +11,9 @@ pub(crate) use crate::internal::{CallbackBox, SocketStorage as SocketInner};
 pub(crate) use dealer::{dealer_inner, dealer_inner_mut};
 pub(crate) use pair::{pair_handle, pair_inner, pair_inner_mut};
 pub(crate) use pub_socket::{pub_inner, pub_inner_mut};
-pub(crate) use router::{recv_router_once, router_inner, router_inner_mut};
+pub(crate) use router::{
+    recv_router_once, recv_router_retained_once, router_inner, router_inner_mut,
+};
 pub(crate) use stream::{stream_inner, stream_inner_mut, stream_on_packet};
 pub(crate) use sub::{sub_inner, sub_inner_mut};
 pub(crate) use xpub::{xpub_inner, xpub_inner_mut};

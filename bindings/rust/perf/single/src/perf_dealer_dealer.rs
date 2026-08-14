@@ -15,7 +15,6 @@ fn main() {
     };
 
     let ctx = common::perf_context();
-    common::apply_single_auto_hwm_msg_unit(&ctx, config.size);
     let receiver = ctx.dealer_socket().expect("receiver");
     let sender = ctx.dealer_socket().expect("sender");
     // Match C perf: numeric socket HWM remains behind the manual-override gate.
@@ -55,25 +54,18 @@ fn main() {
     let active = std::time::Duration::from_secs(config.duration_seconds);
     let active_deadline = std::time::Instant::now() + active;
     let send_thread = std::thread::spawn(move || {
-        common::send_loop(
-            active_deadline,
-            config.size,
-            common::PHASE_ACTIVE,
-            |msg| match sender
-                .send()
-                .message(msg)
-                .flags(zlink::SendFlags::DONT_WAIT)
-                .submit()
-            {
-                Ok(sent) => sent,
+        common::send_loop(active_deadline, config.size, common::PHASE_ACTIVE, |msg| {
+            match common::block_on(sender.send().message(msg).submit()) {
+                Ok(()) => true,
                 Err(err) if err.code() == SubmitResult::NotConnected => false,
+                Err(err) if common::is_single_send_retry_error(&err) => false,
                 Err(err) => panic!("active send: {err}"),
-            },
-        );
+            }
+        });
         common::send_stop_token(|msg| {
             // Match C perf: the phase terminator must be queued after every
             // accepted payload even when the data path has reached its HWM.
-            sender.send().message(msg).submit()
+            common::block_on(sender.send().message(msg).submit()).map(|()| true)
         });
     });
 

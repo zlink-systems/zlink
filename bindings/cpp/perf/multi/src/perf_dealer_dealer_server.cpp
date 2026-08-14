@@ -145,8 +145,7 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
 
         if (!perf::multi::wait_for_start_from_stdin (msg_size))
             return false;
-        if (!perf::multi::apply_benchmark_auto_hwm_msg_unit (ctx, msg_size)
-            || !perf::multi::recalculate_auto_hwm (ctx))
+        if (!perf::multi::recalculate_auto_hwm (ctx))
             return false;
         perf::multi::emit_auto_hwm_detail (server, "server", "server", transport, msg_size,
                                            "dealer");

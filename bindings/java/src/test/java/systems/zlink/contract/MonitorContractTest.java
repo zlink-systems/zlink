@@ -8,8 +8,26 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class MonitorContractTest {
+    @Test
+    public void monitorHwmBytesAreForwardedExactly() {
+        TestSupport.assumeNative();
+
+        try (Context ctx = Zlink.createContext();
+             PairSocket socket = ctx.createPairSocket()) {
+            long monitorHwmBytes = 12_345L;
+            try (var monitor = socket.monitorOpen(monitorHwmBytes)) {
+                assertEquals(monitorHwmBytes * 2L,
+                    ctx.coreHwmBudgetSnapshot()
+                        .monitorQueueAppliedHwmBytes());
+            }
+            assertThrows(IllegalArgumentException.class,
+                () -> socket.monitorOpen(-1L));
+        }
+    }
+
     @Test
     public void monitorStatusUsesCanonicalMonitorSurface() {
         TestSupport.assumeNative();
@@ -23,9 +41,11 @@ public class MonitorContractTest {
             socket.options().recvHwm(recvHwmBytes);
 
             var status = monitor.status();
-            assertEquals(2, status.abiVersion());
-            assertEquals(232, status.structSize());
+            assertEquals(3, status.abiVersion());
+            assertEquals(192, status.structSize());
             assertTrue(status.sndPendingMsgs() >= 0L);
+            assertTrue(status.sndPendingBytes() >= 0L);
+            assertTrue(status.rcvPendingBytes() >= 0L);
             assertEquals(sendHwmBytes,
                 status.autoHwmAppliedSendHwmBytes());
             assertEquals(recvHwmBytes,

@@ -12,7 +12,6 @@ const {
 } = require('../common/perf_metrics');
 const {
   applyContextPolicy,
-  applyAutoHwmMsgUnit,
   applySocketPolicy,
   benchmarkEndpoint,
   closeSenderWorker,
@@ -41,7 +40,7 @@ function partStrings(received) {
   return received.parts.map((part) => part.data().toString());
 }
 
-function handshakeRouterReceiver(receiver) {
+async function handshakeRouterReceiver(receiver) {
   const ping = new zlink.Received();
   receiver.recv(ping);
   try {
@@ -49,7 +48,7 @@ function handshakeRouterReceiver(receiver) {
       throw new Error('router-router handshake receive failed');
     }
 
-    receiver.send(ping.routingId).message(Buffer.from('PONG')).submit();
+    await receiver.send(ping.routingId).message(Buffer.from('PONG')).submit();
     return ping.routingId;
   } finally {
     ping.close();
@@ -82,7 +81,7 @@ async function handshakeRouterReceiverWithRetry(receiver) {
       throw new Error('router-router handshake receive failed');
     }
 
-    receiver.send(ping.routingId).message(Buffer.from('PONG')).submit();
+    await receiver.send(ping.routingId).message(Buffer.from('PONG')).submit();
     return ping.routingId;
   } finally {
     ping.close();
@@ -104,9 +103,10 @@ async function runRouterRouterBenchmark(msgSize, options) {
       createSender: (ctx) => zlink.createRouterSocket(ctx),
       configureReceiver: (socket) => socket.setRoutingId(RECEIVER_ROUTING_ID),
       configureSender: (socket) => socket.setRoutingId(zlink.RoutingId.from(SENDER_ID)),
-      handshake: (sender, receiver) => {
-        sender.send(RECEIVER_ROUTING_ID).message(Buffer.from('PING')).submit();
-        const senderRid = handshakeRouterReceiver(receiver);
+      handshake: async (sender, receiver) => {
+        await sender.send(RECEIVER_ROUTING_ID)
+          .message(Buffer.from('PING')).submit();
+        const senderRid = await handshakeRouterReceiver(receiver);
         const reply = new zlink.Received();
         sender.recv(reply);
         try {
@@ -120,10 +120,10 @@ async function runRouterRouterBenchmark(msgSize, options) {
         // id; the sender addresses the receiver by RECEIVER_ROUTING_ID.
         return RECEIVER_ROUTING_ID;
       },
-      sendActive: (socket, payload, routingId) => {
+      sendActive: async (socket, payload, routingId) => {
         try {
-          return socket.send(routingId).message(payload)
-            .flags(zlink.SendFlags.DontWait).submit();
+          await socket.send(routingId).message(payload).submit();
+          return true;
         } catch (error) {
           if (error instanceof zlink.SubmitError
             && (error.result === zlink.SubmitResult.Backpressured
@@ -139,9 +139,8 @@ async function runRouterRouterBenchmark(msgSize, options) {
           throw error;
         }
       },
-      sendStop: (socket, routingId) => {
-        socket.send(routingId).message(STOP_TOKEN_BYTES)
-          .flags(zlink.SendFlags.None).submit();
+      sendStop: async (socket, routingId) => {
+        await socket.send(routingId).message(STOP_TOKEN_BYTES).submit();
       },
     });
   }
@@ -154,7 +153,6 @@ async function runRouterRouterBenchmark(msgSize, options) {
 
   try {
     applySocketPolicy(receiver, options);
-    applyAutoHwmMsgUnit(ctx, msgSize);
     ctx.recalculateAutoHwm();
     receiver.setRoutingId(RECEIVER_ROUTING_ID);
     configureTlsServer(receiver, options.transport);

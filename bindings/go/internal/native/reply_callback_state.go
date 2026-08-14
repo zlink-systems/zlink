@@ -13,8 +13,6 @@ type replyCallbackState struct {
 	result             requestResult
 	once               sync.Once
 	mu                 sync.Mutex
-	progressDetach     func()
-	progressDone       bool
 	completionDispatch func(requestResult)
 	completionDone     bool
 }
@@ -23,34 +21,14 @@ func (s *replyCallbackState) complete(result requestResult) {
 	s.once.Do(func() {
 		s.mu.Lock()
 		s.result = result
-		s.progressDone = true
-		detach := s.progressDetach
-		s.progressDetach = nil
 		s.completionDone = true
 		dispatch := s.completionDispatch
 		s.completionDispatch = nil
 		s.mu.Unlock()
-		if detach != nil {
-			detach()
-		}
 		if dispatch != nil {
 			dispatch(result)
 		}
 	})
-}
-
-func (s *replyCallbackState) setProgressDetach(detach func()) {
-	if s == nil || detach == nil {
-		return
-	}
-	s.mu.Lock()
-	if s.progressDone {
-		s.mu.Unlock()
-		detach()
-		return
-	}
-	s.progressDetach = detach
-	s.mu.Unlock()
 }
 
 func (s *replyCallbackState) setCompletionDispatch(dispatch func(requestResult)) {

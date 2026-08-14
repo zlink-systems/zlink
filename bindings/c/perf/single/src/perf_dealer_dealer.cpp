@@ -37,11 +37,6 @@ void run_dealer_dealer (const std::string &transport, size_t msg_size, const std
         print_fail ();
         return;
     }
-    if (!apply_single_auto_hwm_msg_unit (ctx.get (), msg_size)) {
-        print_fail ();
-        return;
-    }
-
     socket_guard_t receiver (ctx.get (), ZLINK_SOCKET_DEALER);
     socket_guard_t sender (ctx.get (), ZLINK_SOCKET_DEALER);
     if (!receiver.valid () || !sender.valid ()) {

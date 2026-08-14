@@ -51,6 +51,34 @@ func newMessage(t testing.TB, data string) *zlink.Message {
 	return msg
 }
 
+func awaitRoutedSend(t testing.TB, completion <-chan error) error {
+	t.Helper()
+	select {
+	case err, ok := <-completion:
+		if !ok {
+			t.Fatal("routed send completion closed without a result")
+		}
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for routed send completion")
+		return nil
+	}
+}
+
+func awaitRequest(t testing.TB, completion <-chan zlink.RequestReplyCompletion) zlink.RequestReplyCompletion {
+	t.Helper()
+	select {
+	case result, ok := <-completion:
+		if !ok {
+			t.Fatal("request completion closed without a result")
+		}
+		return result
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for request completion")
+		return zlink.RequestReplyCompletion{}
+	}
+}
+
 func waitForMonitorEvent(t testing.TB, mon *zlink.SocketMonitor, timeout time.Duration) *zlink.MonitorEvent {
 	t.Helper()
 	type result struct {

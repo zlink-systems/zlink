@@ -17,6 +17,7 @@ import { type MonitorEventType } from '../../contracts/eventing';
 import type { SocketSendReadyHandler } from '../../contracts/messaging';
 import { normalizeRoutingId } from '../core/routing_id';
 import { MonitorSocket } from '../eventing/monitor_socket';
+import { validateUInt64 } from '../options/byte_values';
 
 export class SocketBase extends NativeHandle {
   constructor(ctx: Context, type: number) {
@@ -81,12 +82,23 @@ export class SocketBase extends NativeHandle {
     );
   }
 
-  monitorOpen(events?: readonly MonitorEventType[]): MonitorSocket {
+  monitorOpen(
+    events?: readonly MonitorEventType[],
+    monitorHwmBytes: bigint = 0n
+  ): MonitorSocket {
     const mask = events === undefined
       ? 0xFFFF
       : events.reduce((current, event) => current | (event | 0), 0);
+    const exactMonitorHwmBytes = validateUInt64(
+      monitorHwmBytes,
+      'monitorHwmBytes'
+    );
     return new MonitorSocket(configCall('monitor open failed', () =>
-      requireNative().monitorOpen(getNativeHandle(this), mask | 0)
+      requireNative().monitorOpen(
+        getNativeHandle(this),
+        mask | 0,
+        exactMonitorHwmBytes
+      )
     ));
   }
 

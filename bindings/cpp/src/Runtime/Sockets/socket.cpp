@@ -13,7 +13,11 @@
 #include <Runtime/Sockets/socket_access.hpp>
 #include <Runtime/Sockets/socket_callback_state.hpp>
 #include <Runtime/Messaging/received_access.hpp>
+#include <Runtime/Messaging/routed_admission_state.hpp>
+#include <Runtime/Messaging/publish_admission_state.hpp>
 #include <Runtime/Native/subscription_reader.hpp>
+
+#include <cerrno>
 
 namespace zlink
 {
@@ -37,15 +41,93 @@ routing_id_t routing_id_from_native_pointer (const void *native_) noexcept
     return (rid && rid->size > 0) ? native_routing_id (*rid) : unchecked_empty_routing_id ();
 }
 
+namespace
+{
+void send_ready_trampoline (void *, void *userdata_) noexcept
+{
+    auto *state = static_cast<socket_callback_state_t *> (userdata_);
+    if (!state)
+        return;
+    std::function<void ()> handler;
+    {
+        std::lock_guard<std::mutex> lock (state->send_ready_mutex);
+        handler = state->send_ready_handler;
+    }
+    if (handler) {
+        try {
+            handler ();
+        }
+        catch (...) {
+            // A user observer must not cross the native callback boundary or
+            // prevent binding-owned admission progress.
+        }
+    }
+    notify_routed_admission_ready (*state);
+    notify_publish_admission_ready (*state);
+}
+} // namespace
+
+void ensure_native_send_ready_handler (
+  void *socket_,
+  socket_callback_state_t &state_)
+{
+    std::call_once (
+      state_.native_send_ready_handler_once,
+      [&] {
+          if (zlink_send_ready_handler (
+                socket_,
+                static_cast<zlink_send_ready_handler_fn> (
+                  +send_ready_trampoline),
+                &state_)
+              != 0)
+              throw_if_failed<handler_error_t> (
+                static_cast<handler_result_t> (
+                  handler_result_from_errno (zlink_errno ())));
+      });
+}
+
 } // namespace detail
 
 socket_t::~socket_t ()
 {
+    if (_callbacks) {
+        _callbacks->socket_closed.store (true, std::memory_order_release);
+        detail::shutdown_routed_admission_state (*_callbacks);
+        detail::shutdown_publish_admission_state (*_callbacks);
+    }
+    if (_socket && _callbacks) {
+        std::lock_guard<std::mutex> attempt_lock (
+          _callbacks->outbound_record_attempt_mutex);
+        (void) _socket->close ();
+    } else if (_socket) {
+        (void) _socket->close ();
+    }
 }
 
 socket_t::socket_t (socket_t &&) noexcept = default;
 
-socket_t &socket_t::operator= (socket_t &&) noexcept = default;
+socket_t &socket_t::operator= (socket_t &&other_) noexcept
+{
+    if (this == &other_)
+        return *this;
+    if (_callbacks) {
+        _callbacks->socket_closed.store (true, std::memory_order_release);
+        detail::shutdown_routed_admission_state (*_callbacks);
+        detail::shutdown_publish_admission_state (*_callbacks);
+    }
+    if (_socket && _callbacks) {
+        std::lock_guard<std::mutex> attempt_lock (
+          _callbacks->outbound_record_attempt_mutex);
+        (void) _socket->close ();
+    } else if (_socket) {
+        (void) _socket->close ();
+    }
+    _socket = std::move (other_._socket);
+    _callbacks = std::move (other_._callbacks);
+    _receive_envelope = std::move (other_._receive_envelope);
+    _type = other_._type;
+    return *this;
+}
 
 bool socket_t::valid () const noexcept
 {
@@ -54,9 +136,28 @@ bool socket_t::valid () const noexcept
 
 void socket_t::close ()
 {
-    const int rc = _socket ? _socket->close () : 0;
+    if (!_socket || !_socket->valid ())
+        return;
+    if (_callbacks
+        && _callbacks->socket_closed.load (std::memory_order_acquire))
+        throw close_error_t (close_result_t::busy, EBUSY);
+    int rc = 0;
+    if (_socket && _callbacks) {
+        std::lock_guard<std::mutex> attempt_lock (
+          _callbacks->outbound_record_attempt_mutex);
+        _callbacks->socket_closed.store (true, std::memory_order_release);
+        rc = _socket->close ();
+        if (rc != 0)
+            _callbacks->socket_closed.store (false, std::memory_order_release);
+    } else if (_socket) {
+        rc = _socket->close ();
+    }
     if (rc != 0)
         throw close_error_t (static_cast<close_result_t> (rc), zlink_errno ());
+    if (_callbacks)
+        detail::shutdown_routed_admission_state (*_callbacks);
+    if (_callbacks)
+        detail::shutdown_publish_admission_state (*_callbacks);
 }
 
 void socket_t::bind (const std::string &endpoint_)
@@ -119,7 +220,7 @@ void socket_t::set_tls_client (const std::string &ca_cert_,
 
 socket_t::socket_t () noexcept :
     _socket (std::make_unique<detail::socket_handle_t> ()),
-    _callbacks (std::make_unique<detail::socket_callback_state_t> ()),
+    _callbacks (std::make_shared<detail::socket_callback_state_t> ()),
     _type (socket_type::pair)
 {
 }
@@ -127,13 +228,24 @@ socket_t::socket_t () noexcept :
 socket_t::socket_t (context_t &ctx_, socket_type type_) :
     _socket (std::make_unique<detail::socket_handle_t> (
       zlink_socket (detail::native_handle (ctx_), static_cast<zlink_socket_type_t> (type_)), true)),
-    _callbacks (std::make_unique<detail::socket_callback_state_t> ()),
+    _callbacks (std::make_shared<detail::socket_callback_state_t> ()),
     _type (type_)
 {
 }
 
 int socket_t::send (message_t &part_, send_flags_t flags_)
 {
+    detail::socket_callback_state_t &callbacks = callback_state ();
+    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
+        errno = ETERM;
+        return -1;
+    }
+    std::lock_guard<std::mutex> attempt_lock (
+      callbacks.outbound_record_attempt_mutex);
+    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
+        errno = ETERM;
+        return -1;
+    }
     return detail::submit_one_message_part (
       part_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_) {
           return zlink_send_part (detail::native_handle (*this), part_out_,
@@ -144,6 +256,17 @@ int socket_t::send (message_t &part_, send_flags_t flags_)
 
 int socket_t::send (std::vector<message_t> &parts_, send_flags_t flags_)
 {
+    detail::socket_callback_state_t &callbacks = callback_state ();
+    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
+        errno = ETERM;
+        return -1;
+    }
+    std::lock_guard<std::mutex> attempt_lock (
+      callbacks.outbound_record_attempt_mutex);
+    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
+        errno = ETERM;
+        return -1;
+    }
     return detail::submit_message_parts (
       parts_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
           return zlink_send_part (detail::native_handle (*this), part_out_,
@@ -155,6 +278,17 @@ int socket_t::send (std::vector<message_t> &parts_, send_flags_t flags_)
 int socket_t::send (const routing_id_t &target_rid_, message_t &part_, send_flags_t flags_)
 {
     const zlink_routing_id_t target_rid = zlink::detail::routing_id_native_value (target_rid_);
+    detail::socket_callback_state_t &callbacks = callback_state ();
+    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
+        errno = ETERM;
+        return -1;
+    }
+    std::lock_guard<std::mutex> attempt_lock (
+      callbacks.outbound_record_attempt_mutex);
+    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
+        errno = ETERM;
+        return -1;
+    }
     return detail::submit_one_message_part (
       part_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_) {
           return zlink_send_part_rid (
@@ -168,6 +302,17 @@ int socket_t::send (const routing_id_t &target_rid_,
                     send_flags_t flags_)
 {
     const zlink_routing_id_t target_rid = zlink::detail::routing_id_native_value (target_rid_);
+    detail::socket_callback_state_t &callbacks = callback_state ();
+    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
+        errno = ETERM;
+        return -1;
+    }
+    std::lock_guard<std::mutex> attempt_lock (
+      callbacks.outbound_record_attempt_mutex);
+    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
+        errno = ETERM;
+        return -1;
+    }
     return detail::submit_message_parts (
       parts_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
           return zlink_send_part_rid (
@@ -178,19 +323,57 @@ int socket_t::send (const routing_id_t &target_rid_,
 
 int socket_t::receive (received_t &received_, recv_flags_t flags_)
 {
-    return receive (received_, flags_, true);
+    return receive_impl (received_, flags_, true, false);
 }
 
 int socket_t::receive (received_t &received_, recv_flags_t flags_, bool attach_routed_send_context_)
 {
+    return receive_impl (received_, flags_, attach_routed_send_context_, false);
+}
+
+int socket_t::receive_retained (received_t &received_, recv_flags_t flags_)
+{
+    return receive_impl (received_, flags_, true, true);
+}
+
+int socket_t::receive_retained (
+  received_t &received_, recv_flags_t flags_,
+  bool attach_routed_send_context_)
+{
+    return receive_impl (received_, flags_, attach_routed_send_context_, true);
+}
+
+int socket_t::receive_impl (
+  received_t &received_, recv_flags_t flags_,
+  bool attach_routed_send_context_, bool retain_credit_)
+{
+    // Caller-provided storage is reusable. Release this copy's previous
+    // envelope credit before waiting for the next message.
+    received_.close ();
     if (!_receive_envelope)
         _receive_envelope = std::make_unique<detail::recv_envelope_t> ();
     auto &envelope = *_receive_envelope;
     const bool use_router_recv = _type == socket_type::router;
-    const int rc =
-      detail::recv_envelope (detail::native_handle (*this), flags_, envelope, use_router_recv);
-    if (rc != 0)
+    const bool use_dealer_recv = _type == socket_type::dealer;
+    int rc = -1;
+    try {
+        rc = detail::recv_envelope (
+          detail::native_handle (*this), flags_, envelope, use_router_recv,
+          use_dealer_recv, retain_credit_);
+    }
+    catch (...) {
+        // A failed binding-side allocation must not leave earlier multipart
+        // frame leases parked in the reusable envelope.
+        envelope.reset ();
+        throw;
+    }
+    if (rc != 0) {
+        // A multipart receive can fail after earlier physical parts were
+        // accepted.  The reusable staging envelope must not retain their Core
+        // credit until a later receive or socket destruction.
+        envelope.reset ();
         return rc;
+    }
 
     const std::optional<routing_id_t> source_rid =
       zlink::detail::routing_id_empty (envelope.source_rid)
@@ -201,23 +384,37 @@ int socket_t::receive (received_t &received_, recv_flags_t flags_, bool attach_r
 
     if (envelope.single_part.has_value ()) {
         detail::received_access_t::assign (received_, source_rid, request_seq,
-                                           std::move (*envelope.single_part));
+                                           std::move (*envelope.single_part),
+                                           std::move (envelope.leases));
     } else if (envelope.parts.size () == 1u) {
         detail::received_access_t::assign (received_, source_rid, request_seq,
-                                           std::move (envelope.parts[0]));
+                                           std::move (envelope.parts[0]),
+                                           std::move (envelope.leases));
     } else {
         detail::received_access_t::assign (received_, source_rid, request_seq,
-                                           envelope.parts);
+                                           envelope.parts, std::move (envelope.leases));
     }
     if (attach_routed_send_context_ && source_rid.has_value ())
         detail::received_access_t::set_socket_rid_send_context (received_,
-                                                                detail::native_handle (*this));
+                                                                detail::native_handle (*this),
+                                                                _callbacks);
     return 0;
 }
 
 int socket_t::publish (const std::string &topic_id_, message_t &part_, send_flags_t flags_)
 {
     detail::validate_no_embedded_null (topic_id_, "topic");
+    detail::socket_callback_state_t &callbacks = callback_state ();
+    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
+        errno = ETERM;
+        return -1;
+    }
+    std::lock_guard<std::mutex> attempt_lock (
+      callbacks.outbound_record_attempt_mutex);
+    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
+        errno = ETERM;
+        return -1;
+    }
     return detail::submit_one_message_part (
       part_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_) {
           return zlink_publish_part (detail::native_handle (*this), topic_id_.c_str (), part_out_,
@@ -231,6 +428,17 @@ int socket_t::publish (const std::string &topic_id_,
                        send_flags_t flags_)
 {
     detail::validate_no_embedded_null (topic_id_, "topic");
+    detail::socket_callback_state_t &callbacks = callback_state ();
+    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
+        errno = ETERM;
+        return -1;
+    }
+    std::lock_guard<std::mutex> attempt_lock (
+      callbacks.outbound_record_attempt_mutex);
+    if (callbacks.socket_closed.load (std::memory_order_acquire)) {
+        errno = ETERM;
+        return -1;
+    }
     return detail::submit_message_parts (
       parts_, [&] (zlink_msg_t *part_out_, zlink_part_flag_t part_flag_, bool) {
           return zlink_publish_part (detail::native_handle (*this), topic_id_.c_str (), part_out_,
@@ -241,14 +449,36 @@ int socket_t::publish (const std::string &topic_id_,
 
 int socket_t::subscribe (topic_message_t &message_, recv_flags_t flags_)
 {
+    message_.close ();
     return detail::read_subscription_message (
       message_,
       [&] (const zlink_routing_id_t **source_rid_out_, char *topic_out_, size_t topic_capacity_,
-           size_t *topic_size_out_, zlink_msg_t *part_out_, zlink_part_flag_t *has_more_out_) {
+           size_t *topic_size_out_, zlink_msg_t *part_out_,
+           zlink_hwm_budget_lease_t **lease_out_, zlink_part_flag_t *has_more_out_) {
+           *lease_out_ = nullptr;
+           return static_cast<int> (zlink_subscribe_part (
+             detail::native_handle (*this), source_rid_out_, topic_out_,
+             topic_capacity_, topic_size_out_, part_out_, has_more_out_,
+             static_cast<zlink_recv_flags_t> (static_cast<int> (flags_))));
+       });
+}
+
+int socket_t::subscribe_retained (
+  topic_message_t &message_, recv_flags_t flags_)
+{
+    message_.close ();
+    return detail::read_subscription_message (
+      message_,
+      [&] (const zlink_routing_id_t **source_rid_out_, char *topic_out_,
+           size_t topic_capacity_, size_t *topic_size_out_,
+           zlink_msg_t *part_out_, zlink_hwm_budget_lease_t **lease_out_,
+           zlink_part_flag_t *has_more_out_) {
           return static_cast<int> (
-            zlink_subscribe_part (detail::native_handle (*this), source_rid_out_, topic_out_,
-                                  topic_capacity_, topic_size_out_, part_out_, has_more_out_,
-                                  static_cast<zlink_recv_flags_t> (static_cast<int> (flags_))));
+            zlink_subscribe_part_with_hwm_budget_lease (
+              detail::native_handle (*this), source_rid_out_, topic_out_,
+              topic_capacity_, topic_size_out_, part_out_, lease_out_,
+              has_more_out_, static_cast<zlink_recv_flags_t> (
+                               static_cast<int> (flags_))));
       });
 }
 
@@ -361,23 +591,18 @@ int socket_t::subscription_at (size_t index_, std::string &filter_, bool *is_pat
 void socket_t::set_send_ready_handler (std::function<void ()> handler_)
 {
     detail::socket_callback_state_t &state = callback_state ();
-    state.send_ready_handler = std::move (handler_);
-    auto trampoline = [] (void *, void *userdata_) {
-        auto *callback_state = static_cast<detail::socket_callback_state_t *> (userdata_);
-        if (callback_state && callback_state->send_ready_handler)
-            callback_state->send_ready_handler ();
-    };
-    if (zlink_send_ready_handler (detail::native_handle (*this),
-                                  static_cast<zlink_send_ready_handler_fn> (+trampoline), &state)
-        != 0)
-        detail::throw_if_failed<handler_error_t> (
-          static_cast<handler_result_t> (detail::handler_result_from_errno (zlink_errno ())));
+    {
+        std::lock_guard<std::mutex> lock (state.send_ready_mutex);
+        state.send_ready_handler = std::move (handler_);
+    }
+    detail::ensure_native_send_ready_handler (
+      detail::native_handle (*this), state);
 }
 
 detail::socket_callback_state_t &socket_t::callback_state ()
 {
     if (!_callbacks)
-        _callbacks = std::make_unique<detail::socket_callback_state_t> ();
+        _callbacks = std::make_shared<detail::socket_callback_state_t> ();
     return *_callbacks;
 }
 

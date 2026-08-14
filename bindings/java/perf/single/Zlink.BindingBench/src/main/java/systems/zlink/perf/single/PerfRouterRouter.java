@@ -12,7 +12,6 @@ import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.SubmitResult;
@@ -239,7 +238,7 @@ final class PerfRouterRouter {
             }
 
             try (Message pong = Message.from(PONG)) {
-                senderRouterSend(receiver, senderRoute, pong, SendFlags.NONE);
+                senderRouterSend(receiver, senderRoute, pong);
             }
 
             while (true) {
@@ -302,7 +301,7 @@ final class PerfRouterRouter {
                                             RoutingId targetRoute) {
         PerfStopToken.sendWithRetry(() -> {
             try (Message stop = PerfStopToken.newMessage()) {
-                senderRouterSend(sender, targetRoute, stop, SendFlags.NONE);
+                senderRouterSend(sender, targetRoute, stop);
                 return true;
             }
         }, "router/router");
@@ -310,21 +309,19 @@ final class PerfRouterRouter {
 
     private static void senderRouterSend(RouterSocket socket,
                                          RoutingId route,
-                                         Message message,
-                                         SendFlags flags) {
-        socket.send(route)
+                                         Message message) {
+        PerfUtil.awaitStage(socket.send(route)
             .message(message)
-            .flags(flags)
-            .submit();
+            .submit());
     }
 
     private static boolean trySendActive(RouterSocket sender, RoutingId route,
                                          Message active) {
         try {
-            return sender.send(route)
+            PerfUtil.awaitStage(sender.send(route)
                 .message(active)
-                .flags(SendFlags.DONT_WAIT)
-                .submit();
+                .submit());
+            return true;
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {
             if (ex.getResult()
                 == systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED) {
@@ -343,10 +340,10 @@ final class PerfRouterRouter {
     private static boolean trySendBlocking(RouterSocket sender, RoutingId route,
                                            Message active) {
         try {
-            return sender.send(route)
+            PerfUtil.awaitStage(sender.send(route)
                 .message(active)
-                .flags(SendFlags.NONE)
-                .submit();
+                .submit());
+            return true;
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {
             if (ex.getResult()
                 == systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED) {

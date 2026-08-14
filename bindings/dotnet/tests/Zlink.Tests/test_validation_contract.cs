@@ -72,7 +72,7 @@ public sealed class test_validation_contract
         Assert.Throws<ArgumentNullException>(() =>
             pair.Send().Message((Message)null!));
         Assert.Throws<ArgumentNullException>(() =>
-            pub.Publish((string)null!).Message(publishedMessage).Submit());
+            pub.Publish((string)null!));
     }
 
     [Fact]
@@ -188,8 +188,5 @@ public sealed class test_validation_contract
 
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
             dealer.Request().Message(message).Timeout(negative).Async());
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
-            dealer.Request().Message(message).Timeout(negative).Submit(
-                (_, parts) => Zlink.MultipartClose(parts)));
     }
 }

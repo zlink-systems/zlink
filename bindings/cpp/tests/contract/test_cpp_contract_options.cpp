@@ -135,15 +135,33 @@ template <typename T> class has_context_options_facade_t
                      zlink::thread_scheduling_policy_t::other),
                    std::declval<U &> ().blocky (),
                    std::declval<U &> ().blocky (true),
-                   std::declval<U &> ().auto_hwm_profile (),
-                   std::declval<U &> ().auto_hwm_profile (zlink::auto_hwm_profile::balanced),
-                   std::declval<U &> ().auto_hwm_msg_unit_bytes (),
-                   std::declval<U &> ().auto_hwm_msg_unit_bytes (zlink::byte_count_t::bytes (64)),
+                   std::declval<U &> ().core_hwm_memory_limit_bytes (),
+                   std::declval<U &> ().core_hwm_memory_limit_bytes (
+                     zlink::byte_count_t::bytes (64)),
+                   std::declval<U &> ().core_hwm_budget_bytes (),
+                   std::declval<U &> ().core_hwm_budget_bytes (
+                     zlink::byte_count_t::bytes (64)),
+                   std::declval<U &> ().core_hwm_profile (),
+                   std::declval<U &> ().core_hwm_profile (
+                     zlink::auto_hwm_profile::balanced),
                    std::declval<U &> ().socket_limit (),
                    std::declval<U &> ().msg_t_size (),
                    std::declval<U &> ().add_thread_affinity (zlink::cpu_index_t::value (0)),
                    std::declval<U &> ().remove_thread_affinity (zlink::cpu_index_t::value (0)),
                    std::true_type ());
+
+    template <typename> static std::false_type test (...);
+
+  public:
+    static const bool value = decltype (test<T> (0))::value;
+};
+
+template <typename T> class has_legacy_auto_hwm_msg_unit_bytes_t
+{
+  private:
+    template <typename U>
+    static auto test (int)
+      -> decltype (std::declval<U &> ().auto_hwm_msg_unit_bytes (), std::true_type ());
 
     template <typename> static std::false_type test (...);
 
@@ -187,6 +205,19 @@ static_assert (has_sub_socket_options_facade_t<zlink::sub_socket_options_t>::val
                "sub_socket_options_t must expose canonical methods");
 static_assert (has_context_options_facade_t<zlink::context_options_t>::value,
                "context_options_t must exist");
+static_assert (!has_legacy_auto_hwm_msg_unit_bytes_t<zlink::context_options_t>::value,
+               "legacy auto_hwm_msg_unit_bytes must not remain as an alias");
+static_assert (
+  std::is_same<decltype (std::declval<const zlink::context_t &> ().core_hwm_budget_snapshot ()),
+               zlink::core_hwm_budget_snapshot_t>::value,
+  "context snapshot must be returned as an immutable value");
+static_assert (!std::is_default_constructible<zlink::core_hwm_budget_snapshot_t>::value,
+               "callers must not initialize native snapshot ABI fields");
+static_assert (
+  std::is_same<decltype (std::declval<const zlink::core_hwm_budget_snapshot_t &> ()
+                           == std::declval<const zlink::core_hwm_budget_snapshot_t &> ()),
+               bool>::value,
+  "Core HWM snapshots must preserve value equality");
 static_assert (has_socket_options_entry_t<zlink::router_socket_t>::value,
                "router_socket_t must expose options()");
 
@@ -196,17 +227,47 @@ void test_context_options ()
     zlink::context_options_t options = ctx.options ();
     options.blocky (false);
     assert (!options.blocky ());
-    options.auto_hwm_profile (zlink::auto_hwm_profile::compact);
-    assert (options.auto_hwm_profile () == zlink::auto_hwm_profile::compact);
-    options.auto_hwm_profile (zlink::auto_hwm_profile::throughput);
-    assert (options.auto_hwm_profile () == zlink::auto_hwm_profile::throughput);
-    const uint64_t boundary = UINT64_MAX / 512u;
-    options.auto_hwm_msg_unit_bytes (zlink::byte_count_t::bytes (boundary));
-    assert (options.auto_hwm_msg_unit_bytes ().bytes () == boundary);
-    options.auto_hwm_msg_unit_bytes (zlink::byte_count_t::bytes (64));
-    assert (options.auto_hwm_msg_unit_bytes ().bytes () == 64);
-    options.auto_hwm_msg_unit_bytes (zlink::byte_count_t::bytes (0));
-    assert (options.auto_hwm_msg_unit_bytes ().bytes () == 0);
+    options.core_hwm_profile (zlink::auto_hwm_profile::compact);
+    assert (options.core_hwm_profile () == zlink::auto_hwm_profile::compact);
+    options.core_hwm_profile (zlink::auto_hwm_profile::throughput);
+    assert (options.core_hwm_profile () == zlink::auto_hwm_profile::throughput);
+
+    const uint64_t memory_limit = UINT64_C (16) * 1024u * 1024u;
+    const uint64_t core_budget = UINT64_C (4) * 1024u * 1024u;
+    options.core_hwm_memory_limit_bytes (zlink::byte_count_t::bytes (memory_limit));
+    options.core_hwm_budget_bytes (zlink::byte_count_t::bytes (core_budget));
+    assert (options.core_hwm_memory_limit_bytes ().bytes () == memory_limit);
+    assert (options.core_hwm_budget_bytes ().bytes () == core_budget);
+
+    ctx.recalculate_auto_hwm ();
+    const zlink::core_hwm_budget_snapshot_t before = ctx.core_hwm_budget_snapshot ();
+    const zlink::core_hwm_budget_snapshot_t before_copy = before;
+    assert (before_copy == before);
+    assert (before.abi_version () == 1u);
+    assert (before.struct_size () > 0u);
+    assert (before.configured_memory_limit_bytes () == memory_limit);
+    assert (before.configured_core_budget_bytes () == core_budget);
+    assert (before.effective_core_budget_bytes () == core_budget);
+    assert (before.budget_planning_active ());
+    assert (before.aggregate_hwm_valid ());
+    assert (!before.budget_insufficient ());
+    assert (!before.aggregate_overflow ());
+    assert (before.flags () != 0u);
+    assert ((before.reserved_u64 () == std::array<uint64_t, 8>{}));
+
+    ctx.reset_core_hwm_budget_metrics ();
+    const zlink::core_hwm_budget_snapshot_t after = ctx.core_hwm_budget_snapshot ();
+    assert (after != before);
+    assert (after.measurement_epoch () == before.measurement_epoch () + 1u);
+    assert (after.budget_generation () == before.budget_generation ());
+    assert (after.current_accounted_bytes () == before.current_accounted_bytes ());
+    assert (after.active_directional_queue_count ()
+            == before.active_directional_queue_count ());
+
+    options.core_hwm_memory_limit_bytes (zlink::byte_count_t::bytes (0));
+    options.core_hwm_budget_bytes (zlink::byte_count_t::bytes (0));
+    assert (options.core_hwm_memory_limit_bytes ().bytes () == 0u);
+    assert (options.core_hwm_budget_bytes ().bytes () == 0u);
 
     options.io_threads (zlink::io_thread_count_t::value (2));
     assert (options.io_threads ().value () == 2);

@@ -6,7 +6,7 @@ using static PerfRunner;
 internal static class PerfMultiDealerRouterServer
 {
 
-    internal static int Run(PerfOptions options)
+    internal static async Task<int> Run(PerfOptions options)
     {
         int size = Math.Max(1, options.Size);
         int rcvTimeoutMs = ResolveMultiRcvTimeoutMs(options);
@@ -26,7 +26,6 @@ internal static class PerfMultiDealerRouterServer
         // then recalculate the socket policy before advertising READY. The
         // relay loop must not wait for a connection-ready event count because
         // C begins receiving as soon as clients connect.
-        ApplyAutoHwmMsgUnit(ctx, size);
         server.Bind(endpoint);
         endpoint = server.Options.LastEndpoint;
         RecalculateAutoHwm(ctx);
@@ -59,7 +58,8 @@ internal static class PerfMultiDealerRouterServer
             }
 
             if ((readyMask & PollEventFlags.PollOut) != 0
-                && !FlushPendingReplies(server, pendingReplies))
+                && !await FlushPendingRepliesAsync(server, pendingReplies)
+                    .ConfigureAwait(false))
             {
                 return 2;
             }
@@ -76,8 +76,7 @@ internal static class PerfMultiDealerRouterServer
                 // MultipartMessageCollection wrapper around the lazy
                 // single-part message (one heap alloc per recv).
                 Message bodyMessage = receivedBuffer.SinglePartOrThrow();
-                ReadOnlySpan<byte> body = bodyMessage.AsReadOnlySpan();
-                if (IsStopTokenPayload(body))
+                if (IsStopTokenPayload(bodyMessage.AsReadOnlySpan()))
                 {
                     stop = true;
                     break;
@@ -94,44 +93,22 @@ internal static class PerfMultiDealerRouterServer
                 if (maybeRoutingId == null)
                     return 2;
                 Message reply = bodyMessage.Copy();
-                if (!EnqueueReplyOrSend(server, pendingReplies,
-                        maybeRoutingId.Value, reply, tryImmediate: false))
-                {
-                    reply.Dispose();
-                    return 2;
-                }
+                pendingReplies.Enqueue(new PendingReply(maybeRoutingId.Value,
+                    reply));
             }
         }
 
         return 0;
     }
 
-    private static bool EnqueueReplyOrSend(IRouterSocket server,
-        Queue<PendingReply> pendingReplies, RoutingId routingId, Message reply,
-        bool tryImmediate = true)
-    {
-        if (tryImmediate && pendingReplies.Count == 0)
-        {
-            if (server.Send(routingId).Message(reply)
-                    .Flags(SendFlags.DontWait).Submit())
-            {
-                reply.Dispose();
-                return true;
-            }
-        }
-
-        pendingReplies.Enqueue(new PendingReply(routingId, reply));
-        return true;
-    }
-
-    private static bool FlushPendingReplies(IRouterSocket server,
+    private static async Task<bool> FlushPendingRepliesAsync(IRouterSocket server,
         Queue<PendingReply> pendingReplies)
     {
         while (pendingReplies.Count > 0)
         {
             PendingReply pending = pendingReplies.Peek();
-            if (server.Send(pending.RoutingId).Message(pending.Message)
-                    .Flags(SendFlags.DontWait).Submit())
+            if (await PerfSocketIo.SendAsync(server, pending.RoutingId,
+                    pending.Message).ConfigureAwait(false) > 0)
             {
                 pendingReplies.Dequeue();
                 pending.Dispose();

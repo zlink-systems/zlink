@@ -31,7 +31,8 @@ export type MonitorEventType = typeof MonitorEventType[keyof typeof MonitorEvent
  * A snapshot of a monitored socket's state and auto-high-water-mark telemetry.
  *
  * `sourceKind` identifies the monitored source; `stateFlags`/`detailFlags` are
- * bit masks of its current state; `snd/rcvPendingMsgs` are queued message
+ * bit masks of its current state; `snd/rcvPendingMsgs` and
+ * `snd/rcvPendingBytes` are queued message and byte counts;
  * counts; and the `autoHwm*` fields report the automatic high-water-mark sizing
  * decisions (applied marks, effective buffers, last recalculation, deferred
  * shrinks).
@@ -44,19 +45,12 @@ export interface MonitorStatus {
   readonly detailFlags: number;
   readonly sndPendingMsgs: bigint;
   readonly rcvPendingMsgs: bigint;
+  readonly sndPendingBytes: bigint;
+  readonly rcvPendingBytes: bigint;
   readonly autoHwmEnabled: boolean;
   readonly autoHwmProfile: number;
   readonly autoHwmRole: number;
   readonly autoHwmPolicyClass: number;
-  readonly autoHwmUnitBudgetBytes: bigint;
-  readonly autoHwmSizeCap: number;
-  readonly autoHwmSocketMessageSlots: bigint;
-  readonly autoHwmConnectionBucketEnabled: boolean;
-  readonly autoHwmConnectionBucketCount: number;
-  readonly autoHwmConnectionBucketIndex: number;
-  readonly autoHwmConnectionBucketHwm4K: number;
-  readonly autoHwmConnectionBucketHysteresisRetained: boolean;
-  readonly autoHwmEffectiveMessageBytes: bigint;
   readonly autoHwmPlannedSndHwmBytes: bigint;
   readonly autoHwmPlannedRcvHwmBytes: bigint;
   readonly autoHwmAppliedSndHwmBytes: bigint;

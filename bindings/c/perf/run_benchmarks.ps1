@@ -163,11 +163,11 @@ $RootDir = [System.IO.Path]::GetFullPath($RootDir)
 
 $OnWindows = $env:OS -eq "Windows_NT"
 $CoreSource = if ($env:ZLINK_CORE_SOURCE) { $env:ZLINK_CORE_SOURCE } else { "release" }
-$CoreVersion = if ($env:ZLINK_CORE_RELEASE_VERSION) {
-    $env:ZLINK_CORE_RELEASE_VERSION
-} else {
-    (Select-String -LiteralPath (Join-Path $RootDir "VERSION") -Pattern "^LIBZLINK_VERSION=(.+)$").Matches.Groups[1].Value
+$RepositoryVersion = (Select-String -LiteralPath (Join-Path $RootDir "VERSION") -Pattern "^LIBZLINK_VERSION=(.+)$").Matches.Groups[1].Value
+if ($env:ZLINK_CORE_RELEASE_VERSION -and $env:ZLINK_CORE_RELEASE_VERSION -ne $RepositoryVersion) {
+    throw "ZLINK_CORE_RELEASE_VERSION $($env:ZLINK_CORE_RELEASE_VERSION) must match repository VERSION $RepositoryVersion"
 }
+$CoreVersion = $RepositoryVersion
 $CorePackagePrefix = if ($env:ZLINK_CORE_PACKAGE_PREFIX) {
     [System.IO.Path]::GetFullPath($env:ZLINK_CORE_PACKAGE_PREFIX)
 } else {

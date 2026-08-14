@@ -36,7 +36,8 @@ Aligned Node bindings for `libzlink`.
   - `SubSocketOptions`
 - context option facade: `ContextOptions`
 - socket option access: `socket.options.*`
-- monitors: `monitorOpen(events?)` with default `ALL`, then `recv(flags?)`,
+- monitors: `monitorOpen(events?, monitorHwmBytes?)` with default `ALL` events
+  and the Core-default queue HWM, then `recv(flags?)`,
   `onEvent()`
 
 `Context.options` should be configured immediately after constructing the
@@ -100,7 +101,7 @@ existing owner is closed and its slot is released.
 
 `Discovery` uses `connectRegistry()`, `setValue()` / `getValue()`,
 `setMetadata()` / `getMetadata()`, `memberPeers()`,
-`memberPeerMetadata()`, `monitorOpen(events?)`, `setTlsClient()`.
+`memberPeerMetadata()`, `monitorOpen(events?, monitorHwmBytes?)`, `setTlsClient()`.
 
 `SpotNode` uses `setPubBind()`, `setRouterBind()`,
 `connectPeer()` / `disconnectPeer()`,

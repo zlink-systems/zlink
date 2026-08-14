@@ -8,7 +8,6 @@ import zlink
 from perf_multi_common import (
     STOP_TOKEN,
     TOPIC,
-    apply_multi_auto_hwm_msg_unit,
     apply_multi_socket_options,
     benchmark_endpoint,
     benchmark_run_id,
@@ -50,7 +49,6 @@ def main(argv=None):
             configure_multi_tls_server(publisher, args.transport)
             apply_multi_socket_options(publisher)
             publisher.bind(endpoint)
-            apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
             print(f"READY,{endpoint}", flush=True)
             # Start gate (single blocking wait, not a polling cadence).
             start_event.wait()

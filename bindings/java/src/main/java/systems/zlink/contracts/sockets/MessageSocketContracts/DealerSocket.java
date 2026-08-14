@@ -5,7 +5,7 @@ package systems.zlink.contracts.sockets;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.RequestOperation;
-import systems.zlink.contracts.messaging.SendOperation;
+import systems.zlink.contracts.messaging.RoutedSendOperation;
 
 /** A socket that load-balances sends across its connected peers and can issue routed requests. */
 public interface DealerSocket extends Socket {
@@ -16,8 +16,13 @@ public interface DealerSocket extends Socket {
     void disconnectRid(RoutingId routingId);
     void setRoutingId(RoutingId rid);
     RoutingId getRoutingId();
-    SendOperation send();
+    RoutedSendOperation send();
     boolean recv(Received result, RecvFlags flags);
+    /**
+     * Receives for a Framework backend and retains the origin Core HWM credit
+     * until {@code result} is closed or reused.
+     */
+    boolean recvRetained(Received result, RecvFlags flags);
     RequestOperation request();
     @Override DealerSocketOptions options();
 }

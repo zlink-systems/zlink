@@ -2,6 +2,7 @@
 #pragma once
 
 #include "context_options.hpp"
+#include "core_hwm_budget_snapshot.hpp"
 #include "../Errors/errors.hpp"
 
 #include <memory>
@@ -48,6 +49,10 @@ class context_t
 
     /// @brief Recomputes automatic high-water marks for sockets configured with an auto-HWM profile.
     void recalculate_auto_hwm ();
+    /// @brief Returns a value snapshot of Core's context-wide HWM budget state.
+    core_hwm_budget_snapshot_t core_hwm_budget_snapshot () const;
+    /// @brief Resets epoch counters while preserving current HWM budget gauges.
+    void reset_core_hwm_budget_metrics ();
 
   private:
     friend class context_options_t;

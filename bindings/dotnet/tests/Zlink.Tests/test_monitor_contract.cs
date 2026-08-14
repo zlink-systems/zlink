@@ -7,6 +7,22 @@ namespace Systems.Zlink.Tests;
 public sealed class test_monitor_contract
 {
     [Fact]
+    public void socket_monitor_hwm_bytes_are_forwarded_exactly()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var ctx = Zlink.CreateContext();
+        using var socket = ctx.CreatePairSocket();
+        const ulong monitorHwmBytes = 12_345UL;
+        using ISocketMonitor monitor = socket.MonitorOpen(SocketEvent.All,
+            monitorHwmBytes);
+
+        Assert.Equal(monitorHwmBytes * 2UL,
+            ctx.GetCoreHwmBudgetSnapshot().MonitorQueueAppliedHwmBytes);
+    }
+
+    [Fact]
     public void socket_monitor_receive_reports_connection_ready_event()
     {
         if (!CoreTestSupport.IsNativeAvailable())
@@ -53,17 +69,14 @@ public sealed class test_monitor_contract
         Assert.Equal(MonitorEventType.ConnectionReady, evt.Event);
 
         MonitorStatus snapshot = monitor.Status();
-        Assert.Equal(2U, snapshot.AbiVersion);
-        Assert.True(snapshot.StructSize >= 232U);
+        Assert.Equal(3U, snapshot.AbiVersion);
+        Assert.True(snapshot.StructSize > 0U);
         Assert.Equal<MonitorSourceKind>(MonitorSourceKind.Socket, snapshot.SourceKind);
         Assert.True(snapshot.SndPendingMsgs >= 0);
         Assert.True(Enum.IsDefined(snapshot.AutoHwmProfile));
         Assert.True(snapshot.AutoHwmPolicyClass >= 0);
-        Assert.True(snapshot.AutoHwmUnitBudgetBytes >= 0);
-        Assert.True(snapshot.AutoHwmSizeCap >= 0);
-        Assert.True(snapshot.AutoHwmSocketMessageSlots >= 0);
-        Assert.True(snapshot.AutoHwmConnectionBucketCount >= 0);
-        Assert.True(snapshot.AutoHwmConnectionBucketHwm4K >= 0);
+        Assert.True(snapshot.SndPendingBytes >= 0);
+        Assert.True(snapshot.RcvPendingBytes >= 0);
         Assert.Equal(sendHwmBytes,
             snapshot.AutoHwmAppliedSendHighWaterMarkBytes);
         Assert.Equal(receiveHwmBytes,

@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import time
 from contextlib import ExitStack
@@ -5,7 +6,6 @@ from contextlib import ExitStack
 import zlink
 
 from perf_multi_common import (
-    apply_multi_auto_hwm_msg_unit,
     apply_multi_socket_options,
     active_message_latency_ns,
     benchmark_run_id,
@@ -19,13 +19,13 @@ from perf_multi_common import (
     resolve_multi_connect_ready_timeout_ms,
     result_metrics,
     safe_poll,
-    send_nonblocking,
+    send_routed,
     stamp_payload,
     wait_monitor_event,
 )
 
 
-def main(argv=None):
+async def main(argv=None):
     args = parse_client_args(argv or sys.argv[1:], pattern="dealer_router")
     run_id = benchmark_run_id()
     payloads = [new_payload(args.msg_size) for _ in range(args.clients)]
@@ -58,7 +58,6 @@ def main(argv=None):
                         zlink.MonitorEventMask.CONNECTION_READY,
                         timeout_ms=resolve_multi_connect_ready_timeout_ms(),
                     )
-                apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
 
                 active_deadline = time.perf_counter() + args.duration
                 recv_storage = [zlink.create_received() for _ in sockets]
@@ -78,7 +77,7 @@ def main(argv=None):
                             run_id=run_id,
                             seq=next_seq,
                         )
-                        if send_nonblocking(current_sock, payload):
+                        if await send_routed(current_sock, payload):
                             seq = next_seq
                             waiting_reply[index] = True
                             send_pending[index] = False
@@ -115,7 +114,7 @@ def main(argv=None):
                                     run_id=run_id,
                                     seq=next_seq,
                                 )
-                                if send_nonblocking(current_sock, payload):
+                                if await send_routed(current_sock, payload):
                                     seq = next_seq
                                     waiting_reply[index] = True
                                     send_pending[index] = False
@@ -161,7 +160,7 @@ def main(argv=None):
                                         run_id=run_id,
                                         seq=next_seq,
                                     )
-                                    if send_nonblocking(current_sock, payload):
+                                    if await send_routed(current_sock, payload):
                                         seq = next_seq
                                         waiting_reply[index] = True
                                         send_pending[index] = False
@@ -198,4 +197,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

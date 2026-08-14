@@ -9,6 +9,7 @@ concepts are outside this Core binding.
 from .core import (
     Context,
     ContextOptions,
+    CoreHwmBudgetSnapshot,
     RoutingId,
     AtomicCounter,
     Stopwatch,
@@ -70,7 +71,7 @@ from .eventing import (
     PollEvents,
     Timer,
 )
-from .sockets.operations import ReplyOp, RequestCallbackOp, RequestOp, SendOp
+from .sockets.operations import ReplyOp, RequestOp, RoutedSendOp, SendOp
 from .sockets import (
     CommonSocketOptions,
     DealerSocketOptions,
@@ -91,6 +92,7 @@ from .sockets import (
 __all__ = [
     "Context",
     "ContextOptions",
+    "CoreHwmBudgetSnapshot",
     "RoutingId",
     "AtomicCounter",
     "Stopwatch",
@@ -131,8 +133,8 @@ __all__ = [
     "TopicMessage",
     "SubscriptionEvent",
     "SendOp",
+    "RoutedSendOp",
     "RequestOp",
-    "RequestCallbackOp",
     "ReplyOp",
     "MonitorEvent",
     "MonitorStatus",

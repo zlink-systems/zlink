@@ -3,6 +3,59 @@ using Systems.Zlink;
 
 public static class PerfSocketIo
 {
+    public static async Task<int> SendAsync(IDealerSocket socket, byte[] payload,
+        SendFlags flags = SendFlags.None)
+    {
+        _ = flags;
+        Message message = CreatePooledMessage(payload);
+        try
+        {
+            await socket.Send().Message(message).Async().ConfigureAwait(false);
+            return payload.Length;
+        }
+        finally
+        {
+            message.Dispose();
+        }
+    }
+
+    public static async Task<int> SendAsync(IDealerSocket socket, Message message,
+        SendFlags flags = SendFlags.None)
+    {
+        _ = flags;
+        int size = message.Size;
+        await socket.Send().Message(message).Async().ConfigureAwait(false);
+        return size;
+    }
+
+    public static async Task<int> SendAsync(IRouterSocket socket,
+        RoutingId routingId, byte[] payload, SendFlags flags = SendFlags.None)
+    {
+        _ = flags;
+        Message message = CreatePooledMessage(payload);
+        try
+        {
+            await socket.Send(routingId).Message(message).Async()
+                .ConfigureAwait(false);
+            return payload.Length;
+        }
+        finally
+        {
+            message.Dispose();
+        }
+    }
+
+    public static async Task<int> SendAsync(IRouterSocket socket,
+        RoutingId routingId,
+        Message message, SendFlags flags = SendFlags.None)
+    {
+        _ = flags;
+        int size = message.Size;
+        await socket.Send(routingId).Message(message).Async()
+            .ConfigureAwait(false);
+        return size;
+    }
+
     public static int Send(IMessageSocket socket, ReadOnlySpan<byte> payload,
         SendFlags flags = SendFlags.None)
     {
@@ -74,7 +127,7 @@ public static class PerfSocketIo
         Message message = CreatePooledMessage(payload);
         try
         {
-            var submit = socket.Publish(topic).Message(message);
+            var submit = socket.TryPublish(topic).Message(message);
             bool sent = flags == SendFlags.None
                 ? submit.Submit()
                 : submit.Flags(flags).Submit();
@@ -97,4 +150,5 @@ public static class PerfSocketIo
         payload.CopyTo(message.AsSpan());
         return message;
     }
+
 }

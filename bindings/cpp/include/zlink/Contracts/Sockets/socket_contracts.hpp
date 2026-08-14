@@ -54,9 +54,10 @@ class socket_t
     void disconnect (const std::string &endpoint_);
     void disconnect_rid (const routing_id_t &peer_rid_);
 
-    socket_monitor_t monitor_open (monitor_event events_ = monitor_event::all) const
+    socket_monitor_t monitor_open (monitor_event events_ = monitor_event::all,
+                                   byte_count_t monitor_hwm_bytes_ = byte_count_t::bytes (0)) const
     {
-        return socket_monitor_t::open (*this, events_);
+        return socket_monitor_t::open (*this, events_, monitor_hwm_bytes_);
     }
 
     common_socket_options_t options () { return common_socket_options_t (*this); }
@@ -92,6 +93,17 @@ class socket_t
     [[nodiscard]] int
     receive (received_t &received_, recv_flags_t flags_, bool attach_routed_send_context_);
 
+    [[nodiscard]] int
+    receive_retained (received_t &received_, recv_flags_t flags_ = recv_flags_t::none);
+
+    [[nodiscard]] int receive_retained (
+      received_t &received_, recv_flags_t flags_,
+      bool attach_routed_send_context_);
+
+    [[nodiscard]] int receive_impl (
+      received_t &received_, recv_flags_t flags_,
+      bool attach_routed_send_context_, bool retain_credit_);
+
     [[nodiscard]] int publish (const std::string &topic_id_,
                                message_t &part_,
                                send_flags_t flags_ = send_flags_t::none);
@@ -108,6 +120,9 @@ class socket_t
 
     [[nodiscard]] int subscribe (topic_message_t &message_,
                                  recv_flags_t flags_ = recv_flags_t::none);
+
+    [[nodiscard]] int subscribe_retained (
+      topic_message_t &message_, recv_flags_t flags_ = recv_flags_t::none);
 
     [[nodiscard]] int subscribe_part (std::optional<routing_id_t> &source_rid_out_,
                                       std::string &topic_out_,
@@ -146,7 +161,7 @@ class socket_t
     friend struct detail::socket_access_t;
 
     std::unique_ptr<detail::socket_handle_t> _socket;
-    std::unique_ptr<detail::socket_callback_state_t> _callbacks;
+    std::shared_ptr<detail::socket_callback_state_t> _callbacks;
     std::unique_ptr<detail::recv_envelope_t> _receive_envelope;
     socket_type _type;
 };

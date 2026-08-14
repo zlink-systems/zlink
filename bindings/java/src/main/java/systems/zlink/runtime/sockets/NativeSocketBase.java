@@ -182,6 +182,10 @@ abstract class NativeSocketBase implements Socket {
     public CommonSocketOptions options() { return options; }
     public SocketMonitor monitorOpen() { return runtime.monitorOpen(); }
     public SocketMonitor monitorOpen(MonitorEventType... events) { return runtime.monitorOpen(events); }
+    public SocketMonitor monitorOpen(long monitorHwmBytes,
+                                     MonitorEventType... events) {
+        return runtime.monitorOpen(monitorHwmBytes, events);
+    }
     public final void setTlsServer(String certPem, String keyPem,
                                    boolean requireClientCert) { runtime.setTlsServer(certPem, keyPem, requireClientCert); }
     public final void setTlsClient(String caCertPem, String hostname,

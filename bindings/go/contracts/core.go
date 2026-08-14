@@ -13,6 +13,8 @@ type (
 	Context = impl.Context
 	// ContextOptions are context-wide options governing the I/O threads and defaults shared by every socket.
 	ContextOptions = impl.ContextOptions
+	// CoreHwmBudgetSnapshot is an immutable context-wide Core budget value.
+	CoreHwmBudgetSnapshot = impl.CoreHwmBudgetSnapshot
 	// AutoHwmProfile selects an automatic high-water-mark sizing profile.
 	AutoHwmProfile = impl.AutoHwmProfile
 	// AutoHwmRecalcReason reports what triggered the last automatic high-water-mark recalculation.

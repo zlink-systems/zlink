@@ -6,12 +6,13 @@ namespace Systems.Zlink.Runtime.Native;
 internal struct ZlinkSocketMonitorOpenOptions
 {
     public uint Events;
+    public ulong MonitorHwmBytes;
 }
 
 [StructLayout(LayoutKind.Sequential)]
 internal struct ZlinkMonitorStatus
 {
-    internal const uint CurrentAbiVersion = 2;
+    internal const uint CurrentAbiVersion = 3;
 
     public uint AbiVersion;
     public uint StructSize;
@@ -20,19 +21,12 @@ internal struct ZlinkMonitorStatus
     public uint DetailFlags;
     public ulong SndPendingMsgs;
     public ulong RcvPendingMsgs;
+    public ulong SndPendingBytes;
+    public ulong RcvPendingBytes;
     public uint AutoHwmEnabled;
     public uint AutoHwmProfile;
     public uint AutoHwmRole;
     public uint AutoHwmPolicyClass;
-    public ulong AutoHwmUnitBudgetBytes;
-    public uint AutoHwmSizeCap;
-    public ulong AutoHwmSocketMessageSlots;
-    public uint AutoHwmConnectionBucketEnabled;
-    public uint AutoHwmConnectionBucketCount;
-    public uint AutoHwmConnectionBucketIndex;
-    public uint AutoHwmConnectionBucketHwm4K;
-    public uint AutoHwmConnectionBucketHysteresisRetained;
-    public ulong AutoHwmEffectiveMessageBytes;
     public ulong AutoHwmPlannedSndHwmBytes;
     public ulong AutoHwmPlannedRcvHwmBytes;
     public ulong AutoHwmAppliedSndHwmBytes;

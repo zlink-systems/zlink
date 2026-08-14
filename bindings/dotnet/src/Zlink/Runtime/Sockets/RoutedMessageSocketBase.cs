@@ -7,7 +7,48 @@ using Systems.Zlink.Runtime.Sockets.Internal;
 namespace Systems.Zlink;
 
 [EditorBrowsable(EditorBrowsableState.Never)]
-internal abstract class RoutedMessageSocketBase : SocketBase, IRoutedMessageSocket
+internal abstract class RoutedReceivingSocketBase : SocketBase,
+    IReceivingMessageSocket
+{
+    internal RoutedReceivingSocketBase(Context context, SocketType type)
+        : base(context, type)
+    {
+    }
+
+    internal RoutedReceivingSocketBase(SocketKernel kernel)
+        : base(kernel)
+    {
+    }
+
+    /// <summary>
+    ///     Receive a routed message into <paramref name="result" />.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool Recv(Received result, RecvFlags flags = RecvFlags.None)
+    {
+        return Kernel.ReceiveRoutedInto(result, (int)flags);
+    }
+
+    /// <summary>
+    ///     Receive a routed message and retain its Core HWM credit with the
+    ///     supplied envelope until deterministic cleanup.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool RecvRetained(Received result,
+        RecvFlags flags = RecvFlags.None)
+    {
+        return Kernel.ReceiveRoutedRetainedInto(result, (int)flags);
+    }
+
+
+    public void OnSendReady(Action handler)
+    {
+        Kernel.SendReadyHandler(handler);
+    }
+}
+
+[EditorBrowsable(EditorBrowsableState.Never)]
+internal abstract class RoutedMessageSocketBase : RoutedReceivingSocketBase
 {
     internal RoutedMessageSocketBase(Context context, SocketType type)
         : base(context, type)
@@ -20,26 +61,11 @@ internal abstract class RoutedMessageSocketBase : SocketBase, IRoutedMessageSock
     }
 
     /// <summary>
-    ///     Start a routed send operation (operation builder).
+    ///     Start a synchronous STREAM send operation.
     /// </summary>
-    public SendOperation Send(RoutingId routingId)
+    public SendOperation TrySend(RoutingId routingId)
     {
-        return new RoutedSendOperation(this, routingId);
-    }
-
-    /// <summary>
-    ///     Receive a routed message into <paramref name="result" />.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool Recv(Received result, RecvFlags flags = RecvFlags.None)
-    {
-        return Kernel.ReceiveRoutedInto(result, (int)flags);
-    }
-
-
-    public void OnSendReady(Action handler)
-    {
-        Kernel.SendReadyHandler(handler);
+        return new StreamSendOperation(this, routingId);
     }
 
     /// <summary>

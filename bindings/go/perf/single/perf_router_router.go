@@ -22,7 +22,6 @@ func runRouterRouter(cfg benchmarkConfig) perfcommon.Result {
 	ctx, err := perfcommon.NewSingleContext()
 	perfcommon.Must(err)
 	defer ctx.Close()
-	perfcommon.ApplySingleAutoHWMMsgUnit(ctx, cfg.msgSize)
 
 	server, err := ctx.RouterSocket()
 	perfcommon.Must(err)
@@ -65,10 +64,11 @@ func runRouterRouter(cfg benchmarkConfig) perfcommon.Result {
 	targetID := waitRouterRouterRouteReady(server, client, serverID)
 
 	result := runSingleRoutedOneWayWithTransient(cfg, server, func(message *zlink.Message) (bool, error) {
-		return client.SendTo(targetID).MoveMessage(message).Submit(context.Background())
+		return perfcommon.SubmitRoutedMessage(message, func(message *zlink.Message) <-chan error {
+			return client.SendTo(targetID).MoveMessage(message).Submit(context.Background())
+		})
 	}, func(message *zlink.Message) error {
-		_, err := client.SendTo(targetID).MoveMessage(message).Submit(context.Background())
-		return err
+		return perfcommon.AwaitRoutedSend(client.SendTo(targetID).MoveMessage(message).Submit(context.Background()))
 	}, isRouterRouterSendTransient)
 	perfcommon.PrintSingleAutoHWMDetail(serverMon, cfg.pattern, cfg.transport, "receiver", zlink.SocketTypeRouter, cfg.msgSize)
 	perfcommon.PrintSingleAutoHWMDetail(clientMon, cfg.pattern, cfg.transport, "sender", zlink.SocketTypeRouter, cfg.msgSize)
@@ -108,13 +108,17 @@ func waitRouterRouterRouteReady(
 	clientEvents := make([]zlink.PollEvent, 1)
 
 	for time.Now().Before(stopAt) {
-		_, sendErr := perfcommon.SubmitMessage(perfcommon.NewMessage(ping), func(message *zlink.Message) (bool, error) {
+		_, sendErr := perfcommon.SubmitRoutedMessage(perfcommon.NewMessage(ping), func(message *zlink.Message) <-chan error {
 			return client.SendTo(serverID).MoveMessage(message).Submit(context.Background())
 		})
 		if sendErr != nil && !perfcommon.IsTransient(sendErr) {
 			perfcommon.Must(sendErr)
 		}
-		event, waitErr := perfcommon.WaitPollerOne(serverPoller, serverEvents, time.Until(stopAt))
+		remaining := time.Until(stopAt)
+		if remaining <= 0 {
+			break
+		}
+		event, waitErr := perfcommon.WaitPollerOne(serverPoller, serverEvents, remaining)
 		if waitErr != nil {
 			if perfcommon.IsTransient(waitErr) {
 				continue
@@ -146,11 +150,15 @@ func waitRouterRouterRouteReady(
 		if clientID.Size() == 0 {
 			continue
 		}
-		_, err := perfcommon.SubmitMessage(perfcommon.NewMessage(pong), func(message *zlink.Message) (bool, error) {
+		_, err := perfcommon.SubmitRoutedMessage(perfcommon.NewMessage(pong), func(message *zlink.Message) <-chan error {
 			return server.SendTo(clientID).MoveMessage(message).Submit(context.Background())
 		})
 		perfcommon.Must(err)
-		clientEvent, clientWaitErr := perfcommon.WaitPollerOne(clientPoller, clientEvents, time.Until(stopAt))
+		remaining = time.Until(stopAt)
+		if remaining <= 0 {
+			break
+		}
+		clientEvent, clientWaitErr := perfcommon.WaitPollerOne(clientPoller, clientEvents, remaining)
 		if clientWaitErr != nil {
 			if perfcommon.IsTransient(clientWaitErr) {
 				continue

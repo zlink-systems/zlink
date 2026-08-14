@@ -7,14 +7,11 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.eventing.PollEventFlags;
-import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.sockets.SendFlags;
-import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfMessageTemplatePool;
@@ -22,9 +19,7 @@ import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfUtil;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -51,12 +46,10 @@ final class PerfMultiRouterRouter {
             // The routed receive loop admits connections while it waits for
             // traffic. An aggregate CONNECTION_READY monitor count is not a
             // reliable Windows barrier for many sockets, so the loop itself
-            // provides readiness and the stop-token count still covers every
-            // client.
+            // provides readiness while runner control owns termination.
             PerfUtil.recalculateAutoHwm(ctx);
             PerfUtil.printMultiMonitorAutoHwm(config, monitor, "server",
                 "server", SocketType.ROUTER);
-            Deque<PendingReply> pendingReplies = new ArrayDeque<>();
             // Long-lived caller-provided Received reused across every recv on
             // the server hot path. The binding refills its internal state in
             // place via adoptFrom, avoiding the per-recv Received allocation
@@ -68,20 +61,10 @@ final class PerfMultiRouterRouter {
                 // C terminates this relay from runner stdin. Client stop
                 // tokens remain regular routed frames and must be echoed.
                 while (!stopRequested.get()) {
-                    if (pendingReplies.isEmpty()) {
-                        pollSet.setEvents(0, PollEventFlags.POLLIN);
-                    } else {
-                        pollSet.setEvents(0,
-                            PollEventFlags.POLLIN, PollEventFlags.POLLOUT);
-                    }
+                    pollSet.setEvents(0, PollEventFlags.POLLIN);
                     int readyCount = pollSet.poll(50);
-                    boolean writable = readyCount > 0
-                        && pollSet.readyHasEventAt(0, PollEventFlags.POLLOUT);
                     boolean readable = readyCount > 0
                         && pollSet.readyHasEventAt(0, PollEventFlags.POLLIN);
-                    if (writable) {
-                        flushPending(server, pendingReplies);
-                    }
                     if (!readable) {
                         continue;
                     }
@@ -101,28 +84,12 @@ final class PerfMultiRouterRouter {
                         }
                         if (!ok) break;
 
-                        // Fast path: send directly when no pending backlog.
-                        if (pendingReplies.isEmpty()
-                            && receivedBuffer.send()
-                                .message(receivedBuffer.firstPart())
-                                .flags(SendFlags.DONT_WAIT)
-                                .submit()) {
-                            continue;
-                        }
                         RoutingId rid = receivedBuffer.getRoutingId().orElseThrow();
-                        // Slow path: take ownership of the part to outlive
-                        // the Received scope and enqueue / send.
                         Message ownedReply = Message.from(receivedBuffer.firstPart());
                         receivedBuffer.close();
-                        if (pendingReplies.isEmpty()
-                            && server.send(rid)
-                                .message(ownedReply)
-                                .flags(SendFlags.DONT_WAIT)
-                                .submit()) {
-                            ownedReply.close();
-                        } else {
-                            pendingReplies.addLast(
-                                new PendingReply(rid, ownedReply));
+                        try (ownedReply) {
+                            PerfUtil.awaitStage(server.send(rid)
+                                .message(ownedReply).submit());
                         }
                     }
                 }
@@ -207,9 +174,7 @@ final class PerfMultiRouterRouter {
         // payload buffer across the entire active phase (or per-socket when
         // borrow_payload_per_socket=true). We use per-socket buffers so that
         // an inflight=1 send isn't disturbed by the next slot's stamp.
-        Message[] payloads = new Message[n];
         boolean[] waitingReply = new boolean[n];
-        boolean[] waitingWritable = new boolean[n];
         List<systems.zlink.contracts.sockets.Socket> socketsAsBase = new ArrayList<>(n);
         for (RouterSocket c : clients) {
             socketsAsBase.add(c);
@@ -229,20 +194,19 @@ final class PerfMultiRouterRouter {
                 int startIndex = rrIndex;
                 for (int i = 0; i < n; i++) {
                     int idx = (startIndex + i) % n;
-                    if (waitingReply[idx] || waitingWritable[idx]) continue;
-                    payloads[idx] = payloadPool.acquire(msgSize,
+                    if (waitingReply[idx]) continue;
+                    Message payload = payloadPool.acquire(msgSize,
                         (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime(),
                         activeEnd);
-                    if (payloads[idx] == null) {
+                    if (payload == null) {
                         break;
                     }
-                    if (trySendPayload(clients.get(idx), payloads[idx])) {
+                    try {
+                        sendPayload(clients.get(idx), payload);
                         waitingReply[idx] = true;
-                    } else {
-                        waitingWritable[idx] = true;
+                    } finally {
+                        payload.close();
                     }
-                    updatePollMask(pollSet, idx, waitingReply[idx],
-                        waitingWritable[idx]);
                 }
                 rrIndex = (startIndex + 1) % n;
                 // The requester owns the active deadline. Bound the wait by
@@ -252,26 +216,15 @@ final class PerfMultiRouterRouter {
                 for (int readyOffset = 0; readyOffset < readyCount;
                      readyOffset++) {
                     int idx = pollSet.readyIndexAt(readyOffset);
-                    boolean writable =
-                        pollSet.readyHasEventAt(readyOffset,
-                            PollEventFlags.POLLOUT);
-                    if (writable && waitingWritable[idx] && !waitingReply[idx]) {
-                        if (trySendPayload(clients.get(idx), payloads[idx])) {
-                            waitingWritable[idx] = false;
-                            waitingReply[idx] = true;
-                            updatePollMask(pollSet, idx, true, false);
-                        }
-                    }
                     boolean readable =
                         pollSet.readyHasEventAt(readyOffset,
                             PollEventFlags.POLLIN);
                     if (!readable) continue;
                     drainReplies(clients.get(idx), idx, waitingReply,
-                        waitingWritable, msgSize, metrics, pollSet, replyBuffer);
+                        msgSize, metrics, replyBuffer);
                 }
             }
             replyBuffer.close();
-            Message.closeAll(payloads);
             // C routed echo ends the relay through the runner control path.
             // Do not inject an extra routed stop frame after active traffic.
         }
@@ -284,9 +237,7 @@ final class PerfMultiRouterRouter {
 
     private static void drainReplies(RouterSocket client, int idx,
                                      boolean[] waitingReply,
-                                     boolean[] waitingWritable,
                                      int msgSize, PerfUtil.Metrics metrics,
-                                     PerfSocketPollSet pollSet,
                                      systems.zlink.contracts.messaging.Received replyBuffer) {
         while (true) {
             boolean ok;
@@ -307,26 +258,6 @@ final class PerfMultiRouterRouter {
             waitingReply[idx] = false;
             PerfUtil.recordActiveLatency(metrics, replyBuffer.firstPart(),
                 msgSize, true);
-            waitingWritable[idx] = false;
-            updatePollMask(pollSet, idx, false, false);
-        }
-    }
-
-    private static boolean trySendPayload(RouterSocket client, Message payload) {
-        return client.send(SERVER_ID)
-            .message(payload)
-            .flags(SendFlags.DONT_WAIT)
-            .submit();
-    }
-
-    private static void updatePollMask(PerfSocketPollSet pollSet, int idx,
-                                       boolean waitingReply,
-                                       boolean waitingWritable) {
-        if (waitingWritable && !waitingReply) {
-            pollSet.setEvents(idx, PollEventFlags.POLLIN,
-                PollEventFlags.POLLOUT);
-        } else {
-            pollSet.setEvents(idx, PollEventFlags.POLLIN);
         }
     }
 
@@ -339,28 +270,8 @@ final class PerfMultiRouterRouter {
             (remainingNs + 999_999L) / 1_000_000L);
     }
 
-    private static void flushPending(RouterSocket server,
-                                     Deque<PendingReply> pendingReplies) {
-        while (!pendingReplies.isEmpty()) {
-            PendingReply pending = pendingReplies.peekFirst();
-            if (pending == null) {
-                return;
-            }
-            if (!server.send(pending.routingId())
-                .message(pending.payload())
-                .flags(SendFlags.DONT_WAIT)
-                .submit()) {
-                return;
-            }
-            pendingReplies.removeFirst();
-            pending.close();
-        }
+    private static void sendPayload(RouterSocket client, Message payload) {
+        PerfUtil.awaitStage(client.send(SERVER_ID)
+            .message(payload).submit());
     }
-
-    private record PendingReply(RoutingId routingId, Message payload) {
-        private void close() {
-            payload.close();
-        }
-    }
-
 }

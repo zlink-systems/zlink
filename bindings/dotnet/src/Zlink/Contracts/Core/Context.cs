@@ -67,4 +67,14 @@ public interface IContext : IDisposable, IAsyncDisposable
     ///     <see cref="AutoHwmProfile" />.
     /// </summary>
     void RecalculateAutoHwm();
+
+    /// <summary>
+    ///     Gets a value snapshot of the context-wide Core HWM budget state.
+    /// </summary>
+    CoreHwmBudgetSnapshot GetCoreHwmBudgetSnapshot();
+
+    /// <summary>
+    ///     Resets epoch counters while preserving current HWM budget gauges.
+    /// </summary>
+    void ResetCoreHwmBudgetMetrics();
 }

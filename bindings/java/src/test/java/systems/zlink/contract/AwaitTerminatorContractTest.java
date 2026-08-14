@@ -9,6 +9,8 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import systems.zlink.TestSupport;
 import systems.zlink.contracts.core.Context;
@@ -22,10 +24,10 @@ import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.RouterSocket;
 
-/** Covers {@link systems.zlink.contracts.messaging.TimeoutSubmitOperation#await()}. */
+/** Covers the canonical {@code CompletionStage} request terminal. */
 class AwaitTerminatorContractTest {
     @Test
-    void awaitBlocksUntilTheReplyArrives() throws Exception {
+    void completionStageCompletesWhenTheReplyArrives() throws Exception {
         TestSupport.assumeNative();
 
         try (Context ctx = Zlink.createContext();
@@ -49,7 +51,9 @@ class AwaitTerminatorContractTest {
                 reply = client.request()
                     .message(request)
                     .timeout(Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS))
-                    .await();
+                    .submit()
+                    .toCompletableFuture()
+                    .get(TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             }
             try {
                 assertEquals(1, reply.size());
@@ -61,7 +65,7 @@ class AwaitTerminatorContractTest {
     }
 
     @Test
-    void awaitRethrowsTheUnwrappedFailureInsteadOfCompletionException() {
+    void completionStagePreservesTheTypedRequestFailure() {
         TestSupport.assumeNative();
 
         try (Context ctx = Zlink.createContext();
@@ -77,14 +81,19 @@ class AwaitTerminatorContractTest {
             server.bind(endpoint);
             client.connect(endpoint);
 
-            ZlinkRequestException failure;
+            ExecutionException completion;
             try (Message request = Message.from("ping")) {
-                failure = assertThrows(ZlinkRequestException.class, () ->
+                completion = assertThrows(ExecutionException.class, () ->
                     client.request()
                         .message(request)
                         .timeout(Duration.ofMillis(200))
-                        .await());
+                        .submit()
+                        .toCompletableFuture()
+                        .get(TestSupport.DEFAULT_TIMEOUT_MS,
+                            TimeUnit.MILLISECONDS));
             }
+            ZlinkRequestException failure =
+                (ZlinkRequestException) completion.getCause();
             assertEquals(RequestResult.TIMED_OUT, failure.getResult());
             // The runtime settles pending request bookkeeping shortly after
             // the timeout fires; closing immediately can race that cleanup.

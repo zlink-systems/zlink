@@ -1,6 +1,8 @@
 //! Contract tests – verify FFI/native call mapping, type conversions,
 //! and resource lifecycle.
 
+mod test_support;
+
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -192,7 +194,25 @@ fn routing_id_max_length() {
 #[test]
 fn version_returns_valid_triple() {
     let (major, minor, patch) = version();
-    assert_eq!((major, minor, patch), (0, 11, 0));
+    let mut package_version = env!("CARGO_PKG_VERSION").split('.');
+    let expected = (
+        package_version
+            .next()
+            .expect("crate version must contain a major component")
+            .parse::<i32>()
+            .expect("crate major version must be numeric"),
+        package_version
+            .next()
+            .expect("crate version must contain a minor component")
+            .parse::<i32>()
+            .expect("crate minor version must be numeric"),
+        package_version
+            .next()
+            .expect("crate version must contain a patch component")
+            .parse::<i32>()
+            .expect("crate patch version must be numeric"),
+    );
+    assert_eq!((major, minor, patch), expected);
 }
 
 #[test]
@@ -264,11 +284,13 @@ fn request_router_exposes_request_sequence() {
         .connect("inproc://rust-request-reply-data")
         .unwrap();
 
-    dealer_socket
-        .send()
-        .message(Message::try_from(b"plain-data").unwrap())
-        .submit()
-        .unwrap();
+    test_support::block_on(
+        dealer_socket
+            .send()
+            .message(Message::try_from(b"plain-data").unwrap())
+            .submit(),
+    )
+    .unwrap();
 
     let mut received = Received::empty();
     router_socket.recv(&mut received, RecvFlags::NONE).unwrap();

@@ -40,6 +40,12 @@ public interface ISocket : IZlinkSocket, IDisposable, IAsyncDisposable
     ISocketMonitor MonitorOpen(SocketEvent events = SocketEvent.All);
 
     /// <summary>
+    ///     Opens a monitor with an exact queue HWM in bytes. A value of zero
+    ///     selects the Core default.
+    /// </summary>
+    ISocketMonitor MonitorOpen(SocketEvent events, ulong monitorHwmBytes);
+
+    /// <summary>
     ///     Configures this socket as a TLS server. Apply before binding.
     /// </summary>
     /// <param name="certPath">Path to the server certificate (PEM).</param>

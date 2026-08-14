@@ -16,6 +16,7 @@ static inline int zlink_stream_packet_handler_go_local(void *s, uintptr_t userda
 import "C"
 
 import (
+	"context"
 	"runtime/cgo"
 	"time"
 	"unsafe"
@@ -124,7 +125,7 @@ func (s *SubSocket) TopicsCount() (int, error) {
 }
 
 type DealerSocket struct {
-	*directSocket
+	*connectionSocket
 }
 
 func newDealerSocket(ctx *Context) (*DealerSocket, error) {
@@ -132,9 +133,12 @@ func newDealerSocket(ctx *Context) (*DealerSocket, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &DealerSocket{
-		directSocket: &directSocket{connectionSocket: &connectionSocket{socketCore: core}},
-	}, nil
+	connection := &connectionSocket{socketCore: core}
+	if _, err := newRoutedAdmission(core, routedDealer); err != nil {
+		_ = core.Close()
+		return nil, err
+	}
+	return &DealerSocket{connectionSocket: connection}, nil
 }
 
 func (s *DealerSocket) SetRoutingID(id RoutingID) error {
@@ -177,24 +181,15 @@ func (s *DealerSocket) SetRequestTimeout(value time.Duration) error {
 	return configErrorFromResult(C.zlink_set_dealer_option(s.raw(), C.ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS, unsafe.Pointer(&raw), C.size_t(C.sizeof_int)))
 }
 
-func (s *DealerSocket) Send() SendOp {
-	return newSendBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
-		return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-			return submitErrorFromResult(C.zlink_send_part(s.raw(), part, C.zlink_send_flags_t(flags), partFlag))
-		})
+func (s *DealerSocket) Send() RoutedSendOp {
+	return newRoutedSendBuilder(func(ctx context.Context, parts []sendBuilderPart) <-chan error {
+		return submitRoutedSend(ctx, s.routedAdmission, nil, parts)
 	})
 }
 
 func (s *DealerSocket) Request() RequestOp {
-	return newRequestBuilder(func(parts []requestBuilderPart, flags SendFlags, timeout time.Duration, callback RequestReplyCallback) error {
-		if callback == nil {
-			return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
-		}
-		_, err := startDealerRequest(s, flags, timeout, parts, callback)
-		if err != nil {
-			return err
-		}
-		return nil
+	return newRequestBuilder(func(ctx context.Context, parts []requestBuilderPart, timeout time.Duration) <-chan RequestReplyCompletion {
+		return submitRoutedRequest(ctx, s.routedAdmission, nil, timeout, parts)
 	})
 }
 
@@ -207,8 +202,13 @@ func newRouterSocket(ctx *Context) (*RouterSocket, error) {
 	if err != nil {
 		return nil, err
 	}
+	connection := &connectionSocket{socketCore: core}
+	if _, err := newRoutedAdmission(core, routedRouter); err != nil {
+		_ = core.Close()
+		return nil, err
+	}
 	return &RouterSocket{
-		routedSocket: &routedSocket{connectionSocket: &connectionSocket{socketCore: core}},
+		routedSocket: &routedSocket{connectionSocket: connection},
 	}, nil
 }
 
@@ -436,6 +436,22 @@ func (s *StreamSocket) SendTo(target RoutingID) SendOp {
 // Received value across recv calls.
 func (s *StreamSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 	ok, err := (&directSocket{connectionSocket: s.core.connectionSocket}).Recv(out, flags)
+	if err != nil || !ok {
+		return ok, err
+	}
+	if out.routingID.Size() > 0 {
+		routingID := out.routingID
+		out.send = func(sendFlags SendFlags, builderParts []sendBuilderPart) (bool, error) {
+			return s.core.submitToBuilder(routingID, sendFlags, builderParts)
+		}
+	}
+	return true, nil
+}
+
+// RecvRetained preserves STREAM source metadata while retaining Core receive
+// credit for the lifetime of the aggregate result.
+func (s *StreamSocket) RecvRetained(out *Received, flags RecvFlags) (bool, error) {
+	ok, err := (&directSocket{connectionSocket: s.core.connectionSocket}).RecvRetained(out, flags)
 	if err != nil || !ok {
 		return ok, err
 	}

@@ -26,6 +26,17 @@ const REQUIRED_PART_SYMBOLS: &[&str] = &[
     "zlink_router_reply_part",
     "zlink_send_part_rid",
     "zlink_xpub_recv_part",
+    "zlink_recv_part_with_hwm_budget_lease",
+    "zlink_dealer_recv_part_with_hwm_budget_lease",
+    "zlink_router_recv_part_v2_with_hwm_budget_lease",
+    "zlink_subscribe_part_with_hwm_budget_lease",
+    "zlink_hwm_budget_lease_release",
+    "zlink_routed_send_ready_handler",
+    "zlink_select_routed_submit_target",
+    "zlink_send_part_transport_pair",
+    "zlink_dealer_send_transport_pair_part",
+    "zlink_router_request_transport_pair_part",
+    "zlink_dealer_request_transport_pair_part",
 ];
 
 fn source_files(root: &Path) -> Vec<PathBuf> {
@@ -122,6 +133,21 @@ fn binding_does_not_duplicate_core_completion_progress() {
     assert!(!all.contains("RequestProgressGuard"));
     assert!(!all.contains("ProgressWorker"));
     assert!(!all.contains("zlink-rust-progress"));
+}
+
+#[test]
+fn routed_async_uses_the_existing_exact_part_contract() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let all = source_files(&root)
+        .iter()
+        .map(|path| fs::read_to_string(path).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(!all.contains("zlink_routed_send_parts"));
+    assert!(!all.contains("zlink_routed_request_parts"));
+    assert!(!all.contains("submit_async"));
+    assert!(!all.contains("RequestCallback"));
 }
 
 #[test]

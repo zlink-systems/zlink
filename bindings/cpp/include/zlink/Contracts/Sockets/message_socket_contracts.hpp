@@ -45,6 +45,10 @@ class pair_socket_t : public message_socket_t
     // Returns 0 on success, a recv_result_t value on receive failure or no data, and -1 only for binding-local failure with errno set.
     int recv (received_t &out_, recv_flags_t flags_ = recv_flags_t::none);
 
+    /// Retains the origin Core HWM credit in @p out_ until its last copy closes.
+    int recv_retained (received_t &out_,
+                       recv_flags_t flags_ = recv_flags_t::none);
+
     int recv (message_t &part_out_, recv_flags_t flags_ = recv_flags_t::none);
 
     void set_send_ready_handler (std::function<void ()> handler_)
@@ -67,11 +71,15 @@ class dealer_socket_t : public message_socket_t
   public:
     explicit dealer_socket_t (context_t &ctx_);
 
-    send_operation_t send ();
+    routed_send_operation_t send ();
 
     // Receive one message into a caller-provided received_t.
     // Returns 0 on success, a recv_result_t value on receive failure or no data, and -1 only for binding-local failure with errno set.
     int recv (received_t &out_, recv_flags_t flags_ = recv_flags_t::none);
+
+    /// Retains the origin Core HWM credit in @p out_ until its last copy closes.
+    int recv_retained (received_t &out_,
+                       recv_flags_t flags_ = recv_flags_t::none);
 
     int recv (message_t &part_out_, recv_flags_t flags_ = recv_flags_t::none);
 

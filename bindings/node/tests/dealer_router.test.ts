@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const zlink = require('@zlink-systems/zlink');
 
-test('dealer/router uses routing id through Received and routed send', () => {
+test('dealer/router uses routing id through Received and routed send', async () => {
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
@@ -12,7 +12,7 @@ test('dealer/router uses routing id through Received and routed send', () => {
   router.bind('inproc://dealer-router-contract');
   dealer.connect('inproc://dealer-router-contract');
 
-  dealer.send().message('hello').submit();
+  await dealer.send().message('hello').submit();
   const request = new zlink.Received();
   router.recv(request);
 
@@ -24,7 +24,7 @@ test('dealer/router uses routing id through Received and routed send', () => {
   assert.notEqual(request.parts[0].getProperty('Routing-Id'), null);
   assert.equal(request.parts[0].getProperty('Routing-Id'), request.parts[0].getProperty('Identity'));
 
-  router.send(request.routingId).message('world').submit();
+  await router.send(request.routingId).message('world').submit();
 
   const response = new zlink.Received();
   dealer.recv(response);
@@ -38,7 +38,7 @@ test('dealer/router uses routing id through Received and routed send', () => {
   ctx.close();
 });
 
-test('router recv fills caller-provided Received with routing metadata', () => {
+test('router recv fills caller-provided Received with routing metadata', async () => {
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
@@ -46,7 +46,7 @@ test('router recv fills caller-provided Received with routing metadata', () => {
   router.bind('inproc://dealer-router-recv-payload-into');
   dealer.connect('inproc://dealer-router-recv-payload-into');
 
-  dealer.send().message(Buffer.from('payload')).submit();
+  await dealer.send().message(Buffer.from('payload')).submit();
 
   const received = new zlink.Received();
   assert.equal(router.recv(received), true);
@@ -59,7 +59,7 @@ test('router recv fills caller-provided Received with routing metadata', () => {
   ctx.close();
 });
 
-test('router forwards an unread received Message from managed storage', () => {
+test('router forwards an unread received Message from managed storage', async () => {
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
@@ -67,14 +67,14 @@ test('router forwards an unread received Message from managed storage', () => {
   router.bind('inproc://dealer-router-managed-forward');
   dealer.connect('inproc://dealer-router-managed-forward');
 
-  dealer.send().message(Buffer.alloc(4096, 0x61)).submit();
+  await dealer.send().message(Buffer.alloc(4096, 0x61)).submit();
   const received = new zlink.Received();
   assert.equal(router.recv(received), true);
   assert.ok(received.routingId);
 
   // Forward the JS-owned receive Buffer without reading it first. Submit
   // materializes the Core frame while preserving the public move contract.
-  router.send(received.routingId).message(received.singlePartOrThrow()).submit();
+  await router.send(received.routingId).message(received.singlePartOrThrow()).submit();
   assert.equal(received.singlePartOrThrow().size(), 0);
 
   const echoed = new zlink.Received();
@@ -139,7 +139,7 @@ test('router nonblocking recv returns false without data', () => {
   ctx.close();
 });
 
-test('router nonblocking recv preserves order and multipart ownership', () => {
+test('router nonblocking recv preserves order and multipart ownership', async () => {
   const ctx = zlink.createContext();
   const router = zlink.createRouterSocket(ctx);
   const dealer = zlink.createDealerSocket(ctx);
@@ -148,7 +148,7 @@ test('router nonblocking recv preserves order and multipart ownership', () => {
   dealer.connect('inproc://dealer-router-recv-order');
 
   for (let index = 0; index < 80; index += 1) {
-    dealer.send()
+    await dealer.send()
       .message(Buffer.from(`header-${index}`))
       .message(Buffer.from(`payload-${index}`))
       .submit();

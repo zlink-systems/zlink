@@ -5,7 +5,7 @@ use crate::{
     BindError, CommonSocketOptions, ConfigError, ConnectError, HandlerError, Received, RecvError,
     RecvFlags, RouterSocketOptions,
 };
-use crate::{Empty, ReplyOp, RequestOp, RoutingId, SendOp};
+use crate::{Empty, ReplyOp, RequestOp, RoutedSendOp, RoutingId};
 
 /// ROUTER socket: routes messages to peers addressed by routing id, the
 /// server side of asynchronous request/reply.
@@ -20,8 +20,15 @@ impl RouterSocket {
     /// Begins a multipart send addressed to `target`: add parts on the returned
     /// builder, then submit. A part is consumed on a successful submit (see
     /// [`SendOp`]).
-    pub fn send(&self, target: &RoutingId) -> SendOp<Empty> {
-        crate::operations::socket_send_to_op(crate::socket::router_inner(self).handle, *target)
+    pub fn send(&self, target: &RoutingId) -> RoutedSendOp<Empty> {
+        crate::operations::socket_routed_send_op(
+            crate::socket::router_inner(self)
+                .routed_admission
+                .as_ref()
+                .expect("ROUTER routed admission")
+                .clone(),
+            *target,
+        )
     }
 
     /// Receives a routed message into caller-provided `out` storage.
@@ -29,20 +36,57 @@ impl RouterSocket {
     /// Returns `Ok(true)` on success and `Ok(false)` when
     /// [`RecvFlags::DONT_WAIT`] is set and no message is available.
     pub fn recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
-        crate::socket::recv_router_once(crate::socket::router_inner(self).handle, flags.bits(), out)
+        let inner = crate::socket::router_inner(self);
+        crate::socket::recv_router_once(
+            inner.handle,
+            inner
+                .routed_admission
+                .as_ref()
+                .expect("ROUTER routed admission")
+                .clone(),
+            flags.bits(),
+            out,
+        )
+    }
+
+    /// Receives while retaining each physical part's Core HWM credit in
+    /// `out`. Reusing, closing, consuming, or dropping `out` releases it.
+    pub fn recv_retained(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
+        let inner = crate::socket::router_inner(self);
+        crate::socket::recv_router_retained_once(
+            inner.handle,
+            inner
+                .routed_admission
+                .as_ref()
+                .expect("ROUTER routed admission")
+                .clone(),
+            flags.bits(),
+            out,
+        )
     }
 
     /// Begins a request addressed to peer `peer_rid`: add parts, then submit and
     /// await a reply. Parts are consumed on a successful submit (see [`SendOp`]).
     pub fn request(&self, peer_rid: &RoutingId) -> RequestOp<Empty> {
-        crate::operations::router_request_op(crate::socket::router_inner(self).handle, *peer_rid)
+        crate::operations::router_request_op(
+            crate::socket::router_inner(self)
+                .routed_admission
+                .as_ref()
+                .expect("ROUTER routed admission")
+                .clone(),
+            *peer_rid,
+        )
     }
 
     /// Begins a reply to the request `request_seq` from peer `rid`: add parts,
     /// then submit. Parts are consumed on a successful submit (see [`SendOp`]).
     pub fn reply(&self, rid: &RoutingId, request_seq: u64) -> ReplyOp<Empty> {
         crate::operations::router_reply_op(
-            crate::socket::router_inner(self).handle,
+            crate::socket::router_inner(self)
+                .routed_admission
+                .as_ref()
+                .expect("ROUTER routed admission")
+                .clone(),
             *rid,
             request_seq,
         )

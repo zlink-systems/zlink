@@ -38,7 +38,8 @@ public class ReceivedContractTest {
             dealer.send()
                 .message(Message.from("part-1"))
                 .message(Message.from("part-2"))
-                .submit();
+                .submit()
+                .toCompletableFuture().join();
 
             try (systems.zlink.contracts.messaging.Received inbound = new systems.zlink.contracts.messaging.Received()) {
 

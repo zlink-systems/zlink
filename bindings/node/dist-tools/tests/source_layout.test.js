@@ -67,7 +67,22 @@ function forbiddenPackageExports(exportsValue) {
     const packageJson = JSON.parse(node_fs_1.default.readFileSync(node_path_1.default.resolve(__dirname, '../../package.json'), 'utf8'));
     strict_1.default.deepEqual(forbiddenPackageExports(packageJson.exports), []);
 });
-(0, node_test_1.default)('bindings samples stay on the Core 0.11.0 raw socket boundary', () => {
+(0, node_test_1.default)('managed routed admission uses only exact per-part Core APIs', () => {
+    const nativeBridge = node_fs_1.default.readFileSync(node_path_1.default.resolve(__dirname, '../../native/src/addon_routed_admission.cc'), 'utf8');
+    for (const symbol of [
+        'zlink_routed_send_ready_handler',
+        'zlink_select_routed_submit_target',
+        'zlink_dealer_send_transport_pair_part',
+        'zlink_dealer_request_transport_pair_part',
+        'zlink_send_part_transport_pair',
+        'zlink_router_request_transport_pair_part'
+    ]) {
+        strict_1.default.ok(nativeBridge.includes(symbol), symbol);
+    }
+    strict_1.default.equal(nativeBridge.includes('zlink_routed_send_parts'), false);
+    strict_1.default.equal(nativeBridge.includes('zlink_routed_request_parts'), false);
+});
+(0, node_test_1.default)('bindings samples stay on the Core 0.11.1 raw socket boundary', () => {
     const sampleRoots = [
         node_path_1.default.resolve(__dirname, '../../samples'),
         node_path_1.default.resolve(__dirname, '../../../javascript/samples')

@@ -39,10 +39,16 @@ internal abstract class SocketBase : ISocket, ISocketOptionEndpoint
 
     public ISocketMonitor MonitorOpen(SocketEvent events = SocketEvent.All)
     {
+        return MonitorOpen(events, 0UL);
+    }
+
+    public ISocketMonitor MonitorOpen(SocketEvent events,
+        ulong monitorHwmBytes)
+    {
         EnumValidation.EnsureSocketEvents(events, nameof(events));
         try
         {
-            return Kernel.MonitorOpen(events);
+            return Kernel.MonitorOpen(events, monitorHwmBytes);
         }
         catch (ZlinkException ex)
         {

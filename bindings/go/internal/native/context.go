@@ -10,6 +10,7 @@ import "C"
 
 import (
 	"math"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,6 +44,33 @@ type ContextOptions struct {
 	ctx *Context
 }
 
+// CoreHwmBudgetSnapshot is an immutable value copy of Core's ABI-v1 budget snapshot.
+type CoreHwmBudgetSnapshot struct {
+	ABIVersion, StructSize                                                        uint32
+	BudgetGeneration, MeasurementEpoch                                            uint64
+	ConfiguredMemoryLimitBytes, RuntimeMemoryLimitBytes, ResolvedMemoryLimitBytes uint64
+	ConfiguredCoreBudgetBytes, EffectiveCoreBudgetBytes                           uint64
+	TotalPlannedHwmBytes, TotalAppliedHwmBytes, ManualReservedHwmBytes            uint64
+	CoreQueueAccountedBytes, ApplicationAccountedBytes                            uint64
+	CurrentAccountedBytes, ProvisionalAccountedBytes, PeakAccountedBytes          uint64
+	CompletionCurrentAccountedBytes, CompletionPeakAccountedBytes                 uint64
+	CompletionPendingMessageCount, TotalMessagingAccountedBytes                   uint64
+	MonitorQueueAppliedHwmBytes, MonitorQueueAccountedBytes                       uint64
+	TotalInstanceAppliedHwmBytes, TotalInstanceAccountedBytes                     uint64
+	OversizeAdmissionCount, LargestOversizeMessageBytes                           uint64
+	ActiveDirectionalQueueCount, ActiveCompletionDirectionalQueueCount            uint64
+	ActiveSendQueueCount, ActiveReceiveQueueCount                                 uint64
+	OutstandingApplicationLeaseCount, RetiredQueueCount                           uint64
+	DeferredOriginCreditBytes, UnlimitedManualQueueCount                          uint64
+	BlockedRatioPPM, Flags                                                        uint32
+	ReservedUint64                                                                [8]uint64
+}
+
+func (s CoreHwmBudgetSnapshot) BudgetPlanningActive() bool { return s.Flags&(1<<0) != 0 }
+func (s CoreHwmBudgetSnapshot) BudgetInsufficient() bool   { return s.Flags&(1<<1) != 0 }
+func (s CoreHwmBudgetSnapshot) AggregateHwmValid() bool    { return s.Flags&(1<<2) != 0 }
+func (s CoreHwmBudgetSnapshot) AggregateOverflow() bool    { return s.Flags&(1<<3) != 0 }
+
 type AutoHwmProfile int
 
 const (
@@ -71,6 +99,12 @@ func NewContext() (*Context, error) {
 	ctx := &Context{}
 	ctx.handle.Store((*byte)(handle))
 	ctx.options = &ContextOptions{ctx: ctx}
+	if limit := debug.SetMemoryLimit(-1); limit > 0 && limit < math.MaxInt64 {
+		if err := ctx.setUint64DataOption(C.ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES, uint64(limit)); err != nil {
+			_ = ctx.Close()
+			return nil, err
+		}
+	}
 	return ctx, nil
 }
 
@@ -112,6 +146,43 @@ func (c *Context) RecalculateAutoHwm() error {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
 	return configErrorFromResult(C.zlink_ctx_auto_hwm_recalculate(c.raw()))
+}
+
+func (c *Context) CoreHwmBudgetSnapshot() (CoreHwmBudgetSnapshot, error) {
+	if c == nil || c.closed.Load() || c.raw() == nil {
+		return CoreHwmBudgetSnapshot{}, &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
+	var raw C.zlink_auto_hwm_budget_snapshot_t
+	raw.abi_version = C.ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1
+	raw.struct_size = C.uint32_t(C.sizeof_zlink_auto_hwm_budget_snapshot_t)
+	if err := configErrorFromResult(C.zlink_ctx_get_auto_hwm_budget_snapshot(c.raw(), &raw)); err != nil {
+		return CoreHwmBudgetSnapshot{}, err
+	}
+	var reserved [8]uint64
+	for index := range reserved {
+		reserved[index] = uint64(raw.reserved_u64[index])
+	}
+	return CoreHwmBudgetSnapshot{
+		uint32(raw.abi_version), uint32(raw.struct_size), uint64(raw.budget_generation), uint64(raw.measurement_epoch),
+		uint64(raw.configured_memory_limit_bytes), uint64(raw.runtime_memory_limit_bytes), uint64(raw.resolved_memory_limit_bytes),
+		uint64(raw.configured_core_budget_bytes), uint64(raw.effective_core_budget_bytes), uint64(raw.total_planned_hwm_bytes),
+		uint64(raw.total_applied_hwm_bytes), uint64(raw.manual_reserved_hwm_bytes), uint64(raw.core_queue_accounted_bytes),
+		uint64(raw.application_accounted_bytes), uint64(raw.current_accounted_bytes), uint64(raw.provisional_accounted_bytes),
+		uint64(raw.peak_accounted_bytes), uint64(raw.completion_current_accounted_bytes), uint64(raw.completion_peak_accounted_bytes),
+		uint64(raw.completion_pending_message_count), uint64(raw.total_messaging_accounted_bytes), uint64(raw.monitor_queue_applied_hwm_bytes),
+		uint64(raw.monitor_queue_accounted_bytes), uint64(raw.total_instance_applied_hwm_bytes), uint64(raw.total_instance_accounted_bytes),
+		uint64(raw.oversize_admission_count), uint64(raw.largest_oversize_message_bytes), uint64(raw.active_directional_queue_count),
+		uint64(raw.active_completion_directional_queue_count), uint64(raw.active_send_queue_count), uint64(raw.active_receive_queue_count),
+		uint64(raw.outstanding_application_lease_count), uint64(raw.retired_queue_count), uint64(raw.deferred_origin_credit_bytes),
+		uint64(raw.unlimited_manual_queue_count), uint32(raw.blocked_ratio_ppm), uint32(raw.flags), reserved,
+	}, nil
+}
+
+func (c *Context) ResetCoreHwmBudgetMetrics() error {
+	if c == nil || c.closed.Load() || c.raw() == nil {
+		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
+	return configErrorFromResult(C.zlink_ctx_reset_auto_hwm_budget_metrics(c.raw()))
 }
 
 func (c *Context) Options() *ContextOptions {
@@ -331,7 +402,7 @@ func (o *ContextOptions) Blocky() (bool, error) {
 	return value != 0, err
 }
 
-func (o *ContextOptions) SetAutoHwmProfile(value AutoHwmProfile) error {
+func (o *ContextOptions) SetCoreHwmProfile(value AutoHwmProfile) error {
 	ctx, err := o.context()
 	if err != nil {
 		return err
@@ -339,7 +410,7 @@ func (o *ContextOptions) SetAutoHwmProfile(value AutoHwmProfile) error {
 	return ctx.setIntOption(C.ZLINK_CTX_OPT_AUTO_HWM_PROFILE, int(value))
 }
 
-func (o *ContextOptions) AutoHwmProfile() (AutoHwmProfile, error) {
+func (o *ContextOptions) CoreHwmProfile() (AutoHwmProfile, error) {
 	ctx, err := o.context()
 	if err != nil {
 		return 0, err
@@ -348,30 +419,36 @@ func (o *ContextOptions) AutoHwmProfile() (AutoHwmProfile, error) {
 	return AutoHwmProfile(value), err
 }
 
-func (o *ContextOptions) SetAutoHwmMsgUnitBytes(value int) error {
+func (o *ContextOptions) SetCoreHwmMemoryLimitBytes(value uint64) error {
 	ctx, err := o.context()
 	if err != nil {
 		return err
 	}
-	if value < 0 {
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
-	}
-	return ctx.setUint64DataOption(C.ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES, uint64(value))
+	return ctx.setUint64DataOption(C.ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES, value)
 }
 
-func (o *ContextOptions) AutoHwmMsgUnitBytes() (int, error) {
+func (o *ContextOptions) CoreHwmMemoryLimitBytes() (uint64, error) {
 	ctx, err := o.context()
 	if err != nil {
 		return 0, err
 	}
-	value, err := ctx.getUint64DataOption(C.ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES)
+	return ctx.getUint64DataOption(C.ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES)
+}
+
+func (o *ContextOptions) SetCoreHwmBudgetBytes(value uint64) error {
+	ctx, err := o.context()
+	if err != nil {
+		return err
+	}
+	return ctx.setUint64DataOption(C.ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES, value)
+}
+
+func (o *ContextOptions) CoreHwmBudgetBytes() (uint64, error) {
+	ctx, err := o.context()
 	if err != nil {
 		return 0, err
 	}
-	if value > uint64(math.MaxInt) {
-		return 0, &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EOVERFLOW)}
-	}
-	return int(value), nil
+	return ctx.getUint64DataOption(C.ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES)
 }
 
 func (o *ContextOptions) context() (*Context, error) {

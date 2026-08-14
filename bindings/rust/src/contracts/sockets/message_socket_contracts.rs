@@ -5,7 +5,7 @@ use crate::{
     BindError, CommonSocketOptions, ConfigError, ConnectError, DealerSocketOptions, HandlerError,
     Received, RecvError, RecvFlags,
 };
-use crate::{Empty, RequestOp, RoutingId, SendOp};
+use crate::{Empty, RequestOp, RoutedSendOp, RoutingId, SendOp};
 
 /// PAIR socket, a bidirectional one-to-one messaging socket.
 pub struct PairSocket {
@@ -37,6 +37,12 @@ impl PairSocket {
     /// [`RecvFlags::DONT_WAIT`] is set and no message is available.
     pub fn recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
         crate::socket::pair_inner(self).recv(out, flags)
+    }
+
+    /// Receives while retaining each physical part's Core HWM credit in
+    /// `out`. Reusing, closing, consuming, or dropping `out` releases it.
+    pub fn recv_retained(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
+        crate::socket::pair_inner(self).recv_retained(out, flags)
     }
 
     /// Registers a callback invoked when the socket can accept more sends after
@@ -154,8 +160,14 @@ impl PairSocket {
 impl DealerSocket {
     /// Begins a multipart send: add parts on the returned builder, then submit.
     /// A part is consumed on a successful submit (see [`SendOp`]).
-    pub fn send(&self) -> SendOp<Empty> {
-        crate::operations::socket_send_op(crate::socket::dealer_inner(self).handle)
+    pub fn send(&self) -> RoutedSendOp<Empty> {
+        crate::operations::dealer_routed_send_op(
+            crate::socket::dealer_inner(self)
+                .routed_admission
+                .as_ref()
+                .expect("DEALER routed admission")
+                .clone(),
+        )
     }
 
     /// Receives a message into caller-provided `out` storage.
@@ -166,11 +178,23 @@ impl DealerSocket {
         crate::socket::dealer_inner(self).recv(out, flags)
     }
 
+    /// Receives while retaining each physical part's Core HWM credit in
+    /// `out`. Reusing, closing, consuming, or dropping `out` releases it.
+    pub fn recv_retained(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
+        crate::socket::dealer_inner(self).recv_dealer_retained(out, flags)
+    }
+
     /// Begins a request: add parts on the returned builder, then submit and
     /// await a reply. Parts are consumed on a successful submit (see
     /// [`SendOp`]).
     pub fn request(&self) -> RequestOp<Empty> {
-        crate::operations::dealer_request_op(crate::socket::dealer_inner(self).handle)
+        crate::operations::dealer_request_op(
+            crate::socket::dealer_inner(self)
+                .routed_admission
+                .as_ref()
+                .expect("DEALER routed admission")
+                .clone(),
+        )
     }
 
     /// Registers a callback invoked when the socket can accept more sends after

@@ -57,7 +57,8 @@ internal sealed class MessageSocketSendOperation : SendOperation,
     }
 }
 
-internal sealed class PublisherSendOperation : SendOperation, SendSubmitOperation
+internal sealed class PublisherTrySendOperation : SendOperation,
+    SendSubmitOperation
 {
     private readonly PublisherSocketBase _socket;
     private readonly string _topic;
@@ -65,7 +66,8 @@ internal sealed class PublisherSendOperation : SendOperation, SendSubmitOperatio
     private OperationMessageBuffer _parts;
     private OperationSubmissionGuard _submission;
 
-    internal PublisherSendOperation(PublisherSocketBase socket, string topic)
+    internal PublisherTrySendOperation(PublisherSocketBase socket,
+        string topic)
     {
         _socket = socket;
         _topic = topic;
@@ -92,9 +94,10 @@ internal sealed class PublisherSendOperation : SendOperation, SendSubmitOperatio
     {
         EnsureReady();
         _submission.MarkSubmittedAfterValidation();
+        var flags = _flags | SendFlags.DontWait;
         return _parts.IsSingle
-            ? _socket.PublishCore(_topic, _parts.Single, _flags)
-            : _socket.PublishCore(_topic, _parts.Parts, _flags);
+            ? _socket.PublishCore(_topic, _parts.Single, flags)
+            : _socket.PublishCore(_topic, _parts.Parts, flags);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -111,7 +114,47 @@ internal sealed class PublisherSendOperation : SendOperation, SendSubmitOperatio
     }
 }
 
-internal sealed class RoutedSendOperation : SendOperation, SendSubmitOperation
+internal sealed class PublisherAsyncSendOperation : AsyncSendOperation,
+    AsyncSendSubmitOperation
+{
+    private readonly PublisherSocketBase _socket;
+    private readonly string _topic;
+    private OperationMessageBuffer _parts;
+    private OperationSubmissionGuard _submission;
+
+    internal PublisherAsyncSendOperation(PublisherSocketBase socket,
+        string topic)
+    {
+        _socket = socket;
+        _topic = topic;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public AsyncSendSubmitOperation Message(Message message)
+    {
+        EnsureNotSubmitted();
+        _parts.Add(message);
+        return this;
+    }
+
+    public Task Async(CancellationToken ct = default)
+    {
+        EnsureNotSubmitted();
+        _parts.EnsureNotEmpty();
+        _submission.MarkSubmittedAfterValidation();
+        return _socket.Kernel.PublisherAdmission.PublishAsync(_topic,
+            _parts.Parts, ct);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EnsureNotSubmitted()
+    {
+        _submission.EnsureNotSubmitted();
+    }
+}
+
+internal sealed class StreamSendOperation : SendOperation,
+    SendSubmitOperation
 {
     private readonly RoutingId _routingId;
     private readonly RoutedMessageSocketBase _socket;
@@ -119,7 +162,7 @@ internal sealed class RoutedSendOperation : SendOperation, SendSubmitOperation
     private OperationMessageBuffer _parts;
     private OperationSubmissionGuard _submission;
 
-    internal RoutedSendOperation(RoutedMessageSocketBase socket,
+    internal StreamSendOperation(RoutedMessageSocketBase socket,
         RoutingId routingId)
     {
         _socket = socket;
@@ -158,6 +201,57 @@ internal sealed class RoutedSendOperation : SendOperation, SendSubmitOperation
         _parts.EnsureNotEmpty();
     }
 
+    private void EnsureNotSubmitted()
+    {
+        _submission.EnsureNotSubmitted();
+    }
+}
+
+internal sealed class RoutedAsyncSendOperation : RoutedSendOperation,
+    RoutedSendSubmitOperation
+{
+    private readonly RoutingId? _routingId;
+    private readonly SocketBase _socket;
+    private OperationMessageBuffer _parts;
+    private OperationSubmissionGuard _submission;
+
+    internal RoutedAsyncSendOperation(DealerSocket socket)
+    {
+        _socket = socket;
+    }
+
+    internal RoutedAsyncSendOperation(RouterSocket socket,
+        RoutingId routingId)
+    {
+        _socket = socket;
+        _routingId = routingId;
+    }
+
+    internal RoutedAsyncSendOperation(StreamSocket socket,
+        RoutingId routingId)
+    {
+        _socket = socket;
+        _routingId = routingId;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public RoutedSendSubmitOperation Message(Message message)
+    {
+        EnsureNotSubmitted();
+        _parts.Add(message);
+        return this;
+    }
+
+    public Task Async(CancellationToken ct = default)
+    {
+        EnsureNotSubmitted();
+        _parts.EnsureNotEmpty();
+        _submission.MarkSubmittedAfterValidation();
+        return _socket.Kernel.RoutedAdmission.SendAsync(_routingId,
+            _parts.Parts, ct);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureNotSubmitted()
     {
         _submission.EnsureNotSubmitted();

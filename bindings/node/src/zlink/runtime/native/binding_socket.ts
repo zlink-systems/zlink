@@ -2,25 +2,55 @@
 
 import type {
   NativeHandle,
-  NativeCompletionControlHandler,
   NativeReceivedRaw,
-  NativeRequestCallback,
   NativeTopicMessageRaw,
   SubscriptionEntry
 } from './binding_types';
 
+interface NativeRoutedAttemptResult {
+  result: number;
+  nativeErrno: number;
+}
+
+interface NativeRoutedTargetResult extends NativeRoutedAttemptResult {
+  peerRid?: Buffer;
+  transportPairId?: bigint;
+  transportPairGeneration?: bigint;
+}
+
+interface NativeRoutedReadyEvent {
+  peerRid: Buffer;
+  transportPairId: bigint;
+  transportPairGeneration: bigint;
+  state: number;
+  terminalErrno: number;
+}
+
 export interface SocketNativeBinding {
-  dealerRequest: (
+  dealerRoutedSendAttempt: (
     socket: NativeHandle,
-    parts: unknown,
+    peerRid: Buffer,
+    transportPairId: bigint,
+    transportPairGeneration: bigint,
+    parts: readonly Buffer[]
+  ) => NativeRoutedAttemptResult;
+  dealerRoutedRequestAttempt: (
+    socket: NativeHandle,
+    peerRid: Buffer,
+    transportPairId: bigint,
+    transportPairGeneration: bigint,
+    parts: readonly Buffer[],
     token: bigint,
-    flags: number,
     timeoutMs: number
-  ) => void;
+  ) => NativeRoutedAttemptResult;
   socketRequestCompletionHandler: (socket: NativeHandle, handler: unknown) => void;
   handleGetRoutingId: (handle: NativeHandle) => Buffer;
   handleSetRoutingId: (handle: NativeHandle, routingId: Buffer) => void;
-  monitorOpen: (socket: NativeHandle, eventMask: number) => NativeHandle;
+  monitorOpen: (
+    socket: NativeHandle,
+    eventMask: number,
+    monitorHwmBytes: bigint
+  ) => NativeHandle;
   routerRecvMessage: (
     socket: NativeHandle,
     flags: number,
@@ -32,46 +62,37 @@ export interface SocketNativeBinding {
     preferManagedSinglePart?: boolean,
     cachedRoutingId?: Buffer | null
   ) => NativeReceivedRaw | null;
+  routerRecvMessageRetained: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
+  routerRecvMessageRetainedNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
   routerReply: (
     socket: NativeHandle,
     peerRid: Buffer,
     requestSeq: bigint,
     parts: unknown
   ) => void;
-  routerCompletionControlHandler: (
-    socket: NativeHandle,
-    handler: NativeCompletionControlHandler
-  ) => void;
-  routerTrySendCompletionControl: (
-    socket: NativeHandle,
-    peerRid: Buffer,
-    parts: unknown
-  ) => boolean;
-  routerTrySendCompletionControlTransportPair: (
+  routerRoutedSendAttempt: (
     socket: NativeHandle,
     peerRid: Buffer,
     transportPairId: bigint,
     transportPairGeneration: bigint,
-    parts: unknown
-  ) => boolean;
-  routerRequest: (
-    socket: NativeHandle,
-    peerRid: Buffer,
-    parts: unknown,
-    token: bigint,
-    flags: number,
-    timeoutMs: number
-  ) => void;
-  routerRequestTransportPair: (
+    parts: readonly Buffer[]
+  ) => NativeRoutedAttemptResult;
+  streamRoutedSendAttempt: (
     socket: NativeHandle,
     peerRid: Buffer,
     transportPairId: bigint,
     transportPairGeneration: bigint,
-    parts: unknown,
+    parts: readonly Buffer[]
+  ) => NativeRoutedAttemptResult;
+  routerRoutedRequestAttempt: (
+    socket: NativeHandle,
+    peerRid: Buffer,
+    transportPairId: bigint,
+    transportPairGeneration: bigint,
+    parts: readonly Buffer[],
     token: bigint,
-    flags: number,
     timeoutMs: number
-  ) => void;
+  ) => NativeRoutedAttemptResult;
   routerSendTransportPair: (
     socket: NativeHandle,
     peerRid: Buffer,
@@ -100,6 +121,11 @@ export interface SocketNativeBinding {
   ) => number;
   socketRecvMessage: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
   socketRecvMessageNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
+  socketRecvMessageRetained: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
+  socketRecvMessageRetainedNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
+  dealerRecvMessageRetained: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
+  dealerRecvMessageRetainedNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
+  hwmBudgetLeaseRelease: (owner: unknown) => void;
   socketSend: (socket: NativeHandle, payload: unknown, flags: number) => void;
   socketSendNoWaitResult: (socket: NativeHandle, payload: unknown) => number;
   socketSendNoWaitResultParts: (
@@ -112,6 +138,16 @@ export interface SocketNativeBinding {
     flags: number
   ) => void;
   socketSendReadyHandler: (socket: NativeHandle, handler: unknown) => void;
+  socketRoutedSendReadyHandler: (
+    socket: NativeHandle,
+    handler: (event: NativeRoutedReadyEvent) => void
+  ) => void;
+  socketRoutedAdmissionClose: (socket: NativeHandle) => void;
+  socketRoutedAdmissionBeginClose: (socket: NativeHandle) => void;
+  socketSelectRoutedSubmitTarget: (
+    socket: NativeHandle,
+    routerRid: Buffer | null
+  ) => NativeRoutedTargetResult;
   socketSendRouting: (
     socket: NativeHandle,
     routingId: Buffer,
@@ -169,6 +205,10 @@ export interface SocketNativeBinding {
     socket: NativeHandle,
     flags: number
   ) => NativeTopicMessageRaw | null;
+  socketSubscribeMessageRetained: (
+    socket: NativeHandle,
+    flags: number
+  ) => NativeTopicMessageRaw | null;
   socketSubscriptionEvent: (
     socket: NativeHandle,
     flags: number
@@ -179,6 +219,7 @@ export interface SocketNativeBinding {
     payload: unknown
   ) => number;
   socketTrySubscribeMessage: (socket: NativeHandle) => NativeTopicMessageRaw | null;
+  socketTrySubscribeMessageRetained: (socket: NativeHandle) => NativeTopicMessageRaw | null;
   socketTrySubscriptionEvent: (
     socket: NativeHandle
   ) => { routingId?: Buffer | null; topic: string; subscribed: boolean } | null;

@@ -15,21 +15,12 @@ public sealed partial class MonitorStatus
         DetailFlags = (MonitorStatusDetailFlags)native.DetailFlags;
         SndPendingMsgs = native.SndPendingMsgs;
         RcvPendingMsgs = native.RcvPendingMsgs;
+        SndPendingBytes = native.SndPendingBytes;
+        RcvPendingBytes = native.RcvPendingBytes;
         AutoHwmEnabled = native.AutoHwmEnabled != 0;
         AutoHwmProfile = (AutoHwmProfile)native.AutoHwmProfile;
         AutoHwmRole = native.AutoHwmRole;
         AutoHwmPolicyClass = native.AutoHwmPolicyClass;
-        AutoHwmUnitBudgetBytes = native.AutoHwmUnitBudgetBytes;
-        AutoHwmSizeCap = native.AutoHwmSizeCap;
-        AutoHwmSocketMessageSlots = native.AutoHwmSocketMessageSlots;
-        AutoHwmConnectionBucketEnabled =
-            native.AutoHwmConnectionBucketEnabled != 0;
-        AutoHwmConnectionBucketCount = native.AutoHwmConnectionBucketCount;
-        AutoHwmConnectionBucketIndex = native.AutoHwmConnectionBucketIndex;
-        AutoHwmConnectionBucketHwm4K = native.AutoHwmConnectionBucketHwm4K;
-        AutoHwmConnectionBucketHysteresisRetained =
-            native.AutoHwmConnectionBucketHysteresisRetained != 0;
-        AutoHwmEffectiveMessageBytes = native.AutoHwmEffectiveMessageBytes;
         AutoHwmPlannedSendHighWaterMarkBytes =
             native.AutoHwmPlannedSndHwmBytes;
         AutoHwmPlannedReceiveHighWaterMarkBytes =

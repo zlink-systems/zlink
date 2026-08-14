@@ -15,6 +15,7 @@
 #include <zlink/Contracts/Sockets/results.hpp>
 #include <zlink/Contracts/Messaging/operation_builder_base.hpp>
 #include "../Core/routing_id_access.hpp"
+#include "../Sockets/socket_callback_state.hpp"
 
 namespace zlink
 {
@@ -76,12 +77,14 @@ struct operation_state_t
     struct raw_command_t
     {
         void *socket = nullptr;
+        std::weak_ptr<socket_callback_state_t> callbacks;
         std::string topic;
         routing_target_t target;
 
         void reset () noexcept
         {
             socket = nullptr;
+            callbacks.reset ();
             topic.clear ();
             target.reset ();
         }
@@ -108,6 +111,7 @@ struct operation_state_t
     received_command_t received;
     send_flags_t flags = send_flags_t::none;
     std::chrono::milliseconds timeout{};
+    bool timeout_explicit = false;
 };
 
 inline void cache_first_rid_native (operation_state_t::routing_target_t &target_,
@@ -221,7 +225,10 @@ inline void reset_for_reuse (operation_state_t &state_) noexcept
         state_.kind = operation_kind_t::none;
         state_.message.reset ();
         state_.raw.socket = nullptr;
+        state_.raw.callbacks.reset ();
         state_.flags = send_flags_t::none;
+        state_.timeout = std::chrono::milliseconds{};
+        state_.timeout_explicit = false;
         return;
     }
 
@@ -232,6 +239,7 @@ inline void reset_for_reuse (operation_state_t &state_) noexcept
     state_.received.reset ();
     state_.flags = send_flags_t::none;
     state_.timeout = std::chrono::milliseconds{};
+    state_.timeout_explicit = false;
 }
 
 inline std::vector<std::unique_ptr<operation_state_t>> &state_pool () noexcept

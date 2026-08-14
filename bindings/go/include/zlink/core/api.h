@@ -48,7 +48,58 @@ ZLINK_EXPORT void zlink_version (int *major_, int *minor_, int *patch_);
 #define ZLINK_CTX_AUTO_HWM_ENABLE_DFLT 1
 #define ZLINK_CTX_AUTO_HWM_RECALC_DEBOUNCE_MS_DFLT 3000
 #define ZLINK_CTX_AUTO_HWM_PROFILE_DFLT ZLINK_AUTO_HWM_PROFILE_BALANCED
-#define ZLINK_CTX_AUTO_HWM_MSG_UNIT_BYTES_DFLT ((uint64_t) 0)
+#define ZLINK_CTX_AUTO_HWM_MEMORY_LIMIT_BYTES_DFLT ((uint64_t) 0)
+#define ZLINK_CTX_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES_DFLT ((uint64_t) 0)
+#define ZLINK_CTX_AUTO_HWM_CORE_BUDGET_BYTES_DFLT ((uint64_t) 0)
+
+#define ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1 1u
+
+#define ZLINK_AUTO_HWM_BUDGET_FLAG_PLANNING_ACTIVE (1u << 0)
+#define ZLINK_AUTO_HWM_BUDGET_FLAG_INSUFFICIENT (1u << 1)
+#define ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_HWM_VALID (1u << 2)
+#define ZLINK_AUTO_HWM_BUDGET_FLAG_AGGREGATE_OVERFLOW (1u << 3)
+
+typedef struct zlink_auto_hwm_budget_snapshot_t
+{
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t budget_generation;
+    uint64_t measurement_epoch;
+    uint64_t configured_memory_limit_bytes;
+    uint64_t runtime_memory_limit_bytes;
+    uint64_t resolved_memory_limit_bytes;
+    uint64_t configured_core_budget_bytes;
+    uint64_t effective_core_budget_bytes;
+    uint64_t total_planned_hwm_bytes;
+    uint64_t total_applied_hwm_bytes;
+    uint64_t manual_reserved_hwm_bytes;
+    uint64_t core_queue_accounted_bytes;
+    uint64_t application_accounted_bytes;
+    uint64_t current_accounted_bytes;
+    uint64_t provisional_accounted_bytes;
+    uint64_t peak_accounted_bytes;
+    uint64_t completion_current_accounted_bytes;
+    uint64_t completion_peak_accounted_bytes;
+    uint64_t completion_pending_message_count;
+    uint64_t total_messaging_accounted_bytes;
+    uint64_t monitor_queue_applied_hwm_bytes;
+    uint64_t monitor_queue_accounted_bytes;
+    uint64_t total_instance_applied_hwm_bytes;
+    uint64_t total_instance_accounted_bytes;
+    uint64_t oversize_admission_count;
+    uint64_t largest_oversize_message_bytes;
+    uint64_t active_directional_queue_count;
+    uint64_t active_completion_directional_queue_count;
+    uint64_t active_send_queue_count;
+    uint64_t active_receive_queue_count;
+    uint64_t outstanding_application_lease_count;
+    uint64_t retired_queue_count;
+    uint64_t deferred_origin_credit_bytes;
+    uint64_t unlimited_manual_queue_count;
+    uint32_t blocked_ratio_ppm;
+    uint32_t flags;
+    uint64_t reserved_u64[8];
+} zlink_auto_hwm_budget_snapshot_t;
 
 /**
  * @brief Create a new zlink context.
@@ -85,8 +136,8 @@ ZLINK_EXPORT zlink_close_result_t zlink_ctx_shutdown (void *context_);
  * @brief Set a context option.
  * @param context_  Context handle.
  * @param option_   Option name (ZLINK_IO_THREADS, ZLINK_MAX_SOCKETS, etc.).
- * @param optval_   Option value. `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES`
- *                  is not an int option; use zlink_ctx_set_data().
+ * @param optval_   Option value. Auto HWM byte options are not int options;
+ *                  use zlink_ctx_set_data().
  * @return 0 on success, -1 on failure (errno is set).
  */
 ZLINK_EXPORT zlink_config_result_t zlink_ctx_set (void *context_,
@@ -97,8 +148,8 @@ ZLINK_EXPORT zlink_config_result_t zlink_ctx_set (void *context_,
  * @brief Set a context option from a byte buffer.
  *
  * This is used for context options whose public binding type is not an int.
- * `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` requires an exact `uint64_t`
- * byte value. `0` selects the socket-type planning-unit default.
+ * Auto HWM memory-limit and Core-budget options require an exact `uint64_t`
+ * byte value. `0` leaves that input unset and selects the next budget source.
  *
  * @param context_    Context handle.
  * @param option_     Option name.
@@ -114,7 +165,7 @@ ZLINK_EXPORT zlink_config_result_t zlink_ctx_set_data (void *context_,
 /**
  * @brief Get a context option into a caller-provided byte buffer.
  *
- * `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` requires a `uint64_t` output
+ * Auto HWM memory-limit and Core-budget options require a `uint64_t` output
  * buffer. The function writes the required size to @p optvallen_.
  *
  * @param context_    Context handle.
@@ -132,9 +183,8 @@ ZLINK_EXPORT zlink_config_result_t zlink_ctx_get_data (void *context_,
  * @brief Get a context option.
  * @param context_  Context handle.
  * @param option_   Option name.
- * @return Option value, or -1 on failure (errno is set).
- * `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` is not available through this
- * function; use zlink_ctx_get_data().
+ * @return Option value, or -1 on failure (errno is set). Auto HWM byte
+ * options are available through zlink_ctx_get_data().
  */
 ZLINK_EXPORT int
 zlink_ctx_get (void *context_, zlink_ctx_option_t option_, zlink_config_result_t *error_out_);
@@ -148,6 +198,19 @@ zlink_ctx_get (void *context_, zlink_ctx_option_t option_, zlink_config_result_t
  * @return 0 on success, -1 on failure (errno is set).
  */
 ZLINK_EXPORT zlink_config_result_t zlink_ctx_auto_hwm_recalculate (void *context_);
+
+/**
+ * @brief Read a versioned context-wide Auto HWM budget snapshot.
+ *
+ * Set abi_version to ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1 and struct_size to
+ * the caller allocation size before calling. The function writes only the
+ * common prefix of the caller and Core layouts.
+ */
+ZLINK_EXPORT zlink_config_result_t zlink_ctx_get_auto_hwm_budget_snapshot (
+  void *context_, zlink_auto_hwm_budget_snapshot_t *snapshot_);
+
+/** @brief Reset Auto HWM epoch counters while preserving current gauges. */
+ZLINK_EXPORT zlink_config_result_t zlink_ctx_reset_auto_hwm_budget_metrics (void *context_);
 
 /** @brief Start a built-in proxy between frontend and backend sockets. */
 ZLINK_EXPORT zlink_config_result_t zlink_proxy (void *frontend_, void *backend_, void *capture_);

@@ -188,9 +188,7 @@ public static class PerfShared
     private static bool SingleAutoHwmStatusVisible(MonitorStatus s)
     {
         return s.AutoHwmAppliedSendHighWaterMarkBytes > 0
-            || s.AutoHwmAppliedReceiveHighWaterMarkBytes > 0
-            || s.AutoHwmEffectiveMessageBytes > 0
-            || s.AutoHwmSocketMessageSlots > 0;
+            || s.AutoHwmAppliedReceiveHighWaterMarkBytes > 0;
     }
 
     // Byte-identical port of bench_common_runtime.hpp
@@ -229,10 +227,8 @@ public static class PerfShared
             + $",role={SingleAutoHwmRoleName(snapshot.AutoHwmRole)}"
             + $",sndhwm={snapshot.AutoHwmAppliedSendHighWaterMarkBytes}"
             + $",rcvhwm={snapshot.AutoHwmAppliedReceiveHighWaterMarkBytes}"
-            + $",effective_message_bytes={snapshot.AutoHwmEffectiveMessageBytes}"
             + $",effective_sndbuf={snapshot.AutoHwmEffectiveSndbuf}"
-            + $",effective_rcvbuf={snapshot.AutoHwmEffectiveRcvbuf}"
-            + $",socket_message_slots={snapshot.AutoHwmSocketMessageSlots}");
+            + $",effective_rcvbuf={snapshot.AutoHwmEffectiveRcvbuf}");
     }
 
     public static void WriteStdoutLine(string line)

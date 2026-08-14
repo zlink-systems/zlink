@@ -11,6 +11,8 @@ type (
 	MonitorSourceKind = impl.MonitorSourceKind
 	// MonitorEventType is the kind of a delivered socket monitor event.
 	MonitorEventType = impl.MonitorEventType
+	// MonitorOpenOption configures the event mask or byte HWM of a socket monitor.
+	MonitorOpenOption = impl.MonitorOpenOption
 	// MonitorEvent is a single socket connection-lifecycle event reported by a monitor.
 	MonitorEvent = impl.MonitorEvent
 	// MonitorStatus is a snapshot of a monitored socket's state and auto-high-water-mark telemetry.
@@ -121,6 +123,8 @@ const (
 )
 
 var (
+	// MonitorHwmBytes sets the monitor queue HWM in bytes. Zero selects the Core default.
+	MonitorHwmBytes = impl.MonitorHwmBytes
 	// OpenSocketMonitor opens a monitor on a socket for the selected events; the caller owns it.
 	OpenSocketMonitor = impl.OpenSocketMonitor
 	// NewTimer creates a standalone timer; the caller owns it.

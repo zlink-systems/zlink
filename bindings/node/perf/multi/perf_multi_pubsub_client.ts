@@ -16,7 +16,6 @@ const { configureTlsClient } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const {
   POLLIN,
-  applyAutoHwmMsgUnit,
   applyContextPolicy,
   applySocketPolicy,
   emitMultiSocketHwmDetail,
@@ -55,7 +54,6 @@ async function main() {
       configureTlsClient(sub, options.transport);
       sub.setSubscription('');
       await waitForConnectionReady(sub, () => sub.connect(options.endpoint));
-      applyAutoHwmMsgUnit(ctx, options.msgSize);
       subs.push(sub);
       receivedBySub.push(new zlink.TopicMessage());
     }

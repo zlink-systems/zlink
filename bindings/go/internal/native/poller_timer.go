@@ -81,7 +81,6 @@ type pollerEntry struct {
 	timer  *Timer
 	slot   uintptr
 	events PollEventFlag
-	owner  *socketCore
 }
 
 type Poller struct {
@@ -262,9 +261,6 @@ func (p *Poller) AddSocket(socket SocketTarget, events PollEventFlag, slot uintp
 	if err := configErrorFromResult(C.zlink_poller_add(p.handle, raw, entry.userDataPtr(), C.short(events))); err != nil {
 		return err
 	}
-	if events&PollCompletion != 0 {
-		acquireExternalRequestProgress(raw, entry.owner)
-	}
 	p.sockets[uintptr(raw)] = entry
 	return nil
 }
@@ -278,8 +274,7 @@ func (p *Poller) ModifySocket(socket SocketTarget, events PollEventFlag) error {
 	if p.closed || p.handle == nil {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	// Completion ownership is acquired at registration time and released at
-	// removal time. Core rejects adding the flag through modify, so reject it
+	// Core rejects adding the completion flag through modify, so reject it
 	// before touching the Go registry as well.
 	if events&PollCompletion != 0 {
 		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
@@ -290,8 +285,7 @@ func (p *Poller) ModifySocket(socket SocketTarget, events PollEventFlag) error {
 	}
 	entry := p.sockets[uintptr(raw)]
 	if entry != nil && entry.events&PollCompletion != 0 {
-		// A completion registration owns native completion processing until the
-		// registration is removed. Change that mode with remove + add.
+		// Change completion registration with remove + add, matching Core.
 		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
 	}
 	if err := configErrorFromResult(C.zlink_poller_modify(p.handle, raw, C.short(events))); err != nil {
@@ -318,10 +312,6 @@ func (p *Poller) RemoveSocket(socket SocketTarget) error {
 	}
 	if err := configErrorFromResult(C.zlink_poller_remove(p.handle, raw)); err != nil {
 		return err
-	}
-	entry := p.sockets[uintptr(raw)]
-	if entry != nil && entry.events&PollCompletion != 0 {
-		releaseExternalRequestProgress(raw, entry.owner)
 	}
 	delete(p.sockets, uintptr(raw))
 	return nil
@@ -484,10 +474,7 @@ func (p *Poller) Close() error {
 	if err := closeErrorFromResult(C.zlink_poller_destroy(&handle)); err != nil {
 		return err
 	}
-	for k, entry := range p.sockets {
-		if entry != nil && entry.events&PollCompletion != 0 {
-			releaseExternalRequestProgress(entry.raw, entry.owner)
-		}
+	for k := range p.sockets {
 		delete(p.sockets, k)
 	}
 	for k := range p.fds {
@@ -502,11 +489,7 @@ func (p *Poller) Close() error {
 }
 
 func (p *Poller) makeEntry(kind pollerEntryKind, socket SocketTarget, raw unsafe.Pointer, fd int, timer *Timer, slot uintptr, events PollEventFlag) *pollerEntry {
-	var owner *socketCore
-	if target, ok := socket.(interface{ completionOwner() *socketCore }); ok {
-		owner = target.completionOwner()
-	}
-	return &pollerEntry{kind: kind, socket: socket, raw: raw, fd: fd, timer: timer, slot: slot, events: events, owner: owner}
+	return &pollerEntry{kind: kind, socket: socket, raw: raw, fd: fd, timer: timer, slot: slot, events: events}
 }
 
 func (e *pollerEntry) userDataPtr() unsafe.Pointer {

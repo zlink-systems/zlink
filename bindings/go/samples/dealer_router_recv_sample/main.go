@@ -33,8 +33,8 @@ func main() {
 	samplecommon.Must(dealer.Connect(endpoint))
 	samplecommon.WaitConnected(routerMon, dealerMon)
 
-	_, err = dealer.Send().Message(samplecommon.Message("ping")).Submit(context.Background())
-	samplecommon.Must(err)
+	samplecommon.Must(<-dealer.Send().Message(
+		samplecommon.Message("ping")).Submit(context.Background()))
 
 	var request zlink.Received
 	_, err = router.Recv(&request, zlink.RecvFlagsNone)

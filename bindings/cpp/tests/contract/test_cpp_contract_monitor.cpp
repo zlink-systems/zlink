@@ -45,6 +45,9 @@ static_assert (
   std::is_same<decltype (zlink::monitor_status_t ().snd_bytes_in_flight), uint64_t>::value,
   "monitor in-flight bytes must be uint64_t");
 static_assert (
+  std::is_same<decltype (zlink::monitor_status_t ().snd_pending_bytes), uint64_t>::value,
+  "monitor pending bytes must be uint64_t");
+static_assert (
   std::is_same<decltype (zlink::monitor_event_t ().value), std::uint64_t>::value,
   "monitor event value must preserve the native uint64_t value");
 static_assert (
@@ -220,9 +223,8 @@ void test_socket_monitor_open_recv_snapshot ()
     assert (snapshot.struct_size == sizeof (zlink_monitor_status_t));
     (void) snapshot.auto_hwm_profile;
     (void) snapshot.auto_hwm_policy_class;
-    (void) snapshot.auto_hwm_unit_budget_bytes;
-    (void) snapshot.auto_hwm_size_cap;
-    (void) snapshot.auto_hwm_socket_message_slots;
+    (void) snapshot.snd_pending_bytes;
+    (void) snapshot.rcv_pending_bytes;
     (void) snapshot.auto_hwm_effective_sndbuf;
     (void) snapshot.auto_hwm_effective_rcvbuf;
     (void) snapshot.auto_hwm_planned_sndhwm_bytes;
@@ -233,6 +235,19 @@ void test_socket_monitor_open_recv_snapshot ()
     (void) snapshot.auto_hwm_deferred_rcvhwm_valid;
     (void) snapshot.snd_bytes_in_flight;
     (void) snapshot.rcv_bytes_in_flight;
+}
+
+void test_socket_monitor_hwm_bytes_are_forwarded_exactly ()
+{
+    zlink::context_t ctx;
+    zlink::pair_socket_t socket (ctx);
+    constexpr uint64_t monitor_hwm_bytes = 12345u;
+
+    zlink::socket_monitor_t monitor = socket.monitor_open (
+      zlink::monitor_event::all, zlink::byte_count_t::bytes (monitor_hwm_bytes));
+    assert (monitor.valid ());
+    assert (ctx.core_hwm_budget_snapshot ().monitor_queue_applied_hwm_bytes ()
+            == monitor_hwm_bytes * 2u);
 }
 
 void test_socket_monitor_exposes_connection_identity ()
@@ -560,6 +575,7 @@ void test_socket_monitor_on_event_callback ()
 int main ()
 {
     test_socket_monitor_open_recv_snapshot ();
+    test_socket_monitor_hwm_bytes_are_forwarded_exactly ();
     test_socket_monitor_exposes_connection_identity ();
     test_socket_monitor_ignore_event_and_poller_size ();
     test_poller_wait_buffer_returns_slot ();

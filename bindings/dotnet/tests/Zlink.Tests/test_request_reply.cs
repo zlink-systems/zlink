@@ -6,8 +6,8 @@ using Xunit;
 
 namespace Systems.Zlink.Tests;
 
-    public sealed class test_request_reply
-    {
+public sealed class test_request_reply
+{
     [Fact]
     public void router_poller_can_own_receive_and_completion_after_bind()
     {
@@ -107,20 +107,11 @@ namespace Systems.Zlink.Tests;
         client.Connect(endpoint);
         Thread.Sleep(50);
 
-        var completion = new TaskCompletionSource<IReadOnlyList<Message>>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
         using Message request = Message.From("ping");
-        Assert.True(client.Request(serverRid)
+        Task<IReadOnlyList<Message>> completion = client.Request(serverRid)
             .Message(request)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Submit((result, parts) =>
-            {
-                if (result == RequestResult.Ok)
-                    completion.TrySetResult(parts);
-                else
-                    completion.TrySetException(
-                        new InvalidOperationException($"request failed: {result}"));
-            }));
+            .Async();
 
         using Received received = RecvWithRetry(server);
         Assert.Equal(ReceivedMessageType.Request, received.MessageType);
@@ -138,77 +129,9 @@ namespace Systems.Zlink.Tests;
             duplicate.Result);
 
         IReadOnlyList<Message> replyParts =
-            await completion.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await completion.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal("pong", replyParts[0].GetString());
         Zlink.MultipartClose(replyParts);
-    }
-
-    [Fact]
-    public async Task router_completion_control_progresses_without_application_recv()
-    {
-        if (!CoreTestSupport.IsNativeAvailable())
-            return;
-
-        using var ctx = Zlink.CreateContext();
-        using var server = ctx.CreateRouterSocket();
-        using var client = ctx.CreateRouterSocket();
-        using var poller = Zlink.CreatePoller();
-        string endpoint = CoreTestSupport.NewEndpoint(
-            "inproc", "completion-control");
-        RoutingId serverRid = CoreTestSupport.RoutingIdUtf8("control-server");
-        RoutingId clientRid = CoreTestSupport.RoutingIdUtf8("control-client");
-        server.SetRoutingId(serverRid);
-        client.SetRoutingId(clientRid);
-        client.Options.SetConnectRoutingId(serverRid);
-
-        var delivered = new TaskCompletionSource<(
-            RoutingId Source, IReadOnlyList<Message> Parts)>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        var invokedRegistration = -1;
-        for (var registration = 0; registration < 16; registration++)
-        {
-            var capturedRegistration = registration;
-            server.OnCompletionControl((source, parts) =>
-            {
-                // Replacing a handler keeps one stable native trampoline and
-                // publishes only the latest managed target.
-                Interlocked.Exchange(ref invokedRegistration,
-                    capturedRegistration);
-                // Ownership survives the native callback return. The receiver
-                // can hand the messages to its own execution context and close
-                // them exactly once after processing.
-                delivered.TrySetResult((source, parts));
-            });
-        }
-        poller.Add(server, PollEventFlags.PollCompletion, 1);
-        server.Bind(endpoint);
-        client.Connect(endpoint);
-        Thread.Sleep(50);
-
-        using Message application = Message.From("application-unread");
-        Assert.True(client.Send(serverRid).Message(application).Submit());
-
-        using Message command = Message.From("relocation-ready");
-        using Message generation = Message.From("generation-9");
-        Assert.True(client.TrySendCompletionControl(
-            serverRid, [command, generation]));
-        Assert.Equal("relocation-ready", command.GetString());
-        Assert.Equal("generation-9", generation.GetString());
-
-        var events = new PollEvent[1];
-        Assert.Equal(1, poller.Wait(events, TimeSpan.FromSeconds(2)));
-        var control = await delivered.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.Equal(15, Volatile.Read(ref invokedRegistration));
-        Assert.Equal(clientRid, control.Source);
-        Assert.Collection(control.Parts,
-            part => Assert.Equal("relocation-ready", part.GetString()),
-            part => Assert.Equal("generation-9", part.GetString()));
-        Zlink.MultipartClose(control.Parts);
-        foreach (Message part in control.Parts)
-            Assert.Throws<ObjectDisposedException>(() => _ = part.Size);
-
-        using Received received = RecvWithRetry(server);
-        Assert.Equal("application-unread", received.Parts[0].GetString());
     }
 
     [Fact]
@@ -226,6 +149,7 @@ namespace Systems.Zlink.Tests;
             "request-then-unsolicited");
         router.Bind(endpoint);
         dealer.Connect(endpoint);
+        Thread.Sleep(50);
 
         using Message request = Message.From("hello");
         Task<IReadOnlyList<Message>> replyTask = dealer.Request()
@@ -247,7 +171,7 @@ namespace Systems.Zlink.Tests;
             part.Dispose();
 
         using Message update = Message.From("unsolicited");
-        Assert.True(router.Send(sourceRid).Message(update).Submit());
+        await router.Send(sourceRid).Message(update).Async();
         string unsolicited =
             CoreTestSupport.ReceiveUtf8WithTimeout(dealer, 2000);
         Assert.Equal("unsolicited", unsolicited);
@@ -269,6 +193,7 @@ namespace Systems.Zlink.Tests;
             "request-then-unsolicited-dontwait");
         router.Bind(endpoint);
         dealer.Connect(endpoint);
+        Thread.Sleep(50);
 
         using Message request = Message.From("hello");
         Task<IReadOnlyList<Message>> replyTask = dealer.Request()
@@ -298,7 +223,7 @@ namespace Systems.Zlink.Tests;
             part.Dispose();
 
         using Message update = Message.From("unsolicited");
-        Assert.True(router.Send(sourceRid).Message(update).Submit());
+        await router.Send(sourceRid).Message(update).Async();
 
         using Received delivered = RecvWithRetry(dealer);
         Assert.Equal("unsolicited", delivered.Parts[0].GetString());
@@ -392,26 +317,10 @@ namespace Systems.Zlink.Tests;
         Thread.Sleep(50);
 
         using Message request = Message.From("from-client");
-        var completion = new TaskCompletionSource<IReadOnlyList<Message>>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        bool accepted = client.Request()
+        Task<IReadOnlyList<Message>> completion = client.Request()
             .Message(request)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Flags(SendFlags.DontWait)
-            .Submit((result, parts) =>
-            {
-                if (result != RequestResult.Ok)
-                {
-                    completion.TrySetException(
-                        new InvalidOperationException($"request failed: {result}"));
-                    return;
-                }
-
-                completion.TrySetResult(parts);
-            });
-
-        Assert.True(accepted);
+            .Async();
 
         using Received received = RecvWithRetry(server);
         Assert.Equal(ReceivedMessageType.Request, received.MessageType);
@@ -421,13 +330,13 @@ namespace Systems.Zlink.Tests;
         using Message reply = Message.From("reply");
         received.Reply().Message(reply).Submit();
 
-        IReadOnlyList<Message> clientReply = await completion.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        IReadOnlyList<Message> clientReply = await completion.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal("reply", clientReply[0].GetString());
         Zlink.MultipartClose(clientReply);
     }
 
     [Fact]
-    public async Task dealer_received_reply_routes_over_tcp_when_request_uses_dontwait_callback()
+    public async Task dealer_received_reply_routes_over_tcp_with_async_request()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -443,26 +352,10 @@ namespace Systems.Zlink.Tests;
         Thread.Sleep(100);
 
         using Message request = Message.From("from-client");
-        var completion = new TaskCompletionSource<IReadOnlyList<Message>>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        bool accepted = client.Request()
+        Task<IReadOnlyList<Message>> completion = client.Request()
             .Message(request)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Flags(SendFlags.DontWait)
-            .Submit((result, parts) =>
-            {
-                if (result != RequestResult.Ok)
-                {
-                    completion.TrySetException(
-                        new InvalidOperationException($"request failed: {result}"));
-                    return;
-                }
-
-                completion.TrySetResult(parts);
-            });
-
-        Assert.True(accepted);
+            .Async();
 
         using Received received = RecvWithRetry(server);
         Assert.Equal(ReceivedMessageType.Request, received.MessageType);
@@ -472,13 +365,13 @@ namespace Systems.Zlink.Tests;
         using Message reply = Message.From("reply");
         received.Reply().Message(reply).Submit();
 
-        IReadOnlyList<Message> clientReply = await completion.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        IReadOnlyList<Message> clientReply = await completion.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal("reply", clientReply[0].GetString());
         Zlink.MultipartClose(clientReply);
     }
 
     [Fact]
-    public async Task dealer_received_multipart_reply_routes_over_tcp_when_request_uses_dontwait_callback()
+    public async Task dealer_received_multipart_reply_routes_over_tcp_with_async_request()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -495,26 +388,10 @@ namespace Systems.Zlink.Tests;
 
         using Message requestHeader = Message.From("request-header");
         using Message requestBody = Message.From("request-body");
-        var completion = new TaskCompletionSource<IReadOnlyList<Message>>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        bool accepted = client.Request()
+        Task<IReadOnlyList<Message>> completion = client.Request()
             .Messages([requestHeader, requestBody])
             .Timeout(TimeSpan.FromSeconds(2))
-            .Flags(SendFlags.DontWait)
-            .Submit((result, parts) =>
-            {
-                if (result != RequestResult.Ok)
-                {
-                    completion.TrySetException(
-                        new InvalidOperationException($"request failed: {result}"));
-                    return;
-                }
-
-                completion.TrySetResult(parts);
-            });
-
-        Assert.True(accepted);
+            .Async();
 
         using Received received = RecvWithRetry(server);
         Assert.Equal(ReceivedMessageType.Request, received.MessageType);
@@ -526,7 +403,7 @@ namespace Systems.Zlink.Tests;
         using Message replyBody = Message.From("reply-body");
         received.Reply().Messages([replyHeader, replyBody]).Submit();
 
-        IReadOnlyList<Message> clientReply = await completion.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        IReadOnlyList<Message> clientReply = await completion.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal("reply-header", clientReply[0].GetString());
         Assert.Equal("reply-body", clientReply[1].GetString());
         Zlink.MultipartClose(clientReply);
@@ -550,26 +427,10 @@ namespace Systems.Zlink.Tests;
 
         using Message requestHeader = Message.From("request-header");
         using Message requestBody = Message.From("request-body");
-        var completion = new TaskCompletionSource<IReadOnlyList<Message>>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        bool accepted = client.Request()
+        Task<IReadOnlyList<Message>> completion = client.Request()
             .Messages([requestHeader, requestBody])
             .Timeout(TimeSpan.FromSeconds(2))
-            .Flags(SendFlags.DontWait)
-            .Submit((result, parts) =>
-            {
-                if (result != RequestResult.Ok)
-                {
-                    completion.TrySetException(
-                        new InvalidOperationException($"request failed: {result}"));
-                    return;
-                }
-
-                completion.TrySetResult(parts);
-            });
-
-        Assert.True(accepted);
+            .Async();
 
         using Received received = RecvWithRetry(server);
         Assert.Equal(ReceivedMessageType.Request, received.MessageType);
@@ -581,14 +442,14 @@ namespace Systems.Zlink.Tests;
         using Message replyBody = Message.From("""{"value":"reply","providerRid":"api-a"}""");
         received.Reply().Messages([replyHeader, replyBody]).Submit();
 
-        IReadOnlyList<Message> clientReply = await completion.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        IReadOnlyList<Message> clientReply = await completion.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal(replyHeaderText, clientReply[0].GetString());
         Assert.Equal("""{"value":"reply","providerRid":"api-a"}""", clientReply[1].GetString());
         Zlink.MultipartClose(clientReply);
     }
 
     [Fact]
-    public async Task dealer_received_reply_routes_from_one_of_two_bound_tcp_peers_when_request_uses_dontwait_callback()
+    public async Task dealer_received_reply_routes_from_one_of_two_bound_tcp_peers_async()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -612,26 +473,10 @@ namespace Systems.Zlink.Tests;
 
         using Message requestHeader = Message.From("request-header");
         using Message requestBody = Message.From("request-body");
-        var completion = new TaskCompletionSource<IReadOnlyList<Message>>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        bool accepted = client.Request()
+        Task<IReadOnlyList<Message>> completion = client.Request()
             .Messages([requestHeader, requestBody])
             .Timeout(TimeSpan.FromSeconds(2))
-            .Flags(SendFlags.DontWait)
-            .Submit((result, parts) =>
-            {
-                if (result != RequestResult.Ok)
-                {
-                    completion.TrySetException(
-                        new InvalidOperationException($"request failed: {result}"));
-                    return;
-                }
-
-                completion.TrySetResult(parts);
-            });
-
-        Assert.True(accepted);
+            .Async();
 
         Received received = RecvWithRetry(serverA, serverB);
         Assert.Equal(ReceivedMessageType.Request, received.MessageType);
@@ -644,7 +489,8 @@ namespace Systems.Zlink.Tests;
         received.Reply().Messages([replyHeader, replyBody]).Submit();
         received.Dispose();
 
-        IReadOnlyList<Message> clientReply = await completion.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        IReadOnlyList<Message> clientReply = await completion.WaitAsync(
+            TimeSpan.FromSeconds(2));
         Assert.Equal("reply-header", clientReply[0].GetString());
         Assert.Equal("reply-body", clientReply[1].GetString());
         Zlink.MultipartClose(clientReply);
@@ -680,26 +526,10 @@ namespace Systems.Zlink.Tests;
 
         using Message requestHeader = Message.From("request-header");
         using Message requestBody = Message.From("request-body");
-        var completion = new TaskCompletionSource<IReadOnlyList<Message>>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        bool accepted = client.Request()
+        Task<IReadOnlyList<Message>> completion = client.Request()
             .Messages([requestHeader, requestBody])
             .Timeout(TimeSpan.FromSeconds(2))
-            .Flags(SendFlags.DontWait)
-            .Submit((result, parts) =>
-            {
-                if (result != RequestResult.Ok)
-                {
-                    completion.TrySetException(
-                        new InvalidOperationException($"request failed: {result}"));
-                    return;
-                }
-
-                completion.TrySetResult(parts);
-            });
-
-        Assert.True(accepted);
+            .Async();
 
         using Received received = RecvWithRetry(serverA, serverB);
         Assert.Equal(ReceivedMessageType.Request, received.MessageType);
@@ -711,7 +541,8 @@ namespace Systems.Zlink.Tests;
         using Message replyBody = Message.From("reply-body");
         received.Reply().Messages([replyHeader, replyBody]).Submit();
 
-        IReadOnlyList<Message> clientReply = await completion.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        IReadOnlyList<Message> clientReply = await completion.WaitAsync(
+            TimeSpan.FromSeconds(2));
         Assert.Equal("reply-header", clientReply[0].GetString());
         Assert.Equal("reply-body", clientReply[1].GetString());
         Zlink.MultipartClose(clientReply);
@@ -735,24 +566,10 @@ namespace Systems.Zlink.Tests;
         Thread.Sleep(100);
 
         using Message request = Message.From("request");
-        var completion = new TaskCompletionSource<IReadOnlyList<Message>>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        Assert.True(client.Request()
+        Task<IReadOnlyList<Message>> completion = client.Request()
             .Message(request)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Flags(SendFlags.DontWait)
-            .Submit((result, parts) =>
-            {
-                if (result != RequestResult.Ok)
-                {
-                    completion.TrySetException(
-                        new InvalidOperationException($"request failed: {result}"));
-                    return;
-                }
-
-                completion.TrySetResult(parts);
-            }));
+            .Async();
 
         Received received = RecvWithRetry(server);
         await Task.Run(() =>
@@ -762,13 +579,14 @@ namespace Systems.Zlink.Tests;
             received.Dispose();
         });
 
-        IReadOnlyList<Message> clientReply = await completion.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        IReadOnlyList<Message> clientReply = await completion.WaitAsync(
+            TimeSpan.FromSeconds(2));
         Assert.Equal("reply", clientReply[0].GetString());
         Zlink.MultipartClose(clientReply);
     }
 
     [Fact]
-    public void request_router_preserves_data_receive_surface()
+    public async Task request_router_preserves_data_receive_surface()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -784,7 +602,7 @@ namespace Systems.Zlink.Tests;
         Thread.Sleep(50);
 
         using Message payload = Message.From("plain-data");
-        dealerSocket.Send().Message(payload).Submit();
+        await dealerSocket.Send().Message(payload).Async();
 
         var received = Received.Create();
         routerSocket.Recv(received);
@@ -803,7 +621,7 @@ namespace Systems.Zlink.Tests;
     }
 
     [Fact]
-    public async Task request_callback_transfers_reply_message_ownership_to_application()
+    public async Task request_async_transfers_reply_message_ownership_to_application()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -819,9 +637,7 @@ namespace Systems.Zlink.Tests;
         Thread.Sleep(50);
 
         using var handled = new ManualResetEventSlim(false);
-        using var callbackReceived = new ManualResetEventSlim(false);
         Message? owned = null;
-        RequestResult observedResult = RequestResult.ProtocolError;
 
         Task serverTask = Task.Run(() =>
         {
@@ -843,17 +659,15 @@ namespace Systems.Zlink.Tests;
         });
 
         using Message request = Message.From("ping-owned");
-        dealerSocket.Request().Message(request).Submit((result, reply) =>
-        {
-            observedResult = result;
-            Assert.Single(reply);
-            owned = reply[0];
-            callbackReceived.Set();
-        });
+        IReadOnlyList<Message> reply = await dealerSocket.Request()
+            .Message(request)
+            .Timeout(TimeSpan.FromSeconds(2))
+            .Async()
+            .WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Single(reply);
+        owned = reply[0];
 
-        Assert.True(callbackReceived.Wait(10000));
         Assert.True(handled.Wait(10000));
-        Assert.Equal(RequestResult.Ok, observedResult);
         Assert.NotNull(owned);
         Assert.Equal("pong-owned", owned!.GetString());
         owned.Dispose();

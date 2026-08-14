@@ -1,18 +1,18 @@
 # Go local package
 
-`build-wsl.sh`는 `bindings/go`를 현재 Core `0.11.0` runtime과 함께 source
+`build-wsl.sh`는 `bindings/go`를 현재 Core `0.11.1` runtime과 함께 source
 archive로 만든다. Go module path는 `zlink.systems/zlink`이고 release version은
-`0.11.0`이다.
+`0.11.1`이다.
 
 ```bash
 scripts/local-package/go/build-wsl.sh \
-  --core-prefix /absolute/path/.artifacts/wsl/install/zlink-core/0.11.0
+  --core-prefix /absolute/path/.artifacts/wsl/install/zlink-core/0.11.1
 ```
 
 출력은 다음 파일이다.
 
 ```text
-.artifacts/wsl/go/zlink-go-0.11.0.tar.gz
+.artifacts/wsl/go/zlink-go-0.11.1.tar.gz
 ```
 
 빌드 전에 Go binding test를 실행하며, archive에는 Linux x86_64 native

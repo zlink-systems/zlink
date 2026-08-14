@@ -282,8 +282,7 @@ bool perf_stream_server (const std::string &lib_name, const std::string &transpo
         options.recv_timeout (std::chrono::milliseconds (io_timeout_ms));
         options.linger (std::chrono::milliseconds (0));
         options.tcp_no_delay (true);
-        if (!perf::multi::apply_benchmark_auto_hwm_msg_unit (ctx, effective_msg_size)
-            || !perf::multi::recalculate_auto_hwm (ctx))
+        if (!perf::multi::recalculate_auto_hwm (ctx))
             return false;
 
         if (!perf::multi::setup_tls_server (server, transport))

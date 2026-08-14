@@ -1,4 +1,4 @@
-//! Raw FFI declarations for the Core 0.11.0 public header set.
+//! Raw FFI declarations for the Core 0.11.1 public header set.
 //!
 //! This module is crate-private. The declarations intentionally contain only
 //! symbols present in the candidate `zlink.h` headers copied into this crate;
@@ -23,6 +23,126 @@ pub struct zlink_msg_t {
 pub struct zlink_routing_id_t {
     pub size: u8,
     pub data: [u8; 255],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct zlink_routed_submit_target_t {
+    pub peer_rid: zlink_routing_id_t,
+    pub transport_pair_id: u64,
+    pub transport_pair_generation: u64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum zlink_routed_send_ready_state_t {
+    ZLINK_ROUTED_SEND_WRITABLE = 1,
+    ZLINK_ROUTED_SEND_TERMINAL = 2,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct zlink_routed_send_ready_event_t {
+    pub peer_rid: zlink_routing_id_t,
+    pub transport_pair_id: u64,
+    pub transport_pair_generation: u64,
+    pub state: zlink_routed_send_ready_state_t,
+    pub terminal_errno: c_int,
+}
+
+#[repr(C)]
+pub struct zlink_hwm_budget_lease_t {
+    _private: [u8; 0],
+}
+
+pub const ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1: u32 = 1;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct zlink_auto_hwm_budget_snapshot_t {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub budget_generation: u64,
+    pub measurement_epoch: u64,
+    pub configured_memory_limit_bytes: u64,
+    pub runtime_memory_limit_bytes: u64,
+    pub resolved_memory_limit_bytes: u64,
+    pub configured_core_budget_bytes: u64,
+    pub effective_core_budget_bytes: u64,
+    pub total_planned_hwm_bytes: u64,
+    pub total_applied_hwm_bytes: u64,
+    pub manual_reserved_hwm_bytes: u64,
+    pub core_queue_accounted_bytes: u64,
+    pub application_accounted_bytes: u64,
+    pub current_accounted_bytes: u64,
+    pub provisional_accounted_bytes: u64,
+    pub peak_accounted_bytes: u64,
+    pub completion_current_accounted_bytes: u64,
+    pub completion_peak_accounted_bytes: u64,
+    pub completion_pending_message_count: u64,
+    pub total_messaging_accounted_bytes: u64,
+    pub monitor_queue_applied_hwm_bytes: u64,
+    pub monitor_queue_accounted_bytes: u64,
+    pub total_instance_applied_hwm_bytes: u64,
+    pub total_instance_accounted_bytes: u64,
+    pub oversize_admission_count: u64,
+    pub largest_oversize_message_bytes: u64,
+    pub active_directional_queue_count: u64,
+    pub active_completion_directional_queue_count: u64,
+    pub active_send_queue_count: u64,
+    pub active_receive_queue_count: u64,
+    pub outstanding_application_lease_count: u64,
+    pub retired_queue_count: u64,
+    pub deferred_origin_credit_bytes: u64,
+    pub unlimited_manual_queue_count: u64,
+    pub blocked_ratio_ppm: u32,
+    pub flags: u32,
+    pub reserved_u64: [u64; 8],
+}
+
+impl Default for zlink_auto_hwm_budget_snapshot_t {
+    fn default() -> Self {
+        Self {
+            abi_version: ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1,
+            struct_size: std::mem::size_of::<Self>() as u32,
+            budget_generation: 0,
+            measurement_epoch: 0,
+            configured_memory_limit_bytes: 0,
+            runtime_memory_limit_bytes: 0,
+            resolved_memory_limit_bytes: 0,
+            configured_core_budget_bytes: 0,
+            effective_core_budget_bytes: 0,
+            total_planned_hwm_bytes: 0,
+            total_applied_hwm_bytes: 0,
+            manual_reserved_hwm_bytes: 0,
+            core_queue_accounted_bytes: 0,
+            application_accounted_bytes: 0,
+            current_accounted_bytes: 0,
+            provisional_accounted_bytes: 0,
+            peak_accounted_bytes: 0,
+            completion_current_accounted_bytes: 0,
+            completion_peak_accounted_bytes: 0,
+            completion_pending_message_count: 0,
+            total_messaging_accounted_bytes: 0,
+            monitor_queue_applied_hwm_bytes: 0,
+            monitor_queue_accounted_bytes: 0,
+            total_instance_applied_hwm_bytes: 0,
+            total_instance_accounted_bytes: 0,
+            oversize_admission_count: 0,
+            largest_oversize_message_bytes: 0,
+            active_directional_queue_count: 0,
+            active_completion_directional_queue_count: 0,
+            active_send_queue_count: 0,
+            active_receive_queue_count: 0,
+            outstanding_application_lease_count: 0,
+            retired_queue_count: 0,
+            deferred_origin_credit_bytes: 0,
+            unlimited_manual_queue_count: 0,
+            blocked_ratio_ppm: 0,
+            flags: 0,
+            reserved_u64: [0; 8],
+        }
+    }
 }
 
 impl zlink_routing_id_t {
@@ -54,7 +174,9 @@ pub enum zlink_ctx_option_t {
     ZLINK_CTX_OPT_AUTO_HWM_ENABLE = 12,
     ZLINK_CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS = 14,
     ZLINK_CTX_OPT_AUTO_HWM_PROFILE = 17,
-    ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES = 18,
+    ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES = 19,
+    ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES = 20,
+    ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES = 21,
 }
 
 impl zlink_ctx_option_t {
@@ -136,7 +258,6 @@ pub enum zlink_option_t {
     ZLINK_OPT_ZMP_METADATA = 0x3030,
     ZLINK_OPT_ROUTE_VALUE_MAX_SIZE = 0x3032,
     ZLINK_OPT_RID_DUPLICATE_POLICY = 0x3033,
-    ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES = 0x3034,
 }
 
 #[repr(C)]
@@ -274,6 +395,7 @@ pub type zlink_socket_monitor_event_t = zlink_monitor_event_t;
 #[derive(Copy, Clone)]
 pub struct zlink_socket_monitor_open_options_t {
     pub events: zlink_socket_monitor_event_mask_t,
+    pub monitor_hwm_bytes: u64,
 }
 
 #[repr(C)]
@@ -286,19 +408,12 @@ pub struct zlink_monitor_status_t {
     pub detail_flags: zlink_monitor_status_detail_mask_t,
     pub snd_pending_msgs: u64,
     pub rcv_pending_msgs: u64,
+    pub snd_pending_bytes: u64,
+    pub rcv_pending_bytes: u64,
     pub auto_hwm_enabled: u32,
     pub auto_hwm_profile: u32,
     pub auto_hwm_role: u32,
     pub auto_hwm_policy_class: u32,
-    pub auto_hwm_unit_budget_bytes: u64,
-    pub auto_hwm_size_cap: u32,
-    pub auto_hwm_socket_message_slots: u64,
-    pub auto_hwm_connection_bucket_enabled: u32,
-    pub auto_hwm_connection_bucket_count: u32,
-    pub auto_hwm_connection_bucket_index: u32,
-    pub auto_hwm_connection_bucket_hwm_4k: u32,
-    pub auto_hwm_connection_bucket_hysteresis_retained: u32,
-    pub auto_hwm_effective_message_bytes: u64,
     pub auto_hwm_planned_sndhwm_bytes: u64,
     pub auto_hwm_planned_rcvhwm_bytes: u64,
     pub auto_hwm_applied_sndhwm_bytes: u64,
@@ -354,6 +469,12 @@ pub type zlink_stream_packet_handler_fn = unsafe extern "C" fn(
 pub type zlink_send_ready_handler_fn =
     unsafe extern "C" fn(subject: *mut c_void, userdata: *mut c_void);
 
+pub type zlink_routed_send_ready_handler_fn = unsafe extern "C" fn(
+    subject: *mut c_void,
+    event: *const zlink_routed_send_ready_event_t,
+    userdata: *mut c_void,
+);
+
 pub type zlink_reply_handler_fn = unsafe extern "C" fn(
     result: zlink_request_result_t,
     parts: *mut zlink_msg_t,
@@ -369,7 +490,7 @@ pub type zlink_timer_handler_fn =
     unsafe extern "C" fn(timer: *mut c_void, fire_count: u64, userdata: *mut c_void);
 
 // ---------------------------------------------------------------------------
-// Functions exported by the candidate Core 0.11.0 headers
+// Functions exported by the candidate Core 0.11.1 headers
 // ---------------------------------------------------------------------------
 
 unsafe extern "C" {
@@ -399,6 +520,11 @@ unsafe extern "C" {
         error_out: *mut zlink_config_result_t,
     ) -> c_int;
     pub fn zlink_ctx_auto_hwm_recalculate(ctx: *mut c_void) -> c_int;
+    pub fn zlink_ctx_get_auto_hwm_budget_snapshot(
+        ctx: *mut c_void,
+        snapshot: *mut zlink_auto_hwm_budget_snapshot_t,
+    ) -> c_int;
+    pub fn zlink_ctx_reset_auto_hwm_budget_metrics(ctx: *mut c_void) -> c_int;
 
     pub fn zlink_msg_init(msg: *mut zlink_msg_t) -> c_int;
     pub fn zlink_msg_init_size(msg: *mut zlink_msg_t, size: usize) -> c_int;
@@ -423,6 +549,16 @@ unsafe extern "C" {
         socket: *mut c_void,
         handler: zlink_send_ready_handler_fn,
         userdata: *mut c_void,
+    ) -> c_int;
+    pub fn zlink_routed_send_ready_handler(
+        socket: *mut c_void,
+        handler: zlink_routed_send_ready_handler_fn,
+        userdata: *mut c_void,
+    ) -> c_int;
+    pub fn zlink_select_routed_submit_target(
+        socket: *mut c_void,
+        router_rid_or_null: *const zlink_routing_id_t,
+        target_out: *mut zlink_routed_submit_target_t,
     ) -> c_int;
     pub fn zlink_close(socket: *mut c_void) -> c_int;
 
@@ -526,6 +662,15 @@ unsafe extern "C" {
         flags: zlink_send_flags_t,
         part_flag: zlink_part_flag_t,
     ) -> c_int;
+    pub fn zlink_send_part_transport_pair(
+        socket: *mut c_void,
+        target_rid: *const zlink_routing_id_t,
+        transport_pair_id: u64,
+        transport_pair_generation: u64,
+        part: *mut zlink_msg_t,
+        flags: zlink_send_flags_t,
+        part_flag: zlink_part_flag_t,
+    ) -> c_int;
     pub fn zlink_dealer_request_part(
         dealer: *mut c_void,
         part: *mut zlink_msg_t,
@@ -535,9 +680,38 @@ unsafe extern "C" {
         handler: Option<zlink_reply_handler_fn>,
         userdata: *mut c_void,
     ) -> c_int;
+    pub fn zlink_dealer_request_transport_pair_part(
+        dealer: *mut c_void,
+        target: *const zlink_routed_submit_target_t,
+        part: *mut zlink_msg_t,
+        flags: zlink_send_flags_t,
+        part_flag: zlink_part_flag_t,
+        timeout_ms: u32,
+        handler: Option<zlink_reply_handler_fn>,
+        userdata: *mut c_void,
+    ) -> c_int;
+    pub fn zlink_dealer_send_transport_pair_part(
+        dealer: *mut c_void,
+        target: *const zlink_routed_submit_target_t,
+        part: *mut zlink_msg_t,
+        flags: zlink_send_flags_t,
+        part_flag: zlink_part_flag_t,
+    ) -> c_int;
     pub fn zlink_router_request_part(
         router: *mut c_void,
         peer_rid: *const zlink_routing_id_t,
+        part: *mut zlink_msg_t,
+        flags: zlink_send_flags_t,
+        part_flag: zlink_part_flag_t,
+        timeout_ms: u32,
+        handler: Option<zlink_reply_handler_fn>,
+        userdata: *mut c_void,
+    ) -> c_int;
+    pub fn zlink_router_request_transport_pair_part(
+        router: *mut c_void,
+        peer_rid: *const zlink_routing_id_t,
+        transport_pair_id: u64,
+        transport_pair_generation: u64,
         part: *mut zlink_msg_t,
         flags: zlink_send_flags_t,
         part_flag: zlink_part_flag_t,
@@ -560,6 +734,26 @@ unsafe extern "C" {
         has_more_out: *mut zlink_part_flag_t,
         flags: zlink_recv_flags_t,
     ) -> c_int;
+    pub fn zlink_router_recv_part_v2_with_hwm_budget_lease(
+        router: *mut c_void,
+        source_rid_out: *mut *const zlink_routing_id_t,
+        request_seq_out: *mut u64,
+        transport_pair_id_out: *mut u64,
+        transport_pair_generation_out: *mut u64,
+        part_out: *mut zlink_msg_t,
+        lease_out: *mut *mut zlink_hwm_budget_lease_t,
+        has_more_out: *mut zlink_part_flag_t,
+        flags: zlink_recv_flags_t,
+    ) -> c_int;
+    pub fn zlink_dealer_recv_part_with_hwm_budget_lease(
+        dealer: *mut c_void,
+        message_type_out: *mut u8,
+        request_seq_out: *mut u64,
+        part_out: *mut zlink_msg_t,
+        lease_out: *mut *mut zlink_hwm_budget_lease_t,
+        has_more_out: *mut zlink_part_flag_t,
+        flags: zlink_recv_flags_t,
+    ) -> c_int;
     pub fn zlink_recv_part(
         socket: *mut c_void,
         source_rid_out: *mut *const zlink_routing_id_t,
@@ -567,6 +761,15 @@ unsafe extern "C" {
         has_more_out: *mut zlink_part_flag_t,
         flags: zlink_recv_flags_t,
     ) -> c_int;
+    pub fn zlink_recv_part_with_hwm_budget_lease(
+        socket: *mut c_void,
+        source_rid_out: *mut *const zlink_routing_id_t,
+        part_out: *mut zlink_msg_t,
+        lease_out: *mut *mut zlink_hwm_budget_lease_t,
+        has_more_out: *mut zlink_part_flag_t,
+        flags: zlink_recv_flags_t,
+    ) -> c_int;
+    pub fn zlink_hwm_budget_lease_release(lease: *mut *mut zlink_hwm_budget_lease_t);
 
     pub fn zlink_publish_part(
         subject: *mut c_void,
@@ -591,6 +794,17 @@ unsafe extern "C" {
         topic_id_capacity: usize,
         topic_id_len_out: *mut usize,
         part_out: *mut zlink_msg_t,
+        has_more_out: *mut zlink_part_flag_t,
+        flags: zlink_recv_flags_t,
+    ) -> c_int;
+    pub fn zlink_subscribe_part_with_hwm_budget_lease(
+        subject: *mut c_void,
+        source_rid_out: *mut *const zlink_routing_id_t,
+        topic_id_out: *mut c_char,
+        topic_id_capacity: usize,
+        topic_id_len_out: *mut usize,
+        part_out: *mut zlink_msg_t,
+        lease_out: *mut *mut zlink_hwm_budget_lease_t,
         has_more_out: *mut zlink_part_flag_t,
         flags: zlink_recv_flags_t,
     ) -> c_int;

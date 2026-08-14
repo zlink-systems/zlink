@@ -125,7 +125,7 @@ test('stream packet body can use managed Buffer materialization', async () => {
           const prefix = Buffer.allocUnsafe(6);
           prefix.writeUInt16BE(header.size(), 0);
           prefix.writeUInt32BE(body.size(), 2);
-          assert.equal(stream.send(sourceRid)
+          assert.equal(stream.trySend(sourceRid)
             .message(prefix)
             .message(header)
             .message(body)
@@ -173,7 +173,7 @@ test('stream packet body forwards from native storage without JavaScript materia
           const prefix = Buffer.allocUnsafe(6);
           prefix.writeUInt16BE(header.size(), 0);
           prefix.writeUInt32BE(body.size(), 2);
-          const submitted = stream.send(sourceRid)
+          const submitted = stream.trySend(sourceRid)
             .message(prefix)
             .message(header)
             .message(body)

@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLES_DIR = ROOT / "samples"
 CANONICAL_SAMPLES = [
-    "request_reply_callback_sample.py",
+    "request_reply_async_sample.py",
     "pair_recv_sample.py",
     "dealer_router_recv_sample.py",
     "pubsub_recv_sample.py",

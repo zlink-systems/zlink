@@ -200,6 +200,8 @@ public final class ContractAccess {
         boolean hasRoutingIdBytes(Received received);
 
         void adoptFrom(Received target, Received source);
+
+        void adoptRetainedCredit(Received received, Runnable release);
     }
 
     public interface SubscriptionEventAccess {
@@ -220,6 +222,8 @@ public final class ContractAccess {
         Message prepareReusableSinglePart(TopicMessage target);
 
         void adoptFrom(TopicMessage target, TopicMessage source);
+
+        void adoptRetainedCredit(TopicMessage target, Runnable release);
     }
 
     public interface MessageAccess {
@@ -587,6 +591,11 @@ public final class ContractAccess {
         topicMessageAccess().adoptFrom(target, source);
     }
 
+    public static void topicMessageAdoptRetainedCredit(TopicMessage target,
+                                                       Runnable release) {
+        topicMessageAccess().adoptRetainedCredit(target, release);
+    }
+
     public static Message topicMessagePrepareReusableSinglePart(
       TopicMessage target) {
         return topicMessageAccess().prepareReusableSinglePart(target);
@@ -636,6 +645,11 @@ public final class ContractAccess {
 
     public static void receivedAdoptFrom(Received target, Received source) {
         receivedAccess().adoptFrom(target, source);
+    }
+
+    public static void receivedAdoptRetainedCredit(Received received,
+                                                   Runnable release) {
+        receivedAccess().adoptRetainedCredit(received, release);
     }
 
     public static void receivedPopulateRoutedSinglePart(

@@ -13,8 +13,21 @@ public delegate void StreamPacketHandler(RoutingId routingId, Message header,
 /// <summary>
 ///     Contract for a STREAM socket: exchanges framed packets with raw TCP peers.
 /// </summary>
-public interface IStreamSocket : IRoutedMessageSocket
+public interface IStreamSocket : IReceivingMessageSocket
 {
+    /// <summary>
+    ///     Begins an exact-target STREAM send whose asynchronous terminal waits
+    ///     for Core admission to the selected connection generation.
+    /// </summary>
+    RoutedSendOperation Send(RoutingId routingId);
+
+    /// <summary>
+    ///     Begins an explicit immediate STREAM send. The terminal returns false
+    ///     when <see cref="SendFlags.DontWait" /> is selected and Core cannot
+    ///     admit the record immediately.
+    /// </summary>
+    SendOperation TrySend(RoutingId routingId);
+
     /// <summary>
     ///     Gets the STREAM-specific typed options facade.
     /// </summary>

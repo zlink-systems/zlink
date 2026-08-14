@@ -10,13 +10,13 @@ use std::sync::{
 use std::time::Duration;
 use zlink::{
     Message, POLLIN, POLLOUT, PollEvent, Poller, RecvFlags, RecvResult, RoutingId, SendFlags,
+    SubmitResult,
 };
 
 fn main() {
     let args = common::MultiArgs::parse();
     let settings = common::MultiSettings::from_env();
     let ctx = common::perf_server_context();
-    common::apply_multi_auto_hwm_msg_unit(&ctx, args.msg_size);
     let router = ctx.router_socket().expect("router");
     // C parity: numeric HWM remains behind the manual-override gate.
     common::apply_multi_hwm(&router, &settings);
@@ -93,14 +93,14 @@ fn main() {
         }
         // Flush pending backlog first (POLLOUT side).
         while let Some((rid, reply_bytes)) = pending.pop_front() {
-            match router
-                .send(&rid)
-                .message(Message::try_from(&reply_bytes).expect("pending reply"))
-                .flags(SendFlags::DONT_WAIT)
-                .submit()
-            {
-                Ok(true) => {}
-                Ok(false) => {
+            match common::block_on(
+                router
+                    .send(&rid)
+                    .message(Message::try_from(&reply_bytes).expect("pending reply"))
+                    .submit(),
+            ) {
+                Ok(()) => {}
+                Err(err) if err.code() == SubmitResult::Backpressured => {
                     pending.push_front((rid, reply_bytes));
                     break;
                 }

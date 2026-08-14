@@ -4,7 +4,6 @@ package native
 
 import (
 	"context"
-	"syscall"
 	"time"
 )
 
@@ -22,6 +21,24 @@ type SendSubmitOp interface {
 	Submit(ctx context.Context) (bool, error)
 }
 
+// RoutedSendOp builds a DEALER/ROUTER send whose completion waits for exact-
+// target admission without occupying the caller goroutine.
+type RoutedSendOp interface {
+	Message(message *Message) RoutedSendSubmitOp
+	MoveMessage(message *Message) RoutedSendSubmitOp
+	Bytes(data []byte) RoutedSendSubmitOp
+}
+
+// RoutedSendSubmitOp exposes the single completion-channel terminal for a
+// managed routed send. The channel yields nil after Core accepts the complete
+// record, or one terminal error, and then closes.
+type RoutedSendSubmitOp interface {
+	Message(message *Message) RoutedSendSubmitOp
+	MoveMessage(message *Message) RoutedSendSubmitOp
+	Bytes(data []byte) RoutedSendSubmitOp
+	Submit(ctx context.Context) <-chan error
+}
+
 type RequestOp interface {
 	Message(message *Message) RequestSubmitOp
 	Bytes(data []byte) RequestSubmitOp
@@ -31,17 +48,7 @@ type RequestSubmitOp interface {
 	Message(message *Message) RequestSubmitOp
 	Bytes(data []byte) RequestSubmitOp
 	Timeout(timeout time.Duration) RequestSubmitOp
-	Flags(flags SendFlags) RequestCallbackSubmitOp
-	SubmitAsync(ctx context.Context) (<-chan RequestReplyCompletion, error)
-	Submit(ctx context.Context, callback RequestReplyCallback) (bool, error)
-}
-
-type RequestCallbackSubmitOp interface {
-	Message(message *Message) RequestCallbackSubmitOp
-	Bytes(data []byte) RequestCallbackSubmitOp
-	Timeout(timeout time.Duration) RequestCallbackSubmitOp
-	Flags(flags SendFlags) RequestCallbackSubmitOp
-	Submit(ctx context.Context, callback RequestReplyCallback) (bool, error)
+	Submit(ctx context.Context) <-chan RequestReplyCompletion
 }
 
 type ReplyOp interface {
@@ -133,19 +140,49 @@ func (b *sendBuilder) singlePart() []sendBuilderPart {
 	return b.first[:]
 }
 
+type routedSendBuilder struct {
+	parts []sendBuilderPart
+	submitOnce
+	submit func(context.Context, []sendBuilderPart) <-chan error
+}
+
+func newRoutedSendBuilder(submit func(context.Context, []sendBuilderPart) <-chan error) RoutedSendOp {
+	return &routedSendBuilder{submit: submit}
+}
+
+func (b *routedSendBuilder) Message(message *Message) RoutedSendSubmitOp {
+	b.parts = append(b.parts, sendBuilderPart{message: message})
+	return b
+}
+
+func (b *routedSendBuilder) MoveMessage(message *Message) RoutedSendSubmitOp {
+	b.parts = append(b.parts, sendBuilderPart{message: message, move: true})
+	return b
+}
+
+func (b *routedSendBuilder) Bytes(data []byte) RoutedSendSubmitOp {
+	b.parts = append(b.parts, sendBuilderPart{data: data, bytes: true})
+	return b
+}
+
+func (b *routedSendBuilder) Submit(ctx context.Context) <-chan error {
+	if len(b.parts) == 0 {
+		return completedSend(configInvalidArgumentError())
+	}
+	if err := b.markSubmitted(); err != nil {
+		return completedSend(err)
+	}
+	return b.submit(ctx, b.parts)
+}
+
 type requestBuilderState struct {
 	parts   []requestBuilderPart
-	flags   SendFlags
 	timeout time.Duration
 	submitOnce
-	submit func(parts []requestBuilderPart, flags SendFlags, timeout time.Duration, callback RequestReplyCallback) error
+	submit func(context.Context, []requestBuilderPart, time.Duration) <-chan RequestReplyCompletion
 }
 
 type requestBuilder struct {
-	state *requestBuilderState
-}
-
-type requestCallbackBuilder struct {
 	state *requestBuilderState
 }
 
@@ -155,7 +192,7 @@ type requestBuilderPart struct {
 	bytes   bool
 }
 
-func newRequestBuilder(submit func(parts []requestBuilderPart, flags SendFlags, timeout time.Duration, callback RequestReplyCallback) error) RequestOp {
+func newRequestBuilder(submit func(context.Context, []requestBuilderPart, time.Duration) <-chan RequestReplyCompletion) RequestOp {
 	return &requestBuilder{state: &requestBuilderState{submit: submit}}
 }
 
@@ -174,80 +211,14 @@ func (b *requestBuilder) Timeout(timeout time.Duration) RequestSubmitOp {
 	return b
 }
 
-func (b *requestBuilder) Flags(flags SendFlags) RequestCallbackSubmitOp {
-	b.state.flags = flags
-	return &requestCallbackBuilder{state: b.state}
-}
-
-func (b *requestBuilder) SubmitAsync(ctx context.Context) (<-chan RequestReplyCompletion, error) {
-	if err := contextError(ctx); err != nil {
-		return nil, err
+func (b *requestBuilder) Submit(ctx context.Context) <-chan RequestReplyCompletion {
+	if len(b.state.parts) == 0 {
+		return completedRequest(configInvalidArgumentError())
 	}
-	return b.state.doSubmitAsync()
-}
-
-func (b *requestBuilder) Submit(ctx context.Context, callback RequestReplyCallback) (bool, error) {
-	if err := contextError(ctx); err != nil {
-		return false, err
+	if err := b.state.markSubmitted(); err != nil {
+		return completedRequest(err)
 	}
-	return b.state.doSubmitCallback(callback)
-}
-
-func (b *requestCallbackBuilder) Message(message *Message) RequestCallbackSubmitOp {
-	b.state.parts = append(b.state.parts, requestBuilderPart{message: message})
-	return b
-}
-
-func (b *requestCallbackBuilder) Bytes(data []byte) RequestCallbackSubmitOp {
-	b.state.parts = append(b.state.parts, requestBuilderPart{data: data, bytes: true})
-	return b
-}
-
-func (b *requestCallbackBuilder) Timeout(timeout time.Duration) RequestCallbackSubmitOp {
-	b.state.timeout = timeout
-	return b
-}
-
-func (b *requestCallbackBuilder) Flags(flags SendFlags) RequestCallbackSubmitOp {
-	b.state.flags = flags
-	return b
-}
-
-func (b *requestCallbackBuilder) Submit(ctx context.Context, callback RequestReplyCallback) (bool, error) {
-	if err := contextError(ctx); err != nil {
-		return false, err
-	}
-	return b.state.doSubmitCallback(callback)
-}
-
-func (s *requestBuilderState) doSubmitAsync() (<-chan RequestReplyCompletion, error) {
-	result := make(chan RequestReplyCompletion, 1)
-	ok, err := s.doSubmitCallback(func(r RequestResult, parts []*Message) {
-		completion := RequestReplyCompletion{Result: r, Parts: parts}
-		completion.Err = requestCompletionError(r)
-		result <- completion
-		close(result)
-	})
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, &SubmitError{Result: SubmitBackpressured, nativeErrno: int(syscall.EAGAIN)}
-	}
-	return result, nil
-}
-
-func (s *requestBuilderState) doSubmitCallback(callback RequestReplyCallback) (bool, error) {
-	if len(s.parts) == 0 || callback == nil {
-		return false, configInvalidArgumentError()
-	}
-	if err := s.markSubmitted(); err != nil {
-		return false, err
-	}
-	if err := s.submit(s.parts, s.flags, s.timeout, callback); err != nil {
-		return submitBackpressureAsNotSubmitted(err)
-	}
-	return true, nil
+	return b.state.submit(ctx, b.state.parts, b.state.timeout)
 }
 
 type replyBuilder struct {
@@ -294,4 +265,18 @@ func contextError(ctx context.Context) error {
 	default:
 		return nil
 	}
+}
+
+func completedSend(err error) <-chan error {
+	result := make(chan error, 1)
+	result <- err
+	close(result)
+	return result
+}
+
+func completedRequest(err error) <-chan RequestReplyCompletion {
+	result := make(chan RequestReplyCompletion, 1)
+	result <- requestCompletionFromError(err)
+	close(result)
+	return result
 }

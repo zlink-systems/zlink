@@ -14,15 +14,25 @@ internal sealed partial class SocketKernel
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool ReceiveInto(Received result, int flags)
     {
-        // The typed socket classes that expose Recv(Received, RecvFlags) on
-        // their public surface only inherit from MessageSocketBase /
-        // RoutedMessageSocketBase, so the message-receive capability is
-        // already guaranteed by the class hierarchy. Skipping the per-call
-        // EnsureSupports lookup keeps DR/RR 64B-1024B recv on the direct
-        // storage-reuse path.
+        return ReceiveIntoCore(result, flags, false);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool ReceiveRetainedInto(Received result, int flags)
+    {
+        return ReceiveIntoCore(result, flags, true);
+    }
+
+    private bool ReceiveIntoCore(Received result, int flags,
+        bool retainCredit)
+    {
+        // The typed socket classes that expose receive on their public surface
+        // already guarantee the capability. Skipping a per-call policy lookup
+        // keeps the storage-reuse path direct.
         if (result == null)
             throw new ArgumentNullException(nameof(result));
-        return TryReceiveIntoMessageCore(result, flags);
+        result.PrepareForReceive();
+        return TryReceiveIntoMessageCore(result, flags, retainCredit);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -152,49 +162,103 @@ internal sealed partial class SocketKernel
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool ReceiveRoutedInto(Received result, int flags)
     {
+        return ReceiveRoutedIntoCore(result, flags, false);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool ReceiveRoutedRetainedInto(Received result, int flags)
+    {
+        return ReceiveRoutedIntoCore(result, flags, true);
+    }
+
+    private bool ReceiveRoutedIntoCore(Received result, int flags,
+        bool retainCredit)
+    {
         if (result == null)
             throw new ArgumentNullException(nameof(result));
-        return TryReceiveIntoRoutedCore(result, flags);
+        result.PrepareForReceive();
+        return TryReceiveIntoRoutedCore(result, flags, retainCredit);
     }
 
-    private bool TryReceiveIntoMessageCore(Received result, int flags)
+    private bool TryReceiveIntoMessageCore(Received result, int flags,
+        bool retainCredit)
     {
         var allowNoData = (flags & DontWaitFlag) != 0;
-        if (!ReceiveBasicParts(flags, out var singlePart, out var parts,
+        if (!ReceiveBasicParts(flags, retainCredit,
+                out var singlePart, out var parts,
+                out var hwmBudgetLeases,
                 allowNoData))
             return false;
-        if (singlePart != null)
-            result.PopulateSinglePart(singlePart);
-        else
-            result.PopulateMultipart(parts!);
-        return true;
+        try
+        {
+            if (singlePart != null)
+                result.PopulateSinglePart(singlePart, hwmBudgetLeases);
+            else
+                result.PopulateMultipart(parts!, hwmBudgetLeases);
+            return true;
+        }
+        catch
+        {
+            DisposeReceivedAssembly(singlePart, parts, hwmBudgetLeases);
+            throw;
+        }
     }
 
-    private bool TryReceiveIntoRoutedCore(Received result, int flags)
+    private bool TryReceiveIntoRoutedCore(Received result, int flags,
+        bool retainCredit)
     {
         var allowNoData = (flags & DontWaitFlag) != 0;
-        if (!ReceiveRoutedParts(flags, out var routingId,
+        if (!ReceiveRoutedParts(flags, retainCredit, out var routingId,
                 out var requestSeq,
                 out var singlePart, out var parts,
+                out var hwmBudgetLeases,
                 allowNoData))
             return false;
-        PopulateRoutedReceivedInto(result, singlePart, parts, routingId,
-            requestSeq);
-        return true;
+        try
+        {
+            PopulateRoutedReceivedInto(result, singlePart, parts, routingId,
+                requestSeq, hwmBudgetLeases);
+            return true;
+        }
+        catch
+        {
+            DisposeReceivedAssembly(singlePart, parts, hwmBudgetLeases);
+            throw;
+        }
+    }
+
+    private static void DisposeReceivedAssembly(Message? singlePart,
+        MultipartMessageCollection? parts,
+        HwmBudgetLeaseOwner? hwmBudgetLeases)
+    {
+        try
+        {
+            if (singlePart != null)
+                singlePart.Dispose();
+            else
+                parts?.Dispose();
+        }
+        finally
+        {
+            hwmBudgetLeases?.Dispose();
+        }
     }
 
     private void PopulateRoutedReceivedInto(Received result,
         Message? singlePart, MultipartMessageCollection? parts,
-        RoutingIdSnapshot routingId, ulong requestSeq)
+        RoutingIdSnapshot routingId, ulong requestSeq,
+        HwmBudgetLeaseOwner? hwmBudgetLeases)
     {
         if (requestSeq == 0)
         {
             if (singlePart != null)
                 result.PopulateRoutedSinglePart(singlePart, routingId,
-                    null, null, sendKernel: this);
+                    null, null, sendKernel: this,
+                    hwmBudgetLeases: hwmBudgetLeases);
             else
                 result.PopulateRoutedMultipart(parts!, routingId,
-                    null, null, sendKernel: this);
+                    null, null, sendKernel: this,
+                    hwmBudgetLeases: hwmBudgetLeases);
             return;
         }
 
@@ -218,10 +282,12 @@ internal sealed partial class SocketKernel
         if (singlePart != null)
             result.PopulateRoutedSinglePart(singlePart, routingId,
                 requestSeq, replyHandler, CreateRoutedSendHandler(routingId),
-                CreateRoutedSendSingleHandler(routingId));
+                CreateRoutedSendSingleHandler(routingId),
+                hwmBudgetLeases: hwmBudgetLeases);
         else
             result.PopulateRoutedMultipart(parts!, routingId,
                 requestSeq, replyHandler, CreateRoutedSendHandler(routingId),
-                CreateRoutedSendSingleHandler(routingId));
+                CreateRoutedSendSingleHandler(routingId),
+                hwmBudgetLeases: hwmBudgetLeases);
     }
 }

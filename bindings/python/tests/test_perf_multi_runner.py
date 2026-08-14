@@ -16,7 +16,6 @@ from perf_metrics import (
     result_metrics,
     stamp_payload,
 )
-from perf_multi_common import apply_multi_auto_hwm_msg_unit
 from run_benchmarks import _normalize_pattern, _result_pattern
 
 
@@ -82,24 +81,6 @@ class PerfMultiRunnerTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["latency"], 2.0)
         self.assertAlmostEqual(metrics["latency_p95"], 2.0)
         self.assertAlmostEqual(metrics["latency_p99"], 2.0)
-
-    def test_auto_hwm_message_unit_recalculates_after_assignment(self):
-        calls = []
-
-        class Options:
-            auto_hwm_msg_unit_bytes = 0
-
-        class Context:
-            options = Options()
-
-            def recalculate_auto_hwm(self):
-                calls.append(self.options.auto_hwm_msg_unit_bytes)
-
-        context = Context()
-        apply_multi_auto_hwm_msg_unit(context, 4096)
-
-        self.assertEqual(context.options.auto_hwm_msg_unit_bytes, 4096)
-        self.assertEqual(calls, [4096])
 
     def test_top_level_multi_wrapper_help(self):
         runner = (

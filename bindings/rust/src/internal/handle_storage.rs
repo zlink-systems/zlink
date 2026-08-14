@@ -1,7 +1,7 @@
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::ffi;
 
@@ -44,6 +44,8 @@ unsafe impl Send for MonitorStorage {}
 pub(crate) struct SocketStorage {
     pub(crate) handle: *mut c_void,
     pub(crate) send_ready_cb: Option<CallbackBox>,
+    pub(crate) routed_ready_cb: Option<CallbackBox>,
+    pub(crate) routed_admission: Option<Arc<super::RoutedAdmission>>,
     pub(crate) packet_cb: Option<CallbackBox>,
 }
 

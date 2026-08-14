@@ -3,8 +3,8 @@ mod common;
 
 use std::time::{Duration, Instant};
 use zlink::{
-    Message, PollEvent, Poller, RecvFlags, RouterSocket, RoutingId, SendFlags, SocketMonitor,
-    POLLIN, POLLOUT,
+    Message, POLLIN, POLLOUT, PollEvent, Poller, RecvFlags, RouterSocket, RoutingId, SocketMonitor,
+    SubmitResult,
 };
 
 fn drain_socket(
@@ -42,7 +42,6 @@ fn main() {
     let settings = common::MultiSettings::from_env();
 
     let ctx = common::perf_client_context();
-    common::apply_multi_auto_hwm_msg_unit(&ctx, args.msg_size);
     let server_rid = RoutingId::from(b"perf-rr-server");
     let mut sockets: Vec<RouterSocket> = Vec::with_capacity(settings.clients);
     let payload_size = args.msg_size.max(common::HEADER_SIZE);
@@ -116,19 +115,14 @@ fn main() {
                 args.msg_size as u32,
                 seqs[index],
             );
-            match sockets[index]
-                .send(&server_rid)
-                .message(msg)
-                .flags(SendFlags::DONT_WAIT)
-                .submit()
-            {
-                Ok(true) => {
+            match common::block_on(sockets[index].send(&server_rid).message(msg).submit()) {
+                Ok(()) => {
                     waiting_reply[index] = true;
                     send_pending[index] = false;
                     seqs[index] += 1;
                     progressed = true;
                 }
-                Ok(false) => {
+                Err(err) if err.code() == SubmitResult::Backpressured => {
                     send_pending[index] = true;
                 }
                 Err(err) => panic!("send failed: {err}"),

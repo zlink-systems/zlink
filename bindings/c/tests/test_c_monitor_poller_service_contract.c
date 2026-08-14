@@ -32,8 +32,20 @@ int main (void)
     zlink_socket_monitor_open_options_t monitor_options;
     memset (&monitor_options, 0, sizeof (monitor_options));
     monitor_options.events = ZLINK_SOCKET_MONITOR_EVENT_ALL;
+    monitor_options.monitor_hwm_bytes = 12345u;
     void *monitor = zlink_socket_monitor_open (pair, &monitor_options);
     CHECK (monitor != NULL);
+
+    uint64_t monitor_hwm = 0;
+    size_t monitor_hwm_size = sizeof (monitor_hwm);
+    CHECK (zlink_get_option (monitor, ZLINK_OPT_SNDHWM, &monitor_hwm, &monitor_hwm_size)
+           == ZLINK_CONFIG_OK);
+    CHECK (monitor_hwm == monitor_options.monitor_hwm_bytes);
+    monitor_hwm = 0;
+    monitor_hwm_size = sizeof (monitor_hwm);
+    CHECK (zlink_get_option (monitor, ZLINK_OPT_RCVHWM, &monitor_hwm, &monitor_hwm_size)
+           == ZLINK_CONFIG_OK);
+    CHECK (monitor_hwm == monitor_options.monitor_hwm_bytes);
 
     zlink_socket_monitor_event_t event;
     CHECK (zlink_socket_monitor_recv (monitor, &event, ZLINK_RECV_FLAGS_DONTWAIT)

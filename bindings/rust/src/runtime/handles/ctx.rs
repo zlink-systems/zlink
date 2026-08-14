@@ -1,7 +1,7 @@
 use std::ffi::{CStr, CString, c_void};
 use std::time::Duration;
 
-use crate::core_context::{AutoHwmProfile, AutoHwmRecalcReason, Context};
+use crate::core_context::{AutoHwmProfile, AutoHwmRecalcReason, Context, CoreHwmBudgetSnapshot};
 use crate::error::{CloseError, ConfigError, ConfigResult};
 use crate::ffi;
 use crate::internal::ContextStorage;
@@ -178,6 +178,58 @@ impl ContextStorage {
     pub(crate) fn recalculate_auto_hwm(&self) -> Result<(), ConfigError> {
         check_config_rc(unsafe { ffi::zlink_ctx_auto_hwm_recalculate(self.handle) })
     }
+
+    pub(crate) fn core_hwm_budget_snapshot(&self) -> Result<CoreHwmBudgetSnapshot, ConfigError> {
+        let mut native = ffi::zlink_auto_hwm_budget_snapshot_t::default();
+        check_config_rc(unsafe {
+            ffi::zlink_ctx_get_auto_hwm_budget_snapshot(self.handle, &mut native)
+        })?;
+        Ok(CoreHwmBudgetSnapshot {
+            abi_version: native.abi_version,
+            struct_size: native.struct_size,
+            budget_generation: native.budget_generation,
+            measurement_epoch: native.measurement_epoch,
+            configured_memory_limit_bytes: native.configured_memory_limit_bytes,
+            runtime_memory_limit_bytes: native.runtime_memory_limit_bytes,
+            resolved_memory_limit_bytes: native.resolved_memory_limit_bytes,
+            configured_core_budget_bytes: native.configured_core_budget_bytes,
+            effective_core_budget_bytes: native.effective_core_budget_bytes,
+            total_planned_hwm_bytes: native.total_planned_hwm_bytes,
+            total_applied_hwm_bytes: native.total_applied_hwm_bytes,
+            manual_reserved_hwm_bytes: native.manual_reserved_hwm_bytes,
+            core_queue_accounted_bytes: native.core_queue_accounted_bytes,
+            application_accounted_bytes: native.application_accounted_bytes,
+            current_accounted_bytes: native.current_accounted_bytes,
+            provisional_accounted_bytes: native.provisional_accounted_bytes,
+            peak_accounted_bytes: native.peak_accounted_bytes,
+            completion_current_accounted_bytes: native.completion_current_accounted_bytes,
+            completion_peak_accounted_bytes: native.completion_peak_accounted_bytes,
+            completion_pending_message_count: native.completion_pending_message_count,
+            total_messaging_accounted_bytes: native.total_messaging_accounted_bytes,
+            monitor_queue_applied_hwm_bytes: native.monitor_queue_applied_hwm_bytes,
+            monitor_queue_accounted_bytes: native.monitor_queue_accounted_bytes,
+            total_instance_applied_hwm_bytes: native.total_instance_applied_hwm_bytes,
+            total_instance_accounted_bytes: native.total_instance_accounted_bytes,
+            oversize_admission_count: native.oversize_admission_count,
+            largest_oversize_message_bytes: native.largest_oversize_message_bytes,
+            active_directional_queue_count: native.active_directional_queue_count,
+            active_completion_directional_queue_count: native
+                .active_completion_directional_queue_count,
+            active_send_queue_count: native.active_send_queue_count,
+            active_receive_queue_count: native.active_receive_queue_count,
+            outstanding_application_lease_count: native.outstanding_application_lease_count,
+            retired_queue_count: native.retired_queue_count,
+            deferred_origin_credit_bytes: native.deferred_origin_credit_bytes,
+            unlimited_manual_queue_count: native.unlimited_manual_queue_count,
+            blocked_ratio_ppm: native.blocked_ratio_ppm,
+            flags: native.flags,
+            reserved_u64: native.reserved_u64,
+        })
+    }
+
+    pub(crate) fn reset_core_hwm_budget_metrics(&self) -> Result<(), ConfigError> {
+        check_config_rc(unsafe { ffi::zlink_ctx_reset_auto_hwm_budget_metrics(self.handle) })
+    }
 }
 
 impl ContextStorage {
@@ -301,28 +353,41 @@ impl ContextStorage {
         )
     }
 
-    pub(crate) fn auto_hwm_profile(&self) -> Result<AutoHwmProfile, ConfigError> {
+    pub(crate) fn core_hwm_profile(&self) -> Result<AutoHwmProfile, ConfigError> {
         AutoHwmProfile::from_raw(
             self.get_int_option(ffi::zlink_ctx_option_t::ZLINK_CTX_OPT_AUTO_HWM_PROFILE as i32)?,
         )
     }
 
-    pub(crate) fn set_auto_hwm_profile(&self, profile: AutoHwmProfile) -> Result<(), ConfigError> {
+    pub(crate) fn set_core_hwm_profile(&self, profile: AutoHwmProfile) -> Result<(), ConfigError> {
         self.set_int_option(
             ffi::zlink_ctx_option_t::ZLINK_CTX_OPT_AUTO_HWM_PROFILE as i32,
             profile.to_raw(),
         )
     }
 
-    pub(crate) fn auto_hwm_msg_unit_bytes(&self) -> Result<u64, ConfigError> {
+    pub(crate) fn core_hwm_memory_limit_bytes(&self) -> Result<u64, ConfigError> {
         self.get_u64_data_option(
-            ffi::zlink_ctx_option_t::ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES as i32,
+            ffi::zlink_ctx_option_t::ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES as i32,
         )
     }
 
-    pub(crate) fn set_auto_hwm_msg_unit_bytes(&self, bytes: u64) -> Result<(), ConfigError> {
+    pub(crate) fn set_core_hwm_memory_limit_bytes(&self, bytes: u64) -> Result<(), ConfigError> {
         self.set_u64_data_option(
-            ffi::zlink_ctx_option_t::ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES as i32,
+            ffi::zlink_ctx_option_t::ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES as i32,
+            bytes,
+        )
+    }
+
+    pub(crate) fn core_hwm_budget_bytes(&self) -> Result<u64, ConfigError> {
+        self.get_u64_data_option(
+            ffi::zlink_ctx_option_t::ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES as i32,
+        )
+    }
+
+    pub(crate) fn set_core_hwm_budget_bytes(&self, bytes: u64) -> Result<(), ConfigError> {
+        self.set_u64_data_option(
+            ffi::zlink_ctx_option_t::ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES as i32,
             bytes,
         )
     }

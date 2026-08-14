@@ -8,24 +8,7 @@ package native
 */
 import "C"
 
-import (
-	"errors"
-	"time"
-)
-
-func requestTimeoutMillis(timeout time.Duration) uint32 {
-	if timeout <= 0 {
-		return 0
-	}
-	ms := timeout / time.Millisecond
-	if ms == 0 {
-		return 1
-	}
-	if ms > time.Duration(^uint32(0)) {
-		return ^uint32(0)
-	}
-	return uint32(ms)
-}
+import "errors"
 
 func submitBackpressureResult(err error) (bool, error) {
 	if err == nil {
@@ -36,26 +19,6 @@ func submitBackpressureResult(err error) (bool, error) {
 		return false, nil
 	}
 	return false, err
-}
-
-func dispatchRequestCallback(state *replyCallbackState, dispatcher *callbackDispatcher, callback RequestReplyCallback) {
-	if state == nil || callback == nil {
-		return
-	}
-	state.setCompletionDispatch(func(result requestResult) {
-		task := &callbackTask{
-			label: "request-completion",
-			invoke: func() {
-				callback(result.result, result.parts)
-			},
-			cleanup: func() {
-				MultipartClose(result.parts)
-			},
-		}
-		if dispatcher == nil || !dispatcher.enqueue(task) {
-			task.cleanup()
-		}
-	})
 }
 
 func cloneParts(parts []*Message) ([]*Message, error) {

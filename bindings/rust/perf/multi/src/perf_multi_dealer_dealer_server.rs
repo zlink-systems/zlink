@@ -12,7 +12,6 @@ fn main() {
     let settings = common::MultiSettings::from_env();
 
     let ctx = common::perf_server_context();
-    common::apply_multi_auto_hwm_msg_unit(&ctx, args.msg_size);
     let server = ctx.dealer_socket().expect("dealer");
     // C parity: numeric HWM remains behind the manual-override gate.
     common::apply_multi_hwm(&server, &settings);

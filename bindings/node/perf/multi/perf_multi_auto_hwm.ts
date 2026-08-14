@@ -231,13 +231,11 @@ function emitSpotNodeAutoHwmSnapshot(node, label, transport, msgSize) {
       + `,profile_id=${snapshot.autoHwmProfile}`
       + `,policy_class=${autoHwmPolicyClassName(snapshot.autoHwmPolicyClass)}`
       + `,policy_class_id=${snapshot.autoHwmPolicyClass}`
-      + `,unit_budget_bytes=${snapshot.autoHwmUnitBudgetBytes}`
-      + `,size_cap=${snapshot.autoHwmSizeCap}`
       + `,scope=${scope}`
       + `,sndhwm=${snapshot.autoHwmAppliedSndHwmBytes}`
       + `,rcvhwm=${snapshot.autoHwmAppliedRcvHwmBytes}`
-      + `,socket_message_slots=${snapshot.autoHwmSocketMessageSlots}`
-      + `,effective_message_bytes=${snapshot.autoHwmEffectiveMessageBytes}`
+      + `,snd_pending_bytes=${snapshot.sndPendingBytes}`
+      + `,rcv_pending_bytes=${snapshot.rcvPendingBytes}`
       + `,effective_sndbuf=${sndbuf}`
       + `,effective_rcvbuf=${rcvbuf}`
       + `,last_recalc_reason=${autoHwmRecalcReasonName(snapshot.autoHwmLastRecalcReason)}`
@@ -277,10 +275,8 @@ function emitMultiSocketHwmDetail(socket, label, transport, msgSize) {
       snapshot.autoHwmAppliedRcvHwmBytes,
       snapshot.autoHwmProfile,
       snapshot.autoHwmPolicyClass,
-      String(snapshot.autoHwmUnitBudgetBytes),
-      snapshot.autoHwmSizeCap,
-      String(snapshot.autoHwmSocketMessageSlots),
-      String(snapshot.autoHwmEffectiveMessageBytes),
+      String(snapshot.sndPendingBytes),
+      String(snapshot.rcvPendingBytes),
       snapshot.autoHwmEffectiveSndBuf,
       snapshot.autoHwmEffectiveRcvBuf,
     ].join('|');
@@ -304,12 +300,10 @@ function emitMultiSocketHwmDetail(socket, label, transport, msgSize) {
       + `,profile_id=${snapshot.autoHwmProfile}`
       + `,policy_class=${autoHwmPolicyClassName(snapshot.autoHwmPolicyClass)}`
       + `,policy_class_id=${snapshot.autoHwmPolicyClass}`
-      + `,unit_budget_bytes=${snapshot.autoHwmUnitBudgetBytes}`
-      + `,size_cap=${snapshot.autoHwmSizeCap}`
       + `,sndhwm=${snapshot.autoHwmAppliedSndHwmBytes}`
       + `,rcvhwm=${snapshot.autoHwmAppliedRcvHwmBytes}`
-      + `,socket_message_slots=${snapshot.autoHwmSocketMessageSlots}`
-      + `,effective_message_bytes=${snapshot.autoHwmEffectiveMessageBytes}`
+      + `,snd_pending_bytes=${snapshot.sndPendingBytes}`
+      + `,rcv_pending_bytes=${snapshot.rcvPendingBytes}`
       + `,effective_sndbuf=${hwmSndBufDisplay(snapshot, socket)}`
       + `,effective_rcvbuf=${hwmRcvBufDisplay(snapshot, socket)}`
       + `,last_recalc_ms=${snapshot.autoHwmLastRecalcMs}`

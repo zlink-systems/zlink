@@ -372,7 +372,7 @@ inline bool setup_client_state (const endpoint_config_t &config,
     }
     perf_multi_client::close_client_monitors (&monitors);
     perf_multi_client::refresh_connected_client_auto_hwm (
-      ctx.get (), sockets, config.client_socket_type, settings.hwm, transport, max_msg_size);
+      sockets, config.client_socket_type, settings.hwm, transport, max_msg_size);
 
     state->slots.resize (sockets.size ());
     for (size_t i = 0; i < sockets.size (); ++i) {
@@ -563,10 +563,6 @@ inline server_recv_step_t reply_one_request (void *server,
 
     const size_t msg_size = zlink_msg_size (&part);
     if (active_msg_size && msg_size > 0 && *active_msg_size != msg_size) {
-        if (!apply_benchmark_context_auto_hwm_msg_unit (ctx, msg_size)) {
-            zlink_msg_close (&part);
-            return server_recv_step_error;
-        }
         apply_benchmark_hwm (server, hwm_value);
         *active_msg_size = msg_size;
         perf_print_auto_hwm_snapshot (server, false, "server", transport, true, msg_size,
@@ -643,8 +639,7 @@ inline int run_server_benchmark (const endpoint_config_t &config,
         return 1;
 
     const multi_bench_settings_t settings = resolve_multi_bench_settings ();
-    if (initial_msg_size == 0
-        || !apply_benchmark_context_auto_hwm_msg_unit (ctx.get (), initial_msg_size)) {
+    if (initial_msg_size == 0) {
         zlink_close (server);
         return 1;
     }

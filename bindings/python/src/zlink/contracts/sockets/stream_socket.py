@@ -24,6 +24,11 @@ class StreamSocket(_socket_contract._SocketContract, Protocol):
         ``DONT_WAIT`` is set and none is available."""
         ...
 
+    def recv_retained_into(self, received, *, flags=0):
+        """Framework-backend aggregate receive that retains Core HWM credit
+        until ``received`` is closed or reused."""
+        ...
+
     def on_packet(self, handler):
         """Register ``handler``, invoked for each inbound framed packet with the
         sender routing id, header, and body; it owns the two messages and runs

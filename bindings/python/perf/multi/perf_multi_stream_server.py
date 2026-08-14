@@ -6,7 +6,6 @@ from collections import deque
 import zlink
 
 from perf_multi_common import (
-    apply_multi_auto_hwm_msg_unit,
     apply_multi_socket_options,
     benchmark_endpoint,
     configure_multi_tls_server,
@@ -40,7 +39,6 @@ def main(argv=None):
             apply_multi_socket_options(server)
             server.options.tcp_no_delay = True
             server.bind(endpoint)
-            apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
             print(f"READY,{endpoint}", flush=True)
 
             def packet_handler(routing_id, header, body):

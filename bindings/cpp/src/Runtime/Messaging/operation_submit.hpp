@@ -33,12 +33,25 @@ inline bool submit_raw_send_state (operation_state_t &state_)
     };
     if (!state_.raw.socket)
         throw_invalid_argument ();
+    const std::shared_ptr<socket_callback_state_t> callbacks =
+      state_.raw.callbacks.lock ();
+    if (!callbacks || callbacks->socket_closed.load (std::memory_order_acquire)) {
+        restore_single_send_part_to_source (state_);
+        throw submit_error_t (submit_result_t::invalid_state, EINVAL);
+    }
     const zlink_routing_id_t *first_rid = target_first_rid_native (state_.raw.target);
 
     if (state_.kind == operation_kind_t::raw_routed_send && !first_rid)
         throw_invalid_argument ();
     if (state_.kind == operation_kind_t::raw_publish && state_.raw.topic.empty ())
         throw_invalid_argument ();
+
+    std::lock_guard<std::mutex> attempt_lock (
+      callbacks->outbound_record_attempt_mutex);
+    if (callbacks->socket_closed.load (std::memory_order_acquire)) {
+        restore_single_send_part_to_source (state_);
+        throw submit_error_t (submit_result_t::invalid_state, EINVAL);
+    }
 
     if (state_.message.single_part.has_value () || state_.message.single_part_source) {
         message_t &part = send_single_part (state_);

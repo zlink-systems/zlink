@@ -1,6 +1,8 @@
 //! Ownership Tests – verify message ownership contracts across
 //! send, recv, close, and callback boundaries.
 
+mod test_support;
+
 use std::thread;
 use std::time::Duration;
 
@@ -98,7 +100,7 @@ fn send_failure_does_not_leak() {
 
     let rid = RoutingId::from(b"ghost");
     let msg = Message::try_from(b"will-fail").unwrap();
-    let _ = router.send(&rid).message(msg).submit();
+    let _ = test_support::block_on(router.send(&rid).message(msg).submit());
     // msg is consumed regardless of success/failure – no native leak
 }
 
@@ -183,7 +185,7 @@ fn callback_receives_owned_parts() {
 }
 
 #[test]
-fn request_callback_preserves_more_than_1024_reply_parts() {
+fn request_future_preserves_more_than_1024_reply_parts() {
     const PART_COUNT: usize = 1025;
 
     let ctx = Context::new().unwrap();
@@ -205,18 +207,14 @@ fn request_callback_preserves_more_than_1024_reply_parts() {
         reply.submit().unwrap();
     });
 
-    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    dealer
-        .request()
-        .message(Message::try_from(b"many-parts").unwrap())
-        .timeout(Duration::from_secs(5))
-        .submit(move |result| reply_tx.send(result).unwrap())
-        .unwrap();
-
-    let parts = reply_rx
-        .recv_timeout(Duration::from_secs(5))
-        .expect("request callback timed out")
-        .expect("request failed");
+    let parts = test_support::block_on(
+        dealer
+            .request()
+            .message(Message::try_from(b"many-parts").unwrap())
+            .timeout(Duration::from_secs(5))
+            .submit(),
+    )
+    .expect("request failed");
     assert_eq!(parts.len(), PART_COUNT);
     assert_eq!(parts[1024].as_bytes(), 1024_u32.to_le_bytes());
     server.join().unwrap();

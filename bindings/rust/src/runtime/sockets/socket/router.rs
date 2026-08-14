@@ -31,9 +31,11 @@ pub(crate) fn router_inner_mut(socket: &mut RouterSocket) -> &mut SocketInner {
 
 pub(crate) fn recv_router_once(
     handle: *mut c_void,
+    admission: std::sync::Arc<crate::internal::RoutedAdmission>,
     flags: u32,
     out: &mut Received,
 ) -> Result<bool, RecvError> {
+    out.begin_receive();
     let mut source_rid = ptr::null();
     let mut request_seq = 0u64;
     let mut recv_flags = flags;
@@ -95,7 +97,89 @@ pub(crate) fn recv_router_once(
     };
 
     if let Some((routing_id, request_seq)) = received {
-        out.replace_router_parts(handle, routing_id, request_seq);
+        out.replace_router_parts(handle, admission, routing_id, request_seq);
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+pub(crate) fn recv_router_retained_once(
+    handle: *mut c_void,
+    admission: std::sync::Arc<crate::internal::RoutedAdmission>,
+    flags: u32,
+    out: &mut Received,
+) -> Result<bool, RecvError> {
+    out.begin_receive();
+    let mut recv_flags = flags;
+    let received = {
+        let parts = out.receive_scratch();
+        let mut received_any = false;
+        let mut routing_id = RoutingId::from_raw(ffi::zlink_routing_id_t::empty());
+        let mut request_seq = 0u64;
+        let mut leases = crate::internal::HwmBudgetLeaseOwner::default();
+
+        loop {
+            let mut part = std::mem::MaybeUninit::<ffi::zlink_msg_t>::uninit();
+            unsafe {
+                ffi::zlink_msg_init(part.as_mut_ptr());
+            }
+            let mut has_more = ffi::zlink_part_flag_t::ZLINK_PART_FINAL;
+            let mut source_rid = ptr::null();
+            let mut current_request_seq = 0u64;
+            let mut transport_pair_id = 0u64;
+            let mut transport_pair_generation = 0u64;
+            let mut lease = ptr::null_mut();
+            let rc = unsafe {
+                ffi::zlink_router_recv_part_v2_with_hwm_budget_lease(
+                    handle,
+                    &mut source_rid,
+                    &mut current_request_seq,
+                    &mut transport_pair_id,
+                    &mut transport_pair_generation,
+                    part.as_mut_ptr(),
+                    &mut lease,
+                    &mut has_more,
+                    recv_flags,
+                )
+            };
+            leases.adopt(lease);
+
+            if !received_any {
+                if rc == crate::error::RecvResult::NoData as i32 {
+                    close_unreceived_part(&mut part);
+                    break None;
+                }
+                if rc != 0 {
+                    close_unreceived_part(&mut part);
+                    let errno = unsafe { ffi::zlink_errno() };
+                    if errno == libc::EAGAIN {
+                        break None;
+                    }
+                    return Err(check_recv_rc(rc).unwrap_err());
+                }
+                if !source_rid.is_null() {
+                    routing_id = unsafe { RoutingId::from_raw(*source_rid) };
+                }
+                request_seq = current_request_seq;
+                parts.clear();
+                received_any = true;
+            } else if rc != 0 {
+                close_unreceived_part(&mut part);
+                parts.clear();
+                return Err(check_recv_rc(rc).unwrap_err());
+            }
+
+            parts.push(unsafe { Message::from_raw(part.assume_init()) });
+            if has_more == ffi::zlink_part_flag_t::ZLINK_PART_FINAL {
+                break Some((routing_id, request_seq, leases));
+            }
+            recv_flags = ffi::ZLINK_DONTWAIT;
+        }
+    };
+
+    if let Some((routing_id, request_seq, leases)) = received {
+        out.replace_router_retained_parts(handle, admission, routing_id, request_seq, leases);
         Ok(true)
     } else {
         Ok(false)

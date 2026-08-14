@@ -7,7 +7,8 @@
         "native/src/addon_core.cc",
         "native/src/addon_core_options.cc",
         "native/src/addon_exports.cc",
-        "native/src/addon_request_callbacks.cc"
+        "native/src/addon_request_callbacks.cc",
+        "native/src/addon_routed_admission.cc"
       ],
       "include_dirs": [ "<!(node scripts/resolve_core.js include)" ],
       "variables": {

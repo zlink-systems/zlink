@@ -54,13 +54,18 @@ public interface IContextOptions
     ///     Gets or sets the profile used to size high-water marks automatically;
     ///     see <see cref="Systems.Zlink.AutoHwmProfile" />.
     /// </summary>
-    AutoHwmProfile AutoHwmProfile { get; set; }
+    AutoHwmProfile CoreHwmProfile { get; set; }
 
     /// <summary>
-    ///     Gets or sets the assumed message size, in bytes, used when auto-sizing
-    ///     high-water marks.
+    ///     Gets or sets the explicit context memory limit used by Core HWM
+    ///     planning, in bytes.
     /// </summary>
-    ulong AutoHwmMessageUnitBytes { get; set; }
+    ulong CoreHwmMemoryLimitBytes { get; set; }
+
+    /// <summary>
+    ///     Gets or sets the context-wide Core messaging budget, in bytes.
+    /// </summary>
+    ulong CoreHwmBudgetBytes { get; set; }
 
     /// <summary>
     ///     Gets or sets whether high-water marks are sized automatically.

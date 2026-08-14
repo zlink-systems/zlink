@@ -511,9 +511,8 @@ function autoHwmDedupKey(fields) {
   return [
     'pattern', 'transport', 'component', 'label', 'msg_size', 'source',
     'role', 'managed_connections', 'active_connections', 'scope',
-    'scope_count', 'sndhwm', 'rcvhwm', 'effective_message_bytes',
-    'effective_sndbuf', 'effective_rcvbuf', 'socket_message_slots',
-    'auto_buffer_bytes', 'manual_buffer_bytes', 'unit_budget_bytes'
+    'scope_count', 'sndhwm', 'rcvhwm', 'snd_pending_bytes',
+    'rcv_pending_bytes', 'effective_sndbuf', 'effective_rcvbuf'
   ].map((name) => fields[name] || '').join('');
 }
 
@@ -677,7 +676,7 @@ function createAutoHwmCollector() {
       display.active = row.active_connections || '';
       display.type = row.socket_type || '';
       display = applyActiveHwmDisplay(display);
-      const key = ['msg_size', 'effective_message_bytes', 'socket', 'type',
+      const key = ['msg_size', 'socket', 'type',
         'role', 'sndhwm', 'rcvhwm', 'effective_sndbuf', 'effective_rcvbuf']
         .map((n) => (display[n] !== undefined ? display[n] : '')).join('');
       if (localSeen.has(key)) {
@@ -693,7 +692,7 @@ function createAutoHwmCollector() {
     const grouped = new Map();
     const groupOrder = [];
     for (const row of displayRows) {
-      const gk = `${row.msg_size || ''}${row.effective_message_bytes || ''}`;
+      const gk = `${row.msg_size || ''}`;
       if (!grouped.has(gk)) {
         grouped.set(gk, []);
         groupOrder.push(gk);
@@ -702,8 +701,7 @@ function createAutoHwmCollector() {
     }
     for (let index = 0; index < groupOrder.length; index += 1) {
       const gk = groupOrder[index];
-      const [msgSize, msgUnit] = gk.split('');
-      out.push(`      - Size(B)=${msgSize}, MsgUnit(B)=${msgUnit}`);
+      out.push(`      - Size(B)=${gk}`);
       emitMarkdownTable(out, '      ', [
         ['Socket', 'socket'], ['Type', 'type'], ['Role', 'role'],
         ['SNDHWM', 'sndhwm'], ['RCVHWM', 'rcvhwm'],
@@ -713,96 +711,6 @@ function createAutoHwmCollector() {
         out.push('      ');
       }
     }
-    return true;
-  }
-
-  function emitSpotCommonTable(out, spotRows) {
-    const commonRows = [];
-    const localSeen = new Set();
-    for (const fields of spotRows) {
-      const key = ['unit_budget_bytes', 'auto_buffer_bytes',
-        'manual_buffer_bytes', 'buffer_connections', 'runtime_reserve_bytes',
-        'effective_message_bytes', 'enabled']
-        .map((n) => fields[n] || '').join('');
-      if (localSeen.has(key)) {
-        continue;
-      }
-      localSeen.add(key);
-      const enabled = fields.enabled || '';
-      commonRows.push({
-        unit_budget_bytes: fields.unit_budget_bytes || '',
-        auto_buffer_bytes: fields.auto_buffer_bytes || '',
-        manual_buffer_bytes: fields.manual_buffer_bytes || '',
-        buffer_connections: fields.buffer_connections || '',
-        runtime_reserve_bytes: fields.runtime_reserve_bytes || '',
-        effective_message_bytes: fields.effective_message_bytes || '',
-        policy: enabled === '1' ? 'auto-hwm' : 'off'
-      });
-    }
-    if (commonRows.length === 0) {
-      return false;
-    }
-    out.push('    Auto-HWM common:');
-    emitMarkdownTable(out, '      ', [
-      ['UnitBudget(B)', 'unit_budget_bytes'],
-      ['AutoBuffer(B)', 'auto_buffer_bytes'],
-      ['ManualBuffer(B)', 'manual_buffer_bytes'],
-      ['BufferConn', 'buffer_connections'],
-      ['Runtime(B)', 'runtime_reserve_bytes'],
-      ['MsgUnit(B)', 'effective_message_bytes'],
-      ['Policy', 'policy']
-    ], commonRows);
-    return true;
-  }
-
-  function emitSpotPolicyTable(out, spotRows) {
-    const policyRows = [];
-    const localSeen = new Set();
-    for (const fields of spotRows) {
-      const [sc] = spotScopeAndSocket(fields.label || '');
-      const scope = fields.scope || sc;
-      if (!scope) {
-        continue;
-      }
-      let row = {
-        transport: fields.transport || '',
-        scope,
-        scope_count: fields.scope_count || '',
-        role: fields.role || '',
-        unit_budget_bytes: fields.unit_budget_bytes || '',
-        socket_message_slots: fields.socket_message_slots || '',
-        effective_message_bytes: fields.effective_message_bytes || '',
-        sndhwm: fields.sndhwm || '',
-        rcvhwm: fields.rcvhwm || '',
-        size_cap: fields.size_cap || '',
-        managed: fields.managed_connections || '',
-        active: fields.active_connections || '',
-        base: fields.base_floor_per_connection || '',
-        reason: fields.last_recalc_reason || ''
-      };
-      row = applyActiveHwmDisplay(row);
-      const key = ['scope', 'scope_count', 'role', 'unit_budget_bytes',
-        'socket_message_slots', 'effective_message_bytes', 'sndhwm',
-        'rcvhwm', 'size_cap', 'base', 'reason']
-        .map((n) => (row[n] !== undefined ? row[n] : '')).join('');
-      if (localSeen.has(key)) {
-        continue;
-      }
-      localSeen.add(key);
-      policyRows.push(row);
-    }
-    if (policyRows.length === 0) {
-      return false;
-    }
-    out.push('    Auto-HWM policy:');
-    emitMarkdownTable(out, '      ', [
-      ['Scope', 'scope'], ['ScopeCount', 'scope_count'], ['Role', 'role'],
-      ['UnitBudget(B)', 'unit_budget_bytes'],
-      ['MsgUnit(B)', 'effective_message_bytes'],
-      ['MsgSlots', 'socket_message_slots'], ['SNDHWM', 'sndhwm'],
-      ['RCVHWM', 'rcvhwm'], ['SizeCap', 'size_cap'], ['Base', 'base'],
-      ['Reason', 'reason']
-    ], policyRows);
     return true;
   }
 
@@ -826,82 +734,27 @@ function createAutoHwmCollector() {
       return false;
     }
     let emitted = false;
-    emitted = emitSpotCommonTable(out, spotRows) || emitted;
     emitted = emitSpotSocketTable(
       out, 'Auto-HWM spotnode', spotDisplayRows(spotRows, 'shared')
     ) || emitted;
     emitted = emitSpotSocketTable(
       out, 'Auto-HWM spot handles', spotDisplayRows(spotRows, 'per-spot')
     ) || emitted;
-    emitted = emitSpotPolicyTable(out, spotRows) || emitted;
     return emitted;
-  }
-
-  function expectedHwm(fields) {
-    const unitBudget = parseInt10(fields.unit_budget_bytes || '', 0);
-    const msgUnit = parseInt10(fields.effective_message_bytes || '', 0);
-    const sizeCap = parseInt10(fields.size_cap || '', 0);
-    if (unitBudget <= 0 || msgUnit <= 0) {
-      return null;
-    }
-    let hwm = Math.trunc((unitBudget + msgUnit - 1) / msgUnit);
-    if (hwm < 1) {
-      hwm = 1;
-    }
-    if (sizeCap > 0) {
-      hwm = Math.min(hwm, sizeCap);
-    }
-    return hwm;
-  }
-
-  function expectedMatchScore(fields) {
-    const expected = expectedHwm(fields);
-    if (expected === null) {
-      return 2;
-    }
-    const sndhwm = parseInt10(fields.sndhwm || '', -1);
-    const rcvhwm = parseInt10(fields.rcvhwm || '', -1);
-    let matches = 0;
-    let visible = 0;
-    if (sndhwm >= 0) {
-      visible += 1;
-      if (sndhwm === expected) {
-        matches += 1;
-      }
-    }
-    if (rcvhwm >= 0) {
-      visible += 1;
-      if (rcvhwm === expected) {
-        matches += 1;
-      }
-    }
-    if (visible === 0) {
-      return 2;
-    }
-    if (matches === visible) {
-      return 0;
-    }
-    return matches > 0 ? 1 : 2;
   }
 
   function selectNonSpotDisplayRows(tableRows) {
     const selected = new Map();
     tableRows.forEach((fields, index) => {
       const logicalKey = ['msg_size', 'component', 'socket_type',
-        'unit_budget_bytes', 'effective_message_bytes']
+        'sndhwm', 'rcvhwm', 'snd_pending_bytes', 'rcv_pending_bytes']
         .map((n) => fields[n] || '').join('');
-      const score = expectedMatchScore(fields);
       const previous = selected.get(logicalKey);
-      if (previous === undefined) {
-        selected.set(logicalKey, [score, index, fields]);
-        return;
-      }
-      const [prevScore, prevIndex] = previous;
-      if (score < prevScore || (score === prevScore && index > prevIndex)) {
-        selected.set(logicalKey, [score, index, fields]);
+      if (previous === undefined || index > previous[0]) {
+        selected.set(logicalKey, [index, fields]);
       }
     });
-    return [...selected.values()].map((item) => item[2]);
+    return [...selected.values()].map((item) => item[1]);
   }
 
   // C emit_auto_hwm_detail_table(emit, pattern_name)
@@ -951,11 +804,12 @@ function createAutoHwmCollector() {
       display.type = fields.socket_type || '';
       const msgSize = fields.msg_size || '';
       display.msg_size_display = (msgSize && msgSize !== '0') ? msgSize : '?';
-      display.unit_budget_kb = bytesToKbDisplay(fields.unit_budget_bytes || '');
+      display.snd_pending_bytes = fields.snd_pending_bytes || '';
+      display.rcv_pending_bytes = fields.rcv_pending_bytes || '';
       display.effective_sndbuf_kb = bytesToKbDisplay(fields.effective_sndbuf || '');
       display.effective_rcvbuf_kb = bytesToKbDisplay(fields.effective_rcvbuf || '');
       const displayKey = ['msg_size_display', 'component', 'type',
-        'unit_budget_kb', 'effective_message_bytes', 'sndhwm', 'rcvhwm',
+        'snd_pending_bytes', 'rcv_pending_bytes', 'sndhwm', 'rcvhwm',
         'effective_sndbuf_kb', 'effective_rcvbuf_kb']
         .map((n) => (display[n] !== undefined ? display[n] : '')).join('');
       if (seenDisplay.has(displayKey)) {
@@ -968,8 +822,8 @@ function createAutoHwmCollector() {
       ['Size(B)', 'msg_size_display'],
       ['Component', 'component'],
       ['Type', 'type'],
-      ['UnitBudget(KB)', 'unit_budget_kb'],
-      ['MsgUnit(B)', 'effective_message_bytes'],
+      ['SndPending(B)', 'snd_pending_bytes'],
+      ['RcvPending(B)', 'rcv_pending_bytes'],
       ['SNDHWM', 'sndhwm'],
       ['RCVHWM', 'rcvhwm'],
       ['SNDBUF(KB)', 'effective_sndbuf_kb'],

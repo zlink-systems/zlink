@@ -106,6 +106,122 @@ final class TopicPlane {
         return true;
     }
 
+    boolean subscribeRetained(TopicMessage result, ReceiveFlag flags) {
+        Objects.requireNonNull(result, "result");
+        Objects.requireNonNull(flags, "flags");
+        result.close();
+        socket.ensureOpen();
+        socket.prepareRecvLikeOperation();
+        RecvScratch scratch = socket.recvScratch();
+
+        while (true) {
+            HwmBudgetLeaseOwner leases = new HwmBudgetLeaseOwner();
+            ArrayList<Message> parts = new ArrayList<>(2);
+            boolean ownerAdopted = false;
+            boolean restart = false;
+            try {
+                scratch.topicLenOut.set(ValueLayout.JAVA_LONG, 0,
+                    RecvScratch.TOPIC_CAPACITY);
+                RoutingId routingId = null;
+                String topicId = "";
+                while (true) {
+                    Message part = InternalAccess.messageAcquireReceive();
+                    boolean success = false;
+                    scratch.leaseOut.set(ValueLayout.ADDRESS, 0,
+                        MemorySegment.NULL);
+                    try {
+                        int rc = Native.subscribePartWithHwmBudgetLease(
+                            socket.handle(), scratch.sourceRidOut,
+                            scratch.topicOut, RecvScratch.TOPIC_CAPACITY,
+                            scratch.topicLenOut,
+                            InternalAccess.messageNativeHandle(part),
+                            scratch.leaseOut, scratch.hasMoreOut,
+                            flags.getValue());
+                        if (rc == RecvResult.OK.value()) {
+                            leases.adopt(scratch.leaseOut);
+                            boolean hasMore = scratch.hasMoreOut.get(
+                                ValueLayout.JAVA_INT, 0) != 0;
+                            InternalAccess.messageFinishReceive(part, hasMore);
+                            if (parts.isEmpty()) {
+                                routingId = NativeRoutingIds.readOut(
+                                    scratch.sourceRidOut);
+                                int topicLength =
+                                    NativeSocketRuntime.normalizeTopicLength(
+                                        scratch.topicOut,
+                                        RecvScratch.TOPIC_CAPACITY,
+                                        scratch.topicLenOut.get(
+                                            ValueLayout.JAVA_LONG, 0));
+                                topicId = decodeTopicString(scratch.topicOut,
+                                    topicLength);
+                            }
+                            parts.add(part);
+                            success = true;
+                            if (hasMore)
+                                continue;
+
+                            if (parts.size() == 1) {
+                                InternalAccess.topicMessageAdoptSingle(result,
+                                    routingId, topicId, part);
+                                parts = null;
+                            } else {
+                                TopicMessage fresh =
+                                    ContractAccess.topicMessage(routingId,
+                                        topicId,
+                                        parts.toArray(Message[]::new));
+                                parts = null;
+                                ContractAccess.topicMessageAdoptRetainedCredit(
+                                    fresh, leases);
+                                try {
+                                    ContractAccess.topicMessageAdoptFrom(result,
+                                        fresh);
+                                } catch (RuntimeException | Error ex) {
+                                    fresh.close();
+                                    throw ex;
+                                }
+                                ownerAdopted = true;
+                                return true;
+                            }
+                            ContractAccess.topicMessageAdoptRetainedCredit(
+                                result, leases);
+                            ownerAdopted = true;
+                            return true;
+                        }
+
+                        HwmBudgetLeaseOwner.releaseNative(scratch.leaseOut);
+                        int errno = Native.errno();
+                        if (errno == NativeErrno.EINTR) {
+                            if (parts.isEmpty())
+                                continue;
+                            restart = true;
+                            break;
+                        }
+                        RecvResult recvResult = RecvResult.fromValue(rc);
+                        if (flags == ReceiveFlag.DONTWAIT
+                            && recvResult == RecvResult.NO_DATA) {
+                            return false;
+                        }
+                        throw new ZlinkRecvException(recvResult, errno);
+                    } finally {
+                        if (!success) {
+                            try {
+                                part.close();
+                            } catch (RuntimeException ignored) {
+                            }
+                        }
+                    }
+                }
+            } finally {
+                if (parts != null)
+                    Message.closeAll(parts);
+                if (!ownerAdopted)
+                    leases.close();
+            }
+            if (!restart)
+                throw new IllegalStateException(
+                    "retained subscribe ended without a result");
+        }
+    }
+
     SubscriptionEvent subscriptionEvent(ReceiveFlag flags) {
         Objects.requireNonNull(flags, "flags");
         socket.ensureOpen();

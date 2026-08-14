@@ -116,14 +116,6 @@ int main (int argc, char **argv)
         return 1;
     }
 
-    if (!apply_benchmark_context_auto_hwm_msg_unit (ctx.get (), msg_size)) {
-        if (bench_debug_enabled ()) {
-            std::cerr << "[multi-stream-server] auto-HWM setup failed errno=" << zlink_errno ()
-                      << std::endl;
-        }
-        zlink_close (server);
-        return 1;
-    }
     perf_print_auto_hwm_snapshot (server, false, "server", transport, true, msg_size,
                                   ZLINK_SOCKET_STREAM);
 

@@ -17,7 +17,6 @@ func runMultiStreamServer(cfg multiConfig) {
 	ctx, err := perfcommon.NewMultiServerContext()
 	perfcommon.Must(err)
 	defer ctx.Close()
-	perfcommon.ApplyMultiAutoHWMMsgUnit(ctx, cfg.msgSize)
 
 	server, err := ctx.StreamSocket()
 	perfcommon.Must(err)

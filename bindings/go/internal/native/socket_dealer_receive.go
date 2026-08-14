@@ -40,13 +40,58 @@ func (s *DealerSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 		return false, err
 	}
 
+	s.replaceDealerReceived(out, parts, messageType, requestSeq, nil)
+	return true, nil
+}
+
+// RecvRetained keeps one opaque Core credit per physical payload part until
+// the Received storage is closed or reused.
+func (s *DealerSocket) RecvRetained(out *Received, flags RecvFlags) (bool, error) {
+	if out == nil {
+		return false, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
+	if s.connectionSocket.hasReceiveHandler() {
+		return false, &RecvError{Result: RecvBusy, nativeErrno: int(C.EBUSY)}
+	}
+
+	reuse := out.beginReceive()
+	var messageType C.uint8_t
+	var requestSeq C.uint64_t
+	parts, retainedCredit, err := recvMultipartRetained(reuse, flags, func(part *C.zlink_msg_t, lease **C.zlink_hwm_budget_lease_t, hasMore *C.zlink_part_flag_t, recvFlags C.zlink_recv_flags_t) error {
+		return recvErrorFromResult(C.zlink_dealer_recv_part_with_hwm_budget_lease(
+			s.raw(),
+			&messageType,
+			&requestSeq,
+			part,
+			lease,
+			hasMore,
+			recvFlags,
+		))
+	})
+	if err != nil {
+		if isNoData(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	s.replaceDealerReceived(out, parts, messageType, requestSeq, retainedCredit)
+	return true, nil
+}
+
+func (s *DealerSocket) replaceDealerReceived(
+	out *Received,
+	parts []*Message,
+	messageType C.uint8_t,
+	requestSeq C.uint64_t,
+	retainedCredit *hwmBudgetLeaseOwner,
+) {
 	seq := uint64(requestSeq)
 	var reply func(SendFlags, []*Message) error
 	if messageType == C.ZLINK_DEALER_MESSAGE_REQUEST && seq != 0 {
 		reply = receivedReplyToDealer(s.reply, seq)
 	}
-	out.replace(RoutingID{}, parts, seq, seq != 0, reply, nil)
-	return true, nil
+	out.replace(RoutingID{}, parts, seq, seq != 0, reply, nil, retainedCredit)
 }
 
 func (s *DealerSocket) reply(requestSeq uint64, flags SendFlags, parts ...*Message) error {
@@ -56,12 +101,14 @@ func (s *DealerSocket) reply(requestSeq uint64, flags SendFlags, parts ...*Messa
 	if err := validateReplyFlags(flags); err != nil {
 		return err
 	}
-	return submitMultipartFromClones(parts, true, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-		return submitErrorFromResult(C.zlink_dealer_reply_part(
-			s.raw(),
-			C.uint64_t(requestSeq),
-			part,
-			partFlag,
-		))
+	return s.routedAdmission.withAttemptGate(func() error {
+		return submitMultipartFromClones(parts, true, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
+			return submitErrorFromResult(C.zlink_dealer_reply_part(
+				s.raw(),
+				C.uint64_t(requestSeq),
+				part,
+				partFlag,
+			))
+		})
 	})
 }

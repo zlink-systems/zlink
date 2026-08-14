@@ -2,13 +2,15 @@
 //   bindings/java/gradlew -p . :kotlin-samples:runDealerRouterRecvSample --no-daemon
 package systems.zlink.samples
 
+import kotlinx.coroutines.future.await
+import kotlinx.coroutines.runBlocking
 import systems.zlink.contracts.core.Zlink
 import systems.zlink.contracts.eventing.MonitorEventType
 import systems.zlink.contracts.messaging.Message
 import systems.zlink.contracts.messaging.Received
 import systems.zlink.contracts.sockets.RecvFlags
 
-fun main() {
+fun main() = runBlocking {
 // --8<-- [start:doc]
     SampleSupport.ensureNative()
     val endpoint = SampleSupport.tcpEndpoint()
@@ -23,7 +25,7 @@ fun main() {
                         SampleSupport.waitConnected(routerMonitor, dealerMonitor)
 
                         Message.from(SampleSupport.DEALER_REQUEST).use { request ->
-                            dealer.send().message(request).submit()
+                            dealer.send().message(request).submit().await()
                         }
 
                         Received().use { received ->

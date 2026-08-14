@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
+python3 "$repo_root/scripts/local-package/sync-version.py" --check >/dev/null
 artifact_root="${ZLINK_LOCAL_PACKAGE_ROOT:-$repo_root/.artifacts/wsl}"
 core_prefix="${ZLINK_CORE_PACKAGE_PREFIX:-}"
 
@@ -10,7 +11,7 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Creates zlink-0.11.0.crate with the Core 0.11.0 Linux runtime.
+Creates zlink-0.11.1.crate with the Core 0.11.1 Linux runtime.
 EOF
 }
 

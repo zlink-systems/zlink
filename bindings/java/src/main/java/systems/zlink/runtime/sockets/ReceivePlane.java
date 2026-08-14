@@ -5,6 +5,7 @@ package systems.zlink.runtime.sockets;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.util.ArrayList;
 import java.util.Objects;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkException;
@@ -56,6 +57,80 @@ final class ReceivePlane {
             new BasicReceiveCursor(flags.getValue()), 0L, false, null, null);
         ContractAccess.receivedAdoptFrom(result, fresh);
         return true;
+    }
+
+    boolean recvRetainedInto(Received result, ReceiveFlag flags) {
+        Objects.requireNonNull(result, "result");
+        Objects.requireNonNull(flags, "flags");
+        result.close();
+        prepareRecvLikeOperation();
+
+        HwmBudgetLeaseOwner leases = new HwmBudgetLeaseOwner();
+        ArrayList<Message> parts = null;
+        Message firstPart = null;
+        boolean ownerAdopted = false;
+        try {
+            RecvScratch scratch = socket.recvScratch();
+            boolean dealer = socket.resolveSocketType() ==
+                systems.zlink.contracts.sockets.SocketType.DEALER;
+            firstPart = recvRetainedPartOrNull(scratch, flags,
+                flags == ReceiveFlag.DONTWAIT, dealer, leases);
+            if (firstPart == null)
+                return false;
+
+            byte[] routingIdBytes = dealer ? null
+                : NativeRoutingIds.readBytesOut(scratch.sourceRidOut);
+            long requestSequence = dealer
+                ? scratch.requestSequenceOut.get(ValueLayout.JAVA_LONG, 0)
+                : 0L;
+            boolean hasRequestSequence = requestSequence != 0L;
+            if (!firstPart.more()) {
+                ContractAccess.receivedPopulateRoutedSinglePart(result,
+                    routingIdBytes, firstPart, requestSequence,
+                    hasRequestSequence, null, null);
+                firstPart = null;
+                ContractAccess.receivedAdoptRetainedCredit(result, leases);
+                ownerAdopted = true;
+                return true;
+            }
+
+            parts = new ArrayList<>(4);
+            parts.add(firstPart);
+            firstPart = null;
+            while (parts.get(parts.size() - 1).more()) {
+                Message next = recvRetainedPartOrNull(scratch, flags, false,
+                    dealer, leases);
+                if (next == null)
+                    throw new ZlinkRecvException(RecvResult.NO_DATA,
+                        NativeErrno.EAGAIN);
+                parts.add(next);
+            }
+
+            Received fresh = InternalAccess.received(routingIdBytes,
+                parts.toArray(Message[]::new), true, requestSequence,
+                hasRequestSequence, null, null);
+            parts = null;
+            ContractAccess.receivedAdoptRetainedCredit(fresh, leases);
+            try {
+                ContractAccess.receivedAdoptFrom(result, fresh);
+            } catch (RuntimeException | Error ex) {
+                fresh.close();
+                throw ex;
+            }
+            ownerAdopted = true;
+            return true;
+        } finally {
+            if (firstPart != null) {
+                try {
+                    firstPart.close();
+                } catch (RuntimeException ignored) {
+                }
+            }
+            if (parts != null)
+                Message.closeAll(parts);
+            if (!ownerAdopted)
+                leases.close();
+        }
     }
 
     Received recvLazy(ReceiveFlag flags) {
@@ -302,6 +377,63 @@ final class ReceivePlane {
                 return null;
             }
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.RECV);
+        }
+    }
+
+    private Message recvRetainedPartOrNull(RecvScratch scratch,
+                                            ReceiveFlag flags,
+                                            boolean allowNoData,
+                                            boolean dealer,
+                                            HwmBudgetLeaseOwner leases) {
+        while (true) {
+            Message part = InternalAccess.messageAcquireReceive();
+            boolean success = false;
+            scratch.leaseOut.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
+            try {
+                int rc;
+                if (dealer) {
+                    scratch.dealerMessageTypeOut.set(ValueLayout.JAVA_BYTE, 0,
+                        (byte) 0);
+                    scratch.requestSequenceOut.set(ValueLayout.JAVA_LONG, 0,
+                        0L);
+                    rc = Native.dealerRecvPartWithHwmBudgetLease(
+                        socket.handle(), scratch.dealerMessageTypeOut,
+                        scratch.requestSequenceOut,
+                        InternalAccess.messageNativeHandle(part),
+                        scratch.leaseOut, scratch.hasMoreOut,
+                        flags.getValue());
+                } else {
+                    rc = Native.recvPartWithHwmBudgetLease(socket.handle(),
+                        scratch.sourceRidOut,
+                        InternalAccess.messageNativeHandle(part),
+                        scratch.leaseOut, scratch.hasMoreOut,
+                        flags.getValue());
+                }
+                if (rc == RecvResult.OK.value()) {
+                    leases.adopt(scratch.leaseOut);
+                    boolean hasMore =
+                        scratch.hasMoreOut.get(ValueLayout.JAVA_INT, 0) != 0;
+                    InternalAccess.messageFinishReceive(part, hasMore);
+                    success = true;
+                    return part;
+                }
+
+                HwmBudgetLeaseOwner.releaseNative(scratch.leaseOut);
+                int errno = Native.errno();
+                if (errno == NativeErrno.EINTR)
+                    continue;
+                RecvResult result = RecvResult.fromValue(rc);
+                if (allowNoData && result == RecvResult.NO_DATA)
+                    return null;
+                throw new ZlinkRecvException(result, errno);
+            } finally {
+                if (!success) {
+                    try {
+                        part.close();
+                    } catch (RuntimeException ignored) {
+                    }
+                }
+            }
         }
     }
 

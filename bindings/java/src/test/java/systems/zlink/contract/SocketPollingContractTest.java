@@ -15,7 +15,6 @@ import systems.zlink.contracts.eventing.PollSourceKind;
 import systems.zlink.contracts.eventing.Poller;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.RecvFlags;
-import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.eventing.ZlinkTimer;
@@ -55,7 +54,8 @@ public class SocketPollingContractTest {
 
             Received first = new Received();
             try (Message outbound = Message.from("first")) {
-                client.send().message(outbound).submit();
+                client.send().message(outbound).submit()
+                    .toCompletableFuture().join();
             }
             assertTrue(server.recv(first, RecvFlags.NONE));
             Message released = first.singlePartOrThrow();
@@ -63,7 +63,8 @@ public class SocketPollingContractTest {
             first.close();
 
             try (Message outbound = Message.from("second")) {
-                client.send().message(outbound).submit();
+                client.send().message(outbound).submit()
+                    .toCompletableFuture().join();
             }
             assertTrue(server.recv(second, RecvFlags.NONE));
             Message retained = second.singlePartOrThrow();
@@ -71,7 +72,8 @@ public class SocketPollingContractTest {
             assertEquals("second", retained.toUtf8String());
 
             try (Message outbound = Message.from("third")) {
-                client.send().message(outbound).submit();
+                client.send().message(outbound).submit()
+                    .toCompletableFuture().join();
             }
             assertTrue(server.recv(third, RecvFlags.NONE));
             assertNotSame(retained, third.singlePartOrThrow());
@@ -79,14 +81,16 @@ public class SocketPollingContractTest {
             assertEquals("third", third.singlePartOrThrow().toUtf8String());
 
             try (Message outbound = Message.from("fourth")) {
-                client.send().message(outbound).submit();
+                client.send().message(outbound).submit()
+                    .toCompletableFuture().join();
             }
             assertTrue(server.recv(fourth, RecvFlags.NONE));
             Message directlyClosed = fourth.singlePartOrThrow();
             directlyClosed.close();
 
             try (Message outbound = Message.from("fifth")) {
-                client.send().message(outbound).submit();
+                client.send().message(outbound).submit()
+                    .toCompletableFuture().join();
             }
             assertTrue(server.recv(fifth, RecvFlags.NONE));
             assertNotSame(directlyClosed, fifth.singlePartOrThrow());
@@ -142,7 +146,8 @@ public class SocketPollingContractTest {
             poller.add(server, 8L, PollEventFlags.POLLIN);
 
             try (Message outbound = Message.from("router-poller")) {
-                client.send().message(outbound).submit();
+                client.send().message(outbound).submit()
+                    .toCompletableFuture().join();
             }
 
             PollEvents events = new PollEvents(1);
@@ -162,7 +167,6 @@ public class SocketPollingContractTest {
         TestSupport.assumeNative();
 
         CountDownLatch completed = new CountDownLatch(1);
-        AtomicReference<RequestResult> result = new AtomicReference<>();
         AtomicReference<byte[]> replyPayload = new AtomicReference<>();
         AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
 
@@ -180,13 +184,13 @@ public class SocketPollingContractTest {
             try (Message request = Message.from("completion-request")) {
                 client.request()
                     .message(request)
-                    .flags(SendFlags.DONT_WAIT)
                     .timeout(Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS))
-                    .submit((requestResult, received) -> {
+                    .submit()
+                    .whenComplete((received, error) -> {
                         try {
-                            result.set(requestResult);
-                            if (requestResult == RequestResult.OK
-                                && !received.isEmpty()) {
+                            if (error != null)
+                                throw new AssertionError(error);
+                            if (!received.isEmpty()) {
                                 replyPayload.set(received.getFirst().toByteArray());
                             }
                         } catch (Throwable failure) {
@@ -228,7 +232,6 @@ public class SocketPollingContractTest {
             assertTrue(completed.await(0, TimeUnit.MILLISECONDS),
                 "public POLLIN|POLLCOMPLETION poller did not dispatch request callback");
             assertNull(callbackFailure.get(), "request callback raised");
-            assertEquals(RequestResult.OK, result.get());
             assertEquals("completion-reply",
                 new String(replyPayload.get(), java.nio.charset.StandardCharsets.UTF_8));
         }

@@ -134,7 +134,7 @@ public static class SampleSupport
         throw new TimeoutException(message);
     }
 
-    public static string ReceiveUtf8(IMessageSocket socket, int timeoutMs)
+    public static string ReceiveUtf8(IReceivingMessageSocket socket, int timeoutMs)
     {
         _ = timeoutMs;
         using var received = Received.Create();

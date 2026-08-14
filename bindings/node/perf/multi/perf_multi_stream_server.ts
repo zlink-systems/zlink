@@ -8,7 +8,6 @@ const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const {
   POLLOUT,
-  applyAutoHwmMsgUnit,
   applyContextPolicy,
   applySocketPolicy,
   emitMultiSocketHwmDetail,
@@ -110,7 +109,6 @@ async function main() {
       );
     }
     configureTlsServer(stream, options.transport);
-    applyAutoHwmMsgUnit(ctx, options.msgSize);
     ctx.recalculateAutoHwm();
     emitMultiSocketHwmDetail(stream, 'endpoint', options.transport, options.msgSize);
     stream.bind(options.endpoint);

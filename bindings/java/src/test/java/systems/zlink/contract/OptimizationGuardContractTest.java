@@ -36,6 +36,8 @@ final class OptimizationGuardContractTest {
     private static final Path PERF_SOURCE = Path.of("perf");
     private static final String ZLINK_FACTORY_RUNTIME_IMPORT =
         "import systems.zlink.runtime.nativeapi.ContractAccess;";
+    private static final String QUALIFIED_FRAMEWORK_STREAM_EXPORT =
+        "exports systems.zlink.runtime.framework to systems.zlink.framework;";
     private static final String RUNTIME_PREFIX = "systems.zlink.runtime.";
     private static final String INTERNAL_PREFIX = "systems.zlink.internal.";
 
@@ -53,12 +55,17 @@ final class OptimizationGuardContractTest {
     private static final String[] REQUIRED_PART_SYMBOLS = {
         "zlink_send_part",
         "zlink_recv_part",
+        "zlink_recv_part_with_hwm_budget_lease",
         "zlink_publish_part",
         "zlink_subscribe_part",
+        "zlink_subscribe_part_with_hwm_budget_lease",
         "zlink_router_recv_part",
+        "zlink_router_recv_part_v2_with_hwm_budget_lease",
+        "zlink_dealer_recv_part_with_hwm_budget_lease",
         "zlink_dealer_request_part",
         "zlink_router_request_part",
-        "zlink_router_reply_part"
+        "zlink_router_reply_part",
+        "zlink_hwm_budget_lease_release"
     };
 
     @Test
@@ -99,8 +106,11 @@ final class OptimizationGuardContractTest {
         List<String> violations = new ArrayList<>();
         for (String line : Files.readAllLines(MODULE_INFO, StandardCharsets.UTF_8)) {
             String trimmed = line.trim();
-            if ((trimmed.startsWith("exports systems.zlink.")
-                    && !trimmed.startsWith("exports systems.zlink.contracts."))
+            boolean unapprovedExport =
+                trimmed.startsWith("exports systems.zlink.")
+                    && !trimmed.startsWith("exports systems.zlink.contracts.")
+                    && !trimmed.equals(QUALIFIED_FRAMEWORK_STREAM_EXPORT);
+            if (unapprovedExport
                 || trimmed.startsWith("opens systems.zlink.")) {
                 violations.add(trimmed);
             }
@@ -215,6 +225,12 @@ final class OptimizationGuardContractTest {
             import systems.zlink.internal.sockets.SocketOptions;
             final class RuntimeSocketOptionsProbe {
                 Object options = SocketOptions.all();
+            }
+            """,
+            """
+            import systems.zlink.runtime.framework.FrameworkStreamOperations;
+            final class FrameworkStreamOperationsProbe {
+                Object operations = FrameworkStreamOperations.class;
             }
             """
         );

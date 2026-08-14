@@ -12,7 +12,7 @@ public sealed class test_router_multiple_dealers
     [InlineData("tcp")]
     [InlineData("ipc")]
     [InlineData("inproc")]
-    public void router_multiple_dealers(string transport)
+    public async Task router_multiple_dealers(string transport)
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -34,8 +34,10 @@ public sealed class test_router_multiple_dealers
         dealer2.Connect(endpoint);
         Thread.Sleep(300);
 
-        CoreTestSupport.SendWithRetry(dealer1, "from_dealer1"u8, 2000);
-        CoreTestSupport.SendWithRetry(dealer2, "from_dealer2"u8, 2000);
+        CoreTestSupport.SendAsyncWithTimeout(dealer1, "from_dealer1"u8,
+            2000);
+        CoreTestSupport.SendAsyncWithTimeout(dealer2, "from_dealer2"u8,
+            2000);
 
         var received = new Dictionary<string, string>();
         for (int i = 0; i < 2; i++)
@@ -53,14 +55,14 @@ public sealed class test_router_multiple_dealers
         string dealer2RoutingId = received.First(kvp => kvp.Value == "from_dealer2").Key;
 
         using Message reply1 = Message.From("reply_to_d1");
-        Assert.True(router.Send(
+        await router.Send(
                 RoutingId.From(Encoding.UTF8.GetBytes(dealer1RoutingId)))
-            .Message(reply1).Submit());
+            .Message(reply1).Async();
 
         using Message reply2 = Message.From("reply_to_d2");
-        Assert.True(router.Send(
+        await router.Send(
                 RoutingId.From(Encoding.UTF8.GetBytes(dealer2RoutingId)))
-            .Message(reply2).Submit());
+            .Message(reply2).Async();
 
         Assert.Equal("reply_to_d1", CoreTestSupport.ReceiveUtf8WithTimeout(dealer1,
             2000));
@@ -85,7 +87,7 @@ public sealed class test_router_multiple_dealers
         dealer.Connect(endpoint);
         Thread.Sleep(100);
 
-        CoreTestSupport.SendWithRetry(dealer, "ping"u8, 2000);
+        CoreTestSupport.SendAsyncWithTimeout(dealer, "ping"u8, 2000);
 
         using var received = Received.Create();
         router.Recv(received);
@@ -100,7 +102,7 @@ public sealed class test_router_multiple_dealers
     }
 
     [Fact]
-    public void routed_direct_send_and_recv_part_roundtrip()
+    public async Task routed_direct_send_and_recv_part_roundtrip()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -118,7 +120,7 @@ public sealed class test_router_multiple_dealers
         Thread.Sleep(100);
 
         using Message outbound = Message.From("ping");
-        Assert.True(dealer.Send().Message(outbound).Submit());
+        await dealer.Send().Message(outbound).Async();
 
         using var inbound = Received.Create();
         Assert.True(router.Recv(inbound));
@@ -130,7 +132,7 @@ public sealed class test_router_multiple_dealers
             inbound.FirstPart().AsReadOnlySpan()));
 
         using Message reply = Message.From("pong");
-        Assert.True(router.Send(actualSourceRid).Message(reply).Submit());
+        await router.Send(actualSourceRid).Message(reply).Async();
 
         using var dealerInbound = Received.Create();
         Assert.True(dealer.Recv(dealerInbound));

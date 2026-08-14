@@ -1,6 +1,6 @@
 [package]
 name = "zlink"
-version = "0.11.0"
+version = "0.11.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Rust bindings for the zlink messaging library"
@@ -31,8 +31,8 @@ libc = "0.2"
 smol_str = "0.3"
 
 [[example]]
-name = "request_reply_callback_sample"
-path = "samples/request_reply_callback_sample.rs"
+name = "request_reply_future_sample"
+path = "samples/request_reply_future_sample.rs"
 
 [[example]]
 name = "pair_recv_sample"

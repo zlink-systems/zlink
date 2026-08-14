@@ -9,8 +9,6 @@ type (
 	RoutingID = impl.RoutingID
 	// Message owns a message payload; sending consumes it and Close releases it.
 	Message = impl.Message
-	// RequestReplyCallback is invoked with a request result and its reply parts, which it owns.
-	RequestReplyCallback = impl.RequestReplyCallback
 	// RequestReplyCompletion carries the result and reply parts of a completed request.
 	RequestReplyCompletion = impl.RequestReplyCompletion
 	// Received is a received message envelope: routing metadata, parts, and an optional reply/send context.

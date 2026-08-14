@@ -1,6 +1,7 @@
 use std::ffi::c_void;
 
 use crate::error::{CloseError, RecvError, RecvResult};
+use crate::internal::HwmBudgetLeaseOwner;
 use crate::message::{Message, RoutingId};
 use crate::messaging_operations::{Empty, ReplyOp, SendOp};
 
@@ -8,11 +9,11 @@ use crate::messaging_operations::{Empty, ReplyOp, SendOp};
 ///
 /// Keeping these values together prevents the public routing id and the
 /// private send/reply target from diverging.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct ReceivedRoute {
     handle: Option<*mut c_void>,
+    admission: Option<std::sync::Arc<crate::internal::RoutedAdmission>>,
     routing_id: RoutingId,
-    request_seq: Option<u64>,
 }
 
 unsafe impl Send for ReceivedRoute {}
@@ -26,7 +27,9 @@ pub struct Received {
     /// The message parts, owned by this envelope.
     parts: Vec<Message>,
     route: Option<ReceivedRoute>,
+    request_seq: Option<u64>,
     receive_scratch: Vec<Message>,
+    hwm_budget_leases: HwmBudgetLeaseOwner,
 }
 
 impl Default for Received {
@@ -45,8 +48,14 @@ impl Received {
         Self {
             parts: Vec::new(),
             route: None,
+            request_seq: None,
             receive_scratch: Vec::new(),
+            hwm_budget_leases: HwmBudgetLeaseOwner::default(),
         }
+    }
+
+    pub(crate) fn begin_receive(&mut self) {
+        self.hwm_budget_leases.release();
     }
 
     pub(crate) fn receive_scratch(&mut self) -> &mut Vec<Message> {
@@ -56,24 +65,62 @@ impl Received {
     pub(crate) fn replace_received_parts(&mut self, routing_id: Option<RoutingId>) {
         self.route = routing_id.map(|routing_id| ReceivedRoute {
             handle: None,
+            admission: None,
             routing_id,
-            request_seq: None,
         });
+        self.request_seq = None;
+        std::mem::swap(&mut self.parts, &mut self.receive_scratch);
+    }
+
+    pub(crate) fn replace_retained_parts(
+        &mut self,
+        routing_id: Option<RoutingId>,
+        request_seq: Option<u64>,
+        leases: HwmBudgetLeaseOwner,
+    ) {
+        self.route = routing_id.map(|routing_id| ReceivedRoute {
+            handle: None,
+            admission: None,
+            routing_id,
+        });
+        self.request_seq = request_seq;
+        self.hwm_budget_leases = leases;
         std::mem::swap(&mut self.parts, &mut self.receive_scratch);
     }
 
     pub(crate) fn replace_router_parts(
         &mut self,
         handle: *mut c_void,
+        admission: std::sync::Arc<crate::internal::RoutedAdmission>,
         routing_id: RoutingId,
         request_seq: u64,
     ) {
         self.route = Some(ReceivedRoute {
             handle: Some(handle),
+            admission: Some(admission),
             routing_id,
-            request_seq: (request_seq != 0).then_some(request_seq),
         });
+        self.request_seq = (request_seq != 0).then_some(request_seq);
         std::mem::swap(&mut self.parts, &mut self.receive_scratch);
+    }
+
+    pub(crate) fn replace_router_retained_parts(
+        &mut self,
+        handle: *mut c_void,
+        admission: std::sync::Arc<crate::internal::RoutedAdmission>,
+        routing_id: RoutingId,
+        request_seq: u64,
+        leases: HwmBudgetLeaseOwner,
+    ) {
+        self.replace_retained_parts(
+            Some(routing_id),
+            (request_seq != 0).then_some(request_seq),
+            leases,
+        );
+        if let Some(route) = self.route.as_mut() {
+            route.handle = Some(handle);
+            route.admission = Some(admission);
+        }
     }
 
     /// Returns `true` when the envelope carries exactly one part.
@@ -89,7 +136,7 @@ impl Received {
     /// Returns the request sequence, present when this envelope can be replied
     /// to.
     pub fn request_seq(&self) -> Option<u64> {
-        self.route.and_then(|route| route.request_seq)
+        self.request_seq
     }
 
     /// Returns the message parts, owned by this envelope.
@@ -111,16 +158,19 @@ impl Received {
 
     /// Consumes the envelope and returns its only part, transferring ownership;
     /// errors unless it holds exactly one part.
-    pub fn single_part_or_error(self) -> Result<Message, RecvError> {
+    pub fn single_part_or_error(mut self) -> Result<Message, RecvError> {
         if self.parts.len() != 1 {
             return Err(recv_state_error());
         }
-        Ok(self.parts.into_iter().next().expect("single part"))
+        Ok(std::mem::take(&mut self.parts)
+            .into_iter()
+            .next()
+            .expect("single part"))
     }
 
     /// Consumes the envelope and returns ownership of all its parts.
-    pub fn into_parts(self) -> Vec<Message> {
-        self.parts
+    pub fn into_parts(mut self) -> Vec<Message> {
+        std::mem::take(&mut self.parts)
     }
 
     /// Closes every part, releasing their payloads.
@@ -147,19 +197,35 @@ impl Received {
     pub(crate) fn set_router_send_context(&mut self, handle: *mut c_void, routing_id: RoutingId) {
         self.route = Some(ReceivedRoute {
             handle: Some(handle),
+            admission: None,
             routing_id,
-            request_seq: self.route.and_then(|route| route.request_seq),
         });
     }
 
-    pub(crate) fn send_target(&self) -> Option<(*mut c_void, RoutingId)> {
-        self.route
-            .and_then(|route| route.handle.map(|handle| (handle, route.routing_id)))
+    pub(crate) fn send_target(
+        &self,
+    ) -> Option<(
+        *mut c_void,
+        Option<std::sync::Arc<crate::internal::RoutedAdmission>>,
+        RoutingId,
+    )> {
+        let route = self.route.as_ref()?;
+        Some((route.handle?, route.admission.clone(), route.routing_id))
     }
 
-    pub(crate) fn reply_target(&self) -> Option<(*mut c_void, RoutingId, u64)> {
-        self.route
-            .and_then(|route| Some((route.handle?, route.routing_id, route.request_seq?)))
+    pub(crate) fn reply_target(
+        &self,
+    ) -> Option<(
+        std::sync::Arc<crate::internal::RoutedAdmission>,
+        RoutingId,
+        u64,
+    )> {
+        let route = self.route.as_ref()?;
+        Some((
+            route.admission.as_ref()?.clone(),
+            route.routing_id,
+            self.request_seq?,
+        ))
     }
 }
 

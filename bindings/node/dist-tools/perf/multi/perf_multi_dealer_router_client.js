@@ -5,7 +5,7 @@ const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createPayload, createRunId, HEADER_SIZE, currentEpochNs, summarizeMetrics, stampPayload } = require('../common/perf_metrics');
 const { configureTlsClient } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { POLLIN, POLLOUT, applyAutoHwmMsgUnit, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, recvNoWaitInto, sendStopTokenOnce, trySocketSend, waitForConnectionReady } = require('./perf_multi_runtime');
+const { POLLIN, POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, recvNoWaitInto, sendStopTokenOnce, tryRoutedSocketSend, waitForConnectionReady } = require('./perf_multi_runtime');
 async function main() {
     const options = parseMultiArgs(process.argv.slice(2));
     const ctx = zlink.createContext();
@@ -31,7 +31,6 @@ async function main() {
         }
         for (let i = 0; i < dealers.length; i += 1) {
             await waitForConnectionReady(dealers[i], () => dealers[i].connect(options.endpoint));
-            applyAutoHwmMsgUnit(ctx, options.msgSize);
             poller.add(dealers[i], pollEvents(POLLIN), i);
         }
         ctx.recalculateAutoHwm();
@@ -67,7 +66,7 @@ async function main() {
                     continue;
                 }
                 stampPayload(payloads[i], { phase: 1, runId, msgSize: options.msgSize, seq });
-                const sent = trySocketSend(dealers[i], payloads[i]);
+                const sent = await tryRoutedSocketSend(dealers[i], payloads[i]);
                 if (!sent) {
                     sendPending[i] = true;
                     // HOT PATH: C registers POLLOUT only after this socket reports
@@ -108,7 +107,7 @@ async function main() {
         // PERF_MULTI_TEST_POLICY § 1.3.1: signal phase end to the echo server
         // via the wire-level stop token. The server's recv loop exits on the
         // first stop token observed.
-        await sendStopTokenOnce(dealers[0], (bytes) => trySocketSend(dealers[0], bytes));
+        await sendStopTokenOnce(dealers[0], (bytes) => tryRoutedSocketSend(dealers[0], bytes));
         const result = await collector.finish();
         for (const metricLine of summarizeMetrics('MULTI_DEALER_ROUTER', options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted)) {
             console.log(metricLine);

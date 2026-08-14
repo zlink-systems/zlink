@@ -1,8 +1,9 @@
 use std::ffi::c_void;
 use std::marker::PhantomData;
+use std::sync::Arc;
 use std::time::Duration;
 
-use crate::error::{RequestError, SubmitError};
+use crate::error::{SubmitError, ZlinkError};
 use crate::flags::SendFlags;
 use crate::message::{Message, RoutingId};
 
@@ -11,9 +12,6 @@ pub struct Empty;
 
 /// Typestate marker: at least one message part has been set.
 pub struct Ready;
-
-/// Typestate marker: flags have been set, only callback submit available.
-pub struct CallbackReady;
 
 /// Owns operation parts without allocating for the common single-part case.
 /// Multipart operations allocate only when a second part is added.
@@ -43,6 +41,10 @@ impl MessageParts {
     pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Message> {
         self.first.iter_mut().chain(self.rest.iter_mut())
     }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &Message> {
+        self.first.iter().chain(self.rest.iter())
+    }
 }
 
 /// A multipart send builder: add parts with [`message`](SendOp::message), then
@@ -63,6 +65,7 @@ pub struct SendOp<State> {
 
 pub(crate) struct SendOpStorage {
     pub(crate) handle: *mut c_void,
+    pub(crate) admission: Option<Arc<crate::internal::RoutedAdmission>>,
     pub(crate) kind: SendOpKind,
     pub(crate) target: Option<RoutingId>,
     pub(crate) parts: MessageParts,
@@ -72,10 +75,24 @@ pub(crate) struct SendOpStorage {
 pub(crate) enum SendOpKind {
     Plain,
     Published { topic: smol_str::SmolStr },
-    Routed,
+    StreamRouted,
+    ImmediateRouted,
 }
 
 unsafe impl Send for SendOpStorage {}
+
+/// An HWM-managed routed send builder. Its [`submit`](RoutedSendOp::submit)
+/// terminal returns a runtime-independent [`Future`](std::future::Future).
+pub struct RoutedSendOp<State> {
+    pub(crate) inner: RoutedSendOpStorage,
+    pub(crate) _state: PhantomData<State>,
+}
+
+pub(crate) struct RoutedSendOpStorage {
+    pub(crate) admission: Arc<crate::internal::RoutedAdmission>,
+    pub(crate) target: Option<RoutingId>,
+    pub(crate) parts: MessageParts,
+}
 
 /// A request builder: add parts, then submit and await a reply. Parts are
 /// consumed on a successful submit (see [`SendOp`]).
@@ -85,17 +102,10 @@ pub struct RequestOp<State> {
 }
 
 pub(crate) struct RequestOpStorage {
-    pub(crate) handle: *mut c_void,
-    pub(crate) kind: RequestOpKind,
+    pub(crate) admission: Arc<crate::internal::RoutedAdmission>,
     pub(crate) peer_rid: Option<RoutingId>,
     pub(crate) parts: MessageParts,
-    pub(crate) flags: Option<SendFlags>,
     pub(crate) timeout: Duration,
-}
-
-pub(crate) enum RequestOpKind {
-    DealerRequest,
-    RouterRequest,
 }
 
 unsafe impl Send for RequestOpStorage {}
@@ -108,7 +118,7 @@ pub struct ReplyOp<State> {
 }
 
 pub(crate) struct ReplyOpStorage {
-    pub(crate) handle: *mut c_void,
+    pub(crate) admission: Arc<crate::internal::RoutedAdmission>,
     pub(crate) kind: ReplyOpKind,
     pub(crate) parts: MessageParts,
     pub(crate) flags: SendFlags,
@@ -128,6 +138,7 @@ impl SendOp<Empty> {
         SendOp {
             inner: SendOpStorage {
                 handle: inner.handle,
+                admission: inner.admission,
                 kind: inner.kind,
                 target: inner.target,
                 parts: {
@@ -163,6 +174,43 @@ impl SendOp<Ready> {
     }
 }
 
+impl RoutedSendOp<Empty> {
+    /// Adds the first routed message part.
+    pub fn message(self, message: Message) -> RoutedSendOp<Ready> {
+        let RoutedSendOp { inner, .. } = self;
+        RoutedSendOp {
+            inner: RoutedSendOpStorage {
+                admission: inner.admission,
+                target: inner.target,
+                parts: {
+                    let mut parts = inner.parts;
+                    parts.push(message);
+                    parts
+                },
+            },
+            _state: PhantomData,
+        }
+    }
+}
+
+impl RoutedSendOp<Ready> {
+    /// Adds another routed message part.
+    pub fn message(mut self, message: Message) -> Self {
+        self.inner.parts.push(message);
+        self
+    }
+
+    /// Starts the exact-target HWM-managed send.
+    ///
+    /// The returned Future never performs a blocking native submit. When Core
+    /// reports backpressure it yields `Pending` until that exact physical
+    /// target becomes writable, disconnects, closes, or reaches the socket's
+    /// absolute send deadline.
+    pub fn submit(self) -> impl std::future::Future<Output = Result<(), SubmitError>> + Send {
+        crate::operations::submit_routed_send(self.inner)
+    }
+}
+
 impl RequestOp<Empty> {
     /// Adds the first request part, transitioning the builder to the ready
     /// state. The part is consumed on a successful submit (see [`SendOp`]).
@@ -170,15 +218,13 @@ impl RequestOp<Empty> {
         let RequestOp { inner, .. } = self;
         RequestOp {
             inner: RequestOpStorage {
-                handle: inner.handle,
-                kind: inner.kind,
+                admission: inner.admission,
                 peer_rid: inner.peer_rid,
                 parts: {
                     let mut parts = inner.parts;
                     parts.push(message);
                     parts
                 },
-                flags: inner.flags,
                 timeout: inner.timeout,
             },
             _state: PhantomData,
@@ -200,54 +246,15 @@ impl RequestOp<Ready> {
         self
     }
 
-    /// Sets the send flags applied at submit time.
-    pub fn flags(self, flags: SendFlags) -> RequestOp<CallbackReady> {
-        let mut operation = self;
-        operation.inner.flags = Some(flags);
-        RequestOp {
-            inner: operation.inner,
-            _state: PhantomData,
-        }
-    }
-
-    /// Submits the request; the reply (or error) is delivered later to
-    /// `callback`, which owns the reply parts.
-    pub fn submit<F>(self, callback: F) -> Result<(), SubmitError>
-    where
-        F: FnOnce(Result<Vec<Message>, RequestError>) + Send + 'static,
-    {
-        crate::operations::submit_request(self.inner, SendFlags::NONE, callback)
-    }
-}
-
-impl RequestOp<CallbackReady> {
-    /// Adds another request part. The part is consumed on a successful submit
-    /// (see [`SendOp`]).
-    pub fn message(mut self, message: Message) -> Self {
-        self.inner.parts.push(message);
-        self
-    }
-
-    /// Sets how long the request waits for a reply before timing out.
-    pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.inner.timeout = timeout;
-        self
-    }
-
-    /// Sets the send flags applied at submit time.
-    pub fn flags(mut self, flags: SendFlags) -> Self {
-        self.inner.flags = Some(flags);
-        self
-    }
-
-    /// Submits the request; the reply (or error) is delivered later to
-    /// `callback`, which owns the reply parts.
-    pub fn submit<F>(self, callback: F) -> Result<(), SubmitError>
-    where
-        F: FnOnce(Result<Vec<Message>, RequestError>) + Send + 'static,
-    {
-        let flags = self.inner.flags.unwrap_or(SendFlags::NONE);
-        crate::operations::submit_request(self.inner, flags, callback)
+    /// Starts the exact-target HWM-managed request.
+    ///
+    /// Admission wait and reply wait share the same absolute timeout. Submit
+    /// failures are returned as [`ZlinkError::Submit`], while accepted-request
+    /// completion failures are returned as [`ZlinkError::Request`].
+    pub fn submit(
+        self,
+    ) -> impl std::future::Future<Output = Result<Vec<Message>, ZlinkError>> + Send {
+        crate::operations::submit_routed_request(self.inner)
     }
 }
 
@@ -258,7 +265,7 @@ impl ReplyOp<Empty> {
         let ReplyOp { inner, .. } = self;
         ReplyOp {
             inner: ReplyOpStorage {
-                handle: inner.handle,
+                admission: inner.admission,
                 kind: inner.kind,
                 parts: {
                     let mut parts = inner.parts;

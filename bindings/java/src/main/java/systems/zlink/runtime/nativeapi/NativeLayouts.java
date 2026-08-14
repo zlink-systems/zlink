@@ -19,12 +19,80 @@ public final class NativeLayouts {
     public static final long ROUTING_ID_DATA_OFFSET = ROUTING_ID_LAYOUT.byteOffset(
             PathElement.groupElement("data"));
 
+    public static final MemoryLayout ROUTED_SUBMIT_TARGET_LAYOUT =
+            MemoryLayout.structLayout(
+                    ROUTING_ID_LAYOUT.withName("peer_rid"),
+                    ValueLayout.JAVA_LONG.withName("transport_pair_id"),
+                    ValueLayout.JAVA_LONG.withName(
+                            "transport_pair_generation"));
+    public static final long ROUTED_SUBMIT_TARGET_PAIR_ID_OFFSET =
+            ROUTED_SUBMIT_TARGET_LAYOUT.byteOffset(
+                    PathElement.groupElement("transport_pair_id"));
+    public static final long ROUTED_SUBMIT_TARGET_GENERATION_OFFSET =
+            ROUTED_SUBMIT_TARGET_LAYOUT.byteOffset(
+                    PathElement.groupElement("transport_pair_generation"));
+
+    public static final MemoryLayout ROUTED_SEND_READY_EVENT_LAYOUT =
+            MemoryLayout.structLayout(
+                    ROUTING_ID_LAYOUT.withName("peer_rid"),
+                    ValueLayout.JAVA_LONG.withName("transport_pair_id"),
+                    ValueLayout.JAVA_LONG.withName(
+                            "transport_pair_generation"),
+                    ValueLayout.JAVA_INT.withName("state"),
+                    ValueLayout.JAVA_INT.withName("terminal_errno"));
+    public static final long ROUTED_SEND_READY_PAIR_ID_OFFSET =
+            ROUTED_SEND_READY_EVENT_LAYOUT.byteOffset(
+                    PathElement.groupElement("transport_pair_id"));
+    public static final long ROUTED_SEND_READY_GENERATION_OFFSET =
+            ROUTED_SEND_READY_EVENT_LAYOUT.byteOffset(
+                    PathElement.groupElement("transport_pair_generation"));
+    public static final long ROUTED_SEND_READY_STATE_OFFSET =
+            ROUTED_SEND_READY_EVENT_LAYOUT.byteOffset(
+                    PathElement.groupElement("state"));
+    public static final long ROUTED_SEND_READY_ERRNO_OFFSET =
+            ROUTED_SEND_READY_EVENT_LAYOUT.byteOffset(
+                    PathElement.groupElement("terminal_errno"));
+
+    public static final MemoryLayout CORE_HWM_BUDGET_SNAPSHOT_LAYOUT =
+            MemoryLayout.structLayout(
+                    ValueLayout.JAVA_INT.withName("abi_version"),
+                    ValueLayout.JAVA_INT.withName("struct_size"),
+                    MemoryLayout.sequenceLayout(33, ValueLayout.JAVA_LONG)
+                            .withName("values"),
+                    ValueLayout.JAVA_INT.withName("blocked_ratio_ppm"),
+                    ValueLayout.JAVA_INT.withName("flags"),
+                    MemoryLayout.sequenceLayout(8, ValueLayout.JAVA_LONG)
+                            .withName("reserved_u64"));
+    public static final long CORE_HWM_BUDGET_ABI_VERSION_OFFSET =
+            CORE_HWM_BUDGET_SNAPSHOT_LAYOUT.byteOffset(
+                    PathElement.groupElement("abi_version"));
+    public static final long CORE_HWM_BUDGET_STRUCT_SIZE_OFFSET =
+            CORE_HWM_BUDGET_SNAPSHOT_LAYOUT.byteOffset(
+                    PathElement.groupElement("struct_size"));
+    public static final long CORE_HWM_BUDGET_VALUES_OFFSET =
+            CORE_HWM_BUDGET_SNAPSHOT_LAYOUT.byteOffset(
+                    PathElement.groupElement("values"));
+    public static final long CORE_HWM_BUDGET_BLOCKED_RATIO_OFFSET =
+            CORE_HWM_BUDGET_SNAPSHOT_LAYOUT.byteOffset(
+                    PathElement.groupElement("blocked_ratio_ppm"));
+    public static final long CORE_HWM_BUDGET_FLAGS_OFFSET =
+            CORE_HWM_BUDGET_SNAPSHOT_LAYOUT.byteOffset(
+                    PathElement.groupElement("flags"));
+    public static final long CORE_HWM_BUDGET_RESERVED_OFFSET =
+            CORE_HWM_BUDGET_SNAPSHOT_LAYOUT.byteOffset(
+                    PathElement.groupElement("reserved_u64"));
+
     public static final MemoryLayout SOCKET_MONITOR_OPEN_OPTIONS_LAYOUT =
             MemoryLayout.structLayout(
-                    ValueLayout.JAVA_INT.withName("events"));
+                    ValueLayout.JAVA_INT.withName("events"),
+                    MemoryLayout.paddingLayout(4),
+                    ValueLayout.JAVA_LONG.withName("monitor_hwm_bytes"));
     public static final long SOCKET_MONITOR_OPEN_EVENTS_OFFSET =
             SOCKET_MONITOR_OPEN_OPTIONS_LAYOUT.byteOffset(
                     PathElement.groupElement("events"));
+    public static final long SOCKET_MONITOR_OPEN_HWM_BYTES_OFFSET =
+            SOCKET_MONITOR_OPEN_OPTIONS_LAYOUT.byteOffset(
+                    PathElement.groupElement("monitor_hwm_bytes"));
 
     public static final MemoryLayout MONITOR_SNAPSHOT_LAYOUT =
             MemoryLayout.structLayout(
@@ -36,21 +104,12 @@ public final class NativeLayouts {
                     MemoryLayout.paddingLayout(4),
                     ValueLayout.JAVA_LONG_UNALIGNED.withName("snd_pending_msgs"),
                     ValueLayout.JAVA_LONG_UNALIGNED.withName("rcv_pending_msgs"),
+                    ValueLayout.JAVA_LONG_UNALIGNED.withName("snd_pending_bytes"),
+                    ValueLayout.JAVA_LONG_UNALIGNED.withName("rcv_pending_bytes"),
                     ValueLayout.JAVA_INT.withName("auto_hwm_enabled"),
                     ValueLayout.JAVA_INT.withName("auto_hwm_profile"),
                     ValueLayout.JAVA_INT.withName("auto_hwm_role"),
                     ValueLayout.JAVA_INT.withName("auto_hwm_policy_class"),
-                    ValueLayout.JAVA_LONG_UNALIGNED.withName("auto_hwm_unit_budget_bytes"),
-                    ValueLayout.JAVA_INT.withName("auto_hwm_size_cap"),
-                    MemoryLayout.paddingLayout(4),
-                    ValueLayout.JAVA_LONG_UNALIGNED.withName("auto_hwm_socket_message_slots"),
-                    ValueLayout.JAVA_INT.withName("auto_hwm_connection_bucket_enabled"),
-                    ValueLayout.JAVA_INT.withName("auto_hwm_connection_bucket_count"),
-                    ValueLayout.JAVA_INT.withName("auto_hwm_connection_bucket_index"),
-                    ValueLayout.JAVA_INT.withName("auto_hwm_connection_bucket_hwm_4k"),
-                    ValueLayout.JAVA_INT.withName("auto_hwm_connection_bucket_hysteresis_retained"),
-                    MemoryLayout.paddingLayout(4),
-                    ValueLayout.JAVA_LONG_UNALIGNED.withName("auto_hwm_effective_message_bytes"),
                     ValueLayout.JAVA_LONG_UNALIGNED.withName("auto_hwm_planned_sndhwm_bytes"),
                     ValueLayout.JAVA_LONG_UNALIGNED.withName("auto_hwm_planned_rcvhwm_bytes"),
                     ValueLayout.JAVA_LONG_UNALIGNED.withName("auto_hwm_applied_sndhwm_bytes"),
@@ -90,6 +149,12 @@ public final class NativeLayouts {
     public static final long MONITOR_SNAPSHOT_RCV_PENDING_MSGS_OFFSET =
             MONITOR_SNAPSHOT_LAYOUT.byteOffset(
                     PathElement.groupElement("rcv_pending_msgs"));
+    public static final long MONITOR_SNAPSHOT_SND_PENDING_BYTES_OFFSET =
+            MONITOR_SNAPSHOT_LAYOUT.byteOffset(
+                    PathElement.groupElement("snd_pending_bytes"));
+    public static final long MONITOR_SNAPSHOT_RCV_PENDING_BYTES_OFFSET =
+            MONITOR_SNAPSHOT_LAYOUT.byteOffset(
+                    PathElement.groupElement("rcv_pending_bytes"));
     public static final long MONITOR_SNAPSHOT_AUTO_HWM_ENABLED_OFFSET =
             MONITOR_SNAPSHOT_LAYOUT.byteOffset(
                     PathElement.groupElement("auto_hwm_enabled"));
@@ -102,33 +167,6 @@ public final class NativeLayouts {
     public static final long MONITOR_SNAPSHOT_AUTO_HWM_POLICY_CLASS_OFFSET =
             MONITOR_SNAPSHOT_LAYOUT.byteOffset(
                     PathElement.groupElement("auto_hwm_policy_class"));
-    public static final long MONITOR_SNAPSHOT_AUTO_HWM_UNIT_BUDGET_BYTES_OFFSET =
-            MONITOR_SNAPSHOT_LAYOUT.byteOffset(
-                    PathElement.groupElement("auto_hwm_unit_budget_bytes"));
-    public static final long MONITOR_SNAPSHOT_AUTO_HWM_SIZE_CAP_OFFSET =
-            MONITOR_SNAPSHOT_LAYOUT.byteOffset(
-                    PathElement.groupElement("auto_hwm_size_cap"));
-    public static final long MONITOR_SNAPSHOT_AUTO_HWM_SOCKET_MESSAGE_SLOTS_OFFSET =
-            MONITOR_SNAPSHOT_LAYOUT.byteOffset(
-                    PathElement.groupElement("auto_hwm_socket_message_slots"));
-    public static final long MONITOR_SNAPSHOT_AUTO_HWM_CONNECTION_BUCKET_ENABLED_OFFSET =
-            MONITOR_SNAPSHOT_LAYOUT.byteOffset(
-                    PathElement.groupElement("auto_hwm_connection_bucket_enabled"));
-    public static final long MONITOR_SNAPSHOT_AUTO_HWM_CONNECTION_BUCKET_COUNT_OFFSET =
-            MONITOR_SNAPSHOT_LAYOUT.byteOffset(
-                    PathElement.groupElement("auto_hwm_connection_bucket_count"));
-    public static final long MONITOR_SNAPSHOT_AUTO_HWM_CONNECTION_BUCKET_INDEX_OFFSET =
-            MONITOR_SNAPSHOT_LAYOUT.byteOffset(
-                    PathElement.groupElement("auto_hwm_connection_bucket_index"));
-    public static final long MONITOR_SNAPSHOT_AUTO_HWM_CONNECTION_BUCKET_HWM_4K_OFFSET =
-            MONITOR_SNAPSHOT_LAYOUT.byteOffset(
-                    PathElement.groupElement("auto_hwm_connection_bucket_hwm_4k"));
-    public static final long MONITOR_SNAPSHOT_AUTO_HWM_CONNECTION_BUCKET_HYSTERESIS_RETAINED_OFFSET =
-            MONITOR_SNAPSHOT_LAYOUT.byteOffset(
-                    PathElement.groupElement("auto_hwm_connection_bucket_hysteresis_retained"));
-    public static final long MONITOR_SNAPSHOT_AUTO_HWM_EFFECTIVE_MESSAGE_BYTES_OFFSET =
-            MONITOR_SNAPSHOT_LAYOUT.byteOffset(
-                    PathElement.groupElement("auto_hwm_effective_message_bytes"));
     public static final long MONITOR_SNAPSHOT_AUTO_HWM_PLANNED_SNDHWM_BYTES_OFFSET =
             MONITOR_SNAPSHOT_LAYOUT.byteOffset(
                     PathElement.groupElement("auto_hwm_planned_sndhwm_bytes"));

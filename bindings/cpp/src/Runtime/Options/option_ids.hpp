@@ -20,7 +20,8 @@ enum class context_option_id : int
     auto_hwm_enable = 12,
     auto_hwm_recalc_debounce_ms = 14,
     auto_hwm_profile = 17,
-    auto_hwm_msg_unit_bytes = 18
+    core_hwm_memory_limit_bytes = 19,
+    core_hwm_budget_bytes = 21
 };
 
 enum class socket_option_id : int

@@ -13,13 +13,12 @@ const { configureTlsClient } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const {
   POLLOUT,
-  applyAutoHwmMsgUnit,
   applyContextPolicy,
   applySocketPolicy,
   emitMultiSocketHwmDetail,
   pollEvents,
   pollEventHas,
-  trySocketSend,
+  tryRoutedSocketSend,
   waitForConnectionReady
 } = require('./perf_multi_runtime');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
@@ -29,9 +28,9 @@ const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 // C parity: bindings/c/perf/multi/src/perf_multi_dealer_dealer_client.cpp
 // is the SENDER. It creates one DEALER socket per client (connect),
 // prints CLIENT_READY,<size>, waits START,<size> from stdin, runs the
-// per-socket DONTWAIT send window (run_send_window ~142-265: send until
-// the duration deadline, POLLOUT-wait pending sockets with `-1`), then
-// sends exactly ONE blocking wire stop token per socket
+// per-socket bounded send window (run_send_window ~142-265). This binding
+// awaits routed admission instead of using the removed DONTWAIT terminal,
+// then sends exactly ONE wire stop token per socket
 // (run_single_size_case ~290-293 / send_stop_token ~114-140). The
 // matching RECEIVER/MEASURER is perf_multi_dealer_dealer_server.cpp.
 // Cross-checked against the already-fixed cpp
@@ -58,7 +57,6 @@ async function main() {
     for (let i = 0; i < dealers.length; i += 1) {
       const dealer = dealers[i];
       await waitForConnectionReady(dealer, () => dealer.connect(options.endpoint));
-      applyAutoHwmMsgUnit(ctx, options.msgSize);
       poller.add(dealer, pollEvents(POLLOUT), i);
     }
     ctx.recalculateAutoHwm();
@@ -93,7 +91,7 @@ async function main() {
         // backpressure occurs, then wait for POLLOUT before returning to it.
         while (currentEpochNs() < activeStopNs) {
           stampPayload(payloads[i], { phase: 1, runId: 1, msgSize: options.msgSize, seq });
-          if (!trySocketSend(dealers[i], payloads[i])) {
+          if (!(await tryRoutedSocketSend(dealers[i], payloads[i]))) {
             pending[i] = true;
             pendingCount += 1;
             break;
@@ -118,7 +116,7 @@ async function main() {
     }
     for (let i = 0; i < dealers.length; i += 1) {
       const deadline = Date.now() + 5000;
-      while (!trySocketSend(dealers[i], STOP_TOKEN_BYTES)) {
+      while (!(await tryRoutedSocketSend(dealers[i], STOP_TOKEN_BYTES))) {
         if (Date.now() >= deadline) {
           throw new Error('stop token send timeout');
         }

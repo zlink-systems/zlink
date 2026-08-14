@@ -430,10 +430,6 @@ inline int run_server_benchmark (const std::string &lib_name, const std::string 
         if (bench_transition_debug_enabled ()) {
             std::cerr << "[multi-dealer-dealer-server] wait start size=" << sizes[si] << std::endl;
         }
-        if (!apply_benchmark_context_auto_hwm_msg_unit (ctx.get (), sizes[si])) {
-            ok = false;
-            break;
-        }
         apply_benchmark_hwm (server, settings.hwm);
         if (!perf_multi_handshake::wait_for_start_from_stdin (sizes[si])) {
             if (bench_transition_debug_enabled ()) {

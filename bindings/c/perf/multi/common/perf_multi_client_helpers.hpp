@@ -320,14 +320,12 @@ inline bool create_client_sockets (ctx_guard_t &ctx,
     return true;
 }
 
-inline void refresh_connected_client_auto_hwm (void *ctx,
-                                               const std::vector<void *> &sockets,
+inline void refresh_connected_client_auto_hwm (const std::vector<void *> &sockets,
                                                zlink_socket_type_t client_socket_type,
                                                uint64_t hwm_value,
                                                const std::string &transport,
                                                size_t msg_size)
 {
-    (void) apply_benchmark_context_auto_hwm_msg_unit (ctx, msg_size);
     for (size_t i = 0; i < sockets.size (); ++i) {
         if (!sockets[i])
             continue;

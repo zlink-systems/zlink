@@ -185,7 +185,7 @@ inline int bench_monitor_hwm ()
     if (monitor_hwm >= 0)
         return monitor_hwm;
 
-    const char *env = std::getenv ("BENCH_MULTI_MONITOR_HWM");
+    const char *env = std::getenv ("BENCH_MULTI_MONITOR_HWM_BYTES");
     if (!env || !*env) {
         monitor_hwm = 200000;
         return monitor_hwm;

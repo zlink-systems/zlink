@@ -48,6 +48,9 @@ public sealed class test_socket_surface
             typeName => typeName.StartsWith(
                 "Systems.Zlink.Runtime.",
                 StringComparison.Ordinal));
+        Assert.DoesNotContain(exportedTypeNames,
+            typeName => typeName.Contains("HwmBudgetLease",
+                StringComparison.Ordinal));
     }
 
     [Fact]
@@ -63,6 +66,21 @@ public sealed class test_socket_surface
             typeof(Received),
             typeof(RecvFlags)));
         Assert.True(HasPublicInstanceMethod(
+            typeof(IPairSocket),
+            "RecvRetained",
+            typeof(Received),
+            typeof(RecvFlags)));
+        Assert.True(HasPublicInstanceMethod(
+            typeof(IRouterSocket),
+            "RecvRetained",
+            typeof(Received),
+            typeof(RecvFlags)));
+        Assert.True(HasPublicInstanceMethod(
+            typeof(ISubSocket),
+            "SubscribeRetained",
+            typeof(TopicMessage),
+            typeof(RecvFlags)));
+        Assert.True(HasPublicInstanceMethod(
             typeof(IStreamSocket),
             nameof(IStreamSocket.OnPacket),
             typeof(StreamPacketHandler)));
@@ -73,5 +91,75 @@ public sealed class test_socket_surface
             typeof(Message).MakeByRefType(),
             typeof(bool).MakeByRefType(),
             typeof(RecvFlags)));
+    }
+
+    [Fact]
+    public void routed_send_and_request_expose_only_async_terminals()
+    {
+        MethodInfo dealerSend = PublicInstanceMethods(typeof(IDealerSocket))
+            .Single(method => method.Name == nameof(IDealerSocket.Send)
+                && method.GetParameters().Length == 0);
+        MethodInfo routerSend = PublicInstanceMethods(typeof(IRouterSocket))
+            .Single(method => method.Name == nameof(IRouterSocket.Send)
+                && method.GetParameters().Select(parameter =>
+                        parameter.ParameterType)
+                    .SequenceEqual([typeof(RoutingId)]));
+
+        Assert.Equal(typeof(RoutedSendOperation), dealerSend.ReturnType);
+        Assert.Equal(typeof(RoutedSendOperation), routerSend.ReturnType);
+        Assert.False(typeof(IMessageSocket).IsAssignableFrom(
+            typeof(IDealerSocket)));
+        Assert.False(typeof(IRoutedMessageSocket).IsAssignableFrom(
+            typeof(IRouterSocket)));
+        Assert.True(typeof(IReceivingMessageSocket).IsAssignableFrom(
+            typeof(IDealerSocket)));
+        Assert.True(typeof(IReceivingMessageSocket).IsAssignableFrom(
+            typeof(IRouterSocket)));
+        Assert.DoesNotContain(PublicInstanceMethods(typeof(IDealerSocket)),
+            method => method.Name == nameof(IDealerSocket.Send)
+                && method.ReturnType == typeof(SendOperation));
+        Assert.DoesNotContain(PublicInstanceMethods(typeof(IRouterSocket)),
+            method => method.Name == nameof(IRouterSocket.Send)
+                && method.ReturnType == typeof(SendOperation));
+        foreach (string runtimeTypeName in new[]
+                 {
+                     "Systems.Zlink.DealerSocket",
+                     "Systems.Zlink.RouterSocket"
+                 })
+        {
+            Type runtimeType = typeof(Zlink).Assembly.GetType(runtimeTypeName)
+                ?? throw new InvalidOperationException(
+                    $"missing runtime type {runtimeTypeName}");
+            Assert.DoesNotContain(PublicInstanceMethods(runtimeType), method =>
+                method.Name == "Send"
+                && method.ReturnType == typeof(SendOperation));
+        }
+        Assert.Equal(typeof(SendOperation),
+            PublicInstanceMethods(typeof(IPairSocket)).Single(method =>
+                method.Name == nameof(IPairSocket.Send)).ReturnType);
+        Assert.Equal(typeof(RoutedSendOperation),
+            PublicInstanceMethods(typeof(IStreamSocket)).Single(method =>
+                method.Name == nameof(IStreamSocket.Send)).ReturnType);
+        Assert.Equal(typeof(SendOperation),
+            PublicInstanceMethods(typeof(IStreamSocket)).Single(method =>
+                method.Name == nameof(IStreamSocket.TrySend)).ReturnType);
+        Assert.True(HasPublicInstanceMethod(typeof(RoutedSendSubmitOperation),
+            nameof(RoutedSendSubmitOperation.Async),
+            typeof(System.Threading.CancellationToken)));
+        Assert.DoesNotContain(PublicInstanceMethods(
+                typeof(RoutedSendSubmitOperation)),
+            method => method.Name is "Submit" or "Flags");
+
+        Assert.True(HasPublicInstanceMethod(typeof(RequestSubmitOperation),
+            nameof(RequestSubmitOperation.Async),
+            typeof(System.Threading.CancellationToken)));
+        Assert.DoesNotContain(PublicInstanceMethods(
+                typeof(RequestSubmitOperation)),
+            method => method.Name is "Submit" or "Flags");
+        Assert.DoesNotContain(typeof(Zlink).Assembly.GetExportedTypes(),
+            type => type.Name is "RequestCallback"
+                or "RequestCallbackSubmitOperation");
+        Assert.DoesNotContain(typeof(Zlink).Assembly.GetTypes(),
+            type => type.Name == "LegacyRoutedSendOperation");
     }
 }

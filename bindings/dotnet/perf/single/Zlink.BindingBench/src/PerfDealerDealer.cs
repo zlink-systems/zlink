@@ -32,7 +32,7 @@ internal static class PerfDealerDealer
         }
     }
 
-    internal static int RunDealerDealer(string transport, int size)
+    internal static async Task<int> RunDealerDealer(string transport, int size)
     {
         int durationSeconds = ResolveSingleDurationSeconds();
         int recvTimeoutMs = ResolveSingleRcvTimeoutMs();
@@ -45,7 +45,6 @@ internal static class PerfDealerDealer
         using var sender = ctx.CreateDealerSocket();
         ApplySingleSocketOptions(receiver);
         ApplySingleSocketOptions(sender);
-        ApplySingleAutoHwmMsgUnit(ctx, size);
         RecalculateSingleAutoHwm(ctx);
         ConfigureTlsServerIfNeeded(receiver, transport);
         ConfigureTlsClientIfNeeded(sender, transport);
@@ -86,16 +85,18 @@ internal static class PerfDealerDealer
             var payload = new byte[payloadSize];
             Array.Fill(payload, (byte)'a');
 
-            if (!RunActivePhase(sender, receiver, payload, size,
-                    durationSeconds, recvTimeoutMs, latencySampleCap,
-                    out long received, out var latencySamples))
+            var active = await RunActivePhaseAsync(sender, receiver, payload,
+                size, durationSeconds, recvTimeoutMs, latencySampleCap)
+                .ConfigureAwait(false);
+            if (!active.Ok)
             {
                 TryCleanup(sender, receiver, endpoint);
                 return 2;
             }
 
-            double throughput = received / (double)Math.Max(durationSeconds, 1);
-            var latency = ComputeLatencyStats(latencySamples);
+            double throughput = active.Received
+                / (double)Math.Max(durationSeconds, 1);
+            var latency = ComputeLatencyStats(active.LatencySamples);
             PrintResult("DEALER_DEALER", transport, size, throughput,
                 latency.mean, latency.p95, latency.p99);
             TryCleanup(sender, receiver, endpoint);
@@ -114,10 +115,10 @@ internal static class PerfDealerDealer
         }
     }
 
-    private static bool RunActivePhase(IDealerSocket sender,
+    private static async Task<(bool Ok, long Received,
+        List<double> LatencySamples)> RunActivePhaseAsync(IDealerSocket sender,
         IDealerSocket receiver, byte[] payload, int msgSize,
-        int durationSeconds, int recvTimeoutMs, int latencyCap,
-        out long receivedOut, out List<double> latencySamples)
+        int durationSeconds, int recvTimeoutMs, int latencyCap)
     {
         _ = recvTimeoutMs;
         long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
@@ -131,7 +132,7 @@ internal static class PerfDealerDealer
         // PERF_SINGLE_TEST_POLICY § 1.4 / C parity: wait on the receiver
         // poller, receive with DontWait, drain the available burst, and end
         // only on the wire-level stop token. The sender owns the active
-        // deadline and uses the blocking flags-none send path from C.
+        // deadline and awaits routed admission without occupying this thread.
         using var poller = Zlink.CreatePoller();
         var events = new PollEvent[1];
         poller.Add(receiver, PollEventFlags.PollIn, 0);
@@ -139,7 +140,30 @@ internal static class PerfDealerDealer
         bool stopReceived = false;
         Exception? sendError = null;
 
-        var senderThread = new Thread(() =>
+        bool ProcessReceived(Message message)
+        {
+            ReadOnlySpan<byte> body = message.AsReadOnlySpan();
+            if (StopToken.IsStopToken(body))
+                return true;
+
+            long recvTicks = Stopwatch.GetTimestamp();
+            if (TryDecodeExpectedSingleHeader(body, msgSize, ActivePhase,
+                    out var header, RunId)
+                && recvTicks <= deadlineTicks)
+            {
+                received++;
+                ulong nowNs = EpochNs();
+                if (nowNs >= header.SentTsNs)
+                {
+                    double latencyNs = nowNs - header.SentTsNs;
+                    ReservoirSample(samples, latencyNs, ref sampleSeen,
+                        latencyCap, ref rng);
+                }
+            }
+            return false;
+        }
+
+        async Task SendLoopAsync()
         {
             try
             {
@@ -150,7 +174,7 @@ internal static class PerfDealerDealer
                     StampMetricHeader(payload.AsSpan(), RunId, ActivePhase,
                         msgSize, seq, EpochNs());
                     seq++;
-                    if (SendBlocking(sender, payload) <= 0)
+                    if (await SendAsync(sender, payload).ConfigureAwait(false) <= 0)
                         continue;
                 }
             }
@@ -160,13 +184,14 @@ internal static class PerfDealerDealer
             }
             finally
             {
-                if (!SendStopTokenBlocking(sender, "[single-dealer-dealer]"))
+                if (!await SendStopTokenAsync(sender,
+                        "[single-dealer-dealer]").ConfigureAwait(false))
                     sendError ??= new InvalidOperationException(
                         "dealer-dealer stop token was not sent");
             }
-        });
-        senderThread.IsBackground = true;
-        senderThread.Start();
+        }
+
+        Task senderTask = SendLoopAsync();
 
         try
         {
@@ -177,27 +202,10 @@ internal static class PerfDealerDealer
 
                 while (TryReceiveNonBlocking(receiver, maybe))
                 {
-                    ReadOnlySpan<byte> body = maybe.FirstPart()
-                        .AsReadOnlySpan();
-                    if (StopToken.IsStopToken(body))
+                    if (ProcessReceived(maybe.FirstPart()))
                     {
                         stopReceived = true;
                         break;
-                    }
-
-                    long recvTicks = Stopwatch.GetTimestamp();
-                    if (TryDecodeExpectedSingleHeader(body, msgSize,
-                            ActivePhase, out var header, RunId)
-                        && recvTicks <= deadlineTicks)
-                    {
-                        received++;
-                        ulong nowNs = EpochNs();
-                        if (nowNs >= header.SentTsNs)
-                        {
-                            double latencyNs = nowNs - header.SentTsNs;
-                            ReservoirSample(samples, latencyNs,
-                                ref sampleSeen, latencyCap, ref rng);
-                        }
                     }
                 }
             }
@@ -207,13 +215,11 @@ internal static class PerfDealerDealer
             recvError = ex;
         }
 
-        senderThread.Join();
+        await senderTask.ConfigureAwait(false);
 
-        latencySamples = samples;
-        receivedOut = received;
         if (sendError != null || recvError != null)
-            return false;
+            return (false, received, samples);
 
-        return received > 0 && latencySamples.Count > 0;
+        return (received > 0 && samples.Count > 0, received, samples);
     }
 }

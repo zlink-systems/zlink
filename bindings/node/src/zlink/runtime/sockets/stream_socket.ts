@@ -5,8 +5,10 @@ import { SocketBase } from './socket_base';
 import { messageFromNativeBuffer, normalizeMessageLikePayload } from '../buffers/message_conversion';
 import { normalizeRoutingId } from '../core/routing_id';
 import {
-  RoutedRuntimeSendOperation,
+  ImmediateRoutedRuntimeSendOperation,
+  ManagedRoutedRuntimeSendOperation,
 } from './socket_operations';
+import { RoutedAdmission } from './routed_admission';
 import { submitErrorFromResult } from './socket_submit_errors';
 import type { RuntimeContext as Context } from '../core/context';
 import {
@@ -38,6 +40,7 @@ import {
   StreamPacketBodyMaterialization
 } from '../../contracts/sockets/socket_constants';
 import type {
+  RoutedSendOperation,
   SendOperation,
   SocketSendReadyHandler,
   StreamPacketHandler,
@@ -47,6 +50,7 @@ const native = requireNative();
 
 export class StreamSocket extends SocketBase {
   readonly options: StreamSocketOptions;
+  private readonly admission: RoutedAdmission;
   private readonly _packetRoutingIdCache = new WeakMap<Buffer, RoutingId>();
   private readonly routedSend = {
     submit: (routingId: Buffer,
@@ -57,9 +61,37 @@ export class StreamSocket extends SocketBase {
   constructor(ctx: Context) {
     super(ctx, NativeSocketType.STREAM);
     this.options = StreamSocketOptions.create(this);
+    try {
+      this.admission = new RoutedAdmission(getNativeHandle(this), 'stream');
+    } catch (error) {
+      super.close();
+      throw error;
+    }
   }
-  send(routingId: RoutingId): SendOperation {
-    return new RoutedRuntimeSendOperation(this.routedSend.submit, normalizeRoutingId(routingId));
+  send(routingId: RoutingId): RoutedSendOperation {
+    const target = normalizeRoutingId(routingId);
+    return new ManagedRoutedRuntimeSendOperation(
+      (selector, parts, timeoutMs, startedAt) => {
+        if (Array.isArray(parts)) {
+          return Promise.reject(new TypeError(
+            'STREAM managed send accepts one FINAL message; submit frames separately'
+          ));
+        }
+        return this.admission.send(
+          selector,
+          parts,
+          timeoutMs === 0 ? this.options.sendTimeout : timeoutMs,
+          startedAt
+        );
+      },
+      target
+    );
+  }
+  trySend(routingId: RoutingId): SendOperation {
+    return new ImmediateRoutedRuntimeSendOperation(
+      this.routedSend.submit,
+      normalizeRoutingId(routingId)
+    );
   }
   private sendDirectRaw(routingId: Buffer, payload: MessageLike | readonly MessageLike[], flags: SendFlags = SendFlags.None): boolean {
     const normalized = normalizeMessageLikePayload(payload);
@@ -123,6 +155,26 @@ export class StreamSocket extends SocketBase {
     materializeReceivedInto(result, receivedRaw, undefined, send);
     return true;
   }
+  recvRetained(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
+    let raw;
+    try {
+      raw = ((flags | 0) & (RecvFlags.DontWait | 0))
+        ? native.socketRecvMessageRetainedNoWait(getNativeHandle(this))
+        : native.socketRecvMessageRetained(getNativeHandle(this), flags | 0);
+    } catch (error) {
+      throw recvNativeError(error, flags, 'retained recv failed');
+    }
+    if (raw == null) return false;
+    const receivedRoutingId = nativeReceivedRoutingId(raw);
+    const send = (parts: readonly Message[], sendFlags: SendFlags) => {
+      if (!receivedRoutingId) {
+        throw submitErrorFromResult(SubmitResult.InvalidState, 'missing routed send target');
+      }
+      return this.sendDirectRaw(receivedRoutingId, parts, sendFlags);
+    };
+    materializeReceivedInto(result, raw, undefined, send);
+    return true;
+  }
   setPacketHandler(handler: StreamPacketHandler): void {
     handlerCall('stream packet handler registration failed', () => {
       const bodyMaterialization = this.options.packetBodyMaterialization;
@@ -166,6 +218,11 @@ export class StreamSocket extends SocketBase {
   }
   setSendReadyHandler(handler: SocketSendReadyHandler): void {
     this.registerSendReadyHandler(handler);
+  }
+  close(): void {
+    this.admission.close();
+    super.close();
+    this.admission.finishClose();
   }
   setRoutingId(routingId: RoutingId): void {
     const normalizedRoutingId = normalizeRoutingId(routingId);

@@ -42,8 +42,8 @@ inline const char *resolve_multi_named_env_value (const char *name_)
         return resolve_multi_env_value ("PERF_MULTI_SNDBUF", "PERF_SNDBUF");
     if (std::strcmp (name_, "PERF_RCVBUF") == 0)
         return resolve_multi_env_value ("PERF_MULTI_RCVBUF", "PERF_RCVBUF");
-    if (std::strcmp (name_, "PERF_MONITOR_HWM") == 0)
-        return resolve_multi_env_value ("PERF_MULTI_MONITOR_HWM", "PERF_MONITOR_HWM");
+    if (std::strcmp (name_, "PERF_MONITOR_HWM_BYTES") == 0)
+        return resolve_multi_env_value ("PERF_MULTI_MONITOR_HWM_BYTES", "PERF_MONITOR_HWM_BYTES");
 
     return resolve_multi_env_value (name_, NULL);
 }
@@ -250,24 +250,6 @@ inline bool perf_auto_hwm_recv_side_visible (uint32_t socket_type_, uint32_t rol
     return true;
 }
 
-inline const char *perf_auto_hwm_bucket_label (uint32_t bucket_index_)
-{
-    switch (bucket_index_) {
-    case 0:
-        return "1-64";
-    case 1:
-        return "65-128";
-    case 2:
-        return "129-512";
-    case 3:
-        return "513-2048";
-    case 4:
-        return "2049+";
-    default:
-        return "";
-    }
-}
-
 inline std::string perf_auto_hwm_sndhwm_display (const zlink_monitor_status_t &snapshot_,
                                                  uint32_t socket_type_)
 {
@@ -298,23 +280,6 @@ inline std::string perf_auto_hwm_rcvbuf_display (const zlink_monitor_status_t &s
     if (!perf_auto_hwm_recv_side_visible (socket_type_, snapshot_.auto_hwm_role))
         return "0";
     return std::to_string (snapshot_.auto_hwm_effective_rcvbuf);
-}
-
-inline size_t perf_auto_hwm_effective_msg_size (size_t msg_size_)
-{
-    if (msg_size_ != 0)
-        return msg_size_;
-    const char *value = std::getenv ("PERF_MSG_SIZES");
-    if (!value || !*value)
-        value = std::getenv ("PERF_MULTI_MSG_SIZES");
-    if (!value || !*value)
-        return 0;
-    errno = 0;
-    char *end = NULL;
-    const unsigned long parsed = std::strtoul (value, &end, 10);
-    if (errno != 0 || end == value)
-        return 0;
-    return static_cast<size_t> (parsed);
 }
 
 inline bool perf_auto_hwm_label_is_control_snapshot (const char *label_)
@@ -391,10 +356,8 @@ inline void perf_print_auto_hwm_snapshot (void *handle_,
                             + std::to_string (snapshot.auto_hwm_applied_rcvhwm_bytes) + "|"
                             + std::to_string (snapshot.auto_hwm_profile) + "|"
                             + std::to_string (snapshot.auto_hwm_policy_class) + "|"
-                            + std::to_string (snapshot.auto_hwm_unit_budget_bytes) + "|"
-                            + std::to_string (snapshot.auto_hwm_size_cap) + "|"
-                            + std::to_string (snapshot.auto_hwm_socket_message_slots) + "|"
-                            + std::to_string (snapshot.auto_hwm_effective_message_bytes) + "|"
+                            + std::to_string (snapshot.snd_pending_bytes) + "|"
+                            + std::to_string (snapshot.rcv_pending_bytes) + "|"
                             + std::to_string (snapshot.auto_hwm_effective_sndbuf) + "|"
                             + std::to_string (snapshot.auto_hwm_effective_rcvbuf);
 
@@ -417,12 +380,10 @@ inline void perf_print_auto_hwm_snapshot (void *handle_,
               << ",profile_id=" << snapshot.auto_hwm_profile << ",policy_class="
               << perf_auto_hwm_policy_class_name (snapshot.auto_hwm_policy_class)
               << ",policy_class_id=" << snapshot.auto_hwm_policy_class
-              << ",unit_budget_bytes=" << snapshot.auto_hwm_unit_budget_bytes
-              << ",size_cap=" << snapshot.auto_hwm_size_cap
               << ",sndhwm=" << snapshot.auto_hwm_applied_sndhwm_bytes
               << ",rcvhwm=" << snapshot.auto_hwm_applied_rcvhwm_bytes
-              << ",socket_message_slots=" << snapshot.auto_hwm_socket_message_slots
-              << ",effective_message_bytes=" << snapshot.auto_hwm_effective_message_bytes
+              << ",snd_pending_bytes=" << snapshot.snd_pending_bytes
+              << ",rcv_pending_bytes=" << snapshot.rcv_pending_bytes
               << ",effective_sndbuf=" << perf_auto_hwm_sndbuf_display (snapshot, socket_type_)
               << ",effective_rcvbuf=" << perf_auto_hwm_rcvbuf_display (snapshot, socket_type_)
               << ",last_recalc_ms=" << snapshot.auto_hwm_last_recalc_ms << ",last_recalc_reason="
@@ -602,22 +563,6 @@ inline void apply_benchmark_hwm (void *socket_, uint64_t hwm_value)
         if (rcvhwm > 0)
             set_sockopt_u64 (socket_, ZLINK_OPT_RCVHWM, rcvhwm, "ZLINK_OPT_RCVHWM");
     }
-}
-
-inline uint64_t perf_auto_hwm_msg_unit_for_size (size_t msg_size_)
-{
-    return static_cast<uint64_t> (msg_size_);
-}
-
-inline bool apply_benchmark_context_auto_hwm_msg_unit (void *ctx_, size_t msg_size_)
-{
-    if (!ctx_ || msg_size_ == 0)
-        return true;
-    const uint64_t msg_unit = perf_auto_hwm_msg_unit_for_size (msg_size_);
-    if (!set_ctx_opt_u64 (ctx_, ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES, msg_unit,
-                          "ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES"))
-        return false;
-    return zlink_ctx_auto_hwm_recalculate (ctx_) == ZLINK_CONFIG_OK;
 }
 
 inline int bench_timeout_ms_from_env (const char *name_, int default_ms_)

@@ -272,11 +272,9 @@ int child_main (int index,
         child_result_t result;
         std::memset (&result, 0, sizeof (result));
         const size_t msg_size = static_cast<size_t> (command.msg_size);
-        const bool prepared =
-          apply_benchmark_context_auto_hwm_msg_unit (ctx.get (), msg_size);
         apply_benchmark_hwm (socket, settings.hwm);
         const bool recalculated =
-          prepared && zlink_ctx_auto_hwm_recalculate (ctx.get ()) == ZLINK_CONFIG_OK;
+          zlink_ctx_auto_hwm_recalculate (ctx.get ()) == ZLINK_CONFIG_OK;
         const bool ran =
           recalculated
           && (is_reqrep ()

@@ -8,6 +8,31 @@ function freezeMessageParts(parts: readonly Message[]): Message[] {
 }
 
 const EMPTY_MESSAGE_PARTS = freezeMessageParts([]);
+const retainedCreditReleases = new WeakMap<MessagePartsEnvelope, () => void>();
+
+/** @internal Replace the private Core-credit owner attached to an aggregate receive result. */
+export function replaceMessagePartsEnvelopeRetainedCredit(
+  target: MessagePartsEnvelope,
+  release: (() => void) | null
+): void {
+  const previous = retainedCreditReleases.get(target);
+  if (previous) {
+    retainedCreditReleases.delete(target);
+    previous();
+  }
+  if (release) {
+    retainedCreditReleases.set(target, release);
+  }
+}
+
+function releaseMessagePartsEnvelopeRetainedCredit(target: MessagePartsEnvelope): void {
+  const release = retainedCreditReleases.get(target);
+  if (!release) {
+    return;
+  }
+  retainedCreditReleases.delete(target);
+  release();
+}
 
 function invalidMultipartError(partsLength: number): RecvError {
   const error = new RecvError(RecvResult.NotSupported, 0);
@@ -52,10 +77,15 @@ export abstract class MessagePartsEnvelope {
 
   /** Close every part, releasing their storage. */
   close(): void {
-    for (const part of this.parts) {
-      part.close();
+    try {
+      for (const part of this.parts) {
+        part.close();
+      }
+    } finally {
+      // Drop aliases before returning the Core origin credit. The opaque
+      // native owner also has a finalizer fallback if this envelope is lost.
+      this.parts = EMPTY_MESSAGE_PARTS;
+      releaseMessagePartsEnvelopeRetainedCredit(this);
     }
-    // Drop aliases before a returned Message facade can be acquired again.
-    this.parts = EMPTY_MESSAGE_PARTS;
   }
 }

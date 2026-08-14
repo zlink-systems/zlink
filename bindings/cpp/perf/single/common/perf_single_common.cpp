@@ -230,7 +230,7 @@ void apply_ctx_options (zlink::context_t &ctx_)
 
     (void) options.blocky (parse_nonnegative_env ("PERF_CTX_BLOCKY", 0) != 0);
     (void) options.auto_hwm_enabled (parse_nonnegative_env ("PERF_CTX_AUTO_HWM_ENABLE", 1) != 0);
-    (void) options.auto_hwm_profile (resolve_single_ctx_auto_hwm_profile ());
+    (void) options.core_hwm_profile (resolve_single_ctx_auto_hwm_profile ());
 }
 
 bool set_sockopt_int (perf_socket_t &socket_,
@@ -267,22 +267,6 @@ void apply_single_hwm (perf_socket_t &socket_)
     const uint64_t rcvhwm = resolve_single_socket_hwm (false);
     (void) set_sockopt_hwm (socket_, perf::options::socket_options::sndhwm, sndhwm, "sndhwm");
     (void) set_sockopt_hwm (socket_, perf::options::socket_options::rcvhwm, rcvhwm, "rcvhwm");
-}
-
-bool apply_single_auto_hwm_msg_unit (ctx_guard_t &ctx_, size_t msg_size_)
-{
-    if (msg_size_ == 0)
-        return true;
-    try {
-        zlink::context_options_t options = ctx_.ctx ().options ();
-        options.auto_hwm_msg_unit_bytes (
-          zlink::byte_count_t::bytes (static_cast<uint64_t> (msg_size_)));
-        return true;
-    }
-    catch (const zlink::config_error_t &err) {
-        errno = err.internal_errno ();
-        return false;
-    }
 }
 
 bool recalculate_single_auto_hwm (ctx_guard_t &ctx_)

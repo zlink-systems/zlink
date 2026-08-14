@@ -42,12 +42,6 @@ final class LibraryLoader {
                 LOOKUP = combinedLookup();
                 return LOOKUP;
             }
-            Path nativeDir = findBindingNativeDir();
-            if (nativeDir != null) {
-                loadFromDirectory(nativeDir);
-                LOOKUP = combinedLookup();
-                return LOOKUP;
-            }
             try {
                 loadFromResources();
                 LOOKUP = combinedLookup();
@@ -263,21 +257,6 @@ final class LibraryLoader {
 
     private static String resourcePath(String os, String arch, String fileName) {
         return "/native/" + os + "-" + arch + "/" + fileName;
-    }
-
-    private static Path findBindingNativeDir() {
-        String os = normalizeOs(System.getProperty("os.name"));
-        String arch = normalizeArch(System.getProperty("os.arch"));
-        String relative = "native/" + os + "-" + arch;
-        Path cwd = Path.of(System.getProperty("user.dir", ".")).toAbsolutePath();
-        String required = libraryFileName(os);
-        Path local = cwd.resolve("src/main/resources").resolve(relative)
-            .normalize();
-        if (Files.exists(local.resolve(required))) {
-            return local;
-        }
-        return findAncestorRelative(cwd,
-            "bindings/java/src/main/resources/" + relative, required);
     }
 
     private static Path findGeneratedBridgeDir() {

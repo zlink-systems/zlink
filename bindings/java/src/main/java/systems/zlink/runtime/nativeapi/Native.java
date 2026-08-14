@@ -59,6 +59,14 @@ public final class Native {
     private static final MethodHandle MH_CTX_AUTO_HWM_RECALCULATE = downcall(
             "zlink_ctx_auto_hwm_recalculate",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
+    private static final MethodHandle MH_CTX_GET_AUTO_HWM_BUDGET_SNAPSHOT =
+            downcall("zlink_ctx_get_auto_hwm_budget_snapshot",
+                FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                    ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+    private static final MethodHandle MH_CTX_RESET_AUTO_HWM_BUDGET_METRICS =
+            downcall("zlink_ctx_reset_auto_hwm_budget_metrics",
+                FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                    ValueLayout.ADDRESS));
     private static final MethodHandle MH_SOCKET = downcall("zlink_socket",
             FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
     private static final MethodHandle MH_CLOSE = downcall("zlink_close",
@@ -85,6 +93,26 @@ public final class Native {
             "zlink_send_ready_handler",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                     ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+    private static final MethodHandle MH_ROUTED_SEND_READY_HANDLER = downcall(
+            "zlink_routed_send_ready_handler",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+    private static final MethodHandle MH_SELECT_ROUTED_SUBMIT_TARGET = downcall(
+            "zlink_select_routed_submit_target",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+    private static final MethodHandle MH_SEND_PART_TRANSPORT_PAIR = downcall(
+            "zlink_send_part_transport_pair",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                    ValueLayout.JAVA_LONG, ValueLayout.ADDRESS,
+                    ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+    private static final MethodHandle MH_DEALER_SEND_TRANSPORT_PAIR_PART =
+            downcall("zlink_dealer_send_transport_pair_part",
+                FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                    ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
+                    ValueLayout.JAVA_INT));
     private static final MethodHandle MH_SEND_PART = downcall("zlink_send_part",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                     ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
@@ -112,6 +140,15 @@ public final class Native {
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                     ValueLayout.ADDRESS, ValueLayout.ADDRESS,
                     ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+    private static final MethodHandle MH_RECV_PART_WITH_HWM_BUDGET_LEASE =
+            downcall("zlink_recv_part_with_hwm_budget_lease",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                            ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                            ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+    private static final MethodHandle MH_HWM_BUDGET_LEASE_RELEASE = downcall(
+            "zlink_hwm_budget_lease_release",
+            FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
     // DONT_WAIT-only critical variant. Caller MUST guarantee DONT_WAIT so
     // zlink_recv_part cannot block while the JVM elides safepoint transitions.
     private static final MethodHandle MH_RECV_PART_CRITICAL =
@@ -211,6 +248,14 @@ public final class Native {
                     ValueLayout.JAVA_LONG, ValueLayout.ADDRESS,
                     ValueLayout.ADDRESS, ValueLayout.ADDRESS,
                     ValueLayout.JAVA_INT));
+    private static final MethodHandle MH_SUBSCRIBE_PART_WITH_HWM_BUDGET_LEASE =
+            downcall("zlink_subscribe_part_with_hwm_budget_lease",
+                    FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                            ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                            ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                            ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                            ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                            ValueLayout.JAVA_INT));
     // DONT_WAIT-only critical variant. zlink_subscribe_part is non-blocking
     // when called with DONT_WAIT, so the JVM can elide GC safepoint
     // transitions on the subscribe hot path (parity with
@@ -338,6 +383,22 @@ public final class Native {
         FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
           ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS,
           ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+    private static final MethodHandle
+        MH_ROUTER_RECV_PART_V2_WITH_HWM_BUDGET_LEASE = downcall(
+            "zlink_router_recv_part_v2_with_hwm_budget_lease",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT));
+    private static final MethodHandle MH_DEALER_RECV_PART_WITH_HWM_BUDGET_LEASE =
+        downcall("zlink_dealer_recv_part_with_hwm_budget_lease",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS, ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT));
     private static final MethodHandle MH_ROUTER_REQUEST_PART = downcall(
       "zlink_router_request_part",
       FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
@@ -355,20 +416,17 @@ public final class Native {
       FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
         ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
         ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+    private static final MethodHandle MH_DEALER_REQUEST_TRANSPORT_PAIR_PART =
+      downcall("zlink_dealer_request_transport_pair_part",
+      FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+        ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_INT,
+        ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+        ValueLayout.ADDRESS));
     private static final MethodHandle MH_ROUTER_REPLY_PART = downcall(
       "zlink_router_reply_part",
       FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
         ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS,
         ValueLayout.JAVA_INT));
-    private static final MethodHandle MH_ROUTER_COMPLETION_CONTROL_PART = downcall(
-      "zlink_router_completion_control_part",
-      FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-        ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-    private static final MethodHandle MH_ROUTER_COMPLETION_CONTROL_HANDLER = downcall(
-      "zlink_router_completion_control_handler",
-      FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-        ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-
 
     private Native() {}
 
@@ -499,6 +557,26 @@ public final class Native {
         }
     }
 
+    public static int ctxGetAutoHwmBudgetSnapshot(MemorySegment ctx,
+                                                   MemorySegment snapshot) {
+        try {
+            return (int) MH_CTX_GET_AUTO_HWM_BUDGET_SNAPSHOT.invokeExact(
+                ctx, snapshot);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_ctx_get_auto_hwm_budget_snapshot failed", t);
+        }
+    }
+
+    public static int ctxResetAutoHwmBudgetMetrics(MemorySegment ctx) {
+        try {
+            return (int) MH_CTX_RESET_AUTO_HWM_BUDGET_METRICS.invokeExact(ctx);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_ctx_reset_auto_hwm_budget_metrics failed", t);
+        }
+    }
+
     public static MemorySegment socket(MemorySegment ctx, int type) {
         try {
             return (MemorySegment) MH_SOCKET.invokeExact(ctx, type);
@@ -584,6 +662,61 @@ public final class Native {
                 userdata);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_send_ready_handler failed", t);
+        }
+    }
+
+    public static int routedSendReadyHandler(MemorySegment handle,
+                                             MemorySegment handler,
+                                             MemorySegment userdata) {
+        try {
+            return (int) MH_ROUTED_SEND_READY_HANDLER.invokeExact(handle,
+                handler, userdata);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_routed_send_ready_handler failed", t);
+        }
+    }
+
+    public static int selectRoutedSubmitTarget(MemorySegment handle,
+                                                MemorySegment routingId,
+                                                MemorySegment targetOut) {
+        try {
+            return (int) MH_SELECT_ROUTED_SUBMIT_TARGET.invokeExact(handle,
+                routingId, targetOut);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_select_routed_submit_target failed", t);
+        }
+    }
+
+    public static int sendPartTransportPair(MemorySegment handle,
+                                            MemorySegment routingId,
+                                            long transportPairId,
+                                            long transportPairGeneration,
+                                            MemorySegment part,
+                                            int flags,
+                                            int partFlag) {
+        try {
+            return (int) MH_SEND_PART_TRANSPORT_PAIR.invokeExact(handle,
+                routingId, transportPairId, transportPairGeneration, part,
+                flags, partFlag);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_send_part_transport_pair failed", t);
+        }
+    }
+
+    public static int dealerSendTransportPairPart(MemorySegment handle,
+                                                  MemorySegment target,
+                                                  MemorySegment part,
+                                                  int flags,
+                                                  int partFlag) {
+        try {
+            return (int) MH_DEALER_SEND_TRANSPORT_PAIR_PART.invokeExact(handle,
+                target, part, flags, partFlag);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_dealer_send_transport_pair_part failed", t);
         }
     }
 
@@ -691,6 +824,28 @@ public final class Native {
                 hasMoreOut, flags);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_recv_part failed", t);
+        }
+    }
+
+    public static int recvPartWithHwmBudgetLease(
+            MemorySegment socket, MemorySegment sourceRidOut,
+            MemorySegment partOut, MemorySegment leaseOut,
+            MemorySegment hasMoreOut, int flags) {
+        try {
+            return (int) MH_RECV_PART_WITH_HWM_BUDGET_LEASE.invokeExact(
+                socket, sourceRidOut, partOut, leaseOut, hasMoreOut, flags);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_recv_part_with_hwm_budget_lease failed", t);
+        }
+    }
+
+    public static void hwmBudgetLeaseRelease(MemorySegment leaseOut) {
+        try {
+            MH_HWM_BUDGET_LEASE_RELEASE.invokeExact(leaseOut);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_hwm_budget_lease_release failed", t);
         }
     }
 
@@ -1022,6 +1177,21 @@ public final class Native {
         }
     }
 
+    public static int subscribePartWithHwmBudgetLease(
+            MemorySegment subject, MemorySegment sourceRidOut,
+            MemorySegment topicIdOut, long topicCapacity,
+            MemorySegment topicIdLenOut, MemorySegment partOut,
+            MemorySegment leaseOut, MemorySegment hasMoreOut, int flags) {
+        try {
+            return (int) MH_SUBSCRIBE_PART_WITH_HWM_BUDGET_LEASE.invokeExact(
+                subject, sourceRidOut, topicIdOut, topicCapacity,
+                topicIdLenOut, partOut, leaseOut, hasMoreOut, flags);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_subscribe_part_with_hwm_budget_lease failed", t);
+        }
+    }
+
     // DONT_WAIT-only critical variant. Caller MUST guarantee DONT_WAIT set.
     public static int subscribePartNoWaitCritical(MemorySegment subject,
                                     MemorySegment sourceRidOut,
@@ -1057,12 +1227,16 @@ public final class Native {
         }
     }
 
-    public static MemorySegment monitorOpen(MemorySegment socket, int events) {
+    public static MemorySegment monitorOpen(MemorySegment socket, int events,
+                                            long monitorHwmBytes) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment options = arena.allocate(
               NativeLayouts.SOCKET_MONITOR_OPEN_OPTIONS_LAYOUT);
             options.set(ValueLayout.JAVA_INT,
               NativeLayouts.SOCKET_MONITOR_OPEN_EVENTS_OFFSET, events);
+            options.set(ValueLayout.JAVA_LONG,
+              NativeLayouts.SOCKET_MONITOR_OPEN_HWM_BYTES_OFFSET,
+              monitorHwmBytes);
             return (MemorySegment) MH_MONITOR_OPEN.invokeExact(socket, options);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_socket_monitor_open failed", t);
@@ -1378,6 +1552,36 @@ public final class Native {
         }
     }
 
+    public static int routerRecvPartV2WithHwmBudgetLease(
+            MemorySegment router, MemorySegment sourceNodeRidOut,
+            MemorySegment requestSeqOut, MemorySegment transportPairIdOut,
+            MemorySegment transportPairGenerationOut, MemorySegment partOut,
+            MemorySegment leaseOut, MemorySegment hasMoreOut, int flags) {
+        try {
+            return (int) MH_ROUTER_RECV_PART_V2_WITH_HWM_BUDGET_LEASE
+                .invokeExact(router, sourceNodeRidOut, requestSeqOut,
+                    transportPairIdOut, transportPairGenerationOut, partOut,
+                    leaseOut, hasMoreOut, flags);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_router_recv_part_v2_with_hwm_budget_lease failed", t);
+        }
+    }
+
+    public static int dealerRecvPartWithHwmBudgetLease(
+            MemorySegment dealer, MemorySegment messageTypeOut,
+            MemorySegment requestSeqOut, MemorySegment partOut,
+            MemorySegment leaseOut, MemorySegment hasMoreOut, int flags) {
+        try {
+            return (int) MH_DEALER_RECV_PART_WITH_HWM_BUDGET_LEASE.invokeExact(
+                dealer, messageTypeOut, requestSeqOut, partOut, leaseOut,
+                hasMoreOut, flags);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_dealer_recv_part_with_hwm_budget_lease failed", t);
+        }
+    }
+
     // DONT_WAIT-only critical variant. Caller MUST guarantee the DONT_WAIT
     // bit is set in flags so that the underlying call is non-blocking.
     public static int routerRecvPartNoWaitCritical(MemorySegment router,
@@ -1407,6 +1611,20 @@ public final class Native {
                 partFlag, timeoutMs, handler, userdata);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_dealer_request_part failed", t);
+        }
+    }
+
+    public static int dealerRequestTransportPairPart(
+            MemorySegment dealer, MemorySegment target, MemorySegment part,
+            int flags, int partFlag, int timeoutMs, MemorySegment handler,
+            MemorySegment userdata) {
+        try {
+            return (int) MH_DEALER_REQUEST_TRANSPORT_PAIR_PART.invokeExact(
+                dealer, target, part, flags, partFlag, timeoutMs, handler,
+                userdata);
+        } catch (Throwable t) {
+            throw new RuntimeException(
+                "zlink_dealer_request_transport_pair_part failed", t);
         }
     }
 
@@ -1457,31 +1675,6 @@ public final class Native {
                 requestSeq, part, partFlag);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_router_reply_part failed", t);
-        }
-    }
-
-    public static int routerCompletionControlPart(MemorySegment router,
-                                                  MemorySegment peerRid,
-                                                  MemorySegment part,
-                                                  int partFlag) {
-        try {
-            return (int) MH_ROUTER_COMPLETION_CONTROL_PART.invokeExact(
-                router, peerRid, part, partFlag);
-        } catch (Throwable t) {
-            throw new RuntimeException(
-                "zlink_router_completion_control_part failed", t);
-        }
-    }
-
-    public static int routerCompletionControlHandler(MemorySegment router,
-                                                     MemorySegment handler,
-                                                     MemorySegment userData) {
-        try {
-            return (int) MH_ROUTER_COMPLETION_CONTROL_HANDLER.invokeExact(
-                router, handler, userData);
-        } catch (Throwable t) {
-            throw new RuntimeException(
-                "zlink_router_completion_control_handler failed", t);
         }
     }
 

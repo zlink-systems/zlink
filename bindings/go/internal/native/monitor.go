@@ -46,6 +46,35 @@ type MonitorEventMask uint32
 type MonitorSourceKind uint32
 type MonitorEventType uint64
 
+// MonitorOpenOption configures a socket monitor when it is opened.
+type MonitorOpenOption interface {
+	applyMonitorOpenOption(*monitorOpenConfig)
+}
+
+type monitorOpenConfig struct {
+	events          MonitorEventMask
+	hasEvents       bool
+	monitorHwmBytes uint64
+}
+
+type monitorHwmBytesOption uint64
+
+func (events MonitorEventMask) applyMonitorOpenOption(config *monitorOpenConfig) {
+	config.events |= events
+	config.hasEvents = true
+}
+
+func (value monitorHwmBytesOption) applyMonitorOpenOption(config *monitorOpenConfig) {
+	config.monitorHwmBytes = uint64(value)
+}
+
+// MonitorHwmBytes sets the monitor queue HWM in bytes. Zero selects the Core
+// default; a positive value is passed to Core unchanged. If supplied more than
+// once, the last value wins.
+func MonitorHwmBytes(value uint64) MonitorOpenOption {
+	return monitorHwmBytesOption(value)
+}
+
 const (
 	MonitorEventTypeConnected               MonitorEventType = MonitorEventType(MonitorEventConnected)
 	MonitorEventTypeConnectDelayed          MonitorEventType = MonitorEventType(MonitorEventConnectDelayed)
@@ -103,44 +132,37 @@ func (e *MonitorEvent) IsConnectionReady() bool {
 }
 
 type MonitorStatus struct {
-	ABIVersion                                uint32
-	StructSize                                uint32
-	SourceKind                                MonitorSourceKind
-	StateFlags                                uint32
-	DetailFlags                               uint32
-	SndPendingMsgs                            uint64
-	RcvPendingMsgs                            uint64
-	AutoHwmEnabled                            bool
-	AutoHwmProfile                            uint32
-	AutoHwmRole                               uint32
-	AutoHwmPolicyClass                        uint32
-	AutoHwmUnitBudgetBytes                    uint64
-	AutoHwmSizeCap                            uint32
-	AutoHwmSocketMessageSlots                 uint64
-	AutoHwmConnectionBucketEnabled            bool
-	AutoHwmConnectionBucketCount              uint32
-	AutoHwmConnectionBucketIndex              uint32
-	AutoHwmConnectionBucketHwm4K              uint32
-	AutoHwmConnectionBucketHysteresisRetained bool
-	AutoHwmEffectiveMessageBytes              uint64
-	AutoHwmPlannedSndHwmBytes                 uint64
-	AutoHwmPlannedRcvHwmBytes                 uint64
-	AutoHwmAppliedSndHwmBytes                 uint64
-	AutoHwmAppliedRcvHwmBytes                 uint64
-	AutoHwmEffectiveSndBuf                    int32
-	AutoHwmEffectiveRcvBuf                    int32
-	AutoHwmLastRecalcMs                       uint64
-	AutoHwmLastRecalcReason                   AutoHwmRecalcReason
-	AutoHwmSendBlockedRatioPPM                uint32
-	AutoHwmDeferredSndHwmBytes                uint64
-	AutoHwmDeferredRcvHwmBytes                uint64
-	AutoHwmDeferredSndHwmValid                bool
-	AutoHwmDeferredRcvHwmValid                bool
-	SndBytesInFlight                          uint64
-	RcvBytesInFlight                          uint64
-	MinimumCoreMessageChargeBytes             uint64
-	OversizeMessageAdmissionCount             uint64
-	OversizeMessageAdmissionMaxBytes          uint64
+	ABIVersion                       uint32
+	StructSize                       uint32
+	SourceKind                       MonitorSourceKind
+	StateFlags                       uint32
+	DetailFlags                      uint32
+	SndPendingMsgs                   uint64
+	RcvPendingMsgs                   uint64
+	SndPendingBytes                  uint64
+	RcvPendingBytes                  uint64
+	AutoHwmEnabled                   bool
+	AutoHwmProfile                   uint32
+	AutoHwmRole                      uint32
+	AutoHwmPolicyClass               uint32
+	AutoHwmPlannedSndHwmBytes        uint64
+	AutoHwmPlannedRcvHwmBytes        uint64
+	AutoHwmAppliedSndHwmBytes        uint64
+	AutoHwmAppliedRcvHwmBytes        uint64
+	AutoHwmEffectiveSndBuf           int32
+	AutoHwmEffectiveRcvBuf           int32
+	AutoHwmLastRecalcMs              uint64
+	AutoHwmLastRecalcReason          AutoHwmRecalcReason
+	AutoHwmSendBlockedRatioPPM       uint32
+	AutoHwmDeferredSndHwmBytes       uint64
+	AutoHwmDeferredRcvHwmBytes       uint64
+	AutoHwmDeferredSndHwmValid       bool
+	AutoHwmDeferredRcvHwmValid       bool
+	SndBytesInFlight                 uint64
+	RcvBytesInFlight                 uint64
+	MinimumCoreMessageChargeBytes    uint64
+	OversizeMessageAdmissionCount    uint64
+	OversizeMessageAdmissionMaxBytes uint64
 }
 
 func (s *MonitorStatus) IsReady() bool {
@@ -149,44 +171,37 @@ func (s *MonitorStatus) IsReady() bool {
 
 func monitorStatusFromC(raw C.zlink_monitor_status_t) MonitorStatus {
 	return MonitorStatus{
-		ABIVersion:                     uint32(raw.abi_version),
-		StructSize:                     uint32(raw.struct_size),
-		SourceKind:                     MonitorSourceKind(raw.source_kind),
-		StateFlags:                     uint32(raw.state_flags),
-		DetailFlags:                    uint32(raw.detail_flags),
-		SndPendingMsgs:                 uint64(raw.snd_pending_msgs),
-		RcvPendingMsgs:                 uint64(raw.rcv_pending_msgs),
-		AutoHwmEnabled:                 uint32(raw.auto_hwm_enabled) != 0,
-		AutoHwmProfile:                 uint32(raw.auto_hwm_profile),
-		AutoHwmRole:                    uint32(raw.auto_hwm_role),
-		AutoHwmPolicyClass:             uint32(raw.auto_hwm_policy_class),
-		AutoHwmUnitBudgetBytes:         uint64(raw.auto_hwm_unit_budget_bytes),
-		AutoHwmSizeCap:                 uint32(raw.auto_hwm_size_cap),
-		AutoHwmSocketMessageSlots:      uint64(raw.auto_hwm_socket_message_slots),
-		AutoHwmConnectionBucketEnabled: uint32(raw.auto_hwm_connection_bucket_enabled) != 0,
-		AutoHwmConnectionBucketCount:   uint32(raw.auto_hwm_connection_bucket_count),
-		AutoHwmConnectionBucketIndex:   uint32(raw.auto_hwm_connection_bucket_index),
-		AutoHwmConnectionBucketHwm4K:   uint32(raw.auto_hwm_connection_bucket_hwm_4k),
-		AutoHwmConnectionBucketHysteresisRetained: uint32(raw.auto_hwm_connection_bucket_hysteresis_retained) != 0,
-		AutoHwmEffectiveMessageBytes:              uint64(raw.auto_hwm_effective_message_bytes),
-		AutoHwmPlannedSndHwmBytes:                 uint64(raw.auto_hwm_planned_sndhwm_bytes),
-		AutoHwmPlannedRcvHwmBytes:                 uint64(raw.auto_hwm_planned_rcvhwm_bytes),
-		AutoHwmAppliedSndHwmBytes:                 uint64(raw.auto_hwm_applied_sndhwm_bytes),
-		AutoHwmAppliedRcvHwmBytes:                 uint64(raw.auto_hwm_applied_rcvhwm_bytes),
-		AutoHwmEffectiveSndBuf:                    int32(raw.auto_hwm_effective_sndbuf),
-		AutoHwmEffectiveRcvBuf:                    int32(raw.auto_hwm_effective_rcvbuf),
-		AutoHwmLastRecalcMs:                       uint64(raw.auto_hwm_last_recalc_ms),
-		AutoHwmLastRecalcReason:                   AutoHwmRecalcReason(raw.auto_hwm_last_recalc_reason),
-		AutoHwmSendBlockedRatioPPM:                uint32(raw.auto_hwm_send_blocked_ratio_ppm),
-		AutoHwmDeferredSndHwmBytes:                uint64(raw.auto_hwm_deferred_sndhwm_bytes),
-		AutoHwmDeferredRcvHwmBytes:                uint64(raw.auto_hwm_deferred_rcvhwm_bytes),
-		AutoHwmDeferredSndHwmValid:                uint32(raw.auto_hwm_deferred_sndhwm_valid) != 0,
-		AutoHwmDeferredRcvHwmValid:                uint32(raw.auto_hwm_deferred_rcvhwm_valid) != 0,
-		SndBytesInFlight:                          uint64(raw.snd_bytes_in_flight),
-		RcvBytesInFlight:                          uint64(raw.rcv_bytes_in_flight),
-		MinimumCoreMessageChargeBytes:             uint64(raw.minimum_core_message_charge_bytes),
-		OversizeMessageAdmissionCount:             uint64(raw.oversize_message_admission_count),
-		OversizeMessageAdmissionMaxBytes:          uint64(raw.oversize_message_admission_max_bytes),
+		ABIVersion:                       uint32(raw.abi_version),
+		StructSize:                       uint32(raw.struct_size),
+		SourceKind:                       MonitorSourceKind(raw.source_kind),
+		StateFlags:                       uint32(raw.state_flags),
+		DetailFlags:                      uint32(raw.detail_flags),
+		SndPendingMsgs:                   uint64(raw.snd_pending_msgs),
+		RcvPendingMsgs:                   uint64(raw.rcv_pending_msgs),
+		SndPendingBytes:                  uint64(raw.snd_pending_bytes),
+		RcvPendingBytes:                  uint64(raw.rcv_pending_bytes),
+		AutoHwmEnabled:                   uint32(raw.auto_hwm_enabled) != 0,
+		AutoHwmProfile:                   uint32(raw.auto_hwm_profile),
+		AutoHwmRole:                      uint32(raw.auto_hwm_role),
+		AutoHwmPolicyClass:               uint32(raw.auto_hwm_policy_class),
+		AutoHwmPlannedSndHwmBytes:        uint64(raw.auto_hwm_planned_sndhwm_bytes),
+		AutoHwmPlannedRcvHwmBytes:        uint64(raw.auto_hwm_planned_rcvhwm_bytes),
+		AutoHwmAppliedSndHwmBytes:        uint64(raw.auto_hwm_applied_sndhwm_bytes),
+		AutoHwmAppliedRcvHwmBytes:        uint64(raw.auto_hwm_applied_rcvhwm_bytes),
+		AutoHwmEffectiveSndBuf:           int32(raw.auto_hwm_effective_sndbuf),
+		AutoHwmEffectiveRcvBuf:           int32(raw.auto_hwm_effective_rcvbuf),
+		AutoHwmLastRecalcMs:              uint64(raw.auto_hwm_last_recalc_ms),
+		AutoHwmLastRecalcReason:          AutoHwmRecalcReason(raw.auto_hwm_last_recalc_reason),
+		AutoHwmSendBlockedRatioPPM:       uint32(raw.auto_hwm_send_blocked_ratio_ppm),
+		AutoHwmDeferredSndHwmBytes:       uint64(raw.auto_hwm_deferred_sndhwm_bytes),
+		AutoHwmDeferredRcvHwmBytes:       uint64(raw.auto_hwm_deferred_rcvhwm_bytes),
+		AutoHwmDeferredSndHwmValid:       uint32(raw.auto_hwm_deferred_sndhwm_valid) != 0,
+		AutoHwmDeferredRcvHwmValid:       uint32(raw.auto_hwm_deferred_rcvhwm_valid) != 0,
+		SndBytesInFlight:                 uint64(raw.snd_bytes_in_flight),
+		RcvBytesInFlight:                 uint64(raw.rcv_bytes_in_flight),
+		MinimumCoreMessageChargeBytes:    uint64(raw.minimum_core_message_charge_bytes),
+		OversizeMessageAdmissionCount:    uint64(raw.oversize_message_admission_count),
+		OversizeMessageAdmissionMaxBytes: uint64(raw.oversize_message_admission_max_bytes),
 	}
 }
 
@@ -196,25 +211,33 @@ type SocketMonitor struct {
 	callback   cgo.Handle
 }
 
-func resolveMonitorEvents(events []MonitorEventMask) MonitorEventMask {
-	if len(events) == 0 {
-		return MonitorEventAll
+func resolveMonitorOpenOptions(options []MonitorOpenOption) (monitorOpenConfig, error) {
+	config := monitorOpenConfig{}
+	for _, option := range options {
+		if option == nil {
+			return monitorOpenConfig{}, &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
+		}
+		option.applyMonitorOpenOption(&config)
 	}
-	var mask MonitorEventMask
-	for _, event := range events {
-		mask |= event
+	if !config.hasEvents {
+		config.events = MonitorEventAll
 	}
-	return mask
+	return config, nil
 }
 
-func OpenSocketMonitor(socket SocketTarget, events ...MonitorEventMask) (*SocketMonitor, error) {
+func OpenSocketMonitor(socket SocketTarget, options ...MonitorOpenOption) (*SocketMonitor, error) {
 	if socket == nil {
 		return nil, &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
 	}
-	options := C.zlink_socket_monitor_open_options_t{
-		events: C.zlink_socket_monitor_event_mask_t(resolveMonitorEvents(events)),
+	config, err := resolveMonitorOpenOptions(options)
+	if err != nil {
+		return nil, err
 	}
-	handle := C.zlink_socket_monitor_open(socket.raw(), &options)
+	nativeOptions := C.zlink_socket_monitor_open_options_t{
+		events:            C.zlink_socket_monitor_event_mask_t(config.events),
+		monitor_hwm_bytes: C.uint64_t(config.monitorHwmBytes),
+	}
+	handle := C.zlink_socket_monitor_open(socket.raw(), &nativeOptions)
 	if handle == nil {
 		return nil, configErrorFromErrno(currentErrno())
 	}

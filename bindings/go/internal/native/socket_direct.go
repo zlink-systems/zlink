@@ -48,7 +48,28 @@ func (s *directSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 		}
 		return false, err
 	}
-	out.replace(routingIDFromCPtr(sourceRID), clonedParts, 0, false, nil, nil)
+	out.replace(routingIDFromCPtr(sourceRID), clonedParts, 0, false, nil, nil, nil)
+	return true, nil
+}
+
+// RecvRetained is the explicit Framework-backend receive boundary. Ordinary
+// Recv keeps returning Core queue credit immediately at dequeue.
+func (s *directSocket) RecvRetained(out *Received, flags RecvFlags) (bool, error) {
+	if out == nil {
+		return false, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
+	reuse := out.beginReceive()
+	var sourceRID *C.zlink_routing_id_t
+	parts, retainedCredit, err := recvMultipartRetained(reuse, flags, func(part *C.zlink_msg_t, lease **C.zlink_hwm_budget_lease_t, hasMore *C.zlink_part_flag_t, recvFlags C.zlink_recv_flags_t) error {
+		return recvErrorFromResult(C.zlink_recv_part_with_hwm_budget_lease(s.raw(), &sourceRID, part, lease, hasMore, recvFlags))
+	})
+	if err != nil {
+		if isNoData(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	out.replace(routingIDFromCPtr(sourceRID), parts, 0, false, nil, nil, retainedCredit)
 	return true, nil
 }
 

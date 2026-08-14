@@ -4,6 +4,7 @@
 
 #include <Runtime/Core/routing_id_access.hpp>
 #include <Runtime/Native/native_message_guard.hpp>
+#include <Runtime/Native/hwm_budget_lease.hpp>
 
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/Contracts/Messaging/message.hpp>
@@ -22,13 +23,27 @@ namespace detail
 struct topic_message_access_t
 {
     static void replace_single (topic_message_t &message_out_,
-                                std::optional<routing_id_t> source_,
-                                std::string topic_,
-                                message_t part_)
+                                 std::optional<routing_id_t> source_,
+                                 std::string topic_,
+                                 message_t part_,
+                                 std::shared_ptr<hwm_budget_lease_set_t> leases_)
     {
         message_out_._routing_id = std::move (source_);
         message_out_._topic = std::move (topic_);
         message_out_._parts.replace (std::move (part_));
+        message_out_._hwm_budget_leases = std::move (leases_);
+    }
+
+    static void replace_parts (topic_message_t &message_out_,
+                               std::optional<routing_id_t> source_,
+                               std::string topic_,
+                               std::vector<message_t> &parts_,
+                               std::shared_ptr<hwm_budget_lease_set_t> leases_)
+    {
+        message_out_._routing_id = std::move (source_);
+        message_out_._topic = std::move (topic_);
+        message_out_._parts.replace (parts_);
+        message_out_._hwm_budget_leases = std::move (leases_);
     }
 };
 
@@ -90,15 +105,20 @@ template <typename ReceivePart>
     const zlink_routing_id_t *source_rid = nullptr;
     size_t topic_length = sizeof (topic_buffer);
     zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+    std::shared_ptr<hwm_budget_lease_set_t> leases;
+    zlink_hwm_budget_lease_t *lease = nullptr;
 
     scoped_native_message_t native_part;
     if (!native_part.init ())
         return -1;
 
     const int first_rc = receive_part_ (&source_rid, topic_buffer, sizeof (topic_buffer),
-                                        &topic_length, native_part.get (), &has_more);
-    if (first_rc != ZLINK_RECV_OK)
+                                        &topic_length, native_part.get (), &lease, &has_more);
+    if (first_rc != ZLINK_RECV_OK) {
+        release_hwm_budget_lease (lease);
         return first_rc;
+    }
+    adopt_hwm_budget_lease (leases, lease);
 
     std::string topic (topic_buffer, bounded_topic_size (topic_length, sizeof (topic_buffer)));
     const std::optional<routing_id_t> source = optional_native_routing_id (source_rid);
@@ -108,7 +128,7 @@ template <typename ReceivePart>
 
     if (has_more == ZLINK_PART_FINAL) {
         topic_message_access_t::replace_single (message_out_, source, std::move (topic),
-                                                 std::move (first_part));
+                                                 std::move (first_part), std::move (leases));
         return 0;
     }
 
@@ -121,17 +141,23 @@ template <typename ReceivePart>
         if (!next_part.init ())
             return -1;
 
-        size_t ignored_topic_length = 0u;
-        const int rc = receive_part_ (&source_rid, nullptr, 0u, &ignored_topic_length,
-                                      next_part.get (), &has_more);
-        if (rc != ZLINK_RECV_OK)
+        size_t next_topic_length = sizeof (topic_buffer);
+        lease = nullptr;
+        const int rc = receive_part_ (
+          &source_rid, topic_buffer, sizeof (topic_buffer),
+          &next_topic_length, next_part.get (), &lease, &has_more);
+        if (rc != ZLINK_RECV_OK) {
+            release_hwm_budget_lease (lease);
             return rc;
+        }
+        adopt_hwm_budget_lease (leases, lease);
 
         parts.emplace_back ();
         adopt_native_message (parts.back (), next_part.get ());
 
         if (has_more == ZLINK_PART_FINAL) {
-            message_out_ = topic_message_t (source, std::move (topic), std::move (parts));
+            topic_message_access_t::replace_parts (
+              message_out_, source, std::move (topic), parts, std::move (leases));
             return 0;
         }
     }

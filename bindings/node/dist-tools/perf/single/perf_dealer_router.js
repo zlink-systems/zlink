@@ -3,7 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createRunId, currentEpochNs, integerEnv, summarizeMetrics, } = require('../common/perf_metrics');
-const { applyContextPolicy, applyAutoHwmMsgUnit, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRouterRecvInto, emitSingleSocketHwmDetail, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForWorkerMessage, } = require('./perf_single_common');
+const { applyContextPolicy, applySocketPolicy, benchmarkEndpoint, closeSenderWorker, configureTlsServer, drainRouterRecvInto, emitSingleSocketHwmDetail, parseSingleBinaryArgs, runLocalSocketOneWayBenchmark, spawnSenderWorker, waitForWorkerError, waitForWorkerMessage, } = require('./perf_single_common');
 async function runDealerRouterBenchmark(msgSize, options) {
     if (options.transport === 'inproc') {
         return runLocalSocketOneWayBenchmark({
@@ -22,7 +22,6 @@ async function runDealerRouterBenchmark(msgSize, options) {
     let worker = null;
     try {
         applySocketPolicy(router, options);
-        applyAutoHwmMsgUnit(ctx, msgSize);
         ctx.recalculateAutoHwm();
         configureTlsServer(router, options.transport);
         router.bind(endpoint);

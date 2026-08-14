@@ -25,13 +25,11 @@ type socketCore struct {
 	callbackMu              sync.Mutex
 	recvHandle              cgo.Handle
 	recvActive              atomic.Uintptr
-	completionControlHandle cgo.Handle
 	subscribeHandle         cgo.Handle
 	sendReadyHandle         cgo.Handle
+	routedReadyHandle       cgo.Handle
 	streamPacketHandle      cgo.Handle
-	requestProgressMu       sync.Mutex
-	requestProgress         *progressPump
-	requestDispatcher       *callbackDispatcher
+	routedAdmission         *routedAdmission
 }
 
 func newSocketCore(ctx *Context, socketType C.zlink_socket_type_t) (*socketCore, error) {
@@ -56,25 +54,6 @@ func (s *socketCore) raw() unsafe.Pointer {
 
 func (s *socketCore) isClosed() bool {
 	return s == nil || s.closed.Load() || s.raw() == nil
-}
-
-func (s *socketCore) startRequestProgress(state *replyCallbackState) {
-	if s == nil || state == nil {
-		return
-	}
-	s.callbackMu.Lock()
-	defer s.callbackMu.Unlock()
-	handle := s.raw()
-	if s.isClosed() || handle == nil || externalRequestProgressActive(handle) {
-		return
-	}
-	s.requestProgressMu.Lock()
-	if s.requestProgress == nil {
-		s.requestProgress = newProgressPump(handle)
-	}
-	pump := s.requestProgress
-	pump.attach(state)
-	s.requestProgressMu.Unlock()
 }
 
 func (s *socketCore) Bind(endpoint string) error {
@@ -119,45 +98,32 @@ func (s *socketCore) Close() error {
 		s.callbackMu.Unlock()
 		return nil
 	}
-	s.requestProgressMu.Lock()
-	pump := s.requestProgress
-	s.requestProgressMu.Unlock()
-	if pump != nil {
-		pump.stopAndWait()
-	}
 	handle := s.raw()
-	if err := closeErrorFromResult(C.zlink_close(handle)); err != nil {
-		if pump != nil && !externalRequestProgressActive(handle) {
-			pump.resume()
-		}
+	var closeErr error
+	if s.routedAdmission != nil {
+		closeErr = s.routedAdmission.closeNative()
+	} else {
+		closeErr = closeErrorFromResult(C.zlink_close(handle))
+	}
+	if closeErr != nil {
 		s.callbackMu.Unlock()
-		return err
+		return closeErr
 	}
 	s.closed.Store(true)
 	s.handle.Store(nil)
-	s.requestProgressMu.Lock()
-	if s.requestProgress == pump {
-		s.requestProgress = nil
-	}
-	s.requestProgressMu.Unlock()
-	requestDispatcher := s.requestDispatcher
-	s.requestDispatcher = nil
 	s.callbackMu.Unlock()
-	if requestDispatcher != nil {
-		requestDispatcher.close()
-	}
 	s.releaseCallbacks()
 	return nil
 }
 
 func (s *socketCore) releaseCallbacks() {
 	s.callbackMu.Lock()
-	handles := []cgo.Handle{s.recvHandle, s.completionControlHandle, s.subscribeHandle, s.sendReadyHandle, s.streamPacketHandle}
+	handles := []cgo.Handle{s.recvHandle, s.subscribeHandle, s.sendReadyHandle, s.routedReadyHandle, s.streamPacketHandle}
 	s.recvHandle = 0
 	s.recvActive.Store(0)
-	s.completionControlHandle = 0
 	s.subscribeHandle = 0
 	s.sendReadyHandle = 0
+	s.routedReadyHandle = 0
 	s.streamPacketHandle = 0
 	s.callbackMu.Unlock()
 	for _, handle := range handles {
@@ -165,55 +131,8 @@ func (s *socketCore) releaseCallbacks() {
 	}
 }
 
-func (s *socketCore) pauseInternalRequestProgress() {
-	if s == nil {
-		return
-	}
-	s.callbackMu.Lock()
-	defer s.callbackMu.Unlock()
-	s.requestProgressMu.Lock()
-	pump := s.requestProgress
-	s.requestProgressMu.Unlock()
-	if pump != nil {
-		pump.stopAndWait()
-	}
-}
-
-func (s *socketCore) resumeInternalRequestProgress() {
-	if s == nil {
-		return
-	}
-	s.callbackMu.Lock()
-	defer s.callbackMu.Unlock()
-	handle := s.raw()
-	if s.isClosed() || handle == nil || externalRequestProgressActive(handle) {
-		return
-	}
-	s.requestProgressMu.Lock()
-	pump := s.requestProgress
-	s.requestProgressMu.Unlock()
-	if pump != nil {
-		pump.resume()
-	}
-}
-
 func (s *socketCore) hasReceiveHandler() bool {
 	return s.recvActive.Load() != 0
-}
-
-func (s *socketCore) requestCallbackDispatcher() *callbackDispatcher {
-	if s == nil {
-		return nil
-	}
-	s.callbackMu.Lock()
-	defer s.callbackMu.Unlock()
-	if s.isClosed() {
-		return nil
-	}
-	if s.requestDispatcher == nil {
-		s.requestDispatcher = newCallbackDispatcher()
-	}
-	return s.requestDispatcher
 }
 
 func (s *socketCore) replaceCallback(handle cgo.Handle, slot *cgo.Handle, active *atomic.Uintptr, register func() error) error {

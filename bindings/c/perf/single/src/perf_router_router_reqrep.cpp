@@ -179,7 +179,7 @@ void run_router_router_reqrep (const std::string &transport,
     std::vector<char> payload (payload_size, 'r');
 
     ctx_guard_t ctx;
-    if (!ctx.valid () || !apply_single_auto_hwm_msg_unit (ctx.get (), msg_size)) {
+    if (!ctx.valid ()) {
         print_fail ();
         fflush (NULL);
         std::_Exit (1);

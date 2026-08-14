@@ -86,6 +86,16 @@ public sealed partial class MonitorStatus
     public ulong RcvPendingMsgs { get; }
 
     /// <summary>
+    ///     Gets the send pending byte count.
+    /// </summary>
+    public ulong SndPendingBytes { get; }
+
+    /// <summary>
+    ///     Gets the receive pending byte count.
+    /// </summary>
+    public ulong RcvPendingBytes { get; }
+
+    /// <summary>
     ///     Gets the automatic high water mark enabled.
     /// </summary>
     public bool AutoHwmEnabled { get; }
@@ -104,51 +114,6 @@ public sealed partial class MonitorStatus
     ///     Gets the automatic high water mark policy class.
     /// </summary>
     public uint AutoHwmPolicyClass { get; }
-
-    /// <summary>
-    ///     Gets the automatic high water mark unit budget bytes.
-    /// </summary>
-    public ulong AutoHwmUnitBudgetBytes { get; }
-
-    /// <summary>
-    ///     Gets the automatic high water mark size cap.
-    /// </summary>
-    public uint AutoHwmSizeCap { get; }
-
-    /// <summary>
-    ///     Gets the automatic high water mark socket message slots.
-    /// </summary>
-    public ulong AutoHwmSocketMessageSlots { get; }
-
-    /// <summary>
-    ///     Gets whether a connection-count bucket applied to this socket.
-    /// </summary>
-    public bool AutoHwmConnectionBucketEnabled { get; }
-
-    /// <summary>
-    ///     Gets the peer count used by the connection bucket planner.
-    /// </summary>
-    public uint AutoHwmConnectionBucketCount { get; }
-
-    /// <summary>
-    ///     Gets the selected connection bucket index.
-    /// </summary>
-    public uint AutoHwmConnectionBucketIndex { get; }
-
-    /// <summary>
-    ///     Gets the selected bucket HWM for a 4 KiB message unit.
-    /// </summary>
-    public uint AutoHwmConnectionBucketHwm4K { get; }
-
-    /// <summary>
-    ///     Gets whether hysteresis retained the previous connection bucket.
-    /// </summary>
-    public bool AutoHwmConnectionBucketHysteresisRetained { get; }
-
-    /// <summary>
-    ///     Gets the automatic high water mark effective message bytes.
-    /// </summary>
-    public ulong AutoHwmEffectiveMessageBytes { get; }
 
     /// <summary>
     ///     Gets the send HWM selected by the current automatic plan, in

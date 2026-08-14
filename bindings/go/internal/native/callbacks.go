@@ -150,25 +150,6 @@ type recvCallbackState struct {
 	handler    recvCallback
 }
 
-type completionControlCallbackState struct {
-	dispatcher *callbackDispatcher
-	handler    func(*Received)
-}
-
-func newCompletionControlCallbackState(handler func(*Received)) *completionControlCallbackState {
-	return &completionControlCallbackState{
-		dispatcher: newCallbackDispatcher(),
-		handler:    handler,
-	}
-}
-
-func (s *completionControlCallbackState) close() {
-	if s == nil {
-		return
-	}
-	s.dispatcher.close()
-}
-
 func newRecvCallbackState(handler recvCallback) *recvCallbackState {
 	return &recvCallbackState{
 		dispatcher: newCallbackDispatcher(),

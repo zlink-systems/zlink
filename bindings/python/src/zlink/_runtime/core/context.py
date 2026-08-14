@@ -3,9 +3,10 @@
 import ctypes
 
 from ...contracts.core.options import AutoHwmProfile, ContextOption
+from ...contracts.core.context import CoreHwmBudgetSnapshot
 from ...contracts.errors.codes import CloseResult, ConfigResult
 from ...contracts.errors.errors import CloseError, ConfigError
-from ..._native.ffi import lib
+from ..._native.ffi import ZlinkAutoHwmBudgetSnapshot, lib
 from ..handles.native_support import (
     _config_result_from_errno,
     _raise_result_error,
@@ -33,6 +34,10 @@ class NativeContext:
             _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
 
     def _set_uint64_option(self, option, value):
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise TypeError("byte value must be an integer")
+        if value < 0 or value > (1 << 64) - 1:
+            raise ValueError("byte value must fit in uint64")
         raw_value = ctypes.c_uint64(value)
         rc = lib().zlink_ctx_set_data(
             self._handle,
@@ -74,6 +79,28 @@ class NativeContext:
 
     def recalculate_auto_hwm(self):
         rc = lib().zlink_ctx_auto_hwm_recalculate(self._handle)
+        if rc != 0:
+            _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
+
+    def core_hwm_budget_snapshot(self):
+        native = ZlinkAutoHwmBudgetSnapshot()
+        native.abi_version = 1
+        native.struct_size = ctypes.sizeof(native)
+        rc = lib().zlink_ctx_get_auto_hwm_budget_snapshot(
+            self._handle, ctypes.byref(native)
+        )
+        if rc != 0:
+            _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
+        values = {
+            name: int(getattr(native, name))
+            for name, _ in ZlinkAutoHwmBudgetSnapshot._fields_
+            if name != "reserved_u64"
+        }
+        values["reserved_u64"] = tuple(int(value) for value in native.reserved_u64)
+        return CoreHwmBudgetSnapshot(**values)
+
+    def reset_core_hwm_budget_metrics(self):
+        rc = lib().zlink_ctx_reset_auto_hwm_budget_metrics(self._handle)
         if rc != 0:
             _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
 
@@ -186,22 +213,36 @@ class NativeContextOptions:
         self._context._set_option(ContextOption.CTX_OPT_BLOCKY, int(bool(value)))
 
     @property
-    def auto_hwm_profile(self):
+    def core_hwm_profile(self):
         return AutoHwmProfile(self._context._get_option(ContextOption.AUTO_HWM_PROFILE))
 
-    @auto_hwm_profile.setter
-    def auto_hwm_profile(self, value):
+    @core_hwm_profile.setter
+    def core_hwm_profile(self, value):
         self._context._set_option(ContextOption.AUTO_HWM_PROFILE, int(value))
 
     @property
-    def auto_hwm_msg_unit_bytes(self):
-        return self._context._get_uint64_option(ContextOption.AUTO_HWM_MSG_UNIT_BYTES)
+    def core_hwm_memory_limit_bytes(self):
+        return self._context._get_uint64_option(
+            ContextOption.AUTO_HWM_MEMORY_LIMIT_BYTES
+        )
 
-    @auto_hwm_msg_unit_bytes.setter
-    def auto_hwm_msg_unit_bytes(self, value):
-        if value < 0:
-            raise ValueError("auto_hwm_msg_unit_bytes must be non-negative")
-        self._context._set_uint64_option(ContextOption.AUTO_HWM_MSG_UNIT_BYTES, value)
+    @core_hwm_memory_limit_bytes.setter
+    def core_hwm_memory_limit_bytes(self, value):
+        self._context._set_uint64_option(
+            ContextOption.AUTO_HWM_MEMORY_LIMIT_BYTES, value
+        )
+
+    @property
+    def core_hwm_budget_bytes(self):
+        return self._context._get_uint64_option(
+            ContextOption.AUTO_HWM_CORE_BUDGET_BYTES
+        )
+
+    @core_hwm_budget_bytes.setter
+    def core_hwm_budget_bytes(self, value):
+        self._context._set_uint64_option(
+            ContextOption.AUTO_HWM_CORE_BUDGET_BYTES, value
+        )
 
     @property
     def socket_limit(self):

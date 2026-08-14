@@ -5,6 +5,7 @@ import systems.zlink.contracts.sockets.AutoHwmProfile;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.core.ContextOptions;
+import systems.zlink.contracts.core.CoreHwmBudgetSnapshot;
 import java.lang.reflect.Method;
 import org.junit.jupiter.api.Test;
 
@@ -41,17 +42,44 @@ public class ContextContractTest {
             assertDoesNotThrow(() -> options.blocky(false));
             assertFalse(options.blocky());
             assertDoesNotThrow(
-                () -> options.autoHwmProfile(AutoHwmProfile.COMPACT));
-            assertEquals(AutoHwmProfile.COMPACT, options.autoHwmProfile());
-            assertEquals(0L, options.autoHwmMessageUnitBytes());
-            long planningUnit = (long) Integer.MAX_VALUE + 1024L;
-            assertDoesNotThrow(
-                () -> options.autoHwmMessageUnitBytes(planningUnit));
-            assertEquals(planningUnit, options.autoHwmMessageUnitBytes());
-            assertDoesNotThrow(() -> options.autoHwmMessageUnitBytes(0L));
-            assertEquals(0L, options.autoHwmMessageUnitBytes());
-            assertDoesNotThrow(() -> options.autoHwmMessageUnitBytes(-1L));
-            assertEquals(-1L, options.autoHwmMessageUnitBytes());
+                () -> options.coreHwmProfile(AutoHwmProfile.COMPACT));
+            assertEquals(AutoHwmProfile.COMPACT, options.coreHwmProfile());
+
+            long memoryLimit = 16L * 1024L * 1024L;
+            long coreBudget = 4L * 1024L * 1024L;
+            options.coreHwmMemoryLimitBytes(memoryLimit);
+            options.coreHwmBudgetBytes(coreBudget);
+            assertEquals(memoryLimit, options.coreHwmMemoryLimitBytes());
+            assertEquals(coreBudget, options.coreHwmBudgetBytes());
+            assertThrows(IllegalArgumentException.class,
+                () -> options.coreHwmBudgetBytes(-1L));
+
+            ctx.recalculateAutoHwm();
+            CoreHwmBudgetSnapshot before = ctx.coreHwmBudgetSnapshot();
+            assertEquals(1, before.abiVersion());
+            assertTrue(before.structSize() > 0);
+            assertEquals(memoryLimit, before.configuredMemoryLimitBytes());
+            assertEquals(coreBudget, before.configuredCoreBudgetBytes());
+            assertEquals(coreBudget, before.effectiveCoreBudgetBytes());
+            assertTrue(before.budgetPlanningActive());
+            assertTrue(before.aggregateHwmValid());
+            assertFalse(before.budgetInsufficient());
+            assertFalse(before.aggregateOverflow());
+            assertTrue(before.reservedUInt64().stream()
+                .allMatch(value -> value == 0L));
+
+            ctx.resetCoreHwmBudgetMetrics();
+            CoreHwmBudgetSnapshot after = ctx.coreHwmBudgetSnapshot();
+            assertEquals(before.measurementEpoch() + 1L,
+                after.measurementEpoch());
+            assertEquals(before.budgetGeneration(), after.budgetGeneration());
+            assertEquals(before.currentAccountedBytes(),
+                after.currentAccountedBytes());
+            assertEquals(before.activeDirectionalQueueCount(),
+                after.activeDirectionalQueueCount());
+
+            options.coreHwmMemoryLimitBytes(0L);
+            options.coreHwmBudgetBytes(0L);
             assertTrue(options.messageThreadSize() > 0);
         }
     }

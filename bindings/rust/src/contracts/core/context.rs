@@ -38,6 +38,69 @@ pub enum AutoHwmRecalcReason {
     DeferredShrink,
 }
 
+/// Context-wide Core HWM budget snapshot copied from ABI v1 without unit
+/// conversion. Completion counters are diagnostic and are excluded from the
+/// application queue budget and directional queue counts.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoreHwmBudgetSnapshot {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub budget_generation: u64,
+    pub measurement_epoch: u64,
+    pub configured_memory_limit_bytes: u64,
+    pub runtime_memory_limit_bytes: u64,
+    pub resolved_memory_limit_bytes: u64,
+    pub configured_core_budget_bytes: u64,
+    pub effective_core_budget_bytes: u64,
+    pub total_planned_hwm_bytes: u64,
+    pub total_applied_hwm_bytes: u64,
+    pub manual_reserved_hwm_bytes: u64,
+    pub core_queue_accounted_bytes: u64,
+    pub application_accounted_bytes: u64,
+    pub current_accounted_bytes: u64,
+    pub provisional_accounted_bytes: u64,
+    pub peak_accounted_bytes: u64,
+    pub completion_current_accounted_bytes: u64,
+    pub completion_peak_accounted_bytes: u64,
+    pub completion_pending_message_count: u64,
+    pub total_messaging_accounted_bytes: u64,
+    pub monitor_queue_applied_hwm_bytes: u64,
+    pub monitor_queue_accounted_bytes: u64,
+    pub total_instance_applied_hwm_bytes: u64,
+    pub total_instance_accounted_bytes: u64,
+    pub oversize_admission_count: u64,
+    pub largest_oversize_message_bytes: u64,
+    pub active_directional_queue_count: u64,
+    pub active_completion_directional_queue_count: u64,
+    pub active_send_queue_count: u64,
+    pub active_receive_queue_count: u64,
+    pub outstanding_application_lease_count: u64,
+    pub retired_queue_count: u64,
+    pub deferred_origin_credit_bytes: u64,
+    pub unlimited_manual_queue_count: u64,
+    pub blocked_ratio_ppm: u32,
+    pub flags: u32,
+    pub reserved_u64: [u64; 8],
+}
+
+impl CoreHwmBudgetSnapshot {
+    pub fn budget_planning_active(&self) -> bool {
+        self.flags & (1 << 0) != 0
+    }
+
+    pub fn budget_insufficient(&self) -> bool {
+        self.flags & (1 << 1) != 0
+    }
+
+    pub fn aggregate_hwm_valid(&self) -> bool {
+        self.flags & (1 << 2) != 0
+    }
+
+    pub fn aggregate_overflow(&self) -> bool {
+        self.flags & (1 << 3) != 0
+    }
+}
+
 /// The zlink context, the foundation for creating sockets and managing native
 /// runtime resources.
 ///
@@ -107,6 +170,16 @@ impl Context {
     /// Recalculate and apply auto HWM for the entire context immediately.
     pub fn recalculate_auto_hwm(&self) -> Result<(), ConfigError> {
         self.inner.recalculate_auto_hwm()
+    }
+
+    /// Returns a value snapshot of Core's context-wide HWM budget state.
+    pub fn core_hwm_budget_snapshot(&self) -> Result<CoreHwmBudgetSnapshot, ConfigError> {
+        self.inner.core_hwm_budget_snapshot()
+    }
+
+    /// Resets epoch counters while preserving current HWM budget gauges.
+    pub fn reset_core_hwm_budget_metrics(&self) -> Result<(), ConfigError> {
+        self.inner.reset_core_hwm_budget_metrics()
     }
 
     /// Access typed context options.
@@ -211,23 +284,34 @@ impl<'a> ContextOptions<'a> {
         self.context.set_auto_hwm_recalc_debounce(value)
     }
     /// Returns the profile used to size high-water marks automatically.
-    pub fn auto_hwm_profile(&self) -> Result<AutoHwmProfile, ConfigError> {
-        self.context.auto_hwm_profile()
+    pub fn core_hwm_profile(&self) -> Result<AutoHwmProfile, ConfigError> {
+        self.context.core_hwm_profile()
     }
     /// Sets the profile used to size high-water marks automatically; see
     /// [`AutoHwmProfile`].
-    pub fn set_auto_hwm_profile(&self, profile: AutoHwmProfile) -> Result<(), ConfigError> {
-        self.context.set_auto_hwm_profile(profile)
+    pub fn set_core_hwm_profile(&self, profile: AutoHwmProfile) -> Result<(), ConfigError> {
+        self.context.set_core_hwm_profile(profile)
     }
-    /// Returns the assumed message size, in bytes, used when auto-sizing
-    /// high-water marks.
-    pub fn auto_hwm_msg_unit_bytes(&self) -> Result<u64, ConfigError> {
-        self.context.auto_hwm_msg_unit_bytes()
+
+    /// Returns the explicit context memory limit used by Core HWM planning.
+    pub fn core_hwm_memory_limit_bytes(&self) -> Result<u64, ConfigError> {
+        self.context.core_hwm_memory_limit_bytes()
     }
-    /// Sets the assumed message size, in bytes, used when auto-sizing high-water
-    /// marks.
-    pub fn set_auto_hwm_msg_unit_bytes(&self, bytes: u64) -> Result<(), ConfigError> {
-        self.context.set_auto_hwm_msg_unit_bytes(bytes)
+
+    /// Sets the explicit context memory limit used by Core HWM planning.
+    pub fn set_core_hwm_memory_limit_bytes(&self, bytes: u64) -> Result<(), ConfigError> {
+        self.context.set_core_hwm_memory_limit_bytes(bytes)
+    }
+
+    /// Returns the manually configured context-wide Core messaging budget.
+    pub fn core_hwm_budget_bytes(&self) -> Result<u64, ConfigError> {
+        self.context.core_hwm_budget_bytes()
+    }
+
+    /// Sets the context-wide Core messaging budget without applying a profile
+    /// ratio in the binding.
+    pub fn set_core_hwm_budget_bytes(&self, bytes: u64) -> Result<(), ConfigError> {
+        self.context.set_core_hwm_budget_bytes(bytes)
     }
     /// Pins the context's I/O threads to also run on CPU core `cpu`.
     pub fn add_thread_affinity(&self, cpu: i32) -> Result<(), ConfigError> {

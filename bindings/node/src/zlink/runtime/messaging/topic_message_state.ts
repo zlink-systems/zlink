@@ -12,6 +12,7 @@ import {
   freezeMessageParts,
   freezeOwnedMessageParts
 } from './message_parts_state';
+import { replaceMessagePartsEnvelopeRetainedCredit } from '../../contracts/messaging/message_parts_envelope';
 
 interface TopicMessageState {
   parts: Message[];
@@ -43,7 +44,13 @@ export function replaceTopicMessage(
   // TopicMessage instances retain external Buffer storage until GC and PUBSUB
   // subscriber benchmarks regress in both RSS and throughput.
   if (state.parts !== parts) {
-    closeMessageParts(state.parts);
+    try {
+      closeMessageParts(state.parts);
+    } finally {
+      replaceMessagePartsEnvelopeRetainedCredit(target, null);
+    }
+  } else {
+    replaceMessagePartsEnvelopeRetainedCredit(target, null);
   }
   const candidate = state._reusableSinglePart;
   if (candidate && !parts.includes(candidate)) {

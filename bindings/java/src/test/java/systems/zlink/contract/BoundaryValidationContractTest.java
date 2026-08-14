@@ -27,6 +27,12 @@ public class BoundaryValidationContractTest {
     }
 
     @Test
+    public void streamSocketKeepsItsExistingSynchronousSendSurface() {
+        assertFalse(java.util.Arrays.stream(StreamSocket.class.getMethods())
+            .anyMatch(method -> method.getName().equals("sendAsync")));
+    }
+
+    @Test
     public void routingIdAcceptsMaximumLengthAndRejectsOverflow() {
         byte[] max = new byte[RoutingId.MAX_LENGTH];
         byte[] overflow = new byte[RoutingId.MAX_LENGTH + 1];

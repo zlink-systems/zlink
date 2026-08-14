@@ -20,8 +20,14 @@ extern "C" {
 
 /* HWM option values are uint64_t byte counts. */
 #define ZLINK_HWM_BYTES_DFLT ((uint64_t) 4096000)
-#define ZLINK_AUTO_HWM_MESSAGE_UNIT_BYTES_DFLT ((uint64_t) 4096)
-#define ZLINK_AUTO_HWM_STREAM_UNIT_BYTES_DFLT ((uint64_t) 1024)
+
+typedef struct zlink_hwm_budget_lease_t zlink_hwm_budget_lease_t;
+
+ZLINK_EXPORT int zlink_recv_with_hwm_budget_lease (
+  void *socket_, zlink_msg_t *message_,
+  zlink_hwm_budget_lease_t **lease_out_, int flags_);
+ZLINK_EXPORT void zlink_hwm_budget_lease_release (
+  zlink_hwm_budget_lease_t **lease_p_);
 
 /******************************************************************************/
 /*  Raw socket events and monitoring                                          */
@@ -56,25 +62,41 @@ typedef void (*zlink_stream_packet_handler_fn) (void *stream_,
 
 typedef void (*zlink_send_ready_handler_fn) (void *subject_, void *userdata_);
 
+typedef enum zlink_routed_send_ready_state_t
+{
+    ZLINK_ROUTED_SEND_WRITABLE = 1,
+    ZLINK_ROUTED_SEND_TERMINAL = 2
+} zlink_routed_send_ready_state_t;
+
+typedef struct zlink_routed_send_ready_event_t
+{
+    zlink_routing_id_t peer_rid;
+    uint64_t transport_pair_id;
+    uint64_t transport_pair_generation;
+    zlink_routed_send_ready_state_t state;
+    int terminal_errno;
+} zlink_routed_send_ready_event_t;
+
+/**
+ * @brief Value identity of one routed application-pipe submit target.
+ *
+ * The value is a snapshot, not a reservation. A later exact submit can report
+ * backpressure or a terminal route result if the pipe state changed.
+ */
+typedef struct zlink_routed_submit_target_t
+{
+    zlink_routing_id_t peer_rid;
+    uint64_t transport_pair_id;
+    uint64_t transport_pair_generation;
+} zlink_routed_submit_target_t;
+
+typedef void (*zlink_routed_send_ready_handler_fn) (
+  void *subject_, const zlink_routed_send_ready_event_t *event_, void *userdata_);
+
 typedef void (*zlink_reply_handler_fn) (zlink_request_result_t result_,
                                         zlink_msg_t *parts_,
                                         size_t part_count_,
                                         void *userdata_);
-
-/**
- * @brief Callback for a bounded raw control record received on a ROUTER's
- * paired completion connection.
- *
- * The callback runs on the socket completion owner. Ownership of every payload
- * part is transferred to the callback; each part must be closed or consumed
- * exactly once before the callback returns. The source routing id is valid only
- * for the duration of the callback.
- */
-typedef void (*zlink_completion_control_handler_fn) (
-  const zlink_routing_id_t *source_rid_,
-  zlink_msg_t *parts_,
-  size_t part_count_,
-  void *userdata_);
 
 typedef enum zlink_part_flag_t
 {
@@ -132,18 +154,34 @@ ZLINK_EXPORT zlink_handler_result_t zlink_send_ready_handler (void *s_,
                                                               void *userdata_);
 
 /**
- * @brief Install or replace the ROUTER completion-control callback.
+ * @brief Install or replace the long-lived routed-target readiness callback.
  *
- * Completion-control records are opaque multipart payloads. Core does not
- * assign command meaning or inspect the payload. They are not returned by the
- * application receive APIs. A later registration replaces the current
- * handler. Passing NULL returns ZLINK_HANDLER_INVALID_ARGUMENT with EINVAL;
- * a non-ROUTER socket returns ZLINK_HANDLER_NOT_SUPPORTED with ENOTSUP. Closing
- * the socket while this callback is running returns ZLINK_CLOSE_BUSY with
- * EBUSY; close may be retried after the callback returns.
+ * Supported subjects are DEALER, ROUTER, and STREAM. Each event identifies one exact
+ * application pipe by peer routing id and transport-pair generation. WRITABLE
+ * means a previously blocked target is worth retrying with DONTWAIT; it does
+ * not guarantee that a retry will succeed. TERMINAL is delivered exactly once
+ * for that identity when the pipe disconnects, the socket closes, or its
+ * context terminates. The routing id is borrowed for the callback duration.
+ *
+ * The callback must not block or submit on the socket. It should only schedule
+ * binding-owned work. Replacing the handler from this socket's own readiness
+ * callback fails with errno=EDEADLK.
  */
-ZLINK_EXPORT zlink_handler_result_t zlink_router_completion_control_handler (
-  void *router_, zlink_completion_control_handler_fn handler_, void *userdata_);
+ZLINK_EXPORT zlink_handler_result_t zlink_routed_send_ready_handler (
+  void *s_, zlink_routed_send_ready_handler_fn handler_, void *userdata_);
+
+/**
+ * @brief Select one exact routed submit target without claiming pipe credit.
+ *
+ * ROUTER requires a non-NULL routing id and snapshots that exact admitted
+ * route. DEALER requires NULL and commits one weighted selection across all
+ * connected, positive-weight application pipes, including an HWM-blocked
+ * pipe. The returned value can be inserted into binding-owned pending state
+ * before an exact DONTWAIT submit.
+ */
+ZLINK_EXPORT zlink_submit_result_t zlink_select_routed_submit_target (
+  void *s_, const zlink_routing_id_t *router_rid_or_null_,
+  zlink_routed_submit_target_t *target_out_);
 
 /**
  * @brief Close a socket and release its resources.
@@ -162,10 +200,8 @@ ZLINK_EXPORT zlink_close_result_t zlink_close (void *s_);
 /**
  * @brief Set a common socket option.
  *
- * `ZLINK_OPT_SNDHWM`, `ZLINK_OPT_RCVHWM`, and
- * `ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES` require an exact `uint64_t` value.
- * HWM values are bytes and `0` means unlimited. The Auto HWM message unit is
- * a planning input and `0` selects the socket-type default. Four-byte legacy
+ * `ZLINK_OPT_SNDHWM` and `ZLINK_OPT_RCVHWM` require an exact `uint64_t`
+ * value. HWM values are bytes and `0` means unlimited. Four-byte legacy
  * values fail with `ZLINK_CONFIG_INVALID_ARGUMENT`.
  */
 ZLINK_EXPORT zlink_config_result_t zlink_set_option (void *handle_,
@@ -176,7 +212,7 @@ ZLINK_EXPORT zlink_config_result_t zlink_set_option (void *handle_,
 /**
  * @brief Get a common socket option.
  *
- * The three byte-count options documented by zlink_set_option() require an
+ * The two byte-count options documented by zlink_set_option() require an
  * exact `uint64_t` output buffer and return a size of `sizeof(uint64_t)`.
  */
 ZLINK_EXPORT zlink_config_result_t zlink_get_option (void *handle_,
@@ -317,12 +353,35 @@ ZLINK_EXPORT zlink_submit_result_t zlink_dealer_request_part (void *dealer_,
                                                               zlink_reply_handler_fn handler_,
                                                               void *userdata_);
 
+/** @brief Submit a DEALER request part to one selected exact target. */
+ZLINK_EXPORT zlink_submit_result_t zlink_dealer_request_transport_pair_part (
+  void *dealer_,
+  const zlink_routed_submit_target_t *target_,
+  zlink_msg_t *part_,
+  zlink_send_flags_t flags_,
+  zlink_part_flag_t part_flag_,
+  uint32_t timeout_ms_,
+  zlink_reply_handler_fn handler_,
+  void *userdata_);
+
+/** @brief Submit a DEALER raw part to one selected exact target. */
+ZLINK_EXPORT zlink_submit_result_t zlink_dealer_send_transport_pair_part (
+  void *dealer_,
+  const zlink_routed_submit_target_t *target_,
+  zlink_msg_t *part_,
+  zlink_send_flags_t flags_,
+  zlink_part_flag_t part_flag_);
+
 ZLINK_EXPORT zlink_recv_result_t zlink_dealer_recv_part (void *dealer_,
                                                          uint8_t *message_type_out_,
                                                          uint64_t *request_seq_out_,
                                                          zlink_msg_t *part_out_,
                                                          zlink_part_flag_t *has_more_out_,
                                                          zlink_recv_flags_t flags_);
+ZLINK_EXPORT zlink_recv_result_t zlink_dealer_recv_part_with_hwm_budget_lease (
+  void *dealer_, uint8_t *message_type_out_, uint64_t *request_seq_out_,
+  zlink_msg_t *part_out_, zlink_hwm_budget_lease_t **lease_out_,
+  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
 
 ZLINK_EXPORT zlink_submit_result_t zlink_dealer_reply_part (void *dealer_,
                                                             uint64_t request_seq_,
@@ -357,30 +416,6 @@ ZLINK_EXPORT zlink_submit_result_t zlink_router_reply_part (void *router_,
                                                             zlink_msg_t *part_,
                                                             zlink_part_flag_t part_flag_);
 
-/**
- * @brief Submit one opaque completion-control part to a ROUTER peer.
- *
- * The record uses the peer's existing completion connection. A failed final
- * submit aborts the multipart record. Every call consumes the supplied part on
- * every result. Keep independent copies and retry the complete record from its
- * first part after send-ready notification when the result is
- * ZLINK_SUBMIT_BACKPRESSURED.
- */
-ZLINK_EXPORT zlink_submit_result_t zlink_router_completion_control_part (
-  void *router_,
-  const zlink_routing_id_t *peer_rid_,
-  zlink_msg_t *part_,
-  zlink_part_flag_t part_flag_);
-
-/** @brief Submit a Completion-control part through one specified transport pair. */
-ZLINK_EXPORT zlink_submit_result_t zlink_router_completion_control_transport_pair_part (
-  void *router_,
-  const zlink_routing_id_t *peer_rid_,
-  uint64_t transport_pair_id_,
-  uint64_t transport_pair_generation_,
-  zlink_msg_t *part_,
-  zlink_part_flag_t part_flag_);
-
 ZLINK_EXPORT zlink_recv_result_t
 zlink_router_recv_part (void *router_,
                         const zlink_routing_id_t **source_node_rid_out_,
@@ -399,12 +434,23 @@ zlink_router_recv_part_v2 (void *router_,
                            zlink_msg_t *part_out_,
                            zlink_part_flag_t *has_more_out_,
                            zlink_recv_flags_t flags_);
+ZLINK_EXPORT zlink_recv_result_t
+zlink_router_recv_part_v2_with_hwm_budget_lease (
+  void *router_, const zlink_routing_id_t **source_node_rid_out_,
+  uint64_t *request_seq_out_, uint64_t *transport_pair_id_out_,
+  uint64_t *transport_pair_generation_out_, zlink_msg_t *part_out_,
+  zlink_hwm_budget_lease_t **lease_out_,
+  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
 
 ZLINK_EXPORT zlink_recv_result_t zlink_recv_part (void *s_,
                                                   const zlink_routing_id_t **source_rid_out_,
                                                   zlink_msg_t *part_out_,
                                                   zlink_part_flag_t *has_more_out_,
                                                   zlink_recv_flags_t flags_);
+ZLINK_EXPORT zlink_recv_result_t zlink_recv_part_with_hwm_budget_lease (
+  void *s_, const zlink_routing_id_t **source_rid_out_,
+  zlink_msg_t *part_out_, zlink_hwm_budget_lease_t **lease_out_,
+  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
 
 ZLINK_EXPORT zlink_submit_result_t zlink_publish_part (void *subject_,
                                                        const char *topic_id_,
@@ -426,6 +472,12 @@ ZLINK_EXPORT zlink_recv_result_t zlink_subscribe_part (void *sub_,
                                                        zlink_msg_t *part_out_,
                                                        zlink_part_flag_t *has_more_out_,
                                                        zlink_recv_flags_t flags_);
+ZLINK_EXPORT zlink_recv_result_t zlink_subscribe_part_with_hwm_budget_lease (
+  void *sub_, const zlink_routing_id_t **source_rid_out_,
+  char *topic_id_buf_, size_t topic_id_capacity_,
+  size_t *topic_id_len_out_, zlink_msg_t *part_out_,
+  zlink_hwm_budget_lease_t **lease_out_,
+  zlink_part_flag_t *has_more_out_, zlink_recv_flags_t flags_);
 
 ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
                                                        const zlink_routing_id_t **source_rid_out_,

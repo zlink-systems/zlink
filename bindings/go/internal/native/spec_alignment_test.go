@@ -189,6 +189,32 @@ func TestCoreEventFlagValuesRemainComplete(t *testing.T) {
 	}
 }
 
+func TestMonitorOpenOptionsUseExactByteHwm(t *testing.T) {
+	config, err := resolveMonitorOpenOptions([]MonitorOpenOption{
+		MonitorEventConnected,
+		MonitorHwmBytes(4096),
+		MonitorEventDisconnected,
+		MonitorHwmBytes(8192),
+	})
+	if err != nil {
+		t.Fatalf("resolveMonitorOpenOptions() error = %v", err)
+	}
+	if want := MonitorEventConnected | MonitorEventDisconnected; config.events != want {
+		t.Fatalf("events = %#x, want %#x", config.events, want)
+	}
+	if config.monitorHwmBytes != 8192 {
+		t.Fatalf("monitor HWM bytes = %d, want last value 8192", config.monitorHwmBytes)
+	}
+
+	defaultEvents, err := resolveMonitorOpenOptions([]MonitorOpenOption{MonitorHwmBytes(0)})
+	if err != nil {
+		t.Fatalf("resolveMonitorOpenOptions(default) error = %v", err)
+	}
+	if defaultEvents.events != MonitorEventAll || defaultEvents.monitorHwmBytes != 0 {
+		t.Fatalf("default options = %+v, want all events and Core-default byte HWM", defaultEvents)
+	}
+}
+
 func TestReceivedReplyHelpersCarryCanonicalMetadata(t *testing.T) {
 	replyPart, err := NewMessage([]byte("reply"))
 	if err != nil {
@@ -304,16 +330,10 @@ func TestExportedSpecShapeForMonitorDiscoveryAndErrors(t *testing.T) {
 	assertField("SourceKind", reflect.TypeOf(MonitorStatus{}), reflect.Uint32)
 	assertField("SndPendingMsgs", reflect.TypeOf(MonitorStatus{}), reflect.Uint64)
 	assertField("RcvPendingMsgs", reflect.TypeOf(MonitorStatus{}), reflect.Uint64)
+	assertField("SndPendingBytes", reflect.TypeOf(MonitorStatus{}), reflect.Uint64)
+	assertField("RcvPendingBytes", reflect.TypeOf(MonitorStatus{}), reflect.Uint64)
 	assertField("AutoHwmProfile", reflect.TypeOf(MonitorStatus{}), reflect.Uint32)
 	assertField("AutoHwmPolicyClass", reflect.TypeOf(MonitorStatus{}), reflect.Uint32)
-	assertField("AutoHwmUnitBudgetBytes", reflect.TypeOf(MonitorStatus{}), reflect.Uint64)
-	assertField("AutoHwmSizeCap", reflect.TypeOf(MonitorStatus{}), reflect.Uint32)
-	assertField("AutoHwmSocketMessageSlots", reflect.TypeOf(MonitorStatus{}), reflect.Uint64)
-	assertField("AutoHwmConnectionBucketEnabled", reflect.TypeOf(MonitorStatus{}), reflect.Bool)
-	assertField("AutoHwmConnectionBucketCount", reflect.TypeOf(MonitorStatus{}), reflect.Uint32)
-	assertField("AutoHwmConnectionBucketIndex", reflect.TypeOf(MonitorStatus{}), reflect.Uint32)
-	assertField("AutoHwmConnectionBucketHwm4K", reflect.TypeOf(MonitorStatus{}), reflect.Uint32)
-	assertField("AutoHwmConnectionBucketHysteresisRetained", reflect.TypeOf(MonitorStatus{}), reflect.Bool)
 	assertField("AutoHwmLastRecalcReason", reflect.TypeOf(MonitorStatus{}), reflect.Uint32)
 	assertField("AutoHwmSendBlockedRatioPPM", reflect.TypeOf(MonitorStatus{}), reflect.Uint32)
 	assertField("ABIVersion", reflect.TypeOf(MonitorStatus{}), reflect.Uint32)
@@ -336,6 +356,8 @@ func TestExportedSpecShapeForMonitorDiscoveryAndErrors(t *testing.T) {
 	assertNoField("AutoHwmScope", reflect.TypeOf(MonitorStatus{}))
 	assertNoField("AutoHwmControlBudgetBytes", reflect.TypeOf(MonitorStatus{}))
 	assertNoField("AutoHwmControlActiveConnections", reflect.TypeOf(MonitorStatus{}))
+	assertNoField("AutoHwmUnitBudgetBytes", reflect.TypeOf(MonitorStatus{}))
+	assertNoField("AutoHwmSocketMessageSlots", reflect.TypeOf(MonitorStatus{}))
 	assertNoField("SendPendingMsg", reflect.TypeOf(MonitorStatus{}))
 	assertNoField("RecvPendingMsg", reflect.TypeOf(MonitorStatus{}))
 

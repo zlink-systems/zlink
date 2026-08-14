@@ -78,7 +78,26 @@ test('package exports expose only the public root', () => {
   assert.deepEqual(forbiddenPackageExports(packageJson.exports), []);
 });
 
-test('bindings samples stay on the Core 0.11.0 raw socket boundary', () => {
+test('managed routed admission uses only exact per-part Core APIs', () => {
+  const nativeBridge = fs.readFileSync(
+    path.resolve(__dirname, '../../native/src/addon_routed_admission.cc'),
+    'utf8'
+  );
+  for (const symbol of [
+    'zlink_routed_send_ready_handler',
+    'zlink_select_routed_submit_target',
+    'zlink_dealer_send_transport_pair_part',
+    'zlink_dealer_request_transport_pair_part',
+    'zlink_send_part_transport_pair',
+    'zlink_router_request_transport_pair_part'
+  ]) {
+    assert.ok(nativeBridge.includes(symbol), symbol);
+  }
+  assert.equal(nativeBridge.includes('zlink_routed_send_parts'), false);
+  assert.equal(nativeBridge.includes('zlink_routed_request_parts'), false);
+});
+
+test('bindings samples stay on the Core 0.11.1 raw socket boundary', () => {
   const sampleRoots = [
     path.resolve(__dirname, '../../samples'),
     path.resolve(__dirname, '../../../javascript/samples')

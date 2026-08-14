@@ -17,12 +17,13 @@ dealer_socket_t::dealer_socket_t (context_t &ctx_) :
 {
 }
 
-send_operation_t dealer_socket_t::send ()
+routed_send_operation_t dealer_socket_t::send ()
 {
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_send;
     state_ptr->raw.socket = detail::native_handle (*this);
-    return send_operation_t (std::move (state_ptr));
+    state_ptr->raw.callbacks = callback_state ().weak_from_this ();
+    return routed_send_operation_t (std::move (state_ptr));
 }
 
 request_operation_t dealer_socket_t::request ()
@@ -30,12 +31,18 @@ request_operation_t dealer_socket_t::request ()
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_request;
     state_ptr->raw.socket = detail::native_handle (*this);
+    state_ptr->raw.callbacks = callback_state ().weak_from_this ();
     return request_operation_t (std::move (state_ptr));
 }
 
 int dealer_socket_t::recv (received_t &out_, recv_flags_t flags_)
 {
     return socket_t::receive (out_, flags_);
+}
+
+int dealer_socket_t::recv_retained (received_t &out_, recv_flags_t flags_)
+{
+    return socket_t::receive_retained (out_, flags_);
 }
 
 int dealer_socket_t::recv (message_t &part_out_, recv_flags_t flags_)

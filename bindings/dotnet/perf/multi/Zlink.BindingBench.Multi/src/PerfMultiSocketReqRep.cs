@@ -23,9 +23,9 @@ internal static class PerfMultiSocketReqRep
         return RunServer(options, routerRouter: false, "multi-dealer-router-reqrep");
     }
 
-    internal static int RunDealerRouterClient(PerfOptions options)
+    internal static Task<int> RunDealerRouterClient(PerfOptions options)
     {
-        return RunClient(options, routerRouter: false);
+        return RunClientAsync(options, routerRouter: false);
     }
 
     internal static int RunRouterRouterServer(PerfOptions options)
@@ -33,9 +33,9 @@ internal static class PerfMultiSocketReqRep
         return RunServer(options, routerRouter: true, "multi-router-router-reqrep");
     }
 
-    internal static int RunRouterRouterClient(PerfOptions options)
+    internal static Task<int> RunRouterRouterClient(PerfOptions options)
     {
-        return RunClient(options, routerRouter: true);
+        return RunClientAsync(options, routerRouter: true);
     }
 
     private static int RunServer(PerfOptions options, bool routerRouter,
@@ -59,7 +59,6 @@ internal static class PerfMultiSocketReqRep
         // bind, then recalculate the socket policy before advertising READY.
         // The server receives as soon as clients connect and does not gate on
         // a connection-ready event count.
-        ApplyAutoHwmMsgUnit(ctx, size);
         server.Bind(endpoint);
         endpoint = server.Options.LastEndpoint;
         RecalculateAutoHwm(ctx);
@@ -104,7 +103,8 @@ internal static class PerfMultiSocketReqRep
         return 0;
     }
 
-    private static int RunClient(PerfOptions options, bool routerRouter)
+    private static async Task<int> RunClientAsync(PerfOptions options,
+        bool routerRouter)
     {
         int size = Math.Max(1, options.Size);
         int durationSeconds = ResolveMultiDurationSeconds(options);
@@ -114,7 +114,6 @@ internal static class PerfMultiSocketReqRep
         string endpoint = options.Endpoint;
 
         using var ctx = Zlink.CreateContext();
-        using var progressPoller = Zlink.CreatePoller();
         using var pollManager = new PollManager();
         ApplyMultiClientContextOptions(ctx, options);
         var clients = new List<IZlinkSocket>(clientCount);
@@ -176,7 +175,6 @@ internal static class PerfMultiSocketReqRep
             monitors.Clear();
 
             for (int i = 0; i < clients.Count; i++)
-                ApplyAutoHwmMsgUnit(ctx, size);
             RecalculateAutoHwm(ctx);
             if (clients.Count > 0)
                 PrintAutoHwmSnapshot((ISocket)clients[0], "endpoint",
@@ -186,11 +184,10 @@ internal static class PerfMultiSocketReqRep
             {
                 var slot = new ClientSlot(clients[i]);
                 slots.Add(slot);
-                progressPoller.Add(clients[i], PollEventFlags.PollCompletion, (nuint)i);
             }
 
-            var result = RunClientLoop(progressPoller, slots, routerRouter, size,
-                durationSeconds, latencySampleCap);
+            var result = await RunClientLoopAsync(slots, routerRouter, size,
+                durationSeconds, latencySampleCap).ConfigureAwait(false);
             if (result.completed <= 0 || result.latencySamples.Count == 0)
             {
                 DebugLogLimited(ref s_debugClientReplyLogs,
@@ -212,37 +209,38 @@ internal static class PerfMultiSocketReqRep
         }
     }
 
-    private static (long completed, List<double> latencySamples) RunClientLoop(
-        IPoller progressPoller, List<ClientSlot> slots, bool routerRouter,
+    private static async Task<(long completed, List<double> latencySamples)>
+        RunClientLoopAsync(
+        List<ClientSlot> slots, bool routerRouter,
         int msgSize, int durationSeconds, int latencyCap)
     {
         int payloadSize = Math.Max(msgSize, PerfMetricHeaderSize);
+        using var completionSignal = new SemaphoreSlim(0);
         var samples = new List<double>(Math.Max(0, latencyCap));
         object gate = new();
-        Exception? callbackError = null;
-        int hasCallbackError = 0;
+        Exception? completionError = null;
+        int hasCompletionError = 0;
         long completed = 0;
         long sampleSeen = 0;
         uint rng = 0xA341316Cu;
         long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
         ulong activeDeadlineNs = EpochNs()
             + (ulong)Math.Max(1, durationSeconds) * 1_000_000_000UL;
-        var events = new PollEvent[Math.Max(1, slots.Count)];
         TimeSpan requestTimeout = ResolveReqRepTimeout();
-        bool HasCallbackError() => Volatile.Read(ref hasCallbackError) != 0;
+        bool HasCompletionError() => Volatile.Read(ref hasCompletionError) != 0;
 
-        void RecordCallbackError(Exception ex)
+        void RecordCompletionError(Exception ex)
         {
             lock (gate)
             {
-                callbackError ??= ex;
-                Volatile.Write(ref hasCallbackError, 1);
+                completionError ??= ex;
+                Volatile.Write(ref hasCompletionError, 1);
             }
         }
 
         bool TrySubmit(ClientSlot slot)
         {
-            if (slot.InFlight || HasCallbackError()
+            if (slot.InFlight || HasCompletionError()
                 || Stopwatch.GetTimestamp() >= deadlineTicks)
             {
                 return false;
@@ -253,21 +251,19 @@ internal static class PerfMultiSocketReqRep
             StampMetricHeader(message.AsSpan(), RunId, PerfPhase.Active, msgSize,
                 slot.NextSeq++, EpochNsFromTimestamp(sentTicks));
 
-            bool submitted;
             try
             {
                 slot.InFlight = true;
-                submitted = routerRouter
+                Task<IReadOnlyList<Message>> request = routerRouter
                     ? ((IRouterSocket)slot.Socket).Request(ServerRoutingId)
                         .Message(message)
                         .Timeout(requestTimeout)
-                        .Flags(SendFlags.DontWait)
-                        .Submit(slot.Callback!)
+                        .Async()
                     : ((IDealerSocket)slot.Socket).Request()
                         .Message(message)
                         .Timeout(requestTimeout)
-                        .Flags(SendFlags.DontWait)
-                        .Submit(slot.Callback!);
+                        .Async();
+                _ = ObserveRequestAsync(slot, request);
             }
             catch (ZlinkException ex)
                 when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
@@ -277,92 +273,91 @@ internal static class PerfMultiSocketReqRep
                 return false;
             }
 
-            if (!submitted)
-                slot.InFlight = false;
-            else if (s_debugEnabled)
+            if (s_debugEnabled)
                 DebugLogLimited(ref s_debugClientSubmitLogs,
                     $"socket_reqrep_client: submitted seq={slot.NextSeq - 1}");
-            return submitted;
+            return true;
         }
 
-        RequestCallback MakeCallback(ClientSlot slot)
+        async Task ObserveRequestAsync(ClientSlot slot,
+            Task<IReadOnlyList<Message>> request)
         {
-            return (result, parts) =>
+            IReadOnlyList<Message>? parts = null;
+            try
             {
-                try
+                parts = await request.ConfigureAwait(false);
+                if (s_debugEnabled)
                 {
-                    if (s_debugEnabled)
+                    DebugLogLimited(ref s_debugClientReplyLogs,
+                        $"socket_reqrep_client: completion parts={parts.Count}");
+                }
+                if (parts.Count > 0
+                    && PerfShared.TryDecodeMetricHeader(
+                        parts[parts.Count - 1].AsReadOnlySpan(),
+                        out PerfMetricHeader header)
+                    && header.RunId == RunId
+                    && header.MsgSize == (uint)msgSize
+                    && header.Phase == ActivePhase)
+                {
+                    ulong nowNs = EpochNs();
+                    if (nowNs < activeDeadlineNs && nowNs >= header.SentTsNs)
                     {
-                        DebugLogLimited(ref s_debugClientReplyLogs,
-                            $"socket_reqrep_client: callback result={result} parts={parts.Count}");
-                    }
-                    if (result == RequestResult.Ok && parts.Count > 0)
-                    {
-                        ReadOnlySpan<byte> body = parts[parts.Count - 1].AsReadOnlySpan();
-                        if (PerfShared.TryDecodeMetricHeader(body,
-                                out PerfMetricHeader header)
-                            && header.RunId == RunId
-                            && header.MsgSize == (uint)msgSize
-                            && header.Phase == ActivePhase)
+                        lock (gate)
                         {
-                            ulong nowNs = EpochNs();
-                            if (nowNs < activeDeadlineNs
-                                && nowNs >= header.SentTsNs)
-                            {
-                                lock (gate)
-                                {
-                                    double sampleNs =
-                                        (nowNs - header.SentTsNs) * 0.5;
-                                    ReservoirSample(samples, sampleNs,
-                                        ref sampleSeen, latencyCap, ref rng);
-                                }
-                                Interlocked.Increment(ref completed);
-                            }
+                            double sampleNs =
+                                (nowNs - header.SentTsNs) * 0.5;
+                            ReservoirSample(samples, sampleNs,
+                                ref sampleSeen, latencyCap, ref rng);
                         }
+                        Interlocked.Increment(ref completed);
                     }
                 }
-                catch (Exception ex)
-                {
-                    RecordCallbackError(ex);
-                }
-                finally
-                {
+            }
+            catch (ZlinkRequestException ex)
+                when (ex.Result == ZlinkRequestException.ErrorCode.TimedOut)
+            {
+                if (s_debugEnabled)
+                    DebugLogLimited(ref s_debugClientReplyLogs,
+                        "socket_reqrep_client: completion timed out");
+            }
+            catch (Exception ex)
+            {
+                RecordCompletionError(ex);
+            }
+            finally
+            {
+                if (parts != null)
                     Zlink.MultipartClose(parts);
-                    slot.InFlight = false;
-                }
-            };
+                slot.InFlight = false;
+                completionSignal.Release();
+            }
         }
 
-        // Match the C callback/userdata path: the callback captures stable
-        // run state and is reused for sequential requests on each slot.
-        for (int i = 0; i < slots.Count; i++)
-            slots[i].Callback = MakeCallback(slots[i]);
-
-        while (Stopwatch.GetTimestamp() < deadlineTicks && !HasCallbackError())
+        while (Stopwatch.GetTimestamp() < deadlineTicks && !HasCompletionError())
         {
             bool submittedAny = false;
             for (int i = 0; i < slots.Count; i++)
                 submittedAny |= TrySubmit(slots[i]);
 
             if (!submittedAny)
-                _ = progressPoller.Wait(events, TimeSpan.FromMilliseconds(50));
+                _ = await completionSignal.WaitAsync(50).ConfigureAwait(false);
             else
-                _ = progressPoller.Wait(events, TimeSpan.Zero);
+                _ = await completionSignal.WaitAsync(0).ConfigureAwait(false);
         }
 
         long drainStart = Stopwatch.GetTimestamp();
         TimeSpan drainTimeout = ResolveReqRepDrainTimeout();
-        while (!HasCallbackError() && AnyInFlight(slots))
+        while (!HasCompletionError() && AnyInFlight(slots))
         {
-            _ = progressPoller.Wait(events, TimeSpan.FromMilliseconds(50));
+            _ = await completionSignal.WaitAsync(50).ConfigureAwait(false);
             if (Stopwatch.GetElapsedTime(drainStart) > drainTimeout)
-                throw new TimeoutException("multi request/reply callbacks did not drain");
+                throw new TimeoutException("multi request/reply operations did not drain");
         }
 
         lock (gate)
         {
-            if (callbackError != null)
-                throw callbackError;
+            if (completionError != null)
+                throw completionError;
         }
         return (Volatile.Read(ref completed), samples);
     }
@@ -494,7 +489,6 @@ internal static class PerfMultiSocketReqRep
 
         internal IZlinkSocket Socket { get; }
         internal ulong NextSeq { get; set; } = 1;
-        internal RequestCallback? Callback { get; set; }
         internal volatile bool InFlight;
     }
 

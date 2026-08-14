@@ -51,20 +51,12 @@ monitor_status_t make_monitor_status (const zlink_monitor_status_t &native_)
     status.detail_flags = native_.detail_flags;
     status.snd_pending_msgs = native_.snd_pending_msgs;
     status.rcv_pending_msgs = native_.rcv_pending_msgs;
+    status.snd_pending_bytes = native_.snd_pending_bytes;
+    status.rcv_pending_bytes = native_.rcv_pending_bytes;
     status.auto_hwm_enabled = native_.auto_hwm_enabled != 0;
     status.auto_hwm_profile = native_.auto_hwm_profile;
     status.auto_hwm_role = native_.auto_hwm_role;
     status.auto_hwm_policy_class = native_.auto_hwm_policy_class;
-    status.auto_hwm_unit_budget_bytes = native_.auto_hwm_unit_budget_bytes;
-    status.auto_hwm_size_cap = native_.auto_hwm_size_cap;
-    status.auto_hwm_socket_message_slots = native_.auto_hwm_socket_message_slots;
-    status.auto_hwm_connection_bucket_enabled = native_.auto_hwm_connection_bucket_enabled != 0;
-    status.auto_hwm_connection_bucket_count = native_.auto_hwm_connection_bucket_count;
-    status.auto_hwm_connection_bucket_index = native_.auto_hwm_connection_bucket_index;
-    status.auto_hwm_connection_bucket_hwm_4k = native_.auto_hwm_connection_bucket_hwm_4k;
-    status.auto_hwm_connection_bucket_hysteresis_retained =
-      native_.auto_hwm_connection_bucket_hysteresis_retained != 0;
-    status.auto_hwm_effective_message_bytes = native_.auto_hwm_effective_message_bytes;
     status.auto_hwm_planned_sndhwm_bytes = native_.auto_hwm_planned_sndhwm_bytes;
     status.auto_hwm_planned_rcvhwm_bytes = native_.auto_hwm_planned_rcvhwm_bytes;
     status.auto_hwm_applied_sndhwm_bytes = native_.auto_hwm_applied_sndhwm_bytes;
@@ -140,10 +132,13 @@ bool socket_monitor_t::valid () const noexcept
     return _impl && _impl->handle != nullptr;
 }
 
-socket_monitor_t socket_monitor_t::open (const socket_t &socket_, monitor_event events_)
+socket_monitor_t socket_monitor_t::open (const socket_t &socket_,
+                                         monitor_event events_,
+                                         byte_count_t monitor_hwm_bytes_)
 {
-    zlink_socket_monitor_open_options_t options;
+    zlink_socket_monitor_open_options_t options{};
     options.events = static_cast<zlink_socket_monitor_event_mask_t> (events_);
+    options.monitor_hwm_bytes = monitor_hwm_bytes_.bytes ();
     socket_monitor_t out;
     out._impl->handle =
       zlink_socket_monitor_open (const_cast<void *> (detail::native_handle (socket_)), &options);

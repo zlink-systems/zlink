@@ -19,6 +19,24 @@ class ZlinkRoutingId(ctypes.Structure):
     _fields_ = [("size", ctypes.c_uint8), ("data", ctypes.c_uint8 * 255)]
 
 
+class ZlinkRoutedSendReadyEvent(ctypes.Structure):
+    _fields_ = [
+        ("peer_rid", ZlinkRoutingId),
+        ("transport_pair_id", ctypes.c_uint64),
+        ("transport_pair_generation", ctypes.c_uint64),
+        ("state", ctypes.c_int),
+        ("terminal_errno", ctypes.c_int),
+    ]
+
+
+class ZlinkRoutedSubmitTarget(ctypes.Structure):
+    _fields_ = [
+        ("peer_rid", ZlinkRoutingId),
+        ("transport_pair_id", ctypes.c_uint64),
+        ("transport_pair_generation", ctypes.c_uint64),
+    ]
+
+
 class ZlinkMonitorEvent(ctypes.Structure):
     _fields_ = [
         ("event", ctypes.c_uint64),
@@ -35,7 +53,53 @@ class ZlinkMonitorEvent(ctypes.Structure):
 
 
 class ZlinkSocketMonitorOpenOptions(ctypes.Structure):
-    _fields_ = [("events", ctypes.c_uint32)]
+    _fields_ = [
+        ("events", ctypes.c_uint32),
+        ("monitor_hwm_bytes", ctypes.c_uint64),
+    ]
+
+
+class ZlinkAutoHwmBudgetSnapshot(ctypes.Structure):
+    _fields_ = [
+        ("abi_version", ctypes.c_uint32),
+        ("struct_size", ctypes.c_uint32),
+        ("budget_generation", ctypes.c_uint64),
+        ("measurement_epoch", ctypes.c_uint64),
+        ("configured_memory_limit_bytes", ctypes.c_uint64),
+        ("runtime_memory_limit_bytes", ctypes.c_uint64),
+        ("resolved_memory_limit_bytes", ctypes.c_uint64),
+        ("configured_core_budget_bytes", ctypes.c_uint64),
+        ("effective_core_budget_bytes", ctypes.c_uint64),
+        ("total_planned_hwm_bytes", ctypes.c_uint64),
+        ("total_applied_hwm_bytes", ctypes.c_uint64),
+        ("manual_reserved_hwm_bytes", ctypes.c_uint64),
+        ("core_queue_accounted_bytes", ctypes.c_uint64),
+        ("application_accounted_bytes", ctypes.c_uint64),
+        ("current_accounted_bytes", ctypes.c_uint64),
+        ("provisional_accounted_bytes", ctypes.c_uint64),
+        ("peak_accounted_bytes", ctypes.c_uint64),
+        ("completion_current_accounted_bytes", ctypes.c_uint64),
+        ("completion_peak_accounted_bytes", ctypes.c_uint64),
+        ("completion_pending_message_count", ctypes.c_uint64),
+        ("total_messaging_accounted_bytes", ctypes.c_uint64),
+        ("monitor_queue_applied_hwm_bytes", ctypes.c_uint64),
+        ("monitor_queue_accounted_bytes", ctypes.c_uint64),
+        ("total_instance_applied_hwm_bytes", ctypes.c_uint64),
+        ("total_instance_accounted_bytes", ctypes.c_uint64),
+        ("oversize_admission_count", ctypes.c_uint64),
+        ("largest_oversize_message_bytes", ctypes.c_uint64),
+        ("active_directional_queue_count", ctypes.c_uint64),
+        ("active_completion_directional_queue_count", ctypes.c_uint64),
+        ("active_send_queue_count", ctypes.c_uint64),
+        ("active_receive_queue_count", ctypes.c_uint64),
+        ("outstanding_application_lease_count", ctypes.c_uint64),
+        ("retired_queue_count", ctypes.c_uint64),
+        ("deferred_origin_credit_bytes", ctypes.c_uint64),
+        ("unlimited_manual_queue_count", ctypes.c_uint64),
+        ("blocked_ratio_ppm", ctypes.c_uint32),
+        ("flags", ctypes.c_uint32),
+        ("reserved_u64", ctypes.c_uint64 * 8),
+    ]
 
 
 class ZlinkMonitorStatus(ctypes.Structure):
@@ -47,19 +111,12 @@ class ZlinkMonitorStatus(ctypes.Structure):
         ("detail_flags", ctypes.c_uint32),
         ("snd_pending_msgs", ctypes.c_uint64),
         ("rcv_pending_msgs", ctypes.c_uint64),
+        ("snd_pending_bytes", ctypes.c_uint64),
+        ("rcv_pending_bytes", ctypes.c_uint64),
         ("auto_hwm_enabled", ctypes.c_uint32),
         ("auto_hwm_profile", ctypes.c_uint32),
         ("auto_hwm_role", ctypes.c_uint32),
         ("auto_hwm_policy_class", ctypes.c_uint32),
-        ("auto_hwm_unit_budget_bytes", ctypes.c_uint64),
-        ("auto_hwm_size_cap", ctypes.c_uint32),
-        ("auto_hwm_socket_message_slots", ctypes.c_uint64),
-        ("auto_hwm_connection_bucket_enabled", ctypes.c_uint32),
-        ("auto_hwm_connection_bucket_count", ctypes.c_uint32),
-        ("auto_hwm_connection_bucket_index", ctypes.c_uint32),
-        ("auto_hwm_connection_bucket_hwm_4k", ctypes.c_uint32),
-        ("auto_hwm_connection_bucket_hysteresis_retained", ctypes.c_uint32),
-        ("auto_hwm_effective_message_bytes", ctypes.c_uint64),
         ("auto_hwm_planned_sndhwm_bytes", ctypes.c_uint64),
         ("auto_hwm_planned_rcvhwm_bytes", ctypes.c_uint64),
         ("auto_hwm_applied_sndhwm_bytes", ctypes.c_uint64),
@@ -132,8 +189,10 @@ class _Lib:
         p_msg = ctypes.POINTER(ZlinkMsg)
         p_rid = ctypes.POINTER(ZlinkRoutingId)
         p_rid_ptr = ctypes.POINTER(p_rid)
+        p_routed_target = ctypes.POINTER(ZlinkRoutedSubmitTarget)
         p_int = ctypes.POINTER(ctypes.c_int)
         p_size = ctypes.POINTER(ctypes.c_size_t)
+        p_hwm_budget_lease = ctypes.POINTER(ctypes.c_void_p)
 
         specs = [
             ("zlink_version", [p_int, p_int, p_int], None),
@@ -147,6 +206,8 @@ class _Lib:
             ("zlink_ctx_get_data", [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, p_size], ctypes.c_int),
             ("zlink_ctx_get", [ctypes.c_void_p, ctypes.c_int, p_int], ctypes.c_int),
             ("zlink_ctx_auto_hwm_recalculate", [ctypes.c_void_p], ctypes.c_int),
+            ("zlink_ctx_get_auto_hwm_budget_snapshot", [ctypes.c_void_p, ctypes.POINTER(ZlinkAutoHwmBudgetSnapshot)], ctypes.c_int),
+            ("zlink_ctx_reset_auto_hwm_budget_metrics", [ctypes.c_void_p], ctypes.c_int),
             ("zlink_proxy", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
             ("zlink_proxy_steerable", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
             ("zlink_has", [ctypes.c_char_p], ctypes.c_bool),
@@ -177,7 +238,8 @@ class _Lib:
             ("zlink_recv_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
             ("zlink_stream_packet_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
             ("zlink_send_ready_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
-            ("zlink_router_completion_control_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
+            ("zlink_routed_send_ready_handler", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
+            ("zlink_select_routed_submit_target", [ctypes.c_void_p, p_rid, p_routed_target], ctypes.c_int),
             ("zlink_close", [ctypes.c_void_p], ctypes.c_int),
             ("zlink_set_option", [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t], ctypes.c_int),
             ("zlink_get_option", [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, p_size], ctypes.c_int),
@@ -202,19 +264,27 @@ class _Lib:
             ("zlink_disconnect_rid", [ctypes.c_void_p, p_rid], ctypes.c_int),
             ("zlink_send_part", [ctypes.c_void_p, p_msg, ctypes.c_int, ctypes.c_int], ctypes.c_int),
             ("zlink_send_part_rid", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_int, ctypes.c_int], ctypes.c_int),
+            ("zlink_send_part_transport_pair", [ctypes.c_void_p, p_rid, ctypes.c_uint64, ctypes.c_uint64, p_msg, ctypes.c_int, ctypes.c_int], ctypes.c_int),
             ("zlink_dealer_request_part", [ctypes.c_void_p, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
+            ("zlink_dealer_request_transport_pair_part", [ctypes.c_void_p, p_routed_target, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
+            ("zlink_dealer_send_transport_pair_part", [ctypes.c_void_p, p_routed_target, p_msg, ctypes.c_int, ctypes.c_int], ctypes.c_int),
             ("zlink_dealer_recv_part", [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(ctypes.c_uint64), p_msg, p_int, ctypes.c_int], ctypes.c_int),
+            ("zlink_dealer_recv_part_with_hwm_budget_lease", [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(ctypes.c_uint64), p_msg, p_hwm_budget_lease, p_int, ctypes.c_int], ctypes.c_int),
             ("zlink_dealer_reply_part", [ctypes.c_void_p, ctypes.c_uint64, p_msg, ctypes.c_int], ctypes.c_int),
             ("zlink_router_request_part", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
+            ("zlink_router_request_transport_pair_part", [ctypes.c_void_p, p_rid, ctypes.c_uint64, ctypes.c_uint64, p_msg, ctypes.c_int, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
             ("zlink_router_reply_part", [ctypes.c_void_p, p_rid, ctypes.c_uint64, p_msg, ctypes.c_int], ctypes.c_int),
-            ("zlink_router_completion_control_part", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_int], ctypes.c_int),
             ("zlink_router_recv_part", [ctypes.c_void_p, p_rid_ptr, ctypes.POINTER(ctypes.c_uint64), p_msg, p_int, ctypes.c_int], ctypes.c_int),
+            ("zlink_router_recv_part_v2_with_hwm_budget_lease", [ctypes.c_void_p, p_rid_ptr, ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64), p_msg, p_hwm_budget_lease, p_int, ctypes.c_int], ctypes.c_int),
             ("zlink_recv_part", [ctypes.c_void_p, p_rid_ptr, p_msg, p_int, ctypes.c_int], ctypes.c_int),
+            ("zlink_recv_part_with_hwm_budget_lease", [ctypes.c_void_p, p_rid_ptr, p_msg, p_hwm_budget_lease, p_int, ctypes.c_int], ctypes.c_int),
+            ("zlink_hwm_budget_lease_release", [p_hwm_budget_lease], None),
             ("zlink_publish_part", [ctypes.c_void_p, ctypes.c_char_p, p_msg, ctypes.c_int, ctypes.c_int], ctypes.c_int),
             ("zlink_set_subscription", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_int),
             ("zlink_unset_subscription", [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_int),
             ("zlink_subscription_at", [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, p_size, p_int], ctypes.c_int),
             ("zlink_subscribe_part", [ctypes.c_void_p, p_rid_ptr, ctypes.POINTER(ctypes.c_char), ctypes.c_size_t, p_size, p_msg, p_int, ctypes.c_int], ctypes.c_int),
+            ("zlink_subscribe_part_with_hwm_budget_lease", [ctypes.c_void_p, p_rid_ptr, ctypes.POINTER(ctypes.c_char), ctypes.c_size_t, p_size, p_msg, p_hwm_budget_lease, p_int, ctypes.c_int], ctypes.c_int),
             ("zlink_xpub_recv_part", [ctypes.c_void_p, p_rid_ptr, p_int, ctypes.POINTER(ctypes.c_char), ctypes.c_size_t, p_size, ctypes.c_int], ctypes.c_int),
             ("zlink_monitor_ignore_handler", [ctypes.POINTER(ZlinkMonitorEvent), ctypes.c_void_p], None),
             ("zlink_socket_monitor_open", [ctypes.c_void_p, ctypes.POINTER(ZlinkSocketMonitorOpenOptions)], ctypes.c_void_p),

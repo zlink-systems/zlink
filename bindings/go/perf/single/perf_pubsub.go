@@ -15,7 +15,6 @@ func runPubSub(cfg benchmarkConfig) perfcommon.Result {
 	ctx, err := perfcommon.NewSingleContext()
 	perfcommon.Must(err)
 	defer ctx.Close()
-	perfcommon.ApplySingleAutoHWMMsgUnit(ctx, cfg.msgSize)
 
 	publisher, err := ctx.PubSocket()
 	perfcommon.Must(err)

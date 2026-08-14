@@ -21,8 +21,13 @@ typedef enum zlink_ctx_option_t
     ZLINK_CTX_OPT_AUTO_HWM_ENABLE = 12,
     ZLINK_CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS = 14,
     ZLINK_CTX_OPT_AUTO_HWM_PROFILE = 17,
+    /* Value 18 is intentionally unassigned. */
     /* uint64_t bytes; use zlink_ctx_set_data()/zlink_ctx_get_data(). */
-    ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES = 18
+    ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES = 19,
+    /* uint64_t bytes; use zlink_ctx_set_data()/zlink_ctx_get_data(). */
+    ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES = 20,
+    /* uint64_t bytes; use zlink_ctx_set_data()/zlink_ctx_get_data(). */
+    ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES = 21
 } zlink_ctx_option_t;
 
 typedef enum zlink_auto_hwm_profile_t
@@ -109,9 +114,7 @@ typedef enum zlink_option_t
     ZLINK_OPT_LAST_ENDPOINT = 0x3014,
     ZLINK_OPT_ZMP_METADATA = 0x3030,
     ZLINK_OPT_ROUTE_VALUE_MAX_SIZE = 0x3032,
-    ZLINK_OPT_RID_DUPLICATE_POLICY = 0x3033,
-    /* uint64_t Auto HWM planning-unit bytes; 0 selects the default. */
-    ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES = 0x3034
+    ZLINK_OPT_RID_DUPLICATE_POLICY = 0x3033
 } zlink_option_t;
 
 typedef enum zlink_submit_retry_mode_t

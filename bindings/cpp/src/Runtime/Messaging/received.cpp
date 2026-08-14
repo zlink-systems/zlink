@@ -26,6 +26,16 @@ void close_parts (std::vector<message_t> &parts_)
 
 } // namespace
 
+received_t::~received_t ()
+{
+    close ();
+}
+
+topic_message_t::~topic_message_t ()
+{
+    close ();
+}
+
 received_t::received_t (std::optional<routing_id_t> routing_id_,
                         std::optional<uint64_t> request_seq_,
                         std::vector<message_t> parts_) :
@@ -134,11 +144,13 @@ message_t received_t::single_part_or_throw ()
 void received_t::close ()
 {
     _parts.close ();
+    _hwm_budget_leases.reset ();
 }
 
 void topic_message_t::close ()
 {
     _parts.close ();
+    _hwm_budget_leases.reset ();
 }
 
 const std::vector<message_t> &received_t::parts () const

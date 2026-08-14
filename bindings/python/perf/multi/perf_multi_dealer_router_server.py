@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import threading
 from collections import deque
@@ -5,7 +6,6 @@ from collections import deque
 import zlink
 
 from perf_multi_common import (
-    apply_multi_auto_hwm_msg_unit,
     apply_multi_socket_options,
     benchmark_endpoint,
     configure_multi_tls_server,
@@ -13,11 +13,11 @@ from perf_multi_common import (
     perf_server_context,
     recv_nonblocking,
     safe_poll,
-    send_nonblocking,
+    send_routed,
 )
 
 
-def main(argv=None):
+async def main(argv=None):
     args = parse_server_args(argv or sys.argv[1:])
     endpoint = benchmark_endpoint(args.transport, "multi-dealer-router")
     stop = threading.Event()
@@ -38,7 +38,6 @@ def main(argv=None):
             configure_multi_tls_server(router, args.transport)
             apply_multi_socket_options(router)
             router.bind(endpoint)
-            apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
             print(f"READY,{endpoint}", flush=True)
             with zlink.create_poller() as poller:
                 poller.add_socket(router, zlink.PollEventFlag.POLLIN, 0)
@@ -52,7 +51,9 @@ def main(argv=None):
                 while not stop.is_set():
                     while pending:
                         routing_id, payload = pending[0]
-                        if not send_nonblocking(router, payload, routing_id=routing_id):
+                        if not await send_routed(
+                            router, payload, routing_id=routing_id
+                        ):
                             break
                         pending.popleft()
                     while True:
@@ -85,4 +86,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

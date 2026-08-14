@@ -8,6 +8,8 @@ from zlink._native.ffi import (
     ZlinkMsg,
     ZlinkPollItem,
     ZlinkPollerEvent,
+    ZlinkRoutedSendReadyEvent,
+    ZlinkRoutedSubmitTarget,
     ZlinkRoutingId,
     ZlinkSocketMonitorOpenOptions,
     lib,
@@ -18,14 +20,35 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "zlink"
 
 
-def test_ffi_layouts_are_the_core_0_11_0_layouts():
+def test_ffi_layouts_are_the_core_0_11_1_layouts():
     assert (ctypes.sizeof(ZlinkMsg), ctypes.alignment(ZlinkMsg)) == (64, 8)
     assert (ctypes.sizeof(ZlinkRoutingId), ctypes.alignment(ZlinkRoutingId)) == (256, 1)
-    assert (ctypes.sizeof(ZlinkMonitorStatus), ctypes.alignment(ZlinkMonitorStatus)) == (232, 8)
-    assert (ctypes.sizeof(ZlinkSocketMonitorOpenOptions), ctypes.alignment(ZlinkSocketMonitorOpenOptions)) == (4, 4)
+    assert (ctypes.sizeof(ZlinkMonitorStatus), ctypes.alignment(ZlinkMonitorStatus)) == (192, 8)
+    assert (ctypes.sizeof(ZlinkSocketMonitorOpenOptions), ctypes.alignment(ZlinkSocketMonitorOpenOptions)) == (16, 8)
     expected_poll_item = (24, 8) if os.name == "nt" else (16, 8)
     assert (ctypes.sizeof(ZlinkPollItem), ctypes.alignment(ZlinkPollItem)) == expected_poll_item
     assert (ctypes.sizeof(ZlinkPollerEvent), ctypes.alignment(ZlinkPollerEvent)) == (48, 8)
+    assert (
+        ctypes.sizeof(ZlinkRoutedSendReadyEvent),
+        ctypes.alignment(ZlinkRoutedSendReadyEvent),
+    ) == (280, 8)
+    assert (
+        ctypes.sizeof(ZlinkRoutedSubmitTarget),
+        ctypes.alignment(ZlinkRoutedSubmitTarget),
+    ) == (272, 8)
+
+
+def test_exact_routed_admission_symbols_are_bound_directly():
+    native = lib()
+    for name in (
+        "zlink_routed_send_ready_handler",
+        "zlink_select_routed_submit_target",
+        "zlink_send_part_transport_pair",
+        "zlink_dealer_send_transport_pair_part",
+        "zlink_dealer_request_transport_pair_part",
+        "zlink_router_request_transport_pair_part",
+    ):
+        assert callable(getattr(native, name))
 
 
 def test_native_extension_exposes_only_raw_bridge_operations():
@@ -47,9 +70,13 @@ def test_native_extension_exposes_only_raw_bridge_operations():
         "publish_parts",
         "recv_parts",
         "recv_owner",
+        "recv_retained_owner",
+        "dealer_recv_retained_owner",
         "router_recv_owner",
+        "router_recv_retained_owner",
         "subscribe_parts",
         "subscribe_owner",
+        "subscribe_retained_owner",
     }
     assert not (SRC / "_native" / "_zlink_perf_native.c").exists()
     assert "_zlink_perf_native" not in (ROOT / "setup.py").read_text(encoding="utf-8")
@@ -102,7 +129,7 @@ def test_package_platform_policy_is_explicit_for_supported_native_targets():
         assert {
             "linux-x86_64/libzlink.so",
             "linux-x86_64/libzlink.so.0",
-            "linux-x86_64/libzlink.so.0.11.0",
+            "linux-x86_64/libzlink.so.0.11.1",
         }.issubset(payloads)
 
 
@@ -115,7 +142,12 @@ def test_raw_core_symbol_binding_is_present_and_removed_symbols_are_absent():
         "zlink_socket",
         "zlink_send_part",
         "zlink_recv_part",
+        "zlink_recv_part_with_hwm_budget_lease",
+        "zlink_dealer_recv_part_with_hwm_budget_lease",
         "zlink_router_recv_part",
+        "zlink_router_recv_part_v2_with_hwm_budget_lease",
+        "zlink_subscribe_part_with_hwm_budget_lease",
+        "zlink_hwm_budget_lease_release",
         "zlink_timer_new",
         "zlink_poller_new",
         "zlink_socket_monitor_open",

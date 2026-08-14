@@ -1,38 +1,43 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import { RouterSocketOptions } from './socket_options';
-import { messageFromNativeBuffer, normalizeOperationPayload } from '../buffers/message_conversion';
+import { normalizeOperationPayload } from '../buffers/message_conversion';
 import { normalizeRoutingId } from '../core/routing_id';
 import {
+  ManagedRoutedRuntimeSendOperation,
   RuntimeReplyOperation,
   RuntimeRequestOperation,
   RoutedMessageSocket,
 } from './socket_operations';
+import { RoutedAdmission, resolvedRequestTimeout } from './routed_admission';
 import { normalizeReplyFlags } from './socket_submit_errors';
 import type { RuntimeContext as Context } from '../core/context';
-import { configCall, handlerCall, submitNativeError } from '../errors/native_errors';
+import { configCall, submitNativeError } from '../errors/native_errors';
 import { getNativeHandle } from '../handles/native_handle';
-import { executeNativeRequest } from '../messaging/request_executor';
-import { startRequestProgress } from '../messaging/request_progress';
 import { requireNative } from '../native/native';
-import { RoutingId, type Message, type MessageLike } from '../../contracts';
+import { RoutingId, type MessageLike } from '../../contracts';
 import { SendFlags, SocketType as NativeSocketType } from '../../contracts/sockets/socket_constants';
 import type {
   ReplyOperation,
-  RequestCallback,
   RequestOperation,
+  RoutedSendOperation,
 } from '../../contracts/messaging';
 
 const native = requireNative();
 
 export class RouterSocket extends RoutedMessageSocket {
-  private completionControlHandler?: (
-    sourceRoutingId: RoutingId,
-    parts: Message[]
-  ) => void;
-  private completionControlNativeRegistered = false;
+  private readonly admission: RoutedAdmission;
   readonly options: RouterSocketOptions;
-  constructor(ctx: Context) { super(ctx, NativeSocketType.ROUTER); this.options = RouterSocketOptions.create(this); }
+  constructor(ctx: Context) {
+    super(ctx, NativeSocketType.ROUTER);
+    this.options = RouterSocketOptions.create(this);
+    try {
+      this.admission = new RoutedAdmission(getNativeHandle(this), 'router');
+    } catch (error) {
+      super.close();
+      throw error;
+    }
+  }
   setRoutingId(routingId: RoutingId): void {
     const normalizedRoutingId = normalizeRoutingId(routingId);
     configCall('routing id set failed', () => {
@@ -46,9 +51,27 @@ export class RouterSocket extends RoutedMessageSocket {
       )
     );
   }
+  send(peerRid: RoutingId): RoutedSendOperation {
+    const peer = normalizeRoutingId(peerRid, 'peerRid');
+    return new ManagedRoutedRuntimeSendOperation(
+      (selector, parts, timeoutMs, startedAt) => this.admission.send(
+        selector,
+        parts,
+        timeoutMs === 0 ? this.options.sendTimeout : timeoutMs,
+        startedAt
+      ),
+      peer
+    );
+  }
   request(peerRid: RoutingId): RequestOperation {
-    return new RuntimeRequestOperation((parts, cbOrTimeout, opFlags, opTimeout) =>
-      this.requestDirect(peerRid, parts, cbOrTimeout, opFlags, opTimeout)
+    const peer = normalizeRoutingId(peerRid, 'peerRid');
+    return new RuntimeRequestOperation((parts, timeoutMs, startedAt) =>
+      this.admission.request(
+        peer,
+        parts,
+        resolvedRequestTimeout(timeoutMs, this.options.requestTimeout),
+        startedAt
+      )
     );
   }
   requestTransportPair(
@@ -56,31 +79,21 @@ export class RouterSocket extends RoutedMessageSocket {
     transportPairId: bigint,
     transportPairGeneration: bigint
   ): RequestOperation {
-    return new RuntimeRequestOperation((parts, cbOrTimeout, opFlags, opTimeout) => {
-      const peer = normalizeRoutingId(peerRid, 'peerRid');
-      const nativeHandle = getNativeHandle(this);
-      return executeNativeRequest({
-        handle: nativeHandle,
-        callbackOrTimeout: cbOrTimeout,
-        flagsOrTimeout: opFlags,
-        maybeTimeout: opTimeout,
-        startProgress: () => startRequestProgress(nativeHandle),
-        invoke: (token, flags, timeoutMs) => {
-          native.routerRequestTransportPair(
-            nativeHandle,
-            peer,
-            transportPairId,
-            transportPairGeneration,
-            parts,
-            token,
-            flags | 0,
-            timeoutMs | 0
-          );
-        },
-        submitErrorMessage: 'transport-pair request failed',
-        requestErrorMessage: 'transport-pair request failed'
-      });
-    });
+    const peer = normalizeRoutingId(peerRid, 'peerRid');
+    const exactTarget = {
+      peerRid: peer,
+      transportPairId,
+      transportPairGeneration,
+    };
+    return new RuntimeRequestOperation((parts, timeoutMs, startedAt) =>
+      this.admission.request(
+        peer,
+        parts,
+        resolvedRequestTimeout(timeoutMs, this.options.requestTimeout),
+        startedAt,
+        exactTarget
+      )
+    );
   }
   sendTransportPair(
     peerRid: RoutingId,
@@ -104,105 +117,8 @@ export class RouterSocket extends RoutedMessageSocket {
       throw submitNativeError(error, flags, 'transport-pair send failed');
     }
   }
-  private requestDirect(
-    peerRid: RoutingId,
-    payloadOrParts: MessageLike | readonly MessageLike[],
-    callbackOrTimeout?: RequestCallback | number,
-    flagsOrTimeout?: SendFlags | number,
-    maybeTimeout?: number,
-  ): Promise<Message[]> | boolean {
-    const parts = normalizeOperationPayload(payloadOrParts);
-    const peer = normalizeRoutingId(peerRid, 'peerRid');
-    const nativeHandle = getNativeHandle(this);
-    return executeNativeRequest({
-      handle: nativeHandle,
-      callbackOrTimeout,
-      flagsOrTimeout,
-      maybeTimeout,
-      startProgress: () => startRequestProgress(nativeHandle),
-      invoke: (token, flags, timeoutMs) => {
-        native.routerRequest(
-          nativeHandle,
-          peer,
-          parts,
-          token,
-          flags | 0,
-          timeoutMs | 0
-        );
-      },
-      submitErrorMessage: 'request failed',
-      requestErrorMessage: 'request failed'
-    });
-  }
   reply(peerRid: RoutingId, requestSeq: bigint): ReplyOperation {
     return new RuntimeReplyOperation((parts, opFlags) => this.replyDirect(peerRid, requestSeq, parts, opFlags));
-  }
-  trySendCompletionControl(
-    peerRid: RoutingId,
-    payloadOrParts: readonly MessageLike[]
-  ): boolean {
-    const peer = normalizeRoutingId(peerRid, 'peerRid');
-    const parts = normalizeOperationPayload(payloadOrParts);
-    try {
-      return native.routerTrySendCompletionControl(
-        getNativeHandle(this),
-        peer,
-        parts
-      );
-    } catch (error) {
-      throw submitNativeError(error, SendFlags.None, 'completion control failed');
-    }
-  }
-  trySendCompletionControlTransportPair(
-    peerRid: RoutingId,
-    transportPairId: bigint,
-    transportPairGeneration: bigint,
-    payloadOrParts: readonly MessageLike[]
-  ): boolean {
-    const peer = normalizeRoutingId(peerRid, 'peerRid');
-    const parts = normalizeOperationPayload(payloadOrParts);
-    try {
-      return native.routerTrySendCompletionControlTransportPair(
-        getNativeHandle(this),
-        peer,
-        transportPairId,
-        transportPairGeneration,
-        parts
-      );
-    } catch (error) {
-      throw submitNativeError(error, SendFlags.None, 'transport-pair completion control failed');
-    }
-  }
-  setCompletionControlHandler(
-    handler: (sourceRoutingId: RoutingId, parts: Message[]) => void
-  ): void {
-    if (typeof handler !== 'function') {
-      throw new TypeError('handler must be a function');
-    }
-    const previous = this.completionControlHandler;
-    this.completionControlHandler = handler;
-    if (this.completionControlNativeRegistered) return;
-
-    try {
-      handlerCall('completion control handler failed', () => {
-        native.routerCompletionControlHandler(
-          getNativeHandle(this),
-          (sourceRoutingId, parts) => {
-            const current = this.completionControlHandler;
-            const messages = parts.map(messageFromNativeBuffer);
-            if (current) {
-              current(RoutingId.from(sourceRoutingId), messages);
-              return;
-            }
-            for (const message of messages) message.close();
-          }
-        );
-      });
-      this.completionControlNativeRegistered = true;
-    } catch (error) {
-      this.completionControlHandler = previous;
-      throw error;
-    }
   }
   protected replyToRoutedMessage(
     sourceRid: RoutingId,
@@ -226,5 +142,10 @@ export class RouterSocket extends RoutedMessageSocket {
     } catch (error) {
       throw submitNativeError(error, flags, 'reply failed');
     }
+  }
+  close(): void {
+    this.admission.close();
+    super.close();
+    this.admission.finishClose();
   }
 }

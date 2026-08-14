@@ -15,6 +15,13 @@ public interface Socket extends AutoCloseable {
 
     SocketMonitor monitorOpen(MonitorEventType... events);
 
+    /**
+     * Opens a monitor with an exact queue HWM in bytes. Zero selects the Core
+     * default.
+     */
+    SocketMonitor monitorOpen(long monitorHwmBytes,
+                              MonitorEventType... events);
+
     void setTlsServer(String certPem, String keyPem, boolean requireClientCert);
 
     void setTlsClient(String caCertPem, String hostname, boolean trustSystem);

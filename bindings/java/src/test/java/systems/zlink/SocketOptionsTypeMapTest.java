@@ -28,8 +28,7 @@ public class SocketOptionsTypeMapTest {
     private static final Set<Integer> NON_SOCKET_CATALOG_OPTION_IDS = Set.of(
       SocketOption.SUBSCRIBE.getValue(),
       SocketOption.UNSUBSCRIBE.getValue(),
-      SocketOption.RCVMORE.getValue(),
-      SocketOption.AUTO_HWM_MSG_UNIT_BYTES.getValue()
+      SocketOption.RCVMORE.getValue()
     );
 
     @Test

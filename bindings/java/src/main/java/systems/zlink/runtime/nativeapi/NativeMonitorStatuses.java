@@ -9,7 +9,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
 public final class NativeMonitorStatuses {
-    private static final int MONITOR_STATUS_ABI_VERSION = 2;
+    private static final int MONITOR_STATUS_ABI_VERSION = 3;
 
     private NativeMonitorStatuses() {
     }
@@ -40,6 +40,10 @@ public final class NativeMonitorStatuses {
             NativeLayouts.MONITOR_SNAPSHOT_SND_PENDING_MSGS_OFFSET),
           segment.get(ValueLayout.JAVA_LONG_UNALIGNED,
             NativeLayouts.MONITOR_SNAPSHOT_RCV_PENDING_MSGS_OFFSET),
+          segment.get(ValueLayout.JAVA_LONG_UNALIGNED,
+            NativeLayouts.MONITOR_SNAPSHOT_SND_PENDING_BYTES_OFFSET),
+          segment.get(ValueLayout.JAVA_LONG_UNALIGNED,
+            NativeLayouts.MONITOR_SNAPSHOT_RCV_PENDING_BYTES_OFFSET),
           segment.get(ValueLayout.JAVA_INT,
             NativeLayouts.MONITOR_SNAPSHOT_AUTO_HWM_ENABLED_OFFSET) != 0,
           EnumCodecs.autoHwmProfileFromValue(segment.get(ValueLayout.JAVA_INT,
@@ -48,24 +52,6 @@ public final class NativeMonitorStatuses {
             NativeLayouts.MONITOR_SNAPSHOT_AUTO_HWM_ROLE_OFFSET),
           segment.get(ValueLayout.JAVA_INT,
             NativeLayouts.MONITOR_SNAPSHOT_AUTO_HWM_POLICY_CLASS_OFFSET),
-          segment.get(ValueLayout.JAVA_LONG_UNALIGNED,
-            NativeLayouts.MONITOR_SNAPSHOT_AUTO_HWM_UNIT_BUDGET_BYTES_OFFSET),
-          segment.get(ValueLayout.JAVA_INT,
-            NativeLayouts.MONITOR_SNAPSHOT_AUTO_HWM_SIZE_CAP_OFFSET),
-          segment.get(ValueLayout.JAVA_LONG_UNALIGNED,
-            NativeLayouts.MONITOR_SNAPSHOT_AUTO_HWM_SOCKET_MESSAGE_SLOTS_OFFSET),
-          segment.get(ValueLayout.JAVA_INT,
-            NativeLayouts.MONITOR_SNAPSHOT_AUTO_HWM_CONNECTION_BUCKET_ENABLED_OFFSET) != 0,
-          segment.get(ValueLayout.JAVA_INT,
-            NativeLayouts.MONITOR_SNAPSHOT_AUTO_HWM_CONNECTION_BUCKET_COUNT_OFFSET),
-          segment.get(ValueLayout.JAVA_INT,
-            NativeLayouts.MONITOR_SNAPSHOT_AUTO_HWM_CONNECTION_BUCKET_INDEX_OFFSET),
-          segment.get(ValueLayout.JAVA_INT,
-            NativeLayouts.MONITOR_SNAPSHOT_AUTO_HWM_CONNECTION_BUCKET_HWM_4K_OFFSET),
-          segment.get(ValueLayout.JAVA_INT,
-            NativeLayouts.MONITOR_SNAPSHOT_AUTO_HWM_CONNECTION_BUCKET_HYSTERESIS_RETAINED_OFFSET) != 0,
-          segment.get(ValueLayout.JAVA_LONG_UNALIGNED,
-            NativeLayouts.MONITOR_SNAPSHOT_AUTO_HWM_EFFECTIVE_MESSAGE_BYTES_OFFSET),
           segment.get(ValueLayout.JAVA_LONG_UNALIGNED,
             NativeLayouts.MONITOR_SNAPSHOT_AUTO_HWM_PLANNED_SNDHWM_BYTES_OFFSET),
           segment.get(ValueLayout.JAVA_LONG_UNALIGNED,

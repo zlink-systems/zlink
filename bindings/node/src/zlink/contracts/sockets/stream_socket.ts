@@ -2,7 +2,7 @@
 
 import type { RoutingId } from '../core';
 import type { Received } from '../messaging';
-import type { SendOperation } from '../messaging';
+import type { RoutedSendOperation, SendOperation } from '../messaging';
 import type { StreamPacketHandler } from '../messaging';
 import type { RecvFlags } from './socket_constants';
 import type { StreamSocketOptions } from './socket_options';
@@ -15,10 +15,21 @@ import type { Socket } from './socket';
 export interface StreamSocket extends Socket {
   /** The STREAM-specific typed options facade. */
   readonly options: StreamSocketOptions;
-  /** Begin a send addressed to `routingId`; parts are consumed on a successful submit. */
-  send(routingId: RoutingId): SendOperation;
+  /**
+   * Begin an exact-target managed send. `submit()` resolves only after Core
+   * accepts the record for the selected `(RID, pairId, generation)`.
+   */
+  send(routingId: RoutingId): RoutedSendOperation;
+  /** Begin an explicit immediate DONTWAIT-capable send. */
+  trySend(routingId: RoutingId): SendOperation;
   /** Receive a message into `result`; false when `RecvFlags.DontWait` is set and none is available. */
   recv(result: Received, flags?: RecvFlags): boolean;
+  /**
+   * Receive into `result` for a Framework backend while retaining dequeued
+   * Core HWM credit. Successful reuse or `result.close()` returns the credit;
+   * a native finalizer is the fallback if the result becomes unreachable.
+   */
+  recvRetained(result: Received, flags?: RecvFlags): boolean;
   /**
    * Register the handler invoked for each inbound framed packet; the handler
    * owns the messages it receives (see {@link StreamPacketHandler}) and runs on

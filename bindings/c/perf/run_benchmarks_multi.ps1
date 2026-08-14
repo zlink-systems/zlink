@@ -35,8 +35,8 @@ param(
     [int]$ServerReadyTimeoutMs = 10000,
     [Alias("MultiConnectReadyTimeoutMs")]
     [int]$ConnectReadyTimeoutMs = 1000,
-    [Alias("MultiMonitorHwm")]
-    [int]$MonitorHwm = 4096000,
+    [Alias("MultiMonitorHwmBytes")]
+    [int]$MonitorHwmBytes = 4096000,
     [Alias("MultiServerShutdownTimeoutMs")]
     [int]$ServerShutdownTimeoutMs = 5000,
     [Alias("MultiServerBindPort")]
@@ -80,7 +80,7 @@ Options:
   -PatternTransitionMs N       Pattern transition cooldown(ms).
   -ServerReadyTimeoutMs N      Server READY wait timeout(ms).
   -ConnectReadyTimeoutMs N     Client/server connect-ready wait timeout(ms).
-  -MonitorHwm N                Monitor socket HWM (default: 4096000).
+  -MonitorHwmBytes N           Monitor socket HWM bytes (default: 4096000).
   -ServerShutdownTimeoutMs N   Server shutdown wait timeout(ms).
   -ServerBindPort N            Server bind port (0=auto).
 "@
@@ -96,7 +96,7 @@ $TransportTransitionExplicit = $PSBoundParameters.ContainsKey("TransportTransiti
 $PatternTransitionExplicit = $PSBoundParameters.ContainsKey("PatternTransitionMs")
 $ServerReadyExplicit = $PSBoundParameters.ContainsKey("ServerReadyTimeoutMs")
 $ConnectReadyExplicit = $PSBoundParameters.ContainsKey("ConnectReadyTimeoutMs")
-$MonitorHwmExplicit = $PSBoundParameters.ContainsKey("MonitorHwm")
+$MonitorHwmBytesExplicit = $PSBoundParameters.ContainsKey("MonitorHwmBytes")
 $ServerShutdownExplicit = $PSBoundParameters.ContainsKey("ServerShutdownTimeoutMs")
 $ServerBindPortExplicit = $PSBoundParameters.ContainsKey("ServerBindPort")
 
@@ -131,8 +131,8 @@ if (-not $ServerReadyExplicit) {
 if (-not $ConnectReadyExplicit) {
     $ConnectReadyTimeoutMs = [int](Get-EnvironmentDefault -Primary "PERF_MULTI_CONNECT_READY_TIMEOUT_MS" -Fallback "PERF_CONNECT_READY_TIMEOUT_MS" -Default "10000")
 }
-if (-not $MonitorHwmExplicit) {
-    $MonitorHwm = [int](Get-EnvironmentDefault -Primary "PERF_MULTI_MONITOR_HWM" -Fallback "PERF_MONITOR_HWM" -Default "4096000")
+if (-not $MonitorHwmBytesExplicit) {
+    $MonitorHwmBytes = [int](Get-EnvironmentDefault -Primary "PERF_MULTI_MONITOR_HWM_BYTES" -Fallback "PERF_MONITOR_HWM_BYTES" -Default "4096000")
 }
 if (-not $ServerShutdownExplicit) {
     $ServerShutdownTimeoutMs = [int](Get-EnvironmentDefault -Primary "PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS" -Fallback "PERF_SERVER_SHUTDOWN_TIMEOUT_MS" -Default "5000")
@@ -152,7 +152,7 @@ if ($TransportTransitionMs -lt 0) { throw "TransportTransitionMs must be >= 0." 
 if ($PatternTransitionMs -lt 0) { throw "PatternTransitionMs must be >= 0." }
 if ($ServerReadyTimeoutMs -lt 0) { throw "ServerReadyTimeoutMs must be >= 0." }
 if ($ConnectReadyTimeoutMs -lt 0) { throw "ConnectReadyTimeoutMs must be >= 0." }
-if ($MonitorHwm -lt 0) { throw "MonitorHwm must be >= 0." }
+if ($MonitorHwmBytes -lt 0) { throw "MonitorHwmBytes must be >= 0." }
 if ($ServerShutdownTimeoutMs -lt 0) { throw "ServerShutdownTimeoutMs must be >= 0." }
 if ($ServerBindPort -lt 0 -or $ServerBindPort -gt 65535) {
     throw "ServerBindPort must be in range 0..65535."
@@ -259,11 +259,11 @@ $RootDir = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir "..\..\.."))
 $CMakeSourceDir = Join-Path $RootDir "bindings\c"
 $OnWindows = $env:OS -eq "Windows_NT"
 $CoreSource = if ($env:ZLINK_CORE_SOURCE) { $env:ZLINK_CORE_SOURCE } else { "release" }
-$CoreVersion = if ($env:ZLINK_CORE_RELEASE_VERSION) {
-    $env:ZLINK_CORE_RELEASE_VERSION
-} else {
-    (Select-String -LiteralPath (Join-Path $RootDir "VERSION") -Pattern "^LIBZLINK_VERSION=(.+)$").Matches.Groups[1].Value
+$RepositoryVersion = (Select-String -LiteralPath (Join-Path $RootDir "VERSION") -Pattern "^LIBZLINK_VERSION=(.+)$").Matches.Groups[1].Value
+if ($env:ZLINK_CORE_RELEASE_VERSION -and $env:ZLINK_CORE_RELEASE_VERSION -ne $RepositoryVersion) {
+    throw "ZLINK_CORE_RELEASE_VERSION $($env:ZLINK_CORE_RELEASE_VERSION) must match repository VERSION $RepositoryVersion"
 }
+$CoreVersion = $RepositoryVersion
 $CorePackagePrefix = if ($env:ZLINK_CORE_PACKAGE_PREFIX) {
     [System.IO.Path]::GetFullPath($env:ZLINK_CORE_PACKAGE_PREFIX)
 } else {
@@ -626,7 +626,7 @@ $RunEnv["PERF_MULTI_TRANSPORT_TRANSITION_MS"] = $TransportTransitionMs.ToString(
 $RunEnv["PERF_MULTI_PATTERN_TRANSITION_MS"] = $PatternTransitionMs.ToString()
 $RunEnv["PERF_MULTI_SERVER_READY_TIMEOUT_MS"] = $ServerReadyTimeoutMs.ToString()
 $RunEnv["PERF_MULTI_CONNECT_READY_TIMEOUT_MS"] = $ConnectReadyTimeoutMs.ToString()
-$RunEnv["PERF_MULTI_MONITOR_HWM"] = $MonitorHwm.ToString()
+$RunEnv["PERF_MULTI_MONITOR_HWM_BYTES"] = $MonitorHwmBytes.ToString()
 $RunEnv["PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS"] = $ServerShutdownTimeoutMs.ToString()
 $RunEnv["PERF_MULTI_SERVER_BIND_PORT"] = $ServerBindPort.ToString()
 $RunEnv["PERF_MULTI_RUN_COOLDOWN_MS"] = $RunCooldownMs.ToString()

@@ -21,16 +21,21 @@ internal static partial class NativeMethods
         "zlink_close",
         "zlink_connect",
         "zlink_ctx_auto_hwm_recalculate",
+        "zlink_ctx_get_auto_hwm_budget_snapshot",
         "zlink_ctx_get",
         "zlink_ctx_new",
         "zlink_ctx_set",
         "zlink_ctx_set_data",
+        "zlink_ctx_reset_auto_hwm_budget_metrics",
         "zlink_ctx_get_data",
         "zlink_ctx_shutdown",
         "zlink_ctx_term",
         "zlink_dealer_recv_part",
+        "zlink_dealer_recv_part_with_hwm_budget_lease",
         "zlink_dealer_reply_part",
         "zlink_dealer_request_part",
+        "zlink_dealer_request_transport_pair_part",
+        "zlink_dealer_send_transport_pair_part",
         "zlink_disconnect",
         "zlink_disconnect_rid",
         "zlink_errno",
@@ -42,6 +47,7 @@ internal static partial class NativeMethods
         "zlink_get_stream_option",
         "zlink_get_sub_option",
         "zlink_has",
+        "zlink_hwm_budget_lease_release",
         "zlink_monitor_close",
         "zlink_monitor_status",
         "zlink_msg_close",
@@ -71,13 +77,17 @@ internal static partial class NativeMethods
         "zlink_publish_part",
         "zlink_recv_handler",
         "zlink_recv_part",
-        "zlink_router_completion_control_handler",
-        "zlink_router_completion_control_part",
+        "zlink_recv_part_with_hwm_budget_lease",
         "zlink_router_recv_part",
+        "zlink_router_recv_part_v2_with_hwm_budget_lease",
         "zlink_router_reply_part",
         "zlink_router_request_part",
+        "zlink_router_request_transport_pair_part",
+        "zlink_routed_send_ready_handler",
+        "zlink_select_routed_submit_target",
         "zlink_send_part",
         "zlink_send_part_rid",
+        "zlink_send_part_transport_pair",
         "zlink_send_ready_handler",
         "zlink_set_dealer_option",
         "zlink_set_option",
@@ -100,6 +110,7 @@ internal static partial class NativeMethods
         "zlink_stream_packet_handler",
         "zlink_strerror",
         "zlink_subscribe_part",
+        "zlink_subscribe_part_with_hwm_budget_lease",
         "zlink_subscription_at",
         "zlink_timer_destroy",
         "zlink_timer_handler",
@@ -150,6 +161,14 @@ internal static partial class NativeMethods
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int zlink_ctx_auto_hwm_recalculate(IntPtr context);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int zlink_ctx_get_auto_hwm_budget_snapshot(
+        IntPtr context, ref ZlinkAutoHwmBudgetSnapshot snapshot);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int zlink_ctx_reset_auto_hwm_budget_metrics(
+        IntPtr context);
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int zlink_close(IntPtr socket);
@@ -227,6 +246,12 @@ internal static partial class NativeMethods
     internal static partial int zlink_dealer_recv_part(IntPtr dealer,
         out byte messageType, out ulong requestSeq, ref ZlinkMsg part,
         out ZlinkPartFlag hasMore, int flags);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int zlink_dealer_recv_part_with_hwm_budget_lease(
+        IntPtr dealer, out byte messageType, out ulong requestSeq,
+        ref ZlinkMsg part, out IntPtr lease, out ZlinkPartFlag hasMore,
+        int flags);
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int zlink_dealer_reply_part(IntPtr dealer,

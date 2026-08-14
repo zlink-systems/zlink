@@ -11,28 +11,31 @@ extern void goZlinkReplyTrampoline(zlink_request_result_t result_, zlink_msg_t *
 */
 import "C"
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type routedSocket struct {
 	*connectionSocket
 }
 
-func (s *routedSocket) OnSendReady(handler func()) error {
-	return s.setSendReady(handler)
-}
-
 func (s *routedSocket) submitTo(target RoutingID, flags SendFlags, parts ...*Message) (bool, error) {
 	rid := target.toC()
-	err := submitMultipartFromClones(parts, true, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-		return submitErrorFromResult(C.zlink_send_part_rid(s.raw(), &rid, part, C.zlink_send_flags_t(flags), partFlag))
+	err := s.routedAdmission.withAttemptGate(func() error {
+		return submitMultipartFromClones(parts, true, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
+			return submitErrorFromResult(C.zlink_send_part_rid(s.raw(), &rid, part, C.zlink_send_flags_t(flags), partFlag))
+		})
 	})
 	return submitBackpressureResult(err)
 }
 
 func (s *routedSocket) submitToBuilder(target RoutingID, flags SendFlags, parts []sendBuilderPart) (bool, error) {
 	rid := target.toC()
-	err := submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-		return submitErrorFromResult(C.zlink_send_part_rid(s.raw(), &rid, part, C.zlink_send_flags_t(flags), partFlag))
+	err := s.routedAdmission.withAttemptGate(func() error {
+		return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
+			return submitErrorFromResult(C.zlink_send_part_rid(s.raw(), &rid, part, C.zlink_send_flags_t(flags), partFlag))
+		})
 	})
 	return submitBackpressureResult(err)
 }
@@ -42,8 +45,10 @@ func (s *routedSocket) reply(rid RoutingID, requestSeq uint64, flags SendFlags, 
 		return err
 	}
 	target := rid.toC()
-	return submitMultipartFromClones(parts, true, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-		return submitErrorFromResult(C.zlink_router_reply_part(s.raw(), &target, C.uint64_t(requestSeq), part, partFlag))
+	return s.routedAdmission.withAttemptGate(func() error {
+		return submitMultipartFromClones(parts, true, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
+			return submitErrorFromResult(C.zlink_router_reply_part(s.raw(), &target, C.uint64_t(requestSeq), part, partFlag))
+		})
 	})
 }
 
@@ -65,8 +70,44 @@ func (s *routedSocket) recvInto(out *Received, flags RecvFlags) error {
 		return err
 	}
 
-	routingID := routingIDFromCPtr(sourceRID)
-	seq := uint64(requestSeq)
+	s.replaceRoutedReceived(out, routingIDFromCPtr(sourceRID), parts, uint64(requestSeq), nil)
+	return nil
+}
+
+func (s *routedSocket) recvRetainedInto(out *Received, flags RecvFlags) error {
+	reuse := out.beginReceive()
+	var sourceRID *C.zlink_routing_id_t
+	var requestSeq C.uint64_t
+	var transportPairID C.uint64_t
+	var transportPairGeneration C.uint64_t
+	parts, retainedCredit, err := recvMultipartRetained(reuse, flags, func(part *C.zlink_msg_t, lease **C.zlink_hwm_budget_lease_t, hasMore *C.zlink_part_flag_t, recvFlags C.zlink_recv_flags_t) error {
+		return recvErrorFromResult(C.zlink_router_recv_part_v2_with_hwm_budget_lease(
+			s.raw(),
+			&sourceRID,
+			&requestSeq,
+			&transportPairID,
+			&transportPairGeneration,
+			part,
+			lease,
+			hasMore,
+			recvFlags,
+		))
+	})
+	if err != nil {
+		return err
+	}
+
+	s.replaceRoutedReceived(out, routingIDFromCPtr(sourceRID), parts, uint64(requestSeq), retainedCredit)
+	return nil
+}
+
+func (s *routedSocket) replaceRoutedReceived(
+	out *Received,
+	routingID RoutingID,
+	parts []*Message,
+	seq uint64,
+	retainedCredit *hwmBudgetLeaseOwner,
+) {
 	hasSeq := seq != 0
 	var reply func(SendFlags, []*Message) error
 	if hasSeq {
@@ -78,8 +119,7 @@ func (s *routedSocket) recvInto(out *Received, flags RecvFlags) error {
 			return s.submitToBuilder(routingID, sendFlags, builderParts)
 		}
 	}
-	out.replace(routingID, parts, seq, hasSeq, reply, send)
-	return nil
+	out.replace(routingID, parts, seq, hasSeq, reply, send, retainedCredit)
 }
 
 func (s *routedSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
@@ -97,36 +137,32 @@ func (s *routedSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 	}
 	return true, nil
 }
-func (s *RouterSocket) SendTo(target RoutingID) SendOp {
-	return newSendBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
-		rid := target.toC()
-		return submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-			return submitErrorFromResult(C.zlink_send_part_rid(
-				s.raw(),
-				&rid,
-				part,
-				C.zlink_send_flags_t(flags),
-				partFlag,
-			))
-		})
+
+// RecvRetained is the explicit Framework-backend routed receive boundary.
+func (s *routedSocket) RecvRetained(out *Received, flags RecvFlags) (bool, error) {
+	if out == nil {
+		return false, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
+	if s.connectionSocket.hasReceiveHandler() {
+		return false, &RecvError{Result: RecvBusy, nativeErrno: int(C.EBUSY)}
+	}
+	if err := s.recvRetainedInto(out, flags); err != nil {
+		if isNoData(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+func (s *RouterSocket) SendTo(target RoutingID) RoutedSendOp {
+	return newRoutedSendBuilder(func(ctx context.Context, parts []sendBuilderPart) <-chan error {
+		return submitRoutedSend(ctx, s.routedAdmission, &target, parts)
 	})
 }
 
 func (s *RouterSocket) Request(peerRID RoutingID) RequestOp {
-	return newRequestBuilder(func(
-		parts []requestBuilderPart,
-		flags SendFlags,
-		timeout time.Duration,
-		callback RequestReplyCallback,
-	) error {
-		if callback == nil {
-			return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
-		}
-		_, err := startRouterRequest(s, peerRID, flags, timeout, parts, callback)
-		if err != nil {
-			return err
-		}
-		return nil
+	return newRequestBuilder(func(ctx context.Context, parts []requestBuilderPart, timeout time.Duration) <-chan RequestReplyCompletion {
+		return submitRoutedRequest(ctx, s.routedAdmission, &peerRID, timeout, parts)
 	})
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 impl crate::internal::SocketStorage {
     pub(crate) fn create(
         ctx: &crate::core_context::Context,
@@ -11,9 +12,45 @@ impl crate::internal::SocketStorage {
                 last_errno(),
             ));
         }
+        let routed_role = match typ {
+            ffi::zlink_socket_type_t::ZLINK_SOCKET_DEALER => {
+                Some(crate::internal::RoutedRole::Dealer)
+            }
+            ffi::zlink_socket_type_t::ZLINK_SOCKET_ROUTER => {
+                Some(crate::internal::RoutedRole::Router)
+            }
+            _ => None,
+        };
+        let (routed_admission, routed_ready_cb) = if let Some(role) = routed_role {
+            let admission = crate::internal::RoutedAdmission::new(handle, role);
+            let (callback, userdata) = CallbackBox::new(Arc::clone(&admission));
+            let rc = unsafe {
+                ffi::zlink_routed_send_ready_handler(
+                    handle,
+                    crate::internal::routed_ready_trampoline,
+                    userdata,
+                )
+            };
+            if rc != 0 {
+                let errno = last_errno();
+                drop(callback);
+                unsafe {
+                    ffi::zlink_close(handle);
+                }
+                return Err(ConfigError::new(
+                    crate::error::ConfigResult::InternalError,
+                    errno,
+                ));
+            }
+            (Some(admission), Some(callback))
+        } else {
+            (None, None)
+        };
         Ok(Self {
             handle,
             send_ready_cb: None,
+            routed_ready_cb,
+            routed_admission,
             packet_cb: None,
         })
     }
@@ -61,10 +98,44 @@ impl crate::internal::SocketStorage {
     /// finds no data, and `Err(_)` on hard error. See
     /// `doc/spec/bindings/README.md` for the caller-provided receive shape.
     pub(crate) fn recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
+        out.begin_receive();
         let routing_id = recv_basic_parts(self.handle, flags.bits(), out.receive_scratch())?;
         match routing_id {
             Some(routing_id) => {
                 out.replace_received_parts(routing_id);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) fn recv_retained(
+        &self,
+        out: &mut Received,
+        flags: RecvFlags,
+    ) -> Result<bool, RecvError> {
+        out.begin_receive();
+        let received =
+            recv_retained_parts(self.handle, flags.bits(), out.receive_scratch(), false)?;
+        match received {
+            Some((routing_id, request_seq, leases)) => {
+                out.replace_retained_parts(routing_id, request_seq, leases);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) fn recv_dealer_retained(
+        &self,
+        out: &mut Received,
+        flags: RecvFlags,
+    ) -> Result<bool, RecvError> {
+        out.begin_receive();
+        let received = recv_retained_parts(self.handle, flags.bits(), out.receive_scratch(), true)?;
+        match received {
+            Some((routing_id, request_seq, leases)) => {
+                out.replace_retained_parts(routing_id, request_seq, leases);
                 Ok(true)
             }
             None => Ok(false),
@@ -78,6 +149,7 @@ impl crate::internal::SocketStorage {
         out: &mut TopicMessage,
         flags: RecvFlags,
     ) -> Result<bool, RecvError> {
+        out.begin_receive();
         let mut topic_buf = [0i8; 256];
         let received = recv_subscribed_parts(
             self.handle,
@@ -88,6 +160,28 @@ impl crate::internal::SocketStorage {
         match received {
             Some((routing_id, topic)) => {
                 out.replace_received_parts(routing_id, topic);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) fn subscribe_recv_retained(
+        &self,
+        out: &mut TopicMessage,
+        flags: RecvFlags,
+    ) -> Result<bool, RecvError> {
+        out.begin_receive();
+        let mut topic_buf = [0i8; 256];
+        let received = recv_retained_subscribed_parts(
+            self.handle,
+            &mut topic_buf,
+            flags.bits(),
+            out.receive_scratch(),
+        )?;
+        match received {
+            Some((routing_id, topic, leases)) => {
+                out.replace_retained_parts(routing_id, topic, leases);
                 Ok(true)
             }
             None => Ok(false),
@@ -549,20 +643,42 @@ impl crate::internal::SocketStorage {
         if self.handle.is_null() {
             return Ok(());
         }
-        for callback in self.send_ready_cb.iter().chain(self.packet_cb.iter()) {
+        for callback in self
+            .send_ready_cb
+            .iter()
+            .chain(self.routed_ready_cb.iter())
+            .chain(self.packet_cb.iter())
+        {
             callback.set_closing(true);
         }
-        if let Err(error) = check_close_rc(unsafe { ffi::zlink_close(self.handle) }) {
-            for callback in self.send_ready_cb.iter().chain(self.packet_cb.iter()) {
+        let close_rc = if let Some(admission) = &self.routed_admission {
+            admission.close_native(false)
+        } else {
+            unsafe { ffi::zlink_close(self.handle) }
+        };
+        if let Err(error) = check_close_rc(close_rc) {
+            for callback in self
+                .send_ready_cb
+                .iter()
+                .chain(self.routed_ready_cb.iter())
+                .chain(self.packet_cb.iter())
+            {
                 callback.set_closing(false);
             }
             return Err(error);
         }
+        if let Some(admission) = &self.routed_admission {
+            admission.notify_closed(libc::ECANCELED);
+        }
         self.handle = ptr::null_mut();
-        let callbacks = [self.send_ready_cb.take(), self.packet_cb.take()]
-            .into_iter()
-            .flatten()
-            .collect();
+        let callbacks = [
+            self.send_ready_cb.take(),
+            self.routed_ready_cb.take(),
+            self.packet_cb.take(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         crate::internal::release_callbacks(callbacks);
         Ok(())
     }
@@ -873,14 +989,30 @@ impl Drop for crate::internal::SocketStorage {
         if self.handle.is_null() {
             return;
         }
-        for callback in self.send_ready_cb.iter().chain(self.packet_cb.iter()) {
+        for callback in self
+            .send_ready_cb
+            .iter()
+            .chain(self.routed_ready_cb.iter())
+            .chain(self.packet_cb.iter())
+        {
             callback.set_closing(true);
         }
-        let callbacks = [self.send_ready_cb.take(), self.packet_cb.take()]
-            .into_iter()
-            .flatten()
-            .collect();
-        let rc = unsafe { ffi::zlink_close(self.handle) };
+        let callbacks = [
+            self.send_ready_cb.take(),
+            self.routed_ready_cb.take(),
+            self.packet_cb.take(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let rc = if let Some(admission) = &self.routed_admission {
+            admission.close_native(true)
+        } else {
+            unsafe { ffi::zlink_close(self.handle) }
+        };
+        if let Some(admission) = &self.routed_admission {
+            admission.notify_closed(libc::ECANCELED);
+        }
         if rc == 0 {
             crate::internal::release_callbacks(callbacks);
         } else {

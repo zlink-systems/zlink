@@ -290,8 +290,6 @@ inline bool run_server_loop (void *ctx,
                     return false;
                 }
                 if (new_size) {
-                    if (!apply_benchmark_context_auto_hwm_msg_unit (ctx, current_phase_msg_size))
-                        return false;
                     apply_benchmark_hwm (server, settings.hwm);
                     if (zlink_ctx_auto_hwm_recalculate (ctx) != ZLINK_CONFIG_OK) {
                         if (bench_debug_enabled ()) {

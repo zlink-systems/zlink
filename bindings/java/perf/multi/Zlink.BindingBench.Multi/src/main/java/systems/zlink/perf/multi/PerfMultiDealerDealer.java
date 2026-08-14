@@ -9,7 +9,6 @@ import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.messaging.Received;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
@@ -270,8 +269,8 @@ final class PerfMultiDealerDealer {
         Message payload = PerfUtil.payload(size, (byte) PerfUtil.PHASE_ACTIVE,
             System.nanoTime());
         try (payload) {
-            return socket.send().message(payload)
-                .flags(SendFlags.DONT_WAIT).submit();
+            PerfUtil.awaitStage(socket.send().message(payload).submit());
+            return true;
         } catch (ZlinkSubmitException ex) {
             if (isTransient(ex)) {
                 return false;
@@ -293,9 +292,8 @@ final class PerfMultiDealerDealer {
         // the peer stopped draining its queue.
         while (true) {
             try (Message stop = PerfStopToken.newMessage()) {
-                if (socket.send().message(stop).flags(SendFlags.NONE).submit()) {
-                    return;
-                }
+                PerfUtil.awaitStage(socket.send().message(stop).submit());
+                return;
             } catch (ZlinkSubmitException ex) {
                 if (!isTransient(ex)) {
                     throw ex;

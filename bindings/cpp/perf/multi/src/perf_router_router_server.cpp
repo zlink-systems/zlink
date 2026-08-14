@@ -70,16 +70,16 @@ void debug_log (const std::string &message_)
 
 } // namespace
 
-bool perf_router_router_server (const std::string &lib_name,
-                                const std::string &transport,
-                                size_t msg_size)
+perf::async_task_t<bool> perf_router_router_server (const std::string &lib_name,
+                                                    const std::string &transport,
+                                                    size_t msg_size)
 {
     perf::multi::set_perf_pattern_env ("ROUTER_ROUTER_SENDSEND");
 
     if (!perf::multi::is_supported_transport (transport)) {
         std::cout << "UNSUPPORTED," << lib_name << ",MULTI_ROUTER_ROUTER_SENDSEND," << transport
                   << std::endl;
-        return true;
+        co_return true;
     }
 
     const perf::multi::multi_bench_settings_t settings =
@@ -91,22 +91,20 @@ bool perf_router_router_server (const std::string &lib_name,
     // send/recv (cpp.md round 21).
     zlink::router_socket_t server (ctx.ctx ());
     if (!server.valid ())
-        return false;
+        co_return false;
 
     server.set_routing_id (
       zlink::routing_id_t::from (reinterpret_cast<const uint8_t *> ("SERVER"), 6));
     perf::multi::apply_benchmark_socket_options (server, settings, transport);
-    if (!perf::multi::apply_benchmark_auto_hwm_msg_unit (ctx, msg_size))
-        return false;
     if (!perf::multi::setup_tls_server (server, transport))
-        return false;
+        co_return false;
 
     const std::string endpoint = perf::multi::bind_and_resolve_endpoint (
       server, transport, "cpp_multi_router_router", settings.server_bind_port);
     if (endpoint.empty ())
-        return false;
+        co_return false;
     if (!perf::multi::recalculate_auto_hwm (ctx))
-        return false;
+        co_return false;
     perf::multi::emit_auto_hwm_detail (server, "server", "server", transport, msg_size, "router");
 
     g_stop_requested.store (false, std::memory_order_release);
@@ -116,59 +114,12 @@ bool perf_router_router_server (const std::string &lib_name,
 
     perf::multi::print_ready (endpoint);
 
-    struct pending_reply_t
-    {
-        zlink::routing_id_t rid;
-        zlink::message_t payload;
-    };
-
     bool failed = false;
-    std::deque<pending_reply_t> pending_replies;
     zlink::poller_t poller;
     poller.add (server, zlink::poll_event_flag_t::pollin, 0);
     std::vector<zlink::poll_event_t> events (1);
 
-    auto send_payload = [&] (const zlink::routing_id_t &rid, zlink::message_t &payload) -> int {
-        try {
-            const bool sent = std::move (server.send (rid))
-                                .message (payload)
-                                .flags (zlink::send_flags_t::dontwait)
-                                .submit ();
-            return sent ? 1 : 0;
-        }
-        catch (const zlink::submit_error_t &err) {
-            const int err_no = err.internal_errno ();
-            if (err_no == EAGAIN || err_no == EWOULDBLOCK || err_no == EINTR
-                || err_no == EHOSTUNREACH || err_no == ENOTCONN) {
-                return 0;
-            }
-            errno = err_no;
-            debug_log ("send failed errno=" + std::to_string (err_no));
-            return -1;
-        }
-    };
-
-    auto flush_pending = [&] () -> bool {
-        while (!pending_replies.empty ()) {
-            pending_reply_t &front = pending_replies.front ();
-            const int rc = send_payload (front.rid, front.payload);
-            if (rc > 0) {
-                pending_replies.pop_front ();
-                continue;
-            }
-            if (rc == 0)
-                return true;
-            return false;
-        }
-        return true;
-    };
-
     while (!g_stop_requested.load (std::memory_order_acquire)) {
-        zlink::poll_event_flag_t poll_interest = zlink::poll_event_flag_t::pollin;
-        if (!pending_replies.empty ())
-            poll_interest = poll_interest | zlink::poll_event_flag_t::pollout;
-        poller.modify (server, poll_interest);
-
         const size_t poll_rc =
           poller.wait (events.data (), events.size (), std::chrono::milliseconds (-1));
         if (poll_rc == 0)
@@ -177,16 +128,6 @@ bool perf_router_router_server (const std::string &lib_name,
         const short revents = static_cast<short> (events[0].revents);
         const bool readable =
           (revents & static_cast<short> (zlink::poll_event_flag_t::pollin)) != 0;
-        const bool writable =
-          (revents & static_cast<short> (zlink::poll_event_flag_t::pollout)) != 0;
-
-        if (writable && !pending_replies.empty ()) {
-            if (!flush_pending ()) {
-                failed = true;
-                break;
-            }
-        }
-
         if (!readable)
             continue;
 
@@ -217,29 +158,27 @@ bool perf_router_router_server (const std::string &lib_name,
                 continue;
             }
 
-            if (!pending_replies.empty ()) {
-                pending_replies.push_back (
-                  pending_reply_t{*received.routing_id (), std::move (part)});
-                continue;
-            }
-
             const zlink::routing_id_t source_node_rid = *received.routing_id ();
-            const int send_rc = send_payload (source_node_rid, part);
-            if (send_rc > 0)
-                continue;
-            if (send_rc == 0) {
-                pending_replies.push_back (pending_reply_t{source_node_rid, std::move (part)});
-                continue;
+            try {
+                co_await std::move (server.send (source_node_rid)).message (part).async ();
             }
-            debug_log ("send failed errno=" + std::to_string (errno));
-            failed = true;
-            break;
+            catch (const zlink::submit_error_t &err) {
+                const int err_no = err.internal_errno ();
+                if (err_no == EAGAIN || err_no == EWOULDBLOCK || err_no == EINTR
+                    || err_no == EHOSTUNREACH || err_no == ENOTCONN) {
+                    continue;
+                }
+                errno = err_no;
+                debug_log ("send failed errno=" + std::to_string (err_no));
+                failed = true;
+                break;
+            }
         }
         if (failed)
             break;
     }
 
-    return !failed;
+    co_return !failed;
 }
 
 int main (int argc, char **argv)
@@ -255,5 +194,5 @@ int main (int argc, char **argv)
     if (size == 0)
         return 1;
 
-    return perf_router_router_server (lib_name, transport, size) ? 0 : 1;
+    return perf_router_router_server (lib_name, transport, size).get () ? 0 : 1;
 }

@@ -8,13 +8,12 @@ function identity<T>(value: T): T {
   return value;
 }
 
-export class SendOperationBase<TInput, TStored = TInput> {
+export class PartOperationBase<TInput, TStored = TInput> {
   private readonly _normalize: (value: TInput) => TStored;
   private _single!: TStored;
   private _hasSingle = false;
   private _parts: TStored[] | null = null;
   private _submitted = false;
-  protected _flags: SendFlags = SendFlags.None;
 
   constructor(normalize: (value: TInput) => TStored = identity as (value: TInput) => TStored) {
     this._normalize = normalize;
@@ -36,12 +35,6 @@ export class SendOperationBase<TInput, TStored = TInput> {
     return this;
   }
 
-  flags(flags: SendFlags): this {
-    this.ensureOpen();
-    this._flags = flags;
-    return this;
-  }
-
   protected ensureOpen(): void {
     if (this._submitted) {
       throw new TypeError('operation has already been submitted');
@@ -60,5 +53,17 @@ export class SendOperationBase<TInput, TStored = TInput> {
   protected consumeParts(): readonly TStored[] {
     const value = this.consumePayload();
     return Array.isArray(value) ? value as readonly TStored[] : [value as TStored];
+  }
+}
+
+/** Builder base for the immediate data-plane operations that still accept flags. */
+export class SendOperationBase<TInput, TStored = TInput>
+  extends PartOperationBase<TInput, TStored> {
+  protected _flags: SendFlags = SendFlags.None;
+
+  flags(flags: SendFlags): this {
+    this.ensureOpen();
+    this._flags = flags;
+    return this;
   }
 }

@@ -1,8 +1,10 @@
+import asyncio
+
 import zlink
 from sample_support import tcp_endpoint, wait_connected
 
 
-def main():
+async def main():
 # --8<-- [start:doc]
     _, endpoint = tcp_endpoint()
 
@@ -16,7 +18,7 @@ def main():
                         dealer.connect(endpoint)
                         wait_connected(router_monitor, dealer_monitor)
 
-                dealer.send().message(b"ping").submit()
+                await dealer.send().message(b"ping").submit()
                 request = zlink.create_received()
                 if not router.recv_into(request):
                     raise AssertionError("expected dealer-router request")
@@ -38,4 +40,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

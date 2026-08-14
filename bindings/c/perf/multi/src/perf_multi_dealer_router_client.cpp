@@ -81,7 +81,7 @@ inline int run_client_benchmark (const std::string &lib_name,
             return 1;
         }
         close_client_monitors (&monitors);
-        refresh_connected_client_auto_hwm (ctx.get (), sockets, k_client_socket_type, settings.hwm,
+        refresh_connected_client_auto_hwm (sockets, k_client_socket_type, settings.hwm,
                                            transport, msg_size);
 
         double throughput = 0.0;

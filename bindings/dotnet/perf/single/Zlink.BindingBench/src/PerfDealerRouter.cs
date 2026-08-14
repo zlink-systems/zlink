@@ -37,7 +37,7 @@ internal static class PerfDealerRouter
         return ok;
     }
 
-    internal static int RunDealerRouter(string transport, int size)
+    internal static async Task<int> RunDealerRouter(string transport, int size)
     {
         int durationSeconds = ResolveSingleDurationSeconds();
         int recvTimeoutMs = ResolveSingleRcvTimeoutMs();
@@ -48,7 +48,6 @@ internal static class PerfDealerRouter
         ApplySingleContextOptions(ctx);
         using var receiver = ctx.CreateRouterSocket();
         using var sender = ctx.CreateDealerSocket();
-        ApplySingleAutoHwmMsgUnit(ctx, size);
         RecalculateSingleAutoHwm(ctx);
         ConfigureTlsServerIfNeeded(receiver, transport);
         ConfigureTlsClientIfNeeded(sender, transport);
@@ -101,17 +100,19 @@ internal static class PerfDealerRouter
             var payload = new byte[payloadSize];
             Array.Fill(payload, (byte)'a');
 
-            if (!RunActivePhase(sender, receiver, payload, size, durationSeconds,
-                    recvTimeoutMs, latencySampleCap, out long received,
-                    out var latencySamples))
+            var active = await RunActivePhaseAsync(sender, receiver, payload,
+                size, durationSeconds, recvTimeoutMs, latencySampleCap)
+                .ConfigureAwait(false);
+            if (!active.Ok)
             {
                 DebugLog("single_dealer_router_error:active_failed");
                 TryCleanup(sender, receiver, endpoint);
                 return 2;
             }
 
-            double throughput = received / (double)Math.Max(durationSeconds, 1);
-            var latency = ComputeLatencyStats(latencySamples);
+            double throughput = active.Received
+                / (double)Math.Max(durationSeconds, 1);
+            var latency = ComputeLatencyStats(active.LatencySamples);
             PrintResult("DEALER_ROUTER", transport, size, throughput,
                 latency.mean, latency.p95, latency.p99);
             TryCleanup(sender, receiver, endpoint);
@@ -130,9 +131,11 @@ internal static class PerfDealerRouter
         }
     }
 
-    private static bool RunActivePhase(IDealerSocket sender, IRouterSocket receiver,
+    private static async Task<(bool Ok, long Received,
+        List<double> LatencySamples)> RunActivePhaseAsync(IDealerSocket sender,
+        IRouterSocket receiver,
         byte[] payload, int msgSize, int durationSeconds, int recvTimeoutMs,
-        int latencyCap, out long receivedOut, out List<double> latencySamples)
+        int latencyCap)
     {
         _ = recvTimeoutMs;
         long received = 0;
@@ -145,8 +148,8 @@ internal static class PerfDealerRouter
 
         // PERF_SINGLE_TEST_POLICY § 1.4 / C parity: active phase ends only
         // when the receiver observes the wire-level stop token. Active sends
-        // use blocking send with transient backpressure retry until the
-        // deadline; no binding-local in-flight cap is applied. ROUTER recv is
+        // await routed admission until the deadline; no binding-local
+        // in-flight cap is applied. ROUTER recv is
         // multi-part ([routing-id..., payload]); the payload is the last part
         // (TryGetPayloadPart). Latency stays recv_now_ns - sent_ts_ns.
         bool ProcessBody(ReadOnlySpan<byte> body)
@@ -173,7 +176,7 @@ internal static class PerfDealerRouter
         poller.Add(receiver, PollEventFlags.PollIn, 0);
         using var maybe = Received.Create();
 
-        var senderThread = new Thread(() =>
+        async Task SendLoopAsync()
         {
             try
             {
@@ -196,7 +199,8 @@ internal static class PerfDealerRouter
                     seq++;
                     try
                     {
-                        if (PerfSocketIo.Send(sender, payload, SendFlags.None) <= 0)
+                        if (await PerfSocketIo.SendAsync(sender, payload,
+                                SendFlags.None).ConfigureAwait(false) <= 0)
                             continue;
                     }
                     catch (ZlinkException ex)
@@ -217,11 +221,12 @@ internal static class PerfDealerRouter
             }
             finally
             {
-                SendStopTokenBlocking(sender, "[single-dealer-router]");
+                _ = await SendStopTokenAsync(sender,
+                    "[single-dealer-router]").ConfigureAwait(false);
             }
-        });
-        senderThread.IsBackground = true;
-        senderThread.Start();
+        }
+
+        Task senderTask = SendLoopAsync();
 
         try
         {
@@ -248,17 +253,15 @@ internal static class PerfDealerRouter
             sendError ??= ex;
         }
 
-        senderThread.Join();
+        await senderTask.ConfigureAwait(false);
 
-        latencySamples = samples;
-        receivedOut = received;
         if (sendError != null)
         {
             DebugLog("single_dealer_router_error:active_failed");
-            return false;
+            return (false, received, samples);
         }
 
-        return received > 0 && latencySamples.Count > 0;
+        return (received > 0 && samples.Count > 0, received, samples);
     }
 
     private static bool TryReceive(IRouterSocket receiver, Received result)

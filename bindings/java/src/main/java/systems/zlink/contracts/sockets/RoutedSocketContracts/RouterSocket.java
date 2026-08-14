@@ -2,13 +2,11 @@
 
 package systems.zlink.contracts.sockets;
 
-import java.util.List;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.ReplyOperation;
 import systems.zlink.contracts.messaging.RequestOperation;
-import systems.zlink.contracts.messaging.SendOperation;
+import systems.zlink.contracts.messaging.RoutedSendOperation;
 
 /** Routes messages to peers addressed by routing id; the request/reply server side. */
 public interface RouterSocket extends Socket {
@@ -25,8 +23,13 @@ public interface RouterSocket extends Socket {
                                  long transportPairGeneration);
     void setRoutingId(RoutingId rid);
     RoutingId getRoutingId();
-    SendOperation send(RoutingId rid);
+    RoutedSendOperation send(RoutingId rid);
     boolean recv(Received result, RecvFlags flags);
+    /**
+     * Receives for a Framework backend and retains each physical part's
+     * origin Core HWM credit until {@code result} is closed or reused.
+     */
+    boolean recvRetained(Received result, RecvFlags flags);
     RequestOperation request(RoutingId rid);
     /**
      * Creates a request operation pinned to the specified physical transport
@@ -37,12 +40,5 @@ public interface RouterSocket extends Socket {
                              long transportPairId,
                              long transportPairGeneration);
     ReplyOperation reply(RoutingId rid, long requestSequence);
-    /**
-     * Tries to submit an opaque record on the peer's existing Completion
-     * connection. Input messages are not consumed; false means back-pressure.
-     */
-    boolean trySendCompletionControl(RoutingId peerRid, List<Message> parts);
-    /** Installs or replaces the opaque Completion control callback. */
-    void setCompletionControlHandler(CompletionControlHandler handler);
     @Override RouterSocketOptions options();
 }

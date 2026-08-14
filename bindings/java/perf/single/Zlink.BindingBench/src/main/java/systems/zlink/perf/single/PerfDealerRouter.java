@@ -9,7 +9,6 @@ import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.RouterSocket;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
@@ -120,10 +119,10 @@ final class PerfDealerRouter {
                     // ROUTER receiver always observes the terminator.
                     PerfStopToken.sendWithRetry(() -> {
                         try (Message stop = PerfStopToken.newMessage()) {
-                            return sender.send()
+                            PerfUtil.awaitStage(sender.send()
                                 .message(stop)
-                                .flags(SendFlags.NONE)
-                                .submit();
+                                .submit());
+                            return true;
                         }
                     }, "dealer/router");
                 } catch (Throwable ex) {
@@ -151,10 +150,10 @@ final class PerfDealerRouter {
 
     private static boolean trySendBlocking(DealerSocket sender, Message active) {
         try {
-            return sender.send()
+            PerfUtil.awaitStage(sender.send()
                 .message(active)
-                .flags(SendFlags.NONE)
-                .submit();
+                .submit());
+            return true;
         } catch (systems.zlink.contracts.errors.ZlinkSubmitException ex) {
             if (ex.getResult()
                 == systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED) {

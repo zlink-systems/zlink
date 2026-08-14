@@ -6,6 +6,7 @@
 #include "message.hpp"
 
 #include <optional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -16,6 +17,7 @@ namespace zlink
 namespace detail
 {
 struct topic_message_access_t;
+class hwm_budget_lease_set_t;
 }
 
 /// @brief A received publish: its topic and message parts.
@@ -23,6 +25,11 @@ class topic_message_t
 {
   public:
     topic_message_t () = default;
+    ~topic_message_t ();
+    topic_message_t (const topic_message_t &) = default;
+    topic_message_t &operator= (const topic_message_t &) = default;
+    topic_message_t (topic_message_t &&) noexcept = default;
+    topic_message_t &operator= (topic_message_t &&) noexcept = default;
 
     topic_message_t (std::optional<routing_id_t> routing_id_,
                      std::string topic_,
@@ -58,6 +65,7 @@ class topic_message_t
     std::optional<routing_id_t> _routing_id;
     std::string _topic;
     detail::lazy_message_parts_t _parts;
+    std::shared_ptr<detail::hwm_budget_lease_set_t> _hwm_budget_leases;
     friend struct detail::topic_message_access_t;
 };
 

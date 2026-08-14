@@ -44,7 +44,7 @@ class SubmitResult(IntEnum):
     NOT_ADMITTED = 13
 
 class RequestResult(IntEnum):
-    """The outcome of a request, as delivered to a request callback."""
+    """The outcome of a routed request completion."""
     OK = 0
     TIMED_OUT = 101
     NOT_FOUND = 102

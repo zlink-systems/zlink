@@ -156,7 +156,7 @@ internal static partial class PerfRunner
         ctx.Options.Blocky = PerfEnv.ReadBool("PERF_CTX_BLOCKY", false);
         ctx.Options.AutoHwmEnabled =
             PerfEnv.ReadNonNegative("PERF_CTX_AUTO_HWM_ENABLE", 1) != 0;
-        ctx.Options.AutoHwmProfile = ResolveContextAutoHwmProfile();
+        ctx.Options.CoreHwmProfile = ResolveContextAutoHwmProfile();
     }
 
     internal static void ApplyMultiClientContextOptions(IContext ctx,
@@ -187,19 +187,6 @@ internal static partial class PerfRunner
         }
         socket.Options.SendTimeout = TimeSpan.FromMilliseconds(sndTimeo);
         socket.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(rcvTimeo);
-    }
-
-    internal static void ApplyAutoHwmMsgUnit(IContext ctx, int msgSize)
-    {
-        if (msgSize <= 0)
-            return;
-        try
-        {
-            ctx.Options.AutoHwmMessageUnitBytes = (ulong)msgSize;
-        }
-        catch (ZlinkException)
-        {
-        }
     }
 
     internal static void RecalculateAutoHwm(IContext ctx)
@@ -274,12 +261,8 @@ internal static partial class PerfRunner
             + $",profile_id={fields.Profile}"
             + $",policy_class={AutoHwmPolicyClassName(fields.PolicyClass)}"
             + $",policy_class_id={fields.PolicyClass}"
-            + $",unit_budget_bytes={fields.UnitBudgetBytes}"
-            + $",size_cap={fields.SizeCap}"
             + $",sndhwm={fields.SndHwm}"
             + $",rcvhwm={fields.RcvHwm}"
-            + $",socket_message_slots={fields.SocketMessageSlots}"
-            + $",effective_message_bytes={fields.EffectiveMessageBytes}"
             + $",effective_sndbuf={AutoHwmSndbufDisplay(socketType, fields.Role, fields.EffectiveSndbuf)}"
             + $",effective_rcvbuf={AutoHwmRcvbufDisplay(socketType, fields.Role, fields.EffectiveRcvbuf)}"
             + $",last_recalc_ms={fields.LastRecalcMs}"
@@ -452,9 +435,7 @@ internal static partial class PerfRunner
     private readonly struct AutoHwmSnapshotFields
     {
         private AutoHwmSnapshotFields(bool enabled, AutoHwmProfile profile, uint role,
-            uint policyClass, ulong unitBudgetBytes, uint sizeCap,
-            ulong socketMessageSlots, ulong effectiveMessageBytes,
-            ulong sndHwm, ulong rcvHwm, int effectiveSndbuf,
+            uint policyClass, ulong sndHwm, ulong rcvHwm, int effectiveSndbuf,
             int effectiveRcvbuf, ulong lastRecalcMs,
             AutoHwmRecalcReason lastRecalcReason,
             uint sendBlockedRatioPpm, ulong deferredSndHwm,
@@ -464,10 +445,6 @@ internal static partial class PerfRunner
             Profile = profile;
             Role = role;
             PolicyClass = policyClass;
-            UnitBudgetBytes = unitBudgetBytes;
-            SizeCap = sizeCap;
-            SocketMessageSlots = socketMessageSlots;
-            EffectiveMessageBytes = effectiveMessageBytes;
             SndHwm = sndHwm;
             RcvHwm = rcvHwm;
             EffectiveSndbuf = effectiveSndbuf;
@@ -483,10 +460,6 @@ internal static partial class PerfRunner
         internal AutoHwmProfile Profile { get; }
         internal uint Role { get; }
         internal uint PolicyClass { get; }
-        internal ulong UnitBudgetBytes { get; }
-        internal uint SizeCap { get; }
-        internal ulong SocketMessageSlots { get; }
-        internal ulong EffectiveMessageBytes { get; }
         internal ulong SndHwm { get; }
         internal ulong RcvHwm { get; }
         internal int EffectiveSndbuf { get; }
@@ -501,9 +474,6 @@ internal static partial class PerfRunner
             MonitorStatus snapshot)
             => new(snapshot.AutoHwmEnabled, snapshot.AutoHwmProfile,
                 snapshot.AutoHwmRole, snapshot.AutoHwmPolicyClass,
-                snapshot.AutoHwmUnitBudgetBytes, snapshot.AutoHwmSizeCap,
-                snapshot.AutoHwmSocketMessageSlots,
-                snapshot.AutoHwmEffectiveMessageBytes,
                 snapshot.AutoHwmAppliedSendHighWaterMarkBytes,
                 snapshot.AutoHwmAppliedReceiveHighWaterMarkBytes,
                 snapshot.AutoHwmEffectiveSndbuf,
@@ -515,7 +485,7 @@ internal static partial class PerfRunner
                 snapshot.AutoHwmDeferredReceiveHighWaterMarkBytes);
 
         internal static AutoHwmSnapshotFields FromSocketOptions(ISocket socket)
-            => new(false, (AutoHwmProfile)0, 0, 0, 0, 0, 0, 0,
+            => new(false, (AutoHwmProfile)0, 0, 0,
                 ReadSocketOption(() => socket.Options.SendHighWaterMark),
                 ReadSocketOption(() => socket.Options.ReceiveHighWaterMark),
                 ReadSocketOption(() => socket.Options.SendBufferSize),

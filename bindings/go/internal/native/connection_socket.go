@@ -18,13 +18,6 @@ type connectionSocket struct {
 	*socketCore
 }
 
-func (s *connectionSocket) completionOwner() *socketCore {
-	if s == nil {
-		return nil
-	}
-	return s.socketCore
-}
-
 func (s *connectionSocket) SetSendHighWaterMark(value int) error {
 	return s.setHwmOption(C.ZLINK_OPT_SNDHWM, value)
 }

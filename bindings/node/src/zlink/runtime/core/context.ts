@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
-import type { AutoHwmProfileValue } from '../../contracts/core';
+import { getHeapStatistics } from 'node:v8';
+import type {
+  AutoHwmProfileValue,
+  CoreHwmBudgetSnapshot
+} from '../../contracts/core';
 import { createError } from '../errors/error_mapping';
 import {
   closeCall,
@@ -53,23 +57,12 @@ export class ContextOptions {
   set autoHwmEnabled(value: boolean) { setContextOptionRaw(this._context, ContextOption.AUTO_HWM_ENABLE, value ? 1 : 0); }
   get autoHwmRecalcDebounceMs(): number { return getContextOptionRaw(this._context, ContextOption.AUTO_HWM_RECALC_DEBOUNCE_MS); }
   set autoHwmRecalcDebounceMs(value: number) { setContextOptionRaw(this._context, ContextOption.AUTO_HWM_RECALC_DEBOUNCE_MS, value | 0); }
-  get autoHwmProfile(): AutoHwmProfileValue { return getContextOptionRaw(this._context, ContextOption.AUTO_HWM_PROFILE) as AutoHwmProfileValue; }
-  set autoHwmProfile(value: AutoHwmProfileValue) { setContextOptionRaw(this._context, ContextOption.AUTO_HWM_PROFILE, value | 0); }
-  get autoHwmMsgUnitBytes(): bigint {
-    const value = requireNative().ctxGetOptData(
-      getNativeHandle(this._context),
-      ContextOption.AUTO_HWM_MSG_UNIT_BYTES
-    );
-    if (value.length !== 8) throw new Error('autoHwmMsgUnitBytes option returned an invalid payload');
-    return value.readBigUInt64LE(0);
-  }
-  set autoHwmMsgUnitBytes(value: bigint) {
-    setContextOptionRaw(
-      this._context,
-      ContextOption.AUTO_HWM_MSG_UNIT_BYTES,
-      uint64Buffer(value, 'autoHwmMsgUnitBytes')
-    );
-  }
+  get coreHwmProfile(): AutoHwmProfileValue { return getContextOptionRaw(this._context, ContextOption.AUTO_HWM_PROFILE) as AutoHwmProfileValue; }
+  set coreHwmProfile(value: AutoHwmProfileValue) { setContextOptionRaw(this._context, ContextOption.AUTO_HWM_PROFILE, value | 0); }
+  get coreHwmMemoryLimitBytes(): bigint { return getContextUInt64(this._context, ContextOption.AUTO_HWM_MEMORY_LIMIT_BYTES, 'coreHwmMemoryLimitBytes'); }
+  set coreHwmMemoryLimitBytes(value: bigint) { setContextUInt64(this._context, ContextOption.AUTO_HWM_MEMORY_LIMIT_BYTES, value, 'coreHwmMemoryLimitBytes'); }
+  get coreHwmBudgetBytes(): bigint { return getContextUInt64(this._context, ContextOption.AUTO_HWM_CORE_BUDGET_BYTES, 'coreHwmBudgetBytes'); }
+  set coreHwmBudgetBytes(value: bigint) { setContextUInt64(this._context, ContextOption.AUTO_HWM_CORE_BUDGET_BYTES, value, 'coreHwmBudgetBytes'); }
   get threadNamePrefix(): string { return this._threadNamePrefix; }
   set threadNamePrefix(value: string) {
     const normalized = validateCString(value, 'threadNamePrefix');
@@ -111,6 +104,16 @@ function getContextOptionRawStrict(context: Context, option: number): number {
   }
 }
 
+function getContextUInt64(context: Context, option: number, name: string): bigint {
+  const value = requireNative().ctxGetOptData(getNativeHandle(context), option | 0);
+  if (value.length !== 8) throw new Error(`${name} option returned an invalid payload`);
+  return value.readBigUInt64LE(0);
+}
+
+function setContextUInt64(context: Context, option: number, value: bigint, name: string): void {
+  setContextOptionRaw(context, option, uint64Buffer(value, name));
+}
+
 export class Context extends NativeHandle {
   readonly options: ContextOptions;
 
@@ -118,6 +121,15 @@ export class Context extends NativeHandle {
     super(requireNative().ctxNew());
     if (!this._native) throw lastError('config', 'context creation failed');
     this.options = ContextOptions.create(this);
+    const heapLimitBytes = BigInt(Math.trunc(getHeapStatistics().heap_size_limit));
+    if (heapLimitBytes > 0n) {
+      setContextUInt64(
+        this,
+        ContextOption.AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES,
+        heapLimitBytes,
+        'runtimeMemoryLimitBytes'
+      );
+    }
   }
 
   shutdown(): void {
@@ -129,6 +141,25 @@ export class Context extends NativeHandle {
   recalculateAutoHwm(): void {
     configCall('context auto HWM recalculation failed', () => {
       requireNative().ctxRecalculateAutoHwm(this._native);
+    });
+  }
+
+  getCoreHwmBudgetSnapshot(): CoreHwmBudgetSnapshot {
+    const snapshot = requireNative().ctxGetAutoHwmBudgetSnapshot(this._native);
+    const flags = snapshot.flags >>> 0;
+    return Object.freeze({
+      ...snapshot,
+      reservedUInt64: Object.freeze([...snapshot.reservedUInt64]),
+      budgetPlanningActive: (flags & (1 << 0)) !== 0,
+      budgetInsufficient: (flags & (1 << 1)) !== 0,
+      aggregateHwmValid: (flags & (1 << 2)) !== 0,
+      aggregateOverflow: (flags & (1 << 3)) !== 0
+    });
+  }
+
+  resetCoreHwmBudgetMetrics(): void {
+    configCall('context auto HWM metric reset failed', () => {
+      requireNative().ctxResetAutoHwmBudgetMetrics(this._native);
     });
   }
 

@@ -9,6 +9,52 @@ export const AutoHwmProfile = Object.freeze({
 } as const);
 export type AutoHwmProfileValue = typeof AutoHwmProfile[keyof typeof AutoHwmProfile];
 
+/** Immutable Core Auto HWM ABI-v1 context budget snapshot. */
+export interface CoreHwmBudgetSnapshot {
+  readonly abiVersion: number;
+  readonly structSize: number;
+  readonly budgetGeneration: bigint;
+  readonly measurementEpoch: bigint;
+  readonly configuredMemoryLimitBytes: bigint;
+  readonly runtimeMemoryLimitBytes: bigint;
+  readonly resolvedMemoryLimitBytes: bigint;
+  readonly configuredCoreBudgetBytes: bigint;
+  readonly effectiveCoreBudgetBytes: bigint;
+  readonly totalPlannedHwmBytes: bigint;
+  readonly totalAppliedHwmBytes: bigint;
+  readonly manualReservedHwmBytes: bigint;
+  readonly coreQueueAccountedBytes: bigint;
+  readonly applicationAccountedBytes: bigint;
+  readonly currentAccountedBytes: bigint;
+  readonly provisionalAccountedBytes: bigint;
+  readonly peakAccountedBytes: bigint;
+  readonly completionCurrentAccountedBytes: bigint;
+  readonly completionPeakAccountedBytes: bigint;
+  readonly completionPendingMessageCount: bigint;
+  readonly totalMessagingAccountedBytes: bigint;
+  readonly monitorQueueAppliedHwmBytes: bigint;
+  readonly monitorQueueAccountedBytes: bigint;
+  readonly totalInstanceAppliedHwmBytes: bigint;
+  readonly totalInstanceAccountedBytes: bigint;
+  readonly oversizeAdmissionCount: bigint;
+  readonly largestOversizeMessageBytes: bigint;
+  readonly activeDirectionalQueueCount: bigint;
+  readonly activeCompletionDirectionalQueueCount: bigint;
+  readonly activeSendQueueCount: bigint;
+  readonly activeReceiveQueueCount: bigint;
+  readonly outstandingApplicationLeaseCount: bigint;
+  readonly retiredQueueCount: bigint;
+  readonly deferredOriginCreditBytes: bigint;
+  readonly unlimitedManualQueueCount: bigint;
+  readonly blockedRatioPpm: number;
+  readonly flags: number;
+  readonly reservedUInt64: readonly bigint[];
+  readonly budgetPlanningActive: boolean;
+  readonly budgetInsufficient: boolean;
+  readonly aggregateHwmValid: boolean;
+  readonly aggregateOverflow: boolean;
+}
+
 /** Context-wide options governing the I/O threads and defaults shared by every socket. */
 export interface ContextOptions {
   /** The number of background I/O threads serving the context. */
@@ -31,10 +77,12 @@ export interface ContextOptions {
   autoHwmEnabled: boolean;
   /** The minimum delay, in ms, between automatic high-water-mark recalculations. */
   autoHwmRecalcDebounceMs: number;
-  /** The profile used to size high-water marks automatically. */
-  autoHwmProfile: AutoHwmProfileValue;
-  /** The byte planning unit used when auto-sizing high-water marks; 0n selects the socket default. */
-  autoHwmMsgUnitBytes: bigint;
+  /** The profile used to divide the Core memory budget. */
+  coreHwmProfile: AutoHwmProfileValue;
+  /** Explicit context memory limit in bytes; 0n selects automatic detection. */
+  coreHwmMemoryLimitBytes: bigint;
+  /** Explicit context-wide Core budget in bytes; 0n derives it from the memory limit. */
+  coreHwmBudgetBytes: bigint;
   /** The prefix applied to the names of threads the context creates. */
   threadNamePrefix: string;
   /** Pin the context's I/O threads to also run on CPU core `cpu`. */
@@ -51,6 +99,10 @@ export interface Context {
   shutdown(): void;
   /** Recompute automatic high-water marks for the context's sockets immediately. */
   recalculateAutoHwm(): void;
+  /** Return an immutable value snapshot of Core's context-wide HWM budget state. */
+  getCoreHwmBudgetSnapshot(): CoreHwmBudgetSnapshot;
+  /** Reset epoch metrics while preserving current HWM budget gauges. */
+  resetCoreHwmBudgetMetrics(): void;
   /** Close the context and release its resources, terminating anything still open under it. */
   close(): void;
 }

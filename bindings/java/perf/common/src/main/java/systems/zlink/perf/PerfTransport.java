@@ -27,10 +27,7 @@ final class PerfTransport {
         }
         ctx.options().blocky(benchCtxBlocky());
         ctx.options().autoHwmEnabled(benchCtxAutoHwmEnabled());
-        ctx.options().autoHwmProfile(benchCtxAutoHwmProfile());
-        if (config.size() > 0) {
-            ctx.options().autoHwmMessageUnitBytes(config.size());
-        }
+        ctx.options().coreHwmProfile(benchCtxAutoHwmProfile());
         return ctx;
     }
 

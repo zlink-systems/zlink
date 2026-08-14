@@ -6,7 +6,7 @@ using static PerfRunner;
 
 internal static class PerfMultiDealerRouterClient
 {
-    internal static int Run(PerfOptions options)
+    internal static async Task<int> Run(PerfOptions options)
     {
         int size = Math.Max(1, options.Size);
         int durationSeconds = ResolveMultiDurationSeconds(options);
@@ -51,16 +51,15 @@ internal static class PerfMultiDealerRouterClient
             monitors.Clear();
 
             for (int i = 0; i < clients.Count; i++)
-                ApplyAutoHwmMsgUnit(ctx, size);
             RecalculateAutoHwm(ctx);
             if (clients.Count > 0)
                 PrintAutoHwmSnapshot(clients[0], "endpoint",
                     options.Transport, size);
 
             var slots = CreateSlots(activeClients, size);
-            var result = RunMultiDealerRouterClientLoop(pollManager, slots,
+            var result = await RunMultiDealerRouterClientLoopAsync(pollManager, slots,
                 size, latencySampleCap, pollTimeoutMs, durationSeconds,
-                readyTimeoutMs);
+                readyTimeoutMs).ConfigureAwait(false);
 
             // PERF_MULTI: echo (relay) clients send NO wire stop token. C
             // perf_multi_dealer_router_client.cpp drives run_echo_duration
@@ -98,9 +97,9 @@ internal static class PerfMultiDealerRouterClient
         return slots;
     }
 
-    private static (double throughput, double latencyNs, double latencyP95Ns,
-        double latencyP99Ns, long measureCount)
-        RunMultiDealerRouterClientLoop(PollManager pollManager,
+    private static async Task<(double throughput, double latencyNs,
+        double latencyP95Ns, double latencyP99Ns, long measureCount)>
+        RunMultiDealerRouterClientLoopAsync(PollManager pollManager,
             DealerRouterClientSlot[] slots, int msgSize, int latencySampleCap,
             int pollTimeoutMs, int durationSeconds, int readyTimeoutMs)
     {
@@ -120,8 +119,9 @@ internal static class PerfMultiDealerRouterClient
             + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
         while (Stopwatch.GetTimestamp() < benchDeadlineTicks)
         {
-            TryScheduleIdleSends(slots, eventMasks, msgSize, runId,
-                PerfPhase.Active, ref seq, ref rrIndex);
+            (seq, rrIndex) = await TryScheduleIdleSendsAsync(slots, eventMasks,
+                msgSize, runId, PerfPhase.Active, seq, rrIndex)
+                .ConfigureAwait(false);
 
             // PERF_MULTI_TEST_POLICY § 1.3.1: poller wait is signal-driven
             // (-1). The benchDeadlineTicks check at the top of the loop
@@ -135,11 +135,12 @@ internal static class PerfMultiDealerRouterClient
             }
 
             for (int i = 0; i < readyCount; i++)
-                HandleClientEvent(pollManager, slots,
+                seq = await HandleClientEventAsync(pollManager, slots,
                     ReadySocketIndexAt(pollManager, i),
                     ReadySocketMaskAt(pollManager, i), eventMasks, msgSize,
-                    runId, PerfPhase.Active, ref seq, metrics, allowSend: true,
-                    activeDeadlineTicks: benchDeadlineTicks);
+                    runId, PerfPhase.Active, seq, metrics, allowSend: true,
+                    activeDeadlineTicks: benchDeadlineTicks)
+                    .ConfigureAwait(false);
         }
 
         long benchEndTicks = Stopwatch.GetTimestamp();
@@ -160,9 +161,10 @@ internal static class PerfMultiDealerRouterClient
             metrics.MeasureCount);
     }
 
-    private static void TryScheduleIdleSends(DealerRouterClientSlot[] slots,
-        PollEventFlags[] eventMasks, int msgSize, uint runId, PerfPhase phase, ref ulong seq,
-        ref int rrIndex)
+    private static async Task<(ulong Seq, int RrIndex)>
+        TryScheduleIdleSendsAsync(DealerRouterClientSlot[] slots,
+            PollEventFlags[] eventMasks, int msgSize, uint runId,
+            PerfPhase phase, ulong seq, int rrIndex)
     {
         int startIndex = rrIndex;
         for (int i = 0; i < slots.Length; i++)
@@ -172,8 +174,10 @@ internal static class PerfMultiDealerRouterClient
             if (slot.WaitingForReply || slot.WaitingForWritable)
                 continue;
 
-            if (TrySend(slot, msgSize, runId, phase, ref seq))
+            if (await TrySendAsync(slot, msgSize, runId, phase, seq)
+                    .ConfigureAwait(false))
             {
+                seq++;
                 slot.WaitingForReply = true;
                 slot.WaitingForWritable = false;
                 UpdatePollMask(slot, eventMasks, slotIndex);
@@ -186,12 +190,13 @@ internal static class PerfMultiDealerRouterClient
 
         if (slots.Length > 0)
             rrIndex = (startIndex + 1) % slots.Length;
+        return (seq, rrIndex);
     }
 
-    private static void HandleClientEvent(PollManager pollManager,
+    private static async Task<ulong> HandleClientEventAsync(PollManager pollManager,
         DealerRouterClientSlot[] slots,
         int slotIndex, PollEventFlags readyMask, PollEventFlags[] eventMasks,
-        int msgSize, uint runId, PerfPhase phase, ref ulong seq,
+        int msgSize, uint runId, PerfPhase phase, ulong seq,
         DealerRouterMetrics metrics, bool allowSend, long activeDeadlineTicks)
     {
         _ = activeDeadlineTicks;
@@ -203,8 +208,10 @@ internal static class PerfMultiDealerRouterClient
             && slot.WaitingForWritable
             && !slot.WaitingForReply)
         {
-            if (TrySend(slot, msgSize, runId, phase, ref seq))
+            if (await TrySendAsync(slot, msgSize, runId, phase, seq)
+                    .ConfigureAwait(false))
             {
+                seq++;
                 slot.WaitingForReply = true;
                 slot.WaitingForWritable = false;
                 UpdatePollMask(slot, eventMasks, slotIndex);
@@ -212,7 +219,7 @@ internal static class PerfMultiDealerRouterClient
         }
 
         if ((readyMask & PollEventFlags.PollIn) == 0)
-            return;
+            return seq;
 
         IDealerSocket dealerSock = (IDealerSocket)slot.Socket;
         Received receivedMessage = slot.ReusableReceived;
@@ -229,13 +236,13 @@ internal static class PerfMultiDealerRouterClient
             slot.WaitingForReply = false;
             if (phase == PerfPhase.Active)
             {
-                ReadOnlySpan<byte> body = receivedMessage.SinglePartOrThrow()
-                    .AsReadOnlySpan();
                 // Match C reference: outer while loop bounds the active
                 // window; dropping replies that arrive after activeDeadline
                 // would lower throughput vs C for replies whose sends were
                 // inside the active phase.
-                if (PerfRunner.TryDecodeMetricHeader(body, out PerfMetricHeader header)
+                if (PerfRunner.TryDecodeMetricHeader(
+                        receivedMessage.SinglePartOrThrow().AsReadOnlySpan(),
+                        out PerfMetricHeader header)
                     && header.RunId == runId
                     && header.MsgSize == (uint)msgSize
                     && header.Phase == (uint)phase)
@@ -265,6 +272,7 @@ internal static class PerfMultiDealerRouterClient
             slot.WaitingForWritable = false;
             UpdatePollMask(slot, eventMasks, slotIndex);
         }
+        return seq;
     }
 
     private static List<ISocket> CollectSockets(
@@ -292,8 +300,8 @@ internal static class PerfMultiDealerRouterClient
         eventMasks[index] = events;
     }
 
-    private static bool TrySend(DealerRouterClientSlot slot, int msgSize,
-        uint runId, PerfPhase phase, ref ulong seq)
+    private static async Task<bool> TrySendAsync(DealerRouterClientSlot slot,
+        int msgSize, uint runId, PerfPhase phase, ulong seq)
     {
         // Match C: stamp immediately before every send attempt. A blocked
         // attempt keeps the current sequence; only a successful send advances it.
@@ -301,11 +309,8 @@ internal static class PerfMultiDealerRouterClient
             seq, EpochNs());
         using Message message = Message.Allocate(slot.Payload.Length);
         slot.Payload.AsSpan(0, PerfMetricHeaderSize).CopyTo(message.AsSpan());
-        bool sent = ((IDealerSocket)slot.Socket).Send().Message(message)
-            .Flags(SendFlags.DontWait).Submit();
-        if (sent)
-            seq++;
-        return sent;
+        return await PerfSocketIo.SendAsync((IDealerSocket)slot.Socket,
+            message).ConfigureAwait(false) > 0;
     }
 
     private static int RemainingMilliseconds(long deadlineTicks)

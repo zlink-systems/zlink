@@ -513,7 +513,8 @@ Options:
                          Override PERF_MULTI_SERVER_READY_TIMEOUT_MS (default: 10000).
   --connect-ready-timeout-ms N
                          Override PERF_MULTI_CONNECT_READY_TIMEOUT_MS (default: 10000).
-  --monitor-hwm BYTES    Override PERF_MULTI_MONITOR_HWM (default: 4096000).
+  --monitor-hwm-bytes BYTES
+                         Override PERF_MULTI_MONITOR_HWM_BYTES (default: 4096000).
   --server-shutdown-timeout-ms N
                          Override PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS (default: 5000).
   --server-bind-port N
@@ -681,7 +682,7 @@ TRANSPORT_TRANSITION_MS="${PERF_MULTI_TRANSPORT_TRANSITION_MS:-${PERF_TRANSPORT_
 PATTERN_TRANSITION_MS="${PERF_MULTI_PATTERN_TRANSITION_MS:-${PERF_PATTERN_TRANSITION_MS:-3000}}"
 SERVER_READY_TIMEOUT_MS="${PERF_MULTI_SERVER_READY_TIMEOUT_MS:-${PERF_SERVER_READY_TIMEOUT_MS:-10000}}"
 CONNECT_READY_TIMEOUT_MS="${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-10000}}"
-MONITOR_HWM="${PERF_MULTI_MONITOR_HWM:-${PERF_MONITOR_HWM:-4096000}}"
+MONITOR_HWM_BYTES="${PERF_MULTI_MONITOR_HWM_BYTES:-${PERF_MONITOR_HWM_BYTES:-4096000}}"
 SERVER_SHUTDOWN_TIMEOUT_MS="${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}}"
 SERVER_BIND_PORT="${PERF_MULTI_SERVER_BIND_PORT:-${PERF_SERVER_BIND_PORT:-0}}"
 CTX_AUTO_HWM_ENABLE="${PERF_CTX_AUTO_HWM_ENABLE:-1}"
@@ -960,12 +961,12 @@ while [[ $# -gt 0 ]]; do
       CONNECT_READY_TIMEOUT_MS="${2}"
       shift 2
       ;;
-    --monitor-hwm)
+    --monitor-hwm-bytes)
       if [[ $# -lt 2 ]]; then
         echo "Error: $1 requires a value." >&2
         exit 1
       fi
-      MONITOR_HWM="${2}"
+      MONITOR_HWM_BYTES="${2}"
       shift 2
       ;;
     --server-shutdown-timeout-ms)
@@ -1037,8 +1038,8 @@ if ! is_uint "${CONNECT_READY_TIMEOUT_MS}"; then
   echo "Error: --connect-ready-timeout-ms must be a non-negative integer." >&2
   exit 1
 fi
-if ! is_uint "${MONITOR_HWM}"; then
-  echo "Error: --monitor-hwm must be a non-negative integer." >&2
+if ! is_uint "${MONITOR_HWM_BYTES}"; then
+  echo "Error: --monitor-hwm-bytes must be a non-negative integer." >&2
   exit 1
 fi
 if [[ -n "${HWM}" ]] && ! is_positive_u64 "${HWM}"; then
@@ -1144,7 +1145,7 @@ if [[ "${#EXPLICIT_PATTERNS[@]}" -eq 0 ]]; then
 fi
 RUN_ENV+=(PERF_MULTI_SERVER_READY_TIMEOUT_MS="${SERVER_READY_TIMEOUT_MS}")
 RUN_ENV+=(PERF_MULTI_CONNECT_READY_TIMEOUT_MS="${CONNECT_READY_TIMEOUT_MS}")
-RUN_ENV+=(PERF_MULTI_MONITOR_HWM="${MONITOR_HWM}")
+RUN_ENV+=(PERF_MULTI_MONITOR_HWM_BYTES="${MONITOR_HWM_BYTES}")
 RUN_ENV+=(PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS="${SERVER_SHUTDOWN_TIMEOUT_MS}")
 RUN_ENV+=(PERF_MULTI_SERVER_BIND_PORT="${SERVER_BIND_PORT}")
 RUN_ENV+=(PERF_DISABLE_RESOURCE_METRICS="${DISABLE_RESOURCE_METRICS}")

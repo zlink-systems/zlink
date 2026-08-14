@@ -171,11 +171,6 @@ void run_pubsub (const std::string &transport, size_t msg_size, const std::strin
         print_fail ();
         return;
     }
-    if (!apply_single_auto_hwm_msg_unit (ctx.get (), msg_size)) {
-        print_fail ();
-        return;
-    }
-
     socket_guard_t publisher (ctx.get (), ZLINK_SOCKET_PUB);
     socket_guard_t subscriber (ctx.get (), ZLINK_SOCKET_SUB);
     if (!publisher.valid () || !subscriber.valid ()) {

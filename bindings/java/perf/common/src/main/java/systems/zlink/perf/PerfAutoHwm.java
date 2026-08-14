@@ -2,8 +2,6 @@
 
 package systems.zlink.perf;
 
-import systems.zlink.contracts.sockets.AutoHwmProfile;
-import systems.zlink.contracts.sockets.AutoHwmRecalcReason;
 import systems.zlink.contracts.eventing.MonitorStatus;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.sockets.Socket;
@@ -33,12 +31,10 @@ final class PerfAutoHwm {
             + ",role=" + roleName(monitorStatus.autoHwmRole())
             + ",sndhwm=" + monitorStatus.autoHwmAppliedSendHwmBytes()
             + ",rcvhwm=" + monitorStatus.autoHwmAppliedRecvHwmBytes()
-            + ",effective_message_bytes="
-            + monitorStatus.autoHwmEffectiveMessageBytes()
+            + ",snd_pending_bytes=" + monitorStatus.sndPendingBytes()
+            + ",rcv_pending_bytes=" + monitorStatus.rcvPendingBytes()
             + ",effective_sndbuf=" + monitorStatus.autoHwmAppliedSndBuffer()
-            + ",effective_rcvbuf=" + monitorStatus.autoHwmAppliedRcvBuffer()
-            + ",socket_message_slots="
-            + monitorStatus.autoHwmSocketMessageSlots());
+            + ",effective_rcvbuf=" + monitorStatus.autoHwmAppliedRcvBuffer());
     }
 
     static void printMultiSocket(PerfUtil.Config config, Socket socket,
@@ -71,13 +67,10 @@ final class PerfAutoHwm {
             + ",profile_id=" + profileId(monitorStatus.autoHwmProfile())
             + ",policy_class=" + policyClassName(monitorStatus.autoHwmPolicyClass())
             + ",policy_class_id=" + monitorStatus.autoHwmPolicyClass()
-            + ",unit_budget_bytes=" + monitorStatus.autoHwmUnitBudgetBytes()
-            + ",size_cap=" + monitorStatus.autoHwmSizeCap()
             + ",sndhwm=" + hwmDisplay(monitorStatus, socketType, true)
             + ",rcvhwm=" + hwmDisplay(monitorStatus, socketType, false)
-            + ",socket_message_slots=" + monitorStatus.autoHwmSocketMessageSlots()
-            + ",effective_message_bytes="
-            + monitorStatus.autoHwmEffectiveMessageBytes()
+            + ",snd_pending_bytes=" + monitorStatus.sndPendingBytes()
+            + ",rcv_pending_bytes=" + monitorStatus.rcvPendingBytes()
             + ",effective_sndbuf=" + bufferDisplay(monitorStatus, socketType, true)
             + ",effective_rcvbuf=" + bufferDisplay(monitorStatus, socketType, false)
             + ",last_recalc_ms=" + monitorStatus.autoHwmLastRecalcMs()
@@ -94,8 +87,8 @@ final class PerfAutoHwm {
     private static boolean visible(MonitorStatus monitorStatus) {
         return monitorStatus.autoHwmAppliedSendHwmBytes() > 0
             || monitorStatus.autoHwmAppliedRecvHwmBytes() > 0
-            || monitorStatus.autoHwmEffectiveMessageBytes() > 0
-            || monitorStatus.autoHwmSocketMessageSlots() > 0;
+            || monitorStatus.sndPendingBytes() > 0
+            || monitorStatus.rcvPendingBytes() > 0;
     }
 
     private static String roleName(int role) {

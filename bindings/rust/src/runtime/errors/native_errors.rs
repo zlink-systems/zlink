@@ -9,12 +9,13 @@ pub(crate) fn last_errno() -> i32 {
     unsafe { ffi::zlink_errno() }
 }
 
-fn submit_result_from_errno(err: i32) -> SubmitResult {
+pub(crate) fn submit_result_from_errno(err: i32) -> SubmitResult {
     match err {
         0 => SubmitResult::Ok,
         libc::EAGAIN => SubmitResult::Backpressured,
         libc::ENOTCONN | libc::EHOSTUNREACH => SubmitResult::NotConnected,
         libc::ENOENT => SubmitResult::NotFound,
+        libc::ECANCELED => SubmitResult::Terminated,
         x if x == eterm() => SubmitResult::Terminated,
         libc::EFAULT => SubmitResult::InvalidHandle,
         libc::EINVAL => SubmitResult::InvalidArgument,
@@ -25,6 +26,10 @@ fn submit_result_from_errno(err: i32) -> SubmitResult {
         libc::ENOMEM | libc::ENOBUFS => SubmitResult::OutOfMemory,
         _ => SubmitResult::InternalError,
     }
+}
+
+pub(crate) fn submit_error_from_errno(err: i32) -> SubmitError {
+    SubmitError::new(submit_result_from_errno(err), err)
 }
 
 fn recv_result_from_errno(err: i32) -> RecvResult {

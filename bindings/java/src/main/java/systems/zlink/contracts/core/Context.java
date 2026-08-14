@@ -57,6 +57,12 @@ public interface Context extends AutoCloseable {
      */
     void recalculateAutoHwm();
 
+    /** Returns a value snapshot of Core's context-wide HWM budget state. */
+    CoreHwmBudgetSnapshot coreHwmBudgetSnapshot();
+
+    /** Resets epoch counters while preserving current HWM budget gauges. */
+    void resetCoreHwmBudgetMetrics();
+
     @Override
     void close();
 }

@@ -4,10 +4,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const zlink = require('@zlink-systems/zlink');
 const readline = require('node:readline');
 const { MonitorEventType, RecvFlags, RecvResult } = zlink;
-const { applyAutoHwmMsgUnit, applyAutoHwmProfile, integerEnv, manualSocketOverridesEnabled, sleepImmediate } = require('../common/perf_metrics');
+const { applyAutoHwmProfile, integerEnv, manualSocketOverridesEnabled, sleepImmediate } = require('../common/perf_metrics');
 const POLLIN = 1;
 const POLLOUT = 2;
-const POLLCOMPLETION = 32;
 const { emitMultiSocketHwmDetail } = require('./perf_multi_auto_hwm');
 function integerEnvPair(primary, fallbackName, fallback) {
     return integerEnv(primary, integerEnv(fallbackName, fallback));
@@ -19,9 +18,6 @@ function pollEvents(mask) {
     }
     if ((mask & POLLOUT) !== 0) {
         events.push(zlink.PollEventFlag.PollOut);
-    }
-    if ((mask & POLLCOMPLETION) !== 0) {
-        events.push(zlink.PollEventFlag.PollCompletion);
     }
     return events;
 }
@@ -55,10 +51,10 @@ function applySocketPolicy(socket, options = {}) {
     // C parity: bindings/c/perf/multi/common/perf_multi_runtime.hpp
     // apply_debug_timeouts (~986-997) sets ZLINK_OPT_SNDTIMEO/RCVTIMEO to
     // the 200ms default on every benchmark socket UNCONDITIONALLY, and
-    // returns early (no timeouts) only for the inproc transport. The hot
-    // path is still DONTWAIT send + `-1` poller wait; these socket timeouts
-    // bound individual blocking calls exactly as in the C reference. Match
-    // C: skip for inproc, otherwise apply the C default.
+    // returns early (no timeouts) only for the inproc transport. Direct
+    // synchronous roles still use DONTWAIT + poller waits; routed roles await
+    // the canonical admission terminal. Match C's timeout policy: skip for
+    // inproc, otherwise apply the C default.
     const transport = String(options.transport || process.env.PERF_MULTI_TRANSPORT || '').trim().toLowerCase();
     const isInproc = transport === 'inproc';
     const sendTimeout = integerEnv('PERF_MULTI_SNDTIMEO_MS', 200);
@@ -210,12 +206,35 @@ function trySocketSend(socket, ...args) {
         throw error;
     }
 }
+async function tryRoutedSocketSend(socket, ...args) {
+    try {
+        const routed = args.length >= 2 && args[0] instanceof zlink.RoutingId;
+        const payload = routed ? args[1] : args[0];
+        let op = routed ? socket.send(args[0]) : socket.send();
+        const parts = Array.isArray(payload) ? payload : [payload];
+        for (const part of parts) {
+            op = op.message(part);
+        }
+        await op.submit();
+        return true;
+    }
+    catch (error) {
+        if (error instanceof zlink.SubmitError && error.result === zlink.SubmitResult.Backpressured) {
+            return false;
+        }
+        const text = String(error && error.message ? error.message : error);
+        if ((error && error.code === 'EAGAIN') || text.includes('Resource temporarily unavailable')) {
+            return false;
+        }
+        throw error;
+    }
+}
 // PERF_MULTI_TEST_POLICY § 1.3.1: emit the wire-level stop token once at
 // phase end. Callers pass a closure that performs the actual send (e.g.
 // router.send(routingId, ...)); a failed sentinel is a benchmark failure.
 async function sendStopTokenOnce(_socket, sendFn) {
     const stopBytes = require('../perf_stop_token').STOP_TOKEN_BYTES;
-    if (!sendFn(stopBytes)) {
+    if (!(await sendFn(stopBytes))) {
         throw new Error('stop token send failed');
     }
 }
@@ -379,9 +398,7 @@ function createSocketEventWaiter(socket, events) {
 module.exports = {
     POLLIN,
     POLLOUT,
-    POLLCOMPLETION,
     applyContextPolicy,
-    applyAutoHwmMsgUnit,
     applySocketPolicy,
     createCallbackEventWaiter,
     createSocketEventWaiter,
@@ -396,6 +413,7 @@ module.exports = {
     subscribeNoWait,
     subscribeNoWaitInto,
     trySocketPublish,
+    tryRoutedSocketSend,
     trySocketSend,
     waitForControlStart,
     waitForRunnerControlConnected,

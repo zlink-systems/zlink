@@ -7,8 +7,11 @@
 #include <zlink.hpp>
 
 #include <cerrno>
+#include <condition_variable>
+#include <coroutine>
 #include <cstring>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -20,6 +23,277 @@ namespace perf
 {
 
 using namespace zlink;
+
+// Small owning coroutine used by the perf harness. Operations stay awaitable
+// all the way through a scenario; get() is reserved for the process runner
+// boundary that invokes that scenario.
+template <typename T> class async_task_t
+{
+  public:
+    struct promise_type
+    {
+        using handle_t = std::coroutine_handle<promise_type>;
+
+        async_task_t get_return_object ()
+        {
+            return async_task_t (handle_t::from_promise (*this));
+        }
+        std::suspend_never initial_suspend () noexcept { return {}; }
+        struct final_awaiter_t
+        {
+            bool await_ready () const noexcept { return false; }
+            std::coroutine_handle<> await_suspend (handle_t handle_) const noexcept
+            {
+                promise_type &promise = handle_.promise ();
+                std::coroutine_handle<> continuation;
+                {
+                    std::lock_guard<std::mutex> lock (promise.mutex);
+                    promise.done = true;
+                    continuation = promise.continuation;
+                }
+                promise.changed.notify_all ();
+                return continuation ? continuation : std::noop_coroutine ();
+            }
+            void await_resume () const noexcept {}
+        };
+        final_awaiter_t final_suspend () noexcept { return {}; }
+        void return_value (T value_) { value.emplace (std::move (value_)); }
+        void unhandled_exception () noexcept { failure = std::current_exception (); }
+
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::optional<T> value;
+        std::exception_ptr failure;
+        std::coroutine_handle<> continuation;
+        bool done = false;
+    };
+
+    async_task_t (async_task_t &&other_) noexcept :
+        _handle (std::exchange (other_._handle, {}))
+    {
+    }
+    async_task_t &operator= (async_task_t &&other_) noexcept
+    {
+        if (this != &other_) {
+            reset ();
+            _handle = std::exchange (other_._handle, {});
+        }
+        return *this;
+    }
+    async_task_t (const async_task_t &) = delete;
+    async_task_t &operator= (const async_task_t &) = delete;
+    ~async_task_t () { reset (); }
+
+    T get ()
+    {
+        promise_type &promise = _handle.promise ();
+        std::unique_lock<std::mutex> lock (promise.mutex);
+        promise.changed.wait (lock, [&] { return promise.done; });
+        if (promise.failure)
+            std::rethrow_exception (promise.failure);
+        return std::move (*promise.value);
+    }
+
+    class awaiter_t
+    {
+      public:
+        explicit awaiter_t (typename promise_type::handle_t handle_) : _handle (handle_) {}
+        awaiter_t (awaiter_t &&other_) noexcept :
+            _handle (std::exchange (other_._handle, {}))
+        {
+        }
+        awaiter_t (const awaiter_t &) = delete;
+        ~awaiter_t ()
+        {
+            if (_handle)
+                _handle.destroy ();
+        }
+
+        bool await_ready () const noexcept
+        {
+            std::lock_guard<std::mutex> lock (_handle.promise ().mutex);
+            return _handle.promise ().done;
+        }
+        bool await_suspend (std::coroutine_handle<> continuation_) noexcept
+        {
+            promise_type &promise = _handle.promise ();
+            std::lock_guard<std::mutex> lock (promise.mutex);
+            if (promise.done)
+                return false;
+            promise.continuation = continuation_;
+            return true;
+        }
+        T await_resume ()
+        {
+            promise_type &promise = _handle.promise ();
+            if (promise.failure)
+                std::rethrow_exception (promise.failure);
+            return std::move (*promise.value);
+        }
+
+      private:
+        typename promise_type::handle_t _handle;
+    };
+
+    awaiter_t operator co_await () && noexcept
+    {
+        return awaiter_t (std::exchange (_handle, {}));
+    }
+
+  private:
+    using handle_t = typename promise_type::handle_t;
+
+    explicit async_task_t (handle_t handle_) : _handle (handle_)
+    {
+    }
+    void reset () noexcept
+    {
+        if (_handle)
+            _handle.destroy ();
+        _handle = {};
+    }
+
+    handle_t _handle;
+};
+
+template <> class async_task_t<void>
+{
+  public:
+    struct promise_type
+    {
+        using handle_t = std::coroutine_handle<promise_type>;
+
+        async_task_t get_return_object ()
+        {
+            return async_task_t (handle_t::from_promise (*this));
+        }
+        std::suspend_never initial_suspend () noexcept { return {}; }
+        struct final_awaiter_t
+        {
+            bool await_ready () const noexcept { return false; }
+            std::coroutine_handle<> await_suspend (handle_t handle_) const noexcept
+            {
+                promise_type &promise = handle_.promise ();
+                std::coroutine_handle<> continuation;
+                {
+                    std::lock_guard<std::mutex> lock (promise.mutex);
+                    promise.done = true;
+                    continuation = promise.continuation;
+                }
+                promise.changed.notify_all ();
+                return continuation ? continuation : std::noop_coroutine ();
+            }
+            void await_resume () const noexcept {}
+        };
+        final_awaiter_t final_suspend () noexcept { return {}; }
+        void return_void () noexcept {}
+        void unhandled_exception () noexcept { failure = std::current_exception (); }
+
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::exception_ptr failure;
+        std::coroutine_handle<> continuation;
+        bool done = false;
+    };
+
+    async_task_t (async_task_t &&other_) noexcept :
+        _handle (std::exchange (other_._handle, {}))
+    {
+    }
+    async_task_t &operator= (async_task_t &&other_) noexcept
+    {
+        if (this != &other_) {
+            reset ();
+            _handle = std::exchange (other_._handle, {});
+        }
+        return *this;
+    }
+    async_task_t (const async_task_t &) = delete;
+    async_task_t &operator= (const async_task_t &) = delete;
+    ~async_task_t () { reset (); }
+
+    void get ()
+    {
+        promise_type &promise = _handle.promise ();
+        std::unique_lock<std::mutex> lock (promise.mutex);
+        promise.changed.wait (lock, [&] { return promise.done; });
+        if (promise.failure)
+            std::rethrow_exception (promise.failure);
+    }
+
+    class awaiter_t
+    {
+      public:
+        explicit awaiter_t (typename promise_type::handle_t handle_) : _handle (handle_) {}
+        awaiter_t (awaiter_t &&other_) noexcept :
+            _handle (std::exchange (other_._handle, {}))
+        {
+        }
+        awaiter_t (const awaiter_t &) = delete;
+        ~awaiter_t ()
+        {
+            if (_handle)
+                _handle.destroy ();
+        }
+
+        bool await_ready () const noexcept
+        {
+            std::lock_guard<std::mutex> lock (_handle.promise ().mutex);
+            return _handle.promise ().done;
+        }
+        bool await_suspend (std::coroutine_handle<> continuation_) noexcept
+        {
+            promise_type &promise = _handle.promise ();
+            std::lock_guard<std::mutex> lock (promise.mutex);
+            if (promise.done)
+                return false;
+            promise.continuation = continuation_;
+            return true;
+        }
+        void await_resume ()
+        {
+            promise_type &promise = _handle.promise ();
+            if (promise.failure)
+                std::rethrow_exception (promise.failure);
+        }
+
+      private:
+        typename promise_type::handle_t _handle;
+    };
+
+    awaiter_t operator co_await () && noexcept
+    {
+        return awaiter_t (std::exchange (_handle, {}));
+    }
+
+  private:
+    using handle_t = typename promise_type::handle_t;
+
+    explicit async_task_t (handle_t handle_) : _handle (handle_)
+    {
+    }
+    void reset () noexcept
+    {
+        if (_handle)
+            _handle.destroy ();
+        _handle = {};
+    }
+
+    handle_t _handle;
+};
+
+class detached_async_task_t
+{
+  public:
+    struct promise_type
+    {
+        detached_async_task_t get_return_object () noexcept { return {}; }
+        std::suspend_never initial_suspend () noexcept { return {}; }
+        std::suspend_never final_suspend () noexcept { return {}; }
+        void return_void () noexcept {}
+        void unhandled_exception () noexcept { std::terminate (); }
+    };
+};
 
 class socket_t
 {
@@ -305,8 +579,7 @@ class socket_t
     {
         return visit ([&] (auto &socket_) -> int {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
-            if constexpr (std::is_same<socket_type_t, pair_socket_t>::value
-                          || std::is_same<socket_type_t, dealer_socket_t>::value) {
+            if constexpr (std::is_same<socket_type_t, pair_socket_t>::value) {
                 try {
                     const bool sent =
                       std::move (socket_.send ()).message (part_).flags (flags_).submit ();
@@ -327,8 +600,7 @@ class socket_t
     {
         return visit ([&] (auto &socket_) -> int {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
-            if constexpr (std::is_same<socket_type_t, router_socket_t>::value
-                          || std::is_same<socket_type_t, stream_socket_t>::value) {
+            if constexpr (std::is_same<socket_type_t, stream_socket_t>::value) {
                 try {
                     const bool sent = std::move (socket_.send (routing_id_))
                                         .message (part_)
@@ -343,6 +615,30 @@ class socket_t
             } else {
                 errno = EOPNOTSUPP;
                 return -1;
+            }
+        });
+    }
+
+    async_result_t<void> send_async (message_t &part_)
+    {
+        return visit ([&] (auto &socket_) -> async_result_t<void> {
+            using socket_type_t = typename std::decay<decltype (socket_)>::type;
+            if constexpr (std::is_same<socket_type_t, dealer_socket_t>::value) {
+                return std::move (socket_.send ()).message (part_).async ();
+            } else {
+                throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
+            }
+        });
+    }
+
+    async_result_t<void> send_async (const routing_id_t &routing_id_, message_t &part_)
+    {
+        return visit ([&] (auto &socket_) -> async_result_t<void> {
+            using socket_type_t = typename std::decay<decltype (socket_)>::type;
+            if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
+                return std::move (socket_.send (routing_id_)).message (part_).async ();
+            } else {
+                throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
             }
         });
     }
@@ -415,43 +711,36 @@ class socket_t
         });
     }
 
-    bool request (message_t &part_,
-                  std::chrono::milliseconds timeout_,
-                  int flags_,
-                  request_callback_t callback_)
+    async_result_t<std::vector<message_t>>
+    request (message_t &part_, std::chrono::milliseconds timeout_)
     {
-        return visit ([&] (auto &socket_) -> bool {
+        return visit ([&] (auto &socket_) -> async_result_t<std::vector<message_t>> {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, dealer_socket_t>::value) {
                 return std::move (socket_.request ())
                   .message (part_)
                   .timeout (timeout_)
-                  .flags (flags_)
-                  .submit (std::move (callback_));
+                  .async ();
             } else {
-                errno = EOPNOTSUPP;
-                return false;
+                throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
             }
         });
     }
 
-    bool request (const routing_id_t &target_rid_,
-                  message_t &part_,
-                  std::chrono::milliseconds timeout_,
-                  int flags_,
-                  request_callback_t callback_)
+    async_result_t<std::vector<message_t>>
+    request (const routing_id_t &target_rid_,
+             message_t &part_,
+             std::chrono::milliseconds timeout_)
     {
-        return visit ([&] (auto &socket_) -> bool {
+        return visit ([&] (auto &socket_) -> async_result_t<std::vector<message_t>> {
             using socket_type_t = typename std::decay<decltype (socket_)>::type;
             if constexpr (std::is_same<socket_type_t, router_socket_t>::value) {
                 return std::move (socket_.request (target_rid_))
                   .message (part_)
                   .timeout (timeout_)
-                  .flags (flags_)
-                  .submit (std::move (callback_));
+                  .async ();
             } else {
-                errno = EOPNOTSUPP;
-                return false;
+                throw config_error_t (config_result_t::not_supported, EOPNOTSUPP);
             }
         });
     }

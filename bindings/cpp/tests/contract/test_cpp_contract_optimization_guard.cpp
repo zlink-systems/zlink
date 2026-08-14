@@ -96,8 +96,8 @@ int main ()
       "zlink_publish_part",
       "zlink_subscribe_part",
       "zlink_router_recv_part",
-      "zlink_dealer_request_part",
-      "zlink_router_request_part",
+      "zlink_dealer_request_transport_pair_part",
+      "zlink_router_request_transport_pair_part",
       "zlink_router_reply_part",
       "submit_borrowed_message_array",
     };

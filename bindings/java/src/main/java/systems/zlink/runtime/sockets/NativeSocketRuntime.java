@@ -26,7 +26,6 @@ import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeHelpers;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
-import systems.zlink.runtime.nativeapi.RequestProgressPump;
 import io.netty.buffer.ByteBuf;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -198,12 +197,22 @@ final class NativeSocketRuntime implements AutoCloseable {
 
     /** Opens a socket monitor for all events. */
     public SocketMonitor monitorOpen() {
-        return monitorOpen(MonitorEventType.ALL);
+        return monitorOpen(0L, MonitorEventType.ALL);
     }
 
     /** Opens a socket monitor for the requested event types. */
     public SocketMonitor monitorOpen(MonitorEventType... events) {
-        return socketCore.monitorOpen(resolveMonitorEvents(events));
+        return monitorOpen(0L, events);
+    }
+
+    /** Opens a socket monitor with an exact queue HWM in bytes. */
+    public SocketMonitor monitorOpen(long monitorHwmBytes,
+                                     MonitorEventType... events) {
+        if (monitorHwmBytes < 0L)
+            throw new IllegalArgumentException(
+                "monitorHwmBytes must be non-negative");
+        return socketCore.monitorOpen(resolveMonitorEvents(events),
+            monitorHwmBytes);
     }
 
     public final void setTlsServer(String certPem, String keyPem,
@@ -396,6 +405,10 @@ final class NativeSocketRuntime implements AutoCloseable {
         return receivePlane.recvInto(result, flags);
     }
 
+    public boolean recvRetainedInto(Received result, ReceiveFlag flags) {
+        return receivePlane.recvRetainedInto(result, flags);
+    }
+
     public Optional<Received> recvNoWait() {
         return Optional.ofNullable(recvNoWaitOrNull());
     }
@@ -424,6 +437,10 @@ final class NativeSocketRuntime implements AutoCloseable {
 
     public boolean subscribe(TopicMessage result, ReceiveFlag flags) {
         return topicPlane.subscribe(result, flags);
+    }
+
+    public boolean subscribeRetained(TopicMessage result, ReceiveFlag flags) {
+        return topicPlane.subscribeRetained(result, flags);
     }
 
     public Optional<TopicMessage> subscribeNoWait() {
@@ -501,10 +518,6 @@ final class NativeSocketRuntime implements AutoCloseable {
         socketCore.setSendReadyHandler(handler);
     }
 
-    public void setCompletionControlHandler(CompletionControlHandler handler) {
-        socketCore.setCompletionControlHandler(handler);
-    }
-
     int send(byte[] data, int offset, int length, int sendFlags) {
         Objects.requireNonNull(data, "data");
         validateRange(data.length, offset, length, "data");
@@ -575,11 +588,6 @@ final class NativeSocketRuntime implements AutoCloseable {
                 int rc = Native.close(handle);
                 if (rc != 0)
                     throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CLOSE);
-                // Stop progress only after Core accepts close. A BUSY result
-                // must leave completion ownership intact for the caller's
-                // retry; stopping it before the native admission can leave a
-                // partially closed socket.
-                RequestProgressPump.stopSocketProgress(handle);
             }
             socketCore.closeCommonState();
             handle = MemorySegment.NULL;

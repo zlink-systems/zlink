@@ -6,17 +6,17 @@ const zlink = require('@zlink-systems/zlink');
 const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const { isStopTokenParts } = require('../perf_stop_token');
-const { POLLIN, POLLOUT, applyAutoHwmMsgUnit, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, trySocketSend, waitPollerOne } = require('./perf_multi_runtime');
-function drainPending(router, pending) {
+const { POLLIN, POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, tryRoutedSocketSend, waitPollerOne } = require('./perf_multi_runtime');
+async function drainPending(router, pending) {
     while (pending.length > 0) {
         const reply = pending[0];
-        if (!trySocketSend(router, reply.routingId, reply.payload)) {
+        if (!(await tryRoutedSocketSend(router, reply.routingId, reply.payload))) {
             break;
         }
         pending.shift();
     }
 }
-function receiveAndQueueReplies(router, pending, received) {
+async function receiveAndQueueReplies(router, pending, received) {
     while (true) {
         if (!router.recv(received, zlink.RecvFlags.DontWait)) {
             return false;
@@ -30,7 +30,8 @@ function receiveAndQueueReplies(router, pending, received) {
                 return true;
             }
             const routingId = received.routingId;
-            if (pending.length === 0 && trySocketSend(router, routingId, payload)) {
+            if (pending.length === 0
+                && await tryRoutedSocketSend(router, routingId, payload)) {
                 continue;
             }
             pending.push({ routingId, payload: Buffer.from(payload.data()) });
@@ -57,7 +58,6 @@ async function main() {
         configureTlsServer(router, options.transport);
         router.setRoutingId(zlink.RoutingId.from(Buffer.from('SERVER', 'ascii')));
         router.bind(options.endpoint);
-        applyAutoHwmMsgUnit(ctx, options.msgSize);
         ctx.recalculateAutoHwm();
         emitMultiSocketHwmDetail(router, 'endpoint', options.transport, options.msgSize);
         poller.add(router, pollEvents(POLLIN), 0);
@@ -81,11 +81,11 @@ async function main() {
             // directly so each ready relay event avoids generic event inspection.
             const revents = ready.revents;
             if ((revents & POLLOUT) !== 0) {
-                drainPending(router, pending);
+                await drainPending(router, pending);
             }
             if ((revents & POLLIN) !== 0) {
-                stop = receiveAndQueueReplies(router, pending, received);
-                drainPending(router, pending);
+                stop = await receiveAndQueueReplies(router, pending, received);
+                await drainPending(router, pending);
             }
             const nextPollMask = pending.length > 0 ? POLLIN | POLLOUT : POLLIN;
             if (nextPollMask !== pollMask) {

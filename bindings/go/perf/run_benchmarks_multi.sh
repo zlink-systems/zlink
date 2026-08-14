@@ -103,7 +103,7 @@ AUTO_HWM_PROFILE=""
 CONNECT_READY_TIMEOUT_MS=""
 CONNECT_CONCURRENCY=""
 SERVER_READY_TIMEOUT_MS=""
-MONITOR_HWM=""
+MONITOR_HWM_BYTES=""
 SERVER_SHUTDOWN_TIMEOUT_MS=""
 SERVER_BIND_PORT=""
 RUN_COOLDOWN_MS="${PERF_MULTI_RUN_COOLDOWN_MS:-${PERF_RUN_COOLDOWN_MS:-3000}}"
@@ -303,7 +303,7 @@ Options:
   --pattern-transition-ms N
   --server-ready-timeout-ms N
   --connect-ready-timeout-ms N
-  --monitor-hwm N
+  --monitor-hwm-bytes N
   --server-shutdown-timeout-ms N
   --server-bind-port N
   --auto-hwm-profile NAME
@@ -350,8 +350,8 @@ while [[ $# -gt 0 ]]; do
     --server-ready-timeout-ms)
       SERVER_READY_TIMEOUT_MS="$2"
       shift 2 ;;
-    --monitor-hwm)
-      MONITOR_HWM="$2"
+    --monitor-hwm-bytes)
+      MONITOR_HWM_BYTES="$2"
       shift 2 ;;
     --server-shutdown-timeout-ms)
       SERVER_SHUTDOWN_TIMEOUT_MS="$2"
@@ -419,6 +419,10 @@ if [[ "${SMOKE}" -eq 1 && -n "${OUTPUT_FILE}" ]]; then
   echo "Error: --smoke cannot be combined with --output." >&2
   exit 1
 fi
+if [[ -n "${MONITOR_HWM_BYTES}" ]] && ! is_uint "${MONITOR_HWM_BYTES}"; then
+  echo "Error: --monitor-hwm-bytes must be a non-negative integer." >&2
+  exit 1
+fi
 
 if [[ -n "${HWM}" ]]; then
   export PERF_MULTI_HWM="${HWM}"
@@ -462,8 +466,8 @@ fi
 if [[ -n "${SERVER_READY_TIMEOUT_MS}" ]]; then
   export PERF_MULTI_SERVER_READY_TIMEOUT_MS="${SERVER_READY_TIMEOUT_MS}"
 fi
-if [[ -n "${MONITOR_HWM}" ]]; then
-  export PERF_MULTI_MONITOR_HWM="${MONITOR_HWM}"
+if [[ -n "${MONITOR_HWM_BYTES}" ]]; then
+  export PERF_MULTI_MONITOR_HWM_BYTES="${MONITOR_HWM_BYTES}"
 fi
 if [[ -n "${SERVER_SHUTDOWN_TIMEOUT_MS}" ]]; then
   export PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS="${SERVER_SHUTDOWN_TIMEOUT_MS}"
@@ -847,7 +851,7 @@ emit_effective_options_multi() {
   echo "- rcvtimeo_ms: ${RCVTIMEO_MS:-${PERF_MULTI_RCVTIMEO_MS:-200}}"
   echo "- connect_concurrency: ${CONNECT_CONCURRENCY:-128 (default)}"
   echo "- connect_ready_timeout_ms: ${CONNECT_READY_TIMEOUT_MS:-${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-1000}}}"
-  echo "- monitor_hwm: ${MONITOR_HWM:-${PERF_MULTI_MONITOR_HWM:-1000}}"
+  echo "- monitor_hwm_bytes: ${MONITOR_HWM_BYTES:-${PERF_MULTI_MONITOR_HWM_BYTES:-${PERF_MONITOR_HWM_BYTES:-4096000}}}"
   echo "- server_ready_timeout_ms: ${SERVER_READY_TIMEOUT_MS:-${PERF_MULTI_SERVER_READY_TIMEOUT_MS:-${PERF_SERVER_READY_TIMEOUT_MS:-10000}}}"
   echo "- server_shutdown_timeout_ms: ${SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}}}"
   echo "- server_bind_port: ${SERVER_BIND_PORT:-${PERF_MULTI_SERVER_BIND_PORT:-0}}"

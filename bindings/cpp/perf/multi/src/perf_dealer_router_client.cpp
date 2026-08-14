@@ -96,14 +96,14 @@ class dealer_router_client_bench_t
         _phase_cfg.active_seconds = std::max (1, _settings.duration_seconds);
     }
 
-    bool run ()
+    perf::async_task_t<bool> run ()
     {
         if (!setup_sockets ())
-            return false;
+            co_return false;
 
         bool ok = true;
-        if (!run_phase (perf_metric::phase_active, _phase_cfg.active_seconds, &_result.active_count,
-                        &_result.latency)) {
+        if (!co_await run_phase (perf_metric::phase_active, _phase_cfg.active_seconds,
+                                 &_result.active_count, &_result.latency)) {
             ok = false;
         }
 
@@ -115,7 +115,7 @@ class dealer_router_client_bench_t
         // The server is terminated via the run_comparison.py stdin STOP
         // path (and SIGTERM fallback). dotnet removed its equivalent
         // TrySendStopToken for the same reason.
-        return ok;
+        co_return ok;
     }
 
   private:
@@ -135,8 +135,6 @@ class dealer_router_client_bench_t
                   reinterpret_cast<const uint8_t *> (routing_id.data ()), routing_id.size ()));
 
                 perf::multi::apply_benchmark_socket_options (sock, _settings, _transport);
-                if (!perf::multi::apply_benchmark_auto_hwm_msg_unit (_ctx, _msg_size))
-                    return false;
                 if (!perf::multi::setup_tls_client (sock, _transport))
                     return false;
                 _monitors.push_back (perf::multi::connect_monitor_t ());
@@ -201,48 +199,42 @@ class dealer_router_client_bench_t
         }
     }
 
-    bool try_send_request (socket_state_t &state, perf_metric::phase_t phase)
+    perf::async_task_t<bool> try_send_request (socket_state_t &state,
+                                               perf_metric::phase_t phase)
     {
         std::vector<char> &request_buffer =
           state.use_per_socket_buffer ? state.request_buffer : _shared_request_buffer;
         if (!state.sock || request_buffer.empty ())
-            return false;
+            co_return false;
 
         const uint64_t sent_ts_ns = perf_metric::now_ns ();
         if (!perf_metric::stamp_payload (&request_buffer[0], state.payload_size, _run_id, phase,
                                          _msg_size, _seq, sent_ts_ns)) {
-            return false;
+            co_return false;
         }
 
         state.request = zlink::message_t::from (
           std::as_bytes (std::span<const char> (request_buffer.data (), state.payload_size)));
         if (!state.request.valid ()) {
-            return false;
+            co_return false;
         }
 
         try {
-            if (std::move (state.sock->send ())
-                  .message (state.request)
-                  .flags (zlink::send_flags_t::dontwait)
-                  .submit ()) {
-                ++_seq;
-                state.awaiting_reply = true;
-                state.send_pending = false;
-                return set_pollout (state, false);
-            }
-            state.send_pending = true;
-            errno = EAGAIN;
-            return set_pollout (state, true);
+            co_await std::move (state.sock->send ()).message (state.request).async ();
+            ++_seq;
+            state.awaiting_reply = true;
+            state.send_pending = false;
+            co_return true;
         }
         catch (const zlink::submit_error_t &err) {
             const int err_no = err.internal_errno ();
             if (err_no == EAGAIN || err_no == EWOULDBLOCK) {
                 state.send_pending = true;
                 errno = err_no;
-                return set_pollout (state, true);
+                co_return false;
             }
             errno = err_no;
-            return false;
+            co_return false;
         }
     }
 
@@ -270,21 +262,21 @@ class dealer_router_client_bench_t
         return 0;
     }
 
-    bool run_phase (perf_metric::phase_t phase,
-                    int seconds,
-                    unsigned long long *count_out,
-                    perf::multi::bench_latency_stats_t *lat_out)
+    perf::async_task_t<bool> run_phase (perf_metric::phase_t phase,
+                                        int seconds,
+                                        unsigned long long *count_out,
+                                        perf::multi::bench_latency_stats_t *lat_out)
     {
         if (seconds <= 0) {
             if (count_out)
                 *count_out = 0;
             if (lat_out)
                 *lat_out = perf::multi::bench_latency_stats_t ();
-            return true;
+            co_return true;
         }
 
         if (_socket_states.empty ())
-            return false;
+            co_return false;
 
         try {
             perf::multi::bench_latency_sampler_t latency;
@@ -301,19 +293,11 @@ class dealer_router_client_bench_t
                 socket_state_t &state = _socket_states[attempt];
                 if (state.awaiting_reply || state.send_pending || !state.sock)
                     continue;
-                if (!try_send_request (state, phase))
-                    return false;
+                if (!co_await try_send_request (state, phase))
+                    co_return false;
             }
 
             while (std::chrono::steady_clock::now () < deadline) {
-                for (size_t i = 0; i < _socket_states.size (); ++i) {
-                    socket_state_t &state = _socket_states[i];
-                    if (!state.sock || state.awaiting_reply || !state.send_pending)
-                        continue;
-                    if (!try_send_request (state, phase))
-                        return false;
-                }
-
                 const size_t capacity = _socket_states.size () + 1;
                 if (_poll_events.size () < capacity)
                     _poll_events.resize (capacity);
@@ -332,12 +316,6 @@ class dealer_router_client_bench_t
 
                     if (!(static_cast<short> (_poll_events[i].revents)
                           & static_cast<short> (zlink::poll_event_flag_t::pollin))) {
-                        if ((static_cast<short> (_poll_events[i].revents)
-                             & static_cast<short> (zlink::poll_event_flag_t::pollout))
-                            && state->send_pending) {
-                            if (!try_send_request (*state, phase))
-                                return false;
-                        }
                         continue;
                     }
 
@@ -350,7 +328,7 @@ class dealer_router_client_bench_t
                                 break;
                             if (err == EINTR)
                                 continue;
-                            return false;
+                            co_return false;
                         }
                         state->awaiting_reply = false;
                         if (recv_rc > 0) {
@@ -368,15 +346,9 @@ class dealer_router_client_bench_t
                             latency.add (latency_ns);
                         }
 
-                        if (std::chrono::steady_clock::now () < deadline)
-                            state->send_pending = true;
-                    }
-
-                    if ((static_cast<short> (_poll_events[i].revents)
-                         & static_cast<short> (zlink::poll_event_flag_t::pollout))
-                        && state->send_pending) {
-                        if (!try_send_request (*state, phase))
-                            return false;
+                        if (std::chrono::steady_clock::now () < deadline
+                            && !co_await try_send_request (*state, phase))
+                            co_return false;
                     }
                 }
             }
@@ -385,10 +357,10 @@ class dealer_router_client_bench_t
                 *count_out = count;
             if (lat_out)
                 *lat_out = latency.snapshot ();
-            return true;
+            co_return true;
         }
         catch (const zlink::binding_error_t &) {
-            return false;
+            co_return false;
         }
     }
 
@@ -423,30 +395,30 @@ class dealer_router_client_bench_t
 
 } // namespace
 
-bool perf_dealer_router_client (const std::string &lib_name,
-                                const std::string &transport,
-                                size_t msg_size,
-                                const std::string &endpoint)
+perf::async_task_t<bool> perf_dealer_router_client (const std::string &lib_name,
+                                                    const std::string &transport,
+                                                    size_t msg_size,
+                                                    const std::string &endpoint)
 {
     perf::multi::set_perf_pattern_env (k_pattern_env);
 
     if (!perf::multi::is_supported_transport (transport)) {
         std::cout << "UNSUPPORTED," << lib_name << "," << k_pattern_result << "," << transport
                   << std::endl;
-        return true;
+        co_return true;
     }
 
     const perf::multi::multi_bench_settings_t settings =
       perf::multi::resolve_multi_bench_settings ();
 
     dealer_router_client_bench_t bench (transport, lib_name, msg_size, endpoint, settings);
-    if (!bench.run ()) {
+    if (!co_await bench.run ()) {
         std::cerr << "DEALER_ROUTER_CLIENT_FAIL,transport=" << transport << ",size=" << msg_size
                   << std::endl;
-        return false;
+        co_return false;
     }
 
-    return true;
+    co_return true;
 }
 
 int main (int argc, char **argv)
@@ -468,5 +440,5 @@ int main (int argc, char **argv)
         return 1;
     }
 
-    return perf_dealer_router_client (lib_name, transport, size, endpoint) ? 0 : 1;
+    return perf_dealer_router_client (lib_name, transport, size, endpoint).get () ? 0 : 1;
 }

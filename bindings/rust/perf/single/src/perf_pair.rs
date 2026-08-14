@@ -13,7 +13,6 @@ fn main() {
     };
 
     let ctx = common::perf_context();
-    common::apply_single_auto_hwm_msg_unit(&ctx, config.size);
     let receiver = ctx.pair_socket().expect("receiver");
     let sender = ctx.pair_socket().expect("sender");
     // Match C perf: the context message unit follows the payload size, while

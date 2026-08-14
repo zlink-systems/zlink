@@ -46,6 +46,17 @@ internal static partial class NativeMethods
         out IntPtr sourceRoutingId, ref ZlinkMsg part, out int hasMore,
         int flags);
 
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int zlink_recv_part_with_hwm_budget_lease(
+        IntPtr socket, out IntPtr sourceRoutingId, ref ZlinkMsg part,
+        out IntPtr lease, out int hasMore, int flags);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial void zlink_hwm_budget_lease_release(
+        ref IntPtr lease);
+
     // DONT_WAIT-only variant: same C function, kept as a separate entry point
     // so managed code can choose the non-blocking path explicitly.
     [LibraryImport(LibraryName, EntryPoint = "zlink_recv_part")]
@@ -60,13 +71,11 @@ internal static partial class NativeMethods
         ref ZlinkMsg part, out int hasMore, int flags);
 
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int zlink_router_completion_control_part(
-        IntPtr router, ref ZlinkRoutingId peerRoutingId,
-        ref ZlinkMsg part, ZlinkPartFlag partFlag);
-
-    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
-    internal static extern int zlink_router_completion_control_handler(
-        IntPtr router, ZlinkSocketMsgHandlerDelegate handler, IntPtr userData);
+    internal static extern int
+        zlink_router_recv_part_v2_with_hwm_budget_lease(IntPtr router,
+            out IntPtr sourceNodeRoutingId, out ulong requestSeq,
+            out ulong transportPairId, out ulong transportPairGeneration,
+            ref ZlinkMsg part, out IntPtr lease, out int hasMore, int flags);
 
     // DONT_WAIT-only fast variant.
     [DllImport(LibraryName, EntryPoint = "zlink_router_recv_part",
@@ -86,6 +95,38 @@ internal static partial class NativeMethods
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int zlink_send_ready_handler(IntPtr subject,
         ZlinkSendReadyHandlerDelegate handler, IntPtr userData);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int zlink_routed_send_ready_handler(IntPtr subject,
+        ZlinkRoutedSendReadyHandlerDelegate handler, IntPtr userData);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int zlink_select_routed_submit_target(IntPtr subject,
+        IntPtr routerRoutingIdOrNull, out ZlinkRoutedSubmitTarget target);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int zlink_send_part_transport_pair(IntPtr router,
+        ref ZlinkRoutingId targetRoutingId, ulong transportPairId,
+        ulong transportPairGeneration, ref ZlinkMsg part, int flags,
+        ZlinkPartFlag partFlag);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int zlink_dealer_send_transport_pair_part(
+        IntPtr dealer, ref ZlinkRoutedSubmitTarget target, ref ZlinkMsg part,
+        int flags, ZlinkPartFlag partFlag);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int zlink_dealer_request_transport_pair_part(
+        IntPtr dealer, ref ZlinkRoutedSubmitTarget target, ref ZlinkMsg part,
+        int flags, ZlinkPartFlag partFlag, uint timeoutMs, IntPtr handler,
+        IntPtr userData);
+
+    [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int zlink_router_request_transport_pair_part(
+        IntPtr router, ref ZlinkRoutingId peerRoutingId,
+        ulong transportPairId, ulong transportPairGeneration,
+        ref ZlinkMsg part, int flags, ZlinkPartFlag partFlag, uint timeoutMs,
+        IntPtr handler, IntPtr userData);
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -178,4 +219,8 @@ internal static partial class NativeMethods
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate void ZlinkSendReadyHandlerDelegate(IntPtr subject,
         IntPtr userData);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void ZlinkRoutedSendReadyHandlerDelegate(IntPtr subject,
+        IntPtr readyEvent, IntPtr userData);
 }

@@ -6,6 +6,8 @@
 #include "operation_submit.hpp"
 #include "operation_state.hpp"
 
+#include <cerrno>
+
 namespace zlink
 {
 namespace
@@ -15,8 +17,16 @@ void submit_raw_reply (detail::operation_state_t &state_)
 {
     if (!state_.raw.socket || !state_.raw.target.first_rid)
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+    const std::shared_ptr<detail::socket_callback_state_t> callbacks =
+      state_.raw.callbacks.lock ();
+    if (!callbacks || callbacks->socket_closed.load (std::memory_order_acquire))
+        throw submit_error_t (submit_result_t::invalid_state, EINVAL);
 
     zlink::detail::throw_if_reply_flags_unsupported (state_.flags);
+    std::lock_guard<std::mutex> attempt_lock (
+      callbacks->outbound_record_attempt_mutex);
+    if (callbacks->socket_closed.load (std::memory_order_acquire))
+        throw submit_error_t (submit_result_t::invalid_state, EINVAL);
     const zlink_routing_id_t first_rid =
       zlink::detail::routing_id_native_value (*state_.raw.target.first_rid);
     const int rc = detail::submit_message_parts (

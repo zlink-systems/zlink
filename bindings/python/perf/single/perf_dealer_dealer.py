@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import threading
 import time
@@ -6,7 +7,6 @@ import zlink
 
 from perf_common import (
     STOP_TOKEN,
-    apply_single_auto_hwm_msg_unit,
     apply_single_socket_options,
     benchmark_run_id,
     configure_single_tls_client,
@@ -17,7 +17,7 @@ from perf_common import (
     poll_idle_ms,
     print_result_lines,
     run_one_way_receiver_public_recv,
-    send_nonblocking,
+    send_routed,
     result_metrics,
     resolve_single_endpoint,
     resolve_single_connect_ready_timeout_ms,
@@ -26,7 +26,7 @@ from perf_common import (
 )
 
 
-def _send_stop_token(sock):
+async def _send_stop_token(sock):
     """Send wire-level stop token once with bounded backpressure attempts.
 
     PERF_SINGLE_TEST_POLICY § 1.4: phase end is signalled on the wire by
@@ -37,7 +37,7 @@ def _send_stop_token(sock):
 
     for _ in range(100):
         try:
-            sock.send().message(STOP_TOKEN).submit()
+            await sock.send().message(STOP_TOKEN).submit()
             return
         except zlink.SubmitError as exc:
             if exc.result != zlink.SubmitResult.BACKPRESSURED:
@@ -49,25 +49,24 @@ def _public_one_way_metrics(sender, receiver, *, msg_size, duration_s, run_id):
     return None
 
 
-def main(argv=None):
+async def main(argv=None):
     args = parse_single_args(argv or sys.argv[1:], pattern="dealer_dealer")
     run_id = benchmark_run_id()
     latencies = []
     received = 0
     payload = new_payload(args.msg_size)
 
-    def send_loop(dealer, active_end):
-        # C send_active_samples: DONTWAIT send, re-stamp fresh now_ns on
-        # every retry, busy-loop through transient backpressure.
+    async def send_loop(dealer, active_end):
+        # Preserve C's fresh timestamp per attempt while the routed terminal
+        # suspends this coroutine until Core admission.
         while time.perf_counter() < active_end:
-            send_nonblocking(
+            await send_routed(
                 dealer, stamp_payload(payload, phase=1, run_id=run_id)
             )
         # PERF_SINGLE_TEST_POLICY § 1.4: signal phase end on the wire.
-        _send_stop_token(dealer)
+        await _send_stop_token(dealer)
 
     with perf_context() as ctx:
-        apply_single_auto_hwm_msg_unit(ctx, args.msg_size)
         with zlink.create_dealer_socket(ctx) as server:
             with zlink.create_dealer_socket(ctx) as client:
                 endpoint = resolve_single_endpoint(args.transport, "dealer-dealer")
@@ -92,9 +91,8 @@ def main(argv=None):
                     run_id=run_id,
                 )
                 if metrics is None:
-                    sender = threading.Thread(
-                        target=send_loop, args=(client, active_end), daemon=True
-                    )
+                    sender = threading.Thread(target=lambda: asyncio.run(
+                        send_loop(client, active_end)), daemon=True)
                     sender.start()
                     # C perf_single_one_way.hpp run_active_phase receiver.
                     received = run_one_way_receiver_public_recv(
@@ -121,4 +119,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

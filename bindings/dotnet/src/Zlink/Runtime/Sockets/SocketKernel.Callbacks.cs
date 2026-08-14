@@ -33,53 +33,70 @@ internal sealed partial class SocketKernel : IDisposable
             throw new ArgumentNullException(nameof(handler));
 
         var context = SynchronizationContext.Current;
-        var native = new NativeMethods.ZlinkSendReadyHandlerDelegate(
-            OnNativeSendReady);
-        _callbacks.SendReadyHandler = handler;
-        _callbacks.SendReadyHandlerContext = context;
-        _callbacks.SendReadyHandlerNative = native;
-        var rc = NativeMethods.zlink_send_ready_handler(Handle, native,
-            IntPtr.Zero);
-        if (rc != 0)
+        lock (_sendReadyRegistrationSync)
         {
-            _callbacks.ClearSendReady();
-            ZlinkException.ThrowHandlerIfError(rc);
+            _callbacks.SendReadyHandler = handler;
+            _callbacks.SendReadyHandlerContext = context;
+            try
+            {
+                EnsureNativeSendReadyHandlerLocked();
+            }
+            catch
+            {
+                _callbacks.SendReadyHandler = null;
+                _callbacks.SendReadyHandlerContext = null;
+                throw;
+            }
         }
     }
 
-    public void CompletionControlHandler(CompletionControlHandler handler)
+    private void AdmissionSendReadyHandler(Action handler)
     {
-        if (handler == null)
-            throw new ArgumentNullException(nameof(handler));
-
-        var context = SynchronizationContext.Current;
-        lock (_completionControlRegistrationSync)
+        lock (_sendReadyRegistrationSync)
         {
-            // Core always calls the same rooted trampoline. Replacing the
-            // managed target therefore cannot expose a collected native
-            // delegate or require a second native registration.
-            if (_callbacks.CompletionControlNative == null)
+            _callbacks.AdmissionSendReadyHandler = handler;
+            try
             {
-                var native = new NativeMethods.ZlinkSocketMsgHandlerDelegate(
-                    OnNativeCompletionControl);
-                _callbacks.PublishCompletionControl(handler, context);
-                _callbacks.CompletionControlNative = native;
-                var rc = NativeMethods.zlink_router_completion_control_handler(
-                    Handle, native, IntPtr.Zero);
-                if (rc != 0)
-                {
-                    _callbacks.ClearCompletionControl();
-                    ZlinkException.ThrowHandlerIfError(rc);
-                }
-                return;
+                EnsureNativeSendReadyHandlerLocked();
             }
-
-            _callbacks.PublishCompletionControl(handler, context);
+            catch
+            {
+                _callbacks.AdmissionSendReadyHandler = null;
+                throw;
+            }
         }
+    }
+
+    private void EnsureNativeSendReadyHandlerLocked()
+    {
+        if (_callbacks.SendReadyHandlerNative != null)
+            return;
+
+        var native = new NativeMethods.ZlinkSendReadyHandlerDelegate(
+            OnNativeSendReady);
+        _callbacks.SendReadyHandlerNative = native;
+        var rc = NativeMethods.zlink_send_ready_handler(Handle, native,
+            IntPtr.Zero);
+        if (rc == 0)
+            return;
+
+        _callbacks.SendReadyHandlerNative = null;
+        ZlinkException.ThrowHandlerIfError(rc);
     }
 
     private void OnNativeSendReady(IntPtr subject, IntPtr userData)
     {
+        var admission = _callbacks.AdmissionSendReadyHandler;
+        if (admission != null)
+            try
+            {
+                admission();
+            }
+            catch (Exception ex)
+            {
+                CallbackExceptionHub.Report(ex);
+            }
+
         var handler = _callbacks.SendReadyHandler;
         var context = _callbacks.SendReadyHandlerContext;
         if (handler == null)
@@ -140,47 +157,4 @@ internal sealed partial class SocketKernel : IDisposable
         }
     }
 
-    private unsafe void OnNativeCompletionControl(
-        IntPtr sourceRoutingId,
-        IntPtr parts,
-        nuint partCount,
-        IntPtr userData)
-    {
-        var callback = _callbacks.ReadCompletionControl();
-        if (callback == null || sourceRoutingId == IntPtr.Zero)
-        {
-            if (parts != IntPtr.Zero)
-                NativeMethods.zlink_multipart_close(parts, partCount);
-            return;
-        }
-
-        Message[]? managedParts = null;
-        var delivered = false;
-        try
-        {
-            var source = RoutingIdSnapshot
-                .FromPointer(sourceRoutingId)
-                .ToRoutingId()
-                ?? throw new InvalidOperationException(
-                    "Completion control source routing id was empty.");
-            managedParts = Message.FromNativeVector(parts, partCount);
-            parts = IntPtr.Zero;
-            partCount = 0;
-            delivered = true;
-            CallbackDelivery.Post(callback.Context,
-                () => callback.Handler(source, managedParts));
-        }
-        catch (Exception ex)
-        {
-            CallbackExceptionHub.Report(ex);
-            if (!delivered && managedParts != null)
-                foreach (var part in managedParts)
-                    part.Dispose();
-        }
-        finally
-        {
-            if (parts != IntPtr.Zero)
-                NativeMethods.zlink_multipart_close(parts, partCount);
-        }
-    }
 }

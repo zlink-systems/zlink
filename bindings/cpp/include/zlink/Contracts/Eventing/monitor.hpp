@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 #pragma once
 
+#include "../Core/byte_count.hpp"
 #include "../Errors/errors.hpp"
 #include "events.hpp"
 #include "status.hpp"
@@ -29,7 +30,8 @@ class socket_monitor_t
     socket_monitor_t ();
 
     static socket_monitor_t open (const socket_t &socket_,
-                                  monitor_event events_ = monitor_event::all);
+                                  monitor_event events_ = monitor_event::all,
+                                  byte_count_t monitor_hwm_bytes_ = byte_count_t::bytes (0));
 
     ~socket_monitor_t ();
 

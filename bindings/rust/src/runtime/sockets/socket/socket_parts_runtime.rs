@@ -99,6 +99,22 @@ pub(crate) fn routing_id_from_ptr(raw: *const ffi::zlink_routing_id_t) -> Option
 
 type RecvBasicParts = Result<Option<Option<RoutingId>>, RecvError>;
 type RecvSubscribedParts = Result<Option<(Option<RoutingId>, smol_str::SmolStr)>, RecvError>;
+type RecvRetainedParts = Result<
+    Option<(
+        Option<RoutingId>,
+        Option<u64>,
+        crate::internal::HwmBudgetLeaseOwner,
+    )>,
+    RecvError,
+>;
+type RecvRetainedSubscribedParts = Result<
+    Option<(
+        Option<RoutingId>,
+        smol_str::SmolStr,
+        crate::internal::HwmBudgetLeaseOwner,
+    )>,
+    RecvError,
+>;
 
 pub(crate) fn recv_basic_parts(
     handle: *mut c_void,
@@ -150,6 +166,83 @@ pub(crate) fn recv_basic_parts(
         parts.push(unsafe { Message::from_raw(part.assume_init()) });
         if has_more == ffi::zlink_part_flag_t::ZLINK_PART_FINAL {
             return Ok(Some(routing_id));
+        }
+        recv_flags = ffi::ZLINK_DONTWAIT;
+    }
+}
+
+pub(crate) fn recv_retained_parts(
+    handle: *mut c_void,
+    flags: ffi::zlink_recv_flags_t,
+    parts: &mut Vec<Message>,
+    dealer: bool,
+) -> RecvRetainedParts {
+    let mut routing_id = None;
+    let mut request_seq = None;
+    let mut recv_flags = flags;
+    let mut received_any = false;
+    let mut leases = crate::internal::HwmBudgetLeaseOwner::default();
+
+    loop {
+        let mut source_rid_ptr = ptr::null();
+        let mut message_type = 0u8;
+        let mut current_request_seq = 0u64;
+        let mut part = MaybeUninit::<ffi::zlink_msg_t>::uninit();
+        unsafe {
+            ffi::zlink_msg_init(part.as_mut_ptr());
+        }
+        let mut lease = ptr::null_mut();
+        let mut has_more = ffi::zlink_part_flag_t::ZLINK_PART_FINAL;
+        let rc = unsafe {
+            if dealer {
+                ffi::zlink_dealer_recv_part_with_hwm_budget_lease(
+                    handle,
+                    &mut message_type,
+                    &mut current_request_seq,
+                    part.as_mut_ptr(),
+                    &mut lease,
+                    &mut has_more,
+                    recv_flags,
+                )
+            } else {
+                ffi::zlink_recv_part_with_hwm_budget_lease(
+                    handle,
+                    &mut source_rid_ptr,
+                    part.as_mut_ptr(),
+                    &mut lease,
+                    &mut has_more,
+                    recv_flags,
+                )
+            }
+        };
+        leases.adopt(lease);
+
+        if !received_any {
+            if rc == RecvResult::NoData as i32 {
+                close_unreceived_part(&mut part);
+                return Ok(None);
+            }
+            if rc != 0 {
+                close_unreceived_part(&mut part);
+                let errno = unsafe { ffi::zlink_errno() };
+                if errno == libc::EAGAIN {
+                    return Ok(None);
+                }
+                return Err(check_recv_rc(rc).unwrap_err());
+            }
+            routing_id = routing_id_from_ptr(source_rid_ptr);
+            request_seq = (current_request_seq != 0).then_some(current_request_seq);
+            parts.clear();
+            received_any = true;
+        } else if rc != 0 {
+            close_unreceived_part(&mut part);
+            parts.clear();
+            return Err(check_recv_rc(rc).unwrap_err());
+        }
+
+        parts.push(unsafe { Message::from_raw(part.assume_init()) });
+        if has_more == ffi::zlink_part_flag_t::ZLINK_PART_FINAL {
+            return Ok(Some((routing_id, request_seq, leases)));
         }
         recv_flags = ffi::ZLINK_DONTWAIT;
     }
@@ -212,6 +305,73 @@ pub(crate) fn recv_subscribed_parts(
         parts.push(unsafe { Message::from_raw(part.assume_init()) });
         if has_more == ffi::zlink_part_flag_t::ZLINK_PART_FINAL {
             return Ok(Some((routing_id, topic)));
+        }
+        recv_flags = ffi::ZLINK_DONTWAIT;
+    }
+}
+
+pub(crate) fn recv_retained_subscribed_parts(
+    handle: *mut c_void,
+    topic_buf: &mut [i8; 256],
+    flags: ffi::zlink_recv_flags_t,
+    parts: &mut Vec<Message>,
+) -> RecvRetainedSubscribedParts {
+    let mut routing_id = None;
+    let mut topic = smol_str::SmolStr::default();
+    let mut recv_flags = flags;
+    let mut received_any = false;
+    let mut leases = crate::internal::HwmBudgetLeaseOwner::default();
+
+    loop {
+        let mut source_rid_ptr = ptr::null();
+        let mut topic_len = topic_buf.len();
+        let mut part = MaybeUninit::<ffi::zlink_msg_t>::uninit();
+        unsafe {
+            ffi::zlink_msg_init(part.as_mut_ptr());
+        }
+        let mut lease = ptr::null_mut();
+        let mut has_more = ffi::zlink_part_flag_t::ZLINK_PART_FINAL;
+        let rc = unsafe {
+            ffi::zlink_subscribe_part_with_hwm_budget_lease(
+                handle,
+                &mut source_rid_ptr,
+                topic_buf.as_mut_ptr(),
+                topic_buf.len(),
+                &mut topic_len,
+                part.as_mut_ptr(),
+                &mut lease,
+                &mut has_more,
+                recv_flags,
+            )
+        };
+        leases.adopt(lease);
+
+        if !received_any {
+            if rc == RecvResult::NoData as i32 {
+                close_unreceived_part(&mut part);
+                return Ok(None);
+            }
+            if rc != 0 {
+                close_unreceived_part(&mut part);
+                let errno = unsafe { ffi::zlink_errno() };
+                if errno == libc::EAGAIN {
+                    return Ok(None);
+                }
+                return Err(check_recv_rc(rc).unwrap_err());
+            }
+            routing_id = routing_id_from_ptr(source_rid_ptr);
+            topic = cstr_buf_to_smolstr(topic_buf, topic_len);
+            parts.clear();
+            received_any = true;
+        } else if rc != 0 {
+            close_unreceived_part(&mut part);
+            parts.clear();
+            return Err(check_recv_rc(rc).unwrap_err());
+        }
+
+        parts.push(unsafe { Message::from_raw(part.assume_init()) });
+        if has_more == ffi::zlink_part_flag_t::ZLINK_PART_FINAL {
+            return Ok(Some((routing_id, topic, leases)));
         }
         recv_flags = ffi::ZLINK_DONTWAIT;
     }

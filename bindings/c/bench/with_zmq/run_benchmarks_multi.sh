@@ -344,7 +344,7 @@ Options:
                          Override BENCH_SERVER_READY_TIMEOUT_MS (default: 10000).
   --connect-ready-timeout-ms N
                          Override connect-ready timeout ms (default: 5000).
-  --monitor-hwm N        Override monitor hwm (default: 1000).
+  --monitor-hwm-bytes N  Override monitor HWM bytes (default: 1000).
   --server-shutdown-timeout-ms N
                          Override BENCH_SERVER_SHUTDOWN_TIMEOUT_MS (default: 5000).
   --server-bind-port N
@@ -542,7 +542,7 @@ TRANSPORT_TRANSITION_MS="${PERF_TRANSPORT_TRANSITION_MS:-3000}"
 PATTERN_TRANSITION_MS="${PERF_PATTERN_TRANSITION_MS:-3000}"
 SERVER_READY_TIMEOUT_MS="${PERF_SERVER_READY_TIMEOUT_MS:-10000}"
 CONNECT_READY_TIMEOUT_MS="${PERF_CONNECT_READY_TIMEOUT_MS:-5000}"
-MONITOR_HWM="${PERF_MONITOR_HWM:-1000}"
+MONITOR_HWM_BYTES="${PERF_MONITOR_HWM_BYTES:-1000}"
 SERVER_SHUTDOWN_TIMEOUT_MS="${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}"
 SERVER_BIND_PORT="${PERF_SERVER_BIND_PORT:-0}"
 
@@ -767,12 +767,12 @@ while [[ $# -gt 0 ]]; do
       CONNECT_READY_TIMEOUT_MS="${2}"
       shift 2
       ;;
-    --monitor-hwm)
+    --monitor-hwm-bytes)
       if [[ $# -lt 2 ]]; then
         echo "Error: $1 requires a value." >&2
         exit 1
       fi
-      MONITOR_HWM="${2}"
+      MONITOR_HWM_BYTES="${2}"
       shift 2
       ;;
     --server-shutdown-timeout-ms)
@@ -852,8 +852,8 @@ if ! is_uint "${CONNECT_READY_TIMEOUT_MS}"; then
   echo "Error: --connect-ready-timeout-ms must be a non-negative integer." >&2
   exit 1
 fi
-if ! is_uint "${MONITOR_HWM}"; then
-  echo "Error: --monitor-hwm must be a non-negative integer." >&2
+if ! is_uint "${MONITOR_HWM_BYTES}"; then
+  echo "Error: --monitor-hwm-bytes must be a non-negative integer." >&2
   exit 1
 fi
 if ! is_uint "${SERVER_SHUTDOWN_TIMEOUT_MS}"; then
@@ -1007,7 +1007,7 @@ run_all_patterns() {
     cmd+=(--sndtimeo-ms "${SNDTIMEO_MS}")
     cmd+=(--rcvtimeo-ms "${RCVTIMEO_MS}")
     cmd+=(--connect-ready-timeout-ms "${CONNECT_READY_TIMEOUT_MS}")
-    cmd+=(--monitor-hwm "${MONITOR_HWM}")
+    cmd+=(--monitor-hwm-bytes "${MONITOR_HWM_BYTES}")
     cmd+=(--connect-concurrency "${pattern_connect_concurrency}")
     cmd+=(--io-threads "${pattern_io_threads}")
     cmd+=(--build-dir "${BUILD_DIR}")
