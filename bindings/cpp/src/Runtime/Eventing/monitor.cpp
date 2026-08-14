@@ -178,7 +178,7 @@ void socket_monitor_t::on_event (std::function<void (const monitor_event_t &)> h
 std::optional<monitor_event_t> socket_monitor_t::recv (recv_flags_t flags_)
 {
     zlink_monitor_event_t event;
-    const recv_result_t result = static_cast<recv_result_t> (zlink_socket_monitor_recv_v2 (
+    const recv_result_t result = static_cast<recv_result_t> (zlink_socket_monitor_recv (
       _impl->handle, &event, static_cast<zlink_recv_flags_t> (static_cast<int> (flags_))));
     if (result == recv_result_t::no_data && flags_ == recv_flags_t::dontwait)
         return std::nullopt;

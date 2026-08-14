@@ -93,7 +93,9 @@ public sealed class test_stream_socket
 
     private static bool HasPublicReceiveWithFlags()
     {
-        return typeof(IRoutedMessageSocket).GetMethod("Recv",
+        Type receivingSocket = typeof(IReceivingMessageSocket);
+        return receivingSocket.IsAssignableFrom(typeof(IRoutedMessageSocket))
+            && receivingSocket.GetMethod("Recv",
             BindingFlags.Instance | BindingFlags.Public, binder: null,
             types: new[] { typeof(Received), typeof(RecvFlags) },
             modifiers: null) != null;

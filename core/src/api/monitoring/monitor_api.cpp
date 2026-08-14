@@ -145,7 +145,7 @@ void monitor_handler_task (void *arg_)
     void *monitor_socket = static_cast<void *> (state_->socket);
     while (!state_->stop.load (std::memory_order_acquire)) {
         zlink_monitor_event_t event;
-        const int rc = recv_socket_monitor_event_extended_unchecked (
+        const int rc = recv_socket_monitor_event_unchecked (
           monitor_socket, &event, ZLINK_DONTWAIT);
         if (rc != 0)
             break;

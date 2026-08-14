@@ -3781,7 +3781,7 @@ napi_value retained_router_recv_message (napi_env env,
 
     napi_value out = create_router_recv_message_value (
       env, peer_rid, request_seq, transport_pair_id,
-      transport_pair_generation, parts.data (), parts.size ());
+      transport_pair_generation, parts.data (), parts.size (), false, NULL);
     close_msg_vector (parts);
     if (!out) {
         delete owner;
@@ -3867,7 +3867,7 @@ napi_value monitor_recv (napi_env env, napi_callback_info info)
     napi_get_value_external (env, argv[0], &mon);
     (void) argv;
     zlink_monitor_event_t evt;
-    int rc = zlink_socket_monitor_recv_v2 (mon, &evt, ZLINK_RECV_FLAGS_NONE);
+    int rc = zlink_socket_monitor_recv (mon, &evt, ZLINK_RECV_FLAGS_NONE);
     if (rc != 0)
         return throw_last_error (env, "monitor_recv failed");
     return create_socket_monitor_event_value (env, evt);
@@ -3882,7 +3882,7 @@ napi_value monitor_try_recv (napi_env env, napi_callback_info info)
     napi_get_value_external (env, argv[0], &mon);
 
     zlink_monitor_event_t evt;
-    int rc = zlink_socket_monitor_recv_v2 (mon, &evt, ZLINK_RECV_FLAGS_DONTWAIT);
+    int rc = zlink_socket_monitor_recv (mon, &evt, ZLINK_RECV_FLAGS_DONTWAIT);
     if (rc != 0) {
         if (zlink_errno () == EAGAIN) {
             napi_value none;

@@ -51,7 +51,6 @@ int recv_socket_monitor_event_internal (void *monitor_socket_,
                                         zlink_monitor_event_t *event_,
                                         uint64_t *connection_id_out_,
                                         uint32_t *internal_flags_out_,
-                                        bool extended_output_,
                                         int flags_)
 {
     if (!monitor_socket_ || !event_) {
@@ -64,12 +63,7 @@ int recv_socket_monitor_event_internal (void *monitor_socket_,
     if (rc == -1)
         return -1;
 
-    // zlink_monitor_event_t grew in 0.9.0. The legacy recv entry point must
-    // remain safe for callers compiled with the preceding layout, so it only
-    // writes the stable prefix. The versioned entry point opts into the
-    // identity fields explicitly.
-    constexpr std::size_t legacy_size = offsetof (zlink_monitor_event_t, connection_id);
-    memset (event_, 0, extended_output_ ? sizeof (*event_) : legacy_size);
+    memset (event_, 0, sizeof (*event_));
     if (connection_id_out_)
         *connection_id_out_ = 0;
     if (internal_flags_out_)
@@ -80,25 +74,20 @@ int recv_socket_monitor_event_internal (void *monitor_socket_,
         socket_monitor_internal_event_t internal_event;
         memcpy (&internal_event, zlink_msg_data (first_frame.get ()),
                 sizeof (internal_event));
-        if (extended_output_) {
-            *event_ = internal_event.event;
-            event_->connection_id = internal_event.connection_id;
-            event_->transport_pair_id = internal_event.transport_pair_id;
-            event_->transport_pair_generation = internal_event.transport_pair_generation;
-            event_->transport_lane = internal_event.transport_lane;
-            event_->flags = internal_event.internal_flags;
-        } else {
-            memcpy (event_, &internal_event.event, legacy_size);
-        }
+        *event_ = internal_event.event;
+        event_->connection_id = internal_event.connection_id;
+        event_->transport_pair_id = internal_event.transport_pair_id;
+        event_->transport_pair_generation = internal_event.transport_pair_generation;
+        event_->transport_lane = internal_event.transport_lane;
+        event_->flags = internal_event.internal_flags;
         if (connection_id_out_)
             *connection_id_out_ = internal_event.connection_id;
         if (internal_flags_out_)
             *internal_flags_out_ = internal_event.internal_flags;
         return 0;
     }
-    const std::size_t output_size = extended_output_ ? sizeof (*event_) : legacy_size;
-    if (zlink_msg_size (first_frame.get ()) >= output_size) {
-        memcpy (event_, zlink_msg_data (first_frame.get ()), output_size);
+    if (zlink_msg_size (first_frame.get ()) >= sizeof (*event_)) {
+        memcpy (event_, zlink_msg_data (first_frame.get ()), sizeof (*event_));
         return 0;
     }
 
@@ -162,15 +151,7 @@ int recv_socket_monitor_event_unchecked (void *monitor_socket_,
                                          int flags_)
 {
     return recv_socket_monitor_event_internal (
-      monitor_socket_, event_, NULL, NULL, false, flags_);
-}
-
-int recv_socket_monitor_event_extended_unchecked (void *monitor_socket_,
-                                                  zlink_monitor_event_t *event_,
-                                                  int flags_)
-{
-    return recv_socket_monitor_event_internal (
-      monitor_socket_, event_, NULL, NULL, true, flags_);
+      monitor_socket_, event_, NULL, NULL, flags_);
 }
 
 zlink_recv_result_t zlink_socket_monitor_recv (void *monitor_,
@@ -181,17 +162,6 @@ zlink_recv_result_t zlink_socket_monitor_recv (void *monitor_,
         return zlink::recv_result_internal::from_errno (errno);
     return zlink::recv_result_internal::from_rc (
       recv_socket_monitor_event_unchecked (monitor_, out_, static_cast<int> (flags_)));
-}
-
-zlink_recv_result_t zlink_socket_monitor_recv_v2 (void *monitor_,
-                                                  zlink_socket_monitor_event_t *out_,
-                                                  zlink_recv_flags_t flags_)
-{
-    if (require_monitor_recv_model (monitor_) != 0)
-        return zlink::recv_result_internal::from_errno (errno);
-    return zlink::recv_result_internal::from_rc (
-      recv_socket_monitor_event_internal (
-        monitor_, out_, NULL, NULL, true, static_cast<int> (flags_)));
 }
 
 zlink_config_result_t zlink_monitor_status (void *monitor_, zlink_monitor_status_t *out_)
