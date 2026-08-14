@@ -14,7 +14,6 @@ import systems.zlink.contracts.eventing.ZlinkTimer;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.TopicMessage;
-import systems.zlink.contracts.sockets.RequestCallback;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RouterSocket;
@@ -26,10 +25,8 @@ import systems.zlink.runtime.eventing.NativeTimer;
 import systems.zlink.runtime.sockets.SocketMessageHandler;
 import systems.zlink.runtime.messaging.ReceivedPartCursor;
 import java.lang.foreign.MemorySegment;
-import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 
@@ -73,26 +70,16 @@ public final class InternalAccess {
     }
 
     public interface RuntimeSocketAccess {
-        CompletableFuture<List<Message>> dealerRequestAsync(
-            DealerSocket socket, List<Message> parts, SendFlags flags,
-            Duration timeout);
-        boolean dealerRequestCallback(DealerSocket socket, List<Message> parts,
-                                      RequestCallback callback,
-                                      SendFlags flags, Duration timeout);
         Object routerReceiveSupport(RouterSocket socket,
                                     boolean closeSocketOnClose);
         Received routerRecv(Object support, RecvFlags flags);
         boolean routerRecvInto(Object support, Received target,
                                RecvFlags flags);
+        boolean routerRecvRetainedInto(Object support, Received target,
+                                       RecvFlags flags);
         void routerOnReceive(Object support, SocketMessageHandler handler);
         void routerReceiveBeginClose(Object support);
         void routerReceiveFinishClose(Object support);
-        CompletableFuture<List<Message>> routerRequestAsync(
-            RouterSocket socket, RoutingId routingId, List<Message> parts,
-            SendFlags flags, Duration timeout);
-        boolean routerRequestCallback(
-            RouterSocket socket, RoutingId routingId, List<Message> parts,
-            RequestCallback callback, SendFlags flags, Duration timeout);
         void routerReply(RouterSocket socket, RoutingId routingId,
                          long requestSequence, List<Message> parts);
     }
@@ -413,20 +400,6 @@ public final class InternalAccess {
         socketAccess().leaveCallback();
     }
 
-    public static CompletableFuture<List<Message>> dealerRequestAsync(
-            DealerSocket socket, List<Message> parts, SendFlags flags,
-            Duration timeout) {
-        return runtimeSocketAccess().dealerRequestAsync(socket, parts, flags,
-            timeout);
-    }
-
-    public static boolean dealerRequestCallback(
-            DealerSocket socket, List<Message> parts, RequestCallback callback,
-            SendFlags flags, Duration timeout) {
-        return runtimeSocketAccess().dealerRequestCallback(socket, parts,
-            callback, flags, timeout);
-    }
-
     public static Object routerReceiveSupport(RouterSocket socket,
                                               boolean closeSocketOnClose) {
         return runtimeSocketAccess().routerReceiveSupport(socket,
@@ -442,6 +415,13 @@ public final class InternalAccess {
         return runtimeSocketAccess().routerRecvInto(support, target, flags);
     }
 
+    public static boolean routerRecvRetainedInto(Object support,
+                                                 Received target,
+                                                 RecvFlags flags) {
+        return runtimeSocketAccess().routerRecvRetainedInto(support, target,
+            flags);
+    }
+
     public static void routerOnReceive(Object support,
                                        SocketMessageHandler handler) {
         runtimeSocketAccess().routerOnReceive(support, handler);
@@ -453,20 +433,6 @@ public final class InternalAccess {
 
     public static void routerReceiveFinishClose(Object support) {
         runtimeSocketAccess().routerReceiveFinishClose(support);
-    }
-
-    public static CompletableFuture<List<Message>> routerRequestAsync(
-            RouterSocket socket, RoutingId routingId, List<Message> parts,
-            SendFlags flags, Duration timeout) {
-        return runtimeSocketAccess().routerRequestAsync(socket, routingId,
-            parts, flags, timeout);
-    }
-
-    public static boolean routerRequestCallback(
-            RouterSocket socket, RoutingId routingId, List<Message> parts,
-            RequestCallback callback, SendFlags flags, Duration timeout) {
-        return runtimeSocketAccess().routerRequestCallback(socket, routingId,
-            parts, callback, flags, timeout);
     }
 
     public static void routerReply(RouterSocket socket, RoutingId routingId,

@@ -13,7 +13,6 @@ const {
 } = require('../common/perf_metrics');
 const {
   applyContextPolicy,
-  applyAutoHwmMsgUnit,
   applySocketPolicy,
   benchmarkEndpoint,
   closeSenderWorker,
@@ -49,7 +48,6 @@ async function runPairBenchmark(msgSize, options) {
 
   try {
     applySocketPolicy(server, options);
-    applyAutoHwmMsgUnit(ctx, msgSize);
     ctx.recalculateAutoHwm();
     configureTlsServer(server, options.transport);
     server.bind(endpoint);

@@ -7,6 +7,7 @@ namespace Systems.Zlink;
 public sealed partial class TopicMessage
 {
     private int _closed;
+    private HwmBudgetLeaseOwner? _hwmBudgetLeases;
     private MultipartMessageCollection? _parts;
     private RoutingId? _routingId;
     private RoutingIdSnapshot _routingIdSnapshot;
@@ -130,6 +131,11 @@ public sealed partial class TopicMessage
         return topicWriteBuffer;
     }
 
+    internal void PrepareForSubscribe()
+    {
+        ResetForReuse(false);
+    }
+
     internal void PopulateFromWritableTopicBuffer(RoutingId? routingId,
         int topicLength, MultipartMessageCollection parts)
     {
@@ -150,21 +156,23 @@ public sealed partial class TopicMessage
 
     internal void PopulateFromWritableTopicBuffer(
         RoutingIdSnapshot routingId, int topicLength,
-        MultipartMessageCollection parts)
+        MultipartMessageCollection parts,
+        HwmBudgetLeaseOwner? hwmBudgetLeases = null)
     {
-        ResetForReuse(false);
         SetTopicFromWritableBuffer(topicLength);
         PopulatePartsCore(null, routingId, parts);
+        _hwmBudgetLeases = hwmBudgetLeases;
     }
 
     internal void PopulateSinglePartFromWritableTopicBuffer(
-        RoutingIdSnapshot routingId, int topicLength, Message singlePart)
+        RoutingIdSnapshot routingId, int topicLength, Message singlePart,
+        HwmBudgetLeaseOwner? hwmBudgetLeases = null)
     {
         if (singlePart == null)
             throw new ArgumentNullException(nameof(singlePart));
-        ResetForReuse(false);
         SetTopicFromWritableBuffer(topicLength);
         PopulateSinglePartCore(null, routingId, singlePart);
+        _hwmBudgetLeases = hwmBudgetLeases;
     }
 
     private void PopulatePartsCore(RoutingId? routingId,
@@ -188,10 +196,18 @@ public sealed partial class TopicMessage
         if (reopen)
             EnsureOpen();
 
-        if (_parts != null)
-            _parts.Dispose();
-        else
-            _singlePart?.Dispose();
+        try
+        {
+            if (_parts != null)
+                _parts.Dispose();
+            else
+                _singlePart?.Dispose();
+        }
+        finally
+        {
+            _hwmBudgetLeases?.Dispose();
+            _hwmBudgetLeases = null;
+        }
         _parts = null;
         _singlePart = null;
         _routingId = null;

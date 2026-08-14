@@ -6,6 +6,7 @@
 #include "zlink/Contracts/Core/byte_count.hpp"
 #include "zlink/Contracts/Core/context.hpp"
 #include "zlink/Contracts/Core/context_options.hpp"
+#include "zlink/Contracts/Core/core_hwm_budget_snapshot.hpp"
 #include "zlink/Contracts/Core/routing_id.hpp"
 #include "zlink/Contracts/Core/utilities.hpp"
 #include "zlink/Contracts/Errors/errors.hpp"

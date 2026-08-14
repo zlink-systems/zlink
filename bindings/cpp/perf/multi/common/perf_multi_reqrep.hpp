@@ -8,6 +8,7 @@
 #include "perf_metric_header.hpp"
 
 #include <atomic>
+#include <condition_variable>
 #include <csignal>
 #include <memory>
 #include <mutex>
@@ -34,15 +35,43 @@ inline bool transient (int err_)
            || err_ == EHOSTUNREACH || err_ == ENOTCONN;
 }
 
+struct client_completion_state_t
+{
+    explicit client_completion_state_t (size_t msg_size_) :
+        run_id (1U),
+        msg_size (msg_size_),
+        deadline_ns (0),
+        completed (0),
+        fatal (false),
+        latency ()
+    {
+    }
+
+    const uint32_t run_id;
+    const size_t msg_size;
+    std::atomic<uint64_t> deadline_ns;
+    std::atomic<unsigned long long> completed;
+    std::atomic<bool> fatal;
+    std::mutex completion_mutex;
+    std::condition_variable completion_changed;
+    std::mutex latency_mutex;
+    bench_latency_sampler_t latency;
+};
+
 template <typename SocketT> struct client_slot_t
 {
-    client_slot_t () : socket (), payload (), next_seq (1), waiting (false), owner (NULL) {}
+    client_slot_t () :
+        socket (),
+        payload (),
+        next_seq (1),
+        waiting (std::make_shared<std::atomic<bool>> (false))
+    {
+    }
 
     std::unique_ptr<SocketT> socket;
     std::vector<char> payload;
     uint64_t next_seq;
-    std::atomic<bool> waiting;
-    void *owner;
+    std::shared_ptr<std::atomic<bool>> waiting;
 };
 
 template <typename SocketT> class client_bench_t
@@ -64,13 +93,7 @@ template <typename SocketT> class client_bench_t
         _ctx (),
         _slots (),
         _monitors (),
-        _poller (),
-        _events (),
-        _run_id (1U),
-        _deadline_ns (0),
-        _completed (0),
-        _fatal (false),
-        _latency ()
+        _completion (std::make_shared<client_completion_state_t> (msg_size_))
     {
     }
 
@@ -81,19 +104,21 @@ template <typename SocketT> class client_bench_t
 
         const int duration_s = std::max (1, _settings.duration_seconds);
         const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (duration_s);
-        _deadline_ns.store (perf_metric::now_ns ()
-                              + static_cast<uint64_t> (duration_s) * 1000000000ULL,
-                            std::memory_order_release);
+        _completion->deadline_ns.store (
+          perf_metric::now_ns ()
+            + static_cast<uint64_t> (duration_s) * 1000000000ULL,
+          std::memory_order_release);
 
         while (std::chrono::steady_clock::now () < deadline
-               && !_fatal.load (std::memory_order_acquire)) {
+               && !_completion->fatal.load (std::memory_order_acquire)) {
             bool submitted = false;
             for (size_t i = 0; i < _slots.size (); ++i) {
-                if (_slots[i]->waiting.load (std::memory_order_acquire))
+                if (_slots[i]->waiting->load (std::memory_order_acquire))
                     continue;
                 if (!submit (*_slots[i]))
                     return false;
-                submitted = submitted || _slots[i]->waiting.load (std::memory_order_acquire);
+                submitted =
+                  submitted || _slots[i]->waiting->load (std::memory_order_acquire);
             }
             if (!submitted) {
                 try {
@@ -101,8 +126,9 @@ template <typename SocketT> class client_bench_t
                       deadline - std::chrono::steady_clock::now ());
                     const int wait_ms = static_cast<int> (
                       std::max<int64_t> (1, std::min<int64_t> (50, remaining.count ())));
-                    (void) _poller.wait (_events.data (), _events.size (),
-                                         std::chrono::milliseconds (wait_ms));
+                    std::unique_lock<std::mutex> lock (_completion->completion_mutex);
+                    _completion->completion_changed.wait_for (
+                      lock, std::chrono::milliseconds (wait_ms));
                 }
                 catch (const zlink::binding_error_t &err) {
                     if (err.internal_errno () != EINTR)
@@ -116,8 +142,9 @@ template <typename SocketT> class client_bench_t
                                                 std::max (1000, _settings.rcvtimeo_ms * 4));
         while (any_waiting () && std::chrono::steady_clock::now () < drain_deadline) {
             try {
-                (void) _poller.wait (_events.data (), _events.size (),
-                                     std::chrono::milliseconds (50));
+                std::unique_lock<std::mutex> lock (_completion->completion_mutex);
+                _completion->completion_changed.wait_for (
+                  lock, std::chrono::milliseconds (50));
             }
             catch (const zlink::binding_error_t &err) {
                 if (err.internal_errno () != EINTR)
@@ -125,10 +152,12 @@ template <typename SocketT> class client_bench_t
             }
         }
 
-        const unsigned long long completed = _completed.load (std::memory_order_acquire);
-        if (_fatal.load (std::memory_order_acquire) || any_waiting () || completed == 0)
+        const unsigned long long completed =
+          _completion->completed.load (std::memory_order_acquire);
+        if (_completion->fatal.load (std::memory_order_acquire) || any_waiting ()
+            || completed == 0)
             return false;
-        const bench_latency_stats_t latency = _latency.snapshot ();
+        const bench_latency_stats_t latency = _completion->latency.snapshot ();
         print_client_result_lines (_lib_name, _config.result_pattern, _transport, _msg_size,
                                    completed, duration_s, 2.0, latency);
         return true;
@@ -153,16 +182,13 @@ template <typename SocketT> class client_bench_t
                     slot->socket->options ().connect_routing_id (_target_rid);
                 }
                 apply_benchmark_socket_options (*slot->socket, _settings, _transport);
-                if (!apply_benchmark_auto_hwm_msg_unit (_ctx, _msg_size)
-                    || !setup_tls_client (*slot->socket, _transport))
+                if (!setup_tls_client (*slot->socket, _transport))
                     return false;
                 _monitors.push_back (connect_monitor_t ());
                 if (!open_connect_monitor (*slot->socket, _monitors.back ()))
                     return false;
                 slot->socket->connect (_endpoint);
                 slot->payload.assign (payload_size, 'q');
-                slot->owner = this;
-                _poller.add (*slot->socket, zlink::poll_event_flag_t::pollcompletion, i);
                 _slots.push_back (std::move (slot));
             }
             const bool ready = wait_connect_ready_all (_monitors, _settings.connect_ready_timeout_ms);
@@ -170,7 +196,6 @@ template <typename SocketT> class client_bench_t
                 close_connect_monitor (_monitors[i]);
             if (!ready || !recalculate_auto_hwm (_ctx))
                 return false;
-            _events.resize (_slots.size ());
             return !_slots.empty ();
         }
         catch (const zlink::binding_error_t &) {
@@ -181,67 +206,42 @@ template <typename SocketT> class client_bench_t
     bool submit (client_slot_t<SocketT> &slot_)
     {
         const uint64_t sent_ns = perf_metric::now_ns ();
-        if (!perf_metric::stamp_payload (slot_.payload.data (), slot_.payload.size (), _run_id,
-                                         perf_metric::phase_active, _msg_size, slot_.next_seq,
-                                         sent_ns))
+        if (!perf_metric::stamp_payload (
+              slot_.payload.data (), slot_.payload.size (), _completion->run_id,
+              perf_metric::phase_active, _msg_size, slot_.next_seq, sent_ns))
             return false;
         zlink::message_t request = zlink::message_t::from (
           std::as_bytes (std::span<const char> (slot_.payload.data (), slot_.payload.size ())));
         if (!request.valid ())
             return false;
 
-        slot_.waiting.store (true, std::memory_order_release);
+        slot_.waiting->store (true, std::memory_order_release);
         try {
-            client_slot_t<SocketT> *slot_ptr = &slot_;
-            const auto callback = [slot_ptr] (zlink::request_result_t result,
-                                              std::vector<zlink::message_t> parts) {
-                client_bench_t *owner = static_cast<client_bench_t *> (slot_ptr->owner);
-                slot_ptr->waiting.store (false, std::memory_order_release);
-                if (!owner)
-                    return;
-                if (result != zlink::request_result_t::ok || parts.empty ()) {
-                    if (result != zlink::request_result_t::timed_out)
-                        owner->_fatal.store (true, std::memory_order_release);
-                    return;
-                }
-                perf_metric::header_t header;
-                if (!perf_metric::decode_payload_header (parts.front ().data (),
-                                                         parts.front ().size (), &header)
-                    || !perf_metric::is_expected (header, owner->_run_id,
-                                                  perf_metric::phase_active, owner->_msg_size))
-                    return;
-                const uint64_t now = perf_metric::now_ns ();
-                if (now >= owner->_deadline_ns.load (std::memory_order_acquire))
-                    return;
-                owner->_latency.add (perf_metric::elapsed_latency_ns (now, header.sent_ts_ns) * 0.5);
-                owner->_completed.fetch_add (1, std::memory_order_relaxed);
-            };
-            bool ok = false;
             if constexpr (std::is_same<SocketT, zlink::router_socket_t>::value) {
                 // PERF_POLICY / C parity: the C reference builds the constant
                 // server routing id once per active client state, not once per
                 // request. Keep routing-id construction out of the measured loop.
-                ok = std::move (slot_.socket->request (_target_rid))
-                       .message (request)
-                       .timeout (std::chrono::milliseconds (std::max (1, _settings.rcvtimeo_ms)))
-                       .flags (static_cast<int> (zlink::send_flags_t::none))
-                       .submit (callback);
+                observe_request (
+                  slot_.waiting, _completion,
+                  std::move (slot_.socket->request (_target_rid))
+                            .message (request)
+                            .timeout (std::chrono::milliseconds (
+                              std::max (1, _settings.rcvtimeo_ms)))
+                            .async ());
             } else {
-                ok = std::move (slot_.socket->request ())
-                       .message (request)
-                       .timeout (std::chrono::milliseconds (std::max (1, _settings.rcvtimeo_ms)))
-                       .flags (static_cast<int> (zlink::send_flags_t::none))
-                       .submit (callback);
-            }
-            if (!ok) {
-                slot_.waiting.store (false, std::memory_order_release);
-                return true;
+                observe_request (
+                  slot_.waiting, _completion,
+                  std::move (slot_.socket->request ())
+                            .message (request)
+                            .timeout (std::chrono::milliseconds (
+                              std::max (1, _settings.rcvtimeo_ms)))
+                            .async ());
             }
             ++slot_.next_seq;
             return true;
         }
         catch (const zlink::submit_error_t &err) {
-            slot_.waiting.store (false, std::memory_order_release);
+            slot_.waiting->store (false, std::memory_order_release);
             if (err.result () == zlink::submit_result_t::backpressured
                 || transient (err.internal_errno ()))
                 return true;
@@ -249,10 +249,46 @@ template <typename SocketT> class client_bench_t
         }
     }
 
+    static detached_async_task_t observe_request (
+      std::shared_ptr<std::atomic<bool>> waiting_,
+      std::shared_ptr<client_completion_state_t> completion_,
+      zlink::async_result_t<std::vector<zlink::message_t>> result_)
+    {
+        try {
+            std::vector<zlink::message_t> parts = co_await std::move (result_);
+            if (!parts.empty ()) {
+                perf_metric::header_t header;
+                if (perf_metric::decode_payload_header (
+                      parts.front ().data (), parts.front ().size (), &header)
+                    && perf_metric::is_expected (
+                      header, completion_->run_id, perf_metric::phase_active,
+                      completion_->msg_size)) {
+                    const uint64_t now = perf_metric::now_ns ();
+                    if (now
+                        < completion_->deadline_ns.load (std::memory_order_acquire)) {
+                        std::lock_guard<std::mutex> lock (completion_->latency_mutex);
+                        completion_->latency.add (
+                          perf_metric::elapsed_latency_ns (now, header.sent_ts_ns) * 0.5);
+                        completion_->completed.fetch_add (1, std::memory_order_relaxed);
+                    }
+                }
+            }
+        }
+        catch (const zlink::request_error_t &err) {
+            if (err.result () != zlink::request_result_t::timed_out)
+                completion_->fatal.store (true, std::memory_order_release);
+        }
+        catch (...) {
+            completion_->fatal.store (true, std::memory_order_release);
+        }
+        waiting_->store (false, std::memory_order_release);
+        completion_->completion_changed.notify_one ();
+    }
+
     bool any_waiting () const
     {
         for (size_t i = 0; i < _slots.size (); ++i) {
-            if (_slots[i]->waiting.load (std::memory_order_acquire))
+            if (_slots[i]->waiting->load (std::memory_order_acquire))
                 return true;
         }
         return false;
@@ -268,13 +304,7 @@ template <typename SocketT> class client_bench_t
     ctx_guard_t _ctx;
     std::vector<std::unique_ptr<client_slot_t<SocketT>>> _slots;
     std::vector<connect_monitor_t> _monitors;
-    zlink::poller_t _poller;
-    std::vector<zlink::poll_event_t> _events;
-    const uint32_t _run_id;
-    std::atomic<uint64_t> _deadline_ns;
-    std::atomic<unsigned long long> _completed;
-    std::atomic<bool> _fatal;
-    bench_latency_sampler_t _latency;
+    std::shared_ptr<client_completion_state_t> _completion;
 };
 
 inline std::atomic<bool> &server_stop_flag ()
@@ -336,8 +366,7 @@ inline bool run_server (const config_t &config_,
     if (config_.server_has_routing_id)
         server.set_routing_id (zlink::routing_id_t::from (std::string ("SERVER")));
     apply_benchmark_socket_options (server, settings, transport_);
-    if (!apply_benchmark_auto_hwm_msg_unit (ctx, msg_size_)
-        || !setup_tls_server (server, transport_))
+    if (!setup_tls_server (server, transport_))
         return false;
     const std::string endpoint = bind_and_resolve_endpoint (
       server, transport_, std::string ("cpp_") + config_.env_pattern, settings.server_bind_port);

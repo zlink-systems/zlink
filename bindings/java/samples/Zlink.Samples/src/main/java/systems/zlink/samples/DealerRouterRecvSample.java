@@ -26,7 +26,7 @@ public final class DealerRouterRecvSample {
             SampleSupport.waitConnected(routerMonitor, dealerMonitor);
 
             try (Message request = Message.from(SampleSupport.DEALER_REQUEST)) {
-                dealer.send().message(request).submit();
+                dealer.send().message(request).submit().toCompletableFuture().join();
             }
 
             try (systems.zlink.contracts.messaging.Received received = new systems.zlink.contracts.messaging.Received()) {

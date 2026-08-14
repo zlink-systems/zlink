@@ -48,12 +48,13 @@ func TestRequestContextDeadlineUsesStandardErrors(t *testing.T) {
 
 	deadline, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	if _, err := socket.Request().Bytes([]byte("context-deadline")).SubmitAsync(deadline); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Request().SubmitAsync(expired) error = %v, want context.DeadlineExceeded", err)
+	completion := awaitRequest(t, socket.Request().Bytes([]byte("context-deadline")).Submit(deadline))
+	if !errors.Is(completion.Err, context.DeadlineExceeded) {
+		t.Fatalf("Request().Submit(expired) error = %v, want context.DeadlineExceeded", completion.Err)
 	}
 }
 
-func TestRequestCallbackDeliveryUsesSocketDispatcher(t *testing.T) {
+func TestRequestCompletionChannelDeliversReply(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
@@ -68,7 +69,7 @@ func TestRequestCallbackDeliveryUsesSocketDispatcher(t *testing.T) {
 	}
 	defer dealer.Close()
 
-	endpoint := inprocEndpoint("request-callback-dispatcher")
+	endpoint := inprocEndpoint("request-completion-channel")
 	if err := router.Bind(endpoint); err != nil {
 		t.Fatalf("Bind() error = %v", err)
 	}
@@ -87,7 +88,7 @@ func TestRequestCallbackDeliveryUsesSocketDispatcher(t *testing.T) {
 			return
 		}
 		defer request.Close()
-		reply, err := zlink.NewMessageString("callback-reply")
+		reply, err := zlink.NewMessageString("channel-reply")
 		if err != nil {
 			serverDone <- err
 			return
@@ -96,32 +97,16 @@ func TestRequestCallbackDeliveryUsesSocketDispatcher(t *testing.T) {
 		serverDone <- request.Reply().Message(reply).Submit(context.Background())
 	}()
 
-	callbackDone := make(chan error, 1)
-	ok, err := dealer.Request().Bytes([]byte("callback-request")).Timeout(2*time.Second).Submit(context.Background(), func(result zlink.RequestResult, parts []*zlink.Message) {
-		defer zlink.MultipartClose(parts)
-		if result != zlink.RequestOK {
-			callbackDone <- fmt.Errorf("request result = %v, want RequestOK", result)
-			return
-		}
-		if len(parts) != 1 || string(parts[0].Data()) != "callback-reply" {
-			callbackDone <- fmt.Errorf("request callback parts = %d, want callback-reply", len(parts))
-			return
-		}
-		callbackDone <- nil
-	})
-	if err != nil {
-		t.Fatalf("Request().Submit(callback) error = %v", err)
+	completion := awaitRequest(t, dealer.Request().Bytes([]byte("channel-request")).Timeout(2*time.Second).Submit(context.Background()))
+	defer zlink.MultipartClose(completion.Parts)
+	if completion.Err != nil {
+		t.Fatalf("request completion error = %v", completion.Err)
 	}
-	if !ok {
-		t.Fatal("Request().Submit(callback) returned ok=false")
+	if completion.Result != zlink.RequestOK {
+		t.Fatalf("request result = %v, want RequestOK", completion.Result)
 	}
-	select {
-	case err := <-callbackDone:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("request callback was not delivered")
+	if len(completion.Parts) != 1 || string(completion.Parts[0].Data()) != "channel-reply" {
+		t.Fatalf("request completion parts = %d, want channel-reply", len(completion.Parts))
 	}
 	select {
 	case err := <-serverDone:
@@ -133,7 +118,7 @@ func TestRequestCallbackDeliveryUsesSocketDispatcher(t *testing.T) {
 	}
 }
 
-func TestPollerModifyCompletionDoesNotDisableRequestProgress(t *testing.T) {
+func TestPollerModifyCompletionDoesNotDisableRequestCompletion(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
@@ -184,10 +169,7 @@ func TestPollerModifyCompletionDoesNotDisableRequestProgress(t *testing.T) {
 		serverDone <- request.Reply().Message(reply).Submit(context.Background())
 	}()
 
-	completion, err := dealer.Request().Bytes([]byte("ping")).Timeout(time.Second).SubmitAsync(context.Background())
-	if err != nil {
-		t.Fatalf("SubmitAsync() error = %v", err)
-	}
+	completion := dealer.Request().Bytes([]byte("ping")).Timeout(time.Second).Submit(context.Background())
 	select {
 	case result, ok := <-completion:
 		if !ok {
@@ -210,7 +192,7 @@ func TestPollerModifyCompletionDoesNotDisableRequestProgress(t *testing.T) {
 	}
 }
 
-func TestPollerCompletionOwnsAndReleasesRequestProgress(t *testing.T) {
+func TestPollerCompletionObservesRequestsWithoutOwningProgress(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
@@ -278,10 +260,7 @@ func TestPollerCompletionOwnsAndReleasesRequestProgress(t *testing.T) {
 	}
 
 	serverDone := serveRequest("poller-reply")
-	completion, err := dealer.Request().Bytes([]byte("poller-request")).Timeout(2 * time.Second).SubmitAsync(context.Background())
-	if err != nil {
-		t.Fatalf("SubmitAsync() error = %v", err)
-	}
+	completion := dealer.Request().Bytes([]byte("poller-request")).Timeout(2 * time.Second).Submit(context.Background())
 
 	events := make([]zlink.PollEvent, 1)
 	sawCompletionEvent := false
@@ -325,10 +304,7 @@ firstComplete:
 	registered = false
 
 	serverDone = serveRequest("internal-reply")
-	second, err := dealer.Request().Bytes([]byte("internal-request")).Timeout(2 * time.Second).SubmitAsync(context.Background())
-	if err != nil {
-		t.Fatalf("second SubmitAsync() error = %v", err)
-	}
+	second := dealer.Request().Bytes([]byte("internal-request")).Timeout(2 * time.Second).Submit(context.Background())
 	select {
 	case result, ok := <-second:
 		if !ok {
@@ -339,7 +315,7 @@ firstComplete:
 		}
 		zlink.MultipartClose(result.Parts)
 	case <-time.After(5 * time.Second):
-		t.Fatalf("internal request progress did not resume after RemoveSocket")
+		t.Fatalf("request completion did not continue after RemoveSocket")
 	}
 	if err := <-serverDone; err != nil {
 		t.Fatalf("second server request error = %v", err)
@@ -374,7 +350,7 @@ func TestPublishDontWaitReturnsErrorWhenUnroutable(t *testing.T) {
 	}
 }
 
-func TestBlockingSendFailureSurfacesError(t *testing.T) {
+func TestRoutedSendFailureSurfacesError(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
@@ -389,12 +365,12 @@ func TestBlockingSendFailureSurfacesError(t *testing.T) {
 	}
 
 	rid := zlink.NewRoutingID([]byte("missing-peer"))
-	if _, err := router.SendTo(rid).Message(newMessage(t, "data")).Submit(context.Background()); err == nil {
+	if err := awaitRoutedSend(t, router.SendTo(rid).Message(newMessage(t, "data")).Submit(context.Background())); err == nil {
 		t.Fatalf("SendTo() should surface an error when no peer exists")
 	}
 }
 
-func TestBlockingSendFailurePreservesMessagePayload(t *testing.T) {
+func TestRoutedSendFailurePreservesMessagePayload(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
@@ -413,7 +389,7 @@ func TestBlockingSendFailurePreservesMessagePayload(t *testing.T) {
 	msg := newMessage(t, "preserve-me")
 	defer msg.Close()
 
-	if _, err := router.SendTo(rid).Message(msg).Submit(context.Background()); err == nil {
+	if err := awaitRoutedSend(t, router.SendTo(rid).Message(msg).Submit(context.Background())); err == nil {
 		t.Fatalf("SendTo() should surface an error when no peer exists")
 	}
 	if got := string(msg.Data()); got != "preserve-me" {
@@ -421,7 +397,7 @@ func TestBlockingSendFailurePreservesMessagePayload(t *testing.T) {
 	}
 }
 
-func TestBlockingSendFailurePreservesBytesPayload(t *testing.T) {
+func TestRoutedSendFailurePreservesBytesPayload(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
@@ -438,7 +414,7 @@ func TestBlockingSendFailurePreservesBytesPayload(t *testing.T) {
 	rid := zlink.NewRoutingID([]byte("missing-peer"))
 	payload := []byte("preserve-bytes")
 
-	if _, err := router.SendTo(rid).Bytes(payload).Submit(context.Background()); err == nil {
+	if err := awaitRoutedSend(t, router.SendTo(rid).Bytes(payload).Submit(context.Background())); err == nil {
 		t.Fatalf("SendTo().Bytes() should surface an error when no peer exists")
 	}
 	if got := string(payload); got != "preserve-bytes" {
@@ -465,7 +441,7 @@ func TestMoveMessageFailureConsumesMessagePayload(t *testing.T) {
 	msg := newMessage(t, "consume-me")
 	defer msg.Close()
 
-	if _, err := router.SendTo(rid).MoveMessage(msg).Submit(context.Background()); err == nil {
+	if err := awaitRoutedSend(t, router.SendTo(rid).MoveMessage(msg).Submit(context.Background())); err == nil {
 		t.Fatalf("MoveMessage SendTo() should surface an error when no peer exists")
 	}
 	if got := msg.Data(); got != nil {

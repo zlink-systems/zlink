@@ -9,6 +9,12 @@ internal sealed class Context : NativeOwner, IContext
     public Context() : base(CreateHandle())
     {
         Options = new ContextOptions(this);
+        long runtimeMemoryLimit = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
+        if (runtimeMemoryLimit > 0)
+        {
+            SetUInt64Option(ContextOption.AutoHwmRuntimeMemoryLimitBytes,
+                (ulong)runtimeMemoryLimit);
+        }
     }
 
     internal IntPtr Handle => _handle;
@@ -69,6 +75,77 @@ internal sealed class Context : NativeOwner, IContext
     {
         EnsureNotDisposed();
         var rc = NativeMethods.zlink_ctx_auto_hwm_recalculate(Handle);
+        if (rc != 0)
+            throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
+    }
+
+    public unsafe CoreHwmBudgetSnapshot GetCoreHwmBudgetSnapshot()
+    {
+        EnsureNotDisposed();
+        var native = new ZlinkAutoHwmBudgetSnapshot
+        {
+            AbiVersion = ZlinkAutoHwmBudgetSnapshot.CurrentAbiVersion,
+            StructSize = (uint)sizeof(ZlinkAutoHwmBudgetSnapshot)
+        };
+        var rc = NativeMethods.zlink_ctx_get_auto_hwm_budget_snapshot(Handle,
+            ref native);
+        if (rc != 0)
+            throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
+
+        var reserved = new ulong[8];
+        for (var index = 0; index < reserved.Length; ++index)
+            reserved[index] = native.ReservedUInt64[index];
+        return new CoreHwmBudgetSnapshot
+        {
+            AbiVersion = native.AbiVersion,
+            StructSize = native.StructSize,
+            BudgetGeneration = native.BudgetGeneration,
+            MeasurementEpoch = native.MeasurementEpoch,
+            ConfiguredMemoryLimitBytes = native.ConfiguredMemoryLimitBytes,
+            RuntimeMemoryLimitBytes = native.RuntimeMemoryLimitBytes,
+            ResolvedMemoryLimitBytes = native.ResolvedMemoryLimitBytes,
+            ConfiguredCoreBudgetBytes = native.ConfiguredCoreBudgetBytes,
+            EffectiveCoreBudgetBytes = native.EffectiveCoreBudgetBytes,
+            TotalPlannedHwmBytes = native.TotalPlannedHwmBytes,
+            TotalAppliedHwmBytes = native.TotalAppliedHwmBytes,
+            ManualReservedHwmBytes = native.ManualReservedHwmBytes,
+            CoreQueueAccountedBytes = native.CoreQueueAccountedBytes,
+            ApplicationAccountedBytes = native.ApplicationAccountedBytes,
+            CurrentAccountedBytes = native.CurrentAccountedBytes,
+            ProvisionalAccountedBytes = native.ProvisionalAccountedBytes,
+            PeakAccountedBytes = native.PeakAccountedBytes,
+            CompletionCurrentAccountedBytes =
+                native.CompletionCurrentAccountedBytes,
+            CompletionPeakAccountedBytes = native.CompletionPeakAccountedBytes,
+            CompletionPendingMessageCount =
+                native.CompletionPendingMessageCount,
+            TotalMessagingAccountedBytes = native.TotalMessagingAccountedBytes,
+            MonitorQueueAppliedHwmBytes = native.MonitorQueueAppliedHwmBytes,
+            MonitorQueueAccountedBytes = native.MonitorQueueAccountedBytes,
+            TotalInstanceAppliedHwmBytes = native.TotalInstanceAppliedHwmBytes,
+            TotalInstanceAccountedBytes = native.TotalInstanceAccountedBytes,
+            OversizeAdmissionCount = native.OversizeAdmissionCount,
+            LargestOversizeMessageBytes = native.LargestOversizeMessageBytes,
+            ActiveDirectionalQueueCount = native.ActiveDirectionalQueueCount,
+            ActiveCompletionDirectionalQueueCount =
+                native.ActiveCompletionDirectionalQueueCount,
+            ActiveSendQueueCount = native.ActiveSendQueueCount,
+            ActiveReceiveQueueCount = native.ActiveReceiveQueueCount,
+            OutstandingApplicationLeaseCount =
+                native.OutstandingApplicationLeaseCount,
+            RetiredQueueCount = native.RetiredQueueCount,
+            DeferredOriginCreditBytes = native.DeferredOriginCreditBytes,
+            UnlimitedManualQueueCount = native.UnlimitedManualQueueCount,
+            BlockedRatioPpm = native.BlockedRatioPpm,
+            Flags = native.Flags,
+            ReservedUInt64 = Array.AsReadOnly(reserved)
+        };
+    }
+
+    public void ResetCoreHwmBudgetMetrics()
+    {
+        EnsureNotDisposed();
+        var rc = NativeMethods.zlink_ctx_reset_auto_hwm_budget_metrics(Handle);
         if (rc != 0)
             throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
     }

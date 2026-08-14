@@ -60,7 +60,12 @@ case "$(uname -m)" in
   *) echo "unsupported architecture: $(uname -m)" >&2; exit 2 ;;
 esac
 
-VERSION="${ZLINK_CORE_VERSION:-$(bash "${ROOT_DIR}/core/version.sh")}"
+REPO_VERSION="$(bash "${ROOT_DIR}/core/version.sh")"
+VERSION="${ZLINK_CORE_VERSION:-$REPO_VERSION}"
+[[ "$VERSION" = "$REPO_VERSION" ]] || {
+  echo "ZLINK_CORE_VERSION $VERSION must match repository VERSION $REPO_VERSION" >&2
+  exit 2
+}
 ABI_MAJOR="${ZLINK_CORE_ABI_MAJOR:-0}"
 [[ "${ABI_MAJOR}" =~ ^[0-9]+$ ]] || {
   echo "ZLINK_CORE_ABI_MAJOR must be numeric" >&2
@@ -131,7 +136,7 @@ copy_public_headers() {
   mkdir -p "${dir}"
   mkdir -p "${dir}/zlink"
 
-  # Core 0.10.1 owns only the raw C headers. Remove the retired service tree and
+  # Core owns only the raw C headers. Remove the retired service tree and
   # replace each Core-owned lowercase group without touching binding-owned
   # trees such as the C++ Contracts directory.
   rm -rf "${dir}/zlink/service"

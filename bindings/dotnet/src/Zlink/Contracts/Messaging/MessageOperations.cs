@@ -37,11 +37,61 @@ public static class MessageOperations
     }
 
     /// <summary>
-    ///     Adds <paramref name="messages" /> as parts, in order. The parts are
-    ///     consumed on a successful submit; see <see cref="SendOperation" /> for the
-    ///     ownership contract.
+    ///     Adds asynchronous-send parts in order. Ownership transfers when the
+    ///     builder's asynchronous terminal is called.
     /// </summary>
-    /// <returns>The same builder, for chaining further parts, flags, or submit.</returns>
+    public static AsyncSendSubmitOperation Messages(
+        this AsyncSendOperation operation,
+        IReadOnlyList<Message> messages)
+    {
+        EnsureNotEmpty(messages);
+        return operation.Message(messages[0]).Messages(messages, 1);
+    }
+
+    /// <summary>
+    ///     Adds asynchronous-send parts in order. Ownership transfers when the
+    ///     builder's asynchronous terminal is called.
+    /// </summary>
+    public static AsyncSendSubmitOperation Messages(
+        this AsyncSendSubmitOperation operation,
+        IReadOnlyList<Message> messages)
+    {
+        EnsureNotEmpty(messages);
+        return operation.Messages(messages, 0);
+    }
+
+    /// <summary>
+    ///     Adds routed-send parts in order. Ownership transfers when the builder's
+    ///     asynchronous terminal is called.
+    /// </summary>
+    public static RoutedSendSubmitOperation Messages(
+        this RoutedSendOperation operation,
+        IReadOnlyList<Message> messages)
+    {
+        EnsureNotEmpty(messages);
+        return operation.Message(messages[0]).Messages(messages, 1);
+    }
+
+    /// <summary>
+    ///     Adds routed-send parts in order. Ownership transfers when the builder's
+    ///     asynchronous terminal is called.
+    /// </summary>
+    public static RoutedSendSubmitOperation Messages(
+        this RoutedSendSubmitOperation operation,
+        IReadOnlyList<Message> messages)
+    {
+        EnsureNotEmpty(messages);
+        return operation.Messages(messages, 0);
+    }
+
+    /// <summary>
+    ///     Adds <paramref name="messages" /> as request parts, in order. Ownership
+    ///     transfers when the builder's asynchronous terminal is called.
+    /// </summary>
+    /// <returns>
+    ///     The same builder, for chaining further parts, timeout, or the
+    ///     asynchronous terminal.
+    /// </returns>
     public static RequestSubmitOperation Messages(
         this RequestOperation operation,
         IReadOnlyList<Message> messages)
@@ -51,27 +101,15 @@ public static class MessageOperations
     }
 
     /// <summary>
-    ///     Adds <paramref name="messages" /> as parts, in order. The parts are
-    ///     consumed on a successful submit; see <see cref="SendOperation" /> for the
-    ///     ownership contract.
+    ///     Adds <paramref name="messages" /> as request parts, in order. Ownership
+    ///     transfers when the builder's asynchronous terminal is called.
     /// </summary>
-    /// <returns>The same builder, for chaining further parts, flags, or submit.</returns>
+    /// <returns>
+    ///     The same builder, for chaining further parts, timeout, or the
+    ///     asynchronous terminal.
+    /// </returns>
     public static RequestSubmitOperation Messages(
         this RequestSubmitOperation operation,
-        IReadOnlyList<Message> messages)
-    {
-        EnsureNotEmpty(messages);
-        return operation.Messages(messages, 0);
-    }
-
-    /// <summary>
-    ///     Adds <paramref name="messages" /> as parts, in order. The parts are
-    ///     consumed on a successful submit; see <see cref="SendOperation" /> for the
-    ///     ownership contract.
-    /// </summary>
-    /// <returns>The same builder, for chaining further parts, flags, or submit.</returns>
-    public static RequestCallbackSubmitOperation Messages(
-        this RequestCallbackSubmitOperation operation,
         IReadOnlyList<Message> messages)
     {
         EnsureNotEmpty(messages);
@@ -140,18 +178,30 @@ public static class MessageOperations
         return operation;
     }
 
-    private static RequestSubmitOperation Messages(
-        this RequestSubmitOperation operation,
+    private static AsyncSendSubmitOperation Messages(
+        this AsyncSendSubmitOperation operation,
         IReadOnlyList<Message> messages,
         int startIndex)
     {
-        for (var index = startIndex; index < messages.Count; index++) operation = operation.Message(messages[index]);
+        for (var index = startIndex; index < messages.Count; index++)
+            operation = operation.Message(messages[index]);
 
         return operation;
     }
 
-    private static RequestCallbackSubmitOperation Messages(
-        this RequestCallbackSubmitOperation operation,
+    private static RoutedSendSubmitOperation Messages(
+        this RoutedSendSubmitOperation operation,
+        IReadOnlyList<Message> messages,
+        int startIndex)
+    {
+        for (var index = startIndex; index < messages.Count; index++)
+            operation = operation.Message(messages[index]);
+
+        return operation;
+    }
+
+    private static RequestSubmitOperation Messages(
+        this RequestSubmitOperation operation,
         IReadOnlyList<Message> messages,
         int startIndex)
     {

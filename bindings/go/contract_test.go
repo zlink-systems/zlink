@@ -16,8 +16,8 @@ import (
 
 func TestRuntimeVersionIsAvailable(t *testing.T) {
 	version := zlink.RuntimeVersion()
-	if version.Major != 0 || version.Minor != 10 || version.Patch != 1 {
-		t.Fatalf("RuntimeVersion() = %d.%d.%d, want 0.10.1", version.Major, version.Minor, version.Patch)
+	if version.Major != 0 || version.Minor != 11 || version.Patch != 1 {
+		t.Fatalf("RuntimeVersion() = %d.%d.%d, want 0.11.1", version.Major, version.Minor, version.Patch)
 	}
 }
 
@@ -49,8 +49,9 @@ func TestDirectCommonHeaderVersionMatchesPackage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preprocess zlink/common.h: %v\n%s", err, output)
 	}
-	if got := lastNonEmptyLine(string(output)); got != "1" {
-		t.Fatalf("ZLINK_VERSION_PATCH from direct zlink/common.h include = %q, want 1", got)
+	want := fmt.Sprint(zlink.RuntimeVersion().Patch)
+	if got := lastNonEmptyLine(string(output)); got != want {
+		t.Fatalf("ZLINK_VERSION_PATCH from direct zlink/common.h include = %q, want %s", got, want)
 	}
 }
 
@@ -142,14 +143,11 @@ func TestRequestReplyCanonicalDealerRouterRoundTrip(t *testing.T) {
 	}()
 
 	requestPayload := []byte("ping")
-	replyCh, err := dealerSocket.Request().Bytes(requestPayload).Timeout(2 * time.Second).SubmitAsync(context.Background())
-	if err != nil {
-		t.Fatalf("Request() error = %v", err)
-	}
+	replyCh := dealerSocket.Request().Bytes(requestPayload).Timeout(2 * time.Second).Submit(context.Background())
 	if !bytes.Equal(requestPayload, []byte("ping")) {
 		t.Fatalf("Request().Bytes() mutated caller payload = %q", string(requestPayload))
 	}
-	completion := <-replyCh
+	completion := awaitRequest(t, replyCh)
 	if completion.Err != nil {
 		t.Fatalf("Request() completion error = %v", completion.Err)
 	}
@@ -197,7 +195,7 @@ func TestRouterRequestSupportPreservesDataReceiveSurface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewMessage() error = %v", err)
 	}
-	if _, err := dealerSocket.Send().Message(payload).Submit(context.Background()); err != nil {
+	if err := awaitRoutedSend(t, dealerSocket.Send().Message(payload).Submit(context.Background())); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 	var received zlink.Received

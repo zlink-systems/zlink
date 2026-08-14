@@ -15,6 +15,16 @@ internal sealed class StreamSocket : RoutedMessageSocketBase, IStreamSocket
 
     public new StreamSocketOptions Options { get; }
 
+    public RoutedSendOperation Send(RoutingId routingId)
+    {
+        return new RoutedAsyncSendOperation(this, routingId);
+    }
+
+    public new SendOperation TrySend(RoutingId routingId)
+    {
+        return base.TrySend(routingId);
+    }
+
     public void OnPacket(StreamPacketHandler handler)
     {
         Kernel.AttachStreamPacket(handler);

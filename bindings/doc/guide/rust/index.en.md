@@ -226,7 +226,7 @@ Verified samples live under `bindings/rust/samples/`.
 |------|------|
 | `pair_recv_sample.rs` | PAIR send/receive |
 | `dealer_router_recv_sample.rs` | DEALER/ROUTER send/receive |
-| `request_reply_callback_sample.rs` | Callback request/reply |
+| `request_reply_future_sample.rs` | Future request/reply |
 | `pubsub_recv_sample.rs` | PUB/SUB publish/subscribe |
 | `stream_recv_sample.rs` | STREAM raw TCP |
 | `stream_packet_callback_sample.rs` | STREAM packet callback |

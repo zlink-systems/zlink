@@ -47,6 +47,7 @@ RCVBUF=""
 SNDTIMEO_MS=""
 RCVTIMEO_MS=""
 AUTO_HWM_PROFILE=""
+MONITOR_HWM_BYTES=""
 
 cleanup_report_dir() {
   local dir="$1"
@@ -79,9 +80,13 @@ sleep_millis() {
   sleep "$((millis / 1000)).$(printf '%03d' "$((millis % 1000))")"
 }
 
+is_uint() {
+  [[ "${1:-}" =~ ^[0-9]+$ ]]
+}
+
 is_positive_uint() {
   local value="${1:-}"
-  [[ "${value}" =~ ^[0-9]+$ ]] && (( 10#${value} > 0 ))
+  is_uint "${value}" && (( 10#${value} > 0 ))
 }
 
 go_gomaxprocs_floor4() {
@@ -135,6 +140,7 @@ Options:
   --send-timeout-ms N
   --recv-timeout-ms N
   --auto-hwm-profile NAME
+  --monitor-hwm-bytes N
   -h, --help
 
 Notes:
@@ -191,6 +197,9 @@ while [[ $# -gt 0 ]]; do
     --auto-hwm-profile)
       AUTO_HWM_PROFILE="$2"
       shift 2 ;;
+    --monitor-hwm-bytes)
+      MONITOR_HWM_BYTES="$2"
+      shift 2 ;;
     --reuse-build)
       REUSE_BUILD=1
       shift ;;
@@ -212,6 +221,10 @@ if [[ "${REUSE_BUILD}" -eq 1 && "${CLEAN_BUILD}" -eq 1 ]]; then
 fi
 if [[ "${SMOKE}" -eq 1 && -n "${OUTPUT_FILE}" ]]; then
   echo "Error: --smoke cannot be combined with --output." >&2
+  exit 1
+fi
+if [[ -n "${MONITOR_HWM_BYTES}" ]] && ! is_uint "${MONITOR_HWM_BYTES}"; then
+  echo "Error: --monitor-hwm-bytes must be a non-negative integer." >&2
   exit 1
 fi
 
@@ -241,6 +254,9 @@ if [[ -n "${RCVTIMEO_MS}" ]]; then
 fi
 if [[ -n "${AUTO_HWM_PROFILE}" ]]; then
   export PERF_CTX_AUTO_HWM_PROFILE="${AUTO_HWM_PROFILE}"
+fi
+if [[ -n "${MONITOR_HWM_BYTES}" ]]; then
+  export PERF_MONITOR_HWM_BYTES="${MONITOR_HWM_BYTES}"
 fi
 GO_GOMAXPROCS_SOURCE="env:GOMAXPROCS"
 if [[ -n "${GOMAXPROCS:-}" ]]; then
@@ -476,6 +492,7 @@ emit_effective_options_single() {
   echo "- rcvtimeo_ms: ${RCVTIMEO_MS:-${PERF_SINGLE_RCVTIMEO_MS:-200}}"
   echo "- ctx_auto_hwm_enable: ${PERF_CTX_AUTO_HWM_ENABLE:-core-default}"
   echo "- ctx_auto_hwm_profile: ${AUTO_HWM_PROFILE:-${PERF_SINGLE_CTX_AUTO_HWM_PROFILE:-${PERF_CTX_AUTO_HWM_PROFILE:-balanced}}}"
+  echo "- monitor_hwm_bytes: ${MONITOR_HWM_BYTES:-${PERF_MONITOR_HWM_BYTES:-4096000}}"
   echo "- patterns: ${EFFECTIVE_PATTERNS_CSV}"
   echo "- transports: ${EFFECTIVE_TRANSPORTS_CSV}"
   echo "- msg_sizes: ${MSG_SIZES}"

@@ -23,25 +23,6 @@ internal static class RequestProgressPump
         return Attach(handle, task);
     }
 
-    internal static ProgressLease AttachSocketCallback(IntPtr handle)
-    {
-        return Attach(handle);
-    }
-
-    private static ProgressLease Attach(IntPtr handle)
-    {
-        if (handle == IntPtr.Zero)
-            return default;
-
-        var key = handle;
-        if (ExternalProgressCount(key) > 0)
-            return default;
-        var state = States.GetOrAdd(key, _ => new ProgressState());
-        Interlocked.Increment(ref state.ActiveCount);
-        EnsureWorker(key, state, handle);
-        return new ProgressLease(key, state);
-    }
-
     private static Task<T> Attach<T>(IntPtr handle, Task<T> task)
     {
         if (handle == IntPtr.Zero || task.IsCompleted)
@@ -232,26 +213,4 @@ internal static class RequestProgressPump
         internal Thread? Worker;
     }
 
-    internal readonly struct ProgressLease
-    {
-        private readonly nint _key;
-        private readonly ProgressState _state;
-        private readonly bool _active;
-
-        internal ProgressLease(nint key, ProgressState state)
-        {
-            _key = key;
-            _state = state;
-            _active = true;
-        }
-
-        public void Dispose()
-        {
-            if (!_active)
-                return;
-            if (Interlocked.Decrement(ref _state.ActiveCount) == 0
-                && Volatile.Read(ref _state.WorkerRunning) == 0)
-                States.TryRemove(_key, out _);
-        }
-    }
 }

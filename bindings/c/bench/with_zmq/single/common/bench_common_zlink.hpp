@@ -553,13 +553,10 @@ inline int resolve_single_pubsub_recv_timeout_ms ()
 inline uint64_t resolve_single_socket_hwm_bytes (bool send_)
 {
     const int base_hwm = parse_positive_env ("PERF_SINGLE_HWM", 1000);
-    const int message_slots =
+    const int hwm_bytes =
       send_ ? parse_positive_env ("PERF_SINGLE_SNDHWM", base_hwm)
             : parse_positive_env ("PERF_SINGLE_RCVHWM", base_hwm);
-    const uint64_t unit = ZLINK_AUTO_HWM_MESSAGE_UNIT_BYTES_DFLT;
-    return static_cast<uint64_t> (message_slots) > UINT64_MAX / unit
-             ? UINT64_MAX
-             : static_cast<uint64_t> (message_slots) * unit;
+    return static_cast<uint64_t> (hwm_bytes);
 }
 
 inline int resolve_single_queue_sample_ms ()

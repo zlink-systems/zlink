@@ -1,6 +1,8 @@
 //! Send Failure Contract Tests – verify that blocking send failures surface
 //! as errors and non-blocking sends return explicit outcomes.
 
+mod test_support;
+
 use std::thread;
 use std::time::Duration;
 
@@ -20,7 +22,7 @@ fn blocking_send_failure_surfaces_error() {
 
     let rid = RoutingId::from(b"nonexistent-peer");
     let msg = Message::try_from(b"will-fail").unwrap();
-    let result = router.send(&rid).message(msg).submit();
+    let result = test_support::block_on(router.send(&rid).message(msg).submit());
 
     // Must be an error, not silently swallowed
     assert!(

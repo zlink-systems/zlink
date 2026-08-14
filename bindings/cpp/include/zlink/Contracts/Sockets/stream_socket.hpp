@@ -19,6 +19,10 @@ class stream_socket_t : public routed_message_socket_t
     // Returns 0 on success, a recv_result_t value on receive failure or no data, and -1 only for binding-local failure with errno set.
     int recv (received_t &out_, recv_flags_t flags_ = recv_flags_t::none);
 
+    /// Retains the origin Core HWM credit in @p out_ until its last copy closes.
+    int recv_retained (received_t &out_,
+                       recv_flags_t flags_ = recv_flags_t::none);
+
     void set_packet_handler (
       std::function<void (const routing_id_t &, message_t &&, message_t &&)> handler_);
 

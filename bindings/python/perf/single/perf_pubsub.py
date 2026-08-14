@@ -6,7 +6,6 @@ import zlink
 
 from perf_common import (
     STOP_TOKEN,
-    apply_single_auto_hwm_msg_unit,
     apply_single_socket_options,
     benchmark_run_id,
     configure_single_tls_client,
@@ -73,7 +72,6 @@ def main(argv=None):
                     raise
         _publish_stop_token(publisher)
     with perf_context() as ctx:
-        apply_single_auto_hwm_msg_unit(ctx, args.msg_size)
         with zlink.create_pub_socket(ctx) as publisher:
             # Match C perf: the harness always sets NODROP explicitly. The
             # socket default is lossy fanout, which would drop samples and the

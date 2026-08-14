@@ -16,7 +16,6 @@ fn main() {
     };
 
     let ctx = common::perf_context();
-    common::apply_single_auto_hwm_msg_unit(&ctx, config.size);
     let receiver = ctx.router_socket().expect("receiver");
     let sender = ctx.router_socket().expect("sender");
     // Match C perf: numeric socket HWM remains behind the manual-override gate.
@@ -72,11 +71,13 @@ fn main() {
     let target = receiver_rid.clone();
     common::wait_monitor_ready(&mut receiver_mon, ready_timeout, "router-router receiver");
     common::wait_monitor_ready(&mut mon, ready_timeout, "router-router sender");
-    sender
-        .send(&target)
-        .message(Message::try_from(b"PING").expect("router ping"))
-        .submit()
-        .expect("router handshake send");
+    common::block_on(
+        sender
+            .send(&target)
+            .message(Message::try_from(b"PING").expect("router ping"))
+            .submit(),
+    )
+    .expect("router handshake send");
     let mut handshake = zlink::Received::empty();
     if let Err(err) = receiver.recv(&mut handshake, zlink::RecvFlags::NONE) {
         panic!("receiver handshake recv: {err}");
@@ -86,11 +87,13 @@ fn main() {
         .expect("receiver handshake rid")
         .clone();
     assert_eq!(handshake.parts()[0].as_bytes(), b"PING");
-    receiver
-        .send(&reply_rid)
-        .message(Message::try_from(b"PONG").expect("router pong"))
-        .submit()
-        .expect("receiver handshake reply");
+    common::block_on(
+        receiver
+            .send(&reply_rid)
+            .message(Message::try_from(b"PONG").expect("router pong"))
+            .submit(),
+    )
+    .expect("receiver handshake reply");
     let mut handshake_reply = zlink::Received::empty();
     if let Err(err) = sender.recv(&mut handshake_reply, zlink::RecvFlags::NONE) {
         panic!("sender handshake recv: {err}");
@@ -104,18 +107,17 @@ fn main() {
     let active_deadline = std::time::Instant::now() + active;
     let send_target = target.clone();
     let send_thread = std::thread::spawn(move || {
-        common::send_loop(
-            active_deadline,
-            config.size,
-            common::PHASE_ACTIVE,
-            |msg| match sender.send(&send_target).message(msg).submit() {
-                Ok(sent) => sent,
+        common::send_loop(active_deadline, config.size, common::PHASE_ACTIVE, |msg| {
+            match common::block_on(sender.send(&send_target).message(msg).submit()) {
+                Ok(()) => true,
                 Err(err) if err.code() == SubmitResult::NotConnected => false,
                 Err(err) if common::is_single_send_retry_error(&err) => false,
                 Err(err) => panic!("active send: {err}"),
-            },
-        );
-        common::send_stop_token(|msg| sender.send(&send_target).message(msg).submit());
+            }
+        });
+        common::send_stop_token(|msg| {
+            common::block_on(sender.send(&send_target).message(msg).submit()).map(|()| true)
+        });
     });
 
     let mut received = Received::empty();

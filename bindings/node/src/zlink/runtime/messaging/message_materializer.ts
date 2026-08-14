@@ -28,6 +28,8 @@ import {
   createTopicMessage,
   replaceTopicMessage
 } from './topic_message_state';
+import { replaceMessagePartsEnvelopeRetainedCredit } from '../../contracts/messaging/message_parts_envelope';
+import { requireNative } from '../native/native';
 
 export interface NativeReceivedEnvelope {
   parts?: MessageSnapshot[];
@@ -37,6 +39,8 @@ export interface NativeReceivedEnvelope {
   requestSeq?: bigint | null;
   transportPairId?: bigint;
   transportPairGeneration?: bigint;
+  /** @internal Opaque native owner for all retained Core credits in this envelope. */
+  hwmBudgetLeaseOwner?: unknown;
 }
 
 /** Internal receive transfer: either an envelope or an unrouted native frame. */
@@ -48,6 +52,8 @@ export interface NativeTopicMessageRaw {
   data?: Buffer;
   nativeMessage?: unknown;
   routingId?: Buffer | null;
+  /** @internal Opaque native owner for all retained Core credits in this envelope. */
+  hwmBudgetLeaseOwner?: unknown;
 }
 
 type NativeTopicMessageSinglePart = readonly [Buffer, string];
@@ -156,6 +162,26 @@ function hasReplyableRequestSeq(requestSeq: bigint | null): requestSeq is bigint
   return requestSeq !== null && requestSeq !== 0n;
 }
 
+function retainedCreditOwner(raw: NativeReceivedRaw | NativeTopicMessageEnvelope): unknown {
+  return (raw as { hwmBudgetLeaseOwner?: unknown }).hwmBudgetLeaseOwner;
+}
+
+function adoptRetainedCredit(target: Received | TopicMessage, owner: unknown): void {
+  if (owner === undefined) {
+    return;
+  }
+  replaceMessagePartsEnvelopeRetainedCredit(
+    target,
+    () => requireNative().hwmBudgetLeaseRelease(owner)
+  );
+}
+
+function releaseRetainedCredit(owner: unknown): void {
+  if (owner !== undefined) {
+    requireNative().hwmBudgetLeaseRelease(owner);
+  }
+}
+
 export function materializeReceived(
   raw: NativeReceivedRaw,
   reply?: (requestSeq: bigint, parts: readonly MessageLike[], flags: SendFlags) => void,
@@ -197,35 +223,42 @@ export function materializeReceivedInto(
   reply?: (requestSeq: bigint, parts: readonly MessageLike[], flags: SendFlags) => void,
   send?: (parts: readonly Message[], flags: SendFlags) => boolean
 ): void {
+  const retainedOwner = retainedCreditOwner(raw);
   const envelope = envelopeOf(raw);
   const requestSeq = envelope?.requestSeq ?? null;
-  replaceReceived(
-    target,
-    materializeReceivedParts(raw),
-    wrapNativeRoutingId(envelope?.routingId ?? null),
-    requestSeq,
-    hasReplyableRequestSeq(requestSeq) && reply
-      ? {
-          beginReply() {
-            return createReceivedReplyOperation(
-              (parts: readonly MessageLike[], flags: SendFlags): void => {
-                reply(requestSeq, parts, flags);
-              }
-            );
+  try {
+    replaceReceived(
+      target,
+      materializeReceivedParts(raw),
+      wrapNativeRoutingId(envelope?.routingId ?? null),
+      requestSeq,
+      hasReplyableRequestSeq(requestSeq) && reply
+        ? {
+            beginReply() {
+              return createReceivedReplyOperation(
+                (parts: readonly MessageLike[], flags: SendFlags): void => {
+                  reply(requestSeq, parts, flags);
+                }
+              );
+            }
           }
-        }
-      : null,
-    send
-      ? {
-          beginSend() {
-            return createReceivedSendOperation(
-              (parts: readonly Message[], flags: SendFlags): boolean =>
-                send(parts, flags)
-            );
+        : null,
+      send
+        ? {
+            beginSend() {
+              return createReceivedSendOperation(
+                (parts: readonly Message[], flags: SendFlags): boolean =>
+                  send(parts, flags)
+              );
+            }
           }
-        }
-      : null
-  );
+        : null
+    );
+    adoptRetainedCredit(target, retainedOwner);
+  } catch (error) {
+    releaseRetainedCredit(retainedOwner);
+    throw error;
+  }
   const targetInternal = target as Received & {
     transportPairId?: bigint;
     transportPairGeneration?: bigint;
@@ -239,6 +272,7 @@ export function materializeRoutedReceivedInto(
   raw: NativeReceivedRaw,
   operations: RoutedReceiveOperations
 ): void {
+  const retainedOwner = retainedCreditOwner(raw);
   const envelope = envelopeOf(raw);
   if (envelope === null) {
     throw new Error('routed receive requires a receive envelope');
@@ -286,14 +320,20 @@ export function materializeRoutedReceivedInto(
     context.cachedRoutingBytes = context.routingId;
     context.cachedRoutingId = wrapNativeRoutingId(context.routingId);
   }
-  replaceReceived(
-    target,
-    materializeReceivedParts(raw),
-    context.cachedRoutingId,
-    context.requestSeq,
-    hasReplyableRequestSeq(context.requestSeq) ? context.replyContext : null,
-    context.routingId == null ? null : context.sendContext
-  );
+  try {
+    replaceReceived(
+      target,
+      materializeReceivedParts(raw),
+      context.cachedRoutingId,
+      context.requestSeq,
+      hasReplyableRequestSeq(context.requestSeq) ? context.replyContext : null,
+      context.routingId == null ? null : context.sendContext
+    );
+    adoptRetainedCredit(target, retainedOwner);
+  } catch (error) {
+    releaseRetainedCredit(retainedOwner);
+    throw error;
+  }
   const targetInternal = target as Received & {
     transportPairId?: bigint;
     transportPairGeneration?: bigint;
@@ -315,14 +355,21 @@ export function materializeTopicMessage(raw: NativeTopicMessageEnvelope): TopicM
 }
 
 export function adoptTopicMessage(result: TopicMessage, raw: NativeTopicMessageEnvelope): void {
+  const retainedOwner = retainedCreditOwner(raw);
   const topic = isNativeTopicMessageSinglePart(raw) ? raw[1] : raw.topic;
   const routingId = isNativeTopicMessageSinglePart(raw)
     ? null
     : wrapNativeRoutingId(raw.routingId ?? null);
-  replaceTopicMessage(
-    result,
-    topic,
-    materializeTopicParts(raw),
-    routingId
-  );
+  try {
+    replaceTopicMessage(
+      result,
+      topic,
+      materializeTopicParts(raw),
+      routingId
+    );
+    adoptRetainedCredit(result, retainedOwner);
+  } catch (error) {
+    releaseRetainedCredit(retainedOwner);
+    throw error;
+  }
 }

@@ -1,25 +1,22 @@
 // SPDX-License-Identifier: MPL-2.0
 
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using Systems.Zlink.Runtime.Native;
 
 namespace Systems.Zlink;
 
-internal sealed class DealerSocket : MessageSocketBase, IDealerSocket
+internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
 {
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(5);
-
-    private static readonly NativeMethods.ZlinkReplyHandlerDelegate RequestReplyHandler =
-        OnRequestReply;
-
-    private static readonly IntPtr RequestReplyHandlerPtr =
-        Marshal.GetFunctionPointerForDelegate(RequestReplyHandler);
 
     public DealerSocket(Context context)
         : base(context, SocketType.Dealer)
     {
         Options = new DealerSocketOptions(this);
+    }
+
+    public RoutedSendOperation Send()
+    {
+        return new RoutedAsyncSendOperation(this);
     }
 
     public new DealerSocketOptions Options { get; }
@@ -44,14 +41,28 @@ internal sealed class DealerSocket : MessageSocketBase, IDealerSocket
 
     public override bool Recv(Received result, RecvFlags flags = RecvFlags.None)
     {
+        return RecvCore(result, flags, false);
+    }
+
+    public override bool RecvRetained(Received result,
+        RecvFlags flags = RecvFlags.None)
+    {
+        return RecvCore(result, flags, true);
+    }
+
+    private bool RecvCore(Received result, RecvFlags flags,
+        bool retainCredit)
+    {
         if (result == null)
             throw new ArgumentNullException(nameof(result));
+        result.PrepareForReceive();
 
         List<Message>? parts = null;
         var messageType = ReceivedMessageType.Raw;
         ulong requestSeq = 0;
         var firstPart = true;
         var transferred = false;
+        HwmBudgetLeaseOwner? hwmBudgetLeases = null;
 
         try
         {
@@ -67,13 +78,23 @@ internal sealed class DealerSocket : MessageSocketBase, IDealerSocket
                 var recvFlags = firstPart ? (int)flags : 0;
                 try
                 {
-                    var rc = NativeMethods.zlink_dealer_recv_part(Handle,
-                        out var nativeMessageType, out var nativeRequestSeq,
-                        ref nativePart, out var hasMore,
-                        recvFlags);
+                    var lease = IntPtr.Zero;
+                    byte nativeMessageType;
+                    ulong nativeRequestSeq;
+                    NativeMethods.ZlinkPartFlag hasMore;
+                    var rc = retainCredit
+                        ? NativeMethods
+                            .zlink_dealer_recv_part_with_hwm_budget_lease(
+                                Handle, out nativeMessageType,
+                                out nativeRequestSeq, ref nativePart,
+                                out lease, out hasMore, recvFlags)
+                        : NativeMethods.zlink_dealer_recv_part(Handle,
+                            out nativeMessageType, out nativeRequestSeq,
+                            ref nativePart, out hasMore, recvFlags);
 
                     if (rc != 0)
                     {
+                        HwmBudgetLeaseOwner.ReleaseUnowned(ref lease);
                         var errno = NativeMethods.zlink_errno();
                         if (firstPart && (flags & RecvFlags.DontWait) != 0
                                       && ZlinkException.MapErrorCode(errno) is ErrorCode.EAgain
@@ -82,6 +103,10 @@ internal sealed class DealerSocket : MessageSocketBase, IDealerSocket
 
                         throw ZlinkException.CreateRecvException(errno);
                     }
+
+                    if (retainCredit)
+                        HwmBudgetLeaseOwner.Adopt(ref hwmBudgetLeases,
+                            ref lease);
 
                     messageType = (ReceivedMessageType)nativeMessageType;
                     requestSeq = nativeRequestSeq;
@@ -101,7 +126,8 @@ internal sealed class DealerSocket : MessageSocketBase, IDealerSocket
                         if (messageType == ReceivedMessageType.Raw
                             && requestSeq == 0)
                         {
-                            result.PopulateSinglePart(singlePart);
+                            result.PopulateSinglePart(singlePart,
+                                hwmBudgetLeases);
                             transferred = true;
                             return true;
                         }
@@ -113,13 +139,16 @@ internal sealed class DealerSocket : MessageSocketBase, IDealerSocket
                                 : null;
                         result.PopulateMessageEnvelopeSingle(singlePart,
                             messageType, requestSeq == 0 ? null : requestSeq,
-                            singleReplyHandler);
+                            singleReplyHandler, hwmBudgetLeases);
                         transferred = true;
                         return true;
                     }
 
-                    parts ??= new List<Message>();
-                    parts.Add(Message.AdoptNative(ref nativePart));
+                    parts ??= new List<Message>(4);
+                    if (parts.Count == parts.Capacity)
+                        parts.Capacity = checked(parts.Count * 2);
+                    var adoptedPart = Message.AdoptNative(ref nativePart);
+                    parts.Add(adoptedPart);
                     ownsNativePart = false;
                     firstPart = false;
 
@@ -138,156 +167,31 @@ internal sealed class DealerSocket : MessageSocketBase, IDealerSocket
                     ? CreateReplyHandler(requestSeq)
                     : null;
             result.PopulateMessageEnvelope(parts!.ToArray(), messageType,
-                requestSeq == 0 ? null : requestSeq, replyHandler);
+                requestSeq == 0 ? null : requestSeq, replyHandler,
+                hwmBudgetLeases);
             transferred = true;
             return true;
         }
         catch
         {
             if (!transferred)
+            {
+                hwmBudgetLeases?.Dispose();
                 if (parts != null)
                     RequestReplySupport.DisposeParts(parts);
+            }
             throw;
         }
     }
 
-    internal async Task<IReadOnlyList<Message>> RequestCore(
+    internal Task<IReadOnlyList<Message>> RequestCore(
         IReadOnlyList<Message> parts, TimeSpan timeout,
         CancellationToken ct = default)
     {
-        var received = await RequestAsyncCore(parts,
-                timeout == TimeSpan.Zero ? DefaultRequestTimeout : timeout, ct)
-            .ConfigureAwait(false);
-        return received.Parts;
-    }
-
-    internal bool RequestCallbackCore(IReadOnlyList<Message> parts,
-        RequestCallback callback, SendFlags flags = SendFlags.None,
-        TimeSpan? timeout = null)
-    {
-        if (callback == null)
-            throw new ArgumentNullException(nameof(callback));
-        RequestReplySupport.EnsureParts(parts, nameof(parts));
-        return RequestCallbackCore(parts, null, callback, flags, timeout);
-    }
-
-    internal bool RequestCallbackCore(Message part,
-        RequestCallback callback, SendFlags flags = SendFlags.None,
-        TimeSpan? timeout = null)
-    {
-        if (callback == null)
-            throw new ArgumentNullException(nameof(callback));
-        if (part == null)
-            throw new ArgumentNullException(nameof(part));
-        return RequestCallbackCore(null, part, callback, flags, timeout);
-    }
-
-    private bool RequestCallbackCore(IReadOnlyList<Message>? parts,
-        Message? singlePart, RequestCallback callback, SendFlags flags,
-        TimeSpan? timeout)
-    {
         var timeoutMs = RequestReplySupport.NormalizeRequestTimeout(
-            timeout ?? TimeSpan.Zero, DefaultRequestTimeout);
-        GCHandle handle = default;
-        RequestCallbackCompletion? state = null;
-
-        try
-        {
-            // Hot path: callback request is used by windowed perf and framework
-            // request pumps. Complete directly from native callback state instead
-            // of building a TaskCompletionSource/continuation per request.
-            state = new RequestCallbackCompletion(callback);
-            handle = GCHandle.Alloc(state, GCHandleType.Normal);
-            var userData = GCHandle.ToIntPtr(handle);
-
-            lock (SubmitGate)
-            {
-                if (singlePart != null)
-                {
-                    var submitter = new DealerRequestSinglePartSubmitter(
-                        Handle, (int)flags, timeoutMs, userData);
-                    var rc = SinglePartSubmit.Submit(singlePart,
-                        ref submitter);
-                    if (rc != 0)
-                        throw ZlinkException.CreateSubmitException(
-                            NativeMethods.zlink_errno());
-                }
-                else
-                {
-                    RequestReplySupport.SubmitOwnedParts(parts!,
-                        (ref ZlinkMsg nativePart,
-                                NativeMethods.ZlinkPartFlag partFlag) =>
-                            NativeMethods.zlink_dealer_request_part(Handle,
-                                ref nativePart, (int)flags, partFlag,
-                                timeoutMs, DirectRequestReplyHandlerPtr,
-                                userData));
-                }
-            }
-
-            state.AttachProgress(RequestProgressPump.AttachSocketCallback(Handle));
-            return true;
-        }
-        catch (ZlinkException error) when ((flags & SendFlags.DontWait) != 0)
-        {
-            state?.DisposeProgress();
-            if (handle.IsAllocated)
-                handle.Free();
-
-            if (RequestReplySupport.MapSendNoWaitResult(error)
-                == SendResult.Backpressured)
-                return false;
-
-            throw;
-        }
-        catch
-        {
-            state?.DisposeProgress();
-            if (handle.IsAllocated)
-                handle.Free();
-            throw;
-        }
-    }
-
-    private Task<Received> RequestAsyncCore(IReadOnlyList<Message> parts,
-        TimeSpan timeout, CancellationToken ct, int flags = 0)
-    {
-        if (parts == null)
-            throw new ArgumentNullException(nameof(parts));
-
-        var timeoutMs = RequestReplySupport.NormalizeRequestTimeout(timeout,
+            timeout,
             DefaultRequestTimeout);
-        var completion = new TaskCompletionSource<Received>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        GCHandle handle = default;
-
-        try
-        {
-            RequestCallState state = new(completion);
-            handle = GCHandle.Alloc(state, GCHandleType.Normal);
-            var userData = GCHandle.ToIntPtr(handle);
-
-            if (ct.CanBeCanceled)
-                state.SetCancellationRegistration(
-                    ct.Register(static userdata => { RequestCallState.CancelFromUserData(userdata); }, handle));
-
-            lock (SubmitGate)
-            {
-                RequestReplySupport.SubmitOwnedParts(parts,
-                    (ref ZlinkMsg nativePart,
-                            NativeMethods.ZlinkPartFlag partFlag) =>
-                        NativeMethods.zlink_dealer_request_part(Handle,
-                            ref nativePart, flags, partFlag, timeoutMs,
-                            RequestReplyHandlerPtr, userData));
-            }
-
-            return RequestProgressPump.AttachSocket(Handle, completion.Task);
-        }
-        catch
-        {
-            if (handle.IsAllocated)
-                handle.Free();
-            throw;
-        }
+        return Kernel.RoutedAdmission.RequestAsync(null, parts, timeoutMs, ct);
     }
 
     private ReceivedReplyHandler CreateReplyHandler(ulong requestSeq)
@@ -316,77 +220,6 @@ internal sealed class DealerSocket : MessageSocketBase, IDealerSocket
             {
                 RequestReplySupport.DisposeParts(cloned);
             }
-        }
-    }
-
-    private readonly struct DealerRequestSinglePartSubmitter
-        : INativeSinglePartSubmitter<DealerRequestSinglePartSubmitter>
-    {
-        private readonly IntPtr _dealer;
-        private readonly int _flags;
-        private readonly uint _timeoutMs;
-        private readonly IntPtr _userData;
-
-        internal DealerRequestSinglePartSubmitter(IntPtr dealer, int flags,
-            uint timeoutMs, IntPtr userData)
-        {
-            _dealer = dealer;
-            _flags = flags;
-            _timeoutMs = timeoutMs;
-            _userData = userData;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static int Submit(
-            ref DealerRequestSinglePartSubmitter submitter,
-            ref ZlinkMsg nativePart)
-        {
-            return NativeMethods.zlink_dealer_request_part(
-                submitter._dealer, ref nativePart, submitter._flags,
-                NativeMethods.ZlinkPartFlag.Final, submitter._timeoutMs,
-                DirectRequestReplyHandlerPtr, submitter._userData);
-        }
-    }
-
-    private static void OnRequestReply(int result, IntPtr parts, nuint partCount,
-        IntPtr userData)
-    {
-        RequestReplySupport.CompleteReceivedReply(result, parts, partCount,
-            userData);
-    }
-
-    private static readonly NativeMethods.ZlinkReplyHandlerDelegate DirectRequestReplyHandler =
-        OnDirectRequestReply;
-
-    private static readonly IntPtr DirectRequestReplyHandlerPtr =
-        Marshal.GetFunctionPointerForDelegate(DirectRequestReplyHandler);
-
-    private static void OnDirectRequestReply(int result, IntPtr parts,
-        nuint partCount, IntPtr userData)
-    {
-        var handle = GCHandle.FromIntPtr(userData);
-        var state = (RequestCallbackCompletion)handle.Target!;
-        try
-        {
-            if (!state.TryStartCompletion())
-                return;
-
-            if (result != 0)
-            {
-                state.Invoke((RequestResult)result, Array.Empty<Message>());
-                return;
-            }
-
-            var replyParts = Message.FromNativeVector(parts, partCount);
-            parts = IntPtr.Zero;
-            partCount = 0;
-            state.Invoke(RequestResult.Ok, replyParts);
-        }
-        finally
-        {
-            if (parts != IntPtr.Zero)
-                NativeMethods.zlink_multipart_close(parts, partCount);
-            handle.Free();
         }
     }
 

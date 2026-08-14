@@ -207,7 +207,7 @@ public sealed class test_stream_socket
             header.Dispose();
             if (payload.AsReadOnlySpan().SequenceEqual(expected))
                 Interlocked.Increment(ref matched);
-            stream.Send(rid).Message(payload).Submit();
+            stream.TrySend(rid).Message(payload).Submit();
         }));
 
         using var client = ConnectRawClient(port);
@@ -284,7 +284,7 @@ public sealed class test_stream_socket
             ReadOnlySpan<byte> payload = msg.AsReadOnlySpan();
             if (payload.Length == 1 && payload[0] == 0)
                 Interlocked.Increment(ref matched);
-            stream.Send(rid).Message(msg).Submit();
+            stream.TrySend(rid).Message(msg).Submit();
         }));
 
         using var client = ConnectRawClient(port);
@@ -328,7 +328,7 @@ public sealed class test_stream_socket
         Assert.False(observedRid.IsEmpty);
 
         using (Message closing = Message.From("session-closing"u8))
-            stream.Send(observedRid).Message(closing).Submit();
+            stream.TrySend(observedRid).Message(closing).Submit();
         stream.DisconnectRid(observedRid);
         Assert.Equal("session-closing"u8.ToArray(), ReceiveExact(ns, "session-closing"u8.Length));
         Assert.True(WaitForRawClientClose(ns, 3000),
@@ -363,7 +363,7 @@ public sealed class test_stream_socket
             Assert.False(routingId.IsEmpty);
             Assert.Equal("hello", CoreTestSupport.Utf8(payloadMessage));
             using var reply = Message.From("world"u8);
-            stream.Send(routingId).Message(reply).Submit();
+            stream.TrySend(routingId).Message(reply).Submit();
             Assert.Throws<ObjectDisposedException>(() =>
             {
                 _ = reply.Size;
@@ -375,6 +375,43 @@ public sealed class test_stream_socket
         int n = client.GetStream().Read(recv, 0, recv.Length);
         Assert.True(n > 0);
         Assert.Equal("world", CoreTestSupport.Utf8(recv.AsSpan(0, n)));
+    }
+
+    [Fact]
+    public async Task stream_exact_target_async_send_uses_binding_admission()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var ctx = Zlink.CreateContext();
+        using var stream = ctx.CreateStreamSocket();
+
+        string endpoint = CoreTestSupport.NewEndpoint("tcp", "stream-async");
+        int port = CoreTestSupport.ExtractPort(endpoint);
+        stream.Bind(endpoint);
+
+        using var client = ConnectRawClient(port);
+        NetworkStream network = client.GetStream();
+        RoutingId? routingId = null;
+        stream.OnPacket((StreamPacketHandler)((rid, header, body) =>
+        {
+            header.Dispose();
+            body.Dispose();
+            routingId = rid;
+        }));
+        SendAll(network, CoreTestSupport.BuildStreamPacket("route"u8));
+        Assert.True(CoreTestSupport.WaitUntil(
+            () => routingId.HasValue, 3_000, 10));
+
+        using var reply = Message.From("async-world"u8);
+        await stream.Send(routingId!.Value)
+            .Message(reply)
+            .Async()
+            .WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Throws<ObjectDisposedException>(() => _ = reply.Size);
+        Assert.Equal("async-world"u8.ToArray(),
+            ReceiveExact(network, "async-world"u8.Length));
     }
 
     [Fact]
@@ -408,9 +445,48 @@ public sealed class test_stream_socket
             Assert.Equal(incoming, part!.ToArray());
 
         using var reply = Message.From("raw-reply"u8);
-        stream.Send(routingId).Message(reply).Submit();
+        stream.TrySend(routingId).Message(reply).Submit();
         Assert.Equal("raw-reply"u8.ToArray(),
             ReceiveExact(clientStream, "raw-reply"u8.Length));
+    }
+
+    [Fact]
+    public void stream_recv_retained_holds_core_credit_until_envelope_disposal()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var ctx = Zlink.CreateContext();
+        using var stream = ctx.CreateStreamSocket();
+        string endpoint = CoreTestSupport.NewEndpoint(
+            "tcp",
+            "stream-recv-retained");
+        int port = CoreTestSupport.ExtractPort(endpoint);
+        stream.Bind(endpoint);
+
+        using var client = ConnectRawClient(port);
+        byte[] incoming = "retained-stream-part"u8.ToArray();
+        SendAll(client.GetStream(), incoming);
+
+        using var received = Received.Create();
+        Assert.True(CoreTestSupport.WaitUntil(
+            () => stream.RecvRetained(received, RecvFlags.DontWait),
+            3_000));
+        Assert.False(received.RoutingId is null || received.RoutingId.Value.IsEmpty);
+        Assert.Single(received.Parts);
+        Assert.Equal(incoming, received.FirstPart().ToArray());
+
+        CoreHwmBudgetSnapshot held = ctx.GetCoreHwmBudgetSnapshot();
+        Assert.Equal(1UL, held.OutstandingApplicationLeaseCount);
+        Assert.True(held.ApplicationAccountedBytes > 0);
+
+        received.Dispose();
+        Assert.True(CoreTestSupport.WaitUntil(() =>
+        {
+            CoreHwmBudgetSnapshot released = ctx.GetCoreHwmBudgetSnapshot();
+            return released.OutstandingApplicationLeaseCount == 0
+                   && released.ApplicationAccountedBytes == 0;
+        }, 3_000));
     }
 
     [Fact]
@@ -613,7 +689,7 @@ public sealed class test_stream_socket
         stream.OnPacket((StreamPacketHandler)((rid, header, payload) =>
         {
             header.Dispose();
-            stream.Send(rid).Message(payload).Submit();
+            stream.TrySend(rid).Message(payload).Submit();
         }));
 
         const int clientCount = 8;

@@ -14,6 +14,7 @@ from ..._native.ffi import (
     ZlinkSocketMonitorOpenOptions,
     lib,
 )
+from ..buffers.payload_buffers import _validated_uint64
 from ..eventing.dispatcher import CallbackDispatcher
 from ..handles.native_support import (
     _raise_last_error,
@@ -37,29 +38,12 @@ def _monitor_status_from_native(snapshot):
         detail_flags=int(snapshot.detail_flags),
         snd_pending_msgs=int(snapshot.snd_pending_msgs),
         rcv_pending_msgs=int(snapshot.rcv_pending_msgs),
+        snd_pending_bytes=int(snapshot.snd_pending_bytes),
+        rcv_pending_bytes=int(snapshot.rcv_pending_bytes),
         auto_hwm_enabled=bool(snapshot.auto_hwm_enabled),
         auto_hwm_profile=int(snapshot.auto_hwm_profile),
         auto_hwm_role=int(snapshot.auto_hwm_role),
         auto_hwm_policy_class=int(snapshot.auto_hwm_policy_class),
-        auto_hwm_unit_budget_bytes=int(snapshot.auto_hwm_unit_budget_bytes),
-        auto_hwm_size_cap=int(snapshot.auto_hwm_size_cap),
-        auto_hwm_socket_message_slots=int(snapshot.auto_hwm_socket_message_slots),
-        auto_hwm_connection_bucket_enabled=bool(
-            snapshot.auto_hwm_connection_bucket_enabled
-        ),
-        auto_hwm_connection_bucket_count=int(
-            snapshot.auto_hwm_connection_bucket_count
-        ),
-        auto_hwm_connection_bucket_index=int(
-            snapshot.auto_hwm_connection_bucket_index
-        ),
-        auto_hwm_connection_bucket_hwm_4k=int(
-            snapshot.auto_hwm_connection_bucket_hwm_4k
-        ),
-        auto_hwm_connection_bucket_hysteresis_retained=bool(
-            snapshot.auto_hwm_connection_bucket_hysteresis_retained
-        ),
-        auto_hwm_effective_message_bytes=int(snapshot.auto_hwm_effective_message_bytes),
         auto_hwm_planned_sndhwm_bytes=int(snapshot.auto_hwm_planned_sndhwm_bytes),
         auto_hwm_planned_rcvhwm_bytes=int(snapshot.auto_hwm_planned_rcvhwm_bytes),
         auto_hwm_applied_sndhwm_bytes=int(snapshot.auto_hwm_applied_sndhwm_bytes),
@@ -194,8 +178,13 @@ NativeMonitorSocket.__name__ = "MonitorSocket"
 NativeMonitorSocket.__qualname__ = "MonitorSocket"
 
 
-def open_socket_monitor(socket, events=MonitorEventMask.ALL):
+def open_socket_monitor(
+    socket, events=MonitorEventMask.ALL, monitor_hwm_bytes=0
+):
     options = ZlinkSocketMonitorOpenOptions()
     options.events = int(events)
+    options.monitor_hwm_bytes = _validated_uint64(
+        monitor_hwm_bytes, field="monitor_hwm_bytes"
+    )
     handle = lib().zlink_socket_monitor_open(socket._handle, ctypes.byref(options))
     return NativeMonitorSocket(handle)

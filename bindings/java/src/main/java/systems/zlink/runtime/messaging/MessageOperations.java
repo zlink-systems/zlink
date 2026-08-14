@@ -3,20 +3,22 @@
 package systems.zlink.runtime.messaging;
 
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.RequestCallback;
 import systems.zlink.contracts.sockets.SendFlags;
+import systems.zlink.contracts.messaging.AsyncSendOperation;
+import systems.zlink.contracts.messaging.AsyncSendSubmitOperation;
 import systems.zlink.contracts.messaging.ReplyOperation;
 import systems.zlink.contracts.messaging.ReplySubmitOperation;
-import systems.zlink.contracts.messaging.RequestCallbackSubmitOperation;
 import systems.zlink.contracts.messaging.RequestOperation;
 import systems.zlink.contracts.messaging.RequestSubmitOperation;
+import systems.zlink.contracts.messaging.RoutedSendOperation;
+import systems.zlink.contracts.messaging.RoutedSendSubmitOperation;
 import systems.zlink.contracts.messaging.SendOperation;
 import systems.zlink.contracts.messaging.SendSubmitOperation;
 import systems.zlink.runtime.nativeapi.MessagePartsBuffer;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 public final class MessageOperations {
     private static final long DEFAULT_TIMEOUT_MS = 5_000L;
@@ -35,9 +37,16 @@ public final class MessageOperations {
             Objects.requireNonNull(invoker, "invoker"));
     }
 
-    public static RequestOperation request(RequestAsyncInvoker asyncInvoker,
-                                           RequestCallbackInvoker callbackInvoker) {
-        return new RequestBuilder(asyncInvoker, callbackInvoker);
+    public static RoutedSendOperation routedSend(RoutedSendInvoker invoker) {
+        return new RoutedSendBuilder(invoker);
+    }
+
+    public static AsyncSendOperation asyncSend(AsyncSendInvoker invoker) {
+        return new AsyncSendBuilder(invoker);
+    }
+
+    public static RequestOperation request(RequestAsyncInvoker asyncInvoker) {
+        return new RequestBuilder(asyncInvoker);
     }
 
     public static ReplyOperation reply(ReplyInvoker invoker) {
@@ -55,16 +64,83 @@ public final class MessageOperations {
     }
 
     @FunctionalInterface
-    public interface RequestAsyncInvoker {
-        CompletableFuture<List<Message>> submit(List<Message> parts,
-                                                SendFlags flags,
-                                                Duration timeout);
+    public interface RoutedSendInvoker {
+        CompletionStage<Void> submit(List<Message> parts);
     }
 
     @FunctionalInterface
-    public interface RequestCallbackInvoker {
-        boolean submit(List<Message> parts, RequestCallback callback,
-                       SendFlags flags, Duration timeout);
+    public interface AsyncSendInvoker {
+        CompletionStage<Void> submit(List<Message> parts);
+    }
+
+    private static final class AsyncSendBuilder
+      implements AsyncSendOperation, AsyncSendSubmitOperation {
+        private final AsyncSendInvoker invoker;
+        private final MessagePartsBuffer parts = new MessagePartsBuffer();
+        private boolean submitted;
+
+        private AsyncSendBuilder(AsyncSendInvoker invoker) {
+            this.invoker = Objects.requireNonNull(invoker, "invoker");
+        }
+
+        @Override
+        public AsyncSendSubmitOperation message(Message part) {
+            ensureNotSubmitted();
+            parts.add(Objects.requireNonNull(part, "part"));
+            return this;
+        }
+
+        @Override
+        public CompletionStage<Void> submit() {
+            ensureNotSubmitted();
+            if (parts.isEmpty())
+                throw new IllegalArgumentException("at least one message required");
+            submitted = true;
+            return invoker.submit(parts.asList());
+        }
+
+        private void ensureNotSubmitted() {
+            if (submitted)
+                throw new IllegalStateException("operation already submitted");
+        }
+    }
+
+    @FunctionalInterface
+    public interface RequestAsyncInvoker {
+        CompletionStage<List<Message>> submit(List<Message> parts,
+                                              Duration timeout);
+    }
+
+    private static final class RoutedSendBuilder
+      implements RoutedSendOperation, RoutedSendSubmitOperation {
+        private final RoutedSendInvoker invoker;
+        private final MessagePartsBuffer parts = new MessagePartsBuffer();
+        private boolean submitted;
+
+        private RoutedSendBuilder(RoutedSendInvoker invoker) {
+            this.invoker = Objects.requireNonNull(invoker, "invoker");
+        }
+
+        @Override
+        public RoutedSendSubmitOperation message(Message part) {
+            ensureNotSubmitted();
+            parts.add(Objects.requireNonNull(part, "part"));
+            return this;
+        }
+
+        @Override
+        public CompletionStage<Void> submit() {
+            ensureNotSubmitted();
+            if (parts.isEmpty())
+                throw new IllegalArgumentException("at least one message required");
+            submitted = true;
+            return invoker.submit(parts.asList());
+        }
+
+        private void ensureNotSubmitted() {
+            if (submitted)
+                throw new IllegalStateException("operation already submitted");
+        }
     }
 
     @FunctionalInterface
@@ -140,20 +216,15 @@ public final class MessageOperations {
     private static final class RequestBuilder
       implements RequestOperation, RequestSubmitOperation {
         private final RequestAsyncInvoker asyncInvoker;
-        private final RequestCallbackInvoker callbackInvoker;
         private Message singlePart;
         private MessagePartsBuffer parts;
         private int partCount;
         private Duration timeout = Duration.ofMillis(DEFAULT_TIMEOUT_MS);
-        private SendFlags flags = SendFlags.NONE;
         private boolean submitted;
 
-        private RequestBuilder(RequestAsyncInvoker asyncInvoker,
-                               RequestCallbackInvoker callbackInvoker) {
+        private RequestBuilder(RequestAsyncInvoker asyncInvoker) {
             this.asyncInvoker = Objects.requireNonNull(asyncInvoker,
                 "asyncInvoker");
-            this.callbackInvoker = Objects.requireNonNull(callbackInvoker,
-                "callbackInvoker");
         }
 
         @Override
@@ -170,23 +241,9 @@ public final class MessageOperations {
         }
 
         @Override
-        public RequestCallbackSubmitOperation flags(SendFlags value) {
-            ensureNotSubmitted();
-            return new CallbackRequestBuilder(this,
-                Objects.requireNonNull(value, "flags"));
-        }
-
-        @Override
-        public CompletableFuture<List<Message>> submit() {
+        public CompletionStage<List<Message>> submit() {
             markSubmitted();
-            return asyncInvoker.submit(requestParts(), flags, timeout);
-        }
-
-        @Override
-        public boolean submit(RequestCallback callback) {
-            markSubmitted();
-            return callbackInvoker.submit(requestParts(),
-                Objects.requireNonNull(callback, "callback"), flags, timeout);
+            return asyncInvoker.submit(requestParts(), timeout);
         }
 
         private void addMessage(Message part) {
@@ -219,44 +276,6 @@ public final class MessageOperations {
         private void ensureNotSubmitted() {
             if (submitted)
                 throw new IllegalStateException("operation already submitted");
-        }
-    }
-
-    private static final class CallbackRequestBuilder
-      implements RequestCallbackSubmitOperation {
-        private final RequestBuilder source;
-        private SendFlags flags;
-
-        private CallbackRequestBuilder(RequestBuilder source, SendFlags flags) {
-            this.source = source;
-            this.flags = flags;
-        }
-
-        @Override
-        public RequestCallbackSubmitOperation message(Message part) {
-            source.addMessage(part);
-            return this;
-        }
-
-        @Override
-        public RequestCallbackSubmitOperation timeout(Duration value) {
-            source.timeout(value);
-            return this;
-        }
-
-        @Override
-        public RequestCallbackSubmitOperation flags(SendFlags value) {
-            source.ensureNotSubmitted();
-            flags = Objects.requireNonNull(value, "flags");
-            return this;
-        }
-
-        @Override
-        public boolean submit(RequestCallback callback) {
-            source.markSubmitted();
-            return source.callbackInvoker.submit(source.requestParts(),
-                Objects.requireNonNull(callback, "callback"), flags,
-                source.timeout);
         }
     }
 

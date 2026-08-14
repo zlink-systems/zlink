@@ -8,24 +8,17 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.eventing.PollEventFlags;
-import systems.zlink.contracts.messaging.Received;
-import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SocketType;
-import systems.zlink.contracts.errors.ZlinkException;
-import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
 import java.time.Duration;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
 
 final class PerfMultiDealerRouter {
@@ -55,7 +48,6 @@ final class PerfMultiDealerRouter {
             PerfUtil.printMultiMonitorAutoHwm(config, monitor, "server",
                 "server", SocketType.ROUTER);
             int stops = 0;
-            Deque<PendingReply> pendingReplies = new ArrayDeque<>();
             systems.zlink.contracts.messaging.Received receivedBuffer = new systems.zlink.contracts.messaging.Received();
             try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
                 List.of(server), PollEventFlags.POLLIN)) {
@@ -63,17 +55,8 @@ final class PerfMultiDealerRouter {
                 // server exits after observing one wire-level stop token per
                 // expected client.
                 while (stops < config.clients()) {
-                    if (pendingReplies.isEmpty()) {
-                        pollSet.setEvents(0, PollEventFlags.POLLIN);
-                    } else {
-                        pollSet.setEvents(0, PollEventFlags.POLLIN,
-                            PollEventFlags.POLLOUT);
-                    }
-                    int readyCount = pollSet.poll(-1);
-                    if (readyCount > 0
-                        && pollSet.readyHasEventAt(0, PollEventFlags.POLLOUT)) {
-                        flushPending(server, pendingReplies);
-                    }
+                    pollSet.setEvents(0, PollEventFlags.POLLIN);
+                    pollSet.poll(-1);
                     while (true) {
                         if (!server.recv(receivedBuffer, systems.zlink.contracts.sockets.RecvFlags.DONT_WAIT)) {
                             break;
@@ -83,25 +66,12 @@ final class PerfMultiDealerRouter {
                             receivedBuffer.close();
                             continue;
                         }
-                        if (pendingReplies.isEmpty()
-                            && receivedBuffer.send()
-                                .message(receivedBuffer.firstPart())
-                                .flags(SendFlags.DONT_WAIT)
-                                .submit()) {
-                            continue;
-                        }
                         RoutingId rid = receivedBuffer.getRoutingId().orElseThrow();
                         Message reply = Message.from(receivedBuffer.firstPart());
                         receivedBuffer.close();
-                        if (pendingReplies.isEmpty()
-                            && server.send(rid)
-                                .message(reply)
-                                .flags(SendFlags.DONT_WAIT)
-                                .submit()) {
-                            reply.close();
-                        } else {
-                            pendingReplies.addLast(new PendingReply(rid, reply));
-                        }
+                        PerfUtil.awaitStage(server.send(rid)
+                            .message(reply).submit());
+                        reply.close();
                     }
                 }
             }
@@ -179,7 +149,6 @@ final class PerfMultiDealerRouter {
         int msgSize = config.size();
         Message[] payloads = new Message[n];
         boolean[] waitingReply = new boolean[n];
-        boolean[] waitingWritable = new boolean[n];
         for (int i = 0; i < n; i++) {
             payloads[i] = PerfUtil.payloadTemplate(msgSize);
         }
@@ -195,16 +164,11 @@ final class PerfMultiDealerRouter {
                 int startIndex = rrIndex;
                 for (int i = 0; i < n; i++) {
                     int idx = (startIndex + i) % n;
-                    if (waitingReply[idx] || waitingWritable[idx]) continue;
+                    if (waitingReply[idx]) continue;
                     payloads[idx] = PerfUtil.resetAndWritePayload(payloads[idx], msgSize,
                         (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
-                    if (trySendPayload(clients.get(idx), payloads[idx])) {
-                        waitingReply[idx] = true;
-                    } else {
-                        waitingWritable[idx] = true;
-                    }
-                    updatePollMask(pollSet, idx, waitingReply[idx],
-                        waitingWritable[idx]);
+                    sendPayload(clients.get(idx), payloads[idx]);
+                    waitingReply[idx] = true;
                 }
                 rrIndex = (startIndex + 1) % n;
                 long remainingNs = activeEnd - System.nanoTime();
@@ -216,49 +180,32 @@ final class PerfMultiDealerRouter {
                 int readyCount = pollSet.poll(waitMs);
                 for (int readyOffset = 0; readyOffset < readyCount; readyOffset++) {
                     int idx = pollSet.readyIndexAt(readyOffset);
-                    boolean writable =
-                        pollSet.readyHasEventAt(readyOffset,
-                            PollEventFlags.POLLOUT);
-                    if (writable && waitingWritable[idx] && !waitingReply[idx]) {
-                        if (trySendPayload(clients.get(idx), payloads[idx])) {
-                            waitingWritable[idx] = false;
-                            waitingReply[idx] = true;
-                            updatePollMask(pollSet, idx, true, false);
-                        }
-                    }
                     boolean readable =
                         pollSet.readyHasEventAt(readyOffset,
                             PollEventFlags.POLLIN);
                     if (!readable) continue;
                     drainReplies(clients.get(idx), idx, waitingReply,
-                        waitingWritable, msgSize, metrics, pollSet,
-                        replyBuffer);
+                        msgSize, metrics, replyBuffer);
                 }
             }
             replyBuffer.close();
             Message.closeAll(List.of(payloads));
             for (DealerSocket client : clients) {
-                try (Message stop = PerfStopToken.newMessage();
-                     PerfSocketPollSet stopPoll = PerfSocketPollSet.fromSockets(
-                         List.of(client), PollEventFlags.POLLOUT)) {
-                    stopPoll.setEvents(0);
-                    sendUntilSent(client, stopPoll, stop,
-                        System.nanoTime() + Duration.ofSeconds(5).toNanos());
+                try (Message stop = PerfStopToken.newMessage()) {
+                    sendPayload(client, stop);
                 }
             }
         }
     }
 
-    private static boolean trySendPayload(DealerSocket client, Message payload) {
-        return client.send().message(payload).flags(SendFlags.DONT_WAIT).submit();
+    private static void sendPayload(DealerSocket client, Message payload) {
+        PerfUtil.awaitStage(client.send().message(payload).submit());
     }
 
     private static void drainReplies(DealerSocket client, int idx,
                                      boolean[] waitingReply,
-                                     boolean[] waitingWritable,
                                      int msgSize,
                                      PerfUtil.Metrics metrics,
-                                     PerfSocketPollSet pollSet,
                                      systems.zlink.contracts.messaging.Received replyBuffer) {
         while (true) {
             if (!client.recv(replyBuffer, systems.zlink.contracts.sockets.RecvFlags.DONT_WAIT)) {
@@ -271,82 +218,7 @@ final class PerfMultiDealerRouter {
             PerfUtil.recordActiveLatency(metrics, replyBuffer.firstPart(),
                 msgSize, true);
             waitingReply[idx] = false;
-            waitingWritable[idx] = false;
-            updatePollMask(pollSet, idx, false, false);
         }
     }
 
-    private static void updatePollMask(PerfSocketPollSet pollSet, int idx,
-                                       boolean waitingReply,
-                                       boolean waitingWritable) {
-        if (waitingWritable && !waitingReply) {
-            pollSet.setEvents(idx, PollEventFlags.POLLIN,
-                PollEventFlags.POLLOUT);
-        } else {
-            pollSet.setEvents(idx, PollEventFlags.POLLIN);
-        }
-    }
-
-    private static void sendUntilSent(DealerSocket client, PerfSocketPollSet pollSet,
-                                      Message part,
-                                      long deadlineNs) {
-        while (true) {
-            if (client.send().message(part).flags(SendFlags.DONT_WAIT).submit()) {
-                return;
-            }
-            if (System.nanoTime() >= deadlineNs) {
-                throw new IllegalStateException("dealer/router send timed out");
-            }
-            // PERF_MULTI_TEST_POLICY § 1.3.1: wait for POLLOUT readiness.
-            // The finite wait preserves the application-level deadline when
-            // the peer has already stopped producing a readiness transition.
-            long remainingNs = deadlineNs - System.nanoTime();
-            int waitMs = (int) Math.min(Integer.MAX_VALUE,
-                Math.max(1L, remainingNs / 1_000_000L));
-            pollSet.setEvents(0, PollEventFlags.POLLOUT);
-            pollSet.poll(waitMs);
-        }
-    }
-
-    private static boolean awaitReadable(PerfSocketPollSet pollSet, long deadlineNs) {
-        // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven wait for POLLIN.
-        // Deadline check is application-level; poller timeout is -1.
-        while (System.nanoTime() < deadlineNs) {
-            try {
-                pollSet.setEvents(0, PollEventFlags.POLLIN);
-                if (pollSet.poll(-1) > 0) {
-                    return true;
-                }
-            } catch (systems.zlink.contracts.errors.ZlinkException ex) {
-                if (ex.getNativeErrno() != 11 && ex.getNativeErrno() != 4) {
-                    throw ex;
-                }
-            }
-        }
-        return false;
-    }
-
-    private static void flushPending(RouterSocket server,
-                                     Deque<PendingReply> pendingReplies) {
-        while (!pendingReplies.isEmpty()) {
-            PendingReply pending = pendingReplies.peekFirst();
-            if (pending == null) {
-                return;
-            }
-            if (!server.send(pending.routingId())
-                .message(pending.payload())
-                .flags(SendFlags.DONT_WAIT)
-                .submit()) {
-                return;
-            }
-            pendingReplies.removeFirst();
-            pending.close();
-        }
-    }
-
-    private record PendingReply(RoutingId routingId, Message payload) {
-        private void close() {
-            payload.close();
-        }
-    }
 }

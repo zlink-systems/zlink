@@ -6,7 +6,7 @@ using static PerfRunner;
 
 internal static class PerfMultiRouterRouterClient
 {
-    internal static int Run(PerfOptions options)
+    internal static async Task<int> Run(PerfOptions options)
     {
         int size = Math.Max(1, options.Size);
         int durationSeconds = ResolveMultiDurationSeconds(options);
@@ -17,7 +17,7 @@ internal static class PerfMultiRouterRouterClient
         int clientCount = ResolveMultiClients(options);
         int pollTimeoutMs = ResolveMultiClientPollTimeoutMs(options);
         string endpoint = options.Endpoint;
-        ReadOnlySpan<byte> serverRoutingId = "SERVER"u8;
+        byte[] serverRoutingId = "SERVER"u8.ToArray();
 
         using var ctx = Zlink.CreateContext();
         using var pollManager = new PollManager();
@@ -57,7 +57,6 @@ internal static class PerfMultiRouterRouterClient
             monitors.Clear();
 
             for (int i = 0; i < clients.Count; i++)
-                ApplyAutoHwmMsgUnit(ctx, size);
             RecalculateAutoHwm(ctx);
             if (clients.Count > 0)
                 PrintAutoHwmSnapshot(clients[0], "endpoint",
@@ -68,9 +67,10 @@ internal static class PerfMultiRouterRouterClient
                 double latencyP99Ns, long measureCount) result;
             try
             {
-                result = RunMultiRouterRouterClientLoop(pollManager, slots,
+                result = await RunMultiRouterRouterClientLoopAsync(pollManager,
+                    slots,
                     size, latencySampleCap, pollTimeoutMs, durationSeconds,
-                    readyTimeoutMs);
+                    readyTimeoutMs).ConfigureAwait(false);
             }
             finally
             {
@@ -120,9 +120,9 @@ internal static class PerfMultiRouterRouterClient
             slots[i].ReusableReceived.Dispose();
     }
 
-    private static (double throughput, double latencyNs, double latencyP95Ns,
-        double latencyP99Ns, long measureCount)
-        RunMultiRouterRouterClientLoop(PollManager pollManager,
+    private static async Task<(double throughput, double latencyNs,
+        double latencyP95Ns, double latencyP99Ns, long measureCount)>
+        RunMultiRouterRouterClientLoopAsync(PollManager pollManager,
             RouterRouterClientSlot[] slots, int msgSize, int latencySampleCap,
             int pollTimeoutMs, int durationSeconds, int readyTimeoutMs)
     {
@@ -142,8 +142,9 @@ internal static class PerfMultiRouterRouterClient
             + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
         while (Stopwatch.GetTimestamp() < benchDeadlineTicks)
         {
-            TryScheduleIdleSends(slots, eventMasks, msgSize, runId, PerfPhase.Active,
-                ref seq, ref rrIndex);
+            (seq, rrIndex) = await TryScheduleIdleSendsAsync(slots, eventMasks,
+                msgSize, runId, PerfPhase.Active, seq, rrIndex)
+                .ConfigureAwait(false);
 
             // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven wait.
             int readyCount = PollSocketEvents(pollManager, sockets, eventMasks,
@@ -154,11 +155,12 @@ internal static class PerfMultiRouterRouterClient
             }
 
             for (int i = 0; i < readyCount; i++)
-                HandleClientEvent(pollManager, slots,
+                seq = await HandleClientEventAsync(pollManager, slots,
                     ReadySocketIndexAt(pollManager, i),
                     ReadySocketMaskAt(pollManager, i), eventMasks, msgSize,
-                    runId, PerfPhase.Active, ref seq, metrics, allowSend: true,
-                    activeDeadlineTicks: benchDeadlineTicks);
+                    runId, PerfPhase.Active, seq, metrics, allowSend: true,
+                    activeDeadlineTicks: benchDeadlineTicks)
+                    .ConfigureAwait(false);
         }
 
         long benchEndTicks = Stopwatch.GetTimestamp();
@@ -178,9 +180,10 @@ internal static class PerfMultiRouterRouterClient
             metrics.MeasureCount);
     }
 
-    private static void TryScheduleIdleSends(RouterRouterClientSlot[] slots,
-        PollEventFlags[] eventMasks, int msgSize, uint runId, PerfPhase phase, ref ulong seq,
-        ref int rrIndex)
+    private static async Task<(ulong Seq, int RrIndex)>
+        TryScheduleIdleSendsAsync(RouterRouterClientSlot[] slots,
+            PollEventFlags[] eventMasks, int msgSize, uint runId,
+            PerfPhase phase, ulong seq, int rrIndex)
     {
         int startIndex = rrIndex;
         for (int i = 0; i < slots.Length; i++)
@@ -190,8 +193,10 @@ internal static class PerfMultiRouterRouterClient
             if (slot.WaitingForReply || slot.WaitingForWritable)
                 continue;
 
-            if (TrySend(slot, msgSize, runId, phase, ref seq))
+            if (await TrySendAsync(slot, msgSize, runId, phase, seq)
+                    .ConfigureAwait(false))
             {
+                seq++;
                 slot.WaitingForReply = true;
                 slot.WaitingForWritable = false;
                 UpdatePollMask(slot, eventMasks, slotIndex);
@@ -204,12 +209,13 @@ internal static class PerfMultiRouterRouterClient
 
         if (slots.Length > 0)
             rrIndex = (startIndex + 1) % slots.Length;
+        return (seq, rrIndex);
     }
 
-    private static void HandleClientEvent(PollManager pollManager,
+    private static async Task<ulong> HandleClientEventAsync(PollManager pollManager,
         RouterRouterClientSlot[] slots,
         int slotIndex, PollEventFlags readyMask, PollEventFlags[] eventMasks,
-        int msgSize, uint runId, PerfPhase phase, ref ulong seq,
+        int msgSize, uint runId, PerfPhase phase, ulong seq,
         RouterRouterMetrics metrics, bool allowSend, long activeDeadlineTicks)
     {
         _ = activeDeadlineTicks;
@@ -220,8 +226,10 @@ internal static class PerfMultiRouterRouterClient
             && slot.WaitingForWritable
             && !slot.WaitingForReply)
         {
-            if (TrySend(slot, msgSize, runId, phase, ref seq))
+            if (await TrySendAsync(slot, msgSize, runId, phase, seq)
+                    .ConfigureAwait(false))
             {
+                seq++;
                 slot.WaitingForReply = true;
                 slot.WaitingForWritable = false;
                 UpdatePollMask(slot, eventMasks, slotIndex);
@@ -229,7 +237,7 @@ internal static class PerfMultiRouterRouterClient
         }
 
         if ((readyMask & PollEventFlags.PollIn) == 0)
-            return;
+            return seq;
 
         IRouterSocket routerSock = slot.Socket;
         Received received = slot.ReusableReceived;
@@ -247,12 +255,13 @@ internal static class PerfMultiRouterRouterClient
             slot.WaitingForReply = false;
             if (phase == PerfPhase.Active)
             {
-                ReadOnlySpan<byte> body = received.FirstPart().AsReadOnlySpan();
                 // Match C reference: outer while loop bounds the active
                 // window; dropping replies that arrive after activeDeadline
                 // would lower throughput vs C for replies whose sends were
                 // inside the active phase.
-                if (PerfShared.TryDecodeMetricHeader(body, out PerfMetricHeader header)
+                if (PerfShared.TryDecodeMetricHeader(
+                        received.FirstPart().AsReadOnlySpan(),
+                        out PerfMetricHeader header)
                     && header.RunId == runId
                     && header.MsgSize == (uint)msgSize
                     && header.Phase == (uint)phase)
@@ -283,6 +292,7 @@ internal static class PerfMultiRouterRouterClient
             slot.WaitingForWritable = false;
             UpdatePollMask(slot, eventMasks, slotIndex);
         }
+        return seq;
     }
 
     private static List<ISocket> CollectSockets(
@@ -310,8 +320,8 @@ internal static class PerfMultiRouterRouterClient
         eventMasks[index] = events;
     }
 
-    private static bool TrySend(RouterRouterClientSlot slot, int msgSize,
-        uint runId, PerfPhase phase, ref ulong seq)
+    private static async Task<bool> TrySendAsync(RouterRouterClientSlot slot,
+        int msgSize, uint runId, PerfPhase phase, ulong seq)
     {
         // Match C: stamp immediately before every send attempt, including a
         // POLLOUT retry. A blocked attempt keeps the current sequence; only a
@@ -320,13 +330,8 @@ internal static class PerfMultiRouterRouterClient
             seq, EpochNs());
         using Message message = Message.Allocate(slot.Payload.Length);
         slot.Payload.AsSpan(0, PerfMetricHeaderSize).CopyTo(message.AsSpan());
-        bool sent = slot.Socket.Send(slot.ServerRoutingId)
-            .Message(message)
-            .Flags(SendFlags.DontWait)
-            .Submit();
-        if (sent)
-            seq++;
-        return sent;
+        return await PerfSocketIo.SendAsync(slot.Socket, slot.ServerRoutingId,
+            message).ConfigureAwait(false) > 0;
     }
 
     private static int RemainingMilliseconds(long deadlineTicks)

@@ -37,10 +37,12 @@ class context_options_t
     void auto_hwm_enabled (bool enabled_);
     std::chrono::milliseconds auto_hwm_recalc_debounce () const;
     void auto_hwm_recalc_debounce (std::chrono::milliseconds value_);
-    zlink::auto_hwm_profile auto_hwm_profile () const;
-    void auto_hwm_profile (zlink::auto_hwm_profile profile_);
-    byte_count_t auto_hwm_msg_unit_bytes () const;
-    void auto_hwm_msg_unit_bytes (byte_count_t value_);
+    byte_count_t core_hwm_memory_limit_bytes () const;
+    void core_hwm_memory_limit_bytes (byte_count_t value_);
+    byte_count_t core_hwm_budget_bytes () const;
+    void core_hwm_budget_bytes (byte_count_t value_);
+    zlink::auto_hwm_profile core_hwm_profile () const;
+    void core_hwm_profile (zlink::auto_hwm_profile profile_);
     socket_count_t socket_limit () const;
     byte_size_t msg_t_size () const;
     void add_thread_affinity (cpu_index_t cpu_);

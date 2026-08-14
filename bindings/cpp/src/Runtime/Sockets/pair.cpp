@@ -19,12 +19,18 @@ send_operation_t pair_socket_t::send ()
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_send;
     state_ptr->raw.socket = detail::native_handle (*this);
+    state_ptr->raw.callbacks = callback_state ().weak_from_this ();
     return send_operation_t (std::move (state_ptr));
 }
 
 int pair_socket_t::recv (received_t &out_, recv_flags_t flags_)
 {
     return socket_t::receive (out_, flags_);
+}
+
+int pair_socket_t::recv_retained (received_t &out_, recv_flags_t flags_)
+{
+    return socket_t::receive_retained (out_, flags_);
 }
 
 int pair_socket_t::recv (message_t &part_out_, recv_flags_t flags_)

@@ -78,29 +78,37 @@ func TestCommonTypedOptions(t *testing.T) {
 	if got, err := opts.Blocky(); err != nil || got {
 		t.Fatalf("Blocky() = (%v, %v), want (false, nil)", got, err)
 	}
-	if err := opts.SetAutoHwmProfile(zlink.AutoHwmProfileCompact); err != nil {
-		t.Fatalf("SetAutoHwmProfile() error = %v", err)
+	if err := opts.SetCoreHwmProfile(zlink.AutoHwmProfileCompact); err != nil {
+		t.Fatalf("SetCoreHwmProfile() error = %v", err)
 	}
-	if got, err := opts.AutoHwmProfile(); err != nil || got != zlink.AutoHwmProfileCompact {
-		t.Fatalf("AutoHwmProfile() = (%v, %v), want (compact, nil)", got, err)
+	if got, err := opts.CoreHwmProfile(); err != nil || got != zlink.AutoHwmProfileCompact {
+		t.Fatalf("CoreHwmProfile() = (%v, %v), want (compact, nil)", got, err)
 	}
-	if got, err := opts.AutoHwmMsgUnitBytes(); err != nil || got != 0 {
-		t.Fatalf("AutoHwmMsgUnitBytes() = (%d, %v), want (0, nil)", got, err)
+	if err := opts.SetCoreHwmMemoryLimitBytes(64 << 20); err != nil {
+		t.Fatalf("SetCoreHwmMemoryLimitBytes() error = %v", err)
 	}
-	if err := opts.SetAutoHwmMsgUnitBytes(64); err != nil {
-		t.Fatalf("SetAutoHwmMsgUnitBytes(64) error = %v", err)
+	if got, err := opts.CoreHwmMemoryLimitBytes(); err != nil || got != 64<<20 {
+		t.Fatalf("CoreHwmMemoryLimitBytes() = (%d, %v)", got, err)
 	}
-	if got, err := opts.AutoHwmMsgUnitBytes(); err != nil || got != 64 {
-		t.Fatalf("AutoHwmMsgUnitBytes() = (%d, %v), want (64, nil)", got, err)
+	if err := opts.SetCoreHwmBudgetBytes(16 << 20); err != nil {
+		t.Fatalf("SetCoreHwmBudgetBytes() error = %v", err)
 	}
-	if err := opts.SetAutoHwmMsgUnitBytes(0); err != nil {
-		t.Fatalf("SetAutoHwmMsgUnitBytes(0) error = %v", err)
+	if got, err := opts.CoreHwmBudgetBytes(); err != nil || got != 16<<20 {
+		t.Fatalf("CoreHwmBudgetBytes() = (%d, %v)", got, err)
 	}
-	if got, err := opts.AutoHwmMsgUnitBytes(); err != nil || got != 0 {
-		t.Fatalf("AutoHwmMsgUnitBytes() after reset = (%d, %v), want (0, nil)", got, err)
+	if err := ctx.RecalculateAutoHwm(); err != nil {
+		t.Fatal(err)
 	}
-	if err := opts.SetAutoHwmMsgUnitBytes(-1); err == nil {
-		t.Fatalf("SetAutoHwmMsgUnitBytes(-1) succeeded, want error")
+	before, err := ctx.CoreHwmBudgetSnapshot()
+	if err != nil || before.ABIVersion != 1 || before.ConfiguredCoreBudgetBytes != 16<<20 {
+		t.Fatalf("CoreHwmBudgetSnapshot() = (%+v, %v)", before, err)
+	}
+	if err := ctx.ResetCoreHwmBudgetMetrics(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := ctx.CoreHwmBudgetSnapshot()
+	if err != nil || after.MeasurementEpoch <= before.MeasurementEpoch {
+		t.Fatalf("reset snapshot epoch = (%d, %v), before %d", after.MeasurementEpoch, err, before.MeasurementEpoch)
 	}
 }
 

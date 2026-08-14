@@ -1,7 +1,7 @@
+import asyncio
 import ctypes
 import importlib.util
 import os
-import queue
 import time
 import unittest
 
@@ -50,11 +50,12 @@ class CoreApiAlignmentTests(unittest.TestCase):
             "Received",
             "RoutingId",
             "SendOp",
+            "RoutedSendOp",
             "RequestOp",
-            "RequestCallbackOp",
             "ReplyOp",
         ):
             self.assertTrue(hasattr(zlink, name), name)
+        self.assertFalse(hasattr(zlink, "RequestCallbackOp"))
 
         self.assertFalse(hasattr(zlink.Message, "get_property"))
         self.assertTrue(hasattr(zlink.Message, "ref_count"))
@@ -76,8 +77,25 @@ class CoreApiAlignmentTests(unittest.TestCase):
     def test_context_and_message_contract(self):
         with zlink.create_context() as ctx:
             self.assertGreater(ctx.options.max_sockets, 0)
-            ctx.options.auto_hwm_msg_unit_bytes = 64
-            self.assertEqual(ctx.options.auto_hwm_msg_unit_bytes, 64)
+            ctx.options.core_hwm_memory_limit_bytes = 64 * 1024 * 1024
+            ctx.options.core_hwm_budget_bytes = 16 * 1024 * 1024
+            self.assertEqual(
+                ctx.options.core_hwm_memory_limit_bytes, 64 * 1024 * 1024
+            )
+            self.assertEqual(ctx.options.core_hwm_budget_bytes, 16 * 1024 * 1024)
+            ctx.recalculate_auto_hwm()
+            before = ctx.core_hwm_budget_snapshot()
+            self.assertEqual(before.abi_version, 1)
+            self.assertEqual(before.configured_core_budget_bytes, 16 * 1024 * 1024)
+            self.assertEqual(len(before.reserved_u64), 8)
+            ctx.reset_core_hwm_budget_metrics()
+            self.assertGreater(
+                ctx.core_hwm_budget_snapshot().measurement_epoch,
+                before.measurement_epoch,
+            )
+            for invalid in (-1, 2**64, 1.5):
+                with self.assertRaises((TypeError, ValueError)):
+                    ctx.options.core_hwm_budget_bytes = invalid
 
         source = bytearray(b"payload")
         with zlink.Message.from_(source) as message:
@@ -85,6 +103,27 @@ class CoreApiAlignmentTests(unittest.TestCase):
             self.assertEqual(message.to_bytes(), b"payload")
             self.assertGreaterEqual(message.ref_count(), 1)
         self.assertEqual(message.to_bytes(), b"")
+
+    def test_monitor_status_uses_abi_v3_byte_telemetry(self):
+        with zlink.create_context() as ctx:
+            with zlink.create_pair_socket(ctx) as socket:
+                monitor_hwm_bytes = 12345
+                with socket.monitor_open(
+                    monitor_hwm_bytes=monitor_hwm_bytes
+                ) as monitor:
+                    status = monitor.status()
+                    self.assertEqual(status.abi_version, 3)
+                    self.assertEqual(status.struct_size, ctypes.sizeof(ZlinkMonitorStatus))
+                    self.assertIsInstance(status.snd_pending_bytes, int)
+                    self.assertIsInstance(status.rcv_pending_bytes, int)
+                    self.assertEqual(
+                        ctx.core_hwm_budget_snapshot().monitor_queue_applied_hwm_bytes,
+                        monitor_hwm_bytes * 2,
+                    )
+
+                for invalid in (-1, 2**64, 1.5):
+                    with self.assertRaises((TypeError, OverflowError)):
+                        socket.monitor_open(monitor_hwm_bytes=invalid)
 
     def test_socket_hwm_uses_unsigned_64_bit_byte_options(self):
         boundary = 2**63 + 17
@@ -135,89 +174,103 @@ class CoreApiAlignmentTests(unittest.TestCase):
                     with received:
                         self.assertEqual(received.to_bytes_list(), [b"builder-payload"])
 
-            callbacks = queue.Queue()
             with zlink.create_dealer_socket(ctx) as dealer:
                 with zlink.create_router_socket(ctx) as router:
                     router.bind("inproc://python-core-11-message-request")
                     dealer.connect("inproc://python-core-11-message-request")
 
-                    def on_reply(result, parts):
+                    async def exchange():
+                        with zlink.Message.from_(b"request-payload") as request:
+                            pending = asyncio.create_task(
+                                dealer.request().message(request).submit()
+                            )
+                            await asyncio.sleep(0)
+                        request_received = zlink.create_received()
+                        self.assertTrue(router.recv_into(request_received))
+                        with request_received:
+                            self.assertEqual(
+                                request_received.to_bytes_list(),
+                                [b"request-payload"],
+                            )
+                            with zlink.Message.from_(b"reply-payload") as reply:
+                                request_received.reply().message(reply).submit()
+                        parts = await pending
                         try:
-                            callbacks.put((result, [part.to_bytes() for part in parts]))
+                            self.assertEqual(
+                                [part.to_bytes() for part in parts],
+                                [b"reply-payload"],
+                            )
                         finally:
                             for part in parts:
                                 part.close()
 
-                    with zlink.Message.from_(b"request-payload") as request:
-                        self.assertTrue(
-                            dealer.request().message(request).submit(on_reply)
-                        )
-                    request_received = zlink.create_received()
-                    self.assertTrue(router.recv_into(request_received))
-                    with request_received:
-                        self.assertEqual(
-                            request_received.to_bytes_list(), [b"request-payload"]
-                        )
-                        with zlink.Message.from_(b"reply-payload") as reply:
-                            request_received.reply().message(reply).submit()
-
-                    _wait_for(lambda: not callbacks.empty())
-                    result, parts = callbacks.get_nowait()
-                    self.assertEqual(result, zlink.RequestResult.OK)
-                    self.assertEqual(parts, [b"reply-payload"])
+                    asyncio.run(exchange())
 
     def test_pending_request_close_delivers_termination_without_close_error(self):
-        callbacks = queue.Queue()
         with zlink.create_context() as ctx:
             with zlink.create_dealer_socket(ctx) as dealer:
                 with zlink.create_router_socket(ctx) as router:
                     router.bind("inproc://python-core-11-pending-close")
                     dealer.connect("inproc://python-core-11-pending-close")
-                    dealer.request().message(b"pending").submit(
-                        lambda result, parts: callbacks.put((result, parts))
-                    )
-                    received = zlink.create_received()
-                    self.assertTrue(router.recv_into(received))
-                    received.close()
 
-                    dealer.close()
+                    async def close_pending():
+                        pending = asyncio.create_task(
+                            dealer.request().message(b"pending").submit()
+                        )
+                        await asyncio.sleep(0)
+                        received = zlink.create_received()
+                        self.assertTrue(router.recv_into(received))
+                        received.close()
+                        dealer.close()
+                        with self.assertRaises(zlink.RequestError) as raised:
+                            await pending
+                        self.assertEqual(
+                            raised.exception.result,
+                            zlink.RequestResult.TERMINATED,
+                        )
 
-                    _wait_for(lambda: not callbacks.empty())
-                    result, parts = callbacks.get_nowait()
-                    self.assertEqual(result, zlink.RequestResult.TERMINATED)
-                    self.assertEqual(parts, [])
+                    asyncio.run(close_pending())
 
-    def test_request_rejects_missing_callback_before_native_submission(self):
+    def test_routed_request_has_only_the_canonical_coroutine_terminal(self):
         with zlink.create_context() as ctx:
             with zlink.create_dealer_socket(ctx) as dealer:
+                request = dealer.request().message(b"payload")
+                self.assertFalse(hasattr(request, "flags"))
+                self.assertFalse(hasattr(request, "submit_async"))
                 with self.assertRaises(TypeError):
-                    dealer.request().message(b"payload").submit(None)
-                with self.assertRaises(TypeError):
-                    dealer.request().message(b"payload").flags(0).submit(None)
+                    request.submit(None)
+                coroutine = request.submit()
+                coroutine.close()
 
     def test_dealer_router_request_reply_uses_raw_routing_metadata(self):
-        callbacks = queue.Queue()
         with zlink.create_context() as ctx:
             with zlink.create_dealer_socket(ctx) as dealer:
                 with zlink.create_router_socket(ctx) as router:
                     router.bind("inproc://python-core-11-request")
                     dealer.connect("inproc://python-core-11-request")
-                    dealer.request().message(b"ping").submit(
-                        lambda result, parts: callbacks.put(
-                            (result, [part.to_bytes() for part in parts])
+
+                    async def exchange():
+                        pending = asyncio.create_task(
+                            dealer.request().message(b"ping").submit()
                         )
-                    )
-                    received = zlink.create_received()
-                    self.assertTrue(router.recv_into(received))
-                    with received:
-                        self.assertIsNotNone(received.routing_id)
-                        self.assertIsInstance(received.request_seq, int)
-                        self.assertEqual(received.to_bytes_list(), [b"ping"])
-                        received.reply().message(b"pong").submit()
-                    _wait_for(lambda: not callbacks.empty())
-                    result, parts = callbacks.get_nowait()
-                    self.assertEqual(result, zlink.RequestResult.OK)
-                    self.assertEqual(parts, [b"pong"])
+                        await asyncio.sleep(0)
+                        received = zlink.create_received()
+                        self.assertTrue(router.recv_into(received))
+                        with received:
+                            self.assertIsNotNone(received.routing_id)
+                            self.assertIsInstance(received.request_seq, int)
+                            self.assertEqual(received.to_bytes_list(), [b"ping"])
+                            received.reply().message(b"pong").submit()
+                        parts = await pending
+                        try:
+                            self.assertEqual(
+                                [part.to_bytes() for part in parts], [b"pong"]
+                            )
+                        finally:
+                            for part in parts:
+                                part.close()
+
+                    asyncio.run(exchange())
 
     def test_router_recv_into_keeps_storage_and_snapshot_contract(self):
         with zlink.create_context() as ctx:
@@ -234,8 +287,12 @@ class CoreApiAlignmentTests(unittest.TestCase):
                     )
                     self.assertEqual(len(received), 0)
 
-                    self.assertTrue(
-                        dealer.send().messages(b"first", b"second").submit()
+                    self.assertIsNone(
+                        asyncio.run(
+                            dealer.send()
+                            .messages(b"first", b"second")
+                            .submit()
+                        )
                     )
                     self.assertTrue(router.recv_into(received))
                     self.assertIsNotNone(received.routing_id)
@@ -254,7 +311,11 @@ class CoreApiAlignmentTests(unittest.TestCase):
                         received.to_bytes_list(), [b"first", b"second"]
                     )
 
-                    self.assertTrue(dealer.send().message(b"replacement").submit())
+                    self.assertIsNone(
+                        asyncio.run(
+                            dealer.send().message(b"replacement").submit()
+                        )
+                    )
                     self.assertTrue(router.recv_into(received))
                     self.assertEqual(snapshot.tobytes(), b"first")
                     received.close()
@@ -271,14 +332,14 @@ class CoreApiAlignmentTests(unittest.TestCase):
         )
         self.assertEqual(
             (ctypes.sizeof(ZlinkMonitorStatus), ctypes.alignment(ZlinkMonitorStatus)),
-            (232, 8),
+            (192, 8),
         )
         self.assertEqual(
             (
                 ctypes.sizeof(ZlinkSocketMonitorOpenOptions),
                 ctypes.alignment(ZlinkSocketMonitorOpenOptions),
             ),
-            (4, 4),
+            (16, 8),
         )
         expected_poll_item = (24, 8) if os.name == "nt" else (16, 8)
         self.assertEqual(

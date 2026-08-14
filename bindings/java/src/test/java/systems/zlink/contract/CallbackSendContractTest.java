@@ -11,7 +11,6 @@ import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.sockets.PairSocket;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.RecvFlags;
-import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.sockets.SendFlags;
@@ -88,12 +87,12 @@ public class CallbackSendContractTest {
             try (Message request = Message.from("ping")) {
                 dealer.request()
                     .message(request)
-                    .flags(SendFlags.NONE)
                     .timeout(Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS))
-                    .submit(
-                    (result, received) -> {
+                    .submit()
+                    .whenComplete((received, error) -> {
                         try {
-                            assertEquals(RequestResult.OK, result);
+                            if (error != null)
+                                throw new AssertionError(error);
                             replyPayload.set(received.get(0).toByteArray());
                         } catch (Throwable t) {
                             callbackError.set(t);
@@ -245,12 +244,12 @@ public class CallbackSendContractTest {
                     try (Message request = Message.from("request-" + index)) {
                         dealer.request()
                             .message(request)
-                            .flags(SendFlags.NONE)
                             .timeout(Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS))
-                            .submit(
-                            (result, received) -> {
+                            .submit()
+                            .whenComplete((received, error) -> {
                                 try {
-                                    assertEquals(RequestResult.OK, result);
+                                    if (error != null)
+                                        throw new AssertionError(error);
                                     byte[] data = received.get(0)
                                         .toByteArray();
                                     String payload = new String(data,

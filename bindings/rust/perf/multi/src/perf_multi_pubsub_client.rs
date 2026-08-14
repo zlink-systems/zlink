@@ -71,7 +71,6 @@ fn main() {
     let settings = common::MultiSettings::from_env();
 
     let ctx = common::perf_client_context();
-    common::apply_multi_auto_hwm_msg_unit(&ctx, args.msg_size);
     let mut sockets: Vec<SubSocket> = Vec::with_capacity(settings.clients);
     let mut monitors: Vec<SocketMonitor> = Vec::with_capacity(settings.clients);
 

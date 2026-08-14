@@ -6,38 +6,40 @@ package zlink
 import impl "zlink.systems/zlink/contracts"
 
 type (
-	SendOp                  = impl.SendOp
-	SendSubmitOp            = impl.SendSubmitOp
-	RequestOp               = impl.RequestOp
-	RequestSubmitOp         = impl.RequestSubmitOp
-	RequestCallbackSubmitOp = impl.RequestCallbackSubmitOp
-	ReplyOp                 = impl.ReplyOp
-	ReplySubmitOp           = impl.ReplySubmitOp
+	SendOp             = impl.SendOp
+	SendSubmitOp       = impl.SendSubmitOp
+	RoutedSendOp       = impl.RoutedSendOp
+	RoutedSendSubmitOp = impl.RoutedSendSubmitOp
+	RequestOp          = impl.RequestOp
+	RequestSubmitOp    = impl.RequestSubmitOp
+	ReplyOp            = impl.ReplyOp
+	ReplySubmitOp      = impl.ReplySubmitOp
 
 	MonitorEventMask  = impl.MonitorEventMask
 	MonitorSourceKind = impl.MonitorSourceKind
 	MonitorEventType  = impl.MonitorEventType
+	MonitorOpenOption = impl.MonitorOpenOption
 	MonitorEvent      = impl.MonitorEvent
 	MonitorStatus     = impl.MonitorStatus
 	SocketMonitor     = impl.SocketMonitor
 
 	RoutingID              = impl.RoutingID
 	Message                = impl.Message
-	RequestReplyCallback   = impl.RequestReplyCallback
 	RequestReplyCompletion = impl.RequestReplyCompletion
 	Received               = impl.Received
 	TopicMessage           = impl.TopicMessage
 	SubscriptionEvent      = impl.SubscriptionEvent
 
-	Version             = impl.Version
-	Context             = impl.Context
-	ContextOptions      = impl.ContextOptions
-	AutoHwmProfile      = impl.AutoHwmProfile
-	AutoHwmRecalcReason = impl.AutoHwmRecalcReason
-	SocketTarget        = impl.SocketTarget
-	Stopwatch           = impl.Stopwatch
-	AtomicCounter       = impl.AtomicCounter
-	Thread              = impl.Thread
+	Version               = impl.Version
+	Context               = impl.Context
+	ContextOptions        = impl.ContextOptions
+	CoreHwmBudgetSnapshot = impl.CoreHwmBudgetSnapshot
+	AutoHwmProfile        = impl.AutoHwmProfile
+	AutoHwmRecalcReason   = impl.AutoHwmRecalcReason
+	SocketTarget          = impl.SocketTarget
+	Stopwatch             = impl.Stopwatch
+	AtomicCounter         = impl.AtomicCounter
+	Thread                = impl.Thread
 
 	SocketType          = impl.SocketType
 	RidDuplicatePolicy  = impl.RidDuplicatePolicy
@@ -241,6 +243,7 @@ const (
 )
 
 var (
+	MonitorHwmBytes       = impl.MonitorHwmBytes
 	OpenSocketMonitor     = impl.OpenSocketMonitor
 	NewRoutingID          = impl.NewRoutingID
 	NewRoutingIDString    = impl.NewRoutingIDString

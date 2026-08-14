@@ -53,25 +53,88 @@ public interface SendSubmitOperation
 }
 
 /// <summary>
-///     Builds a request: add the request parts, then submit and await a reply.
+///     Builds a send whose terminal operation waits asynchronously for local
+///     Core admission.
+/// </summary>
+public interface AsyncSendOperation
+{
+    /// <summary>
+    ///     Adds the first message part. Ownership transfers when
+    ///     <see cref="AsyncSendSubmitOperation.Async" /> is called.
+    /// </summary>
+    AsyncSendSubmitOperation Message(Message message);
+}
+
+/// <summary>
+///     Accepts further parts and asynchronously waits until Core admits the
+///     complete record.
+/// </summary>
+public interface AsyncSendSubmitOperation
+{
+    /// <summary>Adds another message part.</summary>
+    AsyncSendSubmitOperation Message(Message message);
+
+    /// <summary>
+    ///     Transfers the accumulated parts to the operation and returns without
+    ///     waiting for HWM credit. The task completes when Core admits the
+    ///     complete record.
+    /// </summary>
+    Task Async(CancellationToken ct = default);
+}
+
+/// <summary>
+///     Builds an exact-target DEALER or ROUTER send whose terminal operation is
+///     language-native asynchronous admission.
+/// </summary>
+public interface RoutedSendOperation
+{
+    /// <summary>
+    ///     Adds the first message part. Ownership transfers to the asynchronous
+    ///     operation when <see cref="RoutedSendSubmitOperation.Async" /> is
+    ///     called.
+    /// </summary>
+    RoutedSendSubmitOperation Message(Message message);
+}
+
+/// <summary>
+///     Accepts further parts and asynchronously waits until Core admits the
+///     complete routed record.
+/// </summary>
+public interface RoutedSendSubmitOperation
+{
+    /// <summary>Adds another message part.</summary>
+    RoutedSendSubmitOperation Message(Message message);
+
+    /// <summary>
+    ///     Transfers the accumulated parts to the operation and returns without
+    ///     waiting for target HWM credit. The task completes when the complete
+    ///     record is admitted to the selected exact target.
+    /// </summary>
+    Task Async(CancellationToken ct = default);
+}
+
+/// <summary>
+///     Builds a request: add the request parts, then call the asynchronous
+///     terminal and await a reply.
 /// </summary>
 public interface RequestOperation
 {
     /// <summary>
-    ///     Adds the first request part. The part is consumed on a successful
-    ///     submit; see <see cref="SendOperation" /> for the ownership contract.
+    ///     Adds the first request part. Ownership transfers to the asynchronous
+    ///     operation when <see cref="RequestSubmitOperation.Async" /> is called.
     /// </summary>
     RequestSubmitOperation Message(Message message);
 }
 
 /// <summary>
-///     Accepts further parts, timeout, flags, and the terminal submit of a request.
+///     Accepts further parts, timeout, and the asynchronous terminal operation of
+///     a request.
 /// </summary>
 public interface RequestSubmitOperation
 {
     /// <summary>
-    ///     Adds another request part. The part is consumed on a successful submit;
-    ///     see <see cref="SendOperation" /> for the ownership contract.
+    ///     Adds another request part. Ownership transfers to the asynchronous
+    ///     operation when <see cref="Async" /> is called.
     /// </summary>
     RequestSubmitOperation Message(Message message);
 
@@ -82,68 +145,15 @@ public interface RequestSubmitOperation
     RequestSubmitOperation Timeout(TimeSpan timeout);
 
     /// <summary>
-    ///     Sets the send flags and narrows the builder to callback submission:
-    ///     once flags are set the awaitable <see cref="Async" /> is no longer
-    ///     reachable, only <see cref="RequestCallbackSubmitOperation.Submit" />.
-    /// </summary>
-    RequestCallbackSubmitOperation Flags(SendFlags flags);
-
-    /// <summary>
-    ///     Submits the request and asynchronously returns the reply parts.
+    ///     Transfers the request parts to the operation, asynchronously waits for
+    ///     exact-target admission, and returns the reply parts.
     /// </summary>
     /// <remarks>
-    ///     The caller owns the returned messages and must dispose them. Request
-    ///     parts follow the consume-on-submit contract of <see cref="SendOperation" />.
+    ///     The caller owns the returned messages and must dispose them. Calling
+    ///     this method transfers all accumulated request parts to the pending
+    ///     operation, including while it waits for exact-target admission.
     /// </remarks>
     Task<IReadOnlyList<Message>> Async(CancellationToken ct = default);
-
-    /// <summary>
-    ///     Submits the request; the result and reply parts are delivered later to
-    ///     <paramref name="callback" /> (see <see cref="RequestCallback" /> for reply
-    ///     ownership).
-    /// </summary>
-    /// <returns>
-    ///     true when the request was dispatched; false only when
-    ///     <see cref="SendFlags.DontWait" /> is set and the send would have blocked
-    ///     (back-pressure). Other failures throw <see cref="ZlinkException" />.
-    /// </returns>
-    bool Submit(RequestCallback callback);
-}
-
-/// <summary>
-///     Callback-submission stage of a request builder (reached after
-///     <see cref="RequestSubmitOperation.Flags" />).
-/// </summary>
-public interface RequestCallbackSubmitOperation
-{
-    /// <summary>
-    ///     Adds another request part. The part is consumed on a successful submit;
-    ///     see <see cref="SendOperation" /> for the ownership contract.
-    /// </summary>
-    RequestCallbackSubmitOperation Message(Message message);
-
-    /// <summary>
-    ///     Sets how long the submit awaits a reply before the result reports
-    ///     <see cref="RequestResult.TimedOut" />, replacing any previous value.
-    /// </summary>
-    RequestCallbackSubmitOperation Timeout(TimeSpan timeout);
-
-    /// <summary>
-    ///     Sets the send flags applied at submit time, replacing any previous flags.
-    /// </summary>
-    RequestCallbackSubmitOperation Flags(SendFlags flags);
-
-    /// <summary>
-    ///     Submits the request; the result and reply parts are delivered later to
-    ///     <paramref name="callback" /> (see <see cref="RequestCallback" /> for reply
-    ///     ownership).
-    /// </summary>
-    /// <returns>
-    ///     true when the request was dispatched; false only when
-    ///     <see cref="SendFlags.DontWait" /> is set and the send would have blocked
-    ///     (back-pressure). Other failures throw <see cref="ZlinkException" />.
-    /// </returns>
-    bool Submit(RequestCallback callback);
 }
 
 /// <summary>
@@ -176,7 +186,7 @@ public interface ReplySubmitOperation
 }
 
 /// <summary>
-///     The outcome of a request, as delivered to a <see cref="RequestCallback" />.
+///     The outcome of a request.
 /// </summary>
 public enum RequestResult
 {
@@ -251,14 +261,3 @@ public enum RequestResult
     /// </summary>
     Backpressured = 113
 }
-
-/// <summary>
-///     Receives request completion and reply payloads.
-/// </summary>
-/// <remarks>
-///     When <paramref name="result" /> is <see cref="RequestResult.Ok" />, the
-///     callback owns the messages in <paramref name="parts" /> and must dispose them.
-///     Non-success results provide an empty payload list.
-/// </remarks>
-public delegate void RequestCallback(RequestResult result,
-    IReadOnlyList<Message> parts);

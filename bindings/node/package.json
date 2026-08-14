@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/zlink",
-  "version": "0.10.1",
+  "version": "0.11.1",
   "description": "zlink Node.js bindings \u2014 high-performance async messaging library",
   "license": "MPL-2.0",
   "author": "Zlink Systems",

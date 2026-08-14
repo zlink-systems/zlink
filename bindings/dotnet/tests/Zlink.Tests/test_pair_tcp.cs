@@ -603,7 +603,7 @@ public sealed class test_pair_tcp
     }
 
     [Fact]
-    public void send_nonblocking_reports_not_ready_for_unknown_router_peer()
+    public async Task routed_async_reports_not_connected_for_unknown_router_peer()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -613,26 +613,8 @@ public sealed class test_pair_tcp
         router.Options.Mandatory = true;
 
         using Message message = Message.From("no-route");
-        var ex = Assert.Throws<ZlinkSubmitException>(() =>
-            router.Send(RoutingId.From("UNKNOWN"u8)).Message(message)
-                .Flags(SendFlags.DontWait).Submit());
-        Assert.Equal(ZlinkSubmitException.ErrorCode.NotConnected, ex.Result);
-    }
-
-    [Fact]
-    public void send_nonblocking_throws_not_ready_for_unknown_router_peer()
-    {
-        if (!CoreTestSupport.IsNativeAvailable())
-            return;
-
-        using var ctx = Zlink.CreateContext();
-        using var router = ctx.CreateRouterSocket();
-        router.Options.Mandatory = true;
-
-        using Message message = Message.From("no-route");
-        var ex = Assert.Throws<ZlinkSubmitException>(() =>
-            router.Send(RoutingId.From("UNKNOWN"u8)).Message(message)
-                .Flags(SendFlags.DontWait).Submit());
+        var ex = await Assert.ThrowsAsync<ZlinkSubmitException>(() =>
+            router.Send(RoutingId.From("UNKNOWN"u8)).Message(message).Async());
         Assert.Equal(ZlinkSubmitException.ErrorCode.NotConnected, ex.Result);
     }
 }

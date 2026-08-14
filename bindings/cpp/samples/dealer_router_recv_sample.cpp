@@ -2,7 +2,7 @@
 
 #include "sample_common.hpp"
 
-int main ()
+detail::sample_task_t run_sample ()
 {
     // --8<-- [start:doc]
     zlink::context_t ctx;
@@ -19,7 +19,7 @@ int main ()
 
     const std::string sent = detail::k_dealer_router_request;
     zlink::message_t outbound = detail::make_message (sent);
-    dealer.send ().message (outbound).submit ();
+    co_await dealer.send ().message (std::move (outbound)).async ();
 
     zlink::received_t inbound;
     assert (router.recv (inbound) == 0);
@@ -30,7 +30,7 @@ int main ()
     const std::string reply_payload = detail::k_dealer_router_reply;
     zlink::message_t reply = detail::make_message (reply_payload);
     // Reply on the ROUTER socket, addressed by the received envelope's routing id.
-    router.send (*inbound.routing_id ()).message (reply).submit ();
+    co_await router.send (*inbound.routing_id ()).message (std::move (reply)).async ();
     inbound.close ();
 
     zlink::received_t echoed;
@@ -41,6 +41,11 @@ int main ()
     echoed.close ();
     std::printf ("[dealer-router/recv] send: \"%s\" → recv: \"%s\"\n", sent.c_str (),
                  received.c_str ());
-    return 0;
     // --8<-- [end:doc]
+}
+
+int main ()
+{
+    run_sample ().get ();
+    return 0;
 }

@@ -5,6 +5,7 @@ package systems.zlink.runtime.core;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.ContextOption;
 import systems.zlink.contracts.core.ContextOptions;
+import systems.zlink.contracts.core.CoreHwmBudgetSnapshot;
 import systems.zlink.internal.ContractAccess;
 import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.errors.ConfigResult;
@@ -21,18 +22,16 @@ import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeHelpers;
+import systems.zlink.runtime.nativeapi.NativeLayouts;
 import systems.zlink.runtime.sockets.NativeSockets;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.List;
 
 final class NativeContext implements Context {
-    private static final boolean DEBUG_REQREP =
-      Boolean.getBoolean("zlink.reqrep.debug");
-        private final ContextOptions options;
+    private final ContextOptions options;
     private MemorySegment handle;
 
     static {
@@ -98,6 +97,12 @@ final class NativeContext implements Context {
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
         }
         this.options = new ContextOptions(this);
+        long runtimeMemoryLimit = Runtime.getRuntime().maxMemory();
+        if (runtimeMemoryLimit > 0) {
+            setUInt64Option(
+                ContextOption.AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES,
+                runtimeMemoryLimit);
+        }
     }
 
     @Override
@@ -168,16 +173,105 @@ final class NativeContext implements Context {
     }
 
     @Override
+    public CoreHwmBudgetSnapshot coreHwmBudgetSnapshot() {
+        ensureOpen();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment snapshot = arena.allocate(
+                NativeLayouts.CORE_HWM_BUDGET_SNAPSHOT_LAYOUT);
+            snapshot.set(ValueLayout.JAVA_INT,
+                NativeLayouts.CORE_HWM_BUDGET_ABI_VERSION_OFFSET, 1);
+            snapshot.set(ValueLayout.JAVA_INT,
+                NativeLayouts.CORE_HWM_BUDGET_STRUCT_SIZE_OFFSET,
+                Math.toIntExact(
+                    NativeLayouts.CORE_HWM_BUDGET_SNAPSHOT_LAYOUT.byteSize()));
+            int rc = Native.ctxGetAutoHwmBudgetSnapshot(handle, snapshot);
+            if (rc != 0) {
+                throw new ZlinkConfigException(ConfigResult.fromValue(rc));
+            }
+
+            List<Long> reserved = new ArrayList<>(8);
+            for (int index = 0; index < 8; ++index) {
+                reserved.add(readPositiveLong(snapshot,
+                    NativeLayouts.CORE_HWM_BUDGET_RESERVED_OFFSET
+                        + (long) index * Long.BYTES,
+                    "reservedUInt64[" + index + "]"));
+            }
+            return new CoreHwmBudgetSnapshot(
+                snapshot.get(ValueLayout.JAVA_INT,
+                    NativeLayouts.CORE_HWM_BUDGET_ABI_VERSION_OFFSET),
+                snapshot.get(ValueLayout.JAVA_INT,
+                    NativeLayouts.CORE_HWM_BUDGET_STRUCT_SIZE_OFFSET),
+                readBudgetValue(snapshot, 0, "budgetGeneration"),
+                readBudgetValue(snapshot, 1, "measurementEpoch"),
+                readBudgetValue(snapshot, 2, "configuredMemoryLimitBytes"),
+                readBudgetValue(snapshot, 3, "runtimeMemoryLimitBytes"),
+                readBudgetValue(snapshot, 4, "resolvedMemoryLimitBytes"),
+                readBudgetValue(snapshot, 5, "configuredCoreBudgetBytes"),
+                readBudgetValue(snapshot, 6, "effectiveCoreBudgetBytes"),
+                readBudgetValue(snapshot, 7, "totalPlannedHwmBytes"),
+                readBudgetValue(snapshot, 8, "totalAppliedHwmBytes"),
+                readBudgetValue(snapshot, 9, "manualReservedHwmBytes"),
+                readBudgetValue(snapshot, 10, "coreQueueAccountedBytes"),
+                readBudgetValue(snapshot, 11, "applicationAccountedBytes"),
+                readBudgetValue(snapshot, 12, "currentAccountedBytes"),
+                readBudgetValue(snapshot, 13, "provisionalAccountedBytes"),
+                readBudgetValue(snapshot, 14, "peakAccountedBytes"),
+                readBudgetValue(snapshot, 15,
+                    "completionCurrentAccountedBytes"),
+                readBudgetValue(snapshot, 16,
+                    "completionPeakAccountedBytes"),
+                readBudgetValue(snapshot, 17,
+                    "completionPendingMessageCount"),
+                readBudgetValue(snapshot, 18,
+                    "totalMessagingAccountedBytes"),
+                readBudgetValue(snapshot, 19,
+                    "monitorQueueAppliedHwmBytes"),
+                readBudgetValue(snapshot, 20,
+                    "monitorQueueAccountedBytes"),
+                readBudgetValue(snapshot, 21,
+                    "totalInstanceAppliedHwmBytes"),
+                readBudgetValue(snapshot, 22,
+                    "totalInstanceAccountedBytes"),
+                readBudgetValue(snapshot, 23, "oversizeAdmissionCount"),
+                readBudgetValue(snapshot, 24,
+                    "largestOversizeMessageBytes"),
+                readBudgetValue(snapshot, 25,
+                    "activeDirectionalQueueCount"),
+                readBudgetValue(snapshot, 26,
+                    "activeCompletionDirectionalQueueCount"),
+                readBudgetValue(snapshot, 27, "activeSendQueueCount"),
+                readBudgetValue(snapshot, 28, "activeReceiveQueueCount"),
+                readBudgetValue(snapshot, 29,
+                    "outstandingApplicationLeaseCount"),
+                readBudgetValue(snapshot, 30, "retiredQueueCount"),
+                readBudgetValue(snapshot, 31, "deferredOriginCreditBytes"),
+                readBudgetValue(snapshot, 32, "unlimitedManualQueueCount"),
+                snapshot.get(ValueLayout.JAVA_INT,
+                    NativeLayouts.CORE_HWM_BUDGET_BLOCKED_RATIO_OFFSET),
+                snapshot.get(ValueLayout.JAVA_INT,
+                    NativeLayouts.CORE_HWM_BUDGET_FLAGS_OFFSET),
+                reserved);
+        }
+    }
+
+    @Override
+    public void resetCoreHwmBudgetMetrics() {
+        ensureOpen();
+        int rc = Native.ctxResetAutoHwmBudgetMetrics(handle);
+        if (rc != 0) {
+            throw new ZlinkConfigException(ConfigResult.fromValue(rc));
+        }
+    }
+
+    @Override
     public void close() {
         if (handle == null || handle.address() == 0) {
             return;
         }
-        debug("ctxTerm begin");
         NativeErrno.retryWhileInterrupted(() -> Native.ctxShutdown(handle),
             rc -> rc != 0);
         NativeErrno.retryWhileInterrupted(() -> Native.ctxTerm(handle),
             rc -> rc != 0);
-        debug("ctxTerm end");
         handle = MemorySegment.NULL;
     }
 
@@ -211,8 +305,7 @@ final class NativeContext implements Context {
             int rc = Native.ctxSetData(handle, option.getValue(), bytes,
                 Long.BYTES);
             if (rc != 0) {
-                throw ZlinkException.fromLastError(
-                    systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+                throw new ZlinkConfigException(ConfigResult.fromValue(rc));
             }
         }
     }
@@ -235,31 +328,41 @@ final class NativeContext implements Context {
             size.set(ValueLayout.JAVA_LONG, 0, Long.BYTES);
             int rc = Native.ctxGetData(handle, option.getValue(), value, size);
             if (rc != 0) {
-                throw ZlinkException.fromLastError(
-                    systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+                throw new ZlinkConfigException(ConfigResult.fromValue(rc));
             }
             if (size.get(ValueLayout.JAVA_LONG, 0) != Long.BYTES) {
                 throw new IllegalStateException(
                     "native context option returned an invalid value size");
             }
-            return value.get(ValueLayout.JAVA_LONG, 0);
+            return requirePositiveLong(
+                value.get(ValueLayout.JAVA_LONG, 0), option.name());
         }
+    }
+
+    private static long readBudgetValue(MemorySegment snapshot, int index,
+                                        String name) {
+        return readPositiveLong(snapshot,
+            NativeLayouts.CORE_HWM_BUDGET_VALUES_OFFSET
+                + (long) index * Long.BYTES, name);
+    }
+
+    private static long readPositiveLong(MemorySegment snapshot, long offset,
+                                         String name) {
+        return requirePositiveLong(
+            snapshot.get(ValueLayout.JAVA_LONG, offset), name);
+    }
+
+    private static long requirePositiveLong(long value, String name) {
+        if (value < 0) {
+            throw new ArithmeticException(
+                name + " exceeds Java's positive long range");
+        }
+        return value;
     }
 
     private void ensureOpen() {
         if (handle == null || handle.address() == 0) {
             throw new IllegalStateException("context is closed");
-        }
-    }
-
-    private static void debug(String message) {
-        if (DEBUG_REQREP) {
-            try {
-                Files.writeString(Path.of("/tmp/zlink-reqrep.log"),
-                    "[context] " + message + System.lineSeparator(),
-                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-            } catch (Exception ignored) {
-            }
         }
     }
 }

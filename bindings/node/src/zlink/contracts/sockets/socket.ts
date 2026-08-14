@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-import type { MonitorSocket } from '../eventing';
+import type { MonitorEventType, MonitorSocket } from '../eventing';
 import type { RoutingId } from '../core';
-import type { SocketMonitorHandler } from '../messaging';
 import type { DealerSocket } from './dealer_socket';
 import type { PairSocket } from './pair_socket';
 import type { PubSocket, SubSocket, XPubSocket, XSubSocket } from './pubsub_sockets';
@@ -24,7 +23,10 @@ export interface Socket {
    * Open a monitor reporting the selected lifecycle `events`. The caller owns
    * the returned monitor and must close it.
    */
-  monitorOpen(events?: number, handler?: SocketMonitorHandler): MonitorSocket;
+  monitorOpen(
+    events?: readonly MonitorEventType[],
+    monitorHwmBytes?: bigint
+  ): MonitorSocket;
   /**
    * Configure this socket as a TLS server. Apply before binding. `cert`/`key`
    * are PEM paths; `requireClientCert` requires mutual TLS.

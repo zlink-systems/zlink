@@ -1,13 +1,17 @@
 //! Multi perf common utilities.
 
 use std::fs;
+use std::future::Future;
 use std::io;
 use std::path::Path;
-use std::thread;
+use std::pin::pin;
+use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll, Wake, Waker};
+use std::thread::{self, Thread};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zlink::{
-    Context, DealerSocket, Message, PairSocket, PollEvent, Poller, PubSocket, RouterSocket,
-    RecvFlags, SocketMonitor, StreamSocket, SubSocket, ZlinkError,
+    Context, DealerSocket, Message, PairSocket, PollEvent, Poller, PubSocket, RecvFlags,
+    RouterSocket, SocketMonitor, StreamSocket, SubSocket, ZlinkError,
 };
 
 pub const STOP_TOKEN: &[u8] = b"__zlink_perf_stop__";
@@ -17,6 +21,30 @@ pub const PHASE_ACTIVE: u8 = 1;
 pub const PHASE_COOLDOWN: u8 = 2;
 pub const MAGIC: u32 = 0x5A4C_4E4B; // "ZLNK"
 pub const BENCHMARK_RUN_ID: u32 = 1;
+
+struct ThreadWake(Thread);
+
+impl Wake for ThreadWake {
+    fn wake(self: Arc<Self>) {
+        self.0.unpark();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.unpark();
+    }
+}
+
+pub fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = pin!(future);
+    let waker = Waker::from(Arc::new(ThreadWake(thread::current())));
+    let mut context = TaskContext::from_waker(&waker);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => thread::park(),
+        }
+    }
+}
 
 pub fn encode_header(buf: &mut [u8], phase: u8, msg_size: u32, seq: u64) {
     buf[0..4].copy_from_slice(&MAGIC.to_le_bytes());
@@ -364,9 +392,7 @@ pub struct PhaseResult {
 
 fn bandwidth_multiplier(pattern: &str) -> f64 {
     match pattern {
-        "MULTI_DEALER_ROUTER"
-        | "MULTI_ROUTER_ROUTER"
-        | "MULTI_STREAM" => 2.0,
+        "MULTI_DEALER_ROUTER" | "MULTI_ROUTER_ROUTER" | "MULTI_STREAM" => 2.0,
         _ => 1.0,
     }
 }
@@ -634,17 +660,6 @@ pub fn apply_multi_hwm<O: MultiSocketHwmOptions>(opts: &O, settings: &MultiSetti
         opts.set_receive_high_water_mark(settings.receive_high_water_mark)
             .expect("rcvhwm");
     }
-}
-
-pub fn apply_multi_auto_hwm_msg_unit(ctx: &Context, msg_size: usize) {
-    if msg_size == 0 {
-        return;
-    }
-    let unit = msg_size as u64;
-    ctx.options()
-        .set_auto_hwm_msg_unit_bytes(unit)
-        .expect("auto hwm msg unit");
-    ctx.recalculate_auto_hwm().expect("auto hwm recalculate");
 }
 
 pub fn resolve_multi_connect_ready_timeout() -> Duration {

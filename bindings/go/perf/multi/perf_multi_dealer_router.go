@@ -24,7 +24,6 @@ func runMultiDealerRouterServer(cfg multiConfig) {
 	defer router.Close()
 
 	perfcommon.Must(perfcommon.ConfigureTLSServer(router, cfg.transport))
-	perfcommon.ApplyMultiAutoHWMMsgUnit(serverCtx, cfg.msgSize)
 	perfcommon.ApplyMultiHWM(router, cfg.pattern)
 	perfcommon.ApplyMultiBenchmarkSocketOptions(router, cfg.transport)
 	endpoint := perfcommon.BindAndResolveEndpoint(router, cfg.transport, "perf-multi-dealer-router")
@@ -54,7 +53,6 @@ func runMultiDealerRouterClient(cfg multiConfig, endpoint string) perfcommon.Res
 	clientCtx, err := perfcommon.NewMultiClientContext()
 	perfcommon.Must(err)
 	defer clientCtx.Close()
-	perfcommon.ApplyMultiAutoHWMMsgUnit(clientCtx, cfg.msgSize)
 
 	dealers := make([]dealerRouterClient, 0, cfg.clients)
 	for i := 0; i < cfg.clients; i++ {
@@ -162,8 +160,8 @@ func sendMultiDealerRouterRequest(
 	window perfcommon.BenchmarkWindow,
 ) bool {
 	perfcommon.StampWindowPayload(payload, window.ActiveAt)
-	sent, err := perfcommon.SubmitPayload(payload, func(message *zlink.Message) (bool, error) {
-		return socket.Send().MoveMessage(message).Flags(zlink.SendFlagsDontWait).Submit(context.Background())
+	sent, err := perfcommon.SubmitRoutedPayload(payload, func(message *zlink.Message) <-chan error {
+		return socket.Send().MoveMessage(message).Submit(context.Background())
 	})
 	if err != nil {
 		if perfcommon.IsTransient(err) {

@@ -40,5 +40,9 @@ final class NativeXSubSocket extends NativeSocketBase implements XSubSocket {
           : Optional.empty();
     }
     public boolean subscribe(TopicMessage result, RecvFlags flags) { return runtime().subscribe(result, ReceiveFlag.fromValue(flags.value())); }
+    public boolean subscribeRetained(TopicMessage result, RecvFlags flags) {
+        return runtime().subscribeRetained(result,
+            ReceiveFlag.fromValue(flags.value()));
+    }
     @Override public SubSocketOptions options() { return options; }
 }

@@ -30,7 +30,6 @@ internal static class PerfMultiPubSubServer
 
         server.Bind(endpoint);
         endpoint = server.Options.LastEndpoint;
-        ApplyAutoHwmMsgUnit(ctx, size);
         RecalculateAutoHwm(ctx);
         PrintAutoHwmSnapshot(server, "server", options.Transport, size);
         WriteStdoutLine($"READY,{endpoint}");
@@ -65,7 +64,7 @@ internal static class PerfMultiPubSubServer
     {
         try
         {
-            return server.Publish(Topic).Message(message)
+            return server.TryPublish(Topic).Message(message)
                 .Flags(SendFlags.DontWait).Submit();
         }
         catch (ZlinkException ex) when (IsWouldBlock(ex.NativeErrno)
@@ -87,7 +86,7 @@ internal static class PerfMultiPubSubServer
             try
             {
                 using Message message = new(MultiStopToken.AsSpan());
-                if (server.Publish(Topic).Message(message)
+                if (server.TryPublish(Topic).Message(message)
                         .Flags(SendFlags.None).Submit())
                     return true;
             }

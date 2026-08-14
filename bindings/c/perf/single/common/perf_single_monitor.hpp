@@ -16,7 +16,7 @@ inline void configure_perf_monitor_socket (void *monitor_)
     if (!monitor_)
         return;
 
-    const int monitor_hwm = parse_positive_env ("PERF_MONITOR_HWM", 4096000);
+    const int monitor_hwm = parse_positive_env ("PERF_MONITOR_HWM_BYTES", 4096000);
     set_sockopt_int (monitor_, ZLINK_OPT_LINGER, 0, "ZLINK_OPT_LINGER");
     if (monitor_hwm > 0) {
         set_sockopt_u64 (monitor_, ZLINK_OPT_SNDHWM, static_cast<uint64_t> (monitor_hwm),

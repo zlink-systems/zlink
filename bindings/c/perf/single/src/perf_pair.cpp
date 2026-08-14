@@ -35,11 +35,6 @@ void run_pair (const std::string &transport, size_t msg_size, const std::string 
         print_fail ();
         return;
     }
-    if (!apply_single_auto_hwm_msg_unit (ctx.get (), msg_size)) {
-        print_fail ();
-        return;
-    }
-
     socket_guard_t bind_socket (ctx.get (), ZLINK_SOCKET_PAIR);
     socket_guard_t connect_socket (ctx.get (), ZLINK_SOCKET_PAIR);
     if (!bind_socket.valid () || !connect_socket.valid ()) {

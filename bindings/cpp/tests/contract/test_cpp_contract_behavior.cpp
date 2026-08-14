@@ -84,6 +84,44 @@ static_assert (!has_set_receive_handler_t<zlink::router_socket_t>::value,
 static_assert (!has_set_receive_handler_t<zlink::stream_socket_t>::value,
                "stream_socket_t must not expose raw set_receive_handler");
 
+template <typename T>
+concept has_blocking_get_t = requires (T &result) { result.get (); };
+template <typename T>
+concept has_blocking_wait_t = requires (T &result) { result.wait (); };
+template <typename T>
+concept has_blocking_wait_for_t = requires (T &result) {
+    result.wait_for (std::chrono::milliseconds (1));
+};
+template <typename T>
+concept has_managed_send_callback_t = requires (T &&operation) {
+    std::move (operation).submit (
+      std::function<void (zlink::submit_result_t)> ());
+};
+template <typename T>
+concept has_managed_request_callback_t = requires (T &&operation) {
+    std::move (operation).submit (
+      std::function<void (zlink::request_result_t,
+                          std::vector<zlink::message_t>)> ());
+};
+template <typename T>
+concept has_sync_submit_t = requires (T &&operation) {
+    std::move (operation).submit ();
+};
+template <typename T>
+concept has_flags_t = requires (T &&operation) {
+    std::move (operation).flags (0);
+};
+
+static_assert (std::is_move_constructible_v<zlink::async_result_t<void>>);
+static_assert (!std::is_copy_constructible_v<zlink::async_result_t<void>>);
+static_assert (!has_blocking_get_t<zlink::async_result_t<void>>);
+static_assert (!has_blocking_wait_t<zlink::async_result_t<void>>);
+static_assert (!has_blocking_wait_for_t<zlink::async_result_t<void>>);
+static_assert (!has_managed_send_callback_t<zlink::send_submit_operation_t>);
+static_assert (!has_managed_request_callback_t<zlink::request_submit_operation_t>);
+static_assert (!has_sync_submit_t<zlink::routed_send_submit_operation_t>);
+static_assert (!has_flags_t<zlink::routed_send_submit_operation_t>);
+
 template <typename Fn> void expect_runtime_error (Fn fn_)
 {
     bool threw = false;
@@ -102,9 +140,7 @@ void test_pair_recv_nonblocking_returns_empty_without_data ()
     zlink::pair_socket_t socket (ctx);
     zlink::received_t received;
     const int rc = socket.recv (received, zlink::recv_flags_t::dontwait);
-    assert (rc == static_cast<int> (zlink::recv_result_t::no_data) || rc == -1);
-    if (rc == -1)
-        assert (errno == EAGAIN || errno == EWOULDBLOCK);
+    assert (rc == static_cast<int> (zlink::recv_result_t::no_data));
 }
 
 void test_receive_reuses_caller_storage_capacity ()
@@ -181,7 +217,7 @@ void test_router_send_throws_for_closed_socket ()
     zlink::routing_id_t routing_id = zlink::routing_id_t::from (
       reinterpret_cast<const uint8_t *> (rid_text.data ()), rid_text.size ());
     zlink::message_t outbound = zlink_cpp_contract::make_message ("no-route");
-    expect_runtime_error ([&] { router.send (routing_id).message (outbound).submit (); });
+    expect_runtime_error ([&] { (void) router.send (routing_id).message (outbound).async (); });
     assert (outbound.valid ());
 }
 
@@ -450,22 +486,6 @@ void test_routing_id_copy_assignment_preserves_short_value ()
     assert (routing_id == short_id);
 }
 
-void test_async_result_wait_pumps_progress ()
-{
-    std::promise<int> promise;
-    std::future<int> future = promise.get_future ();
-    int progress_calls = 0;
-    zlink::async_result_t<int> result (std::move (future), [&promise, &progress_calls] () {
-        ++progress_calls;
-        if (progress_calls == 3)
-            promise.set_value (42);
-    });
-
-    assert (result.wait_for (std::chrono::seconds (1)) == std::future_status::ready);
-    assert (result.get () == 42);
-    assert (progress_calls >= 3);
-}
-
 } // namespace
 
 int main ()
@@ -489,6 +509,5 @@ int main ()
     test_one_shot_poll_empty_set ();
     test_routing_id_rejects_null_pointer_for_non_empty_bytes ();
     test_routing_id_copy_assignment_preserves_short_value ();
-    test_async_result_wait_pumps_progress ();
     std::quick_exit (0);
 }

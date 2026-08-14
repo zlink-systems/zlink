@@ -25,7 +25,7 @@ fn main() {
     drop(dealer_mon);
 
     let req = Message::try_from(b"ping").expect("message failed");
-    dealer.send().message(req).submit().expect("send failed");
+    sample_support::block_on(dealer.send().message(req).submit()).expect("send failed");
 
     let mut received = zlink::Received::empty();
     router

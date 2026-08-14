@@ -5,7 +5,7 @@ const readline = require('node:readline');
 const zlink = require('@zlink-systems/zlink');
 const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { POLLOUT, applyAutoHwmMsgUnit, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, trySocketSend, waitPollerOne } = require('./perf_multi_runtime');
+const { POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, trySocketSend, waitPollerOne } = require('./perf_multi_runtime');
 function packetParts(header, body) {
     const prefix = Buffer.allocUnsafe(6);
     prefix.writeUInt16BE(header.size(), 0);
@@ -88,7 +88,6 @@ async function main() {
             throw new Error('PERF_STREAM_PACKET_BODY_MATERIALIZATION must be native or managed');
         }
         configureTlsServer(stream, options.transport);
-        applyAutoHwmMsgUnit(ctx, options.msgSize);
         ctx.recalculateAutoHwm();
         emitMultiSocketHwmDetail(stream, 'endpoint', options.transport, options.msgSize);
         stream.bind(options.endpoint);

@@ -203,7 +203,7 @@ public sealed class test_pubsub
         Thread.Sleep(100);
 
         using Message message = Message.From("direct-payload");
-        Assert.True(publisher.Publish(topic).Message(message).Submit());
+        Assert.True(publisher.TryPublish(topic).Message(message).Submit());
         Assert.Equal("direct-payload", CoreTestSupport.SubscribeUtf8WithTimeout(
             subscriber, out string receivedTopic, 2000));
         Assert.Equal(topic, receivedTopic);

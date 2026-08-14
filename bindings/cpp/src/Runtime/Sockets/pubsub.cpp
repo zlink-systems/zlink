@@ -19,6 +19,7 @@ send_operation_t pub_socket_t::publish (const std::string &topic_id_)
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_publish;
     state_ptr->raw.socket = detail::native_handle (*this);
+    state_ptr->raw.callbacks = callback_state ().weak_from_this ();
     state_ptr->raw.topic = topic_id_;
     return send_operation_t (std::move (state_ptr));
 }
@@ -33,6 +34,7 @@ send_operation_t xpub_socket_t::publish (const std::string &topic_id_)
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_publish;
     state_ptr->raw.socket = detail::native_handle (*this);
+    state_ptr->raw.callbacks = callback_state ().weak_from_this ();
     state_ptr->raw.topic = topic_id_;
     return send_operation_t (std::move (state_ptr));
 }

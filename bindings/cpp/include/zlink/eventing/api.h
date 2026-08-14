@@ -44,11 +44,13 @@ typedef void (*zlink_monitor_handler_fn) (const zlink_monitor_event_t *event_, v
 typedef zlink_monitor_event_t zlink_socket_monitor_event_t;
 typedef zlink_monitor_handler_fn zlink_socket_monitor_handler_fn;
 
-#define ZLINK_MONITOR_STATUS_ABI_VERSION 2u
+#define ZLINK_MONITOR_STATUS_ABI_VERSION 3u
 
 typedef struct zlink_socket_monitor_open_options_t
 {
     zlink_socket_monitor_event_mask_t events;
+    /* 0 selects the Core default; positive values are exact byte HWM values. */
+    uint64_t monitor_hwm_bytes;
 } zlink_socket_monitor_open_options_t;
 
 /**
@@ -83,6 +85,12 @@ typedef struct zlink_monitor_status_t
     /* Current pending receive message count. Some sources report an estimate. */
     uint64_t rcv_pending_msgs;
 
+    /* Current pending send bytes. */
+    uint64_t snd_pending_bytes;
+
+    /* Current pending receive bytes. Some sources report an estimate. */
+    uint64_t rcv_pending_bytes;
+
     /* Non-zero when automatic HWM policy is enabled for this source. */
     uint32_t auto_hwm_enabled;
 
@@ -94,33 +102,6 @@ typedef struct zlink_monitor_status_t
 
     /* Automatic HWM policy class selected from role and socket type. */
     uint32_t auto_hwm_policy_class;
-
-    /* Unit budget in bytes used to calculate message slots for this socket. */
-    uint64_t auto_hwm_unit_budget_bytes;
-
-    /* Message slot cap selected from profile and policy class. */
-    uint32_t auto_hwm_size_cap;
-
-    /* Message slot count calculated from the unit budget and message size. */
-    uint64_t auto_hwm_socket_message_slots;
-
-    /* Non-zero when a connection-count bucket limited this socket plan. */
-    uint32_t auto_hwm_connection_bucket_enabled;
-
-    /* Connection count observed by the automatic HWM bucket planner. */
-    uint32_t auto_hwm_connection_bucket_count;
-
-    /* Selected connection bucket index, or UINT32_MAX when no bucket applies. */
-    uint32_t auto_hwm_connection_bucket_index;
-
-    /* Selected bucket HWM for a 4 KiB message unit, or 0 when no bucket applies. */
-    uint32_t auto_hwm_connection_bucket_hwm_4k;
-
-    /* Non-zero when hysteresis retained the previous connection bucket. */
-    uint32_t auto_hwm_connection_bucket_hysteresis_retained;
-
-    /* Message size in bytes used by the automatic HWM calculation. */
-    uint64_t auto_hwm_effective_message_bytes;
 
     /* Send HWM selected by the current plan, in accounted bytes. */
     uint64_t auto_hwm_planned_sndhwm_bytes;

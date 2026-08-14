@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import threading
 import time
@@ -6,7 +7,6 @@ import zlink
 
 from perf_common import (
     STOP_TOKEN,
-    apply_single_auto_hwm_msg_unit,
     apply_single_socket_options,
     benchmark_run_id,
     configure_single_tls_client,
@@ -21,17 +21,18 @@ from perf_common import (
     resolve_single_endpoint,
     resolve_single_connect_ready_timeout_ms,
     single_routing_probe,
+    send_routed,
     stamp_payload,
     wait_monitor_event,
 )
 
 
-def _send_stop_token(sock):
+async def _send_stop_token(sock):
     """PERF_SINGLE_TEST_POLICY § 1.4 wire-level shutdown signal."""
 
     for _ in range(100):
         try:
-            sock.send().message(STOP_TOKEN).submit()
+            await sock.send().message(STOP_TOKEN).submit()
             return
         except zlink.SubmitError as exc:
             if exc.result != zlink.SubmitResult.BACKPRESSURED:
@@ -43,32 +44,29 @@ def _public_one_way_metrics(sender, receiver, *, msg_size, duration_s, run_id):
     return None
 
 
-def main(argv=None):
+async def main(argv=None):
     args = parse_single_args(argv or sys.argv[1:], pattern="dealer_router")
     run_id = benchmark_run_id()
     latencies = []
     received = 0
     payload = new_payload(args.msg_size)
 
-    def send_loop(dealer, active_end):
-        # C send_active_samples: DONTWAIT send, re-stamp fresh now_ns on
-        # every retry, busy-loop through transient backpressure.
-        flag = int(zlink.SendFlags.DONT_WAIT)
-        send = dealer.send
+    async def send_loop(dealer, active_end):
+        # Preserve C's fresh timestamp per attempt while the routed terminal
+        # suspends this coroutine until Core admission.
         stamp = stamp_payload
         submit_backpressured = zlink.SubmitResult.BACKPRESSURED
         while time.perf_counter() < active_end:
             try:
-                send().message(stamp(payload, phase=1, run_id=run_id)).flags(
-                    flag
-                ).submit()
+                await send_routed(
+                    dealer, stamp(payload, phase=1, run_id=run_id)
+                )
             except zlink.SubmitError as exc:
                 if exc.result != submit_backpressured:
                     raise
-        _send_stop_token(dealer)
+        await _send_stop_token(dealer)
 
     with perf_context() as ctx:
-        apply_single_auto_hwm_msg_unit(ctx, args.msg_size)
         with zlink.create_router_socket(ctx) as router:
             with zlink.create_dealer_socket(ctx) as dealer:
                 endpoint = resolve_single_endpoint(args.transport, "dealer-router")
@@ -86,7 +84,7 @@ def main(argv=None):
 
                 # C perf_dealer_router.cpp wait_for_dealer_router_ready:
                 # one-shot DEALER->ROUTER routing probe before phase=active.
-                if not single_routing_probe(
+                if not await single_routing_probe(
                     dealer,
                     router,
                     payload,
@@ -106,9 +104,8 @@ def main(argv=None):
                     run_id=run_id,
                 )
                 if metrics is None:
-                    sender = threading.Thread(
-                        target=send_loop, args=(dealer, active_end), daemon=True
-                    )
+                    sender = threading.Thread(target=lambda: asyncio.run(
+                        send_loop(dealer, active_end)), daemon=True)
                     sender.start()
                     # C perf_dealer_router.cpp run_active_phase receiver.
                     received = run_one_way_receiver(
@@ -136,4 +133,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

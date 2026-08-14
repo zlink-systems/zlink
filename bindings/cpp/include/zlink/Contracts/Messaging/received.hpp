@@ -7,6 +7,7 @@
 #include "message.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -16,6 +17,8 @@ namespace zlink
 namespace detail
 {
 struct received_access_t;
+class hwm_budget_lease_set_t;
+struct socket_callback_state_t;
 }
 
 /// @brief A received message envelope: routing metadata, parts, and an optional reply context.
@@ -23,6 +26,7 @@ class received_t
 {
   public:
     received_t () = default;
+    ~received_t ();
     received_t (const received_t &other) = default;
     received_t &operator= (const received_t &other) = default;
 
@@ -77,11 +81,16 @@ class received_t
     std::optional<routing_id_t> _routing_id;
     std::optional<uint64_t> _request_seq;
     detail::lazy_message_parts_t _parts;
+    // Core queue credit follows the received envelope, not copies of an
+    // individual message part. Copies share this owner and the last owner (or
+    // an explicit close on the last owner) returns the retained credit.
+    std::shared_ptr<detail::hwm_budget_lease_set_t> _hwm_budget_leases;
     // Send/reply context, reconstructed lazily at submit time from the stored
     // routing ids and request sequence. Avoids per-receive std::function
     // closures and their heap allocations on the server hot path.
     std::uintptr_t _send_context_handle = 0;
     send_context_kind_t _send_context_kind = send_context_kind_t::none;
+    std::weak_ptr<detail::socket_callback_state_t> _send_context_callbacks;
 };
 
 } // namespace zlink

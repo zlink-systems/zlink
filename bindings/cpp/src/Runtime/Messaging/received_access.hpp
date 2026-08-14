@@ -5,6 +5,7 @@
 #include <Runtime/Core/routing_id_access.hpp>
 #include <Runtime/Native/message_access.hpp>
 #include <Runtime/Native/native_send.hpp>
+#include <Runtime/Sockets/socket_callback_state.hpp>
 
 #include <zlink/Contracts/Messaging/received.hpp>
 
@@ -18,25 +19,31 @@ struct received_access_t
     static void assign (received_t &received_,
                         std::optional<routing_id_t> routing_id_,
                         std::optional<uint64_t> request_seq_,
-                        std::vector<message_t> &parts_)
+                        std::vector<message_t> &parts_,
+                        std::shared_ptr<hwm_budget_lease_set_t> leases_)
     {
         received_._routing_id = std::move (routing_id_);
         received_._request_seq = std::move (request_seq_);
         received_._parts.replace (parts_);
+        received_._hwm_budget_leases = std::move (leases_);
         received_._send_context_handle = 0;
         received_._send_context_kind = received_t::send_context_kind_t::none;
+        received_._send_context_callbacks.reset ();
     }
 
     static void assign (received_t &received_,
                         std::optional<routing_id_t> routing_id_,
                         std::optional<uint64_t> request_seq_,
-                        message_t part_)
+                        message_t part_,
+                        std::shared_ptr<hwm_budget_lease_set_t> leases_)
     {
         received_._routing_id = std::move (routing_id_);
         received_._request_seq = std::move (request_seq_);
         received_._parts.replace (std::move (part_));
+        received_._hwm_budget_leases = std::move (leases_);
         received_._send_context_handle = 0;
         received_._send_context_kind = received_t::send_context_kind_t::none;
+        received_._send_context_callbacks.reset ();
     }
 
     static received_t make (std::optional<routing_id_t> routing_id_,
@@ -53,16 +60,20 @@ struct received_access_t
         return received_t (std::move (routing_id_), std::move (request_seq_), std::move (part_));
     }
 
-    static void set_socket_rid_send_context (received_t &received_, void *handle_)
+    static void set_socket_rid_send_context (
+      received_t &received_, void *handle_,
+      const std::shared_ptr<socket_callback_state_t> &callbacks_)
     {
-        set_send_context (received_, handle_, received_t::send_context_kind_t::socket_rid);
+        set_send_context (received_, handle_, received_t::send_context_kind_t::socket_rid,
+                          callbacks_);
     }
 
     static bool has_send_context (const received_t &received_) noexcept
     {
         return received_._send_context_handle != 0
                && received_._send_context_kind != received_t::send_context_kind_t::none
-               && received_._routing_id.has_value ();
+               && received_._routing_id.has_value ()
+               && !received_._send_context_callbacks.expired ();
     }
 
     static bool has_reply_context (const received_t &received_) noexcept
@@ -81,6 +92,14 @@ struct received_access_t
             return false;
 
         void *handle = reinterpret_cast<void *> (received_._send_context_handle);
+        const std::shared_ptr<socket_callback_state_t> callbacks =
+          received_._send_context_callbacks.lock ();
+        if (!callbacks || callbacks->socket_closed.load (std::memory_order_acquire))
+            return false;
+        std::lock_guard<std::mutex> attempt_lock (
+          callbacks->outbound_record_attempt_mutex);
+        if (callbacks->socket_closed.load (std::memory_order_acquire))
+            return false;
         const zlink_send_flags_t native_flags =
           static_cast<zlink_send_flags_t> (static_cast<int> (flags_));
         const zlink_routing_id_t routing_id =
@@ -114,6 +133,14 @@ struct received_access_t
             return false;
 
         void *handle = reinterpret_cast<void *> (received_._send_context_handle);
+        const std::shared_ptr<socket_callback_state_t> callbacks =
+          received_._send_context_callbacks.lock ();
+        if (!callbacks || callbacks->socket_closed.load (std::memory_order_acquire))
+            return false;
+        std::lock_guard<std::mutex> attempt_lock (
+          callbacks->outbound_record_attempt_mutex);
+        if (callbacks->socket_closed.load (std::memory_order_acquire))
+            return false;
         const uint64_t request_seq = *received_._request_seq;
         const zlink_routing_id_t routing_id =
           zlink::detail::routing_id_native_value (*received_._routing_id);
@@ -139,6 +166,14 @@ struct received_access_t
     static bool
     submit_send (received_t &received_, std::vector<message_t> &parts_, send_flags_t flags_)
     {
+        const std::shared_ptr<socket_callback_state_t> callbacks =
+          received_._send_context_callbacks.lock ();
+        if (!callbacks || callbacks->socket_closed.load (std::memory_order_acquire))
+            throw submit_error_t (submit_result_t::invalid_state, EINVAL);
+        std::lock_guard<std::mutex> attempt_lock (
+          callbacks->outbound_record_attempt_mutex);
+        if (callbacks->socket_closed.load (std::memory_order_acquire))
+            throw submit_error_t (submit_result_t::invalid_state, EINVAL);
         void *handle = reinterpret_cast<void *> (received_._send_context_handle);
         const zlink_send_flags_t native_flags =
           static_cast<zlink_send_flags_t> (static_cast<int> (flags_));
@@ -156,6 +191,14 @@ struct received_access_t
     static void
     submit_reply (received_t &received_, std::vector<message_t> &parts_, send_flags_t flags_)
     {
+        const std::shared_ptr<socket_callback_state_t> callbacks =
+          received_._send_context_callbacks.lock ();
+        if (!callbacks || callbacks->socket_closed.load (std::memory_order_acquire))
+            throw submit_error_t (submit_result_t::invalid_state, EINVAL);
+        std::lock_guard<std::mutex> attempt_lock (
+          callbacks->outbound_record_attempt_mutex);
+        if (callbacks->socket_closed.load (std::memory_order_acquire))
+            throw submit_error_t (submit_result_t::invalid_state, EINVAL);
         void *handle = reinterpret_cast<void *> (received_._send_context_handle);
         const uint64_t request_seq = *received_._request_seq;
         const zlink_routing_id_t routing_id =
@@ -169,10 +212,13 @@ struct received_access_t
 
   private:
     static void
-    set_send_context (received_t &received_, void *handle_, received_t::send_context_kind_t kind_)
+    set_send_context (received_t &received_, void *handle_,
+                      received_t::send_context_kind_t kind_,
+                      const std::shared_ptr<socket_callback_state_t> &callbacks_)
     {
         received_._send_context_handle = reinterpret_cast<std::uintptr_t> (handle_);
         received_._send_context_kind = kind_;
+        received_._send_context_callbacks = callbacks_;
     }
 };
 

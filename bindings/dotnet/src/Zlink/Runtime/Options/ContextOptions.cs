@@ -55,16 +55,24 @@ internal sealed class ContextOptions : IContextOptions
         set => _context.SetOption(ContextOption.Blocky, value ? 1 : 0);
     }
 
-    public AutoHwmProfile AutoHwmProfile
+    public AutoHwmProfile CoreHwmProfile
     {
         get => (AutoHwmProfile)_context.GetOption(ContextOption.AutoHwmProfile);
         set => _context.SetOption(ContextOption.AutoHwmProfile, (int)value);
     }
 
-    public ulong AutoHwmMessageUnitBytes
+    public ulong CoreHwmMemoryLimitBytes
     {
-        get => _context.GetUInt64Option(ContextOption.AutoHwmMsgUnitBytes);
-        set => _context.SetUInt64Option(ContextOption.AutoHwmMsgUnitBytes, value);
+        get => _context.GetUInt64Option(ContextOption.AutoHwmMemoryLimitBytes);
+        set => _context.SetUInt64Option(ContextOption.AutoHwmMemoryLimitBytes,
+            value);
+    }
+
+    public ulong CoreHwmBudgetBytes
+    {
+        get => _context.GetUInt64Option(ContextOption.AutoHwmCoreBudgetBytes);
+        set => _context.SetUInt64Option(ContextOption.AutoHwmCoreBudgetBytes,
+            value);
     }
 
     public bool AutoHwmEnabled

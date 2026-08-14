@@ -160,7 +160,7 @@ class ctx_guard_t
 
         (void) options.blocky (bench_ctx_blocky () != 0);
         (void) options.auto_hwm_enabled (true);
-        (void) options.auto_hwm_profile (bench_ctx_auto_hwm_profile ());
+        (void) options.core_hwm_profile (bench_ctx_auto_hwm_profile ());
     }
 
     ~ctx_guard_t ()
@@ -210,22 +210,6 @@ inline void apply_debug_timeouts (SocketLike &socket, const std::string &)
     (void) set_common_socket_option (socket, perf::options::socket_options::rcvtimeo,
                                      settings.rcvtimeo_ms);
     (void) set_common_socket_option (socket, perf::options::socket_options::linger, 0);
-}
-
-inline bool apply_benchmark_auto_hwm_msg_unit (ctx_guard_t &ctx, size_t msg_size)
-{
-    if (msg_size == 0)
-        return true;
-    try {
-        zlink::context_options_t options = ctx.ctx ().options ();
-        options.auto_hwm_msg_unit_bytes (
-          zlink::byte_count_t::bytes (static_cast<uint64_t> (msg_size)));
-        return true;
-    }
-    catch (const zlink::config_error_t &err) {
-        errno = err.internal_errno ();
-        return false;
-    }
 }
 
 inline bool recalculate_auto_hwm (ctx_guard_t &ctx)
@@ -385,8 +369,8 @@ inline void emit_auto_hwm_detail (SocketLike &socket,
                             + std::to_string (snapshot.auto_hwm_role) + "|"
                             + std::to_string (snapshot.auto_hwm_applied_sndhwm_bytes) + "|"
                             + std::to_string (snapshot.auto_hwm_applied_rcvhwm_bytes) + "|"
-                            + std::to_string (snapshot.auto_hwm_unit_budget_bytes) + "|"
-                            + std::to_string (snapshot.auto_hwm_effective_message_bytes) + "|"
+                            + std::to_string (snapshot.snd_pending_bytes) + "|"
+                            + std::to_string (snapshot.rcv_pending_bytes) + "|"
                             + std::to_string (effective_sndbuf) + "|"
                             + std::to_string (effective_rcvbuf);
 
@@ -409,12 +393,13 @@ inline void emit_auto_hwm_detail (SocketLike &socket,
               << ",profile_id=" << snapshot.auto_hwm_profile
               << ",policy_class=" << auto_hwm_policy_class_name (snapshot.auto_hwm_policy_class)
               << ",policy_class_id=" << snapshot.auto_hwm_policy_class
-              << ",unit_budget_bytes=" << snapshot.auto_hwm_unit_budget_bytes
-              << ",size_cap=" << snapshot.auto_hwm_size_cap
               << ",sndhwm=" << snapshot.auto_hwm_applied_sndhwm_bytes
               << ",rcvhwm=" << snapshot.auto_hwm_applied_rcvhwm_bytes
-              << ",socket_message_slots=" << snapshot.auto_hwm_socket_message_slots
-              << ",effective_message_bytes=" << snapshot.auto_hwm_effective_message_bytes
+              << ",snd_pending_bytes=" << snapshot.snd_pending_bytes
+              << ",rcv_pending_bytes=" << snapshot.rcv_pending_bytes
+              << ",snd_bytes_in_flight=" << snapshot.snd_bytes_in_flight
+              << ",rcv_bytes_in_flight=" << snapshot.rcv_bytes_in_flight
+              << ",minimum_core_message_charge_bytes=" << snapshot.minimum_core_message_charge_bytes
               << ",effective_sndbuf=" << effective_sndbuf
               << ",effective_rcvbuf=" << effective_rcvbuf
               << ",last_recalc_ms=" << snapshot.auto_hwm_last_recalc_ms << ",last_recalc_reason="

@@ -26,7 +26,7 @@ public sealed class test_socket_concurrency
 
         var dealerStart = new Barrier(producerCount);
         Task[] dealerSends = Enumerable.Range(0, producerCount)
-            .Select(producer => Task.Run(() =>
+            .Select(producer => Task.Run(async () =>
             {
                 dealerStart.SignalAndWait();
                 for (var messageIndex = 0;
@@ -37,10 +37,10 @@ public sealed class test_socket_concurrency
                         $"dealer-{producer}-{messageIndex}-header");
                     using Message body = Message.From(
                         $"dealer-{producer}-{messageIndex}-body");
-                    Assert.True(dealer.Send()
+                    await dealer.Send()
                         .Message(header)
                         .Message(body)
-                        .Submit());
+                        .Async();
                 }
             }))
             .ToArray();
@@ -78,7 +78,7 @@ public sealed class test_socket_concurrency
 
         var routerStart = new Barrier(producerCount);
         Task[] routerSends = Enumerable.Range(0, producerCount)
-            .Select(producer => Task.Run(() =>
+            .Select(producer => Task.Run(async () =>
             {
                 routerStart.SignalAndWait();
                 for (var messageIndex = 0;
@@ -89,10 +89,10 @@ public sealed class test_socket_concurrency
                         $"router-{producer}-{messageIndex}-header");
                     using Message body = Message.From(
                         $"router-{producer}-{messageIndex}-body");
-                    Assert.True(router.Send(target)
+                    await router.Send(target)
                         .Message(header)
                         .Message(body)
-                        .Submit());
+                        .Async();
                 }
             }))
             .ToArray();
@@ -222,7 +222,7 @@ public sealed class test_socket_concurrency
         for (var producer = 0; producer < producerCount; producer++)
         {
             var producerIndex = producer;
-            sends.Add(Task.Run(() =>
+            sends.Add(Task.Run(async () =>
             {
                 start.SignalAndWait();
                 for (var operation = 0; operation < operationsPerProducer; operation++)
@@ -231,9 +231,9 @@ public sealed class test_socket_concurrency
                         $"send-{producerIndex}-{operation}-header");
                     using Message body = Message.From(
                         $"send-{producerIndex}-{operation}-body");
-                    Assert.True(dealer.Send()
+                    await dealer.Send()
                         .Messages([header, body])
-                        .Submit());
+                        .Async();
                 }
             }));
 

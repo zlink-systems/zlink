@@ -255,7 +255,7 @@ Options:
   --duration N                  Override BENCH_MULTI_DURATION_SECONDS (default: 5)
   --clients N                   Override BENCH_MULTI_CLIENTS
   --hwm N                       Override BENCH_MULTI_HWM (default: 100, stream=10)
-  --monitor-hwm N               Override BENCH_MULTI_MONITOR_HWM (monitor queue HWM)
+  --monitor-hwm-bytes N         Override BENCH_MULTI_MONITOR_HWM_BYTES (monitor queue HWM bytes)
   --sndtimeo-ms N               Override BENCH_MULTI_SNDTIMEO_MS (default: 200)
   --rcvtimeo-ms N               Override BENCH_MULTI_RCVTIMEO_MS (default: 200)
   --connect-ready-timeout-ms N Override BENCH_MULTI_CONNECT_READY_TIMEOUT_MS (default: 5000)
@@ -309,7 +309,7 @@ MULTI_WARMUP_SECONDS="${BENCH_MULTI_WARMUP_SECONDS:-2}"
 MULTI_DURATION_SECONDS="${BENCH_MULTI_DURATION_SECONDS:-5}"
 MULTI_CLIENTS="${BENCH_MULTI_CLIENTS:-}"
 MULTI_HWM="${BENCH_MULTI_HWM:-}"
-MULTI_MONITOR_HWM="${BENCH_MULTI_MONITOR_HWM:-}"
+MULTI_MONITOR_HWM_BYTES="${BENCH_MULTI_MONITOR_HWM_BYTES:-}"
 MULTI_SNDTIMEO_MS="${BENCH_MULTI_SNDTIMEO_MS:-200}"
 MULTI_RCVTIMEO_MS="${BENCH_MULTI_RCVTIMEO_MS:-200}"
 MULTI_CONNECT_READY_TIMEOUT_MS="${BENCH_MULTI_CONNECT_READY_TIMEOUT_MS:-5000}"
@@ -403,8 +403,8 @@ while [[ $# -gt 0 ]]; do
       MULTI_HWM="${2:-}"
       shift 2
       ;;
-    --monitor-hwm|--multi-monitor-hwm)
-      MULTI_MONITOR_HWM="${2:-}"
+    --monitor-hwm-bytes|--multi-monitor-hwm-bytes)
+      MULTI_MONITOR_HWM_BYTES="${2:-}"
       shift 2
       ;;
     --sndtimeo-ms|--multi-sndtimeo-ms)
@@ -519,8 +519,8 @@ export BENCH_TRANSPORT_TRANSITION_MS="${MULTI_TRANSPORT_TRANSITION_MS}"
 export BENCH_MULTI_SERVER_READY_TIMEOUT_MS="${MULTI_SERVER_READY_TIMEOUT_MS}"
 export BENCH_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS="${MULTI_SERVER_SHUTDOWN_TIMEOUT_MS}"
 export BENCH_MULTI_SERVER_BIND_PORT="${MULTI_SERVER_BIND_PORT}"
-if [[ -n "${MULTI_MONITOR_HWM}" ]]; then
-  export BENCH_MULTI_MONITOR_HWM="${MULTI_MONITOR_HWM}"
+if [[ -n "${MULTI_MONITOR_HWM_BYTES}" ]]; then
+  export BENCH_MULTI_MONITOR_HWM_BYTES="${MULTI_MONITOR_HWM_BYTES}"
 fi
 
 effective_clients="${MULTI_CLIENTS:-${BENCH_MULTI_CLIENTS:-}}"

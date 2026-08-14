@@ -27,7 +27,6 @@ func runMultiDealerDealerServer(cfg multiConfig) {
 	defer server.Close()
 
 	perfcommon.Must(perfcommon.ConfigureTLSServer(server, cfg.transport))
-	perfcommon.ApplyMultiAutoHWMMsgUnit(serverCtx, cfg.msgSize)
 	perfcommon.ApplyMultiHWM(server, cfg.pattern)
 	perfcommon.ApplyMultiBenchmarkSocketOptions(server, cfg.transport)
 	endpoint := perfcommon.BindAndResolveEndpoint(server, cfg.transport, "perf-multi-dealer-dealer")
@@ -184,7 +183,6 @@ func runMultiDealerDealerClient(cfg multiConfig, endpoint string) {
 		var err error
 		sharedCtx, err = perfcommon.NewMultiClientContext()
 		perfcommon.Must(err)
-		perfcommon.ApplyMultiAutoHWMMsgUnit(sharedCtx, cfg.msgSize)
 	}
 	for i := 0; i < cfg.clients; i++ {
 		clientCtx := sharedCtx
@@ -192,7 +190,6 @@ func runMultiDealerDealerClient(cfg multiConfig, endpoint string) {
 			var err error
 			clientCtx, err = perfcommon.NewMultiClientContext()
 			perfcommon.Must(err)
-			perfcommon.ApplyMultiAutoHWMMsgUnit(clientCtx, cfg.msgSize)
 		}
 		client, err := clientCtx.DealerSocket()
 		perfcommon.Must(err)
@@ -263,11 +260,11 @@ func runMultiDealerDealerSendWindow(clients []dealerDealerClient, cfg multiConfi
 			if !now.Before(window.StopAt) {
 				break
 			}
-			sent, sendErr := perfcommon.SubmitWindowPayload(cfg.msgSize, window.ActiveAt, func(message *zlink.Message) (bool, error) {
+			sent, sendErr := perfcommon.SubmitRoutedWindowPayload(cfg.msgSize, window.ActiveAt, func(message *zlink.Message) <-chan error {
 				if !useMultiDealerDealerMoveMessage(cfg.transport, cfg.msgSize) {
-					return client.socket.Send().Message(message).Flags(zlink.SendFlagsDontWait).Submit(context.Background())
+					return client.socket.Send().Message(message).Submit(context.Background())
 				}
-				return client.socket.Send().MoveMessage(message).Flags(zlink.SendFlagsDontWait).Submit(context.Background())
+				return client.socket.Send().MoveMessage(message).Submit(context.Background())
 			})
 			if sendErr == nil && sent {
 				if pending[i] {
@@ -347,8 +344,8 @@ func useMultiDealerDealerMoveMessage(transport string, msgSize int) bool {
 // the cpp / java / dotnet implementations.
 func sendMultiDealerStopToken(socket *zlink.DealerSocket) {
 	for attempt := 0; attempt < perfcommon.StopTokenSendAttempts; attempt++ {
-		sent, err := perfcommon.SubmitPayload(perfcommon.StopToken, func(message *zlink.Message) (bool, error) {
-			return socket.Send().MoveMessage(message).Flags(zlink.SendFlagsDontWait).Submit(context.Background())
+		sent, err := perfcommon.SubmitRoutedPayload(perfcommon.StopToken, func(message *zlink.Message) <-chan error {
+			return socket.Send().MoveMessage(message).Submit(context.Background())
 		})
 		if err == nil && sent {
 			return

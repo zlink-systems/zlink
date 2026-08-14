@@ -184,6 +184,16 @@ impl SubSocket {
         crate::socket::sub_inner(self).subscribe_recv(out, flags)
     }
 
+    /// Receives a matching topic message while retaining its physical Core
+    /// HWM credits in `out` until reuse, close, consumption, or drop.
+    pub fn subscribe_retained(
+        &self,
+        out: &mut TopicMessage,
+        flags: RecvFlags,
+    ) -> Result<bool, RecvError> {
+        crate::socket::sub_inner(self).subscribe_recv_retained(out, flags)
+    }
+
     /// Adds a subscription for `filter` (an exact topic or pattern).
     /// Subscriptions accumulate; a socket may hold several at once.
     pub fn set_subscription(&self, filter: &str) -> Result<(), ConfigError> {
@@ -273,6 +283,16 @@ impl XSubSocket {
     /// [`RecvFlags::DONT_WAIT`] is set and no message is available.
     pub fn subscribe(&self, out: &mut TopicMessage, flags: RecvFlags) -> Result<bool, RecvError> {
         crate::socket::xsub_inner(self).subscribe_recv(out, flags)
+    }
+
+    /// Receives a matching topic message while retaining its physical Core
+    /// HWM credits in `out` until reuse, close, consumption, or drop.
+    pub fn subscribe_retained(
+        &self,
+        out: &mut TopicMessage,
+        flags: RecvFlags,
+    ) -> Result<bool, RecvError> {
+        crate::socket::xsub_inner(self).subscribe_recv_retained(out, flags)
     }
 
     /// Adds a subscription for `filter` (an exact topic or pattern).

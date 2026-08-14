@@ -321,6 +321,28 @@ class _ReceivedPartsOwner:
         self._closed = True
 
 
+class _HwmBudgetCreditOwner:
+    """Private aggregate-only owner for per-physical-part Core credit."""
+
+    def __init__(self, credits):
+        self._credits = credits
+
+    def close(self):
+        credits = self._credits
+        if not credits:
+            return
+        self._credits = ()
+        for credit in credits:
+            if credit and credit.value:
+                lib().zlink_hwm_budget_lease_release(ctypes.byref(credit))
+
+    def __del__(self):
+        try:
+            self.close()
+        except BaseException:
+            pass
+
+
 class _BytesReceivedPartsOwner:
     def __init__(self, parts):
         self._parts = tuple(bytes(part) for part in parts)
@@ -420,3 +442,81 @@ def _recv_native_parts(handle, flags):
         final_array[index] = native_part
     routing = _routing_id_bytes(routing_id.contents) if routing_id else None
     return routing, _ReceivedPartsOwner(final_array, part_count)
+
+
+def _recv_retained_native_parts(recv_part, flags):
+    """Receive one multipart aggregate and privately adopt every Core lease."""
+
+    native_parts = []
+    leases = []
+    recv_flags = int(flags)
+    try:
+        while True:
+            native_part = ZlinkMsg()
+            rc = lib().zlink_msg_init(ctypes.byref(native_part))
+            if rc != 0:
+                _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
+
+            lease = ctypes.c_void_p()
+            try:
+                # Reserve Python ownership before Core atomically dequeues the
+                # part and transfers its HWM credit.
+                leases.append(lease)
+            except BaseException:
+                lib().zlink_msg_close(ctypes.byref(native_part))
+                raise
+
+            has_more = ctypes.c_int()
+            rc = recv_part(
+                ctypes.byref(native_part),
+                ctypes.byref(lease),
+                ctypes.byref(has_more),
+                recv_flags,
+                not native_parts,
+            )
+            if rc != 0:
+                lib().zlink_msg_close(ctypes.byref(native_part))
+                _raise_result_error(RecvError, RecvResult, rc, lib().zlink_errno())
+            native_parts.append(native_part)
+            if has_more.value == 0:
+                break
+            recv_flags = 1
+
+        part_count = len(native_parts)
+        final_array = (ZlinkMsg * part_count)()
+        for index, native_part in enumerate(native_parts):
+            final_array[index] = native_part
+        retained_credit = _HwmBudgetCreditOwner(leases)
+        parts_owner = _ReceivedPartsOwner(final_array, part_count)
+        native_parts = []
+        leases = []
+        return parts_owner, retained_credit
+    except BaseException:
+        for native_part in native_parts:
+            lib().zlink_msg_close(ctypes.byref(native_part))
+        for lease in leases:
+            if lease and lease.value:
+                lib().zlink_hwm_budget_lease_release(ctypes.byref(lease))
+        raise
+
+
+def _recv_native_parts_retained(handle, flags):
+    routing = None
+
+    def recv_part(part, lease, has_more, recv_flags, first):
+        nonlocal routing
+        source_rid = ctypes.POINTER(ZlinkRoutingId)()
+        rc = lib().zlink_recv_part_with_hwm_budget_lease(
+            handle,
+            ctypes.byref(source_rid),
+            part,
+            lease,
+            has_more,
+            recv_flags,
+        )
+        if rc == 0 and first and source_rid:
+            routing = _routing_id_bytes(source_rid.contents)
+        return rc
+
+    owner, retained_credit = _recv_retained_native_parts(recv_part, flags)
+    return routing, owner, retained_credit

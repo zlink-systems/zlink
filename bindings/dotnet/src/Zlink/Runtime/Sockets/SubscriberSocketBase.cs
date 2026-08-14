@@ -38,4 +38,10 @@ internal abstract class SubscriberSocketBase : ConnectableSocketBase, ISubscribe
         return Kernel.SubscribeIntoSubscriber(result, (int)flags);
     }
 
+    public bool SubscribeRetained(TopicMessage result,
+        RecvFlags flags = RecvFlags.None)
+    {
+        return Kernel.SubscribeRetainedIntoSubscriber(result, (int)flags);
+    }
+
 }

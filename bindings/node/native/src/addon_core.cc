@@ -8,7 +8,6 @@
 #include "addon_request_callbacks.h"
 #include "addon_submit_results.h"
 #include "addon_tsfn_slots.h"
-#include <algorithm>
 #include <errno.h>
 #include <atomic>
 #include <cstring>
@@ -26,6 +25,96 @@ static const size_t k_stream_slot_count = 8;
 static const size_t k_send_ready_handler_slot_count = 8;
 static const size_t k_socket_monitor_handler_slot_count = 8;
 static const int32_t k_stream_dispatch_len32be = 1;
+
+// One aggregate receive may transfer one Core HWM-credit lease per physical
+// part. This owner never crosses the public TypeScript surface: a Received or
+// TopicMessage keeps its opaque external alive until explicit close/reuse, and
+// the external finalizer is the leak-prevention fallback.
+struct retained_hwm_budget_lease_owner_t
+{
+    struct lease_node_t
+    {
+        explicit lease_node_t (zlink_hwm_budget_lease_t *lease_) : lease (lease_), next (NULL) {}
+        zlink_hwm_budget_lease_t *lease;
+        lease_node_t *next;
+    };
+
+    retained_hwm_budget_lease_owner_t () : head (NULL) {}
+    ~retained_hwm_budget_lease_owner_t () { release_all (); }
+
+    bool adopt (zlink_hwm_budget_lease_t *lease)
+    {
+        if (!lease)
+            return true;
+        lease_node_t *node = new (std::nothrow) lease_node_t (lease);
+        if (!node) {
+            zlink_hwm_budget_lease_release (&lease);
+            errno = ENOMEM;
+            return false;
+        }
+        node->next = head;
+        head = node;
+        return true;
+    }
+
+    void release_all ()
+    {
+        while (head) {
+            lease_node_t *node = head;
+            head = node->next;
+            zlink_hwm_budget_lease_release (&node->lease);
+            delete node;
+        }
+    }
+
+    bool empty () const { return head == NULL; }
+
+    lease_node_t *head;
+};
+
+void finalize_retained_hwm_budget_lease_owner (napi_env env, void *data, void *hint)
+{
+    (void) env;
+    (void) hint;
+    delete static_cast<retained_hwm_budget_lease_owner_t *> (data);
+}
+
+bool attach_retained_hwm_budget_lease_owner (
+  napi_env env, napi_value envelope, retained_hwm_budget_lease_owner_t **owner_p)
+{
+    if (!owner_p || !*owner_p)
+        return true;
+    retained_hwm_budget_lease_owner_t *owner = *owner_p;
+    if (owner->empty ()) {
+        delete owner;
+        *owner_p = NULL;
+        return true;
+    }
+
+    napi_value external;
+    if (napi_create_external (env, owner,
+                              finalize_retained_hwm_budget_lease_owner,
+                              NULL, &external)
+        != napi_ok) {
+        delete owner;
+        *owner_p = NULL;
+        napi_throw_error (env, NULL,
+                          "retained HWM-credit owner allocation failed");
+        return false;
+    }
+    // The external finalizer owns deletion after this point. On a property
+    // failure return Core credit now and let GC delete the empty owner later.
+    *owner_p = NULL;
+    if (napi_set_named_property (env, envelope, "hwmBudgetLeaseOwner", external)
+        != napi_ok) {
+        owner->release_all ();
+        napi_throw_error (env, NULL,
+                          "retained HWM-credit owner attachment failed");
+        return false;
+    }
+    return true;
+}
+
 struct stream_js_payload_t
 {
     stream_js_payload_t () : packet_count (0), body_materialization (0) {
@@ -46,12 +135,6 @@ struct stream_js_payload_t
 struct socket_monitor_handler_js_payload_t
 {
     zlink_monitor_event_t event;
-};
-
-struct completion_control_js_payload_t
-{
-    std::vector<unsigned char> routing_id;
-    std::vector<std::vector<unsigned char>> parts;
 };
 
 struct stream_js_state_t
@@ -93,24 +176,8 @@ struct socket_monitor_handler_js_state_t
     napi_threadsafe_function tsfn;
 };
 
-struct completion_control_handler_js_state_t
-{
-    completion_control_handler_js_state_t ()
-        : socket (NULL), env (NULL), tsfn (NULL)
-    {
-    }
-
-    void *socket;
-    napi_env env;
-    napi_threadsafe_function tsfn;
-};
-
 static std::mutex g_send_ready_handler_slots_mu;
 static send_ready_handler_js_state_t g_send_ready_handler_slots[k_send_ready_handler_slot_count];
-static std::mutex g_completion_control_handler_slots_mu;
-static std::mutex g_completion_control_handler_registration_mu;
-static std::unordered_map<void *, std::vector<completion_control_handler_js_state_t *> >
-  g_completion_control_handler_states;
 static std::mutex g_socket_monitor_handler_slots_mu;
 static socket_monitor_handler_js_state_t
   g_socket_monitor_handler_slots[k_socket_monitor_handler_slot_count];
@@ -174,6 +241,7 @@ void reset_socket_monitor_handler_slot_unsafe (socket_monitor_handler_js_state_t
     reset_tsfn_slot_base (state);
     state->monitor = NULL;
 }
+
 
 zlink_socket_type_t translate_socket_type (int32_t type)
 {
@@ -276,6 +344,83 @@ int subscribe_parts (void *sock,
     return ZLINK_RECV_OK;
 }
 
+int subscribe_parts_retained (
+  void *sock, zlink_routing_id_t *routing_id, char *topic,
+  size_t topic_capacity, size_t *topic_len, std::vector<zlink_msg_t> *parts,
+  retained_hwm_budget_lease_owner_t *lease_owner, int32_t flags)
+{
+    if (!parts || !lease_owner) {
+        errno = EFAULT;
+        return ZLINK_RECV_INTERNAL_ERROR;
+    }
+    const zlink_routing_id_t *source_rid = NULL;
+    zlink_msg_t first_part;
+    if (zlink_msg_init (&first_part) != 0)
+        return ZLINK_RECV_INTERNAL_ERROR;
+    zlink_hwm_budget_lease_t *lease = NULL;
+    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+
+    copy_routing_id (routing_id, NULL);
+    parts->clear ();
+    int rc = zlink_subscribe_part_with_hwm_budget_lease (
+      sock, &source_rid, topic, topic_capacity, topic_len, &first_part,
+      &lease, &has_more, static_cast<zlink_recv_flags_t> (flags));
+    if (rc != ZLINK_RECV_OK) {
+        zlink_hwm_budget_lease_release (&lease);
+        zlink_msg_close (&first_part);
+        return rc;
+    }
+    copy_routing_id (routing_id, source_rid);
+    const bool first_lease_adopted = lease_owner->adopt (lease);
+    lease = NULL;
+    if (!first_lease_adopted || !append_msg_move (parts, &first_part)) {
+        const int saved_errno = errno;
+        zlink_msg_close (&first_part);
+        close_msg_vector (*parts);
+        parts->clear ();
+        errno = saved_errno == 0 ? ENOMEM : saved_errno;
+        return ZLINK_RECV_INTERNAL_ERROR;
+    }
+
+    while (has_more) {
+        const zlink_routing_id_t *next_source_rid = NULL;
+        size_t next_topic_len = topic_capacity;
+        zlink_msg_t next_part;
+        if (zlink_msg_init (&next_part) != 0) {
+            close_msg_vector (*parts);
+            parts->clear ();
+            return ZLINK_RECV_INTERNAL_ERROR;
+        }
+        lease = NULL;
+        zlink_part_flag_t more = ZLINK_PART_FINAL;
+        rc = zlink_subscribe_part_with_hwm_budget_lease (
+          sock, &next_source_rid, topic, topic_capacity,
+          &next_topic_len, &next_part, &lease, &more,
+          ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc != ZLINK_RECV_OK) {
+            const int saved_errno = errno;
+            zlink_hwm_budget_lease_release (&lease);
+            zlink_msg_close (&next_part);
+            close_msg_vector (*parts);
+            parts->clear ();
+            errno = saved_errno == 0 ? ENOMEM : saved_errno;
+            return rc;
+        }
+        const bool lease_adopted = lease_owner->adopt (lease);
+        lease = NULL;
+        if (!lease_adopted || !append_msg_move (parts, &next_part)) {
+            const int saved_errno = errno;
+            zlink_msg_close (&next_part);
+            close_msg_vector (*parts);
+            parts->clear ();
+            errno = saved_errno == 0 ? ENOMEM : saved_errno;
+            return ZLINK_RECV_INTERNAL_ERROR;
+        }
+        has_more = more;
+    }
+    return ZLINK_RECV_OK;
+}
+
 int router_recv_parts (void *router,
                        zlink_routing_id_t *peer_rid,
                        uint64_t *request_seq,
@@ -354,6 +499,91 @@ int router_recv_parts (void *router,
     return ZLINK_RECV_OK;
 }
 
+int router_recv_parts_retained (
+  void *router, zlink_routing_id_t *peer_rid, uint64_t *request_seq,
+  std::vector<zlink_msg_t> *parts,
+  retained_hwm_budget_lease_owner_t *lease_owner, int32_t flags,
+  uint64_t *transport_pair_id, uint64_t *transport_pair_generation)
+{
+    if (!parts || !lease_owner || !request_seq || !transport_pair_id
+        || !transport_pair_generation) {
+        errno = EFAULT;
+        return ZLINK_RECV_INTERNAL_ERROR;
+    }
+    const zlink_routing_id_t *peer_rid_ptr = NULL;
+    zlink_msg_t first_part;
+    if (zlink_msg_init (&first_part) != 0)
+        return ZLINK_RECV_INTERNAL_ERROR;
+    zlink_hwm_budget_lease_t *lease = NULL;
+    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+
+    copy_routing_id (peer_rid, NULL);
+    *request_seq = 0;
+    *transport_pair_id = 0;
+    *transport_pair_generation = 0;
+    parts->clear ();
+    int rc = zlink_router_recv_part_v2_with_hwm_budget_lease (
+      router, &peer_rid_ptr, request_seq, transport_pair_id,
+      transport_pair_generation, &first_part, &lease, &has_more,
+      static_cast<zlink_recv_flags_t> (flags));
+    if (rc != ZLINK_RECV_OK) {
+        zlink_hwm_budget_lease_release (&lease);
+        zlink_msg_close (&first_part);
+        return rc;
+    }
+    copy_routing_id (peer_rid, peer_rid_ptr);
+    const bool first_lease_adopted = lease_owner->adopt (lease);
+    lease = NULL;
+    if (!first_lease_adopted || !append_msg_move (parts, &first_part)) {
+        const int saved_errno = errno;
+        zlink_msg_close (&first_part);
+        close_msg_vector (*parts);
+        parts->clear ();
+        errno = saved_errno == 0 ? ENOMEM : saved_errno;
+        return ZLINK_RECV_INTERNAL_ERROR;
+    }
+
+    while (has_more) {
+        const zlink_routing_id_t *next_peer_rid = NULL;
+        uint64_t next_request_seq = 0;
+        uint64_t next_pair_id = 0;
+        uint64_t next_pair_generation = 0;
+        zlink_msg_t next_part;
+        if (zlink_msg_init (&next_part) != 0) {
+            close_msg_vector (*parts);
+            parts->clear ();
+            return ZLINK_RECV_INTERNAL_ERROR;
+        }
+        lease = NULL;
+        zlink_part_flag_t more = ZLINK_PART_FINAL;
+        rc = zlink_router_recv_part_v2_with_hwm_budget_lease (
+          router, &next_peer_rid, &next_request_seq, &next_pair_id,
+          &next_pair_generation, &next_part, &lease, &more,
+          ZLINK_RECV_FLAGS_DONTWAIT);
+        if (rc != ZLINK_RECV_OK) {
+            const int saved_errno = errno;
+            zlink_hwm_budget_lease_release (&lease);
+            zlink_msg_close (&next_part);
+            close_msg_vector (*parts);
+            parts->clear ();
+            errno = saved_errno == 0 ? ENOMEM : saved_errno;
+            return rc;
+        }
+        const bool lease_adopted = lease_owner->adopt (lease);
+        lease = NULL;
+        if (!lease_adopted || !append_msg_move (parts, &next_part)) {
+            const int saved_errno = errno;
+            zlink_msg_close (&next_part);
+            close_msg_vector (*parts);
+            parts->clear ();
+            errno = saved_errno == 0 ? ENOMEM : saved_errno;
+            return ZLINK_RECV_INTERNAL_ERROR;
+        }
+        has_more = more;
+    }
+    return ZLINK_RECV_OK;
+}
+
 int send_parts (void *sock, zlink_msg_t *parts, size_t part_count, zlink_send_flags_t flags)
 {
     return submit_msg_parts (parts, part_count, [sock, flags] (zlink_msg_t *part,
@@ -384,67 +614,6 @@ int publish_parts (
                                                                       bool) {
         return zlink_publish_part (sock, topic, part, flags, part_flag);
     });
-}
-
-int dealer_request_parts (void *dealer,
-                          zlink_msg_t *parts,
-                          size_t part_count,
-                          zlink_reply_handler_fn handler,
-                          void *userdata,
-                          zlink_send_flags_t flags,
-                          uint32_t timeout_ms)
-{
-    return submit_msg_parts (parts, part_count, [dealer, handler, userdata, flags, timeout_ms] (
-                                                  zlink_msg_t *part,
-                                                  zlink_part_flag_t part_flag, bool is_final) {
-        return zlink_dealer_request_part (dealer, part, flags, part_flag,
-                                          is_final ? timeout_ms : 0u,
-                                          is_final ? handler : NULL,
-                                          is_final ? userdata : NULL);
-    });
-}
-
-int router_request_parts (void *router,
-                          const zlink_routing_id_t *peer_rid,
-                          zlink_msg_t *parts,
-                          size_t part_count,
-                          zlink_reply_handler_fn handler,
-                          void *userdata,
-                          zlink_send_flags_t flags,
-                          uint32_t timeout_ms)
-{
-    return submit_msg_parts (parts, part_count, [router, peer_rid, handler, userdata, flags,
-                                                 timeout_ms] (zlink_msg_t *part,
-                                                              zlink_part_flag_t part_flag,
-                                                              bool is_final) {
-        return zlink_router_request_part (router, peer_rid, part, flags, part_flag,
-                                          is_final ? timeout_ms : 0u,
-                                          is_final ? handler : NULL,
-                                          is_final ? userdata : NULL);
-    });
-}
-
-int router_request_transport_pair_parts (
-  void *router,
-  const zlink_routing_id_t *peer_rid,
-  uint64_t pair_id,
-  uint64_t pair_generation,
-  zlink_msg_t *parts,
-  size_t part_count,
-  zlink_reply_handler_fn handler,
-  void *userdata,
-  zlink_send_flags_t flags,
-  uint32_t timeout_ms)
-{
-    return submit_msg_parts (parts, part_count,
-      [router, peer_rid, pair_id, pair_generation, handler, userdata, flags, timeout_ms]
-      (zlink_msg_t *part, zlink_part_flag_t part_flag, bool is_final) {
-          return zlink_router_request_transport_pair_part (
-            router, peer_rid, pair_id, pair_generation, part, flags, part_flag,
-            is_final ? timeout_ms : 0u,
-            is_final ? handler : NULL,
-            is_final ? userdata : NULL);
-      });
 }
 
 int router_reply_parts (void *router,
@@ -658,6 +827,136 @@ napi_value create_subscribed_value (napi_env env,
     return obj;
 }
 
+int recv_message_value_retained (napi_env env,
+                                 void *sock,
+                                 int32_t flags,
+                                 bool dealer,
+                                 napi_value *out)
+{
+    if (!out) {
+        errno = EFAULT;
+        return ZLINK_RECV_INTERNAL_ERROR;
+    }
+    *out = NULL;
+    retained_hwm_budget_lease_owner_t *owner =
+      new (std::nothrow) retained_hwm_budget_lease_owner_t;
+    if (!owner) {
+        errno = ENOMEM;
+        return ZLINK_RECV_INTERNAL_ERROR;
+    }
+
+    zlink_routing_id_t routing_id;
+    copy_routing_id (&routing_id, NULL);
+    const zlink_routing_id_t *source_rid = NULL;
+    uint8_t message_type = 0;
+    uint64_t request_seq = 0;
+    zlink_msg_t first_part;
+    if (zlink_msg_init (&first_part) != 0) {
+        delete owner;
+        return ZLINK_RECV_INTERNAL_ERROR;
+    }
+    zlink_hwm_budget_lease_t *lease = NULL;
+    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
+    int rc = dealer
+      ? zlink_dealer_recv_part_with_hwm_budget_lease (
+          sock, &message_type, &request_seq, &first_part, &lease, &has_more,
+          static_cast<zlink_recv_flags_t> (flags))
+      : zlink_recv_part_with_hwm_budget_lease (
+          sock, &source_rid, &first_part, &lease, &has_more,
+          static_cast<zlink_recv_flags_t> (flags));
+    if (rc != ZLINK_RECV_OK) {
+        zlink_hwm_budget_lease_release (&lease);
+        zlink_msg_close (&first_part);
+        delete owner;
+        return rc;
+    }
+    if (!dealer)
+        copy_routing_id (&routing_id, source_rid);
+    const bool first_lease_adopted = owner->adopt (lease);
+    lease = NULL;
+
+    std::vector<zlink_msg_t> parts;
+    if (!first_lease_adopted || !append_msg_move (&parts, &first_part)) {
+        const int saved_errno = errno;
+        zlink_msg_close (&first_part);
+        close_msg_vector (parts);
+        delete owner;
+        errno = saved_errno == 0 ? ENOMEM : saved_errno;
+        return ZLINK_RECV_INTERNAL_ERROR;
+    }
+    while (has_more) {
+        zlink_msg_t next_part;
+        if (zlink_msg_init (&next_part) != 0) {
+            close_msg_vector (parts);
+            delete owner;
+            return ZLINK_RECV_INTERNAL_ERROR;
+        }
+        lease = NULL;
+        zlink_part_flag_t more = ZLINK_PART_FINAL;
+        if (dealer) {
+            uint8_t next_message_type = 0;
+            uint64_t next_request_seq = 0;
+            rc = zlink_dealer_recv_part_with_hwm_budget_lease (
+              sock, &next_message_type, &next_request_seq, &next_part, &lease,
+              &more, ZLINK_RECV_FLAGS_DONTWAIT);
+        } else {
+            const zlink_routing_id_t *next_source_rid = NULL;
+            rc = zlink_recv_part_with_hwm_budget_lease (
+              sock, &next_source_rid, &next_part, &lease, &more,
+              ZLINK_RECV_FLAGS_DONTWAIT);
+        }
+        if (rc != ZLINK_RECV_OK) {
+            const int saved_errno = errno;
+            zlink_hwm_budget_lease_release (&lease);
+            zlink_msg_close (&next_part);
+            close_msg_vector (parts);
+            delete owner;
+            errno = saved_errno;
+            return rc;
+        }
+        const bool lease_adopted = owner->adopt (lease);
+        lease = NULL;
+        if (!lease_adopted || !append_msg_move (&parts, &next_part)) {
+            const int saved_errno = errno;
+            zlink_msg_close (&next_part);
+            close_msg_vector (parts);
+            delete owner;
+            errno = saved_errno == 0 ? ENOMEM : saved_errno;
+            return ZLINK_RECV_INTERNAL_ERROR;
+        }
+        has_more = more;
+    }
+
+    napi_value envelope =
+      create_recv_message_value (env, routing_id, parts.data (), parts.size ());
+    close_msg_vector (parts);
+    if (!envelope) {
+        delete owner;
+        errno = ENOMEM;
+        return ZLINK_RECV_INTERNAL_ERROR;
+    }
+    if (dealer && request_seq != 0) {
+        napi_value request_seq_value;
+        if (napi_create_bigint_uint64 (env, request_seq, &request_seq_value)
+              != napi_ok
+            || napi_set_named_property (env, envelope, "requestSeq",
+                                        request_seq_value)
+                 != napi_ok) {
+            delete owner;
+            napi_throw_error (env, NULL,
+                              "retained dealer metadata allocation failed");
+            errno = ENOMEM;
+            return ZLINK_RECV_INTERNAL_ERROR;
+        }
+    }
+    if (!attach_retained_hwm_budget_lease_owner (env, envelope, &owner)) {
+        errno = ENOMEM;
+        return ZLINK_RECV_INTERNAL_ERROR;
+    }
+    *out = envelope;
+    return ZLINK_RECV_OK;
+}
+
 void stream_tsfn_finalize (napi_env env, void *finalize_data, void *finalize_hint)
 {
     (void) env;
@@ -680,37 +979,6 @@ void send_ready_handler_tsfn_finalize (napi_env env, void *finalize_data, void *
         return;
     std::lock_guard<std::mutex> lock (g_send_ready_handler_slots_mu);
     reset_send_ready_handler_slot_unsafe (state);
-}
-
-void completion_control_handler_tsfn_finalize (
-  napi_env env, void *finalize_data, void *finalize_hint)
-{
-    (void) env;
-    (void) finalize_hint;
-    completion_control_handler_js_state_t *state =
-      static_cast<completion_control_handler_js_state_t *> (finalize_data);
-    if (!state)
-        return;
-    {
-        std::lock_guard<std::mutex> lock (
-          g_completion_control_handler_slots_mu);
-        if (state->socket) {
-            std::unordered_map<
-              void *,
-              std::vector<completion_control_handler_js_state_t *> >::iterator
-              entry = g_completion_control_handler_states.find (state->socket);
-            if (entry != g_completion_control_handler_states.end ()) {
-                std::vector<completion_control_handler_js_state_t *> &states =
-                  entry->second;
-                states.erase (
-                  std::remove (states.begin (), states.end (), state),
-                  states.end ());
-                if (states.empty ())
-                    g_completion_control_handler_states.erase (entry);
-            }
-        }
-    }
-    delete state;
 }
 
 void socket_monitor_handler_tsfn_finalize (napi_env env, void *finalize_data, void *finalize_hint)
@@ -792,42 +1060,6 @@ void send_ready_handler_tsfn_call_js (napi_env env, napi_value js_cb, void *cont
     napi_value this_arg;
     napi_get_undefined (env, &this_arg);
     (void) napi_call_function (env, this_arg, js_cb, 0, NULL, &recv);
-}
-
-void completion_control_handler_tsfn_call_js (
-  napi_env env, napi_value js_cb, void *context, void *data)
-{
-    std::unique_ptr<completion_control_js_payload_t> payload (
-      static_cast<completion_control_js_payload_t *> (data));
-    (void) context;
-    if (!env || !js_cb || !payload)
-        return;
-
-    napi_value argv[2];
-    if (napi_create_buffer_copy (
-          env, payload->routing_id.size (),
-          payload->routing_id.empty () ? NULL : payload->routing_id.data (),
-          NULL, &argv[0])
-        != napi_ok)
-        return;
-    if (napi_create_array_with_length (env, payload->parts.size (), &argv[1])
-        != napi_ok)
-        return;
-    for (size_t i = 0; i < payload->parts.size (); ++i) {
-        napi_value part;
-        const std::vector<unsigned char> &bytes = payload->parts[i];
-        if (napi_create_buffer_copy (
-              env, bytes.size (), bytes.empty () ? NULL : bytes.data (), NULL,
-              &part)
-            != napi_ok)
-            return;
-        napi_set_element (env, argv[1], static_cast<uint32_t> (i), part);
-    }
-
-    napi_value recv;
-    napi_value this_arg;
-    napi_get_undefined (env, &this_arg);
-    (void) napi_call_function (env, this_arg, js_cb, 2, argv, &recv);
 }
 
 void socket_monitor_handler_tsfn_call_js (napi_env env, napi_value js_cb, void *context, void *data)
@@ -968,45 +1200,6 @@ template <size_t Slot> void send_ready_handler_slot_callback (void *subject_, vo
     }
 }
 
-void completion_control_handler_callback (
-  const zlink_routing_id_t *source_rid_, zlink_msg_t *parts_,
-  size_t part_count_, void *userdata_)
-{
-    completion_control_handler_js_state_t *state =
-      static_cast<completion_control_handler_js_state_t *> (userdata_);
-    napi_threadsafe_function tsfn = NULL;
-    {
-        std::lock_guard<std::mutex> lock (g_completion_control_handler_slots_mu);
-        if (state && state->tsfn)
-            tsfn = state->tsfn;
-    }
-
-    std::unique_ptr<completion_control_js_payload_t> payload;
-    if (tsfn && source_rid_ && parts_ && part_count_ > 0) {
-        payload.reset (new completion_control_js_payload_t ());
-        payload->routing_id.assign (
-          source_rid_->data, source_rid_->data + source_rid_->size);
-        payload->parts.reserve (part_count_);
-        for (size_t i = 0; i < part_count_; ++i) {
-            const size_t size = zlink_msg_size (&parts_[i]);
-            const unsigned char *data = static_cast<const unsigned char *> (
-              zlink_msg_data (&parts_[i]));
-            if (size == 0)
-                payload->parts.emplace_back ();
-            else
-                payload->parts.emplace_back (data, data + size);
-        }
-    }
-    if (parts_)
-        zlink_multipart_close (parts_, part_count_);
-
-    if (payload
-        && napi_call_threadsafe_function (
-             tsfn, payload.get (), napi_tsfn_nonblocking)
-             == napi_ok)
-        payload.release ();
-}
-
 #define SOCKET_MONITOR_HANDLER_SLOT_CALLBACK(N) &socket_monitor_handler_slot_callback<N>
 typedef void (*socket_monitor_handler_slot_callback_t) (const zlink_monitor_event_t *, void *);
 template <size_t Slot>
@@ -1083,53 +1276,6 @@ bool attach_send_ready_handler (napi_env env, void *socket, napi_value handler)
     return true;
 }
 
-bool attach_completion_control_handler (
-  napi_env env, void *socket, napi_value handler)
-{
-    completion_control_handler_js_state_t *state =
-      new completion_control_handler_js_state_t ();
-
-    napi_threadsafe_function tsfn = NULL;
-    if (!create_tsfn_slot_queue (
-          env, handler, state, "zlink-completion-control-handler",
-          completion_control_handler_tsfn_finalize,
-          completion_control_handler_tsfn_call_js,
-          "completionControlHandler failed to create callback queue", true,
-          &tsfn)) {
-        delete state;
-        return false;
-    }
-
-    state->socket = socket;
-    state->env = env;
-    state->tsfn = tsfn;
-
-    zlink_handler_result_t rc;
-    {
-        // Serialize replacement for one socket. The previous TSFN remains
-        // available until socket close so a Core callback already in flight
-        // can still enqueue the payload it accepted.
-        std::lock_guard<std::mutex> registration_lock (
-          g_completion_control_handler_registration_mu);
-        rc = zlink_router_completion_control_handler (
-          socket, completion_control_handler_callback, state);
-        if (rc == ZLINK_HANDLER_OK) {
-            std::lock_guard<std::mutex> state_lock (
-              g_completion_control_handler_slots_mu);
-            std::vector<completion_control_handler_js_state_t *> &states =
-              g_completion_control_handler_states[socket];
-            states.push_back (state);
-        }
-    }
-    if (rc != ZLINK_HANDLER_OK) {
-        state->socket = NULL;
-        (void) napi_release_threadsafe_function (tsfn, napi_tsfn_abort);
-        throw_last_error (env, "completionControlHandler failed");
-        return false;
-    }
-    return true;
-}
-
 bool attach_socket_monitor_handler (napi_env env, void *monitor, napi_value handler)
 {
     size_t slot_index = 0;
@@ -1179,29 +1325,6 @@ void release_socket_send_ready_handler_slot (void *socket)
     }
     if (tsfn)
         (void) napi_release_threadsafe_function (tsfn, napi_tsfn_abort);
-}
-
-void release_socket_completion_control_handler_slot (void *socket)
-{
-    std::vector<completion_control_handler_js_state_t *> states;
-    {
-        std::lock_guard<std::mutex> lock (
-          g_completion_control_handler_slots_mu);
-        std::unordered_map<
-          void *, std::vector<completion_control_handler_js_state_t *> >::iterator
-          entry = g_completion_control_handler_states.find (socket);
-        if (entry == g_completion_control_handler_states.end ())
-            return;
-        states.swap (entry->second);
-        g_completion_control_handler_states.erase (entry);
-        for (size_t i = 0; i < states.size (); ++i)
-            states[i]->socket = NULL;
-    }
-    for (size_t i = 0; i < states.size (); ++i) {
-        if (states[i]->tsfn)
-            (void) napi_release_threadsafe_function (
-              states[i]->tsfn, napi_tsfn_release);
-    }
 }
 
 void release_socket_monitor_handler_slot (void *monitor)
@@ -1973,6 +2096,118 @@ napi_value ctx_recalculate_auto_hwm (napi_env env, napi_callback_info info)
     return ok;
 }
 
+napi_value ctx_get_auto_hwm_budget_snapshot (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    void *ctx = NULL;
+    napi_get_value_external (env, argv[0], &ctx);
+    zlink_auto_hwm_budget_snapshot_t snapshot;
+    memset (&snapshot, 0, sizeof (snapshot));
+    snapshot.abi_version = ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1;
+    snapshot.struct_size = sizeof (snapshot);
+    const zlink_config_result_t rc =
+      zlink_ctx_get_auto_hwm_budget_snapshot (ctx, &snapshot);
+    if (rc != ZLINK_CONFIG_OK)
+        return throw_last_error (env, "ctx_get_auto_hwm_budget_snapshot failed");
+
+    napi_value out;
+    napi_create_object (env, &out);
+    set_uint32_property (env, out, "abiVersion", snapshot.abi_version);
+    set_uint32_property (env, out, "structSize", snapshot.struct_size);
+    set_uint64_bigint_property (env, out, "budgetGeneration", snapshot.budget_generation);
+    set_uint64_bigint_property (env, out, "measurementEpoch", snapshot.measurement_epoch);
+    set_uint64_bigint_property (env, out, "configuredMemoryLimitBytes",
+                                snapshot.configured_memory_limit_bytes);
+    set_uint64_bigint_property (env, out, "runtimeMemoryLimitBytes",
+                                snapshot.runtime_memory_limit_bytes);
+    set_uint64_bigint_property (env, out, "resolvedMemoryLimitBytes",
+                                snapshot.resolved_memory_limit_bytes);
+    set_uint64_bigint_property (env, out, "configuredCoreBudgetBytes",
+                                snapshot.configured_core_budget_bytes);
+    set_uint64_bigint_property (env, out, "effectiveCoreBudgetBytes",
+                                snapshot.effective_core_budget_bytes);
+    set_uint64_bigint_property (env, out, "totalPlannedHwmBytes",
+                                snapshot.total_planned_hwm_bytes);
+    set_uint64_bigint_property (env, out, "totalAppliedHwmBytes",
+                                snapshot.total_applied_hwm_bytes);
+    set_uint64_bigint_property (env, out, "manualReservedHwmBytes",
+                                snapshot.manual_reserved_hwm_bytes);
+    set_uint64_bigint_property (env, out, "coreQueueAccountedBytes",
+                                snapshot.core_queue_accounted_bytes);
+    set_uint64_bigint_property (env, out, "applicationAccountedBytes",
+                                snapshot.application_accounted_bytes);
+    set_uint64_bigint_property (env, out, "currentAccountedBytes",
+                                snapshot.current_accounted_bytes);
+    set_uint64_bigint_property (env, out, "provisionalAccountedBytes",
+                                snapshot.provisional_accounted_bytes);
+    set_uint64_bigint_property (env, out, "peakAccountedBytes",
+                                snapshot.peak_accounted_bytes);
+    set_uint64_bigint_property (env, out, "completionCurrentAccountedBytes",
+                                snapshot.completion_current_accounted_bytes);
+    set_uint64_bigint_property (env, out, "completionPeakAccountedBytes",
+                                snapshot.completion_peak_accounted_bytes);
+    set_uint64_bigint_property (env, out, "completionPendingMessageCount",
+                                snapshot.completion_pending_message_count);
+    set_uint64_bigint_property (env, out, "totalMessagingAccountedBytes",
+                                snapshot.total_messaging_accounted_bytes);
+    set_uint64_bigint_property (env, out, "monitorQueueAppliedHwmBytes",
+                                snapshot.monitor_queue_applied_hwm_bytes);
+    set_uint64_bigint_property (env, out, "monitorQueueAccountedBytes",
+                                snapshot.monitor_queue_accounted_bytes);
+    set_uint64_bigint_property (env, out, "totalInstanceAppliedHwmBytes",
+                                snapshot.total_instance_applied_hwm_bytes);
+    set_uint64_bigint_property (env, out, "totalInstanceAccountedBytes",
+                                snapshot.total_instance_accounted_bytes);
+    set_uint64_bigint_property (env, out, "oversizeAdmissionCount",
+                                snapshot.oversize_admission_count);
+    set_uint64_bigint_property (env, out, "largestOversizeMessageBytes",
+                                snapshot.largest_oversize_message_bytes);
+    set_uint64_bigint_property (env, out, "activeDirectionalQueueCount",
+                                snapshot.active_directional_queue_count);
+    set_uint64_bigint_property (env, out, "activeCompletionDirectionalQueueCount",
+                                snapshot.active_completion_directional_queue_count);
+    set_uint64_bigint_property (env, out, "activeSendQueueCount",
+                                snapshot.active_send_queue_count);
+    set_uint64_bigint_property (env, out, "activeReceiveQueueCount",
+                                snapshot.active_receive_queue_count);
+    set_uint64_bigint_property (env, out, "outstandingApplicationLeaseCount",
+                                snapshot.outstanding_application_lease_count);
+    set_uint64_bigint_property (env, out, "retiredQueueCount",
+                                snapshot.retired_queue_count);
+    set_uint64_bigint_property (env, out, "deferredOriginCreditBytes",
+                                snapshot.deferred_origin_credit_bytes);
+    set_uint64_bigint_property (env, out, "unlimitedManualQueueCount",
+                                snapshot.unlimited_manual_queue_count);
+    set_uint32_property (env, out, "blockedRatioPpm", snapshot.blocked_ratio_ppm);
+    set_uint32_property (env, out, "flags", snapshot.flags);
+    napi_value reserved;
+    napi_create_array_with_length (env, 8, &reserved);
+    for (uint32_t index = 0; index < 8; ++index) {
+        napi_value value;
+        napi_create_bigint_uint64 (env, snapshot.reserved_u64[index], &value);
+        napi_set_element (env, reserved, index, value);
+    }
+    napi_set_named_property (env, out, "reservedUInt64", reserved);
+    return out;
+}
+
+napi_value ctx_reset_auto_hwm_budget_metrics (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    void *ctx = NULL;
+    napi_get_value_external (env, argv[0], &ctx);
+    const zlink_config_result_t rc = zlink_ctx_reset_auto_hwm_budget_metrics (ctx);
+    if (rc != ZLINK_CONFIG_OK)
+        return throw_last_error (env, "ctx_reset_auto_hwm_budget_metrics failed");
+    napi_value ok;
+    napi_get_undefined (env, &ok);
+    return ok;
+}
+
 napi_value socket_new (napi_env env, napi_callback_info info)
 {
     napi_value argv[2];
@@ -2002,7 +2237,6 @@ napi_value socket_close (napi_env env, napi_callback_info info)
         return throw_last_error (env, "close failed");
     stream_release_slot (sock);
     release_socket_send_ready_handler_slot (sock);
-    release_socket_completion_control_handler_slot (sock);
     release_socket_request_dispatcher (sock);
     napi_value ok;
     napi_get_undefined (env, &ok);
@@ -2671,6 +2905,60 @@ napi_value socket_try_recv_message (napi_env env, napi_callback_info info)
     return out;
 }
 
+napi_value retained_recv_message (napi_env env,
+                                  napi_callback_info info,
+                                  bool dealer,
+                                  bool dontwait)
+{
+    napi_value argv[2];
+    size_t argc = 2;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    void *sock = NULL;
+    napi_get_value_external (env, argv[0], &sock);
+    int32_t flags = dontwait ? ZLINK_RECV_FLAGS_DONTWAIT
+                             : ZLINK_RECV_FLAGS_NONE;
+    if (!dontwait && argc >= 2)
+        napi_get_value_int32 (env, argv[1], &flags);
+
+    napi_value out = NULL;
+    const int rc = recv_message_value_retained (env, sock, flags, dealer, &out);
+    if (rc == ZLINK_RECV_OK)
+        return out;
+    bool exception_pending = false;
+    if (napi_is_exception_pending (env, &exception_pending) == napi_ok
+        && exception_pending)
+        return NULL;
+    if (dontwait && zlink_errno () == EAGAIN) {
+        napi_value none;
+        napi_get_null (env, &none);
+        return none;
+    }
+    return throw_last_error (
+      env, dealer ? "dealer retained recv failed" : "retained recv failed");
+}
+
+napi_value socket_recv_message_retained (napi_env env, napi_callback_info info)
+{
+    return retained_recv_message (env, info, false, false);
+}
+
+napi_value socket_try_recv_message_retained (napi_env env,
+                                             napi_callback_info info)
+{
+    return retained_recv_message (env, info, false, true);
+}
+
+napi_value dealer_recv_message_retained (napi_env env, napi_callback_info info)
+{
+    return retained_recv_message (env, info, true, false);
+}
+
+napi_value dealer_try_recv_message_retained (napi_env env,
+                                             napi_callback_info info)
+{
+    return retained_recv_message (env, info, true, true);
+}
+
 class subscribe_topic_buffer_t
 {
   public:
@@ -2792,6 +3080,104 @@ napi_value socket_try_subscribe_message (napi_env env, napi_callback_info info)
         return none;
     }
     return throw_last_error (env, "subscribeNoWait failed");
+}
+
+napi_value retained_subscribe_message (napi_env env,
+                                       napi_callback_info info,
+                                       bool dontwait)
+{
+    napi_value argv[2];
+    size_t argc = 2;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    void *sock = NULL;
+    napi_get_value_external (env, argv[0], &sock);
+    int32_t flags = dontwait ? ZLINK_RECV_FLAGS_DONTWAIT
+                             : ZLINK_RECV_FLAGS_NONE;
+    if (!dontwait && argc >= 2)
+        napi_get_value_int32 (env, argv[1], &flags);
+
+    subscribe_topic_buffer_t topic;
+    zlink_routing_id_t routing_id;
+    std::vector<zlink_msg_t> parts;
+    size_t topic_len = topic.size ();
+    retained_hwm_budget_lease_owner_t *owner =
+      new (std::nothrow) retained_hwm_budget_lease_owner_t;
+    if (!owner) {
+        errno = ENOMEM;
+        return throw_last_error (env, "retained subscribe failed");
+    }
+
+    for (;;) {
+        memset (&routing_id, 0, sizeof (routing_id));
+        const int rc = subscribe_parts_retained (
+          sock, &routing_id, topic.data (), topic.size (), &topic_len, &parts,
+          owner, flags);
+        if (rc == ZLINK_RECV_OK) {
+            napi_value out = create_subscribed_value (
+              env, routing_id, topic.data (), topic_len, parts.data (),
+              parts.size ());
+            close_msg_vector (parts);
+            if (!out) {
+                delete owner;
+                return NULL;
+            }
+            if (!attach_retained_hwm_budget_lease_owner (env, out, &owner))
+                return NULL;
+            return out;
+        }
+        const int saved_errno = zlink_errno ();
+        if (dontwait && saved_errno == EAGAIN) {
+            delete owner;
+            napi_value none;
+            napi_get_null (env, &none);
+            return none;
+        }
+        if (saved_errno != ENOBUFS && saved_errno != EMSGSIZE) {
+            delete owner;
+            errno = saved_errno;
+            return throw_last_error (env, "retained subscribe failed");
+        }
+        delete owner;
+        owner = new (std::nothrow) retained_hwm_budget_lease_owner_t;
+        if (!owner) {
+            errno = ENOMEM;
+            return throw_last_error (env, "retained subscribe failed");
+        }
+        topic.resize (topic_len);
+    }
+}
+
+napi_value socket_subscribe_message_retained (napi_env env,
+                                              napi_callback_info info)
+{
+    return retained_subscribe_message (env, info, false);
+}
+
+napi_value socket_try_subscribe_message_retained (napi_env env,
+                                                  napi_callback_info info)
+{
+    return retained_subscribe_message (env, info, true);
+}
+
+napi_value hwm_budget_lease_release (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    retained_hwm_budget_lease_owner_t *owner = NULL;
+    if (argc < 1
+        || napi_get_value_external (
+             env, argv[0], reinterpret_cast<void **> (&owner))
+             != napi_ok
+        || !owner) {
+        napi_throw_type_error (env, NULL,
+                               "invalid retained HWM-credit owner");
+        return NULL;
+    }
+    owner->release_all ();
+    napi_value out;
+    napi_get_undefined (env, &out);
+    return out;
 }
 
 napi_value socket_send_ready_handler (napi_env env, napi_callback_info info)
@@ -3115,151 +3501,6 @@ napi_value handle_get_routing_id (napi_env env, napi_callback_info info)
     return create_routing_id_value (env, routing_id);
 }
 
-napi_value dealer_request (napi_env env, napi_callback_info info)
-{
-    napi_value argv[5];
-    size_t argc = 5;
-    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
-    if (argc < 5) {
-        napi_throw_type_error (env, NULL,
-                               "dealerRequest requires (socket, parts, handler, flags, timeoutMs)");
-        return NULL;
-    }
-    void *dealer = NULL;
-    napi_get_value_external (env, argv[0], &dealer);
-    std::vector<zlink_msg_t> parts;
-    if (!build_msg_vector_or_single (env, argv[1], &parts))
-        return NULL;
-    int32_t flags = 0;
-    napi_get_value_int32 (env, argv[3], &flags);
-    int32_t timeout_ms = 0;
-    napi_get_value_int32 (env, argv[4], &timeout_ms);
-    uint64_t token = 0;
-    if (!get_uint64_like (env, argv[2], &token))
-        return NULL;
-    request_js_state_t *state = create_core_request_js_state (env, dealer, token);
-    if (!state) {
-        close_msg_vector (parts);
-        return NULL;
-    }
-    int rc = dealer_request_parts (
-      dealer, parts.data (), parts.size (), request_reply_callback_trampoline, state,
-      static_cast<zlink_send_flags_t> (flags), static_cast<uint32_t> (timeout_ms));
-    if (rc != ZLINK_SUBMIT_OK) {
-        abort_request_js_state (state);
-        return throw_last_error (env, "dealerRequest failed");
-    }
-    consume_native_message_value (env, argv[1]);
-    napi_value ok;
-    napi_get_undefined (env, &ok);
-    return ok;
-}
-
-napi_value router_request (napi_env env, napi_callback_info info)
-{
-    napi_value argv[6];
-    size_t argc = 6;
-    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
-    if (argc < 6) {
-        napi_throw_type_error (
-          env, NULL,
-          "routerRequest requires (socket, routingId, parts, handler, flags, timeoutMs)");
-        return NULL;
-    }
-    void *router = NULL;
-    napi_get_value_external (env, argv[0], &router);
-    zlink_routing_id_t peer_rid;
-    if (!parse_routing_id_value (env, argv[1], &peer_rid))
-        return NULL;
-    std::vector<zlink_msg_t> parts;
-    if (!build_msg_vector_or_single (env, argv[2], &parts))
-        return NULL;
-    napi_valuetype handler_type = napi_undefined;
-    napi_typeof (env, argv[3], &handler_type);
-    uint64_t token = 0;
-    if (!get_uint64_like (env, argv[3], &token)) {
-        close_msg_vector (parts);
-        return NULL;
-    }
-    int32_t flags = 0;
-    napi_get_value_int32 (env, argv[4], &flags);
-    int32_t timeout_ms = 0;
-    napi_get_value_int32 (env, argv[5], &timeout_ms);
-    request_js_state_t *state = create_core_request_js_state (env, router, token);
-    if (!state) {
-        close_msg_vector (parts);
-        return NULL;
-    }
-    int rc = router_request_parts (
-      router, &peer_rid, parts.data (), parts.size (), request_reply_callback_trampoline, state,
-      static_cast<zlink_send_flags_t> (flags), static_cast<uint32_t> (timeout_ms));
-    if (rc != ZLINK_SUBMIT_OK) {
-        abort_request_js_state (state);
-        return throw_last_error (env, "routerRequest failed");
-    }
-    consume_native_message_value (env, argv[2]);
-    napi_value ok;
-    napi_get_undefined (env, &ok);
-    return ok;
-}
-
-napi_value router_request_transport_pair (napi_env env, napi_callback_info info)
-{
-    napi_value argv[8];
-    size_t argc = 8;
-    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
-    if (argc < 8) {
-        napi_throw_type_error (
-          env, NULL,
-          "routerRequestTransportPair requires (socket, routingId, pairId, pairGeneration, parts, handler, flags, timeoutMs)");
-        return NULL;
-    }
-    void *router = NULL;
-    napi_get_value_external (env, argv[0], &router);
-    zlink_routing_id_t peer_rid;
-    if (!parse_routing_id_value (env, argv[1], &peer_rid))
-        return NULL;
-    uint64_t pair_id = 0;
-    uint64_t pair_generation = 0;
-    if (!get_uint64_like (env, argv[2], &pair_id)
-        || !get_uint64_like (env, argv[3], &pair_generation)
-        || pair_id == 0 || pair_generation == 0) {
-        napi_throw_type_error (env, NULL, "transport pair identity must be non-zero uint64 values");
-        return NULL;
-    }
-    std::vector<zlink_msg_t> parts;
-    if (!build_msg_vector_or_single (env, argv[4], &parts))
-        return NULL;
-    napi_valuetype handler_type = napi_undefined;
-    napi_typeof (env, argv[5], &handler_type);
-    uint64_t token = 0;
-    if (!get_uint64_like (env, argv[5], &token)) {
-        close_msg_vector (parts);
-        return NULL;
-    }
-    int32_t flags = 0;
-    int32_t timeout_ms = 0;
-    napi_get_value_int32 (env, argv[6], &flags);
-    napi_get_value_int32 (env, argv[7], &timeout_ms);
-    request_js_state_t *state = create_core_request_js_state (env, router, token);
-    if (!state) {
-        close_msg_vector (parts);
-        return NULL;
-    }
-    int rc = router_request_transport_pair_parts (
-      router, &peer_rid, pair_id, pair_generation, parts.data (), parts.size (),
-      request_reply_callback_trampoline, state,
-      static_cast<zlink_send_flags_t> (flags), static_cast<uint32_t> (timeout_ms));
-    if (rc != ZLINK_SUBMIT_OK) {
-        abort_request_js_state (state);
-        return throw_last_error (env, "routerRequestTransportPair failed");
-    }
-    consume_native_message_value (env, argv[4]);
-    napi_value ok;
-    napi_get_undefined (env, &ok);
-    return ok;
-}
-
 napi_value router_send_transport_pair (napi_env env, napi_callback_info info)
 {
     napi_value argv[6];
@@ -3350,121 +3591,6 @@ napi_value router_reply (napi_env env, napi_callback_info info)
     return ok;
 }
 
-napi_value router_try_send_completion_control (
-  napi_env env, napi_callback_info info)
-{
-    napi_value argv[3];
-    size_t argc = 3;
-    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
-    if (argc < 3) {
-        napi_throw_type_error (
-          env, NULL,
-          "routerTrySendCompletionControl requires (socket, routingId, parts)");
-        return NULL;
-    }
-    void *router = NULL;
-    napi_get_value_external (env, argv[0], &router);
-    zlink_routing_id_t peer_rid;
-    if (!parse_routing_id_value (env, argv[1], &peer_rid))
-        return NULL;
-    std::vector<zlink_msg_t> parts;
-    if (!build_msg_vector_or_single (env, argv[2], &parts))
-        return NULL;
-    if (parts.empty ()) {
-        napi_throw_range_error (env, NULL, "parts must not be empty");
-        return NULL;
-    }
-
-    int rc = submit_msg_parts (
-      parts.data (), parts.size (),
-      [&] (zlink_msg_t *part_, zlink_part_flag_t part_flag_, bool) {
-          return zlink_router_completion_control_part (
-            router, &peer_rid, part_, part_flag_);
-      });
-    parts.clear ();
-    if (rc != ZLINK_SUBMIT_OK && rc != ZLINK_SUBMIT_BACKPRESSURED)
-        return throw_last_error (env, "routerTrySendCompletionControl failed");
-
-    napi_value result;
-    napi_get_boolean (env, rc == ZLINK_SUBMIT_OK, &result);
-    return result;
-}
-
-napi_value router_try_send_completion_control_transport_pair (
-  napi_env env, napi_callback_info info)
-{
-    napi_value argv[5];
-    size_t argc = 5;
-    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
-    if (argc < 5) {
-        napi_throw_type_error (env, NULL,
-          "routerTrySendCompletionControlTransportPair requires (socket, routingId, pairId, pairGeneration, parts)");
-        return NULL;
-    }
-    void *router = NULL;
-    napi_get_value_external (env, argv[0], &router);
-    zlink_routing_id_t peer_rid;
-    if (!parse_routing_id_value (env, argv[1], &peer_rid))
-        return NULL;
-    uint64_t pair_id = 0;
-    uint64_t pair_generation = 0;
-    if (!get_uint64_like (env, argv[2], &pair_id)
-        || !get_uint64_like (env, argv[3], &pair_generation)
-        || pair_id == 0 || pair_generation == 0) {
-        napi_throw_type_error (env, NULL, "transport pair identity must be non-zero uint64 values");
-        return NULL;
-    }
-    std::vector<zlink_msg_t> parts;
-    if (!build_msg_vector_or_single (env, argv[4], &parts))
-        return NULL;
-    if (parts.empty ()) {
-        napi_throw_range_error (env, NULL, "parts must not be empty");
-        return NULL;
-    }
-    int rc = submit_msg_parts (
-      parts.data (), parts.size (),
-      [router, &peer_rid, pair_id, pair_generation] (
-        zlink_msg_t *part, zlink_part_flag_t part_flag, bool) {
-          return zlink_router_completion_control_transport_pair_part (
-            router, &peer_rid, pair_id, pair_generation, part, part_flag);
-      });
-    parts.clear ();
-    if (rc != ZLINK_SUBMIT_OK && rc != ZLINK_SUBMIT_BACKPRESSURED)
-        return throw_last_error (env, "routerTrySendCompletionControlTransportPair failed");
-    napi_value result;
-    napi_get_boolean (env, rc == ZLINK_SUBMIT_OK, &result);
-    return result;
-}
-
-napi_value router_completion_control_handler (
-  napi_env env, napi_callback_info info)
-{
-    napi_value argv[2];
-    size_t argc = 2;
-    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
-    if (argc < 2) {
-        napi_throw_type_error (
-          env, NULL,
-          "routerCompletionControlHandler requires (socket, handler)");
-        return NULL;
-    }
-    void *router = NULL;
-    napi_get_value_external (env, argv[0], &router);
-    napi_valuetype handler_type = napi_undefined;
-    napi_typeof (env, argv[1], &handler_type);
-    if (handler_type != napi_function) {
-        napi_throw_type_error (
-          env, NULL,
-          "routerCompletionControlHandler handler must be a function");
-        return NULL;
-    }
-    if (!attach_completion_control_handler (env, router, argv[1]))
-        return NULL;
-    napi_value ok;
-    napi_get_undefined (env, &ok);
-    return ok;
-}
-
 napi_value router_recv_message (napi_env env, napi_callback_info info)
 {
     napi_value argv[2];
@@ -3525,17 +3651,94 @@ napi_value router_try_recv_message (napi_env env, napi_callback_info info)
     return out;
 }
 
-napi_value monitor_open (napi_env env, napi_callback_info info)
+napi_value retained_router_recv_message (napi_env env,
+                                         napi_callback_info info,
+                                         bool dontwait)
 {
     napi_value argv[2];
     size_t argc = 2;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    void *router = NULL;
+    napi_get_value_external (env, argv[0], &router);
+    int32_t flags = dontwait ? ZLINK_RECV_FLAGS_DONTWAIT
+                             : ZLINK_RECV_FLAGS_NONE;
+    if (!dontwait && argc >= 2)
+        napi_get_value_int32 (env, argv[1], &flags);
+
+    retained_hwm_budget_lease_owner_t *owner =
+      new (std::nothrow) retained_hwm_budget_lease_owner_t;
+    if (!owner) {
+        errno = ENOMEM;
+        return throw_last_error (env, "retained router recv failed");
+    }
+    zlink_routing_id_t peer_rid;
+    uint64_t request_seq = 0;
+    uint64_t transport_pair_id = 0;
+    uint64_t transport_pair_generation = 0;
+    std::vector<zlink_msg_t> parts;
+    const int rc = router_recv_parts_retained (
+      router, &peer_rid, &request_seq, &parts, owner, flags,
+      &transport_pair_id, &transport_pair_generation);
+    if (rc != ZLINK_RECV_OK) {
+        const int saved_errno = zlink_errno ();
+        delete owner;
+        if (dontwait && saved_errno == EAGAIN) {
+            napi_value none;
+            napi_get_null (env, &none);
+            return none;
+        }
+        errno = saved_errno;
+        return throw_last_error (env, "retained router recv failed");
+    }
+
+    napi_value out = create_router_recv_message_value (
+      env, peer_rid, request_seq, transport_pair_id,
+      transport_pair_generation, parts.data (), parts.size ());
+    close_msg_vector (parts);
+    if (!out) {
+        delete owner;
+        return NULL;
+    }
+    if (!attach_retained_hwm_budget_lease_owner (env, out, &owner))
+        return NULL;
+    return out;
+}
+
+napi_value router_recv_message_retained (napi_env env,
+                                         napi_callback_info info)
+{
+    return retained_router_recv_message (env, info, false);
+}
+
+napi_value router_try_recv_message_retained (napi_env env,
+                                             napi_callback_info info)
+{
+    return retained_router_recv_message (env, info, true);
+}
+
+napi_value monitor_open (napi_env env, napi_callback_info info)
+{
+    napi_value argv[3];
+    size_t argc = 3;
     napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
     void *sock = NULL;
     napi_get_value_external (env, argv[0], &sock);
     int32_t events = 0;
     napi_get_value_int32 (env, argv[1], &events);
-    zlink_socket_monitor_open_options_t options;
+    uint64_t monitor_hwm_bytes = 0;
+    bool monitor_hwm_lossless = false;
+    if (argc < 3
+        || napi_get_value_bigint_uint64 (
+             env, argv[2], &monitor_hwm_bytes, &monitor_hwm_lossless)
+             != napi_ok
+        || !monitor_hwm_lossless) {
+        napi_throw_type_error (
+          env, NULL, "monitorHwmBytes must be a lossless uint64 bigint");
+        return NULL;
+    }
+    zlink_socket_monitor_open_options_t options{};
     options.events = static_cast<zlink_socket_monitor_event_mask_t> (events);
+    options.monitor_hwm_bytes = monitor_hwm_bytes;
     void *mon = zlink_socket_monitor_open (sock, &options);
     if (!mon)
         return throw_last_error (env, "monitor_open failed");

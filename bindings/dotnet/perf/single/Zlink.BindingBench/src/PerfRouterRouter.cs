@@ -37,7 +37,7 @@ internal static class PerfRouterRouter
         }
     }
 
-    internal static int RunRouterRouter(string transport, int size)
+    internal static async Task<int> RunRouterRouter(string transport, int size)
     {
         int durationSeconds = ResolveSingleDurationSeconds();
         int recvTimeoutMs = ResolveSingleRcvTimeoutMs();
@@ -50,7 +50,6 @@ internal static class PerfRouterRouter
         using var sender = ctx.CreateRouterSocket();
         ApplySingleSocketOptions(receiver);
         ApplySingleSocketOptions(sender);
-        ApplySingleAutoHwmMsgUnit(ctx, size);
         RecalculateSingleAutoHwm(ctx);
         ConfigureTlsServerIfNeeded(receiver, transport);
         ConfigureTlsClientIfNeeded(sender, transport);
@@ -80,8 +79,9 @@ internal static class PerfRouterRouter
                 return 2;
             }
 
-            if (!CompleteHandshake(sender, receiver, readyTimeoutMs,
-                    out RoutingId targetRoutingId))
+            var handshake = await CompleteHandshakeAsync(sender, receiver,
+                readyTimeoutMs).ConfigureAwait(false);
+            if (!handshake.Ok)
             {
                 TryCleanup(sender, receiver, endpoint);
                 DebugLog("single_router_router_error:route_probe_failed");
@@ -105,18 +105,19 @@ internal static class PerfRouterRouter
             var payload = new byte[payloadSize];
             Array.Fill(payload, (byte)'a');
 
-            if (!RunActivePhase(sender, receiver, targetRoutingId, payload,
-                    size, durationSeconds, recvTimeoutMs, latencySampleCap,
-                    out long received,
-                    out var latencySamples))
+            var active = await RunActivePhaseAsync(sender, receiver,
+                handshake.TargetRoutingId, payload, size, durationSeconds,
+                recvTimeoutMs, latencySampleCap).ConfigureAwait(false);
+            if (!active.Ok)
             {
                 DebugLog("single_router_router_error:active_failed");
                 TryCleanup(sender, receiver, endpoint);
                 return 2;
             }
 
-            double throughput = received / (double)Math.Max(durationSeconds, 1);
-            var latency = ComputeLatencyStats(latencySamples);
+            double throughput = active.Received
+                / (double)Math.Max(durationSeconds, 1);
+            var latency = ComputeLatencyStats(active.LatencySamples);
             PrintResult("ROUTER_ROUTER", transport, size, throughput,
                 latency.mean, latency.p95, latency.p99);
             TryCleanup(sender, receiver, endpoint);
@@ -135,12 +136,12 @@ internal static class PerfRouterRouter
         }
     }
 
-    private static bool CompleteHandshake(IRouterSocket sender,
-        IRouterSocket receiver, int timeoutMs, out RoutingId targetRoutingId)
+    private static async Task<(bool Ok, RoutingId TargetRoutingId)>
+        CompleteHandshakeAsync(IRouterSocket sender, IRouterSocket receiver,
+            int timeoutMs)
     {
-        targetRoutingId = ReceiverRoutingId;
-        ReadOnlySpan<byte> ping = "PING"u8;
-        ReadOnlySpan<byte> pong = "PONG"u8;
+        byte[] ping = "PING"u8.ToArray();
+        byte[] pong = "PONG"u8.ToArray();
         RoutingId? senderActualRoutingId = null;
 
         using var poller = Zlink.CreatePoller();
@@ -152,8 +153,8 @@ internal static class PerfRouterRouter
         {
             try
             {
-                _ = PerfSocketIo.Send(sender, ReceiverRoutingId, ping,
-                    SendFlags.DontWait);
+                _ = await PerfSocketIo.SendAsync(sender, ReceiverRoutingId,
+                    ping, SendFlags.DontWait).ConfigureAwait(false);
             }
             catch (ZlinkException ex)
                 when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
@@ -180,19 +181,20 @@ internal static class PerfRouterRouter
         }
 
         if (senderActualRoutingId == null)
-            return false;
+            return (false, ReceiverRoutingId);
 
         try
         {
-            if (PerfSocketIo.Send(receiver, senderActualRoutingId.Value, pong,
-                    SendFlags.None) == 0)
-                return false;
+            if (await PerfSocketIo.SendAsync(receiver,
+                    senderActualRoutingId.Value, pong, SendFlags.None)
+                    .ConfigureAwait(false) == 0)
+                return (false, ReceiverRoutingId);
         }
         catch (ZlinkException ex)
             when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
                   || IsTransientNetworkError(ex.NativeErrno))
         {
-            return false;
+            return (false, ReceiverRoutingId);
         }
 
         using var senderPoller = Zlink.CreatePoller();
@@ -212,18 +214,18 @@ internal static class PerfRouterRouter
                 if (response.RoutingId == null || !IsPayload(response, pong))
                     continue;
 
-                targetRoutingId = response.RoutingId.Value;
-                return true;
+                return (true, response.RoutingId.Value);
             }
         }
 
-        return false;
+        return (false, ReceiverRoutingId);
     }
 
-    private static bool RunActivePhase(IRouterSocket sender, IRouterSocket receiver,
+    private static async Task<(bool Ok, long Received,
+        List<double> LatencySamples)> RunActivePhaseAsync(IRouterSocket sender,
+        IRouterSocket receiver,
         RoutingId targetRoutingId, byte[] payload, int msgSize,
-        int durationSeconds, int recvTimeoutMs, int latencyCap,
-        out long receivedOut, out List<double> latencySamples)
+        int durationSeconds, int recvTimeoutMs, int latencyCap)
     {
         _ = recvTimeoutMs;
         long received = 0;
@@ -269,7 +271,7 @@ internal static class PerfRouterRouter
         // PERF_SINGLE_TEST_POLICY § 1.4: sender drops `senderDone` flag.
         // After active deadline it emits the wire-level stop token; the
         // receiver loop exits when it sees the token.
-        var senderThread = new Thread(() =>
+        async Task SendLoopAsync()
         {
             try
             {
@@ -288,8 +290,9 @@ internal static class PerfRouterRouter
                     seq++;
                     try
                     {
-                        if (PerfSocketIo.Send(sender, targetRoutingId, payload,
-                                SendFlags.None) == 0)
+                        if (await PerfSocketIo.SendAsync(sender,
+                                targetRoutingId, payload, SendFlags.None)
+                                .ConfigureAwait(false) == 0)
                             continue;
                     }
                     catch (ZlinkException ex)
@@ -314,16 +317,16 @@ internal static class PerfRouterRouter
             {
                 // Always emit the stop token so the receiver loop exits
                 // even on send failures during the active phase.
-                if (!SendRoutedStopTokenBlocking(sender, targetRoutingId,
-                        "[single-router-router]"))
+                if (!await SendRoutedStopTokenAsync(sender, targetRoutingId,
+                        "[single-router-router]").ConfigureAwait(false))
                 {
                     sendError ??= new TimeoutException(
                         "router-router stop token was not sent");
                 }
             }
-        });
-        senderThread.IsBackground = true;
-        senderThread.Start();
+        }
+
+        Task senderTask = SendLoopAsync();
 
         // PERF_SINGLE_TEST_POLICY § 1.4: blocking first recv per cycle, then
         // DontWait burst-drain. The phase ends purely when the wire-level stop
@@ -346,17 +349,15 @@ internal static class PerfRouterRouter
             }
         }
 
-        senderThread.Join();
+        await senderTask.ConfigureAwait(false);
 
-        latencySamples = samples;
-        receivedOut = received;
         if (sendError != null)
         {
             DebugLog("single_router_router_error:send_failed");
-            return false;
+            return (false, received, samples);
         }
 
-        return received > 0 && latencySamples.Count > 0;
+        return (received > 0 && samples.Count > 0, received, samples);
     }
 
     private static bool TryReceive(IRouterSocket receiver, Received result)

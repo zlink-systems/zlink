@@ -16,7 +16,6 @@ fn main() {
     };
 
     let ctx = common::perf_context();
-    common::apply_single_auto_hwm_msg_unit(&ctx, config.size);
     let router = ctx.router_socket().expect("router");
     let dealer = ctx.dealer_socket().expect("dealer");
     let rid = RoutingId::from(b"perf-dealer");
@@ -56,11 +55,13 @@ fn main() {
     let ready_timeout = common::resolve_single_ready_timeout();
     common::wait_monitor_ready(&mut router_mon, ready_timeout, "dealer-router router");
     common::wait_monitor_ready(&mut mon, ready_timeout, "dealer-router dealer");
-    dealer
-        .send()
-        .message(Message::try_from(b"PING").expect("dealer ping"))
-        .submit()
-        .expect("dealer handshake send");
+    common::block_on(
+        dealer
+            .send()
+            .message(Message::try_from(b"PING").expect("dealer ping"))
+            .submit(),
+    )
+    .expect("dealer handshake send");
     let mut handshake = zlink::Received::empty();
     if let Err(err) = router.recv(&mut handshake, zlink::RecvFlags::NONE) {
         panic!("router handshake recv: {err}");
@@ -70,11 +71,13 @@ fn main() {
         .expect("router handshake rid")
         .clone();
     assert_eq!(handshake.parts()[0].as_bytes(), b"PING");
-    router
-        .send(&reply_rid)
-        .message(Message::try_from(b"PONG").expect("router pong"))
-        .submit()
-        .expect("router handshake reply");
+    common::block_on(
+        router
+            .send(&reply_rid)
+            .message(Message::try_from(b"PONG").expect("router pong"))
+            .submit(),
+    )
+    .expect("router handshake reply");
     let mut handshake_reply = zlink::Received::empty();
     if let Err(err) = dealer.recv(&mut handshake_reply, zlink::RecvFlags::NONE) {
         panic!("dealer handshake recv: {err}");
@@ -86,18 +89,17 @@ fn main() {
     let active = Duration::from_secs(config.duration_seconds);
     let active_deadline = std::time::Instant::now() + active;
     let send_thread = std::thread::spawn(move || {
-        common::send_loop(
-            active_deadline,
-            config.size,
-            common::PHASE_ACTIVE,
-            |msg| match dealer.send().message(msg).submit() {
-                Ok(sent) => sent,
+        common::send_loop(active_deadline, config.size, common::PHASE_ACTIVE, |msg| {
+            match common::block_on(dealer.send().message(msg).submit()) {
+                Ok(()) => true,
                 Err(err) if err.code() == SubmitResult::NotConnected => false,
                 Err(err) if common::is_single_send_retry_error(&err) => false,
                 Err(err) => panic!("active send: {err}"),
-            },
-        );
-        common::send_stop_token(|msg| dealer.send().message(msg).submit());
+            }
+        });
+        common::send_stop_token(|msg| {
+            common::block_on(dealer.send().message(msg).submit()).map(|()| true)
+        });
     });
 
     let mut received = Received::empty();

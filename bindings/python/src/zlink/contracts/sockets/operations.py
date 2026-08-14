@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 
-from typing import Protocol, runtime_checkable
+from typing import Awaitable, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -15,13 +15,16 @@ class _FluentMessageOp(Protocol):
         """Add payload parts in order; successful submission consumes them."""
         ...
 
+
+@runtime_checkable
+class _FlaggedFluentMessageOp(_FluentMessageOp, Protocol):
     def flags(self, flags):
         """Set the send flags used by submission."""
         ...
 
 
 @runtime_checkable
-class SendOp(_FluentMessageOp, Protocol):
+class SendOp(_FlaggedFluentMessageOp, Protocol):
     """Build and submit a multipart send."""
 
     def submit(self):
@@ -30,33 +33,29 @@ class SendOp(_FluentMessageOp, Protocol):
 
 
 @runtime_checkable
+class RoutedSendOp(_FluentMessageOp, Protocol):
+    """Build an HWM-managed DEALER or ROUTER send."""
+
+    def submit(self) -> Awaitable[None]:
+        """Return the coroutine that completes after exact-target admission."""
+        ...
+
+
+@runtime_checkable
 class RequestOp(_FluentMessageOp, Protocol):
-    """Build a request and deliver its reply to a callback."""
+    """Build an HWM-managed routed request."""
 
     def timeout(self, timeout):
         """Set the reply timeout."""
         ...
 
-    def submit(self, callback):
-        """Submit the request and deliver the reply to ``callback``."""
+    def submit(self) -> Awaitable[list]:
+        """Return the coroutine that completes with the reply parts."""
         ...
 
 
 @runtime_checkable
-class RequestCallbackOp(_FluentMessageOp, Protocol):
-    """Request builder stage used after send flags have been selected."""
-
-    def timeout(self, timeout):
-        """Set the reply timeout."""
-        ...
-
-    def submit(self, callback):
-        """Submit the request and deliver the reply to ``callback``."""
-        ...
-
-
-@runtime_checkable
-class ReplyOp(_FluentMessageOp, Protocol):
+class ReplyOp(_FlaggedFluentMessageOp, Protocol):
     """Build and submit a reply."""
 
     def submit(self):
@@ -64,4 +63,4 @@ class ReplyOp(_FluentMessageOp, Protocol):
         ...
 
 
-__all__ = ["ReplyOp", "RequestCallbackOp", "RequestOp", "SendOp"]
+__all__ = ["ReplyOp", "RequestOp", "RoutedSendOp", "SendOp"]

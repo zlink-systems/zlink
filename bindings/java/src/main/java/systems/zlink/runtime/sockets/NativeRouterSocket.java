@@ -10,29 +10,19 @@ import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.ReplyOperation;
 import systems.zlink.contracts.messaging.RequestOperation;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.messaging.SendOperation;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.messaging.RoutedSendOperation;
 import systems.zlink.internal.ContractAccess;
 import systems.zlink.runtime.messaging.MessageOperations;
 import systems.zlink.runtime.nativeapi.InternalAccess;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
-import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
-import systems.zlink.runtime.nativeapi.Native;
-import systems.zlink.runtime.nativeapi.NativeLayouts;
-import systems.zlink.runtime.nativeapi.MessagePartsBuffer;
-import systems.zlink.runtime.nativeapi.NativeRoutingIds;
-import java.util.concurrent.CompletableFuture;
+import systems.zlink.internal.sockets.SocketOptions;
 
 final class NativeRouterSocket extends NativeSocketBase implements RouterSocket {
-    private static final boolean DEBUG_REQREP =
-      Boolean.getBoolean("zlink.reqrep.debug");
     private final RouterSocketOptions options = ContractAccess.routerSocketOptions(this);
+    private final OutboundRecordAttemptGate outboundRecordAttempts =
+        new OutboundRecordAttemptGate();
+    private final RoutedAdmission routedAdmission;
     private final Object routedRequests =
       InternalAccess.routerReceiveSupport(this, false);
     private final ContractAccess.RoutedSingleSendInvoker receivedSingleSender =
@@ -42,6 +32,16 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
 
     NativeRouterSocket(Context ctx) {
         super(ctx, SocketType.ROUTER);
+        try {
+            routedAdmission = new RoutedAdmission(handle(), false,
+                outboundRecordAttempts);
+        } catch (RuntimeException error) {
+            try {
+                runtime().close();
+            } catch (RuntimeException ignored) {
+            }
+            throw error;
+        }
     }
 
     public void bind(String endpoint) { runtime().bind(endpoint); }
@@ -59,22 +59,24 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
     public void setRoutingId(RoutingId rid) { runtime().setRoutingId(rid); }
     public RoutingId getRoutingId() { return runtime().getRoutingId(); }
 
-    public SendOperation send(RoutingId rid) {
-        return MessageOperations.send(
-            (part, flags) -> sendInternal(rid, part, flags),
-            (parts, flags) -> sendInternal(rid, parts, flags));
+    public RoutedSendOperation send(RoutingId rid) {
+        Objects.requireNonNull(rid, "rid");
+        return MessageOperations.routedSend(parts -> routedAdmission.send(
+            rid, parts, runtime().getOption(SocketOptions.SNDTIMEO)));
     }
 
     private boolean sendInternal(RoutingId rid, Message part, SendFlags flags) {
-        return runtime().send(rid, part, SendFlag.fromValue(flags.value()));
+        return outboundRecordAttempts.call(() -> runtime().send(rid, part,
+            SendFlag.fromValue(flags.value())));
     }
     private boolean sendInternal(RoutingId rid, List<Message> parts, SendFlags flags) {
-        return runtime().send(rid, parts, SendFlag.fromValue(flags.value()));
+        return outboundRecordAttempts.call(() -> runtime().send(rid, parts,
+            SendFlag.fromValue(flags.value())));
     }
     private boolean sendReceivedSingle(byte[] routingIdBytes, Message part,
                                        SendFlags flags) {
-        return runtime().send(routingIdBytes, part,
-            SendFlag.fromValue(flags.value()));
+        return outboundRecordAttempts.call(() -> runtime().send(
+            routingIdBytes, part, SendFlag.fromValue(flags.value())));
     }
     private boolean sendReceivedMultipart(byte[] routingIdBytes,
                                           List<Message> parts,
@@ -99,6 +101,15 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
         return true;
     }
 
+    public boolean recvRetained(Received result, RecvFlags flags) {
+        Objects.requireNonNull(result, "result");
+        Objects.requireNonNull(flags, "flags");
+        boolean ok = InternalAccess.routerRecvRetainedInto(routedRequests,
+            result, flags);
+        if (ok) attachSendSender(result);
+        return ok;
+    }
+
     void attachSendSender(Received result) {
         if (ContractAccess.receivedHasRoutingIdBytes(result)) {
             ContractAccess.receivedSetRoutedSenders(result,
@@ -115,10 +126,9 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
     public void setSendReadyHandler(SendReadyHandler handler) { runtime().setSendReadyHandler(handler); }
 
     public RequestOperation request(RoutingId rid) {
-        return MessageOperations.request(
-            (parts, flags, timeout) -> requestStage(rid, parts, flags, timeout),
-            (parts, callback, flags, timeout) ->
-                requestCallback(rid, parts, callback, flags, timeout));
+        Objects.requireNonNull(rid, "rid");
+        return MessageOperations.request((parts, timeout) ->
+            routedAdmission.request(rid, parts, timeout));
     }
 
     public RequestOperation request(RoutingId rid,
@@ -128,105 +138,41 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
             throw new IllegalArgumentException(
                 "transport pair identity must be non-zero");
         }
-        return MessageOperations.request(
-            (parts, flags, timeout) -> NativeRouterRequestSupport.requestStage(
-                this, rid, transportPairId, transportPairGeneration,
-                parts, flags, timeout),
-            (parts, callback, flags, timeout) ->
-                NativeRouterRequestSupport.requestCallback(
-                    this, rid, transportPairId, transportPairGeneration,
-                    parts, callback, flags, timeout));
-    }
-
-    private CompletableFuture<List<Message>> requestStage(RoutingId rid,
-                                                          List<Message> parts,
-                                                          SendFlags flags,
-                                                          Duration timeout) {
-        return InternalAccess.routerRequestAsync(this, rid, parts, flags,
-            timeout);
-    }
-
-    private boolean requestCallback(RoutingId rid,
-                                    List<Message> parts,
-                                    RequestCallback callback,
-                                    SendFlags flags,
-                                    Duration timeout) {
-        return InternalAccess.routerRequestCallback(this, rid, parts, callback,
-            flags, timeout);
+        RoutedAdmission.Target target = new RoutedAdmission.Target(rid,
+            transportPairId, transportPairGeneration);
+        return MessageOperations.request((parts, timeout) ->
+            routedAdmission.request(target, parts, timeout));
     }
 
     public ReplyOperation reply(RoutingId rid, long requestSequence) {
-        return MessageOperations.reply(parts ->
-            InternalAccess.routerReply(this, rid, requestSequence, parts));
+        return MessageOperations.reply(parts -> submitReply(rid,
+            requestSequence, parts));
     }
 
-    public boolean trySendCompletionControl(RoutingId peerRid,
-                                            List<Message> parts) {
-        Objects.requireNonNull(peerRid, "peerRid");
-        Objects.requireNonNull(parts, "parts");
-        if (parts.isEmpty())
-            throw new IllegalArgumentException("parts must not be empty");
-
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment nativeRid = NativeRoutingIds.allocate(arena, peerRid);
-            MessagePartsBuffer validated = new MessagePartsBuffer();
-            for (int i = 0; i < parts.size(); i++) {
-                validated.add(Objects.requireNonNull(parts.get(i),
-                    "parts[" + i + "]"));
-            }
-            MemorySegment nativeParts = validated.copyToNativeArray(arena);
-            long stride = NativeLayouts.MESSAGE_LAYOUT.byteSize();
-            try {
-                for (int i = 0; i < parts.size(); i++) {
-                    MemorySegment nativePart = nativeParts.asSlice(
-                        i * stride, stride);
-                    int partFlag = i + 1 < parts.size()
-                        ? Native.PART_MORE : Native.PART_FINAL;
-                    int rc = Native.routerCompletionControlPart(
-                        InternalAccess.socketHandle(this), nativeRid,
-                        nativePart, partFlag);
-                    int nativeErrno = rc == SubmitResult.OK.value()
-                        ? 0 : Native.errno();
-                    if (rc == SubmitResult.OK.value())
-                        continue;
-                    if (rc == SubmitResult.BACKPRESSURED.value())
-                        return false;
-                    throw new ZlinkSubmitException(SubmitResult.fromValue(rc),
-                        nativeErrno);
-                }
-                return true;
-            } finally {
-                MessagePartsBuffer.closeNativeArray(nativeParts, parts.size());
-            }
-        }
-    }
-
-    public void setCompletionControlHandler(CompletionControlHandler handler) {
-        runtime().setCompletionControlHandler(handler);
+    void submitReply(RoutingId rid, long requestSequence,
+                     List<Message> parts) {
+        outboundRecordAttempts.run(() -> InternalAccess.routerReply(this, rid,
+            requestSequence, parts));
     }
 
     @Override
     public void close() {
-        debug("router close begin");
-        InternalAccess.routerReceiveBeginClose(routedRequests);
+        routedAdmission.prepareClose();
+        boolean closed = false;
         try {
-            runtime().close();
+            outboundRecordAttempts.run(runtime()::close);
+            closed = true;
+            routedAdmission.commitClose();
+            InternalAccess.routerReceiveBeginClose(routedRequests);
         } finally {
-            InternalAccess.routerReceiveFinishClose(routedRequests);
-        }
-        debug("router close end");
-    }
-    @Override public RouterSocketOptions options() { return options; }
-
-    private static void debug(String message) {
-        if (DEBUG_REQREP) {
-            try {
-                Files.writeString(Path.of("/tmp/zlink-reqrep.log"),
-                    "[router-socket] " + message + System.lineSeparator(),
-                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-            } catch (Exception ignored) {
+            if (closed) {
+                routedAdmission.finishClose();
+                InternalAccess.routerReceiveFinishClose(routedRequests);
+            } else {
+                routedAdmission.abortClose();
             }
         }
     }
+    @Override public RouterSocketOptions options() { return options; }
 
 }

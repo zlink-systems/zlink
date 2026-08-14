@@ -8,26 +8,26 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.DealerSocket;
 import systems.zlink.contracts.sockets.RecvFlags;
-import systems.zlink.contracts.sockets.RequestCallback;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.RouterSocket;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SubmitResult;
-import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkRecvException;
+import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfErrno;
-import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfUtil;
 import systems.zlink.perf.PerfMessageTemplatePool;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -115,9 +115,11 @@ final class PerfSocketReqRep {
                 Math.min(64, 768 * 1024 / Math.max(1, config.size())));
             Duration requestTimeout = Duration.ofMillis(Math.max(1,
                 PerfUtil.intEnv("PERF_SINGLE_REQREP_TIMEOUT_MS", 200)));
-            RequestCallback callback = (result, parts) -> {
+            Semaphore completionSignals = new Semaphore(0);
+            BiConsumer<List<Message>, Throwable> completion = (parts, error) -> {
                 try {
-                    if (result == RequestResult.OK) {
+                    Throwable cause = completionCause(error);
+                    if (cause == null) {
                         if (parts != null && !parts.isEmpty()) {
                             PerfUtil.Header header = PerfUtil.decodeHeader(parts.get(0),
                                 config.size());
@@ -126,9 +128,9 @@ final class PerfSocketReqRep {
                                 metrics.recordNanos(header.latencyNanos());
                             }
                         }
-                    } else if (result != RequestResult.TIMED_OUT) {
-                        failure.compareAndSet(null, new IllegalStateException(
-                            "request completion failed: " + result));
+                    } else if (!(cause instanceof ZlinkRequestException request)
+                        || request.getResult() != RequestResult.TIMED_OUT) {
+                        failure.compareAndSet(null, cause);
                     }
                 } catch (Throwable ex) {
                     failure.compareAndSet(null, ex);
@@ -137,11 +139,10 @@ final class PerfSocketReqRep {
                         Message.closeAll(parts);
                     }
                     outstanding.decrementAndGet();
+                    completionSignals.release();
                 }
             };
 
-            PerfSocketPollSet completions = PerfSocketPollSet.fromSockets(
-                List.of(client), PollEventFlags.POLLCOMPLETION);
             try (PerfMessageTemplatePool requestPool =
                      new PerfMessageTemplatePool(config.size(), maxInFlight)) {
                 while (System.nanoTime() < activeEnd && failure.get() == null) {
@@ -157,17 +158,13 @@ final class PerfSocketReqRep {
                         }
                         try (request) {
                             outstanding.incrementAndGet();
-                            boolean accepted = submit(client, routedClient, request,
-                                requestTimeout, callback);
-                            if (!accepted) {
-                                outstanding.decrementAndGet();
-                                break;
-                            }
+                            submit(client, routedClient, request,
+                                requestTimeout, completion);
                             submittedAny = true;
                             submittedSinceProgress++;
                             if (submittedSinceProgress >= 64) {
                                 submittedSinceProgress = 0;
-                                completions.poll(0);
+                                completionSignals.tryAcquire();
                             }
                         } catch (ZlinkSubmitException ex) {
                             outstanding.decrementAndGet();
@@ -182,12 +179,12 @@ final class PerfSocketReqRep {
                         pauseIdleRequester();
                         continue;
                     }
-                    completions.poll(50);
+                    awaitCompletionSignal(completionSignals, 50);
                 }
                 long drainEnd = System.nanoTime()
                     + TimeUnit.MILLISECONDS.toNanos(completionDrainTimeoutMs);
                 while (outstanding.get() > 0 && System.nanoTime() < drainEnd) {
-                    completions.poll(50);
+                    awaitCompletionSignal(completionSignals, 50);
                 }
                 sendStop(client, routedClient);
                 PerfUtil.join(serverThread, "socket reqrep server",
@@ -198,8 +195,6 @@ final class PerfSocketReqRep {
                         failure.get());
                 }
                 return metrics.finishSingle(config);
-            } finally {
-                completions.close();
             }
         }
     }
@@ -213,17 +208,33 @@ final class PerfSocketReqRep {
         }
     }
 
-    private static boolean submit(Socket client, boolean routedClient,
-                                  Message request, Duration timeout,
-                                  RequestCallback callback) {
-        if (routedClient) {
-            return ((RouterSocket) client).request(SERVER_RID)
-                .message(request).timeout(timeout).flags(SendFlags.NONE)
-                .submit(callback);
+    private static void submit(Socket client, boolean routedClient,
+                               Message request, Duration timeout,
+                               BiConsumer<List<Message>, Throwable> completion) {
+        var stage = routedClient
+            ? ((RouterSocket) client).request(SERVER_RID)
+                .message(request).timeout(timeout).submit()
+            : ((DealerSocket) client).request()
+                .message(request).timeout(timeout).submit();
+        stage.whenComplete(completion);
+    }
+
+    private static Throwable completionCause(Throwable error) {
+        if (error instanceof CompletionException completion
+            && completion.getCause() != null) {
+            return completion.getCause();
         }
-        return ((DealerSocket) client).request()
-            .message(request).timeout(timeout).flags(SendFlags.NONE)
-            .submit(callback);
+        return error;
+    }
+
+    private static void awaitCompletionSignal(Semaphore completions,
+                                              long timeoutMs) {
+        try {
+            completions.tryAcquire(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("request completion wait interrupted", ex);
+        }
     }
 
     private static void runServer(RouterSocket server,
@@ -282,27 +293,21 @@ final class PerfSocketReqRep {
     }
 
     private static void sendStop(Socket client, boolean routedClient) {
-        try (PerfSocketPollSet writable = PerfSocketPollSet.fromSockets(
-                 List.of(client), PollEventFlags.POLLOUT)) {
-            writable.setEvents(0);
-            PerfStopToken.sendWithRetry(
-                () -> trySendStop(client, routedClient),
-                () -> {
-                    writable.setEvents(0, PollEventFlags.POLLOUT);
-                    writable.poll(-1);
-                },
-                "socket reqrep");
-        }
+        PerfStopToken.sendWithRetry(
+            () -> trySendStop(client, routedClient),
+            "socket reqrep");
     }
 
     private static boolean trySendStop(Socket client, boolean routedClient) {
         try (Message stop = PerfStopToken.newMessage()) {
             if (routedClient) {
-                return ((RouterSocket) client).send(SERVER_RID)
-                    .message(stop).flags(SendFlags.DONT_WAIT).submit();
+                PerfUtil.awaitStage(((RouterSocket) client).send(SERVER_RID)
+                    .message(stop).submit());
+                return true;
             }
-            return ((DealerSocket) client).send()
-                .message(stop).flags(SendFlags.DONT_WAIT).submit();
+            PerfUtil.awaitStage(((DealerSocket) client).send()
+                .message(stop).submit());
+            return true;
         } catch (ZlinkSubmitException ex) {
             if (ex.getResult() == SubmitResult.BACKPRESSURED
                 || ex.getResult() == SubmitResult.NOT_CONNECTED) {

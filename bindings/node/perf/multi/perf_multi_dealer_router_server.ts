@@ -10,27 +10,26 @@ const { isStopTokenParts } = require('../perf_stop_token');
 const {
   POLLIN,
   POLLOUT,
-  applyAutoHwmMsgUnit,
   applyContextPolicy,
   applySocketPolicy,
   emitMultiSocketHwmDetail,
   pollEvents,
   pollEventHas,
-  trySocketSend,
+  tryRoutedSocketSend,
   waitPollerOne
 } = require('./perf_multi_runtime');
 
-function drainPending(router, pending) {
+async function drainPending(router, pending) {
   while (pending.length > 0) {
     const reply = pending[0];
-    if (!trySocketSend(router, reply.routingId, reply.payload)) {
+    if (!(await tryRoutedSocketSend(router, reply.routingId, reply.payload))) {
       break;
     }
     pending.shift();
   }
 }
 
-function receiveAndQueueReplies(router, pending, received) {
+async function receiveAndQueueReplies(router, pending, received) {
   while (true) {
     if (!router.recv(received, zlink.RecvFlags.DontWait)) {
       return false;
@@ -44,7 +43,8 @@ function receiveAndQueueReplies(router, pending, received) {
       if (isStopTokenParts([payload])) {
         return true;
       }
-      if (pending.length === 0 && trySocketSend(router, routingId, payload)) {
+      if (pending.length === 0
+          && await tryRoutedSocketSend(router, routingId, payload)) {
         continue;
       }
       pending.push({ routingId, payload: Buffer.from(payload.data()) });
@@ -70,7 +70,6 @@ async function main() {
     applySocketPolicy(router);
     configureTlsServer(router, options.transport);
     router.bind(options.endpoint);
-    applyAutoHwmMsgUnit(ctx, options.msgSize);
     ctx.recalculateAutoHwm();
     emitMultiSocketHwmDetail(router, 'endpoint', options.transport, options.msgSize);
     poller.add(router, pollEvents(POLLIN), 0);
@@ -94,11 +93,11 @@ async function main() {
         continue;
       }
       if (pollEventHas(ready, POLLOUT)) {
-        drainPending(router, pending);
+        await drainPending(router, pending);
       }
       if (pollEventHas(ready, POLLIN)) {
-        stop = receiveAndQueueReplies(router, pending, received);
-        drainPending(router, pending);
+        stop = await receiveAndQueueReplies(router, pending, received);
+        await drainPending(router, pending);
       }
     }
   } finally {

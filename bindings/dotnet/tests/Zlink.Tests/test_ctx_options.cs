@@ -18,25 +18,49 @@ public sealed class test_ctx_options
         int maxSockets = ctx.Options.MaxSockets;
         Assert.True(maxSockets > 0);
 
-        ctx.Options.AutoHwmProfile = AutoHwmProfile.Compact;
-        Assert.Equal(AutoHwmProfile.Compact, ctx.Options.AutoHwmProfile);
-
-        Assert.Equal(0UL, ctx.Options.AutoHwmMessageUnitBytes);
-        const ulong planningUnit = (ulong)int.MaxValue + 1024UL;
-        ctx.Options.AutoHwmMessageUnitBytes = planningUnit;
-        Assert.Equal(planningUnit, ctx.Options.AutoHwmMessageUnitBytes);
-        ctx.Options.AutoHwmMessageUnitBytes = 0UL;
-        Assert.Equal(0UL, ctx.Options.AutoHwmMessageUnitBytes);
+        ctx.Options.CoreHwmProfile = AutoHwmProfile.Compact;
+        Assert.Equal(AutoHwmProfile.Compact, ctx.Options.CoreHwmProfile);
     }
 
     [Fact]
-    public void auto_hwm_planning_unit_public_type_is_64_bit_unsigned()
+    public void core_hwm_budget_options_and_snapshot_are_exact_ulong_values()
     {
-        var property = typeof(IContextOptions).GetProperty(
-            nameof(IContextOptions.AutoHwmMessageUnitBytes));
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
 
-        Assert.NotNull(property);
-        Assert.Equal(typeof(ulong), property.PropertyType);
+        using var ctx = Zlink.CreateContext();
+        const ulong memoryLimit = 16UL * 1024UL * 1024UL;
+        const ulong coreBudget = 4UL * 1024UL * 1024UL;
+        ctx.Options.CoreHwmMemoryLimitBytes = memoryLimit;
+        ctx.Options.CoreHwmBudgetBytes = coreBudget;
+        Assert.Equal(memoryLimit, ctx.Options.CoreHwmMemoryLimitBytes);
+        Assert.Equal(coreBudget, ctx.Options.CoreHwmBudgetBytes);
+
+        ctx.RecalculateAutoHwm();
+        CoreHwmBudgetSnapshot before = ctx.GetCoreHwmBudgetSnapshot();
+        Assert.Equal(1U, before.AbiVersion);
+        Assert.True(before.StructSize > 0U);
+        Assert.Equal(memoryLimit, before.ConfiguredMemoryLimitBytes);
+        Assert.Equal(coreBudget, before.ConfiguredCoreBudgetBytes);
+        Assert.Equal(coreBudget, before.EffectiveCoreBudgetBytes);
+        Assert.True(before.BudgetPlanningActive);
+        Assert.True(before.AggregateHwmValid);
+        Assert.False(before.BudgetInsufficient);
+        Assert.False(before.AggregateOverflow);
+        Assert.All(before.ReservedUInt64, value => Assert.Equal(0UL, value));
+
+        ctx.ResetCoreHwmBudgetMetrics();
+        CoreHwmBudgetSnapshot after = ctx.GetCoreHwmBudgetSnapshot();
+        Assert.Equal(before.MeasurementEpoch + 1UL, after.MeasurementEpoch);
+        Assert.Equal(before.BudgetGeneration, after.BudgetGeneration);
+        Assert.Equal(before.CurrentAccountedBytes, after.CurrentAccountedBytes);
+        Assert.Equal(before.ActiveDirectionalQueueCount,
+            after.ActiveDirectionalQueueCount);
+
+        ctx.Options.CoreHwmMemoryLimitBytes = 0UL;
+        ctx.Options.CoreHwmBudgetBytes = 0UL;
+        Assert.Equal(0UL, ctx.Options.CoreHwmMemoryLimitBytes);
+        Assert.Equal(0UL, ctx.Options.CoreHwmBudgetBytes);
     }
 
     [Fact]

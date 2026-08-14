@@ -30,7 +30,7 @@ public sealed class test_raw_capability
         Func<MonitorStatus, bool> ready = static status => status.IsReady;
 
         Func<IStreamSocket, RoutingId, SendOperation> streamSend =
-            static (socket, routingId) => socket.Send(routingId);
+            static (socket, routingId) => socket.TrySend(routingId);
         Func<IStreamSocket, Received, bool> streamReceive =
             static (socket, received) => socket.Recv(received);
         StreamPartReceiver streamPartReceive =

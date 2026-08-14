@@ -5,19 +5,26 @@ internal static class MultiPerfPatternRegistry
         {
             new MultiPerfPattern("DEALER_DEALER",
                 static options => PerfMultiDealerDealerServer.Run(options),
-                static options => PerfMultiDealerDealerClient.Run(options)),
+                static options => PerfMultiDealerDealerClient.Run(options)
+                    .GetAwaiter().GetResult()),
             new MultiPerfPattern("DEALER_ROUTER",
-                static options => PerfMultiDealerRouterServer.Run(options),
-                static options => PerfMultiDealerRouterClient.Run(options)),
+                static options => PerfMultiDealerRouterServer.Run(options)
+                    .GetAwaiter().GetResult(),
+                static options => PerfMultiDealerRouterClient.Run(options)
+                    .GetAwaiter().GetResult()),
             new MultiPerfPattern("DEALER_ROUTER_REQREP",
                 static options => PerfMultiSocketReqRep.RunDealerRouterServer(options),
-                static options => PerfMultiSocketReqRep.RunDealerRouterClient(options)),
+                static options => PerfMultiSocketReqRep.RunDealerRouterClient(options)
+                    .GetAwaiter().GetResult()),
             new MultiPerfPattern("ROUTER_ROUTER",
-                static options => PerfMultiRouterRouterServer.Run(options),
-                static options => PerfMultiRouterRouterClient.Run(options)),
+                static options => PerfMultiRouterRouterServer.Run(options)
+                    .GetAwaiter().GetResult(),
+                static options => PerfMultiRouterRouterClient.Run(options)
+                    .GetAwaiter().GetResult()),
             new MultiPerfPattern("ROUTER_ROUTER_REQREP",
                 static options => PerfMultiSocketReqRep.RunRouterRouterServer(options),
-                static options => PerfMultiSocketReqRep.RunRouterRouterClient(options)),
+                static options => PerfMultiSocketReqRep.RunRouterRouterClient(options)
+                    .GetAwaiter().GetResult()),
             new MultiPerfPattern("PUBSUB",
                 static options => PerfMultiPubSubServer.Run(options),
                 static options => PerfMultiPubSubClient.Run(options)),

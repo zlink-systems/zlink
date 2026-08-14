@@ -5,6 +5,7 @@ package systems.zlink.contracts.sockets;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.SubscriptionEvent;
 import systems.zlink.contracts.messaging.SendOperation;
+import systems.zlink.contracts.messaging.AsyncSendOperation;
 
 /** A publisher that also surfaces subscriber subscription events. */
 public interface XPubSocket extends Socket {
@@ -15,6 +16,7 @@ public interface XPubSocket extends Socket {
     void disconnectRid(RoutingId routingId);
     void setRoutingId(RoutingId rid);
     SendOperation publish(String topicId);
+    AsyncSendOperation publishAsync(String topicId);
     boolean receiveSubscriptionEvent(SubscriptionEvent result, RecvFlags flags);
     @Override PubSocketOptions options();
 }

@@ -25,7 +25,8 @@ ownership and error handling. The public contract is:
 - request/reply surfaces use `request`, `reply`, and raw routing ids
 - raw public option bags like `setsockopt` and `getsockopt` are not exposed
 - typed option families are exposed through properties and capability objects
-- monitor sockets use canonical `monitor_open()`, `recv()`, and `snapshot()`
+- monitor sockets use canonical
+  `monitor_open(events=..., monitor_hwm_bytes=...)`, `recv()`, and `snapshot()`
 - monitor masks use `MonitorEventMask`; decoded monitor payload uses
   `MonitorEvent`
 - resource-owning types support sync and async context manager cleanup
@@ -37,12 +38,11 @@ ownership and error handling. The public contract is:
 - callback removal by passing `None` is not part of the public contract;
   callback lifecycle ends with socket close
 
-The raw FFI declarations `zlink_recv_handler()` and
-`zlink_router_completion_control_handler()` are private implementation
-primitives. The public Python surface uses `on_packet` for STREAM packets,
+The raw FFI declaration `zlink_recv_handler()` is a private implementation
+primitive. The public Python surface uses `on_packet` for STREAM packets,
 `on_send_ready` for send readiness, `on_event` for monitor events, and the
-`request(...)` callback path for ROUTER request completion. Python does not
-add separate direct raw-receive or completion-control registration methods.
+`request(...)` asynchronous terminal for routed request completion. Python
+does not add a separate direct raw-receive registration method.
 
 ## Surface Summary
 

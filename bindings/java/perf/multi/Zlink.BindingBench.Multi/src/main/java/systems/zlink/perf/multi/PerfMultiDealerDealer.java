@@ -276,8 +276,8 @@ final class PerfMultiDealerDealer {
             return false;
         }
         try (payload) {
-            return socket.send().message(payload)
-                .flags(SendFlags.DONT_WAIT).submit();
+            PerfUtil.awaitStage(socket.send().message(payload).submit());
+            return true;
         } catch (ZlinkSubmitException ex) {
             if (isTransient(ex)) {
                 return false;
@@ -298,9 +298,8 @@ final class PerfMultiDealerDealer {
             pollSet.setEvents(0);
             while (true) {
                 try (Message stop = PerfStopToken.newMessage()) {
-                    if (socket.send().message(stop).flags(SendFlags.DONT_WAIT).submit()) {
-                        return;
-                    }
+                    PerfUtil.awaitStage(socket.send().message(stop).submit());
+                    return;
                 } catch (ZlinkSubmitException ex) {
                     if (!isTransient(ex)) {
                         throw ex;

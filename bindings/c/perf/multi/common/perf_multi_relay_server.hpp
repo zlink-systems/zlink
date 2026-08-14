@@ -337,7 +337,7 @@ inline int run_server_benchmark (const relay_server_config_t &config,
     const multi_bench_settings_t settings = resolve_multi_bench_settings ();
     const std::vector<size_t> sizes = resolve_bench_msg_sizes (64);
     const size_t msg_size = config.msg_size > 0 ? config.msg_size : sizes.front ();
-    if (msg_size == 0 || !apply_benchmark_context_auto_hwm_msg_unit (ctx.get (), msg_size)) {
+    if (msg_size == 0) {
         zlink_close (server);
         return 1;
     }

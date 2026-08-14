@@ -2,8 +2,6 @@
 
 package native
 
-type RequestReplyCallback func(RequestResult, []*Message)
-
 type RequestReplyCompletion struct {
 	Result RequestResult
 	Parts  []*Message

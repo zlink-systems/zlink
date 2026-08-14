@@ -223,21 +223,6 @@ def apply_multi_socket_options(*sockets, receive_timeout_ms=None):
         sock.options.receive_timeout_ms = recv_timeout_ms
 
 
-def apply_multi_auto_hwm_msg_unit(ctx, msg_size):
-    if msg_size <= 0:
-        return
-    ctx.options.auto_hwm_msg_unit_bytes = msg_size
-    ctx.recalculate_auto_hwm()
-
-
-
-
-
-
-
-
-
-
 
 
 def recv_nonblocking(sock, *, method="recv", storage=None):
@@ -301,6 +286,21 @@ def send_nonblocking(sock, payload, *, method="send", routing_id=None):
         else:
             op.message(payload)
         return bool(op.submit())
+    except _submit_error_type() as exc:
+        if exc.result == _submit_backpressured_result():
+            return False
+        raise
+
+
+async def send_routed(sock, payload, *, routing_id=None):
+    try:
+        op = sock.send() if routing_id is None else sock.send(routing_id)
+        if isinstance(payload, (list, tuple)):
+            op.messages(*payload)
+        else:
+            op.message(payload)
+        await op.submit()
+        return True
     except _submit_error_type() as exc:
         if exc.result == _submit_backpressured_result():
             return False

@@ -6,7 +6,7 @@ const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createRunId, currentEpochNs, HEADER_SIZE, integerEnv, summarizeMetrics } = require('../common/perf_metrics');
 const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { POLLIN, applyAutoHwmMsgUnit, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, waitPollerOne, waitForConnectionReadyCount } = require('./perf_multi_runtime');
+const { POLLIN, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, waitPollerOne, waitForConnectionReadyCount } = require('./perf_multi_runtime');
 const { isStopToken } = require('../perf_stop_token');
 // MULTI_DEALER_DEALER server == RECEIVER / MEASURER.
 //
@@ -39,7 +39,6 @@ async function main() {
         applySocketPolicy(server, { transport: options.transport });
         configureTlsServer(server, options.transport);
         server.bind(options.endpoint);
-        applyAutoHwmMsgUnit(ctx, options.msgSize);
         ctx.recalculateAutoHwm();
         emitMultiSocketHwmDetail(server, 'endpoint', options.transport, options.msgSize);
         poller.add(server, pollEvents(POLLIN), 0);

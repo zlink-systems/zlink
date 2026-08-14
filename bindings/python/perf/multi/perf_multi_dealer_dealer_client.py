@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import time
 from contextlib import ExitStack
@@ -6,7 +7,6 @@ import zlink
 
 from perf_multi_common import (
     STOP_TOKEN,
-    apply_multi_auto_hwm_msg_unit,
     apply_multi_socket_options,
     benchmark_run_id,
     configure_multi_tls_client,
@@ -15,23 +15,23 @@ from perf_multi_common import (
     perf_client_context,
     resolve_multi_connect_ready_timeout_ms,
     safe_poll,
-    send_nonblocking,
+    send_routed,
     stamp_payload,
     wait_monitor_event,
 )
 
 
-def _send_stop_token(sock):
+async def _send_stop_token(sock):
     # C perf_multi_dealer_dealer_client.cpp send_stop_token: bounded retry
     # through transient backpressure so the server's receive window observes
     # the per-socket wire stop token.
     for _ in range(1000):
-        if send_nonblocking(sock, STOP_TOKEN):
+        if await send_routed(sock, STOP_TOKEN):
             return True
     return False
 
 
-def main(argv=None):
+async def main(argv=None):
     args = parse_client_args(argv or sys.argv[1:], pattern="dealer_dealer")
     run_id = benchmark_run_id()
     payloads = [new_payload(args.msg_size) for _ in range(args.clients)]
@@ -56,7 +56,6 @@ def main(argv=None):
                         zlink.MonitorEventMask.CONNECTION_READY,
                         timeout_ms=resolve_multi_connect_ready_timeout_ms(),
                     )
-                apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
                 print(f"CLIENT_READY,{args.msg_size}", flush=True)
                 command = sys.stdin.readline().strip()
                 if command != f"START,{args.msg_size}":
@@ -68,16 +67,15 @@ def main(argv=None):
                     poll_events = zlink.create_poll_events(max(1, len(sockets)))
                     for index, sock in enumerate(sockets):
                         poller.add_socket(sock, zlink.PollEventFlag.POLLOUT, index)
-                    # C run_send_window: per socket, send DONTWAIT until
-                    # EAGAIN -> mark pending; once all attempted, POLLOUT
-                    # poll(-1) the pending sockets and clear on writable.
+                    # Await routed admission per socket. Retain the POLLOUT
+                    # fallback only for a transient pre-admission rejection.
                     while time.perf_counter() < active_deadline:
                         for index, current_sock in enumerate(sockets):
                             if send_pending[index]:
                                 continue
                             while time.perf_counter() < active_deadline:
                                 seq += 1
-                                if send_nonblocking(
+                                if await send_routed(
                                     current_sock,
                                     stamp_payload(
                                         payloads[index],
@@ -117,7 +115,7 @@ def main(argv=None):
                 # C run_single_size_case: send a wire stop token per socket
                 # so the server receive window terminates.
                 for sock in sockets:
-                    _send_stop_token(sock)
+                    await _send_stop_token(sock)
                 print(f"CLIENT_DONE,{args.msg_size}", flush=True)
         finally:
             for sock in sockets:
@@ -128,4 +126,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

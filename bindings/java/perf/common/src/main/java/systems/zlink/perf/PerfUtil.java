@@ -19,6 +19,8 @@ import systems.zlink.contracts.sockets.SubSocket;
 import systems.zlink.contracts.messaging.TopicMessage;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 
 public final class PerfUtil {
@@ -259,6 +261,21 @@ public final class PerfUtil {
 
     public static void join(Thread thread, String label, Duration timeout) {
         PerfTransport.join(thread, label, timeout);
+    }
+
+    public static <T> T awaitStage(CompletionStage<T> stage) {
+        try {
+            return stage.toCompletableFuture().join();
+        } catch (CompletionException ex) {
+            Throwable cause = ex.getCause();
+            if (cause instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw ex;
+        }
     }
 
     public static void pauseOneWaySendRetry(String label) {

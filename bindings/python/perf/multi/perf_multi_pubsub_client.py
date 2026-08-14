@@ -7,7 +7,6 @@ import zlink
 from perf_multi_common import (
     STOP_TOKEN,
     TOPIC,
-    apply_multi_auto_hwm_msg_unit,
     apply_multi_socket_options,
     active_message_latency_ns,
     benchmark_run_id,
@@ -52,7 +51,6 @@ def main(argv=None):
                         zlink.MonitorEventMask.CONNECTION_READY,
                         timeout_ms=resolve_multi_connect_ready_timeout_ms(),
                     )
-            apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
             print(f"CLIENT_READY,{args.msg_size}", flush=True)
             while True:
                 command = sys.stdin.readline().strip()

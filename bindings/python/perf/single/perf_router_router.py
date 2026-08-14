@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import threading
 import time
@@ -6,7 +7,6 @@ import zlink
 
 from perf_common import (
     STOP_TOKEN,
-    apply_single_auto_hwm_msg_unit,
     apply_single_socket_options,
     benchmark_run_id,
     configure_single_tls_client,
@@ -21,12 +21,13 @@ from perf_common import (
     resolve_single_endpoint,
     resolve_single_connect_ready_timeout_ms,
     single_routing_probe,
+    send_routed,
     stamp_payload,
     wait_monitor_event,
 )
 
 
-def _send_router_stop_token(router, dest_routing_id):
+async def _send_router_stop_token(router, dest_routing_id):
     """PERF_SINGLE_TEST_POLICY § 1.4 wire-level shutdown signal.
 
     Router-router uses ``send(routing_id).message(payload).submit()``; the stop token is a
@@ -35,7 +36,7 @@ def _send_router_stop_token(router, dest_routing_id):
 
     for _ in range(100):
         try:
-            router.send(dest_routing_id).message(STOP_TOKEN).submit()
+            await router.send(dest_routing_id).message(STOP_TOKEN).submit()
             return
         except zlink.SubmitError as exc:
             if exc.result not in (
@@ -50,33 +51,32 @@ def _public_one_way_metrics(sender, receiver, *, msg_size, duration_s, run_id):
     return None
 
 
-def main(argv=None):
+async def main(argv=None):
     args = parse_single_args(argv or sys.argv[1:], pattern="router_router")
     run_id = benchmark_run_id()
     latencies = []
     received = 0
     payload = new_payload(args.msg_size)
 
-    def send_loop(router, active_end):
-        # C send_active_samples: DONTWAIT routed send, re-stamp fresh
-        # now_ns on every retry, busy-loop through transient backpressure.
-        flag = int(zlink.SendFlags.DONT_WAIT)
-        send = router.send
+    async def send_loop(router, active_end):
+        # Preserve C's fresh timestamp per attempt while the routed terminal
+        # suspends this coroutine until Core admission.
         stamp = stamp_payload
         submit_backpressured = zlink.SubmitResult.BACKPRESSURED
         submit_not_connected = zlink.SubmitResult.NOT_CONNECTED
         while time.perf_counter() < active_end:
             try:
-                send(b"SERVER").message(stamp(payload, phase=1, run_id=run_id)).flags(
-                    flag
-                ).submit()
+                await send_routed(
+                    router,
+                    stamp(payload, phase=1, run_id=run_id),
+                    routing_id=b"SERVER",
+                )
             except zlink.SubmitError as exc:
                 if exc.result not in (submit_backpressured, submit_not_connected):
                     raise
-        _send_router_stop_token(router, b"SERVER")
+        await _send_router_stop_token(router, b"SERVER")
 
     with perf_context() as ctx:
-        apply_single_auto_hwm_msg_unit(ctx, args.msg_size)
         with zlink.create_router_socket(ctx) as server:
             with zlink.create_router_socket(ctx) as client:
                 server.set_routing_id(b"SERVER")
@@ -98,7 +98,7 @@ def main(argv=None):
                 # C perf_router_router.cpp wait_for_router_router_ready:
                 # one-shot routed probe (addressed to the peer routing id)
                 # before phase=active.
-                if not single_routing_probe(
+                if not await single_routing_probe(
                     client,
                     server,
                     payload,
@@ -119,9 +119,8 @@ def main(argv=None):
                     run_id=run_id,
                 )
                 if metrics is None:
-                    sender = threading.Thread(
-                        target=send_loop, args=(client, active_end), daemon=True
-                    )
+                    sender = threading.Thread(target=lambda: asyncio.run(
+                        send_loop(client, active_end)), daemon=True)
                     sender.start()
                     # C perf_router_router.cpp run_active_phase receiver.
                     received = run_one_way_receiver(
@@ -149,4 +148,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

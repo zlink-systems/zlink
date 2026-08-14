@@ -11,7 +11,6 @@ const {
 } = require('../common/perf_metrics');
 const {
   applyContextPolicy,
-  applyAutoHwmMsgUnit,
   applySocketPolicy,
   configureTlsClient,
   configureTlsServer,
@@ -62,8 +61,9 @@ async function handshakeRouterSender(port, sender, receiverRoutingId) {
   let pingSent = false;
   while (!pingSent && process.hrtime.bigint() < deadlineNs) {
     try {
-      pingSent = sender.send(receiverRoutingId).message(Buffer.from('PING'))
-        .flags(zlink.SendFlags.DontWait).submit();
+      await sender.send(receiverRoutingId)
+        .message(Buffer.from('PING')).submit();
+      pingSent = true;
     } catch (error) {
       if (!isTransientSubmit(error)) {
         throw error;
@@ -107,11 +107,10 @@ async function handshakeRouterSender(port, sender, receiverRoutingId) {
   }
 }
 
-// C parity: generic one-way patterns use ZLINK_DONTWAIT + retry-on-EAGAIN
-// through perf_single_one_way.hpp, while routed one-way patterns use
-// ZLINK_SEND_FLAGS_NONE in their active send loops and still treat transient
-// backpressure as retry. In both cases a transient submit must never become
-// a thrown failure or a silent drop. PERF_SINGLE_TEST_POLICY § 1.4.
+// C parity: direct PAIR/PUB roles retain their synchronous terminals, while
+// routed one-way roles await the canonical admission terminal. A transient
+// submit must never become a thrown failure or a silent drop.
+// PERF_SINGLE_TEST_POLICY § 1.4.
 function isTransientSubmit(error) {
   const text = String(error && error.message ? error.message : error);
   return (error instanceof zlink.SubmitError
@@ -122,7 +121,7 @@ function isTransientSubmit(error) {
     || /Resource temporarily unavailable|temporarily unavailable|would block|timed out|Host unreachable|not connected/i.test(text);
 }
 
-function submitOnce(kind, socket, body, receiverRoutingId, topic) {
+async function submitOnce(kind, socket, body, receiverRoutingId, topic) {
   const message = process.env.PERF_NODE_MESSAGE_PAYLOAD === '1'
     ? zlink.Message.from(body)
     : body;
@@ -131,11 +130,16 @@ function submitOnce(kind, socket, body, receiverRoutingId, topic) {
       .flags(zlink.SendFlags.DontWait).submit();
   }
   if (kind === 'router_router') {
-    return socket.send(receiverRoutingId).message(message)
-      .flags(zlink.SendFlags.None).submit();
+    await socket.send(receiverRoutingId).message(message).submit();
+    return true;
   }
   if (kind === 'dealer_router') {
-    return socket.send().message(message).flags(zlink.SendFlags.None).submit();
+    await socket.send().message(message).submit();
+    return true;
+  }
+  if (kind === 'dealer_dealer') {
+    await socket.send().message(message).submit();
+    return true;
   }
   return socket.send().message(message).flags(zlink.SendFlags.DontWait).submit();
 }
@@ -144,10 +148,10 @@ function submitOnce(kind, socket, body, receiverRoutingId, topic) {
 // loop). Returns when the message is on the wire; throws only on a real
 // fatal error. `deadlineNs` (optional) bounds the active-sample retry the
 // same way C's send_active_samples is bounded by the duration deadline.
-function submitWithRetry(kind, socket, body, receiverRoutingId, topic, deadlineNs) {
+async function submitWithRetry(kind, socket, body, receiverRoutingId, topic, deadlineNs) {
   for (;;) {
     try {
-      if (submitOnce(kind, socket, body, receiverRoutingId, topic)) {
+      if (await submitOnce(kind, socket, body, receiverRoutingId, topic)) {
         return true;
       }
     } catch (error) {
@@ -167,28 +171,31 @@ function sleepMillis(ms) {
   Atomics.wait(sleepBuffer, 0, 0, ms);
 }
 
-function submitStopOnce(kind, socket, receiverRoutingId, topic) {
+async function submitStopOnce(kind, socket, receiverRoutingId, topic) {
   if (kind === 'pubsub') {
     socket.publish(topic).message(STOP_TOKEN_BYTES)
       .flags(zlink.SendFlags.None).submit();
     return;
   }
   if (kind === 'router_router') {
-    socket.send(receiverRoutingId).message(STOP_TOKEN_BYTES)
-      .flags(zlink.SendFlags.None).submit();
+    await socket.send(receiverRoutingId).message(STOP_TOKEN_BYTES).submit();
+    return;
+  }
+  if (kind === 'dealer_router' || kind === 'dealer_dealer') {
+    await socket.send().message(STOP_TOKEN_BYTES).submit();
     return;
   }
   socket.send().message(STOP_TOKEN_BYTES).flags(zlink.SendFlags.None).submit();
 }
 
-function sendStopToken(kind, socket, receiverRoutingId, topic) {
+async function sendStopToken(kind, socket, receiverRoutingId, topic) {
   // PERF_SINGLE_TEST_POLICY § 1.4 / C send_stop_token_with_retry
   // (~202-215): emit the wire-level stop token once, retrying through
   // transient backpressure so the terminator always reaches the peer.
   trace(`sendStopToken begin kind=${kind}`);
   for (let retry = 0; retry < 100; retry += 1) {
     try {
-      submitStopOnce(kind, socket, receiverRoutingId, topic);
+      await submitStopOnce(kind, socket, receiverRoutingId, topic);
       trace(`sendStopToken sent kind=${kind}`);
       return;
     } catch (error) {
@@ -201,7 +208,7 @@ function sendStopToken(kind, socket, receiverRoutingId, topic) {
   throw new Error('stop token send retry budget exhausted');
 }
 
-function sendLoop(kind, socket, payload, duration, runId, msgSize, seqStart, receiverRoutingId, topic) {
+async function sendLoop(kind, socket, payload, duration, runId, msgSize, seqStart, receiverRoutingId, topic) {
   const activeStopNs = process.hrtime.bigint() + BigInt(Math.floor(duration * 1_000_000_000));
   let seq = seqStart;
   while (process.hrtime.bigint() < activeStopNs) {
@@ -209,14 +216,15 @@ function sendLoop(kind, socket, payload, duration, runId, msgSize, seqStart, rec
     // C send_active_samples: a retried (backpressured) send does not
     // advance seq until it is actually accepted; the duration deadline
     // bounds the retry so we never block past the active window.
-    if (submitWithRetry(kind, socket, payload, receiverRoutingId, topic, activeStopNs)) {
+    if (await submitWithRetry(kind, socket, payload, receiverRoutingId, topic,
+        activeStopNs)) {
       seq += 1n;
     }
   }
   // C single sends active samples until the deadline and then sends only
   // the wire stop token. There is no post-active phase-2 payload.
   trace(`sendLoop active done kind=${kind} seq=${seq.toString()}`);
-  sendStopToken(kind, socket, receiverRoutingId, topic);
+  await sendStopToken(kind, socket, receiverRoutingId, topic);
 }
 
 async function main() {
@@ -248,28 +256,24 @@ async function main() {
       case 'pair':
         socket = zlink.createPairSocket(ctx);
         applySocketPolicy(socket, options);
-        applyAutoHwmMsgUnit(ctx, msgSize);
         ctx.recalculateAutoHwm();
         await connectSender(kind, socket, endpoint, transport);
         break;
       case 'dealer_dealer':
         socket = zlink.createDealerSocket(ctx);
         applySocketPolicy(socket, options);
-        applyAutoHwmMsgUnit(ctx, msgSize);
         ctx.recalculateAutoHwm();
         await connectSender(kind, socket, endpoint, transport);
         break;
       case 'dealer_router':
         socket = zlink.createDealerSocket(ctx);
         applySocketPolicy(socket, options);
-        applyAutoHwmMsgUnit(ctx, msgSize);
         ctx.recalculateAutoHwm();
         await connectSender(kind, socket, endpoint, transport);
         break;
       case 'pubsub':
         socket = zlink.createPubSocket(ctx);
         applySocketPolicy(socket, options);
-        applyAutoHwmMsgUnit(ctx, msgSize);
         ctx.recalculateAutoHwm();
         configureTlsServer(socket, transport);
         socket.bind(endpoint);
@@ -279,7 +283,6 @@ async function main() {
       case 'router_router': {
         socket = zlink.createRouterSocket(ctx);
         applySocketPolicy(socket, options);
-        applyAutoHwmMsgUnit(ctx, msgSize);
         socket.setRoutingId(zlink.RoutingId.from(Buffer.from(senderRoutingIdBytes)));
         ctx.recalculateAutoHwm();
         configureTlsClient(socket, transport);
@@ -314,7 +317,7 @@ async function main() {
     }
 
     trace(`sendLoop begin kind=${kind} duration=${duration} msgSize=${msgSize}`);
-    sendLoop(
+    await sendLoop(
       kind,
       socket,
       payload,

@@ -35,12 +35,14 @@ type (
 	SendOp = impl.SendOp
 	// SendSubmitOp accepts further parts, flags, and the terminal submit of a send.
 	SendSubmitOp = impl.SendSubmitOp
+	// RoutedSendOp builds an exact-target managed send on a DEALER or ROUTER.
+	RoutedSendOp = impl.RoutedSendOp
+	// RoutedSendSubmitOp completes when Core accepts the complete routed record.
+	RoutedSendSubmitOp = impl.RoutedSendSubmitOp
 	// RequestOp builds a request; submitting consumes the parts and awaits a reply.
 	RequestOp = impl.RequestOp
-	// RequestSubmitOp accepts further parts, timeout, flags, and the terminal submit of a request.
+	// RequestSubmitOp accepts further parts, a timeout, and the completion-channel terminal.
 	RequestSubmitOp = impl.RequestSubmitOp
-	// RequestCallbackSubmitOp is the callback-submission stage of a request.
-	RequestCallbackSubmitOp = impl.RequestCallbackSubmitOp
 	// ReplyOp builds a reply; submitting consumes the parts.
 	ReplyOp = impl.ReplyOp
 	// ReplySubmitOp accepts further parts, flags, and the terminal submit of a reply.

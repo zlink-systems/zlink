@@ -224,7 +224,7 @@ std::thread::spawn(move || {
 |------|------|
 | `pair_recv_sample.rs` | PAIR 송수신 |
 | `dealer_router_recv_sample.rs` | DEALER/ROUTER 송수신 |
-| `request_reply_callback_sample.rs` | 콜백 요청/응답 |
+| `request_reply_future_sample.rs` | Future 요청/응답 |
 | `pubsub_recv_sample.rs` | PUB/SUB 발행·구독 |
 | `stream_recv_sample.rs` | STREAM 원시 TCP |
 | `stream_packet_callback_sample.rs` | STREAM 패킷 콜백 |

@@ -41,6 +41,23 @@ func (s *subscribeSocket) Subscribe(out *TopicMessage, flags RecvFlags) (bool, e
 	return true, nil
 }
 
+// SubscribeRetained is the explicit Framework-backend topic receive boundary.
+func (s *subscribeSocket) SubscribeRetained(out *TopicMessage, flags RecvFlags) (bool, error) {
+	if out == nil {
+		return false, &RecvError{Result: RecvInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
+	err := recvTopicMessageRetainedInto(out, func(rid **C.zlink_routing_id_t, topic *C.char, topicLen *C.size_t, part *C.zlink_msg_t, lease **C.zlink_hwm_budget_lease_t, hasMore *C.zlink_part_flag_t, recvFlags C.zlink_recv_flags_t) error {
+		return recvErrorFromResult(C.zlink_subscribe_part_with_hwm_budget_lease(s.raw(), rid, topic, recvTopicBufferCap, topicLen, part, lease, hasMore, recvFlags))
+	}, flags)
+	if err != nil {
+		if isNoData(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 type xpubSubscribeSocket struct {
 	*publishSocket
 }

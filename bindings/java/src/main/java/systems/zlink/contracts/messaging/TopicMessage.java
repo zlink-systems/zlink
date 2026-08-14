@@ -7,7 +7,9 @@ import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.internal.ContractAccess;
 import java.util.ArrayList;
+import java.lang.ref.Cleaner;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 /** Topic-aware recv result used by raw subscription paths. */
@@ -22,6 +24,11 @@ public final class TopicMessage implements AutoCloseable {
     // zero-realloc reuse).
     private ArrayList<Message> reusableSingle;
     private Message reusableSinglePart;
+    private final RetainedCreditCleanup retainedCredit =
+        new RetainedCreditCleanup();
+    @SuppressWarnings("unused")
+    private final Cleaner.Cleanable retainedCreditFallback =
+        retainedCredit.register(this);
 
     static {
         ContractAccess.register(new ContractAccess.TopicMessageAccess() {
@@ -46,6 +53,12 @@ public final class TopicMessage implements AutoCloseable {
             public void adoptFrom(TopicMessage target, TopicMessage source) {
                 target.adoptFrom(source);
             }
+
+            @Override
+            public void adoptRetainedCredit(TopicMessage target,
+                                            Runnable release) {
+                target.adoptRetainedCredit(release);
+            }
         });
     }
 
@@ -63,7 +76,11 @@ public final class TopicMessage implements AutoCloseable {
     // intermediate fresh TopicMessage + Message[] + List.of allocations that
     // adoptFrom(subscribe(...)) incurs per message.
     void adoptSingle(RoutingId routingId, String topicId, Message part) {
-        closePartsExcept(part);
+        try {
+            closePartsExcept(part);
+        } finally {
+            retainedCredit.release();
+        }
         ArrayList<Message> slot = reusableSingle;
         if (slot == null) {
             slot = new ArrayList<>(1);
@@ -93,12 +110,20 @@ public final class TopicMessage implements AutoCloseable {
         if (closed || parts == null || parts.isEmpty()) {
             return;
         }
+        RuntimeException failure = null;
         for (Message part : parts) {
             if (part == keep) {
                 continue;
             }
-            part.closeFromOwner();
+            try {
+                part.closeFromOwner();
+            } catch (RuntimeException ex) {
+                if (failure == null)
+                    failure = ex;
+            }
         }
+        if (failure != null)
+            throw failure;
     }
 
     void adoptFrom(TopicMessage source) {
@@ -109,6 +134,7 @@ public final class TopicMessage implements AutoCloseable {
         this.topic = source.topic;
         this.parts = source.parts;
         this.closed = false;
+        this.retainedCredit.transferFrom(source.retainedCredit);
         source.routingId = null;
         source.topic = "";
         source.parts = List.of();
@@ -153,12 +179,30 @@ public final class TopicMessage implements AutoCloseable {
         if (closed)
             return;
         closed = true;
+        RuntimeException failure = null;
         for (Message part : parts) {
-            part.closeFromOwner();
+            try {
+                part.closeFromOwner();
+            } catch (RuntimeException ex) {
+                if (failure == null)
+                    failure = ex;
+            }
         }
         if (reusableSinglePart != null
             && (parts == null || !parts.contains(reusableSinglePart))) {
-            reusableSinglePart.closeFromOwner();
+            try {
+                reusableSinglePart.closeFromOwner();
+            } catch (RuntimeException ex) {
+                if (failure == null)
+                    failure = ex;
+            }
         }
+        retainedCredit.release();
+        if (failure != null)
+            throw failure;
+    }
+
+    private void adoptRetainedCredit(Runnable release) {
+        retainedCredit.replace(Objects.requireNonNull(release, "release"));
     }
 }

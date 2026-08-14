@@ -124,7 +124,7 @@ The recommended sweep axes are:
 | message sizes | `64`, `1024`, `4096`, `65536` bytes |
 | patterns | `DEALER_ROUTER_SENDSEND`, `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER_SENDSEND`, `ROUTER_ROUTER_REQREP`, `PUBSUB`, `STREAM` |
 
-Profile guidance after the auto-HWM message-unit change:
+Profile guidance for byte-budget Auto HWM:
 
 | Profile | Use case |
 |---------|----------|
@@ -134,10 +134,7 @@ Profile guidance after the auto-HWM message-unit change:
 | `throughput` | larger per-connection queue depth for high throughput sweeps |
 
 If calculated HWM values are too small for the target traffic shape, first
-select a larger profile. Use `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` when the
-benchmark context's effective message unit differs from the socket-type default.
-Use raw socket `ZLINK_OPT_AUTO_HWM_MSG_UNIT_BYTES` only for a socket-specific
-override inside that context.
+select a larger profile or configure the context-wide Auto HWM byte budget.
 
 ## One-Way Latency Caveat
 

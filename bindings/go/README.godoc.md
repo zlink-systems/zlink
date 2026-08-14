@@ -45,8 +45,6 @@ The exported Go package reflects the Core 0.9.0 raw-socket contract.
   closing it and serialize one poller's add/modify/remove/wait operations
 - callback delivery hops off native callback threads onto Go-managed
   dispatcher goroutines before user handlers run
-- ROUTER completion-control records use `OnCompletionControl` and
-  `CompletionControl`; native part callbacks remain internal
 
 ## Message Payload Lifetime
 

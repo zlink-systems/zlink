@@ -65,28 +65,12 @@ func main() {
 		requestDone <- replyErr
 	}()
 
-	replyCh := make(chan []*zlink.Message, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		completions, err := dealerSocket.Request().Message(samplecommon.Message("ping")).Timeout(2 * time.Second).SubmitAsync(context.Background())
-		if err != nil {
-			errCh <- err
-			return
-		}
-		completion := <-completions
-		if completion.Err != nil {
-			errCh <- completion.Err
-			return
-		}
-		replyCh <- completion.Parts
-	}()
-
-	var reply []*zlink.Message
-	select {
-	case err := <-errCh:
-		samplecommon.Must(err)
-	case reply = <-replyCh:
-	}
+	completion := <-dealerSocket.Request().
+		Message(samplecommon.Message("ping")).
+		Timeout(2 * time.Second).
+		Submit(context.Background())
+	samplecommon.Must(completion.Err)
+	reply := completion.Parts
 	defer func() {
 		for _, part := range reply {
 			part.Close()

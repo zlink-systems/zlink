@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
+python3 "$repo_root/scripts/local-package/sync-version.py" --check >/dev/null
 artifact_root="${ZLINK_LOCAL_PACKAGE_ROOT:-$repo_root/.artifacts/wsl}"
 configuration="${CONFIGURATION:-Release}"
 core_prefix="${ZLINK_CORE_PACKAGE_PREFIX:-}"
@@ -11,8 +12,8 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Builds the C++ binding against the installed Core 0.10.1 local package and
-installs it below .artifacts/wsl/install/zlink-cpp/0.10.1.
+Builds the C++ binding against the installed Core 0.11.1 local package and
+installs it below .artifacts/wsl/install/zlink-cpp/0.11.1.
 EOF
 }
 
@@ -51,4 +52,10 @@ cmake --install "$build_dir"
   echo "C++ package library is missing: $prefix" >&2
   exit 1
 }
+cmake \
+  -DZLINK_CPP_PREFIX="$prefix" \
+  -DZLINK_CORE_PREFIX="$core_prefix" \
+  -DZLINK_CPP_VERSION="$version" \
+  -DZLINK_CPP_BUILD_DIR="$build_dir" \
+  -P "$script_dir/verify-package.cmake"
 echo "C++ local package: $prefix"

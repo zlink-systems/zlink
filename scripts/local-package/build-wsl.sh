@@ -9,19 +9,22 @@ core_source="${ZLINK_CORE_SOURCE:-release}"
 release_version="${ZLINK_CORE_RELEASE_VERSION:-$version}"
 core_prefix="${ZLINK_CORE_PACKAGE_PREFIX:-}"
 language_args=()
+version_action="build"
 
 usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [options] [c] [cpp] [dotnet] [go] [java] [node] [python] [rust]
 
 With no language arguments, builds all eight first-party bindings at version
-0.10.1 into .artifacts/wsl. By default the exact Core release is downloaded
+0.11.1 into .artifacts/wsl. By default the exact Core release is downloaded
 and verified; set --core-source local when testing an in-progress Core build.
 
 Options:
   --core-source release|local  Core input mode (default: release)
   --core-version VERSION       Core release version (default: VERSION)
   --core-prefix ABSOLUTE_DIR   Use an already verified Core prefix
+  --sync-versions              Sync managed Core/binding values and exit
+  --verify-versions            Verify managed Core/binding values and exit
 EOF
 }
 
@@ -30,12 +33,30 @@ while [[ $# -gt 0 ]]; do
     --core-source) core_source="${2:-}"; shift 2 ;;
     --core-version) release_version="${2:-}"; shift 2 ;;
     --core-prefix) core_prefix="${2:-}"; shift 2 ;;
+    --sync-versions) version_action="sync"; shift ;;
+    --verify-versions) version_action="verify"; shift ;;
     -h|--help) usage; exit 0 ;;
     c|cpp|dotnet|go|java|node|python|rust|core)
       language_args+=("$1"); shift ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+case "$version_action" in
+  sync)
+    python3 "$script_dir/sync-version.py" --write
+    python3 "$script_dir/sync-version.py" --check
+    exit 0
+    ;;
+  verify)
+    python3 "$script_dir/sync-version.py" --check
+    exit 0
+    ;;
+  build)
+    python3 "$script_dir/sync-version.py" --write
+    python3 "$script_dir/sync-version.py" --check
+    ;;
+esac
 
 if [[ "${#language_args[@]}" -eq 0 ]]; then
   language_args=(c cpp dotnet go java node python rust)

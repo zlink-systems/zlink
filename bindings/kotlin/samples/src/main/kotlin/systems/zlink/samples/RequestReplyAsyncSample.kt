@@ -2,6 +2,8 @@
 //   bindings/java/gradlew -p . :kotlin-samples:runRequestReplyAsyncSample --no-daemon
 package systems.zlink.samples
 
+import kotlinx.coroutines.future.await
+import kotlinx.coroutines.runBlocking
 import systems.zlink.contracts.core.RoutingId
 import systems.zlink.contracts.core.Zlink
 import systems.zlink.contracts.eventing.MonitorEventType
@@ -11,9 +13,8 @@ import systems.zlink.contracts.sockets.RecvFlags
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
-fun main() {
+fun main() = runBlocking {
 // --8<-- [start:doc]
     SampleSupport.ensureNative()
     val endpoint = SampleSupport.tcpEndpoint()
@@ -51,24 +52,21 @@ fun main() {
                         }, "request-reply-async-router")
                         routerThread.start()
 
-                        val roundTrip: java.util.concurrent.CompletionStage<Void>
                         Message.from(SampleSupport.DEALER_REQUEST).use { request ->
-                            roundTrip = dealerSocket.request()
+                            val reply = dealerSocket.request()
                                 .message(request)
                                 .timeout(Duration.ofSeconds(2))
                                 .submit()
-                                .thenAccept { reply ->
-                                    try {
-                                        val value = reply[0].toUtf8String()
-                                        check(SampleSupport.DEALER_REPLY == value) { "unexpected reply: $value" }
-                                    } finally {
-                                        Message.closeAll(reply)
-                                    }
-                                }
+                                .await()
+                            try {
+                                val value = reply[0].toUtf8String()
+                                check(SampleSupport.DEALER_REPLY == value) { "unexpected reply: $value" }
+                            } finally {
+                                Message.closeAll(reply)
+                            }
                         }
 
-                        roundTrip.toCompletableFuture().get(2, TimeUnit.SECONDS)
-                        replyHandled.get(2, TimeUnit.SECONDS)
+                        replyHandled.await()
                         SampleSupport.await(requestHandled, "request reply async")
                         println(
                             "[dealer-router/request-reply/async] send: \"${SampleSupport.DEALER_REQUEST}\"" +

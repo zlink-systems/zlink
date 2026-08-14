@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
+python3 "$repo_root/scripts/local-package/sync-version.py" --check >/dev/null
 build_dir="${ZLINK_CORE_BUILD_DIR:-$repo_root/core/build}"
 output_root="${ZLINK_LOCAL_PACKAGE_ROOT:-$repo_root/.artifacts/wsl}"
 configuration="${CONFIGURATION:-Release}"
@@ -13,7 +14,7 @@ usage() {
 Usage: build-wsl.sh [--build-dir DIR] [--output-root ABSOLUTE_DIR]
                     [--evidence ABSOLUTE_JSON]
 
-Builds Core from the current source, installs a versioned 0.10.1 local package,
+Builds Core from the current source, installs a versioned 0.11.1 local package,
 writes a generic provenance record, and verifies a clean C consumer. The ABI
 SONAME is libzlink.so.0.
 EOF

@@ -159,8 +159,6 @@ class pubsub_client_bench_t
 
             (void) sock.set_subscription (std::string (k_topic));
             perf::multi::apply_benchmark_socket_options (sock, _settings, _transport);
-            if (!perf::multi::apply_benchmark_auto_hwm_msg_unit (_ctx, _msg_size))
-                return false;
             if (!perf::multi::setup_tls_client (sock, _transport))
                 return false;
             _monitors.push_back (perf::multi::connect_monitor_t ());

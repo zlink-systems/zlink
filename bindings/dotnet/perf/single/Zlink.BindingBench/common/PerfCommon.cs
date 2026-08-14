@@ -176,6 +176,15 @@ internal static partial class PerfRunner
         return PerfSocketIo.Send(socket, buffer, flags);
     }
 
+    internal static async Task<int> SendAsync(IDealerSocket socket, byte[] buffer,
+        SendFlags flags = SendFlags.None)
+    {
+        if (buffer == null)
+            throw new ArgumentNullException(nameof(buffer));
+        return await PerfSocketIo.SendAsync(socket, buffer, flags)
+            .ConfigureAwait(false);
+    }
+
     internal static bool TrySendActiveMessage(IMessageSocket socket,
         ReadOnlySpan<byte> buffer, string tag)
     {
@@ -268,7 +277,7 @@ internal static partial class PerfRunner
         }
     }
 
-    internal static bool TryReceiveNonBlocking(IMessageSocket receiver,
+    internal static bool TryReceiveNonBlocking(IReceivingMessageSocket receiver,
         Received result)
     {
         try
@@ -337,6 +346,36 @@ internal static partial class PerfRunner
 
         Console.Error.WriteLine($"{tag} stop-token send failed");
         return false;
+    }
+
+    internal static async Task<bool> SendStopTokenAsync(IDealerSocket sender,
+        string tag)
+    {
+        try
+        {
+            return await PerfSocketIo.SendAsync(sender, StopToken.Bytes)
+                .ConfigureAwait(false) > 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"{tag} stop-token send failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    internal static async Task<bool> SendRoutedStopTokenAsync(IRouterSocket sender,
+        RoutingId routingId, string tag)
+    {
+        try
+        {
+            return await PerfSocketIo.SendAsync(sender, routingId,
+                StopToken.Bytes).ConfigureAwait(false) > 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"{tag} stop-token send failed: {ex.Message}");
+            return false;
+        }
     }
 
     internal static bool SendRoutedStopTokenBlocking(IRoutedMessageSocket sender,
@@ -453,7 +492,7 @@ internal static partial class PerfRunner
 
         ctx.Options.AutoHwmEnabled =
             PerfEnv.ReadNonNegative("PERF_CTX_AUTO_HWM_ENABLE", 1) != 0;
-        ctx.Options.AutoHwmProfile = ResolveContextAutoHwmProfile();
+        ctx.Options.CoreHwmProfile = ResolveContextAutoHwmProfile();
 
         int maxSockets = ResolveSingleMaxSockets();
         if (maxSockets > 0)
@@ -495,13 +534,6 @@ internal static partial class PerfRunner
             if (rcvHwm > 0)
                 socket.Options.ReceiveHighWaterMark = rcvHwm;
         }
-    }
-
-    internal static void ApplySingleAutoHwmMsgUnit(IContext ctx, int msgSize)
-    {
-        if (msgSize <= 0)
-            return;
-        ctx.Options.AutoHwmMessageUnitBytes = (ulong)msgSize;
     }
 
     internal static void RecalculateSingleAutoHwm(IContext ctx)

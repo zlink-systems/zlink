@@ -22,6 +22,30 @@ internal unsafe struct ZlinkRoutingId
 }
 
 [StructLayout(LayoutKind.Sequential)]
+internal struct ZlinkRoutedSubmitTarget
+{
+    public ZlinkRoutingId PeerRoutingId;
+    public ulong TransportPairId;
+    public ulong TransportPairGeneration;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct ZlinkRoutedSendReadyEvent
+{
+    public ZlinkRoutingId PeerRoutingId;
+    public ulong TransportPairId;
+    public ulong TransportPairGeneration;
+    public ZlinkRoutedSendReadyState State;
+    public int TerminalErrno;
+}
+
+internal enum ZlinkRoutedSendReadyState
+{
+    Writable = 1,
+    Terminal = 2
+}
+
+[StructLayout(LayoutKind.Sequential)]
 internal unsafe struct ZlinkMonitorEvent
 {
     public ulong Event;

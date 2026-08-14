@@ -14,7 +14,6 @@ fn main() {
     };
 
     let ctx = common::perf_context();
-    common::apply_single_auto_hwm_msg_unit(&ctx, config.size);
     let pub_sock = ctx.pub_socket().expect("pub");
     let sub_sock = ctx.sub_socket().expect("sub");
     // Match C perf: the harness always sets NODROP explicitly. The socket
@@ -61,11 +60,7 @@ fn main() {
     let send_thread =
         std::thread::spawn(move || {
             common::send_loop(active_deadline, config.size, common::PHASE_ACTIVE, |msg| {
-                match pub_sock
-                    .publish("P")
-                    .message(msg)
-                    .submit()
-                {
+                match pub_sock.publish("P").message(msg).submit() {
                     Ok(sent) => sent,
                     Err(err) if err.code() == SubmitResult::NotConnected => false,
                     Err(err) => panic!("active publish: {err}"),

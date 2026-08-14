@@ -7,6 +7,7 @@ module systems.zlink {
     exports systems.zlink.contracts.eventing;
     exports systems.zlink.contracts.messaging;
     exports systems.zlink.contracts.sockets;
+    exports systems.zlink.runtime.framework to systems.zlink.framework;
 
     uses systems.zlink.internal.RuntimeBridgeProvider;
     provides systems.zlink.internal.RuntimeBridgeProvider

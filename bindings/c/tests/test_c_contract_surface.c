@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include <zlink.h>
 
 #define CHECK(expr)                                                                                \
@@ -9,13 +11,19 @@
 int main (void)
 {
     CHECK (ZLINK_VERSION_MAJOR == 0);
-    CHECK (ZLINK_VERSION_MINOR == 10);
+    CHECK (ZLINK_VERSION_MINOR == 11);
     CHECK (ZLINK_VERSION_PATCH == 1);
-    CHECK (ZLINK_VERSION == ZLINK_MAKE_VERSION (0, 10, 1));
+    CHECK (ZLINK_VERSION == ZLINK_MAKE_VERSION (0, 11, 1));
 
     CHECK (ZLINK_SOCKET_PAIR == 0x1001);
     CHECK (ZLINK_SOCKET_STREAM == 0x1008);
     CHECK (ZLINK_DONTWAIT == ZLINK_SEND_FLAGS_DONTWAIT);
+    CHECK (ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES == 19);
+    CHECK (ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES == 20);
+    CHECK (ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES == 21);
+    CHECK (ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1 == 1u);
+    CHECK (ZLINK_MONITOR_STATUS_ABI_VERSION == 3u);
+    CHECK (sizeof (zlink_socket_monitor_open_options_t) == 16u);
 
     zlink_msg_t msg;
     CHECK (sizeof msg >= 64);
@@ -33,5 +41,15 @@ int main (void)
     CHECK (zlink_recv_part != NULL);
     CHECK (zlink_publish_part != NULL);
     CHECK (zlink_subscribe_part != NULL);
+
+    void *ctx = zlink_ctx_new ();
+    CHECK (ctx != NULL);
+    zlink_auto_hwm_budget_snapshot_t snapshot;
+    memset (&snapshot, 0, sizeof (snapshot));
+    snapshot.abi_version = ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1;
+    snapshot.struct_size = sizeof (snapshot);
+    CHECK (zlink_ctx_get_auto_hwm_budget_snapshot (ctx, &snapshot) == ZLINK_CONFIG_OK);
+    CHECK (zlink_ctx_reset_auto_hwm_budget_metrics (ctx) == ZLINK_CONFIG_OK);
+    CHECK (zlink_ctx_term (ctx) == ZLINK_CLOSE_OK);
     return 0;
 }

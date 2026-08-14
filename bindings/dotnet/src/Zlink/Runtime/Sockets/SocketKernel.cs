@@ -9,7 +9,9 @@ internal sealed partial class SocketKernel : IDisposable
     private const int TopicBufferSize = 4096;
     private const int DontWaitFlag = 1;
     private readonly SocketCallbackRegistry _callbacks = new();
-    private readonly object _completionControlRegistrationSync = new();
+    private readonly object _sendReadyRegistrationSync = new();
+    private readonly object _publisherAdmissionSync = new();
+    private readonly object _routedAdmissionSync = new();
     private readonly object _streamModeGate = new();
 
     private readonly SocketHandle _handle;
@@ -17,6 +19,10 @@ internal sealed partial class SocketKernel : IDisposable
     private readonly SocketTypePolicy _policy;
     private string? _publishTopicCacheKey;
     private byte[]? _publishTopicCacheUtf8;
+    private PublisherAdmissionScheduler? _publisherAdmission;
+    private bool _publisherAdmissionClosing;
+    private RoutedAdmissionScheduler? _routedAdmission;
+    private bool _routedAdmissionClosing;
     private bool _streamAttached;
     private int _streamReceiveMode;
 
@@ -38,6 +44,61 @@ internal sealed partial class SocketKernel : IDisposable
     public IntPtr Handle => _handle.DangerousGetHandle();
     public SocketType Type => _policy.SocketType;
     internal object SubmitGate { get; } = new();
+
+    internal RoutedAdmissionScheduler RoutedAdmission
+    {
+        get
+        {
+            if (Type is not (SocketType.Dealer or SocketType.Router
+                or SocketType.Stream))
+                throw new NotSupportedException(
+                    "Exact routed admission requires a DEALER, ROUTER, or STREAM socket.");
+
+            lock (_routedAdmissionSync)
+            {
+                if (_routedAdmissionClosing)
+                    throw new ZlinkSubmitException(
+                        ZlinkSubmitException.ErrorCode.Terminated);
+                return _routedAdmission ??= new RoutedAdmissionScheduler(
+                    Handle, Type, SubmitGate,
+                    () => GetOption(SocketOptions.SndTimeo));
+            }
+        }
+    }
+
+    internal PublisherAdmissionScheduler PublisherAdmission
+    {
+        get
+        {
+            if (Type is not (SocketType.Pub or SocketType.XPub))
+                throw new NotSupportedException(
+                    "Publisher admission requires a PUB or XPUB socket.");
+
+            lock (_publisherAdmissionSync)
+            {
+                if (_publisherAdmissionClosing)
+                    throw new ZlinkSubmitException(
+                        ZlinkSubmitException.ErrorCode.Terminated);
+                if (_publisherAdmission != null)
+                    return _publisherAdmission;
+
+                var admission = new PublisherAdmissionScheduler(
+                    Handle, SubmitGate,
+                    () => GetOption(SocketOptions.SndTimeo));
+                try
+                {
+                    AdmissionSendReadyHandler(admission.SignalReady);
+                    _publisherAdmission = admission;
+                    return admission;
+                }
+                catch
+                {
+                    admission.BeginClose();
+                    throw;
+                }
+            }
+        }
+    }
 
     public bool ReceiveSubscriptionEvent(SubscriptionEvent result,
         RecvFlags flags = RecvFlags.None)

@@ -10,6 +10,7 @@
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
+#include <coroutine>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -27,6 +28,37 @@
 
 namespace detail
 {
+
+class sample_task_t
+{
+  public:
+    struct promise_type
+    {
+        sample_task_t get_return_object () { return sample_task_t (completion.get_future ()); }
+        std::suspend_never initial_suspend () noexcept { return {}; }
+        std::suspend_never final_suspend () noexcept { return {}; }
+        void return_void () { completion.set_value (); }
+        void unhandled_exception () { completion.set_exception (std::current_exception ()); }
+
+      private:
+        std::promise<void> completion;
+    };
+
+    sample_task_t (sample_task_t &&) noexcept = default;
+    sample_task_t &operator= (sample_task_t &&) noexcept = default;
+    sample_task_t (const sample_task_t &) = delete;
+    sample_task_t &operator= (const sample_task_t &) = delete;
+
+    void get () { _completion.get (); }
+
+  private:
+    explicit sample_task_t (std::future<void> completion_) :
+        _completion (std::move (completion_))
+    {
+    }
+
+    std::future<void> _completion;
+};
 
 inline const char *const k_pair_payload = "hello-pair";
 inline const char *const k_dealer_router_request = "ping";

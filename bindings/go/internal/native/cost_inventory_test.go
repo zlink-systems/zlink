@@ -47,8 +47,8 @@ func TestHotPathCostInventoryIsClassified(t *testing.T) {
 		"bytes-builder-native-copy":     {},
 		"option-scratch-buffer":         {},
 		"callback-dispatcher-worker":    {},
-		"request-completion-dispatcher": {},
-		"request-progress-handle-pump":  {},
+		"routed-payload-snapshot-copy":  {},
+		"routed-admission-worker":       {},
 		"cgo-package-runtime-rpath":     {},
 	}
 	gotIDs := make(map[string]struct{}, len(inventory.Entries))

@@ -23,6 +23,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
+import java.lang.ref.Cleaner;
 
 /**
  * Aggregates one recv result, including an optional routing id and the owned
@@ -72,6 +73,11 @@ public final class Received implements AutoCloseable {
     private RoutingId routingId;
     private List<Message> partsView;
     private boolean closed;
+    private final RetainedCreditCleanup retainedCredit =
+        new RetainedCreditCleanup();
+    @SuppressWarnings("unused")
+    private final Cleaner.Cleanable retainedCreditFallback =
+        retainedCredit.register(this);
 
     static {
         ContractAccess.register(new ContractAccess.ReceivedAccess() {
@@ -195,6 +201,12 @@ public final class Received implements AutoCloseable {
             public void adoptFrom(Received target, Received source) {
                 target.adoptFrom(source);
             }
+
+            @Override
+            public void adoptRetainedCredit(Received received,
+                                            Runnable release) {
+                received.adoptRetainedCredit(release);
+            }
         });
     }
 
@@ -252,6 +264,8 @@ public final class Received implements AutoCloseable {
         }
         ContractAccess.ReceivedPartCursor pendingCursor = cursor;
         cursor = null;
+        closeCursorQuietly(pendingCursor);
+        retainedCredit.release();
         this.closed = false;
         this.routingId = null;
         this.routingIdBytes = routingIdBytes;
@@ -268,7 +282,6 @@ public final class Received implements AutoCloseable {
         }
         this.realizedParts.add(singlePart);
         this.partsView = null;
-        closeCursorQuietly(pendingCursor);
     }
 
     /**
@@ -299,6 +312,7 @@ public final class Received implements AutoCloseable {
         this.cursor = source.cursor;
         this.routingId = source.routingId;
         this.partsView = source.partsView;
+        this.retainedCredit.transferFrom(source.retainedCredit);
 
         // Detach source so its own close() / finalizer is a no-op.
         source.requestSequence = 0L;
@@ -745,6 +759,7 @@ public final class Received implements AutoCloseable {
                 part.closeFromOwner();
             } catch (RuntimeException ignored) {
             }
+            retainedCredit.release();
             return;
         }
 
@@ -786,6 +801,7 @@ public final class Received implements AutoCloseable {
         }
         releasePartsList(partsToRelease);
         closeCursorQuietly(pendingCursor);
+        retainedCredit.release();
         markTerminal();
     }
 
@@ -854,8 +870,13 @@ public final class Received implements AutoCloseable {
         }
         releasePartsList(partsToRelease);
         closeCursorQuietly(pendingCursor);
+        retainedCredit.release();
         markTerminal();
         return Collections.unmodifiableList(detached);
+    }
+
+    private void adoptRetainedCredit(Runnable release) {
+        retainedCredit.replace(Objects.requireNonNull(release, "release"));
     }
 
     private void ensureOpen() {

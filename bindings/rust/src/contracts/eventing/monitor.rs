@@ -64,6 +64,24 @@ pub const MONITOR_EVENT_ALL: SocketMonitorEventMask = SocketMonitorEventMask::AL
 pub const MONITOR_EVENT_CONNECTION_READY: SocketMonitorEventMask =
     SocketMonitorEventMask::CONNECTION_READY;
 
+/// Options used when opening a socket monitor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SocketMonitorOpenOptions {
+    /// Event types delivered by the monitor.
+    pub events: SocketMonitorEventMask,
+    /// Exact monitor queue HWM in bytes; zero selects Core's default.
+    pub monitor_hwm_bytes: u64,
+}
+
+impl Default for SocketMonitorOpenOptions {
+    fn default() -> Self {
+        Self {
+            events: SocketMonitorEventMask::ALL,
+            monitor_hwm_bytes: 0,
+        }
+    }
+}
+
 /// A single socket connection-lifecycle event reported by a monitor.
 #[derive(Debug, Clone)]
 pub struct MonitorEvent {
@@ -141,6 +159,10 @@ pub struct MonitorStatus {
     pub snd_pending_msgs: u64,
     /// The number of inbound messages currently queued.
     pub rcv_pending_msgs: u64,
+    /// The number of outbound bytes currently queued.
+    pub snd_pending_bytes: u64,
+    /// The number of inbound bytes currently queued.
+    pub rcv_pending_bytes: u64,
     /// Whether automatic high-water-mark sizing is enabled.
     pub auto_hwm_enabled: bool,
     /// The active auto-HWM profile.
@@ -149,24 +171,6 @@ pub struct MonitorStatus {
     pub auto_hwm_role: u32,
     /// The auto-HWM policy class in effect.
     pub auto_hwm_policy_class: u32,
-    /// The per-unit memory budget, in bytes, used when sizing.
-    pub auto_hwm_unit_budget_bytes: u64,
-    /// The upper cap applied to auto-sized high-water marks.
-    pub auto_hwm_size_cap: u32,
-    /// The number of message slots auto-sizing allotted to the socket.
-    pub auto_hwm_socket_message_slots: u64,
-    /// Whether a connection-count bucket applied to the socket plan.
-    pub auto_hwm_connection_bucket_enabled: bool,
-    /// The peer count used to choose the connection bucket.
-    pub auto_hwm_connection_bucket_count: u32,
-    /// The selected connection bucket index, or `u32::MAX` when no bucket applies.
-    pub auto_hwm_connection_bucket_index: u32,
-    /// The selected bucket HWM for a 4 KiB message unit.
-    pub auto_hwm_connection_bucket_hwm_4k: u32,
-    /// Whether hysteresis retained the previous connection bucket.
-    pub auto_hwm_connection_bucket_hysteresis_retained: bool,
-    /// The effective per-message size, in bytes, used when sizing.
-    pub auto_hwm_effective_message_bytes: u64,
     /// The send high-water mark planned by the current policy, in bytes.
     pub auto_hwm_planned_sndhwm_bytes: u64,
     /// The receive high-water mark planned by the current policy, in bytes.
@@ -219,6 +223,14 @@ impl SocketMonitor {
     /// Open a socket monitor for all events.
     pub fn open(socket: &dyn Monitorable) -> Result<Self, ConfigError> {
         crate::monitor::socket_monitor_open(socket)
+    }
+
+    /// Open a socket monitor with explicit event and byte-HWM options.
+    pub fn open_with_options(
+        socket: &dyn Monitorable,
+        options: SocketMonitorOpenOptions,
+    ) -> Result<Self, ConfigError> {
+        crate::monitor::socket_monitor_open_with_options(socket, options)
     }
 
     /// Blocking receive of a monitor event.

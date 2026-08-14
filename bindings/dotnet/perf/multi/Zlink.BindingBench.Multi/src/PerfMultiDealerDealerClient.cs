@@ -8,7 +8,7 @@ internal static class PerfMultiDealerDealerClient
 {
     private const int ActiveDeadlineTag = int.MaxValue;
 
-    internal static int Run(PerfOptions options)
+    internal static async Task<int> Run(PerfOptions options)
     {
         int size = Math.Max(1, options.Size);
         int sndTimeoutMs = ResolveMultiSndTimeoutMs(options);
@@ -53,7 +53,6 @@ internal static class PerfMultiDealerDealerClient
             monitors.Clear();
 
             for (int i = 0; i < clients.Count; i++)
-                ApplyAutoHwmMsgUnit(ctx, size);
             RecalculateAutoHwm(ctx);
             if (clients.Count > 0)
                 PrintAutoHwmSnapshot(clients[0], "endpoint",
@@ -68,8 +67,8 @@ internal static class PerfMultiDealerDealerClient
                 return controlState.StopRequested ? 0 : 2;
             }
 
-            if (!RunSendPhase(activeClients, size, durationSeconds,
-                    controlState))
+            if (!await RunSendPhaseAsync(activeClients, size, durationSeconds,
+                    controlState).ConfigureAwait(false))
                 return 2;
 
             WriteStdoutLine($"CLIENT_DONE,{size}");
@@ -82,7 +81,8 @@ internal static class PerfMultiDealerDealerClient
         }
     }
 
-    private static bool RunSendPhase(List<ISocket> activeClients, int msgSize,
+    private static async Task<bool> RunSendPhaseAsync(
+        List<ISocket> activeClients, int msgSize,
         int durationSeconds, RunnerControlState controlState)
     {
         const uint runId = 1;
@@ -118,8 +118,8 @@ internal static class PerfMultiDealerDealerClient
                     Message message = Message.Allocate(payloadSize);
                     StampMetricHeader(message.AsSpan(), runId,
                         PerfPhase.Active, msgSize, seq, EpochNs());
-                    bool sent = socket.Send().Message(message)
-                        .Flags(SendFlags.DontWait).Submit();
+                    bool sent = await PerfSocketIo.SendAsync(socket, message)
+                        .ConfigureAwait(false) > 0;
                     message.Dispose();
                     if (!sent)
                     {
@@ -148,8 +148,8 @@ internal static class PerfMultiDealerDealerClient
         // server drains these tokens before the size process closes.
         for (int i = 0; i < activeClients.Count; i++)
         {
-            if (!SendStopTokenBlocking((IDealerSocket)activeClients[i],
-                    controlState))
+            if (!await SendStopTokenAsync((IDealerSocket)activeClients[i],
+                    controlState).ConfigureAwait(false))
                 return false;
         }
 
@@ -160,7 +160,7 @@ internal static class PerfMultiDealerDealerClient
     // transient backpressure (EINTR/EAGAIN/EWOULDBLOCK/ETIMEDOUT), aborting
     // the retry loop early only when shutdown is requested
     // (C g_stop_requested). Any non-transient failure is fatal.
-    private static bool SendStopTokenBlocking(IDealerSocket socket,
+    private static async Task<bool> SendStopTokenAsync(IDealerSocket socket,
         RunnerControlState controlState)
     {
         while (!controlState.StopRequested)
@@ -168,8 +168,8 @@ internal static class PerfMultiDealerDealerClient
             try
             {
                 using Message message = new(MultiStopToken.AsSpan());
-                if (socket.Send().Message(message).Flags(SendFlags.None)
-                        .Submit())
+                if (await PerfSocketIo.SendAsync(socket, message)
+                        .ConfigureAwait(false) > 0)
                     return true;
             }
             catch (ZlinkSubmitException ex)

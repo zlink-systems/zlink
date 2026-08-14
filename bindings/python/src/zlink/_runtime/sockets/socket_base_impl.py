@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 
 import ctypes
-import threading
 
 from ...contracts.sockets.codes import SocketType
 from ...contracts.core.routing_id import RoutingId
@@ -14,10 +13,9 @@ from ..._native.ffi import ZlinkMsg, ZlinkRoutingId, lib
 from ..handles.native_support import (
     _copy_routing_id,
     _decode_topic_text,
-    _REPLY_HANDLER,
     _ReceivedPartsOwner,
+    _recv_retained_native_parts,
     _raise_result_error,
-    _request_result_from_code,
     _report_unhandled_callback_exception,
     _routing_id_bytes,
     _validated_routing_id_bytes,
@@ -30,20 +28,18 @@ from ...contracts.errors.errors import (
     SubmitError,
 )
 from ...contracts.errors.codes import ConnectResult
-from ...contracts.sockets.codes import HandlerResult, RecvResult, RequestResult, SubmitResult
+from ...contracts.sockets.codes import HandlerResult, RecvResult, SubmitResult
 from ..messaging.message_materializer import (
     Message,
     ReceivedMessage,
     SubscriptionEvent,
 )
 from ..messaging.request_reply import (
-    _PendingRequest,
-    _RequestProgressPump,
     _clone_payload,
     _ensure_reply_flags_supported,
-    _message_list_from_parts,
     _timeout_to_ms,
 )
+from ..messaging.routed_async import RoutedAdmissionOwner
 from .socket_base import (
     _BindSocket,
     _DealerOptionSocket,
@@ -72,11 +68,6 @@ from .socket_base import (
 _NO_PAYLOAD = object()
 
 
-def _require_request_callback(callback):
-    if not callable(callback):
-        raise TypeError("request callback must be callable")
-
-
 _native_socket_send_op_func = (
     getattr(_native_extension, "socket_send_op", None)
     if _native_extension is not None
@@ -94,6 +85,16 @@ _native_publisher_send_op_func = (
 )
 _native_router_recv_owner_func = (
     getattr(_native_extension, "router_recv_owner", None)
+    if _native_extension is not None
+    else None
+)
+_native_dealer_recv_retained_owner_func = (
+    getattr(_native_extension, "dealer_recv_retained_owner", None)
+    if _native_extension is not None
+    else None
+)
+_native_router_recv_retained_owner_func = (
+    getattr(_native_extension, "router_recv_retained_owner", None)
     if _native_extension is not None
     else None
 )
@@ -198,6 +199,8 @@ class _SocketSendOp:
 
 
 class _RoutedSocketSendOp(_SocketSendOp):
+    """Synchronous routed builder retained for STREAM only."""
+
     __slots__ = ("_routing_id",)
 
     def __init__(self, socket, routing_id):
@@ -227,6 +230,70 @@ class _RoutedSocketSendOp(_SocketSendOp):
             if (self._flags & 1) and ex.result == SubmitResult.BACKPRESSURED:
                 return False
             raise
+
+
+class _ManagedRoutedSendOp:
+    """Canonical coroutine builder for DEALER/ROUTER HWM admission."""
+
+    __slots__ = ("_socket", "_routing_id", "_payload", "_parts", "_submitted")
+
+    def __init__(self, socket, routing_id=None):
+        self._socket = socket
+        self._routing_id = (
+            None
+            if routing_id is None
+            else _validated_routing_id_bytes(routing_id)
+        )
+        self._payload = _NO_PAYLOAD
+        self._parts = None
+        self._submitted = False
+
+    def message(self, payload):
+        if self._submitted:
+            raise SubmitError(SubmitResult.INVALID_STATE, 0)
+        if self._parts is not None:
+            self._parts.append(payload)
+        elif self._payload is _NO_PAYLOAD:
+            self._payload = payload
+        else:
+            self._parts = [self._payload, payload]
+            self._payload = _NO_PAYLOAD
+        return self
+
+    def messages(self, *payloads):
+        if self._submitted:
+            raise SubmitError(SubmitResult.INVALID_STATE, 0)
+        if not payloads:
+            return self
+        if self._parts is not None:
+            self._parts.extend(payloads)
+        elif self._payload is _NO_PAYLOAD:
+            if len(payloads) == 1:
+                self._payload = payloads[0]
+            else:
+                self._parts = list(payloads)
+        else:
+            self._parts = [self._payload, *payloads]
+            self._payload = _NO_PAYLOAD
+        return self
+
+    def _payload_or_raise(self):
+        if self._parts is not None:
+            if not self._parts:
+                raise SubmitError(SubmitResult.INVALID_ARGUMENT, 0)
+            return self._parts
+        if self._payload is _NO_PAYLOAD:
+            raise SubmitError(SubmitResult.INVALID_ARGUMENT, 0)
+        return self._payload
+
+    def submit(self):
+        if self._submitted:
+            raise SubmitError(SubmitResult.INVALID_STATE, 0)
+        payload = self._payload_or_raise()
+        self._submitted = True
+        return self._socket._routed_admission.submit_send(
+            self._routing_id, payload
+        )
 
 
 class _PublisherSendOp(_SocketSendOp):
@@ -363,12 +430,12 @@ class _NativePublisherSendOp(_SocketSendOp):
 
 
 class _RequestOp:
-    """Own the fluent state for one raw request submission."""
+    """Canonical coroutine builder for one routed request."""
 
-    __slots__ = ("_op_callback", "_parts", "_timeout", "_submitted")
+    __slots__ = ("_op_submit", "_parts", "_timeout", "_submitted")
 
-    def __init__(self, op_callback):
-        self._op_callback = op_callback
+    def __init__(self, op_submit):
+        self._op_submit = op_submit
         self._parts = []
         self._timeout = 0
         self._submitted = False
@@ -391,80 +458,15 @@ class _RequestOp:
         self._timeout = timeout
         return self
 
-    def flags(self, flags):
-        if self._submitted:
-            raise SubmitError(SubmitResult.INVALID_STATE, 0)
-        self._submitted = True
-        return _RequestCallbackOp(
-            self._op_callback,
-            self._parts,
-            self._timeout,
-            int(flags),
-        )
-
-    def submit(self, callback):
+    def submit(self):
         if self._submitted:
             raise SubmitError(SubmitResult.INVALID_STATE, 0)
         if not self._parts:
             raise SubmitError(SubmitResult.INVALID_ARGUMENT, 0)
-        _require_request_callback(callback)
         self._submitted = True
-        return self._op_callback(
+        return self._op_submit(
             self._parts,
-            callback,
-            flags=0,
-            timeout=self._timeout,
-        )
-
-
-class _RequestCallbackOp:
-    """Own the request state after send flags have been selected."""
-
-    __slots__ = ("_op_callback", "_parts", "_timeout", "_flags", "_submitted")
-
-    def __init__(self, op_callback, parts, timeout, flags):
-        self._op_callback = op_callback
-        self._parts = parts
-        self._timeout = timeout
-        self._flags = flags
-        self._submitted = False
-
-    def message(self, payload):
-        if self._submitted:
-            raise SubmitError(SubmitResult.INVALID_STATE, 0)
-        self._parts.append(payload)
-        return self
-
-    def messages(self, *payloads):
-        if self._submitted:
-            raise SubmitError(SubmitResult.INVALID_STATE, 0)
-        self._parts.extend(payloads)
-        return self
-
-    def timeout(self, timeout):
-        if self._submitted:
-            raise SubmitError(SubmitResult.INVALID_STATE, 0)
-        self._timeout = timeout
-        return self
-
-    def flags(self, flags):
-        if self._submitted:
-            raise SubmitError(SubmitResult.INVALID_STATE, 0)
-        self._flags = int(flags)
-        return self
-
-    def submit(self, callback):
-        if self._submitted:
-            raise SubmitError(SubmitResult.INVALID_STATE, 0)
-        if not self._parts:
-            raise SubmitError(SubmitResult.INVALID_ARGUMENT, 0)
-        _require_request_callback(callback)
-        self._submitted = True
-        return self._op_callback(
-            self._parts,
-            callback,
-            flags=self._flags,
-            timeout=self._timeout,
+            _timeout_to_ms(self._timeout),
         )
 
 
@@ -506,65 +508,38 @@ class _ReplyOp:
         return self._op_callback(self._parts, self._flags)
 
 
-class _RequestSocket:
-    """Aggregate request completion ownership for DEALER and ROUTER."""
+class _RoutedAsyncSocket:
+    """Lifecycle glue for the socket-local routed coroutine owner."""
 
-    def _init_request_socket(self):
-        self._request_reply_handler = _REPLY_HANDLER(self._on_request_reply)
-        self._request_state_lock = threading.RLock()
-        self._request_closing = False
-        self._pending_requests = {}
-        self._request_progress = _RequestProgressPump(
-            lambda: self._handle,
-            self._request_has_pending,
-            lambda: self._cancel_pending_requests(RequestResult.INTERNAL_ERROR),
-        )
-
-    def _request_has_pending(self):
-        with self._request_state_lock:
-            return bool(self._pending_requests)
-
-    def _on_request_reply(self, result_code, parts, part_count, userdata):
-        handle = ctypes.cast(userdata, ctypes.c_void_p).value
-        with self._request_state_lock:
-            pending = self._pending_requests.pop(handle, None)
-        if pending is None:
-            return
-        result = _request_result_from_code(int(result_code))
-        reply = []
-        if result == RequestResult.OK:
-            reply = _message_list_from_parts(parts, part_count)
-        pending.resolve(result, reply)
-
-    def _cancel_pending_requests(self, result):
-        with self._request_state_lock:
-            pending_requests = list(self._pending_requests.values())
-            self._pending_requests.clear()
-        for pending in pending_requests:
-            pending.resolve(result, [])
+    def _init_routed_async_socket(self, role):
+        if role == SocketType.DEALER:
+            read_request_timeout = lambda: self.dealer_options.request_timeout_ms
+        else:
+            read_request_timeout = lambda: self.router_options.request_timeout_ms
+        try:
+            admission = RoutedAdmissionOwner(
+                self,
+                role,
+                self._outbound_record_attempt_gate,
+                lambda: self.options.send_timeout_ms,
+                read_request_timeout,
+            )
+        except Exception:
+            super().close()
+            raise
+        self._routed_admission = admission
 
     def close(self):
-        progress = getattr(self, "_request_progress", None)
-        with self._request_state_lock:
-            self._request_closing = True
+        admission = getattr(self, "_routed_admission", None)
+        if admission is None:
+            return super().close()
         try:
-            if progress is not None:
-                progress.stop()
+            admission.begin_close()
             super().close()
         except Exception:
-            # A retryable Core close must leave the request aggregate usable.
-            # Restart progress only while the native handle and pending work
-            # still exist; a successful close drains/cancels them below.
-            with self._request_state_lock:
-                self._request_closing = False
-            if (
-                progress is not None
-                and self._handle
-                and self._request_has_pending()
-            ):
-                progress.ensure_running()
+            admission.rollback_close()
             raise
-        self._cancel_pending_requests(RequestResult.TERMINATED)
+        admission.finish_close()
 
 
 class PairSocket(_SendReadySocket, _EndpointSocket, _MessageSocket):
@@ -575,7 +550,7 @@ class PairSocket(_SendReadySocket, _EndpointSocket, _MessageSocket):
 
 
 class DealerSocket(
-    _RequestSocket,
+    _RoutedAsyncSocket,
     _SendReadySocket,
     _EndpointSocket,
     _DealerOptionSocket,
@@ -586,58 +561,73 @@ class DealerSocket(
 
     def __init__(self, context):
         super().__init__(context)
-        self._init_request_socket()
+        self._init_routed_async_socket(SocketType.DEALER)
 
     def send(self):
-        return _native_socket_send_op(self) or _SocketSendOp(self)
+        return _ManagedRoutedSendOp(self)
 
     def request(self):
         return _RequestOp(
-            lambda parts, callback, flags=0, timeout=0: self._request_callback(
-                parts, callback, flags=flags, timeout=timeout
+            lambda parts, timeout_ms: self._routed_admission.submit_request(
+                None, parts, timeout_ms
             )
         )
 
-    def _request_callback(self, payload, callback, *, flags=0, timeout=0):
-        with self._request_state_lock:
-            if self._request_closing or not self._handle:
-                raise SubmitError(SubmitResult.INVALID_STATE, 0)
-            pending = _PendingRequest(callback=callback)
-            handle = id(pending)
-            self._pending_requests[handle] = pending
-            try:
-                self._start_request(payload, flags, timeout, handle)
-                self._request_progress.ensure_running()
-                return True
-            except SubmitError as ex:
-                self._pending_requests.pop(handle, None)
-                if int(flags) & 1 and ex.result == SubmitResult.BACKPRESSURED:
+    def recv_retained_into(self, received, *, flags=0):
+        """Framework-backend typed DEALER receive with retained Core credit."""
+        if received is None:
+            raise TypeError("received must be a Received")
+        received.close()
+        try:
+            if (
+                _native_dealer_recv_retained_owner_func is not None
+                and not _in_callback()
+            ):
+                result = _native_dealer_recv_retained_owner_func(
+                    int(self._socket_handle.handle), int(flags)
+                )
+                if result is False:
                     return False
-                raise
-            except Exception:
-                self._pending_requests.pop(handle, None)
-                raise
+                rc, err, _message_type, request_seq, owner, retained_credit = result
+                if int(rc) != 0:
+                    _raise_result_error(RecvError, RecvResult, rc, err)
+                seq = int(request_seq)
+            else:
+                seq = 0
 
-    def _start_request(self, payload, flags, timeout, handle):
-        native_parts = _clone_payload(payload)
-        rc, err = _submit_parts(
-            native_parts,
-            lambda part_ptr, part_flag: lib().zlink_dealer_request_part(
-                self._handle,
-                part_ptr,
-                int(flags),
-                part_flag,
-                _timeout_to_ms(timeout),
-                self._request_reply_handler,
-                ctypes.c_void_p(handle),
-            ),
+                def recv_part(part, lease, has_more, recv_flags, first):
+                    nonlocal seq
+                    message_type = ctypes.c_uint8()
+                    request_seq = ctypes.c_uint64()
+                    rc = lib().zlink_dealer_recv_part_with_hwm_budget_lease(
+                        self._handle,
+                        ctypes.byref(message_type),
+                        ctypes.byref(request_seq),
+                        part,
+                        lease,
+                        has_more,
+                        recv_flags,
+                    )
+                    if rc == 0 and first:
+                        seq = int(request_seq.value)
+                    return rc
+
+                owner, retained_credit = _recv_retained_native_parts(
+                    recv_part, flags
+                )
+        except RecvError as ex:
+            if int(flags) & 1 and ex.result == RecvResult.NO_DATA:
+                return False
+            raise
+        received._replace(
+            owner,
+            request_seq=seq if seq != 0 else None,
+            retained_credit=retained_credit,
         )
-        if rc != 0:
-            self._pending_requests.pop(handle, None)
-            _raise_result_error(SubmitError, SubmitResult, rc, err)
+        return True
 
 class RouterSocket(
-    _RequestSocket,
+    _RoutedAsyncSocket,
     _SendReadySocket,
     _EndpointSocket,
     _RouterOptionSocket,
@@ -648,22 +638,20 @@ class RouterSocket(
 
     def __init__(self, context):
         super().__init__(context)
-        self._init_request_socket()
+        self._init_routed_async_socket(SocketType.ROUTER)
 
     @property
     def router_options(self):
         return create_router_socket_options(self)
 
     def send(self, routing_id):
-        return _native_routed_send_op(self, routing_id) or _RoutedSocketSendOp(
-            self, routing_id
-        )
+        return _ManagedRoutedSendOp(self, routing_id)
 
     def request(self, peer_rid):
         return _RequestOp(
-            lambda parts, callback, flags=0, timeout=0: self._request_callback(
-                peer_rid, parts, callback, flags=flags, timeout=timeout
-            ),
+            lambda parts, timeout_ms: self._routed_admission.submit_request(
+                peer_rid, parts, timeout_ms
+            )
         )
 
     def reply(self, routing_id, request_seq):
@@ -677,18 +665,28 @@ class RouterSocket(
         _ensure_reply_flags_supported(flags)
         native_parts = _clone_payload(payload)
         native_rid = _copy_routing_id(routing_id)
-        rc, err = _submit_parts(
-            native_parts,
-            lambda part_ptr, part_flag: lib().zlink_router_reply_part(
-                self._handle,
-                ctypes.byref(native_rid),
-                ctypes.c_uint64(request_seq),
-                part_ptr,
-                part_flag,
-            ),
-        )
-        if rc != 0:
-            _raise_result_error(SubmitError, SubmitResult, rc, err)
+        attempted = False
+
+        def submit(_handle):
+            nonlocal attempted
+            attempted = True
+            return _submit_parts(
+                native_parts,
+                lambda part_ptr, part_flag: lib().zlink_router_reply_part(
+                    self._handle,
+                    ctypes.byref(native_rid),
+                    ctypes.c_uint64(request_seq),
+                    part_ptr,
+                    part_flag,
+                ),
+            )
+
+        try:
+            self._routed_admission.run_sync_outbound_attempt(submit)
+        except Exception:
+            if not attempted:
+                _close_native_parts(native_parts)
+            raise
 
     def _replace_router_received(self, received, owner, routing_id, request_seq):
         received._replace(
@@ -771,45 +769,73 @@ class RouterSocket(
         )
         return True
 
-    def _request_callback(self, routing_id, payload, callback, *, flags=0, timeout=0):
-        with self._request_state_lock:
-            if self._request_closing or not self._handle:
-                raise SubmitError(SubmitResult.INVALID_STATE, 0)
-            pending = _PendingRequest(callback=callback)
-            handle = id(pending)
-            self._pending_requests[handle] = pending
-            try:
-                self._start_request(routing_id, payload, flags, timeout, handle)
-                self._request_progress.ensure_running()
-                return True
-            except SubmitError as ex:
-                self._pending_requests.pop(handle, None)
-                if int(flags) & 1 and ex.result == SubmitResult.BACKPRESSURED:
+    def recv_retained_into(self, received, *, flags=0):
+        """Framework-backend typed ROUTER receive with retained Core credit."""
+        if received is None:
+            raise TypeError("received must be a Received")
+        received.close()
+        try:
+            if (
+                _native_router_recv_retained_owner_func is not None
+                and not _in_callback()
+            ):
+                result = _native_router_recv_retained_owner_func(
+                    int(self._socket_handle.handle), int(flags)
+                )
+                if result is False:
                     return False
-                raise
-            except Exception:
-                self._pending_requests.pop(handle, None)
-                raise
+                rc, err, routing, request_seq, owner, retained_credit = result
+                if int(rc) != 0:
+                    _raise_result_error(RecvError, RecvResult, rc, err)
+                routing_id = (
+                    RoutingId.from_(routing) if routing is not None else None
+                )
+                seq = int(request_seq)
+            else:
+                routing_id = None
+                seq = 0
 
-    def _start_request(self, routing_id, payload, flags, timeout, handle):
-        native_parts = _clone_payload(payload)
-        native_rid = _copy_routing_id(routing_id)
-        rc, err = _submit_parts(
-            native_parts,
-            lambda part_ptr, part_flag: lib().zlink_router_request_part(
-                self._handle,
-                ctypes.byref(native_rid),
-                part_ptr,
-                int(flags),
-                part_flag,
-                _timeout_to_ms(timeout),
-                self._request_reply_handler,
-                ctypes.c_void_p(handle),
-            ),
+                def recv_part(part, lease, has_more, recv_flags, first):
+                    nonlocal routing_id, seq
+                    source_rid = ctypes.POINTER(ZlinkRoutingId)()
+                    request_seq = ctypes.c_uint64()
+                    transport_pair_id = ctypes.c_uint64()
+                    transport_pair_generation = ctypes.c_uint64()
+                    rc = lib().zlink_router_recv_part_v2_with_hwm_budget_lease(
+                        self._handle,
+                        ctypes.byref(source_rid),
+                        ctypes.byref(request_seq),
+                        ctypes.byref(transport_pair_id),
+                        ctypes.byref(transport_pair_generation),
+                        part,
+                        lease,
+                        has_more,
+                        recv_flags,
+                    )
+                    if rc == 0 and first:
+                        routing_id = (
+                            _routing_id_bytes(source_rid.contents)
+                            if source_rid
+                            else None
+                        )
+                        seq = int(request_seq.value)
+                    return rc
+
+                owner, retained_credit = _recv_retained_native_parts(
+                    recv_part, flags
+                )
+        except RecvError as ex:
+            if int(flags) & 1 and ex.result == RecvResult.NO_DATA:
+                return False
+            raise
+        received._replace(
+            owner,
+            routing_id=routing_id,
+            request_seq=seq if seq != 0 else None,
+            router_socket=self,
+            retained_credit=retained_credit,
         )
-        if rc != 0:
-            self._pending_requests.pop(handle, None)
-            _raise_result_error(SubmitError, SubmitResult, rc, err)
+        return True
 
 class StreamSocket(
     _SendReadySocket,
@@ -822,6 +848,16 @@ class StreamSocket(
 
     def __init__(self, context):
         super().__init__(context)
+
+    def _replace_retained_received(
+        self, received, owner, routing, retained_credit
+    ):
+        received._replace(
+            owner,
+            routing,
+            router_socket=self,
+            retained_credit=retained_credit,
+        )
 
     def send(self, routing_id):
         return _native_routed_send_op(self, routing_id) or _RoutedSocketSendOp(

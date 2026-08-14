@@ -19,7 +19,6 @@ const {
   currentEpochNs,
   HEADER_SIZE,
   MIN_MSG_SIZE,
-  applyAutoHwmMsgUnit,
   applyAutoHwmProfile,
   integerEnv,
   manualSocketOverridesEnabled,
@@ -156,8 +155,8 @@ function autoHwmRoleName(role) {
 function singleAutoHwmSnapshotVisible(snapshot) {
   return snapshot.autoHwmAppliedSndHwmBytes > 0n
     || snapshot.autoHwmAppliedRcvHwmBytes > 0n
-    || BigInt(snapshot.autoHwmEffectiveMessageBytes ?? 0) > 0n
-    || BigInt(snapshot.autoHwmSocketMessageSlots ?? 0) > 0n;
+    || BigInt(snapshot.sndPendingBytes ?? 0) > 0n
+    || BigInt(snapshot.rcvPendingBytes ?? 0) > 0n;
 }
 
 function emitSingleSocketHwmDetail(socket, pattern, transport, component, msgSize) {
@@ -194,10 +193,10 @@ function emitSingleSocketHwmDetail(socket, pattern, transport, component, msgSiz
       + `,role=${autoHwmRoleName(snapshot.autoHwmRole)}`
       + `,sndhwm=${snapshot.autoHwmAppliedSndHwmBytes}`
       + `,rcvhwm=${snapshot.autoHwmAppliedRcvHwmBytes}`
-      + `,effective_message_bytes=${snapshot.autoHwmEffectiveMessageBytes}`
+      + `,snd_pending_bytes=${snapshot.sndPendingBytes}`
+      + `,rcv_pending_bytes=${snapshot.rcvPendingBytes}`
       + `,effective_sndbuf=${snapshot.autoHwmEffectiveSndBuf}`
       + `,effective_rcvbuf=${snapshot.autoHwmEffectiveRcvBuf}`
-      + `,socket_message_slots=${snapshot.autoHwmSocketMessageSlots}`
     );
   } catch (err) {
     // Snapshot/emit is diagnostic only; keep the benchmark result primary.
@@ -465,8 +464,12 @@ function isTransientSubmit(error) {
     || text.includes('Transport endpoint is not connected');
 }
 
-function sendSocketNoWait(socket, payload, flags = zlink.SendFlags.DontWait) {
+async function sendSocketNoWait(socket, payload, flags = zlink.SendFlags.DontWait) {
   try {
+    if (typeof socket.request === 'function') {
+      await socket.send().message(payload).submit();
+      return true;
+    }
     return socket.send().message(payload).flags(flags).submit();
   } catch (error) {
     if (isTransientSubmit(error)) {
@@ -476,14 +479,18 @@ function sendSocketNoWait(socket, payload, flags = zlink.SendFlags.DontWait) {
   }
 }
 
-function sendSocketRequired(socket, payload, flags = zlink.SendFlags.None) {
+async function sendSocketRequired(socket, payload, flags = zlink.SendFlags.None) {
+  if (typeof socket.request === 'function') {
+    await socket.send().message(payload).submit();
+    return;
+  }
   socket.send().message(payload).flags(flags).submit();
 }
 
-function sendSocketStopWithRetry(socket) {
+async function sendSocketStopWithRetry(socket) {
   for (let retry = 0; retry < 100; retry += 1) {
     try {
-      sendSocketRequired(socket, STOP_TOKEN_BYTES);
+      await sendSocketRequired(socket, STOP_TOKEN_BYTES);
       return;
     } catch (error) {
       if (!isTransientSubmit(error)) {
@@ -551,7 +558,6 @@ async function runLocalSocketOneWayBenchmark({
   try {
     applySocketPolicy(receiver, options);
     applySocketPolicy(sender, options);
-    applyAutoHwmMsgUnit(ctx, msgSize);
     if (typeof configureReceiver === 'function') {
       configureReceiver(receiver);
     }
@@ -573,7 +579,7 @@ async function runLocalSocketOneWayBenchmark({
     // shared context — no Worker, so inproc works.
     let activeRoutingId = null;
     if (typeof handshake === 'function') {
-      activeRoutingId = handshake(sender, receiver);
+      activeRoutingId = await handshake(sender, receiver);
     }
 
     const activeStartNs = currentEpochNs();
@@ -610,9 +616,9 @@ async function runLocalSocketOneWayBenchmark({
     const sendOne = typeof sendActive === 'function'
       ? (value) => sendActive(sender, value, activeRoutingId)
       : (value) => sendSocketNoWait(sender, value);
-    const sendActiveBlocking = (value) => {
+    const sendActiveBlocking = async (value) => {
       while (true) {
-        if (sendOne(value)) {
+        if (await sendOne(value)) {
           return true;
         }
         // Backpressured: drain the receiver (the Node stand-in for C's
@@ -629,16 +635,16 @@ async function runLocalSocketOneWayBenchmark({
     let seq = 1n;
     while (currentEpochNs() < activeStopNs) {
       stampPayload(payload, { phase: 1, runId, msgSize, seq });
-      sendActiveBlocking(payload);
+      await sendActiveBlocking(payload);
       seq += 1n;
       drainOnce();
     }
     // C single sends active samples until the deadline and then sends only
     // the wire stop token. There is no post-active phase-2 payload.
     if (typeof sendStop === 'function') {
-      sendStop(sender, activeRoutingId);
+      await sendStop(sender, activeRoutingId);
     } else {
-      sendSocketStopWithRetry(sender);
+      await sendSocketStopWithRetry(sender);
     }
     while (!drainOnce()) {
       // Drain until the wire-level stop token arrives.
@@ -793,7 +799,6 @@ async function closeSenderWorker(worker?: NodeWorker | null) {
 }
 
 module.exports = {
-  applyAutoHwmMsgUnit,
   applyContextPolicy,
   applySocketPolicy,
   configureTlsClient,
@@ -816,7 +821,6 @@ module.exports = {
 };
 
 export {
-  applyAutoHwmMsgUnit,
   applyContextPolicy,
   applySocketPolicy,
   configureTlsClient,

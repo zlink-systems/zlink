@@ -15,19 +15,12 @@ import java.util.EnumSet;
  * @param detailFlags bitmask of detail flags
  * @param sndPendingMsgs pending outbound message count
  * @param rcvPendingMsgs pending inbound message count
+ * @param sndPendingBytes pending outbound byte count
+ * @param rcvPendingBytes pending inbound byte count
  * @param autoHwmEnabled whether auto-HWM is enabled
  * @param autoHwmProfile the current auto-HWM sizing profile
  * @param autoHwmRole the socket's auto-HWM role
  * @param autoHwmPolicyClass the auto-HWM policy class
- * @param autoHwmUnitBudgetBytes the per-message unit budget in bytes
- * @param autoHwmSizeCap the computed auto-HWM size cap
- * @param autoHwmSocketMessageSlots the socket's message slot capacity
- * @param autoHwmConnectionBucketEnabled whether a connection bucket applied
- * @param autoHwmConnectionBucketCount the peer count used by the bucket planner
- * @param autoHwmConnectionBucketIndex the selected bucket index
- * @param autoHwmConnectionBucketHwm4K the selected bucket HWM for 4 KiB messages
- * @param autoHwmConnectionBucketHysteresisRetained whether hysteresis retained the previous bucket
- * @param autoHwmEffectiveMessageBytes the effective message size in bytes
  * @param autoHwmPlannedSendHwmBytes planned send HWM in accounted bytes
  * @param autoHwmPlannedRecvHwmBytes planned receive HWM in accounted bytes
  * @param autoHwmAppliedSendHwmBytes applied send HWM in accounted bytes
@@ -52,18 +45,10 @@ public record MonitorStatus(int abiVersion, int structSize,
                               EnumSet<MonitorStateFlags> stateFlags,
                               EnumSet<MonitorStatusDetailFlags> detailFlags,
                               long sndPendingMsgs, long rcvPendingMsgs,
+                              long sndPendingBytes, long rcvPendingBytes,
                               boolean autoHwmEnabled,
                               AutoHwmProfile autoHwmProfile,
                               int autoHwmRole, int autoHwmPolicyClass,
-                              long autoHwmUnitBudgetBytes,
-                              int autoHwmSizeCap,
-                              long autoHwmSocketMessageSlots,
-                              boolean autoHwmConnectionBucketEnabled,
-                              int autoHwmConnectionBucketCount,
-                              int autoHwmConnectionBucketIndex,
-                              int autoHwmConnectionBucketHwm4K,
-                              boolean autoHwmConnectionBucketHysteresisRetained,
-                              long autoHwmEffectiveMessageBytes,
                               long autoHwmPlannedSendHwmBytes,
                               long autoHwmPlannedRecvHwmBytes,
                               long autoHwmAppliedSendHwmBytes,

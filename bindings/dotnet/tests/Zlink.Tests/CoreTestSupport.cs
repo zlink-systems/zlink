@@ -157,7 +157,7 @@ internal static class CoreTestSupport
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         while (DateTime.UtcNow < deadline)
         {
-            Message message = Message.From(payload);
+            using Message message = Message.From(payload);
             try
             {
                 socket.Send().Message(message).Submit();
@@ -171,6 +171,15 @@ internal static class CoreTestSupport
         throw new TimeoutException("send timeout");
     }
 
+    internal static void SendAsyncWithTimeout(IDealerSocket socket,
+        ReadOnlySpan<byte> payload, int timeoutMs)
+    {
+        using Message message = Message.From(payload);
+        socket.Send().Message(message).Async()
+            .WaitAsync(TimeSpan.FromMilliseconds(timeoutMs))
+            .GetAwaiter().GetResult();
+    }
+
     internal static void PublishWithRetry(IPublisherSocket socket, string topic,
         ReadOnlySpan<byte> payload, int timeoutMs)
     {
@@ -180,8 +189,7 @@ internal static class CoreTestSupport
             Message message = Message.From(payload);
             try
             {
-                socket.Publish(topic).Message(message).Submit();
-                return;
+                if (socket.TryPublish(topic).Message(message).Submit()) return;
             }
             catch (ZlinkSubmitException)
             {
@@ -191,7 +199,8 @@ internal static class CoreTestSupport
         throw new TimeoutException("publish timeout");
     }
 
-    internal static Received ReceiveMessageWithTimeout(IMessageSocket socket,
+    internal static Received ReceiveMessageWithTimeout(
+        IReceivingMessageSocket socket,
         int timeoutMs)
     {
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
@@ -205,7 +214,8 @@ internal static class CoreTestSupport
         throw new TimeoutException("receive timeout");
     }
 
-    internal static byte[] ReceiveBytesWithTimeout(IMessageSocket socket,
+    internal static byte[] ReceiveBytesWithTimeout(
+        IReceivingMessageSocket socket,
         int maxSize, int timeoutMs)
     {
         _ = maxSize;
@@ -222,7 +232,8 @@ internal static class CoreTestSupport
         }
     }
 
-    internal static string ReceiveUtf8WithTimeout(IMessageSocket socket,
+    internal static string ReceiveUtf8WithTimeout(
+        IReceivingMessageSocket socket,
         int timeoutMs)
     {
         Received received = ReceiveMessageWithTimeout(socket, timeoutMs);
@@ -318,7 +329,8 @@ internal static class CoreTestSupport
         return Encoding.UTF8.GetString(payload).Trim('\0');
     }
 
-    internal static bool TryReceiveMultipartLastPart(IMessageSocket socket,
+    internal static bool TryReceiveMultipartLastPart(
+        IReceivingMessageSocket socket,
         int maxSize, out byte[] lastPart)
     {
         _ = maxSize;
@@ -355,44 +367,8 @@ internal static class CoreTestSupport
         }
     }
 
-    internal static bool TryReceiveMultipartLastPart(IRoutedMessageSocket socket,
-        int maxSize, out byte[] lastPart)
-    {
-        _ = maxSize;
-        try
-        {
-            var received = Received.Create();
-            if (!socket.Recv(received, RecvFlags.DontWait))
-            {
-                lastPart = Array.Empty<byte>();
-                return false;
-            }
-            IReadOnlyList<Message> parts = received.Parts;
-            if (parts.Count == 0)
-            {
-                lastPart = Array.Empty<byte>();
-                return true;
-            }
-
-            try
-            {
-                lastPart = parts[parts.Count - 1].AsReadOnlySpan().ToArray();
-                return true;
-            }
-            finally
-            {
-                DisposeAll(parts);
-            }
-        }
-        catch (ZlinkRecvException ex)
-            when (ex.Result == ZlinkRecvException.ErrorCode.NoData)
-        {
-            lastPart = Array.Empty<byte>();
-            return false;
-        }
-    }
-
-    internal static bool ExpectNoMessage(IMessageSocket socket, int probeMs)
+    internal static bool ExpectNoMessage(IReceivingMessageSocket socket,
+        int probeMs)
     {
         DateTime deadline = DateTime.UtcNow.AddMilliseconds(probeMs);
         var received = Received.Create();
@@ -425,7 +401,7 @@ internal static class CoreTestSupport
     }
 
     internal static (string routingId, string payload) ReceiveRoutedUtf8WithTimeout(
-        IRoutedMessageSocket socket, int timeoutMs)
+        IReceivingMessageSocket socket, int timeoutMs)
     {
         TimeSpan? oldTimeout = socket.Options.ReceiveTimeout;
         socket.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(timeoutMs);

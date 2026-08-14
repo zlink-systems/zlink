@@ -18,7 +18,9 @@ class ContextOption(IntEnum):
     AUTO_HWM_ENABLE = 12
     AUTO_HWM_RECALC_DEBOUNCE_MS = 14
     AUTO_HWM_PROFILE = 17
-    AUTO_HWM_MSG_UNIT_BYTES = 18
+    AUTO_HWM_MEMORY_LIMIT_BYTES = 19
+    AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES = 20
+    AUTO_HWM_CORE_BUDGET_BYTES = 21
 
 class AutoHwmProfile(IntEnum):
     """An automatic high-water-mark sizing profile trading memory, latency, and throughput."""

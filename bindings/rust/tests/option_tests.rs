@@ -9,22 +9,61 @@ use zlink::{AutoHwmProfile, Context, RidDuplicatePolicy, RoutingId, StreamSocket
 fn context_option_auto_hwm_profile() {
     let ctx = Context::new().unwrap();
     ctx.options()
-        .set_auto_hwm_profile(AutoHwmProfile::Compact)
+        .set_core_hwm_profile(AutoHwmProfile::Compact)
         .unwrap();
     assert_eq!(
-        ctx.options().auto_hwm_profile().unwrap(),
+        ctx.options().core_hwm_profile().unwrap(),
         AutoHwmProfile::Compact
     );
 }
 
 #[test]
-fn context_option_auto_hwm_msg_unit_bytes() {
+fn context_core_hwm_budget_options_and_snapshot() {
     let ctx = Context::new().unwrap();
-    assert_eq!(ctx.options().auto_hwm_msg_unit_bytes().unwrap(), 0);
-    ctx.options().set_auto_hwm_msg_unit_bytes(64).unwrap();
-    assert_eq!(ctx.options().auto_hwm_msg_unit_bytes().unwrap(), 64);
-    ctx.options().set_auto_hwm_msg_unit_bytes(0).unwrap();
-    assert_eq!(ctx.options().auto_hwm_msg_unit_bytes().unwrap(), 0);
+    let memory_limit = 16 * 1024 * 1024;
+    let core_budget = 4 * 1024 * 1024;
+    ctx.options()
+        .set_core_hwm_memory_limit_bytes(memory_limit)
+        .unwrap();
+    ctx.options()
+        .set_core_hwm_budget_bytes(core_budget)
+        .unwrap();
+    assert_eq!(
+        ctx.options().core_hwm_memory_limit_bytes().unwrap(),
+        memory_limit
+    );
+    assert_eq!(ctx.options().core_hwm_budget_bytes().unwrap(), core_budget);
+
+    ctx.recalculate_auto_hwm().unwrap();
+    let before = ctx.core_hwm_budget_snapshot().unwrap();
+    assert_eq!(before.abi_version, 1);
+    assert!(before.struct_size > 0);
+    assert_eq!(before.configured_memory_limit_bytes, memory_limit);
+    assert_eq!(before.configured_core_budget_bytes, core_budget);
+    assert_eq!(before.effective_core_budget_bytes, core_budget);
+    assert!(before.budget_planning_active());
+    assert!(before.aggregate_hwm_valid());
+    assert!(!before.budget_insufficient());
+    assert!(!before.aggregate_overflow());
+    assert_eq!(before.reserved_u64, [0; 8]);
+
+    ctx.reset_core_hwm_budget_metrics().unwrap();
+    let after = ctx.core_hwm_budget_snapshot().unwrap();
+    assert_eq!(after.measurement_epoch, before.measurement_epoch + 1);
+    assert_eq!(after.budget_generation, before.budget_generation);
+    assert_eq!(
+        after.current_accounted_bytes,
+        before.current_accounted_bytes
+    );
+    assert_eq!(
+        after.active_directional_queue_count,
+        before.active_directional_queue_count
+    );
+
+    ctx.options().set_core_hwm_memory_limit_bytes(0).unwrap();
+    ctx.options().set_core_hwm_budget_bytes(0).unwrap();
+    assert_eq!(ctx.options().core_hwm_memory_limit_bytes().unwrap(), 0);
+    assert_eq!(ctx.options().core_hwm_budget_bytes().unwrap(), 0);
 }
 
 #[test]

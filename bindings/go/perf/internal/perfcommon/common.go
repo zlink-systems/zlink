@@ -138,8 +138,8 @@ func autoHWMStatusVisible(snapshot *zlink.MonitorStatus) bool {
 	return snapshot != nil &&
 		(snapshot.AutoHwmAppliedSndHwmBytes > 0 ||
 			snapshot.AutoHwmAppliedRcvHwmBytes > 0 ||
-			snapshot.AutoHwmEffectiveMessageBytes > 0 ||
-			snapshot.AutoHwmSocketMessageSlots > 0)
+			snapshot.SndPendingBytes > 0 ||
+			snapshot.RcvPendingBytes > 0)
 }
 
 func printAutoHWMDetail(
@@ -157,7 +157,7 @@ func printAutoHWMDetail(
 		socketName = component
 	}
 	fmt.Printf(
-		"AUTO_HWM_DETAIL,pattern=%s,transport=%s,component=%s,msg_size=%d,owner=%s,owner_id=%d,socket=%s,socket_type=%s,role=%s,sndhwm=%d,rcvhwm=%d,effective_message_bytes=%d,effective_sndbuf=%d,effective_rcvbuf=%d,socket_message_slots=%d\n",
+		"AUTO_HWM_DETAIL,pattern=%s,transport=%s,component=%s,msg_size=%d,owner=%s,owner_id=%d,socket=%s,socket_type=%s,role=%s,sndhwm=%d,rcvhwm=%d,snd_pending_bytes=%d,rcv_pending_bytes=%d,effective_sndbuf=%d,effective_rcvbuf=%d\n",
 		pattern,
 		transport,
 		component,
@@ -169,10 +169,10 @@ func printAutoHWMDetail(
 		autoHWMRoleName(snapshot.AutoHwmRole),
 		snapshot.AutoHwmAppliedSndHwmBytes,
 		snapshot.AutoHwmAppliedRcvHwmBytes,
-		snapshot.AutoHwmEffectiveMessageBytes,
+		snapshot.SndPendingBytes,
+		snapshot.RcvPendingBytes,
 		snapshot.AutoHwmEffectiveSndBuf,
 		snapshot.AutoHwmEffectiveRcvBuf,
-		snapshot.AutoHwmSocketMessageSlots,
 	)
 }
 
@@ -330,16 +330,6 @@ func ApplySingleHWM(socket hwmSocket) {
 	}
 }
 
-// ApplySingleAutoHWMMsgUnit sets the context message-unit for the current
-// payload size; numeric socket HWM remains behind the manual-override gate.
-func ApplySingleAutoHWMMsgUnit(ctx *zlink.Context, msgSize int) {
-	if ctx == nil || msgSize <= 0 {
-		return
-	}
-	Must(ctx.Options().SetAutoHwmMsgUnitBytes(msgSize))
-	Must(ctx.RecalculateAutoHwm())
-}
-
 // ApplyMultiHWM mirrors perf_multi_runtime.hpp apply_benchmark_hwm:
 // numeric HWM only with manual override; otherwise auto-HWM stays.
 func ApplyMultiHWM(socket hwmSocket, pattern string) {
@@ -355,16 +345,6 @@ func ApplyMultiHWM(socket hwmSocket, pattern string) {
 	if rcvhwm := resolveManualSocketHWM("PERF_MULTI_HWM", "PERF_MULTI_SNDHWM", "PERF_MULTI_RCVHWM", false); rcvhwm > 0 {
 		Must(socket.SetReceiveHighWaterMark(rcvhwm))
 	}
-}
-
-// ApplyMultiAutoHWMMsgUnit sets the context message-unit for the current
-// payload size; numeric socket HWM remains behind the manual-override gate.
-func ApplyMultiAutoHWMMsgUnit(ctx *zlink.Context, msgSize int) {
-	if ctx == nil || msgSize <= 0 {
-		return
-	}
-	Must(ctx.Options().SetAutoHwmMsgUnitBytes(msgSize))
-	Must(ctx.RecalculateAutoHwm())
 }
 
 func ApplySingleBenchmarkSocketOptions(socket benchmarkSocket, _ string) {
@@ -475,9 +455,34 @@ func UniqueEndpoint(transport, prefix string) string {
 }
 
 func OpenMonitor(socket zlink.SocketTarget) *zlink.SocketMonitor {
-	mon, err := zlink.OpenSocketMonitor(socket, zlink.MonitorEventConnectionReady)
+	hwmBytes, err := monitorHwmBytesFromEnv()
+	Must(err)
+	mon, err := zlink.OpenSocketMonitor(
+		socket,
+		zlink.MonitorEventConnectionReady,
+		zlink.MonitorHwmBytes(hwmBytes),
+	)
 	Must(err)
 	return mon
+}
+
+func monitorHwmBytesFromEnv() (uint64, error) {
+	const defaultMonitorHwmBytes uint64 = 4_096_000
+
+	name := "PERF_MULTI_MONITOR_HWM_BYTES"
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		name = "PERF_MONITOR_HWM_BYTES"
+		raw = strings.TrimSpace(os.Getenv(name))
+	}
+	if raw == "" {
+		return defaultMonitorHwmBytes, nil
+	}
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an unsigned 64-bit byte value: %w", name, err)
+	}
+	return value, nil
 }
 
 func PreparePayload(size int) []byte {
@@ -514,6 +519,47 @@ func SubmitMessage(
 		_ = message.Close()
 	}
 	return sent, err
+}
+
+func AwaitRoutedSend(completion <-chan error) error {
+	if completion == nil {
+		return fmt.Errorf("nil routed send completion")
+	}
+	err, ok := <-completion
+	if !ok {
+		return fmt.Errorf("routed send completion closed without a result")
+	}
+	return err
+}
+
+func SubmitRoutedMessage(
+	message *zlink.Message,
+	submit func(*zlink.Message) <-chan error,
+) (bool, error) {
+	if message == nil {
+		return false, fmt.Errorf("nil perf message")
+	}
+	err := AwaitRoutedSend(submit(message))
+	if err != nil {
+		_ = message.Close()
+		return false, err
+	}
+	return true, nil
+}
+
+func SubmitRoutedPayload(
+	payload []byte,
+	submit func(*zlink.Message) <-chan error,
+) (bool, error) {
+	return SubmitRoutedMessage(NewMessage(payload), submit)
+}
+
+func SubmitRoutedWindowPayload(
+	size int,
+	activeAt time.Time,
+	submit func(*zlink.Message) <-chan error,
+) (bool, error) {
+	return SubmitRoutedMessage(NewWindowMessage(size, activeAt), submit)
 }
 
 func SubmitPayload(

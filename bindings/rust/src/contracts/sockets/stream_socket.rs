@@ -20,7 +20,7 @@ impl StreamSocket {
     /// builder, then submit. A part is consumed on a successful submit (see
     /// [`SendOp`]).
     pub fn send(&self, target: &RoutingId) -> SendOp<Empty> {
-        crate::operations::socket_send_to_op(crate::socket::stream_inner(self).handle, *target)
+        crate::operations::stream_send_to_op(crate::socket::stream_inner(self).handle, *target)
     }
 
     /// Receives a message into caller-provided `out` storage.
@@ -29,6 +29,18 @@ impl StreamSocket {
     /// [`RecvFlags::DONT_WAIT`] is set and no message is available.
     pub fn recv(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
         let received = crate::socket::stream_inner(self).recv(out, flags)?;
+        if received {
+            if let Some(routing_id) = out.routing_id().copied() {
+                out.set_router_send_context(crate::socket::stream_inner(self).handle, routing_id);
+            }
+        }
+        Ok(received)
+    }
+
+    /// Receives while retaining each physical part's Core HWM credit in
+    /// `out`. Reusing, closing, consuming, or dropping `out` releases it.
+    pub fn recv_retained(&self, out: &mut Received, flags: RecvFlags) -> Result<bool, RecvError> {
+        let received = crate::socket::stream_inner(self).recv_retained(out, flags)?;
         if received {
             if let Some(routing_id) = out.routing_id().copied() {
                 out.set_router_send_context(crate::socket::stream_inner(self).handle, routing_id);

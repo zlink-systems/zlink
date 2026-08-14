@@ -15,7 +15,6 @@ import java.lang.invoke.MethodType;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
-import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
@@ -38,9 +37,6 @@ final class SocketCore {
         ValueLayout.JAVA_LONG, ValueLayout.ADDRESS);
     private static final FunctionDescriptor FD_SEND_READY_CALLBACK =
       FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS);
-    private static final FunctionDescriptor FD_COMPLETION_CONTROL_CALLBACK =
-      FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS,
-        ValueLayout.JAVA_LONG, ValueLayout.ADDRESS);
     private static final FunctionDescriptor FD_STREAM_PACKET_CALLBACK =
       FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS,
         ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS);
@@ -74,7 +70,6 @@ final class SocketCore {
     private int sendScratchCapacity = NativeSocketRuntime.DEFAULT_IO_BUFFER_SIZE;
     private SocketMessageHandler receiveHandler;
     private SendReadyHandler sendReadyHandler;
-    private volatile CompletionControlHandler completionControlHandler;
     private StreamFramedPacketHandler streamFramedPacketHandler;
     private StreamUInt32FramedPacketHandler streamUInt32FramedPacketHandler;
     private StreamUInt32FramedNativeHandler streamUInt32FramedNativeHandler;
@@ -82,8 +77,6 @@ final class SocketCore {
       new SocketCallbackSupport(this);
     private Arena receiveCallbackArena;
     private Arena sendReadyCallbackArena;
-    private Arena completionControlCallbackArena;
-    private final Object completionControlCallbackLock = new Object();
     private Arena streamPacketCallbackArena;
     private final ConcurrentHashMap<Integer, RoutingId> routingIdCache =
       new ConcurrentHashMap<>();
@@ -266,8 +259,9 @@ final class SocketCore {
         return socket.readOption(option);
     }
 
-    SocketMonitor monitorOpen(int events) {
-        MemorySegment sock = Native.monitorOpen(socket.handle(), events);
+    SocketMonitor monitorOpen(int events, long monitorHwmBytes) {
+        MemorySegment sock = Native.monitorOpen(socket.handle(), events,
+            monitorHwmBytes);
         if (sock == null || sock.address() == 0)
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
         return InternalAccess.monitorSocket(sock, true);
@@ -297,25 +291,6 @@ final class SocketCore {
         RuntimeResources.closeArena(sendReadyCallbackArena);
         sendReadyCallbackArena = arena;
         sendReadyHandler = handler;
-    }
-
-    void setCompletionControlHandler(CompletionControlHandler handler) {
-        Objects.requireNonNull(handler, "handler");
-        synchronized (completionControlCallbackLock) {
-            if (completionControlCallbackArena == null) {
-                completionControlCallbackArena = installCallback(
-                    "handleCompletionControlCallback",
-                    MethodType.methodType(void.class, MemorySegment.class,
-                        MemorySegment.class, long.class, MemorySegment.class),
-                    FD_COMPLETION_CONTROL_CALLBACK,
-                    "zlink_router_completion_control_handler",
-                    stub -> Native.routerCompletionControlHandler(
-                        socket.handle(), stub, MemorySegment.NULL));
-            }
-            // Replacements reuse the lifetime-stable native upcall stub and
-            // only publish the new Java handler while callbacks are excluded.
-            completionControlHandler = handler;
-        }
     }
 
     void attachStreamPacket(StreamFramedPacketHandler handler) {
@@ -386,18 +361,15 @@ final class SocketCore {
     void closeCommonState() {
         receiveHandler = null;
         sendReadyHandler = null;
-        completionControlHandler = null;
         streamFramedPacketHandler = null;
         streamUInt32FramedPacketHandler = null;
         streamUInt32FramedNativeHandler = null;
         callbackSupport.close();
         RuntimeResources.closeArena(receiveCallbackArena);
         RuntimeResources.closeArena(sendReadyCallbackArena);
-        RuntimeResources.closeArena(completionControlCallbackArena);
         RuntimeResources.closeArena(streamPacketCallbackArena);
         receiveCallbackArena = null;
         sendReadyCallbackArena = null;
-        completionControlCallbackArena = null;
         streamPacketCallbackArena = null;
         RuntimeResources.closeArena(sendScratchArena);
         sendScratchArena = null;
@@ -471,51 +443,6 @@ final class SocketCore {
             executor.execute(() -> dispatchSendReady(handler));
         } catch (RuntimeException ex) {
             recordCallbackFailure(ex);
-        }
-    }
-
-    private void handleCompletionControlCallback(MemorySegment sourceRid,
-                                                 MemorySegment parts,
-                                                 long partCount,
-                                                 MemorySegment userdata) {
-        CompletionControlHandler handler;
-        synchronized (completionControlCallbackLock) {
-            handler = completionControlHandler;
-        }
-        ExecutorService executor = callbackSupport.executor();
-        if (handler == null || executor == null) {
-            if (parts != null && parts.address() != 0)
-                NativeMessage.multipartClose(parts, partCount);
-            return;
-        }
-
-        CallbackReceivedData snapshot = null;
-        try {
-            snapshot = snapshotReceive(sourceRid, parts, partCount);
-            CallbackReceivedData callbackSnapshot = snapshot;
-            executor.execute(() -> dispatchCompletionControl(
-                handler, callbackSnapshot));
-            snapshot = null;
-        } catch (RejectedExecutionException ex) {
-            recordCallbackFailure(ex);
-        } catch (RuntimeException ex) {
-            recordCallbackFailure(ex);
-        } finally {
-            closeSnapshot(snapshot);
-        }
-    }
-
-    private void dispatchCompletionControl(
-      CompletionControlHandler handler,
-      CallbackReceivedData snapshot) {
-        enterCallback();
-        try {
-            handler.onControl(snapshot.routingId(),
-                List.of(snapshot.parts()));
-        } catch (RuntimeException ex) {
-            recordCallbackFailure(ex);
-        } finally {
-            leaveCallback();
         }
     }
 

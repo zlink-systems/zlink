@@ -50,7 +50,8 @@ enum class context_option : int
     auto_hwm_enable = 12,
     auto_hwm_recalc_debounce_ms = 14,
     auto_hwm_profile = 17,
-    auto_hwm_msg_unit_bytes = 18
+    core_hwm_memory_limit_bytes = 19,
+    core_hwm_budget_bytes = 21
 };
 
 /// @brief Selects an automatic high-water-mark sizing profile.
@@ -91,9 +92,10 @@ class xpub_socket_t;
 class timer_t;
 class send_operation_t;
 class send_submit_operation_t;
+class routed_send_operation_t;
+class routed_send_submit_operation_t;
 class request_operation_t;
 class request_submit_operation_t;
-class request_callback_submit_operation_t;
 class reply_operation_t;
 class reply_submit_operation_t;
 /// @brief Strongly-typed I/O thread count for context creation.

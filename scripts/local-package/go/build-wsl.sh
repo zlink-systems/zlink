@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
+python3 "$repo_root/scripts/local-package/sync-version.py" --check >/dev/null
 artifact_root="${ZLINK_LOCAL_PACKAGE_ROOT:-$repo_root/.artifacts/wsl}"
 core_prefix="${ZLINK_CORE_PACKAGE_PREFIX:-}"
 
@@ -10,8 +11,8 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Creates zlink-go-0.10.1.tar.gz containing the Go module source, headers, and
-the Core 0.10.1 Linux runtime. The Go module path is zlink.systems/zlink.
+Creates zlink-go-0.11.1.tar.gz containing the Go module source, headers, and
+the Core 0.11.1 Linux runtime. The Go module path is zlink.systems/zlink.
 EOF
 }
 

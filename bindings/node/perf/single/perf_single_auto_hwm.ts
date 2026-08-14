@@ -65,8 +65,8 @@ function autoHwmDetailTableLines(rows, pattern) {
       'rcvhwm',
       'sndbuf_kb',
       'rcvbuf_kb',
-      'effective_message_bytes',
-      'socket_message_slots',
+      'snd_pending_bytes',
+      'rcv_pending_bytes',
     ].map((name) => display[name] ?? '').join('\0');
     if (seen.has(key)) {
       continue;
@@ -96,8 +96,8 @@ function autoHwmDetailTableLines(rows, pattern) {
     ['RCVHWM', 'rcvhwm'],
     ['SNDBUF(KB)', 'sndbuf_kb'],
     ['RCVBUF(KB)', 'rcvbuf_kb'],
-    ['MsgUnit(B)', 'effective_message_bytes'],
-    ['Slots', 'socket_message_slots'],
+    ['SndPending(B)', 'snd_pending_bytes'],
+    ['RcvPending(B)', 'rcv_pending_bytes'],
   ];
   const widths = cellWidths(displayRows, columns);
   const header = '| ' + columns

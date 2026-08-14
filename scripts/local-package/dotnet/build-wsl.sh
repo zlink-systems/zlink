@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
+python3 "$repo_root/scripts/local-package/sync-version.py" --check >/dev/null
 artifact_root="${ZLINK_LOCAL_PACKAGE_ROOT:-$repo_root/.artifacts/wsl}"
 configuration="${CONFIGURATION:-Release}"
 core_prefix="${ZLINK_CORE_PACKAGE_PREFIX:-}"
@@ -11,7 +12,7 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Creates Systems.Zlink.0.10.1.nupkg with the exact Core 0.10.1 Linux runtime.
+Creates Systems.Zlink.0.11.1.nupkg with the exact Core 0.11.1 Linux runtime.
 EOF
 }
 

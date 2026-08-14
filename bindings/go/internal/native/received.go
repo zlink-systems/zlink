@@ -9,12 +9,13 @@ package native
 import "C"
 
 type Received struct {
-	routingID     RoutingID
-	parts         []*Message
-	requestSeq    uint64
-	hasRequestSeq bool
-	reply         func(SendFlags, []*Message) error
-	send          func(SendFlags, []sendBuilderPart) (bool, error)
+	routingID      RoutingID
+	parts          []*Message
+	requestSeq     uint64
+	hasRequestSeq  bool
+	reply          func(SendFlags, []*Message) error
+	send           func(SendFlags, []sendBuilderPart) (bool, error)
+	retainedCredit *hwmBudgetLeaseOwner
 }
 
 func (r *Received) RoutingID() RoutingID {
@@ -45,6 +46,9 @@ func (r *Received) beginReceive() []*Message {
 			_ = part.Close()
 		}
 	}
+	retainedCredit := r.retainedCredit
+	r.retainedCredit = nil
+	retainedCredit.release()
 	r.routingID = RoutingID{}
 	r.parts = nil
 	r.requestSeq = 0
@@ -61,6 +65,7 @@ func (r *Received) replace(
 	hasRequestSeq bool,
 	reply func(SendFlags, []*Message) error,
 	send func(SendFlags, []sendBuilderPart) (bool, error),
+	retainedCredit *hwmBudgetLeaseOwner,
 ) {
 	r.routingID = routingID
 	r.parts = parts
@@ -68,6 +73,7 @@ func (r *Received) replace(
 	r.hasRequestSeq = hasRequestSeq
 	r.reply = reply
 	r.send = send
+	r.retainedCredit = retainedCredit
 }
 
 func (r *Received) RequestSeq() uint64 {
@@ -170,5 +176,8 @@ func (r *Received) Close() error {
 	r.hasRequestSeq = false
 	r.reply = nil
 	r.send = nil
+	retainedCredit := r.retainedCredit
+	r.retainedCredit = nil
+	retainedCredit.release()
 	return first
 }

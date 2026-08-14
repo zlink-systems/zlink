@@ -13,6 +13,7 @@ import {
   materializeReceivedInto,
   materializeRoutedReceivedInto,
   materializeTopicMessage,
+  type NativeReceivedRaw,
 } from '../messaging/message_materializer';
 import {
   normalizeMessageLikePayload,
@@ -41,13 +42,15 @@ import type {
   SendOperation,
 } from '../../contracts/messaging';
 import {
+  AsyncPublishOperation,
   PublishOperation,
-  RoutedRuntimeSendOperation,
   RuntimeSendOperation,
 } from './socket_operation_builders';
+import { PublisherAdmission } from './publisher_admission';
 export {
+  ImmediateRoutedRuntimeSendOperation,
+  ManagedRoutedRuntimeSendOperation,
   PublishOperation,
-  RoutedRuntimeSendOperation,
   RuntimeReplyOperation,
   RuntimeRequestOperation,
   RuntimeSendOperation,
@@ -56,7 +59,47 @@ import { submitErrorFromResult } from './socket_submit_errors';
 
 const native = requireNative();
 
-export class SendSocket extends SendReadySocket {
+export class ReceiveSocket extends SendReadySocket {
+  /**
+   * Receives into caller-provided storage. Pass a long-lived {@link Received}
+   * and the binding refills its internal state in place each successful call.
+   * Returns true on success and false when DontWait finds no data.
+   */
+  recv(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
+    let raw;
+    try {
+      raw = ((flags | 0) & (RecvFlags.DontWait | 0))
+        ? native.socketRecvMessageNoWait(getNativeHandle(this))
+        : native.socketRecvMessage(getNativeHandle(this), flags | 0);
+    } catch (error) {
+      throw recvNativeError(error, flags, 'recv failed');
+    }
+    if (raw == null) return false;
+    materializeReceivedInto(result, raw);
+    return true;
+  }
+
+  /** @internal Select the retained native receive family for this socket role. */
+  protected recvRetainedRaw(flags: RecvFlags): NativeReceivedRaw | null {
+    return ((flags | 0) & (RecvFlags.DontWait | 0))
+      ? native.socketRecvMessageRetainedNoWait(getNativeHandle(this))
+      : native.socketRecvMessageRetained(getNativeHandle(this), flags | 0);
+  }
+
+  recvRetained(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
+    let raw;
+    try {
+      raw = this.recvRetainedRaw(flags);
+    } catch (error) {
+      throw recvNativeError(error, flags, 'retained recv failed');
+    }
+    if (raw == null) return false;
+    materializeReceivedInto(result, raw);
+    return true;
+  }
+}
+
+export class SendSocket extends ReceiveSocket {
   private readonly sendOperation = {
     submit: (parts: MessageLike | readonly MessageLike[], flags: SendFlags) =>
       this.sendDirect(parts, flags),
@@ -94,11 +137,19 @@ export class SendSocket extends SendReadySocket {
 }
 
 export class PublisherSocket extends SendReadySocket {
+  private readonly admission: PublisherAdmission;
   private lastPublishTopic: string | undefined;
   private lastValidatedPublishTopic: string | undefined;
   private readonly publishInvoker =
     (topic: string, payload: MessageLike | readonly MessageLike[], flags: SendFlags) =>
       this.publishDirect(topic, payload, flags);
+
+  constructor(ctx: import('../core/context').RuntimeContext, type: number) {
+    super(ctx, type);
+    this.admission = new PublisherAdmission(getNativeHandle(this), () => this.publisherSendTimeout());
+  }
+
+  protected publisherSendTimeout(): number { return -1; }
 
   publish(topic: string): SendOperation {
     const normalizedTopic = topic === this.lastPublishTopic
@@ -110,6 +161,29 @@ export class PublisherSocket extends SendReadySocket {
       this.publishInvoker,
       normalizedTopic
     );
+  }
+  publishAsync(topic: string): import('../../contracts/messaging').AsyncSendOperation {
+    const normalizedTopic = topic === this.lastPublishTopic
+      ? this.lastValidatedPublishTopic!
+      : validateCString(topic, 'topic', Number.MAX_SAFE_INTEGER);
+    this.lastPublishTopic = topic;
+    this.lastValidatedPublishTopic = normalizedTopic;
+    return new AsyncPublishOperation(
+      (publishTopic, payload, timeoutMs, startedAt) => this.admission.submit(
+        publishTopic,
+        payload,
+        timeoutMs,
+        startedAt
+      ),
+      normalizedTopic
+    );
+  }
+  setSendReadyHandler(handler: import('../../contracts/messaging').SocketSendReadyHandler): void {
+    this.admission.setObserver(handler);
+  }
+  close(): void {
+    this.admission.close();
+    super.close();
   }
   /** @internal */
   publishDirect(topic: string, payload: MessageLike | readonly MessageLike[], flags: SendFlags = SendFlags.None): boolean {
@@ -135,27 +209,6 @@ export class PublisherSocket extends SendReadySocket {
     } catch (error) {
       return submitOrBackpressure(error, flags, 'publish failed');
     }
-  }
-}
-
-export class MessageSocket extends SendSocket {
-  /**
-   * Receives into caller-provided storage. Pass a long-lived {@link Received}
-   * and the binding refills its internal state in place each successful call.
-   * Returns true on success and false when DontWait finds no data.
-   */
-  recv(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
-    let raw;
-    try {
-      raw = ((flags | 0) & (RecvFlags.DontWait | 0))
-        ? native.socketRecvMessageNoWait(getNativeHandle(this))
-        : native.socketRecvMessage(getNativeHandle(this), flags | 0);
-    } catch (error) {
-      throw recvNativeError(error, flags, 'recv failed');
-    }
-    if (raw == null) return false;
-    materializeReceivedInto(result, raw);
-    return true;
   }
 }
 
@@ -199,6 +252,23 @@ export class SubscriberSocket extends ConnectableSocket {
     }
     return materializeTopicMessage(raw);
   }
+
+  subscribeRetained(
+    result: TopicMessage,
+    flags: RecvFlags = RecvFlags.None
+  ): boolean {
+    let raw;
+    try {
+      raw = ((flags | 0) & (RecvFlags.DontWait | 0))
+        ? native.socketTrySubscribeMessageRetained(getNativeHandle(this))
+        : native.socketSubscribeMessageRetained(getNativeHandle(this), flags | 0);
+    } catch (error) {
+      throw recvNativeError(error, flags, 'retained subscribe failed');
+    }
+    if (raw == null) return false;
+    adoptTopicMessage(result, raw);
+    return true;
+  }
 }
 
 export class RoutedMessageSocket extends SendReadySocket {
@@ -209,18 +279,6 @@ export class RoutedMessageSocket extends SendReadySocket {
             parts: readonly Message[], flags: SendFlags) =>
       this.replyToRoutedMessage(RoutingId.from(routingId), requestSeq, parts, flags),
   };
-  private readonly routedSend = {
-    submit: (routingId: Buffer,
-             parts: MessageLike | readonly MessageLike[], flags: SendFlags) =>
-      this.sendDirectRaw(routingId, parts, flags),
-  };
-
-  send(routingId: RoutingId): SendOperation {
-    return new RoutedRuntimeSendOperation(
-      this.routedSend.submit,
-      normalizeRoutingId(routingId)
-    );
-  }
   protected sendDirect(routingId: RoutingId, payload: MessageLike | readonly MessageLike[], flags: SendFlags = SendFlags.None): boolean {
     const normalizedRoutingId = normalizeRoutingId(routingId);
     return this.sendDirectRaw(normalizedRoutingId, payload, flags);
@@ -283,6 +341,21 @@ export class RoutedMessageSocket extends SendReadySocket {
         : native.routerRecvMessage(getNativeHandle(this), flags | 0);
     } catch (error) {
       throw recvNativeError(error, flags, 'recv failed');
+    }
+    if (raw == null) return false;
+    materializeRoutedReceivedInto(result, raw, this.receivedOperations);
+    return true;
+  }
+
+
+  recvRetained(result: Received, flags: RecvFlags = RecvFlags.None): boolean {
+    let raw;
+    try {
+      raw = ((flags | 0) & (RecvFlags.DontWait | 0))
+        ? native.routerRecvMessageRetainedNoWait(getNativeHandle(this))
+        : native.routerRecvMessageRetained(getNativeHandle(this), flags | 0);
+    } catch (error) {
+      throw recvNativeError(error, flags, 'retained recv failed');
     }
     if (raw == null) return false;
     materializeRoutedReceivedInto(result, raw, this.receivedOperations);

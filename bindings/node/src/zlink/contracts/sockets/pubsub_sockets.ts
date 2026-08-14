@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import type { SubscriptionEvent, TopicMessage } from '../messaging';
-import type { SendOperation } from '../messaging';
+import type { AsyncSendOperation, SendOperation } from '../messaging';
 import type { SubscriptionEntry } from '../messaging';
 import type { RecvFlags } from './socket_constants';
 import type { PubSocketOptions, SubSocketOptions } from './socket_options';
@@ -13,6 +13,8 @@ export interface PubSocket extends ConnectableSocket {
   readonly options: PubSocketOptions;
   /** Begin publishing under `topic`; parts are consumed on a successful submit. */
   publish(topic: string): SendOperation;
+  /** Begin a binding-owned asynchronous publish admission wait. */
+  publishAsync(topic: string): AsyncSendOperation;
   /**
    * Register a callback invoked when the socket can accept more sends after
    * back-pressure. The callback runs on a background dispatch thread.
@@ -44,6 +46,12 @@ export interface SubSocket extends ConnectableSocket {
    * `RecvFlags.DontWait` is set and none is available.
    */
   subscribe(result: TopicMessage, flags?: RecvFlags): boolean;
+  /**
+   * Receive into `result` for a Framework backend while retaining dequeued
+   * Core HWM credit. Successful reuse or `result.close()` returns the credit;
+   * a native finalizer is the fallback if the result becomes unreachable.
+   */
+  subscribeRetained(result: TopicMessage, flags?: RecvFlags): boolean;
 }
 
 /** XSUB socket: a subscriber whose subscriptions are carried as messages. */

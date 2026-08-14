@@ -1,13 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-import type { RequestResult } from '../errors/errors';
 import type { SendFlags } from '../sockets/socket_constants';
 import type { Message, MessageLike } from './message';
-
-/** Invoked with a request result and its reply parts; the callback owns the parts and must close them. */
-export type RequestCallback = (result: RequestResult, parts: readonly Message[]) => void;
-/** Invoked with a request result and its reply parts; the callback owns the parts. */
-export type ReplyHandler = (result: RequestResult, parts: Message[]) => void;
 
 /** Builder stage that accepts one message part and returns the next stage. */
 export interface PartBuilder<TNext> {
@@ -47,27 +41,34 @@ export interface SendSubmitOperation
   submit(): boolean;
 }
 
+/** Builds a binding-owned asynchronous admission wait for one send record. */
+export interface AsyncSendOperation extends PartBuilder<AsyncSendSubmitOperation> {}
+
+/** Async send terminal: Core, rather than a Framework retry queue, owns readiness. */
+export interface AsyncSendSubmitOperation
+  extends PartBuilder<AsyncSendSubmitOperation>, Timeoutable<AsyncSendSubmitOperation> {
+  /** Resolve after Core accepts the complete record; reject on timeout or terminal failure. */
+  submit(): Promise<void>;
+}
+
+/** Builds a DEALER/ROUTER send whose terminal waits asynchronously for Core admission. */
+export interface RoutedSendOperation extends PartBuilder<RoutedSendSubmitOperation> {}
+
+/** Accepts further routed parts and exposes the sole managed terminal. */
+export interface RoutedSendSubmitOperation
+  extends PartBuilder<RoutedSendSubmitOperation>, Timeoutable<RoutedSendSubmitOperation> {
+  /** Resolve after Core accepts the complete record; reject on terminal failure. */
+  submit(): Promise<void>;
+}
+
 /** Builds a request: add the request parts, then submit and await a reply. */
 export interface RequestOperation extends PartBuilder<RequestSubmitOperation> {}
 
-/** Accepts further parts, timeout, flags, and the terminal submit of a request. */
+/** Accepts further parts, timeout, and the sole managed terminal of a request. */
 export interface RequestSubmitOperation
   extends PartBuilder<RequestSubmitOperation>, Timeoutable<RequestSubmitOperation> {
-  /** Set the send flags and narrow the builder to callback submission. */
-  flags(flags: SendFlags): RequestCallbackSubmitOperation;
   /** Submit the request and return the reply parts, which the caller owns. */
   submit(): Promise<Message[]>;
-  /** Submit the request; the result and reply parts are delivered to `callback`. Returns false under DontWait back-pressure. */
-  submit(callback: RequestCallback): boolean;
-}
-
-/** Callback-submission stage of a request (reached after setting flags). */
-export interface RequestCallbackSubmitOperation
-  extends PartBuilder<RequestCallbackSubmitOperation>,
-    Timeoutable<RequestCallbackSubmitOperation>,
-    Flaggable<RequestCallbackSubmitOperation> {
-  /** Submit the request; the result and reply parts are delivered to `callback`. */
-  submit(callback: RequestCallback): boolean;
 }
 
 /** Builds a reply to a received request: add the reply parts, then submit. */

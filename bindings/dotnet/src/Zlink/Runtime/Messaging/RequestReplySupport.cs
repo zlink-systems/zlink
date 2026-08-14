@@ -2,16 +2,12 @@
 
 using System.Buffers;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using Systems.Zlink.Runtime.Native;
 
 namespace Systems.Zlink;
 
 internal static class RequestReplySupport
 {
-    private const int ErrnoEAgainWin = 35;
-    private const int ErrnoEWouldBlockWin = 10035;
-
     internal static Message[] CloneParts(IReadOnlyList<Message> parts)
     {
         if (parts.Count == 0)
@@ -176,127 +172,6 @@ internal static class RequestReplySupport
             if (rentedNative != null)
                 ArrayPool<ZlinkMsg>.Shared.Return(rentedNative);
         }
-    }
-
-    internal static void AttachResultCallback(Func<Task<Received>> invoke,
-        Action<RequestResult, Received?> callback)
-    {
-        if (callback == null)
-            throw new ArgumentNullException(nameof(callback));
-        var context = SynchronizationContext.Current;
-        _ = invoke().ContinueWith(task =>
-            {
-                if (task.IsFaulted)
-                {
-                    var error = task.Exception?.GetBaseException()
-                                ?? new ZlinkRequestException(RequestResult.ProtocolError);
-                    if (error is ZlinkRequestException requestError)
-                    {
-                        DeliverCallback(context, () => callback(
-                            (RequestResult)requestError.Code, null));
-                        return;
-                    }
-
-                    if (error is ZlinkSubmitException submitError)
-                    {
-                        DeliverCallback(context, () => callback(
-                            MapSubmitFailureResult(submitError), null));
-                        return;
-                    }
-
-                    DeliverCallback(context, () => callback(
-                        RequestResult.ProtocolError, null));
-                    return;
-                }
-
-                if (task.IsCanceled)
-                {
-                    DeliverCallback(context, () => callback(
-                        RequestResult.Terminated, null));
-                    return;
-                }
-
-                DeliverCallback(context, () => callback(RequestResult.Ok,
-                    task.Result));
-            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-    }
-
-    internal static void CompleteReceivedReply(int result, IntPtr parts,
-        nuint partCount, IntPtr userData)
-    {
-        var handle = GCHandle.FromIntPtr(userData);
-        var state = (RequestCallState)handle.Target!;
-        try
-        {
-            if (result != 0)
-            {
-                state.TrySetException(new ZlinkRequestException(
-                    (RequestResult)result));
-                return;
-            }
-
-            var replyParts = Message.FromNativeVector(parts, partCount);
-            parts = IntPtr.Zero;
-            partCount = 0;
-            var received = new Received((RoutingId?)null, replyParts);
-            if (!state.TrySetResult(received))
-                DisposeParts(replyParts);
-        }
-        finally
-        {
-            if (parts != IntPtr.Zero)
-                NativeMethods.zlink_multipart_close(parts, partCount);
-            handle.Free();
-        }
-    }
-
-    private static void DeliverCallback(SynchronizationContext? context,
-        Action action)
-    {
-        if (context != null)
-        {
-            CallbackDelivery.Post(context, action);
-            return;
-        }
-
-        try
-        {
-            action();
-        }
-        catch (Exception ex)
-        {
-            CallbackExceptionHub.Report(ex);
-        }
-    }
-
-    internal static SendResult MapSendNoWaitResult(ZlinkException error)
-    {
-        var code = ZlinkException.MapErrorCode(error.NativeErrno);
-        return code switch
-        {
-            ErrorCode.EAgain => SendResult.Backpressured,
-            _ when error.NativeErrno == ErrnoEAgainWin ||
-                   error.NativeErrno == ErrnoEWouldBlockWin =>
-                SendResult.Backpressured,
-            _ => throw error
-        };
-    }
-
-    private static RequestResult MapSubmitFailureResult(ZlinkSubmitException error)
-    {
-        return error.Result switch
-        {
-            ZlinkSubmitException.ErrorCode.NotConnected => RequestResult.NotConnected,
-            ZlinkSubmitException.ErrorCode.NotFound => RequestResult.NotFound,
-            ZlinkSubmitException.ErrorCode.NotAdmitted
-                or ZlinkSubmitException.ErrorCode.InvalidState => RequestResult.Rejected,
-            ZlinkSubmitException.ErrorCode.Backpressured => RequestResult.Busy,
-            ZlinkSubmitException.ErrorCode.InvalidArgument => RequestResult.InvalidArgument,
-            ZlinkSubmitException.ErrorCode.NotSupported => RequestResult.NotSupported,
-            ZlinkSubmitException.ErrorCode.Terminated => RequestResult.Terminated,
-            _ => RequestResult.InternalError
-        };
     }
 
     internal delegate int NativePartSubmitter(

@@ -368,20 +368,6 @@ inline void apply_single_hwm (void *socket_)
         set_sockopt_u64 (socket_, ZLINK_OPT_RCVHWM, rcvhwm, "ZLINK_OPT_RCVHWM");
 }
 
-inline bool apply_single_auto_hwm_msg_unit (void *ctx_, size_t msg_size_)
-{
-    if (!ctx_ || msg_size_ == 0)
-        return true;
-
-    const uint64_t msg_unit =
-      msg_size_ > static_cast<size_t> (UINT64_MAX) ? UINT64_MAX
-                                                  : static_cast<uint64_t> (msg_size_);
-    if (!set_ctx_opt_u64 (ctx_, ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES, msg_unit,
-                          "ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES"))
-        return false;
-    return zlink_ctx_auto_hwm_recalculate (ctx_) == ZLINK_CONFIG_OK;
-}
-
 inline const char *single_socket_type_name (zlink_socket_type_t type_)
 {
     switch (type_) {
@@ -429,9 +415,7 @@ inline const char *single_auto_hwm_role_name (uint32_t role_)
 inline bool single_auto_hwm_snapshot_visible (const zlink_monitor_status_t &snapshot_)
 {
     return snapshot_.auto_hwm_applied_sndhwm_bytes > 0
-           || snapshot_.auto_hwm_applied_rcvhwm_bytes > 0
-           || snapshot_.auto_hwm_effective_message_bytes > 0
-           || snapshot_.auto_hwm_socket_message_slots > 0;
+           || snapshot_.auto_hwm_applied_rcvhwm_bytes > 0;
 }
 
 inline void emit_single_socket_hwm_detail (void *socket_,
@@ -467,10 +451,10 @@ inline void emit_single_socket_hwm_detail (void *socket_,
               << ",role=" << single_auto_hwm_role_name (snapshot.auto_hwm_role)
               << ",sndhwm=" << snapshot.auto_hwm_applied_sndhwm_bytes
               << ",rcvhwm=" << snapshot.auto_hwm_applied_rcvhwm_bytes
-              << ",effective_message_bytes=" << snapshot.auto_hwm_effective_message_bytes
+              << ",snd_pending_bytes=" << snapshot.snd_pending_bytes
+              << ",rcv_pending_bytes=" << snapshot.rcv_pending_bytes
               << ",effective_sndbuf=" << snapshot.auto_hwm_effective_sndbuf
-              << ",effective_rcvbuf=" << snapshot.auto_hwm_effective_rcvbuf
-              << ",socket_message_slots=" << snapshot.auto_hwm_socket_message_slots << std::endl;
+              << ",effective_rcvbuf=" << snapshot.auto_hwm_effective_rcvbuf << std::endl;
 }
 
 inline void apply_single_benchmark_socket_options (void *socket_, const std::string &)

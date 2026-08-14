@@ -1,6 +1,7 @@
 package zlink_test
 
 import (
+	"context"
 	"reflect"
 	"testing"
 	"time"
@@ -45,13 +46,15 @@ func TestSurfaceCanonicalBuilderSignatures(t *testing.T) {
 	}
 
 	sendOp := reflect.TypeOf((*zlink.SendOp)(nil)).Elem()
+	routedSendOp := reflect.TypeOf((*zlink.RoutedSendOp)(nil)).Elem()
 	requestOp := reflect.TypeOf((*zlink.RequestOp)(nil)).Elem()
 	replyOp := reflect.TypeOf((*zlink.ReplyOp)(nil)).Elem()
 	assertReturn((*zlink.PairSocket)(nil), "Send", sendOp)
-	assertReturn((*zlink.DealerSocket)(nil), "Send", sendOp)
+	assertReturn((*zlink.DealerSocket)(nil), "Send", routedSendOp)
+	assertReturn((*zlink.DealerSocket)(nil), "Request", requestOp)
 	assertReturn((*zlink.PubSocket)(nil), "Publish", sendOp)
 	assertReturn((*zlink.XPubSocket)(nil), "Publish", sendOp)
-	assertReturn((*zlink.RouterSocket)(nil), "SendTo", sendOp)
+	assertReturn((*zlink.RouterSocket)(nil), "SendTo", routedSendOp)
 	assertReturn((*zlink.RouterSocket)(nil), "Request", requestOp)
 	assertReturn((*zlink.RouterSocket)(nil), "Reply", replyOp)
 	assertReturn((*zlink.StreamSocket)(nil), "SendTo", sendOp)
@@ -75,8 +78,6 @@ func TestSurfaceRawSocketCapabilities(t *testing.T) {
 		{(*zlink.SubSocket)(nil), "Send", false},
 		{(*zlink.RouterSocket)(nil), "SendTo", true},
 		{(*zlink.RouterSocket)(nil), "RecvPart", false},
-		{(*zlink.RouterSocket)(nil), "OnCompletionControl", true},
-		{(*zlink.RouterSocket)(nil), "CompletionControl", true},
 		{(*zlink.RouterSocket)(nil), "SetRoutingID", true},
 		{(*zlink.RouterSocket)(nil), "SetConnectRoutingID", true},
 		{(*zlink.RouterSocket)(nil), "RoutingID", true},
@@ -116,7 +117,7 @@ func TestSurfaceTypedOptionsAndCallbacks(t *testing.T) {
 		{(*zlink.ContextOptions)(nil), "ThreadSchedulingPolicy"},
 		{(*zlink.ContextOptions)(nil), "AddThreadAffinity"},
 		{(*zlink.ContextOptions)(nil), "RemoveThreadAffinity"},
-		{(*zlink.ContextOptions)(nil), "SetAutoHwmMsgUnitBytes"},
+		{(*zlink.ContextOptions)(nil), "SetCoreHwmBudgetBytes"},
 		{(*zlink.RouterSocket)(nil), "SetMandatory"},
 		{(*zlink.RouterSocket)(nil), "SetRidDuplicatePolicy"},
 		{(*zlink.RouterSocket)(nil), "CommonOptions"},
@@ -131,8 +132,6 @@ func TestSurfaceTypedOptionsAndCallbacks(t *testing.T) {
 		{(*zlink.SubSocket)(nil), "SubscriptionAt"},
 		{(*zlink.XSubSocket)(nil), "SubscriptionAt"},
 		{(*zlink.PairSocket)(nil), "OnSendReady"},
-		{(*zlink.DealerSocket)(nil), "OnSendReady"},
-		{(*zlink.RouterSocket)(nil), "OnSendReady"},
 		{(*zlink.XPubSocket)(nil), "OnSendReady"},
 		{(*zlink.StreamSocket)(nil), "OnSendReady"},
 	}
@@ -141,11 +140,11 @@ func TestSurfaceTypedOptionsAndCallbacks(t *testing.T) {
 			t.Fatalf("%T should expose %s", check.target, check.name)
 		}
 	}
-	if hasMethod((*zlink.PairSocket)(nil), "SetAutoHwmMsgUnitBytes") {
-		t.Fatalf("PairSocket should not expose context-level auto-HWM unit option")
-	}
 	if hasMethod((*zlink.PairSocket)(nil), "SetMandatory") {
 		t.Fatalf("PairSocket should not expose router-specific options")
+	}
+	if hasMethod((*zlink.DealerSocket)(nil), "OnSendReady") || hasMethod((*zlink.RouterSocket)(nil), "OnSendReady") {
+		t.Fatalf("managed routed sockets should not expose the native readiness callback")
 	}
 	if hasMethod((*zlink.PubSocket)(nil), "TopicsCount") || hasMethod((*zlink.XPubSocket)(nil), "TopicsCount") {
 		t.Fatalf("publish sockets should not expose subscriber-only topic count")
@@ -153,5 +152,45 @@ func TestSurfaceTypedOptionsAndCallbacks(t *testing.T) {
 	waitMethod := methodType((*zlink.Poller)(nil), "Wait")
 	if waitMethod == nil || waitMethod.NumIn() != 3 || waitMethod.In(1) != reflect.TypeOf([]zlink.PollEvent{}) || waitMethod.In(2) != reflect.TypeOf(time.Duration(0)) {
 		t.Fatalf("Poller.Wait signature = %v", waitMethod)
+	}
+}
+
+func TestSurfaceManagedRoutedTerminalIsSubmitOnly(t *testing.T) {
+	contextType := reflect.TypeOf((*context.Context)(nil)).Elem()
+	sendCompletionType := reflect.TypeOf((<-chan error)(nil))
+	requestCompletionType := reflect.TypeOf((<-chan zlink.RequestReplyCompletion)(nil))
+
+	assertTerminal := func(target reflect.Type, completion reflect.Type) {
+		t.Helper()
+		method, ok := target.MethodByName("Submit")
+		if !ok || method.Type.NumIn() != 1 || method.Type.In(0) != contextType || method.Type.NumOut() != 1 || method.Type.Out(0) != completion {
+			t.Fatalf("%v.Submit signature = %v", target, method.Type)
+		}
+		for _, forbidden := range []string{"SubmitAsync", "Flags", "Callback", "OnProgress"} {
+			if _, ok := target.MethodByName(forbidden); ok {
+				t.Fatalf("%v should not expose compatibility terminal %s", target, forbidden)
+			}
+		}
+	}
+
+	assertTerminal(reflect.TypeOf((*zlink.RoutedSendSubmitOp)(nil)).Elem(), sendCompletionType)
+	assertTerminal(reflect.TypeOf((*zlink.RequestSubmitOp)(nil)).Elem(), requestCompletionType)
+}
+
+func TestSurfaceMonitorOpenUsesOnlyByteHwmOption(t *testing.T) {
+	optionType := reflect.TypeOf((*zlink.MonitorOpenOption)(nil)).Elem()
+	openType := reflect.TypeOf(zlink.OpenSocketMonitor)
+	if !openType.IsVariadic() || openType.NumIn() != 2 || openType.In(1) != reflect.TypeOf([]zlink.MonitorOpenOption(nil)) {
+		t.Fatalf("OpenSocketMonitor signature = %v, want variadic MonitorOpenOption", openType)
+	}
+	hwmType := reflect.TypeOf(zlink.MonitorHwmBytes)
+	if hwmType.NumIn() != 1 || hwmType.In(0).Kind() != reflect.Uint64 || hwmType.NumOut() != 1 || hwmType.Out(0) != optionType {
+		t.Fatalf("MonitorHwmBytes signature = %v, want func(uint64) MonitorOpenOption", hwmType)
+	}
+	rootNames := exportedTopLevelNames(t, ".")
+	for _, legacy := range []string{"MonitorHwm", "MonitorHwmCount", "MonitorHwmMessages"} {
+		if _, ok := rootNames[legacy]; ok {
+			t.Fatalf("root package should not expose legacy monitor count option %s", legacy)
+		}
 	}
 }

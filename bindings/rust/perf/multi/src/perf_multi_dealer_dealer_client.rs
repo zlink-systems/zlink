@@ -6,8 +6,7 @@ mod common;
 use std::io::{self, BufRead, Write};
 use std::time::{Duration, Instant};
 use zlink::{
-    DealerSocket, Message, PollEvent, Poller, RoutingId, SendFlags, SocketMonitor, SubmitResult,
-    POLLOUT,
+    DealerSocket, Message, POLLOUT, PollEvent, Poller, RoutingId, SocketMonitor, SubmitResult,
 };
 
 fn main() {
@@ -15,7 +14,6 @@ fn main() {
     let settings = common::MultiSettings::from_env();
 
     let ctx = common::perf_client_context();
-    common::apply_multi_auto_hwm_msg_unit(&ctx, args.msg_size);
     let mut sockets: Vec<DealerSocket> = Vec::with_capacity(settings.clients);
     let mut monitors: Vec<SocketMonitor> = Vec::with_capacity(settings.clients);
 
@@ -93,19 +91,10 @@ fn main() {
                     args.msg_size as u32,
                     seq,
                 );
-                match socket
-                    .send()
-                    .message(msg)
-                    .flags(SendFlags::DONT_WAIT)
-                    .submit()
-                {
-                    Ok(true) => {
+                match common::block_on(socket.send().message(msg).submit()) {
+                    Ok(()) => {
                         seq += 1;
                         progressed = true;
-                    }
-                    Ok(false) => {
-                        send_pending[index] = true;
-                        break;
                     }
                     Err(err) if err.code() == SubmitResult::Backpressured => {
                         send_pending[index] = true;
@@ -150,13 +139,13 @@ fn main() {
     for socket in &sockets {
         let mut sent = false;
         for _ in 0..100 {
-            match socket
-                .send()
-                .message(Message::try_from(common::STOP_TOKEN).expect("stop token"))
-                .flags(SendFlags::DONT_WAIT)
-                .submit()
-            {
-                Ok(_) => {
+            match common::block_on(
+                socket
+                    .send()
+                    .message(Message::try_from(common::STOP_TOKEN).expect("stop token"))
+                    .submit(),
+            ) {
+                Ok(()) => {
                     sent = true;
                     break;
                 }

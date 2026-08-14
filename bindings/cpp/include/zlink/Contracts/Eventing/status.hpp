@@ -61,19 +61,12 @@ struct monitor_status_t
         detail_flags (0),
         snd_pending_msgs (0),
         rcv_pending_msgs (0),
+        snd_pending_bytes (0),
+        rcv_pending_bytes (0),
         auto_hwm_enabled (false),
         auto_hwm_profile (0),
         auto_hwm_role (0),
         auto_hwm_policy_class (0),
-        auto_hwm_unit_budget_bytes (0),
-        auto_hwm_size_cap (0),
-        auto_hwm_socket_message_slots (0),
-        auto_hwm_connection_bucket_enabled (false),
-        auto_hwm_connection_bucket_count (0),
-        auto_hwm_connection_bucket_index (0xffffffffu),
-        auto_hwm_connection_bucket_hwm_4k (0),
-        auto_hwm_connection_bucket_hysteresis_retained (false),
-        auto_hwm_effective_message_bytes (0),
         auto_hwm_planned_sndhwm_bytes (0),
         auto_hwm_planned_rcvhwm_bytes (0),
         auto_hwm_applied_sndhwm_bytes (0),
@@ -104,19 +97,12 @@ struct monitor_status_t
     uint32_t detail_flags;
     uint64_t snd_pending_msgs;
     uint64_t rcv_pending_msgs;
+    uint64_t snd_pending_bytes;
+    uint64_t rcv_pending_bytes;
     bool auto_hwm_enabled;
     uint32_t auto_hwm_profile;
     uint32_t auto_hwm_role;
     uint32_t auto_hwm_policy_class;
-    uint64_t auto_hwm_unit_budget_bytes;
-    uint32_t auto_hwm_size_cap;
-    uint64_t auto_hwm_socket_message_slots;
-    bool auto_hwm_connection_bucket_enabled;
-    uint32_t auto_hwm_connection_bucket_count;
-    uint32_t auto_hwm_connection_bucket_index;
-    uint32_t auto_hwm_connection_bucket_hwm_4k;
-    bool auto_hwm_connection_bucket_hysteresis_retained;
-    uint64_t auto_hwm_effective_message_bytes;
     uint64_t auto_hwm_planned_sndhwm_bytes;
     uint64_t auto_hwm_planned_rcvhwm_bytes;
     uint64_t auto_hwm_applied_sndhwm_bytes;

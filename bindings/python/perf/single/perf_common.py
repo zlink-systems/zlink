@@ -192,15 +192,6 @@ def apply_single_socket_options(*sockets, receive_timeout_ms=None):
         sock.options.receive_timeout_ms = recv_timeout_ms
 
 
-def apply_single_auto_hwm_msg_unit(ctx, msg_size):
-    # Context-level message unit follows the current payload size; numeric
-    # socket HWM remains behind the manual-override gate.
-    if msg_size <= 0:
-        return
-    ctx.options.auto_hwm_msg_unit_bytes = msg_size
-
-
-
 def _recv_storage(method):
     zlink_mod = _require_zlink()
     if method == "recv":
@@ -401,6 +392,17 @@ def send_nonblocking(sock, payload, *, routing_id=None):
         raise
 
 
+async def send_routed(sock, payload, *, routing_id=None):
+    try:
+        op = sock.send() if routing_id is None else sock.send(routing_id)
+        await op.message(payload).submit()
+        return True
+    except _submit_error_type() as exc:
+        if exc.result == _submit_backpressured_result():
+            return False
+        raise
+
+
 def publish_nonblocking(sock, topic, payload):
     flag = _dont_wait_flag()
     try:
@@ -432,12 +434,12 @@ def wait_socket_readable_until(poller, events, deadline):
     safe_poll(poller, events, wait_ms)
 
 
-def single_routing_probe(sender, receiver, payload, *, run_id, msg_size,
-                         routing_id=None):
+async def single_routing_probe(sender, receiver, payload, *, run_id, msg_size,
+                               routing_id=None):
     """C perf_dealer_router.cpp wait_for_dealer_router_ready /
     perf_router_router.cpp wait_for_router_router_ready: one-shot routing
-    self-check. Bounded by PERF_CONNECT_READY_TIMEOUT_MS; DONTWAIT probe
-    sends (phase=active, seq=0) until the receiver confirms one matching
+    self-check. Bounded by PERF_CONNECT_READY_TIMEOUT_MS; awaited routed
+    probe sends (phase=active, seq=0) until the receiver confirms one matching
     header. No retry/sleep loop beyond C's bounded probe."""
 
     from perf_metrics import decode_header as _decode_header
@@ -449,7 +451,7 @@ def single_routing_probe(sender, receiver, payload, *, run_id, msg_size,
     probe = stamp_payload(payload, phase=1, run_id=run_id, seq=0)
     try:
         while time.perf_counter() < deadline:
-            send_nonblocking(sender, probe, routing_id=routing_id)
+            await send_routed(sender, probe, routing_id=routing_id)
             probe_deadline = min(deadline, time.perf_counter() + 0.05)
             while time.perf_counter() < probe_deadline:
                 received = recv_nonblocking(receiver)

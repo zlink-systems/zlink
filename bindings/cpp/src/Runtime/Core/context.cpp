@@ -96,6 +96,71 @@ void context_t::recalculate_auto_hwm ()
       static_cast<config_result_t> (zlink_ctx_auto_hwm_recalculate (_impl->ctx)));
 }
 
+core_hwm_budget_snapshot_t context_t::core_hwm_budget_snapshot () const
+{
+    if (!_impl || !_impl->ctx)
+        throw config_error_t (config_result_t::invalid_handle);
+
+    zlink_auto_hwm_budget_snapshot_t native{};
+    native.abi_version = ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1;
+    native.struct_size = sizeof (native);
+    detail::throw_if_failed<config_error_t> (static_cast<config_result_t> (
+      zlink_ctx_get_auto_hwm_budget_snapshot (_impl->ctx, &native)));
+
+    core_hwm_budget_snapshot_t snapshot;
+    snapshot._abi_version = native.abi_version;
+    snapshot._struct_size = native.struct_size;
+    snapshot._budget_generation = native.budget_generation;
+    snapshot._measurement_epoch = native.measurement_epoch;
+    snapshot._configured_memory_limit_bytes = native.configured_memory_limit_bytes;
+    snapshot._runtime_memory_limit_bytes = native.runtime_memory_limit_bytes;
+    snapshot._resolved_memory_limit_bytes = native.resolved_memory_limit_bytes;
+    snapshot._configured_core_budget_bytes = native.configured_core_budget_bytes;
+    snapshot._effective_core_budget_bytes = native.effective_core_budget_bytes;
+    snapshot._total_planned_hwm_bytes = native.total_planned_hwm_bytes;
+    snapshot._total_applied_hwm_bytes = native.total_applied_hwm_bytes;
+    snapshot._manual_reserved_hwm_bytes = native.manual_reserved_hwm_bytes;
+    snapshot._core_queue_accounted_bytes = native.core_queue_accounted_bytes;
+    snapshot._application_accounted_bytes = native.application_accounted_bytes;
+    snapshot._current_accounted_bytes = native.current_accounted_bytes;
+    snapshot._provisional_accounted_bytes = native.provisional_accounted_bytes;
+    snapshot._peak_accounted_bytes = native.peak_accounted_bytes;
+    snapshot._completion_current_accounted_bytes =
+      native.completion_current_accounted_bytes;
+    snapshot._completion_peak_accounted_bytes = native.completion_peak_accounted_bytes;
+    snapshot._completion_pending_message_count = native.completion_pending_message_count;
+    snapshot._total_messaging_accounted_bytes = native.total_messaging_accounted_bytes;
+    snapshot._monitor_queue_applied_hwm_bytes = native.monitor_queue_applied_hwm_bytes;
+    snapshot._monitor_queue_accounted_bytes = native.monitor_queue_accounted_bytes;
+    snapshot._total_instance_applied_hwm_bytes = native.total_instance_applied_hwm_bytes;
+    snapshot._total_instance_accounted_bytes = native.total_instance_accounted_bytes;
+    snapshot._oversize_admission_count = native.oversize_admission_count;
+    snapshot._largest_oversize_message_bytes = native.largest_oversize_message_bytes;
+    snapshot._active_directional_queue_count = native.active_directional_queue_count;
+    snapshot._active_completion_directional_queue_count =
+      native.active_completion_directional_queue_count;
+    snapshot._active_send_queue_count = native.active_send_queue_count;
+    snapshot._active_receive_queue_count = native.active_receive_queue_count;
+    snapshot._outstanding_application_lease_count =
+      native.outstanding_application_lease_count;
+    snapshot._retired_queue_count = native.retired_queue_count;
+    snapshot._deferred_origin_credit_bytes = native.deferred_origin_credit_bytes;
+    snapshot._unlimited_manual_queue_count = native.unlimited_manual_queue_count;
+    snapshot._blocked_ratio_ppm = native.blocked_ratio_ppm;
+    snapshot._flags = native.flags;
+    for (std::size_t i = 0; i != snapshot._reserved_u64.size (); ++i)
+        snapshot._reserved_u64[i] = native.reserved_u64[i];
+    return snapshot;
+}
+
+void context_t::reset_core_hwm_budget_metrics ()
+{
+    if (!_impl || !_impl->ctx)
+        throw config_error_t (config_result_t::invalid_handle);
+    detail::throw_if_failed<config_error_t> (static_cast<config_result_t> (
+      zlink_ctx_reset_auto_hwm_budget_metrics (_impl->ctx)));
+}
+
 void context_t::term_noexcept () noexcept
 {
     if (!_impl || !_impl->ctx)
@@ -320,7 +385,33 @@ void context_options_t::auto_hwm_recalc_debounce (std::chrono::milliseconds valu
                            detail::native_option_ms (value_)));
 }
 
-zlink::auto_hwm_profile context_options_t::auto_hwm_profile () const
+byte_count_t context_options_t::core_hwm_memory_limit_bytes () const
+{
+    return byte_count_t::bytes (_ctx.get_option_uint64_raw (
+      context_option_id_value (detail::context_option_id::core_hwm_memory_limit_bytes)));
+}
+
+void context_options_t::core_hwm_memory_limit_bytes (byte_count_t value_)
+{
+    detail::throw_if_failed<config_error_t> (_ctx.set_option_uint64_raw (
+      context_option_id_value (detail::context_option_id::core_hwm_memory_limit_bytes),
+      value_.bytes ()));
+}
+
+byte_count_t context_options_t::core_hwm_budget_bytes () const
+{
+    return byte_count_t::bytes (_ctx.get_option_uint64_raw (
+      context_option_id_value (detail::context_option_id::core_hwm_budget_bytes)));
+}
+
+void context_options_t::core_hwm_budget_bytes (byte_count_t value_)
+{
+    detail::throw_if_failed<config_error_t> (_ctx.set_option_uint64_raw (
+      context_option_id_value (detail::context_option_id::core_hwm_budget_bytes),
+      value_.bytes ()));
+}
+
+zlink::auto_hwm_profile context_options_t::core_hwm_profile () const
 {
     int error = 0;
     const int value =
@@ -330,23 +421,10 @@ zlink::auto_hwm_profile context_options_t::auto_hwm_profile () const
     return static_cast<zlink::auto_hwm_profile> (value);
 }
 
-void context_options_t::auto_hwm_profile (zlink::auto_hwm_profile profile_)
+void context_options_t::core_hwm_profile (zlink::auto_hwm_profile profile_)
 {
     detail::throw_if_failed<config_error_t> (_ctx.set_option_raw (
       context_option_id_value (detail::context_option_id::auto_hwm_profile), static_cast<int> (profile_)));
-}
-
-byte_count_t context_options_t::auto_hwm_msg_unit_bytes () const
-{
-    return byte_count_t::bytes (_ctx.get_option_uint64_raw (
-      context_option_id_value (detail::context_option_id::auto_hwm_msg_unit_bytes)));
-}
-
-void context_options_t::auto_hwm_msg_unit_bytes (byte_count_t value_)
-{
-    detail::throw_if_failed<config_error_t> (_ctx.set_option_uint64_raw (
-      context_option_id_value (detail::context_option_id::auto_hwm_msg_unit_bytes),
-      value_.bytes ()));
 }
 
 socket_count_t context_options_t::socket_limit () const

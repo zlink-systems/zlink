@@ -38,6 +38,10 @@ done
   echo "Core release version must be MAJOR.MINOR.PATCH: ${version:-<missing>}" >&2
   exit 2
 }
+[[ "$version" = "$repo_version" ]] || {
+  echo "Core release version $version must match repository VERSION $repo_version" >&2
+  exit 2
+}
 
 if [[ -z "$platform" ]]; then
   case "$(uname -s)" in

@@ -22,6 +22,7 @@ send_operation_t stream_socket_t::send (const routing_id_t &target_rid_)
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_routed_send;
     state_ptr->raw.socket = detail::native_handle (*this);
+    state_ptr->raw.callbacks = callback_state ().weak_from_this ();
     state_ptr->raw.target.first_rid = target_rid_;
     return send_operation_t (std::move (state_ptr));
 }
@@ -29,6 +30,11 @@ send_operation_t stream_socket_t::send (const routing_id_t &target_rid_)
 int stream_socket_t::recv (received_t &out_, recv_flags_t flags_)
 {
     return socket_t::receive (out_, flags_);
+}
+
+int stream_socket_t::recv_retained (received_t &out_, recv_flags_t flags_)
+{
+    return socket_t::receive_retained (out_, flags_);
 }
 
 void stream_socket_t::set_packet_handler (

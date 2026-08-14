@@ -339,7 +339,7 @@ inline int run_client_benchmark (const std::string &lib_name,
     for (size_t si = 0; si < msg_sizes.size (); ++si) {
         const size_t msg_size = msg_sizes[si];
         const uint32_t run_id = static_cast<uint32_t> (si + 1);
-        refresh_connected_client_auto_hwm (ctx.get (), sockets, k_client_socket_type,
+        refresh_connected_client_auto_hwm (sockets, k_client_socket_type,
                                            base_settings.hwm, transport, msg_size);
         std::cout << "CLIENT_READY," << msg_size << std::endl;
         if (!run_single_size_case (sockets, poller, base_settings, scratch_capacity, lib_name,

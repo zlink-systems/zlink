@@ -4,7 +4,10 @@
 use std::thread;
 use std::time::Duration;
 
-use zlink::{Context, MonitorEvent, MonitorEventType, RecvError, SocketMonitor};
+use zlink::{
+    Context, MonitorEvent, MonitorEventType, RecvError, SocketMonitor, SocketMonitorEventMask,
+    SocketMonitorOpenOptions,
+};
 
 #[test]
 fn socket_monitor_recv_surface() {
@@ -14,6 +17,28 @@ fn socket_monitor_recv_surface() {
 
     let _mon = SocketMonitor::open(&sock).unwrap();
     let _recv: fn(&SocketMonitor) -> Result<MonitorEvent, RecvError> = SocketMonitor::recv;
+}
+
+#[test]
+fn socket_monitor_hwm_bytes_are_forwarded_exactly() {
+    let ctx = Context::new().unwrap();
+    let sock = ctx.pair_socket().unwrap();
+    let monitor_hwm_bytes = 12_345;
+    let _mon = SocketMonitor::open_with_options(
+        &sock,
+        SocketMonitorOpenOptions {
+            events: SocketMonitorEventMask::ALL,
+            monitor_hwm_bytes,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        ctx.core_hwm_budget_snapshot()
+            .unwrap()
+            .monitor_queue_applied_hwm_bytes,
+        monitor_hwm_bytes * 2
+    );
 }
 
 #[test]
@@ -80,11 +105,8 @@ fn socket_monitor_status() {
     let _ = snap.is_closed();
     let _ = snap.auto_hwm_profile;
     let _ = snap.auto_hwm_policy_class;
-    let _ = snap.auto_hwm_unit_budget_bytes;
-    let _ = snap.auto_hwm_size_cap;
-    let _ = snap.auto_hwm_socket_message_slots;
-    let _ = snap.auto_hwm_connection_bucket_count;
-    let _ = snap.auto_hwm_connection_bucket_hwm_4k;
+    let _ = snap.snd_pending_bytes;
+    let _ = snap.rcv_pending_bytes;
 }
 
 #[test]

@@ -41,6 +41,30 @@ func recvTopicMessageInto(
 	return nil
 }
 
+func recvTopicMessageRetainedInto(
+	out *TopicMessage,
+	call func(**C.zlink_routing_id_t, *C.char, *C.size_t, *C.zlink_msg_t, **C.zlink_hwm_budget_lease_t, *C.zlink_part_flag_t, C.zlink_recv_flags_t) error,
+	flags RecvFlags,
+) error {
+	var sourceRID *C.zlink_routing_id_t
+	topicBuf := reusableTopicBuffer(out.topicBuf)
+	out.topicBuf = topicBuf
+	topicLen := C.size_t(len(topicBuf))
+	reuse := out.parts
+	_ = out.Close()
+	parts, retainedCredit, err := recvMultipartRetained(reuse, flags, func(part *C.zlink_msg_t, lease **C.zlink_hwm_budget_lease_t, hasMore *C.zlink_part_flag_t, recvFlags C.zlink_recv_flags_t) error {
+		return call(&sourceRID, (*C.char)(unsafe.Pointer(&topicBuf[0])), &topicLen, part, lease, hasMore, recvFlags)
+	})
+	if err != nil {
+		return err
+	}
+	out.routingID = routingIDFromCPtr(sourceRID)
+	out.topic = string(topicBuf[:int(topicLen)])
+	out.parts = parts
+	out.retainedCredit = retainedCredit
+	return nil
+}
+
 func recvSubscriptionEventInto(
 	out *SubscriptionEvent,
 	call func(*C.zlink_routing_id_t, *C.int, *C.char, *C.size_t, C.zlink_recv_flags_t) error,

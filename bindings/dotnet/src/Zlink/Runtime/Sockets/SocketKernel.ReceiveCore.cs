@@ -11,13 +11,17 @@ internal sealed partial class SocketKernel
     // HOT PATH: basic message receive intentionally discards source routing
     // metadata. Routed receive helpers own that information; do not restore a
     // routing-id allocation or copy to this path.
-    private bool ReceiveBasicParts(int flags, out Message? singlePart,
-        out MultipartMessageCollection? parts, bool allowNoData = false)
+    private bool ReceiveBasicParts(int flags, bool retainCredit,
+        out Message? singlePart,
+        out MultipartMessageCollection? parts,
+        out HwmBudgetLeaseOwner? hwmBudgetLeases,
+        bool allowNoData = false)
     {
         var nativeParts = Array.Empty<ZlinkMsg>();
         var nativePartCount = 0;
         singlePart = null;
         parts = null;
+        hwmBudgetLeases = null;
         try
         {
             while (true)
@@ -29,39 +33,56 @@ internal sealed partial class SocketKernel
                 if (initRc != 0)
                     throw ZlinkException.CreateRecvException(
                         NativeMethods.zlink_errno());
-                var initialized = true;
-                var rc = (flags & DontWaitFlag) != 0
-                    ? NativeMethods.zlink_recv_part_nowait(Handle,
-                        out _, ref part, out var hasMore,
-                        flags)
-                    : NativeMethods.zlink_recv_part(Handle,
-                        out _, ref part, out hasMore, flags);
-                if (rc != 0)
+                var ownsNativePart = true;
+                try
                 {
-                    if (initialized)
+                    var lease = IntPtr.Zero;
+                    int hasMore;
+                    var rc = retainCredit
+                        ? NativeMethods.zlink_recv_part_with_hwm_budget_lease(
+                            Handle, out _, ref part, out lease, out hasMore,
+                            flags)
+                        : (flags & DontWaitFlag) != 0
+                            ? NativeMethods.zlink_recv_part_nowait(Handle,
+                                out _, ref part, out hasMore, flags)
+                            : NativeMethods.zlink_recv_part(Handle, out _,
+                                ref part, out hasMore, flags);
+                    if (rc != 0)
+                    {
+                        HwmBudgetLeaseOwner.ReleaseUnowned(ref lease);
+                        var errno = NativeMethods.zlink_errno();
+                        if (allowNoData && nativePartCount == 0
+                                        && ZlinkException.MapErrorCode(errno) is ErrorCode.EAgain
+                                            or ErrorCode.EBusy)
+                            return false;
+                        throw ZlinkException.CreateRecvException(errno);
+                    }
+
+                    if (retainCredit)
+                        HwmBudgetLeaseOwner.Adopt(ref hwmBudgetLeases,
+                            ref lease);
+                    if (hasMore == 0 && nativePartCount == 0)
+                    {
+                        // Pool-aware adoption: in routed echo workloads the
+                        // Message wrapper lifetime is bounded by the caller's
+                        // using-scope. Recycling these instances eliminates a
+                        // per-message heap allocation and Gen 0 GC pressure.
+                        singlePart = Message.AdoptNativeFromPool(ref part);
+                        ownsNativePart = false;
+                        return true;
+                    }
+
+                    AppendNativePart(ref nativeParts, ref nativePartCount,
+                        ref part);
+                    ownsNativePart = false;
+                    if (hasMore == 0)
+                        break;
+                }
+                finally
+                {
+                    if (ownsNativePart)
                         NativeMethods.zlink_msg_close(ref part);
-                    var errno = NativeMethods.zlink_errno();
-                    if (allowNoData && nativePartCount == 0
-                                    && ZlinkException.MapErrorCode(errno) is ErrorCode.EAgain
-                                        or ErrorCode.EBusy)
-                        return false;
-                    throw ZlinkException.CreateRecvException(errno);
                 }
-
-                initialized = false;
-                if (hasMore == 0 && nativePartCount == 0)
-                {
-                    // Pool-aware adoption: in routed echo workloads the
-                    // Message wrapper lifetime is bounded by the caller's
-                    // using-scope. Recycling these instances eliminates a
-                    // per-message heap allocation and Gen 0 GC pressure.
-                    singlePart = Message.AdoptNativeFromPool(ref part);
-                    return true;
-                }
-
-                AppendNativePart(ref nativeParts, ref nativePartCount, ref part);
-                if (hasMore == 0)
-                    break;
             }
 
             parts = MultipartMessageCollection.FromNativeParts(nativeParts,
@@ -72,23 +93,28 @@ internal sealed partial class SocketKernel
         {
             CloseNativeParts(nativeParts, nativePartCount);
             singlePart?.Dispose();
+            hwmBudgetLeases?.Dispose();
+            hwmBudgetLeases = null;
             throw;
         }
     }
 
-    private bool ReceiveRoutedParts(int flags,
+    private bool ReceiveRoutedParts(int flags, bool retainCredit,
         out RoutingIdSnapshot routingId,
         out ulong requestSeq, out Message? singlePart,
-        out MultipartMessageCollection? parts, bool allowNoData = false)
+        out MultipartMessageCollection? parts,
+        out HwmBudgetLeaseOwner? hwmBudgetLeases,
+        bool allowNoData = false)
     {
         routingId = default;
         requestSeq = 0;
         singlePart = null;
         parts = null;
+        hwmBudgetLeases = null;
         if (_policy.UsesRouterRoutedReceiveEnvelope)
-            return ReceiveRouterParts(flags, out routingId,
+            return ReceiveRouterParts(flags, retainCredit, out routingId,
                 out requestSeq, out singlePart,
-                out parts, allowNoData);
+                out parts, out hwmBudgetLeases, allowNoData);
 
         var nativeParts = Array.Empty<ZlinkMsg>();
         var nativePartCount = 0;
@@ -101,40 +127,57 @@ internal sealed partial class SocketKernel
                 if (initRc != 0)
                     throw ZlinkException.CreateRecvException(
                         NativeMethods.zlink_errno());
-                var initialized = true;
-                int rc;
-                IntPtr sourceNodeRid;
-                int basicHasMore;
-                rc = (flags & DontWaitFlag) != 0
-                    ? NativeMethods.zlink_recv_part_nowait(Handle,
-                        out sourceNodeRid, ref part, out basicHasMore,
-                        flags)
-                    : NativeMethods.zlink_recv_part(Handle, out sourceNodeRid,
-                        ref part, out basicHasMore, flags);
-                if (rc != 0)
+                var ownsNativePart = true;
+                try
                 {
-                    if (initialized)
+                    var lease = IntPtr.Zero;
+                    IntPtr sourceNodeRid;
+                    int basicHasMore;
+                    var rc = retainCredit
+                        ? NativeMethods.zlink_recv_part_with_hwm_budget_lease(
+                            Handle, out sourceNodeRid, ref part, out lease,
+                            out basicHasMore, flags)
+                        : (flags & DontWaitFlag) != 0
+                            ? NativeMethods.zlink_recv_part_nowait(Handle,
+                                out sourceNodeRid, ref part,
+                                out basicHasMore, flags)
+                            : NativeMethods.zlink_recv_part(Handle,
+                                out sourceNodeRid, ref part,
+                                out basicHasMore, flags);
+                    if (rc != 0)
+                    {
+                        HwmBudgetLeaseOwner.ReleaseUnowned(ref lease);
+                        var errno = NativeMethods.zlink_errno();
+                        if (allowNoData && nativePartCount == 0
+                                        && ZlinkException.MapErrorCode(errno) is ErrorCode.EAgain
+                                            or ErrorCode.EBusy)
+                            return false;
+                        throw ZlinkException.CreateRecvException(errno);
+                    }
+
+                    if (retainCredit)
+                        HwmBudgetLeaseOwner.Adopt(ref hwmBudgetLeases,
+                            ref lease);
+                    if (!routingId.HasValue)
+                        routingId = RoutingIdSnapshot.FromPointer(sourceNodeRid);
+                    if (basicHasMore == 0 && nativePartCount == 0)
+                    {
+                        singlePart = Message.AdoptNativeFromPool(ref part);
+                        ownsNativePart = false;
+                        return true;
+                    }
+
+                    AppendNativePart(ref nativeParts, ref nativePartCount,
+                        ref part);
+                    ownsNativePart = false;
+                    if (basicHasMore == 0)
+                        break;
+                }
+                finally
+                {
+                    if (ownsNativePart)
                         NativeMethods.zlink_msg_close(ref part);
-                    var errno = NativeMethods.zlink_errno();
-                    if (allowNoData && nativePartCount == 0
-                                    && ZlinkException.MapErrorCode(errno) is ErrorCode.EAgain
-                                        or ErrorCode.EBusy)
-                        return false;
-                    throw ZlinkException.CreateRecvException(errno);
                 }
-
-                initialized = false;
-                if (!routingId.HasValue)
-                    routingId = RoutingIdSnapshot.FromPointer(sourceNodeRid);
-                if (basicHasMore == 0 && nativePartCount == 0)
-                {
-                    singlePart = Message.AdoptNativeFromPool(ref part);
-                    return true;
-                }
-
-                AppendNativePart(ref nativeParts, ref nativePartCount, ref part);
-                if (basicHasMore == 0)
-                    break;
             }
 
             parts = MultipartMessageCollection.FromNativeParts(nativeParts,
@@ -145,14 +188,17 @@ internal sealed partial class SocketKernel
         {
             CloseNativeParts(nativeParts, nativePartCount);
             singlePart?.Dispose();
+            hwmBudgetLeases?.Dispose();
+            hwmBudgetLeases = null;
             throw;
         }
     }
 
-    private bool ReceiveRouterParts(int flags,
+    private bool ReceiveRouterParts(int flags, bool retainCredit,
         out RoutingIdSnapshot routingId,
         out ulong requestSeq, out Message? singlePart,
-        out MultipartMessageCollection? parts, bool allowNoData)
+        out MultipartMessageCollection? parts,
+        out HwmBudgetLeaseOwner? hwmBudgetLeases, bool allowNoData)
     {
         var nativeParts = Array.Empty<ZlinkMsg>();
         var nativePartCount = 0;
@@ -160,6 +206,7 @@ internal sealed partial class SocketKernel
         requestSeq = 0;
         singlePart = null;
         parts = null;
+        hwmBudgetLeases = null;
         try
         {
             while (true)
@@ -169,52 +216,70 @@ internal sealed partial class SocketKernel
                 if (initRc != 0)
                     throw ZlinkException.CreateRecvException(
                         NativeMethods.zlink_errno());
-                var initialized = true;
-                // DONT_WAIT-only variant: avoid blocking while still allowing
-                // managed free callbacks during native message handling.
-                IntPtr sourceNodeRid;
-                ulong receivedRequestSeq;
-                int hasMore;
-                var rc = (flags & DontWaitFlag) != 0
-                    ? NativeMethods.zlink_router_recv_part_nowait(Handle,
-                        out sourceNodeRid, out receivedRequestSeq, ref part,
-                        out hasMore, flags)
-                    : NativeMethods.zlink_router_recv_part(Handle,
-                        out sourceNodeRid, out receivedRequestSeq, ref part,
-                        out hasMore, flags);
-                if (rc != 0)
+                var ownsNativePart = true;
+                try
                 {
-                    if (initialized)
+                    var lease = IntPtr.Zero;
+                    IntPtr sourceNodeRid;
+                    ulong receivedRequestSeq;
+                    int hasMore;
+                    var rc = retainCredit
+                        ? NativeMethods
+                            .zlink_router_recv_part_v2_with_hwm_budget_lease(
+                                Handle, out sourceNodeRid,
+                                out receivedRequestSeq, out _, out _, ref part,
+                                out lease, out hasMore, flags)
+                        : (flags & DontWaitFlag) != 0
+                            ? NativeMethods.zlink_router_recv_part_nowait(
+                                Handle, out sourceNodeRid,
+                                out receivedRequestSeq, ref part, out hasMore,
+                                flags)
+                            : NativeMethods.zlink_router_recv_part(Handle,
+                                out sourceNodeRid, out receivedRequestSeq,
+                                ref part, out hasMore, flags);
+                    if (rc != 0)
+                    {
+                        HwmBudgetLeaseOwner.ReleaseUnowned(ref lease);
+                        var errno = NativeMethods.zlink_errno();
+                        if (allowNoData && nativePartCount == 0
+                                        && ZlinkException.MapErrorCode(errno) is ErrorCode.EAgain
+                                            or ErrorCode.EBusy)
+                            return false;
+
+                        throw ZlinkException.CreateRecvException(errno);
+                    }
+
+                    if (retainCredit)
+                        HwmBudgetLeaseOwner.Adopt(ref hwmBudgetLeases,
+                            ref lease);
+                    if (nativePartCount == 0)
+                    {
+                        routingId = RoutingIdSnapshot.FromPointer(sourceNodeRid);
+                        requestSeq = receivedRequestSeq;
+                    }
+
+                    if (hasMore == 0 && nativePartCount == 0)
+                    {
+                        // Pool-aware adoption: in routed echo workloads the
+                        // Message wrapper lifetime is bounded by the caller's
+                        // using-scope. Recycling these instances eliminates a
+                        // per-message heap allocation and Gen 0 GC pressure.
+                        singlePart = Message.AdoptNativeFromPool(ref part);
+                        ownsNativePart = false;
+                        return true;
+                    }
+
+                    AppendNativePart(ref nativeParts, ref nativePartCount,
+                        ref part);
+                    ownsNativePart = false;
+                    if (hasMore == 0)
+                        break;
+                }
+                finally
+                {
+                    if (ownsNativePart)
                         NativeMethods.zlink_msg_close(ref part);
-                    var errno = NativeMethods.zlink_errno();
-                    if (allowNoData && nativePartCount == 0
-                                    && ZlinkException.MapErrorCode(errno) is ErrorCode.EAgain
-                                        or ErrorCode.EBusy)
-                        return false;
-
-                    throw ZlinkException.CreateRecvException(errno);
                 }
-
-                initialized = false;
-                if (nativePartCount == 0)
-                {
-                    routingId = RoutingIdSnapshot.FromPointer(sourceNodeRid);
-                    requestSeq = receivedRequestSeq;
-                }
-
-                if (hasMore == 0 && nativePartCount == 0)
-                {
-                    // Pool-aware adoption: in routed echo workloads the
-                    // Message wrapper lifetime is bounded by the caller's
-                    // using-scope. Recycling these instances eliminates a
-                    // per-message heap allocation and Gen 0 GC pressure.
-                    singlePart = Message.AdoptNativeFromPool(ref part);
-                    return true;
-                }
-
-                AppendNativePart(ref nativeParts, ref nativePartCount, ref part);
-                if (hasMore == 0)
-                    break;
             }
 
             parts = MultipartMessageCollection.FromNativeParts(nativeParts,
@@ -225,13 +290,16 @@ internal sealed partial class SocketKernel
         {
             CloseNativeParts(nativeParts, nativePartCount);
             singlePart?.Dispose();
+            hwmBudgetLeases?.Dispose();
+            hwmBudgetLeases = null;
             throw;
         }
     }
 
-    private bool ReceiveSubscribedParts(int flags,
+    private bool ReceiveSubscribedParts(int flags, bool retainCredit,
         byte[] topicBuffer, out RoutingIdSnapshot routingId, out int topicLength,
         out Message? singlePart, out MultipartMessageCollection? parts,
+        out HwmBudgetLeaseOwner? hwmBudgetLeases,
         bool allowNoData = false)
     {
         var nativeParts = Array.Empty<ZlinkMsg>();
@@ -240,6 +308,7 @@ internal sealed partial class SocketKernel
         topicLength = 0;
         singlePart = null;
         parts = null;
+        hwmBudgetLeases = null;
         try
         {
             while (true)
@@ -249,39 +318,64 @@ internal sealed partial class SocketKernel
                 if (initRc != 0)
                     throw ZlinkException.CreateRecvException(
                         NativeMethods.zlink_errno());
-                var initialized = true;
-                var rc = NativeMethods.zlink_subscribe_part(Handle,
-                    out var sourceRoutingId, topicBuffer,
-                    (nuint)topicBuffer.Length, out var nativeTopicLength, ref part,
-                    out var hasMore, flags);
-                if (rc != 0)
+                var ownsNativePart = true;
+                try
                 {
-                    if (initialized)
+                    var lease = IntPtr.Zero;
+                    IntPtr sourceRoutingId;
+                    nuint nativeTopicLength;
+                    int hasMore;
+                    var rc = retainCredit
+                        ? NativeMethods
+                            .zlink_subscribe_part_with_hwm_budget_lease(Handle,
+                                out sourceRoutingId, topicBuffer,
+                                (nuint)topicBuffer.Length,
+                                out nativeTopicLength, ref part, out lease,
+                                out hasMore, flags)
+                        : NativeMethods.zlink_subscribe_part(Handle,
+                            out sourceRoutingId, topicBuffer,
+                            (nuint)topicBuffer.Length,
+                            out nativeTopicLength, ref part, out hasMore,
+                            flags);
+                    if (rc != 0)
+                    {
+                        HwmBudgetLeaseOwner.ReleaseUnowned(ref lease);
+                        var errno = NativeMethods.zlink_errno();
+                        if (allowNoData && nativePartCount == 0
+                                        && ZlinkException.MapErrorCode(errno) is ErrorCode.EAgain
+                                            or ErrorCode.EBusy)
+                            return false;
+                        throw ZlinkException.CreateRecvException(errno);
+                    }
+
+                    if (retainCredit)
+                        HwmBudgetLeaseOwner.Adopt(ref hwmBudgetLeases,
+                            ref lease);
+                    if (nativePartCount == 0)
+                    {
+                        routingId = RoutingIdSnapshot.FromPointer(
+                            sourceRoutingId);
+                        topicLength = checked((int)nativeTopicLength);
+                    }
+
+                    if (hasMore == 0 && nativePartCount == 0)
+                    {
+                        singlePart = Message.AdoptNativeFromPool(ref part);
+                        ownsNativePart = false;
+                        return true;
+                    }
+
+                    AppendNativePart(ref nativeParts, ref nativePartCount,
+                        ref part);
+                    ownsNativePart = false;
+                    if (hasMore == 0)
+                        break;
+                }
+                finally
+                {
+                    if (ownsNativePart)
                         NativeMethods.zlink_msg_close(ref part);
-                    var errno = NativeMethods.zlink_errno();
-                    if (allowNoData && nativePartCount == 0
-                                    && ZlinkException.MapErrorCode(errno) is ErrorCode.EAgain
-                                        or ErrorCode.EBusy)
-                        return false;
-                    throw ZlinkException.CreateRecvException(errno);
                 }
-
-                initialized = false;
-                if (nativePartCount == 0)
-                {
-                    routingId = RoutingIdSnapshot.FromPointer(sourceRoutingId);
-                    topicLength = checked((int)nativeTopicLength);
-                }
-
-                if (hasMore == 0 && nativePartCount == 0)
-                {
-                    singlePart = Message.AdoptNativeFromPool(ref part);
-                    return true;
-                }
-
-                AppendNativePart(ref nativeParts, ref nativePartCount, ref part);
-                if (hasMore == 0)
-                    break;
             }
 
             parts = MultipartMessageCollection.FromNativeParts(nativeParts,
@@ -292,6 +386,8 @@ internal sealed partial class SocketKernel
         {
             CloseNativeParts(nativeParts, nativePartCount);
             singlePart?.Dispose();
+            hwmBudgetLeases?.Dispose();
+            hwmBudgetLeases = null;
             throw;
         }
     }

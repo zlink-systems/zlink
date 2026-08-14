@@ -19,6 +19,8 @@ kotlin {
 dependencies {
     implementation project(':')
     implementation project(':samples')
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.9.0'
     compileOnly 'io.netty:netty-buffer:4.1.100.Final'
 }
 

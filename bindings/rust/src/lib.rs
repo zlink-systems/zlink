@@ -83,7 +83,9 @@ mod topic_message_contract;
 
 // -- Public re-exports -------------------------------------------------------
 
-pub use core_context::{AutoHwmProfile, AutoHwmRecalcReason, Context, ContextOptions};
+pub use core_context::{
+    AutoHwmProfile, AutoHwmRecalcReason, Context, ContextOptions, CoreHwmBudgetSnapshot,
+};
 pub use core_utilities::{AtomicCounter, Stopwatch, Thread};
 pub use domain::Received;
 pub use error::{
@@ -97,11 +99,12 @@ pub use flags::{
 pub use message::Message;
 pub use message_socket_contracts::{DealerSocket, PairSocket};
 pub use messaging_operation_contracts::SendResult;
-pub use messaging_operations::{CallbackReady, Empty, Ready, ReplyOp, RequestOp, SendOp};
+pub use messaging_operations::{Empty, Ready, ReplyOp, RequestOp, RoutedSendOp, SendOp};
 pub use messaging_subscription_event::SubscriptionEvent;
 pub use monitor_contracts::{
     MONITOR_EVENT_ALL, MONITOR_EVENT_CONNECTION_READY, MonitorEvent, MonitorEventType,
     MonitorSourceKind, MonitorStatus, Monitorable, SocketMonitor, SocketMonitorEventMask,
+    SocketMonitorOpenOptions,
 };
 pub use poller_contracts::{
     POLLCOMPLETION, POLLIN, POLLOUT, PollEvent, PollItem, PollSourceKind, Pollable, Poller, Timer,

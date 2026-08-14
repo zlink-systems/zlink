@@ -43,4 +43,9 @@ class RouterSocket(_socket_contract._SocketContract, Protocol):
         ``DONT_WAIT`` is set and none is available."""
         ...
 
+    def recv_retained_into(self, received, *, flags=0):
+        """Framework-backend routed aggregate receive that retains Core HWM
+        credit until ``received`` is closed or reused."""
+        ...
+
 __all__ = ["RouterSocket"]

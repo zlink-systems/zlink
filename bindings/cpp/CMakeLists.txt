@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(zlink_cpp VERSION 0.10.1 LANGUAGES CXX)
+project(zlink_cpp VERSION 0.11.1 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -11,7 +11,7 @@ set(ZLINK_CORE_DIR "${ZLINK_REPO_ROOT_DIR}/core" CACHE PATH "Path to zlink core"
 set(ZLINK_CPP_CORE_BUILD_DIR "${ZLINK_REPO_ROOT_DIR}/core/build" CACHE PATH
     "Path to an existing zlink core build directory")
 set(ZLINK_CPP_CORE_PACKAGE_PREFIX "" CACHE PATH
-    "Path to an installed Zlink 0.10.1 Core release prefix")
+    "Path to an installed Zlink 0.11.1 Core release prefix")
 option(ZLINK_CPP_USE_CORE_BUILD_RUNTIME
   "Require the targeted core/build runtime instead of an installed Core package"
   OFF)
@@ -99,7 +99,7 @@ function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
   endif()
 
   if(ZLINK_CPP_CORE_PACKAGE_PREFIX)
-    find_package(zlink 0.9 CONFIG QUIET
+    find_package(zlink ${PROJECT_VERSION} EXACT CONFIG QUIET
       PATHS "${ZLINK_CPP_CORE_PACKAGE_PREFIX}"
       NO_DEFAULT_PATH)
     if(TARGET libzlink)
@@ -113,6 +113,22 @@ function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
     # GitHub Core release archives contain the runtime and public headers, but
     # not a CMake package config. Materialize an imported target for this
     # normalized release prefix.
+    set(_package_provenance
+      "${ZLINK_CPP_CORE_PACKAGE_PREFIX}/share/zlink/core-package-provenance.json")
+    if(NOT EXISTS "${_package_provenance}")
+      message(FATAL_ERROR
+        "Core release prefix has neither an exact zlink ${PROJECT_VERSION} "
+        "package config nor package provenance: ${ZLINK_CPP_CORE_PACKAGE_PREFIX}")
+    endif()
+    file(READ "${_package_provenance}" _package_provenance_json)
+    string(REGEX MATCH
+      "\"version\"[ \t\r\n]*:[ \t\r\n]*\"([0-9]+\\.[0-9]+\\.[0-9]+)\""
+      _package_version_match "${_package_provenance_json}")
+    if(NOT "${CMAKE_MATCH_1}" STREQUAL "${PROJECT_VERSION}")
+      message(FATAL_ERROR
+        "Core release prefix version ${CMAKE_MATCH_1} does not match "
+        "zlink_cpp ${PROJECT_VERSION}: ${ZLINK_CPP_CORE_PACKAGE_PREFIX}")
+    endif()
     set(_package_include "${ZLINK_CPP_CORE_PACKAGE_PREFIX}/include")
     if(NOT IS_DIRECTORY "${_package_include}")
       message(FATAL_ERROR
@@ -197,7 +213,7 @@ function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
 
   message(FATAL_ERROR
     "No zlink core runtime found for this platform. "
-    "Expected an installed Core 0.10.1 package, an existing libzlink target, "
+    "Expected an installed Core 0.11.1 package, an existing libzlink target, "
     "or a targeted source build under ${ZLINK_CPP_CORE_BUILD_DIR}.")
 endfunction()
 
@@ -215,6 +231,9 @@ add_library(zlink_cpp STATIC
   src/Runtime/Messaging/received.cpp
   src/Runtime/Messaging/reply_operations.cpp
   src/Runtime/Messaging/request_reply.cpp
+  src/Runtime/Messaging/async_continuation_dispatcher.cpp
+  src/Runtime/Messaging/routed_admission_state.cpp
+  src/Runtime/Messaging/publish_admission_state.cpp
   src/Runtime/Messaging/send_operations.cpp
   src/Runtime/Options/dealer_socket_options.cpp
   src/Runtime/Options/pubsub_socket_options.cpp
@@ -231,6 +250,9 @@ add_library(zlink_cpp STATIC
 )
 add_library(zlink::cpp ALIAS zlink_cpp)
 
+target_include_directories(zlink_cpp BEFORE PRIVATE
+  $<TARGET_PROPERTY:${ZLINK_CPP_CORE_TARGET},INTERFACE_INCLUDE_DIRECTORIES>
+)
 target_include_directories(zlink_cpp
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>
@@ -246,6 +268,7 @@ set_target_properties(zlink_cpp PROPERTIES
   EXPORT_NAME cpp
   POSITION_INDEPENDENT_CODE ON
   CXX_EXTENSIONS OFF
+  NO_SYSTEM_FROM_IMPORTED TRUE
 )
 
 install(TARGETS zlink_cpp
@@ -434,6 +457,8 @@ if(ZLINK_CPP_BUILD_TESTS)
     test_cpp_contract_message.cpp
     test_cpp_contract_socket.cpp
     test_cpp_contract_request_reply.cpp
+    test_cpp_contract_exact_target_retry.cpp
+    test_cpp_contract_exact_request_target.cpp
     test_cpp_contract_options.cpp
     test_cpp_contract_monitor.cpp
     test_cpp_contract_raw_capability.cpp
@@ -450,6 +475,12 @@ if(ZLINK_CPP_BUILD_TESTS)
     )
   endforeach()
   target_include_directories(test_cpp_contract_request_reply PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/src
+  )
+  target_include_directories(test_cpp_contract_exact_target_retry PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/src
+  )
+  target_include_directories(test_cpp_contract_exact_request_target PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src
   )
 

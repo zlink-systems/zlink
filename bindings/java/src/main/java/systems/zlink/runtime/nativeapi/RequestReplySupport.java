@@ -13,7 +13,6 @@ import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.errors.ZlinkException;
-import java.lang.foreign.MemorySegment;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
@@ -167,12 +166,6 @@ public final class RequestReplySupport {
                 future.completeExceptionally(error);
             }
         });
-    }
-
-    public static void startSocketRequestProgress(CompletableFuture<?> future,
-                                                  MemorySegment socketHandle,
-                                                  String threadName) {
-        RequestProgressPump.trackSocketRequest(future, socketHandle, threadName);
     }
 
     public static ScheduledFuture<?> scheduleRequestTimeout(Runnable action,

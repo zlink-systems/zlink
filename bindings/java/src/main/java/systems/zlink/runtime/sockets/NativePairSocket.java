@@ -47,5 +47,11 @@ final class NativePairSocket extends NativeSocketBase implements PairSocket {
         java.util.Objects.requireNonNull(flags, "flags");
         return runtime().recvInto(result, ReceiveFlag.fromValue(flags.value()));
     }
+    public boolean recvRetained(Received result, RecvFlags flags) {
+        java.util.Objects.requireNonNull(result, "result");
+        java.util.Objects.requireNonNull(flags, "flags");
+        return runtime().recvRetainedInto(result,
+            ReceiveFlag.fromValue(flags.value()));
+    }
     public void setSendReadyHandler(SendReadyHandler handler) { runtime().setSendReadyHandler(handler); }
 }

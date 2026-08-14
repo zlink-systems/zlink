@@ -34,9 +34,11 @@ public enum ReceivedMessageType
 ///     Holds one received message envelope.
 /// </summary>
 /// <remarks>
-///     A received envelope owns its message parts until disposed or until an API
-///     explicitly transfers ownership. Reuse instances created by <c>Create</c>
-///     with receive APIs that accept caller-provided storage.
+///     A received envelope owns its message parts until disposed, passed to
+///     another receive attempt for reuse, or until an API explicitly transfers
+///     ownership. An envelope populated by <c>RecvRetained</c> also owns its Core
+///     HWM credit for the same lifetime. Reuse instances created by
+///     <c>Create</c> with receive APIs that accept caller-provided storage.
 /// </remarks>
 public sealed partial class Received : IDisposable
 {
@@ -87,8 +89,8 @@ public sealed partial class Received : IDisposable
     /// <summary>
     ///     Create an empty <see cref="Received" /> for caller-provided storage.
     ///     Hand the same instance to <c>Recv(Received, ...)</c> across calls to
-    ///     avoid the per-recv allocation; the binding overwrites the internal
-    ///     state on each successful receive.
+    ///     avoid the per-recv allocation. Starting the next receive releases the
+    ///     preceding envelope before the binding waits for new data.
     /// </summary>
     public static Received Create()
     {

@@ -11,7 +11,6 @@ func runDealerRouter(cfg benchmarkConfig) perfcommon.Result {
 	ctx, err := perfcommon.NewSingleContext()
 	perfcommon.Must(err)
 	defer ctx.Close()
-	perfcommon.ApplySingleAutoHWMMsgUnit(ctx, cfg.msgSize)
 
 	router, err := ctx.RouterSocket()
 	perfcommon.Must(err)
@@ -37,17 +36,18 @@ func runDealerRouter(cfg benchmarkConfig) perfcommon.Result {
 	perfcommon.ApplySingleBenchmarkSocketOptions(dealer, cfg.transport)
 	perfcommon.WaitConnectedWithTimeout(perfcommon.SingleReadyTimeout(), routerMon, dealerMon)
 	waitSingleRouteReady("dealer/router perf endpoint", func(payload []byte) error {
-		_, err := perfcommon.SubmitMessage(perfcommon.NewMessage(payload), func(message *zlink.Message) (bool, error) {
+		_, err := perfcommon.SubmitRoutedMessage(perfcommon.NewMessage(payload), func(message *zlink.Message) <-chan error {
 			return dealer.Send().MoveMessage(message).Submit(context.Background())
 		})
 		return err
 	}, router)
 
 	result := runSingleRoutedOneWay(cfg, router, func(message *zlink.Message) (bool, error) {
-		return dealer.Send().MoveMessage(message).Submit(context.Background())
+		return perfcommon.SubmitRoutedMessage(message, func(message *zlink.Message) <-chan error {
+			return dealer.Send().MoveMessage(message).Submit(context.Background())
+		})
 	}, func(message *zlink.Message) error {
-		_, err := dealer.Send().MoveMessage(message).Submit(context.Background())
-		return err
+		return perfcommon.AwaitRoutedSend(dealer.Send().MoveMessage(message).Submit(context.Background()))
 	})
 	perfcommon.PrintSingleAutoHWMDetail(routerMon, cfg.pattern, cfg.transport, "router", zlink.SocketTypeRouter, cfg.msgSize)
 	perfcommon.PrintSingleAutoHWMDetail(dealerMon, cfg.pattern, cfg.transport, "dealer", zlink.SocketTypeDealer, cfg.msgSize)

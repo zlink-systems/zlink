@@ -53,7 +53,6 @@ internal static class PerfMultiPubSubClient
             monitors.Clear();
 
             for (int i = 0; i < clients.Count; i++)
-                ApplyAutoHwmMsgUnit(ctx, size);
             RecalculateAutoHwm(ctx);
             if (clients.Count > 0)
                 PrintAutoHwmSnapshot(clients[0], "endpoint",

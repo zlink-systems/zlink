@@ -325,7 +325,7 @@ void test_pair_direct_recv_no_data_preserves_output ()
     assert (!invalid.valid ());
 }
 
-void test_dealer_send_dontwait_builder ()
+void test_dealer_routed_send_async_builder ()
 {
     zlink::context_t ctx;
     zlink::router_socket_t router (ctx);
@@ -346,9 +346,8 @@ void test_dealer_send_dontwait_builder ()
       dealer_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
 
     zlink::message_t outbound = zlink_cpp_contract::make_message ("direct");
-    const bool sent =
-      dealer.send ().message (outbound).flags (zlink::send_flags_t::dontwait).submit ();
-    assert (sent);
+    zlink_cpp_contract::submit_routed_send (
+      dealer.send ().message (outbound).async ());
     assert (!outbound.valid ());
 
     zlink::routing_id_t source =
@@ -408,7 +407,8 @@ void test_router_recv_single_part_direct ()
       dealer_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
 
     zlink::message_t outbound = zlink_cpp_contract::make_message ("routed");
-    assert (dealer.send ().message (outbound).submit ());
+    zlink_cpp_contract::submit_routed_send (
+      dealer.send ().message (outbound).async ());
 
     zlink::routing_id_t source =
       zlink::routing_id_t::from (reinterpret_cast<const uint8_t *> ("placeholder"), 11);
@@ -449,7 +449,8 @@ void test_router_send_builder_owns_target_rid ()
       dealer_b_monitor, static_cast<uint64_t> (zlink::monitor_event::connection_ready), 2000));
 
     zlink::message_t hello_a = zlink_cpp_contract::make_message ("hello-a");
-    assert (dealer_a.send ().message (hello_a).submit ());
+    zlink_cpp_contract::submit_routed_send (
+      dealer_a.send ().message (hello_a).async ());
     zlink::routing_id_t source =
       zlink::routing_id_t::from (reinterpret_cast<const uint8_t *> ("placeholder"), 11);
     zlink::message_t inbound;
@@ -457,7 +458,8 @@ void test_router_send_builder_owns_target_rid ()
     assert (source == dealer_a_id);
 
     zlink::message_t hello_b = zlink_cpp_contract::make_message ("hello-b");
-    assert (dealer_b.send ().message (hello_b).submit ());
+    zlink_cpp_contract::submit_routed_send (
+      dealer_b.send ().message (hello_b).async ());
     assert (router.recv (source, inbound) == 0);
     assert (source == dealer_b_id);
 
@@ -466,7 +468,7 @@ void test_router_send_builder_owns_target_rid ()
     auto pending = router.send (target).message (outbound);
     target = dealer_b_id;
 
-    assert (std::move (pending).submit ());
+    zlink_cpp_contract::submit_routed_send (std::move (pending).async ());
 
     zlink::message_t routed_to_a;
     assert (dealer_a.recv (routed_to_a) == 0);
@@ -503,7 +505,8 @@ void test_router_recv_received_single_part_large ()
     zlink::message_t outbound (payload_size);
     assert (outbound.valid ());
     std::memset (outbound.data (), 0x7b, payload_size);
-    assert (dealer.send ().message (outbound).submit ());
+    zlink_cpp_contract::submit_routed_send (
+      dealer.send ().message (outbound).async ());
 
     zlink::received_t inbound;
     assert (router.recv (inbound) == 0);
@@ -548,7 +551,8 @@ void test_router_recv_received_multipart ()
 
     zlink::message_t first = zlink_cpp_contract::make_message ("one");
     zlink::message_t second = zlink_cpp_contract::make_message ("two");
-    assert (dealer.send ().message (first).message (second).submit ());
+    zlink_cpp_contract::submit_routed_send (
+      dealer.send ().message (first).message (second).async ());
 
     zlink::received_t inbound;
     assert (router.recv (inbound) == 0);
@@ -610,7 +614,8 @@ void test_router_direct_recv_multipart_failure_preserves_output ()
 
     zlink::message_t first = zlink_cpp_contract::make_message ("first");
     zlink::message_t second = zlink_cpp_contract::make_message ("second");
-    assert (dealer.send ().message (first).message (second).submit ());
+    zlink_cpp_contract::submit_routed_send (
+      dealer.send ().message (first).message (second).async ());
 
     const zlink::routing_id_t placeholder =
       zlink::routing_id_t::from (reinterpret_cast<const uint8_t *> ("placeholder"), 11);
@@ -652,7 +657,65 @@ void test_pair_send_recv_multipart ()
     assert (inbound.parts ()[1].to_string () == "two");
 }
 
-void test_pubsub_subscribe_multipart ()
+void test_received_lifetime_retains_and_releases_core_hwm_credit ()
+{
+    zlink::context_t ctx;
+    ctx.options ().auto_hwm_enabled (false);
+    zlink::pair_socket_t receiver (ctx);
+    zlink::pair_socket_t sender (ctx);
+    receiver.options ().recv_hwm (zlink::byte_count_t::bytes (128));
+    sender.options ().send_hwm (zlink::byte_count_t::bytes (128));
+
+    const std::string endpoint = zlink_cpp_contract::unique_inproc ("pair-retained-credit");
+    receiver.bind (endpoint);
+    sender.connect (endpoint);
+
+    zlink::message_t outbound (1024);
+    assert (outbound.valid ());
+    std::memset (outbound.data (), 0x6a, outbound.size ());
+    assert (sender.send ().message (outbound).submit ());
+
+    const zlink::core_hwm_budget_snapshot_t queued = ctx.core_hwm_budget_snapshot ();
+    assert (queued.core_queue_accounted_bytes () > 0u);
+    assert (queued.application_accounted_bytes () == 0u);
+
+    zlink::received_t received;
+    assert (receiver.recv_retained (received) == 0);
+    assert (received.first_part ().size () == 1024u);
+
+    const zlink::core_hwm_budget_snapshot_t retained = ctx.core_hwm_budget_snapshot ();
+    assert (retained.core_queue_accounted_bytes () == 0u);
+    assert (retained.application_accounted_bytes () == queued.core_queue_accounted_bytes ());
+    assert (retained.current_accounted_bytes () == queued.current_accounted_bytes ());
+    assert (retained.outstanding_application_lease_count () == 1u);
+    assert (retained.deferred_origin_credit_bytes ()
+            == retained.application_accounted_bytes ());
+
+    zlink::received_t copy = received;
+    const int no_data = receiver.recv (received, zlink::recv_flags_t::dontwait);
+    assert (no_data == static_cast<int> (zlink::recv_result_t::no_data));
+    assert (ctx.core_hwm_budget_snapshot ().outstanding_application_lease_count () == 1u);
+    assert (copy.first_part ().size () == 1024u);
+
+    copy.close ();
+    const zlink::core_hwm_budget_snapshot_t released = ctx.core_hwm_budget_snapshot ();
+    assert (released.application_accounted_bytes () == 0u);
+    assert (released.outstanding_application_lease_count () == 0u);
+    assert (released.deferred_origin_credit_bytes () == 0u);
+    assert (released.current_accounted_bytes () == 0u);
+
+    zlink::message_t ordinary_outbound = zlink::message_t::from ("ordinary");
+    assert (sender.send ().message (ordinary_outbound).submit ());
+    zlink::received_t ordinary;
+    assert (receiver.recv (ordinary) == 0);
+    const zlink::core_hwm_budget_snapshot_t ordinary_released =
+      ctx.core_hwm_budget_snapshot ();
+    assert (ordinary_released.application_accounted_bytes () == 0u);
+    assert (ordinary_released.outstanding_application_lease_count () == 0u);
+    ordinary.close ();
+}
+
+void test_publisher_async_admission_multipart ()
 {
     zlink::context_t ctx;
     zlink::xpub_socket_t publisher (ctx);
@@ -680,14 +743,23 @@ void test_pubsub_subscribe_multipart ()
     std::vector<zlink::message_t> outbound;
     outbound.push_back (zlink_cpp_contract::make_message ("alpha"));
     outbound.push_back (zlink_cpp_contract::make_message ("beta"));
-    assert (publisher.publish (topic).message (outbound[0]).message (outbound[1]).submit ());
+    zlink_cpp_contract::submit_routed_send (
+      publisher.publish (topic).message (outbound[0]).message (outbound[1]).async ());
 
     zlink::topic_message_t inbound;
-    assert (subscriber.subscribe (inbound) == static_cast<int> (zlink::recv_result_t::ok));
+    assert (subscriber.subscribe_retained (inbound)
+            == static_cast<int> (zlink::recv_result_t::ok));
     assert (inbound.topic () == topic);
     assert (inbound.parts ().size () == 2);
     assert (inbound.parts ()[0].to_string () == "alpha");
     assert (inbound.parts ()[1].to_string () == "beta");
+
+    assert (ctx.core_hwm_budget_snapshot ().outstanding_application_lease_count () == 2u);
+    zlink::topic_message_t copy = inbound;
+    inbound.close ();
+    assert (ctx.core_hwm_budget_snapshot ().outstanding_application_lease_count () == 2u);
+    copy.close ();
+    assert (ctx.core_hwm_budget_snapshot ().outstanding_application_lease_count () == 0u);
 }
 
 void test_pair_ipc_large_message_shutdown ()
@@ -725,7 +797,7 @@ int main ()
     test_pair_send_recv_single_part ();
     test_pair_send_recv_single_part_direct ();
     test_pair_direct_recv_no_data_preserves_output ();
-    test_dealer_send_dontwait_builder ();
+    test_dealer_routed_send_async_builder ();
     test_pair_direct_recv_multipart_failure_preserves_output ();
     test_router_recv_single_part_direct ();
     test_router_send_builder_owns_target_rid ();
@@ -734,7 +806,8 @@ int main ()
     test_router_direct_recv_no_data_preserves_output ();
     test_router_direct_recv_multipart_failure_preserves_output ();
     test_pair_send_recv_multipart ();
-    test_pubsub_subscribe_multipart ();
+    test_received_lifetime_retains_and_releases_core_hwm_credit ();
+    test_publisher_async_admission_multipart ();
 #if !defined(_WIN32)
     test_pair_ipc_large_message_shutdown ();
 #endif

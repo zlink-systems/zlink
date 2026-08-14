@@ -3,6 +3,7 @@
 use crate::RecvError;
 use crate::domain::recv_state_error;
 use crate::error::CloseError;
+use crate::internal::HwmBudgetLeaseOwner;
 use crate::message::{Message, RoutingId};
 
 /// A received publish: its topic, source routing id, and message parts.
@@ -16,6 +17,7 @@ pub struct TopicMessage {
     /// The message parts, owned by this envelope.
     parts: Vec<Message>,
     receive_scratch: Vec<Message>,
+    hwm_budget_leases: HwmBudgetLeaseOwner,
 }
 
 impl TopicMessage {
@@ -26,7 +28,12 @@ impl TopicMessage {
             topic: smol_str::SmolStr::default(),
             parts: Vec::new(),
             receive_scratch: Vec::new(),
+            hwm_budget_leases: HwmBudgetLeaseOwner::default(),
         }
+    }
+
+    pub(crate) fn begin_receive(&mut self) {
+        self.hwm_budget_leases.release();
     }
 
     pub(crate) fn receive_scratch(&mut self) -> &mut Vec<Message> {
@@ -40,6 +47,18 @@ impl TopicMessage {
     ) {
         self.routing_id = routing_id;
         self.topic = topic;
+        std::mem::swap(&mut self.parts, &mut self.receive_scratch);
+    }
+
+    pub(crate) fn replace_retained_parts(
+        &mut self,
+        routing_id: Option<RoutingId>,
+        topic: smol_str::SmolStr,
+        leases: HwmBudgetLeaseOwner,
+    ) {
+        self.routing_id = routing_id;
+        self.topic = topic;
+        self.hwm_budget_leases = leases;
         std::mem::swap(&mut self.parts, &mut self.receive_scratch);
     }
 
@@ -77,16 +96,19 @@ impl TopicMessage {
 
     /// Consumes the envelope and returns its only part, transferring ownership;
     /// errors unless it holds exactly one part.
-    pub fn single_part_or_error(self) -> Result<Message, RecvError> {
+    pub fn single_part_or_error(mut self) -> Result<Message, RecvError> {
         if self.parts.len() != 1 {
             return Err(recv_state_error());
         }
-        Ok(self.parts.into_iter().next().expect("single part"))
+        Ok(std::mem::take(&mut self.parts)
+            .into_iter()
+            .next()
+            .expect("single part"))
     }
 
     /// Consumes the envelope and returns ownership of all its parts.
-    pub fn into_parts(self) -> Vec<Message> {
-        self.parts
+    pub fn into_parts(mut self) -> Vec<Message> {
+        std::mem::take(&mut self.parts)
     }
 
     /// Closes every part, releasing their payloads.

@@ -3,7 +3,7 @@ using Systems.Zlink;
 
 internal static class Program
 {
-    private static void Main(string[] args)
+    private static async Task Main(string[] args)
     {
         // --8<-- [start:doc]
         if (!SampleSupport.IsNativeAvailable())
@@ -20,7 +20,7 @@ internal static class Program
         SampleSupport.WaitConnected(routerMonitor, dealerMonitor);
 
         using (Message request = Message.From("ping"))
-            dealer.Send().Message(request).Submit();
+            await dealer.Send().Message(request).Async();
         using var received = Received.Create();
         if (!router.Recv(received))
             throw new InvalidOperationException("recv failed");

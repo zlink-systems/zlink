@@ -242,7 +242,7 @@ Framework sample은 단순 API 호출뿐 아니라 여러 역할의 server와 cl
 | Binding 정식 계약 | [Bindings 스펙](./bindings/doc/spec/README.ko.md) |
 | Framework 개념과 사용 상황 | [Framework 서버 개요](./framework/doc/framework/common/guide/server/01-overview.ko.md) |
 | Framework 정식 계약 | [Framework 공통 스펙](./framework/doc/framework/common/spec/README.ko.md) |
-| Framework 내부 구조 | [Framework internals](./framework/doc/framework/common/internals/README.ko.md) |
+| Framework 내부 구조 | [Framework internals](framework/doc/framework/common/spec/README.ko.md) |
 | Core를 소스에서 빌드하고 테스트 | [Core 빌드 가이드](./doc/building/build-guide.ko.md) |
 | 현재 source로 Core와 Bindings local package 생성 | [Local package 가이드](./scripts/local-package/README.ko.md) |
 | Binding package 설치와 사용 | [Bindings 가이드](./bindings/doc/guide/README.ko.md) |

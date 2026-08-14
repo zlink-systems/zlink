@@ -106,6 +106,8 @@ static const socket_option_key_t<int> tcp_nodelay (socket_option::tcp_nodelay);
 namespace router_options
 {
 static const router_option_key_t<int> mandatory (router_option::mandatory);
+static const router_option_key_t<std::string> connect_routing_id (
+  router_option::connect_routing_id);
 } // namespace router_options
 
 } // namespace options

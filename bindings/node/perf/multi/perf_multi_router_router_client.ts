@@ -17,7 +17,6 @@ const { parseMultiArgs } = require('./perf_multi_common');
 const {
   POLLIN,
   POLLOUT,
-  applyAutoHwmMsgUnit,
   applyContextPolicy,
   applySocketPolicy,
   emitMultiSocketHwmDetail,
@@ -25,7 +24,7 @@ const {
   pollEventHas,
   recvNoWaitInto,
   sendStopTokenOnce,
-  trySocketSend,
+  tryRoutedSocketSend,
   waitForConnectionReady
 } = require('./perf_multi_runtime');
 
@@ -61,7 +60,6 @@ async function main() {
     }
     for (let i = 0; i < routers.length; i += 1) {
       await waitForConnectionReady(routers[i], () => routers[i].connect(options.endpoint));
-      applyAutoHwmMsgUnit(ctx, options.msgSize);
       poller.add(routers[i], pollEvents(POLLIN | POLLOUT), i);
     }
     ctx.recalculateAutoHwm();
@@ -100,7 +98,11 @@ async function main() {
           continue;
         }
         stampPayload(payloads[i], { phase: 1, runId, msgSize: options.msgSize, seq });
-        const sent = trySocketSend(routers[i], SERVER_ROUTING_ID, payloads[i]);
+        const sent = await tryRoutedSocketSend(
+          routers[i],
+          SERVER_ROUTING_ID,
+          payloads[i]
+        );
         if (!sent) {
           sendPending[i] = true;
           continue;
@@ -142,7 +144,7 @@ async function main() {
     // PERF_MULTI_TEST_POLICY § 1.3.1: signal phase end via wire stop token.
     await sendStopTokenOnce(
       routers[0],
-      (bytes) => trySocketSend(routers[0], SERVER_ROUTING_ID, bytes)
+      (bytes) => tryRoutedSocketSend(routers[0], SERVER_ROUTING_ID, bytes)
     );
 
     const result = await collector.finish();

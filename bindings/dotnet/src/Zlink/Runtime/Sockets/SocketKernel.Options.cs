@@ -80,11 +80,13 @@ internal sealed partial class SocketKernel : IDisposable
         return _options.GetString(option.Option, initialSize);
     }
 
-    public SocketMonitor MonitorOpen(SocketEvent events = SocketEvent.All)
+    public SocketMonitor MonitorOpen(SocketEvent events,
+        ulong monitorHwmBytes)
     {
         ZlinkSocketMonitorOpenOptions options = new()
         {
-            Events = (uint)events
+            Events = (uint)events,
+            MonitorHwmBytes = monitorHwmBytes
         };
         var handle = NativeMethods.zlink_socket_monitor_open(Handle, in options);
         if (handle == IntPtr.Zero)

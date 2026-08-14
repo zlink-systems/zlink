@@ -24,6 +24,13 @@ internal static partial class NativeMethods
         out IntPtr sourceRoutingId, byte[] topicIdBuffer, nuint topicIdCapacity,
         out nuint topicIdLenOut, ref ZlinkMsg part, out int hasMore, int flags);
 
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static partial int zlink_subscribe_part_with_hwm_budget_lease(
+        IntPtr subject, out IntPtr sourceRoutingId, byte[] topicIdBuffer,
+        nuint topicIdCapacity, out nuint topicIdLenOut, ref ZlinkMsg part,
+        out IntPtr lease, out int hasMore, int flags);
+
     [DllImport(LibraryName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int zlink_xpub_recv_part(IntPtr subject,
         out IntPtr sourceRoutingId, out int subscribed, byte[] topicIdBuffer,

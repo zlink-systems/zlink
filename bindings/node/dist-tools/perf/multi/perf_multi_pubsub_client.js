@@ -7,7 +7,7 @@ const { createMetricCollector, createRunId, currentEpochNs, HEADER_SIZE, summari
 const { integerEnv } = require('../common/perf_args');
 const { configureTlsClient } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { POLLIN, applyAutoHwmMsgUnit, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, waitForConnectionReady } = require('./perf_multi_runtime');
+const { POLLIN, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, waitForConnectionReady } = require('./perf_multi_runtime');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 function isStopTokenPayload(buffer, size) {
     if (size !== STOP_TOKEN_BYTES.length) {
@@ -35,7 +35,6 @@ async function main() {
             configureTlsClient(sub, options.transport);
             sub.setSubscription('');
             await waitForConnectionReady(sub, () => sub.connect(options.endpoint));
-            applyAutoHwmMsgUnit(ctx, options.msgSize);
             subs.push(sub);
             receivedBySub.push(new zlink.TopicMessage());
         }

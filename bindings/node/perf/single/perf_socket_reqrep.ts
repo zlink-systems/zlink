@@ -12,7 +12,6 @@ const {
   stampPayload,
 } = require('../common/perf_metrics');
 const {
-  applyAutoHwmMsgUnit,
   applyContextPolicy,
   applySocketPolicy,
   benchmarkEndpoint,
@@ -100,8 +99,8 @@ function drainServer(server) {
   return stop;
 }
 
-function handshakeRouters(client, server) {
-  client.send(SERVER_RID).message(Buffer.from('PING')).submit();
+async function handshakeRouters(client, server) {
+  await client.send(SERVER_RID).message(Buffer.from('PING')).submit();
   const ping = new zlink.Received();
   const pong = new zlink.Received();
   try {
@@ -109,7 +108,7 @@ function handshakeRouters(client, server) {
     if (!ping.routingId || ping.singlePartOrThrow().data().toString() !== 'PING') {
       throw new Error('router request/reply handshake receive failed');
     }
-    server.send(ping.routingId).message(Buffer.from('PONG')).submit();
+    await server.send(ping.routingId).message(Buffer.from('PONG')).submit();
     client.recv(pong);
     if (pong.singlePartOrThrow().data().toString() !== 'PONG') {
       throw new Error('router request/reply handshake reply failed');
@@ -130,12 +129,9 @@ async function runSocketReqRep(msgSize, options, routedClient) {
   const clientMonitor = client.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
   const endpoint = await benchmarkEndpoint(options.transport,
     routedClient ? `router-router-reqrep-${msgSize}` : `dealer-router-reqrep-${msgSize}`);
-  const poller = zlink.createPoller();
-  const pollEvents = zlink.createPollEvents(1);
   try {
     applySocketPolicy(server, options);
     applySocketPolicy(client, options);
-    applyAutoHwmMsgUnit(ctx, msgSize);
     server.setRoutingId(SERVER_RID);
     server.options.mandatory = true;
     if (routedClient) {
@@ -152,11 +148,9 @@ async function runSocketReqRep(msgSize, options, routedClient) {
     ctx.recalculateAutoHwm();
     trace('ready');
     if (routedClient) {
-      handshakeRouters(client, server);
+      await handshakeRouters(client, server);
       trace('handshake-done');
     }
-    poller.add(client, [zlink.PollEventFlag.PollCompletion], 0);
-
     const runId = createRunId(options.runId ?? 1);
     const activeStartNs = currentEpochNs();
     const activeStopNs = activeStartNs
@@ -175,15 +169,19 @@ async function runSocketReqRep(msgSize, options, routedClient) {
       Math.min(64, Math.floor(REQUEST_WINDOW_BYTES / Math.max(1, msgSize)))
     );
     let failure = null;
-    const callback = (result, parts) => {
+    let completionSignal = Promise.resolve();
+    const observe = async (request) => {
+      let parts = null;
       try {
-        if (result === zlink.RequestResult.Ok && parts?.length > 0) {
+        parts = await request;
+        if (parts?.length > 0) {
           collector.recordPayload(parts[0].data(), currentEpochNs());
-        } else if (result !== zlink.RequestResult.TimedOut) {
-          failure = new Error(`request completion failed: ${result}`);
         }
       } catch (error) {
-        failure = error;
+        if (!(error instanceof zlink.RequestError
+            && error.result === zlink.RequestResult.TimedOut)) {
+          failure = error;
+        }
       } finally {
         closeParts(parts);
         outstanding -= 1;
@@ -196,38 +194,31 @@ async function runSocketReqRep(msgSize, options, routedClient) {
         stampPayload(payload, { phase: 1, runId, msgSize, seq });
         try {
           const operation = routedClient ? client.request(SERVER_RID) : client.request();
-          const accepted = operation.message(payload)
-            .timeout(options.recvTimeoutMs ?? 200)
-            .flags(zlink.SendFlags.None)
-            .submit(callback);
-          if (accepted) {
-            outstanding += 1;
-            seq += 1n;
-          } else {
-            break;
-          }
+          const request = operation.message(payload)
+            .timeout(options.recvTimeoutMs ?? 200).submit();
+          outstanding += 1;
+          completionSignal = observe(request);
+          seq += 1n;
         } catch (error) {
           if (!transientSubmit(error)) throw error;
           break;
         }
       }
       drainServer(server);
-      poller.wait(pollEvents, 0);
-      await sleepImmediate();
+      await Promise.race([completionSignal, sleepImmediate()]);
     }
     trace(`active-done outstanding=${outstanding}`);
 
     const drainStopNs = currentEpochNs() + 10_000_000_000n;
     while (outstanding > 0 && currentEpochNs() < drainStopNs) {
       drainServer(server);
-      poller.wait(pollEvents, 10);
-      await sleepImmediate();
+      await Promise.race([completionSignal, sleepImmediate()]);
     }
     if (failure || outstanding !== 0) throw failure ?? new Error('request drain timed out');
     trace('drain-done');
 
     const stopOperation = routedClient ? client.send(SERVER_RID) : client.send();
-    stopOperation.message(STOP_TOKEN_BYTES).flags(zlink.SendFlags.None).submit();
+    await stopOperation.message(STOP_TOKEN_BYTES).submit();
     const stopDeadlineNs = currentEpochNs() + 5_000_000_000n;
     let stopReceived = false;
     while (!stopReceived && currentEpochNs() < stopDeadlineNs) {
@@ -242,7 +233,7 @@ async function runSocketReqRep(msgSize, options, routedClient) {
     throw error;
   } finally {
     trace('closing');
-    for (const resource of [pollEvents, poller, clientMonitor, serverMonitor,
+    for (const resource of [clientMonitor, serverMonitor,
       client, server, ctx]) {
       try { resource?.close?.(); } catch (_) { /* preserve the benchmark failure */ }
     }

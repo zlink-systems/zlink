@@ -11,6 +11,18 @@ use zlink::{
     SubmitRetryMode, SubscriptionEvent, Thread, TopicMessage, XPubSocket,
 };
 
+fn assert_routed_send_future<F>(_: F)
+where
+    F: std::future::Future<Output = Result<(), zlink::SubmitError>> + Send,
+{
+}
+
+fn assert_routed_request_future<F>(_: F)
+where
+    F: std::future::Future<Output = Result<Vec<Message>, zlink::ZlinkError>> + Send,
+{
+}
+
 // ---------------------------------------------------------------------------
 // Socket type capability separation
 // ---------------------------------------------------------------------------
@@ -89,9 +101,30 @@ fn router_socket_send_requires_routing_id() {
     // RouterSocket::send takes a RoutingId and returns a builder.
     let rid = RoutingId::from(b"peer-001");
     let msg = Message::try_from(b"response").unwrap();
-    let _ = sock.send(&rid).message(msg).submit();
+    assert_routed_send_future(sock.send(&rid).message(msg).submit());
+    assert_routed_request_future(
+        sock.request(&rid)
+            .message(Message::try_from(b"request").unwrap())
+            .submit(),
+    );
     let mut received = Received::empty();
     let _ = sock.recv(&mut received, RecvFlags::DONT_WAIT);
+}
+
+#[test]
+fn dealer_routed_submit_returns_future() {
+    let ctx = Context::new().unwrap();
+    let sock = ctx.dealer_socket().unwrap();
+    assert_routed_send_future(
+        sock.send()
+            .message(Message::try_from(b"send").unwrap())
+            .submit(),
+    );
+    assert_routed_request_future(
+        sock.request()
+            .message(Message::try_from(b"request").unwrap())
+            .submit(),
+    );
 }
 
 #[test]

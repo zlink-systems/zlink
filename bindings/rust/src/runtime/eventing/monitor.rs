@@ -8,7 +8,7 @@ use crate::internal::{CallbackBox, MonitorStorage};
 use crate::message::RoutingId;
 use crate::monitor_contracts::{
     MonitorEvent, MonitorEventType, MonitorSourceKind, MonitorStatus, Monitorable, SocketMonitor,
-    SocketMonitorEventMask,
+    SocketMonitorOpenOptions,
 };
 use crate::native_errors::{
     check_close_rc, check_config_rc, check_handler_rc, check_recv_rc, last_errno,
@@ -44,21 +44,12 @@ impl MonitorStatus {
             detail_flags: raw.detail_flags,
             snd_pending_msgs: raw.snd_pending_msgs,
             rcv_pending_msgs: raw.rcv_pending_msgs,
+            snd_pending_bytes: raw.snd_pending_bytes,
+            rcv_pending_bytes: raw.rcv_pending_bytes,
             auto_hwm_enabled: raw.auto_hwm_enabled != 0,
             auto_hwm_profile: raw.auto_hwm_profile,
             auto_hwm_role: raw.auto_hwm_role,
             auto_hwm_policy_class: raw.auto_hwm_policy_class,
-            auto_hwm_unit_budget_bytes: raw.auto_hwm_unit_budget_bytes,
-            auto_hwm_size_cap: raw.auto_hwm_size_cap,
-            auto_hwm_socket_message_slots: raw.auto_hwm_socket_message_slots,
-            auto_hwm_connection_bucket_enabled: raw.auto_hwm_connection_bucket_enabled != 0,
-            auto_hwm_connection_bucket_count: raw.auto_hwm_connection_bucket_count,
-            auto_hwm_connection_bucket_index: raw.auto_hwm_connection_bucket_index,
-            auto_hwm_connection_bucket_hwm_4k: raw.auto_hwm_connection_bucket_hwm_4k,
-            auto_hwm_connection_bucket_hysteresis_retained: raw
-                .auto_hwm_connection_bucket_hysteresis_retained
-                != 0,
-            auto_hwm_effective_message_bytes: raw.auto_hwm_effective_message_bytes,
             auto_hwm_planned_sndhwm_bytes: raw.auto_hwm_planned_sndhwm_bytes,
             auto_hwm_planned_rcvhwm_bytes: raw.auto_hwm_planned_rcvhwm_bytes,
             auto_hwm_applied_sndhwm_bytes: raw.auto_hwm_applied_sndhwm_bytes,
@@ -96,17 +87,18 @@ pub(crate) fn monitor_status_is_closed(status: &MonitorStatus) -> bool {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn socket_monitor_open(socket: &dyn Monitorable) -> Result<SocketMonitor, ConfigError> {
-    socket_monitor_open_with_events(socket, SocketMonitorEventMask::ALL)
+    socket_monitor_open_with_options(socket, SocketMonitorOpenOptions::default())
 }
 
-/// Open a socket monitor with an explicit typed event mask.
-pub(crate) fn socket_monitor_open_with_events(
+/// Open a socket monitor with explicit typed options.
+pub(crate) fn socket_monitor_open_with_options(
     socket: &dyn Monitorable,
-    events: SocketMonitorEventMask,
+    options: SocketMonitorOpenOptions,
 ) -> Result<SocketMonitor, ConfigError> {
     let target = monitorable_handle(socket)?;
     let opts = ffi::zlink_socket_monitor_open_options_t {
-        events: events.bits(),
+        events: options.events.bits(),
+        monitor_hwm_bytes: options.monitor_hwm_bytes,
     };
     let handle = unsafe { ffi::zlink_socket_monitor_open(target, &opts) };
     if handle.is_null() {

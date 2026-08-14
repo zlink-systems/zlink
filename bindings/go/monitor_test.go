@@ -7,6 +7,28 @@ import (
 	zlink "zlink.systems/zlink"
 )
 
+func TestMonitorOpenAcceptsByteHwmOption(t *testing.T) {
+	ctx := newContext(t)
+	defer ctx.Close()
+
+	socket, err := ctx.PairSocket()
+	if err != nil {
+		t.Fatalf("PairSocket() error = %v", err)
+	}
+	defer socket.Close()
+
+	monitor, err := zlink.OpenSocketMonitor(
+		socket,
+		zlink.MonitorHwmBytes(4096),
+		zlink.MonitorEventConnected,
+		zlink.MonitorHwmBytes(8192),
+	)
+	if err != nil {
+		t.Fatalf("OpenSocketMonitor(byte HWM) error = %v", err)
+	}
+	defer monitor.Close()
+}
+
 func TestMonitorRecv(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
@@ -50,9 +72,11 @@ func TestMonitorRecv(t *testing.T) {
 	}
 	_ = snapshot.AutoHwmProfile
 	_ = snapshot.AutoHwmPolicyClass
-	_ = snapshot.AutoHwmUnitBudgetBytes
-	_ = snapshot.AutoHwmSizeCap
-	_ = snapshot.AutoHwmSocketMessageSlots
+	if snapshot.ABIVersion != 3 {
+		t.Fatalf("Status ABI = %d, want 3", snapshot.ABIVersion)
+	}
+	_ = snapshot.SndPendingBytes
+	_ = snapshot.RcvPendingBytes
 }
 
 func TestMonitorOnEventReceivesStateChange(t *testing.T) {

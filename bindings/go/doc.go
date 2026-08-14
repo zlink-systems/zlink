@@ -11,7 +11,7 @@
 //   - context options are exposed through Context.Options() as ContextOptions
 //   - socket capabilities are split by concrete socket type
 //   - typed domain objects model routing IDs, aggregate receive results, topic
-//     messages, subscription events, completion-control records, and monitor events
+//     messages, subscription events, and monitor events
 //   - raw option bags and raw flags are not exposed publicly
 //   - monitor open APIs use typed event masks and default to ALL when omitted
 //   - callback delivery hops from native threads onto Go-managed dispatcher

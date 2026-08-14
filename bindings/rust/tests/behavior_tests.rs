@@ -1,6 +1,8 @@
 //! Behavior tests -- verify that the binding layer correctly relays
 //! core send/recv/publish/subscribe contracts.
 
+mod test_support;
+
 use std::thread;
 use std::time::Duration;
 
@@ -80,7 +82,7 @@ fn dealer_router_roundtrip() {
 
     // Dealer sends to Router
     let msg = Message::try_from(b"request-payload").unwrap();
-    dealer.send().message(msg).submit().unwrap();
+    test_support::block_on(dealer.send().message(msg).submit()).unwrap();
 
     // Router receives with the dealer's routing id
     let mut received = Received::empty();
@@ -89,11 +91,13 @@ fn dealer_router_roundtrip() {
 
     // Router sends back to the dealer using the received routing id
     let reply = Message::try_from(b"response-payload").unwrap();
-    router
-        .send(received.routing_id().expect("missing routing id"))
-        .message(reply)
-        .submit()
-        .unwrap();
+    test_support::block_on(
+        router
+            .send(received.routing_id().expect("missing routing id"))
+            .message(reply)
+            .submit(),
+    )
+    .unwrap();
 
     let mut response = Received::empty();
     dealer.recv(&mut response, RecvFlags::NONE).unwrap();
@@ -112,12 +116,14 @@ fn router_recv_preserves_routing_id_and_multipart_payload() {
     dealer.connect("inproc://beh-router-part").unwrap();
     thread::sleep(Duration::from_millis(50));
 
-    dealer
-        .send()
-        .message(Message::try_from(b"part-1").unwrap())
-        .message(Message::try_from(b"part-2").unwrap())
-        .submit()
-        .unwrap();
+    test_support::block_on(
+        dealer
+            .send()
+            .message(Message::try_from(b"part-1").unwrap())
+            .message(Message::try_from(b"part-2").unwrap())
+            .submit(),
+    )
+    .unwrap();
 
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
@@ -240,21 +246,25 @@ fn dealer_router_send_from_callback() {
     drop(dealer_mon);
 
     // Dealer sends request.
-    dealer
-        .send()
-        .message(Message::try_from(b"request-42").unwrap())
-        .submit()
-        .unwrap();
+    test_support::block_on(
+        dealer
+            .send()
+            .message(Message::try_from(b"request-42").unwrap())
+            .submit(),
+    )
+    .unwrap();
 
     let mut received = Received::empty();
     router.recv(&mut received, RecvFlags::NONE).unwrap();
     assert_eq!(received.parts()[0].as_bytes(), b"request-42");
     let reply = Message::try_from(b"reply-42").unwrap();
-    router
-        .send(received.routing_id().expect("missing routing id"))
-        .message(reply)
-        .submit()
-        .unwrap();
+    test_support::block_on(
+        router
+            .send(received.routing_id().expect("missing routing id"))
+            .message(reply)
+            .submit(),
+    )
+    .unwrap();
 
     // Dealer receives the reply sent from the router handle.
     dealer

@@ -10,27 +10,29 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.RequestOperation;
-import systems.zlink.contracts.messaging.SendOperation;
+import systems.zlink.contracts.messaging.RoutedSendOperation;
 import systems.zlink.runtime.messaging.MessageOperations;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.time.Duration;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import systems.zlink.runtime.nativeapi.InternalAccess;
+import systems.zlink.internal.sockets.SocketOptions;
 
 final class NativeDealerSocket extends NativeSocketBase implements DealerSocket {
-    private static final boolean DEBUG_REQREP =
-      Boolean.getBoolean("zlink.reqrep.debug");
     private final DealerSocketOptions options = ContractAccess.dealerSocketOptions(this);
-    private final MessageOperations.SingleSendInvoker singleSend =
-        (part, flags) -> runtime().send(part, SendFlag.fromValue(flags.value()));
-    private final MessageOperations.SendInvoker multipartSend =
-        (parts, flags) -> runtime().send(parts, SendFlag.fromValue(flags.value()));
+    private final OutboundRecordAttemptGate outboundRecordAttempts =
+        new OutboundRecordAttemptGate();
+    private final RoutedAdmission routedAdmission;
 
     NativeDealerSocket(Context ctx) {
         super(ctx, SocketType.DEALER);
+        try {
+            routedAdmission = new RoutedAdmission(handle(), true,
+                outboundRecordAttempts);
+        } catch (RuntimeException error) {
+            try {
+                runtime().close();
+            } catch (RuntimeException ignored) {
+            }
+            throw error;
+        }
     }
 
     public void bind(String endpoint) { runtime().bind(endpoint); }
@@ -43,11 +45,18 @@ final class NativeDealerSocket extends NativeSocketBase implements DealerSocket 
     public void setRoutingId(RoutingId rid) { runtime().setRoutingId(rid); }
     public RoutingId getRoutingId() { return runtime().getRoutingId(); }
 
-    public SendOperation send() {
-        return MessageOperations.send(singleSend, multipartSend);
+    public RoutedSendOperation send() {
+        return MessageOperations.routedSend(parts -> routedAdmission.send(
+            null, parts, runtime().getOption(SocketOptions.SNDTIMEO)));
     }
-    SendResult sendNoWaitResult(Message part) { return runtime().sendNoWaitResult(part); }
-    SendResult sendNoWaitResult(List<Message> parts) { return runtime().sendNoWaitResult(parts); }
+    SendResult sendNoWaitResult(Message part) {
+        return outboundRecordAttempts.call(
+            () -> runtime().sendNoWaitResult(part));
+    }
+    SendResult sendNoWaitResult(List<Message> parts) {
+        return outboundRecordAttempts.call(
+            () -> runtime().sendNoWaitResult(parts));
+    }
     /**
      * Receives into caller-provided {@link Received} storage.
      *
@@ -63,44 +72,33 @@ final class NativeDealerSocket extends NativeSocketBase implements DealerSocket 
         java.util.Objects.requireNonNull(flags, "flags");
         return runtime().recvInto(result, ReceiveFlag.fromValue(flags.value()));
     }
+    public boolean recvRetained(Received result, RecvFlags flags) {
+        java.util.Objects.requireNonNull(result, "result");
+        java.util.Objects.requireNonNull(flags, "flags");
+        return runtime().recvRetainedInto(result,
+            ReceiveFlag.fromValue(flags.value()));
+    }
     public void setSendReadyHandler(SendReadyHandler handler) { runtime().setSendReadyHandler(handler); }
     public RequestOperation request() {
-        return MessageOperations.request(this::requestStage, this::requestCallback);
-    }
-
-    private CompletableFuture<List<Message>> requestStage(List<Message> parts,
-                                                          SendFlags flags,
-                                                          Duration timeout) {
-        return InternalAccess.dealerRequestAsync(this, parts, flags, timeout);
-    }
-
-    private boolean requestCallback(List<Message> parts,
-                                    RequestCallback callback,
-                                    SendFlags flags,
-                                    Duration timeout) {
-        return InternalAccess.dealerRequestCallback(this, parts, callback, flags,
-            timeout);
+        return MessageOperations.request((parts, timeout) ->
+            routedAdmission.request((RoutingId) null, parts, timeout));
     }
     @Override
     public void close() {
-        debug("dealer close begin");
+        routedAdmission.prepareClose();
+        boolean closed = false;
         try {
-            runtime().close();
+            outboundRecordAttempts.run(runtime()::close);
+            closed = true;
+            routedAdmission.commitClose();
         } finally {
-            debug("dealer close end");
-        }
-    }
-    @Override public DealerSocketOptions options() { return options; }
-
-    private static void debug(String message) {
-        if (DEBUG_REQREP) {
-            try {
-                Files.writeString(Path.of("/tmp/zlink-reqrep.log"),
-                    "[dealer-socket] " + message + System.lineSeparator(),
-                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-            } catch (Exception ignored) {
+            if (closed) {
+                routedAdmission.finishClose();
+            } else {
+                routedAdmission.abortClose();
             }
         }
     }
+    @Override public DealerSocketOptions options() { return options; }
 
 }

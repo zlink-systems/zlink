@@ -6,7 +6,7 @@
 #include <zlink/Contracts/Sockets/pubsub_socket_contracts.hpp>
 #include <zlink/Contracts/Errors/errors.hpp>
 #include <zlink.h>
-#include "../Core/operation_detail.hpp"
+#include "../Core/routing_id_access.hpp"
 #include "../Messaging/received_access.hpp"
 #include "../Native/native_receive.hpp"
 

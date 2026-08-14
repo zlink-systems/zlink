@@ -12,7 +12,6 @@ const {
 } = require('../common/perf_metrics');
 const {
   applyContextPolicy,
-  applyAutoHwmMsgUnit,
   applySocketPolicy,
   benchmarkEndpoint,
   closeSenderWorker,
@@ -46,7 +45,6 @@ async function runDealerRouterBenchmark(msgSize, options) {
 
   try {
     applySocketPolicy(router, options);
-    applyAutoHwmMsgUnit(ctx, msgSize);
     ctx.recalculateAutoHwm();
     configureTlsServer(router, options.transport);
     router.bind(endpoint);

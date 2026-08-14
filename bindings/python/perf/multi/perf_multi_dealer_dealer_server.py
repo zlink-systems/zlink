@@ -7,7 +7,6 @@ import zlink
 from perf_multi_common import (
     STOP_TOKEN,
     active_message_latency_ns,
-    apply_multi_auto_hwm_msg_unit,
     apply_multi_socket_options,
     benchmark_endpoint,
     benchmark_run_id,
@@ -47,7 +46,6 @@ def main(argv=None):
             apply_multi_socket_options(dealer)
             with dealer.monitor_open(zlink.MonitorEventMask.CONNECTION_READY) as monitor:
                 dealer.bind(endpoint)
-                apply_multi_auto_hwm_msg_unit(ctx, args.msg_size)
                 print(f"READY,{endpoint}", flush=True)
                 with zlink.create_poller() as poller:
                     poller.add_socket(dealer, zlink.PollEventFlag.POLLIN, 0)

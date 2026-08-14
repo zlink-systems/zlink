@@ -52,7 +52,6 @@ internal enum SocketOption
     TcpNoDelay = 0x3031,
     RouteValueMaxSize = 0x3032,
     RidDuplicatePolicy = 0x3033,
-    AutoHwmMsgUnitBytes = 0x3034,
     SubmitRetryMode = 0x3037,
     SubmitRetryTimeout = 0x3038,
     SubmitRetryAttempts = 0x3039,
