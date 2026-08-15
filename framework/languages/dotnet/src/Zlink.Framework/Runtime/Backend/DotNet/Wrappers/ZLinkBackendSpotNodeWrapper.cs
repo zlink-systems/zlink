@@ -1520,6 +1520,10 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             RequestResult.Terminated => ZLinkFrameworkErrorKind.ShuttingDown,
             RequestResult.ProtocolError => ZLinkFrameworkErrorKind.ProtocolError,
             RequestResult.Rejected => ZLinkFrameworkErrorKind.Rejected,
+            //  Backpressured(113) is the bounded admission terminal: a target's
+            //  placement/admission capacity is CapacityExceeded (spec 32:104-108),
+            //  matching C++ reply_header_exception case 113.
+            RequestResult.Backpressured => ZLinkFrameworkErrorKind.CapacityExceeded,
             RequestResult.Conflict or RequestResult.Busy
                 or RequestResult.NotConnected =>
                 ZLinkFrameworkErrorKind.Unavailable,
