@@ -431,11 +431,21 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 else
                 {
                     ZLinkMessageParts.DisposeAll(reply);
+                    //  Spec 32-framework-error-model — the command-39 activation
+                    //  path emits SpotGenerationStale/RequestProtocolError/
+                    //  WorkerTimedOut/RequestFailed; classify each rather than
+                    //  collapsing protocol and deadline into InternalFailure.
                     terminal.TrySetException(new ZLinkFrameworkException(
-                        record.FailureErrno
-                        == (int)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
-                            ? ZLinkFrameworkErrorKind.InvalidOperation
-                            : ZLinkFrameworkErrorKind.InternalFailure,
+                        (ServiceWireConstants.FrameworkErrorCode)record.FailureErrno switch
+                        {
+                            ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale =>
+                                ZLinkFrameworkErrorKind.InvalidOperation,
+                            ServiceWireConstants.FrameworkErrorCode.RequestProtocolError =>
+                                ZLinkFrameworkErrorKind.ProtocolError,
+                            ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut =>
+                                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                            _ => ZLinkFrameworkErrorKind.InternalFailure,
+                        },
                         "Remote Instance Spot activation failed."));
                 }
             },
