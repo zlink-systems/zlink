@@ -92,7 +92,7 @@ final class ZLinkSpotRouterNodeDispatcher {
                 + " parts=" + ZLinkChannelRuntime.describeTraceParts(reply.parts()));
             if (reply.result() != ZLinkBackendRequestResult.OK) {
                 result.completeExceptionally(new ZLinkFrameworkException(
-                    reply.result().toFrameworkErrorKind(),
+                    reply.result().toFrameworkErrorKind(reply.failureCode()),
                     "SPOT route request failed: " + reply.result()));
                 return;
             }

@@ -1630,6 +1630,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 header.terminalResult() == 0
                     ? ZLinkBackendRequestResult.OK
                     : backendResult(header.terminalResult()),
+                header.failureCode(),
                 Optional.of(targetNodeRid),
                 Optional.of(targetSpotId),
                 Optional.of(correlation),
@@ -2358,26 +2359,19 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 replyFrames == null ? List.of() : replyFrames));
             return operation.completion().thenCompose(received -> {
             if (received.result() != ZLinkBackendRequestResult.OK) {
+                //  Ownership-aware translator: the coarse remote terminal
+                //  refined by the fine failure code (spec 32:81-118, 99-103),
+                //  replacing the divergent hand-rolled switch.
+                ZLinkFrameworkErrorKind errorKind = received.result()
+                    .toFrameworkErrorKind(received.failureCode());
                 received.close();
                 return CompletableFuture.failedFuture(
                     new ZLinkFrameworkException(
-                        actorRequestErrorKind(received.result()),
+                        errorKind,
                         "Actor request failed: " + received.result()));
             }
             return CompletableFuture.completedFuture(received.parts());
         });
-    }
-
-    private static ZLinkFrameworkErrorKind actorRequestErrorKind(
-        ZLinkBackendRequestResult result) {
-        return switch (result) {
-            case NOT_CONNECTED, CONFLICT -> ZLinkFrameworkErrorKind.UNAVAILABLE;
-            case NOT_FOUND -> ZLinkFrameworkErrorKind.NOT_FOUND;
-            case TIMED_OUT -> ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED;
-            case PROTOCOL_ERROR -> ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
-            case REJECTED, BUSY, TERMINATED -> ZLinkFrameworkErrorKind.REJECTED;
-            default -> ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
-        };
     }
 
     CompletionStage<Void> bindRemoteStreamSession(
@@ -3449,6 +3443,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 header.terminalResult() == 0
                     ? ZLinkBackendRequestResult.OK
                     : backendResult(header.terminalResult()),
+                header.failureCode(),
                 Optional.of(actor.nodeRid()),
                 Optional.empty(),
                 Optional.of(correlation),
@@ -3562,6 +3557,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 : backendResult(header.terminalResult());
             ZLinkBackendReceived received = new ZLinkBackendReceived(
                 terminal,
+                header.failureCode(),
                 Optional.of(target),
                 Optional.empty(),
                 Optional.empty(),

@@ -1386,7 +1386,7 @@ public final class ZLinkChannelRuntime
                     try {
                         if (reply.result() != ZLinkBackendRequestResult.OK) {
                             result.completeExceptionally(new ZLinkFrameworkException(
-                                reply.result().toFrameworkErrorKind(),
+                                reply.result().toFrameworkErrorKind(reply.failureCode()),
                                 "internal route request failed: " + reply.result()));
                         } else if (reply.parts().isEmpty()) {
                             result.completeExceptionally(new ZLinkFrameworkException(

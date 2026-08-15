@@ -192,7 +192,7 @@ final class ZLinkChannelCallRuntime {
         CompletableFuture<TReply> result) {
         if (reply.result() != ZLinkBackendRequestResult.OK) {
             result.completeExceptionally(new ZLinkFrameworkException(
-                reply.result().toFrameworkErrorKind(),
+                reply.result().toFrameworkErrorKind(reply.failureCode()),
                 "channel request failed: " + reply.result()));
             return;
         }

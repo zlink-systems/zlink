@@ -10,6 +10,7 @@ import systems.zlink.contracts.messaging.Message;
 
 public final class ZLinkBackendReceived implements AutoCloseable {
     private final ZLinkBackendRequestResult result;
+    private final int failureCode;
     private final Optional<RoutingId> routingId;
     private final Optional<String> spotId;
     private final Optional<Long> requestSeq;
@@ -35,6 +36,7 @@ public final class ZLinkBackendReceived implements AutoCloseable {
         String contentType) {
         this(
             result,
+            0,
             routingId,
             spotId,
             requestSeq,
@@ -52,6 +54,7 @@ public final class ZLinkBackendReceived implements AutoCloseable {
 
     private ZLinkBackendReceived(
         ZLinkBackendRequestResult result,
+        int failureCode,
         Optional<RoutingId> routingId,
         Optional<String> spotId,
         Optional<Long> requestSeq,
@@ -63,6 +66,7 @@ public final class ZLinkBackendReceived implements AutoCloseable {
         Runnable closeAction,
         String contentType) {
         this.result = result == null ? ZLinkBackendRequestResult.OK : result;
+        this.failureCode = Math.max(0, failureCode);
         this.routingId = routingId == null ? Optional.empty() : routingId;
         this.spotId = spotId == null ? Optional.empty() : spotId;
         this.requestSeq = requestSeq == null ? Optional.empty() : requestSeq;
@@ -91,12 +95,14 @@ public final class ZLinkBackendReceived implements AutoCloseable {
         Runnable closeAction,
         String contentType) {
         return new ZLinkBackendReceived(
-            result, routingId, spotId, requestSeq, applicationMetadata,
+            result, 0, routingId, spotId, requestSeq, applicationMetadata,
             acceptedJournalRecord, acceptedJournalRecordSizeHint, parts, reply,
             closeAction, contentType);
     }
 
     public ZLinkBackendRequestResult result() { return result; }
+    /** The fine framework failure code from the reply header (0 if absent). */
+    public int failureCode() { return failureCode; }
     public Optional<RoutingId> routingId() { return routingId; }
     public Optional<String> spotId() { return spotId; }
     public Optional<Long> requestSeq() { return requestSeq; }
@@ -252,6 +258,29 @@ public final class ZLinkBackendReceived implements AutoCloseable {
             requestSeq,
             new byte[0],
             new byte[0],
+            parts,
+            null,
+            () -> { },
+            null);
+    }
+
+    /** Completion-site constructor that carries the reply's fine failure code. */
+    public ZLinkBackendReceived(
+        ZLinkBackendRequestResult result,
+        int failureCode,
+        Optional<RoutingId> routingId,
+        Optional<String> spotId,
+        Optional<Long> requestSeq,
+        List<Message> parts) {
+        this(
+            result,
+            failureCode,
+            routingId,
+            spotId,
+            requestSeq,
+            new byte[0],
+            () -> new byte[0],
+            0,
             parts,
             null,
             () -> { },
