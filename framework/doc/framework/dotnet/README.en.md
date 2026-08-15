@@ -4,7 +4,7 @@
 
 [Guide Home](../index.en.md) | [Common Spec](../common/README.en.md)
 
-[Common Spec](../common/README.en.md) | [Async Execution](../common/spec/05-async-execution-policy.en.md) | [Exact Interface](../common/spec/server/languages/dotnet/interfaces/README.en.md) | [Stream Connector](../common/spec/stream-connector/languages/dotnet/03-stream-connector.en.md) | [Unity Guide](guide/stream-connector/02-unity.en.md) | [Common Internals](../common/spec/README.en.md) | [Regression Matrix](internals/regression-test-matrix.en.md) | [Backend Policy](internals/backend-dependency-policy.en.md) | [Runtime Integration](internals/runtime-integration-and-ownership.en.md)
+[Common Spec](../common/README.en.md) | [Async Execution](../common/spec/server/05-async-execution-policy.en.md) | [Exact Interface](../common/spec/server/languages/dotnet/interfaces/README.en.md) | [Stream Connector](../common/spec/stream-connector/languages/dotnet/03-stream-connector.en.md) | [Unity Guide](guide/stream-connector/02-unity.en.md) | [Common Internals](../common/spec/server/README.en.md) | [Regression Matrix](internals/regression-test-matrix.en.md) | [Backend Policy](internals/backend-dependency-policy.en.md) | [Runtime Integration](internals/runtime-integration-and-ownership.en.md)
 
 # ZLink Framework for .NET
 
@@ -19,7 +19,7 @@
 > | [`guide/stream-connector/`](guide/stream-connector/README.en.md) | The **Stream connector** usage guide (including Unity/Godot) |
 > | [`internals/`](internals/regression-test-matrix.en.md) | Implementation and verification criteria |
 >
-> **The public contract doesn't live here.** It's owned by the [spec tree](../common/spec/README.en.md) —
+> **The public contract doesn't live here.** It's owned by the [spec tree](../common/spec/server/README.en.md) —
 > [server/languages/dotnet](../common/spec/server/languages/dotnet/README.en.md),
 > [http-client/languages/dotnet](../common/spec/http-client/languages/dotnet/dotnet-http-client.en.md),
 > [stream-connector/languages/dotnet](../common/spec/stream-connector/languages/dotnet/03-stream-connector.en.md).
@@ -172,7 +172,7 @@ exact interface table of contents.
 | [32-stream-connector.ko.md](../common/spec/stream-connector/languages/dotnet/03-stream-connector.en.md) | The separate client connector's lifecycle, dispatch, codec, transport, and termination reasons |
 | [Public contract](../common/spec/server/languages/dotnet/README.en.md) | The documentation contract and the exact verification procedure against actual assembly/NuGet artifacts |
 
-**The meaning and behavioral rules of a feature are owned by the [common spec](../common/spec/README.en.md).**
+**The meaning and behavioral rules of a feature are owned by the [common spec](../common/spec/server/README.en.md).**
 Language-specific documents only fix what shape that meaning takes in `.NET`.
 
 ### 2.3 Maintenance Documents
@@ -183,7 +183,7 @@ follow each feature's spec.
 
 | Document | Scope |
 |------|------------|
-| [Common Internals](../common/spec/README.en.md) | Runtime architecture decisions shared across all four languages |
+| [Common Internals](../common/spec/server/README.en.md) | Runtime architecture decisions shared across all four languages |
 | [regression-test-matrix.ko.md](internals/regression-test-matrix.en.md) | The regression test items that must always be kept, CI tiers, release gate |
 | [backend-dependency-policy.ko.md](internals/backend-dependency-policy.en.md) | Backend dependency relationships and the boundary for replacing low-level libraries |
 | [runtime-integration-and-ownership.en.md](internals/runtime-integration-and-ownership.en.md) | Binding public API selection, adapter responsibility, and receive-storage ownership |

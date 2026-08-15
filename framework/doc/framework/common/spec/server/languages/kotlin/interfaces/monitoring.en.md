@@ -42,7 +42,7 @@ add these.
 The ClientServer target and fanout publisher use Java's `ZLinkPeerState`
 and `ZLinkTopologyReason` unchanged. A Kotlin-only connection status
 enum isn't created. The local role of a
-[snapshot](../../../../01-glossary.en.md#snapshot) that registered
+[snapshot](../../../01-glossary.en.md#snapshot) that registered
 Client and Server together on the same ChannelName is represented by
 Java's `ZLinkClientServerRole.CLIENT_AND_SERVER`. This is only an
 aggregate projection of two separate role registrations, not a builder
@@ -51,7 +51,7 @@ created.
 
 Fanout ready semantics also use the Java contract unchanged. The
 publisher-dedicated SUB socket's native-ready alone doesn't become
-[ready](../../../../01-glossary.en.md#ready) — the first valid
+[ready](../../../01-glossary.en.md#ready) — the first valid
 application record or liveness beacon must also be received on the same
 socket. The 15-second inbound timeout changes that publisher's peer
 state to `NOT_CONNECTED`.
@@ -65,7 +65,7 @@ standard logger/trace/metric provider configured by the application does
 not change the original message operation's terminal result and is
 isolated as separate diagnostics.
 
-[RouteMesh](../../../../01-glossary.en.md#routemesh) placement status
+[RouteMesh](../../../01-glossary.en.md#routemesh) placement status
 only provides whether new objects can be accepted and the current
 process's active Actor/Spot count. Node-wide placement weight,
 per-stable-type capacity, pending activation, and reservation failure

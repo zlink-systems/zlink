@@ -113,7 +113,7 @@ Most scenarios are expressed with the verification functions the connector provi
 
 **The terminal call follows the language** — `.NET` uses `Async`, Java/Node/C++ use
 `submit`, Kotlin uses `await`
-([Async Execution Policy](../../../common/spec/05-async-execution-policy.en.md)).
+([Async Execution Policy](../../../common/spec/server/05-async-execution-policy.en.md)).
 
 Value comparison uses `Ensure(condition, message)`. The message is required, and on
 failure the scenario ends with an exception carrying that message.

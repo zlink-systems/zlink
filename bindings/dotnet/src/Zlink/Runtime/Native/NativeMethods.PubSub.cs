@@ -24,6 +24,17 @@ internal static partial class NativeMethods
         out IntPtr sourceRoutingId, byte[] topicIdBuffer, nuint topicIdCapacity,
         out nuint topicIdLenOut, ref ZlinkMsg part, out int hasMore, int flags);
 
+    // DONT_WAIT returns after one dequeue attempt. Keep this separate from the
+    // general import: a blocking subscription receive must retain its normal
+    // GC transition even when callers otherwise use the same public API.
+    [LibraryImport(LibraryName, EntryPoint = "zlink_subscribe_part")]
+    [SuppressGCTransition]
+    [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
+    internal static unsafe partial int zlink_subscribe_part_dont_wait(
+        IntPtr subject, out IntPtr sourceRoutingId, byte* topicIdBuffer,
+        nuint topicIdCapacity, out nuint topicIdLenOut, ref ZlinkMsg part,
+        out int hasMore, int flags);
+
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = new[] { typeof(CallConvCdecl) })]
     internal static partial int zlink_subscribe_part_with_hwm_budget_lease(

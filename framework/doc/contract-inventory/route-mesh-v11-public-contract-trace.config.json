@@ -2729,8 +2729,8 @@
         "/(?:[0-9]+-)?(?:common-runtime|configuration-host|foundation-configuration|nestjs-host)\\.ko\\.md$"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/06-framework-api.ko.md",
-        "framework/doc/framework/common/spec/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
+        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
       ],
       "decisionIds": [
         "POSD-V11-01",
@@ -2783,10 +2783,10 @@
         "/(?:[0-9]+-)?(?:configuration-topology|foundation-configuration|channel-messaging|routing-id-allocation|location-observability|topology-monitoring|common-runtime)\\.ko\\.md$"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/07-channel-topology.ko.md",
-        "framework/doc/framework/common/spec/09-client-server-channel.ko.md",
-        "framework/doc/framework/common/spec/10-network-listener-identity.ko.md",
-        "framework/doc/framework/common/spec/21-location-runtime.ko.md"
+        "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
+        "framework/doc/framework/common/spec/server/09-client-server-channel.ko.md",
+        "framework/doc/framework/common/spec/server/10-network-listener-identity.ko.md",
+        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md"
       ],
       "decisionIds": [
         "POSD-V11-03",
@@ -2842,9 +2842,9 @@
         "/(?:[0-9]+-)?(?:common-runtime|channel-messaging|dispatch-ownership|serialization|foundation-configuration|examples)\\.ko\\.md$"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/04-message-model.ko.md",
-        "framework/doc/framework/common/spec/05-async-execution-policy.ko.md",
-        "framework/doc/framework/common/spec/08-channel-messaging.ko.md"
+        "framework/doc/framework/common/spec/server/04-message-model.ko.md",
+        "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
+        "framework/doc/framework/common/spec/server/08-channel-messaging.ko.md"
       ],
       "decisionIds": [
         "POSD-V11-02",
@@ -2885,10 +2885,10 @@
         "/(?:[0-9]+-)?(?:spots|channel-messaging)\\.ko\\.md$"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/12-spot-messaging.ko.md",
-        "framework/doc/framework/common/spec/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/16-spot-address-messaging.ko.md",
-        "framework/doc/framework/common/spec/17-stage-wrapper-on-spot.ko.md"
+        "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
+        "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
+        "framework/doc/framework/common/spec/server/17-stage-wrapper-on-spot.ko.md"
       ],
       "decisionIds": [
         "POSD-V11-06",
@@ -2942,10 +2942,10 @@
         "/(?:[0-9]+-)?(?:actors|spots|bound-stream-session|location-maintenance|location-objects)\\.ko\\.md$"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/14-actor-model.ko.md",
-        "framework/doc/framework/common/spec/15-spot-actor.ko.md",
-        "framework/doc/framework/common/spec/20-session-actor-dispatch.ko.md",
-        "framework/doc/framework/common/spec/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/14-actor-model.ko.md",
+        "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
+        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
+        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
       ],
       "decisionIds": [
         "POSD-V11-04",
@@ -3038,8 +3038,8 @@
         "/(?:[0-9]+-)?(?:stream-session|bound-stream-session|stream-worker)\\.ko\\.md$"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/19-stream-session.ko.md",
-        "framework/doc/framework/common/spec/20-session-actor-dispatch.ko.md"
+        "framework/doc/framework/common/spec/server/19-stream-session.ko.md",
+        "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md"
       ],
       "decisionIds": [
         "POSD-V11-04",
@@ -3070,10 +3070,10 @@
         "/(?:[0-9]+-)?(?:authority-relocation|location-maintenance|location-objects|location-provider-redis|location-store|routing-id-allocation|location-observability)\\.ko\\.md$"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/21-location-runtime.ko.md",
-        "framework/doc/framework/common/spec/22-location-store-redis.ko.md",
-        "framework/doc/framework/common/spec/23-relocation-store-redis.ko.md",
-        "framework/doc/framework/common/spec/30-host-relocation-flow.ko.md"
+        "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
+        "framework/doc/framework/common/spec/server/22-location-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/23-relocation-store-redis.ko.md",
+        "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md"
       ],
       "decisionIds": [
         "POSD-V11-06",
@@ -3144,11 +3144,11 @@
         "/(?:[0-9]+-)?(?:monitoring|monitoring-errors|topology-monitoring|location-observability|common-runtime|channel-messaging)\\.ko\\.md$"
       ],
       "formalSpecOwners": [
-        "framework/doc/framework/common/spec/24-runtime-monitoring.ko.md",
-        "framework/doc/framework/common/spec/25-runtime-metrics.ko.md",
-        "framework/doc/framework/common/spec/26-message-flow-tracing.ko.md",
-        "framework/doc/framework/common/spec/27-flow-correlation.ko.md",
-        "framework/doc/framework/common/spec/29-transport-liveness.ko.md"
+        "framework/doc/framework/common/spec/server/24-runtime-monitoring.ko.md",
+        "framework/doc/framework/common/spec/server/25-runtime-metrics.ko.md",
+        "framework/doc/framework/common/spec/server/26-message-flow-tracing.ko.md",
+        "framework/doc/framework/common/spec/server/27-flow-correlation.ko.md",
+        "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md"
       ],
       "decisionIds": [
         "POSD-V11-01",

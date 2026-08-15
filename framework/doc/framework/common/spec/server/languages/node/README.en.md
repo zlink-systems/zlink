@@ -10,7 +10,7 @@ contract tests must follow this contract.
 | `interfaces` | [Public Interface Table Of Contents](interfaces/README.en.md) | Per-category TypeScript declarations, Location Store, maintenance, and automatic routing ID allocation |
 
 **The meaning and behavioral rules of a feature are owned by the
-[common spec](../../../README.en.md).** This directory only fixes the
+[common spec](../../README.en.md).** This directory only fixes the
 **exact public API** that meaning takes in this language.
 
 Host relocation must always specify a mode. Planned maintenance only

@@ -160,7 +160,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
            const std::string &, std::type_index,
            std::function<zlink::framework::encoded_payload_t (
              zlink::framework::serializer_registry_t &)>,
-           const std::map<std::string, std::string> &) {
+           const std::map<std::string, std::string> &)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           EXPECT_EQ ("cart-17", std::string (spot_id));
           EXPECT_EQ (std::optional<std::string> ("commerce"), intent.mesh_name);
           EXPECT_EQ (std::optional<std::string> ("shopping-cart"),
@@ -169,7 +170,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
           auto address = zlink::framework::runtime::spot_address_t{
             "commerce", zlink::routing_id_t::from ("cart-node"), "cart-17", 1};
           resolver.addresses.insert_or_assign ("cart-17", address);
-          return zlink::framework::result_t<void>::success ();
+          co_return zlink::framework::result_t<void>::success ();
       },
       [] (const auto &, const auto &, std::string, std::type_index,
           auto, std::chrono::milliseconds, auto) {
@@ -186,21 +187,24 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       "commerce",
       [&] (const zlink::routing_id_t &node, const std::string &spot,
            std::uint64_t generation,
-           zlink::framework::runtime::messaging::message_parts_t) {
+           zlink::framework::runtime::messaging::message_parts_t)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           EXPECT_EQ ("cart-node", node.to_string ());
           EXPECT_EQ ("cart-17", spot);
           EXPECT_EQ (1u, generation);
           ++sends;
-          return zlink::framework::result_t<void>::success ();
+          co_return zlink::framework::result_t<void>::success ();
       },
       [&] (const zlink::routing_id_t &, const std::string &, std::uint64_t,
            zlink::framework::runtime::messaging::message_parts_t parts,
-           std::chrono::milliseconds) {
+           std::chrono::milliseconds)
+        -> zlink::framework::task_t<zlink::framework::result_t<
+          zlink::framework::runtime::messaging::message_parts_t>> {
           ++requests;
           auto header = envelopes.decode_header (parts).value ();
           header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
           reply_t reply{71};
-          return zlink::framework::result_t<
+          co_return zlink::framework::result_t<
             zlink::framework::runtime::messaging::message_parts_t>::success (
             envelopes.encode_parts (header, reply, serializers));
       });
@@ -236,9 +240,10 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     std::atomic_int activations{0};
     runtime.bind_instance_spot_activator (
       [&] (const auto &, const auto &, const auto &, auto, auto,
-           const auto &) {
+           const auto &)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           ++activations;
-          return zlink::framework::result_t<void>::failure (
+          co_return zlink::framework::result_t<void>::failure (
             zlink::framework::framework_error_kind_t::internal_failure,
             "must not activate");
       },
@@ -274,8 +279,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     std::chrono::milliseconds observed_timeout{0};
     runtime.bind_instance_spot_activator (
       [] (const auto &, const auto &, const auto &, auto, auto,
-          const auto &) {
-          return zlink::framework::result_t<void>::failure (
+          const auto &)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
+          co_return zlink::framework::result_t<void>::failure (
             zlink::framework::framework_error_kind_t::internal_failure,
             "unused one-way activation");
       },
@@ -312,9 +318,10 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     std::atomic_int activations{0};
     runtime.bind_instance_spot_activator (
       [&] (const auto &, const auto &, const auto &, auto, auto,
-           const auto &) {
+           const auto &)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
           ++activations;
-          return zlink::framework::result_t<void>::failure (
+          co_return zlink::framework::result_t<void>::failure (
             zlink::framework::framework_error_kind_t::internal_failure,
             "simulated cold activation rejection");
       },

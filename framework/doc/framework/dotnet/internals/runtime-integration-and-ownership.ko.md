@@ -1,7 +1,7 @@
 <!-- framework-adapter-nav:start -->
 [문서 목록](../../../README.ko.md) | [이전: Backend Policy](backend-dependency-policy.ko.md) | [다음: Regression Test Matrix](regression-test-matrix.ko.md)<!-- framework-adapter-nav:end -->
 
-[공통 layering](../../common/spec/40-internal-layering.ko.md) | [공통 spec](../../common/spec/README.ko.md)
+[공통 layering](../../common/spec/server/40-internal-layering.ko.md) | [공통 spec](../../common/spec/server/README.ko.md)
 
 # .NET Runtime Integration과 Receive Ownership
 
@@ -11,7 +11,7 @@
 문서만으로 판단할 수 있어야 한다.
 
 이 문서는 Framework public contract를 추가하지 않는다. Framework public contract는
-[공통 spec](../../common/spec/README.ko.md)과 .NET exact interface 문서가 소유한다.
+[공통 spec](../../common/spec/server/README.ko.md)과 .NET exact interface 문서가 소유한다.
 
 ## 1. 계층 기준
 

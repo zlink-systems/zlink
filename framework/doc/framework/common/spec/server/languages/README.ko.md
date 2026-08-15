@@ -9,8 +9,8 @@ connector는 [언어별 Stream connector 계약](../../stream-connector/README.k
 HTTP client는 [언어별 HTTP client 계약](../../http-client/README.ko.md)이
 각각 소유한다.
 
-언어에 공통인 동작은 [공통 스펙](../../README.ko.md)이 정의하고, 계약을 변경하는
-절차는 [공개 계약 관리](../../00-public-contract-governance.ko.md)를 따른다.
+언어에 공통인 동작은 [공통 스펙](../README.ko.md)이 정의하고, 계약을 변경하는
+절차는 [공개 계약 관리](../00-public-contract-governance.ko.md)를 따른다.
 
 | 언어 | 공개 계약 |
 |------|-----------|

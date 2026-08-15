@@ -163,13 +163,13 @@ record, not to demonstrate relocation.
 
 | Behavior Needed | Element Chosen | Reason And Contract Basis |
 |---|---|---|
-| Find the current owner per player. | A global Spot message | Resolves the current Ready authority by SpotId. [Interaction Model §2](../../spec/03-interaction-model.en.md#2-common-model) |
-| Prepare a missing player owner on the first event. | Instance intent | Only the first message that explicitly specifies a missing Instance Spot starts cold activation. [Interaction Model §7](../../spec/03-interaction-model.en.md#7-spot-and-actor) |
-| Process one player's events in order. | The Spot execution gate | Uses the owner turn as the Application state-change boundary. [Async Execution Policy](../../spec/05-async-execution-policy.en.md) |
-| Keep the connection and push. | STREAM Session and bound session | The binding route points at the current connection. [STREAM Session](../../spec/19-stream-session.en.md) |
-| Prepare a session actor and Spot. | The public Actor/Spot manager | Uses the global ID and stable type; the caller doesn't choose the owner NodeRid. [Framework API](../../spec/06-framework-api.en.md) |
+| Find the current owner per player. | A global Spot message | Resolves the current Ready authority by SpotId. [Interaction Model §2](../../spec/server/03-interaction-model.en.md#2-common-model) |
+| Prepare a missing player owner on the first event. | Instance intent | Only the first message that explicitly specifies a missing Instance Spot starts cold activation. [Interaction Model §7](../../spec/server/03-interaction-model.en.md#7-spot-and-actor) |
+| Process one player's events in order. | The Spot execution gate | Uses the owner turn as the Application state-change boundary. [Async Execution Policy](../../spec/server/05-async-execution-policy.en.md) |
+| Keep the connection and push. | STREAM Session and bound session | The binding route points at the current connection. [STREAM Session](../../spec/server/19-stream-session.en.md) |
+| Prepare a session actor and Spot. | The public Actor/Spot manager | Uses the global ID and stable type; the caller doesn't choose the owner NodeRid. [Framework API](../../spec/server/06-framework-api.en.md) |
 | Correct progress. | Application store and an explicit request | The Framework provides no event-sourcing or reconcile policy. |
-| Define the owner failure scope. | Failure/failover policy | A Ready owner failure is not automatic replacement. [Failover Policy §4.4](../../spec/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure) |
+| Define the owner failure scope. | Failure/failover policy | A Ready owner failure is not automatic replacement. [Failover Policy §4.4](../../spec/server/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure) |
 
 Instance intent is the choice for preparing the first owner when the SpotId is Missing. It's not a
 feature that automatically resubmits a failed message to a different node after a Ready owner

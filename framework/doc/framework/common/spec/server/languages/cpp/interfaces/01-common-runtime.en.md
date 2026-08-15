@@ -97,7 +97,7 @@ to know that state's data structure or processing order.
 
 The public `route_client_t` and `route_send_call_t` provide a typed
 call targeting a node and global Spot ID.
-[User Spot](../../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot)
+[User Spot](../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot)
 and Instance Spot use the same ID-only call surface, and don't provide
 a separate handle/resolver/logical address type. The request family
 returns `channel_request_call_t`. The user doesn't pass a target
@@ -300,7 +300,7 @@ SPOT and STREAM backpressure is only observed through the public
   configuration, and **exceeding the bound returns a failed result.**
 - The error kind of an exceeded bound differs by operation family and
   queue location. It follows the §error mapping table above and
-  [Spot Messaging §5.3](../../../../12-spot-messaging.en.md) — it
+  [Spot Messaging §5.3](../../../12-spot-messaging.en.md) — it
   isn't uniformly `capacity_exceeded`. Source-local saturation of
   one-way/send is `deadline_exceeded`, a request's local queue
   saturation is `capacity_exceeded`, and a remote queue saturation is
@@ -324,7 +324,7 @@ Classic Fanout. A request completes as `rejected`. `next()` can be
 called only once, and a second call is an `invalid_operation` error.
 
 The filter's registration order, `next` meaning, and scope are owned by
-[Framework API §8.1](../../../../06-framework-api.en.md#81-handler-filter).
+[Framework API §8.1](../../../06-framework-api.en.md#81-handler-filter).
 
 ### 6.3 Public Surface Boundary
 
@@ -410,7 +410,7 @@ public:
 **A worker is work that runs outside a spot/session execution
 context.** The rule for resuming completion in the original execution
 context is owned by
-[Async Execution Policy](../../../../05-async-execution-policy.en.md).
+[Async Execution Policy](../../../05-async-execution-policy.en.md).
 The worker function is passed a `std::stop_token` combining timeout,
 host shutdown, and caller cancellation. `submit()` is a terminal that
 doesn't wait for a result, and `submit()` keeps the current turn and
@@ -434,8 +434,8 @@ or transport, but doesn't replace the common error classification.
 
 The same Spot's dispatch serialization and `yield()`'s allowed scope
 are owned by
-[Stage Wrapper §3](../../../../17-stage-wrapper-on-spot.en.md) and
-[Async Execution Policy](../../../../05-async-execution-policy.en.md).
+[Stage Wrapper §3](../../../17-stage-wrapper-on-spot.en.md) and
+[Async Execution Policy](../../../05-async-execution-policy.en.md).
 
 ---
 <!-- framework-adapter-nav:bottom:start -->

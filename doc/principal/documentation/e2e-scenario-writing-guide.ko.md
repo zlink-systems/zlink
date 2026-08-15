@@ -308,7 +308,7 @@ request를 보내고 reply를 받는가.
 - 검증: baseline과 재시작 뒤 request가 각각 한 번 처리된다. 두 번째 request는 application
   retry 없이 새 provider의 public application evidence에 기록되고, client는 정해진 reply를 받는다.
   Public status에 이전 peer가 ready 상태로 남거나 handler가 중복 실행되면 실패다.
-- 세부 동작: [Transport liveness §6](../../../framework/doc/framework/common/spec/29-transport-liveness.ko.md#6-connection-loss와-reconnect)의
+- 세부 동작: [Transport liveness §6](../../../framework/doc/framework/common/spec/server/29-transport-liveness.ko.md#6-connection-loss와-reconnect)의
   reconnect와 target readiness 계약을 검증한다.
 ```
 
@@ -409,7 +409,7 @@ protocol frame을 직접 읽어 성공을 판정하지 않는다. 공개 결과�
 
 이렇게 쓴다.
 
-> 세부 동작: [Host Relocate와 Shutdown §12](../../../framework/doc/framework/common/spec/30-host-relocation-flow.ko.md#12-state별-admission)의
+> 세부 동작: [Host Relocate와 Shutdown §12](../../../framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md#12-state별-admission)의
 > 신규 admission 차단과 이미 수락한 request의 완료 경계를 검증한다.
 
 이렇게 쓰지 않는다.

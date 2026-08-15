@@ -3,6 +3,7 @@
 import ctypes
 import errno as _errno
 import threading
+import time as _time
 from typing import Optional
 
 from ..eventing.dispatcher import CallbackDispatcher
@@ -204,7 +205,28 @@ class _SocketHandle:
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
-        self.close()
+        _close_owned_resource(self.close)
+
+
+_RESOURCE_CLOSE_RETRY_INTERVAL_SECONDS = 0.001
+_RESOURCE_CLOSE_RETRY_TIMEOUT_SECONDS = 1.0
+
+
+def _close_owned_resource(close):
+    """Close a binding-owned resource after transient callback ownership drains."""
+    deadline = _time.monotonic() + _RESOURCE_CLOSE_RETRY_TIMEOUT_SECONDS
+    while True:
+        try:
+            close()
+            return
+        except CloseError as exc:
+            if (
+                exc.result != CloseResult.BUSY
+                or exc.native_errno != _errno.EBUSY
+                or _time.monotonic() >= deadline
+            ):
+                raise
+            _time.sleep(_RESOURCE_CLOSE_RETRY_INTERVAL_SECONDS)
 
 
 class _BaseSocket:
@@ -547,7 +569,7 @@ class _BaseSocket:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        self.close()
+        _close_owned_resource(self.close)
 
 
 class _Socket(_BaseSocket):

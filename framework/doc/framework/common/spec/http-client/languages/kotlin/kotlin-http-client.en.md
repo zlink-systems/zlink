@@ -66,7 +66,7 @@ Request configuration (`get/post/put/delete/patch/head/options`,
   non-blocking coroutine, and the calling coroutine's cancellation
   doesn't cancel an already-submitted HTTP operation. The thread isn't
   occupied while waiting on the network.
-- A handler/actor/[spot](../../../01-glossary.en.md#spot) path calls it
+- A handler/actor/[spot](../../../server/01-glossary.en.md#spot) path calls it
   directly inside a suspend function. `runBlocking` is test/CLI-only.
 - The continuation resumes on the calling coroutine's dispatcher. The
   resume location is changed with `withContext`.

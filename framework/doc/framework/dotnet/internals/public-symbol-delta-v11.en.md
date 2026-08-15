@@ -1,11 +1,11 @@
 <!-- framework-adapter-nav:start -->
-[Document List](../../../README.en.md) | [Runtime Lifecycle](../../common/spec/README.en.md)
+[Document List](../../../README.en.md) | [Runtime Lifecycle](../../common/spec/server/README.en.md)
 <!-- framework-adapter-nav:end -->
 
 # .NET v11 Public Boundary
 
 [Exact Interface](../../common/spec/server/languages/dotnet/interfaces/README.en.md) ·
-[Runtime Lifecycle](../../common/spec/README.en.md)
+[Runtime Lifecycle](../../common/spec/server/README.en.md)
 
 ## 1. Purpose
 
@@ -72,5 +72,5 @@ retention policy.
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[Document List](../../../README.en.md) | [Runtime Lifecycle](../../common/spec/README.en.md)
+[Document List](../../../README.en.md) | [Runtime Lifecycle](../../common/spec/server/README.en.md)
 <!-- framework-adapter-nav:bottom:end -->

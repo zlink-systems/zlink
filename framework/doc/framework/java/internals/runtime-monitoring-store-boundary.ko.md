@@ -30,7 +30,7 @@ Spot type별 세부 capacity는 authoritative reservation 결과로 확정한다
 atomic reservation 결과와 terminal reconciliation을 기준으로 관리한다.
 
 관련 공통 계약은
-[`Runtime monitoring`](../../common/spec/24-runtime-monitoring.ko.md)과
-[`MeshNode`](../../common/spec/13-mesh-node.ko.md)이다. Java public interface는
+[`Runtime monitoring`](../../common/spec/server/24-runtime-monitoring.ko.md)과
+[`MeshNode`](../../common/spec/server/13-mesh-node.ko.md)이다. Java public interface는
 [`Java monitoring interface`](../../common/spec/server/languages/java/interfaces/monitoring.ko.md)를
 따른다.

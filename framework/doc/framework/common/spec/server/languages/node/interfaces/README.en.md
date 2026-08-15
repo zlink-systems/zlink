@@ -1,6 +1,6 @@
 # Node.js Public Interface Table Of Contents
 
-[Node.js contract table of contents](../README.en.md) · [Common Spec](../../../../README.en.md)
+[Node.js contract table of contents](../README.en.md) · [Common Spec](../../../README.en.md)
 
 This directory fixes, per category, the exact public TypeScript
 declarations the ZLink Framework's `@zlink-systems/framework`,
@@ -16,7 +16,7 @@ owned by each package's separate spec.
 | 01 | [Foundation Types And Configuration](01-foundation-configuration.en.md) | Global ID/ref, object role/capacity, Actor/Spot relocation adapter and explicit policy |
 | 02 | [Channel, Request, And Routing](02-channel-messaging.en.md) | Entry Spot actor messaging, Channel/Fanout/RouteMesh calls and handlers |
 | 03 | [Location, Host Lifecycle, And Observability](03-location-observability.en.md) | Operational queries, relocation mode/target version, runtime events, metrics, and tracing |
-| 04 | [Spot And Instance Spot](04-spots.en.md) | [Spot](../../../../01-glossary.en.md#spot) lifecycle, [User Spot](../../../../01-glossary.en.md#entry-user-instance-spot) manager, and the Instance cold-activation fluent call |
+| 04 | [Spot And Instance Spot](04-spots.en.md) | [Spot](../../../01-glossary.en.md#spot) lifecycle, [User Spot](../../../01-glossary.en.md#entry-user-instance-spot) manager, and the Instance cold-activation fluent call |
 | 05 | [Actor And Session Binding](05-actors.en.md) | Actor lifecycle, Actor call, and bound session |
 | 06 | [STREAM, Timer, And Worker](06-stream-worker.en.md) | STREAM session, timer, and worker scheduling |
 | 07 | [NestJS Host Adapter](07-nestjs-host.en.md) | Module, DI token, decorator, and host builder |

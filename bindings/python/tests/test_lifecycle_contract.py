@@ -113,6 +113,41 @@ def test_socket_close_keeps_callback_state_when_native_close_fails():
     socket._dispatcher.close.assert_called_once_with()
 
 
+def test_socket_resource_exit_retries_native_busy_until_close_succeeds():
+    handle = _RetryableHandle()
+    socket = _socket_with_lifecycle_state(socket_base._BaseSocket, handle)
+
+    socket.__exit__(None, None, None)
+
+    assert handle.calls == 2
+    assert all(
+        value is None
+        for value in (
+            socket._recv_handler,
+            socket._recv_handler_cb,
+            socket._send_ready_handler,
+            socket._send_ready_handler_cb,
+            socket._packet_handler,
+            socket._packet_handler_cb,
+        )
+    )
+    socket._dispatcher.close.assert_called_once_with()
+
+
+def test_socket_resource_exit_does_not_retry_non_busy_close_error():
+    handle = Mock()
+    handle.close.side_effect = zlink.CloseError(
+        zlink.CloseResult.INVALID_HANDLE, errno.EFAULT
+    )
+    socket = _socket_with_lifecycle_state(socket_base._BaseSocket, handle)
+
+    with pytest.raises(zlink.CloseError) as raised:
+        socket.__exit__(None, None, None)
+
+    assert raised.value.result == zlink.CloseResult.INVALID_HANDLE
+    handle.close.assert_called_once_with()
+
+
 def test_routed_async_owner_is_not_terminated_until_socket_close_succeeds():
     handle = _RetryableHandle()
     socket = _socket_with_lifecycle_state(socket_base_impl.DealerSocket, handle)

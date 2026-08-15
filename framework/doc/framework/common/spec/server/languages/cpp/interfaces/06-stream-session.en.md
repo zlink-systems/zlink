@@ -1,6 +1,6 @@
 # C++ STREAM Session Exact Interface
 
-[C++ exact interface table of contents](README.en.md) · [Session Actor Dispatch](../../../../20-session-actor-dispatch.en.md)
+[C++ exact interface table of contents](README.en.md) · [Session Actor Dispatch](../../../20-session-actor-dispatch.en.md)
 
 ## 1. Public Session Surface
 

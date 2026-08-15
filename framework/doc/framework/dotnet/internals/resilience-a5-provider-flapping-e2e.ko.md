@@ -3,7 +3,7 @@
 이 문서는 공통 resilience lifecycle E2E의 RL-A5를 .NET
 `ResilienceLifecycle` fixture에서 검증하는 방법을 기록한다. 공개 계약은
 [공통 RL-A5 시나리오](../../common/e2e/config-5-resilience-lifecycle.ko.md)와
-[Runtime monitoring 명세](../../common/spec/24-runtime-monitoring.ko.md)에 있다.
+[Runtime monitoring 명세](../../common/spec/server/24-runtime-monitoring.ko.md)에 있다.
 
 ## 공통 시나리오와 구현
 

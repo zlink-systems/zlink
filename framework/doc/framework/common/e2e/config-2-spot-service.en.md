@@ -58,7 +58,7 @@ processing requests?
   the SpotId from the reply.
 - Verification: The public manager `Find` returns the reply's SpotId as a Ready ref, and the state
   handler runs exactly once.
-- Detailed behavior: verifies [Spot Actor §2](../spec/15-spot-actor.en.md).
+- Detailed behavior: verifies [Spot Actor §2](../spec/server/15-spot-actor.en.md).
 
 #### SM-A2 A User Spot's State Changes Serially
 
@@ -74,8 +74,8 @@ of reply order?
 - Procedure: N increment requests with unique operation IDs are sent with bounded concurrency.
 - Verification: Every request receives exactly one reply, and the final state is N. The handler
   active count never exceeds 1.
-- Detailed behavior: verifies [Work Put On The Spot Application Queue](../spec/12-spot-messaging.en.md#53-work-put-on-the-spot-application-queue)
-  and [Spot Turn And Callback Order](../spec/12-spot-messaging.en.md#54-spot-turn-and-callback-order).
+- Detailed behavior: verifies [Work Put On The Spot Application Queue](../spec/server/12-spot-messaging.en.md#53-work-put-on-the-spot-application-queue)
+  and [Spot Turn And Callback Order](../spec/server/12-spot-messaging.en.md#54-spot-turn-and-callback-order).
 
 #### SM-A3 A Global SpotId Reaches The Correct Spot
 
@@ -89,7 +89,7 @@ only by the specified global SpotId's current owner.
 - Starting condition: Spots A and B are ready on different nodes.
 - Procedure: A marker request is sent once with Spot A's ID.
 - Verification: The marker appears once in A's evidence and not in B's.
-- Detailed behavior: verifies [Spot Messaging §3](../spec/12-spot-messaging.en.md).
+- Detailed behavior: verifies [Spot Messaging §3](../spec/server/12-spot-messaging.en.md).
 
 #### SM-A4 Calling The Current Spot With No Owner Input
 
@@ -106,7 +106,7 @@ and after owner relocation?
   the same ID is requested again.
 - Verification: The first marker is processed by A, and the second by B. The caller input has no
   MeshName, RID, or endpoint.
-- Detailed behavior: verifies [Spot Messaging §3](../spec/12-spot-messaging.en.md).
+- Detailed behavior: verifies [Spot Messaging §3](../spec/server/12-spot-messaging.en.md).
 
 #### SM-A5 An Application Stage Wrapper Does Not Change The Spot Contract
 
@@ -123,7 +123,7 @@ ordering?
   wrapper.
 - Verification: SpotWide keeps the shared-gate order, and PerActor keeps per-Actor/per-timer lane
   order. The public replies and state match a control flow that doesn't use the wrapper.
-- Detailed behavior: verifies [Async Execution Policy](../spec/05-async-execution-policy.en.md).
+- Detailed behavior: verifies [Async Execution Policy](../spec/server/05-async-execution-policy.en.md).
 
 #### SM-A6 Run A User Spot's Initialize And Close Lifecycle
 
@@ -139,8 +139,8 @@ close calls `OnClosing(ExplicitClose)` exactly once.
   the same current ref.
 - Verification: The first close is false, and the callback/membership are kept. The second is true,
   and the closing callback runs exactly once.
-- Detailed behavior: verifies [Actor Membership](../spec/15-spot-actor.en.md#3-actor-membership-for-entry-spot-and-user-spot)
-  and [Spot Termination](../spec/12-spot-messaging.en.md#62-spot-termination).
+- Detailed behavior: verifies [Actor Membership](../spec/server/15-spot-actor.en.md#3-actor-membership-for-entry-spot-and-user-spot)
+  and [Spot Termination](../spec/server/12-spot-messaging.en.md#62-spot-termination).
 
 #### SM-A7 Reject A Stable-Type Conflict For The Same SpotId
 
@@ -154,7 +154,7 @@ A single global SpotId can have only one object kind and stable type in its curr
 - Procedure: A `GetOrCreate` of stable type B is called on the same ID.
 - Verification: The call is `TypeMismatch`, and the original Spot's state and handler availability
   are preserved.
-- Detailed behavior: verifies [Spot Actor §2](../spec/15-spot-actor.en.md).
+- Detailed behavior: verifies [Spot Actor §2](../spec/server/15-spot-actor.en.md).
 
 #### SM-A8 Reflect A CPU Worker's Result In Spot State
 
@@ -171,8 +171,8 @@ result reflected in Spot state exactly once?
   the worker is released.
 - Verification: The probe finishes before the continuation, and the final state reflects the worker
   result exactly once.
-- Detailed behavior: verifies [Worker Offload](../spec/05-async-execution-policy.en.md#12-worker-offload)
-  and [Handler Turn And Claim](../spec/05-async-execution-policy.en.md#3-handler-turn-and-claim).
+- Detailed behavior: verifies [Worker Offload](../spec/server/05-async-execution-policy.en.md#12-worker-offload)
+  and [Handler Turn And Claim](../spec/server/05-async-execution-policy.en.md#3-handler-turn-and-claim).
 
 #### SM-A9 A User Spot Is Published As Ready Only After Initialize Completes
 
@@ -189,7 +189,7 @@ after release?
   another process. The gate is released, and it is called again.
 - Verification: During the held window, Find does not return a Ready ref, and there is no handler
   evidence. After Create succeeds, Find and request succeed with the same current ref.
-- Detailed behavior: verifies the publication boundary in [Spot Actor §2](../spec/15-spot-actor.en.md).
+- Detailed behavior: verifies the publication boundary in [Spot Actor §2](../spec/server/15-spot-actor.en.md).
 
 #### SM-A10 The Entry Spot ID Is A Lifecycle Identity Independent Of The MeshNode RID
 
@@ -206,7 +206,7 @@ change independently from the RID on a replacement?
   request is sent. The Host is restarted with a replacement lifecycle, and both IDs are read again.
 - Verification: The two IDs are different, valid identities and are stable within the same lifecycle.
   In the replacement, the old Entry ID does not remain current, and a new Entry request succeeds.
-- Detailed behavior: verifies [Network Listener Identity §7.3](../spec/10-network-listener-identity.en.md).
+- Detailed behavior: verifies [Network Listener Identity §7.3](../spec/server/10-network-listener-identity.en.md).
 
 #### SM-A11 Reject Entry Spot's Reserved Format As A User/Instance ID
 
@@ -223,7 +223,7 @@ current Entry identity.
   ID.
 - Verification: Both calls are `InvalidOperation`, with no factory callback or application handler
   evidence.
-- Detailed behavior: verifies [Entry Spot in the Glossary](../spec/01-glossary.en.md).
+- Detailed behavior: verifies [Entry Spot in the Glossary](../spec/server/01-glossary.en.md).
 
 #### SM-A12 Automatic User Spot IDs Differ Across Concurrent Creates
 
@@ -240,7 +240,7 @@ independent state?
 - Procedure: Different callers concurrently run 200 automatic Creates.
 - Verification: The successful refs' SpotIds are all different, and each ID's marker request is
   processed exactly once at its own Spot.
-- Detailed behavior: verifies [Spot Actor §2](../spec/15-spot-actor.en.md).
+- Detailed behavior: verifies [Spot Actor §2](../spec/server/15-spot-actor.en.md).
 
 #### SM-A13 SpotId Keeps UTF-8 Length And Exact Equality
 
@@ -257,7 +257,7 @@ no side effect?
 - Procedure: Each valid ID is created, found, and requested, and a 256-byte ID create is attempted.
 - Verification: The valid IDs point to distinct objects by exact value. The 256-byte call is a local
   validation error, with no factory evidence.
-- Detailed behavior: verifies the same-global-ID rule and Spot ID contract in [Actor Model §2.1](../spec/14-actor-model.en.md).
+- Detailed behavior: verifies the same-global-ID rule and Spot ID contract in [Actor Model §2.1](../spec/server/14-actor-model.en.md).
 
 ### Track B — Actor Creation And Spot Membership Change
 
@@ -275,7 +275,7 @@ single current Actor?
   concurrently, then Found again.
 - Verification: The first Find is empty, with no factory evidence. The creation results point to a
   single current Actor, and the final Find returns the same generation ref.
-- Detailed behavior: verifies [Actor Model §3](../spec/14-actor-model.en.md).
+- Detailed behavior: verifies [Actor Model §3](../spec/server/14-actor-model.en.md).
 
 #### SM-B0A Return Actor-Creation Accept And Reject Per Operation
 
@@ -293,7 +293,7 @@ request/terminal?
 - Verification: The first receives a typed Rejected with its own payload, and the second receives
   Created and the current ActorRef. The final Find returns only the accepted Actor, with no
   handler/destroy evidence for the rejected operation.
-- Detailed behavior: verifies [Actor Model §3](../spec/14-actor-model.en.md).
+- Detailed behavior: verifies [Actor Model §3](../spec/server/14-actor-model.en.md).
 
 #### SM-B1 Join A User Spot On The Same Node
 
@@ -312,7 +312,7 @@ point to the target User Spot?
 - Verification: Target `OnActorJoin`, `OnJoinedActor`, and source `OnLeaveActor` each run exactly
   once, and the current Spot is the target. The follow-up Actor request is also processed exactly
   once on play-a.
-- Detailed behavior: verifies [Spot Actor §4](../spec/15-spot-actor.en.md).
+- Detailed behavior: verifies [Spot Actor §4](../spec/server/15-spot-actor.en.md).
 
 #### SM-B2 Join A User Spot On A Different Node
 
@@ -330,7 +330,7 @@ process requests at the target?
 - Verification: Join is Accepted, the current location is play-b, and generation and counter are the
   same as before. The public lifecycle/adapter callbacks each run exactly once in the formal order,
   and the follow-up request is processed at the target.
-- Detailed behavior: verifies [Spot Actor §5](../spec/15-spot-actor.en.md).
+- Detailed behavior: verifies [Spot Actor §5](../spec/server/15-spot-actor.en.md).
 
 #### SM-B3 Preserve A Typed Actor Request Payload
 
@@ -345,7 +345,7 @@ values across process boundaries.
 - Procedure: A request with nested objects, ordered tags, and nullable values is sent to the remote
   Actor.
 - Verification: The handler evidence's and reply's field values/collection order match the input.
-- Detailed behavior: verifies [Message Model](../spec/04-message-model.en.md).
+- Detailed behavior: verifies [Message Model](../spec/server/04-message-model.en.md).
 
 #### SM-B4 Send A Remote Actor Request To The Current Owner
 
@@ -361,7 +361,7 @@ receiving the reply?
 - Procedure: The caller sends a request once using only the ActorId.
 - Verification: Only the play-b handler records the marker exactly once, and the caller receives a
   matching reply.
-- Detailed behavior: verifies [Actor Model §5](../spec/14-actor-model.en.md).
+- Detailed behavior: verifies [Actor Model §5](../spec/server/14-actor-model.en.md).
 
 #### SM-B6 Distinguish Explicit Leave From A Session Disconnect Callback
 
@@ -376,7 +376,7 @@ callback?
 - Procedure: Variant A calls public leave, and B abnormally terminates the Stream connection.
 - Verification: A runs only `OnLeaveActor` exactly once, with membership changing. B runs only
   `OnDisconnectActor` exactly once for the current binding, with Actor and Spot membership preserved.
-- Detailed behavior: verifies [Session Actor Dispatch §6](../spec/20-session-actor-dispatch.en.md).
+- Detailed behavior: verifies [Session Actor Dispatch §6](../spec/server/20-session-actor-dispatch.en.md).
 
 #### SM-B7 Dispatch Actor Packets After The Membership Callback
 
@@ -391,7 +391,7 @@ could be observed.
 - Procedure: Sequence-1-through-20 requests are sent after the Join-completion callback.
 - Verification: The public callback evidence ends before the Join terminal, the target handler
   sequence is 1 through 20, and the active count is 1.
-- Detailed behavior: verifies [Spot Actor §4](../spec/15-spot-actor.en.md).
+- Detailed behavior: verifies [Spot Actor §4](../spec/server/15-spot-actor.en.md).
 
 #### SM-B8 Destroy The Current Incarnation With An Exact ActorRef
 
@@ -407,7 +407,7 @@ after recreate become `InvalidOperation`?
   called again with the old ref.
 - Verification: The results are true, false, `InvalidOperation` in order, and the recreated Actor
   processes requests.
-- Detailed behavior: verifies [Failover Policy §4.1](../spec/31-failure-failover-policy.en.md).
+- Detailed behavior: verifies [Failover Policy §4.1](../spec/server/31-failure-failover-policy.en.md).
 
 #### SM-B9 Distinguish A Target Spot's Join Accept From Reject
 
@@ -423,7 +423,7 @@ membership?
 - Procedure: Local/remote accept and reject variants are run on fresh Actors.
 - Verification: Accept returns completion Accepted and the target current Spot. Reject is typed
   Rejected, with no target-joined/source-leave callback, and the source follow-up request succeeds.
-- Detailed behavior: verifies [Spot Actor §4](../spec/15-spot-actor.en.md).
+- Detailed behavior: verifies [Spot Actor §4](../spec/server/15-spot-actor.en.md).
 
 #### SM-B10 Verify Object Role And Location Store Prerequisites
 
@@ -441,7 +441,7 @@ Channel works?
   sent.
 - Verification: The negative hosts are a configuration error before listener readiness. The manual
   request succeeds, and object managers/factory operations are not provided.
-- Detailed behavior: verifies [MeshNode §4](../spec/13-mesh-node.en.md).
+- Detailed behavior: verifies [MeshNode §4](../spec/server/13-mesh-node.en.md).
 
 #### SM-B11 An Actor Is Published As Ready Only After Initial Membership Completes
 
@@ -458,7 +458,7 @@ release?
   another process. The gate is released, and it is called again.
 - Verification: During the held window, there is no Ready ref or handler evidence. After Create
   completes, Find and request succeed against the current Actor.
-- Detailed behavior: verifies [Actor Model §3](../spec/14-actor-model.en.md).
+- Detailed behavior: verifies [Actor Model §3](../spec/server/14-actor-model.en.md).
 
 ### Track C — Confirm Message Direction Between Channel And Spot
 
@@ -477,7 +477,7 @@ Spot state?
   request with the same ID.
 - Verification: The Spot handler runs exactly once, and the caller receives exactly one reply that
   includes the Spot result.
-- Detailed behavior: verifies [Spot Messaging §3](../spec/12-spot-messaging.en.md).
+- Detailed behavior: verifies [Spot Messaging §3](../spec/server/12-spot-messaging.en.md).
 
 #### SM-C2 Send A Channel Request From A Spot Handler
 
@@ -492,7 +492,7 @@ request and state?
 - Procedure: The Spot request waits on the Channel request with Async or allowed Yield.
 - Verification: The Channel and Spot handlers each record the operation ID exactly once, and the
   final reply/state matches the downstream result.
-- Detailed behavior: verifies [Channel Messaging §3.2](../spec/08-channel-messaging.en.md).
+- Detailed behavior: verifies [Channel Messaging §3.2](../spec/server/08-channel-messaging.en.md).
 
 #### SM-C3 Send A Request From One Spot To Another Spot
 
@@ -507,7 +507,7 @@ in its own state?
 - Procedure: The source handler sends a request to the target SpotId once.
 - Verification: The target marker and the source's final state carry a matching operation ID, and
   the caller's reply arrives exactly once.
-- Detailed behavior: verifies [Spot Messaging §3](../spec/12-spot-messaging.en.md).
+- Detailed behavior: verifies [Spot Messaging §3](../spec/server/12-spot-messaging.en.md).
 
 #### SM-C4 A MeshNode With No Local Spot Publishes A Logical Multicast
 
@@ -524,7 +524,7 @@ Spot?
 - Procedure: The origin's application endpoint publishes a Logical Multicast once.
 - Verification: The matching Spots each receive the marker exactly once, and the nonmatching Spot
   does not.
-- Detailed behavior: verifies [Spot Messaging §4](../spec/12-spot-messaging.en.md).
+- Detailed behavior: verifies [Spot Messaging §4](../spec/server/12-spot-messaging.en.md).
 
 #### SM-C5 Judge Logical Multicast Remote Delivery Through Subscriber Evidence
 
@@ -541,7 +541,7 @@ marker exactly once?
 - Procedure: The source Spot publishes a unique marker.
 - Verification: The Spots at positive nodes each receive it exactly once, and the weight-0 node is
   excluded as a new target. It does not pass on publish terminal alone.
-- Detailed behavior: verifies [Spot Messaging §4](../spec/12-spot-messaging.en.md).
+- Detailed behavior: verifies [Spot Messaging §4](../spec/server/12-spot-messaging.en.md).
 
 #### SM-C6 Isolate Logical Multicast Partial Backpressure From Other Targets
 
@@ -559,7 +559,7 @@ target process the marker exactly once?
 - Procedure: A marker is published once.
 - Verification: The public terminal ends in a formal meaning with no per-target result, and the ready
   target processes the marker exactly once. Private snapshots/attempt counts are not read.
-- Detailed behavior: verifies [Spot Messaging §4](../spec/12-spot-messaging.en.md).
+- Detailed behavior: verifies [Spot Messaging §4](../spec/server/12-spot-messaging.en.md).
 
 ### Track D — Confirm Session Binding, Relay, And Stream Lifecycle
 
@@ -579,7 +579,7 @@ push reach the bound Stream client?
 - Procedure: The client sends a request with Actor ID metadata, and the Actor sends one push.
 - Verification: Each variant's Actor handler processes the request once, and the client receives a
   matching reply and push exactly once each. The remote variant's caller supplies no RID or endpoint.
-- Detailed behavior: verifies [Session Actor Dispatch §5](../spec/20-session-actor-dispatch.en.md).
+- Detailed behavior: verifies [Session Actor Dispatch §5](../spec/server/20-session-actor-dispatch.en.md).
 
 #### SM-D3 Entry And User Spot Actor Binding Have The Same Meaning
 
@@ -593,7 +593,7 @@ result?
 - Starting condition: Fresh Actors are prepared in Entry and User Spots, respectively.
 - Procedure: Each binds to a separate Session, and request/push are run once each.
 - Verification: Both variants provide a matching reply/push exactly once, with membership unchanged.
-- Detailed behavior: verifies [Actor Model §2.3](../spec/14-actor-model.en.md).
+- Detailed behavior: verifies [Actor Model §2.3](../spec/server/14-actor-model.en.md).
 
 #### SM-D4 Bind Several Actors To One Session
 
@@ -610,7 +610,7 @@ Actor?
   sent once.
 - Verification: Each Actor processes only its own marker, and the client receives distinct
   replies/pushes. The missing target is a public dispatch error with neither Actor processing it.
-- Detailed behavior: verifies [Session Actor Dispatch §3](../spec/20-session-actor-dispatch.en.md).
+- Detailed behavior: verifies [Session Actor Dispatch §3](../spec/server/20-session-actor-dispatch.en.md).
 
 #### SM-D4A Isolate A Stale Session After Rebind
 
@@ -631,7 +631,7 @@ Actor state?
 - Verification: In both fixtures the old binding's callback runs at most once and is not repeated
   after its terminal tombstone. Failure neither restores the old binding nor removes B's binding.
   Late old operations end stale with no handler evidence. B's relay/push each succeed exactly once.
-- Detailed behavior: verifies [Session Actor Dispatch §4](../spec/20-session-actor-dispatch.en.md).
+- Detailed behavior: verifies [Session Actor Dispatch §4](../spec/server/20-session-actor-dispatch.en.md).
 
 #### SM-D4B Use Message Follow On The Stored Binding Route After Relocation
 
@@ -651,7 +651,7 @@ return `Unavailable`?
 - Verification: The active marker is processed exactly once at the target Actor. The expired request
   is `Unavailable`, with no handler evidence. Both variants have zero disconnect callbacks and keep
   the binding identity and ObjectGeneration.
-- Detailed behavior: verifies [Session Actor Dispatch §5](../spec/20-session-actor-dispatch.en.md).
+- Detailed behavior: verifies [Session Actor Dispatch §5](../spec/server/20-session-actor-dispatch.en.md).
 
 #### SM-D5 Notify All Current Bindings Of A Physical Disconnect
 
@@ -668,7 +668,7 @@ once, keeping membership?
   application error.
 - Verification: Every current Actor's callback is attempted exactly once, and one failure does not
   block the rest. The public current Spot and ObjectGeneration are preserved.
-- Detailed behavior: verifies [Session Actor Dispatch §6](../spec/20-session-actor-dispatch.en.md).
+- Detailed behavior: verifies [Session Actor Dispatch §6](../spec/server/20-session-actor-dispatch.en.md).
 
 #### SM-D5A Notify A Selected Actor Of A Logical Disconnect
 
@@ -684,7 +684,7 @@ connection preserved?
 - Procedure: A public logical-disconnect operation is called on X, and a relay is sent to Y.
 - Verification: Only X's callback runs exactly once, and Y's relay succeeds. The connection and both
   Actors' membership are preserved.
-- Detailed behavior: verifies [Session Actor Dispatch §6](../spec/20-session-actor-dispatch.en.md).
+- Detailed behavior: verifies [Session Actor Dispatch §6](../spec/server/20-session-actor-dispatch.en.md).
 
 #### SM-D6 A Push Is Received Only By The Currently Bound Session
 
@@ -697,7 +697,7 @@ An Actor push targets exactly one current binding — it is not broadcast to unb
 - Starting condition: Client A is bound to the Actor, and B is only connected.
 - Procedure: A backend request changes Actor state, triggering a push.
 - Verification: A receives the marker exactly once, and B does not.
-- Detailed behavior: verifies [Session Actor Dispatch §5](../spec/20-session-actor-dispatch.en.md).
+- Detailed behavior: verifies [Session Actor Dispatch §5](../spec/server/20-session-actor-dispatch.en.md).
 
 #### SM-D7 Reject Pre-Auth Requests In The Application Session Callback
 
@@ -715,7 +715,7 @@ gets a formal close/error?
 - Verification: Only the connector whose credentials the Application callback accepts receives a
   reply. The invalid connector receives the Application-defined error or close reason, with no
   business-handler execution.
-- Detailed behavior: verifies [Stream Session §3](../spec/19-stream-session.en.md).
+- Detailed behavior: verifies [Stream Session §3](../spec/server/19-stream-session.en.md).
 
 #### SM-D8 A Stream Reconnect Requires A New Auth/Bind
 
@@ -732,7 +732,7 @@ succeeding only after explicit auth/rebind on reconnect?
   auth/rebinds, and a new request is sent.
 - Verification: The old request is a disconnected failure and is not replayed. Only the new request
   is processed exactly once at the Actor.
-- Detailed behavior: verifies [Failover Policy §6](../spec/31-failure-failover-policy.en.md).
+- Detailed behavior: verifies [Failover Policy §6](../spec/server/31-failure-failover-policy.en.md).
 
 #### SM-D9 A Logger Provider Records STREAM Message-Flow Results
 
@@ -748,8 +748,8 @@ name, and message kind?
 - Procedure: A request and a one-way packet are each sent once.
 - Verification: The logger provider records the formal fields for both messages exactly once,
   matching the handler results.
-- Detailed behavior: verifies [Message Flow Tracing — Common Attributes](../spec/26-message-flow-tracing.en.md#3-common-attributes)
-  and [Flow Correlation — Propagation Rule](../spec/27-flow-correlation.en.md#5-propagation-rule).
+- Detailed behavior: verifies [Message Flow Tracing — Common Attributes](../spec/server/26-message-flow-tracing.en.md#3-common-attributes)
+  and [Flow Correlation — Propagation Rule](../spec/server/27-flow-correlation.en.md#5-propagation-rule).
 
 #### SM-D10 Isolate Stream Backpressure Per Session
 
@@ -767,8 +767,8 @@ shared job queue capacity?
   request/push are run. A's gate is released.
 - Verification: B's results complete before A's gate is released. A's operations each have exactly
   one success or deadline terminal, with Session state not corrupted.
-- Detailed behavior: verifies [The STREAM Recv Loop And Application Surface](../spec/19-stream-session.en.md#4-the-frameworks-internal-recv-loop-and-the-application-surface)
-  and [Admission Deadline](../spec/05-async-execution-policy.en.md#14-admission-deadline).
+- Detailed behavior: verifies [The STREAM Recv Loop And Application Surface](../spec/server/19-stream-session.en.md#4-the-frameworks-internal-recv-loop-and-the-application-surface)
+  and [Admission Deadline](../spec/server/05-async-execution-policy.en.md#14-admission-deadline).
 
 #### SM-D11 Separate Stream And Channel Requests On The Same Client
 
@@ -784,7 +784,7 @@ payload's reply?
 - Procedure: 50 requests with distinct markers are interleaved on each surface.
 - Verification: All 100 replies exactly correspond to their operation ID and input surface, with no
   cross-delivery.
-- Detailed behavior: verifies [Interaction Model](../spec/03-interaction-model.en.md).
+- Detailed behavior: verifies [Interaction Model](../spec/server/03-interaction-model.en.md).
 
 #### SM-D12 Rebind Actor State After Reconnecting To A Different Gateway
 
@@ -801,7 +801,7 @@ Session-b auth/rebind?
   current ActorRef, and sends a state request.
 - Verification: The counter keeps increasing from 10, and reply/push arrive at session-b. The old
   binding is not reused.
-- Detailed behavior: verifies [Failover Policy §6](../spec/31-failure-failover-policy.en.md).
+- Detailed behavior: verifies [Failover Policy §6](../spec/server/31-failure-failover-policy.en.md).
 
 #### SM-D13 Handle Stream Heartbeat Loss As A Disconnect
 
@@ -818,8 +818,8 @@ Actors' callbacks observed?
   deadline plus tolerance.
 - Verification: The connector is Disconnected, and the current bound Actors each receive the
   disconnect callback at most once.
-- Detailed behavior: verifies [Connection Loss And Reconnect](../spec/29-transport-liveness.en.md#6-connection-loss-and-reconnect)
-  and [The STREAM Error Boundary](../spec/19-stream-session.en.md#6-error-boundary).
+- Detailed behavior: verifies [Connection Loss And Reconnect](../spec/server/29-transport-liveness.en.md#6-connection-loss-and-reconnect)
+  and [The STREAM Error Boundary](../spec/server/19-stream-session.en.md#6-error-boundary).
 
 #### SM-D14 Perform Auth/Relay/Push On A TLS Stream
 
@@ -834,8 +834,8 @@ certificate is rejected before auth?
 - Procedure: TLS connectors connect to both endpoints.
 - Verification: The valid connection completes auth/bind/relay/push. The invalid connection ends in a
   public TLS error, with the Session handler not running.
-- Detailed behavior: verifies [STREAM TLS](../spec/19-stream-session.en.md#71-tls)
-  and [From Session To Actor](../spec/19-stream-session.en.md#8-from-session-to-actor).
+- Detailed behavior: verifies [STREAM TLS](../spec/server/19-stream-session.en.md#71-tls)
+  and [From Session To Actor](../spec/server/19-stream-session.en.md#8-from-session-to-actor).
 
 #### SM-D15 Complete A Channel→Actor→Bound-Session Push Chain
 
@@ -850,7 +850,7 @@ Channel, direct Actor, and bound push.
 - Procedure: A backend request starts an Actor send, and the Actor handler sends a bound push.
 - Verification: The client receives the marker push exactly once. The public flow trace connects
   each hop as the same flow.
-- Detailed behavior: verifies [Flow Correlation §5](../spec/27-flow-correlation.en.md).
+- Detailed behavior: verifies [Flow Correlation §5](../spec/server/27-flow-correlation.en.md).
 
 ### Track E — Confirm Negative Dispatch And Timer
 
@@ -870,7 +870,7 @@ surface-specific `no_handler/reply_error` evidence?
 - Verification: Each missing request has one formal error terminal and one `zlink.dispatch_error`
   logger record with its own `surface`, `reason=no_handler`, and `action=reply_error`. Each normal
   request returns one normal reply.
-- Detailed behavior: verifies [Message Flow Tracing §2.2](../spec/26-message-flow-tracing.en.md).
+- Detailed behavior: verifies [Message Flow Tracing §2.2](../spec/server/26-message-flow-tracing.en.md).
 
 #### SM-E2 A Spot One-Shot Timer Changes State
 
@@ -886,7 +886,7 @@ exactly once?
   polled with a bounded wait.
 - Verification: The callback count and counter delta are both 1, and the client push is also exactly
   one.
-- Detailed behavior: verifies [Async Execution Policy — Spot Timer](../spec/05-async-execution-policy.en.md#5-spot-timer).
+- Detailed behavior: verifies [Async Execution Policy — Spot Timer](../spec/server/05-async-execution-policy.en.md#5-spot-timer).
 
 #### SM-E3 An Idle Timer Starts An Explicit Close
 
@@ -903,8 +903,8 @@ Spot is kept?
   collected.
 - Verification: Only the idle-empty Spot is closed, with a callback reason of ExplicitClose. The
   other two keep processing requests.
-- Detailed behavior: verifies [Spot Timer](../spec/05-async-execution-policy.en.md#5-spot-timer)
-  and [Spot Termination](../spec/12-spot-messaging.en.md#62-spot-termination).
+- Detailed behavior: verifies [Spot Timer](../spec/server/05-async-execution-policy.en.md#5-spot-timer)
+  and [Spot Termination](../spec/server/12-spot-messaging.en.md#62-spot-termination).
 
 #### SM-E4 Confirm Observable Sequences Per Timer Overrun Policy
 
@@ -924,7 +924,7 @@ configured policy?
   due ticks in `SkippedTicks`; `CatchUpBounded` delivers consecutively only up to
   `MaxCatchUpTicks`; and `DelayNextTick` schedules the next tick after callback completion. Exact
   scheduler nanoseconds and thread timing are not compared.
-- Detailed behavior: verifies [Spot-Timer Overrun Policy And Tick Fields](../spec/05-async-execution-policy.en.md#5-spot-timer).
+- Detailed behavior: verifies [Spot-Timer Overrun Policy And Tick Fields](../spec/server/05-async-execution-policy.en.md#5-spot-timer).
 
 ### Track F — Channel/Node/Spot Routes Coexist On The Same MeshNode Transport
 
@@ -940,7 +940,7 @@ target Spot?
 - Starting condition: The caller and target Spot are in the same MeshNode process.
 - Procedure: A SpotId request and send are each started once.
 - Verification: The request-reply and send-handler evidence match the input markers.
-- Detailed behavior: verifies [Spot Messaging §3](../spec/12-spot-messaging.en.md).
+- Detailed behavior: verifies [Spot Messaging §3](../spec/server/12-spot-messaging.en.md).
 
 #### SM-F2 Call A Spot Of A Different MeshNode By SpotId
 
@@ -954,7 +954,7 @@ each?
 - Starting condition: The source and target MeshNodes are ready, and the User Spot is on the target.
 - Procedure: The source endpoint uses only the SpotId to send a request and send.
 - Verification: Only the target's evidence increases, and the request's reply returns to the source.
-- Detailed behavior: verifies [Spot Messaging §3](../spec/12-spot-messaging.en.md).
+- Detailed behavior: verifies [Spot Messaging §3](../spec/server/12-spot-messaging.en.md).
 
 #### SM-F3 Separate ChannelName/Node-Direct/Spot-Direct Namespaces
 
@@ -970,7 +970,7 @@ once?
 - Procedure: A unique-marker request is sent through each public target API.
 - Verification: Each handler processes only its own marker, and the caller receives matching
   replies.
-- Detailed behavior: verifies [Interaction Model §3](../spec/03-interaction-model.en.md).
+- Detailed behavior: verifies [Interaction Model §3](../spec/server/03-interaction-model.en.md).
 
 #### SM-F4 Distinguish A Missing Spot From A Stale SpotRef
 
@@ -986,7 +986,7 @@ incarnation.
 - Procedure: Missing request/send and the old-ref close are run.
 - Verification: The direct calls are `NotFound`, the old-ref close is `InvalidOperation`, and the
   recreated Spot processes requests.
-- Detailed behavior: verifies [Failover Policy §4.1](../spec/31-failure-failover-policy.en.md).
+- Detailed behavior: verifies [Failover Policy §4.1](../spec/server/31-failure-failover-policy.en.md).
 
 #### SM-F5 Closing A Spot Does Not Terminate The MeshNode Channel
 
@@ -1001,7 +1001,7 @@ request keeps succeeding?
 - Procedure: Both requests are confirmed, the Spot is closed, then both are called again.
 - Verification: The Spot request is NotFound, and the Channel request receives a normal reply. The
   MeshNode status is ready.
-- Detailed behavior: verifies [MeshNode §4](../spec/13-mesh-node.en.md).
+- Detailed behavior: verifies [MeshNode §4](../spec/server/13-mesh-node.en.md).
 
 #### SM-F6 Handle A Cross-Node Spot Call And Actor Join On The Same RouteMesh
 
@@ -1018,7 +1018,7 @@ at the target?
 - Verification: The Spot handlers and Join callbacks run the formal number of times at the target.
   The Actor's generation/state are preserved, and the follow-up request is also processed at the
   target.
-- Detailed behavior: verifies [Spot Actor §5](../spec/15-spot-actor.en.md).
+- Detailed behavior: verifies [Spot Actor §5](../spec/server/15-spot-actor.en.md).
 
 ### Track G — Handle Node Crash, Scale-Out, And Placement
 
@@ -1041,8 +1041,8 @@ explicit recreate/rebind?
 - Verification: The old operations are a bounded error and are not auto-retried. The new incarnation
   processes request/push with a different generation, and the old-ref bind is `InvalidOperation`. The
   independent play-b Actor is unaffected.
-- Detailed behavior: verifies [Failover Policy §5](../spec/31-failure-failover-policy.en.md) and
-  [§6](../spec/31-failure-failover-policy.en.md).
+- Detailed behavior: verifies [Failover Policy §5](../spec/server/31-failure-failover-policy.en.md) and
+  [§6](../spec/server/31-failure-failover-policy.en.md).
 
 #### SM-G2 Scale-Out Keeps Existing Owners And Only Places New Objects
 
@@ -1059,7 +1059,7 @@ objects on B?
   set to 0, then a new Actor and Spot are created.
 - Verification: The old evidence is recorded only on A, and the new evidence only on B. Scale-out
   itself does not change old owners.
-- Detailed behavior: verifies [MeshNode §5](../spec/13-mesh-node.en.md).
+- Detailed behavior: verifies [MeshNode §5](../spec/server/13-mesh-node.en.md).
 
 #### SM-G3 Concurrent Join/Leave Requests Each Produce Exactly One Membership Terminal
 
@@ -1077,7 +1077,7 @@ with no duplicate callback?
 - Verification: Each operation has exactly one Accepted, Rejected, or formal conflict result. The
   accepted final memberships match the public callback counts, and there is no Actor handler
   overlap.
-- Detailed behavior: verifies [Spot Actor §4](../spec/15-spot-actor.en.md).
+- Detailed behavior: verifies [Spot Actor §4](../spec/server/15-spot-actor.en.md).
 
 #### SM-G4 Isolate Many Bound Session Pushes Per Target
 
@@ -1091,7 +1091,7 @@ Even with many bindings, a push must not be delivered to a different Session.
 - Procedure: Each Actor starts a unique-marker push with bounded concurrency.
 - Verification: A successful push marker is observed exactly once at the correct client and absent
   from other clients. A failed terminal is not counted as a delivery success.
-- Detailed behavior: verifies [Session Actor Dispatch §5](../spec/20-session-actor-dispatch.en.md).
+- Detailed behavior: verifies [Session Actor Dispatch §5](../spec/server/20-session-actor-dispatch.en.md).
 
 #### SM-G5A Confirm A 100:300 Placement Weight Ratio With A Sufficient Sample
 
@@ -1108,7 +1108,7 @@ exact alternation.
 - Procedure: 800 Actors or User Spots with unique IDs are created.
 - Verification: All creates succeed, and the combined owner count is 800. B's share is 65–85%, and
   existing owners are unchanged.
-- Detailed behavior: verifies [MeshNode §5](../spec/13-mesh-node.en.md).
+- Detailed behavior: verifies [MeshNode §5](../spec/server/13-mesh-node.en.md).
 
 #### SM-G5B Exclude A High-Weight Node With No Capacity From New Placement
 
@@ -1124,7 +1124,7 @@ eligible A?
   10001.
 - Verification: The create's owner is A, and the factory runs exactly once. The invalid weights are a
   configuration error before listener readiness.
-- Detailed behavior: verifies [MeshNode §5](../spec/13-mesh-node.en.md).
+- Detailed behavior: verifies [MeshNode §5](../spec/server/13-mesh-node.en.md).
 
 ## 4. Completion Criteria
 

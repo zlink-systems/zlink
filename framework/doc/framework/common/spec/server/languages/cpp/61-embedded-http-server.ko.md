@@ -124,7 +124,7 @@ connection lifecycle은 다음 공개 동작을 보장한다.
 
 - keep-alive가 켜진 HTTP/1.1 connection은 여러 request를 처리한다.
 - `max_connections`를 넘는 새 connection은 server option에 정한 overload 결과로 종료한다.
-- [shutdown](../../../01-glossary.ko.md#shutdown) 시작 뒤에는 새 connection을 받지 않는다.
+- [shutdown](../../01-glossary.ko.md#shutdown) 시작 뒤에는 새 connection을 받지 않는다.
 - shutdown drain 동안 active request는 timeout 안에서 완료를 기다린다.
 - drain timeout이 지나면 connection을 닫는다.
 

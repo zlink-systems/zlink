@@ -11,8 +11,8 @@ relocation itself isn't a physical/logical disconnect, it doesn't run
 the Actor disconnect callback. The route and physical connection of a
 different Actor not included in the relocation target aren't changed.
 
-[Interface table of contents](README.en.md) · [Actor Model](../../../../14-actor-model.en.md) ·
-[Spot/Actor Membership](../../../../15-spot-actor.en.md)
+[Interface table of contents](README.en.md) · [Actor Model](../../../14-actor-model.en.md) ·
+[Spot/Actor Membership](../../../15-spot-actor.en.md)
 
 This document fixes the exact TypeScript declarations related to Actor
 that `@zlink-systems/framework` and `@zlink-systems/nestjs` export in
@@ -148,7 +148,7 @@ The caller doesn't specify a target RID or predicate.
 `create` returns `AlreadyExists` if a ready incarnation of the same
 ActorId exists, and `TypeMismatch` if stable type differs. A new attempt
 returns `created` or `rejected`. `getOrCreate` returns a
-[ready](../../../../01-glossary.en.md#ready) Actor of the same type as
+[ready](../../../01-glossary.en.md#ready) Actor of the same type as
 `existing`, without a callback. If Creating, it waits for the authority
 change, and a CAS loser doesn't start a separate factory or callback. A
 different operation receives `existing` after ready, competes for a new
@@ -167,7 +167,7 @@ Actor create finishes the selected owner MeshNode's Entry Spot
 membership and the Ready barrier in the same lifecycle. After Ready, a
 one-way message is submitted directly to the Actor queue. Even if a
 stale route is confirmed after resolve or queue admission, the
-framework doesn't find a new [owner](../../../../01-glossary.en.md#owner)
+framework doesn't find a new [owner](../../../01-glossary.en.md#owner)
 and hidden-retry the same operation.
 
 The Actor Join call only provides a synchronous `defer()`, and doesn't
@@ -191,12 +191,12 @@ timeout is 5 seconds, and an explicit value is a finite
 absolute deadline is fixed at the moment `defer()` is called.
 
 If `ZLinkActorContext.spotId` is absent, the Actor is a current
-[Entry Spot](../../../../01-glossary.en.md#entry-user-instance-spot)
+[Entry Spot](../../../01-glossary.en.md#entry-user-instance-spot)
 member; if it has a value, it's a member of that User Spot. A separate
 boolean or mutable Spot instance representing the same state isn't
 provided. `findSpot(actorId)` also only returns the current User
-[Spot](../../../../01-glossary.en.md#spot)
-[membership](../../../../01-glossary.en.md#membership) as `SpotRef`,
+[Spot](../../../01-glossary.en.md#spot)
+[membership](../../../01-glossary.en.md#membership) as `SpotRef`,
 and `undefined` on Entry Spot. The factory creates a new Actor and
 context per target attempt, and doesn't reuse an instance whose
 cross-node restore failed in the next attempt.
@@ -206,7 +206,7 @@ cross-node restore failed in the next attempt.
 Session binding fixes the exact incarnation of `ActorRef.actorId +
 objectGeneration` once. A bind overload taking a local Actor instance,
 a global Actor directory, a handle resolver, and a separate ActorRef
-[snapshot](../../../../01-glossary.en.md#snapshot) conversion API aren't
+[snapshot](../../../01-glossary.en.md#snapshot) conversion API aren't
 provided. `find(actorId)` only queries an Actor already bound to that
 session, not a global directory.
 
@@ -218,9 +218,9 @@ only releases the binding — Actor and Spot membership are kept.
 
 The public trace category is `actor-relocation`. The meaning and
 verification criteria are owned by
-[Actor Model](../../../../14-actor-model.en.md),
-[Spot/Actor Membership](../../../../15-spot-actor.en.md), and
-[Session Actor Dispatch](../../../../20-session-actor-dispatch.en.md).
+[Actor Model](../../../14-actor-model.en.md),
+[Spot/Actor Membership](../../../15-spot-actor.en.md), and
+[Session Actor Dispatch](../../../20-session-actor-dispatch.en.md).
 
 `yield(...)` declared on an Actor request is only valid while the
 current Actor handler is running on a `SpotWide` User Spot's shared

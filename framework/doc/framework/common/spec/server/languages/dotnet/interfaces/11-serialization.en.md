@@ -1,7 +1,7 @@
 # .NET Codec Extension Public Interface
 
-[.NET exact interface table of contents](README.en.md) · [Common Message Contract](../../../../04-message-model.en.md) ·
-[Common Framework API](../../../../06-framework-api.en.md#9-codec)
+[.NET exact interface table of contents](README.en.md) · [Common Message Contract](../../../04-message-model.en.md) ·
+[Common Framework API](../../../06-framework-api.en.md#9-codec)
 
 ## 1. Scope
 

@@ -399,8 +399,8 @@ spec·internals처럼 규칙을 촘촘히 나열하는 문서는 헤더 규약�
    3(적층 구조는 ASCII, 흐름·시퀀스는 Mermaid)을 따른다. 기존 ASCII 상태 다이어그램이
    있다면 같은 정보를 유지한 채 mermaid로 바꾼다.
 
-**예시.** `common/spec/05-async-execution-policy.ko.md`와
-`common/spec/51-internal-service-wire-protocol.ko.md`가 넷을 모두 적용한 결과다.
+**예시.** `common/spec/server/05-async-execution-policy.ko.md`와
+`common/spec/server/51-internal-service-wire-protocol.ko.md`가 넷을 모두 적용한 결과다.
 
 **적용 범위.** 원칙적으로 spec·internals 문서 전반에 적용할 수 있지만, 문장이 이미
 짧고 절이 이미 잘게 나뉜 문서에는 추가하지 않는다 — 표·다이어그램·소제목이 늘어야

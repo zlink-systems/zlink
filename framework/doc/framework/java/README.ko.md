@@ -7,7 +7,7 @@
 > Java/Kotlin 표면으로 구체화한다.
 
 비동기 실행, `CompletionStage`, Kotlin coroutine wrapper의 공통 의미는
-[비동기 실행과 coroutine 정책](../common/spec/05-async-execution-policy.ko.md)을 따른다.
+[비동기 실행과 coroutine 정책](../common/spec/server/05-async-execution-policy.ko.md)을 따른다.
 
 Sample과 E2E의 설정 파일, 환경 변수 금지와 `@ConfigurationProperties` binding 기준은
 [Sample/E2E 설정 정책](../common/sample-e2e-configuration-policy.ko.md)을 따른다.
@@ -34,7 +34,7 @@ Sample과 E2E의 설정 파일, 환경 변수 금지와 `@ConfigurationPropertie
 | [Java interfaces](../common/spec/server/languages/java/interfaces/README.ko.md) | 기능별 exact public signature와 Spring host lifecycle |
 | [stream-connector](../common/spec/stream-connector/languages/java/03-stream-connector.ko.md) | client connector |
 
-**기능의 의미와 동작 규칙은 [공통 스펙](../common/spec/README.ko.md)이 소유한다.** 언어별 문서는
+**기능의 의미와 동작 규칙은 [공통 스펙](../common/spec/server/README.ko.md)이 소유한다.** 언어별 문서는
 그 의미가 Java/Kotlin에서 어떤 모양인지만 고정한다.
 
 ## 3. 내부 기준
@@ -44,7 +44,7 @@ Sample과 E2E의 설정 파일, 환경 변수 금지와 `@ConfigurationPropertie
 | 문서 | 범위 |
 |------|------|
 | [backend-dependency-policy](internals/backend-dependency-policy.ko.md) | Java binding 의존 격리 |
-| [공통 내부 구조](../common/spec/README.ko.md) | 네 언어가 공유하는 runtime 아키텍처 결정 |
+| [공통 내부 구조](../common/spec/server/README.ko.md) | 네 언어가 공유하는 runtime 아키텍처 결정 |
 | [regression-test-matrix](internals/regression-test-matrix.ko.md) | JVM contract, E2E와 performance smoke 기준 |
 | [stream-dispatch-hot-path](internals/stream-dispatch-hot-path.ko.md) | Stream 수신 dispatch의 ownership과 allocation 경계 |
 | [runtime-monitoring-placement-usage](internals/runtime-monitoring-placement-usage.ko.md) | Placement limit과 live object count의 결합 경계 |

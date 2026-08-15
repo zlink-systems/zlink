@@ -64,5 +64,5 @@ following document.
 ## Related Documents
 
 - Per-language user guide: `framework/doc/framework/<lang>/guide/http-client/`
-- [Codec Extension Shared Contract](../06-framework-api.en.md)
+- [Codec Extension Shared Contract](../server/06-framework-api.en.md)
 - [Common E2E Contract](../../e2e/README.en.md)

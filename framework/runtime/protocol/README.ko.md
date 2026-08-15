@@ -65,5 +65,5 @@ trailing CRC32C 순서다. CRC32C는 magic부터 body의 마지막 byte까지 �
 encode한 body도 원래 bytes와 일치하는지 확인한다.
 
 현재 목표 의미와 validation 순서는
-[`51-internal-service-wire-protocol.ko.md`](../../doc/framework/common/spec/51-internal-service-wire-protocol.ko.md)가 설명한다. 언어별 상수
+[`51-internal-service-wire-protocol.ko.md`](../../doc/framework/common/spec/server/51-internal-service-wire-protocol.ko.md)가 설명한다. 언어별 상수
 파일은 검증한 schema에서 생성하며 직접 편집하지 않는다.

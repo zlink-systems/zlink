@@ -51,8 +51,17 @@ export interface SocketNativeBinding {
     eventMask: number,
     monitorHwmBytes: bigint
   ) => NativeHandle;
-  routerRecvMessage: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
-  routerRecvMessageNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
+  routerRecvMessage: (
+    socket: NativeHandle,
+    flags: number,
+    preferManagedSinglePart?: boolean,
+    cachedRoutingId?: Buffer | null
+  ) => NativeReceivedRaw | null;
+  routerRecvMessageNoWait: (
+    socket: NativeHandle,
+    preferManagedSinglePart?: boolean,
+    cachedRoutingId?: Buffer | null
+  ) => NativeReceivedRaw | null;
   routerRecvMessageRetained: (socket: NativeHandle, flags: number) => NativeReceivedRaw | null;
   routerRecvMessageRetainedNoWait: (socket: NativeHandle) => NativeReceivedRaw | null;
   routerReply: (

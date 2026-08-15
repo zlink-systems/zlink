@@ -130,7 +130,7 @@ ZLinkMetricsCustomizer zlinkMetrics(PlaySettings settings) {
 ```
 
 계기 이름은 `zlink.`으로 시작한다. 정확한 이름 · 종류 · 단위 · label은
-[Runtime metric과 집계 규칙](../../../common/spec/25-runtime-metrics.ko.md)이 소유한다.
+[Runtime metric과 집계 규칙](../../../common/spec/server/25-runtime-metrics.ko.md)이 소유한다.
 
 > **현재 Java runtime이 방출하는 계기는 계약의 일부뿐이다.** 계약이 정의한 47개 중
 > 14개만 나오고, request 관련 셋은 계약 이름(`zlink.mesh_node.request.*`)이 아니라
@@ -175,4 +175,4 @@ store가 잠시 끊겼을 때 오케스트레이터가 프로세스를 죽인다
 - 정식 계약: [Java monitoring 공개 인터페이스](../../../common/spec/server/languages/java/interfaces/monitoring.ko.md)
 - 메트릭과 drain · readiness 운영: [12. 운영](12-operations.ko.md)
 - 진단 옵션 목록: [16. Options](16-options.ko.md) §4
-- 계기 이름 규약: [Runtime metric과 집계 규칙](../../../common/spec/25-runtime-metrics.ko.md)
+- 계기 이름 규약: [Runtime metric과 집계 규칙](../../../common/spec/server/25-runtime-metrics.ko.md)

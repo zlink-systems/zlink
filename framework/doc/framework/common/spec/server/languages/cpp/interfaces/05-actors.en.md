@@ -12,8 +12,8 @@ disconnect, it doesn't run the Actor disconnect callback. It doesn't
 change the route and physical connection of a different Actor not
 included in the relocation target.
 
-[C++ exact interface table of contents](README.en.md) · [Actor Model](../../../../14-actor-model.en.md) ·
-[Spot · Actor Membership](../../../../15-spot-actor.en.md)
+[C++ exact interface table of contents](README.en.md) · [Actor Model](../../../14-actor-model.en.md) ·
+[Spot · Actor Membership](../../../15-spot-actor.en.md)
 
 ## 1. Identity And Maintenance Policy
 
@@ -213,8 +213,8 @@ public:
 ```
 
 Actor send and request only take a global `actor_id_t` as target. There's
-no overload that takes [MeshName](../../../../01-glossary.en.md#meshname),
-ActorRef, [owner](../../../../01-glossary.en.md#owner) NodeRid, or the
+no overload that takes [MeshName](../../../01-glossary.en.md#meshname),
+ActorRef, [owner](../../../01-glossary.en.md#owner) NodeRid, or the
 current SpotId. The runtime only caches a positive Ready route and
 doesn't keep a negative cache. A missing route is distinguished as
 `not_found`, and an exact-ref generation mismatch as
@@ -287,7 +287,7 @@ unknown Mesh is `not_found`.
 `Create` returns `already_exists` for an existing identity, and returns
 `actor_create_created_t` or `actor_create_rejected_t` for a new
 attempt. `GetOrCreate` returns a
-[Ready](../../../../01-glossary.en.md#ready) Actor of the same stable
+[Ready](../../../01-glossary.en.md#ready) Actor of the same stable
 type as `actor_create_existing_t` without a callback. If it's Creating,
 it waits for the authority change, and a CAS loser doesn't start a
 separate factory or callback. A different operation receives
@@ -299,12 +299,12 @@ and re-encodes the reply with the current correlation/reply route. The
 terminal is kept for 5 minutes after the original deadline. A callback
 exception isn't a rejected result — it's a typed creation failure. A
 different type is `type_mismatch`.
-[Deadline](../../../../01-glossary.en.md#deadline) applies across
+[Deadline](../../../01-glossary.en.md#deadline) applies across
 resolve, reservation, factory, and Ready as a whole. `Find` only
 returns a Ready ref and doesn't create one. `FindSpot` only returns the
 Ready `spot_ref_t` of the current User Spot membership, and returns an
 empty optional for Entry
-[membership](../../../../01-glossary.en.md#membership) or a Missing
+[membership](../../../01-glossary.en.md#membership) or a Missing
 Actor. `Destroy` only changes the exact ActorRef.
 With no matching incarnation it's `false`, a different generation is
 `invalid_operation`, and while moving it's `unavailable`.
@@ -312,7 +312,7 @@ A public Actor directory and local Actor bind overload aren't
 provided.
 
 Actor creation confirms the selected owner MeshNode's
-[Entry Spot](../../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot)
+[Entry Spot](../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot)
 membership together inside the Ready barrier. Actor work payload is
 delivered directly to the Actor queue regardless of membership kind,
 without going through the Entry Spot callback. The original creation
@@ -377,16 +377,16 @@ connection-bound operation. If there's no valid binding or the
 connection generation changed, it ends with a session-not-bound or
 stale result, and the Framework doesn't find a different session and
 resubmit. Connection close doesn't change the Actor's
-[Spot](../../../../01-glossary.en.md#spot) membership or automatically
+[Spot](../../../01-glossary.en.md#spot) membership or automatically
 end the Actor.
 
 ## 5. Public Trace Category
 
 The declarations in this document belong to public trace's
 `actor-relocation` category. The common meaning is owned by
-[Actor Model](../../../../14-actor-model.en.md),
-[Spot · Actor Membership](../../../../15-spot-actor.en.md), and
-[Session Actor Dispatch](../../../../20-session-actor-dispatch.en.md).
+[Actor Model](../../../14-actor-model.en.md),
+[Spot · Actor Membership](../../../15-spot-actor.en.md), and
+[Session Actor Dispatch](../../../20-session-actor-dispatch.en.md).
 
 `yield()` and `yield_message()` declared in this document are only
 valid while the current Actor handler is running in a `SpotWide` User

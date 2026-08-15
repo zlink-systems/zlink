@@ -2,7 +2,7 @@
 
 This directory owns the exact .NET public interface of the server
 framework. The language-neutral meaning of a feature is defined by the
-[common spec](../../../README.en.md), and this directory fixes the C#
+[common spec](../../README.en.md), and this directory fixes the C#
 types, methods, generic constraints, nullable, and async return types.
 
 | Document | Contract owned |
@@ -20,32 +20,32 @@ owns its exact interface.
 
 ## Contract Application Rules
 
-- [RouteMesh](../../../01-glossary.en.md#routemesh) registration starts
+- [RouteMesh](../../01-glossary.en.md#routemesh) registration starts
   with `AddRouteMesh(meshName)` and fixes the role with
   `Channel(channelName).Client()` or `.Server()`. A MeshNode with no
   Server membership is also allowed.
 - Channel send/request only takes a ChannelName and picks the
   process-local RouteMesh or ClientServer send path.
 - The Node direct handler and the
-  [ChannelName](../../../01-glossary.en.md#channelname) handler use
+  [ChannelName](../../01-glossary.en.md#channelname) handler use
   different interface families.
 - A typed payload is serialized as JSON by default. A codec doesn't need
   to be registered per message type to use JSON.
 - Metadata is delivered to the handler as an immutable
   `ZLinkMessageMetadata`
-  [snapshot](../../../01-glossary.en.md#snapshot).
+  [snapshot](../../01-glossary.en.md#snapshot).
 - Object role is one of `None`, `Client`, `Server` per
-  [MeshNode](../../../01-glossary.en.md#meshnode), and Client and Server
+  [MeshNode](../../01-glossary.en.md#meshnode), and Client and Server
   explicitly register an `IZLinkLocationStore` implementation. The
   official Redis package the framework provides is one of this
   interface's providers — using Redis itself isn't a required condition
   for Object role.
 - A regular message to an Actor/User Spot/Instance
-  [Spot](../../../01-glossary.en.md#spot) only takes a global ID. The
+  [Spot](../../01-glossary.en.md#spot) only takes a global ID. The
   manager create for Actor and User Spot takes stable type and an
   optional Mesh/placement, performs remote placement, and the exact
   mutation takes an `ActorRef` or `SpotRef`. A Missing
-  [Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
+  [Instance Spot](../../01-glossary.en.md#entry-user-instance-spot)
   specifies activation on the Spot-dedicated fluent call.
 - Host lifecycle is owned by `IZLinkFrameworkRuntime`'s
   `RelocateAsync(...)` and `ShutdownAsync(...)`.
@@ -62,7 +62,7 @@ A .NET async operation only receives explicit cancellation when its
 signature has a `CancellationToken`. A method with no token isn't
 interpreted as having a cancellation argument. The terminal result after
 cancellation follows the
-[Async Execution Policy](../../../05-async-execution-policy.en.md).
+[Async Execution Policy](../../05-async-execution-policy.en.md).
 
 ## Verification
 

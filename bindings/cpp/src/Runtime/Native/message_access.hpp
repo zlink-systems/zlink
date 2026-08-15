@@ -25,7 +25,14 @@ struct message_access_t
 
     static bool &valid (message_t &message_) noexcept { return message_._valid; }
 
+    static bool &has_payload (message_t &message_) noexcept { return message_._has_payload; }
+
     static const bool &valid (const message_t &message_) noexcept { return message_._valid; }
+
+    static const bool &has_payload (const message_t &message_) noexcept
+    {
+        return message_._has_payload;
+    }
 
     static void close_noexcept (message_t &message_) noexcept { message_.close_noexcept (); }
 };
@@ -53,6 +60,8 @@ inline void adopt_native_message (message_t &message_, zlink_msg_t *src_)
     if (zlink_msg_init (src_) != 0)
         return;
     message_access_t::valid (message_) = true;
+    message_access_t::has_payload (message_) = zlink_msg_size (
+      message_access_t::native (message_)) > 0;
 }
 
 inline void move_to_native (message_t &message_, zlink_msg_t *dest_)
@@ -61,11 +70,24 @@ inline void move_to_native (message_t &message_, zlink_msg_t *dest_)
         return;
     *dest_ = *message_access_t::native (message_);
     message_access_t::valid (message_) = false;
+    message_access_t::has_payload (message_) = false;
 }
 
 inline void mark_sent (message_t &message_) noexcept
 {
     message_access_t::valid (message_) = false;
+    message_access_t::has_payload (message_) = false;
+}
+
+inline bool has_payload (const message_t &message_) noexcept
+{
+    return message_access_t::has_payload (message_);
+}
+
+inline void refresh_payload_presence (message_t &message_) noexcept
+{
+    message_access_t::has_payload (message_) = message_.valid ()
+      && zlink_msg_size (native_handle (message_)) > 0;
 }
 
 } // namespace detail

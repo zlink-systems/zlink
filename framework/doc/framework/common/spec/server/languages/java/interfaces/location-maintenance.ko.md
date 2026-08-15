@@ -1,7 +1,7 @@
 # Java Location·Relocation 공개 인터페이스
 
-[Java exact interface 목록](README.ko.md) · [공통 Location runtime](../../../../21-location-runtime.ko.md) ·
-[공통 Redis provider](../../../../22-location-store-redis.ko.md)
+[Java exact interface 목록](README.ko.md) · [공통 Location runtime](../../../21-location-runtime.ko.md) ·
+[공통 Redis provider](../../../22-location-store-redis.ko.md)
 
 이 문서는 application과 provider plugin 작성자가 알아야 하는 Java public contract만 정의한다.
 Authority, owner lease, reservation, capacity, aggregate와 relocation state machine은 Framework가 private

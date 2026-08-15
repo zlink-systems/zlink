@@ -44,6 +44,8 @@ async function main() {
   const receivedBySub = [];
   let rl = null;
   let collector = null;
+  let poller = null;
+  let pollBuffer = null;
 
   try {
     for (let i = 0; i < options.clients; i += 1) {
@@ -59,6 +61,14 @@ async function main() {
     for (const sub of subs) {
       emitMultiSocketHwmDetail(sub, 'endpoint', options.transport, options.msgSize);
     }
+    // The C harness prepares its poll items before the active window starts.
+    // Keep the same boundary here so setting up 100 subscriptions is never
+    // charged to the receive measurement.
+    poller = zlink.createPoller();
+    pollBuffer = zlink.createPollEvents(Math.max(1, subs.length));
+    for (let i = 0; i < subs.length; i += 1) {
+      poller.add(subs[i], pollEvents(POLLIN), i);
+    }
 
     console.log(`CLIENT_READY,${options.msgSize}`);
     rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -73,54 +83,44 @@ async function main() {
           activeStopNs,
           latencySampleStride: integerEnv('PERF_MULTI_PUBSUB_LATENCY_SAMPLE_STRIDE', 32),
         });
-        const poller = zlink.createPoller();
-        const pollBuffer = zlink.createPollEvents(Math.max(1, subs.length));
-        try {
-          for (let i = 0; i < subs.length; i += 1) {
-            poller.add(subs[i], pollEvents(POLLIN), i);
+        // C parity: run_recv_duration checks the active deadline before
+        // each poll and waits no more than 100ms. A received socket is then
+        // drained with DONT_WAIT until empty. The wire stop token still
+        // ends the phase when it arrives first.
+        let stopReceived = false;
+        while (!stopReceived) {
+          const remainingNs = activeStopNs - BigInt(currentEpochNs());
+          if (remainingNs <= 0n) {
+            break;
           }
-          // C parity: bindings/c/perf/multi/src/perf_multi_pubsub_client
-          // .cpp run_recv_duration (~166-228). Pure signal-driven `-1`
-          // poller wait — NO zlink.Timer, NO duration+2s wall-clock bound.
-          // The active window closes on the application clock (the
-          // collector enforces the recvTs<=activeStop anchor —
-          // perf_measurement.ts ~280) and the phase ends when the
-          // server's wire stop token wakes the `-1` wait. The stop token
-          // is checked BEFORE decoding the metric header (C lines 76-79 /
-          // 203-206; mirrors the already-fixed cpp perf_pubsub_client.cpp
-          // run_active_until_stop_token ~239-246).
-          let stopReceived = false;
-          while (!stopReceived) {
-            const readyCount = poller.wait(
-        pollBuffer,
-        process.platform === 'win32' ? 50 : -1
-      );
-            if (readyCount === 0) {
+          const waitMs = Number((remainingNs + 999_999n) / 1_000_000n);
+          const readyCount = poller.wait(pollBuffer, Math.min(100, Math.max(1, waitMs)));
+          if (readyCount === 0) {
+            continue;
+          }
+          for (let offset = 0; offset < readyCount; offset += 1) {
+            const index = pollBuffer.slot(offset);
+            if (!Number.isInteger(index) || index < 0 || index >= subs.length
+                || !pollEventHas({ revents: pollBuffer.revents(offset) }, POLLIN)) {
               continue;
             }
-            for (let offset = 0; offset < readyCount; offset += 1) {
-              const index = pollBuffer.slot(offset);
-              if (!Number.isInteger(index) || index < 0 || index >= subs.length
-                  || !pollEventHas({ revents: pollBuffer.revents(offset) }, POLLIN)) {
+            while (true) {
+              if (BigInt(currentEpochNs()) >= activeStopNs) {
+                stopReceived = true;
+                break;
+              }
+              const received = receivedBySub[index];
+              if (!subs[index].subscribe(received, zlink.RecvFlags.DontWait)) {
+                break;
+              }
+              const data = received.singlePartOrThrow().data();
+              if (isStopTokenPayload(data, data.length)) {
+                stopReceived = true;
                 continue;
               }
-              while (true) {
-                const received = receivedBySub[index];
-                if (!subs[index].subscribe(received, zlink.RecvFlags.DontWait)) {
-                  break;
-                }
-                const data = received.singlePartOrThrow().data();
-                if (isStopTokenPayload(data, data.length)) {
-                  stopReceived = true;
-                  continue;
-                }
-                collector.recordPayload(data, currentEpochNs());
-              }
+              collector.recordPayload(data, currentEpochNs());
             }
           }
-        } finally {
-          pollBuffer.close();
-          poller.close();
         }
         break;
       }
@@ -141,6 +141,8 @@ async function main() {
     console.log(`CLIENT_DONE,${options.msgSize}`);
   } finally {
     rl?.close();
+    pollBuffer?.close();
+    poller?.close();
     for (const received of receivedBySub) {
       received.close();
     }

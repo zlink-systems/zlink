@@ -125,19 +125,21 @@ zlink_config_result_t init_owned_message_storage (zlink_msg_t *message_, size_t 
 
 } // namespace
 
-message_t::message_t () : _valid (false)
+message_t::message_t () : _valid (false), _has_payload (false)
 {
     if (zlink_msg_init (detail::native_handle (*this)) == 0)
         _valid = true;
 }
 
-message_t::message_t (size_t size_) : _valid (false)
+message_t::message_t (size_t size_) : _valid (false), _has_payload (false)
 {
-    if (init_owned_message_storage (detail::native_handle (*this), size_) == 0)
+    if (init_owned_message_storage (detail::native_handle (*this), size_) == 0) {
         _valid = true;
+        _has_payload = size_ > 0;
+    }
 }
 
-message_t::message_t (no_init_t) noexcept : _storage (), _valid (false)
+message_t::message_t (no_init_t) noexcept : _storage (), _valid (false), _has_payload (false)
 {
 }
 
@@ -146,7 +148,7 @@ message_t::~message_t ()
     close_noexcept ();
 }
 
-message_t::message_t (const message_t &other_) : _valid (false)
+message_t::message_t (const message_t &other_) : _valid (false), _has_payload (false)
 {
     if (!other_._valid)
         return;
@@ -156,6 +158,7 @@ message_t::message_t (const message_t &other_) : _valid (false)
                         const_cast<zlink_msg_t *> (detail::native_handle (other_)))
         == 0) {
         _valid = true;
+        _has_payload = other_._has_payload;
         return;
     }
     zlink_msg_close (detail::native_handle (*this));
@@ -174,19 +177,22 @@ message_t &message_t::operator= (const message_t &other_)
                         const_cast<zlink_msg_t *> (detail::native_handle (other_)))
         == 0) {
         _valid = true;
+        _has_payload = other_._has_payload;
         return *this;
     }
     zlink_msg_close (detail::native_handle (*this));
     return *this;
 }
 
-message_t::message_t (message_t &&other_) noexcept : _storage (), _valid (false)
+message_t::message_t (message_t &&other_) noexcept : _storage (), _valid (false), _has_payload (false)
 {
     if (!other_._valid)
         return;
     *detail::native_handle (*this) = *detail::native_handle (other_);
     _valid = true;
+    _has_payload = other_._has_payload;
     other_._valid = false;
+    other_._has_payload = false;
 }
 
 message_t &message_t::operator= (message_t &&other_) noexcept
@@ -198,7 +204,9 @@ message_t &message_t::operator= (message_t &&other_) noexcept
         return *this;
     *detail::native_handle (*this) = *detail::native_handle (other_);
     _valid = true;
+    _has_payload = other_._has_payload;
     other_._valid = false;
+    other_._has_payload = false;
     return *this;
 }
 
@@ -244,6 +252,7 @@ void message_t::init ()
     if (zlink_msg_init (detail::native_handle (*this)) != 0)
         return;
     _valid = true;
+    _has_payload = false;
 }
 
 void message_t::init (size_t size_)
@@ -252,6 +261,7 @@ void message_t::init (size_t size_)
     if (init_owned_message_storage (detail::native_handle (*this), size_) != 0)
         return;
     _valid = true;
+    _has_payload = size_ > 0;
 }
 
 std::byte *message_t::data () noexcept
@@ -326,6 +336,7 @@ void message_t::close ()
         return;
     (void) zlink_msg_close (detail::native_handle (*this));
     _valid = false;
+    _has_payload = false;
 }
 
 namespace advanced
@@ -351,7 +362,10 @@ message_t external_message_t::from (std::span<std::byte> bytes_,
     if (zlink_msg_init_data (detail::native_handle (msg), bytes_.data (), bytes_.size (),
                              reinterpret_cast<zlink_free_fn *> (free_fn_), hint_)
         == 0)
+    {
         msg._valid = true;
+        msg._has_payload = !bytes_.empty ();
+    }
     return msg;
 }
 
@@ -370,6 +384,7 @@ void message_t::close_noexcept () noexcept
         return;
     (void) zlink_msg_close (detail::native_handle (*this));
     _valid = false;
+    _has_payload = false;
 }
 
 } // namespace zlink

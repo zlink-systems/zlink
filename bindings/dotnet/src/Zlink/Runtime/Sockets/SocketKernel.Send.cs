@@ -235,10 +235,14 @@ internal sealed partial class SocketKernel : IDisposable
     public void Publish(string topic, Message message, SendFlags flags = SendFlags.None)
     {
         EnsureSupports(nameof(Publish), SocketTypePolicy.SocketCapability.Publish);
-        var topicUtf8 = GetValidatedPublishTopicUtf8(topic, nameof(topic));
         if (message == null)
             throw new ArgumentNullException(nameof(message));
-        PublishSingleCore(topicUtf8, message, (int)flags);
+        lock (SubmitGate)
+        {
+            var topicUtf8 = GetValidatedPublishTopicUtf8Unlocked(topic,
+                nameof(topic));
+            PublishSingleCoreUnlocked(topicUtf8, message, (int)flags);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -259,10 +263,14 @@ internal sealed partial class SocketKernel : IDisposable
     {
         EnsureSupports(nameof(PublishNoWaitResult),
             SocketTypePolicy.SocketCapability.Publish);
-        var topicUtf8 = GetValidatedPublishTopicUtf8(topic, nameof(topic));
         if (message == null)
             throw new ArgumentNullException(nameof(message));
-        return PublishNoWaitSingleCore(topicUtf8, message);
+        lock (SubmitGate)
+        {
+            var topicUtf8 = GetValidatedPublishTopicUtf8Unlocked(topic,
+                nameof(topic));
+            return PublishNoWaitSingleCoreUnlocked(topicUtf8, message);
+        }
     }
 
     public void Publish(string topic, IReadOnlyList<Message> parts,

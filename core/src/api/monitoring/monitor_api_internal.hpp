@@ -150,9 +150,6 @@ void *open_socket_monitor_internal (
 int recv_socket_monitor_event_unchecked (void *monitor_socket_,
                                          zlink_monitor_event_t *event_,
                                          int flags_);
-int recv_socket_monitor_event_extended_unchecked (void *monitor_socket_,
-                                                  zlink_monitor_event_t *event_,
-                                                  int flags_);
 int recv_socket_monitor_event_internal (void *monitor_socket_,
                                         zlink_monitor_event_t *event_,
                                         uint64_t *connection_id_out_,

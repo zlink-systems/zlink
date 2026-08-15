@@ -173,18 +173,6 @@ ZLINK_EXPORT zlink_recv_result_t zlink_socket_monitor_recv (void *monitor_,
                                                             zlink_socket_monitor_event_t *out_,
                                                             zlink_recv_flags_t flags_);
 
-/**
- * @brief Read an event using the extended monitor event layout.
- *
- * The legacy recv function writes only the stable event prefix so callers
- * built against the previous layout remain safe. Callers that need physical
- * connection identity must use this versioned entry point.
- */
-ZLINK_EXPORT zlink_recv_result_t zlink_socket_monitor_recv_v2 (
-  void *monitor_,
-  zlink_socket_monitor_event_t *out_,
-  zlink_recv_flags_t flags_);
-
 /** @brief Read the current snapshot for a monitor handle. */
 ZLINK_EXPORT zlink_config_result_t zlink_monitor_status (void *monitor_,
                                                          zlink_monitor_status_t *out_);

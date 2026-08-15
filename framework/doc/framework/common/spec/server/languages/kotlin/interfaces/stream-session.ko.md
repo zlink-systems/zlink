@@ -1,7 +1,7 @@
 # Kotlin STREAM session 공개 인터페이스
 
 [인터페이스 목차](README.ko.md) · [Java STREAM session](../../java/interfaces/stream-session.ko.md) ·
-[session Actor dispatch](../../../../20-session-actor-dispatch.ko.md)
+[session Actor dispatch](../../../20-session-actor-dispatch.ko.md)
 
 Kotlin session lifecycle과 coroutine handler는 Java session 계약을 그대로 사용한다. Actor dispatch를 켜는
 builder member는 `enableActorDispatch()`이며 MeshName 인자를 받지 않는다. Startup에는 object role이 Client

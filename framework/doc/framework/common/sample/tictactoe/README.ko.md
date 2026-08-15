@@ -170,14 +170,14 @@ Observer는 room member가 아니다. Observer의 local Entry Spot handler가 mi
 
 | 필요한 동작 | 선택한 요소 | 선택 이유와 계약 근거 |
 |---|---|---|
-| 수동 peer로 object route를 구성한다. | RouteMesh manual endpoint | automatic discovery와 구분되는 topology를 보여 준다. [Channel topology](../../spec/07-channel-topology.ko.md) |
-| room을 새로 만든다. | User Spot manager Create | Framework가 global RoomId를 발급하고 owner를 선택한다. [상호작용 모델 §2.1](../../spec/03-interaction-model.ko.md#21-상호작용을-시작하는-public-interface) |
-| remote room에 join한다. | global Spot·Actor message | Caller는 RoomId·ActorId를 지정하고 current owner를 Framework가 resolve한다. [Spot address messaging](../../spec/16-spot-address-messaging.ko.md) |
-| 다른 node의 room에 Player Actor를 join한다. | `PreserveStateWith`, Actor relocation adapter와 Relocation Store | Framework가 Actor state를 보존해 Room owner로 이동한다. [Relocation policy §5](../../spec/15-spot-actor.ko.md#5-모든-이동-경로가-공유하는-relocation-policy), [Store 등록 §10](../../spec/06-framework-api.ko.md#10-location-store와-relocation-store) |
-| client connection을 actor에 연결한다. | STREAM session binding | current session으로 server push를 보낸다. [STREAM session](../../spec/19-stream-session.ko.md) |
-| milestone을 여러 Play ingress에 알린다. | Logical Multicast | publisher가 subscriber node 목록을 관리하지 않는다. [상호작용 모델 §5](../../spec/03-interaction-model.ko.md#5-spot-logical-multicast) |
-| game 종료 뒤 actor를 정리한다. | public leave와 Entry Spot destroy | disconnect cleanup과 explicit destroy를 분리한다. [Spot·Actor membership §3](../../spec/15-spot-actor.ko.md#3-entry-spot과-user-spot의-actor-membership) |
-| owner 장애를 표현한다. | failure/failover policy | Ready owner 장애는 자동 replacement가 아니다. [Failure policy](../../spec/31-failure-failover-policy.ko.md#42-기존-actor와-spot) |
+| 수동 peer로 object route를 구성한다. | RouteMesh manual endpoint | automatic discovery와 구분되는 topology를 보여 준다. [Channel topology](../../spec/server/07-channel-topology.ko.md) |
+| room을 새로 만든다. | User Spot manager Create | Framework가 global RoomId를 발급하고 owner를 선택한다. [상호작용 모델 §2.1](../../spec/server/03-interaction-model.ko.md#21-상호작용을-시작하는-public-interface) |
+| remote room에 join한다. | global Spot·Actor message | Caller는 RoomId·ActorId를 지정하고 current owner를 Framework가 resolve한다. [Spot address messaging](../../spec/server/16-spot-address-messaging.ko.md) |
+| 다른 node의 room에 Player Actor를 join한다. | `PreserveStateWith`, Actor relocation adapter와 Relocation Store | Framework가 Actor state를 보존해 Room owner로 이동한다. [Relocation policy §5](../../spec/server/15-spot-actor.ko.md#5-모든-이동-경로가-공유하는-relocation-policy), [Store 등록 §10](../../spec/server/06-framework-api.ko.md#10-location-store와-relocation-store) |
+| client connection을 actor에 연결한다. | STREAM session binding | current session으로 server push를 보낸다. [STREAM session](../../spec/server/19-stream-session.ko.md) |
+| milestone을 여러 Play ingress에 알린다. | Logical Multicast | publisher가 subscriber node 목록을 관리하지 않는다. [상호작용 모델 §5](../../spec/server/03-interaction-model.ko.md#5-spot-logical-multicast) |
+| game 종료 뒤 actor를 정리한다. | public leave와 Entry Spot destroy | disconnect cleanup과 explicit destroy를 분리한다. [Spot·Actor membership §3](../../spec/server/15-spot-actor.ko.md#3-entry-spot과-user-spot의-actor-membership) |
+| owner 장애를 표현한다. | failure/failover policy | Ready owner 장애는 자동 replacement가 아니다. [Failure policy](../../spec/server/31-failure-failover-policy.ko.md#42-기존-actor와-spot) |
 
 Room creation의 Create call에는 initial room settings와 필요하면 최초 placement Mesh를
 전달할 수 있지만, Play endpoint나 NodeRid를 업무 값으로 전달하지 않는다. 이미 존재하는

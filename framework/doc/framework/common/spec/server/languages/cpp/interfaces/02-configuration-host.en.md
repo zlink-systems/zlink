@@ -148,7 +148,7 @@ peer table. This restriction doesn't apply to `shutdown()`.
 every target's `Prepared` completion and host `Relocating` descriptor
 publication. It's also used, instead of `relocation_disabled`, when
 connection-bound work wasn't terminal drained within the pre-`Captured`
-[deadline](../../../../01-glossary.en.md#deadline). A bound-session
+[deadline](../../../01-glossary.en.md#deadline). A bound-session
 request is not drained; it follows the same frozen-journal and
 ingress-hold rules as any other Actor request. The Framework
 cleans up the relocation reference and reservation, releases the
@@ -299,7 +299,7 @@ The default construction rule is below.
 - Only when complex external object construction or conditional
   construction is needed, use
   `add_factory<T, Dep1, Dep2>()`. The
-  [Factory](../../../../01-glossary.en.md#factory) only receives a
+  [Factory](../../../01-glossary.en.md#factory) only receives a
   typed reference of the declared dependency, not a runtime provider or
   scope.
 - A Channel/HTTP handler class, once registered to a handler group or
@@ -318,8 +318,8 @@ The default construction rule is below.
 transport capability. The Framework internally builds the scope
 boundary of handler dispatch, STREAM session, and Spot activation. A
 channel handler builds a scope per dispatch,
-[STREAM session](../../../../01-glossary.en.md#stream-session) has a
-session scope, and [Spot](../../../../01-glossary.en.md#spot) and
+[STREAM session](../../../01-glossary.en.md#stream-session) has a
+session scope, and [Spot](../../../01-glossary.en.md#spot) and
 Entry Spot have an activation scope. An actor factory is resolved in
 the actor creation scope, and the actor instance itself is owned by
 the actor runtime.
@@ -394,7 +394,7 @@ request/send/publish handler can be bundled under the same group name
 and connected to a channel with the channel builder's
 `.add_handler_group(...)`.
 The handler group must match the channel kind. A
-[RouteMesh](../../../../01-glossary.en.md#routemesh) ChannelName can
+[RouteMesh](../../../01-glossary.en.md#routemesh) ChannelName can
 take a request/send handler group, and a fanout channel can only take
 a publish handler group. Connecting a mismatched group fails as a
 configuration error when writing options.
@@ -407,9 +407,9 @@ allow duplication whether a channel references a group first and a
 handler comes in later, or a handler is registered first and a channel
 references the group later.
 A MeshNode can have a ROUTER listen endpoint and zero or more
-[ChannelName](../../../../01-glossary.en.md#channelname)
-[membership](../../../../01-glossary.en.md#membership)s. A
-[MeshNode](../../../../01-glossary.en.md#meshname) dedicated to call or
+[ChannelName](../../../01-glossary.en.md#channelname)
+[membership](../../../01-glossary.en.md#membership)s. A
+[MeshNode](../../../01-glossary.en.md#meshname) dedicated to call or
 Node direct can start with no membership, and a MeshNode providing a
 Channel handler must register at least one Server membership. Each
 Server ChannelName can have a request/send handler group. A fanout
@@ -460,7 +460,7 @@ app.add_zlink_framework ([&](zlink::framework::zlink_framework_options_t &option
 ```
 
 Using automatic peer discovery looks up the same
-[MeshName](../../../../01-glossary.en.md#meshname)'s MeshNode
+[MeshName](../../../01-glossary.en.md#meshname)'s MeshNode
 descriptor from a registered `location_store_t` provider. The official
 Redis package is one of the usable providers.
 A manual peer is registered with `peer_connections().connect(endpoint)`
@@ -543,7 +543,7 @@ configuration error.
 
 A MeshNode opens a ROUTER endpoint with `listen(...)` and selects a
 role after `channel(...)`. An automatic peer is configured with the
-Redis [descriptor](../../../../01-glossary.en.md#descriptor), and a
+Redis [descriptor](../../../01-glossary.en.md#descriptor), and a
 manual peer with `peer_connections()`. Node/Channel/Spot/Actor messages
 use the same MeshNode ROUTER.
 In fluent options, a value used as an identifier or connection address
@@ -551,10 +551,10 @@ In fluent options, a value used as an identifier or connection address
 name — doesn't allow an empty or whitespace-only string. An invalid
 value is closed as a framework error at builder-call or options-apply
 time, without being passed down to the low-level socket/runtime.
-Spot code uses [Node direct](../../../../01-glossary.en.md#node-direct),
+Spot code uses [Node direct](../../../01-glossary.en.md#node-direct),
 ChannelName select-one, and Logical Multicast as a client of the owner
 MeshNode.
-[Logical Multicast](../../../../01-glossary.en.md#logical-multicast)
+[Logical Multicast](../../../01-glossary.en.md#logical-multicast)
 doesn't compose a separate PUB/SUB role. Only classic fanout uses an
 independent PUB/SUB socket.
 
@@ -759,7 +759,7 @@ Store with `add_location_store(...)`. If there's even one
 `RecreateOnRelocation` or `PreserveStateWith` factory, or even one
 Instance Spot factory, it also registers exactly one Relocation Store
 with `add_relocation_store(...)`. A same-node configuration with no
-[Instance Spot](../../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot)
+[Instance Spot](../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot)
 factory and only `DisableRelocation` factories doesn't need a
 Relocation Store. If a needed Store is missing, or the same capability
 is duplicate-registered, the Framework terminates with a configuration
@@ -1076,7 +1076,7 @@ The following six instrument names, which the Framework records to
 the standard metric provider for Instance activation, are used as-is
 in byte form. Kind, unit, label, and the closed outcome value are
 owned by
-[Runtime Metrics §4](../../../../25-runtime-metrics.en.md#4-object-and-stream).
+[Runtime Metrics §4](../../../25-runtime-metrics.en.md#4-object-and-stream).
 
 - `zlink.instance_spot.activations`
 - `zlink.instance_spot.activation.duration`
@@ -1193,7 +1193,7 @@ public:
 
 - **Middleware is a `before`/`after` pair.** It isn't a `next` delegate
   approach — the shape is different from a
-  [handler filter](../../../../06-framework-api.en.md).
+  [handler filter](../../../06-framework-api.en.md).
 - **A middleware instance is built with `create_instance`, receiving
   the DI provider together.**
 
@@ -1239,7 +1239,7 @@ registration surface.
 - Spot/Actor registration is put on the owner `mesh_node_builder_t`.
 
 The meaning of claim progress during drain is owned by
-[Graceful Drain §5](../../../../30-host-relocation-flow.en.md).
+[Graceful Drain §5](../../../30-host-relocation-flow.en.md).
 
 ## 9. Configuration Lookup
 

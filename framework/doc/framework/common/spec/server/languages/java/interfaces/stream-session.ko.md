@@ -1,6 +1,6 @@
 # Java STREAM session 공개 인터페이스
 
-[인터페이스 목차](README.ko.md) · [STREAM session](../../../../19-stream-session.ko.md)
+[인터페이스 목차](README.ko.md) · [STREAM session](../../../19-stream-session.ko.md)
 
 STREAM session, Actor binding과 relay는 JVM Framework runtime이 소유한다. Application에는 session lifecycle,
 typed packet·push와 Actor binding 결과만 공개하며 transport frame과 binding 구현은 노출하지 않는다.
@@ -13,8 +13,8 @@ Client 또는 Server role과 Location Store가 필요하다.
 Actor가 다른 MeshNode에 있으면 runtime은 같은 public session interface로 bind, ingress와 push를 전달한다.
 Runtime은 Actor ObjectGeneration, source·target NodeGeneration, AuthorityOwnerGeneration,
 binding generation과 session sequence를 application callback 전에 검사한다. Rebind와 close는 exact binding
-identity transition이다. Identity는 session owner Node RID·lifecycle generation·owner-local [binding generation](../../../../01-glossary.ko.md#binding-generation)을
-함께 사용하므로 다른 [MeshNode](../../../../01-glossary.ko.md#meshnode)나 재시작한 [owner](../../../../01-glossary.ko.md#owner)의 작은 local counter도 새 binding으로 등록할 수 있다. 이전 owner
+identity transition이다. Identity는 session owner Node RID·lifecycle generation·owner-local [binding generation](../../../01-glossary.ko.md#binding-generation)을
+함께 사용하므로 다른 [MeshNode](../../../01-glossary.ko.md#meshnode)나 재시작한 [owner](../../../01-glossary.ko.md#owner)의 작은 local counter도 새 binding으로 등록할 수 있다. 이전 owner
 lifecycle의 push·ingress·tombstone은 current session에 적용하지 않는다.
 
 Session close는 remote unbind completion을 bounded lifecycle deadline 안에서 관찰한다. Timeout이나

@@ -60,7 +60,7 @@ public:
 ```
 
 `preserve_state_with<TAdapter>()`에서 `TAdapter`는
-`spot_relocation_adapter_t<TSpot>`를 구현해야 한다. Actor adapter를 전달하거나 [Spot](../../../../01-glossary.ko.md#spot) factory에 맞지 않는 adapter를
+`spot_relocation_adapter_t<TSpot>`를 구현해야 한다. Actor adapter를 전달하거나 [Spot](../../../01-glossary.ko.md#spot) factory에 맞지 않는 adapter를
 전달하면 socket bind 전에 configuration error로 실패한다. Adapter는 application state를 opaque byte vector로만
 주고받으며 typed state, 별도 contract identifier와 message wrapper를 노출하지 않는다.
 
@@ -412,9 +412,9 @@ public:
 ```
 
 `spot_context_t::publish(...)`는 target ChannelName과 topic을 함께 받는다. publish는
-[MeshNode](../../../../01-glossary.ko.md#meshnode) ROUTER를 통해 remote MeshNode마다 한 번 제출하고, 수신 node는 node-local
+[MeshNode](../../../01-glossary.ko.md#meshnode) ROUTER를 통해 remote MeshNode마다 한 번 제출하고, 수신 node는 node-local
 subscription만 검사한다. 각 remote ROUTER와 local mailbox는 대상별로 수락하며, 한 대상의
-실패가 앞에서 수락된 전송을 취소하지 않는다. Spot·Actor 등록은 [owner](../../../../01-glossary.ko.md#owner)
+실패가 앞에서 수락된 전송을 취소하지 않는다. Spot·Actor 등록은 [owner](../../../01-glossary.ko.md#owner)
 `mesh_node_builder_t`에 속한다.
 
 `mesh_node_socket_config_t`는 RouteMesh SS의 Framework-level message-size 설정을 제공하지 않는다.
@@ -424,25 +424,25 @@ service-wire 표현 한계, HWM과 mailbox budget은 별도 자원·wire guard�
 수신 대기 상한을 따로 두지 않는다. HWM은 0 이상이어야 한다.
 
 Spot Actor Join / Relocation 관련 interface도 이 문서에 기록된 정식 계약이며,
-그 동작 의미는 [공통 스펙](../../../../15-spot-actor.ko.md)을 따른다. 구현이나 contract test가
+그 동작 의미는 [공통 스펙](../../../15-spot-actor.ko.md)을 따른다. 구현이나 contract test가
 이 시그니처와 다르면 계약 불일치로 처리한다.
 `join_entry_spot(...)`은 target node RID를 받지 않으며 Framework가 현재 eligible Entry Spot을 선택한다.
 
 `spot_close_reason_t`의 값은 `explicit_close=0`, `host_shutdown=1`, `relocation_out=2`,
-`idle_evicted=3`다. `idle_evicted`는 [Instance Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) 전용 이유이며 Entry Spot과 User Spot에는 전달하지
+`idle_evicted=3`다. `idle_evicted`는 [Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) 전용 이유이며 Entry Spot과 User Spot에는 전달하지
 않는다. 유휴 판정 조건과 정리 뒤 재활성화 규칙은
-[Spot 모델 §6.2](../../../../11-spot-model.ko.md#62-유휴-instance-spot-정리)가 소유한다.
+[Spot 모델 §6.2](../../../11-spot-model.ko.md#62-유휴-instance-spot-정리)가 소유한다.
 Context의
 `deadline`은 closing operation의 absolute UTC time이다. Framework는 callback invocation 전에는
-`cleanup_cancellation`에 stop을 요청하지 않고 deadline이 끝날 때 요청한다. Entry·User·[Instance Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)만
+`cleanup_cancellation`에 stop을 요청하지 않고 deadline이 끝날 때 요청한다. Entry·User·[Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)만
 callback을 받고 Actor별 closing callback은 제공하지 않는다. Host Shutdown은 Actor membership과 local instance가
 유효한 상태에서 callback을 실행하고 completion 뒤 scope와 authority를 정리한다. Standalone Actor relocation은
 Entry Spot을 닫지 않으므로 이 callback을 호출하지 않는다.
 
 `entry_spot_context_t::destroy_actor(...)`는 Entry Spot에서만 호출한다. user Spot에 있는 Actor는
-먼저 `leave_actor(...)` 또는 Entry Spot join을 완료해야 한다. Destroy는 [membership](../../../../01-glossary.ko.md#membership) 이동이 아니므로
+먼저 `leave_actor(...)` 또는 Entry Spot join을 완료해야 한다. Destroy는 [membership](../../../01-glossary.ko.md#membership) 이동이 아니므로
 `on_leave_actor`를 다시 호출하지 않으며, 같은 Actor instance의 중복 destroy는 lifecycle callback을
-추가로 실행하지 않고 성공으로 끝난다. 전체 순서는 [Actor model §6](../../../../14-actor-model.ko.md#6-actor-lifecycle)을
+추가로 실행하지 않고 성공으로 끝난다. 전체 순서는 [Actor model §6](../../../14-actor-model.ko.md#6-actor-lifecycle)을
 따른다.
 
 Actor와 User·Instance Spot의 cross-node materialization 동작은 factory 등록에 연결한
@@ -459,7 +459,7 @@ chunking을 수행한다. 반환한 vector의 소유권은 Framework로 이동�
 vector는 해당 비동기 호출이 소유한다. Capture가 throw하거나
 failed task로 끝나면 durable abort와 source normalization 뒤 admission을 복원한다. Restore가 실패한 instance는
 폐기하고 새 attempt의 factory가 만든 instance에 같은 immutable payload를 적용한다. Framework가 operation
-[deadline](../../../../01-glossary.ko.md#deadline) 때문에 callback을 취소하면 `deadline_exceeded`로 분류한다. Recovery 때문에 두 method가 at-least-once
+[deadline](../../../01-glossary.ko.md#deadline) 때문에 callback을 취소하면 `deadline_exceeded`로 분류한다. Recovery 때문에 두 method가 at-least-once
 호출되거나 stale attempt와 successor에서 겹칠 수 있으므로 adapter는 retry-safe해야 한다. Framework는 adapter의
 external side effect에 exactly-once를 보장하지 않는다.
 
@@ -495,7 +495,7 @@ instance는 Framework가 생성할 때 결합한 `instance_spot_context_t`를 `c
 노출한다. Framework는 인자 없는 `configure()`, message를 받지 않는 `on_initialize()`,
 `on_closing(context, cleanup_cancellation)`을 actor-free lifecycle로 사용한다. `configure(...)`에서는 direct
 packet과 timer handler만 등록할 수 있다. Instance context의 전용 registry에는 Actor handler와 Logical
-Multicast [subscription](../../../../01-glossary.ko.md#subscription) 등록 member가 존재하지 않는다. 같은 MeshNode에서 stable
+Multicast [subscription](../../../01-glossary.ko.md#subscription) 등록 member가 존재하지 않는다. 같은 MeshNode에서 stable
 `instance_spot_type`이나 같은 Spot class를 User Spot factory와 Instance factory에 중복 등록해도 socket bind
 전에 설정 오류로 실패한다.
 
@@ -511,12 +511,12 @@ fencing 조건을 만족하는 location row만 해제한다.
 
 User Spot은 manager의 explicit Create·GetOrCreate가 `Creating` reservation을 시작한다. Instance Spot은
 `spot_send_call_t` 또는 `spot_request_call_t`에서 `instance_spot()`을 선택한 direct call만 missing RID의
-[cold activation](../../../../01-glossary.ko.md#cold-activation)을 시작한다. Marker가 없는 일반 send·request에서
+[cold activation](../../../01-glossary.ko.md#cold-activation)을 시작한다. Marker가 없는 일반 send·request에서
 RID가 없으면 `not_found`로 끝나며 factory를 실행하거나 creation intent를 기록하지 않는다.
 
 Source와 target은 다음 순서로 역할을 나눈다.
 
-1. Source는 `Ready` [authority](../../../../01-glossary.ko.md#authority)가 있으면 current owner에게 일반 message를 보낸다.
+1. Source는 `Ready` [authority](../../../01-glossary.ko.md#authority)가 있으면 current owner에게 일반 message를 보낸다.
 2. Authority가 `Missing`이면 Source가 target을 선택한다. Source는 creation reservation을 만들지 않는다.
 3. Source는 SpotId, stable type, creation intent와 최초 message를 하나의 activation envelope에 넣어 target으로
    보낸다. 이 envelope는 application handler에 전달하지 않는 Framework 내부 message다.
@@ -566,8 +566,8 @@ member Actor 전체를 하나의 aggregate로 이전하며 participant 총수에
 `PerActor` User Spot은 stateless shell만 새 target에 다시 만들고 Actor를 독립된 unit으로 이전한다.
 
 Instance Spot factory는 actor-free lifecycle만 구현한다. Source runtime은 Instance Spot marker가 있는 direct
-call에서만 missing RID의 [activation envelope](../../../../01-glossary.ko.md#activation-envelope)를 target에 보낸다. Target runtime은 envelope를 근거로 자신을
-owner로 creation claim을 시작한다. `instance_spot()`은 [stable type](../../../../01-glossary.ko.md#stable-type)을 생략한 marker이고,
+call에서만 missing RID의 [activation envelope](../../../01-glossary.ko.md#activation-envelope)를 target에 보낸다. Target runtime은 envelope를 근거로 자신을
+owner로 creation claim을 시작한다. `instance_spot()`은 [stable type](../../../01-glossary.ko.md#stable-type)을 생략한 marker이고,
 `instance_spot(stable_type)`은 type을 명시한 marker다. `in_mesh(mesh_name)`는 missing RID를 처음 배치할
 Mesh를 선택한다. 이미 `Ready`인
 authority row가 있으면 global SpotId로 현재 owner를 찾으므로 marker와 stable type이 없어도 같은 row로
@@ -671,9 +671,9 @@ private:
 object의 read-only member로 move하고 `context()`에서 그 handle을 반환한다. Default construction, copy와
 assignment로 identity를 만들거나 교체할 수 없다.
 
-`route_mesh_runtime_options_t`는 public DI singleton이다. 등록되지 않은 [ChannelName](../../../../01-glossary.ko.md#channelname)을 조회하면 구성
+`route_mesh_runtime_options_t`는 public DI singleton이다. 등록되지 않은 [ChannelName](../../../01-glossary.ko.md#channelname)을 조회하면 구성
 오류로 실패한다. 실행 중에는 ChannelName weight만 변경할 수 있다. 최대 메시지 크기는 startup 뒤
-변경할 수 없다. [Weight](../../../../01-glossary.ko.md#weight)는 0부터 10000까지이고 기본값은 100이다. 범위
+변경할 수 없다. [Weight](../../../01-glossary.ko.md#weight)는 0부터 10000까지이고 기본값은 100이다. 범위
 밖 값은 startup 설정과 runtime 변경에서 configuration error다. 0은 해당 membership을 새 select-one과
 Logical Multicast remote target에서 제외한다.
 
@@ -729,7 +729,7 @@ actor packet member는 containing Spot에 선언하며 mutable Actor, `message_c
 호출 대상인 containing Spot은 member function의 `this`다. actor disconnected callback도 같은 concrete
 Actor reference를 받는다.
 Runtime의 private dispatch가 `message_t`를 DTO로 바꾸고 현재 Spot instance와 Actor를 찾아 typed member
-function을 호출한다. Application은 invoker, service provider, serializer registry와 [descriptor](../../../../01-glossary.ko.md#descriptor) 조회 표면을
+function을 호출한다. Application은 invoker, service provider, serializer registry와 [descriptor](../../../01-glossary.ko.md#descriptor) 조회 표면을
 받지 않는다. 샘플도 public registration과 call 경로를 통과해야 framework 동작을 확인했다고 볼 수 있다.
 Entry Spot membership 상태에서도 actor packet은 일반 Spot packet으로 등록하지 않는다.
 `spot_context_t::handlers()`에서 `add_actor_request<Method>()` 또는 `add_actor_send<Method>()`로 등록하며,
@@ -747,7 +747,7 @@ key와 공백만 있는 key는 의미가 모호하므로 두 방향의 allowlist
 Spot의 직렬 실행 queue에 제출된다. Entry Spot timer도
 서로 다른 Entry Spot instance를 전역 직렬화하지 않는다.
 
-Timer backend 선택은 [비동기 실행 정책](../../../../05-async-execution-policy.ko.md#5-spot-timer)을 따른다.
+Timer backend 선택은 [비동기 실행 정책](../../../05-async-execution-policy.ko.md#5-spot-timer)을 따른다.
 `timer_tick_t`는 공통 timer dispatch metadata만 제공한다.
 
 ActorGateway session relay의 public 표면은 `session_actor_manager_t`, `session_actor_t`,
@@ -853,7 +853,7 @@ Timer option을 생략하면 `overrun_policy`는 `skip_late_ticks`, `max_catch_u
 검증한다. 다른 policy에서는 이 값을 사용하지 않으며 이 범위로 validation하지 않는다. 이 규칙은 기존
 `timer_options_t` field를 해석하는 계약이며 새 public member를 추가하지 않는다.
 
-timer 등록 검증은 [stage-wrapper §4.1](../../../../17-stage-wrapper-on-spot.ko.md)이 소유한다.
+timer 등록 검증은 [stage-wrapper §4.1](../../../17-stage-wrapper-on-spot.ko.md)이 소유한다.
 
 Framework timer는 owner Actor·Spot에 속한 logical registration이다. Cross-node relocation에서는 timer 이름,
 handler type, period, `timer_options_t`, scheduling cursor와 seal 시점의 pending tick을 relocation payload에
@@ -913,8 +913,8 @@ Spot incarnation이 없으면 manager `Close`는 `false`, 다른 generation이�
 ## 5. Public trace category
 
 이 문서의 declaration은 public trace의 `spot-instance`와 `actor-relocation` category에 속한다. 공통 의미는
-[Spot address와 messaging](../../../../16-spot-address-messaging.ko.md)과
-[Spot·Actor membership](../../../../15-spot-actor.ko.md)이 소유한다.
+[Spot address와 messaging](../../../16-spot-address-messaging.ko.md)과
+[Spot·Actor membership](../../../15-spot-actor.ko.md)이 소유한다.
 
-**lifecycle callback의 호출 순서는 [MeshNode §7](../../../../13-mesh-node.ko.md)가 소유한다** —
+**lifecycle callback의 호출 순서는 [MeshNode §7](../../../13-mesh-node.ko.md)가 소유한다** —
 handler 구성 → 생성 callback → **수락된 경우에만** 초기화 → 종료는 한 번.

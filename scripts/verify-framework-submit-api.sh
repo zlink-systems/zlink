@@ -35,9 +35,9 @@ function read(relative) {
 }
 
 if (mode === '--contract') {
-  const asyncPolicy = read('framework/doc/framework/common/spec/05-async-execution-policy.ko.md');
-  const frameworkApi = read('framework/doc/framework/common/spec/06-framework-api.ko.md');
-  const spotMessaging = read('framework/doc/framework/common/spec/12-spot-messaging.ko.md');
+  const asyncPolicy = read('framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md');
+  const frameworkApi = read('framework/doc/framework/common/spec/server/06-framework-api.ko.md');
+  const spotMessaging = read('framework/doc/framework/common/spec/server/12-spot-messaging.ko.md');
   const scenario = read('framework/doc/framework/common/e2e/config-13-submit-admission.ko.md');
   for (const [source, owner, fragments] of [
     [asyncPolicy, 'async policy', [

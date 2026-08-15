@@ -102,10 +102,10 @@ targets.
 
 If `CancellationToken` is triggered before admission, it completes
 exactly once with a cancelled `ValueTask`. Pre-cancellation doesn't start
-runtime admission. If admission/timeout/[shutdown](../../../../01-glossary.en.md#shutdown)
+runtime admission. If admission/timeout/[shutdown](../../../01-glossary.en.md#shutdown)
 and cancellation race, only one atomic terminal winner completes, and
 late admission isn't created after a timeout or cancellation. For
-[Logical Multicast](../../../../01-glossary.en.md#logical-multicast), only
+[Logical Multicast](../../../01-glossary.en.md#logical-multicast), only
 cancellation before publish starts blocks the operation from starting.
 Once publish has started, submission to the selected target set proceeds
 to completion.
@@ -121,7 +121,7 @@ automatically copy request metadata.
 
 The worker call's `Submit`, `Async`, and `Yield` follow the completion
 semantics of
-[Async Execution Policy §1.2](../../../../05-async-execution-policy.en.md#12-worker-offload).
+[Async Execution Policy §1.2](../../../05-async-execution-policy.en.md#12-worker-offload).
 Worker options can only be set before the host starts.
 
 The `Yield` terminal only exists on `RequestToChannel`,

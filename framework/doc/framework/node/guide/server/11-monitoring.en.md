@@ -128,7 +128,7 @@ message-operation result.
 > before building a dashboard.**
 
 The contract for instrument names, kinds, units, and labels is owned by
-[Runtime Metrics And Aggregation Rules](../../../common/spec/25-runtime-metrics.en.md).
+[Runtime Metrics And Aggregation Rules](../../../common/spec/server/25-runtime-metrics.en.md).
 
 ## 5. Readiness And Liveness
 

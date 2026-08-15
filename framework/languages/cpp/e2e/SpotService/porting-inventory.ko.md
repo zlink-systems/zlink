@@ -126,7 +126,7 @@
     설정으로 통과했다. 서버 간 시작 순서가 forward, reverse, shuffle 이어도 같은 public
     readiness probe와 scenario evidence가 통과했다. framework 공통 spec에는 transport
     재접속을 framework 기능으로 다시 구현하지 않고 하부 zlink socket 책임으로 둔다는 정책을
-    `framework/doc/framework/common/spec/framework-api.ko.md`에 추가했다.
+    `framework/doc/framework/common/spec/server/06-framework-api.ko.md`에 추가했다.
   - `nice -n 10 env ZLINK_CPP_E2E_SKIP_BUILD=1 timeout 2400s ./framework/languages/cpp/e2e/SpotService/run_e2e.sh`
     - 결과: failed
     - 로그: `framework/languages/cpp/e2e/SpotService/logs/20260708-092418-799125`

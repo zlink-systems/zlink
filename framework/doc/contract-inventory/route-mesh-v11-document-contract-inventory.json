@@ -4,7 +4,7 @@
   "description": "RouteMesh 11 formal document semantics. This inventory intentionally contains no document or code-block hash.",
   "languages": ["dotnet", "cpp", "java", "kotlin", "node"],
   "host_lifecycle_contract": {
-    "formal_path": "framework/doc/framework/common/spec/30-host-relocation-flow.ko.md",
+    "formal_path": "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md",
     "e2e_path": "framework/doc/framework/common/e2e/config-6-store-failure-recovery.ko.md",
     "states": [
       { "name": "Preparing", "wire_value": 0 },
@@ -533,7 +533,7 @@
   },
   "formal_documents": [
     {
-      "path": "framework/doc/framework/common/spec/51-internal-service-wire-protocol.ko.md",
+      "path": "framework/doc/framework/common/spec/server/51-internal-service-wire-protocol.ko.md",
       "required_fragments": [
         "`livenessProbe`",
         "`livenessAck`",
@@ -558,57 +558,57 @@
       ]
     },
     {
-      "path": "framework/doc/framework/common/spec/00-public-contract-governance.ko.md",
+      "path": "framework/doc/framework/common/spec/server/00-public-contract-governance.ko.md",
       "required_fragments": ["package의 `languages/<lang>/`", "공통 스펙"],
       "forbidden_fragments": []
     },
     {
-      "path": "framework/doc/framework/common/spec/05-async-execution-policy.ko.md",
+      "path": "framework/doc/framework/common/spec/server/05-async-execution-policy.ko.md",
       "required_fragments": ["동기 `TrySubmit` 계열을 제공하지 않는다", "비동기 submit terminator 하나만 제공하고"],
       "forbidden_fragments": []
     },
     {
-      "path": "framework/doc/framework/common/spec/06-framework-api.ko.md",
+      "path": "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
       "required_fragments": ["ChannelName", "global Actor", "Object role", "Relocate", "Shutdown"],
       "forbidden_fragments": ["InstanceSpotAddress는 `MeshName`", "ZLinkMeshNodeDrainPolicy", "ReleaseAndRecreate"]
     },
     {
-      "path": "framework/doc/framework/common/spec/07-channel-topology.ko.md",
+      "path": "framework/doc/framework/common/spec/server/07-channel-topology.ko.md",
       "required_fragments": ["Client", "Server", "ChannelName"],
       "forbidden_fragments": []
     },
     {
-      "path": "framework/doc/framework/common/spec/12-spot-messaging.ko.md",
+      "path": "framework/doc/framework/common/spec/server/12-spot-messaging.ko.md",
       "required_fragments": ["local outbound admission", "Instance Spot"],
       "forbidden_fragments": []
     },
     {
-      "path": "framework/doc/framework/common/spec/16-spot-address-messaging.ko.md",
+      "path": "framework/doc/framework/common/spec/server/16-spot-address-messaging.ko.md",
       "required_fragments": ["global SpotId", "creation intent", "activation barrier", "existing-only operation", "distinct Instance type"],
       "forbidden_fragments": ["InstanceSpotAddress의 첫", "address cold activation", "ReleaseAndRecreate"]
     },
     {
-      "path": "framework/doc/framework/common/spec/21-location-runtime.ko.md",
+      "path": "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
       "required_fragments": ["Actor·Spot의 현재 위치", "ActorId 또는 SpotId", "owner lease", "Reserve", "Commit", "Abort"],
       "forbidden_fragments": ["Instance Spot authority row"]
     },
     {
-      "path": "framework/doc/framework/common/spec/30-host-relocation-flow.ko.md",
+      "path": "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md",
       "required_fragments": ["Relocate", "Shutdown", "admission seal", "Component별 `Drain`", "ManualTopologyUnsupported=8", "| 0 | `Relocated` | `None` |", "| 1 | `Blocked` | `TargetUnavailable`, `StoreUnavailable`, `RelocationDisabled`, `StateIncompatible`, `DeadlineExceeded`, `RelocationFailed`, `RuntimeNotReady`, `ManualTopologyUnsupported`, `ShutdownRequested`, `OperationInProgress` |", "Shutdown outcome은 `Stopped=0`, `ForceStopped=1`", "reason은 `None=0`,", "`DeadlineExceeded=1`, `TeardownFailed=2`"],
       "forbidden_fragments": ["Retire", "Retiring", "ZLinkMeshNodeDrainPolicy", "ReleaseAndRecreate", "DrainNatural", "CheckpointTooLarge", "| `Completed` |", "| `Failed` |"]
     },
     {
-      "path": "framework/doc/framework/common/spec/29-transport-liveness.ko.md",
+      "path": "framework/doc/framework/common/spec/server/29-transport-liveness.ko.md",
       "required_fragments": ["service liveness", "`livenessProbe`", "`livenessAck`", "application public API가 아니며", "Orderly close", "전용 SUB socket", "one-way", "beacon", "사용하지 않는다. Subscriber", "publisher만 not-ready"],
       "forbidden_fragments": []
     },
     {
-      "path": "framework/doc/framework/common/spec/31-failure-failover-policy.ko.md",
+      "path": "framework/doc/framework/common/spec/server/31-failure-failover-policy.ko.md",
       "required_fragments": ["`FailoverPolicy`를 선택하는 public API는 없다", "수락 여부가 불분명하거나 이미 수락된 뒤에는", "다른 eligible target을 선택할 수 있다", "일반 Actor·Spot message는 global logical ID만 target으로 사용한다", "Target 일치 조건에서 제외한다", "자동 복원하지 않는다", "다른 runtime이 relocation을 이어받지 않는다", "Client reconnect는 새 Session"],
       "forbidden_fragments": []
     },
     {
-      "path": "framework/doc/framework/common/spec/32-framework-error-model.ko.md",
+      "path": "framework/doc/framework/common/spec/server/32-framework-error-model.ko.md",
       "required_fragments": ["공통 `ErrorKind`", "`NotFound`", "`InternalFailure`", "source runtime의 outbound queue", "Remote handler가 실행되지 않았다는 뜻이 아니며", "Public exception, error object와 typed failure에는 `RetryAdvice`", "typed 결과가 없는 filter"],
       "forbidden_fragments": []
     }

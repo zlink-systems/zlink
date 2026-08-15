@@ -20,11 +20,11 @@ directory.
 | `61` | [Embedded HTTP Server](61-embedded-http-server.en.md) | Embedded server |
 
 **The meaning and behavior rule of a capability is owned by the
-[common spec](../../../README.en.md).** This directory fixes the
+[common spec](../../README.en.md).** This directory fixes the
 **exact public surface** that meaning has in C++.
 
 **The internal runtime structure isn't a public contract** — it's
-owned by [internals/runtime-architecture](../../../README.en.md).
+owned by [internals/runtime-architecture](../../README.en.md).
 
 The client connector is owned by the
 [C++ Stream Connector guide](../../../../../cpp/guide/stream-connector/INDEX.en.md)

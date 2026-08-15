@@ -4,7 +4,7 @@
 
 [스펙 목차](../README.ko.md)
 
-[Node.js 묶음](../README.ko.md) | [인터페이스](../../common/spec/server/languages/node/interfaces/README.ko.md) | [Runtime Lifecycle](../../common/spec/README.ko.md) | [Regression Matrix](regression-test-matrix.ko.md)
+[Node.js 묶음](../README.ko.md) | [인터페이스](../../common/spec/server/languages/node/interfaces/README.ko.md) | [Runtime Lifecycle](../../common/spec/server/README.ko.md) | [Regression Matrix](regression-test-matrix.ko.md)
 
 # ZLink Framework Node.js Backend Dependency Policy
 

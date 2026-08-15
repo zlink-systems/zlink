@@ -9,7 +9,7 @@ location snapshot을 갱신한다. 응답이 없어도 Actor 처리를 멈추지
 변경하지 않는다.
 
 [인터페이스 목차](README.ko.md) · [Java Actor](../../java/interfaces/actors.ko.md) ·
-[Actor 공통 계약](../../../../14-actor-model.ko.md)
+[Actor 공통 계약](../../../14-actor-model.ko.md)
 
 Kotlin은 Java의 global Actor identity와 fluent operation을 그대로 사용한다. `ActorId`는 Location Store
 transaction domain 전체에서 유일하며 UTF-8 encoded 크기는 1..255 bytes다. 대소문자를 구분하고
@@ -32,7 +32,7 @@ reservation, factory 실행과 queue 변경 전에 `InvalidOperation`으로 끝�
 Actor type은 UTF-8 1..255 bytes의 stable exact value다. `Create`에서 Ready object가 있으면
 `AlreadyExists`이며 새 attempt에서는 Java `ZLinkActorCreateResult`의 `Created`
 또는 `Rejected`를 반환한다. `GetOrCreate`는 같은 type의
-[Ready](../../../../01-glossary.ko.md#ready) object를 callback 없이 `Existing`으로
+[Ready](../../../01-glossary.ko.md#ready) object를 callback 없이 `Existing`으로
 반환한다. Creating이면 authority 변경을 기다리며 CAS loser는
 별도 factory나 callback을 시작하지 않는다. 서로 다른 operation은 Ready 뒤 `Existing`을
 받고 cleanup 뒤 새 reservation을 경쟁하며 앞선 application reply를 공유하지 않는다.
@@ -50,18 +50,18 @@ relocation API를 만들지 않는다. State 보존 policy는
 bind 전에 검증한다. Java interop에서 null adapter class를 전달한 policy도 bind 전에 startup configuration error로
 거부한다.
 
-`preserveStateWith(...)`로 등록한 Actor adapter는 maintenance cross-node materialization, remote User·Entry Spot join과 whole [User Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)
+`preserveStateWith(...)`로 등록한 Actor adapter는 maintenance cross-node materialization, remote User·Entry Spot join과 whole [User Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)
 relocation의 각 Actor participant에 사용한다. Same-node join과 `disableRelocation()` 또는 `recreateOnRelocation()`을 선택한 factory에서는 호출하지 않는다.
 Capture가 반환한 `ByteArray`에는 relocation adapter 전용 size 상한이 없다. Java runtime은
 completion에서 복사하고, 등록한 Relocation Store의 일반 blob·whole-payload 제한에 맞춰 필요한
 chunking을 수행한다. Adapter는 completion까지 배열을 소유한다. Restore는 호출마다
 fresh defensive copy를 받고 completion 뒤 보관하지 않는다. Empty `ByteArray`도 유효한 보존 state다.
-[Factory](../../../../01-glossary.ko.md#factory)는 target attempt마다 fresh Actor instance를 만들며 source나 이전 attempt instance를 재사용하지 않는다.
-같은 attempt의 restore는 반복될 수 있다. Capture exception은 source [authority](../../../../01-glossary.ko.md#authority)와 admission을 유지하고, restore
+[Factory](../../../01-glossary.ko.md#factory)는 target attempt마다 fresh Actor instance를 만들며 source나 이전 attempt instance를 재사용하지 않는다.
+같은 attempt의 restore는 반복될 수 있다. Capture exception은 source [authority](../../../01-glossary.ko.md#authority)와 admission을 유지하고, restore
 exception은 target을 sealed 상태로 유지한 채 같은 target process에서 동일한 payload로 다시 시도할 수 있다.
 다른 target을 자동 선택하지 않는다. Null stage와
 null capture payload는 contract 위반이다. Host relocation의 precommit adapter exception·contract violation은 deadline이
-먼저 확정되지 않았으면 `Blocked/StateIncompatible`, [deadline](../../../../01-glossary.ko.md#deadline)이 먼저 확정되면 `Blocked/DeadlineExceeded`다.
+먼저 확정되지 않았으면 `Blocked/StateIncompatible`, [deadline](../../../01-glossary.ko.md#deadline)이 먼저 확정되면 `Blocked/DeadlineExceeded`다.
 Stale attempt cancellation은 terminal result를 commit하지 못한다. 두 callback은 at-least-once이고 stale attempt와
 겹칠 수 있으므로 retry-safe해야 한다. Kotlin coroutine 안에서 exception을 정상 completion으로 바꾸거나 empty
 `ByteArray`를 failure fallback으로 반환하지 않는다.

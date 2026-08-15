@@ -9,6 +9,7 @@ using static PerfRunner;
 internal static class PerfMultiDealerDealerServer
 {
     private const int ServerSocketTag = 0;
+    private const int ActiveDeadlineTag = int.MaxValue;
 
     private enum ReceiveStatus
     {
@@ -69,8 +70,7 @@ internal static class PerfMultiDealerDealerServer
             int durationSeconds, RunnerControlState controlState)
     {
         const uint expectedRunId = 1;
-        var latSamples = new LatencySampleBuffer(
-            EstimateLatencySampleCapacity(latencySampleCap, durationSeconds));
+        var latSamples = new LatencySampleBuffer(latencySampleCap);
         long measureCount = 0;
         using var received = Received.Create();
 
@@ -100,34 +100,26 @@ internal static class PerfMultiDealerDealerServer
         return (throughput, latencyNs, latencyP95Ns, latencyP99Ns, measureCount);
     }
 
-    private static int EstimateLatencySampleCapacity(int configuredCap,
-        int durationSeconds)
-    {
-        const int expectedHighRatePerSecond = 4_000_000;
-        long expected = (long)Math.Max(1, durationSeconds)
-            * expectedHighRatePerSecond;
-        if (expected > int.MaxValue)
-            expected = int.MaxValue;
-        return Math.Max(configuredCap, (int)expected);
-    }
-
     private static bool ReceiveActiveWindow(IDealerSocket server,
         Received received, int msgSize, uint expectedRunId,
         PerfPhase expectedPhase, LatencySampleBuffer latSamples,
         ref long messageCount, int durationSeconds,
         RunnerControlState controlState)
     {
+        using var activeTimer = Zlink.CreateTimer();
         using var poller = Zlink.CreatePoller();
-        var events = new PollEvent[1];
+        var events = new PollEvent[2];
         long activeDeadlineTicks = Stopwatch.GetTimestamp()
             + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
         poller.Add(server, PollEventFlags.PollIn, ServerSocketTag);
+        poller.Add(activeTimer, ActiveDeadlineTag);
+        activeTimer.Start(TimeSpan.FromSeconds(Math.Max(1, durationSeconds)),
+            1);
 
         int stopTokenCount = 0;
         while (!controlState.StopRequested)
         {
-            int written = poller.Wait(events,
-                TimeSpan.FromMilliseconds(50));
+            int written = poller.Wait(events, TimeSpan.FromMilliseconds(-1));
             if (written == 0)
             {
                 if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
@@ -137,6 +129,12 @@ internal static class PerfMultiDealerDealerServer
 
             for (int i = 0; i < written; i++)
             {
+                if (events[i].Slot == (nuint)ActiveDeadlineTag)
+                {
+                    _ = activeTimer.Recv();
+                    goto active_window_complete;
+                }
+
                 if (events[i].Slot != (nuint)ServerSocketTag
                     || (events[i].Revents & PollEventFlags.PollIn) == 0)
                     continue;
@@ -151,6 +149,13 @@ internal static class PerfMultiDealerDealerServer
                 if (receiveStatus == ReceiveStatus.StopToken)
                     stopTokenCount++;
 
+                // C receives one message after readiness, then checks the
+                // active boundary before a DONT_WAIT drain. Counting a
+                // queued tail after this point would include post-window
+                // traffic in the next result.
+                if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
+                    goto active_window_complete;
+
                 DrainAvailable(server, received, msgSize, expectedRunId,
                     expectedPhase, latSamples, ref messageCount,
                     ref stopTokenCount, collectMetrics: true);
@@ -164,15 +169,8 @@ internal static class PerfMultiDealerDealerServer
         if (controlState.StopRequested)
             return true;
 
-        double drainWaitSeconds = msgSize >= 65536
-            ? Math.Max(10.0, Math.Max(1, durationSeconds) * 2.0)
-            : Math.Max(2.0, Math.Max(1, durationSeconds));
-        // The managed client sends one stop token per DEALER after the active
-        // window. For large frames, crossing the managed/native boundary can
-        // leave a gap longer than the C client's 50ms idle drain even though
-        // the phase is still completing. This only extends teardown; metrics
-        // remain limited to the active window above.
-        int idleWaitMs = msgSize >= 65536 ? 1_000 : 50;
+        const double drainWaitSeconds = 2.0;
+        const int idleWaitMs = 50;
         bool drainComplete = DrainPhaseUntilIdle(poller, events, server,
             received, msgSize, expectedRunId, expectedPhase, latSamples,
             ref messageCount,
@@ -318,57 +316,62 @@ internal static class PerfMultiDealerDealerServer
     private sealed class LatencySampleBuffer
     {
         private double[] _samples;
-        private int _count;
+        private readonly int _sampleCap;
+        private int _sampleCount;
+        private ulong _samplesSeen;
         private double _sum;
+        private ulong _rng = 0xA341316Cu;
 
-        internal LatencySampleBuffer(int capacity)
+        internal LatencySampleBuffer(int sampleCap)
         {
-            _samples = new double[Math.Max(1, capacity)];
+            _sampleCap = Math.Max(0, sampleCap);
+            _samples = new double[_sampleCap];
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void Add(double value)
         {
-            if (_count == _samples.Length)
-                Grow();
             double sample = value >= 0.0 ? value : 0.0;
-            _samples[_count++] = sample;
             _sum += sample;
+            _samplesSeen++;
+            if (_sampleCap == 0)
+                return;
+            if (_sampleCount < _sampleCap)
+            {
+                _samples[_sampleCount++] = sample;
+                return;
+            }
+            _rng = _rng * 1664525u + 1013904223u;
+            ulong slot = _rng % _samplesSeen;
+            if (slot < (ulong)_sampleCount)
+                _samples[(int)slot] = sample;
         }
 
         internal (double mean, double p95, double p99) ComputeStats()
         {
-            if (_count == 0)
+            if (_samplesSeen == 0)
                 return (0.0, 0.0, 0.0);
 
-            Array.Sort(_samples, 0, _count);
-            double mean = _sum / _count;
+            double mean = _sum / _samplesSeen;
+            if (_sampleCount == 0)
+                return (mean, mean, mean);
+            Array.Sort(_samples, 0, _sampleCount);
             return (mean, PercentileFromSorted(0.95),
                 PercentileFromSorted(0.99));
         }
 
-        private void Grow()
-        {
-            int next = _samples.Length <= int.MaxValue / 2
-                ? _samples.Length * 2
-                : int.MaxValue;
-            if (next == _samples.Length)
-                throw new OutOfMemoryException("Latency sample buffer is full.");
-            Array.Resize(ref _samples, next);
-        }
-
         private double PercentileFromSorted(double q)
         {
-            if (_count == 0)
+            if (_sampleCount == 0)
                 return 0.0;
             if (q <= 0.0)
                 return _samples[0];
             if (q >= 1.0)
-                return _samples[_count - 1];
+                return _samples[_sampleCount - 1];
 
-            double pos = (_count - 1) * q;
+            double pos = (_sampleCount - 1) * q;
             int lo = (int)pos;
-            int hi = lo + 1 < _count ? lo + 1 : lo;
+            int hi = lo + 1 < _sampleCount ? lo + 1 : lo;
             double frac = pos - lo;
             return _samples[lo] + (_samples[hi] - _samples[lo]) * frac;
         }

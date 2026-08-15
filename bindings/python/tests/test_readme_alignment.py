@@ -20,7 +20,9 @@ class ReadmeAlignmentTests(unittest.TestCase):
         self.assertIn("on_send_ready", readme)
         self.assertIn("on_event", readme)
         self.assertIn("receive_subscription_event", readme)
-        self.assertIn("monitor_open()", readme)
+        self.assertIn(
+            "monitor_open(events=..., monitor_hwm_bytes=...)", readme
+        )
         self.assertIn("MonitorEventMask", readme)
         self.assertIn("async context manager cleanup", readme)
         self.assertIn("Timer", readme)

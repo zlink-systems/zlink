@@ -27,6 +27,12 @@ public final class PollEvents {
                                   int revents, int fd) {
                 events.markEvent(index, sourceKindValue, slot, revents, fd);
             }
+
+            @Override
+            public void markSocketEvent(PollEvents events, int index,
+                                        long slot, int revents) {
+                events.markSocketEvent(index, slot, revents);
+            }
         });
     }
 
@@ -93,6 +99,16 @@ public final class PollEvents {
         slots[index] = slot;
         this.revents[index] = revents;
         fds[index] = fd;
+    }
+
+    void markSocketEvent(int index, long slot, int revents) {
+        if (index < 0 || index >= capacity)
+            throw new IndexOutOfBoundsException("event index " + index);
+        sourceKinds[index] = PollSourceKind.SOCKET;
+        slots[index] = slot;
+        this.revents[index] = revents;
+        // fd(index) is populated only for FD-kind sources.
+        fds[index] = 0;
     }
 
     private void checkReadyIndex(int index) {

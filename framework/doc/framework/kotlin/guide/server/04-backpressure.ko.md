@@ -17,9 +17,9 @@ title: "4. Backpressure — 처리보다 도착이 빠를 때 · Kotlin"
 
 # 4. Backpressure — 처리보다 도착이 빠를 때
 
-> **이 장의 계약 소유 문서** — [비동기 실행 정책](../../../common/spec/05-async-execution-policy.ko.md)과
-> [Framework API](../../../common/spec/06-framework-api.ko.md),
-> [runtime monitoring](../../../common/spec/24-runtime-monitoring.ko.md)과
+> **이 장의 계약 소유 문서** — [비동기 실행 정책](../../../common/spec/server/05-async-execution-policy.ko.md)과
+> [Framework API](../../../common/spec/server/06-framework-api.ko.md),
+> [runtime monitoring](../../../common/spec/server/24-runtime-monitoring.ko.md)과
 > [언어별 topology 공개 계약](../../../common/spec/server/languages/README.ko.md)이
 > 다룬다. 이 챕터는 그 동작을 개념과 원리로 설명하고 어떤 옵션이 영향을 주는지 다룬다.
 > 옵션의 정확한 이름·기본값과 변경 시점은 언어별 `16. Options` 장과 exact interface가 소유한다.
@@ -286,7 +286,7 @@ exact interface에서 확인한다.
 Framework와 binding은 profile 비율을 적용하거나 budget을 connection 수로 나누지 않는다. 실제
 effective budget, 방향별 queue HWM, accounted byte와 blocked ratio는 Core snapshot을 그대로 읽는다.
 `coreHwmBudgetBytes`는 process RSS hard cap이 아니므로 RSS·managed heap과 allocator overhead는 별도로
-관찰한다([runtime monitoring](../../../common/spec/24-runtime-monitoring.ko.md)).
+관찰한다([runtime monitoring](../../../common/spec/server/24-runtime-monitoring.ko.md)).
 
 운영에서 manual budget을 사용할 때는 production과 같은 payload 분포와 connection 수에서 Core
 snapshot의 current·peak accounted byte, blocked ratio, throughput, latency와 process memory를 함께
@@ -364,8 +364,8 @@ gauge를 유지하고 peak를 current로 재기준화하며 현재 epoch의 coun
 ## 6. Framework runtime 적용 범위
 
 이 공통 가이드는 언어별 구현 차이를 열거하지 않는다. 공통 동작은
-[Framework API §2.1](../../../common/spec/06-framework-api.ko.md#21-core-memory-budget과-application-job-queue를-분리한다),
-status와 reset 의미는 [runtime monitoring](../../../common/spec/24-runtime-monitoring.ko.md)이
+[Framework API §2.1](../../../common/spec/server/06-framework-api.ko.md#21-core-memory-budget과-application-job-queue를-분리한다),
+status와 reset 의미는 [runtime monitoring](../../../common/spec/server/24-runtime-monitoring.ko.md)이
 소유한다. 각 언어에서 실제로 사용하는 이름과 호출 형태는 해당 언어의 `16. Options`,
 `11. Monitoring`과 [exact interface](../../../common/spec/server/languages/README.ko.md)에서 확인한다.
 
@@ -401,12 +401,12 @@ status와 reset 의미는 [runtime monitoring](../../../common/spec/24-runtime-m
 
 - 옵션 기본값과 변경 시점: `16. Options` 장 §3
 - one-way submit과 완료 경계의 정식 계약:
-  [비동기 실행 정책](../../../common/spec/05-async-execution-policy.ko.md)
+  [비동기 실행 정책](../../../common/spec/server/05-async-execution-policy.ko.md)
 - Core HWM과 Application job queue 설정:
-  [Framework API §2.1](../../../common/spec/06-framework-api.ko.md#21-core-memory-budget과-application-job-queue를-분리한다)
+  [Framework API §2.1](../../../common/spec/server/06-framework-api.ko.md#21-core-memory-budget과-application-job-queue를-분리한다)
 - status·metric과 reset 의미:
-  [runtime monitoring](../../../common/spec/24-runtime-monitoring.ko.md) ·
-  [runtime metrics](../../../common/spec/25-runtime-metrics.ko.md)
+  [runtime monitoring](../../../common/spec/server/24-runtime-monitoring.ko.md) ·
+  [runtime metrics](../../../common/spec/server/25-runtime-metrics.ko.md)
 - 소켓 설정 표면: [언어별 topology 공개 계약](../../../common/spec/server/languages/README.ko.md)
 - socket option의 byte 단위 계약: [core guide의 socket option](https://zlink-systems.github.io/zlink/ko/guide/12-socket-options/)
 - 다음 축: [05-channel-messaging](05-channel-messaging.ko.md)

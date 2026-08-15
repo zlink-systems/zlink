@@ -50,6 +50,9 @@ public final class ContractAccess {
 
         void markEvent(PollEvents events, int index, int sourceKindValue,
                        long slot, int revents, int fd);
+
+        void markSocketEvent(PollEvents events, int index, long slot,
+                             int revents);
     }
 
     public interface RoutingIdAccess {
@@ -310,6 +313,8 @@ public final class ContractAccess {
 
         Message[] materializeVectorShared(Object parts, long count);
 
+        Message materializeSingleVectorShared(Object parts);
+
         Message adoptOwnedMessage(Object nativeMsg);
 
         void copyFromSegment(Object source, long sourceOffset, Object destination,
@@ -380,6 +385,11 @@ public final class ContractAccess {
                                            int revents, int fd) {
         pollEventsAccess().markEvent(events, index, sourceKindValue, slot,
             revents, fd);
+    }
+
+    public static void pollEventsMarkSocketEvent(PollEvents events, int index,
+                                                 long slot, int revents) {
+        pollEventsAccess().markSocketEvent(events, index, slot, revents);
     }
 
     public static RoutingId routingIdFromTrusted(byte[] value) {
@@ -655,8 +665,28 @@ public final class ContractAccess {
             replySender, onTerminalState);
     }
 
+    /** Runtime-only access cache for receive hot paths. */
+    public static ReceivedAccess receivedAccessForRuntime() {
+        return receivedAccess();
+    }
+
+    /** Runtime-only access cache for poll event materialization. */
+    public static PollEventsAccess pollEventsAccessForRuntime() {
+        return pollEventsAccess();
+    }
+
+    /** Runtime-only access cache for subscription receive hot paths. */
+    public static TopicMessageAccess topicMessageAccessForRuntime() {
+        return topicMessageAccess();
+    }
+
     public static Object messageDataSegment(Message message) {
         return messageAccess().dataSegment(message);
+    }
+
+    /** Runtime-only access cache for message hot paths. */
+    public static MessageAccess messageAccessForRuntime() {
+        return messageAccess();
     }
 
     public static Object messageDataSegment(Message message, int knownSize) {
@@ -826,8 +856,18 @@ public final class ContractAccess {
         return nativeMessageAccess().materializeVectorShared(parts, count);
     }
 
+    public static Message nativeMessageMaterializeSingleVectorShared(
+        Object parts) {
+        return nativeMessageAccess().materializeSingleVectorShared(parts);
+    }
+
     public static Message nativeMessageAdoptOwned(Object nativeMsg) {
         return nativeMessageAccess().adoptOwnedMessage(nativeMsg);
+    }
+
+    /** Runtime-only access cache for native message hot paths. */
+    public static NativeMessageAccess nativeMessageAccessForRuntime() {
+        return nativeMessageAccess();
     }
 
     public static void nativeMessageCopyFromSegment(Object source,

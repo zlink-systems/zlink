@@ -1,7 +1,7 @@
 # C++ Channel Messaging Exact Interface
 
-[C++ exact interface table of contents](README.en.md) · [MeshNode](../../../../13-mesh-node.en.md) ·
-[Framework API](../../../../06-framework-api.en.md)
+[C++ exact interface table of contents](README.en.md) · [MeshNode](../../../13-mesh-node.en.md) ·
+[Framework API](../../../06-framework-api.en.md)
 
 ## 1. RouteMesh Registration
 
@@ -330,7 +330,7 @@ empty payload, one job isn't `0` bytes, and even for a large payload,
 the fixed cost is still added. If the sum exceeds `std::uint64_t`'s
 representable range, it's pinned to the maximum value and that submit
 is rejected. The accounting rule is owned by
-[Framework API §8.2](../../../../06-framework-api.en.md#82-handler-execution-object-and-dependency-lifetime).
+[Framework API §8.2](../../../06-framework-api.en.md#82-handler-execution-object-and-dependency-lifetime).
 Both values are set only before startup. `0` isn't unlimited — it
 selects the finite default the Framework profile decides. A Logical
 Multicast local target also judges admission using this capacity
@@ -338,8 +338,8 @@ limit.
 
 After `channel(channel_name)`, `client()` or `server()` is called
 exactly once. Only the builder `server()` returns sets weight and
-handler. A [MeshNode](../../../../01-glossary.en.md#meshname) with no
-Server [membership](../../../../01-glossary.en.md#membership) can also
+handler. A [MeshNode](../../../01-glossary.en.md#meshname) with no
+Server [membership](../../../01-glossary.en.md#membership) can also
 start. `add_client_server_channel(channel_name)` puts one-way request
 start authority only on the client, and the server only performs
 receiving-send/request processing and reply. The ClientServer builder
@@ -347,9 +347,9 @@ can call one or both of `client()` and `server()`, but each role is
 registered at most once. The registration key is `(ChannelName, Role)`,
 and duplicate registration of the same role is a startup error. A
 different role shares the same ChannelName's topology as a separate
-registration. The [RouteMesh](../../../../01-glossary.en.md#routemesh)
+registration. The [RouteMesh](../../../01-glossary.en.md#routemesh)
 single-role-selection and
-[ChannelName](../../../../01-glossary.en.md#channelname) conflict rule
+[ChannelName](../../../01-glossary.en.md#channelname) conflict rule
 don't change.
 
 A peer connection isn't needed only when both MeshNodes are Object
@@ -370,9 +370,9 @@ runtime change. Weighted selection computes the sum of candidate
 weight using at least a 64-bit integer.
 
 Root BindHost's default is `127.0.0.1`. If AdvertiseHost is omitted, a
-non-wildcard [BindHost](../../../../01-glossary.en.md#bindhost) is
+non-wildcard [BindHost](../../../01-glossary.en.md#bindhost) is
 used, and for a wildcard BindHost,
-[AdvertiseHost](../../../../01-glossary.en.md#advertisehost) must be
+[AdvertiseHost](../../../01-glossary.en.md#advertisehost) must be
 specified. If the automatic discovery listener's port is omitted, or
 the listener call itself is omitted, port `0` is used.
 A per-listener host setting takes priority over the root default.
@@ -382,7 +382,7 @@ runtime builds an RID in the format
 `prefix-<lowercase-canonical-uuid-v4>`, and limits the whole RID to 255
 bytes or fewer. UUID v4 is expressed as a lowercase canonical string of
 `8-4-4-4-12` digits. If the active descriptor
-[owner](../../../../01-glossary.en.md#owner) CAS conflicts, it doesn't
+[owner](../../../01-glossary.en.md#owner) CAS conflicts, it doesn't
 retry with a new UUID — it immediately fails startup with
 `routing_id_conflict`. A fixed RID is allowed only in explicit manual
 topology with Object role `none`.
@@ -390,7 +390,7 @@ topology with Object role `none`.
 Object role `server` includes `client` capability. `client` and
 `server` require a Location Store, and `none` doesn't create a
 manager, factory, or hidden local object runtime. Placement
-[weight](../../../../01-glossary.en.md#weight) is `0..10000`, defaulting
+[weight](../../../01-glossary.en.md#weight) is `0..10000`, defaulting
 to 100, and 0 excludes it only from a new create/relocation target. A
 value outside the range is a configuration error in both startup
 config and runtime change. Node Actor limit and Node Spot limit
@@ -412,7 +412,7 @@ is fixed before the MeshNode lifecycle starts.
 
 `set_instance_spot_idle_timeout(...)` is the reference time for
 cleaning up an idle
-[Instance Spot](../../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot).
+[Instance Spot](../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot).
 The default is `std::chrono::milliseconds::zero()`, and `0` means no
 cleanup. The allowed range is `0` and positive values, and negative is
 a configuration error before socket bind. The value is fixed before
@@ -423,7 +423,7 @@ target — Entry Spot and User Spot aren't affected by this setting. The
 idle judgment condition, the delivery of
 `spot_close_reason_t::idle_evicted`, and the cold activation rule after
 cleanup are owned by
-[Spot Model §6.2](../../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
+[Spot Model §6.2](../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
 
 Descriptor capacity is only used for a candidate filter. The Framework
 only runs the factory after atomically obtaining the Location Store's
@@ -435,11 +435,11 @@ Actor totals all-or-none. If every candidate's reservation fails due to
 capacity, it completes with `capacity_exceeded` without calling an
 application factory or handler.
 An Actor/User Spot/Instance Spot
-[factory](../../../../01-glossary.en.md#factory) always specifies a
+[factory](../../../01-glossary.en.md#factory) always specifies a
 relocation policy, and there's no overload that omits it. A
 state-preserving Actor factory needs
 `actor_relocation_adapter_t<TActor>`, and a state-preserving
-User/[Instance Spot](../../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot)
+User/[Instance Spot](../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot)
 factory needs `spot_relocation_adapter_t<TSpot>`. If the factory kind
 and adapter kind or instance type don't match, it fails as a
 configuration error before socket bind.
@@ -465,7 +465,7 @@ The Entry Spot ID is issued by the Framework at startup. A public
 member for the caller to pass a Spot ID or configure a per-Entry-Spot
 option isn't provided. Only after Entry Spot factory registration and
 initialization complete does the Framework publish the RID to the
-[descriptor](../../../../01-glossary.en.md#descriptor) and resolver.
+[descriptor](../../../01-glossary.en.md#descriptor) and resolver.
 
 The RID format is `<prefix>-entry-<lowercase-canonical-uuid-v4>`, using
 a UUID v4 generated separately from the MeshNode. The Framework's
@@ -557,16 +557,16 @@ Automatic RouteMesh compares RID in canonical byte order, and only the
 MeshNode with the smaller RID connects to the counterpart endpoint. A
 manual topology can connect from one or both sides depending on
 application endpoint configuration. If bidirectional connection or
-[automatic discovery](../../../../01-glossary.en.md#automatic-discovery)
+[automatic discovery](../../../01-glossary.en.md#automatic-discovery)
 contention/a stale snapshot creates a duplicate candidate, handshake
 and admission check the same RID and lifecycle generation and keep
 only one in ready state.
 
 A ClientServer client can use manual endpoint and
-[location store](../../../../01-glossary.en.md#location-store)
+[location store](../../../01-glossary.en.md#location-store)
 automatic discovery together. If the two sources point to the same
 Server RID and
-[lifecycle generation](../../../../01-glossary.en.md#lifecycle-generation),
+[lifecycle generation](../../../01-glossary.en.md#lifecycle-generation),
 the connection intent and ready target are merged into one. In both
 automatic and manual, only the client connects to server — the server
 doesn't look for a client endpoint or start an outbound connect.
@@ -574,7 +574,7 @@ doesn't look for a client endpoint or start an outbound connect.
 If both Client and Server are registered on the same process, a local
 Server that finished listener and service admission is also included
 in the same candidate set as a remote Server. The same
-[Ready](../../../../01-glossary.en.md#ready), positive weight, and
+[Ready](../../../01-glossary.en.md#ready), positive weight, and
 non-draining conditions apply — there's no local priority or remote
 exclusion rule. Even when a local Server is selected, the actual
 transport message is delivered from the client DEALER to the server
@@ -601,7 +601,7 @@ connect to a subscriber endpoint. Only a subscriber connects to a
 publisher endpoint, and an automatic subscriber makes one connection
 intent per Publisher RID and lifecycle generation.
 `subscriber_connections()` is a runtime handle pointing to the same
-[manual endpoint](../../../../01-glossary.en.md#manual-endpoint) set as
+[manual endpoint](../../../01-glossary.en.md#manual-endpoint) set as
 the builder's `connect(endpoint)`. This handle provides endpoint
 connect, disconnect, and current listing, and doesn't change automatic
 discovery results.
@@ -618,7 +618,7 @@ of `std::variant` don't mix each other's payload as an optional field.
 Each variant's `identifier()` returns `static constexpr
 event_identifier`, so the caller can't change the identifier. `state`
 and event identifier directly use the lowercase identifier from
-[Runtime Monitoring](../../../../24-runtime-monitoring.en.md). This
+[Runtime Monitoring](../../../24-runtime-monitoring.en.md). This
 runtime is read-only and doesn't change `subscriber_connections()`'s
 manual endpoint set. Looking up a ChannelName registered only with a
 manual subscriber is a configuration error.
@@ -628,7 +628,7 @@ The unit `client_server_runtime_t::observe(...)` and
 declared by the [Monitoring interface](08-monitoring.en.md). Since
 ClientServer and fanout are topology sources with ChannelName as the
 source key in
-[Runtime Monitoring §3](../../../../24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes)'s
+[Runtime Monitoring §3](../../../24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes)'s
 source table, both streams also wrap the event variant in the same
 envelope and deliver a per-observer loss tally together. The only
 difference is that the value in the `status` field is an event variant,
@@ -1072,12 +1072,12 @@ public:
 `send_to_spot(...)`'s and `request_to_spot(...)`'s target is always one
 global `spot_id_t`. The fluent option expresses a Missing Instance
 Spot's cold activation intent, and doesn't add
-[MeshName](../../../../01-glossary.en.md#meshname), stable type, owner
+[MeshName](../../../01-glossary.en.md#meshname), stable type, owner
 RID, or generation to the address. A call with no instance marker set
 is existing-only, and ends with `not_found` for a Missing RID.
 
 `instance_spot()` omits the
-[stable type](../../../../01-glossary.en.md#stable-type), and
+[stable type](../../../01-glossary.en.md#stable-type), and
 `instance_spot(stable_type)` specifies the stable type. `in_mesh(...)`
 applies only to the first placement of a Missing RID together with the
 Instance marker. The marker and this option can each be set only once
@@ -1088,16 +1088,16 @@ only once, and a second call is `invalid_operation`.
 The public API stays based on channel name and typed payload
 regardless of transport kind. `publisher_t::publish(...)` provides
 both a convenience call that uses the typed event's
-[packet name](../../../../01-glossary.en.md#packet-name) as topic and
+[packet name](../../../01-glossary.en.md#packet-name) as topic and
 a call that specifies the
-[topic](../../../../01-glossary.en.md#topic) explicitly. Both calls
+[topic](../../../01-glossary.en.md#topic) explicitly. Both calls
 are used for classic fanout, and the Framework decides the codec. If
 the specified topic is the internal liveness exact byte `01 5A 4C 46 31`,
 it doesn't start transport and raises `framework_exception_t`.
 `fanout_publish_call_t::submit()` completes normally once the local
 publisher transport accepts the event. It doesn't return subscriber
 count or receive completion. `publish_call_t` is
-[Logical Multicast](../../../../01-glossary.en.md#logical-multicast)-only.
+[Logical Multicast](../../../01-glossary.en.md#logical-multicast)-only.
 It completes normally once the publisher local queue accepts the
 event, even with 0 subscribers.
 
@@ -1128,10 +1128,10 @@ already-used token is also treated as exceptional completion. A STREAM
 reply isn't given the client request timeout — it only uses that
 STREAM socket's send timeout.
 
-RouteMesh node/Channel/[Spot](../../../../01-glossary.en.md#spot)/Actor
+RouteMesh node/Channel/[Spot](../../../01-glossary.en.md#spot)/Actor
 uses the selected MeshNode ROUTER's send timeout, ClientServer uses the
 client DEALER's,
-[classic fanout](../../../../01-glossary.en.md#classic-fanout) uses the
+[classic fanout](../../../01-glossary.en.md#classic-fanout) uses the
 publisher socket's, and STREAM send/reply uses that STREAM socket's
 send timeout. A bound session uses one framework socket send timeout
 even if the local/remote Actor route changes. An ordinary one-way call

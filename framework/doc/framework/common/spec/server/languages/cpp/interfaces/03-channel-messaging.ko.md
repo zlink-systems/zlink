@@ -1,7 +1,7 @@
 # C++ channel messaging exact interface
 
-[C++ exact interface 목차](README.ko.md) · [MeshNode](../../../../13-mesh-node.ko.md) ·
-[Framework API](../../../../06-framework-api.ko.md)
+[C++ exact interface 목차](README.ko.md) · [MeshNode](../../../13-mesh-node.ko.md) ·
+[Framework API](../../../06-framework-api.ko.md)
 
 ## 1. RouteMesh 등록
 
@@ -326,18 +326,18 @@ byte 합계를 제한한다. Byte 회계는 payload 크기만 세지 않는다 �
 `payload 크기 + metadata 크기 + 작업당 고정 비용`을 더한다. Payload가 비어 있어도 작업 하나는 `0` byte가
 아니며, 큰 payload에서도 고정 비용은 그대로 더한다. 합이 `std::uint64_t` 표현 범위를 넘으면 최댓값으로
 고정하고 그 제출을 거절한다. 회계 규칙은
-[Framework API §8.2](../../../../06-framework-api.ko.md#82-handler-실행-객체와-dependency-수명)가 소유한다.
+[Framework API §8.2](../../../06-framework-api.ko.md#82-handler-실행-객체와-dependency-수명)가 소유한다.
 두 값은 startup 전에만 설정한다. `0`은 unlimited가 아니라 Framework profile이
 정한 유한 기본값을 선택한다. Logical Multicast의 local target도 이 용량 제한으로 admission을 판단한다.
 
 `channel(channel_name)` 뒤에는 `client()` 또는 `server()`를 정확히 한 번 호출한다.
-`server()`가 반환한 builder만 weight와 handler를 설정한다. Server [membership](../../../../01-glossary.ko.md#membership)이 없는
-[MeshNode](../../../../01-glossary.ko.md#meshnode)도 시작할 수 있다. `add_client_server_channel(channel_name)`은 단방향
+`server()`가 반환한 builder만 weight와 handler를 설정한다. Server [membership](../../../01-glossary.ko.md#membership)이 없는
+[MeshNode](../../../01-glossary.ko.md#meshnode)도 시작할 수 있다. `add_client_server_channel(channel_name)`은 단방향
 request 시작 권한을 client에만 두며 server는 수신한 send/request 처리와 reply만 수행한다. ClientServer
 builder에서는 `client()`와 `server()` 중 하나 또는 둘 다 호출할 수 있지만 각 역할은 최대 한 번만
 등록한다. Registration key는 `(ChannelName, Role)`이고 같은 역할의 중복 등록은 startup 오류다. 서로 다른
-역할은 별도 registration으로 같은 ChannelName의 topology를 공유한다. [RouteMesh](../../../../01-glossary.ko.md#routemesh)의 역할 단일 선택과
-[ChannelName](../../../../01-glossary.ko.md#channelname) 충돌 규칙은 바꾸지 않는다.
+역할은 별도 registration으로 같은 ChannelName의 topology를 공유한다. [RouteMesh](../../../01-glossary.ko.md#routemesh)의 역할 단일 선택과
+[ChannelName](../../../01-glossary.ko.md#channelname) 충돌 규칙은 바꾸지 않는다.
 
 두 MeshNode가 모두 Object Client이고 양쪽 모두 RouteMesh Channel Server membership이 없을 때만 peer
 connection이 필요하지 않다. Channel Client membership만 등록한 경우도 같다. 어느 한쪽에라도 weight
@@ -350,20 +350,20 @@ RouteMesh Channel Server, ClientServer Server와 node-wide placement weight는 �
 `0..10000`, 기본값은 `100`이다. 범위 밖 값은 startup 설정과 runtime 변경에서 configuration error다.
 Weighted selection은 후보 weight 합계를 최소 64-bit 정수로 계산한다.
 
-Root BindHost 기본값은 `127.0.0.1`이다. AdvertiseHost를 생략하면 wildcard가 아닌 [BindHost](../../../../01-glossary.ko.md#bindhost)를
-사용하고, wildcard BindHost에서는 [AdvertiseHost](../../../../01-glossary.ko.md#advertisehost)를 반드시 명시한다. Automatic discovery
+Root BindHost 기본값은 `127.0.0.1`이다. AdvertiseHost를 생략하면 wildcard가 아닌 [BindHost](../../../01-glossary.ko.md#bindhost)를
+사용하고, wildcard BindHost에서는 [AdvertiseHost](../../../01-glossary.ko.md#advertisehost)를 반드시 명시한다. Automatic discovery
 listener의 port를 생략하거나 listener 호출을 생략하면 port `0`을 사용한다.
 Listener별 host 설정은 root 기본값보다 우선한다.
 
 Automatic RID prefix는 `[A-Za-z0-9._-]` 1..64자다. Runtime은
 `prefix-<lowercase-canonical-uuid-v4>` 형식으로 RID를 만들고 전체 RID를 255 byte 이하로 제한한다.
 UUID v4는 `8-4-4-4-12` 자리의 lowercase canonical 문자열로 표현한다. Active descriptor
-[owner](../../../../01-glossary.ko.md#owner) CAS가 충돌하면 새 UUID로 다시 시도하지 않고 즉시
+[owner](../../../01-glossary.ko.md#owner) CAS가 충돌하면 새 UUID로 다시 시도하지 않고 즉시
 `routing_id_conflict`로 startup을 실패한다. Fixed RID는
 Object role `none`인 explicit manual topology에서만 허용한다.
 
 Object role `server`는 `client` 기능을 포함한다. `client`와 `server`는 Location Store가 필수이며 `none`은
-manager, factory와 hidden local object runtime을 만들지 않는다. Placement [weight](../../../../01-glossary.ko.md#weight)는 `0..10000`, 기본값은 100이고
+manager, factory와 hidden local object runtime을 만들지 않는다. Placement [weight](../../../01-glossary.ko.md#weight)는 `0..10000`, 기본값은 100이고
 0은 새 create·relocation target에서만 제외한다. 범위 밖 값은 startup 설정과 runtime 변경에서
 configuration error다. Node Actor limit과 Node Spot limit의 기본값은 `0`이며 제한 없음을 뜻한다.
 `set_actor_limit(...)`은 Entry Spot과 User Spot에 존재하는 모든 Actor를 계산하고,
@@ -377,13 +377,13 @@ Actor stable type별 limit은 제공하지 않는다.
 capacity와 activation concurrency를 같은 counter나 option으로 합치지 않는다. 모든 값은 MeshNode lifecycle
 시작 전에 고정한다.
 
-`set_instance_spot_idle_timeout(...)`은 유휴 [Instance Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) 정리 기준 시간이다. 기본값은
+`set_instance_spot_idle_timeout(...)`은 유휴 [Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) 정리 기준 시간이다. 기본값은
 `std::chrono::milliseconds::zero()`이고 `0`은 정리하지 않음을 뜻한다. 허용 범위는 `0`과 양수이며 음수는
 socket bind 전에 configuration error다. 값은 MeshNode lifecycle 시작 전에 고정하고 runtime setter를
 제공하지 않는다. Worker의 `idle_timeout(...)`과는 별개의 설정이며 서로 값을 상속하지 않는다.
 정리 대상은 Instance Spot뿐이고 Entry Spot과 User Spot은 이 설정의 영향을 받지 않는다. 유휴
 판정 조건, `spot_close_reason_t::idle_evicted` 전달과 정리 뒤 cold activation 규칙은
-[Spot 모델 §6.2](../../../../11-spot-model.ko.md#62-유휴-instance-spot-정리)가 소유한다.
+[Spot 모델 §6.2](../../../11-spot-model.ko.md#62-유휴-instance-spot-정리)가 소유한다.
 
 Descriptor capacity는 candidate filter에만 사용한다. Framework는 선택한 node에서 Location Store의 typed
 bundle reservation을 원자적으로 얻은 뒤에만 factory를 실행한다. Actor는 Actor slot 하나, Spot은 Spot 전체
@@ -391,8 +391,8 @@ slot 하나와 해당 stable type slot 하나를 예약한다. `SpotWide` User S
 Spot total 1개, 해당 Spot stable type 1개와 Actor total `N`개를 all-or-none으로 예약한다. 모든 후보의
 reservation이 capacity 때문에 실패하면 `capacity_exceeded`로 완료하고 application factory나
 handler를 호출하지 않는다.
-Actor·User Spot·Instance Spot [factory](../../../../01-glossary.ko.md#factory)는 relocation policy를 항상 명시하며 이를 생략하는
-overload는 없다. State 보존 Actor factory에는 `actor_relocation_adapter_t<TActor>`, state 보존 User·[Instance Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)
+Actor·User Spot·Instance Spot [factory](../../../01-glossary.ko.md#factory)는 relocation policy를 항상 명시하며 이를 생략하는
+overload는 없다. State 보존 Actor factory에는 `actor_relocation_adapter_t<TActor>`, state 보존 User·[Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)
 factory에는 `spot_relocation_adapter_t<TSpot>`가 필요하다. Factory 종류와 adapter 종류 또는 instance type이
 일치하지 않으면 socket bind 전에 configuration error로 실패한다.
 
@@ -410,7 +410,7 @@ Factory와 Entry Spot member는 Object role `server`에서만 유효하다. 단�
 노출하더라도 `none` 또는 `client` role에 factory를 등록한 조합은 socket bind 전에 configuration error로 실패한다.
 
 Entry Spot ID는 Framework가 startup에서 발급한다. Caller가 Spot ID를 전달하거나 Entry Spot별 option을 구성하는
-public member는 제공하지 않는다. Entry Spot factory 등록과 초기화가 완료된 뒤에만 Framework가 [descriptor](../../../../01-glossary.ko.md#descriptor)와
+public member는 제공하지 않는다. Entry Spot factory 등록과 초기화가 완료된 뒤에만 Framework가 [descriptor](../../../01-glossary.ko.md#descriptor)와
 resolver에 RID를 게시한다.
 
 RID 형식은 `<prefix>-entry-<lowercase-canonical-uuid-v4>`이며 MeshNode와 별도로 생성한 UUID v4를
@@ -492,16 +492,16 @@ ClientServer와 Fanout은 서로 다른 물리 topology이므로 같은 process�
 
 Automatic RouteMesh는 RID를 canonical byte order로 비교하고 더 작은 RID의 MeshNode만 상대 endpoint로
 connect한다. Manual topology는 application endpoint 구성에 따라 한쪽 또는 양쪽에서 connect할 수 있다.
-양쪽 연결이나 [automatic discovery](../../../../01-glossary.ko.md#automatic-discovery) 경합·오래된 snapshot으로 중복 후보가 생기면 handshake와 admission이
+양쪽 연결이나 [automatic discovery](../../../01-glossary.ko.md#automatic-discovery) 경합·오래된 snapshot으로 중복 후보가 생기면 handshake와 admission이
 같은 RID와 lifecycle generation을 확인해 하나만 ready 상태로 유지한다.
 
-ClientServer client는 manual endpoint와 [location store](../../../../01-glossary.ko.md#location-store) automatic discovery를 함께 사용할 수 있다. 두 source가
-같은 Server RID와 [lifecycle generation](../../../../01-glossary.ko.md#lifecycle-generation)을 가리키면 connection intent와 ready target을 하나로 합친다.
+ClientServer client는 manual endpoint와 [location store](../../../01-glossary.ko.md#location-store) automatic discovery를 함께 사용할 수 있다. 두 source가
+같은 Server RID와 [lifecycle generation](../../../01-glossary.ko.md#lifecycle-generation)을 가리키면 connection intent와 ready target을 하나로 합친다.
 Automatic과 manual 모두 client만 server로 connect하며 server는 client endpoint를 찾거나 outbound connect를
 시작하지 않는다.
 
 같은 process에 Client와 Server를 모두 등록하면 listener와 service admission을 마친 local Server도 remote
-Server와 같은 candidate 집합에 포함한다. [Ready](../../../../01-glossary.ko.md#ready), positive weight, non-draining 조건을 동일하게 적용하고
+Server와 같은 candidate 집합에 포함한다. [Ready](../../../01-glossary.ko.md#ready), positive weight, non-draining 조건을 동일하게 적용하고
 local 우선순위나 remote 제외 규칙을 두지 않는다. Local Server가 선택되어도 client DEALER에서 server
 ROUTER로 실제 transport message를 전달한다. Handler 직접 호출로 codec, HWM, timeout, cancellation,
 correlation 또는 terminal completion을 우회하지 않는다. `client_and_server`는 channel snapshot의 aggregate
@@ -517,7 +517,7 @@ manual publisher와 manual subscriber만 사용하는 host는 다른 location �
 Publisher는 descriptor만 게시하고 subscriber endpoint로 outbound connect를 시작하지 않는다. Subscriber만
 publisher endpoint로 connect하며 automatic subscriber는 Publisher RID와 lifecycle generation마다 connection
 intent 하나를 만든다.
-`subscriber_connections()`는 builder의 `connect(endpoint)`와 같은 [manual endpoint](../../../../01-glossary.ko.md#manual-endpoint) 집합을 가리키는
+`subscriber_connections()`는 builder의 `connect(endpoint)`와 같은 [manual endpoint](../../../01-glossary.ko.md#manual-endpoint) 집합을 가리키는
 runtime handle이다. 이 handle은 endpoint 연결, 해제와 현재 목록 조회를 제공하며 automatic discovery
 결과를 변경하지 않는다.
 
@@ -529,13 +529,13 @@ Descriptor revision과 endpoint는 Framework 내부에서 identity와 stale 상�
 0개여도 store degraded·recovered 상태를 전달한다. `std::variant`의 두 대안은 서로의 payload를 optional
 field로 섞지 않는다. 각 variant의 `identifier()`는 `static constexpr event_identifier`를 반환하므로 호출자가
 identifier를 바꿀 수 없다. `state`와 event identifier는
-[Runtime monitoring](../../../../24-runtime-monitoring.ko.md)의 lowercase identifier를 그대로 사용한다. 이 runtime은
+[Runtime monitoring](../../../24-runtime-monitoring.ko.md)의 lowercase identifier를 그대로 사용한다. 이 runtime은
 읽기 전용이며 `subscriber_connections()`의 manual endpoint 집합을 변경하지 않는다. Manual subscriber로만
 등록한 ChannelName을 조회하면 configuration error다.
 
 `client_server_runtime_t::observe(...)`와 `fanout_runtime_t::observe(...)`가 전달하는 단위는
 [Monitoring interface](08-monitoring.ko.md)가 선언한 `observed_status_t<TStatus>`다. ClientServer와 fanout은
-[Runtime monitoring §3](../../../../24-runtime-monitoring.ko.md#3-현재-상태-조회와-변화-관찰)의 source 표에서
+[Runtime monitoring §3](../../../24-runtime-monitoring.ko.md#3-현재-상태-조회와-변화-관찰)의 source 표에서
 ChannelName을 source 키로 갖는 topology source이므로, 두 stream도 같은 envelope로 event variant를 감싸
 observer별 유실 누계를 함께 전달한다. `status` field에 들어가는 값이 snapshot이 아니라 event variant라는
 점만 다르고 `loss`의 의미와 reset·saturation 규칙은 같다.
@@ -939,24 +939,24 @@ public:
 ```
 
 `send_to_spot(...)`과 `request_to_spot(...)`의 target은 항상 global `spot_id_t` 하나다. Fluent option은
-Missing Instance Spot의 cold activation intent를 표현하며 address에 [MeshName](../../../../01-glossary.ko.md#meshname), stable type, owner RID 또는
+Missing Instance Spot의 cold activation intent를 표현하며 address에 [MeshName](../../../01-glossary.ko.md#meshname), stable type, owner RID 또는
 generation을 추가하지 않는다. Instance marker를 설정하지 않은 call은 existing-only이고 Missing RID에서
 `not_found`로 끝난다.
 
-`instance_spot()`은 [stable type](../../../../01-glossary.ko.md#stable-type)을 생략하고 `instance_spot(stable_type)`은 stable type을 명시한다.
+`instance_spot()`은 [stable type](../../../01-glossary.ko.md#stable-type)을 생략하고 `instance_spot(stable_type)`은 stable type을 명시한다.
 `in_mesh(...)`는 Instance marker와 함께 Missing RID의 최초 placement에만 적용한다. Marker와 이 option은
 한 call에서 한 번만 설정할 수 있고 중복 설정은
 `invalid_operation`이다. `submit()` 또는 `yield<TReply>()` 가운데 terminal operation도
 한 번만 시작할 수 있으며 두 번째 호출은 `invalid_operation`이다.
 
 Public API는 transport 종류와 무관하게 channel name과 typed payload를 기준으로 유지한다.
-`publisher_t::publish(...)`는 typed event의 [packet name](../../../../01-glossary.ko.md#packet-name)을 topic으로 사용하는 편의 호출과 [topic](../../../../01-glossary.ko.md#topic)을
+`publisher_t::publish(...)`는 typed event의 [packet name](../../../01-glossary.ko.md#packet-name)을 topic으로 사용하는 편의 호출과 [topic](../../../01-glossary.ko.md#topic)을
 명시하는 호출을 함께 제공한다. 두 호출 모두 classic fanout에 사용하며 Framework가 codec을 결정한다.
 명시한 topic이 내부 liveness용 exact byte `01 5A 4C 46 31`이면 transport를 시작하지 않고
 `framework_exception_t`를 발생시킨다.
 `fanout_publish_call_t::submit()`은 local publisher transport가 event를 수락하면 정상 완료한다.
 Subscriber 수와 수신 완료는 반환하지 않는다. `publish_call_t`는
-[Logical Multicast](../../../../01-glossary.ko.md#logical-multicast) 전용이다. Subscriber가 0개여도
+[Logical Multicast](../../../01-glossary.ko.md#logical-multicast) 전용이다. Subscriber가 0개여도
 publisher local queue가 event를 수락하면 정상 완료한다.
 
 모든 server one-way call의 `submit()`과 session Actor `relay(...)`는 정상 완료 값을 만들지 않는다. 정상
@@ -976,7 +976,7 @@ claim하고 소비한다. 같은 token에서 만든 두 call이 경쟁하면 cla
 다시 사용할 수 없으며 이미 사용한 token도 exceptional completion으로 처리한다. STREAM reply는 client
 request timeout을 전달받지 않으며 해당 STREAM socket의 send timeout만 사용한다.
 
-RouteMesh node·Channel·[Spot](../../../../01-glossary.ko.md#spot)·Actor는 선택한 MeshNode ROUTER, ClientServer는 client DEALER, [classic fanout](../../../../01-glossary.ko.md#classic-fanout)은
+RouteMesh node·Channel·[Spot](../../../01-glossary.ko.md#spot)·Actor는 선택한 MeshNode ROUTER, ClientServer는 client DEALER, [classic fanout](../../../01-glossary.ko.md#classic-fanout)은
 publisher socket, STREAM send·reply는 해당 STREAM socket의 send timeout을 사용한다. Bound session은
 local·remote Actor route가 바뀌어도 framework socket send timeout 하나를 사용한다. 일반 one-way call에는
 per-call `timeout(...)`을 두지 않지만 `stream_send_call_t`는 admission 대기 시간을 호출별로 더 짧게 제한할

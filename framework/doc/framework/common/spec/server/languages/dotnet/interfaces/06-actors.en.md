@@ -226,7 +226,7 @@ The Actor packet handler is registered on the registry the Spot owns.
 The handler's exact context and generic parameter are defined by the
 [Spot Interface](05-spots.en.md). `SpotId == null` means the Entry Spot
 stage, and a value present means it's a member of that user
-[Spot](../../../../01-glossary.en.md#spot). A separate boolean
+[Spot](../../../01-glossary.en.md#spot). A separate boolean
 representing the same state isn't provided.
 
 The Actor Join call only provides a resultless synchronous `Defer()`, and
@@ -261,7 +261,7 @@ Relocation policy is owned by the Actor factory registration.
 `DisableRelocation` rejects, before capture, a move that requires
 cross-node materialization. `RecreateOnRelocation` creates the same
 logical identity again with the target
-[factory](../../../../01-glossary.en.md#factory), without restoring
+[factory](../../../01-glossary.en.md#factory), without restoring
 application state. `PreserveStateWith<TAdapter>()` stores the byte array
 `IZLinkActorRelocationAdapter<TActor>` returns as an opaque application
 payload and restores it to the target Actor instance. It doesn't take a
@@ -271,7 +271,7 @@ given a relocation reference, accepted journal, relocation phase,
 source/target owner, or Store CAS version.
 
 For maintenance that materializes an Actor instance on a different node,
-cross-node User Spot/[Entry Spot](../../../../01-glossary.en.md#entry-user-instance-spot)
+cross-node User Spot/[Entry Spot](../../../01-glossary.en.md#entry-user-instance-spot)
 join, and every Actor participant of a whole User Spot relocation, the
 same Actor factory policy is used. Only for `PreserveStateWith` are the
 Actor adapter's `CaptureAsync(...)` and `RestoreAsync(...)` called. A
@@ -280,7 +280,7 @@ same-node join doesn't call the adapter and isn't rejected with
 policy is rejected before capture, without an adapter.
 
 The target finishes restore and accepted-journal validation/staging
-before the [owner](../../../../01-glossary.en.md#owner) commit, without
+before the [owner](../../../01-glossary.en.md#owner) commit, without
 running an application handler. After the owner commit and lifecycle
 callback, the saved existing work is put on the actual Actor queue first,
 and the relocation temporary queue's work is moved after that. Once
@@ -333,7 +333,7 @@ in the following order.
 2. Only the target that secured the reservation first runs the factory
    and the Entry Spot's `OnCreateActorAsync(...)`.
 3. If the callback approves, it commits initial Entry
-   [membership](../../../../01-glossary.en.md#membership), `Ready`,
+   [membership](../../../01-glossary.en.md#membership), `Ready`,
    active capacity, and the `Created` terminal result together.
 4. If the callback rejects, it doesn't create Ready or active capacity,
    and publishes the `Rejected` terminal result while cleaning up the
@@ -363,7 +363,7 @@ the specified Mesh doesn't exist, `NotFound`. The caller doesn't specify
 a target RID, predicate, or callback.
 
 `Create` returns `AlreadyExists` if a
-[Ready](../../../../01-glossary.en.md#ready) incarnation of the same
+[Ready](../../../01-glossary.en.md#ready) incarnation of the same
 ActorId exists, and `TypeMismatch` if stable type differs. `GetOrCreate`
 returns a Ready Actor of the same type as `Existing`, and waits for the
 authority change if it's a Creating attempt. A CAS loser doesn't run a
@@ -390,9 +390,9 @@ generation differs, `InvalidOperation`; if in pre-commit seal,
 `Unavailable` — it doesn't find the current ref and hidden-retry.
 
 `ActorRef.ObjectGeneration` is `1..long.MaxValue`. `MeshName` and
-`NodeRid` are the route [snapshot](../../../../01-glossary.en.md#snapshot)
+`NodeRid` are the route [snapshot](../../../01-glossary.en.md#snapshot)
 at query time, and aren't included in logical identity. Even after
 relocation, ActorId and
-[ObjectGeneration](../../../../01-glossary.en.md#objectgeneration) are
+[ObjectGeneration](../../../01-glossary.en.md#objectgeneration) are
 kept, and a ref with the new location is issued. Regular messaging
 doesn't fix the ref route.

@@ -12,16 +12,16 @@ import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.perf.PerfControl;
+import systems.zlink.perf.PerfMessageTemplatePool;
 import systems.zlink.perf.PerfSocketPollSet;
-import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 final class PerfMultiRouterRouter {
     private static final MonitorEventType READY_EVENT =
@@ -33,6 +33,7 @@ final class PerfMultiRouterRouter {
     }
 
     static PerfUtil.Result runServer(PerfUtil.Config config) {
+        AtomicBoolean stopRequested = PerfControl.watchStopSignal("router-router server");
         try (Context ctx = PerfUtil.newContext(config);
              RouterSocket server = ctx.createRouterSocket();
              var monitor = server.monitorOpen(MonitorEventType.CONNECTION_READY)) {
@@ -45,8 +46,7 @@ final class PerfMultiRouterRouter {
             // The routed receive loop admits connections while it waits for
             // traffic. An aggregate CONNECTION_READY monitor count is not a
             // reliable Windows barrier for many sockets, so the loop itself
-            // provides readiness and the stop-token count still covers every
-            // client.
+            // provides readiness while runner control owns termination.
             PerfUtil.recalculateAutoHwm(ctx);
             PerfUtil.printMultiMonitorAutoHwm(config, monitor, "server",
                 "server", SocketType.ROUTER);
@@ -58,16 +58,20 @@ final class PerfMultiRouterRouter {
             systems.zlink.contracts.messaging.Received receivedBuffer = new systems.zlink.contracts.messaging.Received();
             try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
                 List.of(server), PollEventFlags.POLLIN)) {
-                int stops = 0;
-                while (stops < config.clients()) {
+                // C terminates this relay from runner stdin. Client stop
+                // tokens remain regular routed frames and must be echoed.
+                while (!stopRequested.get()) {
                     pollSet.setEvents(0, PollEventFlags.POLLIN);
-                    int readyCount = pollSet.poll(-1);
+                    int readyCount = pollSet.poll(50);
                     boolean readable = readyCount > 0
                         && pollSet.readyHasEventAt(0, PollEventFlags.POLLIN);
                     if (!readable) {
                         continue;
                     }
                     while (true) {
+                        if (stopRequested.get()) {
+                            break;
+                        }
                         boolean ok;
                         try {
                             ok = server.recv(receivedBuffer, RecvFlags.DONT_WAIT);
@@ -80,18 +84,13 @@ final class PerfMultiRouterRouter {
                         }
                         if (!ok) break;
 
-                        if (PerfStopToken.isStopTokenMessage(
-                                receivedBuffer.firstPart())) {
-                            stops++;
-                            receivedBuffer.close();
-                            continue;
-                        }
                         RoutingId rid = receivedBuffer.getRoutingId().orElseThrow();
                         Message ownedReply = Message.from(receivedBuffer.firstPart());
                         receivedBuffer.close();
-                        PerfUtil.awaitStage(server.send(rid)
-                            .message(ownedReply).submit());
-                        ownedReply.close();
+                        try (ownedReply) {
+                            PerfUtil.awaitStage(server.send(rid)
+                                .message(ownedReply).submit());
+                        }
                     }
                 }
             }
@@ -175,11 +174,7 @@ final class PerfMultiRouterRouter {
         // payload buffer across the entire active phase (or per-socket when
         // borrow_payload_per_socket=true). We use per-socket buffers so that
         // an inflight=1 send isn't disturbed by the next slot's stamp.
-        Message[] payloads = new Message[n];
         boolean[] waitingReply = new boolean[n];
-        for (int i = 0; i < n; i++) {
-            payloads[i] = PerfUtil.payloadTemplate(msgSize);
-        }
         List<systems.zlink.contracts.sockets.Socket> socketsAsBase = new ArrayList<>(n);
         for (RouterSocket c : clients) {
             socketsAsBase.add(c);
@@ -190,7 +185,9 @@ final class PerfMultiRouterRouter {
         // avoiding the per-recv Received + ArrayList allocation.
         systems.zlink.contracts.messaging.Received replyBuffer = new systems.zlink.contracts.messaging.Received();
         try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                socketsAsBase, PollEventFlags.POLLIN)) {
+                socketsAsBase, PollEventFlags.POLLIN);
+             PerfMessageTemplatePool payloadPool = new PerfMessageTemplatePool(
+                 msgSize, Math.max(4, n * 2))) {
             long activeEnd = System.nanoTime()
                 + (long) durationSeconds * 1_000_000_000L;
             while (System.nanoTime() < activeEnd) {
@@ -198,19 +195,24 @@ final class PerfMultiRouterRouter {
                 for (int i = 0; i < n; i++) {
                     int idx = (startIndex + i) % n;
                     if (waitingReply[idx]) continue;
-                    payloads[idx] = PerfUtil.resetAndWritePayload(payloads[idx], msgSize,
-                        (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
-                    sendPayload(clients.get(idx), payloads[idx]);
-                    waitingReply[idx] = true;
+                    Message payload = payloadPool.acquire(msgSize,
+                        (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime(),
+                        activeEnd);
+                    if (payload == null) {
+                        break;
+                    }
+                    try {
+                        sendPayload(clients.get(idx), payload);
+                        waitingReply[idx] = true;
+                    } finally {
+                        payload.close();
+                    }
                 }
                 rrIndex = (startIndex + 1) % n;
-                long remainingNs = activeEnd - System.nanoTime();
-                if (remainingNs <= 0L) {
-                    break;
-                }
-                int waitMs = (int) Math.min(Integer.MAX_VALUE,
-                    Math.max(1L, remainingNs / 1_000_000L));
-                int readyCount = pollSet.poll(waitMs);
+                // The requester owns the active deadline. Bound the wait by
+                // its remaining interval so a quiet relay cannot keep this
+                // phase past the configured duration.
+                int readyCount = pollSet.poll(remainingTimeoutMs(activeEnd));
                 for (int readyOffset = 0; readyOffset < readyCount;
                      readyOffset++) {
                     int idx = pollSet.readyIndexAt(readyOffset);
@@ -223,12 +225,8 @@ final class PerfMultiRouterRouter {
                 }
             }
             replyBuffer.close();
-            Message.closeAll(List.of(payloads));
-            for (int i = 0; i < n; i++) {
-                try (Message stop = PerfStopToken.newMessage()) {
-                    sendPayload(clients.get(i), stop);
-                }
-            }
+            // C routed echo ends the relay through the runner control path.
+            // Do not inject an extra routed stop frame after active traffic.
         }
         // ctx auto-HWM was already applied at setup; reference kept for the
         // compiler so the parameter isn't flagged unused.
@@ -261,6 +259,15 @@ final class PerfMultiRouterRouter {
             PerfUtil.recordActiveLatency(metrics, replyBuffer.firstPart(),
                 msgSize, true);
         }
+    }
+
+    private static int remainingTimeoutMs(long deadline) {
+        long remainingNs = deadline - System.nanoTime();
+        if (remainingNs <= 0) {
+            return 0;
+        }
+        return (int) Math.min(Integer.MAX_VALUE,
+            (remainingNs + 999_999L) / 1_000_000L);
     }
 
     private static void sendPayload(RouterSocket client, Message payload) {

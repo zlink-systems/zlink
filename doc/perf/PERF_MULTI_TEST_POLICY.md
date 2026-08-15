@@ -121,17 +121,26 @@ poller wait 이후 hot path는 poller가 ready로 보고한 source만 처리해�
 
 multi 패턴의 poller wait는 core readiness/completion 신호가 깨우는 방식을
 기준으로 한다. wire-level stop token으로 종료되는 순수 recv/readiness loop는
-**`-1` (signal-driven 무한 wait)** 을 사용한다. 반면 active duration이나
+**`-1` (signal-driven 무한 wait)** 을 사용한다. 다만 active drain 중 stop token을
+이미 소비한 receiver는 다음 빈 `-1` wait로 종료가 멈추지 않도록, 그 active
+deadline까지 남은 시간만 한 번 bounded wait할 수 있다. 반면 active duration이나
 request timeout 같은 application clock을 직접 닫아야 하는 sender/requester
 loop는 C 기준처럼 deadline 재확인을 위한 bounded wait를 둘 수 있다. 이 bounded
-wait는 신호 누락을 덮는 timer fallback이 아니라, poller wakeup 뒤 같은 loop에서
-active deadline을 다시 확인하기 위한 상한이다.
+wait는 신호 누락을 덮는 timer fallback이 아니라, 이미 받은 phase 종료 신호 뒤
+같은 loop에서 active deadline을 닫기 위한 상한이다.
+
+routed relay server의 `STOP`은 wire payload가 아닌 runner teardown 제어다. 이
+제어는 C canonical runner처럼 stdin watcher가 상태를 바꾸고 relay loop가
+`perf_aux_poll_wait_ms()`로 확인할 수 있다. 이 auxiliary wait는 relay의 active
+payload 집계, send rate, HWM, socket event mask를 바꾸지 않으며, 다른 패턴의
+active loop에 일반화하지 않는다.
 
 | 항목 | 규칙 |
 |------|------|
-| wire stop token으로 종료되는 recv/readiness loop | **`-1`** (signal-driven wait) |
+| wire stop token으로 종료되는 recv/readiness loop | 기본은 **`-1`** (signal-driven wait). active drain에서 stop token을 소비했으면 active deadline의 남은 시간만 단일 bounded wait |
 | active duration/request timeout을 직접 닫는 sender/requester loop | C 기준 bounded wait. MeshNode Spot 계열은 nonblocking ready/claim drain 뒤 deadline을 다시 확인 |
 | `MULTI_PUBSUB` receiver | `min(100ms, remaining)` bounded wait. PUB submit 성공은 subscriber 전달을 보장하지 않으므로 active deadline이 필수 종료 조건이다 |
+| routed relay runner teardown | stdin `STOP` watcher + C `perf_aux_poll_wait_ms()` auxiliary wait. runner 제어 전용이며 active metrics와 분리 |
 | 짧은 timer tick 기반 fallback (1–25 ms) | 금지. 과거 wakeup 누락 우회용으로 사용됐으나 core fix 이후 사용 금지. 단, C 기준 코드가 같은 위치에서 `perf_socket_poll(NULL, 0, N)`을 쓰는 idle wait는 `PERF_POLICY.md`의 empty-poll 예외를 따른다 |
 | 종료 / cooldown 용 별도 deadline 검사 | 별도 application clock 으로 처리하고 poller timeout 으로 대체하지 않음 |
 

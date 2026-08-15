@@ -12,9 +12,12 @@ internal sealed partial class SocketKernel : IDisposable
         bool retainCredit)
     {
         var topicBuffer = result.GetWritableTopicBuffer(TopicBufferSize);
-        result.PrepareForSubscribe();
+        if (retainCredit)
+            result.PrepareForSubscribe();
         var allowNoData = (flags & DontWaitFlag) != 0;
+        var candidate = result.PrepareReusableSinglePart();
         var received = ReceiveSubscribedParts(flags, retainCredit, topicBuffer,
+            candidate,
             out var routingId, out var topicLength,
             out var singlePart, out var parts,
             out var hwmBudgetLeases,

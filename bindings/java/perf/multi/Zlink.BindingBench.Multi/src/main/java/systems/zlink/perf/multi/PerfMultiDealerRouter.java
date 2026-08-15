@@ -10,16 +10,15 @@ import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfSocketPollSet;
-import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
 import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 final class PerfMultiDealerRouter {
     private static final MonitorEventType READY_EVENT =
@@ -29,6 +28,7 @@ final class PerfMultiDealerRouter {
     }
 
     static PerfUtil.Result runServer(PerfUtil.Config config) {
+        AtomicBoolean stopRequested = PerfControl.watchStopSignal("dealer-router server");
         try (Context ctx = PerfUtil.newContext(config);
              RouterSocket server = ctx.createRouterSocket();
              var monitor = server.monitorOpen(MonitorEventType.CONNECTION_READY)) {
@@ -42,36 +42,42 @@ final class PerfMultiDealerRouter {
             // aggregate count reaches the expected client count even though
             // the corresponding socket is usable. Waiting for that count
             // makes the case fail before it can measure traffic; the poller
-            // below admits each connection and the stop-token count still
-            // requires every client to complete its phase.
+            // below admits each connection while runner control owns
+            // termination.
             PerfUtil.recalculateAutoHwm(ctx);
             PerfUtil.printMultiMonitorAutoHwm(config, monitor, "server",
                 "server", SocketType.ROUTER);
-            int stops = 0;
             systems.zlink.contracts.messaging.Received receivedBuffer = new systems.zlink.contracts.messaging.Received();
             try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
                 List.of(server), PollEventFlags.POLLIN)) {
-                // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven wait (-1);
-                // server exits after observing one wire-level stop token per
-                // expected client.
-                while (stops < config.clients()) {
+                // The C relay remains active until the runner sends STOP.
+                // A client wire token is ordinary relay traffic, not a
+                // server termination condition.
+                while (!stopRequested.get()) {
                     pollSet.setEvents(0, PollEventFlags.POLLIN);
-                    pollSet.poll(-1);
+                    int readyCount = pollSet.poll(50);
+                    if (readyCount <= 0
+                        || !pollSet.readyHasEventAt(0,
+                            PollEventFlags.POLLIN)) {
+                        continue;
+                    }
+                    // Match the C relay: a DONT_WAIT drain starts only when
+                    // the poller reported this socket readable.  Calling recv
+                    // after every auxiliary STOP wake changes the hot path.
                     while (true) {
-                        if (!server.recv(receivedBuffer, systems.zlink.contracts.sockets.RecvFlags.DONT_WAIT)) {
+                        if (stopRequested.get()) {
                             break;
                         }
-                        if (PerfStopToken.isStopTokenMessage(receivedBuffer.firstPart())) {
-                            stops++;
-                            receivedBuffer.close();
-                            continue;
+                        if (!server.recv(receivedBuffer, systems.zlink.contracts.sockets.RecvFlags.DONT_WAIT)) {
+                            break;
                         }
                         RoutingId rid = receivedBuffer.getRoutingId().orElseThrow();
                         Message reply = Message.from(receivedBuffer.firstPart());
                         receivedBuffer.close();
-                        PerfUtil.awaitStage(server.send(rid)
-                            .message(reply).submit());
-                        reply.close();
+                        try (reply) {
+                            PerfUtil.awaitStage(server.send(rid)
+                                .message(reply).submit());
+                        }
                     }
                 }
             }
@@ -171,13 +177,10 @@ final class PerfMultiDealerRouter {
                     waitingReply[idx] = true;
                 }
                 rrIndex = (startIndex + 1) % n;
-                long remainingNs = activeEnd - System.nanoTime();
-                if (remainingNs <= 0L) {
-                    break;
-                }
-                int waitMs = (int) Math.min(Integer.MAX_VALUE,
-                    Math.max(1L, remainingNs / 1_000_000L));
-                int readyCount = pollSet.poll(waitMs);
+                // The requester owns the active deadline. Bound the wait by
+                // its remaining interval so a quiet relay cannot keep this
+                // phase past the configured duration.
+                int readyCount = pollSet.poll(remainingTimeoutMs(activeEnd));
                 for (int readyOffset = 0; readyOffset < readyCount; readyOffset++) {
                     int idx = pollSet.readyIndexAt(readyOffset);
                     boolean readable =
@@ -190,11 +193,9 @@ final class PerfMultiDealerRouter {
             }
             replyBuffer.close();
             Message.closeAll(List.of(payloads));
-            for (DealerSocket client : clients) {
-                try (Message stop = PerfStopToken.newMessage()) {
-                    sendPayload(client, stop);
-                }
-            }
+            // C routed echo ends the relay through the runner control path.
+            // Do not inject an extra routed stop frame into the measured
+            // topology after the active client phase.
         }
     }
 
@@ -219,6 +220,15 @@ final class PerfMultiDealerRouter {
                 msgSize, true);
             waitingReply[idx] = false;
         }
+    }
+
+    private static int remainingTimeoutMs(long deadline) {
+        long remainingNs = deadline - System.nanoTime();
+        if (remainingNs <= 0) {
+            return 0;
+        }
+        return (int) Math.min(Integer.MAX_VALUE,
+            (remainingNs + 999_999L) / 1_000_000L);
     }
 
 }

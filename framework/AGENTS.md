@@ -4,7 +4,8 @@
 
 ## Public contract parity
 
-- Public contract의 기준은 `framework/doc/framework/common/spec/`과 공통 guide다. 다른 언어 구현이나
+- Server public contract의 기준은 `framework/doc/framework/common/spec/server/`와 공통 guide다. HTTP
+  client와 stream connector 계약은 각각 같은 spec root의 package 디렉터리가 소유한다. 다른 언어 구현이나
   E2E만 근거로 public API를 추가하지 않는다.
 - 계약에 있는 공통 기능은 C++, .NET, Java, Kotlin과 Node.js에서 같은 사용자 동작을 제공해야 한다.
   즉시 구현할 수 없으면 정확한 이유와 사용자 차이를 implementation gap으로 남긴다.

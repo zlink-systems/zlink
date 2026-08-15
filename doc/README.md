@@ -91,7 +91,7 @@ language-specific rules.
 | [stream-socket.md](../core/doc/internals/stream-socket.en.md) | STREAM socket internals, WS/WSS optimization, runtime defaults |
 | [socket-option-defaults.md](../core/doc/internals/socket-option-defaults.en.md) | Effective socket option defaults from code |
 | [threading-model.md](../core/doc/internals/threading-model.en.md) | Threading and concurrency model |
-| [Framework internals](../framework/doc/framework/common/spec/README.en.md) | Framework runtime structure and ownership boundaries |
+| [Framework internals](../framework/doc/framework/common/spec/server/README.en.md) | Framework runtime structure and ownership boundaries |
 | [design-decisions.md](../core/doc/internals/design-decisions.en.md) | Design decision records |
 
 ## Build and Development (building/)

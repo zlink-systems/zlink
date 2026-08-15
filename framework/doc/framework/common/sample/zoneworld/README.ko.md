@@ -143,15 +143,15 @@ Framework가 자동 발급하며 고정 RID를 설정하지 않는다.
 
 | 필요한 동작 | 선택한 요소 | 선택 이유와 계약 근거 |
 |---|---|---|
-| ZoneId로 현재 zone owner를 찾는다. | global Spot message | global SpotId authority를 Framework가 resolve한다. [상호작용 모델 §2](../../spec/03-interaction-model.ko.md#2-공통-모델) |
-| PlayerId로 actor를 찾는다. | global Actor message | Actor location과 current owner를 application route로 노출하지 않는다. [Actor model](../../spec/14-actor-model.ko.md) |
-| zone join을 cross-node 이동으로 사용한다. | Actor Join + relocation | target owner가 다르면 Framework relocation unit이 actor를 이동시킨다. [Graceful drain §8](../../spec/30-host-relocation-flow.ko.md#8-unit-하나를-이전하는-순서) |
-| 이동 중 이전 owner message를 전달한다. | Message Follow | committed target route를 사용하며 실패한 operation을 다른 owner에 재제출하지 않는다. [Object routing §2.4](../../spec/18-object-routing.ko.md#24-이전-owner-route에-도착한-message) |
-| 인접 zone에 snapshot을 전달한다. | Logical Multicast | topic과 target subscription으로 경계를 표현한다. [상호작용 모델 §5](../../spec/03-interaction-model.ko.md#5-spot-logical-multicast) |
-| 전 node 공지·점검을 보낸다. | classic fanout | publisher가 node 목록을 관리하지 않는다. [상호작용 모델 §6](../../spec/03-interaction-model.ko.md#6-classic-fanout) |
-| node 상태를 관찰한다. | runtime monitoring event | 상태 변화와 local report를 Ops에서 수집한다. [Runtime monitoring](../../spec/24-runtime-monitoring.ko.md) |
-| actor 연결을 유지한다. | bound STREAM session | relocation 중 같은 connection을 유지하고 binding 위치만 갱신한다. [Failure policy §6](../../spec/31-failure-failover-policy.ko.md#6-session과-binding) |
-| RID 충돌을 피한다. | SetRoutingIdPrefix zn | application NodeId나 ZoneId와 transport identity를 분리한다. [MeshNode spec](../../spec/13-mesh-node.ko.md) |
+| ZoneId로 현재 zone owner를 찾는다. | global Spot message | global SpotId authority를 Framework가 resolve한다. [상호작용 모델 §2](../../spec/server/03-interaction-model.ko.md#2-공통-모델) |
+| PlayerId로 actor를 찾는다. | global Actor message | Actor location과 current owner를 application route로 노출하지 않는다. [Actor model](../../spec/server/14-actor-model.ko.md) |
+| zone join을 cross-node 이동으로 사용한다. | Actor Join + relocation | target owner가 다르면 Framework relocation unit이 actor를 이동시킨다. [Graceful drain §8](../../spec/server/30-host-relocation-flow.ko.md#8-unit-하나를-이전하는-순서) |
+| 이동 중 이전 owner message를 전달한다. | Message Follow | committed target route를 사용하며 실패한 operation을 다른 owner에 재제출하지 않는다. [Object routing §2.4](../../spec/server/18-object-routing.ko.md#24-이전-owner-route에-도착한-message) |
+| 인접 zone에 snapshot을 전달한다. | Logical Multicast | topic과 target subscription으로 경계를 표현한다. [상호작용 모델 §5](../../spec/server/03-interaction-model.ko.md#5-spot-logical-multicast) |
+| 전 node 공지·점검을 보낸다. | classic fanout | publisher가 node 목록을 관리하지 않는다. [상호작용 모델 §6](../../spec/server/03-interaction-model.ko.md#6-classic-fanout) |
+| node 상태를 관찰한다. | runtime monitoring event | 상태 변화와 local report를 Ops에서 수집한다. [Runtime monitoring](../../spec/server/24-runtime-monitoring.ko.md) |
+| actor 연결을 유지한다. | bound STREAM session | relocation 중 같은 connection을 유지하고 binding 위치만 갱신한다. [Failure policy §6](../../spec/server/31-failure-failover-policy.ko.md#6-session과-binding) |
+| RID 충돌을 피한다. | SetRoutingIdPrefix zn | application NodeId나 ZoneId와 transport identity를 분리한다. [MeshNode spec](../../spec/server/13-mesh-node.ko.md) |
 
 Player Actor factory는 `PreserveStateWith` relocation adapter를 등록한다. Capture/Restore payload는
 좌표, ZoneId, bot 방향과 마지막 적용 movement ID처럼 Application이 소유하는 state만 보존한다.

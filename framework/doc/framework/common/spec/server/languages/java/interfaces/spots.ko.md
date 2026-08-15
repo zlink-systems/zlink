@@ -8,7 +8,7 @@ owner와 membership을 commit한 뒤 message 처리를 시작한다. Target runt
 아니므로 Actor disconnect callback을 실행하지 않는다. relocation 대상에 포함되지 않은 다른 Actor의 route와 physical connection은
 변경하지 않는다.
 
-[인터페이스 목차](README.ko.md) · [Spot 공통 계약](../../../../12-spot-messaging.ko.md)
+[인터페이스 목차](README.ko.md) · [Spot 공통 계약](../../../12-spot-messaging.ko.md)
 
 이 문서는 Java에서 Spot identity, lifecycle, messaging, manager와 relocation adapter를 표현하는 공개
 인터페이스를 고정한다. 일반 message는 global SpotId로 대상을 지정하고, 특정 incarnation을 닫는
@@ -18,7 +18,7 @@ Entry·User·Instance SpotId는 UTF-8 encoded 크기 1..255 bytes의 `String`인
 case-sensitive exact value로 비교한다.
 Unicode normalization과 case folding을 적용하지 않는다.
 
-Location Store가 [Spot](../../../../01-glossary.ko.md#spot)의 current owner와 lifecycle state를 확정해 보관하는 정보를 authority라 한다.
+Location Store가 [Spot](../../../01-glossary.ko.md#spot)의 current owner와 lifecycle state를 확정해 보관하는 정보를 authority라 한다.
 Authority가 Missing이고 caller가 Instance intent를 지정했을 때 새 Instance Spot을 준비하는 과정을
 cold activation이라 한다.
 
@@ -187,14 +187,14 @@ handler를 정리하고 target activation에서 다시 만든다. Handler instan
 payload가 아니며 복구할 application state는 Spot 또는 Actor가 소유한다.
 
 Factory registration의 정확한 builder member는 [구성과 host](configuration-host.ko.md)가 소유한다.
-Actor·User Spot·[Instance Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) [factory](../../../../01-glossary.ko.md#factory)는 configure callback에서 relocation 동작을 정확히 하나 선택하며 callback을 생략하는 overload는 제공하지 않는다.
+Actor·User Spot·[Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) [factory](../../../01-glossary.ko.md#factory)는 configure callback에서 relocation 동작을 정확히 하나 선택하며 callback을 생략하는 overload는 제공하지 않는다.
 Spot manager는 User Spot 전용이다. `create(spotType)`과 `getOrCreate(spotId, spotType)`만 User Spot의
 creation intent를 만들며 Instance Spot create/get-or-create member와 kind marker를 제공하지 않는다.
 
 일반 Spot send/request의 address는 global SpotId 하나다. 두 operation은 각각 `ZLinkSpotSendCall`과
 `ZLinkSpotRequestCall`을 반환한다. `instanceSpot()` 또는 `instanceSpot(stableType)`을 호출한 operation만
 Missing Instance Spot의 cold activation을 시작할 수 있다. Marker가 없는 operation은
-Missing [authority](../../../../01-glossary.ko.md#authority)를
+Missing [authority](../../../01-glossary.ko.md#authority)를
 `NOT_FOUND`로 끝내며 creation intent를 만들지 않는다.
 
 `instanceSpot()`은 existing authority가 있으면 등록된 Instance type 수와 관계없이 authority에 저장된 stable
@@ -205,7 +205,7 @@ type을 사용한다. Missing authority라면 placement가 선택한 Mesh에서 
 다르거나 authority의 kind가 User이면 type-mismatch 오류다.
 
 `inMesh`는 Missing Instance cold activation의 Mesh를 선택한다. Existing authority를 다른
-[owner](../../../../01-glossary.ko.md#owner)로 재배치하지 않으며 일반 User Spot messaging에도 적용하지 않는다. 이 option과
+[owner](../../../01-glossary.ko.md#owner)로 재배치하지 않으며 일반 User Spot messaging에도 적용하지 않는다. 이 option과
 Instance marker는 한 번만 설정할 수 있고 terminal `submit`도 한 번만 호출할 수 있다.
 
 User·Instance Spot factory의 `preserveStateWith` 등록은 factory type에 맞는
@@ -226,7 +226,7 @@ exception은 target admission을 sealed 상태로 유지한 채 같은 immutable
 Factory는 target attempt마다 fresh Spot instance를 만들며 source나 이전 attempt instance를 재사용하지 않는다.
 같은 attempt에서는 Restore가 반복될 수 있다. Exception을 빈 payload나 성공으로 바꾸지 않는다. Capture의 null
 stage와 null `byte[]`, Restore의 null stage는 contract 위반이다. Host relocation에서 deadline이 먼저 확정되지 않은
-precommit adapter exception과 contract 위반은 `Blocked/StateIncompatible`, [deadline](../../../../01-glossary.ko.md#deadline)이 먼저 확정되면
+precommit adapter exception과 contract 위반은 `Blocked/StateIncompatible`, [deadline](../../../01-glossary.ko.md#deadline)이 먼저 확정되면
 `Blocked/DeadlineExceeded`다. Stale attempt cancellation은 terminal result를 commit하지 못한다. Capture와
 restore는 at-least-once이고 stale target attempt와 겹칠 수 있으므로 retry-safe해야 한다.
 
@@ -267,14 +267,14 @@ User Spot은 manager operation이 placement reservation을 시작한다. Instanc
 
 1. Source가 authority를 조회한다. Ready이면 current owner에게
    일반 message를 보낸다.
-2. Authority가 Missing이고 [Instance intent](../../../../01-glossary.ko.md#instance-intent)가 있으면 source가 eligible target을 선택한다. 이어서 SpotId,
+2. Authority가 Missing이고 [Instance intent](../../../01-glossary.ko.md#instance-intent)가 있으면 source가 eligible target을 선택한다. 이어서 SpotId,
    stable type, creation intent와 first message를 activation envelope에 담아 target으로 보낸다. 이 envelope는
-   [Ready](../../../../01-glossary.ko.md#ready) 전에도 전달할 수 있는 Framework infrastructure message이며 application handler에는 전달하지 않는다.
+   [Ready](../../../01-glossary.ko.md#ready) 전에도 전달할 수 있는 Framework infrastructure message이며 application handler에는 전달하지 않는다.
 3. Target runtime은 metadata presence와 frame을 포함한 complete envelope를 Relocation Store에 immutable
-   recovery root로 먼저 저장한 뒤, 요청한 SpotId와 [stable type](../../../../01-glossary.ko.md#stable-type)에 일치하는 local instance가 있는지
+   recovery root로 먼저 저장한 뒤, 요청한 SpotId와 [stable type](../../../01-glossary.ko.md#stable-type)에 일치하는 local instance가 있는지
    확인한다.
 4. Instance가 없을 때만 target이 자신을 owner로 하는 `CREATING` authority와 reserved capacity를 예약한다.
-   Reserved [snapshot](../../../../01-glossary.ko.md#snapshot)은 어떤 예약인지 식별하는 reservation fence와 recovery root의 저장 완료를 증명하는
+   Reserved [snapshot](../../../01-glossary.ko.md#snapshot)은 어떤 예약인지 식별하는 reservation fence와 recovery root의 저장 완료를 증명하는
    receipt를 provider에서 받아 반환한다.
 5. Authority reservation 경쟁에서 이긴 target(CAS winner)만 factory와 initialize를 실행하고 durable
    activation inbox의 first record를 확정한다. 경쟁에서 진 target(CAS loser)은 factory를 시작하지 않으며
@@ -316,7 +316,7 @@ sequenceDiagram
     end
 ```
 
-이 그림은 [cold activation](../../../../01-glossary.ko.md#cold-activation)을 시작하는 첫 message와
+이 그림은 [cold activation](../../../01-glossary.ko.md#cold-activation)을 시작하는 첫 message와
 authority 경쟁만 보여 준다. Handler의 terminal completion 또는 reply, activation 실패 cleanup과 recovery
 pointer 제거는 번호 목록의 후반 단계에 정의한다.
 
@@ -347,15 +347,15 @@ CompletionStage<CartReply> reply = spotClient
 `ZLinkSpotCloseReason`의 값은 `EXPLICIT_CLOSE=0`, `HOST_SHUTDOWN=1`, `RELOCATION_OUT=2`,
 `IDLE_EVICTED=3`이다. `IDLE_EVICTED`는 Instance Spot 전용 이유이며 Entry Spot과 User Spot에는 전달하지
 않는다. 유휴 판정 조건과 정리 뒤 재활성화 규칙은
-[Spot 모델 §6.2](../../../../11-spot-model.ko.md#62-유휴-instance-spot-정리)가 소유한다. Context의
+[Spot 모델 §6.2](../../../11-spot-model.ko.md#62-유휴-instance-spot-정리)가 소유한다. Context의
 `deadline`은 absolute `Instant`다. Java Spot closing callback에는 별도 Framework cancellation 인자를 추가하지
 않는다. Framework는 deadline에 stage completion 대기를 끝내고 bounded teardown을 진행한다.
-Entry·User·Instance Spot만 callback을 받고 Actor별 closing callback은 제공하지 않는다. Host [Shutdown](../../../../01-glossary.ko.md#shutdown)은 Actor
+Entry·User·Instance Spot만 callback을 받고 Actor별 closing callback은 제공하지 않는다. Host [Shutdown](../../../01-glossary.ko.md#shutdown)은 Actor
 membership과 local instance가 유효한 상태에서 callback을 실행하고 completion 뒤 scope와 authority를 정리한다.
 Standalone Actor relocation은 Entry Spot을 닫지 않으므로 이 callback을 호출하지 않는다.
 
 일반 message는 Ready owner를 resolve한다. Missing RID에서는 위 Instance marker가 있는 call만 target-owned
-[activation envelope](../../../../01-glossary.ko.md#activation-envelope)를 만든다. 저장한 envelope와
+[activation envelope](../../../01-glossary.ko.md#activation-envelope)를 만든다. 저장한 envelope와
 stable type·initial Mesh는 최초 cold activation이 terminal completion을 기록하기 전에 같은 target
 node·lifecycle에서 재개할 때만 사용한다. Steady `Ready` owner process 종료나 lease 만료는 `Missing`으로
 바꾸거나 다른 node의 cold activation으로 복구하지 않고 `UNAVAILABLE`로 끝낸다.

@@ -26,6 +26,10 @@ import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.internal.DurationConversions;
 
 public final class NativePoller implements Poller {
+    // HOT PATH: wait() maps every ready native event into caller-owned
+    // PollEvents. Keep the internal bridge monomorphic after class loading.
+    private static final ContractAccess.PollEventsAccess POLL_EVENTS_ACCESS =
+        ContractAccess.pollEventsAccessForRuntime();
     private final List<PollItem> items = new ArrayList<>();
     private final Map<Long, Integer> socketIndexes = new HashMap<>();
     private MemorySegment handle;
@@ -33,6 +37,7 @@ public final class NativePoller implements Poller {
     private MemorySegment waitEvents = MemorySegment.NULL;
     private MemorySegment waitErrorOut = MemorySegment.NULL;
     private int waitEventsCapacity;
+    private boolean containsOnlySockets = true;
     private volatile boolean closeRequested;
     private boolean waitActive;
 
@@ -58,6 +63,7 @@ public final class NativePoller implements Poller {
         if (rc != 0)
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
         items.add(item);
+        containsOnlySockets = false;
     }
 
     public synchronized void add(ZlinkTimer timer, long slot) {
@@ -69,6 +75,7 @@ public final class NativePoller implements Poller {
         if (rc != 0)
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
         items.add(item);
+        containsOnlySockets = false;
     }
 
     public synchronized void modify(Socket socket, PollEventFlags... events) {
@@ -151,6 +158,7 @@ public final class NativePoller implements Poller {
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
         items.clear();
         socketIndexes.clear();
+        containsOnlySockets = true;
     }
 
     public synchronized int size() {
@@ -181,14 +189,25 @@ public final class NativePoller implements Poller {
                 DurationConversions.toIntMillis(timeout, "timeout"), waitErrorOut);
             if (readyCount < 0)
                 throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
-            for (int i = 0; i < readyCount; i++) {
-                ContractAccess.pollEventsMarkEvent(events, i,
-                    NativePollEvents.sourceKindValue(nativeEvents, i),
-                    NativePollEvents.slot(nativeEvents, i),
-                    NativePollEvents.revents(nativeEvents, i),
-                    NativePollEvents.fd(nativeEvents, i));
+            if (containsOnlySockets) {
+                // HOT PATH: a socket-only poller cannot produce FD or timer
+                // results. Keep the public result identical while avoiding
+                // native fields used only by those other source kinds.
+                for (int i = 0; i < readyCount; i++) {
+                    POLL_EVENTS_ACCESS.markSocketEvent(events, i,
+                        NativePollEvents.slot(nativeEvents, i),
+                        NativePollEvents.revents(nativeEvents, i));
+                }
+            } else {
+                for (int i = 0; i < readyCount; i++) {
+                    POLL_EVENTS_ACCESS.markEvent(events, i,
+                        NativePollEvents.sourceKindValue(nativeEvents, i),
+                        NativePollEvents.slot(nativeEvents, i),
+                        NativePollEvents.revents(nativeEvents, i),
+                        NativePollEvents.fd(nativeEvents, i));
+                }
             }
-            ContractAccess.pollEventsMarkReadyCount(events, readyCount);
+            POLL_EVENTS_ACCESS.markReadyCount(events, readyCount);
             return readyCount;
         } finally {
             synchronized (this) {

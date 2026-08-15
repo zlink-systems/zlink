@@ -8,21 +8,21 @@ owner와 membership을 commit한 뒤 message 처리를 시작한다. Target runt
 아니므로 Actor disconnect callback을 실행하지 않는다. relocation 대상에 포함되지 않은 다른 Actor의 route와 physical connection은
 변경하지 않는다.
 
-[인터페이스 목차](README.ko.md) · [Spot address와 messaging](../../../../16-spot-address-messaging.ko.md) ·
-[Spot·Actor membership](../../../../15-spot-actor.ko.md)
+[인터페이스 목차](README.ko.md) · [Spot address와 messaging](../../../16-spot-address-messaging.ko.md) ·
+[Spot·Actor membership](../../../15-spot-actor.ko.md)
 
 이 문서는 ZLink Framework에서 `@zlink-systems/framework`와
 `@zlink-systems/nestjs`가 내보내는 Spot 관련 정확한 TypeScript declaration을 고정한다.
 
-Location Store가 [Spot](../../../../01-glossary.ko.md#spot)의 current owner와 lifecycle state를 확정해 보관하는 정보를 authority라 한다.
+Location Store가 [Spot](../../../01-glossary.ko.md#spot)의 current owner와 lifecycle state를 확정해 보관하는 정보를 authority라 한다.
 Authority가 Missing이고 caller가 Instance intent를 지정했을 때 새 Instance Spot을 준비하는 과정을
 cold activation이라 한다.
 
 ## 1. Global identity와 lifecycle
 
-`SpotId`는 UTF-8 encoded 크기 1..255 bytes의 `string`이며 [Location Store](../../../../01-glossary.ko.md#location-store) transaction domain 전체에서
+`SpotId`는 UTF-8 encoded 크기 1..255 bytes의 `string`이며 [Location Store](../../../01-glossary.ko.md#location-store) transaction domain 전체에서
 유일한 logical ID다. 비교는 case-sensitive exact match이고 Unicode normalization과 case folding을 적용하지 않는다. 일반 message는 SpotId만 받고
-current [authority](../../../../01-glossary.ko.md#authority)를 resolve한다. `SpotRef`는 exact incarnation을 닫을 때 사용하는 immutable location
+current [authority](../../../01-glossary.ko.md#authority)를 resolve한다. `SpotRef`는 exact incarnation을 닫을 때 사용하는 immutable location
 snapshot이다.
 
 ```ts
@@ -142,9 +142,9 @@ Spot lifecycle에서 사용하는 위치만 고정한다.
 `ZLinkSpotCloseReason`의 numeric 값은 `ExplicitClose=0`, `HostShutdown=1`, `RelocationOut=2`,
 `IdleEvicted=3`이다. `IdleEvicted`는 Instance Spot 전용 이유이며 Entry Spot과 User Spot에는 전달하지
 않는다. 유휴 판정 조건과 정리 뒤 재활성화 규칙은
-[Spot 모델 §6.2](../../../../11-spot-model.ko.md#62-유휴-instance-spot-정리)가 소유한다.
+[Spot 모델 §6.2](../../../11-spot-model.ko.md#62-유휴-instance-spot-정리)가 소유한다.
 `deadline`은 closing operation의 absolute UTC instant다. Framework는 callback invocation 전에는
-`cleanupSignal`을 abort하지 않고 deadline이 끝날 때 abort한다. Entry·User·[Instance Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)만 callback을 받고
+`cleanupSignal`을 abort하지 않고 deadline이 끝날 때 abort한다. Entry·User·[Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)만 callback을 받고
 Actor별 closing callback은 제공하지 않는다. Host Shutdown은 Actor membership과 local instance가 유효한
 상태에서 callback을 실행하고 fulfillment 뒤 scope와 authority를 정리한다. Standalone Actor relocation은 Entry
 Spot을 닫지 않으므로 이 callback을 호출하지 않는다.
@@ -270,27 +270,27 @@ export interface ZLinkSpotGetOrCreateCall {
 
 Entry·User·Instance SpotId는 UTF-8 encoded 크기 1..255 bytes의 global string key다. Stable type은 UTF-8 1..255 bytes이며 case-sensitive exact value로
 비교하고 normalization하지 않는다. Object generation은 positive signed-63-bit 값이다. MeshName과 NodeRid는
-조회 시점의 route [snapshot](../../../../01-glossary.ko.md#snapshot)이며 identity key에 포함하지 않는다.
+조회 시점의 route [snapshot](../../../01-glossary.ko.md#snapshot)이며 identity key에 포함하지 않는다.
 
 Create와 GetOrCreate call은 single-use다. 같은 option을 두 번 설정하거나 terminal
 `submit(...)`을 두 번 호출하면 `InvalidOperation`이다. User Spot `create`는 Framework가 새 global Spot ID를 발급한다.
-`getOrCreate`는 같은 User kind·[stable type](../../../../01-glossary.ko.md#stable-type)의
+`getOrCreate`는 같은 User kind·[stable type](../../../01-glossary.ko.md#stable-type)의
 ready Spot을 `existing`으로 반환한다. Creating이면 authority 변경을 기다리고, Ready가
 되면 `existing`, cleanup으로 Missing이 되면 새 reservation을 경쟁한다. Kind나 type이 다르면
-`TypeMismatch`, [deadline](../../../../01-glossary.ko.md#deadline) 안에 terminal state가 되지 않으면 `DeadlineExceeded`다.
+`TypeMismatch`, [deadline](../../../01-glossary.ko.md#deadline) 안에 terminal state가 되지 않으면 `DeadlineExceeded`다.
 
 `close(spotRef)`는 exact incarnation만 닫는다. Generation이 다르면 `InvalidOperation`, 이동 중이면
 `Unavailable`이다. Framework는 current ref를 다시 찾아 다른 incarnation을 닫지 않는다.
 
 Instance Spot에는 manager create·get-or-create를 제공하지 않는다. `sendToSpot`과 `requestToSpot`은 SpotId만
-받고 Spot 전용 call을 반환한다. [Instance intent](../../../../01-glossary.ko.md#instance-intent)를 설정하지 않은 call은 existing-only이며 Missing에서
+받고 Spot 전용 call을 반환한다. [Instance intent](../../../01-glossary.ko.md#instance-intent)를 설정하지 않은 call은 existing-only이며 Missing에서
 `NotFound`다. `instanceSpot()`은 선택한 Mesh의 serving descriptor에 distinct Instance type이 하나일 때
 그 type을 자동 선택하고, 여러 type이면 stable type을 받는 overload를 요구한다. 같은 type을 여러 MeshNode가
 등록한 것은 distinct type 하나다. `inMesh`는 Missing cold activation의 최초 Mesh를
-선택할 때만 사용하고 existing [owner](../../../../01-glossary.ko.md#owner)의 current Mesh를 제한하지 않는다.
+선택할 때만 사용하고 existing [owner](../../../01-glossary.ko.md#owner)의 current Mesh를 제한하지 않는다.
 
 선택한 Mesh에 Instance type이 없으면 send와 request 모두 `NotFound`로 끝난다.
-Distinct type이 여러 개인데 type을 생략하면 `InvalidOperation`이다. [Ready](../../../../01-glossary.ko.md#ready) Instance authority가 있으면 저장된
+Distinct type이 여러 개인데 type을 생략하면 `InvalidOperation`이다. [Ready](../../../01-glossary.ko.md#ready) Instance authority가 있으면 저장된
 stable type을 사용하므로 caller가 type을 다시 제공하지 않아도 된다. Instance marker를 사용했는데 existing
 authority가 User Spot이거나 명시한 type과 authority type이 다르면 `TypeMismatch`다.
 
@@ -311,7 +311,7 @@ Terminal call은 다음 순서로 기존 Instance Spot을 사용하거나 새 In
    snapshot은 어떤 예약인지 식별하는 reservation fence와 recovery root의 저장 완료를 증명하는 receipt를
    provider에서 받아 반환한다.
 5. Authority reservation 경쟁에서 이긴 target(CAS winner)만 factory와 initialize를 실행하고 durable
-   activation inbox의 first record를 확정한다. 경쟁에서 진 target(CAS loser)은 [factory](../../../../01-glossary.ko.md#factory)를 시작하지 않으며
+   activation inbox의 first record를 확정한다. 경쟁에서 진 target(CAS loser)은 [factory](../../../01-glossary.ko.md#factory)를 시작하지 않으며
    current authority를 다시 읽어 owner에게 message를 보내거나 진행 중인 attempt에 합류한다.
 6. Winner는 handler 실행을 막는 barrier를 닫아 둔 상태에서 recovery root·cursor, Ready state와 active
    capacity를 게시한다.
@@ -349,11 +349,11 @@ sequenceDiagram
     end
 ```
 
-이 그림은 [cold activation](../../../../01-glossary.ko.md#cold-activation)을 시작하는 첫 message와
+이 그림은 [cold activation](../../../01-glossary.ko.md#cold-activation)을 시작하는 첫 message와
 authority 경쟁만 보여 준다. Handler의 terminal completion 또는 reply와 recovery pointer 제거는 번호
 목록의 후반 단계에 정의한다.
 
-User Spot의 `close(spotRef)`는 active Actor [membership](../../../../01-glossary.ko.md#membership)이 남아 있으면 `false`를 반환한다. Framework는 Actor를
+User Spot의 `close(spotRef)`는 active Actor [membership](../../../01-glossary.ko.md#membership)이 남아 있으면 `false`를 반환한다. Framework는 Actor를
 자동으로 leave·destroy하지 않는다. One-way Spot message는 local outbound admission까지만 기다리며, target
 queue admission 이후 실패한 operation을 새 owner에게 hidden retry하지 않는다.
 
@@ -385,8 +385,8 @@ logical timer registration을 복원하므로 application이 timer를 다시 등
 완료하고 target Ready 전에는 복원한 tick을 실행하지 않는다.
 
 Public trace category는 `spot-instance`, `actor-relocation`다. 의미와 검증 기준은
-[Spot address와 messaging](../../../../16-spot-address-messaging.ko.md)과
-[Spot·Actor membership](../../../../15-spot-actor.ko.md)이 소유한다.
+[Spot address와 messaging](../../../16-spot-address-messaging.ko.md)과
+[Spot·Actor membership](../../../15-spot-actor.ko.md)이 소유한다.
 
 이 문서에 선언된 `yield(...)`는 `SpotWide` User Spot 또는 Instance Spot의 shared turn에서만 유효하다.
 Entry Spot과 `PerActor` User Spot에서 호출하면 operation을 제출하거나 turn을 반환하지 않고

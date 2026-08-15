@@ -218,7 +218,7 @@ public:
 `observe(...)`가 전달하는 단위는 `observed_status_t<TStatus>`다. `status`는 관찰자
 사이에 공유하는 완전한 status·snapshot이고, `loss`는 이 observation 하나에만 해당하는
 유실 누계다. 누계를 status에 넣지 않는 이유와 두 counter의 의미는
-[Runtime monitoring §3](../../../../24-runtime-monitoring.ko.md#3-현재-상태-조회와-변화-관찰)이 소유한다.
+[Runtime monitoring §3](../../../24-runtime-monitoring.ko.md#3-현재-상태-조회와-변화-관찰)이 소유한다.
 
 `observation_loss_t::coalesced_count`는 source별 최신 slot 합치기로 이 observer가 보지
 못한 중간 status 수이고, `discarded_terminal_count`는 보관 상한 초과로 폐기한 terminal
@@ -280,8 +280,8 @@ Application은 host의 standard logging·telemetry configuration으로 logger·t
 Framework가 그 provider에 structured record를 기록한다. C++ dispatch option은 file path, label, exporter
 lifecycle 또는 provider sink를 받지 않는다. Message-flow observer callback, runtime error sink와 raw event DTO는 public contract가
 아니다. Provider 호출 실패는 원래 message operation의 terminal 결과를 바꾸지 않으며 Framework가 별도
-진단으로 격리한다. 나머지 의미는 [메시지 흐름 추적](../../../../26-message-flow-tracing.ko.md)과
-[흐름 상관관계](../../../../27-flow-correlation.ko.md)가 소유한다.
+진단으로 격리한다. 나머지 의미는 [메시지 흐름 추적](../../../26-message-flow-tracing.ko.md)과
+[흐름 상관관계](../../../27-flow-correlation.ko.md)가 소유한다.
 
 ## 3. Health
 
@@ -358,4 +358,4 @@ Application은 [Configuration과 host](02-configuration-host.ko.md)의
 Peer와 Channel의 현재 상태는 `route_mesh_runtime_t`의 snapshot과 observation으로 확인한다.
 Host 상태는 `app_t::runtime_state()`, `is_ready()`, `relocate(...)`와 `shutdown(...)` 결과로
 확인한다. Metric 이름, 종류, 단위와 label은
-[Runtime metric과 집계 규칙](../../../../25-runtime-metrics.ko.md)이 소유한다.
+[Runtime metric과 집계 규칙](../../../25-runtime-metrics.ko.md)이 소유한다.

@@ -9,15 +9,17 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
-import systems.zlink.runtime.nativeapi.NativeLayouts;
 import systems.zlink.runtime.nativeapi.NativeRoutingIds;
+import systems.zlink.runtime.nativeapi.SendScratch;
 import systems.zlink.runtime.nativeapi.NativeSubmitErrors;
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.List;
 import java.util.Objects;
 
 final class NativeRouterRequestSupport {
+    private static final ThreadLocal<SendScratch> REPLY_SCRATCH =
+        ThreadLocal.withInitial(SendScratch::new);
+
     private NativeRouterRequestSupport() {
     }
 
@@ -39,30 +41,30 @@ final class NativeRouterRequestSupport {
                                            long requestSequence,
                                            Message part,
                                            int partFlag) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment nativeRid = nativeRoutingId(arena, routingId);
-            MemorySegment nativeMsg = arena.allocate(NativeLayouts.MESSAGE_LAYOUT);
-            InternalAccess.messageTransferTo(part, nativeMsg);
-            try {
-                int rc = Native.routerReplyPart(
-                    InternalAccess.socketHandle(socket), nativeRid,
-                    requestSequence, nativeMsg, partFlag);
-                if (rc != 0) {
-                    InternalAccess.messageRestoreFromNative(part, nativeMsg,
-                        false, null);
-                }
-                return rc;
-            } catch (RuntimeException ex) {
-                InternalAccess.messageRestoreFromNative(part, nativeMsg, false,
-                    null);
-                throw ex;
-            }
+        SendScratch scratch = REPLY_SCRATCH.get();
+        MemorySegment nativeRid = scratch.nativeRoutingId;
+        if (scratch.lastRoutingId != routingId) {
+            NativeRoutingIds.write(nativeRid, routingId);
+            scratch.lastRoutingId = routingId;
         }
-    }
-
-    private static MemorySegment nativeRoutingId(Arena arena,
-                                                 RoutingId routingId) {
-        return NativeRoutingIds.allocate(arena, routingId);
+        MemorySegment nativeMsg = scratch.nativeMsg;
+        // HOT PATH: replies retain the existing move-and-restore ownership
+        // boundary, but reuse native routing and message slots.
+        InternalAccess.messageTransferTo(part, nativeMsg);
+        try {
+            int rc = Native.routerReplyPart(
+                InternalAccess.socketHandle(socket), nativeRid,
+                requestSequence, nativeMsg, partFlag);
+            if (rc != 0) {
+                InternalAccess.messageRestoreFromNative(part, nativeMsg,
+                    false, null);
+            }
+            return rc;
+        } catch (RuntimeException ex) {
+            InternalAccess.messageRestoreFromNative(part, nativeMsg, false,
+                null);
+            throw ex;
+        }
     }
 
     private static ZlinkSubmitException submitFailure(String apiName) {

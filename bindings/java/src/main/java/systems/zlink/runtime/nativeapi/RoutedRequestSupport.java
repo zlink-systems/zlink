@@ -114,6 +114,17 @@ public final class RoutedRequestSupport {
                         result));
                 return;
             }
+            if (partCount == 1) {
+                Message reply =
+                    InternalAccess.messageFromOwnedSingleMessageVectorShared(
+                        parts);
+                RequestReplySupport.callbackCompletions().execute(() -> {
+                    if (!future.complete(List.of(reply))) {
+                        reply.close();
+                    }
+                });
+                return;
+            }
             Message[] frames =
                 InternalAccess.messageFromOwnedMessageVectorShared(parts,
                     partCount);

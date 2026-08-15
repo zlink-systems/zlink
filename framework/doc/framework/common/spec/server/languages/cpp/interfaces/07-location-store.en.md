@@ -1,8 +1,8 @@
 # C++ Location · Relocation Store · Redis Exact Interface
 
 [C++ exact interface table of contents](README.en.md) ·
-[Location Runtime](../../../../21-location-runtime.en.md) ·
-[Redis Location Store](../../../../22-location-store-redis.en.md)
+[Location Runtime](../../../21-location-runtime.en.md) ·
+[Redis Location Store](../../../22-location-store-redis.en.md)
 
 This document fixes the minimal public SPI an external provider
 implements, the location option and operational query an application

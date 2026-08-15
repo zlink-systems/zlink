@@ -9,7 +9,7 @@
 This document describes the Spring lifecycle and internal runtime ownership shared by Java and
 Kotlin. The validation, timeout, cancellation, and reconnect contracts a user observes are owned by
 each feature spec. The runtime structure shared by all four languages follows the
-[Common Internal Structure](../../common/spec/README.en.md).
+[Common Internal Structure](../../common/spec/server/README.en.md).
 
 ## 1. Start Order
 

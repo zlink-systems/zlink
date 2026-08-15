@@ -220,7 +220,7 @@ public abstract record ZLinkActorJoinCompletion
 
 Actor packet handler는 Spot이 소유한 registry에 등록한다. Handler의 정확한 context와 generic parameter는
 [Spot interface](05-spots.ko.md)가 정의한다. `SpotId == null`은 Entry Spot 단계이고 값이 있으면 해당 user
-[Spot](../../../../01-glossary.ko.md#spot)에 참여한 상태다. 같은 상태를 나타내는 별도 boolean은 제공하지 않는다.
+[Spot](../../../01-glossary.ko.md#spot)에 참여한 상태다. 같은 상태를 나타내는 별도 boolean은 제공하지 않는다.
 
 Actor Join call은 결과 없는 동기 `Defer()`만 제공하고 `Async(...)`·`Yield(...)`를
 제공하지 않는다. `SpotWide` User Spot의 member Actor가 Actor·Spot·Channel request
@@ -246,18 +246,18 @@ Request 없는 overload는 empty `ZLinkMessage`를 고정한다. Timeout 기본�
 monotonic absolute deadline을 고정한다.
 
 Relocation policy는 Actor factory registration이 소유한다. `DisableRelocation`은 cross-node materialization이 필요한
-이동을 capture 전에 거부한다. `RecreateOnRelocation`은 target [factory](../../../../01-glossary.ko.md#factory)로 같은 logical identity를 다시 만들고 application
+이동을 capture 전에 거부한다. `RecreateOnRelocation`은 target [factory](../../../01-glossary.ko.md#factory)로 같은 logical identity를 다시 만들고 application
 state를 복구하지 않는다. `PreserveStateWith<TAdapter>()`는 `IZLinkActorRelocationAdapter<TActor>`가 반환한 byte 배열을
 opaque application payload로 저장하고 target Actor instance에 복원한다. 별도 application state generic과 stable
 state contract ID를 받지 않으며 Framework message wrapper를 payload로 사용하지 않는다. Adapter는 relocation
 reference, accepted journal, relocation phase, source·target owner와 Store CAS version을 받지 않는다.
 
-다른 node에서 Actor instance를 materialize하는 maintenance, cross-node User Spot·[Entry Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) join과 whole User
+다른 node에서 Actor instance를 materialize하는 maintenance, cross-node User Spot·[Entry Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) join과 whole User
 Spot relocation의 모든 Actor participant는 같은 Actor factory policy를 사용한다. `PreserveStateWith`일 때만 Actor adapter의
 `CaptureAsync(...)`와 `RestoreAsync(...)`를 호출한다. Same-node join은 adapter를 호출하지 않으며 `DisableRelocation`으로
 거부하지도 않는다. `DisableRelocation` policy의 cross-node 이동은 adapter 없이 capture 전에 거부한다.
 
-Target은 [owner](../../../../01-glossary.ko.md#owner) commit 전에 restore와 accepted journal validation·staging을 완료하며 application handler를
+Target은 [owner](../../../01-glossary.ko.md#owner) commit 전에 restore와 accepted journal validation·staging을 완료하며 application handler를
 실행하지 않는다. Owner commit과 lifecycle callback 뒤 저장된 기존 작업을 실제 Actor queue에 먼저 넣고
 relocation temporary queue의 작업을 그 뒤에 옮긴다. Temporary queue 등록을 제거하고 dispatch를 atomic하게
 전환한 뒤 target을 `Ready`로 열고 relocation fence를 해제한다. Source cleanup, `Completed` 기록과
@@ -292,7 +292,7 @@ target의 대기 capacity를 함께 예약한다. 이 예약은 다음 순서로
 2. 예약을 먼저 확보한 target만 factory와 Entry Spot의 `OnCreateActorAsync(...)`를
    실행한다.
 3. Callback이 승인하면 initial Entry
-   [membership](../../../../01-glossary.ko.md#membership), `Ready`, active
+   [membership](../../../01-glossary.ko.md#membership), `Ready`, active
    capacity와 `Created` terminal result를 함께 commit한다.
 4. Callback이 거절하면 Ready와 active capacity를 만들지 않고 Creating row와 pending
    capacity를 정리하면서 `Rejected` terminal result를 publish한다.
@@ -314,7 +314,7 @@ barrier 전체에 적용할 deadline 하나를 확정한다. `InMesh(...)`를 �
 그 Mesh를 사용하고, 0개이면 `NotConfigured`, 둘 이상이면 `InvalidOperation`이다. 명시한 Mesh가
 없으면 `NotFound`다. Caller는 target RID, predicate와 callback을 지정하지 않는다.
 
-`Create`는 같은 ActorId의 [Ready](../../../../01-glossary.ko.md#ready) incarnation이 있으면 `AlreadyExists`, stable type이 다르면
+`Create`는 같은 ActorId의 [Ready](../../../01-glossary.ko.md#ready) incarnation이 있으면 `AlreadyExists`, stable type이 다르면
 `TypeMismatch`다. `GetOrCreate`는 같은 type의 Ready Actor를 `Existing`으로
 반환하고, Creating attempt이면 authority 변경을 기다린다. CAS loser는 별도 factory를
 실행하지 않는다. 서로 다른 operation은 Ready 뒤 `Existing`을 받고 cleanup 뒤 새
@@ -334,6 +334,6 @@ membership의 `SpotRef`만 반환한다. 별도 Actor directory와 public handle
 다르면 `InvalidOperation`, pre-commit seal 중이면 `Unavailable`이며 current ref를 찾아 hidden retry하지
 않는다.
 
-`ActorRef.ObjectGeneration`은 1..`long.MaxValue`다. `MeshName`과 `NodeRid`는 조회 시점의 route [snapshot](../../../../01-glossary.ko.md#snapshot)이며
-logical identity에는 포함되지 않는다. Relocation 뒤에도 ActorId와 [ObjectGeneration](../../../../01-glossary.ko.md#objectgeneration)은 유지되고 새 location을
+`ActorRef.ObjectGeneration`은 1..`long.MaxValue`다. `MeshName`과 `NodeRid`는 조회 시점의 route [snapshot](../../../01-glossary.ko.md#snapshot)이며
+logical identity에는 포함되지 않는다. Relocation 뒤에도 ActorId와 [ObjectGeneration](../../../01-glossary.ko.md#objectgeneration)은 유지되고 새 location을
 가진 ref가 발급된다. 일반 messaging은 ref route를 고정하지 않는다.

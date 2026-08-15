@@ -1,6 +1,6 @@
 # Stream Connector 스펙
 
-[스펙 목차](../README.ko.md)
+[스펙 목차](../server/README.ko.md)
 
 Stream connector는 브라우저와 게임 엔진에서 실행되는 client package다. Framework
 host와 배포 단위, 실행 환경과 의존성이 다르므로 별도 package로 배포한다. Wire와
@@ -11,8 +11,8 @@ session 동작은 Framework 공통 계약을 따른다.
 | [32 Stream Connector](32-stream-connector.ko.md) | Framework가 보장하는 실행 환경, transport, wire, lifecycle과 배포 산출물을 정의한다. |
 
 이 디렉토리는 server 쪽 public interface를 정의하지 않는다. Connector가 연결하는 server session은
-[server/30 STREAM 서버 세션](../19-stream-session.ko.md)과
-[server/31 Session Actor Dispatch](../20-session-actor-dispatch.ko.md)가 소유한다.
+[server/30 STREAM 서버 세션](../server/19-stream-session.ko.md)과
+[server/31 Session Actor Dispatch](../server/20-session-actor-dispatch.ko.md)가 소유한다.
 
 ## 언어별 public API
 
@@ -24,7 +24,7 @@ session 동작은 Framework 공통 계약을 따른다.
 | TypeScript | [languages/typescript](languages/typescript/README.ko.md)는 browser connector의 정확한 public interface를 정의한다. |
 
 Browser connector와 Node.js Framework는 서로 다른 package다. Browser connector는 Node.js host의 public interface가 아니다
-([00 §4](../00-public-contract-governance.ko.md)).
+([00 §4](../server/00-public-contract-governance.ko.md)).
 
 ## 사용 안내
 

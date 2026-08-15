@@ -1,7 +1,7 @@
 # Kotlin STREAM Session Public Interface
 
 [Interface table of contents](README.en.md) · [Java STREAM Session](../../java/interfaces/stream-session.en.md) ·
-[Session Actor Dispatch](../../../../20-session-actor-dispatch.en.md)
+[Session Actor Dispatch](../../../20-session-actor-dispatch.en.md)
 
 The Kotlin session lifecycle and coroutine handler use the Java session
 contract unchanged. The builder member that turns on Actor dispatch is

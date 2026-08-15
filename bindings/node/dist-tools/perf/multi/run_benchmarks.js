@@ -163,6 +163,7 @@ async function main() {
     for (const line of metaLines(metaItems)) {
         emit(line);
     }
+    emit(`META,node_runtime,${process.versions.node}`);
     if (process.env.ZLINK_PERF_RUNTIME_LIBZLINK) {
         emit(`META,runtime_libzlink,${process.env.ZLINK_PERF_RUNTIME_LIBZLINK}`);
     }

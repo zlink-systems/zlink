@@ -4,7 +4,7 @@
 
 [Spec Index](../README.en.md)
 
-[Node.js Bundle](../README.en.md) | [Interfaces](../../common/spec/server/languages/node/interfaces/README.en.md) | [Runtime Lifecycle](../../common/spec/README.en.md) | [Regression Matrix](regression-test-matrix.en.md)
+[Node.js Bundle](../README.en.md) | [Interfaces](../../common/spec/server/languages/node/interfaces/README.en.md) | [Runtime Lifecycle](../../common/spec/server/README.en.md) | [Regression Matrix](regression-test-matrix.en.md)
 
 # ZLink Framework Node.js Backend Dependency Policy
 

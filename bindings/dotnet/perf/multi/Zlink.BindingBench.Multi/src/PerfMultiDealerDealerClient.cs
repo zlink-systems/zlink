@@ -174,6 +174,7 @@ internal static class PerfMultiDealerDealerClient
             }
             catch (ZlinkSubmitException ex)
                 when (ex.Result == ZlinkSubmitException.ErrorCode.Backpressured
+                      || ex.Result == ZlinkSubmitException.ErrorCode.NotAdmitted
                       || IsWouldBlock(ex.NativeErrno)
                       || IsInterrupted(ex.NativeErrno)
                       || PerfShared.IsTransientBackpressure(ex.NativeErrno)

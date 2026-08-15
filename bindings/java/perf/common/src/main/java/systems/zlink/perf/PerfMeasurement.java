@@ -42,7 +42,6 @@ final class PerfMeasurement {
             return nettyPooledPayloadTemplate(size, capacity);
         }
         Message payload = new Message(capacity);
-        payload.fill((byte) 'a');
         payload.writeIntLe(0, MAGIC);
         payload.writeIntLe(4, RUN_ID);
         payload.writeIntLe(9, size);
@@ -54,9 +53,6 @@ final class PerfMeasurement {
             capacity, capacity);
         try {
             payload.writerIndex(capacity);
-            for (int i = 0; i < capacity; i++) {
-                payload.setByte(i, 'a');
-            }
             payload.setIntLE(0, MAGIC);
             payload.setIntLE(4, RUN_ID);
             payload.setIntLE(9, size);
@@ -102,13 +98,17 @@ final class PerfMeasurement {
 
     static boolean isEchoPattern(String pattern) {
         return "DEALER_ROUTER".equals(pattern)
+            || "DEALER_ROUTER_SENDSEND".equals(pattern)
             || "DEALER_ROUTER_REQREP".equals(pattern)
             || "ROUTER_ROUTER".equals(pattern)
+            || "ROUTER_ROUTER_SENDSEND".equals(pattern)
             || "ROUTER_ROUTER_REQREP".equals(pattern)
             || "STREAM".equals(pattern)
             || "SPOT_REQREP".equals(pattern)
             || "SPOT_SENDSEND".equals(pattern)
+            || "MULTI_DEALER_ROUTER_SENDSEND".equals(pattern)
             || "MULTI_DEALER_ROUTER_REQREP".equals(pattern)
+            || "MULTI_ROUTER_ROUTER_SENDSEND".equals(pattern)
             || "MULTI_ROUTER_ROUTER_REQREP".equals(pattern)
             || "MULTI_SPOT_REQREP".equals(pattern)
             || "MULTI_SPOT_SENDSEND".equals(pattern);

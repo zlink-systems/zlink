@@ -32,7 +32,7 @@ lifecycle class는 infrastructure membership relocation callback을 추가하지
 `SpotWide` application-signaled 경계의 completion만
 `onRelocationReadyCompletedSuspending(...)` 기본 no-op bridge로 제공한다.
 
-Channel extension은 process-local ChannelName만 받으며 MeshName과 [ChannelName](../../../../01-glossary.ko.md#channelname)을 함께 받는 선택 overload를
+Channel extension은 process-local ChannelName만 받으며 MeshName과 [ChannelName](../../../01-glossary.ko.md#channelname)을 함께 받는 선택 overload를
 추가하지 않는다. Host `Relocate`·`Shutdown`은 Java의 relocation mode·options·result type을 그대로
 사용하며 별도 drain facade를
 제공하지 않는다. Location Store의 opaque key·value atomic batch와 Relocation Store의
@@ -40,7 +40,7 @@ Framework-issued reference 기반 immutable blob 계약도 Java public interface
 
 각 기능 문서는 Kotlin source signature와 application이 실제로 link하는 generated JVM signature를 구분한다.
 Default argument, suspend continuation, extension receiver와 generic bound는 두 표현 사이에서 손실 없이 대응해야
-한다. Node를 직접 지정하는 extension의 첫 번째 `String` 인자는 Java 계약과 같이 [MeshName](../../../../01-glossary.ko.md#meshname)이다.
+한다. Node를 직접 지정하는 extension의 첫 번째 `String` 인자는 Java 계약과 같이 [MeshName](../../../01-glossary.ko.md#meshname)이다.
 
 Public generation, revision, epoch와 sequence ordinal은 Java 계약의 양수 `Long` 범위를 그대로 사용한다.
 유효 범위는 `1..Long.MAX_VALUE`이며 최대값에서는 wrap이나 값 재사용 없이 terminal exhaustion으로 처리한다.
@@ -50,11 +50,11 @@ Public generation, revision, epoch와 sequence ordinal은 Java 계약의 양수 
 
 Kotlin exact interface는 Java와 같은 global ActorId·SpotId, immutable `ActorRef`·`SpotRef`, ID-only 일반
 messaging과 exact-ref mutation·session bind를 사용한다. Actor와 User Spot의 create/get-or-create는 single-user
-fluent operation이다. [Spot](../../../../01-glossary.ko.md#spot) manager는 User Spot 전용이며 Instance Spot creation member를 제공하지 않는다.
-Missing [Instance Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)의 cold activation은 Spot 전용 send/request call에서 `instanceSpot()` 또는
+fluent operation이다. [Spot](../../../01-glossary.ko.md#spot) manager는 User Spot 전용이며 Instance Spot creation member를 제공하지 않는다.
+Missing [Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)의 cold activation은 Spot 전용 send/request call에서 `instanceSpot()` 또는
 `instanceSpot(stableType)`을 명시한 경우에만 시작한다. Marker가 없으면 not-found이고, marker만 사용한 cold
 activation은 selected Mesh의 distinct serving Instance type이 하나일 때만 type을 자동 선택한다. Existing
-[authority](../../../../01-glossary.ko.md#authority)는 등록 type 수와 관계없이 저장된 type을 사용한다. Mesh object role은 None, Client, Server로
+[authority](../../../01-glossary.ko.md#authority)는 등록 type 수와 관계없이 저장된 type을 사용한다. Mesh object role은 None, Client, Server로
 구분한다. 모든 server factory configure callback은 relocation 동작을 정확히 하나 선택한다. Kotlin extension은
 이 계약을 축약하거나 local fallback을 추가하지 않는다.
 

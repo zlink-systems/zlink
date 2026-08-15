@@ -5,7 +5,7 @@
 This document fixes the exact TypeScript declarations related to
 STREAM, timer, and worker that `@zlink-systems/framework` and
 `@zlink-systems/nestjs` export in ZLink Framework. Behavioral meaning is
-owned by the [common spec](../../../../README.en.md) — this document
+owned by the [common spec](../../../README.en.md) — this document
 only defines names, generics, overloads, inheritance, members,
 parameters, and return types.
 

@@ -13,6 +13,7 @@ import systems.zlink.contracts.sockets.PairSocket;
 import systems.zlink.contracts.sockets.RecvFlags;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class RawSocketIntegrationTest {
@@ -65,6 +66,49 @@ public class RawSocketIntegrationTest {
                 assertArrayEquals("second".getBytes(StandardCharsets.UTF_8),
                     received.parts().get(1).toByteArray());
             }
+        }
+    }
+
+    @Test
+    public void callerProvidedNonBlockingReceiveKeepsStateAcrossNoData() {
+        TestSupport.assumeNative();
+
+        try (Context context = Zlink.createContext();
+             PairSocket sender = context.createPairSocket();
+             PairSocket receiver = context.createPairSocket();
+             Received received = new Received()) {
+            String endpoint = TestSupport.inprocEndpoint("raw-reuse-integration");
+            sender.bind(endpoint);
+            receiver.connect(endpoint);
+
+            try (Message first = Message.from("first")) {
+                sender.send().message(first).submit();
+            }
+            assertTrue(receiver.recv(received, RecvFlags.DONT_WAIT));
+            assertArrayEquals("first".getBytes(StandardCharsets.UTF_8),
+                received.singlePartOrThrow().toByteArray());
+
+            assertFalse(receiver.recv(received, RecvFlags.DONT_WAIT));
+            assertArrayEquals("first".getBytes(StandardCharsets.UTF_8),
+                received.singlePartOrThrow().toByteArray());
+
+            try (Message second = Message.from("second")) {
+                sender.send().message(second).submit();
+            }
+            assertTrue(receiver.recv(received, RecvFlags.DONT_WAIT));
+            assertArrayEquals("second".getBytes(StandardCharsets.UTF_8),
+                received.singlePartOrThrow().toByteArray());
+
+            try (Message third = Message.from("third");
+                 Message fourth = Message.from("fourth")) {
+                sender.send().message(third).message(fourth).submit();
+            }
+            assertTrue(receiver.recv(received, RecvFlags.DONT_WAIT));
+            assertTrue(received.parts().size() == 2);
+            assertArrayEquals("third".getBytes(StandardCharsets.UTF_8),
+                received.parts().get(0).toByteArray());
+            assertArrayEquals("fourth".getBytes(StandardCharsets.UTF_8),
+                received.parts().get(1).toByteArray());
         }
     }
 }

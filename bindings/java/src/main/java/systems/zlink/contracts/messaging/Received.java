@@ -247,6 +247,18 @@ public final class Received implements AutoCloseable {
                                   BiConsumer<List<Message>, SendFlags> replySender,
                                   Runnable onTerminalState) {
         Objects.requireNonNull(singlePart, "singlePart");
+        if (isReusablePlainSinglePartState()) {
+            // HOT PATH: a caller-provided Received repeatedly filled by a
+            // plain DEALER/PAIR recv has no routing or request state. Replace
+            // only the owned frame; a result previously filled by another
+            // socket shape continues through the complete reset below.
+            Message previous = realizedParts.set(0, singlePart);
+            partsView = null;
+            if (previous != singlePart) {
+                try { previous.closeFromOwner(); } catch (RuntimeException ignored) {}
+            }
+            return;
+        }
         // Discard any prior owned state without recycling the parts list,
         // so we can reuse it without reallocation.
         if (realizedParts != null && !realizedParts.isEmpty()) {
@@ -282,6 +294,23 @@ public final class Received implements AutoCloseable {
         }
         this.realizedParts.add(singlePart);
         this.partsView = null;
+    }
+
+    private boolean isReusablePlainSinglePartState() {
+        return !closed
+            && routingId == null
+            && routingIdBytes == null
+            && requestSequence == 0L
+            && !hasRequestSequence
+            && replySender == null
+            && sendSender == null
+            && singleSendSender == null
+            && routedSingleSendSender == null
+            && routedMultipartSendSender == null
+            && onTerminalState == null
+            && cursor == null
+            && realizedParts != null
+            && realizedParts.size() == 1;
     }
 
     /**

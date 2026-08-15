@@ -67,9 +67,9 @@ Actor direct messaging은 Session binding을 전제로 하지 않는다. 이미 
 - 검증: 두 Actor handler가 자기 send와 request를 각각 한 번 처리하고 caller는 입력 marker가 포함된
   reply를 받는다. Bound Actor의 public binding은 전후가 같고 두 push는 처음 연결한 client만 받는다.
   Unbound Actor는 실행 뒤에도 binding이 없으며 Stream client push도 없다.
-- 세부 동작: [Actor model §5](../spec/14-actor-model.ko.md)와
-  [Actor model §2.3](../spec/14-actor-model.ko.md),
-  [Session Actor dispatch §4](../spec/20-session-actor-dispatch.ko.md)의 binding 독립성을 검증한다.
+- 세부 동작: [Actor model §5](../spec/server/14-actor-model.ko.md)와
+  [Actor model §2.3](../spec/server/14-actor-model.ko.md),
+  [Session Actor dispatch §4](../spec/server/20-session-actor-dispatch.ko.md)의 binding 독립성을 검증한다.
 
 #### TA-A3 Direct message 뒤에 Session을 bind한다
 
@@ -88,7 +88,7 @@ Bind되지 않은 Actor가 direct message를 먼저 처리해도 Application은 
 - 검증: Bind 전후의 direct send·request를 Actor handler가 각각 한 번 처리한다. Public binding 조회는
   bind 전에는 Actor를 반환하지 않고 bind 완료 뒤에는 `session-b`의 binding을 반환한다.
   `LateBindNotify`는 `session-b` client만 받는다.
-- 세부 동작: [Session Actor dispatch §2](../spec/20-session-actor-dispatch.ko.md)의
+- 세부 동작: [Session Actor dispatch §2](../spec/server/20-session-actor-dispatch.ko.md)의
   explicit bind와 direct message의 독립성을 검증한다.
 
 #### TA-A4 Logical disconnect 뒤에는 direct message가 계속되고 Actor 제거 뒤에는 실패한다
@@ -110,8 +110,8 @@ membership은 유지된다. Physical STREAM connection도 유지될 수 있다. 
 - 검증: Disconnect callback은 최대 한 번 실행되고 callback failure도 binding을 복원하지 않는다. Physical
   connection과 Actor membership은 유지된다. 두 direct message는 각각 한 번 처리된다. Actor 제거 뒤의 request는
   `NotFound`로 끝나며 handler evidence가 추가되지 않는다.
-- 세부 동작: [Connection disconnect를 Actor에 알리는 방법](../spec/20-session-actor-dispatch.ko.md#41-connection-disconnect를-actor에-알리는-방법)과
-  [Session의 Actor route 보관](../spec/20-session-actor-dispatch.ko.md#4-session이-actor-route를-보관하는-방법)을 검증한다.
+- 세부 동작: [Connection disconnect를 Actor에 알리는 방법](../spec/server/20-session-actor-dispatch.ko.md#41-connection-disconnect를-actor에-알리는-방법)과
+  [Session의 Actor route 보관](../spec/server/20-session-actor-dispatch.ko.md#4-session이-actor-route를-보관하는-방법)을 검증한다.
 
 ### Track B — Logical target과 실패 결과를 구분
 
@@ -129,7 +129,7 @@ Global `ActorId`에 current Actor가 없으면 Framework가 임의로 Actor를 �
 - 절차: Caller server가 `actor-missing`으로 send와 request를 각각 한 번 시도한다.
 - 검증: 두 operation의 public error kind는 `NotFound`다. 두 Actor node의 application evidence에는 해당
   Actor ID와 marker가 없다.
-- 세부 동작: [오류 모델 §2](../spec/32-framework-error-model.ko.md)의 target 부재
+- 세부 동작: [오류 모델 §2](../spec/server/32-framework-error-model.ko.md)의 target 부재
   분류를 검증한다.
 
 #### TA-B2 같은 ActorId로 다시 만든 Actor가 새 direct message를 처리한다
@@ -148,7 +148,7 @@ Application message의 target은 logical `ActorId`다. 따라서 Actor를 제거
   destroy를 시도한다.
 - 검증: 새 Actor handler가 send와 request를 각각 한 번 처리하고 request reply를 반환한다. 이전
   `ActorRef`의 operation은 `InvalidOperation`으로 끝나며 새 Actor의 binding과 lifecycle은 바뀌지 않는다.
-- 세부 동작: [Failover policy §4.1](../spec/31-failure-failover-policy.ko.md)의
+- 세부 동작: [Failover policy §4.1](../spec/server/31-failure-failover-policy.ko.md)의
   ID-only application message와 exact-reference control 구분을 검증한다.
 
 #### TA-B3 Current owner에 연결할 수 없으면 Unavailable로 끝난다
@@ -170,8 +170,8 @@ Actor가 존재하더라도 caller에서 current owner로 message를 보낼 수 
 - 검증: 차단 중 request는 `Unavailable`로 한 번 끝나고 Actor handler는 그 marker를 처리하지 않는다.
   Framework가 다른 Actor나 owner로 자동 전환한 evidence가 없어야 한다. 복구 뒤 새 request는 같은
   Actor가 한 번 처리하고 reply를 반환한다.
-- 세부 동작: [Failover policy §2](../spec/31-failure-failover-policy.ko.md)와
-  [오류 모델 §4](../spec/32-framework-error-model.ko.md)의 route 실패를 검증한다.
+- 세부 동작: [Failover policy §2](../spec/server/31-failure-failover-policy.ko.md)와
+  [오류 모델 §4](../spec/server/32-framework-error-model.ko.md)의 route 실패를 검증한다.
 
 ## 5. 완료 기준
 

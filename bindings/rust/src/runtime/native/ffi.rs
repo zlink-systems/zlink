@@ -490,7 +490,7 @@ pub type zlink_timer_handler_fn =
     unsafe extern "C" fn(timer: *mut c_void, fire_count: u64, userdata: *mut c_void);
 
 // ---------------------------------------------------------------------------
-// Functions exported by the candidate Core 0.10.1 headers
+// Functions exported by the candidate Core 0.11.1 headers
 // ---------------------------------------------------------------------------
 
 unsafe extern "C" {

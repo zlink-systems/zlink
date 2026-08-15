@@ -5,7 +5,7 @@
 This document fixes the exact TypeScript declarations related to the
 NestJS host adapter that `@zlink-systems/framework` and
 `@zlink-systems/nestjs` export in ZLink Framework. Behavioral meaning is
-owned by the [common spec](../../../../README.en.md) — this document
+owned by the [common spec](../../../README.en.md) — this document
 only defines names, generics, overloads, inheritance, members,
 parameters, and return types.
 
@@ -427,10 +427,10 @@ caller-specified identity option.
 
 An Object Server with even one `RecreateOnRelocation` or
 `PreserveStateWith` factory, or even one registered Instance Spot
-[factory](../../../../01-glossary.en.md#factory), must call
+[factory](../../../01-glossary.en.md#factory), must call
 `addRelocationStore(...)` exactly once. Only a same-node configuration
 with no
-[Instance Spot](../../../../01-glossary.en.md#entry-user-instance-spot)
+[Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
 factory where every factory is `DisableRelocation` can omit the
 Relocation Store. A missing or duplicate registration is a
 configuration error before socket bind.

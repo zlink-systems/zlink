@@ -34,7 +34,11 @@ func runDealerRouter(cfg benchmarkConfig) perfcommon.Result {
 	perfcommon.Must(dealer.Connect(endpoint))
 	perfcommon.ApplySingleBenchmarkSocketOptions(router, cfg.transport)
 	perfcommon.ApplySingleBenchmarkSocketOptions(dealer, cfg.transport)
-	perfcommon.WaitConnectedWithTimeout(perfcommon.SingleReadyTimeout(), routerMon, dealerMon)
+	// A ROUTER accepts the peer connection while processing socket activity.
+	// Keep the readiness rule aligned with the C DEALER_ROUTER harness and the
+	// ROUTER_ROUTER Go harness: drain that activity while polling both monitors.
+	perfcommon.WaitConnectedWithActivity(
+		perfcommon.SingleReadyTimeout(), router, routerMon, dealerMon)
 	waitSingleRouteReady("dealer/router perf endpoint", func(payload []byte) error {
 		_, err := perfcommon.SubmitRoutedMessage(perfcommon.NewMessage(payload), func(message *zlink.Message) <-chan error {
 			return dealer.Send().MoveMessage(message).Submit(context.Background())

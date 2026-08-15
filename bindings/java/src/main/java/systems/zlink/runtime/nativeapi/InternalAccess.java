@@ -42,6 +42,11 @@ public final class InternalAccess {
     private static volatile RuntimeSocketAccess runtimeSocketAccess;
     private static volatile TimerAccess timerAccess;
     private static volatile MonitorAccess monitorAccess;
+    // HOT PATH: receive/send planes cross this bridge for every Message frame.
+    // Resolve the contract-owned implementation once; the public Message API
+    // remains the ownership boundary and no caller-visible surface changes.
+    private static final ContractAccess.MessageAccess MESSAGE_ACCESS =
+        ContractAccess.messageAccessForRuntime();
 
     private InternalAccess() {
     }
@@ -219,7 +224,7 @@ public final class InternalAccess {
     }
 
     public static Message messageAcquireReceive() {
-        return ContractAccess.messageAcquireReceive();
+        return MESSAGE_ACCESS.acquireReceive();
     }
 
     public static void messageMoveTo(Message message,
@@ -228,19 +233,19 @@ public final class InternalAccess {
     }
 
     public static MemorySegment messageNativeHandle(Message message) {
-        return (MemorySegment) ContractAccess.messageNativeHandle(message);
+        return (MemorySegment) MESSAGE_ACCESS.nativeHandle(message);
     }
 
     public static void messageSetMore(Message message, boolean more) {
-        ContractAccess.messageSetMore(message, more);
+        MESSAGE_ACCESS.setMore(message, more);
     }
 
     public static boolean messageMore(Message message) {
-        return ContractAccess.messageMore(message);
+        return MESSAGE_ACCESS.more(message);
     }
 
     public static void messageFinishReceive(Message message, boolean more) {
-        ContractAccess.messageFinishReceive(message, more);
+        MESSAGE_ACCESS.finishReceive(message, more);
     }
 
     public static Object messageTransferTo(Message message,
@@ -286,6 +291,12 @@ public final class InternalAccess {
       long count) {
         return ContractAccess.nativeMessageMaterializeVectorShared(partsAddr,
             count);
+    }
+
+    public static Message messageFromOwnedSingleMessageVectorShared(
+      MemorySegment partsAddr) {
+        return ContractAccess.nativeMessageMaterializeSingleVectorShared(
+            partsAddr);
     }
 
     public static Message messageFromOwnedNative(MemorySegment nativeMsg) {

@@ -144,7 +144,7 @@ timeout, `DeadlineExceeded`, or cancellation, the token can't be used
 again. A valid reply only uses the STREAM socket send timeout as the
 admission deadline. Since the caller request timeout isn't delivered over
 the wire, it isn't used as the reply
-[deadline](../../../../01-glossary.en.md#deadline), and no late reply is
+[deadline](../../../01-glossary.en.md#deadline), and no late reply is
 sent after a timeout or cancellation.
 
 `IZLinkSessionSendCall.Timeout(...)` only shortens this send's admission

@@ -11,13 +11,13 @@
 > lifecycle, and each feature's **registration surface**.
 >
 > **The meaning and behavioral rules of a feature are owned by the
-> common spec** — [channel-messaging](../../../08-channel-messaging.en.md),
-> [spot-messaging](../../../12-spot-messaging.en.md), [MeshNode](../../../13-mesh-node.en.md),
-> [stream-session](../../../19-stream-session.en.md), [actor-model](../../../14-actor-model.en.md),
-> [session-actor-dispatch](../../../20-session-actor-dispatch.en.md),
-> [runtime-monitoring](../../../24-runtime-monitoring.en.md),
-> [location-runtime](../../../21-location-runtime.en.md),
-> [channel-topology](../../../07-channel-topology.en.md).
+> common spec** — [channel-messaging](../../08-channel-messaging.en.md),
+> [spot-messaging](../../12-spot-messaging.en.md), [MeshNode](../../13-mesh-node.en.md),
+> [stream-session](../../19-stream-session.en.md), [actor-model](../../14-actor-model.en.md),
+> [session-actor-dispatch](../../20-session-actor-dispatch.en.md),
+> [runtime-monitoring](../../24-runtime-monitoring.en.md),
+> [location-runtime](../../21-location-runtime.en.md),
+> [channel-topology](../../07-channel-topology.en.md).
 >
 > **Public types and signatures are owned per category by the
 > [interface table of contents](interfaces/README.en.md).** This
@@ -45,8 +45,8 @@
   codec, and Protobuf/MessagePack are separated into extension
   packages. The current Node HTTP client doesn't use the framework
   codec registry. The common contract for codec sharing scope follows
-  [Framework API §9](../../../06-framework-api.en.md#9-codec).
-- **The [location store](../../../01-glossary.en.md#location-store)
+  [Framework API §9](../../06-framework-api.en.md#9-codec).
+- **The [location store](../../01-glossary.en.md#location-store)
   implementation is also an extension.** Core only knows the store
   contract — the Redis implementation is provided by a separate package
   (§10).
@@ -99,9 +99,9 @@ declared — not where the application object graph is assembled.**
 | Channel/fanout/route handler | `providers` + handler registration surface | When the channel dispatches that handler group |
 | Entry Spot, user Spot | `providers` + `addEntrySpot(...)` / `addSpotFactory(...)` | When the MeshNode/SpotManager activates a local Spot |
 | Instance Spot | `providers` + `addInstanceSpotFactory(...)` | When a Spot direct fluent call starts Instance cold activation |
-| [Spot](../../../01-glossary.en.md#spot) packet/subscribe/actor/timer handler | Handler decorator + `zlinkDiscoverProviders(...)` | When processed in that Spot's execution context |
+| [Spot](../../01-glossary.en.md#spot) packet/subscribe/actor/timer handler | Handler decorator + `zlinkDiscoverProviders(...)` | When processed in that Spot's execution context |
 | Actor factory | `providers` + `addActorFactory(...)` | When ActorManager creates an actor |
-| Stream session (or [factory](../../../01-glossary.en.md#factory)) | `providers` + `streams` configuration | When a stream connection is activated as a session |
+| Stream session (or [factory](../../01-glossary.en.md#factory)) | `providers` + `streams` configuration | When a stream connection is activated as a session |
 
 ### 4.1 Provider Token
 
@@ -117,7 +117,7 @@ declared — not where the application object graph is assembled.**
 | `ZLINK_FANOUT_CLIENT` | Fanout client |
 | `ZLINK_BOUND_SESSION_FACTORY` | Bound session factory |
 | `ZLINK_CHANNEL_RUNTIME_OPTIONS` | Channel runtime options |
-| `ZLinkDrainHealthIndicator` | [MeshNode](../../../01-glossary.en.md#meshnode) readiness and health indicator |
+| `ZLinkDrainHealthIndicator` | [MeshNode](../../01-glossary.en.md#meshnode) readiness and health indicator |
 | `ZLINK_MESSAGE_METADATA_POLICY` | Metadata policy |
 | `ZLINK_FRAMEWORK_RUNTIME` · `ZLINK_FRAMEWORK_REGISTRATION` | Runtime and registration |
 
@@ -147,9 +147,9 @@ provider for that token, a runtime instance satisfying the registration
 condition in the table above, and exports the provider so it can be
 injected outside the dynamic module too.
 
-If there's no [RouteMesh](../../../01-glossary.en.md#routemesh) MeshNode
+If there's no [RouteMesh](../../01-glossary.en.md#routemesh) MeshNode
 in a static `forRoot`, the RouteMesh runtime provider isn't created; if
-there's no [ClientServer Channel](../../../01-glossary.en.md#clientserver-channel),
+there's no [ClientServer Channel](../../01-glossary.en.md#clientserver-channel),
 the ClientServer runtime provider isn't created. If there's only a
 manual fanout subscriber, the fanout runtime provider isn't created.
 When configuration is decided dynamically in `forRootFactory`, each
@@ -223,7 +223,7 @@ same runtime again, it isn't started twice.
 
 ### 5.2 Shutdown Order
 
-The NestJS [shutdown](../../../01-glossary.en.md#shutdown) hook uses
+The NestJS [shutdown](../../01-glossary.en.md#shutdown) hook uses
 the host-scoped `Shutdown`. If continuity is needed in rolling
 maintenance, the operator calls the injected
 `ZLinkFrameworkRuntime.relocate(...)` before the hook, confirms the
@@ -249,7 +249,7 @@ the state built so far is disposed on the spot and the exception is
 re-thrown.** A half-open socket or hanging context isn't left behind.
 
 The internal cleanup order is owned by
-[runtime-lifecycle](../../../README.en.md), and the backend
+[runtime-lifecycle](../../README.en.md), and the backend
 adapter port is owned by
 [backend-dependency-policy](../../../../../node/internals/backend-dependency-policy.en.md).
 
@@ -262,7 +262,7 @@ Declared with the `zlinkFramework()` fluent builder.
 | `addRouteMesh(...)` | Registers the physical MeshName and MeshNode | **Required** |
 | `listen(port?)` | Opens the ROUTER listener the MeshNode shares. If omitted in automatic discovery, uses port 0 | Not required |
 | `channel(name).server()` | Adds logical server membership and a handler namespace | Not required |
-| `channel(name).client()` | Adds a ChannelName call role with no server [membership](../../../01-glossary.en.md#membership) | Not required |
+| `channel(name).client()` | Adds a ChannelName call role with no server [membership](../../01-glossary.en.md#membership) | Not required |
 | `addClientServerChannel(name)` | Configures a separate topology with distinct one-way request-start authority | Depends on role |
 | `peerConnections()` | Adds manual peer intent with an endpoint or expected RID | Not required |
 | `enablePublisher(...)` | Publishes events on this channel | **Required** |
@@ -270,30 +270,30 @@ Declared with the `zlinkFramework()` fluent builder.
 
 Automatic/manual connection, dispatch key, and duplicate-check scope are
 owned by
-[Channel Topology §5](../../../07-channel-topology.en.md) and
-[Channel Messaging](../../../08-channel-messaging.en.md).
+[Channel Topology §5](../../07-channel-topology.en.md) and
+[Channel Messaging](../../08-channel-messaging.en.md).
 
 ## 7. Spot/Actor Registration
 
 The Spot/Actor factory is registered on the owner MeshNode.
-[Spot direct](../../../01-glossary.en.md#spot-direct) and Logical
+[Spot direct](../../01-glossary.en.md#spot-direct) and Logical
 Multicast use the same ROUTER as Node/Channel messaging. Discovery uses
 the registered Redis location store.
 
 | Builder | What it turns on |
 |---|---|
-| `addRouteMesh(meshName).listen(port?)` | The [owner](../../../01-glossary.en.md#owner) MeshNode and ROUTER listener |
-| `channel(name).server()` | [Logical Multicast](../../../01-glossary.en.md#logical-multicast) scope and [handler namespace](../../../01-glossary.en.md#handler-namespace) |
-| `channel(name).client()` | Outbound [ChannelName](../../../01-glossary.en.md#channelname) call with no server membership |
+| `addRouteMesh(meshName).listen(port?)` | The [owner](../../01-glossary.en.md#owner) MeshNode and ROUTER listener |
+| `channel(name).server()` | [Logical Multicast](../../01-glossary.en.md#logical-multicast) scope and [handler namespace](../../01-glossary.en.md#handler-namespace) |
+| `channel(name).client()` | Outbound [ChannelName](../../01-glossary.en.md#channelname) call with no server membership |
 | `configureSpotPublisher()` | Logical Multicast's ROUTER send configuration |
 | `addEntrySpot(TEntrySpot)` | The Entry Spot handler registry type |
 | `addSpotFactory(TSpot)` | The Spot type this node can create |
-| `addInstanceSpotFactory(type, TSpot, placement, relocation)` | The actor-free [Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot) type this node can activate |
+| `addInstanceSpotFactory(type, TSpot, placement, relocation)` | The actor-free [Instance Spot](../../01-glossary.en.md#entry-user-instance-spot) type this node can activate |
 | MeshNode channel client | The client shared by a Spot handler's ChannelName send/request |
 
 Duplicate registration and type rules are owned by
-[MeshNode](../../../13-mesh-node.en.md) and
-[Spot Messaging](../../../12-spot-messaging.en.md).
+[MeshNode](../../13-mesh-node.en.md) and
+[Spot Messaging](../../12-spot-messaging.en.md).
 
 ### 7.1 Entry Spot Identity And Membership
 
@@ -301,9 +301,9 @@ The framework issues the Entry Spot's global Spot ID at MeshNode
 startup. The application doesn't configure or change the Entry Spot ID.
 Startup initializes the Entry Spot factory and handler, finishes the
 Ready barrier, and then publishes the
-[descriptor](../../../01-glossary.en.md#descriptor). Actor create
+[descriptor](../../01-glossary.en.md#descriptor). Actor create
 finishes the selected owner MeshNode's Entry Spot membership and the
-Actor [Ready](../../../01-glossary.en.md#ready) barrier in the same
+Actor [Ready](../../01-glossary.en.md#ready) barrier in the same
 lifecycle.
 
 This order is the Framework runtime's internal responsibility. The
@@ -311,7 +311,7 @@ public interface doesn't expose a transport object, local handle, or
 resolver.
 
 The Spot message failure and Spot lifetime rules are owned by
-[Spot Messaging §6](../../../12-spot-messaging.en.md#6-failure-and-lifetime).
+[Spot Messaging §6](../../12-spot-messaging.en.md#6-failure-and-lifetime).
 A manual outbound peer is specified with the route mesh builder's
 `connect(...)`.
 
@@ -320,7 +320,7 @@ A manual outbound peer is specified with the route mesh builder's
 The Instance Spot factory registers, together, a stable type kept
 across deployments, an actor-free Spot provider, placement limit, and
 relocation policy. Duplicate registration of the same
-[stable type](../../../01-glossary.en.md#stable-type) or the same
+[stable type](../../01-glossary.en.md#stable-type) or the same
 provider class as a User Spot factory on the same MeshNode fails with a
 configuration error before socket bind.
 
@@ -331,7 +331,7 @@ provider scope is cleaned up exactly once, when activation fails or the
 Instance Spot closes.
 
 Only the Instance intent of a Spot direct fluent call records the
-global [Spot ID](../../../01-glossary.en.md#spot-id), stable type, and
+global [Spot ID](../../01-glossary.en.md#spot-id), stable type, and
 initial Mesh as a durable creation intent. If stable type is omitted,
 it's auto-selected when the selected Mesh's serving descriptor has one
 distinct Instance type, and the caller specifies stable type when there
@@ -356,16 +356,16 @@ the application callback.
 Raw stream's `write(...)`, `close(...)` signatures are owned by
 [Channel And Routing Interface](interfaces/02-channel-messaging.en.md),
 and backpressure semantics are owned by
-[stream-session](../../../19-stream-session.en.md).
+[stream-session](../../19-stream-session.en.md).
 
 ## 9. Session Actor Dispatch Registration
 
 The contract is owned by
-[session-actor-dispatch](../../../20-session-actor-dispatch.en.md).
+[session-actor-dispatch](../../20-session-actor-dispatch.en.md).
 When Actor dispatch is enabled on a stream node, the runtime determines
 the route using the global Actor ID and current
-[authority](../../../01-glossary.en.md#authority). The application
-doesn't additionally register [MeshName](../../../01-glossary.en.md#meshname)
+[authority](../../01-glossary.en.md#authority). The application
+doesn't additionally register [MeshName](../../01-glossary.en.md#meshname)
 or a Spot resolver. Bound-session push is a one-way operation that only
 applies to the current connection, and doesn't retarget a stale binding
 to a new connection.
@@ -373,8 +373,8 @@ to a new connection.
 ## 10. Monitoring/Location Registration
 
 The contract is owned by
-[runtime-monitoring](../../../24-runtime-monitoring.en.md) and
-[location-runtime](../../../21-location-runtime.en.md).
+[runtime-monitoring](../../24-runtime-monitoring.en.md) and
+[location-runtime](../../21-location-runtime.en.md).
 
 | Target | Registration condition |
 |---|---|
@@ -391,8 +391,8 @@ The Redis store is provided by
 ## 11. Startup Validation
 
 The formal source of the verification items is owned by
-[Channel Messaging §9](../../../08-channel-messaging.en.md#9-verification-requirements)
-and [Spot Messaging §8](../../../12-spot-messaging.en.md).
+[Channel Messaging §9](../../08-channel-messaging.en.md#9-verification-requirements)
+and [Spot Messaging §8](../../12-spot-messaging.en.md).
 
 **Node throws every violation as a startup-time configuration
 exception.** Surfacing configuration mistakes immediately is the

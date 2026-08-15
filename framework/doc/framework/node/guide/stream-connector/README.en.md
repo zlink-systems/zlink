@@ -4,7 +4,7 @@
 > the [`.NET` guide](../../../dotnet/README.en.md). This document reflects an earlier state, and
 > **once the `.NET` guide is finished, this document will be deleted and rewritten based on it.**
 >
-> **When confirming the contract, don't trust this document — check the [spec tree](../../../common/spec/README.en.md).**
+> **When confirming the contract, don't trust this document — check the [spec tree](../../../common/spec/server/README.en.md).**
 
 This is the documentation entry point for the TypeScript STREAM client connector
 (`@zlink-systems/stream-connector`). The target is browser web clients and browser-executed builds

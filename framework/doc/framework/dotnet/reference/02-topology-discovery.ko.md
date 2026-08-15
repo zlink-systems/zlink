@@ -326,7 +326,7 @@ services.AddZLinkFramework(options =>
 Core가 byte budget 계산을 소유하며 Framework는 connection 수로 budget을 나누지 않는다.
 Application Job Queue는 별도의 job-count limit이다. `MaxQueuedApplicationJobs`는
 `1..2,147,483,647`을 허용하고 `null`이면 Auto profile을 사용한다.
-[Core/Framework API 계약](../../common/spec/06-framework-api.ko.md)을 참고한다.
+[Core/Framework API 계약](../../common/spec/server/06-framework-api.ko.md)을 참고한다.
 
 **선택 기준.** 위 전용 항목(host lifecycle·topology 등록·diagnostics)에 속하지 않는, 단순 값 하나로
 끝나는 host-wide 설정을 조정할 때 쓴다. Diagnostics 관련 설정은 observability-diagnostics

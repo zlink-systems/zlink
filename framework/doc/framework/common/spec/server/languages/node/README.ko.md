@@ -8,7 +8,7 @@ package export, public declaration과 contract test는 이 계약을 따라야 �
 | `01` | [시스템 구조](01-system-structure.ko.md) | 패키지 구조·배포, NestJS 모듈 등록, DI, Instance Spot을 포함한 lifecycle과 startup validation |
 | `interfaces` | [공개 인터페이스 목차](interfaces/README.ko.md) | 범주별 TypeScript declaration, Location Store, maintenance와 routing ID 자동 할당 |
 
-**기능의 의미와 동작 규칙은 [공통 스펙](../../../README.ko.md)이 소유한다.** 이 디렉토리는 그 의미가
+**기능의 의미와 동작 규칙은 [공통 스펙](../../README.ko.md)이 소유한다.** 이 디렉토리는 그 의미가
 이 언어에서 갖는 **정확한 public API**만 고정한다.
 
 Host relocation은 mode를 반드시 지정한다. Planned maintenance는 source와 같은 application version을,

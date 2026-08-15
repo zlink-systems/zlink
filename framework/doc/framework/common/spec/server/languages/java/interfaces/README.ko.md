@@ -3,7 +3,7 @@
 [Java 계약 목차](../README.ko.md)
 
 이 디렉토리는 Java server package의 정확한 public signature를 기능별로 고정한다. 공통 동작은
-[server 공통 spec](../../../../README.ko.md)이 소유한다.
+[server 공통 spec](../../../README.ko.md)이 소유한다.
 
 - [공통 runtime](common-runtime.ko.md)
 - [구성과 host](configuration-host.ko.md)
@@ -29,10 +29,10 @@ Relocation provider는 Framework가 미리 발급한 reference에 immutable blob
 
 `ZLinkTopologyState`는 등록한 topology의 가용성을, `ZLinkFrameworkRuntimeState`는 host 전체 상태를 나타낸다. Channel
 호출은 process-local ChannelName만 받는다. Node를 직접 지정하는
-`sendToNode(String, RoutingId, Object)`의 첫 번째 인자는 [MeshName](../../../../01-glossary.ko.md#meshname)이다.
+`sendToNode(String, RoutingId, Object)`의 첫 번째 인자는 [MeshName](../../../01-glossary.ko.md#meshname)이다.
 
-ActorId와 User·Instance SpotId는 global logical ID다. 일반 message는 ID만 받고 current [authority](../../../../01-glossary.ko.md#authority)를
-resolve하며 exact mutation과 session bind는 `ActorRef` 또는 `SpotRef`를 받는다. [MeshNode](../../../../01-glossary.ko.md#meshnode) object role은
+ActorId와 User·Instance SpotId는 global logical ID다. 일반 message는 ID만 받고 current [authority](../../../01-glossary.ko.md#authority)를
+resolve하며 exact mutation과 session bind는 `ActorRef` 또는 `SpotRef`를 받는다. [MeshNode](../../../01-glossary.ko.md#meshnode) object role은
 `None`, `Client`, `Server`로 닫혀 있고 Client·Server는 Location Store가 필수다.
 
 정확한 type, constructor, method, record component, enum value와 generic bound는 위 기능별 문서가 소유한다.

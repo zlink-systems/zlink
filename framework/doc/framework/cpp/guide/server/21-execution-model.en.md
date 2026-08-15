@@ -10,7 +10,7 @@ title: "21. Execution & Configuration Model · C++"
 
 > **The document that owns this chapter's contract** — covered by the
 > [C++ common runtime public contract](../../../common/spec/server/languages/cpp/interfaces/01-common-runtime.en.md)
-> and the [Async Execution Policy](../../../common/spec/05-async-execution-policy.en.md).
+> and the [Async Execution Policy](../../../common/spec/server/05-async-execution-policy.en.md).
 > This chapter explains how the C++ framework actually executes and configures those
 > concepts.
 
@@ -220,5 +220,5 @@ stateDiagram-v2
 ## 5. Related Documents
 
 - The formal contract: [C++ common runtime public contract](../../../common/spec/server/languages/cpp/interfaces/01-common-runtime.en.md)
-- The async terminal convention: [Async Execution Policy](../../../common/spec/05-async-execution-policy.en.md)
+- The async terminal convention: [Async Execution Policy](../../../common/spec/server/05-async-execution-policy.en.md)
 - DI injection rules: [18. DI Container](18-di-container.en.md)

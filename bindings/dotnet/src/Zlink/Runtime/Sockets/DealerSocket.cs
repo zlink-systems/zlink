@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+using System.Runtime.CompilerServices;
 using Systems.Zlink.Runtime.Native;
 
 namespace Systems.Zlink;
@@ -68,7 +69,7 @@ internal sealed class DealerSocket : ReceivingMessageSocketBase, IDealerSocket
         {
             while (true)
             {
-                ZlinkMsg nativePart = default;
+                Unsafe.SkipInit(out ZlinkMsg nativePart);
                 var initRc = NativeMethods.zlink_msg_init(ref nativePart);
                 if (initRc != 0)
                     throw ZlinkException.CreateRecvException(

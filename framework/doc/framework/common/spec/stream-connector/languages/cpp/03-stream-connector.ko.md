@@ -212,7 +212,7 @@ Connector가 시작한 outbound operation은 별도 public option 없이 UUIDv7 
 Inbound callback에서 시작한 후속 operation은 현재 inbound flow를 재사용하고, callback이 끝나면
 connector runtime이 current flow context를 정리한다. wire 형식과 비동기 context 경계는
 [공통 Stream Connector §4.2](../../32-stream-connector.ko.md)와
-[Flow Correlation §6](../../../27-flow-correlation.ko.md#6-async-작업과-execution-context)이 소유한다.
+[Flow Correlation §6](../../../server/27-flow-correlation.ko.md#6-async-작업과-execution-context)이 소유한다.
 
 ## 6. options
 
@@ -264,7 +264,7 @@ struct connector_options_t {
 E2E는 sink 구현에서 counter를 읽는다. Sink가 예외를 경계 밖으로 내보내지 않도록 `noexcept`로 고정하며
 metric 처리 실패는 send, request와 연결 상태를 바꾸지 않는다.
 
-`options()`는 [factory](../../../01-glossary.ko.md#factory)가 적용한 설정의 복사본을 반환한다. getter에 보이는 값은 실제 connect,
+`options()`는 [factory](../../../server/01-glossary.ko.md#factory)가 적용한 설정의 복사본을 반환한다. getter에 보이는 값은 실제 connect,
 request, wait, queue, TLS와 compression 경로가 사용하는 값이어야 하며, 동작에 반영되지 않는
 설정값을 공개하지 않는다.
 

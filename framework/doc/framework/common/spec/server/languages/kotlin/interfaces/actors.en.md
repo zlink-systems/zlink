@@ -12,7 +12,7 @@ the Actor disconnect callback. The route and physical connection of a
 different Actor not included in the relocation target aren't changed.
 
 [Interface table of contents](README.en.md) · [Java Actor](../../java/interfaces/actors.en.md) ·
-[Common Actor Contract](../../../../14-actor-model.en.md)
+[Common Actor Contract](../../../14-actor-model.en.md)
 
 Kotlin uses Java's global Actor identity and fluent operation unchanged.
 `ActorId` is unique across the whole Location Store transaction domain,
@@ -71,7 +71,7 @@ startup configuration error before bind.
 An Actor adapter registered with `preserveStateWith(...)` is used for
 maintenance cross-node materialization, remote User/Entry Spot join, and
 each Actor participant of a whole
-[User Spot](../../../../01-glossary.en.md#entry-user-instance-spot)
+[User Spot](../../../01-glossary.en.md#entry-user-instance-spot)
 relocation. It isn't called on a same-node join or on a factory that
 selected `disableRelocation()` or `recreateOnRelocation()`. The `ByteArray`
 capture returns has no relocation-adapter-specific size cap. The Java
@@ -80,18 +80,18 @@ registered Relocation Store's ordinary blob and whole-payload limits. The
 adapter owns the array until completion. Restore
 receives a fresh defensive copy per call and doesn't keep it after
 completion. An empty `ByteArray` is also a valid preserved state. The
-[factory](../../../../01-glossary.en.md#factory) creates a fresh Actor
+[factory](../../../01-glossary.en.md#factory) creates a fresh Actor
 instance per target attempt and doesn't reuse the source or a previous
 attempt's instance. Restore of the same attempt can be repeated. A
 capture exception keeps source
-[authority](../../../../01-glossary.en.md#authority) and admission, and
+[authority](../../../01-glossary.en.md#authority) and admission, and
 a restore exception keeps the target sealed while allowing a retry with
 the same payload on the same target process. A different target isn't
 automatically selected. A null stage and null capture payload are
 contract violations. Host relocation's precommit adapter exception/
 contract violation is `Blocked/StateIncompatible` if a deadline hasn't
 been fixed yet, and `Blocked/DeadlineExceeded` once the
-[deadline](../../../../01-glossary.en.md#deadline) is fixed. Stale
+[deadline](../../../01-glossary.en.md#deadline) is fixed. Stale
 attempt cancellation can't commit a terminal result. Both callbacks are
 at-least-once and can overlap with a stale attempt, so they must be
 retry-safe. Inside a Kotlin coroutine, an exception isn't turned into

@@ -1,7 +1,7 @@
 # .NET RouteMesh/MeshNode Public Interface
 
-[.NET exact interface table of contents](README.en.md) · [Common Topology](../../../../07-channel-topology.en.md) ·
-[MeshNode](../../../../13-mesh-node.en.md) · [Message Model](../../../../04-message-model.en.md)
+[.NET exact interface table of contents](README.en.md) · [Common Topology](../../../07-channel-topology.en.md) ·
+[MeshNode](../../../13-mesh-node.en.md) · [Message Model](../../../04-message-model.en.md)
 
 ## 1. Scope
 
@@ -294,16 +294,16 @@ The exact declaration of `IZLinkCodecRegistryBuilder` and the codec
 extension is owned by [Serialization](11-serialization.en.md).
 
 `AddRouteMesh(meshName)` registers one process-local
-[MeshNode](../../../../01-glossary.en.md#meshnode). Registering the same
+[MeshNode](../../../01-glossary.en.md#meshnode). Registering the same
 `meshName` twice in the same process fails host startup with
 `ZLinkConfigurationException`. After `Channel(channelName)`, call exactly
 one of `Client()` or `Server()`. `Client()` only creates the send path,
 and only `Server()` provides
-[weight](../../../../01-glossary.en.md#weight) and handler registration.
-A MeshNode with no Server [membership](../../../../01-glossary.en.md#membership)
+[weight](../../../01-glossary.en.md#weight) and handler registration.
+A MeshNode with no Server [membership](../../../01-glossary.en.md#membership)
 can also start.
 
-An automatic [RouteMesh](../../../../01-glossary.en.md#routemesh)
+An automatic [RouteMesh](../../../01-glossary.en.md#routemesh)
 compares RID in canonical byte order, and only the MeshNode with the
 smaller RID connects to the counterpart endpoint. Connection intent isn't
 created only when both local and remote object roles are `Client` and
@@ -336,10 +336,10 @@ Server share one ClientServer topology through separate registrations.
 Registering the same role twice fails startup. The RouteMesh ChannelName
 conflict rule stays the same. A Client can use both the registered manual
 endpoint and the server endpoint of the same
-[ChannelName](../../../../01-glossary.en.md#channelname) automatically
+[ChannelName](../../../01-glossary.en.md#channelname) automatically
 discovered from the location store as connection targets. If the two
 sources point to the same Server RID and
-[lifecycle generation](../../../../01-glossary.en.md#lifecycle-generation),
+[lifecycle generation](../../../01-glossary.en.md#lifecycle-generation),
 the connection intent and ready target are merged into one. In both
 automatic and manual, only Client connects to server — Server doesn't
 look for a client endpoint or start an outbound connect. Server only
@@ -349,7 +349,7 @@ doesn't start a new business call to a connected client.
 If a Server role is also registered on the same process, a local Server
 that finished listener and service admission is put in the same
 candidate set as a remote Server. The same
-[Ready](../../../../01-glossary.en.md#ready), positive weight, and
+[Ready](../../../01-glossary.en.md#ready), positive weight, and
 non-draining conditions apply, with no local priority or remote
 exclusion rule. After selection, the actual transport message is
 delivered from the Client DEALER to the Server ROUTER, without calling
@@ -357,8 +357,8 @@ the handler directly.
 
 `ConfigureNetwork()`'s default BindHost is `127.0.0.1`, and if
 AdvertiseHost is omitted, a non-wildcard
-[BindHost](../../../../01-glossary.en.md#bindhost) is used. An
-[automatic discovery](../../../../01-glossary.en.md#automatic-discovery)
+[BindHost](../../../01-glossary.en.md#bindhost) is used. An
+[automatic discovery](../../../01-glossary.en.md#automatic-discovery)
 listener binds to port `0` if the port on `Listen()`/`Bind()`/
 `EnablePublisher()` is omitted, or if the listener call itself is
 omitted. In manual mode, if the endpoint can't be obtained from a
@@ -367,7 +367,7 @@ specified explicitly. A per-listener host setting takes priority over the
 root default.
 
 A fanout publisher that registered a
-[location store](../../../../01-glossary.en.md#location-store) has the
+[location store](../../../01-glossary.en.md#location-store) has the
 framework generate a per-lifecycle RID and publish a dedicated
 descriptor. A publisher with no Store can still be used as a target with
 a fixed RID and manually delivered listener endpoint. `EnableSubscriber()`,
@@ -378,7 +378,7 @@ an automatic subscriber and a manual subscriber on one fanout channel
 fails startup. An automatic subscriber needs a location store, but it
 isn't needed for a host that only uses a manual publisher and manual
 subscriber. A publisher only publishes a
-[descriptor](../../../../01-glossary.en.md#descriptor) and doesn't start
+[descriptor](../../../01-glossary.en.md#descriptor) and doesn't start
 an outbound connect to a subscriber endpoint. Only the subscriber
 connects to the publisher endpoint, and an automatic subscriber creates
 one connection intent per Publisher RID and lifecycle generation.
@@ -397,12 +397,12 @@ UUID v4 generated separately from the MeshNode RID attached. The format
 is `<prefix>-entry-<lowercase-canonical-uuid-v4>`, and the caller doesn't
 specify a fixed Entry Spot ID. This ID's global conflict and the reserved
 format validation for a caller-specified Spot ID are defined by the
-[Spot Model](../../../../11-spot-model.en.md). The prefix and the
+[Spot Model](../../../11-spot-model.en.md). The prefix and the
 generated RID/Spot ID aren't interpreted as placement, shard, or stable
 application identity.
 
 A registered MeshNode descriptor must be at most 1 MiB. The
-[Spot](../../../../01-glossary.en.md#spot) type and stateful object
+[Spot](../../../01-glossary.en.md#spot) type and stateful object
 capability collection are each at most 1024. Exceeding the bound fails
 startup — it doesn't apply only some of the registrations.
 
@@ -461,10 +461,10 @@ so they aren't included in this judgment. A connection between an Object
 Client and Object Server, or between Object Servers, is kept.
 
 The Actor/User Spot/Instance Spot
-[factory](../../../../01-glossary.en.md#factory) fixes stable type,
+[factory](../../../01-glossary.en.md#factory) fixes stable type,
 per-object-kind factory options, and explicit relocation policy in the
 same registration. There's no overload that omits the policy.
-[Stable type](../../../../01-glossary.en.md#stable-type) is UTF-8 1..255
+[Stable type](../../../01-glossary.en.md#stable-type) is UTF-8 1..255
 bytes, and a duplicate type is a startup error. The Entry Spot ID is
 issued by the framework.
 
@@ -488,7 +488,7 @@ value. Only Instance Spot is a cleanup target — Entry Spot and User Spot
 aren't affected by this setting. The idle judgment condition, the
 delivery of `ZLinkSpotCloseReason.IdleEvicted`, and the cold-activation
 rule after cleanup are owned by
-[Spot Model §6.2](../../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
+[Spot Model §6.2](../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
 
 ## 3. Manual Peer
 
@@ -603,7 +603,7 @@ default no-op implementation, so an application override isn't required.
 If expected RID is omitted, the admission handshake determines the
 remote identity. If expected RID is specified, the connection isn't
 admitted if the handshake identity differs. A manual connection also uses
-the same [MeshName](../../../../01-glossary.en.md#meshname)/RID/
+the same [MeshName](../../../01-glossary.en.md#meshname)/RID/
 ChannelName/security validation as an automatic discovery connection.
 
 ## 4. Dispatch Scope Of Handler And Filter
@@ -739,7 +739,7 @@ with the Core HWM budget or application job queue setting. This setting does not
 RouteMesh ServerServer.
 
 `ConfigureSpotPublisher()` doesn't provide a publish-only delivery
-policy option. [Logical Multicast](../../../../01-glossary.en.md#logical-multicast)
+policy option. [Logical Multicast](../../../01-glossary.en.md#logical-multicast)
 starts once it secures source-local execution capacity within the send
 timeout, and completes normally with no return value. It doesn't wait
 for or aggregate per-target admission/failure results into public
@@ -749,14 +749,14 @@ some target's failure. It completes normally even with no targets.
 `IZLinkRouteMeshRuntimeOptions` is a public DI singleton. Querying
 unregistered membership is `ZLinkConfigurationException`.
 `MailboxMessageBudget` and `MailboxByteBudget` are the caps on message
-count and byte sum for the per-[owner](../../../../01-glossary.en.md#owner)
+count and byte sum for the per-[owner](../../../01-glossary.en.md#owner)
 application mailbox. Byte accounting doesn't count only payload size —
 it adds `payload size + metadata size + a fixed per-job cost`. Even if
 payload is empty, one job isn't 0 bytes, and even for a large payload,
 the fixed cost is still added. If the sum exceeds the `ulong`
 representable range, it's pinned to `ulong.MaxValue` and that submit is
 rejected. The accounting rule is owned by
-[Framework API §8.2](../../../../06-framework-api.en.md#82-handler-execution-object-and-dependency-lifetime).
+[Framework API §8.2](../../../06-framework-api.en.md#82-handler-execution-object-and-dependency-lifetime).
 0 uses the Framework profile's finite default. Both values are set
 before startup in `ConfigureRouterSocket()`, and Logical Multicast's
 local target drop also follows this public capacity setting.

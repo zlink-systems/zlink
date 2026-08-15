@@ -9,7 +9,6 @@ import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.messaging.Received;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
@@ -19,7 +18,6 @@ import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
-import systems.zlink.perf.PerfMessageTemplatePool;
 import java.util.ArrayList;
 import java.time.Duration;
 import java.util.List;
@@ -45,52 +43,32 @@ final class PerfMultiDealerDealer {
                 "server", SocketType.DEALER);
             PerfUtil.Metrics metrics = new PerfUtil.Metrics(config);
             Received received = new Received();
-            // C parity (perf_multi_dealer_dealer_server.cpp run_receive_window
-            // ~240-301): the counted throughput window is closed by a
-            // server-side measure-seconds deadline, not by the stop token. The
-            // signal-driven (-1) poll only wakes the loop; the stop token wakes
-            // the poll too but does not anchor the aggregation end.
-            //
-            // The deadline MUST be re-checked *after* draining a poll wakeup
-            // (matching C's post-receive / post-drain `if (now >= deadline)
-            // break;` at lines 273-275 and 294-296). The client sends an
-            // active window of identical duration and then exits. The server
-            // and client start their windows at slightly different wall-clock
-            // instants (the server clock starts only after its post-START
-            // auto-HWM recalc), so the client can finish its active phase,
-            // emit its stop token(s), and exit while the server still believes
-            // it is a hair before its own deadline. If the server then looped
-            // back into an unbounded perf_socket_poll(-1) there would be no
-            // remaining peer to ever wake it, hanging until the harness
-            // timeout. C tolerates the unconditional -1 only because its
-            // deadline break is evaluated right after the wakeup is consumed;
-            // to keep that termination guarantee robust against the cross-
-            // process start-clock skew the blocking poll is bounded by the
-            // time remaining to the deadline. Data and the wire stop token
-            // still wake the poll immediately (signal-driven, no busy poll);
-            // the bound only ensures the measure window cannot outlive its
-            // deadline when the peer has already gone.
+            // C parity: the active window advances only when socket readiness
+            // wakes the poller. The stop token wakes a final drain but does
+            // not determine the measured interval.
             long measureDeadline = System.nanoTime()
                 + config.durationSeconds() * 1_000_000_000L;
+            boolean stopSeen = false;
             while (true) {
-                long remainingNanos = measureDeadline - System.nanoTime();
-                if (remainingNanos <= 0) {
+                long now = System.nanoTime();
+                if (now >= measureDeadline) {
                     break;
                 }
-                long remainingMs = Math.max(1L,
-                    remainingNanos / 1_000_000L);
                 pollSet.setEvents(0, PollEventFlags.POLLIN);
-                int readyCount = pollSet.poll((int) Math.min(remainingMs,
-                    (long) Integer.MAX_VALUE));
+                // A stop token can be consumed while a ready socket is
+                // drained. Once that final wire signal is seen, wait only
+                // for the remaining active interval. This prevents a later
+                // empty -1 poll from keeping the server alive forever.
+                int timeoutMs = stopSeen
+                    ? remainingTimeoutMs(measureDeadline, now)
+                    : -1;
+                int readyCount = pollSet.poll(timeoutMs);
                 if (readyCount <= 0
                     || !pollSet.readyHasEventAt(0, PollEventFlags.POLLIN)) {
                     continue;
                 }
-                drainCounted(server, received, config, metrics);
-                // Post-drain deadline check (C lines 273-275 / 294-296):
-                // break here so the iteration that consumed the final
-                // traffic + stop token terminates instead of re-entering the
-                // poll after the peer has gone.
+                stopSeen |= drainCounted(server, received, config, metrics,
+                    measureDeadline);
                 if (System.nanoTime() >= measureDeadline) {
                     break;
                 }
@@ -105,21 +83,43 @@ final class PerfMultiDealerDealer {
         }
     }
 
-    private static void drainCounted(DealerSocket server, Received received,
-                                      PerfUtil.Config config,
-                                      PerfUtil.Metrics metrics) {
+    private static boolean drainCounted(DealerSocket server, Received received,
+                                        PerfUtil.Config config,
+                                        PerfUtil.Metrics metrics,
+                                        long measureDeadline) {
+        // C receives one message after a readiness wake, then checks the
+        // deadline before draining further. This keeps the active boundary
+        // from counting an already queued post-deadline tail.
+        if (!PerfUtil.recvNoWait(server, received)) {
+            return false;
+        }
+        boolean stopSeen = recordCounted(received, config, metrics);
+        if (System.nanoTime() >= measureDeadline) {
+            return stopSeen;
+        }
         while (true) {
             if (!PerfUtil.recvNoWait(server, received)) {
-                return;
+                return stopSeen;
             }
-            if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
-                // Stop token only wakes the poll; it never ends the
-                // counted window (matches C, which ignores stop_count).
-                continue;
-            }
-            PerfUtil.recordActiveLatency(metrics, received.firstPart(),
-                config.size(), false);
+            stopSeen |= recordCounted(received, config, metrics);
         }
+    }
+
+    private static boolean recordCounted(Received received,
+                                         PerfUtil.Config config,
+                                         PerfUtil.Metrics metrics) {
+        if (PerfStopToken.isStopTokenMessage(received.firstPart())) {
+            return true;
+        }
+        PerfUtil.recordActiveLatency(metrics, received.firstPart(),
+            config.size(), false);
+        return false;
+    }
+
+    private static int remainingTimeoutMs(long deadline, long now) {
+        long remainingNs = Math.max(1L, deadline - now);
+        return (int) Math.min(Integer.MAX_VALUE,
+            (remainingNs + 999_999L) / 1_000_000L);
     }
 
     private static void drainTailUncounted(DealerSocket server,
@@ -181,8 +181,6 @@ final class PerfMultiDealerDealer {
             pollSockets.addAll(clients);
             try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
                      pollSockets, PollEventFlags.POLLOUT)) {
-                try (PerfMessageTemplatePool payloadPool =
-                         new PerfMessageTemplatePool(config.size(), 256)) {
                 for (int i = 0; i < clients.size(); i++) {
                     pollSet.setEvents(i);
                 }
@@ -208,7 +206,7 @@ final class PerfMultiDealerDealer {
                         // message) keeps stamp-to-wire tight like C.
                         DealerSocket socket = clients.get(index);
                         while (System.nanoTime() < activeEnd) {
-                            if (sendOneActive(socket, payloadPool, config.size(),
+                            if (sendOneActive(socket, config.size(),
                                     activeEnd)) {
                                 progressed = true;
                                 continue;
@@ -225,7 +223,6 @@ final class PerfMultiDealerDealer {
                     // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven wait for
                     // POLLOUT readiness; no timer-based fallback.
                     pollWritable(pollSet, pending, -1);
-                }
                 }
             }
             // C parity: send one wire-level stop token on every client socket
@@ -268,13 +265,9 @@ final class PerfMultiDealerDealer {
     // send_status_ok, false on transient backpressure (send_status_blocked);
     // a non-transient error is fatal.
     private static boolean sendOneActive(DealerSocket socket,
-                                         PerfMessageTemplatePool payloadPool,
                                          int size, long activeEnd) {
-        Message payload = payloadPool.acquire(size,
-            (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime(), activeEnd);
-        if (payload == null) {
-            return false;
-        }
+        Message payload = PerfUtil.payload(size, (byte) PerfUtil.PHASE_ACTIVE,
+            System.nanoTime());
         try (payload) {
             PerfUtil.awaitStage(socket.send().message(payload).submit());
             return true;
@@ -292,25 +285,23 @@ final class PerfMultiDealerDealer {
     }
 
     private static void sendStopTokenBlocking(DealerSocket socket) {
-        try (PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
-                 List.of((systems.zlink.contracts.sockets.Socket) socket),
-                 PollEventFlags.POLLOUT)) {
-            pollSet.setEvents(0);
-            while (true) {
-                try (Message stop = PerfStopToken.newMessage()) {
-                    PerfUtil.awaitStage(socket.send().message(stop).submit());
-                    return;
-                } catch (ZlinkSubmitException ex) {
-                    if (!isTransient(ex)) {
-                        throw ex;
-                    }
-                } catch (ZlinkException ex) {
-                    if (!isTransient(ex)) {
-                        throw ex;
-                    }
+        // C send_stop_token uses ZLINK_SEND_FLAGS_NONE, not a DONT_WAIT
+        // retry loop. The socket send timeout bounds each retry under the
+        // benchmark policy. Waiting forever for POLLOUT after the server's
+        // measurement deadline can otherwise keep this process alive after
+        // the peer stopped draining its queue.
+        while (true) {
+            try (Message stop = PerfStopToken.newMessage()) {
+                PerfUtil.awaitStage(socket.send().message(stop).submit());
+                return;
+            } catch (ZlinkSubmitException ex) {
+                if (!isTransient(ex)) {
+                    throw ex;
                 }
-                pollSet.setEvents(0, PollEventFlags.POLLOUT);
-                pollSet.poll(-1);
+            } catch (ZlinkException ex) {
+                if (!isTransient(ex)) {
+                    throw ex;
+                }
             }
         }
     }

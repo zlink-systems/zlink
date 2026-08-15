@@ -9,7 +9,7 @@ The documentation hub for the `zlink::framework` C++ artifact.
 | [60 HTTP Hosting](../common/spec/server/languages/cpp/60-http-hosting.en.md) | The HTTP hosting contract |
 | [61 Embedded HTTP Server](../common/spec/server/languages/cpp/61-embedded-http-server.en.md) | The embedded server |
 
-**The meaning and behavioral rules of a feature are owned by the [common spec](../common/spec/README.en.md).**
+**The meaning and behavioral rules of a feature are owned by the [common spec](../common/spec/server/README.en.md).**
 The C++ documents fix the **exact public surface** that meaning takes in C++.
 
 Sample and E2E JSON config files, the ban on environment variables, and typed-binding
@@ -28,7 +28,7 @@ framework provides host, DI, configuration, logging, and HTTP directly.**
 
 ## Internals List
 
-[Common Internals](../common/spec/README.en.md) ·
+[Common Internals](../common/spec/server/README.en.md) ·
 [Backend Dependency Policy](internals/backend-dependency-policy.en.md) ·
 [Regression Test Matrix](internals/regression-test-matrix.en.md)
 

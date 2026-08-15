@@ -15,4 +15,4 @@ follow [Common Runtime](interfaces/common-runtime.en.md) and
 [Monitoring](interfaces/monitoring.en.md).
 
 Common behavior follows the
-[Framework Common Spec](../../../README.en.md).
+[Framework Common Spec](../../README.en.md).

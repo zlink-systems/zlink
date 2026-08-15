@@ -11,6 +11,7 @@ public sealed partial class TopicMessage
     private MultipartMessageCollection? _parts;
     private RoutingId? _routingId;
     private RoutingIdSnapshot _routingIdSnapshot;
+    private Message? _reusableSinglePart;
     private Message? _singlePart;
     private string? _topic = string.Empty;
     private byte[]? _topicBytes;
@@ -75,7 +76,7 @@ public sealed partial class TopicMessage
     {
         if (singlePart == null)
             throw new ArgumentNullException(nameof(singlePart));
-        ResetForReuse();
+        ResetForIncomingSinglePart(singlePart);
         SetTopic(topic);
         PopulateSinglePartCore(routingId, default, singlePart);
     }
@@ -93,7 +94,7 @@ public sealed partial class TopicMessage
     {
         if (singlePart == null)
             throw new ArgumentNullException(nameof(singlePart));
-        ResetForReuse();
+        ResetForIncomingSinglePart(singlePart);
         SetTopic(topic);
         PopulateSinglePartCore(null, routingId, singlePart);
     }
@@ -111,7 +112,7 @@ public sealed partial class TopicMessage
     {
         if (singlePart == null)
             throw new ArgumentNullException(nameof(singlePart));
-        ResetForReuse();
+        ResetForIncomingSinglePart(singlePart);
         CopyTopic(topicBuffer, topicLength);
         PopulateSinglePartCore(routingId, default, singlePart);
     }
@@ -149,7 +150,7 @@ public sealed partial class TopicMessage
     {
         if (singlePart == null)
             throw new ArgumentNullException(nameof(singlePart));
-        ResetForReuse(false);
+        ResetForIncomingSinglePart(singlePart, resetTopic: false);
         SetTopicFromWritableBuffer(topicLength);
         PopulateSinglePartCore(routingId, default, singlePart);
     }
@@ -159,6 +160,7 @@ public sealed partial class TopicMessage
         MultipartMessageCollection parts,
         HwmBudgetLeaseOwner? hwmBudgetLeases = null)
     {
+        ResetForReuse(false);
         SetTopicFromWritableBuffer(topicLength);
         PopulatePartsCore(null, routingId, parts);
         _hwmBudgetLeases = hwmBudgetLeases;
@@ -170,9 +172,26 @@ public sealed partial class TopicMessage
     {
         if (singlePart == null)
             throw new ArgumentNullException(nameof(singlePart));
+        ResetForIncomingSinglePart(singlePart, resetTopic: false);
         SetTopicFromWritableBuffer(topicLength);
         PopulateSinglePartCore(null, routingId, singlePart);
         _hwmBudgetLeases = hwmBudgetLeases;
+    }
+
+    internal Message PrepareReusableSinglePart()
+    {
+        EnsureOpen();
+        var candidate = _reusableSinglePart;
+        if (candidate == null)
+        {
+            // HOT PATH: the wrapper remains private until a receive succeeds.
+            // Rent only wrappers returned by Message.Dispose so a retained
+            // public Message can never be repurposed for another receive.
+            candidate = Message.RentForNativeReceive();
+            _reusableSinglePart = candidate;
+        }
+        candidate.PrepareForNativeReceive();
+        return candidate;
     }
 
     private void PopulatePartsCore(RoutingId? routingId,
@@ -196,11 +215,13 @@ public sealed partial class TopicMessage
         if (reopen)
             EnsureOpen();
 
+        var retainedSinglePart = reopen && _parts == null
+            && _reusableSinglePart == null ? _singlePart : null;
         try
         {
             if (_parts != null)
                 _parts.Dispose();
-            else
+            else if (!ReferenceEquals(_singlePart, retainedSinglePart))
                 _singlePart?.Dispose();
         }
         finally
@@ -210,6 +231,13 @@ public sealed partial class TopicMessage
         }
         _parts = null;
         _singlePart = null;
+        if (retainedSinglePart != null)
+            _reusableSinglePart = retainedSinglePart;
+        if (!reopen)
+        {
+            _reusableSinglePart?.Dispose();
+            _reusableSinglePart = null;
+        }
         _routingId = null;
         _routingIdSnapshot = default;
         if (resetTopic)
@@ -220,6 +248,44 @@ public sealed partial class TopicMessage
 
         if (reopen)
             Volatile.Write(ref _closed, 0);
+    }
+
+    private void ResetForIncomingSinglePart(Message singlePart,
+        bool resetTopic = true)
+    {
+        EnsureOpen();
+        var previousSinglePart = _singlePart;
+        var candidate = _reusableSinglePart;
+        try
+        {
+            if (_parts != null)
+                _parts.Dispose();
+            else if (!ReferenceEquals(singlePart, candidate)
+                     && !ReferenceEquals(previousSinglePart, singlePart))
+                previousSinglePart?.Dispose();
+        }
+        finally
+        {
+            _hwmBudgetLeases?.Dispose();
+            _hwmBudgetLeases = null;
+        }
+        _parts = null;
+        _singlePart = null;
+
+        if (ReferenceEquals(singlePart, candidate))
+        {
+            // The incoming wrapper was private until native receive succeeded.
+            // Keep the prior public wrapper as the next private candidate;
+            // callers may not retain it after this result is overwritten.
+            _reusableSinglePart = previousSinglePart;
+        }
+        _routingId = null;
+        _routingIdSnapshot = default;
+        if (resetTopic)
+        {
+            _topic = string.Empty;
+            _topicLength = 0;
+        }
     }
 
     private void EnsureOpen()

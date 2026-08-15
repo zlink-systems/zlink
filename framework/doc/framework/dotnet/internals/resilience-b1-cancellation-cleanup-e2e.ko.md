@@ -3,7 +3,7 @@
 이 문서는 공통 resilience lifecycle E2E의 RL-B1을 .NET
 `ResilienceLifecycle` fixture에서 검증하는 방법을 기록한다. 공개 계약은
 [공통 RL-B1 시나리오](../../common/e2e/config-5-resilience-lifecycle.ko.md)와
-[비동기 실행과 handler turn 명세](../../common/spec/05-async-execution-policy.ko.md)에 있다.
+[비동기 실행과 handler turn 명세](../../common/spec/server/05-async-execution-policy.ko.md)에 있다.
 
 ## 공통 시나리오와 fixture의 대응
 

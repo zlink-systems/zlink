@@ -283,6 +283,26 @@ export function acquireMessageWrapper(
   return message;
 }
 
+/** @internal Refill an exclusively owned receive wrapper without pool traffic. */
+export function refillMessageWrapper(
+  message: Message,
+  buffer: Buffer,
+  nativeMessage?: unknown
+): Message {
+  const state = message as unknown as MutableMessageState;
+  if (state._nativeMessage !== undefined && state._nativeMessage !== nativeMessage) {
+    requireMessageNativeOperations().close(state._nativeMessage);
+  }
+  state._buffer = buffer;
+  state._refCount = 1;
+  state._properties = EMPTY_PROPERTIES;
+  state._metadata = EMPTY_METADATA;
+  state._nativeMessage = nativeMessage;
+  state._nativeReadOnly = false;
+  state._released = false;
+  return message;
+}
+
 function releaseMessageWrapper(message: Message): void {
   const state = message as unknown as MutableMessageState;
   if (state._released) {
@@ -314,6 +334,15 @@ function markMessageConsumed(message: Message): void {
 export function canShareNativeMessage(message: Message): boolean {
   const state = message as unknown as { _nativeMessage?: unknown };
   return state._nativeMessage !== undefined;
+}
+
+/** @internal True when receive data was observed and remains in managed storage. */
+export function hasObservedManagedReceiveData(message: Message): boolean {
+  const state = message as unknown as MutableMessageState;
+  return state._buffer !== undefined
+    && state._nativeMessage === undefined
+    && state._refCount > 0
+    && !state._released;
 }
 
 /** @internal Mark a successfully submitted message empty without another native call. */

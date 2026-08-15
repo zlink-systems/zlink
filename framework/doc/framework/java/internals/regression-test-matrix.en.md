@@ -1,7 +1,7 @@
 # JVM Service Runtime Regression Test Matrix
 
 [Java Docs](../README.en.md) · [Kotlin Docs](../../kotlin/README.en.md) ·
-[Runtime Lifecycle](../../common/spec/README.en.md)
+[Runtime Lifecycle](../../common/spec/server/README.en.md)
 
 Java and Kotlin verify a single JVM service runtime. The Java public ABI and the Kotlin
 metadata/extension ABI are checked separately, but the protocol state machine and runtime E2E are not

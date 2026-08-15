@@ -551,7 +551,7 @@ can represent, and it's matched here so all four languages use the
 same cap. The framework doesn't end the iteration just because the
 observer's queue is full — only a `signal` abort ends that iteration.
 The definition of the delivery unit is owned by
-[Runtime Monitoring §3](../../../../24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes).
+[Runtime Monitoring §3](../../../24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes).
 
 ## 7. Message Wrapper
 

@@ -54,5 +54,5 @@ public type과 signature로 표현한다.
 ## 관련 문서
 
 - 언어별 사용자 가이드: `framework/doc/framework/<lang>/guide/http-client/`
-- [Codec extension 공유 계약](../06-framework-api.ko.md)
+- [Codec extension 공유 계약](../server/06-framework-api.ko.md)
 - [공통 E2E 계약](../../e2e/README.ko.md)

@@ -18,8 +18,8 @@ View in another language — [C#/.NET](../../../dotnet/guide/server/10-location.
 # 10. Location — Auto-Connect And Object Location
 
 > **The documents that own this chapter's contract** — defined by
-> [Location runtime](../../../common/spec/21-location-runtime.en.md),
-> [Location Store](../../../common/spec/22-location-store-redis.en.md), and the
+> [Location runtime](../../../common/spec/server/21-location-runtime.en.md),
+> [Location Store](../../../common/spec/server/22-location-store-redis.en.md), and the
 > [per-language location public contract](../../../common/spec/server/languages/README.en.md).
 > This document explains how the application registers a Store and checks status.
 
@@ -130,7 +130,7 @@ Relocation has no separate participant, record, concurrency, or in-flight-byte c
 setting. Target staging uses the host's shared Application Job Queue reservation and runs a
 backlog larger than the live-job limit progressively. Core memory accounting, negotiated
 frame size, and Store limits still apply; see
-[Relocation Flow §5.3](../../../common/spec/28-relocation-flow.en.md#53-no-relocation-specific-capacity-limit).
+[Relocation Flow §5.3](../../../common/spec/server/28-relocation-flow.en.md#53-no-relocation-specific-capacity-limit).
 
 **The four lease values are tied together.** Breaking the following relationship is a
 startup error. Look at all four together when changing any one value.
@@ -205,7 +205,7 @@ generation.
 
 - Runnable verification examples for this chapter's contract: `13. Interface Catalog`
   chapter §6 — the verification class `LocationContracts`
-- The formal contract: [Location runtime](../../../common/spec/21-location-runtime.en.md)
+- The formal contract: [Location runtime](../../../common/spec/server/21-location-runtime.en.md)
 - Manual connection without auto-connect:
   [05-channel-messaging §6](05-channel-messaging.en.md#6-connection-control)
 - Host relocate and drain observability: [12-operations](12-operations.en.md)

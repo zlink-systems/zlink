@@ -1,7 +1,7 @@
 # Kotlin 구성과 host 공개 인터페이스
 
 [인터페이스 목차](README.ko.md) · [Java 구성](../../java/interfaces/configuration-host.ko.md) ·
-[MeshNode 공통 계약](../../../../13-mesh-node.ko.md)
+[MeshNode 공통 계약](../../../13-mesh-node.ko.md)
 
 Kotlin application은 Java builder를 직접 사용한다. Kotlin DSL은 receiver와 reified type으로 실제 중복을
 줄이는 경우에만 제공하며 Java contract에 없는 역할, factory default, allocation provider를 만들지 않는다.
@@ -17,15 +17,15 @@ Server와 같은 readiness·weight·drain 조건으로 선택하며 local
 Automatic RouteMesh는 RID를 canonical byte order로 비교하고 더 작은 RID의 MeshNode만 상대 endpoint로
 connect한다. Manual topology는 application endpoint 구성에 따라 한쪽 또는 양쪽에서 connect할 수 있다.
 양쪽 연결이나 automatic discovery 경합·오래된 snapshot으로 중복 후보가 생기면 handshake와 admission이
-같은 RID와 [lifecycle generation](../../../../01-glossary.ko.md#lifecycle-generation)을 확인해 하나만 ready 상태로 유지한다.
+같은 RID와 [lifecycle generation](../../../01-glossary.ko.md#lifecycle-generation)을 확인해 하나만 ready 상태로 유지한다.
 
 두 MeshNode가 모두 Object Client이고 양쪽 모두 RouteMesh Channel Server membership이 없을 때만 peer
 connection이 필요하지 않다. Channel Client membership만 등록한 경우도 같다. 어느 한쪽에라도 weight
 `0`을 포함한 Channel Server membership이 있으면 연결이 필요하다. ClientServer와 classic fanout은 별도
 물리 topology이므로 이 판정에 포함하지 않는다.
 
-[MeshNode](../../../../01-glossary.ko.md#meshnode)의 object role은 `None`, `Client`, `Server` 중 하나다. `objects()`를 호출하지 않으면 `None`,
-`client()`는 outbound manager와 resolve를 제공하고 `server()`는 Client 기능과 [factory](../../../../01-glossary.ko.md#factory)·Entry registration을
+[MeshNode](../../../01-glossary.ko.md#meshnode)의 object role은 `None`, `Client`, `Server` 중 하나다. `objects()`를 호출하지 않으면 `None`,
+`client()`는 outbound manager와 resolve를 제공하고 `server()`는 Client 기능과 [factory](../../../01-glossary.ko.md#factory)·Entry registration을
 함께 제공한다. Client와 Server는 Location Store가 필요하다. None에는 object manager나 factory가 없다.
 한 node에서 role을 중복 선택하면 startup configuration error다.
 Object Client에도 RouteMesh Channel Server를 등록할 수 있지만 application Node direct handler는 등록할
@@ -34,10 +34,10 @@ Object Client에도 RouteMesh Channel Server를 등록할 수 있지만 applicat
 `ZLinkFrameworkOptions.addLocationStore(...)`와 `addRelocationStore(...)`는 Java public member를 그대로 사용한다.
 `recreateOnRelocation()` 또는 `preserveStateWith(...)`를 선택한 factory가 하나라도 있거나 Instance Spot
 factory가 하나라도 있으면 Relocation Store를 정확히 하나 등록해야 한다. Missing·duplicate registration은
-socket bind 전에 configuration error다. [Instance Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) factory가 없고
+socket bind 전에 configuration error다. [Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) factory가 없고
 `disableRelocation()`만 선택한 same-node 구성에는 Relocation Store가 필수가 아니다. 두 capability를 묶는
 Kotlin DSL이나 Redis 전용 registration helper는 제공하지 않는다.
-완료 가능한 모든 cross-node Actor·[Spot](../../../../01-glossary.ko.md#spot) 이동은 Relocation Store를 사용한다.
+완료 가능한 모든 cross-node Actor·[Spot](../../../01-glossary.ko.md#spot) 이동은 Relocation Store를 사용한다.
 `recreateOnRelocation()`도 accepted journal과 recovery payload를 저장하고 `preserveStateWith(...)`는 application
 state를 추가로 저장한다. Same-node Actor join은 Relocation payload를 만들지 않고,
 `disableRelocation()`을 선택한 cross-node 이동은 capture 전에 거부한다.
@@ -159,16 +159,16 @@ inline fun <reified TActor, reified TFactory>
 ```
 
 Factory configure callback에는 default가 없다. Actor factory builder에는 relocation 동작 선택 외의 설정이 없다. Node placement
-[weight](../../../../01-glossary.ko.md#weight)는 0..10000이고 기본값은 100이다. 범위 밖 값은 startup 설정과
+[weight](../../../01-glossary.ko.md#weight)는 0..10000이고 기본값은 100이다. 범위 밖 값은 startup 설정과
 runtime 변경에서 configuration error다. Channel weight와 별개이며 runtime update와 descriptor
-[snapshot](../../../../01-glossary.ko.md#snapshot)에 같은 값을 사용한다.
+[snapshot](../../../01-glossary.ko.md#snapshot)에 같은 값을 사용한다.
 RouteMesh Channel Server와 ClientServer Server weight도 같은 범위와 기본값을 사용한다. Weighted
 selection은 후보 weight 합계를 최소 64-bit 정수로 계산한다.
 
 MeshNode와 Store-backed fanout publisher의 automatic RID는
 `prefix-<lowercase-canonical-uuid-v4>` 형식이다. UUID v4는 `8-4-4-4-12` 자리의 lowercase canonical
 문자열로 표현한다. Prefix는 ASCII `[A-Za-z0-9._-]` 1..64자이고 full RID는 UTF-8 255 bytes 이하다.
-Active owner와 충돌하면 새 UUID로 다시 시도하지 않고 즉시 `RoutingIdConflict`로 실패한다. Fixed RID는 object role이나 automatic Store [descriptor](../../../../01-glossary.ko.md#descriptor)가
+Active owner와 충돌하면 새 UUID로 다시 시도하지 않고 즉시 `RoutingIdConflict`로 실패한다. Fixed RID는 object role이나 automatic Store [descriptor](../../../01-glossary.ko.md#descriptor)가
 없는 manual topology에서만 사용할 수 있다. Slot count, allocation group과 public allocation provider는 없다.
 
 Object Server의 Entry Spot ID는 같은 prefix의

@@ -386,7 +386,7 @@ function buildMultiOptionItems(opts) {
     ['sndtimeo_ms', optionValue(opts.sendTimeoutMs, 'PERF_MULTI_SNDTIMEO_MS', 200)],
     ['rcvtimeo_ms', optionValue(opts.recvTimeoutMs, 'PERF_MULTI_RCVTIMEO_MS', 200)],
     ['connect_concurrency', connectDisplay],
-    ['connect_ready_timeout_ms', optionValue(opts.connectReadyTimeoutMs, 'PERF_MULTI_CONNECT_READY_TIMEOUT_MS', parseEnvInt('PERF_CONNECT_READY_TIMEOUT_MS', 5000))],
+    ['connect_ready_timeout_ms', optionValue(opts.connectReadyTimeoutMs, 'PERF_MULTI_CONNECT_READY_TIMEOUT_MS', parseEnvInt('PERF_CONNECT_READY_TIMEOUT_MS', 10000))],
     ['monitor_hwm', optionValue(opts.monitorHwm, 'PERF_MULTI_MONITOR_HWM', 4096000)],
     ['server_ready_timeout_ms', optionValue(opts.serverReadyTimeoutMs, 'PERF_MULTI_SERVER_READY_TIMEOUT_MS', parseEnvInt('PERF_SERVER_READY_TIMEOUT_MS', 10000))],
     ['server_shutdown_timeout_ms', optionValue(opts.serverShutdownTimeoutMs, 'PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS', parseEnvInt('PERF_SERVER_SHUTDOWN_TIMEOUT_MS', 5000))],
@@ -394,7 +394,7 @@ function buildMultiOptionItems(opts) {
     ['transport_transition_ms', optionValue(opts.transportTransitionMs, 'PERF_MULTI_TRANSPORT_TRANSITION_MS', parseEnvInt('PERF_TRANSPORT_TRANSITION_MS', 3000))],
     ['pattern_transition_ms', optionValue(opts.patternTransitionMs, 'PERF_MULTI_PATTERN_TRANSITION_MS', parseEnvInt('PERF_PATTERN_TRANSITION_MS', 3000))],
     ['lat_timeout_ms', String(parseEnvInt('PERF_MULTI_LAT_TIMEOUT_MS', 5000))],
-    ['stream_non_tcp_clients_max', String(parseEnvPairInt('PERF_STREAM_NON_TCP_CLIENTS_MAX', 'PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX', 1000))],
+    ['stream_non_tcp_clients_max', String(parseEnvPairInt('PERF_STREAM_NON_TCP_CLIENTS_MAX', 'PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX', 10000))],
     ['disable_resource_metrics', String(Math.max(0, parseEnvInt('PERF_DISABLE_RESOURCE_METRICS', 0)))],
     ['timeout_seconds', timeoutOverride > 0 ? String(timeoutOverride) : 'auto']
   ];

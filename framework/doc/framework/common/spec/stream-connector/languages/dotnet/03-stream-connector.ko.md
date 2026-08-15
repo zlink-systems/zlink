@@ -23,7 +23,7 @@ runtime에 의존하지 않는다.**
 - [API snapshot](../../../../../../../languages/dotnet/contract/api/Systems.Zlink.Stream.Connector.api.txt)
 - [package snapshot](../../../../../../../languages/dotnet/contract/packages/Systems.Zlink.Stream.Connector.package.txt)
 
-이 문서는 [snapshot](../../../01-glossary.ko.md#snapshot)의 member를 반복해 나열하지 않고 **표면의 구조와 `.NET` 고유 의미**를 고정한다.
+이 문서는 [snapshot](../../../server/01-glossary.ko.md#snapshot)의 member를 반복해 나열하지 않고 **표면의 구조와 `.NET` 고유 의미**를 고정한다.
 검증 절차는 [이 문서 §15](#15-회귀-테스트)가 소유한다.
 
 **담당 대상은 네이티브 빌드다**(데스크톱·서버, Unity, Godot C#). Unity 네이티브 빌드는 별도
@@ -277,7 +277,7 @@ callback 안에서 시작한 후속 operation은 **현재 inbound flow를 재사
 flow를 정리한다.**
 
 wire 표현은 [공통 스펙 §4.2](../../32-stream-connector.ko.md)와
-[flow-correlation](../../../27-flow-correlation.ko.md)이 소유한다.
+[flow-correlation](../../../server/27-flow-correlation.ko.md)이 소유한다.
 
 ## 13. Metric
 
@@ -315,7 +315,7 @@ property로 표현한다.
 
 | 테스트 케이스 | 확인 기준 |
 |---------------|-----------|
-| `StreamConnectorTests.ConnectorImplementationIsHiddenBehindPublicInterface` | 구현 타입은 숨기고 [factory](../../../01-glossary.ko.md#factory)가 public interface를 반환한다. |
+| `StreamConnectorTests.ConnectorImplementationIsHiddenBehindPublicInterface` | 구현 타입은 숨기고 [factory](../../../server/01-glossary.ko.md#factory)가 public interface를 반환한다. |
 | `StreamConnectorTests.ConnectorCallInterfacesMatchTheFrozenSurface` | lifecycle, send, request와 wait call의 정확한 member를 고정한다. |
 | `StreamConnectorTests.ConnectorOptionsMatchTheFrozenDefaults` | connector option의 기본값을 고정한다. |
 | `StreamConnectorTests.ManualDispatchRunsHandlerOnDispatchCaller` | Manual callback은 dispatch caller에서 실행된다. |
@@ -324,7 +324,7 @@ property로 표현한다.
 | `StreamConnectorTests.RequestTimeoutRemovesPendingRequest` | timeout 뒤 pending request를 제거한다. |
 | `StreamConnectorTests.TcpTypedRequestCorrelatesResponse` | typed request와 response correlation을 유지한다. |
 | `StreamConnectorTests.TypedConnectorUsesJsonByDefaultAndDecodeReply` | typed 기본 codec은 JSON이다. |
-| `StreamConnectorTests.PacketNameAttributeIsUsedByDefault` | [packet name](../../../01-glossary.ko.md#packet-name) attribute를 기본 identity로 사용한다. |
+| `StreamConnectorTests.PacketNameAttributeIsUsedByDefault` | [packet name](../../../server/01-glossary.ko.md#packet-name) attribute를 기본 identity로 사용한다. |
 | `StreamConnectorTests.DisconnectEventCarriesTheFrozenCloseReasonContract` | disconnect event의 닫힌 종료 사유를 고정한다. |
 | `StreamConnectorTests.SessionClosingPublishesServerDrainReasonAfterDisconnectedState` | session-closing frame을 `ServerDrain` 사유로 변환한다. |
 | `StreamConnectorTests.SharedCloseFaultIsObservedByRepeatedCloseAndDispose` | 반복 close와 dispose가 같은 실패를 관찰한다. |

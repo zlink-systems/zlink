@@ -1,7 +1,7 @@
 # 7. Actor와 Spot
 
-> **이 장의 계약 소유 문서** — [Actor 모델](../../../common/spec/14-actor-model.ko.md)과
-> [Spot과 Actor membership](../../../common/spec/15-spot-actor.ko.md)이 동작을,
+> **이 장의 계약 소유 문서** — [Actor 모델](../../../common/spec/server/14-actor-model.ko.md)과
+> [Spot과 Actor membership](../../../common/spec/server/15-spot-actor.ko.md)이 동작을,
 > [언어별 Actor · Spot 공개 계약](../../../common/spec/server/languages/README.ko.md)이 정확한
 > 시그니처를 소유한다.
 
@@ -1153,7 +1153,7 @@ stale route 실패로 처리한다. Application은 `NodeRid`를 추적하지 않
 
 **이동 중에 보낸 request도 원래 caller에서 완료된다.** Target이 처리한 reply는 원래 caller로
 correlate되고, timeout은 caller의 기존 경로를 그대로 따르며, 늦게 도착한 reply는 drop된다
-([spot-actor 스펙 §10.5](../../../common/spec/15-spot-actor.ko.md)). 이동 중 reply를 기다리는
+([spot-actor 스펙 §10.5](../../../common/spec/server/15-spot-actor.ko.md)). 이동 중 reply를 기다리는
 request 수는 `zlink.mesh_node.requests.inflight`의 `surface=actor` 값으로 관측한다
 ([12-operations](12-operations.ko.md#1-런타임-메트릭)).
 
@@ -1299,4 +1299,4 @@ payload memory를 callback 밖에서 보관하려면 복사해야 한다.
 - 이 챕터 계약의 실행 검증 예문: `13. Interface 카탈로그` 장 §4 — 검증 클래스 `ActorContracts`
 - Session과 Actor binding: [Session Actor Dispatch](08-actor-session.ko.md)
 - STREAM server와 client: [STREAM](09-stream.ko.md)
-- Actor·Spot 주소 해석 규칙: [Object routing](../../../common/spec/18-object-routing.ko.md)
+- Actor·Spot 주소 해석 규칙: [Object routing](../../../common/spec/server/18-object-routing.ko.md)

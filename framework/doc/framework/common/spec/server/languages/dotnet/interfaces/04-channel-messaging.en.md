@@ -5,9 +5,9 @@
 ## 1. Node Direct And ChannelName
 
 Node direct and ChannelName use different handler families. The
-[Node direct](../../../../01-glossary.en.md#node-direct) context provides
+[Node direct](../../../01-glossary.en.md#node-direct) context provides
 the source RID, and the
-[ChannelName](../../../../01-glossary.en.md#channelname) context provides
+[ChannelName](../../../01-glossary.en.md#channelname) context provides
 logical membership.
 
 ```csharp
@@ -113,7 +113,7 @@ public interface IZLinkRouteClient
 
 Node direct submits to a single target RID that isn't an Object Client.
 The Channel operation selects the unique
-[RouteMesh](../../../../01-glossary.en.md#routemesh) or ClientServer send
+[RouteMesh](../../../01-glossary.en.md#routemesh) or ClientServer send
 path for a ChannelName from the process-local route index. It selects one
 ready positive-weight member by round-robin and submits within the same
 operation, and the client doesn't return the selected RID. If ClientServer
@@ -136,7 +136,7 @@ is kept for Channel traffic.
 MeshName on a RouteMesh/Spot/Actor handler is non-null, and it's null on
 a ClientServer/STREAM handler. A Channel handler's ChannelName is
 non-null, and only the Node-direct-dedicated context additionally
-provides [MeshName](../../../../01-glossary.en.md#meshname) and source
+provides [MeshName](../../../01-glossary.en.md#meshname) and source
 RID. A Logical Multicast subscription uses `ZLinkPublishMessageContext`,
 which adds topic and a nullable source. Correlation ID is non-null on a
 request and null on a send, and the framework preserves it together with
@@ -168,12 +168,12 @@ public interface IZLinkFanoutHandler<in TEvent>
 
 `IZLinkFanoutClient.Publish(...)` takes a ChannelName and typed event,
 and a call that needs an explicit topic uses the
-[topic](../../../../01-glossary.en.md#topic) overload. If topic is
+[topic](../../../01-glossary.en.md#topic) overload. If topic is
 omitted, the framework uses the event's
-[packet name](../../../../01-glossary.en.md#packet-name) as topic. A
+[packet name](../../../01-glossary.en.md#packet-name) as topic. A
 reserved topic is rejected with `ArgumentException`. The `Async(...)` of
 the returned dedicated call completes normally once source-local publish
 admission finishes. It doesn't return subscriber count or receipt
 completion. `IZLinkPublishCall` is a Logical-Multicast-dedicated call and
 isn't used for
-[classic fanout](../../../../01-glossary.en.md#classic-fanout).
+[classic fanout](../../../01-glossary.en.md#classic-fanout).

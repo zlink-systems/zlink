@@ -71,6 +71,34 @@ test('router forwards an unread received Message from managed storage', async ()
     router.close();
     ctx.close();
 });
+test('router repeatedly transfers pooled native receive frames without stale state', async () => {
+    const ctx = zlink.createContext();
+    const router = zlink.createRouterSocket(ctx);
+    const dealer = zlink.createDealerSocket(ctx);
+    router.bind('inproc://dealer-router-native-frame-reuse');
+    dealer.connect('inproc://dealer-router-native-frame-reuse');
+    const received = new zlink.Received();
+    const echoed = new zlink.Received();
+    for (let index = 0; index < 256; index += 1) {
+        const expected = `payload-${index}`;
+        await dealer.send().message(expected).submit();
+        assert.equal(router.recv(received), true);
+        assert.ok(received.routingId);
+        // Forward without data(): successful submit moves this exact native frame
+        // to Core. The next recv may reuse its storage only after that ownership
+        // transfer has completed and the public Message has been consumed.
+        await router.send(received.routingId)
+            .message(received.singlePartOrThrow())
+            .submit();
+        assert.equal(dealer.recv(echoed), true);
+        assert.equal(echoed.singlePartOrThrow().getString('utf8'), expected);
+    }
+    echoed.close();
+    received.close();
+    dealer.close();
+    router.close();
+    ctx.close();
+});
 test('router nonblocking recv returns false without data', () => {
     const ctx = zlink.createContext();
     const router = zlink.createRouterSocket(ctx);

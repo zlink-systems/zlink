@@ -17,8 +17,8 @@ title: "6. Spot · C#/.NET"
 
 # 6. Spot
 
-> **이 장의 계약 소유 문서** — [Spot 모델](../../../common/spec/11-spot-model.ko.md)과
-> [SPOT 메시징](../../../common/spec/12-spot-messaging.ko.md)이 동작을,
+> **이 장의 계약 소유 문서** — [Spot 모델](../../../common/spec/server/11-spot-model.ko.md)과
+> [SPOT 메시징](../../../common/spec/server/12-spot-messaging.ko.md)이 동작을,
 > [언어별 Spot 공개 계약](../../../common/spec/server/languages/README.ko.md)이 정확한
 > 시그니처를 소유한다. Actor와 Spot membership은
 > [Actor & Spot 호스팅](07-actor-spot.ko.md)에서 설명한다.

@@ -1,7 +1,7 @@
 # Java Location/Relocation Public Interface
 
-[Java exact interface list](README.en.md) · [Common Location Runtime](../../../../21-location-runtime.en.md) ·
-[Common Redis Provider](../../../../22-location-store-redis.en.md)
+[Java exact interface list](README.en.md) · [Common Location Runtime](../../../21-location-runtime.en.md) ·
+[Common Redis Provider](../../../22-location-store-redis.en.md)
 
 This document only defines the Java public contract an application and
 provider plugin author need to know. Authority, owner lease,

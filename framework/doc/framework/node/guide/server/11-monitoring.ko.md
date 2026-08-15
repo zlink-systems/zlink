@@ -119,7 +119,7 @@ structured record를 그 provider에 기록한다. Provider failure는 message o
 > 전에 필요한 계기가 실제로 나오는지 확인한다.**
 
 계기 이름 · 종류 · 단위 · label의 계약은
-[Runtime metric과 집계 규칙](../../../common/spec/25-runtime-metrics.ko.md)이 소유한다.
+[Runtime metric과 집계 규칙](../../../common/spec/server/25-runtime-metrics.ko.md)이 소유한다.
 
 ## 5. readiness와 liveness
 

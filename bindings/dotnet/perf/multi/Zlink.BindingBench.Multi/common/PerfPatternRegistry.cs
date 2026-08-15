@@ -12,11 +12,21 @@ internal static class MultiPerfPatternRegistry
                     .GetAwaiter().GetResult(),
                 static options => PerfMultiDealerRouterClient.Run(options)
                     .GetAwaiter().GetResult()),
+            new MultiPerfPattern("DEALER_ROUTER_SENDSEND",
+                static options => PerfMultiDealerRouterServer.Run(options)
+                    .GetAwaiter().GetResult(),
+                static options => PerfMultiDealerRouterClient.Run(options)
+                    .GetAwaiter().GetResult()),
             new MultiPerfPattern("DEALER_ROUTER_REQREP",
                 static options => PerfMultiSocketReqRep.RunDealerRouterServer(options),
                 static options => PerfMultiSocketReqRep.RunDealerRouterClient(options)
                     .GetAwaiter().GetResult()),
             new MultiPerfPattern("ROUTER_ROUTER",
+                static options => PerfMultiRouterRouterServer.Run(options)
+                    .GetAwaiter().GetResult(),
+                static options => PerfMultiRouterRouterClient.Run(options)
+                    .GetAwaiter().GetResult()),
+            new MultiPerfPattern("ROUTER_ROUTER_SENDSEND",
                 static options => PerfMultiRouterRouterServer.Run(options)
                     .GetAwaiter().GetResult(),
                 static options => PerfMultiRouterRouterClient.Run(options)

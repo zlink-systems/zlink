@@ -1,6 +1,6 @@
 # Java Channel Messaging Public Interface
 
-[Interface table of contents](README.en.md) · [Channel Messaging](../../../../08-channel-messaging.en.md)
+[Interface table of contents](README.en.md) · [Channel Messaging](../../../08-channel-messaging.en.md)
 
 ChannelName selects the send path within a process. The exact payload
 type of the RouteMesh/ClientServer/fanout builder, typed handler, and
@@ -121,23 +121,23 @@ public final class ZLinkRequestFailureException extends RuntimeException {
 ```
 
 A Channel call only uses the process-local
-[ChannelName](../../../../01-glossary.en.md#channelname) index. An
+[ChannelName](../../../01-glossary.en.md#channelname) index. An
 overload where the caller passes MeshName and ChannelName together to
 choose the physical wiring isn't provided. `sendToNode(String, RoutingId,
 Object)` specifies an exact RID, so its first argument is interpreted as
-[MeshName](../../../../01-glossary.en.md#meshname).
+[MeshName](../../../01-glossary.en.md#meshname).
 
 A Spot direct operation only takes the global SpotId as address and
 returns a Spot-dedicated fluent call. That call's `instanceSpot()` marker
 and optional stable type/initial Mesh express the cold-activation intent
 for a Missing Instance Spot. Without the marker, Missing authority ends
-as not-found. Existing [authority](../../../../01-glossary.en.md#authority)
+as not-found. Existing [authority](../../../01-glossary.en.md#authority)
 uses the stored kind/stable type and current owner, so it doesn't require
 type or Mesh again. The detailed members and
-[cold activation](../../../../01-glossary.en.md#cold-activation) selection
+[cold activation](../../../01-glossary.en.md#cold-activation) selection
 rules are owned by the [Java Spot Interface](spots.en.md).
 
-On the [RouteMesh](../../../../01-glossary.en.md#routemesh) builder
+On the [RouteMesh](../../../01-glossary.en.md#routemesh) builder
 `channel(channelName)` returns, select exactly one of `client()` or
 `server()`. The builder of `addClientServerChannel(channelName)` can
 register one or both of the two roles, but each role at most once.
@@ -156,7 +156,7 @@ using at least a 64-bit integer.
 
 ClientServer's local Server is also included in the same candidate set
 as a remote Server once it finishes listener and service admission. The
-same Ready, positive [weight](../../../../01-glossary.en.md#weight), and
+same Ready, positive [weight](../../../01-glossary.en.md#weight), and
 non-draining conditions apply — there's no local priority or remote
 exclusion rule. Even when a local Server is selected, the actual
 transport message is delivered from the Client DEALER to the Server
@@ -166,7 +166,7 @@ or terminal completion.
 Specifying the internal liveness-dedicated exact topic byte `01 5A 4C 46
 31` in `ZLinkFanoutClient.publish(...)` raises
 `ZLinkConfigurationException` without starting transport. The overload
-that omits [topic](../../../../01-glossary.en.md#topic) uses the typed
+that omits [topic](../../../01-glossary.en.md#topic) uses the typed
 event's packet name, so it doesn't create this internal topic.
 
 Behind the public call, the framework only uses the Java binding's

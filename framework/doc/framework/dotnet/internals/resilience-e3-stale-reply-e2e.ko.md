@@ -4,7 +4,7 @@
 새 request의 결과로 사용하지 않는지 검증하는 방법을 설명한다. 공개 Framework
 계약을 추가하지 않으며, 공통 시나리오
 [`RL-E3`](../../common/e2e/config-5-resilience-lifecycle.ko.md)와
-[Transport 연결 상태 확인](../../common/spec/29-transport-liveness.ko.md)의
+[Transport 연결 상태 확인](../../common/spec/server/29-transport-liveness.ko.md)의
 검증 조건을 .NET fixture에 연결하는 내부 설명이다.
 
 ## 검증 범위

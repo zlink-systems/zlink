@@ -185,6 +185,24 @@ public final class PerfUtil {
             expectedSize, halfRoundTrip);
     }
 
+    public static boolean recordActiveLatency(Metrics metrics, Message message,
+                                              int expectedSize,
+                                              boolean halfRoundTrip,
+                                              long receivedNanoTime) {
+        return PerfMetricHeader.recordActiveLatency(metrics, message,
+            expectedSize, halfRoundTrip, receivedNanoTime);
+    }
+
+    public static int headerPhase(Message message, int expectedSize) {
+        return PerfMetricHeader.phase(message, expectedSize);
+    }
+
+    public static int recordOneWayLatency(Metrics metrics, Message message,
+                                          int expectedSize, long activeEnd) {
+        return PerfMetricHeader.recordOneWayLatency(metrics, message,
+            expectedSize, activeEnd);
+    }
+
     public static String endpoint(String transport, String token) {
         return PerfMeasurement.endpoint(transport, token);
     }

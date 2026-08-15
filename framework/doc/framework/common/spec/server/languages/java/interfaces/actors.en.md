@@ -11,7 +11,7 @@ relocation itself isn't a physical/logical disconnect, it doesn't run the
 Actor disconnect callback. The route and physical connection of a
 different Actor not included in the relocation target aren't changed.
 
-[Interface table of contents](README.en.md) · [Common Actor Contract](../../../../14-actor-model.en.md)
+[Interface table of contents](README.en.md) · [Common Actor Contract](../../../14-actor-model.en.md)
 
 This document fixes the public interface that expresses Actor factory,
 context, messaging, manager, and relocation adapter in Java. A regular
@@ -41,7 +41,7 @@ public interface ZLinkActorRelocationAdapter<TActor extends ZLinkActor> {
 ```
 
 The exact builder member of
-[factory](../../../../01-glossary.en.md#factory) registration is owned
+[factory](../../../01-glossary.en.md#factory) registration is owned
 by [Configuration And Host](configuration-host.en.md). Cross-node
 relocation behavior is wired directly to the Actor factory configure
 callback. The runtime checks the Actor the factory returned against the
@@ -74,7 +74,7 @@ generation, or recovery phase.
 
 If an Actor factory uses `preserveStateWith(...)` in cross-node
 materialization, the same Actor adapter is used for maintenance Actor
-relocation, remote User/[Entry Spot](../../../../01-glossary.en.md#entry-user-instance-spot)
+relocation, remote User/[Entry Spot](../../../01-glossary.en.md#entry-user-instance-spot)
 join, and each Actor participant of a whole User Spot relocation. The
 adapter isn't called on a same-node join or on a factory that selected
 `disableRelocation()` or `recreateOnRelocation()`.
@@ -89,13 +89,13 @@ dispatch is switched atomically, the target opens as `READY`. Source
 cleanup, the `COMPLETED` record, and the bound-session location update
 response don't block the target's message processing. If the target
 process terminates after `READY`, it's handled as ordinary
-[owner](../../../../01-glossary.en.md#owner) loss, and the previous
+[owner](../../../01-glossary.en.md#owner) loss, and the previous
 relocation isn't automatically replayed. A public phase API for
 manipulating this barrier isn't provided.
 
 On a retry within the same source and target process, factory and
 `restore(...)` can be called more than once. `capture(...)` can also be
-repeated before the [authority](../../../../01-glossary.en.md#authority)
+repeated before the [authority](../../../01-glossary.en.md#authority)
 commit. Only the current owner and attempt fence can commit completion
 and open admission. Since the callback doesn't add a relocation ID,
 application restore and capture must be retry-safe, and exactly-once
@@ -115,7 +115,7 @@ and null `byte[]` from capture, and a null stage from restore, are
 adapter contract violations. A precommit adapter exception and contract
 violation where a deadline hasn't been fixed yet in host relocation are
 classified as `Blocked/StateIncompatible`. Once a
-[deadline](../../../../01-glossary.en.md#deadline) is fixed,
+[deadline](../../../01-glossary.en.md#deadline) is fixed,
 `Blocked/DeadlineExceeded` is used, and cancellation of a stale target
 attempt can't commit a terminal result. The adapter must be retry-safe to
 allow repeated calls and stale-attempt overlap, and an external side
@@ -153,7 +153,7 @@ target selection, an incompatible transferred state schema/type adapter gets
 restore, prepares the accepted journal as a staging queue the
 application handler hasn't run, and then performs the `NEW_OWNER` CAS.
 This CAS atomically changes owner, authority owner generation, and the
-current [Spot](../../../../01-glossary.en.md#spot) to the target
+current [Spot](../../../01-glossary.en.md#spot) to the target
 execution shell. Infrastructure relocation doesn't call an application
 membership callback. Dispatch opens after finishing journal/queue/Actor
 timer replay, source relay, and durable cleanup. There's no public phase

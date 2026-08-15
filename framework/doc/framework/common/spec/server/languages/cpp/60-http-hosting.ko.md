@@ -472,7 +472,7 @@ framework error kind는 HTTP status로 매핑한다.
 | `protocol_error` | `400 Bad Request` | client body가 DTO로 변환되지 않았거나 request 의미가 framework 계약과 맞지 않는다 |
 | `not_found` | `404 Not Found` | 대상 route, channel, service를 찾지 못했다 |
 | `framework_exception_t::code() == std::errc::timed_out` | `504 Gateway Timeout` | HTTP hosting 뒤의 zlink request가 시간 안에 끝나지 않았다 |
-| `framework_exception_t::code()`가 [shutdown](../../../01-glossary.ko.md#shutdown) 경계를 나타내고 host가 종료 중임 | `503 Service Unavailable` | host가 종료 중이다 |
+| `framework_exception_t::code()`가 [shutdown](../../01-glossary.ko.md#shutdown) 경계를 나타내고 host가 종료 중임 | `503 Service Unavailable` | host가 종료 중이다 |
 | `internal_failure` | `500 Internal Server Error` | 내부 handler 또는 runtime 실패다 |
 
 HTTP server runtime이 body size limit을 초과한 request를 감지하면 `413 Payload Too Large`로
@@ -492,7 +492,7 @@ HTTP server는 `hosted_service_t`로 실행한다.
 - 진행 중 request는 graceful shutdown timeout 안에서 완료되도록 기다린다.
 - shutdown 중 새 zlink submit을 무기한 만들지 않는다.
 
-HTTP endpoint는 handler가 주입받는 framework client가 ready 상태가 된 뒤에만 [ready](../../../01-glossary.ko.md#ready)로 전환한다.
+HTTP endpoint는 handler가 주입받는 framework client가 ready 상태가 된 뒤에만 [ready](../../01-glossary.ko.md#ready)로 전환한다.
 종료 시에는 새 HTTP request를 먼저 거부하고 진행 중 handler가 messaging drain 기한 안에서 완료될
 기회를 제공한다.
 

@@ -10,17 +10,17 @@
 > application host, **DI 컨테이너**, **configuration**, **logging**, lifecycle, 그리고 각 기능의
 > **등록 표면**이다.
 >
-> **기능의 의미와 동작 규칙은 공통 스펙이 소유한다** — [channel-messaging](../../../08-channel-messaging.ko.md),
-> [spot-messaging](../../../12-spot-messaging.ko.md), [MeshNode](../../../13-mesh-node.ko.md),
-> [stream-session](../../../19-stream-session.ko.md), [actor-model](../../../14-actor-model.ko.md),
-> [session-actor-dispatch](../../../20-session-actor-dispatch.ko.md),
-> [runtime-monitoring](../../../24-runtime-monitoring.ko.md),
-> [location-runtime](../../../21-location-runtime.ko.md),
-> [channel-topology](../../../07-channel-topology.ko.md).
+> **기능의 의미와 동작 규칙은 공통 스펙이 소유한다** — [channel-messaging](../../08-channel-messaging.ko.md),
+> [spot-messaging](../../12-spot-messaging.ko.md), [MeshNode](../../13-mesh-node.ko.md),
+> [stream-session](../../19-stream-session.ko.md), [actor-model](../../14-actor-model.ko.md),
+> [session-actor-dispatch](../../20-session-actor-dispatch.ko.md),
+> [runtime-monitoring](../../24-runtime-monitoring.ko.md),
+> [location-runtime](../../21-location-runtime.ko.md),
+> [channel-topology](../../07-channel-topology.ko.md).
 >
 > **public 타입과 시그니처는 [기능별 exact interface](interfaces/README.ko.md)가 소유한다.**
 > HTTP는 [60](60-http-hosting.ko.md)·[61](61-embedded-http-server.ko.md)이 소유한다.
-> **내부 runtime 구조는 [internals/runtime-architecture](../../../README.ko.md)가 소유한다** —
+> **내부 runtime 구조는 [internals/runtime-architecture](../../README.ko.md)가 소유한다** —
 > 공개 계약이 아니다.
 
 ## 1. 제품 포지션
@@ -67,7 +67,7 @@ class module_t;         // 기능 묶음 등록
 
 - **`module_t`는 관련 등록을 한 덩어리로 묶는다.** 큰 app을 기능 단위로 나눌 때 쓴다.
 - **runtime은 host startup에서 만들고 shutdown에서 정리한다.** lazy 생성으로 숨기지 않는다
-  ([channel-messaging §2](../../../08-channel-messaging.ko.md)).
+  ([channel-messaging §2](../../08-channel-messaging.ko.md)).
 
 ### 3.1 hosted service의 실행 순서
 
@@ -157,7 +157,7 @@ public:
 | **등록되지 않은 타입을 `get_required`** | **실패한다** |
 | 등록되지 않은 타입을 `get` | **빈 값을 돌려준다.** 실패하지 않는다 |
 | **scope 없이 `scoped` 서비스를 resolve** | **실패한다** — scoped는 scope를 요구한다 |
-| **닫힌 provider에서 resolve한다** | **[shutdown](../../../01-glossary.ko.md#shutdown) 경계 오류로 실패한다** |
+| **닫힌 provider에서 resolve한다** | **[shutdown](../../01-glossary.ko.md#shutdown) 경계 오류로 실패한다** |
 
 ### 4.6 수명과 정리
 
@@ -229,7 +229,7 @@ class logger_factory_t;
 ### 7.2 Middleware 실행 순서
 
 **middleware는 `before`/`after` 쌍이다.** handler filter의 `next` delegate 방식과 다르다
-([framework API §8.1](../../../06-framework-api.ko.md#81-handler-filter)).
+([framework API §8.1](../../06-framework-api.ko.md#81-handler-filter)).
 
 | 단계 | 순서 |
 |---|---|
@@ -243,7 +243,7 @@ class logger_factory_t;
 
 handler 등록 표면과 filter 계약은 [channel messaging §3](interfaces/03-channel-messaging.ko.md#3-handler-registry)이
 소유한다. filter의 언어 중립 의미는
-[framework API §8.1](../../../06-framework-api.ko.md#81-handler-filter)이 소유한다.
+[framework API §8.1](../../06-framework-api.ko.md#81-handler-filter)이 소유한다.
 
 ## 9. 기능 등록
 
@@ -257,9 +257,9 @@ handler 등록 표면과 filter 계약은 [channel messaging §3](interfaces/03-
 | HTTP | [60](60-http-hosting.ko.md) · [61](61-embedded-http-server.ko.md) |
 | monitoring · location | §13 Configuration과 Logging |
 
-**startup validation의 항목은 공통 스펙이 소유한다** — [channel-messaging §4](../../../08-channel-messaging.ko.md),
-[spot-messaging §8](../../../12-spot-messaging.ko.md), [stream-session §7.2](../../../19-stream-session.ko.md),
-[runtime-monitoring §6](../../../24-runtime-monitoring.ko.md).
+**startup validation의 항목은 공통 스펙이 소유한다** — [channel-messaging §4](../../08-channel-messaging.ko.md),
+[spot-messaging §8](../../12-spot-messaging.ko.md), [stream-session §7.2](../../19-stream-session.ko.md),
+[runtime-monitoring §6](../../24-runtime-monitoring.ko.md).
 
 **C++은 모든 위반을 host 시작 전에 실패로 만든다.** 오류는 예외가 아니라
 `result_t`/`framework_exception_t` 경계 규약을 따른다([common runtime](interfaces/01-common-runtime.ko.md)).

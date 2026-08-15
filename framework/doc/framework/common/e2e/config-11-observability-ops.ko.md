@@ -63,7 +63,7 @@ Client action이 Session gateway, Actor와 room Spot을 차례로 지나도 하�
 - 절차: Client가 고유 marker의 game action을 Stream으로 한 번 보낸다.
 - 검증: Connector outbound, Session inbound, Actor relay와 room Spot dispatch record가 같은 flow ID와
   marker를 가진다. 각 hop의 application handler는 한 번 실행된다.
-- 세부 동작: [Flow correlation §5](../spec/27-flow-correlation.ko.md)을 검증한다.
+- 세부 동작: [Flow correlation §5](../spec/server/27-flow-correlation.ko.md)을 검증한다.
 
 #### OBS-A2 Dispatch 실패 record에도 flow를 남긴다
 
@@ -77,7 +77,7 @@ Handler가 없는 message도 원래 요청 흐름과 함께 검색할 수 있어
 - 절차: Public typed client로 negative packet을 한 번 보내고 이어서 정상 packet을 보낸다.
 - 검증: Negative dispatch의 trace에는 caller가 만든 flow ID와 정식 error phase가 있다. 정상 packet도
   독립 flow로 처리되며 두 marker가 섞이지 않는다.
-- 세부 동작: [Flow correlation §7](../spec/27-flow-correlation.ko.md)을 검증한다.
+- 세부 동작: [Flow correlation §7](../spec/server/27-flow-correlation.ko.md)을 검증한다.
 
 #### OBS-A3 Tracing off 구간은 inbound flow를 전파하지 않는다
 
@@ -92,7 +92,7 @@ inbound message에서 새 flow를 시작한다.
 - 절차: 세 node를 지나는 고유 marker의 message를 한 번 보낸다.
 - 검증: Source record에는 flow가 있고 off node에는 flow trace가 없다. Target은 source와 다른 새 flow ID를
   만들며 application payload는 정상 처리한다.
-- 세부 동작: [Flow correlation §4](../spec/27-flow-correlation.ko.md)을 검증한다.
+- 세부 동작: [Flow correlation §4](../spec/server/27-flow-correlation.ko.md)을 검증한다.
 
 #### OBS-A4 Fanout payload를 전달하고 timer는 새 flow를 만든다
 
@@ -110,8 +110,8 @@ propagation을 확인하고, subscriber-local missing handler variant만 정식 
   Missing-handler subscriber의 local record는 `surface=classic_fanout`의 `no_handler` dispatch error이고
   `channel_route_kind`를 포함하지 않는다. Timer trace는 별도 flow ID와 `flow_origin=timer`를 가지며 timer
   handler가 한 번 실행된다.
-- 세부 동작: [Message flow tracing — attribute 포함 조건](../spec/26-message-flow-tracing.ko.md#32-attribute-포함-조건)과
-  [Flow correlation — Flow를 만드는 시점](../spec/27-flow-correlation.ko.md#4-flow를-만드는-시점)을 검증한다.
+- 세부 동작: [Message flow tracing — attribute 포함 조건](../spec/server/26-message-flow-tracing.ko.md#32-attribute-포함-조건)과
+  [Flow correlation — Flow를 만드는 시점](../spec/server/27-flow-correlation.ko.md#4-flow를-만드는-시점)을 검증한다.
 
 #### OBS-A5 실행 중 tracing level 변경을 적용한다
 
@@ -126,7 +126,7 @@ marker의 trace 범위가 level과 일치하는가.
 - 절차: 각 level 변경 awaitable이 완료된 직후 서로 다른 marker의 정상 또는 error request를 보낸다.
 - 검증: 모든 request는 정식 application 결과를 가진다. Off marker에는 flow trace가 없고 Errors marker에는
   error record만 있으며 마지막 marker부터 새 flow trace가 다시 생긴다.
-- 세부 동작: [Message-flow tracing — 실행 중에 기록 수준 변경](../spec/26-message-flow-tracing.ko.md#41-실행-중에-기록-수준-변경)을 검증한다.
+- 세부 동작: [Message-flow tracing — 실행 중에 기록 수준 변경](../spec/server/26-message-flow-tracing.ko.md#41-실행-중에-기록-수준-변경)을 검증한다.
 
 ### Track B — Runtime metric과 실제 사건 대조
 
@@ -144,7 +144,7 @@ Active connection gauge와 reconnect counter는 실제 connector lifecycle과 �
   완료되도록 한다.
 - 검증: Server active connection gauge는 각 단계의 실제 연결 수와 일치한다. Connector reconnect counter는
   해당 자동 재접속 사건만큼 증가하며 label은 spec의 닫힌 값만 사용한다.
-- 세부 동작: [Runtime metrics §4](../spec/25-runtime-metrics.ko.md)를 검증한다.
+- 세부 동작: [Runtime metrics §4](../spec/server/25-runtime-metrics.ko.md)를 검증한다.
 
 #### OBS-B2 Actor relocation metric을 확인한다
 
@@ -161,8 +161,8 @@ relocation 실패로 바꾸지는 않는다.
 - 검증: Completed counter delta는 1이고 `object_kind=actor`다. Duration과 interruption sample이 각각
   하나 추가되며 public 이동 결과가 성공이면 interruption 시간이 목표를 넘더라도 completed outcome을
   실패로 바꾸지 않는다.
-- 세부 동작: [Object와 STREAM metric](../spec/25-runtime-metrics.ko.md#4-object와-stream)과
-  [Host relocation과 shutdown metric](../spec/25-runtime-metrics.ko.md#5-host-relocation과-shutdown)을 검증한다.
+- 세부 동작: [Object와 STREAM metric](../spec/server/25-runtime-metrics.ko.md#4-object와-stream)과
+  [Host relocation과 shutdown metric](../spec/server/25-runtime-metrics.ko.md#5-host-relocation과-shutdown)을 검증한다.
 
 #### OBS-B3 Publish metric 부재와 owner lease lateness를 확인한다
 
@@ -179,8 +179,8 @@ Spec은 Logical Multicast와 classic fanout의 target별 publish metric을 제�
   owner lease renew lateness를 만든다.
 - 검증: Subscribers는 marker를 받지만 publish target·receive·drop 전용 metric은 생기지 않는다. Lease
   lateness sample은 증가하고 어떤 metric label에도 flow ID, Actor ID와 Spot ID가 없다.
-- 세부 동작: [Runtime metrics §6](../spec/25-runtime-metrics.ko.md)과
-  [§7](../spec/25-runtime-metrics.ko.md)을 검증한다.
+- 세부 동작: [Runtime metrics §6](../spec/server/25-runtime-metrics.ko.md)과
+  [§7](../spec/server/25-runtime-metrics.ko.md)을 검증한다.
 
 #### OBS-B4 Metric reader가 없어도 messaging을 처리한다
 
@@ -195,7 +195,7 @@ Metric reader와 exporter는 Application이 선택하는 수집 경계다. Reade
 - 절차: 두 host에 같은 marker의 request와 send를 각각 100개 실행한다.
 - 검증: 두 host의 reply, handler count와 payload 값이 같다. Reader가 없는 B에서 별도 exporter나 evidence
   queue를 요구하지 않는다. Allocation과 clock-read 비용은 benchmark 책임이다.
-- 세부 동작: [Runtime metrics §8](../spec/25-runtime-metrics.ko.md)을 검증한다.
+- 세부 동작: [Runtime metrics §8](../spec/server/25-runtime-metrics.ko.md)을 검증한다.
 
 ### Track C — Host Relocate와 Shutdown을 운영
 
@@ -215,7 +215,7 @@ Relocate를 시작한 Host는 기존 accepted work와 infrastructure를 유지�
 - 검증: Held 구간에 source는 `Relocating`, not-ready, not-accepting이며 신규 object는 source에 배치되지
   않는다. 완료 뒤 source status는 `Relocated`이고 process health endpoint는 유지된다. Host state metric도
   같은 닫힌 state를 반영한다.
-- 세부 동작: [Host maintenance §13](../spec/30-host-relocation-flow.ko.md)을 검증한다.
+- 세부 동작: [Host maintenance §13](../spec/server/30-host-relocation-flow.ko.md)을 검증한다.
 
 #### OBS-C2 Actor handoff 뒤 bound Session push를 유지한다
 
@@ -231,8 +231,8 @@ Actor가 다른 node로 이동하면 Framework가 bound Session의 Actor 위치�
   client가 relay request를 보내고 Actor가 post-relocation push를 보낸다.
 - 검증: Public current Actor location은 `play-b`이고 request handler evidence도 B에 있다. Client는 push를
   한 번 받으며 binding count와 Actor identity는 유지된다.
-- 세부 동작: [Actor와 Spot의 공통 handoff 순서](../spec/30-host-relocation-flow.ko.md#82-모든-actor와-spot이-따르는-공통-순서)와
-  [Session Actor relocation route barrier](../spec/20-session-actor-dispatch.ko.md#5-actor-relocation-route-barrier)를
+- 세부 동작: [Actor와 Spot의 공통 handoff 순서](../spec/server/30-host-relocation-flow.ko.md#82-모든-actor와-spot이-따르는-공통-순서)와
+  [Session Actor relocation route barrier](../spec/server/20-session-actor-dispatch.ko.md#5-actor-relocation-route-barrier)를
   검증한다.
 
 #### OBS-C3 User Spot aggregate와 member Actor를 함께 이동한다
@@ -252,7 +252,7 @@ global IDs로 message를 보내면 target에서 기존 application state를 이�
 - 검증: 모든 current locations는 `play-b`이며 ObjectGeneration은 이전 ref와 같다. Spot counter와 Actor
   state가 보존되고 각 handler가 target에서 한 번 실행된다. Source `OnClosing(RelocationOut)`과 target
   restore application callbacks도 operation당 정식 횟수로 기록된다.
-- 세부 동작: [Host maintenance §8.5](../spec/30-host-relocation-flow.ko.md)를
+- 세부 동작: [Host maintenance §8.5](../spec/server/30-host-relocation-flow.ko.md)를
   검증한다.
 
 #### OBS-C4 Shutdown은 relocation 없이 closing callback과 Session close를 수행한다
@@ -270,7 +270,7 @@ active Session을 정식 close reason으로 종료한 뒤 Host를 멈춘다.
 - 검증: 각 Spot callback은 `HostShutdown` reason으로 한 번 실행되고 callback 시점에 application state를
   읽을 수 있다. Client는 정식 server-drain close reason을 받고 Host result는 `Stopped/None`이다. Target
   node에 새 object가 생기지 않는다.
-- 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/30-host-relocation-flow.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
+- 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/server/30-host-relocation-flow.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
 
 #### OBS-C5 Eligible target이 없으면 source를 유지한다
 
@@ -288,8 +288,8 @@ Relocation을 받을 compatible target이 없으면 source object를 변경하�
   request를 보낸다.
 - 검증: Relocate는 정식 `Blocked` outcome과 blocker reason으로 끝난다. Source Host는 Serving이고 public
   location과 generation이 유지되며 follow-up request가 성공한다. Shutdown을 자동 시작하지 않는다.
-- 세부 동작: [Target 선택 전 조건](../spec/30-host-relocation-flow.ko.md#4-target을-선택하기-전에-확인하는-조건)과
-  [Mode에 맞는 target 선택](../spec/30-host-relocation-flow.ko.md#5-mode에-맞는-target을-선택한다)을 검증한다.
+- 세부 동작: [Target 선택 전 조건](../spec/server/30-host-relocation-flow.ko.md#4-target을-선택하기-전에-확인하는-조건)과
+  [Mode에 맞는 target 선택](../spec/server/30-host-relocation-flow.ko.md#5-mode에-맞는-target을-선택한다)을 검증한다.
 
 #### OBS-C6 Rolling update로 exact 새 version에 이동한다
 
@@ -308,7 +308,7 @@ Application patch는 새 version target을 먼저 ready로 만든 뒤 source wor
 - 검증: Result는 `Relocated/None`, mode `RollingUpdate`, effective version N+1이다. Current locations와
   handler evidence는 N+1 target을 가리키며 binding과 object generation은 유지된다. Source process는
   Relocated로 유지되고 후속 explicit Shutdown이 Stopped로 끝난다.
-- 세부 동작: [Host maintenance §5](../spec/30-host-relocation-flow.ko.md)을 검증한다.
+- 세부 동작: [Host maintenance §5](../spec/server/30-host-relocation-flow.ko.md)을 검증한다.
 
 #### OBS-C7 Planned maintenance는 같은 version target을 사용한다
 
@@ -322,7 +322,7 @@ Node 점검은 Application version을 바꾸지 않고 같은 version의 compati
 - 절차: Source stateful object에 accepted request가 있는 상태에서 PlannedMaintenance Relocate를 호출한다.
 - 검증: Accepted request는 terminal 결과를 하나 받고 Relocate result의 effective version은 N이다. Current
   object location과 후속 handler evidence는 target을 가리키며 state와 generation이 유지된다.
-- 세부 동작: [Host maintenance §5](../spec/30-host-relocation-flow.ko.md)을 검증한다.
+- 세부 동작: [Host maintenance §5](../spec/server/30-host-relocation-flow.ko.md)을 검증한다.
 
 #### OBS-C8 Shutdown deadline에서 bounded forced teardown을 수행한다
 
@@ -338,7 +338,7 @@ Spot closing callback이 끝나지 않아도 Shutdown은 host deadline을 넘겨
 - 검증: Callback이 받은 absolute deadline은 Host deadline과 같다. Host result는
   `ForceStopped/DeadlineExceeded`이고 forced-shutdown metric delta는 1이다. Late callback completion이 Host
   terminal을 바꾸지 않는다.
-- 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/30-host-relocation-flow.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
+- 세부 동작: [Shutdown과 Relocate의 경쟁](../spec/server/30-host-relocation-flow.ko.md#11-shutdown과-relocate의-경쟁)을 검증한다.
 
 #### OBS-C9A Automatic topology는 target ready 뒤 relocation을 시작한다
 
@@ -355,8 +355,8 @@ topology status에서 ready가 된 뒤 workload를 이동해야 한다.
   ready를 확인한다.
 - 검증: Not-ready 구간에 source request가 정상 처리되고 current location은 source다. Target ready 뒤
   Relocate가 성공하고 후속 request는 target에서 처리된다.
-- 세부 동작: [Target 선택 전 조건](../spec/30-host-relocation-flow.ko.md#4-target을-선택하기-전에-확인하는-조건)과
-  [Mode에 맞는 target 선택](../spec/30-host-relocation-flow.ko.md#5-mode에-맞는-target을-선택한다)을 검증한다.
+- 세부 동작: [Target 선택 전 조건](../spec/server/30-host-relocation-flow.ko.md#4-target을-선택하기-전에-확인하는-조건)과
+  [Mode에 맞는 target 선택](../spec/server/30-host-relocation-flow.ko.md#5-mode에-맞는-target을-선택한다)을 검증한다.
 
 #### OBS-C10 Relocation mode가 정한 exact version만 선택한다
 
@@ -370,7 +370,7 @@ Weight가 높더라도 mode와 version filter를 통과하지 못한 target은 �
 - 절차: Fresh source에서 PlannedMaintenance와 RollingUpdate N+1을 각각 실행한다.
 - 검증: 첫 result와 current locations는 N target, 두 번째는 N+1 target이다. N+2와 잘못된 version target의
   handler evidence는 없다.
-- 세부 동작: [Host maintenance §5](../spec/30-host-relocation-flow.ko.md)을 검증한다.
+- 세부 동작: [Host maintenance §5](../spec/server/30-host-relocation-flow.ko.md)을 검증한다.
 
 #### OBS-C11 Concurrent Relocate option 충돌을 처리한다
 
@@ -387,7 +387,7 @@ operation의 target이나 deadline을 바꾸면 안 된다.
   시작한다. Target gate를 해제한다.
 - 검증: 같은 option의 두 waiter는 동일한 terminal result를 받고 relocation은 한 번 수행된다. 다른 두
   calls는 `Blocked/OperationInProgress`이며 first operation의 effective version과 deadline을 바꾸지 않는다.
-- 세부 동작: [Concurrent 호출과 cancellation](../spec/30-host-relocation-flow.ko.md#6-concurrent-호출과-cancellation)을
+- 세부 동작: [Concurrent 호출과 cancellation](../spec/server/30-host-relocation-flow.ko.md#6-concurrent-호출과-cancellation)을
   검증한다.
 
 #### OBS-C12 Relocate waiter와 Shutdown 경쟁을 구분한다
@@ -408,7 +408,7 @@ operation과 terminal-once를 유지하는가.
   지원 언어 variant에서는 두 번째 waiter만 cancellation이고 shared operation은 계속된다. 첫 waiter는
   `ShutdownRequested` 경쟁 결과 또는 이미 확정된 relocation result를 받는다. Shutdown terminal은 반복
   status 조회에서도 바뀌지 않는다.
-- 세부 동작: [Host maintenance §11](../spec/30-host-relocation-flow.ko.md)을
+- 세부 동작: [Host maintenance §11](../spec/server/30-host-relocation-flow.ko.md)을
   검증한다.
 
 ## 5. 완료 기준

@@ -128,6 +128,12 @@ final class NativeMessageRuntime {
             }
 
             @Override
+            public Message materializeSingleVectorShared(Object parts) {
+                return NativeMessageRuntime.materializeSingleVectorShared(
+                    (MemorySegment) parts);
+            }
+
+            @Override
             public Message adoptOwnedMessage(Object nativeMsg) {
                 return ContractAccess.messageAdoptOwnedNative(nativeMsg);
             }
@@ -271,6 +277,35 @@ final class NativeMessageRuntime {
     static Message[] materializeVectorShared(MemorySegment partsAddr,
                                              long count) {
         return materializeVector(partsAddr, count, null, false);
+    }
+
+    static Message materializeSingleVectorShared(MemorySegment partsAddr) {
+        if (partsAddr == null || partsAddr.address() == 0) {
+            throw new IllegalArgumentException("message vector is empty");
+        }
+        long messageSize = layoutSize();
+        MemorySegment source = MemorySegment.ofAddress(partsAddr.address())
+            .reinterpret(messageSize);
+        Message message = ContractAccess.messagePrepareVectorTarget(null);
+        boolean moved = false;
+        try {
+            int rc = move((MemorySegment) ContractAccess.messageNativeHandle(message),
+                source);
+            if (rc != 0) {
+                throw ZlinkException.fromLastError(
+                    systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+            }
+            ContractAccess.messageFinishVectorMove(message, false);
+            moved = true;
+            return message;
+        } finally {
+            if (!moved) {
+                try {
+                    message.close();
+                } catch (RuntimeException ignored) {
+                }
+            }
+        }
     }
 
     private static void resetBuilt(Message[] out, int built) {

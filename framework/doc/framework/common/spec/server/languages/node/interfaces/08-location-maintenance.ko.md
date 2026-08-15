@@ -1,8 +1,8 @@
 # Node.js Location·Relocation provider exact interface
 
 [Node.js 공개 interface 목차](README.ko.md) ·
-[Location Runtime](../../../../21-location-runtime.ko.md) ·
-[Redis Location Store](../../../../22-location-store-redis.ko.md)
+[Location Runtime](../../../21-location-runtime.ko.md) ·
+[Redis Location Store](../../../22-location-store-redis.ko.md)
 
 이 문서는 외부 provider가 구현하는 최소 public SPI와 공식 Redis extension의 public declaration을
 고정한다. Authority, owner lease, reservation, capacity, aggregate와 relocation state machine은

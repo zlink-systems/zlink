@@ -12,7 +12,7 @@ connection of a different Actor not included in the relocation target
 aren't changed.
 
 [Interface table of contents](README.en.md) · [Java Spot](../../java/interfaces/spots.en.md) ·
-[Common Spot Contract](../../../../15-spot-actor.en.md)
+[Common Spot Contract](../../../15-spot-actor.en.md)
 
 The information the Location Store holds, fixing the current owner and
 lifecycle state of a Spot, is called authority. The process of
@@ -20,14 +20,14 @@ preparing a new Instance Spot when authority is Missing and the caller
 specified Instance intent is called cold activation.
 
 SpotId is a `String` of UTF-8 encoded size 1..255 bytes, a logical ID
-unique across the whole [Location Store](../../../../01-glossary.en.md#location-store)
+unique across the whole [Location Store](../../../01-glossary.en.md#location-store)
 transaction domain. Comparison is case-sensitive exact match, with no
 Unicode normalization or case folding applied. A regular
-[Spot](../../../../01-glossary.en.md#spot) send/request only takes
+[Spot](../../../01-glossary.en.md#spot) send/request only takes
 SpotId. `SpotRef(spotId, objectGeneration, meshName, nodeRid)` is an
 immutable snapshot only used when closing an exact incarnation.
 `objectGeneration` is `1..Long.MAX_VALUE`, and a decimal string in
-JSON. User and [Instance Spot](../../../../01-glossary.en.md#entry-user-instance-spot)
+JSON. User and [Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
 type is a stable exact value of UTF-8 1..255 bytes. The Java enum's
 numeric value is `ZLinkSpotKind.INVALID=0`, `ENTRY=1`, `USER=2`,
 `INSTANCE=3`, and Kotlin doesn't use ordinal as the contract value — it
@@ -35,7 +35,7 @@ uses `value()`. A creatable-kind enum isn't provided.
 
 `ZLinkSpotManager.create(spotType)` generates a User Spot ID, and
 `getOrCreate(spotId, spotType)` uses a caller-specified User
-[Spot ID](../../../../01-glossary.en.md#spot-id). The manager doesn't
+[Spot ID](../../../01-glossary.en.md#spot-id). The manager doesn't
 provide Instance Spot create/get-or-create. Both operations return a
 Kotlin-only single-use wrapper that preserves `inMesh`, `request`,
 `timeout`. Terminal `await()` or `yield()` is called exactly once. The
@@ -47,7 +47,7 @@ A Spot send/request only takes the global SpotId as address and returns
 a Kotlin-only Spot call wrapper. Only a call that called `instanceSpot()`
 or `instanceSpot(stableType)` creates a Missing Instance Spot's
 cold-activation intent. Without the marker, Missing
-[authority](../../../../01-glossary.en.md#authority) is not-found. If
+[authority](../../../01-glossary.en.md#authority) is not-found. If
 existing authority exists, it uses the stored stable type regardless of
 the number of registered types, so it doesn't require the type again.
 
@@ -56,12 +56,12 @@ when the Mesh placement selected has exactly one distinct serving
 Instance type. If `inMesh` is specified, that Mesh becomes the type
 selection scope, and with two or more,
 `instanceSpot(stableType)` is required. The
-[stable type](../../../../01-glossary.en.md#stable-type) argument is
+[stable type](../../../01-glossary.en.md#stable-type) argument is
 only used for Missing cold activation, and isn't needed to resolve
 existing authority. If the caller-specified type differs from the
 stored type, it's `TypeMismatch`. `inMesh` only applies when selecting
 the Mesh for Missing cold activation, and doesn't relocate an existing
-[owner](../../../../01-glossary.en.md#owner). The wrapper keeps this
+[owner](../../../01-glossary.en.md#owner). The wrapper keeps this
 fluent state and ends the Java call at `await()` or `yield()`.
 
 ### Instance Spot Cold Activation And The First Message
@@ -72,27 +72,27 @@ Java runtime in the following order.
 1. The source looks up authority. If Ready, it sends a regular message
    to the current owner.
 2. If authority is Missing and there's
-   [Instance intent](../../../../01-glossary.en.md#instance-intent), the
+   [Instance intent](../../../01-glossary.en.md#instance-intent), the
    source selects an eligible target. It then puts SpotId, stable type,
    creation intent, and the first message into an activation envelope
    and sends it to the target. The source doesn't create a placement
    reservation. This envelope is a Framework infrastructure message
    that can be delivered even before the
-   [Ready](../../../../01-glossary.en.md#ready) CAS, and isn't
+   [Ready](../../../01-glossary.en.md#ready) CAS, and isn't
    delivered to the application handler.
 3. The target Java runtime first stores the complete envelope,
    including metadata presence and frame, as an immutable recovery root
    in the Relocation Store.
 4. Only when there's no local Instance matching the requested SpotId
    and stable type does the target reserve itself as owner. The
-   reserved [snapshot](../../../../01-glossary.en.md#snapshot) is
+   reserved [snapshot](../../../01-glossary.en.md#snapshot) is
    returned with a reservation fence identifying which reservation it
    is, and a receipt proving the recovery root's storage is complete,
    both received from the provider.
 5. Only the target that wins the authority reservation race (CAS
    winner) runs factory and initialize and confirms the first record of
    the durable activation inbox. A target that loses the race (CAS
-   loser) doesn't start a [factory](../../../../01-glossary.en.md#factory) —
+   loser) doesn't start a [factory](../../../01-glossary.en.md#factory) —
    it re-reads current authority and either sends a message to the
    owner or joins the in-progress attempt.
 6. The winner publishes the recovery root/cursor and Ready state while
@@ -135,7 +135,7 @@ sequenceDiagram
 ```
 
 This diagram only shows the first message that starts
-[cold activation](../../../../01-glossary.en.md#cold-activation) and the
+[cold activation](../../../01-glossary.en.md#cold-activation) and the
 authority race. The handler's terminal completion or reply, and recovery
 pointer removal, are defined in the later steps of the numbered list.
 
@@ -172,7 +172,7 @@ target sealed while allowing a retry with the same payload on the same
 target process. A different target isn't automatically selected. A
 null stage and null capture payload are contract violations. Host
 relocation's precommit adapter exception/contract violation is
-`Blocked/StateIncompatible` if a [deadline](../../../../01-glossary.en.md#deadline)
+`Blocked/StateIncompatible` if a [deadline](../../../01-glossary.en.md#deadline)
 hasn't been fixed yet, and `Blocked/DeadlineExceeded` once the deadline
 is fixed. Stale attempt cancellation can't commit a terminal result. The
 callback is at-least-once and can overlap with a stale attempt, so it
@@ -451,7 +451,7 @@ from a User Spot to an Entry Spot calls the target's
 `onJoinedActorSuspending` and the source's `onLeaveActorSuspending`.
 Neither the `SpotWide` User Spot aggregate nor the `PerActor` User
 Spot's Actor relocation calls any of the member's Entry/User Spot
-[membership](../../../../01-glossary.en.md#membership) callbacks.
+[membership](../../../01-glossary.en.md#membership) callbacks.
 
 The default User Spot factory mode is `SPOT_WIDE`. In this mode, the
 suspending Spot/Actor/timer/lifecycle callback keeps the User Spot gate

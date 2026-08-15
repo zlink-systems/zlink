@@ -9,22 +9,22 @@ owner와 membership을 commit한 뒤 message 처리를 시작한다. Target runt
 변경하지 않는다.
 
 [인터페이스 목차](README.ko.md) · [Java Spot](../../java/interfaces/spots.ko.md) ·
-[Spot 공통 계약](../../../../15-spot-actor.ko.md)
+[Spot 공통 계약](../../../15-spot-actor.ko.md)
 
 Location Store가 Spot의 current owner와 lifecycle state를 확정해 보관하는 정보를 authority라 한다.
 Authority가 Missing이고 caller가 Instance intent를 지정했을 때 새 Instance Spot을 준비하는 과정을
 cold activation이라 한다.
 
-SpotId는 UTF-8 encoded 크기 1..255 bytes의 `String`이며 [Location Store](../../../../01-glossary.ko.md#location-store) transaction domain 전체에서 유일한 logical ID다.
-비교는 case-sensitive exact match이고 Unicode normalization과 case folding을 적용하지 않는다. 일반 [Spot](../../../../01-glossary.ko.md#spot) send/request는
+SpotId는 UTF-8 encoded 크기 1..255 bytes의 `String`이며 [Location Store](../../../01-glossary.ko.md#location-store) transaction domain 전체에서 유일한 logical ID다.
+비교는 case-sensitive exact match이고 Unicode normalization과 case folding을 적용하지 않는다. 일반 [Spot](../../../01-glossary.ko.md#spot) send/request는
 SpotId만 받는다. `SpotRef(spotId, objectGeneration, meshName, nodeRid)`는 exact incarnation을 close할 때만
 사용하는 immutable snapshot이다. `objectGeneration`은 `1..Long.MAX_VALUE`이고 JSON에서는 decimal string이다.
-User와 [Instance Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) type은 UTF-8 1..255 bytes의 stable exact value다.
+User와 [Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) type은 UTF-8 1..255 bytes의 stable exact value다.
 Java enum의 numeric value는 `ZLinkSpotKind.INVALID=0`, `ENTRY=1`, `USER=2`, `INSTANCE=3`이고
 Kotlin은 ordinal을 계약 값으로 사용하지 않고 `value()`를 사용한다. Creatable kind enum은 제공하지 않는다.
 
 `ZLinkSpotManager.create(spotType)`은 User Spot ID를 생성하고,
-`getOrCreate(spotId, spotType)`은 caller가 정한 User [Spot ID](../../../../01-glossary.ko.md#spot-id)를 사용한다. Manager는 Instance Spot
+`getOrCreate(spotId, spotType)`은 caller가 정한 User [Spot ID](../../../01-glossary.ko.md#spot-id)를 사용한다. Manager는 Instance Spot
 create/get-or-create를 제공하지 않는다. 두 operation은 `inMesh`, `request`, `timeout`을 보존하는 Kotlin
 전용 single-use wrapper를 반환한다. Terminal `await()` 또는
 `yield()`를 정확히 한 번 호출한다. 중복 option과 중복 terminal, Mesh 선택, type 충돌과 deadline 규칙은
@@ -34,15 +34,15 @@ Framework가 만들며 public create 대상이 아니다.
 Spot send/request는 global SpotId만 address로 받고 Kotlin 전용 Spot call wrapper를 반환한다.
 `instanceSpot()`이나 `instanceSpot(stableType)`을 호출한 call만 Missing Instance Spot의 cold
 activation intent를 만든다. Marker가 없으면 Missing
-[authority](../../../../01-glossary.ko.md#authority)는 not-found다. Existing authority가 있으면
+[authority](../../../01-glossary.ko.md#authority)는 not-found다. Existing authority가 있으면
 등록 type 수와 관계없이 저장된 stable type을 사용하므로 type을 다시 요구하지 않는다.
 
 Missing authority에 `instanceSpot()`을 사용하면 placement가 선택한 Mesh의 serving Instance type이 distinct
 value 하나일 때만 그 type을 자동 선택한다. `inMesh`를 지정하면 그 Mesh가 type 선택 범위가 되며, 두 개
-이상이면 `instanceSpot(stableType)`이 필요하다. [Stable type](../../../../01-glossary.ko.md#stable-type) 인자는 Missing cold activation에만 사용하고
+이상이면 `instanceSpot(stableType)`이 필요하다. [Stable type](../../../01-glossary.ko.md#stable-type) 인자는 Missing cold activation에만 사용하고
 existing authority를 resolve하는 데는 필요하지 않다. Caller가 명시한 type과 stored type이 다르면
 `TypeMismatch`다.
-`inMesh`는 Missing cold activation에서 Mesh를 선택할 때만 적용하며 existing [owner](../../../../01-glossary.ko.md#owner)를
+`inMesh`는 Missing cold activation에서 Mesh를 선택할 때만 적용하며 existing [owner](../../../01-glossary.ko.md#owner)를
 재배치하지 않는다. Wrapper가 이 fluent state를 유지한 채 `await()` 또는 `yield()`에서 Java call을
 종료한다.
 
@@ -52,17 +52,17 @@ Kotlin API를 사용해도 Instance Spot 생성은 Java runtime이 다음 순서
 
 1. Source가 authority를 조회한다. Ready이면 current owner에게
    일반 message를 보낸다.
-2. Authority가 Missing이고 [Instance intent](../../../../01-glossary.ko.md#instance-intent)가 있으면 source가 eligible target을 선택한다. 이어서 SpotId,
+2. Authority가 Missing이고 [Instance intent](../../../01-glossary.ko.md#instance-intent)가 있으면 source가 eligible target을 선택한다. 이어서 SpotId,
    stable type, creation intent와 first message를 activation envelope에 담아 target으로 보낸다. Source는
-   placement reservation을 만들지 않는다. 이 envelope는 [Ready](../../../../01-glossary.ko.md#ready) CAS 전에도 전달할 수 있는 Framework
+   placement reservation을 만들지 않는다. 이 envelope는 [Ready](../../../01-glossary.ko.md#ready) CAS 전에도 전달할 수 있는 Framework
    infrastructure message이며 application handler에는 전달하지 않는다.
 3. Target Java runtime은 metadata presence와 frame을 포함한 complete envelope를 Relocation Store에
    immutable recovery root로 먼저 저장한다.
 4. 요청한 SpotId와 stable type에 일치하는 Instance가 local에 없을 때만 target이 자신을 owner로
-   예약한다. Reserved [snapshot](../../../../01-glossary.ko.md#snapshot)은 어떤 예약인지 식별하는 reservation fence와 recovery root의 저장 완료를
+   예약한다. Reserved [snapshot](../../../01-glossary.ko.md#snapshot)은 어떤 예약인지 식별하는 reservation fence와 recovery root의 저장 완료를
    증명하는 receipt를 provider에서 받아 반환한다.
 5. Authority reservation 경쟁에서 이긴 target(CAS winner)만 factory와 initialize를 실행하고 durable
-   activation inbox의 first record를 확정한다. 경쟁에서 진 target(CAS loser)은 [factory](../../../../01-glossary.ko.md#factory)를 시작하지 않으며
+   activation inbox의 first record를 확정한다. 경쟁에서 진 target(CAS loser)은 [factory](../../../01-glossary.ko.md#factory)를 시작하지 않으며
    current authority를 다시 읽어 owner에게 message를 보내거나 진행 중인 attempt에 합류한다.
 6. Winner는 handler 실행을 막는 barrier를 닫아 둔 상태에서 recovery root·cursor와 Ready state를
    게시한다.
@@ -100,7 +100,7 @@ sequenceDiagram
     end
 ```
 
-이 그림은 [cold activation](../../../../01-glossary.ko.md#cold-activation)을 시작하는 첫 message와
+이 그림은 [cold activation](../../../01-glossary.ko.md#cold-activation)을 시작하는 첫 message와
 authority 경쟁만 보여 준다. Handler의 terminal completion 또는 reply와 recovery pointer 제거는 번호
 목록의 후반 단계에 정의한다.
 
@@ -125,7 +125,7 @@ Restore는 호출마다 fresh defensive copy를 받고 completion 뒤 보관하�
 재사용하지 않는다. 같은 attempt의 restore는 반복될 수 있다. Capture exception은 source authority와 admission을
 유지하고 restore exception은 target을 sealed 상태로 유지한 채 같은 target process에서 동일한 payload로 다시
 시도할 수 있다. 다른 target을 자동 선택하지 않는다. Null stage와 null capture payload는 contract 위반이다. Host relocation의 precommit adapter
-exception·contract violation은 [deadline](../../../../01-glossary.ko.md#deadline)이 먼저 확정되지 않았으면 `Blocked/StateIncompatible`, deadline이 먼저
+exception·contract violation은 [deadline](../../../01-glossary.ko.md#deadline)이 먼저 확정되지 않았으면 `Blocked/StateIncompatible`, deadline이 먼저
 확정되면 `Blocked/DeadlineExceeded`다. Stale attempt cancellation은 terminal result를 commit하지 못한다.
 Callback은 at-least-once이고 stale attempt와 겹칠 수 있으므로 retry-safe해야 한다.
 
@@ -387,7 +387,7 @@ commit한 뒤 Actor message 처리를 시작한다. Bound Session 위치 갱신�
 User Spot에서 Entry Spot으로 돌아갈 때는 target의 `onJoinedActorSuspending`과 source의
 `onLeaveActorSuspending`을 호출한다. `SpotWide` User Spot aggregate와 `PerActor`
 User Spot의 Actor relocation에서는 member의 Entry/User Spot
-[membership](../../../../01-glossary.ko.md#membership) callback을 모두 호출하지 않는다.
+[membership](../../../01-glossary.ko.md#membership) callback을 모두 호출하지 않는다.
 
 User Spot factory mode의 기본값은 `SPOT_WIDE`다. 이 mode에서 suspending Spot·Actor·timer·lifecycle callback은
 일반 suspension 동안 User Spot gate를 유지한다. Member Actor는 Actor FIFO claim도 함께 유지한다.

@@ -9,7 +9,7 @@
 > 참고 자료로만 사용한다.
 
 비동기 실행, `Promise`, helper 동기 함수의 공통 의미는
-[비동기 실행과 coroutine 정책](../common/spec/05-async-execution-policy.ko.md)을 따른다.
+[비동기 실행과 coroutine 정책](../common/spec/server/05-async-execution-policy.ko.md)을 따른다.
 Node framework 의 서버와 client network API 는 `Promise` 기반 비동기 함수로 투영한다.
 `Async` suffix 는 옮기지 않고, `connect()`, `close()`, `submit()`, `waitFor()`,
 `start()`, `stop()`, `handle()` 처럼 동작 이름과 `Promise<T>` 반환 타입으로 비동기
@@ -39,7 +39,7 @@ API만 설명한다.
 | [system-structure](../common/spec/server/languages/node/01-system-structure.ko.md) | 패키지 구조, NestJS 등록, lifecycle과 startup validation |
 | [인터페이스 목차](../common/spec/server/languages/node/interfaces/README.ko.md) | 범주별 interface·decorator·context·options 카탈로그 |
 
-**기능의 의미와 동작 규칙은 [공통 스펙](../common/spec/README.ko.md)이 소유한다.** 언어별 문서는
+**기능의 의미와 동작 규칙은 [공통 스펙](../common/spec/server/README.ko.md)이 소유한다.** 언어별 문서는
 그 의미가 Node/NestJS에서 어떤 모양인지만 고정한다.
 
 ## 3. 내부 기준 (`internals/`)
@@ -51,7 +51,7 @@ API만 설명한다.
 |------|------|
 | [backend-dependency-policy](internals/backend-dependency-policy.ko.md) | backend 교체 가능성, public surface 격리 |
 | [transport-readiness](internals/01-transport-readiness.ko.md) | transport readiness, liveness, 실행 queue 기본 한도 |
-| [공통 내부 구조](../common/spec/README.ko.md) | 네 언어가 공유하는 runtime 아키텍처 결정 |
+| [공통 내부 구조](../common/spec/server/README.ko.md) | 네 언어가 공유하는 runtime 아키텍처 결정 |
 | [regression-test-matrix](internals/regression-test-matrix.ko.md) | 회귀 테스트 기준 |
 
 ## 4. 공통 샘플

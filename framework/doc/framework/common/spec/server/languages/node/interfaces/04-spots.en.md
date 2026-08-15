@@ -11,15 +11,15 @@ it doesn't run the Actor disconnect callback. The route and physical
 connection of a different Actor not included in the relocation target
 aren't changed.
 
-[Interface table of contents](README.en.md) · [Spot Address And Messaging](../../../../16-spot-address-messaging.en.md) ·
-[Spot/Actor Membership](../../../../15-spot-actor.en.md)
+[Interface table of contents](README.en.md) · [Spot Address And Messaging](../../../16-spot-address-messaging.en.md) ·
+[Spot/Actor Membership](../../../15-spot-actor.en.md)
 
 This document fixes the exact TypeScript declarations related to Spot
 that `@zlink-systems/framework` and `@zlink-systems/nestjs` export in
 ZLink Framework.
 
 The information the Location Store holds, fixing the current owner and
-lifecycle state of a [Spot](../../../../01-glossary.en.md#spot), is
+lifecycle state of a [Spot](../../../01-glossary.en.md#spot), is
 called authority. The process of preparing a new Instance Spot when
 authority is Missing and the caller specified Instance intent is called
 cold activation.
@@ -27,11 +27,11 @@ cold activation.
 ## 1. Global Identity And Lifecycle
 
 `SpotId` is a `string` of UTF-8 encoded size 1..255 bytes, a logical ID
-unique across the whole [Location Store](../../../../01-glossary.en.md#location-store)
+unique across the whole [Location Store](../../../01-glossary.en.md#location-store)
 transaction domain. Comparison is case-sensitive exact match, with no
 Unicode normalization or case folding applied. A regular message only
 takes SpotId and resolves current
-[authority](../../../../01-glossary.en.md#authority). `SpotRef` is the
+[authority](../../../01-glossary.en.md#authority). `SpotRef` is the
 immutable location snapshot used to close an exact incarnation.
 
 ```ts
@@ -154,11 +154,11 @@ used in the Spot lifecycle.
 Instance-Spot-only reason and isn't delivered to Entry Spot or User
 Spot. The idle judgment condition and the reactivation rule after
 cleanup are owned by
-[Spot Model §6.2](../../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
+[Spot Model §6.2](../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
 `deadline` is the closing operation's absolute UTC instant. The
 framework doesn't abort `cleanupSignal` before the callback invocation,
 and aborts it when the deadline ends. Only Entry/User/
-[Instance Spot](../../../../01-glossary.en.md#entry-user-instance-spot)
+[Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
 receive this callback — a per-Actor closing callback isn't provided.
 Host Shutdown runs the callback while Actor membership and the local
 instance are valid, and cleans up scope and authority after fulfillment.
@@ -295,19 +295,19 @@ Entry/User/Instance SpotId is a global string key of UTF-8 encoded
 size 1..255 bytes. Stable type is UTF-8 1..255 bytes, compared as a
 case-sensitive exact value with no normalization. Object generation is
 a positive signed-63-bit value. MeshName and NodeRid are the route
-[snapshot](../../../../01-glossary.en.md#snapshot) at query time, and
+[snapshot](../../../01-glossary.en.md#snapshot) at query time, and
 aren't included in the identity key.
 
 The Create and GetOrCreate calls are single-use. Setting the same
 option twice, or calling terminal `submit(...)` twice, is
 `InvalidOperation`. User Spot's `create` has the framework issue a new
 global Spot ID. `getOrCreate` returns a ready Spot of the same User
-kind/[stable type](../../../../01-glossary.en.md#stable-type) as
+kind/[stable type](../../../01-glossary.en.md#stable-type) as
 `existing`. If Creating, it waits for the authority change; once Ready,
 `existing`; if it becomes Missing through cleanup, it competes for a
 new reservation. If kind or type differs, `TypeMismatch`; if the
 terminal state isn't reached within the
-[deadline](../../../../01-glossary.en.md#deadline), `DeadlineExceeded`.
+[deadline](../../../01-glossary.en.md#deadline), `DeadlineExceeded`.
 
 `close(spotRef)` only closes the exact incarnation. If the generation
 differs, `InvalidOperation`; while moving, `Unavailable`. The framework
@@ -316,7 +316,7 @@ doesn't find the current ref again and close a different incarnation.
 Manager create/get-or-create isn't provided for Instance Spot.
 `sendToSpot` and `requestToSpot` only take SpotId and return a
 Spot-dedicated call. A call that didn't set
-[Instance intent](../../../../01-glossary.en.md#instance-intent) is
+[Instance intent](../../../01-glossary.en.md#instance-intent) is
 existing-only, and `NotFound` on Missing. `instanceSpot()`
 auto-selects the type when the selected Mesh's serving descriptor has
 one distinct Instance type, and requires the overload taking stable
@@ -324,12 +324,12 @@ type when there are multiple types. The same type registered by
 multiple MeshNodes is one distinct type. `inMesh` is only used to
 select the initial Mesh for Missing cold activation, and doesn't
 restrict the current Mesh of an existing
-[owner](../../../../01-glossary.en.md#owner).
+[owner](../../../01-glossary.en.md#owner).
 
 If the selected Mesh has no Instance type, both send and request end
 with `NotFound`. If there are multiple distinct types and type is
 omitted, `InvalidOperation`. If a
-[Ready](../../../../01-glossary.en.md#ready) Instance authority exists,
+[Ready](../../../01-glossary.en.md#ready) Instance authority exists,
 it uses the stored stable type, so the caller doesn't need to provide
 the type again. If the Instance marker is used but the existing
 authority is a User Spot, or the specified type differs from the
@@ -361,7 +361,7 @@ in the following order.
 5. Only the target that wins the authority reservation race (CAS
    winner) runs factory and initialize and confirms the first record of
    the durable activation inbox. A target that loses the race (CAS
-   loser) doesn't start a [factory](../../../../01-glossary.en.md#factory) —
+   loser) doesn't start a [factory](../../../01-glossary.en.md#factory) —
    it re-reads current authority and either sends a message to the
    owner or joins the in-progress attempt.
 6. The winner publishes the recovery root/cursor, Ready state, and
@@ -406,13 +406,13 @@ sequenceDiagram
 ```
 
 This diagram only shows the first message that starts
-[cold activation](../../../../01-glossary.en.md#cold-activation) and the
+[cold activation](../../../01-glossary.en.md#cold-activation) and the
 authority race. The handler's terminal completion or reply, and
 recovery pointer removal, are defined in the later steps of the
 numbered list.
 
 A User Spot's `close(spotRef)` returns `false` if active Actor
-[membership](../../../../01-glossary.en.md#membership) remains. The
+[membership](../../../01-glossary.en.md#membership) remains. The
 framework doesn't automatically leave/destroy the Actor. A one-way Spot
 message only waits until local outbound admission, and doesn't
 hidden-retry an operation that failed after target queue admission to a
@@ -456,8 +456,8 @@ the restored tick isn't run before target Ready.
 
 The public trace categories are `spot-instance`, `actor-relocation`.
 The meaning and verification criteria are owned by
-[Spot Address And Messaging](../../../../16-spot-address-messaging.en.md)
-and [Spot/Actor Membership](../../../../15-spot-actor.en.md).
+[Spot Address And Messaging](../../../16-spot-address-messaging.en.md)
+and [Spot/Actor Membership](../../../15-spot-actor.en.md).
 
 `yield(...)` declared in this document is only valid on the shared turn
 of a `SpotWide` User Spot or Instance Spot. Called on an Entry Spot or

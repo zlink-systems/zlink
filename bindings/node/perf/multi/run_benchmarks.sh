@@ -7,6 +7,13 @@ source "${REPO_ROOT}/bindings/tools/local_core_runtime.sh"
 CORE_RUNTIME="${ZLINK_LOCAL_CORE_RUNTIME}"
 cd "$ROOT_DIR"
 
+NODE_VERSION="$(node -p 'process.versions.node')"
+NODE_MAJOR="${NODE_VERSION%%.*}"
+if [ "$NODE_MAJOR" -lt 22 ]; then
+  echo "Error: Node perf requires Node 22 or newer; found ${NODE_VERSION}." >&2
+  exit 1
+fi
+
 REUSE_BUILD=0
 CLEAN_BUILD=0
 for arg in "$@"; do
@@ -46,6 +53,7 @@ if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 0 ]] && find "$REPO_ROOT/core/include" "$
 fi
 
 echo "Perf runtime libzlink: $(realpath "$CORE_RUNTIME")"
+echo "Perf Node runtime: ${NODE_VERSION}"
 export ZLINK_PERF_RUNTIME_LIBZLINK
 ZLINK_PERF_RUNTIME_LIBZLINK="$(realpath "$CORE_RUNTIME")"
 

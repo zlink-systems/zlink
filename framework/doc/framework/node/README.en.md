@@ -10,7 +10,7 @@
 > interpretation.
 
 The common meaning of async execution, `Promise`, and helper synchronous functions
-follows the [Async Execution And Coroutine Policy](../common/spec/05-async-execution-policy.en.md).
+follows the [Async Execution And Coroutine Policy](../common/spec/server/05-async-execution-policy.en.md).
 The Node framework's server and client network APIs are projected as `Promise`-based
 async functions. The `Async` suffix isn't carried over -- the async contract is expressed
 through the action name and a `Promise<T>` return type, as in `connect()`, `close()`,
@@ -42,7 +42,7 @@ actually exists in the current Node code and regression tests.
 | [system-structure](../common/spec/server/languages/node/01-system-structure.en.md) | Package structure, NestJS registration, lifecycle, and startup validation |
 | [Interface table of contents](../common/spec/server/languages/node/interfaces/README.en.md) | The interface/decorator/context/options catalog by category |
 
-**The meaning and behavioral rules of a feature are owned by the [common spec](../common/spec/README.en.md).**
+**The meaning and behavioral rules of a feature are owned by the [common spec](../common/spec/server/README.en.md).**
 Language-specific documents only fix what shape that meaning takes in Node/NestJS.
 
 ## 3. Internal Criteria (`internals/`)
@@ -54,7 +54,7 @@ maintainers. Check the spec for the public API and allowed combinations.
 |------|------|
 | [backend-dependency-policy](internals/backend-dependency-policy.en.md) | Backend replaceability, public-surface isolation |
 | [transport-readiness](internals/01-transport-readiness.en.md) | Transport readiness, liveness, and execution queue defaults |
-| [Common Internals](../common/spec/README.en.md) | Runtime architecture decisions shared across all four languages |
+| [Common Internals](../common/spec/server/README.en.md) | Runtime architecture decisions shared across all four languages |
 | [regression-test-matrix](internals/regression-test-matrix.en.md) | Regression test criteria |
 
 ## 4. Common Samples
