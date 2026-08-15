@@ -22,7 +22,11 @@ map_submit_result_error_kind (zlink::submit_result_t result) noexcept
         case zlink::submit_result_t::ok:
             return framework_error_kind_t::internal_failure;
         case zlink::submit_result_t::backpressured:
-            return framework_error_kind_t::capacity_exceeded;
+            // Backpressure is never a public terminal: when capacity is not
+            // secured by the send timeout the call completes with
+            // DeadlineExceeded (spec 05-async-execution-policy §"Backpressure
+            // and error classification"; 32-framework-error-model:70).
+            return framework_error_kind_t::deadline_exceeded;
         case zlink::submit_result_t::not_connected:
             return framework_error_kind_t::unavailable;
         case zlink::submit_result_t::not_found:
@@ -55,6 +59,11 @@ map_submit_result_exception (zlink::submit_result_t result, std::string message)
         case zlink::submit_result_t::terminated:
             return detail::make_boundary_exception (
               detail::boundary_error_t::shutdown, std::move (message));
+        case zlink::submit_result_t::backpressured:
+            // DeadlineExceeded from send-timeout backpressure, represented as a
+            // timeout boundary exception exactly like a request timeout.
+            return detail::make_boundary_exception (
+              detail::boundary_error_t::timed_out, std::move (message));
         case zlink::submit_result_t::ok:
             break;
         default:
