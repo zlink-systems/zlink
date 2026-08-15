@@ -470,6 +470,56 @@ async function resolveFrameworkRegistration(module) {
   return await provider.useFactory();
 }
 
+test('concurrent relocation with a different deadline joins the running operation', async () => {
+  const now = () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const provider = new framework.ZLinkInMemoryProviderLocationStore(now);
+  const calls = [];
+  const nodeRid = rid('node-join-deadline');
+  const runtime = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration({
+      locations: { storeInstance: provider },
+      spotNodes: {
+        play: { router: { bind: 'tcp://127.0.0.1:9137', routingId: 'node-join-deadline' } }
+      }
+    })
+  }, {
+    backendAdapterFactory: fakeBackendAdapterFactory(calls, nodeRid)
+  });
+
+  await runtime.start();
+  try {
+    // Two concurrent relocations with the same mode and effective target
+    // version but different deadlines. The join key is (mode, effective target
+    // version) and excludes the deadline, so the second call joins the running
+    // operation and shares its terminal result rather than being rejected as a
+    // concurrent operation. The parity would break if the join keyed on the
+    // deadline.
+    const first = runtime.relocate({
+      mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
+      deadlineMs: 200
+    });
+    const second = runtime.relocate({
+      mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
+      deadlineMs: 800
+    });
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    // The host is Serving so the operation actually started (not an early
+    // RuntimeNotReady), which is what makes the join meaningful.
+    assert.notEqual(
+      firstResult.reason,
+      framework.ZLinkFrameworkRelocationReason.RuntimeNotReady
+    );
+    assert.deepEqual(secondResult, firstResult);
+    assert.notEqual(
+      secondResult.reason,
+      framework.ZLinkFrameworkRelocationReason.OperationInProgress
+    );
+  } finally {
+    await runtime.stop();
+  }
+});
+
 function rid(value) {
   return zlink.RoutingId.from(value);
 }
