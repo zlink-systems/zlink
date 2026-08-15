@@ -36,6 +36,17 @@ import type {
   RawServiceMeshRuntime
 } from '../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime';
 import {
+  ApplicationIngressRecordOwner
+} from '../../packages/framework/src/runtime/application-jobs/application-ingress-record-owner';
+import type {
+  ApplicationJobPermitPort,
+  ApplicationJobQueuePort
+} from '../../packages/framework/src/runtime/application-jobs/contracts';
+import {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} from '../../packages/framework/src/runtime/host/application-job-queue';
+import {
   ServiceInstanceActivationRedirectError,
   ServiceStatefulRuntime,
   type ServiceAsyncInstanceActivationAuthority,
@@ -142,7 +153,38 @@ import {
 import { meshActorSessionNodeAdapter } from '../../packages/framework/src/runtime/backend/mesh-actor-session-node-adapter';
 import { ZLinkNativeFallbackBoundSession } from '../../packages/framework/src/runtime/streams/native-fallback-bound-session';
 
-test('M6B command and flag constants match the generated service wire schema', () => {
+// Production raw ingress records carry the host Application Job Queue owner
+// that the raw MeshNode pump reserves per received frame (see
+// raw-service-mesh-runtime attaching `applicationJobOwner`). These unit tests
+// drive the stateful ingress handler directly, so they mint an equivalent
+// owner over inert queue/permit ports and attach it at the capture point.
+function testIngressJobOwner(): ApplicationIngressRecordOwner {
+  const permit: ApplicationJobPermitPort = {
+    markApplicationQueued() {},
+    detachForHandlerTurn() {},
+    releaseBeforeHandler() {},
+    releaseAfterInternalProcessing() {}
+  };
+  const queue: ApplicationJobQueuePort = {
+    acquire: async () => permit
+  };
+  return ApplicationIngressRecordOwner.create(queue, permit, { close() {} });
+}
+
+function withIngressOwner<T>(record: T): T {
+  return { ...record, applicationJobOwner: testIngressJobOwner() } as T;
+}
+
+function hostApplicationJobQueue(): ApplicationJobQueue {
+  return new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration(
+      { maxQueuedApplicationJobs: 2_048n },
+      () => 1n
+    )
+  );
+}
+
+test('M6B command and flag constants match the generated service wire schema', async () => {
   for (const name of Object.keys(M6bServiceWireCommand) as Array<keyof typeof M6bServiceWireCommand>) {
     assert.equal(M6bServiceWireCommand[name], ServiceWireCommand[name]);
   }
@@ -375,7 +417,7 @@ test('bound-session factory keeps the sealed transfer route ahead of an unfenced
   assert.equal(submittedTarget, sealedTransferTarget.targetNodeRid);
 });
 
-test('Message Follow command preserves route fences and rejects mismatched objects', () => {
+test('Message Follow command preserves route fences and rejects mismatched objects', async () => {
   const source = {
     kind: 'actor' as const,
     actor: { actorId: 'actor-follow', nodeRid: '', generation: 7n },
@@ -422,7 +464,7 @@ test('Message Follow command preserves route fences and rejects mismatched objec
   }), /identities differ/);
 });
 
-test('Message Follow invalidates a Spot route only when every source fence still matches', () => {
+test('Message Follow invalidates a Spot route only when every source fence still matches', async () => {
   let ingress: ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
     .RawServiceIngressRecord) => unknown) | undefined;
   const raw = {
@@ -433,7 +475,7 @@ test('Message Follow invalidates a Spot route only when every source fence still
           ? { descriptor: { lifecycleGeneration: 19n } }
           : undefined
     },
-    setServiceIngress(handler: typeof ingress) { ingress = handler; },
+    setServiceIngress(handler: typeof ingress) { ingress = (record) => handler!(withIngressOwner(record)); },
     sendService: () => true
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'caller', 5n);
@@ -462,7 +504,7 @@ test('Message Follow invalidates a Spot route only when every source fence still
     originalOperation: { high: 1n, low: 2n },
     originalReplyRouteId: 0n
   });
-  assert.equal(ingress?.({
+  assert.equal(await ingress?.({
     command: M6bServiceWireCommand.messageFollow,
     flags: 0,
     sourceRoutingId: 'node-old',
@@ -482,7 +524,7 @@ test('Message Follow invalidates a Spot route only when every source fence still
     originalOperation: { high: 1n, low: 2n },
     originalReplyRouteId: 0n
   });
-  assert.equal(ingress?.({
+  assert.equal(await ingress?.({
     command: M6bServiceWireCommand.messageFollow,
     flags: 0,
     sourceRoutingId: 'node-old',
@@ -492,7 +534,7 @@ test('Message Follow invalidates a Spot route only when every source fence still
   runtime.close();
 });
 
-test('Actor Message Follow reaches the owner cache invalidator only from the admitted source', () => {
+test('Actor Message Follow reaches the owner cache invalidator only from the admitted source', async () => {
   let ingress: ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
     .RawServiceIngressRecord) => unknown) | undefined;
   const received: unknown[] = [];
@@ -504,7 +546,7 @@ test('Actor Message Follow reaches the owner cache invalidator only from the adm
           ? { descriptor: { lifecycleGeneration: 23n } }
           : undefined
     },
-    setServiceIngress(handler: typeof ingress) { ingress = handler; },
+    setServiceIngress(handler: typeof ingress) { ingress = (record) => handler!(withIngressOwner(record)); },
     sendService: () => true
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'caller', 5n);
@@ -535,14 +577,14 @@ test('Actor Message Follow reaches the owner cache invalidator only from the adm
     originalReplyRouteId: 43n
   });
 
-  assert.equal(ingress?.({
+  assert.equal(await ingress?.({
     command: M6bServiceWireCommand.messageFollow,
     flags: 0,
     sourceRoutingId: 'different-node',
     parts: [encoded]
   }), 'protocolError');
   assert.equal(received.length, 0);
-  assert.equal(ingress?.({
+  assert.equal(await ingress?.({
     command: M6bServiceWireCommand.messageFollow,
     flags: 0,
     sourceRoutingId: 'node-old',
@@ -567,7 +609,7 @@ test('Actor Message Follow reaches the owner cache invalidator only from the adm
     originalOperation: { high: 37n, low: 42n },
     originalReplyRouteId: 43n
   });
-  assert.equal(ingress?.({
+  assert.equal(await ingress?.({
     command: M6bServiceWireCommand.messageFollow,
     flags: 0,
     sourceRoutingId: 'node-old',
@@ -583,7 +625,7 @@ test('Actor Message Follow reaches the owner cache invalidator only from the adm
     originalOperation: { high: 37n, low: 42n },
     originalReplyRouteId: 43n
   });
-  assert.equal(ingress?.({
+  assert.equal(await ingress?.({
     command: M6bServiceWireCommand.messageFollow,
     flags: 0,
     sourceRoutingId: 'node-old',
@@ -593,7 +635,7 @@ test('Actor Message Follow reaches the owner cache invalidator only from the adm
   runtime.close();
 });
 
-test('remote User Spot create and close records preserve every generation fence exactly', () => {
+test('remote User Spot create and close records preserve every generation fence exactly', async () => {
   const create = encodeUserSpotCreateHeader({
     correlation: 71n,
     operation: { high: 5n, low: 9n },
@@ -671,7 +713,7 @@ test('remote User Spot create and close records preserve every generation fence 
   assert.throws(() => decodeStatefulHeader(close.subarray(0, -1)));
 });
 
-test('remote User Spot command 20 success tails use operation discriminators 13 and 14', () => {
+test('remote User Spot command 20 success tails use operation discriminators 13 and 14', async () => {
   assert.deepEqual(
     decodeStatefulReply(
       encodeStatefulReply(79n, RequestResult.Ok, 0, {
@@ -719,7 +761,7 @@ test('remote Actor command 49 preserves reservation fences and replays one termi
         : undefined
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     },
     replyService: (_record: unknown, parts: readonly Buffer[]) => {
       replies.push(parts);
@@ -774,7 +816,7 @@ test('remote Actor command 49 preserves reservation fences and replays one termi
       decoded.kind === 'actorCreate' ? decoded.reservation : undefined,
       request.reservation
     );
-    assert.equal(ingress({
+    assert.equal(await ingress({
       command: M6bServiceWireCommand.actorCreate,
       flags: 0,
       sourceRoutingId: 'source',
@@ -818,7 +860,7 @@ test('remote User Spot target executes once and rewrites correlation on terminal
         : undefined
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     },
     replyService: (_record: unknown, parts: readonly Buffer[]) => {
       replies.push(parts);
@@ -865,7 +907,7 @@ test('remote User Spot target executes once and rewrites correlation on terminal
   };
   for (const [index, correlation] of [29n, 31n].entries()) {
     const header = encodeUserSpotCreateHeader({ ...request, correlation });
-    assert.equal(ingress({
+    assert.equal(await ingress({
       command: M6bServiceWireCommand.userSpotCreate,
       flags: 0,
       sourceRoutingId: 'source',
@@ -889,7 +931,7 @@ test('remote User Spot target executes once and rewrites correlation on terminal
     ...request,
     correlation: 33n
   });
-  assert.equal(ingress({
+  assert.equal(await ingress({
     command: M6bServiceWireCommand.userSpotCreate,
     flags: 0,
     sourceRoutingId: 'source',
@@ -908,7 +950,7 @@ test('remote User Spot target executes once and rewrites correlation on terminal
     operation: { high: 11n, low: 39n },
     deadlineUnixMs: BigInt(Date.now() - 1)
   });
-  assert.equal(ingress({
+  assert.equal(await ingress({
     command: M6bServiceWireCommand.userSpotCreate,
     flags: 0,
     sourceRoutingId: 'source',
@@ -930,7 +972,7 @@ test('remote User Spot target executes once and rewrites correlation on terminal
     },
     deadlineUnixMs: BigInt(Date.now() + 10_000)
   });
-  assert.equal(ingress({
+  assert.equal(await ingress({
     command: M6bServiceWireCommand.userSpotCreate,
     flags: 0,
     sourceRoutingId: 'source',
@@ -966,7 +1008,7 @@ test('remote User Spot target executes once and rewrites correlation on terminal
     operation: { high: 11n, low: 41n },
     deadlineUnixMs: BigInt(Date.now() + 10_000)
   });
-  assert.equal(ingress({
+  assert.equal(await ingress({
     command: M6bServiceWireCommand.userSpotCreate,
     flags: 0,
     sourceRoutingId: 'source',
@@ -985,7 +1027,7 @@ test('remote User Spot target executes once and rewrites correlation on terminal
       ...request,
       correlation: 43n
     });
-    assert.equal(ingress({
+    assert.equal(await ingress({
       command: M6bServiceWireCommand.userSpotCreate,
       flags: 0,
       sourceRoutingId: 'source',
@@ -1019,7 +1061,7 @@ test('remote User Spot command 48 close replays one terminal without closing twi
         : undefined
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     },
     replyService: (_record: unknown, parts: readonly Buffer[]) => {
       replies.push(parts);
@@ -1056,7 +1098,7 @@ test('remote User Spot command 48 close replays one terminal without closing twi
   };
 
   for (const [index, correlation] of [47n, 53n].entries()) {
-    assert.equal(ingress({
+    assert.equal(await ingress({
       command: M6bServiceWireCommand.userSpotClose,
       flags: 0,
       sourceRoutingId: 'source',
@@ -1079,7 +1121,7 @@ test('remote User Spot command 48 close replays one terminal without closing twi
   runtime.close();
 });
 
-test('authority keys share the Spot discriminator and preserve colon identities canonically', () => {
+test('authority keys share the Spot discriminator and preserve colon identities canonically', async () => {
   assert.equal(
     encodeAuthorityKey('instance_spot', 'tenant:42').value,
     'zla1:s:9:tenant%3A42'
@@ -1090,7 +1132,7 @@ test('authority keys share the Spot discriminator and preserve colon identities 
   );
 });
 
-test('authority payload bytes match the schema fixture shape and reject malformed UTF-8', () => {
+test('authority payload bytes match the schema fixture shape and reject malformed UTF-8', async () => {
   const base = {
     stableType: 'TenantWorker',
     spotId: 'tenant:42',
@@ -1186,7 +1228,7 @@ test('authority payload bytes match the schema fixture shape and reject malforme
   assert.equal(decodeServiceReadySpotAuthority(relocationWithRecovery), undefined);
 });
 
-test('Instance activation recovery envelope preserves the complete first operation', () => {
+test('Instance activation recovery envelope preserves the complete first operation', async () => {
   const input = {
     target: {
       targetSpotId: 'tenant:42',
@@ -1219,7 +1261,7 @@ test('Instance activation recovery envelope preserves the complete first operati
   );
 });
 
-test('Instance activation recovery envelope matches the cross-language golden bytes', () => {
+test('Instance activation recovery envelope matches the cross-language golden bytes', async () => {
   const encoded = encodeInstanceActivationRecoveryEnvelope({
     target: {
       targetSpotId: 'spot-1',
@@ -1254,7 +1296,7 @@ test('Instance activation recovery envelope matches the cross-language golden by
   );
 });
 
-test('Spot and Actor wire records preserve identity and reject malformed records', () => {
+test('Spot and Actor wire records preserve identity and reject malformed records', async () => {
   const spot = {
     spotId: 'spot-a',
     generation: 7n
@@ -1315,7 +1357,7 @@ test('Spot and Actor wire records preserve identity and reject malformed records
   assert.throws(() => decodeStatefulHeader(Buffer.concat([spotHeader, Buffer.of(0)])));
 });
 
-test('stateful replies preserve operation-specific tails', () => {
+test('stateful replies preserve operation-specific tails', async () => {
   const actor = { nodeRid: 'node-b', actorId: 'actor-a', generation: 5n };
   const encoded = encodeStatefulReply(17n, RequestResult.Ok, 0, {
     kind: 'actorLookup',
@@ -1339,7 +1381,7 @@ test('stateful replies preserve operation-specific tails', () => {
   assert.throws(() => decodeStatefulReply(encoded, 18n, 'actorLookup'));
 });
 
-test('stateful reply decoder rejects a non-canonical terminal and failure pair', () => {
+test('stateful reply decoder rejects a non-canonical terminal and failure pair', async () => {
   const malformedPairs = [
     [RequestResult.NotFound, 0],
     [RequestResult.TimedOut, 21],
@@ -1469,7 +1511,7 @@ test('outbound stateful routes use resolved authority generations and never obje
   runtime.close();
 });
 
-test('general Actor messages resolve the current incarnation while exact controls keep generation fences', () => {
+test('general Actor messages resolve the current incarnation while exact controls keep generation fences', async () => {
   const raw = {
     setServiceIngress: () => {}
   } as unknown as RawServiceMeshRuntime;
@@ -1492,7 +1534,7 @@ test('general Actor messages resolve the current incarnation while exact control
   runtime.close();
 });
 
-test('remote Actor request receives CapacityExceeded when mailbox admission fails', () => {
+test('remote Actor request is fenced as moving when the target mailbox rejects admission', async () => {
   let ingress:
     ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
       .RawServiceIngressRecord) => unknown) | undefined;
@@ -1503,7 +1545,7 @@ test('remote Actor request receives CapacityExceeded when mailbox admission fail
       peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
     },
     setServiceIngress(handler: typeof ingress) {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     },
     replyService(_record: unknown, parts: readonly Buffer[]) {
       replies.push([...parts]);
@@ -1517,7 +1559,7 @@ test('remote Actor request receives CapacityExceeded when mailbox admission fail
     payload: Buffer.from('payload')
   });
 
-  assert.equal(ingress?.({
+  assert.equal(await ingress?.({
     command: M6bServiceWireCommand.actorRequest,
     flags: 0,
     sourceRoutingId: 'caller',
@@ -1534,15 +1576,18 @@ test('remote Actor request receives CapacityExceeded when mailbox admission fail
     ]
   }), 'infrastructure');
   assert.equal(replies.length, 1);
+  // A `tryEnqueue` refusal is the owner-no-longer-accepts-work path (spec
+  // backpressure is a cancellable wait, never a hard refusal), so the target
+  // mailbox rejecting admission fences the request as moving (SpotMoving).
   assert.deepEqual(decodeStatefulReply(replies[0]![0]!, 91n, 'actorRequest'), {
     correlation: 91n,
-    terminalResult: RequestResult.Rejected,
-    failureCode: 18
+    terminalResult: RequestResult.Conflict,
+    failureCode: 34
   });
   runtime.close();
 });
 
-test('a new Instance incarnation outranks a reset authority owner generation', () => {
+test('a new Instance incarnation outranks a reset authority owner generation', async () => {
   const raw = {
     topology: { peer: () => undefined },
     setServiceIngress() {},
@@ -1674,7 +1719,7 @@ test('a Ready Instance terminal forgets its route after local close releases aut
   runtime.close();
 });
 
-test('direct Spot ingress accepts a prior incarnation route for the current Ready object', () => {
+test('direct Spot ingress accepts a prior incarnation route for the current Ready object', async () => {
   let ingress:
     ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
       .RawServiceIngressRecord) => unknown) | undefined;
@@ -1690,7 +1735,7 @@ test('direct Spot ingress accepts a prior incarnation route for the current Read
       peer: () => undefined
     },
     setServiceIngress(handler: typeof ingress) {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'node-a', 3n);
@@ -1714,7 +1759,7 @@ test('direct Spot ingress accepts a prior incarnation route for the current Read
     contentType: 'application/octet-stream',
     payload: Buffer.from('payload')
   });
-  assert.equal(ingress?.({
+  assert.equal(await ingress?.({
     command: M6bServiceWireCommand.spotSend,
     flags: 0,
     sourceRoutingId: 'source',
@@ -1724,7 +1769,7 @@ test('direct Spot ingress accepts a prior incarnation route for the current Read
   runtime.close();
 });
 
-test('direct Spot application admission accepts a StoreVersion-only authority advance', () => {
+test('direct Spot application admission accepts a StoreVersion-only authority advance', async () => {
   for (const operationKind of ['send', 'request'] as const) {
     let ingress:
       ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
@@ -1742,7 +1787,7 @@ test('direct Spot application admission accepts a StoreVersion-only authority ad
         peer: () => undefined
       },
       setServiceIngress(handler: typeof ingress) {
-        ingress = handler;
+        ingress = (record) => handler!(withIngressOwner(record));
       },
       replyService(_record: unknown, parts: readonly Buffer[]) {
         replies.push([...parts]);
@@ -1766,7 +1811,7 @@ test('direct Spot application admission accepts a StoreVersion-only authority ad
       payload: Buffer.from('payload')
     });
     const request = operationKind === 'request';
-    assert.equal(ingress?.({
+    assert.equal(await ingress?.({
       command: request
         ? M6bServiceWireCommand.spotRequest
         : M6bServiceWireCommand.spotSend,
@@ -1794,7 +1839,7 @@ test('direct Spot application admission accepts a StoreVersion-only authority ad
   }
 });
 
-test('direct Spot request maps an owner fence mismatch to Unavailable', () => {
+test('direct Spot request maps an owner fence mismatch to Unavailable', async () => {
   let ingress:
     ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
       .RawServiceIngressRecord) => unknown) | undefined;
@@ -1807,7 +1852,7 @@ test('direct Spot request maps an owner fence mismatch to Unavailable', () => {
       peer: () => undefined
     },
     setServiceIngress(handler: typeof ingress) {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     },
     replyService(_record: unknown, parts: readonly Buffer[]) {
       replies.push([...parts]);
@@ -1829,7 +1874,7 @@ test('direct Spot request maps an owner fence mismatch to Unavailable', () => {
     contentType: 'application/octet-stream',
     payload: Buffer.from('payload')
   });
-  assert.equal(ingress?.({
+  assert.equal(await ingress?.({
     command: M6bServiceWireCommand.spotRequest,
     flags: 0,
     sourceRoutingId: 'caller',
@@ -1852,7 +1897,7 @@ test('direct Spot request maps an owner fence mismatch to Unavailable', () => {
   runtime.close();
 });
 
-test('Ready Instance application admission uses the current same-owner incarnation', () => {
+test('Ready Instance application admission uses the current same-owner incarnation', async () => {
   const current: ServiceInstanceRouteFence = {
     targetNodeRid: 'node-a',
     targetNodeGeneration: 3n,
@@ -1871,7 +1916,7 @@ test('Ready Instance application admission uses the current same-owner incarnati
     storeVersion: 'store-v6'
   };
 
-  assert.equal(harness.ingress(harness.request(previous, 'send')), 'application');
+  assert.equal(await harness.ingress(harness.request(previous, 'send')), 'application');
   assert.equal(harness.queued.length, 1);
   assert.deepEqual(
     (harness.queued[0] as { readonly stateful: { readonly targetSpot: { readonly generation: bigint } } }).stateful.targetSpot,
@@ -1880,7 +1925,7 @@ test('Ready Instance application admission uses the current same-owner incarnati
   harness.runtime.close();
 });
 
-test('Ready Instance admission repairs a local projection published after authority commit', () => {
+test('Ready Instance admission repairs a local projection published after authority commit', async () => {
   const current: ServiceInstanceRouteFence = {
     targetNodeRid: 'node-a',
     targetNodeGeneration: 3n,
@@ -1893,13 +1938,13 @@ test('Ready Instance admission repairs a local projection published after author
   };
   const harness = readyInstanceIngressHarness(current, false);
 
-  assert.equal(harness.ingress(harness.request(current, 'request')), 'application');
+  assert.equal(await harness.ingress(harness.request(current, 'request')), 'application');
   assert.equal(harness.queued.length, 1);
   assert.equal(harness.replies.length, 0);
   harness.runtime.close();
 });
 
-test('Ready Instance application admission preserves generation and owner error categories', () => {
+test('Ready Instance application admission preserves generation and owner error categories', async () => {
   const current: ServiceInstanceRouteFence = {
     targetNodeRid: 'node-a',
     targetNodeGeneration: 3n,
@@ -1916,7 +1961,7 @@ test('Ready Instance application admission preserves generation and owner error 
     ...current,
     objectGeneration: 10n
   };
-  assert.equal(generationHarness.ingress(generationHarness.request(generationReply, 'request')), 'infrastructure');
+  assert.equal(await generationHarness.ingress(generationHarness.request(generationReply, 'request')), 'infrastructure');
   assert.equal(generationHarness.replies.length, 1);
   const staleReply = decodeStatefulReply(
     generationHarness.replies[0]![0]!,
@@ -1936,7 +1981,7 @@ test('Ready Instance application admission preserves generation and owner error 
     objectGeneration: 8n,
     ownerId: 'owner-b'
   };
-  assert.equal(ownerHarness.ingress(ownerHarness.request(moved, 'request')), 'infrastructure');
+  assert.equal(await ownerHarness.ingress(ownerHarness.request(moved, 'request')), 'infrastructure');
   const movedReply = decodeStatefulReply(
     ownerHarness.replies[0]![0]!,
     2n,
@@ -1951,7 +1996,7 @@ test('Ready Instance application admission preserves generation and owner error 
 
   const missingHarness = readyInstanceIngressHarness();
   assert.equal(
-    missingHarness.ingress(missingHarness.request({ ...current, objectGeneration: 1n }, 'request')),
+    await missingHarness.ingress(missingHarness.request({ ...current, objectGeneration: 1n }, 'request')),
     'infrastructure'
   );
   const missingReply = decodeStatefulReply(
@@ -1969,7 +2014,7 @@ test('Ready Instance application admission preserves generation and owner error 
   const storeHarness = readyInstanceIngressHarness(current);
   const storeMismatch = { ...current, storeVersion: 'store-v8' };
   assert.equal(
-    storeHarness.ingress(storeHarness.request(storeMismatch, 'request')),
+    await storeHarness.ingress(storeHarness.request(storeMismatch, 'request')),
     'application'
   );
   assert.equal(storeHarness.queued.length, 1);
@@ -2043,7 +2088,7 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
       }
     },
     setServiceIngress(handler: typeof ingress) {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     },
     sendService(target: string, parts: readonly Buffer[]) {
       relayed.push({ target, parts });
@@ -2074,7 +2119,7 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
     contentType: 'application/octet-stream',
     payload: Buffer.from('payload')
   });
-  assert.equal(ingress?.({
+  assert.equal(await ingress?.({
     command: M6bServiceWireCommand.spotSend,
     flags: 0,
     sourceRoutingId: 'caller',
@@ -2083,7 +2128,7 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
       ownerLeaseGeneration: source.ownerLeaseGeneration + 1n
     }), payload]
   }), 'protocolError');
-  assert.equal(ingress?.({
+  assert.equal(await ingress?.({
     command: M6bServiceWireCommand.spotSend,
     flags: 0,
     sourceRoutingId: 'caller',
@@ -2094,7 +2139,7 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
   }), 'application');
   const seal = runtime.sealSpotMessageFollowIngress(source);
   assert.ok(seal);
-  assert.equal(ingress?.({
+  assert.equal(await ingress?.({
     command: M6bServiceWireCommand.spotSend,
     flags: 0,
     sourceRoutingId: 'caller',
@@ -2150,7 +2195,7 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
   }
   const callerFollowCount = relayed.filter(record => record.target === 'caller').length;
 
-  assert.equal(ingress?.({
+  assert.equal(await ingress?.({
     command: M6bServiceWireCommand.spotRequest,
     flags: 0,
     sourceRoutingId: 'caller',
@@ -2183,7 +2228,7 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
   runtime.rememberSpotRoute(abortSource);
   const abortSeal = runtime.sealSpotMessageFollowIngress(abortSource);
   assert.ok(abortSeal);
-  assert.equal(ingress?.({
+  assert.equal(await ingress?.({
     command: M6bServiceWireCommand.spotSend,
     flags: 0,
     sourceRoutingId: 'caller',
@@ -2194,13 +2239,13 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
   runtime.close();
 });
 
-test('Spot Message Follow does not impose a record-count or stored-byte admission bound', () => {
+test('Spot Message Follow does not impose a record-count or stored-byte admission bound', async () => {
   let ingress:
     ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
       .RawServiceIngressRecord) => unknown) | undefined;
   const raw = {
     setServiceIngress(handler: typeof ingress) {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'node-a', 3n);
@@ -2221,7 +2266,7 @@ test('Spot Message Follow does not impose a record-count or stored-byte admissio
     payload: Buffer.alloc(17 * 1024)
   });
   for (let index = 0; index < 1_025; index += 1) {
-    assert.equal(ingress?.({
+    assert.equal(await ingress?.({
       command: M6bServiceWireCommand.spotSend,
       flags: 0,
       sourceRoutingId: 'caller',
@@ -2323,7 +2368,7 @@ test('retained peer routes may submit while endpoint convergence reports not rea
   runtime.close();
 });
 
-test('global Spot and Actor identities fence stale generations and retain stable type', () => {
+test('global Spot and Actor identities fence stale generations and retain stable type', async () => {
   const registry = new ServiceStatefulRegistry('node-a', 4n);
   const entry = registry.createEntrySpot();
   assert.equal(entry.kind, 'entry');
@@ -2358,7 +2403,7 @@ test('global Spot and Actor identities fence stale generations and retain stable
   assert.throws(() => registry.createActor('actor-a', 'Enemy', spotV2.ref), TypeError);
 });
 
-test('remote create reservations are idempotent per attempt and fence stale attempts', () => {
+test('remote create reservations are idempotent per attempt and fence stale attempts', async () => {
   const target = new ServiceStatefulRegistry('node-target', 2n);
   const first = target.reserve('instanceSpot', 'tenant-42', 'TenantWorker', 10n);
   assert.equal(first.kind, 'reserved');
@@ -2376,7 +2421,7 @@ test('remote create reservations are idempotent per attempt and fence stale atte
   assert.equal(target.reserve('instanceSpot', 'tenant-42', 'OtherWorker', 12n).kind, 'typeMismatch');
 });
 
-test('target-owned Instance activation reserves before factory, commits before one queue admission', () => {
+test('target-owned Instance activation reserves before factory, commits before one queue admission', async () => {
   const queued: unknown[] = [];
   let ingress!: (record: {
     readonly command: number;
@@ -2397,7 +2442,7 @@ test('target-owned Instance activation reserves before factory, commits before o
       }
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -2477,12 +2522,12 @@ test('target-owned Instance activation reserves before factory, commits before o
     sourceRoutingId: 'source',
     parts
   };
-  assert.equal(ingress(record), 'application');
+  assert.equal(await ingress(record), 'application');
   assert.deepEqual(events, ['read', 'reserve', 'commit']);
   assert.equal(runtime.registry.spot('tenant-42')?.stableType, 'TenantWorker');
   assert.equal(queued.length, 1);
 
-  assert.equal(ingress(record), 'application');
+  assert.equal(await ingress(record), 'application');
   assert.deepEqual(events, ['read', 'reserve', 'commit', 'read']);
   assert.equal(queued.length, 1);
   runtime.close();
@@ -2508,7 +2553,7 @@ test('durable missing Instance authority discards a materialized orphan before r
       }
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -2567,7 +2612,7 @@ test('durable missing Instance authority discards a materialized orphan before r
   };
   runtime.registerAsyncInstanceActivationAuthority(authority);
 
-  assert.equal(ingress({
+  assert.equal(await ingress({
     command: M6bServiceWireCommand.instanceSpot,
     flags: 0,
     sourceRoutingId: 'source',
@@ -2629,7 +2674,7 @@ test('Instance activation joins a Creating authority when local materialization 
       }
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -2682,7 +2727,7 @@ test('Instance activation joins a Creating authority when local materialization 
     abort: async () => assert.fail('Successful activation must not abort')
   });
 
-  assert.equal(ingress({
+  assert.equal(await ingress({
     command: M6bServiceWireCommand.instanceSpot,
     flags: 0,
     sourceRoutingId: 'source',
@@ -2741,7 +2786,7 @@ test('Instance activation joins a Creating authority after local materialization
       }
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -2795,7 +2840,7 @@ test('Instance activation joins a Creating authority after local materialization
     abort: async () => assert.fail('Successful activation must not abort')
   });
 
-  assert.equal(ingress({
+  assert.equal(await ingress({
     command: M6bServiceWireCommand.instanceSpot,
     flags: 0,
     sourceRoutingId: 'source',
@@ -2851,7 +2896,7 @@ test('Ready Instance route waits for a closing materialized application before a
       }
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -2884,7 +2929,7 @@ test('Ready Instance route waits for a closing materialized application before a
     completeTerminal: async () => false
   });
 
-  assert.equal(ingress({
+  assert.equal(await ingress({
     command: M6bServiceWireCommand.instanceSpot,
     flags: 0,
     sourceRoutingId: 'source',
@@ -2915,7 +2960,7 @@ test('Ready Instance route waits for a closing materialized application before a
   runtime.close();
 });
 
-test('Instance activation CAS loser does not invoke the local factory', () => {
+test('Instance activation CAS loser does not invoke the local factory', async () => {
   let ingress!: (record: {
     readonly command: number;
     readonly flags: number;
@@ -2928,7 +2973,7 @@ test('Instance activation CAS loser does not invoke the local factory', () => {
     },
     mailbox: { tryEnqueue: () => true },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -2963,8 +3008,8 @@ test('Instance activation CAS loser does not invoke the local factory', () => {
     { high: 7n, low: 32n },
     BigInt(Date.now() + 10_000)
   );
-  assert.throws(
-    () => ingress({
+  await assert.rejects(
+    async () => ingress({
       command: M6bServiceWireCommand.instanceSpot,
       flags: 0,
       sourceRoutingId: 'source',
@@ -3003,7 +3048,7 @@ test('Promise authority redirects the retained activation envelope to the Ready 
       return true;
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'loser', 3n);
@@ -3029,7 +3074,7 @@ test('Promise authority redirects the retained activation envelope to the Ready 
   });
 
   const operation = { high: 7n, low: 44n };
-  assert.equal(ingress({
+  assert.equal(await ingress({
     command: M6bServiceWireCommand.instanceSpot,
     flags: 0,
     sourceRoutingId: 'source',
@@ -3095,7 +3140,7 @@ test('Missing Instance activation joins a new reservation while the prior local 
       return true;
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -3132,7 +3177,7 @@ test('Missing Instance activation joins a new reservation while the prior local 
   });
 
   const operation = { high: 7n, low: 48n };
-  assert.equal(ingress({
+  assert.equal(await ingress({
     command: M6bServiceWireCommand.instanceSpot,
     flags: 0,
     sourceRoutingId: 'source',
@@ -3187,7 +3232,7 @@ test('draining Instance owner rejects stale Missing activation before materializ
     mailbox: { tryEnqueue: () => assert.fail('A draining owner must not admit the stale message') },
     sendService: () => true,
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -3203,7 +3248,7 @@ test('draining Instance owner rejects stale Missing activation before materializ
     abort: async () => assert.fail('A stale activation must not abort')
   });
 
-  assert.equal(ingress({
+  assert.equal(await ingress({
     command: M6bServiceWireCommand.instanceSpot,
     flags: 0,
     sourceRoutingId: 'source',
@@ -3259,7 +3304,7 @@ test('stale local Instance projection redirects to a newer remote Ready authorit
       return true;
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -3301,7 +3346,7 @@ test('stale local Instance projection redirects to a newer remote Ready authorit
     contentType: 'application/octet-stream',
     payload: Buffer.from('remote-ready-payload')
   });
-  assert.equal(ingress({
+  assert.equal(await ingress({
     command: M6bServiceWireCommand.instanceSpot,
     flags: M6bServiceWireFlag.metadata,
     sourceRoutingId: 'source',
@@ -3370,7 +3415,7 @@ test('stale local Instance projection reconciles a newer same-node Ready authori
       return true;
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -3408,7 +3453,7 @@ test('stale local Instance projection reconciles a newer same-node Ready authori
     abort: async () => assert.fail('Ready authority must not abort')
   });
 
-  assert.equal(ingress({
+  assert.equal(await ingress({
     command: M6bServiceWireCommand.instanceSpot,
     flags: 0,
     sourceRoutingId: 'source',
@@ -3471,7 +3516,7 @@ test('Promise authority resumes the retained activation envelope after Store com
       }
     },
     setServiceIngress: (handler: typeof ingress) => {
-      ingress = handler;
+      ingress = (record) => handler!(withIngressOwner(record));
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'target', 3n);
@@ -3553,7 +3598,7 @@ test('Promise authority resumes the retained activation envelope after Store com
     undefined,
     true
   );
-  assert.equal(ingress({
+  assert.equal(await ingress({
     command: M6bServiceWireCommand.instanceSpot,
     flags: M6bServiceWireFlag.metadata,
     sourceRoutingId: 'source',
@@ -3604,7 +3649,7 @@ test('Promise authority resumes the retained activation envelope after Store com
     'send',
     { high: 0n, low: 0n }
   );
-  assert.equal(ingress({
+  assert.equal(await ingress({
     command: M6bServiceWireCommand.instanceSpot,
     flags: 0,
     sourceRoutingId: 'source',
@@ -3832,7 +3877,7 @@ test('Instance Spot activation dispatch rematerializes a missing application bef
   assert.deepEqual(events, ['configure', 'initialize', 'handle:9']);
 });
 
-test('membership and session binding generations advance and remain scoped to their session owner', () => {
+test('membership and session binding generations advance and remain scoped to their session owner', async () => {
   const registry = new ServiceStatefulRegistry('node-a', 1n);
   const firstSpot = registry.createSpot('spot-a');
   const secondSpot = registry.createSpot('spot-b');
@@ -3917,7 +3962,7 @@ test('reply, timeout and shutdown races settle each Promise exactly once', async
   await shutdownResult;
 });
 
-test('bound session transition wire format fences the binding generation', () => {
+test('bound session transition wire format fences the binding generation', async () => {
   const header = encodeBoundSessionBindHeader(
     23n,
     {
@@ -3943,7 +3988,7 @@ test('bound session transition wire format fences the binding generation', () =>
   });
 });
 
-test('boundSessionReplaced command 51 matches its golden and malformed fixtures', () => {
+test('boundSessionReplaced command 51 matches its golden and malformed fixtures', async () => {
   const fixture = JSON.parse(readFileSync(
     '../../runtime/protocol/golden/bound-session-replaced-v1.json',
     'utf8'
@@ -4013,13 +4058,13 @@ test('bound-session replacement is one-way, retries admission, and fences a late
         }
       },
       setServiceIngress(handler: (record: RawServiceIngressRecord) => unknown) {
-        state.ingress = handler;
+        state.ingress = (record) => handler!(withIngressOwner(record));
       },
-      sendService(targetNodeRid: string, parts: readonly Buffer[]) {
+      async sendService(targetNodeRid: string, parts: readonly Buffer[]) {
         if (rejectSendOnce.delete(`${nodeRid}->${targetNodeRid}`)) return false;
         const target = nodes.get(targetNodeRid);
         if (target?.ingress === undefined) return false;
-        const result = target.ingress({
+        const result = await target.ingress({
           command: parts[0]![3]!,
           flags: parts[0]![4]!,
           sourceRoutingId: nodeRid,
@@ -4160,7 +4205,7 @@ test('bound-session replacement is one-way, retries admission, and fences a late
       }
     );
     const oldIngress = nodes.get('session-old')!.ingress!;
-    assert.equal(oldIngress({
+    assert.equal(await oldIngress({
       command: M6bServiceWireCommand.boundSessionReplaced,
       flags: 0,
       sourceRoutingId: 'actor-node',
@@ -4185,7 +4230,7 @@ test('bound-session replacement is one-way, retries admission, and fences a late
       { state: 'tombstone', retiredGeneration: oldBinding.bindingGeneration }
     );
     const actorIngress = nodes.get('actor-node')!.ingress!;
-    actorIngress({
+    await actorIngress({
       command: M6bServiceWireCommand.boundSessionBind,
       flags: 0,
       sourceRoutingId: 'session-old',
@@ -4201,7 +4246,7 @@ test('bound-session replacement is one-way, retries admission, and fences a late
   }
 });
 
-test('mailbox saturation reports dropped actor binding control records', () => {
+test('mailbox saturation reports dropped actor binding control records', async () => {
   let ingress: ((record: RawServiceIngressRecord) => string | undefined) | undefined;
   const dropped: Array<{ readonly kind: string; readonly owner: string }> = [];
   const replies: Buffer[][] = [];
@@ -4210,7 +4255,7 @@ test('mailbox saturation reports dropped actor binding control records', () => {
       peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
     },
     mailbox: { tryEnqueue: () => false },
-    setServiceIngress(handler: typeof ingress) { ingress = handler; },
+    setServiceIngress(handler: typeof ingress) { ingress = (record) => handler!(withIngressOwner(record)); },
     replyService(_record: RawServiceIngressRecord, parts: readonly Buffer[]) {
       replies.push([...parts]);
     }
@@ -4230,7 +4275,7 @@ test('mailbox saturation reports dropped actor binding control records', () => {
     { state: 'active', generation: 9n }
   );
 
-  assert.equal(ingress?.({
+  assert.equal(await ingress?.({
     command: M6bServiceWireCommand.boundSessionBind,
     flags: 0,
     sourceRoutingId: 'session-node',
@@ -4319,7 +4364,7 @@ test('authority reconciliation exact-reads complete scans and publishes only Rea
   assert.deepEqual(changedSpotIds, ['tenant:42', 'tenant:42', 'tenant:42']);
 });
 
-test('live Instance route fences reject an older reconcile snapshot', () => {
+test('live Instance route fences reject an older reconcile snapshot', async () => {
   const raw = {
     topology: { peer: () => undefined },
     setServiceIngress() {},
@@ -5004,7 +5049,8 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
   const backend = new ZLinkNodeRawMeshBackend(
     'm6b-mesh',
     'm6b-node',
-    new ZLinkNodeRawBindingPort()
+    new ZLinkNodeRawBindingPort(),
+    hostApplicationJobQueue()
   );
   backend.setBind(endpoint);
   backend.start();
@@ -5872,7 +5918,7 @@ test('Instance one-way admission invalidates a route rejected by the target', as
   assert.equal(invalidations, 1);
 });
 
-test('Object Server role includes Object Client calling capability', () => {
+test('Object Server role includes Object Client calling capability', async () => {
   assert.equal(hasObjectClientCapability('none'), false);
   assert.equal(hasObjectClientCapability(undefined), false);
   assert.equal(hasObjectClientCapability('client'), true);
@@ -6093,7 +6139,7 @@ function readyInstanceIngressHarness(
       }
     },
     setServiceIngress: (handler: typeof ingressHandler) => {
-      ingressHandler = handler;
+      ingressHandler = (record) => handler!(withIngressOwner(record));
     },
     replyService: (_ingress: RawServiceIngressRecord, parts: readonly Buffer[]) => {
       replies.push(parts);
