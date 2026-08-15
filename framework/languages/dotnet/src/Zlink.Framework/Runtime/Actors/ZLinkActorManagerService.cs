@@ -263,10 +263,18 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
             if (target is null
                 && placementEligible.Count == 0
                 && reservationRefreshAttempt == 0)
+            {
+                var anyCompatible = descriptors.Any(
+                    candidate => IsCompatibleCandidate(candidate, actorType));
                 throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.CapacityExceeded,
-                    $"No Ready Actor target is available for '{actorType}'.",
+                    anyCompatible
+                        ? ZLinkFrameworkErrorKind.CapacityExceeded
+                        : ZLinkFrameworkErrorKind.Unavailable,
+                    anyCompatible
+                        ? $"No Ready Actor target has placement capacity for '{actorType}'."
+                        : $"No compatible Actor target is available for '{actorType}'.",
                     ZLinkRetryAdvice.RetryAfterBackoff);
+            }
             if (target is null)
             {
                 var backoffMilliseconds =
@@ -547,20 +555,32 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
             ZLinkRetryAdvice.RetryAfterBackoff,
             innerException);
 
-    internal static bool IsEligibleCandidate(
+    //  A compatible/live target: serving, a server, placeable, has an Entry
+    //  Spot, and advertises the Actor type. Capacity is a separate axis so an
+    //  absent compatible target (Unavailable) is distinguished from a compatible
+    //  target that is out of placement capacity (CapacityExceeded), spec
+    //  15-spot-actor:367-368.
+    internal static bool IsCompatibleCandidate(
         ZLinkMeshNodeDescriptor candidate,
         string actorType) =>
         candidate.State == ZLinkFrameworkRuntimeState.Serving
         && candidate.ObjectRole == ZLinkMeshNodeObjectRole.Server
         && candidate.PlacementWeight > 0
         && candidate.EntrySpotId is not null
-        && (candidate.Capacity.Actors.Limit == 0
-            || candidate.Capacity.Actors.Active
+        && candidate.ObjectCapabilities.Any(capability =>
+            capability.ObjectKind == ZLinkPlacementObjectKind.Actor
+            && string.Equals(capability.StableType, actorType, StringComparison.Ordinal));
+
+    private static bool HasActorCapacity(ZLinkMeshNodeDescriptor candidate) =>
+        candidate.Capacity.Actors.Limit == 0
+        || candidate.Capacity.Actors.Active
             + (long)candidate.Capacity.Actors.Reserved
-            < candidate.Capacity.Actors.Limit)
-            && candidate.ObjectCapabilities.Any(capability =>
-                capability.ObjectKind == ZLinkPlacementObjectKind.Actor
-                && string.Equals(capability.StableType, actorType, StringComparison.Ordinal));
+            < candidate.Capacity.Actors.Limit;
+
+    internal static bool IsEligibleCandidate(
+        ZLinkMeshNodeDescriptor candidate,
+        string actorType) =>
+        IsCompatibleCandidate(candidate, actorType) && HasActorCapacity(candidate);
 
     private static List<ZLinkMeshNodeDescriptor> FilterRouteReadyCandidates(
         ZLinkSpotNodeRuntime source,
