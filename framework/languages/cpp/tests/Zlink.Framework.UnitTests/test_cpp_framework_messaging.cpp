@@ -483,12 +483,18 @@ int main ()
           107, 33, "RouteMesh request");
         const auto relocation_data_lost = mapper.reply_header_exception (
           105, 35, "RouteMesh request");
+        const auto remote_conflict = mapper.reply_header_exception (
+          107, 0, "RouteMesh request");
+        const auto remote_busy = mapper.reply_header_exception (
+          108, 0, "RouteMesh request");
         if (zlink::framework::detail::boundary_state (native_timeout)
                 != zlink::framework::detail::boundary_error_t::timed_out
             || zlink::framework::detail::boundary_state (native_disconnected)
                  != zlink::framework::detail::boundary_error_t::disconnected
             || worker_queue_full.kind ()
-                 != framework_error_kind_t::capacity_exceeded
+                 != framework_error_kind_t::unavailable
+            || remote_conflict.kind () != framework_error_kind_t::unavailable
+            || remote_busy.kind () != framework_error_kind_t::unavailable
             || spot_moving.kind () != framework_error_kind_t::unavailable
             || actor_location_stale.kind ()
                  != framework_error_kind_t::unavailable

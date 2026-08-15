@@ -1978,9 +1978,15 @@ mesh_node_runtime_t::request_actor_join_spot_route (
     auto completed = co_await await_completion (operation);
     if (completed.record.terminal_result
         != static_cast<int> (zlink::request_result_t::ok)) {
+        //  Classify the remote reply terminal + fine failure code rather than
+        //  collapsing every non-OK completion to InternalFailure (spec 32 §5).
+        const runtime::messaging::request_failure_mapper_t failure_mapper;
+        const auto failure = failure_mapper.reply_header_exception (
+          completed.record.terminal_result,
+          completed.record.failure_errno,
+          "Actor transfer route request");
         co_return result_t<runtime::messaging::message_parts_t>::failure (
-          framework_error_kind_t::internal_failure,
-          "Actor transfer route request returned an error");
+          failure.kind (), failure.what ());
     }
     co_return runtime::messaging::message_parts_t (std::move (completed.parts));
 }
@@ -2635,9 +2641,13 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
             auto completed = co_await await_completion (operation);
             if (completed.record.terminal_result
                 != static_cast<int> (zlink::request_result_t::ok)) {
+                const runtime::messaging::request_failure_mapper_t failure_mapper;
+                const auto failure = failure_mapper.reply_header_exception (
+                  completed.record.terminal_result,
+                  completed.record.failure_errno,
+                  "Actor message follow route request");
                 co_return result_t<std::optional<zlink::message_t>>::failure (
-                  framework_error_kind_t::internal_failure,
-                  "Actor message follow route request returned an error");
+                  failure.kind (), failure.what ());
             }
             runtime::messaging::message_parts_t reply_parts (std::move (completed.parts));
             auto decoded = codec.decode_envelope_reply<spot_actor_packet_route_reply_t> (

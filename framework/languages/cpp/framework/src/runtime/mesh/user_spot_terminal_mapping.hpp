@@ -39,9 +39,10 @@ inline framework_error_kind_t map_user_spot_wire_failure (
         case protocol::framework_error_code::requestFailed:
             return framework_error_kind_t::internal_failure;
         case protocol::framework_error_code::workerQueueFull:
-            return creation
-                     ? framework_error_kind_t::capacity_exceeded
-                     : framework_error_kind_t::capacity_exceeded;
+            //  Spec 32-framework-error-model:99-100 — a full worker queue on the
+            //  remote target this wire reply came from is Unavailable, not a
+            //  source-owned CapacityExceeded.
+            return framework_error_kind_t::unavailable;
         case protocol::framework_error_code::workerTimedOut:
             return framework_error_kind_t::deadline_exceeded;
         case protocol::framework_error_code::workerFailed:
