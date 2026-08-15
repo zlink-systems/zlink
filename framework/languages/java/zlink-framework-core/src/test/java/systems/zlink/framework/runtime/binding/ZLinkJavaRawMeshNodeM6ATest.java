@@ -25,8 +25,12 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import java.util.OptionalLong;
+import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
+import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.contracts.eventing.MonitorEvent;
 import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.messaging.Message;
@@ -118,7 +122,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     @Test
     void ephemeralBindPublishesTheActualListenerEndpoint() {
         try (var context = Zlink.createContext();
-             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var node = meshNode(context)) {
             node.setRoutingId(RoutingId.from("jvm-ephemeral-endpoint"));
             node.setBind("tcp://127.0.0.1:0");
             node.start();
@@ -136,8 +140,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         RoutingId rightRid = RoutingId.from("jvm-client-right");
         String endpoint = "inproc://jvm-client-pair-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             var left = new ZLinkJavaRawMeshNode(context, "mesh");
-             var right = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var left = meshNode(context);
+             var right = meshNode(context)) {
             left.setRoutingId(leftRid);
             left.setBind(endpoint);
             left.setObjectRole(ZLinkMeshNodeObjectRole.CLIENT);
@@ -158,8 +162,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         String serverEndpoint =
             "inproc://jvm-client-server-channel-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             var left = new ZLinkJavaRawMeshNode(context, "mesh");
-             var right = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var left = meshNode(context);
+             var right = meshNode(context)) {
             left.setRoutingId(leftRid);
             left.setBind(serverEndpoint);
             left.setObjectRole(ZLinkMeshNodeObjectRole.CLIENT);
@@ -181,7 +185,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         RoutingId localRid = RoutingId.from("jvm-auto-client-local");
         RoutingId peerRid = RoutingId.from("jvm-auto-client-peer");
         try (var context = Zlink.createContext();
-             var local = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var local = meshNode(context)) {
             local.setRoutingId(localRid);
             local.setBind("inproc://jvm-auto-client-local-" + System.nanoTime());
             local.setObjectRole(ZLinkMeshNodeObjectRole.CLIENT);
@@ -209,8 +213,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         String higherEndpoint =
             "inproc://jvm-bilateral-higher-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             var lower = new ZLinkJavaRawMeshNode(context, "mesh");
-             var higher = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var lower = meshNode(context);
+             var higher = meshNode(context)) {
             lower.setRoutingId(lowerRid);
             lower.setBind(lowerEndpoint);
             higher.setRoutingId(higherRid);
@@ -352,8 +356,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         String peerEndpoint = "inproc://jvm-descriptor-fence-peer-"
             + System.nanoTime();
         try (var context = Zlink.createContext();
-             var local = new ZLinkJavaRawMeshNode(context, "mesh");
-             var peer = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var local = meshNode(context);
+             var peer = meshNode(context)) {
             local.setRoutingId(localRid);
             local.setBind(localEndpoint);
             peer.setRoutingId(peerRid);
@@ -407,8 +411,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         String peerEndpoint = "inproc://jvm-descriptor-replace-peer-"
             + System.nanoTime();
         try (var context = Zlink.createContext();
-             var local = new ZLinkJavaRawMeshNode(context, "mesh");
-             var peer = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var local = meshNode(context);
+             var peer = meshNode(context)) {
             local.setRoutingId(localRid);
             local.setBind(localEndpoint);
             peer.setRoutingId(peerRid);
@@ -468,8 +472,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         String peerEndpoint = "inproc://jvm-pre-ready-replace-peer-"
             + System.nanoTime();
         try (var context = Zlink.createContext();
-             var local = new ZLinkJavaRawMeshNode(context, "mesh");
-             var peer = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var local = meshNode(context);
+             var peer = meshNode(context)) {
             local.setRoutingId(localRid);
             local.setBind(localEndpoint);
             peer.setRoutingId(peerRid);
@@ -531,8 +535,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             new ZLinkServiceM6BWireCodec.SessionOwnerFence(
                 sessionOwnerRid, 7, "session-owner", 8, sessionRid, 9));
         try (var context = Zlink.createContext();
-             var source = new ZLinkJavaRawMeshNode(context, "mesh");
-             var sessionOwner = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var source = meshNode(context);
+             var sessionOwner = meshNode(context)) {
             source.setRoutingId(sourceRid);
             source.setBind("inproc://jvm-m6c-seal-source-" + System.nanoTime());
             sessionOwner.setRoutingId(sessionOwnerRid);
@@ -588,8 +592,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.COMMIT,
             10, 11, sourceRid, 12);
         try (var context = Zlink.createContext();
-             var source = new ZLinkJavaRawMeshNode(context, "mesh");
-             var sessionOwner = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var source = meshNode(context);
+             var sessionOwner = meshNode(context)) {
             source.setRoutingId(sourceRid);
             source.setBind("inproc://jvm-m6c-target-owner-" + System.nanoTime());
             sessionOwner.setRoutingId(sessionOwnerRid);
@@ -624,8 +628,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         RoutingId sourceRid = RoutingId.from("jvm-m6c-relocation-source");
         RoutingId targetRid = RoutingId.from("jvm-m6c-relocation-target");
         try (var context = Zlink.createContext();
-             var source = new ZLinkJavaRawMeshNode(context, "mesh");
-             var target = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var source = meshNode(context);
+             var target = meshNode(context)) {
             source.setRoutingId(sourceRid);
             source.setBind("inproc://jvm-m6c-relocation-source-"
                 + System.nanoTime());
@@ -670,8 +674,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             RoutingId.from("jvm-m6c-canonical-target");
         byte[] command30 = canonicalRelocationCommand(30);
         try (var context = Zlink.createContext();
-             var source = new ZLinkJavaRawMeshNode(context, "mesh");
-             var target = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var source = meshNode(context);
+             var target = meshNode(context)) {
             source.setRoutingId(sourceRid);
             source.setBind(
                 "inproc://jvm-m6c-canonical-source-" + System.nanoTime());
@@ -716,8 +720,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         CountDownLatch applicationEntered = new CountDownLatch(1);
         CountDownLatch releaseApplication = new CountDownLatch(1);
         try (var context = Zlink.createContext();
-             var source = new ZLinkJavaRawMeshNode(context, "mesh");
-             var target = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var source = meshNode(context);
+             var target = meshNode(context)) {
             source.setRoutingId(sourceRid);
             source.setBind(
                 "inproc://jvm-infrastructure-source-" + System.nanoTime());
@@ -791,8 +795,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             19,
             0);
         try (var context = Zlink.createContext();
-             var source = new ZLinkJavaRawMeshNode(context, "mesh");
-             var target = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var source = meshNode(context);
+             var target = meshNode(context)) {
             source.setRoutingId(sourceRid);
             source.setBind(
                 "inproc://jvm-message-follow-source-" + System.nanoTime());
@@ -907,8 +911,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         RoutingId leftRid = RoutingId.from("jvm-m6a-left");
         RoutingId rightRid = RoutingId.from("jvm-m6a-right");
         try (var context = Zlink.createContext();
-             var left = new ZLinkJavaRawMeshNode(context, "mesh");
-             var right = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var left = meshNode(context);
+             var right = meshNode(context)) {
             context.options().autoHwmEnabled(false);
             left.setRoutingId(leftRid);
             left.setBind(endpoint);
@@ -1000,8 +1004,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         RoutingId leftRid = RoutingId.from("jvm-m6a-request-left");
         RoutingId rightRid = RoutingId.from("jvm-m6a-request-right");
         try (var context = Zlink.createContext();
-             var left = new ZLinkJavaRawMeshNode(context, "mesh");
-             var right = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var left = meshNode(context);
+             var right = meshNode(context)) {
             left.setRoutingId(leftRid);
             left.setBind(endpoint);
             right.setRoutingId(rightRid);
@@ -1050,8 +1054,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         RoutingId sourceRid = RoutingId.from("jvm-m6a-bound-error-source");
         RoutingId targetRid = RoutingId.from("jvm-m6a-bound-error-target");
         try (var context = Zlink.createContext();
-             var source = new ZLinkJavaRawMeshNode(context, "mesh");
-             var target = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var source = meshNode(context);
+             var target = meshNode(context)) {
             source.setRoutingId(sourceRid);
             source.setBind(
                 "inproc://jvm-m6a-bound-error-source-" + System.nanoTime());
@@ -1093,6 +1097,20 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 RequestResult.NOT_FOUND,
                 ((ZlinkRequestException) failure.getCause()).getResult());
         }
+    }
+
+    // Production wires the host Application Job Queue onto every mesh node
+    // (ZLinkMeshNodeRuntime.start). These tests drive the raw node directly,
+    // so application dispatch (drainApplicationMailbox) silently no-ops until
+    // the queue is set. Build a node with the queue attached, mirroring the
+    // production wiring.
+    private static ZLinkJavaRawMeshNode meshNode(Context context) {
+        ZLinkJavaRawMeshNode node = new ZLinkJavaRawMeshNode(context, "mesh");
+        node.setApplicationJobQueue(new ZLinkApplicationJobQueue(
+            ZLinkApplicationJobQueueProfile.BALANCED,
+            OptionalLong.empty(),
+            new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null)));
+        return node;
     }
 
     private static void awaitAdmitted(ZLinkJavaRawMeshNode node)

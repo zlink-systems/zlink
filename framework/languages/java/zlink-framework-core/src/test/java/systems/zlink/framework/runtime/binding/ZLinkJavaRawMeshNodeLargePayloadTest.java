@@ -10,9 +10,13 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.OptionalLong;
 import org.junit.jupiter.api.Test;
+import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
+import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
@@ -30,8 +34,8 @@ final class ZLinkJavaRawMeshNodeLargePayloadTest {
         Arrays.fill(payloadBytes, (byte) 'x');
 
         try (var context = Zlink.createContext();
-             var source = new ZLinkJavaRawMeshNode(context, "mesh");
-             var target = new ZLinkJavaRawMeshNode(context, "mesh")) {
+             var source = meshNode(context);
+             var target = meshNode(context)) {
             source.setRoutingId(sourceRid);
             source.setBind("inproc://large-payload-source-" + System.nanoTime());
             source.setRouterHighWaterMark(4_096_000L);
@@ -72,6 +76,18 @@ final class ZLinkJavaRawMeshNodeLargePayloadTest {
                 assertArrayEquals(payloadBytes, reply.parts().get(1).toByteArray());
             }
         }
+    }
+
+    // Production wires the host Application Job Queue onto every mesh node
+    // (ZLinkMeshNodeRuntime.start); the raw node's application dispatch no-ops
+    // without it. Mirror that wiring for the direct-node test.
+    private static ZLinkJavaRawMeshNode meshNode(Context context) {
+        ZLinkJavaRawMeshNode node = new ZLinkJavaRawMeshNode(context, "mesh");
+        node.setApplicationJobQueue(new ZLinkApplicationJobQueue(
+            ZLinkApplicationJobQueueProfile.BALANCED,
+            OptionalLong.empty(),
+            new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null)));
+        return node;
     }
 
     private static void awaitAdmitted(ZLinkJavaRawMeshNode node)
