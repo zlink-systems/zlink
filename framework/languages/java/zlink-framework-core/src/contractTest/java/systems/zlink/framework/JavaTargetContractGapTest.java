@@ -272,7 +272,6 @@ final class JavaTargetContractGapTest {
             "MeshNodeOptions",
             "MessageBuilderStage",
             "ReplySubmitOperation",
-            "RequestCallbackSubmitOperation",
             "RequestSubmitOperation",
             "SpotKind",
             "StreamSessionBinding",
