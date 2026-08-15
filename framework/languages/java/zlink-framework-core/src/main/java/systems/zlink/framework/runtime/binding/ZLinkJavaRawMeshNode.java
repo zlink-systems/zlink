@@ -6516,9 +6516,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     private static ZLinkBackendRequestResult backendResult(
         RequestResult result) {
-        return result == RequestResult.BACKPRESSURED
-            ? ZLinkBackendRequestResult.BUSY
-            : ZLinkBackendRequestResult.valueOf(result.name());
+        //  BACKPRESSURED is preserved now that ZLinkBackendRequestResult has a
+        //  matching member (it classifies to CapacityExceeded), instead of being
+        //  collapsed to BUSY (which would be Unavailable).
+        return ZLinkBackendRequestResult.valueOf(result.name());
     }
 
     private static ZLinkBackendRequestResult backendResult(int wireValue) {

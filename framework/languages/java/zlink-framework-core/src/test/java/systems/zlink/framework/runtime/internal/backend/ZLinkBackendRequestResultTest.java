@@ -35,6 +35,23 @@ class ZLinkBackendRequestResultTest {
             ZLinkBackendRequestResult.NOT_SUPPORTED.toFrameworkErrorKind());
         assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
             ZLinkBackendRequestResult.INTERNAL_ERROR.toFrameworkErrorKind());
+        //  Backpressured(113) is the placement/admission-capacity terminal.
+        assertEquals(ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED,
+            ZLinkBackendRequestResult.BACKPRESSURED.toFrameworkErrorKind());
+        assertEquals(ZLinkBackendRequestResult.BACKPRESSURED,
+            ZLinkBackendRequestResult.fromWireTerminal(113));
+    }
+
+    @Test
+    void fineFailureCodeCoversTypeAndExistenceAndSession() {
+        assertEquals(ZLinkFrameworkErrorKind.ALREADY_EXISTS,
+            ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(3)); // actorAlreadyExists
+        assertEquals(ZLinkFrameworkErrorKind.TYPE_MISMATCH,
+            ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(4)); // actorTypeMismatch
+        assertEquals(ZLinkFrameworkErrorKind.TYPE_MISMATCH,
+            ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(7)); // spotTypeMismatch
+        assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION,
+            ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(8)); // actorSessionNotBound
     }
 
     @Test

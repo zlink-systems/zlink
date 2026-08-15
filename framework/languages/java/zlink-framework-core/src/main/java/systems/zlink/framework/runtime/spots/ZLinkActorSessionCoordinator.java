@@ -117,7 +117,8 @@ final class ZLinkActorSessionCoordinator {
 
     String actorType(String actorId) {
         ZLinkActor actor = localActor(actorId).orElseThrow(() ->
-            new ZLinkConfigurationException(
+            new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
                 "local actor is not available: " + actorId));
         return requireActors().actorTypeFor(actor);
     }
@@ -131,7 +132,8 @@ final class ZLinkActorSessionCoordinator {
 
     ZLinkBackendActorRef actorRef(String actorId) {
         ZLinkActor actor = localActor(actorId).orElseThrow(() ->
-            new ZLinkConfigurationException(
+            new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
                 "local actor is not available: " + actorId));
         return requireActors().currentRef(actor);
     }
@@ -179,7 +181,8 @@ final class ZLinkActorSessionCoordinator {
 
     boolean hasBoundSession(String actorId) {
         ZLinkActor actor = localActor(actorId).orElseThrow(() ->
-            new ZLinkConfigurationException(
+            new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
                 "local actor is not available: " + actorId));
         return requireActors().hasBoundSession(actor);
     }
@@ -187,7 +190,8 @@ final class ZLinkActorSessionCoordinator {
     Optional<ZLinkActorRuntime.BoundSessionRouteSnapshot> boundSessionRoute(
         String actorId) {
         ZLinkActor actor = localActor(actorId).orElseThrow(() ->
-            new ZLinkConfigurationException(
+            new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
                 "local actor is not available: " + actorId));
         return requireActors().boundSessionRoute(actor);
     }
@@ -341,13 +345,22 @@ final class ZLinkActorSessionCoordinator {
         }
         ZLinkActorRuntime runtime = requireActors();
         Optional<ZLinkActor> localActor = runtime.localActor(actorRef.actorId());
-        if (localActor.isEmpty()
-            || !runtime.currentRef(localActor.orElseThrow()).equals(actorRef)) {
-            //  Spec 15-spot-actor:374 — the Message Follow target actor is no
-            //  longer the current owner: Unavailable.
+        ZLinkBackendActorRef currentRef = localActor
+            .map(runtime::currentRef)
+            .orElse(null);
+        if (currentRef == null || !currentRef.equals(actorRef)) {
+            //  Spec 15-spot-actor:373-374 — a matching ActorId with a different
+            //  generation is a stale generation (InvalidOperation); an absent
+            //  actor or a differing owner/membership is Unavailable.
+            ZLinkFrameworkErrorKind kind =
+                currentRef != null
+                    && currentRef.actorId().equals(actorRef.actorId())
+                    && currentRef.generation() != actorRef.generation()
+                    ? ZLinkFrameworkErrorKind.INVALID_OPERATION
+                    : ZLinkFrameworkErrorKind.UNAVAILABLE;
             return CompletableFuture.failedFuture(
                 new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    kind,
                     "Message Follow target actor is not current: "
                         + actorRef.actorId()));
         }
@@ -382,7 +395,8 @@ final class ZLinkActorSessionCoordinator {
         ZLinkActorRuntime runtime = requireActors();
         Optional<ZLinkActor> localActor = runtime.localActor(actorRef.actorId());
         if (localActor.isEmpty()) {
-            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
+            return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
                 "local actor is not available: " + actorRef.actorId()));
         }
         ZLinkActor actor = localActor.get();

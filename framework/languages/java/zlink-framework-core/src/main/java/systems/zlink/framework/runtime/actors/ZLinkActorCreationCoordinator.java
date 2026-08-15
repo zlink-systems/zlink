@@ -709,6 +709,15 @@ public final class ZLinkActorCreationCoordinator
                     case REJECTED ->
                         new ZLinkActorCreateResult.Rejected(reply);
                 });
+        } catch (ZLinkFrameworkException framework) {
+            return CompletableFuture.failedFuture(framework);
+        } catch (IllegalArgumentException decode) {
+            //  Spec 32-framework-error-model:40,91 — a malformed create terminal
+            //  or reply that fails decoding is a ProtocolError, not an
+            //  InternalFailure.
+            return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "Actor create reply could not be decoded.", decode));
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }

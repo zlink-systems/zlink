@@ -15,7 +15,8 @@ public enum ZLinkBackendRequestResult {
     NOT_CONNECTED,
     INVALID_ARGUMENT,
     INVALID_STATE,
-    NOT_SUPPORTED;
+    NOT_SUPPORTED,
+    BACKPRESSURED;
 
     /**
      * Maps a non-OK backend request terminal (decoded from a remote reply) to
@@ -35,6 +36,9 @@ public enum ZLinkBackendRequestResult {
             case REJECTED -> ZLinkFrameworkErrorKind.REJECTED;
             case CONFLICT, BUSY -> ZLinkFrameworkErrorKind.UNAVAILABLE;
             case NOT_CONNECTED -> ZLinkFrameworkErrorKind.UNAVAILABLE;
+            //  Backpressured(113) is the bounded admission terminal: a target's
+            //  placement/admission capacity is CapacityExceeded (spec 32:104-108).
+            case BACKPRESSURED -> ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED;
             case INVALID_ARGUMENT, INVALID_STATE ->
                 ZLinkFrameworkErrorKind.INVALID_OPERATION;
             case OK, INTERNAL_ERROR, NOT_SUPPORTED ->
@@ -74,6 +78,12 @@ public enum ZLinkBackendRequestResult {
 
     private static ZLinkFrameworkErrorKind failureCodeErrorKind(int failureCode) {
         return switch (failureCode) {
+            //  actorAlreadyExists(3)
+            case 3 -> ZLinkFrameworkErrorKind.ALREADY_EXISTS;
+            //  actorTypeMismatch(4), spotTypeMismatch(7)
+            case 4, 7 -> ZLinkFrameworkErrorKind.TYPE_MISMATCH;
+            //  actorSessionNotBound(8)
+            case 8 -> ZLinkFrameworkErrorKind.INVALID_OPERATION;
             //  routeHandlerNotFound(9), requestTargetNotFound(14)
             case 9, 14 -> ZLinkFrameworkErrorKind.NOT_FOUND;
             //  payloadDecodeFailed(12), requestProtocolError(16)
