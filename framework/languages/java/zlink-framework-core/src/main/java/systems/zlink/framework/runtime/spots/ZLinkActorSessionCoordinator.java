@@ -279,13 +279,19 @@ final class ZLinkActorSessionCoordinator {
             || !accepted.header().packetName().equals(header.packetName())
             || accepted.header().requestSequence().isPresent()
             || !Arrays.equals(accepted.payload(), payload.toByteArray())) {
-            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
+            //  Spec 32-framework-error-model:40 — a decoded handoff record that
+            //  fails its integrity check is a ProtocolError.
+            return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                 "Actor handoff record does not match its frozen target and payload"));
         }
         ZLinkActorRuntime runtime = requireActors();
         Optional<ZLinkActor> localActor = runtime.localActor(actorRef.actorId());
         if (localActor.isEmpty()) {
-            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
+            //  Spec 32-framework-error-model:36, 15-spot-actor:374 — the local
+            //  target actor is not currently available: Unavailable.
+            return CompletableFuture.failedFuture(new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
                 "local actor is not available: " + actorRef.actorId()));
         }
         ZLinkActor actor = localActor.get();

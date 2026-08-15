@@ -9,6 +9,8 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkBoundSession;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.spots.ZLinkSpot;
 
@@ -131,7 +133,10 @@ final class ZLinkActorContextState {
 
     void beginMove() {
         if (moving) {
-            throw new ZLinkConfigurationException("actor is already moving: " + actorId);
+            //  Spec 15-spot-actor:374 — the Actor is already moving: Unavailable.
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                "actor is already moving: " + actorId);
         }
         moving = true;
         moveCompletion = new CompletableFuture<>();
@@ -163,7 +168,11 @@ final class ZLinkActorContextState {
 
     ZLinkBoundSession requireBoundSession() {
         if (boundSession == null) {
-            throw new ZLinkConfigurationException("actor has no bound session: " + actorId);
+            //  Spec 32-framework-error-model:41 — an operation that requires a
+            //  bound session in a state that has none is InvalidOperation.
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                "actor has no bound session: " + actorId);
         }
         return boundSession;
     }
