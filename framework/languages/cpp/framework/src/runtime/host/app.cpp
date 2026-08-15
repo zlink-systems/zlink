@@ -415,6 +415,7 @@ class app_state_t
         bool shutdown_requested = false;
         relocation_options_t options{};
         relocation_result_t result{};
+        std::int64_t source_application_version = 0;
         std::chrono::milliseconds deadline{30000};
         std::optional<std::chrono::system_clock::time_point> deadline_at;
         std::vector<std::shared_ptr<relocation_waiter_t>> waiters;
@@ -2763,6 +2764,7 @@ struct relocation_preflight_t
 {
     std::optional<relocation_reason_t> blocker;
     std::int64_t effective_target_application_version = 0;
+    std::int64_t source_application_version = 0;
 };
 
 relocation_preflight_t relocation_topology_preflight_once (detail::app_state_t &state,
@@ -2848,7 +2850,7 @@ relocation_preflight_t relocation_topology_preflight_once (detail::app_state_t &
         const auto effective = options.mode == relocation_mode_t::planned_maintenance
                                  ? *source_application_version
                                  : *options.target_application_version;
-        return {std::nullopt, effective};
+        return {std::nullopt, effective, *source_application_version};
     }
     catch (const std::invalid_argument &) {
         throw;
@@ -3038,11 +3040,16 @@ task_t<relocation_result_t> app_t::relocate (relocation_options_t options,
               && operation.options.target_application_version
                    == options.target_application_version;
             if (!joins_running_operation) {
+                // The rejected call's result reflects the valid option it
+                // requested, not the running operation's target: rolling_update
+                // requests its explicit target version, planned_maintenance
+                // requests the source application version.
+                const auto rejected_effective_target =
+                  options.mode == relocation_mode_t::rolling_update
+                    ? *options.target_application_version
+                    : operation.source_application_version;
                 return task_t<relocation_result_t> (result_t<relocation_result_t>::success (
-                  {options.mode,
-                   preflight.effective_target_application_version != 0
-                     ? preflight.effective_target_application_version
-                     : operation.result.effective_target_application_version,
+                  {options.mode, rejected_effective_target,
                    relocation_outcome_t::blocked, relocation_reason_t::operation_in_progress}));
             }
         } else if (operation.terminal) {
@@ -3075,6 +3082,8 @@ task_t<relocation_result_t> app_t::relocate (relocation_options_t options,
             }
             operation.started = true;
             operation.options = options;
+            operation.source_application_version =
+              preflight.source_application_version;
             operation.deadline_at = std::chrono::system_clock::now () + operation.deadline;
             operation.result.mode = options.mode;
             operation.result.effective_target_application_version =
