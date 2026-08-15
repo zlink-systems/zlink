@@ -101,9 +101,11 @@ set(known_labels
   DERR-009
   DI
   actor
+  admission
   async
   backpressure
   channel
+  claim
   diagnostics
   execution
   gtest
@@ -137,6 +139,7 @@ set(known_labels
   raw-binding
   recovery
   relocation
+  reply
   resource
   stateful
   stream-session
