@@ -1393,7 +1393,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     COMMAND test_cpp_framework_opaque_store_providers)
   set_tests_properties(test_cpp_framework_opaque_store_providers PROPERTIES
     LABELS "framework-unit;framework-location;framework-regression"
-    TIMEOUT 30)
+    # The bounded-batch aggregate stress case commits 2050 participants through
+    # the in-memory fixture store and legitimately runs for tens of seconds.
+    TIMEOUT 120)
   add_executable(test_cpp_framework_location_runtime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime.cpp)
   target_compile_features(test_cpp_framework_location_runtime PRIVATE cxx_std_20)

@@ -520,7 +520,11 @@ TEST (CppFrameworkOpaqueLocationStore, AggregateCommitUsesBoundedBatches)
 {
     in_memory_location_store_t provider;
     provider_location_repository_t repository (provider);
-    const auto claim = repository.claim_owner_lease ("owner-large", 30s).result ().value ();
+    // This bounded-batch stress test commits 2050 participants through the
+    // in-memory fixture store, which takes tens of seconds; the owner-lease TTL
+    // must outlast the whole prepare/commit flow so the terminal CAS still finds
+    // the lease valid.
+    const auto claim = repository.claim_owner_lease ("owner-large", 300s).result ().value ();
     const auto *claimed = std::get_if<owner_lease_claimed_t> (&claim);
     ASSERT_NE (claimed, nullptr);
 
