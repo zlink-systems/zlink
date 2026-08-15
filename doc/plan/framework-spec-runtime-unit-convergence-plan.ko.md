@@ -690,8 +690,10 @@ in-scope full suite에 unresolved failure가 하나라도 있으면 전체 작�
 
 ## 14. 최종 독립 리뷰
 
-모든 language gate가 green인 뒤 구현에 참여하지 않은 별도 reviewer가 read-only로
-다음을 다시 확인한다.
+모든 language gate가 green인 뒤 `gpt-5.6-sol` 모델을 지정한 별도 Codex reviewer가
+read-only로 다음을 다시 확인한다. 구현에 참여한 agent를 reviewer로 재사용하지
+않고, final commit의 frozen spec·source·test와 실제 gate 결과만 새로 검토하게 한다.
+Reviewer는 source 수정, test expectation 변경, commit과 push를 수행하지 않는다.
 
 1. `server/README.ko.md`의 모든 주제를 common KO/EN, 40~52, 다섯 exact language
    tree와 대조했는가.
