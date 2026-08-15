@@ -2910,9 +2910,24 @@ wait_for_relocation_target (runtime::store_location_resolvers_t &peers,
 {
     for (;;) {
         auto live = peers.list_live_mesh_nodes (std::string (mesh_name)).result ().value ();
-        const auto target = std::find_if (live.begin (), live.end (), eligible);
-        if (target != live.end ())
-            return *target;
+        // Spec step 6: apply node-wide placement weight to the final eligible
+        // candidate set with a deterministic weighted draw instead of taking the
+        // first eligible node in store order.
+        std::vector<std::pair<std::string, std::uint32_t>> eligible_by_weight;
+        for (const auto &candidate : live) {
+            if (eligible (candidate) && candidate.placement_weight > 0) {
+                eligible_by_weight.emplace_back (
+                  candidate.rid.to_hex (),
+                  static_cast<std::uint32_t> (candidate.placement_weight));
+            }
+        }
+        if (const auto chosen = select_weighted_relocation_target (eligible_by_weight)) {
+            const auto target = std::find_if (
+              live.begin (), live.end (),
+              [&] (const auto &candidate) { return candidate.rid.to_hex () == *chosen; });
+            if (target != live.end ())
+                return *target;
+        }
         if (shutdown_requested ()) {
             failure_reason = relocation_reason_t::shutdown_requested;
             return std::nullopt;

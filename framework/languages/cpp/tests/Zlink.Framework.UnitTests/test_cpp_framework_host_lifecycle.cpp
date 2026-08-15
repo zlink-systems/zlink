@@ -14,10 +14,12 @@
 #include <functional>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace
@@ -1576,6 +1578,36 @@ bool verify_relocation_target_eligibility_applies_full_narrowing ()
         candidate.placement_weight = 0;
         if (relocation_unit_target_eligible (source, candidate, 7, "", {"player"})) {
             std::cerr << "ineligible actor-only target (zero weight) was accepted\n";
+            return false;
+        }
+    }
+
+    // Spec step 6: deterministic weighted draw over the eligible set. A higher
+    // weight is preferred, the result is order-independent, and a zero weight is
+    // excluded.
+    {
+        using zlink::framework::select_weighted_relocation_target;
+        using weighted_set_t = std::vector<std::pair<std::string, std::uint32_t>>;
+
+        const weighted_set_t high_low = {{"high", 3}, {"low", 1}};
+        if (select_weighted_relocation_target (high_low) != std::optional<std::string> ("high")) {
+            std::cerr << "weighted draw did not prefer the higher weight\n";
+            return false;
+        }
+        const weighted_set_t low_high = {{"low", 1}, {"high", 3}};
+        if (select_weighted_relocation_target (low_high) != std::optional<std::string> ("high")) {
+            std::cerr << "weighted draw was not order-independent\n";
+            return false;
+        }
+        const weighted_set_t empty_set = {};
+        if (select_weighted_relocation_target (empty_set).has_value ()) {
+            std::cerr << "weighted draw returned a target for an empty set\n";
+            return false;
+        }
+        const weighted_set_t zero_and_positive = {{"zero", 0}, {"positive", 2}};
+        if (select_weighted_relocation_target (zero_and_positive)
+            != std::optional<std::string> ("positive")) {
+            std::cerr << "weighted draw did not exclude the zero-weight candidate\n";
             return false;
         }
     }

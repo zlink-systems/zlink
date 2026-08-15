@@ -3,8 +3,11 @@
 #include "runtime/locations/location_records.hpp"
 
 #include <cstdint>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace zlink::framework
@@ -31,5 +34,14 @@ bool relocation_unit_target_eligible (
   std::int64_t effective_target_application_version,
   std::string_view spot_type,
   const std::vector<std::string> &actor_types);
+
+// Applies node-wide placement weight to the final eligible candidate set (spec
+// step 6) and returns the selected candidate key. Uses the framework's
+// deterministic smooth weighted selector (no randomness), so a higher weight is
+// preferred and the choice is reproducible. `candidates` are (key, weight)
+// pairs; a zero weight is excluded. Returns nullopt when the set is empty or all
+// weights are zero.
+std::optional<std::string> select_weighted_relocation_target (
+  std::span<const std::pair<std::string, std::uint32_t>> candidates);
 
 }

@@ -1,4 +1,5 @@
 #include "runtime/host/relocation_target_eligibility.hpp"
+#include "runtime/client_server/weighted_selector.hpp"
 
 #include <algorithm>
 
@@ -86,6 +87,19 @@ bool relocation_unit_target_eligible (
     return candidate.activation_concurrency.limit <= 0
            || candidate.activation_concurrency.active
                 < static_cast<std::uint32_t> (candidate.activation_concurrency.limit);
+}
+
+std::optional<std::string> select_weighted_relocation_target (
+  std::span<const std::pair<std::string, std::uint32_t>> candidates)
+{
+    std::vector<runtime::client_server::weighted_candidate_t> weighted;
+    weighted.reserve (candidates.size ());
+    for (const auto &[key, weight] : candidates)
+        weighted.push_back (
+          runtime::client_server::weighted_candidate_t{key, weight, key});
+    runtime::client_server::smooth_weighted_selector_t selector;
+    selector.set_candidates (weighted);
+    return selector.select ();
 }
 
 }
