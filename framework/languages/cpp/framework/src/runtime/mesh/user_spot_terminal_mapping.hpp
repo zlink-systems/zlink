@@ -56,8 +56,11 @@ inline framework_error_kind_t map_user_spot_wire_failure (
             break;
     }
 
-    if (header.terminal_result == 103
-        || header.terminal_result == 106)
+    //  Spec 32-framework-error-model:118 — terminal 103 is Terminated, which is
+    //  ShuttingDown; only terminal 106 (Rejected) maps to rejected.
+    if (header.terminal_result == 103)
+        return framework_error_kind_t::shutting_down;
+    if (header.terminal_result == 106)
         return framework_error_kind_t::rejected;
     return framework_error_kind_t::internal_failure;
 }
