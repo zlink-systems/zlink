@@ -1219,7 +1219,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 incomingEncoded,
                 root.applicationState())) {
             return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DATA_LOST,
                     "direct Actor Join payload differs from canonical relocation root"));
         }
         String actorId = request.actorId();
@@ -4317,8 +4318,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     private void stopDirectJoinSessionRecovery(String message) {
-        ZLinkConfigurationException pendingAbortClosed =
-            new ZLinkConfigurationException(message);
+        //  Spec 32-framework-error-model:39, 15-spot-actor:375 — a pending
+        //  operation aborted by runtime shutdown/drain is ShuttingDown.
+        ZLinkFrameworkException pendingAbortClosed =
+            new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.SHUTTING_DOWN, message);
         directJoinSessionAborts.forEach((key, flight) -> {
             if (directJoinSessionAborts.remove(key, flight)) {
                 flight.completion().completeExceptionally(pendingAbortClosed);

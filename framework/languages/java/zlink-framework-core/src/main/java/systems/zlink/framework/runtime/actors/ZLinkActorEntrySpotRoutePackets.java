@@ -3,7 +3,8 @@ package systems.zlink.framework.runtime.actors;
 import java.nio.charset.StandardCharsets;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 public final class ZLinkActorEntrySpotRoutePackets {
     public static final String JOIN_ENTRY_SPOT_PACKET_NAME = "__zlink.actor.joinEntrySpot";
@@ -27,7 +28,8 @@ public final class ZLinkActorEntrySpotRoutePackets {
     public static JoinRequest decodeJoinRequest(Message message) {
         String[] fields = message.toUtf8String().split("\n", -1);
         if (fields.length != 4 || fields[0].isBlank() || fields[1].isBlank()) {
-            throw new ZLinkConfigurationException("invalid actor Entry Spot route join request");
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,"invalid actor Entry Spot route join request");
         }
         return new JoinRequest(
             fields[0],
@@ -52,7 +54,8 @@ public final class ZLinkActorEntrySpotRoutePackets {
     public static JoinReply decodeJoinReply(Message message) {
         String[] fields = message.toUtf8String().split("\n", -1);
         if (fields.length != 4 || fields[0].isBlank() || fields[1].isBlank()) {
-            throw new ZLinkConfigurationException("invalid actor Entry Spot route join reply");
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,"invalid actor Entry Spot route join reply");
         }
         return new JoinReply(
             fields[0],

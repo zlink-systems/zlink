@@ -13,6 +13,8 @@ import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.actors.ZLinkActorReplyRoute;
@@ -527,7 +529,8 @@ final class ZLinkActorSessionCoordinator {
                 candidate.sessionOwnerNodeRid().equals(sourceNodeRid)
                     && candidate.sessionRid().equals(sourceSessionRid)
                     && candidate.bindingGeneration() > 0)
-            .orElseThrow(() -> new ZLinkConfigurationException(
+            .orElseThrow(() -> new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
                 "bound Session runtime route is unavailable or stale: "
                     + actorRef.actorId()));
         requireActors().bindNativeSession(

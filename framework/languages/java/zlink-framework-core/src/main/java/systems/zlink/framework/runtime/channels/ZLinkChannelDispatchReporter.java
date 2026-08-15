@@ -98,9 +98,12 @@ final class ZLinkChannelDispatchReporter {
         if (cause instanceof ZLinkFrameworkException frameworkError) {
             return frameworkError.kind();
         }
-        if (cause instanceof PayloadDecodeDispatchException decode
-            && decode.getCause() instanceof ZLinkFrameworkException frameworkError) {
-            return frameworkError.kind();
+        if (cause instanceof PayloadDecodeDispatchException decode) {
+            //  Spec 32-framework-error-model:40 — an unprocessable payload is a
+            //  ProtocolError even when it arrives without a nested framework kind.
+            return decode.getCause() instanceof ZLinkFrameworkException frameworkError
+                ? frameworkError.kind()
+                : ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
         }
         return ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
     }

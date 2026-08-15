@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.spots;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -367,11 +368,14 @@ final class ZLinkSpotTimerRegistryTest {
 
     @Test
     void relocationEnvelopeRejectsTrailingBytes() {
-        assertThrows(
-            ZLinkConfigurationException.class,
+        ZLinkFrameworkException failure = assertThrows(
+            ZLinkFrameworkException.class,
             () -> ZLinkSpotTimerRelocationEnvelope.decode(
                 new byte[] {0, 1, 2, 3},
                 ignored -> PreviousTimerHandler.class));
+        //  Spec 32-framework-error-model:42 — an unverifiable relocation payload
+        //  is DataLost, not a configuration error.
+        assertEquals(ZLinkFrameworkErrorKind.DATA_LOST, failure.kind());
     }
 
     public static final class TimerHandler {

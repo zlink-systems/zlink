@@ -1386,10 +1386,11 @@ public final class ZLinkChannelRuntime
                     try {
                         if (reply.result() != ZLinkBackendRequestResult.OK) {
                             result.completeExceptionally(new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                                reply.result().toFrameworkErrorKind(),
                                 "internal route request failed: " + reply.result()));
                         } else if (reply.parts().isEmpty()) {
-                            result.completeExceptionally(new ZLinkConfigurationException(
+                            result.completeExceptionally(new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                                 "internal route request reply was empty: " + packetName));
                         } else {
                             result.complete(Message.from(reply.parts().get(0)));

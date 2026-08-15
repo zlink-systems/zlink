@@ -17,6 +17,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.spots.ZLinkTimerOptions;
 import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy;
 import systems.zlink.framework.spots.ZLinkTimerTick;
@@ -402,11 +404,15 @@ final class ZLinkSpotTimerRelocationEnvelope {
         return Instant.ofEpochSecond(input.readLong(), input.readInt());
     }
 
-    private static ZLinkConfigurationException invalid(Throwable cause) {
+    private static ZLinkFrameworkException invalid(Throwable cause) {
+        //  Spec 32-framework-error-model:42, 15-spot-actor:372 — a missing or
+        //  unverifiable relocation payload is DataLost.
         return cause == null
-            ? new ZLinkConfigurationException(
+            ? new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DATA_LOST,
                 "invalid Spot timer relocation envelope")
-            : new ZLinkConfigurationException(
+            : new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DATA_LOST,
                 "invalid Spot timer relocation envelope",
                 cause);
     }

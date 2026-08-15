@@ -32,6 +32,7 @@ import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.streams.ZLinkSessionActor;
 import systems.zlink.framework.streams.ZLinkSessionActors;
@@ -1035,7 +1036,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     }
 
     private void expireRelocationSeal(SealTerminal terminal) {
-        RuntimeException failure = new ZLinkConfigurationException(
+        //  Spec 32-framework-error-model:38 — a live operation past its deadline
+        //  is DeadlineExceeded, not a configuration error.
+        RuntimeException failure = new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
             "Session relocation route update timed out: "
                 + terminal.seal().actor().actor().actorId());
         if (!stopRelocationOwner(failure, terminal)) {

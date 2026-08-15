@@ -327,7 +327,11 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
 
     private <TReply> TReply decodeReply(List<Message> reply, Class<TReply> replyType) {
         if (reply == null || reply.isEmpty()) {
-            throw new ZLinkConfigurationException("Actor request reply is empty.");
+            //  Spec 32-framework-error-model:40,83-92 — an unprocessable reply
+            //  contract is a ProtocolError, not a configuration error.
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "Actor request reply is empty.");
         }
         if (reply.size() == 1) {
             byte[] frame = reply.get(0).toByteArray();
@@ -346,7 +350,9 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
             }
         }
         if (reply.size() < 2) {
-            throw new ZLinkConfigurationException("Actor request reply payload is missing.");
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "Actor request reply payload is missing.");
         }
         ZLinkStreamHeader header = ZLinkStreamHeaderCodec.decodeOrPlain(reply.get(0).toByteArray());
         return decodePayload(header, reply.get(1), replyType);

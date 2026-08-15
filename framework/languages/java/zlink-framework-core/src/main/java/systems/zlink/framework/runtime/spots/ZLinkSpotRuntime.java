@@ -2806,7 +2806,8 @@ public final class ZLinkSpotRuntime
         Object spotSurface = spotSurfaceFor(spotId);
         if (spotSurface == null) {
             return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
                     "target execution Spot is unavailable: " + spotId));
         }
         return replayPreparedActorOnSurface(

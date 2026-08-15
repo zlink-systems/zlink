@@ -509,7 +509,10 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
 
     private void requireJoinCompleted(ZLinkBackendActorJoinResult result) {
         if (result.result() != ZLinkBackendRequestResult.OK) {
-            throw new ZLinkConfigurationException(
+            //  Spec 15-spot-actor:364-375 — a Join Failed.Kind is a runtime
+            //  terminal, never NotConfigured.
+            throw new ZLinkFrameworkException(
+                result.result().toFrameworkErrorKind(),
                 "actor spot join failed: " + result.result());
         }
     }
@@ -618,7 +621,8 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                             try {
                                 if (replyParts.isEmpty()) {
                                     return CompletableFuture.failedFuture(
-                                        new ZLinkConfigurationException(
+                                        new ZLinkFrameworkException(
+                                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                                             "remote actor Spot admission reply was empty: " + spotId));
                                 }
                                 ZLinkActorSpotRoutePackets.AdmissionReply admission =

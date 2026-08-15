@@ -107,7 +107,11 @@ final class ZLinkActorEntrySpotJoinCall implements ZLinkActorJoinCall {
                     timeout)
                 .thenCompose(result -> {
                     if (result.result() != ZLinkBackendRequestResult.OK) {
-                        throw new ZLinkConfigurationException(
+                        //  Spec 15-spot-actor:364-375 — a Join Failed.Kind is a
+                        //  runtime terminal (NotFound/Unavailable/CapacityExceeded/
+                        //  ...), never NotConfigured.
+                        throw new ZLinkFrameworkException(
+                            result.result().toFrameworkErrorKind(),
                             "actor entry spot join failed: " + result.result());
                     }
                     CompletionStage<Void> route = result.joinResultCode() != 0

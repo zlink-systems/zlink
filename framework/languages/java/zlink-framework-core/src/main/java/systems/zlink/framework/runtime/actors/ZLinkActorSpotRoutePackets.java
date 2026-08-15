@@ -7,7 +7,8 @@ import java.util.ArrayList;
 import java.util.List;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
@@ -369,7 +370,8 @@ public final class ZLinkActorSpotRoutePackets {
             || fields[8].isBlank()
             || fields[9].isBlank()
             || (fields[10].isBlank() != fields[11].isBlank())) {
-            throw new ZLinkConfigurationException("invalid actor Spot transfer request");
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,"invalid actor Spot transfer request");
         }
         return new TransferRequest(
             fields[0],
@@ -415,7 +417,8 @@ public final class ZLinkActorSpotRoutePackets {
         List<Message> parts,
         int backlogCount) {
         if (backlogCount < 0 || parts.size() != 3 + backlogCount * 5) {
-            throw new ZLinkConfigurationException("invalid actor transfer handoff backlog");
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,"invalid actor transfer handoff backlog");
         }
         List<WireHandoffPacket> backlog = new ArrayList<>(backlogCount);
         for (int index = 0; index < backlogCount; index++) {
@@ -443,7 +446,8 @@ public final class ZLinkActorSpotRoutePackets {
     public static AdmissionReply decodeAdmissionReply(Message message) {
         String[] fields = message.toUtf8String().split("\n", -1);
         if (fields.length != 2) {
-            throw new ZLinkConfigurationException("invalid actor Spot admission reply");
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,"invalid actor Spot admission reply");
         }
         return new AdmissionReply(
             Boolean.parseBoolean(fields[0]),
@@ -504,7 +508,8 @@ public final class ZLinkActorSpotRoutePackets {
     public static BoundSessionSend decodeBoundSessionSend(List<Message> parts) {
         if (parts.size() < 3
             || !BOUND_SESSION_SEND_PACKET_NAME.equals(parts.get(0).toUtf8String())) {
-            throw new ZLinkConfigurationException("invalid routed actor bound session send packet");
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,"invalid routed actor bound session send packet");
         }
         return new BoundSessionSend(
             decodeActorRef(parts.get(1), "invalid routed actor bound session send metadata"),
@@ -514,7 +519,8 @@ public final class ZLinkActorSpotRoutePackets {
     public static ActorPacket decodeActorPacket(List<Message> parts) {
         if (parts.size() < 5
             || !ACTOR_PACKET_NAME.equals(parts.get(0).toUtf8String())) {
-            throw new ZLinkConfigurationException("invalid routed actor packet");
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,"invalid routed actor packet");
         }
         return new ActorPacket(
             decodeActorRef(parts.get(1), "invalid routed actor packet metadata"),
@@ -567,7 +573,8 @@ public final class ZLinkActorSpotRoutePackets {
             || fields[0].isBlank()
             || fields[1].isBlank()
             || fields[3].isBlank()) {
-            throw new ZLinkConfigurationException("invalid actor transfer reply route");
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,"invalid actor transfer reply route");
         }
         return new ZLinkActorReplyRoute(
             new ZLinkBackendActorRef(
@@ -585,7 +592,8 @@ public final class ZLinkActorSpotRoutePackets {
         if (fields.length != 3
             || fields[0].isBlank()
             || fields[1].isBlank()) {
-            throw new ZLinkConfigurationException(errorMessage);
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,errorMessage);
         }
         return new ZLinkBackendActorRef(
             RoutingId.from(fields[0]),
@@ -614,7 +622,8 @@ public final class ZLinkActorSpotRoutePackets {
         if (fields.length != 5
             || fields[1].isBlank()
             || fields[2].isBlank()) {
-            throw new ZLinkConfigurationException("invalid actor Spot route join reply");
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,"invalid actor Spot route join reply");
         }
         Message reply = fields[4].isBlank()
             ? Message.from(new byte[0])
