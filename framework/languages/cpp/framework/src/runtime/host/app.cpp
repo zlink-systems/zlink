@@ -3246,11 +3246,15 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                       // the effective version, excluded from source's non-empty
                       // maintenance wave, with relocation-policy/adapter
                       // compatibility, positive placement weight, and
-                      // population/reservation capacity.
+                      // population/reservation capacity; and, like the preflight,
+                      // the candidate's RID/generation must be an admitted Core
+                      // peer.
                       return relocation_unit_target_eligible (
-                        source_descriptor, peer,
-                        terminal.effective_target_application_version, unit.spot_type,
-                        actor_types);
+                               source_descriptor, peer,
+                               terminal.effective_target_application_version,
+                               unit.spot_type, actor_types)
+                             && node->has_admitted_peer (peer.rid,
+                                                         peer.lifecycle_generation);
                   },
                   terminal.reason);
                 if (!target) {
@@ -3337,19 +3341,19 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 const auto target = wait_for_relocation_target (
                   peers->get (), node->mesh_name (), deadline_at, topology_poll_interval,
                   shutdown_requested,
-                  [&] (const auto &peer) {
-                      return peer.state == framework_runtime_state_t::serving
-                             && peer.application_version
-                                  == terminal.effective_target_application_version
-                             && (!local_rid || peer.rid.to_hex () != local_rid->to_hex ())
-                             && std::any_of (
-                               peer.object_capabilities.begin (), peer.object_capabilities.end (),
-                               [&] (const auto &capability) {
-                                   return capability.object_kind == placement_object_kind_t::actor
-                                          && capability.stable_type
-                                               == ::zlink::framework::detail::actor_ref_access_t::
-                                                 actor_type (actor);
-                               });
+                  [&] (const mesh_node_descriptor_t &peer) {
+                      if (local_rid && peer.rid.to_hex () == local_rid->to_hex ())
+                          return false;
+                      // Single-Actor relocation target: same frozen narrowing as
+                      // the shared path, with no user Spot requirement.
+                      return relocation_unit_target_eligible (
+                               source_descriptor, peer,
+                               terminal.effective_target_application_version, {},
+                               {std::string (
+                                 ::zlink::framework::detail::actor_ref_access_t::actor_type (
+                                   actor))})
+                             && node->has_admitted_peer (peer.rid,
+                                                         peer.lifecycle_generation);
                   },
                   terminal.reason);
                 if (!target) {

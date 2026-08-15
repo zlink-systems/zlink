@@ -74,7 +74,10 @@ bool relocation_unit_target_eligible (
             && candidate.maintenance_wave == source.maintenance_wave)) {
         return false;
     }
-    if (!candidate_supports (source, candidate, placement_object_kind_t::user_spot, spot_type))
+    // An actor-only relocation unit has no user Spot requirement.
+    if (!spot_type.empty ()
+        && !candidate_supports (source, candidate, placement_object_kind_t::user_spot,
+                                spot_type))
         return false;
     for (const auto &actor_type : actor_types) {
         if (!candidate_supports (source, candidate, placement_object_kind_t::actor, actor_type))

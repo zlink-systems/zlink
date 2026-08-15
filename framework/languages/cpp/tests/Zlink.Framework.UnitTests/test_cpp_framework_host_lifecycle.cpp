@@ -1565,6 +1565,21 @@ bool verify_relocation_target_eligibility_applies_full_narrowing ()
         }
     }
 
+    // An actor-only unit (empty Spot type) imposes no user Spot requirement but
+    // still applies the per-candidate gates.
+    {
+        auto candidate = make_eligible ();
+        if (!relocation_unit_target_eligible (source, candidate, 7, "", {"player"})) {
+            std::cerr << "eligible actor-only target was rejected\n";
+            return false;
+        }
+        candidate.placement_weight = 0;
+        if (relocation_unit_target_eligible (source, candidate, 7, "", {"player"})) {
+            std::cerr << "ineligible actor-only target (zero weight) was accepted\n";
+            return false;
+        }
+    }
+
     return true;
 }
 

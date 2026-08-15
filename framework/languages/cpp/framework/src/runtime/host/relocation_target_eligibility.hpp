@@ -20,9 +20,11 @@ namespace zlink::framework
 // stable-type / relocation-policy (snapshot-adapter) compatibility and
 // population/reservation capacity for the unit's user Spot and Actor types.
 //
-// `spot_type` is the unit's user Spot stable type; `actor_types` are the unit's
+// `spot_type` is the unit's user Spot stable type (empty for an actor-only
+// unit, which imposes no user Spot requirement); `actor_types` are the unit's
 // Actor stable types. `source` supplies the maintenance wave and the declared
-// relocation policy per capability.
+// relocation policy per capability. The Core-peer admitted/ready gate (spec
+// step 5) is applied by the caller, which owns the Core peer table.
 bool relocation_unit_target_eligible (
   const mesh_node_descriptor_t &source,
   const mesh_node_descriptor_t &candidate,
