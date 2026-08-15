@@ -360,21 +360,22 @@ if (!/\bsubmit\s*\(/.test(packageNamingSources.cppHttp)
   fail('cpp HTTP Client or Stream Connector naming is not canonical');
 }
 
-const cppSubmitRuntime = read(
+const cppMulticastRuntime = read(
   'framework/languages/cpp/framework/src/runtime/messaging/'
-  + 'async_submit_runtime.cpp');
-const cppMulticastExecutor = cppSubmitRuntime.match(
+  + 'logical_multicast_runtime.cpp');
+const cppMulticastExecutor = cppMulticastRuntime.match(
   /class logical_multicast_executor_t[\s\S]*?\n};/);
 if (!cppMulticastExecutor) {
   fail('cpp Logical Multicast executor implementation is missing');
 } else if (/\b_pending\b/.test(cppMulticastExecutor[0])) {
   fail('cpp Logical Multicast executor retains a pending payload queue');
 }
-const cppGeneralExecutor = cppSubmitRuntime.match(
-  /class async_submit_runtime_t[\s\S]*?\n};/);
-if (!cppGeneralExecutor) {
-  fail('cpp general one-way executor implementation is missing');
-} else if (/\b_waiting\b/.test(cppGeneralExecutor[0])) {
+const cppCallFacadeRuntime = read(
+  'framework/languages/cpp/framework/src/runtime/messaging/'
+  + 'call_facade_runtime.cpp');
+if (!/\bsubmit_one_way_task\s*\(/.test(cppCallFacadeRuntime)) {
+  fail('cpp general one-way direct submit implementation is missing');
+} else if (/\b(?:_waiting|_pending)\b/.test(cppCallFacadeRuntime)) {
   fail('cpp general one-way executor retains an unbounded overflow queue');
 }
 

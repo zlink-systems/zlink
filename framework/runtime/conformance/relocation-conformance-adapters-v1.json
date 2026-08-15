@@ -51,7 +51,7 @@
             "failureAndIdempotency"
           ],
           "tests": [
-            "verify_remote_session_route_ack_and_atomic_switch",
+            "verify_session_route_supports_repeated_relocation",
             "verify_message_follow_route_admission_and_suppression"
           ]
         },
@@ -62,7 +62,7 @@
             "actorJoin",
             "failureAndIdempotency"
           ],
-          "tests": ["verify_deferred_actor_join_completion_converges_in_process"]
+          "tests": ["verify_actor_join_finalize_replies_after_target_activation"]
         }
       ],
       "focusedCommands": [
@@ -97,9 +97,9 @@
           "tests": ["ActorJoin_runtime_preserves_observable_order_and_exact_callback_counts"]
         },
         {
-          "path": "framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/SessionRelocationBarrierTests.cs",
+          "path": "framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/SessionActorCoordinatorTests.cs",
           "behaviorGroups": ["actorJoinMilestones", "actorBoundSession", "failureAndIdempotency"],
-          "tests": ["Three_Node_Command_44_Unblocks_The_Pending_Target_Push_Exactly_Once"]
+          "tests": ["Canonical_Seal_Retries_Target_Push_Until_Command_44_Commits"]
         },
         {
           "path": "framework/languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/RelocationRuntimeTests.cs",
@@ -125,14 +125,14 @@
         }
       ],
       "focusedCommands": [
-        ["dotnet", "test", "tests/Zlink.Framework.UnitTests/Zlink.Framework.UnitTests.csproj", "--filter", "FullyQualifiedName~RelocationBehaviorConformanceTests|FullyQualifiedName~SessionRelocationBarrierTests|FullyQualifiedName~RelocationRuntimeTests"]
+        ["dotnet", "test", "tests/Zlink.Framework.UnitTests/Zlink.Framework.UnitTests.csproj", "--filter", "FullyQualifiedName~RelocationBehaviorConformanceTests|FullyQualifiedName~SessionActorCoordinatorTests|FullyQualifiedName~RelocationRuntimeTests"]
       ]
     },
     {
       "language": "java",
       "fixtureConnection": "direct",
       "fixtureConsumer": {
-        "path": "framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/actors/ZLinkActorJoinRelocationBehaviorContractTest.java",
+        "path": "framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkActorClientMessageFollowRuntimePortTest.java",
         "fixtureReference": "relocation-behavior-v1.json"
       },
       "coverage": {
@@ -150,7 +150,7 @@
       },
       "evidence": [
         {
-          "path": "framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/actors/ZLinkActorJoinRelocationBehaviorContractTest.java",
+          "path": "framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/spots/ZLinkCanonicalDirectJoinHostIntegrationTest.java",
           "behaviorGroups": [
             "commonLifecycle",
             "actorJoin",
@@ -158,35 +158,35 @@
             "actorBoundSession",
             "failureAndIdempotency"
           ],
-          "tests": ["publicDeferredJoinProducesObservableRelocationTraceAndRetainsCallbackPush"]
+          "tests": ["actualHostsUseOneCanonicalOwnerForB1B2D1AndLifecycleOrdering"]
         },
         {
-          "path": "framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/spots/ZLinkDeferredJoinCompletionAuthorityTest.java",
+          "path": "framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/spots/ZLinkCanonicalDirectJoinHostIntegrationTest.java",
           "behaviorGroups": [
             "commonLifecycle",
             "actorJoin",
             "actorBoundSession",
             "failureAndIdempotency"
           ],
-          "tests": ["relocationPublishesReadyBeforeCleanupAndRoutesCallbackPushExactlyOnce"]
+          "tests": ["actualHostsUseOneCanonicalOwnerForB1B2D1AndLifecycleOrdering"]
         },
         {
-          "path": "framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/messaging/ZLinkAdmissionRuntimeTest.java",
+          "path": "framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/actors/ZLinkStreamPhysicalSubmitOwnershipTest.java",
           "behaviorGroups": ["actorBoundSession", "failureAndIdempotency"],
           "tests": [
-            "detachedAdmissionOutlivesThePublicDeadlineAndRetainsDeliveryOwnership",
-            "supersededRouteTerminatesRetainedPayloadExactlyOnce",
-            "shutdownTerminatesDetachedRoutePayloadExactlyOnce"
+            "targetOutboundFifoWaitsForOneBackendPhysicalTerminalAtATime",
+            "targetOutboundErrorSettlesOnceAndAdvancesTheOwnedFifo",
+            "targetOutboundShutdownCancelsThePendingBackendPhysicalTerminal"
           ]
         },
         {
-          "path": "framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/actors/ZLinkActorSpotJoinCallTest.java",
+          "path": "framework/languages/java/zlink-framework-core/src/test/java/systems/zlink/framework/runtime/binding/ZLinkActorClientMessageFollowRuntimePortTest.java",
           "behaviorGroups": ["actorMessageFollow"],
-          "tests": ["sourceCleanupSkipsTheAlreadyCompletedMessageFollowRouteLookup"]
+          "tests": ["targetJoinedSendFollowsExactCommittedSourceAndRefreshesTheNextCall"]
         }
       ],
       "focusedCommands": [
-        ["./gradlew", "--no-daemon", "--no-parallel", "--max-workers=1", ":zlink-framework-core:test", "--tests", "systems.zlink.framework.runtime.actors.ZLinkActorJoinRelocationBehaviorContractTest", "--tests", "systems.zlink.framework.runtime.spots.ZLinkDeferredJoinCompletionAuthorityTest", "--tests", "systems.zlink.framework.runtime.messaging.ZLinkAdmissionRuntimeTest", "--tests", "systems.zlink.framework.runtime.actors.ZLinkActorSpotJoinCallTest"]
+        ["./gradlew", "--no-daemon", "--no-parallel", "--max-workers=1", ":zlink-framework-core:test", "--tests", "systems.zlink.framework.runtime.spots.ZLinkCanonicalDirectJoinHostIntegrationTest", "--tests", "systems.zlink.framework.runtime.actors.ZLinkStreamPhysicalSubmitOwnershipTest", "--tests", "systems.zlink.framework.runtime.binding.ZLinkActorClientMessageFollowRuntimePortTest"]
       ]
     },
     {

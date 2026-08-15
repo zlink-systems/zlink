@@ -924,7 +924,7 @@ def verify_aggregate_runners() -> None:
 def verify_lock_reentrancy() -> None:
     helper_contracts = {
         "framework/languages/cpp/e2e/redis-common.sh": (
-            "ZLINK_CPP_E2E_RUN_LOCK_HELD", "return 0",
+            "zlink_cpp_e2e_run_lock_held", "return 0",
             "exec flock --exclusive --close", 'bash "${runner}" "$@"',
         ),
         "framework/languages/dotnet/e2e/redis-common.sh": (
