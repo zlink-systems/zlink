@@ -191,8 +191,8 @@ public sealed class RequestFailureMappingTests
     [InlineData(RequestResult.InvalidState, ZLinkFrameworkErrorKind.InvalidOperation)]
     [InlineData(RequestResult.NotSupported, ZLinkFrameworkErrorKind.InternalFailure)]
     [InlineData(RequestResult.InternalError, ZLinkFrameworkErrorKind.InternalFailure)]
-    [InlineData(RequestResult.Conflict, ZLinkFrameworkErrorKind.CapacityExceeded)]
-    [InlineData(RequestResult.Busy, ZLinkFrameworkErrorKind.CapacityExceeded)]
+    [InlineData(RequestResult.Conflict, ZLinkFrameworkErrorKind.Unavailable)]
+    [InlineData(RequestResult.Busy, ZLinkFrameworkErrorKind.Unavailable)]
     public void Completion_Maps_Native_Result_To_Framework_Error(
         RequestResult result,
         ZLinkFrameworkErrorKind expected)

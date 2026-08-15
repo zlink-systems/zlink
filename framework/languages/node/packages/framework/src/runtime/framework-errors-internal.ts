@@ -195,11 +195,14 @@ export function requestResultToPublicErrorKind(result: number): ZLinkFrameworkEr
       return ZLinkFrameworkErrorKind.ProtocolError;
     case RequestResult.Rejected:
       return ZLinkFrameworkErrorKind.Rejected;
+    case RequestResult.Backpressured:
+      //  Source-owned send/completion reservation exhausted (spec 32:93-98).
+      return ZLinkFrameworkErrorKind.CapacityExceeded;
     case RequestResult.Conflict:
     case RequestResult.Busy:
-    case RequestResult.Backpressured:
-      return ZLinkFrameworkErrorKind.CapacityExceeded;
     case RequestResult.NotConnected:
+      //  Spec 32:99-103 — a remote target's queue/owner state (conflict, busy,
+      //  or lost connection) is a resource this runtime does not own: Unavailable.
       return ZLinkFrameworkErrorKind.Unavailable;
     case RequestResult.InvalidArgument:
     case RequestResult.InvalidState:

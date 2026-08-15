@@ -29,15 +29,14 @@ internal static class ZLinkRequestFailureMapper
                 ZLinkFrameworkErrorKind.NotFound,
                 $"{operationName} failed because the target was not found.",
                 innerException: CreateRequestException(result)),
-            //  Spec 32-framework-error-model:93-98 — `Conflict`/`Busy` on the
-            //  generic request path is the source runtime failing to secure a
-            //  local bounded resource it owns (reply slot, operation-table entry,
-            //  same-process queue), which is `CapacityExceeded`, not a policy
-            //  `Rejected`. It stays retryable via RetryAfterBackoff. (The Actor
-            //  request path keeps `Conflict`->`Unavailable` for actorLocationStale
-            //  semantics in ZLinkActorClient.MapRequestException.)
+            //  Spec 32-framework-error-model:99-103 — a terminal-only `Conflict`/
+            //  `Busy` on a remote request reply reflects the target's queue/owner
+            //  state, a resource this runtime does not own, so it is `Unavailable`
+            //  (a source-owned bounded resource would be `CapacityExceeded`, but
+            //  that must be proven, not assumed from the coarse terminal). Stays
+            //  retryable via RetryAfterBackoff.
             RequestResult.Conflict or RequestResult.Busy => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.CapacityExceeded,
+                ZLinkFrameworkErrorKind.Unavailable,
                 $"{operationName} was refused with a transient result '{result}'.",
                 ZLinkRetryAdvice.RetryAfterBackoff,
                 CreateRequestException(result)),
