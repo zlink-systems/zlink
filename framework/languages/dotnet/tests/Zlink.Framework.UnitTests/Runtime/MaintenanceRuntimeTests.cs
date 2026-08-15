@@ -432,6 +432,75 @@ public sealed class MaintenanceRuntimeTests
     }
 
     [Fact]
+    public async Task Concurrent_relocation_with_a_different_deadline_joins_the_running_operation()
+    {
+        using var fixture = Create();
+        fixture.Runtime.MarkServing();
+
+        var first = fixture.Runtime.RelocateAsync(new ZLinkFrameworkRelocationOptions
+        {
+            Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+            Deadline = TimeSpan.FromSeconds(30)
+        }).AsTask();
+        await fixture.Executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        // Same mode and effective target application version, different deadline:
+        // the concurrent call joins the running operation and shares its terminal
+        // result; its deadline neither extends nor shortens the operation.
+        var second = fixture.Runtime.RelocateAsync(new ZLinkFrameworkRelocationOptions
+        {
+            Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+            Deadline = TimeSpan.FromSeconds(45)
+        }).AsTask();
+        Assert.False(second.IsCompleted);
+
+        fixture.Executor.Complete.TrySetResult(null);
+        var firstResult = await first;
+        var secondResult = await second;
+
+        Assert.Equal(firstResult, secondResult);
+        Assert.NotEqual(
+            ZLinkFrameworkRelocationReason.OperationInProgress,
+            secondResult.Reason);
+        Assert.Equal(1, fixture.Executor.ExecuteCount);
+    }
+
+    [Fact]
+    public async Task Rejected_concurrent_relocation_reports_the_requested_target_version()
+    {
+        using var fixture = Create(sourceApplicationVersion: 3);
+        fixture.Runtime.MarkServing();
+
+        var first = fixture.Runtime.RelocateAsync(new ZLinkFrameworkRelocationOptions
+        {
+            Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+            Deadline = TimeSpan.FromSeconds(30)
+        }).AsTask();
+        await fixture.Executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        // Different mode and effective target: rejected with OperationInProgress.
+        // The result reflects the valid option the rejected call requested
+        // (rolling update to version 7), not the running operation's target (3).
+        var rejected = await fixture.Runtime.RelocateAsync(
+            new ZLinkFrameworkRelocationOptions
+            {
+                Mode = ZLinkFrameworkRelocationMode.RollingUpdate,
+                TargetApplicationVersion = 7,
+                Deadline = TimeSpan.FromSeconds(45)
+            });
+
+        Assert.Equal(ZLinkFrameworkRelocationOutcome.Blocked, rejected.Outcome);
+        Assert.Equal(
+            ZLinkFrameworkRelocationReason.OperationInProgress,
+            rejected.Reason);
+        Assert.Equal(ZLinkFrameworkRelocationMode.RollingUpdate, rejected.Mode);
+        Assert.Equal(7, rejected.TargetApplicationVersion);
+
+        fixture.Executor.Complete.TrySetResult(null);
+        await first;
+    }
+
+    [Fact]
     public async Task Shutdown_after_relocating_seals_immediately_and_starts_no_next_unit()
     {
         using var fixture = Create();
