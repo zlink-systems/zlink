@@ -336,12 +336,13 @@ version 이하이면 같은 방식으로 `TypeError`로 reject된다. Framework�
 
 Target 후보는 다음 순서로 줄인다.
 
-1. 같은 Mesh에서 `Serving` 상태인 Object Server를 찾는다.
-2. Planned maintenance이면 source version, rolling update이면 지정한 target version과 정확히 같은
+1. Planned maintenance이면 source version, rolling update이면 지정한 target version과 정확히 같은
    node만 남긴다.
-3. Source와 같은 maintenance wave에 속한 node를 제외한다.
-4. stable type, relocation policy와 adapter capability가 맞는지 확인한다.
-5. population capacity와 reservation 가능 여부를 확인한다.
+2. 같은 Mesh에서 source가 아니며 `Serving` 상태인 Object Server만 남긴다.
+3. Stable type, factory, relocation policy와 state adapter가 맞는지 확인한다.
+4. Population capacity와 reservation 가능 여부를 확인하고 source와 같은 maintenance wave를 제외한다.
+5. 같은 descriptor snapshot과 Core peer table에서 RID와 lifecycle generation이 일치하며
+   `Admitted`·`Ready`인 node만 남긴다.
 6. 남은 후보에 node-wide placement weight를 적용한다.
 
 Version filter를 capability·capacity·weight보다 먼저 적용하므로 다른 version으로 fallback하지 않는다.

@@ -6,7 +6,7 @@ Kotlin은 Java의 `ZLinkTopologyState`, `ZLinkFrameworkRuntimeState`,
 `ZLinkFrameworkRelocationMode`, `ZLinkFrameworkRelocationOptions`, relocation·termination
 outcome·reason·result와 `ZLinkFrameworkRuntime`을 그대로 사용한다. 같은 enum, options, result wrapper와
 runtime facade를 추가하지 않는다. 별도 drain facade와 MeshName을 받는 partial termination member는 없으며,
-Kotlin은 Java host의 `Relocate`와 `Shutdown`을 그대로 사용한다.
+Kotlin은 Java host의 `relocate()`와 `shutdown()`을 그대로 사용한다.
 
 Kotlin artifact가 직접 선언하는 call, handler와 coroutine lifecycle adapter의 source owner는
 `systems/zlink/framework/kotlin/contracts/`다. Source를 이 경계로 옮겨도 package 선언은

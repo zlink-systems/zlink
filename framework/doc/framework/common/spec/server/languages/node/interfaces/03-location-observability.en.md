@@ -359,13 +359,17 @@ version.
 
 Target candidates are narrowed in the following order.
 
-1. Finds an Object Server in `Serving` state on the same Mesh.
-2. Keeps only a node exactly matching the source version for planned
+1. Keeps only a node exactly matching the source version for planned
    maintenance, or the specified target version for rolling update.
-3. Excludes a node belonging to the same maintenance wave as source.
-4. Confirms stable type, relocation policy, and adapter capability
-   match.
-5. Confirms population capacity and reservation availability.
+2. Keeps only a `Serving` Object Server on the same Mesh that isn't the
+   source.
+3. Confirms stable type, factory, relocation policy, and state adapter
+   compatibility.
+4. Confirms population capacity and reservation availability, and
+   excludes the same maintenance wave as source.
+5. Keeps only a node whose RID and lifecycle generation match in the
+   same descriptor snapshot and Core peer table, and whose peer is
+   `Admitted` and `Ready`.
 6. Applies node-wide placement weight to the remaining candidates.
 
 Since the version filter is applied before capability/capacity/weight,

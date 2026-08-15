@@ -332,9 +332,9 @@ sequenceDiagram
     Source-->>App: [reply] shutdown result Stopped or ForceStopped
 ```
 
-`Relocated` is the source-side result that cutover was sent for every unit; it doesn't
-mean the source awaited a target-CAS completion reply. `Relocated` keeps descriptor,
-connection, listener, and infrastructure resources. This
+`Relocated` is the source-side result that every unit's cutover submit attempt reached a
+success or failure terminal; it doesn't mean the source awaited a target-CAS completion
+reply. `Relocated` keeps descriptor, connection, listener, and infrastructure resources. This
 diagram shows the normal flow when a target is ready. Without a target, the deadline
 rule from the previous section returns `Blocked/TargetUnavailable`.
 

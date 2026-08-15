@@ -184,15 +184,17 @@ operation을 받아들이는지를 나타낸다. 두 값은 relocation unit 수�
 `TargetApplicationVersion`을 반드시 지정한다. 다른 값 조합은 operation을 시작하기 전에
 `ArgumentException`으로 거부한다.
 
-Target version 조건은 capability, capacity와 weight를 적용하기 전에 후보 집합을 제한한다.
+Target 후보는 다음 순서로 줄인다.
 
-- `PlannedMaintenance`: source와 application version이 같은 target만 사용한다.
-- `RollingUpdate`: 호출자가 지정한 application version과 정확히 같은 target만 사용한다. 그보다 높거나
-  낮은 다른 version으로 자동 전환하지 않는다.
+1. `PlannedMaintenance`는 source와 application version이 같은 target만 남긴다. `RollingUpdate`는 호출자가
+   지정한 application version과 정확히 같은 target만 남기며 더 높거나 낮은 다른 version도 제외한다.
+2. 같은 Mesh에서 source가 아니며 `Serving` 상태인 Object Server만 남긴다.
+3. Stable type, factory, relocation policy와 state adapter가 호환되는 target만 남긴다.
+4. Population capacity와 reservation 가능 여부를 확인하고 source와 같은 `MaintenanceWave`를 제외한다.
+5. 같은 descriptor snapshot과 Core peer table에서 RID와 lifecycle generation이 일치하며
+   `Admitted`·`Ready`인 target만 남긴다.
+6. 남은 후보가 여러 개이면 기존 node-wide placement weight를 적용한다.
 
-두 mode 모두 source node를 제외하고 `Serving` 상태인 Object Server, stable type, relocation policy,
-Relocation adapter와 capacity가 호환되는 target만 사용한다. Source에 `MaintenanceWave`가 설정되어 있으면
-같은 wave의 target을 제외한다. 남은 후보가 여러 개이면 기존 node-wide placement weight를 적용한다.
 요청한 version의 eligible target이 없으면 deadline까지 descriptor와 Core ready 상태의 수렴을 기다린 뒤
 `Blocked/TargetUnavailable`을 반환한다.
 
@@ -212,7 +214,8 @@ shutdown operation은 source에 남은 object와 resource를 정리한다.
 호출자가 전달한 `CancellationToken`은 해당 waiter만 종료한다. 이미 시작한 shared lifecycle operation은
 계속 실행되며 다른 waiter와 host lifecycle에 영향을 주지 않는다. 같은 operation을 반복 호출한 waiter는
 진행 중인 operation과 terminal 결과를 공유한다. `Mode`와 effective target application version이 모두 같은
-호출만 합류한다. 다른 options로 호출하면 기존 operation을 변경하지 않고
+호출은 합류하며 뒤 호출의 deadline은 shared operation deadline을 바꾸지 않는다. `Mode` 또는 effective
+target application version이 다른 options로 호출하면 기존 operation을 변경하지 않고
 `Blocked/OperationInProgress`를 반환한다.
 
 ## 3. 공통 topology 상태

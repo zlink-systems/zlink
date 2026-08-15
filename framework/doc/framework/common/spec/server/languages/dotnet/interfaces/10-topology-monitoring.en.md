@@ -192,21 +192,25 @@ source host's `ApplicationVersion` as the effective target version.
 source. A different value combination is rejected with
 `ArgumentException` before starting the operation.
 
-The target version condition restricts the candidate set before applying
-capability, capacity, and weight.
+Target candidates are narrowed in the following order.
 
-- `PlannedMaintenance`: only uses a target whose application version
-  matches source.
-- `RollingUpdate`: only uses a target that exactly matches the
-  caller-specified application version. It doesn't automatically switch
-  to a different, higher or lower, version.
+1. `PlannedMaintenance` keeps only a target whose application version
+   matches source. `RollingUpdate` keeps only a target that exactly
+   matches the caller-specified application version, excluding a
+   different higher or lower version.
+2. It keeps only a `Serving` Object Server on the same Mesh that isn't
+   the source.
+3. It keeps only a target compatible in stable type, factory, relocation
+   policy, and state adapter.
+4. It confirms population capacity and reservation availability and
+   excludes the same `MaintenanceWave` as source.
+5. It keeps only a target whose RID and lifecycle generation match in
+   the same descriptor snapshot and Core peer table, and whose peer is
+   `Admitted` and `Ready`.
+6. If multiple candidates remain, it applies the existing node-wide
+   placement weight.
 
-Both modes exclude the source node and only use a target that's a
-`Serving` Object Server compatible in stable type, relocation policy,
-Relocation adapter, and capacity. If `MaintenanceWave` is set on the
-source, a target of the same wave is excluded. If multiple candidates
-remain, the existing node-wide placement weight is applied. If there's no
-eligible target for the requested version, it waits until the deadline
+If there's no eligible target for the requested version, it waits until the deadline
 for descriptor and Core ready state to converge, and then returns
 `Blocked/TargetUnavailable`.
 
@@ -234,8 +238,10 @@ already-started shared lifecycle operation keeps running and doesn't
 affect other waiters or host lifecycle. A waiter that repeatedly calls
 the same operation shares the in-progress operation and terminal result.
 Only a call with the same `Mode` and effective target application
-version joins. Calling with different options doesn't change the
-existing operation and returns `Blocked/OperationInProgress`.
+version joins; the later call's deadline doesn't change the shared
+operation deadline. A call with a different `Mode` or effective target
+application version doesn't change the existing operation and returns
+`Blocked/OperationInProgress`.
 
 ## 3. Common Topology State
 

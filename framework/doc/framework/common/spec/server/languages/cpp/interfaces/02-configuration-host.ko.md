@@ -93,9 +93,10 @@ struct termination_result_t {
 Framework는 `std::invalid_argument`로 호출을 거부하고 shared operation과 host state를 변경하지 않는다.
 
 `deadline`이 비어 있으면 기본 30초를 사용한다. `wait_cancellation`은 waiter만 중단하며 이미 시작한 shared
-operation을 취소하지 않는다. 같은 `relocation_options_t`를 사용한 동시 호출은 이미 실행 중인 shared
-operation에 합류하며 같은 terminal result를 받는다. Mode, target application version 또는 deadline이
-다른 동시 호출은 기존 operation에 합류하거나 이를 변경하지 않고
+operation을 취소하지 않는다. Mode와 effective target application version이 같은 동시 호출은 이미 실행
+중인 shared operation에 합류하며 같은 terminal result를 받는다. 첫 호출의 deadline이 shared operation
+deadline을 고정하며, 뒤에 합류한 호출의 deadline은 이를 늘리거나 줄이지 않는다. Mode 또는 effective
+target application version이 다른 동시 호출은 기존 operation에 합류하거나 이를 변경하지 않고
 `blocked/operation_in_progress`를 반환한다. 이 결과의 mode와 effective target version은 거부된 호출이
 요청한 유효한 option을 반영한다.
 
@@ -107,13 +108,16 @@ operation에 합류하며 같은 terminal result를 받는다. Mode, target appl
 
 1. `planned_maintenance`는 source와 version이 같은 candidate만 남긴다.
    `rolling_update`는 요청한 target version과 정확히 같은 candidate만 남긴다.
-2. Source와 같은 non-empty maintenance wave에 속한 candidate를 제외한다.
-3. 남은 candidate에 stable type과 relocation policy·adapter 호환성 검사를 적용한다.
-4. 호환 candidate의 population capacity를 확인한다.
-5. 마지막 후보 집합에서 node-wide placement weight를 적용한다.
+2. 같은 Mesh에서 source가 아니며 `serving` 상태인 Object Server만 남긴다.
+3. 남은 candidate에 factory, stable type과 relocation policy·adapter 호환성 검사를 적용한다.
+4. Population capacity와 reservation 가능 여부를 확인하고, source와 같은 non-empty maintenance wave에
+   속한 candidate를 제외한다.
+5. 같은 descriptor snapshot과 Core peer table에서 RID와 lifecycle generation이 일치하며
+   `admitted`·`ready`인 candidate만 남긴다.
+6. 마지막 후보 집합에서 node-wide placement weight를 적용한다.
 
-Version과 maintenance wave 조건을 capability·capacity·weight보다 먼저 적용하므로, rolling update가 같은
-version node로 fallback하거나 planned maintenance가 더 높은 version node를 선택하지 않는다. 첫 번째
+Version 조건을 capability·capacity·weight보다 먼저 적용하므로, rolling update가 같은 version node로
+fallback하거나 planned maintenance가 더 높은 version node를 선택하지 않는다. 첫 번째
 단계 뒤 candidate가 없거나 이후 조건을 만족하는 target이 없으면
 `blocked/target_unavailable`을 반환한다. 여러 relocation unit은 모두 같은 effective target version을
 사용하지만 각각 다른 eligible node를 선택할 수 있다.

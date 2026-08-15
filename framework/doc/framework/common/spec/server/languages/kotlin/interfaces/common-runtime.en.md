@@ -8,7 +8,7 @@ relocation/termination outcome/reason/result, and
 `ZLinkFrameworkRuntime` unchanged. It doesn't add the same enum, options,
 result wrapper, or runtime facade. There's no separate drain facade or
 partial termination member taking a MeshName — Kotlin uses the Java
-host's `Relocate` and `Shutdown` unchanged.
+host's `relocate()` and `shutdown()` unchanged.
 
 Kotlin also uses Java's `ZLinkListenerKind` and `ZLinkListenerStatus`.
 `ZLinkFrameworkRuntime.listenerStatus(kind, name)` returns the current

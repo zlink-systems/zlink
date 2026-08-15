@@ -75,6 +75,16 @@ public record ZLinkFrameworkTerminationResult(
     ZLinkFrameworkTerminationOutcome outcome,
     ZLinkFrameworkTerminationReason reason) {}
 
+public enum ZLinkListenerKind {
+    ROUTE_MESH, CLIENT_SERVER, FANOUT, STREAM
+}
+
+public record ZLinkListenerStatus(
+    ZLinkListenerKind kind,
+    String name,
+    String endpoint,
+    Instant observedAt) {}
+
 public final class ZLinkFrameworkRuntime
     implements AutoCloseable, ZLinkMessageFlowControl {
     public ZLinkClient client();
@@ -85,6 +95,8 @@ public final class ZLinkFrameworkRuntime
     public ZLinkRouteMeshRuntime routeMeshRuntime();
     public ZLinkClientServerRuntime clientServerRuntime();
     public ZLinkFanoutRuntime fanoutRuntime();
+    public ZLinkListenerStatus listenerStatus(
+        ZLinkListenerKind kind, String name);
     public ZLinkSpotManager spotManager();
     public ZLinkSpotOutbound spotOutbound();
     public ZLinkSpotPublisherClient spotPublisherClient();
@@ -193,21 +205,6 @@ advertise host를 조합한 endpoint를 반환한다. Endpoint 문자열은 wild
 사용할 advertised 주소다. Registration이 없거나 아직 bind되지 않았거나 해당 role이 endpoint를 제공하지
 않으면 `ZLinkFrameworkErrorKind.NOT_CONFIGURED`로 실패한다. 반환된 status의 `observedAt`은 query 결과를
 만든 시각이다.
-
-```java
-public enum ZLinkListenerKind {
-    ROUTE_MESH, CLIENT_SERVER, FANOUT, STREAM;
-}
-
-public record ZLinkListenerStatus(
-    ZLinkListenerKind kind,
-    String name,
-    String endpoint,
-    Instant observedAt) {}
-
-public ZLinkListenerStatus listenerStatus(
-    ZLinkListenerKind kind, String name);
-```
 
 ## Exact public member `javap` inventory
 

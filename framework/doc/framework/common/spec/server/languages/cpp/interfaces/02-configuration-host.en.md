@@ -103,10 +103,12 @@ state.
 
 If `deadline` is empty, the default 30 seconds is used.
 `wait_cancellation` only interrupts the waiter and doesn't cancel an
-already-started shared operation. A concurrent call using the same
-`relocation_options_t` joins the already-running shared operation and
-receives the same terminal result. A concurrent call with a different
-mode, target application version, or deadline doesn't join the
+already-started shared operation. A concurrent call with the same mode
+and effective target application version joins the already-running
+shared operation and receives the same terminal result. The first
+call's deadline fixes the shared operation deadline, and a later joining
+call's deadline doesn't extend or shorten it. A concurrent call with a
+different mode or effective target application version doesn't join the
 existing operation or change it — it returns
 `blocked/operation_in_progress`. This result's mode and effective
 target version reflect the valid option the rejected call requested.
@@ -121,16 +123,19 @@ Both modes narrow candidates in the following order.
 1. `planned_maintenance` keeps only candidates whose version matches
    source. `rolling_update` keeps only candidates that exactly match the
    requested target version.
-2. It excludes a candidate belonging to the same non-empty maintenance
-   wave as source.
-3. It applies a stable-type and relocation-policy/adapter compatibility
-   check to the remaining candidates.
-4. It checks the population capacity of the compatible candidates.
-5. It applies node-wide placement weight on the final candidate set.
+2. It keeps only a `serving` Object Server on the same Mesh that isn't
+   the source.
+3. It applies factory, stable-type, and relocation-policy/adapter
+   compatibility checks to the remaining candidates.
+4. It checks population capacity and reservation availability, and
+   excludes a candidate in the same non-empty maintenance wave as source.
+5. It keeps only a candidate whose RID and lifecycle generation match
+   in the same descriptor snapshot and Core peer table, and whose Core
+   peer is `admitted` and `ready`.
+6. It applies node-wide placement weight on the final candidate set.
 
-Since version and maintenance wave conditions are applied before
-capability/capacity/weight, a rolling update doesn't fall back to a
-same-version node, and planned maintenance doesn't select a
+Since the version condition is applied before capability/capacity/weight,
+a rolling update doesn't fall back to a same-version node, and planned maintenance doesn't select a
 higher-version node. If there's no candidate after the first step, or
 no target satisfying the later conditions, it returns
 `blocked/target_unavailable`. Multiple relocation units all use the

@@ -324,9 +324,9 @@ sequenceDiagram
     Source-->>App: [reply] Shutdown 결과 Stopped 또는 ForceStopped
 ```
 
-`Relocated`는 모든 unit의 cutover가 전송됐다는 source 측 결과이며 target CAS 완료 reply를
-기다렸다는 뜻이 아니다. `Relocated`에서는 descriptor, connection, listener와 infrastructure
-resource를 유지한다.
+`Relocated`는 모든 unit의 cutover submit 시도가 성공 또는 실패 terminal에 도달했다는 source 측
+결과이며 target CAS 완료 reply를 기다렸다는 뜻이 아니다. `Relocated`에서는 descriptor, connection,
+listener와 infrastructure resource를 유지한다.
 이 다이어그램은 target이 준비된 정상 흐름이다. Target이 없으면 앞 절의 deadline 규칙으로
 `Blocked/TargetUnavailable`을 반환한다.
 
