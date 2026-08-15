@@ -654,6 +654,9 @@ export function encodeBoundSessionReplacedHeader(
 
 /** Encodes canonical service-wire command 42. */
 export function encodeSessionRelocationSeal(value: ServiceSessionRelocationSeal): Buffer {
+  if (value.senderRole !== 'source' && value.senderRole !== 'coordinator') {
+    fail('Session relocation seal sender role is invalid.');
+  }
   return concat(
     prefix(M6bServiceWireCommand.sessionRelocationSeal),
     wireId(value.relocation, 'relocation'),
