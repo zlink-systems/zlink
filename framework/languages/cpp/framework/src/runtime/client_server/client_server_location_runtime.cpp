@@ -1498,8 +1498,10 @@ client_server_location_runtime_t::request (
         co_return zlink::message_t::from (decoded.payload);
     }
     catch (const std::exception &error) {
+        //  Spec 32-framework-error-model:40,83-92 — an unprocessable reply
+        //  payload is a ProtocolError, not an InternalFailure.
         co_return result_t<zlink::message_t>::failure (
-          framework_error_kind_t::internal_failure, error.what ());
+          framework_error_kind_t::protocol_error, error.what ());
     }
 }
 
