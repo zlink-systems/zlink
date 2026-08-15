@@ -47,8 +47,10 @@ final class ZLinkSpotRouteMessages {
         Message emptyReply = null;
         try {
             if (isFrameworkErrorReply(replyParts)) {
+                //  The framework-error reply already carries the public kind;
+                //  preserve it instead of collapsing to InternalFailure.
                 throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                    ZLinkFrameworkErrorReply.kind(replyParts),
                     ZLinkFrameworkErrorReply.message(replyParts));
             }
             Message firstReply = replyParts.isEmpty()

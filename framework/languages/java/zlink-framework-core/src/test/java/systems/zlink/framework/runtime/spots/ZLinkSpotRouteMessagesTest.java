@@ -9,7 +9,9 @@ import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
@@ -43,11 +45,24 @@ final class ZLinkSpotRouteMessagesTest {
             message("ZLinkFrameworkError"),
             message("failed"));
         try {
-            assertThrows(
+            ZLinkFrameworkException failure = assertThrows(
                 ZLinkFrameworkException.class,
                 () -> messages.decodeReply(error, String.class));
+            assertEquals(
+                ZLinkFrameworkErrorKind.INTERNAL_FAILURE, failure.kind());
         } finally {
             Message.closeAll(error);
+        }
+
+        List<Message> unavailable = ZLinkFrameworkErrorReply.create(
+            ZLinkFrameworkErrorKind.UNAVAILABLE, "route is converging");
+        try {
+            ZLinkFrameworkException failure = assertThrows(
+                ZLinkFrameworkException.class,
+                () -> messages.decodeReply(unavailable, String.class));
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, failure.kind());
+        } finally {
+            Message.closeAll(unavailable);
         }
     }
 
