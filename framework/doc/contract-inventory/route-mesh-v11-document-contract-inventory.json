@@ -370,7 +370,7 @@
   "consolidated_internal_document_sets": [
     {
       "name": "common-internals",
-      "directory": "framework/doc/framework/common/spec",
+      "directory": "framework/doc/framework/common/spec/server",
       "required_documents": [
         "README.ko.md",
         "40-internal-layering.ko.md",
@@ -391,8 +391,7 @@
         "내부 설계 문서(비규범)",
         "Application이 호출하는 API의 이름과 signature",
         "공개 동작의 의미와 완료 조건",
-        "Core가 제공하는 raw socket·transport 내부",
-        "99 언어별 구현 gap과 정상화 gate"
+        "Core가 제공하는 raw socket·transport 내부"
       ],
       "required_file_fragments": {
         "40-internal-layering.ko.md": [
@@ -448,7 +447,6 @@
       "cpp-implementation-plan.ko.md",
       "dealer-weighted-selection-order.ko.md",
       "dotnet-implementation-plan.ko.md",
-      "framework-internals-implementation-gaps.ko.md",
       "framework-spec-extension-proposals.ko.md",
       "java-implementation-plan.ko.md",
       "node-implementation-plan.ko.md"
@@ -467,15 +465,6 @@
         "required_fragments": [
           "모든 판정의 정본",
           "POSD"
-        ]
-      },
-      {
-        "id": "common-gap-ledger",
-        "path": "framework-internals-implementation-gaps.ko.md",
-        "required_fragments": [
-          "# Framework 구현 갭 목록",
-          "## 요약",
-          "## A부. 새 spec 조항이 만든 갭"
         ]
       },
       {

@@ -34,7 +34,7 @@ final class JavaDocumentationRegressionTest {
         Path deletedSpec = root.resolve("framework/doc/framework/spec");
 
         assertFalse(Files.exists(deletedSpec));
-        assertTrue(Files.isRegularFile(commonSpec.resolve("13-mesh-node.ko.md")));
+        assertTrue(Files.isRegularFile(commonSpec.resolve("server/13-mesh-node.ko.md")));
         assertTrue(Files.isRegularFile(
             commonSpec.resolve("server/languages/java/02-handler-interfaces.ko.md")));
         assertTrue(Files.isDirectory(
