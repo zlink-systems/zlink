@@ -19,7 +19,7 @@ const specRoot = path.join(
   'node'
 );
 const samplesRoot = path.join(workspaceRoot, 'samples');
-const commonSpecRoot = path.resolve(specRoot, '..', '..', '..');
+const commonSpecRoot = path.resolve(specRoot, '..', '..');
 const typescriptSpecRoot = path.resolve(
   specRoot,
   '..',
