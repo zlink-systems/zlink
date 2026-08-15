@@ -1599,6 +1599,11 @@ bool verify_relocation_target_eligibility_applies_full_narrowing ()
             std::cerr << "weighted draw was not order-independent\n";
             return false;
         }
+        const weighted_set_t single = {{"only", 1}};
+        if (select_weighted_relocation_target (single) != std::optional<std::string> ("only")) {
+            std::cerr << "weighted draw did not return the sole candidate\n";
+            return false;
+        }
         const weighted_set_t empty_set = {};
         if (select_weighted_relocation_target (empty_set).has_value ()) {
             std::cerr << "weighted draw returned a target for an empty set\n";

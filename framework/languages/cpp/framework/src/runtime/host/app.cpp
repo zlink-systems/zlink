@@ -2912,19 +2912,26 @@ wait_for_relocation_target (runtime::store_location_resolvers_t &peers,
         auto live = peers.list_live_mesh_nodes (std::string (mesh_name)).result ().value ();
         // Spec step 6: apply node-wide placement weight to the final eligible
         // candidate set with a deterministic weighted draw instead of taking the
-        // first eligible node in store order.
+        // first eligible node in store order. The candidate key pairs RID with
+        // lifecycle generation so a manual fixed-RID node appearing at two
+        // generations is not collapsed and the winner maps back to the exact
+        // descriptor.
+        const auto candidate_key = [] (const mesh_node_descriptor_t &candidate) {
+            return candidate.rid.to_hex () + '\0'
+                   + std::to_string (candidate.lifecycle_generation);
+        };
         std::vector<std::pair<std::string, std::uint32_t>> eligible_by_weight;
         for (const auto &candidate : live) {
             if (eligible (candidate) && candidate.placement_weight > 0) {
                 eligible_by_weight.emplace_back (
-                  candidate.rid.to_hex (),
+                  candidate_key (candidate),
                   static_cast<std::uint32_t> (candidate.placement_weight));
             }
         }
         if (const auto chosen = select_weighted_relocation_target (eligible_by_weight)) {
             const auto target = std::find_if (
               live.begin (), live.end (),
-              [&] (const auto &candidate) { return candidate.rid.to_hex () == *chosen; });
+              [&] (const auto &candidate) { return candidate_key (candidate) == *chosen; });
             if (target != live.end ())
                 return *target;
         }
