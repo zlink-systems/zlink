@@ -418,6 +418,60 @@ test('Relocate rejects local manual topology before changing host state and Shut
   assert.equal(shutdown.outcome, framework.ZLinkFrameworkTerminationOutcome.Stopped);
 });
 
+test('Concurrent relocation with a different deadline joins the running operation', async () => {
+  const host = new internal.ZLinkFrameworkRuntimeHost({
+    registration: internal.createFrameworkRegistration()
+  });
+  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
+
+  const first = host.relocate({
+    mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
+    deadlineMs: 150
+  });
+  // Same mode and effective target application version, different deadline: the
+  // concurrent call joins the running operation and shares its terminal result,
+  // rather than being rejected with OperationInProgress. The join key excludes
+  // the deadline.
+  const second = host.relocate({
+    mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
+    deadlineMs: 300
+  });
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+  assert.deepEqual(secondResult, firstResult);
+  assert.notEqual(
+    secondResult.reason,
+    framework.ZLinkFrameworkRelocationReason.OperationInProgress
+  );
+});
+
+test('Rejected concurrent relocation reports the requested target version', async () => {
+  const host = new internal.ZLinkFrameworkRuntimeHost({
+    registration: internal.createFrameworkRegistration()
+  });
+  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
+
+  const running = host.relocate({
+    mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
+    deadlineMs: 300
+  });
+  // Different mode and effective target: rejected with OperationInProgress, and
+  // the result reflects the valid option the rejected call requested (rolling
+  // update to version 7), not the running operation's target.
+  const rejected = await host.relocate({
+    mode: framework.ZLinkFrameworkRelocationMode.RollingUpdate,
+    targetApplicationVersion: 7n,
+    deadlineMs: 300
+  });
+  assert.equal(rejected.outcome, framework.ZLinkFrameworkRelocationOutcome.Blocked);
+  assert.equal(
+    rejected.reason,
+    framework.ZLinkFrameworkRelocationReason.OperationInProgress
+  );
+  assert.equal(rejected.mode, framework.ZLinkFrameworkRelocationMode.RollingUpdate);
+  assert.equal(rejected.effectiveTargetApplicationVersion, 7n);
+  await running;
+});
+
 test('Serving readiness stays public while a sealed admission gate stops new work', () => {
   const host = new internal.ZLinkFrameworkRuntimeHost({
     registration: internal.createFrameworkRegistration()
