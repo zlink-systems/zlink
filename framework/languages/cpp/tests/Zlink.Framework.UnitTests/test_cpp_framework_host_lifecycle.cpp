@@ -1063,6 +1063,132 @@ bool verify_relocating_status_closes_admission ()
     return passed;
 }
 
+bool verify_relocation_join_ignores_deadline ()
+{
+    auto location_store = std::make_shared<
+      zlink::framework::runtime::in_memory_location_store_t> ();
+    auto relocation_store = std::make_shared<
+      zlink::framework::runtime::in_memory_relocation_store_t> ();
+    auto submit_ready = std::make_shared<std::atomic_bool> (false);
+
+    auto source = zlink::framework::app_t::create ();
+    configure_relocation_app (
+      source, location_store, relocation_store,
+      "host-join-relocation-source");
+    auto source_service = std::make_unique<relocation_source_service_t> (
+      source, submit_ready);
+    auto *source_service_view = source_service.get ();
+    source.add_hosted_service (std::move (source_service));
+    char source_program[] = "host-join-relocation-source";
+    char *source_arguments[] = {source_program, nullptr};
+    int source_exit_code = -1;
+    std::thread source_thread (
+      [&] { source_exit_code = source.run (1, source_arguments); });
+    if (!wait_until (
+          [&] {
+              return source.is_ready ()
+                     && source_service_view->created_spot.load (
+                       std::memory_order_acquire);
+          },
+          std::chrono::seconds (7))) {
+        source.request_stop ();
+        source_thread.join ();
+        std::cerr << "join source must create its application-signaled Spot\n";
+        return false;
+    }
+
+    auto target = zlink::framework::app_t::create ();
+    configure_relocation_app (
+      target, location_store, relocation_store,
+      "host-join-relocation-target");
+    char target_program[] = "host-join-relocation-target";
+    char *target_arguments[] = {target_program, nullptr};
+    int target_exit_code = -1;
+    std::thread target_thread (
+      [&] { target_exit_code = target.run (1, target_arguments); });
+    if (!wait_until ([&] { return target.is_ready (); },
+                     std::chrono::seconds (2))) {
+        target.request_stop ();
+        source.request_stop ();
+        target_thread.join ();
+        source_thread.join ();
+        std::cerr << "join relocation target must reach Serving\n";
+        return false;
+    }
+
+    auto source_services = source.advanced ().services ().build_provider ();
+    auto target_services = target.advanced ().services ().build_provider ();
+    auto &source_mesh = source_services.get_required<
+      zlink::framework::route_mesh_runtime_t> ();
+    auto &target_mesh = target_services.get_required<
+      zlink::framework::route_mesh_runtime_t> ();
+    const auto peers_ready = wait_until (
+      [&] {
+          return source_mesh.snapshot ("host-relocation-mesh").ready_peer_count > 0
+                 && target_mesh.snapshot ("host-relocation-mesh").ready_peer_count > 0;
+      },
+      std::chrono::seconds (7));
+    auto &runtime = source_services.get_required<
+      zlink::framework::framework_runtime_t> ();
+
+    // First call starts the shared operation and holds it in-flight: the
+    // application-signaled readiness is never submitted, so the worker waits
+    // until the first call's deadline. The relocation terminal itself is not
+    // under test here; the join contract is.
+    auto first = source.relocate (
+      {.mode = zlink::framework::relocation_mode_t::planned_maintenance,
+       .deadline = std::chrono::milliseconds (2000)});
+    const auto observed_relocating = wait_until (
+      [&] {
+          return runtime.status ().state
+                 == zlink::framework::framework_runtime_state_t::relocating;
+      },
+      std::chrono::seconds (1));
+    // Second concurrent call: same mode and effective target application
+    // version, different deadline. Per the frozen host configuration contract
+    // it must join the running operation and receive the same terminal result;
+    // its deadline must neither extend nor shorten the shared operation.
+    auto second = source.relocate (
+      {.mode = zlink::framework::relocation_mode_t::planned_maintenance,
+       .deadline = std::chrono::milliseconds (4000)});
+    const auto first_result = first.result ().value ();
+    const auto second_result = second.result ().value ();
+
+    source_services.close ();
+    target_services.close ();
+    const auto target_stopped =
+      target.shutdown (std::chrono::seconds (2)).result ().value ();
+    const auto source_stopped =
+      source.shutdown (std::chrono::seconds (2)).result ().value ();
+    target_thread.join ();
+    source_thread.join ();
+
+    const bool joined_same_terminal = second_result == first_result;
+    const bool not_rejected =
+      second_result.reason
+      != zlink::framework::relocation_reason_t::operation_in_progress;
+    const bool passed =
+      peers_ready && observed_relocating && joined_same_terminal && not_rejected
+      && target_stopped.outcome
+           == zlink::framework::termination_outcome_t::stopped
+      && source_stopped.outcome
+           == zlink::framework::termination_outcome_t::stopped
+      && target_exit_code == 0 && source_exit_code == 0;
+    if (!passed) {
+        std::cerr
+          << "Concurrent relocation with a different deadline must join the "
+             "running operation and share its terminal: "
+          << "peers=" << peers_ready << " observed=" << observed_relocating
+          << " first(outcome=" << static_cast<int> (first_result.outcome)
+          << " reason=" << static_cast<int> (first_result.reason) << ")"
+          << " second(outcome=" << static_cast<int> (second_result.outcome)
+          << " reason=" << static_cast<int> (second_result.reason) << ")"
+          << " same=" << joined_same_terminal
+          << " not_rejected=" << not_rejected << '\n';
+    }
+    return passed;
+}
+
 bool verify_application_signaled_relocation ()
 {
     relocation_ready_spot_t::completion_count.store (
@@ -1225,6 +1351,9 @@ int main ()
         return EXIT_FAILURE;
 
     if (!verify_relocating_status_closes_admission ())
+        return EXIT_FAILURE;
+
+    if (!verify_relocation_join_ignores_deadline ())
         return EXIT_FAILURE;
 
     if (std::getenv (

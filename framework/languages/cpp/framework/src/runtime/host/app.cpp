@@ -3028,7 +3028,16 @@ task_t<relocation_result_t> app_t::relocate (relocation_options_t options,
     {
         std::lock_guard lock (operation.mutex);
         if (operation.started && !operation.terminal) {
-            if (operation.options != options) {
+            // A concurrent call joins the running operation when it targets the
+            // same mode and effective target application version. The deadline
+            // is not part of the join key: the first call's deadline fixes the
+            // shared operation, and a later joining call neither extends nor
+            // shortens it.
+            const bool joins_running_operation =
+              operation.options.mode == options.mode
+              && operation.options.target_application_version
+                   == options.target_application_version;
+            if (!joins_running_operation) {
                 return task_t<relocation_result_t> (result_t<relocation_result_t>::success (
                   {options.mode,
                    preflight.effective_target_application_version != 0
