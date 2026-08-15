@@ -475,12 +475,27 @@ int main ()
           zlink::request_result_t::busy, "native request");
         const auto worker_queue_full = mapper.reply_header_exception (
           106, 18, "RouteMesh request");
+        const auto spot_moving = mapper.reply_header_exception (
+          107, 34, "RouteMesh request");
+        const auto actor_location_stale = mapper.reply_header_exception (
+          107, 21, "RouteMesh request");
+        const auto spot_generation_stale = mapper.reply_header_exception (
+          107, 33, "RouteMesh request");
+        const auto relocation_data_lost = mapper.reply_header_exception (
+          105, 35, "RouteMesh request");
         if (zlink::framework::detail::boundary_state (native_timeout)
                 != zlink::framework::detail::boundary_error_t::timed_out
             || zlink::framework::detail::boundary_state (native_disconnected)
                  != zlink::framework::detail::boundary_error_t::disconnected
             || worker_queue_full.kind ()
                  != framework_error_kind_t::capacity_exceeded
+            || spot_moving.kind () != framework_error_kind_t::unavailable
+            || actor_location_stale.kind ()
+                 != framework_error_kind_t::unavailable
+            || spot_generation_stale.kind ()
+                 != framework_error_kind_t::invalid_operation
+            || relocation_data_lost.kind ()
+                 != framework_error_kind_t::data_lost
             || native_disconnected.code ()
                  != std::make_error_code (std::errc::not_connected)
             || zlink::framework::detail::boundary_state (native_shutdown)

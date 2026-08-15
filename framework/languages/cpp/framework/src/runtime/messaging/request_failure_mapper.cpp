@@ -219,6 +219,33 @@ request_failure_mapper_t::reply_header_exception (
             return framework_exception_t (
               framework_error_kind_t::capacity_exceeded,
               operation_name + " exceeded worker queue capacity.");
+        case 19:
+            return framework_exception_t (
+              framework_error_kind_t::deadline_exceeded,
+              operation_name + " timed out inside the worker.");
+        case 20:
+            return framework_exception_t (
+              framework_error_kind_t::internal_failure,
+              operation_name + " failed inside the worker.");
+        case 21:
+            return framework_exception_t (
+              framework_error_kind_t::unavailable,
+              operation_name
+                + " failed because the actor location was stale.");
+        case 33:
+            return framework_exception_t (
+              framework_error_kind_t::invalid_operation,
+              operation_name
+                + " failed because the spot generation was stale.");
+        case 34:
+            return framework_exception_t (
+              framework_error_kind_t::unavailable,
+              operation_name + " failed because the spot is moving.");
+        case 35:
+            return framework_exception_t (
+              framework_error_kind_t::data_lost,
+              operation_name
+                + " failed because relocation data was lost.");
         default:
             break;
     }
