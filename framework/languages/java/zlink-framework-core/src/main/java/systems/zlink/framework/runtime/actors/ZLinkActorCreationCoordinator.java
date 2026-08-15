@@ -28,6 +28,7 @@ import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations
@@ -682,7 +683,14 @@ public final class ZLinkActorCreationCoordinator
             var terminal = wire.decodeCreationOperationTerminal(envelope);
             if (terminal.terminalResult() != 0
                 || terminal.creation() == null) {
+                //  Classify the create terminal + fine failure code via the
+                //  shared translator instead of collapsing to InternalFailure
+                //  (spec 32:81-118).
+                ZLinkFrameworkErrorKind kind = ZLinkBackendRequestResult
+                    .fromWireTerminal(terminal.terminalResult())
+                    .toFrameworkErrorKind(terminal.failureCode());
                 return failed(
+                    kind,
                     "Actor create failed with terminal result "
                         + terminal.terminalResult()
                         + " and failure code "
@@ -1027,6 +1035,11 @@ public final class ZLinkActorCreationCoordinator
 
     private static <T> CompletionStage<T> failed(String message) {
         return CompletableFuture.failedFuture(stale(message));
+    }
+
+    private static <T> CompletionStage<T> failed(
+        ZLinkFrameworkErrorKind kind, String message) {
+        return CompletableFuture.failedFuture(frameworkFailure(kind, message));
     }
 
     private static <T> CompletionStage<T> deadlineFailed(String message) {

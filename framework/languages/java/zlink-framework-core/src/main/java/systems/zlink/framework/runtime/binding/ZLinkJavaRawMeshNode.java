@@ -6522,15 +6522,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private static ZLinkBackendRequestResult backendResult(int wireValue) {
-        for (ZLinkBackendRequestResult value : ZLinkBackendRequestResult.values()) {
-            if (value.ordinal() == 0 && wireValue == 0) {
-                return value;
-            }
-            if (wireValue == 101 + value.ordinal() - 1) {
-                return value;
-            }
-        }
-        return ZLinkBackendRequestResult.PROTOCOL_ERROR;
+        return ZLinkBackendRequestResult.fromWireTerminal(wireValue);
     }
 
     private UserSpotTerminalAdmission admitUserSpotOperation(

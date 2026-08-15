@@ -55,6 +55,23 @@ public enum ZLinkBackendRequestResult {
         return fine != null ? fine : toFrameworkErrorKind();
     }
 
+    /**
+     * Maps a wire request-terminal value (0 = OK, 101.. = the non-OK terminals)
+     * to the coarse backend result. Shared so every completion path classifies a
+     * remote reply terminal identically. An unknown terminal is a ProtocolError.
+     */
+    public static ZLinkBackendRequestResult fromWireTerminal(int wireTerminal) {
+        if (wireTerminal == 0) {
+            return OK;
+        }
+        for (ZLinkBackendRequestResult value : values()) {
+            if (value.ordinal() >= 1 && wireTerminal == 101 + value.ordinal() - 1) {
+                return value;
+            }
+        }
+        return PROTOCOL_ERROR;
+    }
+
     private static ZLinkFrameworkErrorKind failureCodeErrorKind(int failureCode) {
         return switch (failureCode) {
             //  routeHandlerNotFound(9), requestTargetNotFound(14)

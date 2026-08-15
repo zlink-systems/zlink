@@ -332,16 +332,22 @@ final class ZLinkActorSessionCoordinator {
             || !accepted.header().metadata().equals(header.metadata())
             || request != accepted.replyRouteId().isPresent()
             || !Arrays.equals(accepted.payload(), payload.toByteArray())) {
+            //  Spec 32-framework-error-model:40 — a Message Follow record that
+            //  fails its integrity check is a ProtocolError.
             return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                     "Message Follow record does not match its original operation"));
         }
         ZLinkActorRuntime runtime = requireActors();
         Optional<ZLinkActor> localActor = runtime.localActor(actorRef.actorId());
         if (localActor.isEmpty()
             || !runtime.currentRef(localActor.orElseThrow()).equals(actorRef)) {
+            //  Spec 15-spot-actor:374 — the Message Follow target actor is no
+            //  longer the current owner: Unavailable.
             return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
                     "Message Follow target actor is not current: "
                         + actorRef.actorId()));
         }
