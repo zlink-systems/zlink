@@ -1,4 +1,5 @@
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Host;
 
@@ -109,9 +110,13 @@ internal sealed class ZLinkNativeActorJoinOperation(
         try
         {
             if (result != RequestResult.Ok)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.NotFound,
-                    $"Actor join was rejected for '{actorId}' to SPOT '{spotId}'.");
+                //  Classify the join terminal via the shared request mapper
+                //  (Terminated -> ShuttingDown, TimedOut -> DeadlineExceeded,
+                //  Conflict/Busy -> Unavailable, ...) instead of collapsing every
+                //  non-OK terminal to NotFound (spec 32-framework-error-model:81).
+                throw ZLinkRequestFailureMapper.CreateCompletionException(
+                    result,
+                    $"Actor join for '{actorId}' to SPOT '{spotId}'");
 
             if (replyParts.Count == 0)
                 throw new InvalidOperationException(
