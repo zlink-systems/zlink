@@ -806,8 +806,13 @@ zlink::framework::result_t<void> one_way_native_submit_result (zlink::submit_res
         case zlink::submit_result_t::ok:
             return result_t<void>::success ();
         case zlink::submit_result_t::backpressured:
-            return result_t<void>::failure (framework_error_kind_t::capacity_exceeded,
-                                            std::string (operation) + " is backpressured");
+            // Backpressure is never a public terminal: it completes at the send
+            // deadline as DeadlineExceeded (spec 05-async-execution-policy;
+            // 32-framework-error-model:70), represented as a timeout boundary
+            // like a request timeout — matching submit_result_mapper.
+            return detail::boundary_failure<void> (
+              detail::boundary_error_t::timed_out,
+              std::string (operation) + " is backpressured");
         case zlink::submit_result_t::not_found:
             return result_t<void>::failure (framework_error_kind_t::not_found,
                                             std::string (operation) + " target was not found");
