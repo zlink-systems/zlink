@@ -29,12 +29,15 @@ internal static class ZLinkRequestFailureMapper
                 ZLinkFrameworkErrorKind.NotFound,
                 $"{operationName} failed because the target was not found.",
                 innerException: CreateRequestException(result)),
-            //  Spec 06 §13.1의 `Rejected`는 application admission 정책이 거절했다는
-            //  뜻이다. `Conflict`와 `Busy`는 재시도하면 풀리는 일시 상태이므로 같은
-            //  kind로 뭉치면 안 된다. Kind만 실어 나르는 경로(예: Actor join 완료
-            //  통지)에서는 retry advice가 사라져 일시 충돌이 정책 거절로 도착한다.
+            //  Spec 32-framework-error-model:93-98 — `Conflict`/`Busy` on the
+            //  generic request path is the source runtime failing to secure a
+            //  local bounded resource it owns (reply slot, operation-table entry,
+            //  same-process queue), which is `CapacityExceeded`, not a policy
+            //  `Rejected`. It stays retryable via RetryAfterBackoff. (The Actor
+            //  request path keeps `Conflict`->`Unavailable` for actorLocationStale
+            //  semantics in ZLinkActorClient.MapRequestException.)
             RequestResult.Conflict or RequestResult.Busy => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
+                ZLinkFrameworkErrorKind.CapacityExceeded,
                 $"{operationName} was refused with a transient result '{result}'.",
                 ZLinkRetryAdvice.RetryAfterBackoff,
                 CreateRequestException(result)),
@@ -94,15 +97,22 @@ internal static class ZLinkRequestFailureMapper
                 ZLinkFrameworkErrorKind.ShuttingDown,
                 $"{operationName} failed because the runtime is shutting down.",
                 innerException: error),
-            ZlinkSubmitException.ErrorCode.NotAdmitted
-                or ZlinkSubmitException.ErrorCode.InvalidState => new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Rejected,
-                    $"{operationName} submit was rejected with result '{error.Result}'.",
-                    innerException: error),
-            ZlinkSubmitException.ErrorCode.InvalidArgument
+            ZlinkSubmitException.ErrorCode.NotAdmitted => new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Rejected,
+                $"{operationName} submit was rejected with result '{error.Result}'.",
+                innerException: error),
+            //  Spec 32-framework-error-model:51-56 — an invalid argument, a
+            //  closed/invalid handle, a wrong-state submit, or a thread-affinity
+            //  violation is an InvalidOperation, not a policy Rejected or an
+            //  InternalFailure. Matches C++ submit_result_mapper.
+            ZlinkSubmitException.ErrorCode.InvalidState
+                or ZlinkSubmitException.ErrorCode.InvalidArgument
                 or ZlinkSubmitException.ErrorCode.InvalidHandle
-                or ZlinkSubmitException.ErrorCode.NotSupported
-                or ZlinkSubmitException.ErrorCode.ThreadViolation
+                or ZlinkSubmitException.ErrorCode.ThreadViolation => new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.InvalidOperation,
+                    $"{operationName} submit failed because the operation is invalid in the current state.",
+                    innerException: error),
+            ZlinkSubmitException.ErrorCode.NotSupported
                 or ZlinkSubmitException.ErrorCode.OutOfMemory
                 or ZlinkSubmitException.ErrorCode.SeqExhausted
                 or ZlinkSubmitException.ErrorCode.InternalError => new ZLinkFrameworkException(

@@ -191,6 +191,8 @@ public sealed class RequestFailureMappingTests
     [InlineData(RequestResult.InvalidState, ZLinkFrameworkErrorKind.InvalidOperation)]
     [InlineData(RequestResult.NotSupported, ZLinkFrameworkErrorKind.InternalFailure)]
     [InlineData(RequestResult.InternalError, ZLinkFrameworkErrorKind.InternalFailure)]
+    [InlineData(RequestResult.Conflict, ZLinkFrameworkErrorKind.CapacityExceeded)]
+    [InlineData(RequestResult.Busy, ZLinkFrameworkErrorKind.CapacityExceeded)]
     public void Completion_Maps_Native_Result_To_Framework_Error(
         RequestResult result,
         ZLinkFrameworkErrorKind expected)
@@ -212,6 +214,26 @@ public sealed class RequestFailureMappingTests
         ZLinkFrameworkErrorKind expected)
     {
         var error = ZLinkSubmitFailureMapper.CreateException(result, "request");
+
+        Assert.Equal(expected, error.Kind);
+    }
+
+    [Theory]
+    [InlineData(ZlinkSubmitException.ErrorCode.NotAdmitted, ZLinkFrameworkErrorKind.Rejected)]
+    [InlineData(ZlinkSubmitException.ErrorCode.InvalidState, ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData(ZlinkSubmitException.ErrorCode.InvalidArgument, ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData(ZlinkSubmitException.ErrorCode.InvalidHandle, ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData(ZlinkSubmitException.ErrorCode.ThreadViolation, ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData(ZlinkSubmitException.ErrorCode.NotSupported, ZLinkFrameworkErrorKind.InternalFailure)]
+    [InlineData(ZlinkSubmitException.ErrorCode.InternalError, ZLinkFrameworkErrorKind.InternalFailure)]
+    public void SubmitException_Maps_Native_ErrorCode_To_Framework_Error(
+        ZlinkSubmitException.ErrorCode code,
+        ZLinkFrameworkErrorKind expected)
+    {
+        var error = Assert.IsType<ZLinkFrameworkException>(
+            ZLinkRequestFailureMapper.CreateSubmitException(
+                new ZlinkSubmitException(code),
+                "request"));
 
         Assert.Equal(expected, error.Kind);
     }
