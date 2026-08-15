@@ -1371,21 +1371,15 @@ class provider_location_repository_t final : public location_repository_t
                 return completed (aggregate_commit_result_t::stale);
         }
 
-        if (status == "prepared") {
-            auto current_record = read (row_key);
-            const auto *current_found = std::get_if<store_found_t> (&current_record);
-            if (!current_found)
-                return completed (aggregate_commit_result_t::stale);
-            record = parse_json (current_found->value.bytes);
-            stored = current_found;
-        } else {
-            auto current_record = read (row_key);
-            const auto *current_found = std::get_if<store_found_t> (&current_record);
-            if (!current_found)
-                return completed (aggregate_commit_result_t::stale);
-            stored = current_found;
-            record = parse_json (current_found->value.bytes);
-        }
+        // current_record must outlive its use through `stored` at the version
+        // condition below; a block-local copy here would leave `stored`
+        // dangling past the branch. Both former branches were identical.
+        auto current_record = read (row_key);
+        const auto *current_found = std::get_if<store_found_t> (&current_record);
+        if (!current_found)
+            return completed (aggregate_commit_result_t::stale);
+        record = parse_json (current_found->value.bytes);
+        stored = current_found;
         if (record.value ("status", "") != "committing")
             return completed (aggregate_commit_result_t::stale);
 
