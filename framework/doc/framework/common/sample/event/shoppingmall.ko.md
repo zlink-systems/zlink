@@ -208,14 +208,14 @@ projection을 직접 변경하지 않으며, `GetOrderStateReq`도 조회 외의
 
 | 필요한 동작 | 선택한 Framework 요소 | 선택 이유와 계약 근거 |
 |---|---|---|
-| process가 바뀌어도 `OrderId`로 현재 owner를 찾는다. | global Spot message | Caller가 global Spot ID를 지정하면 Framework가 current Ready authority를 resolve한다. [상호작용 모델 §2](../../spec/03-interaction-model.ko.md#2-공통-모델) |
-| 없는 주문 workflow를 첫 command에서 만들 수 있다. | Instance intent | Missing Instance Spot에서만 cold activation을 시작한다. [상호작용 모델 §7](../../spec/03-interaction-model.ko.md#7-spot과-actor) |
-| API와 Workflow를 logical mesh로 연결한다. | RouteMesh | Caller가 MeshName이나 owner endpoint를 application route로 조립하지 않는다. [RouteMesh topology](../../spec/07-channel-topology.ko.md) |
-| 요청 완료를 확인한다. | Spot request/reply | Request는 typed reply, timeout 또는 terminal error로 완료된다. [상호작용 모델 §4](../../spec/03-interaction-model.ko.md#4-send와-request) |
-| 한 주문의 전이를 순서대로 처리한다. | Spot handler turn | Application state 변경을 하나의 owner 흐름에 두고 handler 밖의 경쟁 writer를 만들지 않는다. [Async execution policy](../../spec/05-async-execution-policy.ko.md) |
-| JSON message를 언어별로 같은 wire 의미로 사용한다. | Framework typed JSON codec | JSON 기본 codec은 message별 등록 없이 선택된다. [Framework API §9](../../spec/06-framework-api.ko.md#9-codec) |
-| owner와 generation을 공유한다. | Location Store | Object location과 authority를 Framework가 관리한다. [Location runtime](../../spec/21-location-runtime.ko.md) |
-| Ready owner 장애의 범위를 정한다. | failure/failover policy | Ready owner 장애는 다른 node의 자동 cold activation으로 바뀌지 않는다. [Failure and failover §4.4](../../spec/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다) |
+| process가 바뀌어도 `OrderId`로 현재 owner를 찾는다. | global Spot message | Caller가 global Spot ID를 지정하면 Framework가 current Ready authority를 resolve한다. [상호작용 모델 §2](../../spec/server/03-interaction-model.ko.md#2-공통-모델) |
+| 없는 주문 workflow를 첫 command에서 만들 수 있다. | Instance intent | Missing Instance Spot에서만 cold activation을 시작한다. [상호작용 모델 §7](../../spec/server/03-interaction-model.ko.md#7-spot과-actor) |
+| API와 Workflow를 logical mesh로 연결한다. | RouteMesh | Caller가 MeshName이나 owner endpoint를 application route로 조립하지 않는다. [RouteMesh topology](../../spec/server/07-channel-topology.ko.md) |
+| 요청 완료를 확인한다. | Spot request/reply | Request는 typed reply, timeout 또는 terminal error로 완료된다. [상호작용 모델 §4](../../spec/server/03-interaction-model.ko.md#4-send와-request) |
+| 한 주문의 전이를 순서대로 처리한다. | Spot handler turn | Application state 변경을 하나의 owner 흐름에 두고 handler 밖의 경쟁 writer를 만들지 않는다. [Async execution policy](../../spec/server/05-async-execution-policy.ko.md) |
+| JSON message를 언어별로 같은 wire 의미로 사용한다. | Framework typed JSON codec | JSON 기본 codec은 message별 등록 없이 선택된다. [Framework API §9](../../spec/server/06-framework-api.ko.md#9-codec) |
+| owner와 generation을 공유한다. | Location Store | Object location과 authority를 Framework가 관리한다. [Location runtime](../../spec/server/21-location-runtime.ko.md) |
+| Ready owner 장애의 범위를 정한다. | failure/failover policy | Ready owner 장애는 다른 node의 자동 cold activation으로 바뀌지 않는다. [Failure and failover §4.4](../../spec/server/31-failure-failover-policy.ko.md#44-instance-spot-cold-activation과-owner-장애를-구분한다) |
 
 Instance intent는 object가 Missing일 때 생성 시점을 정하는 기능이다. 이미 Ready인 object의 owner
 장애를 다른 node에서 자동으로 복구하는 기능이 아니다. 계획된 relocation은 같은 object와 generation을
@@ -433,7 +433,7 @@ message OrderFailedEvent {
 | `Order*Event` | Workflow → `OrderEventStore`, append | expected version을 통과해 stream에 기록된 event가 상태 전이의 기준이 된다. |
 
 Request/reply의 timeout, cancellation과 route 오류는 성공 응답으로 바꾸지 않는다. `Send`와
-`Request`의 공통 terminal 결과는 [Framework error model](../../spec/32-framework-error-model.ko.md)을
+`Request`의 공통 terminal 결과는 [Framework error model](../../spec/server/32-framework-error-model.ko.md)을
 따르며, sample은 실패한 operation을 다른 owner에 자동 재제출하지 않는다.
 
 ### 6.3 상태와 event 순서
@@ -661,7 +661,7 @@ sequenceDiagram
 | explicit `Close` 완료 뒤 `Missing` | 새 Instance intent command | 새 generation을 만들 수 있다. |
 | planned relocation | 기존 object의 owner 변경 | 같은 object와 relocation 계약을 사용하며 crash failover로 처리하지 않는다. |
 
-이 표는 [failure/failover policy](../../spec/31-failure-failover-policy.ko.md)의 범위를 sample에
+이 표는 [failure/failover policy](../../spec/server/31-failure-failover-policy.ko.md)의 범위를 sample에
 적용한 것이다. `InstanceSpot`은 Missing object의 생성 시점을 정하지만, Ready owner 장애 뒤
 authority를 자동 release하거나 다른 node에서 event stream을 복원하는 기능을 추가하지 않는다.
 실패한 request는 새 owner에 자동 재제출하지 않는다. 별도 production failover가 필요하면 authority

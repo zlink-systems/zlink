@@ -41,7 +41,7 @@ application-signaled boundary's completion is provided as an
 
 A Channel extension only takes a process-local ChannelName, and an
 optional overload that takes MeshName and
-[ChannelName](../../../../01-glossary.en.md#channelname) together isn't
+[ChannelName](../../../01-glossary.en.md#channelname) together isn't
 added. Host `Relocate`/`Shutdown` uses Java's relocation mode/options/
 result type unchanged, and doesn't provide a separate drain facade. The
 Location Store's opaque key/value atomic batch and the Relocation
@@ -53,7 +53,7 @@ generated JVM signature the application actually links against. Default
 argument, suspend continuation, extension receiver, and generic bound
 must correspond without loss between the two representations. The first
 `String` argument of an extension that directly specifies a node is
-[MeshName](../../../../01-glossary.en.md#meshname), same as the Java
+[MeshName](../../../01-glossary.en.md#meshname), same as the Java
 contract.
 
 Public generation, revision, epoch, and sequence ordinal use the Java
@@ -69,14 +69,14 @@ The Kotlin exact interface uses the same global ActorId/SpotId,
 immutable `ActorRef`/`SpotRef`, ID-only regular messaging, and
 exact-ref mutation/session bind as Java. Actor and User Spot's
 create/get-or-create are single-use fluent operations. The
-[Spot](../../../../01-glossary.en.md#spot) manager is User-Spot-only and
+[Spot](../../../01-glossary.en.md#spot) manager is User-Spot-only and
 doesn't provide an Instance Spot creation member. Cold activation of a
-Missing [Instance Spot](../../../../01-glossary.en.md#entry-user-instance-spot)
+Missing [Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
 only starts when `instanceSpot()` or `instanceSpot(stableType)` is
 specified on the Spot-dedicated send/request call. Without the marker,
 it's not-found, and cold activation using only the marker auto-selects
 the type only when the selected Mesh has one distinct serving Instance
-type. Existing [authority](../../../../01-glossary.en.md#authority) uses
+type. Existing [authority](../../../01-glossary.en.md#authority) uses
 the stored type regardless of the number of registered types. Mesh
 object role is distinguished as None, Client, Server. Every server
 factory configure callback selects exactly one relocation behavior. A

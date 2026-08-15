@@ -367,24 +367,24 @@ or `TActor`, not a handler field.
 Instance-Spot-only reason and isn't delivered to Entry Spot or User Spot.
 The idle judgment condition and the reactivation rule after cleanup are
 owned by
-[Spot Model §6.2](../../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
+[Spot Model §6.2](../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
 `Deadline` is the closing operation's absolute deadline. The framework
 doesn't cancel `cleanupCancellationToken` before the callback invocation,
 and cancels it when the
-[deadline](../../../../01-glossary.en.md#deadline) ends. An already
+[deadline](../../../01-glossary.en.md#deadline) ends. An already
 cancelled handler token isn't reused. Only Entry/User/Instance Spot
 receive this callback — a per-Actor closing callback isn't provided.
 Host Shutdown runs the callback while Actor membership and the local
 instance are valid, and cleans up scope and
-[authority](../../../../01-glossary.en.md#authority) after completion.
+[authority](../../../01-glossary.en.md#authority) after completion.
 A standalone Actor relocation doesn't close the Entry Spot, so it doesn't
 call this callback.
 
 `IZLinkSpotRelocationAdapter<TSpot>` is registered with
 `PreserveStateWith<TAdapter>()`. It's only called when materializing a
-cross-node User/[Instance Spot](../../../../01-glossary.en.md#entry-user-instance-spot)
+cross-node User/[Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
 instance. In a whole User Spot relocation, the
-[Spot](../../../../01-glossary.en.md#spot) adapter handles the Spot
+[Spot](../../../01-glossary.en.md#spot) adapter handles the Spot
 application payload, and each member Actor's payload is handled
 separately by the Actor adapter registered on the Actor factory.
 `RecreateOnRelocation()` doesn't call the adapter and re-creates the
@@ -403,14 +403,14 @@ callback completes, so the application must copy it to keep it. A capture
 exception restores admission after a durable abort and source
 normalization. An instance with a restore exception is discarded, and a
 new attempt applies the same immutable payload to a new instance the
-[factory](../../../../01-glossary.en.md#factory) creates. If the
+[factory](../../../01-glossary.en.md#factory) creates. If the
 framework cancels a callback due to the operation deadline, it's
 classified as `DeadlineExceeded`. The framework doesn't guarantee
 exactly-once execution of the callback's external side effect.
 
 When maintenance restores an Actor to a different node's Entry Spot, it
 first finishes the Actor adapter restore, then commits Location
-authority and Entry [membership](../../../../01-glossary.en.md#membership).
+authority and Entry [membership](../../../01-glossary.en.md#membership).
 Since this isn't an application membership change, it doesn't call the
 target's `OnJoinedActorAsync(...)`, the source's
 `OnLeaveActorAsync(...)`, or a relocation-dedicated callback. It restores
@@ -461,7 +461,7 @@ during process recovery, the override must be retry-safe.
 The current-location query for Spot and Actor is performed by the
 manager using the global ID. A public resolver and runtime handle aren't
 provided. The owner route and generation update rule follows
-[Spot Address Messaging](../../../../16-spot-address-messaging.en.md).
+[Spot Address Messaging](../../../16-spot-address-messaging.en.md).
 
 The Spot handler signatures are as follows.
 
@@ -552,7 +552,7 @@ re-register it on the target. A framework-managed timer resource isn't
 included in the payload — it's re-created on the target as a logical
 registration. The source doesn't dispatch a new tick after sealing the
 queue, and the target only submits the restored pending tick and the
-next tick to the [owner](../../../../01-glossary.en.md#owner) mailbox
+next tick to the [owner](../../../01-glossary.en.md#owner) mailbox
 after finishing Restore and authority commit and dispatch admission
 opens.
 
@@ -654,14 +654,14 @@ with `NotFound`. Only a call with `InstanceSpot()` or
 `InstanceSpot(instanceSpotType)` specified can newly create and
 initialize a Missing Instance Spot to prepare it for use. This process is
 called cold activation. A call to a
-[Ready](../../../../01-glossary.en.md#ready) Instance authority uses the
-[stable type](../../../../01-glossary.en.md#stable-type) stored in
+[Ready](../../../01-glossary.en.md#ready) Instance authority uses the
+[stable type](../../../01-glossary.en.md#stable-type) stored in
 authority, so the caller doesn't need to provide the type again. If an
 Instance marker is used but the existing authority is a User Spot, or the
 specified stable type differs from the authority's type, it's
 `TypeMismatch`.
 
-In [cold activation](../../../../01-glossary.en.md#cold-activation),
+In [cold activation](../../../01-glossary.en.md#cold-activation),
 `InstanceSpot()` only uses the registered Instance Spot type when exactly
 one is registered on the selected Mesh. If multiple types are
 registered, the type must be specified with
@@ -756,12 +756,12 @@ isn't provided.
 
 `IZLinkSpotPublisherClient.Publish(...)` and
 `IZLinkSpotOutbound.Publish(...)` are
-[Logical Multicast](../../../../01-glossary.en.md#logical-multicast).
+[Logical Multicast](../../../01-glossary.en.md#logical-multicast).
 Both an external publisher's and a Spot callback's outbound only take
 ChannelName and topic. A process-local
-[ChannelName](../../../../01-glossary.en.md#channelname) index selects
-the owner [MeshNode](../../../../01-glossary.en.md#meshnode), and the
-caller doesn't additionally pass [MeshName](../../../../01-glossary.en.md#meshname).
+[ChannelName](../../../01-glossary.en.md#channelname) index selects
+the owner [MeshNode](../../../01-glossary.en.md#meshnode), and the
+caller doesn't additionally pass [MeshName](../../../01-glossary.en.md#meshname).
 Each remote target follows the MeshNode ROUTER's send rule, and matching
 Spot queues on the same node share immutable message storage. The exact
 configuration surface is owned by

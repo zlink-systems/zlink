@@ -1,8 +1,8 @@
 # 7. Actor And Spot
 
 > **The documents that own this chapter's contract** —
-> [Actor Model](../../../common/spec/14-actor-model.en.md) and
-> [Spot And Actor Membership](../../../common/spec/15-spot-actor.en.md) own the behavior,
+> [Actor Model](../../../common/spec/server/14-actor-model.en.md) and
+> [Spot And Actor Membership](../../../common/spec/server/15-spot-actor.en.md) own the behavior,
 > and the
 > [per-language Actor/Spot public contract](../../../common/spec/server/languages/README.en.md)
 > owns the exact signatures.
@@ -1175,7 +1175,7 @@ The application never tracks `NodeRid`.
 **A request sent during the move also completes back at the original caller.** The reply
 the target produced is correlated back to the original caller, the timeout follows the
 caller's existing path as-is, and a reply that arrives late is dropped
-([spot-actor spec §10.5](../../../common/spec/15-spot-actor.en.md)). The number of requests
+([spot-actor spec §10.5](../../../common/spec/server/15-spot-actor.en.md)). The number of requests
 waiting on a reply during a move is observed through the `surface=actor` value of
 `zlink.mesh_node.requests.inflight` ([12-operations](12-operations.en.md#1-runtime-metrics)).
 
@@ -1324,4 +1324,4 @@ retry-safe, and must copy the payload memory if it's kept around outside the cal
   chapter §4 — the verification class `ActorContracts`
 - Session and Actor binding: [Session Actor Dispatch](08-actor-session.en.md)
 - The STREAM server and client: [STREAM](09-stream.en.md)
-- The Actor/Spot address resolution rule: [Object routing](../../../common/spec/18-object-routing.en.md)
+- The Actor/Spot address resolution rule: [Object routing](../../../common/spec/server/18-object-routing.en.md)

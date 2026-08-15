@@ -1,9 +1,9 @@
 # 4. Backpressure — When Arrival Outpaces Processing
 
 > **The documents that own this chapter's contract** — covered by the
-> [Async Execution Policy](../../../common/spec/05-async-execution-policy.en.md),
-> [Framework API](../../../common/spec/06-framework-api.en.md),
-> [Runtime Monitoring](../../../common/spec/24-runtime-monitoring.en.md), and the
+> [Async Execution Policy](../../../common/spec/server/05-async-execution-policy.en.md),
+> [Framework API](../../../common/spec/server/06-framework-api.en.md),
+> [Runtime Monitoring](../../../common/spec/server/24-runtime-monitoring.en.md), and the
 > [per-language topology public contract](../../../common/spec/server/languages/README.en.md).
 > This chapter explains that behavior as concepts and principles, and covers which options
 > affect it. Exact option names, defaults, and mutability are owned by each language's
@@ -466,7 +466,7 @@ The framework and binding do not apply the profile ratio or divide the budget by
 count. They read Core's effective budget, directional queue HWMs, accounted bytes, and
 blocked ratio directly from the Core snapshot. `CoreHwmBudgetBytes` is not a hard process
 RSS cap, so observe RSS, the managed heap, and allocator overhead separately
-([Runtime Monitoring](../../../common/spec/24-runtime-monitoring.en.md)).
+([Runtime Monitoring](../../../common/spec/server/24-runtime-monitoring.en.md)).
 
 For a manual production budget, measure current/peak Core-accounted bytes, blocked ratio,
 throughput, latency, and process memory under production-like payload distribution and
@@ -585,9 +585,9 @@ attribute first.
 ## 6. Framework Runtime Coverage
 
 This common guide does not list per-language implementation differences. Common behavior is
-owned by [Framework API §2.1](../../../common/spec/06-framework-api.en.md#21-separating-the-core-memory-budget-from-the-application-job-queue),
+owned by [Framework API §2.1](../../../common/spec/server/06-framework-api.en.md#21-separating-the-core-memory-budget-from-the-application-job-queue),
 and status/reset semantics are owned by
-[Runtime Monitoring](../../../common/spec/24-runtime-monitoring.en.md). See the language's
+[Runtime Monitoring](../../../common/spec/server/24-runtime-monitoring.en.md). See the language's
 `16. Options`, `11. Monitoring`, and
 [exact interface](../../../common/spec/server/languages/README.en.md) for its spelling and
 call form.
@@ -630,12 +630,12 @@ call form.
 
 - Option defaults and when they can change: `16. Options` chapter §3
 - The formal contract for one-way submit and the completion boundary:
-  [Async Execution Policy](../../../common/spec/05-async-execution-policy.en.md)
+  [Async Execution Policy](../../../common/spec/server/05-async-execution-policy.en.md)
 - Core HWM and application job queue settings:
-  [Framework API §2.1](../../../common/spec/06-framework-api.en.md#21-separating-the-core-memory-budget-from-the-application-job-queue)
+  [Framework API §2.1](../../../common/spec/server/06-framework-api.en.md#21-separating-the-core-memory-budget-from-the-application-job-queue)
 - Status, metrics, and reset semantics:
-  [Runtime Monitoring](../../../common/spec/24-runtime-monitoring.en.md) ·
-  [Runtime Metrics](../../../common/spec/25-runtime-metrics.en.md)
+  [Runtime Monitoring](../../../common/spec/server/24-runtime-monitoring.en.md) ·
+  [Runtime Metrics](../../../common/spec/server/25-runtime-metrics.en.md)
 - The socket configuration surface:
   [per-language topology public contract](../../../common/spec/server/languages/README.en.md)
 - The byte-unit contract for a socket option: [the core guide's socket option](https://zlink-systems.github.io/zlink/guide/12-socket-options/)

@@ -178,11 +178,11 @@ cancellation.
 Passing the internal liveness-dedicated exact byte `01 5A 4C 46 31` to
 `publishToTopic(...)`, which takes a topic, raises the Java runtime's
 `ZLinkConfigurationException` without starting transport. The overload
-that omits [topic](../../../../01-glossary.en.md#topic) uses the typed
+that omits [topic](../../../01-glossary.en.md#topic) uses the typed
 event's packet name, so it doesn't create this internal topic.
 
 The RouteMesh DSL doesn't change the Java builder's meaning — it only
-provides a receiver and lambda. It configures a per-[ChannelName](../../../../01-glossary.en.md#channelname)
+provides a receiver and lambda. It configures a per-[ChannelName](../../../01-glossary.en.md#channelname)
 role on one MeshNode's physical connection.
 
 The Kotlin runtime directly uses Java's `ZLinkRouteMeshRuntimeOptions`.

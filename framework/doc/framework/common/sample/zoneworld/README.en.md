@@ -149,15 +149,15 @@ auto-issued by the Framework as a prefix plus a UUID; no fixed RID is configured
 
 | Behavior Needed | Element Chosen | Reason And Contract Basis |
 |---|---|---|
-| Find the current zone owner by ZoneId. | Global Spot message | The Framework resolves the global SpotId authority. [Interaction Model §2](../../spec/03-interaction-model.en.md#2-common-model) |
-| Find an actor by PlayerId. | Global Actor message | Doesn't expose the Actor location or current owner as an application route. [Actor model](../../spec/14-actor-model.en.md) |
-| Use zone join as a cross-node move. | Actor Join + relocation | When the target owner differs, the Framework relocation unit moves the actor. [Graceful drain §8](../../spec/30-host-relocation-flow.en.md#8-the-order-for-relocating-one-unit) |
-| Deliver a message to the previous owner during a move. | Message Follow | Uses the committed target route and doesn't automatically resubmit a failed operation to a different owner. [Object routing §2.4](../../spec/18-object-routing.en.md#24-a-message-arriving-at-a-previous-owner-route) |
-| Deliver a snapshot to an adjacent zone. | Logical Multicast | Expresses the boundary via topic and target subscription. [Interaction Model §5](../../spec/03-interaction-model.en.md#5-spot-logical-multicast) |
-| Send all-node announcements/maintenance. | Classic fanout | The publisher doesn't manage the node list. [Interaction Model §6](../../spec/03-interaction-model.en.md#6-classic-fanout) |
-| Observe node status. | Runtime monitoring event | Ops collects status changes and local reports. [Runtime monitoring](../../spec/24-runtime-monitoring.en.md) |
-| Keep the actor connection alive. | Bound STREAM session | Keeps the same connection during relocation, only updating the binding location. [Failure policy §6](../../spec/31-failure-failover-policy.en.md#6-session-and-binding) |
-| Avoid RID collisions. | `SetRoutingIdPrefix` zn | Separates the application NodeId/ZoneId from transport identity. [MeshNode spec](../../spec/13-mesh-node.en.md) |
+| Find the current zone owner by ZoneId. | Global Spot message | The Framework resolves the global SpotId authority. [Interaction Model §2](../../spec/server/03-interaction-model.en.md#2-common-model) |
+| Find an actor by PlayerId. | Global Actor message | Doesn't expose the Actor location or current owner as an application route. [Actor model](../../spec/server/14-actor-model.en.md) |
+| Use zone join as a cross-node move. | Actor Join + relocation | When the target owner differs, the Framework relocation unit moves the actor. [Graceful drain §8](../../spec/server/30-host-relocation-flow.en.md#8-the-order-for-relocating-one-unit) |
+| Deliver a message to the previous owner during a move. | Message Follow | Uses the committed target route and doesn't automatically resubmit a failed operation to a different owner. [Object routing §2.4](../../spec/server/18-object-routing.en.md#24-a-message-arriving-at-a-previous-owner-route) |
+| Deliver a snapshot to an adjacent zone. | Logical Multicast | Expresses the boundary via topic and target subscription. [Interaction Model §5](../../spec/server/03-interaction-model.en.md#5-spot-logical-multicast) |
+| Send all-node announcements/maintenance. | Classic fanout | The publisher doesn't manage the node list. [Interaction Model §6](../../spec/server/03-interaction-model.en.md#6-classic-fanout) |
+| Observe node status. | Runtime monitoring event | Ops collects status changes and local reports. [Runtime monitoring](../../spec/server/24-runtime-monitoring.en.md) |
+| Keep the actor connection alive. | Bound STREAM session | Keeps the same connection during relocation, only updating the binding location. [Failure policy §6](../../spec/server/31-failure-failover-policy.en.md#6-session-and-binding) |
+| Avoid RID collisions. | `SetRoutingIdPrefix` zn | Separates the application NodeId/ZoneId from transport identity. [MeshNode spec](../../spec/server/13-mesh-node.en.md) |
 
 The Player Actor factory registers a `PreserveStateWith` relocation adapter. Its Capture/Restore
 payload preserves only Application-owned state such as coordinates, ZoneId, bot direction, and the

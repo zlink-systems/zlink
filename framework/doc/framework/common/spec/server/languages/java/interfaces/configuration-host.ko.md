@@ -1,6 +1,6 @@
 # Java 구성과 host 공개 인터페이스
 
-[인터페이스 목차](README.ko.md) · [Transport liveness](../../../../29-transport-liveness.ko.md)
+[인터페이스 목차](README.ko.md) · [Transport liveness](../../../29-transport-liveness.ko.md)
 
 이 문서는 Java application이 Mesh, Channel role, handler와 Framework host를 구성할 때 사용하는 공개
 인터페이스를 고정한다. Application은 아래 builder로 구성을 선언하고, Framework는 host를 시작할 때
@@ -255,7 +255,7 @@ serverOptions.addRouteMesh("orders")
         CheckoutReply.class); // 이 node를 checkout 요청 처리 후보로 등록한다.
 ```
 
-Automatic [RouteMesh](../../../../01-glossary.ko.md#routemesh)는 RID를 canonical byte order로 비교하고 더 작은 RID의 MeshNode만 상대 endpoint로
+Automatic [RouteMesh](../../../01-glossary.ko.md#routemesh)는 RID를 canonical byte order로 비교하고 더 작은 RID의 MeshNode만 상대 endpoint로
 connect한다. Manual topology는 application endpoint 구성에 따라 한쪽 또는 양쪽에서 connect할 수 있다.
 양쪽 연결이나 automatic discovery 경합·오래된 snapshot으로 중복 후보가 생기면 handshake와 admission이
 같은 RID와 lifecycle generation을 확인해 하나만 ready 상태로 유지한다.
@@ -265,13 +265,13 @@ connect한다. Manual topology는 application endpoint 구성에 따라 한쪽 �
 Channel Server membership이 있으면 weight가 `0`이어도 connection을 만들고 liveness를 유지한다.
 ClientServer와 classic fanout registration은 별도 물리 topology이므로 이 판정에 포함하지 않는다.
 
-ClientServer는 manual endpoint와 location store [automatic discovery](../../../../01-glossary.ko.md#automatic-discovery)를 함께 사용할 수 있다. 두 source가 같은
-Server RID와 [lifecycle generation](../../../../01-glossary.ko.md#lifecycle-generation)을 가리키면 connection intent와 ready target을 하나로 합친다. Automatic과
+ClientServer는 manual endpoint와 location store [automatic discovery](../../../01-glossary.ko.md#automatic-discovery)를 함께 사용할 수 있다. 두 source가 같은
+Server RID와 [lifecycle generation](../../../01-glossary.ko.md#lifecycle-generation)을 가리키면 connection intent와 ready target을 하나로 합친다. Automatic과
 manual 모두 Client만 server로 connect하며 Server는 client endpoint를 찾거나 outbound connect를 시작하지
 않는다. 같은 ChannelName에는 Client와 Server를 각각 한 번 등록할 수 있고 `(ChannelName, Role)` key의
 별도 registration으로 하나의 ClientServer topology를 공유한다. 같은 역할을 두 번 등록하면 startup이
-실패하며 RouteMesh [ChannelName](../../../../01-glossary.ko.md#channelname) 충돌 규칙은
-유지한다. Local Server도 listener와 service admission 뒤 remote Server와 같은 readiness·[weight](../../../../01-glossary.ko.md#weight)·drain
+실패하며 RouteMesh [ChannelName](../../../01-glossary.ko.md#channelname) 충돌 규칙은
+유지한다. Local Server도 listener와 service admission 뒤 remote Server와 같은 readiness·[weight](../../../01-glossary.ko.md#weight)·drain
 조건으로 선택하며 local 우선순위나 direct handler 호출을 사용하지 않는다.
 
 Fanout에서는 Publisher가 descriptor만 게시하고 outbound connect를 시작하지 않는다. Subscriber만 publisher
@@ -281,7 +281,7 @@ endpoint로 connect하며 automatic subscriber는 Publisher RID와 lifecycle gen
 
 Object role을 생략하면 `None`이다. `client()`는 global object operation만 제공하고 placement target이 되지
 않으며 `server()`는 Client capability와 Entry Spot·factory registration을 제공한다. Client와 Server는
-[Location Store](../../../../01-glossary.ko.md#location-store)가 필수다. Actor·User Spot·Instance Spot [factory](../../../../01-glossary.ko.md#factory)는 stable type과 configure callback을
+[Location Store](../../../01-glossary.ko.md#location-store)가 필수다. Actor·User Spot·Instance Spot [factory](../../../01-glossary.ko.md#factory)는 stable type과 configure callback을
 반드시 받으며 relocation 동작 선택을 생략하는 overload는 없다.
 
 Object Client에도 RouteMesh Channel Server를 등록할 수 있다. Application Node direct handler는 등록할
@@ -331,7 +331,7 @@ configuration error다. Location과 Relocation capability를 함께 등록하는
 
 `ApplicationVersion`은 `0..Long.MAX_VALUE` 범위의 배포 순번이다. 음수는 startup validation에서 거부한다.
 Application traffic과 무관한 5초 periodic probe와 같은 current connection의 matching ACK 15초 deadline은
-JVM service runtime의 고정 liveness profile이다. 다른 inbound frame은 [deadline](../../../../01-glossary.ko.md#deadline)을 충족하지 않는다. 이 값을
+JVM service runtime의 고정 liveness profile이다. 다른 inbound frame은 [deadline](../../../01-glossary.ko.md#deadline)을 충족하지 않는다. 이 값을
 Channel·handler·peer별 public option으로 노출하지 않는다. Location owner lease option은 별도 store 계약이며
 transport liveness를 대신하지 않는다.
 
@@ -343,7 +343,7 @@ service-wire 표현 한계, HWM과 mailbox budget은 별도 자원·wire guard�
 상한이다. Byte 회계는 payload 크기만 세지 않는다 — `payload 크기 + metadata 크기 + 작업당 고정 비용`을
 더한다. Payload가 비어 있어도 작업 하나는 `0` byte가 아니며, 큰 payload에서도 고정 비용은 그대로
 더한다. 합이 `long` 표현 범위를 넘으면 `Long.MAX_VALUE`로 고정하고 그 제출을 거절한다. 회계 규칙은
-[Framework API §8.2](../../../../06-framework-api.ko.md#82-handler-실행-객체와-dependency-수명)가 소유한다.
+[Framework API §8.2](../../../06-framework-api.ko.md#82-handler-실행-객체와-dependency-수명)가 소유한다.
 두 값은 startup 전에만 설정한다. `0`은 unlimited가 아니라 Framework profile의 유한 기본값을
 선택한다. 음수는 startup 설정 오류다. Logical Multicast의 local target도 이 용량 제한으로 admission을
 판단한다.
@@ -354,16 +354,16 @@ startup 설정 오류다. 값은 MeshNode lifecycle 시작 전에 고정하고 r
 `ZLinkWorkerOptions.idleTimeout(...)`과는 별개의 설정이며 서로 값을 상속하지 않는다. 정리 대상은
 Instance Spot뿐이고 Entry Spot과 User Spot은 이 설정의 영향을 받지 않는다. 유휴 판정 조건,
 `ZLinkSpotCloseReason.IDLE_EVICTED` 전달과 정리 뒤 cold activation 규칙은
-[Spot 모델 §6.2](../../../../11-spot-model.ko.md#62-유휴-instance-spot-정리)가 소유한다.
+[Spot 모델 §6.2](../../../11-spot-model.ko.md#62-유휴-instance-spot-정리)가 소유한다.
 
 Automatic RID는 `prefix-<lowercase-canonical-uuid-v4>` 형식이다. UUID v4는 `8-4-4-4-12` 자리의
 lowercase canonical 문자열로 표현한다. Prefix는 ASCII `[A-Za-z0-9._-]` 1..64자이며 active
-[owner](../../../../01-glossary.ko.md#owner)와 충돌하면 새 UUID로 다시 시도하지 않고 즉시
+[owner](../../../01-glossary.ko.md#owner)와 충돌하면 새 UUID로 다시 시도하지 않고 즉시
 `ROUTING_ID_CONFLICT`로 실패한다. Fixed RID는 object role과 Store descriptor가 없는 manual
 topology에서만 허용한다. Slot count, allocation group과 public allocation provider는 제공하지 않는다.
 
 Framework가 모든 registration에서 만든 fully encoded MeshNode descriptor는 1 MiB 이하여야 한다.
-[Spot](../../../../01-glossary.ko.md#spot) type과 object capability collection은 각각 최대 1024개다. Relocation adapter class와 opaque application
+[Spot](../../../01-glossary.ko.md#spot) type과 object capability collection은 각각 최대 1024개다. Relocation adapter class와 opaque application
 bytes는 peer descriptor에 게시하지 않는다. Runtime은 완성된 descriptor를 socket bind 전에 한 번에 검증한다.
 Bound를 넘으면
 startup을 실패시키며 collection을 truncate·split하거나 descriptor 일부를 게시하지 않는다.

@@ -1,6 +1,6 @@
 # Java Common Runtime Public Interface
 
-[Interface table of contents](README.en.md) · [Host Relocation And Termination Contract](../../../../30-host-relocation-flow.en.md)
+[Interface table of contents](README.en.md) · [Host Relocation And Termination Contract](../../../30-host-relocation-flow.en.md)
 
 This document fixes the public types expressing host execution state,
 object relocation, termination request, and common async operations in
@@ -136,7 +136,7 @@ fixes the fact that the host status stream uses the same envelope.
 `relocate(options)` closes new application admission and placement, and
 moves current objects to a compatible target. On success it becomes
 `RELOCATED` state, and the host process and infrastructure connections
-are kept. A User Spot moves the [Spot](../../../../01-glossary.en.md#spot)
+are kept. A User Spot moves the [Spot](../../../01-glossary.en.md#spot)
 and the entire current member Actor set together as one aggregate. There's
 no fixed cap on the total participant count. If even one aggregate
 participant selected `disableRelocation()`, it ends with
@@ -146,7 +146,7 @@ relocation-adapter eligibility, `Blocked/TargetUnavailable`. After target select
 incompatible transferred state schema/type adapter is `Blocked/StateIncompatible`. This
 preflight failure doesn't change
 admission. The mere existence of a
-[User Spot](../../../../01-glossary.en.md#entry-user-instance-spot)
+[User Spot](../../../01-glossary.en.md#entry-user-instance-spot)
 doesn't block relocation. If there's even one local manual RouteMesh
 peer, ClientServer client endpoint, fanout subscriber endpoint, or
 manual fanout publisher, it ends with
@@ -391,7 +391,7 @@ public class systems.zlink.framework.errors.ZLinkFrameworkException extends java
 `ZLinkFrameworkErrorKind.value()` returns the common number `0..12`
 regardless of declaration order. `fromValue(int)` also uses the same
 mapping as the
-[Common Error Model](../../../../32-framework-error-model.en.md). The
+[Common Error Model](../../../32-framework-error-model.en.md). The
 public exception doesn't provide whether it's retryable.
 
 ## Serializer And Error Public Signature

@@ -146,8 +146,8 @@ flow respectively. Publish never confirms a per-subscriber result, so it never c
 per-target trace or count.
 
 For exact attributes and propagation rules, see
-[Message Flow Tracing](../../../common/spec/26-message-flow-tracing.en.md) and
-[Flow Correlation](../../../common/spec/27-flow-correlation.en.md).
+[Message Flow Tracing](../../../common/spec/server/26-message-flow-tracing.en.md) and
+[Flow Correlation](../../../common/spec/server/27-flow-correlation.en.md).
 
 ## 4. Common Problems
 

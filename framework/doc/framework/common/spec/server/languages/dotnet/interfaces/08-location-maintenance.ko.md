@@ -1,6 +1,6 @@
 # .NET Location 설정과 운영 공개 인터페이스
 
-[.NET exact interface 목차](README.ko.md) · [Location runtime](../../../../21-location-runtime.ko.md) ·
+[.NET exact interface 목차](README.ko.md) · [Location runtime](../../../21-location-runtime.ko.md) ·
 [Provider SPI](08-authority-relocation.ko.md) · [Host monitoring](10-topology-monitoring.ko.md)
 
 ## 1. 범위

@@ -4,7 +4,7 @@
 >
 > Terminator와 Spot 실행 문맥 결합은
 > [12 HTTP client §3](12-http-client.ko.md)과
-> [04 비동기 실행 정책 §1.1](../05-async-execution-policy.ko.md)이 소유한다. 아래
+> [04 비동기 실행 정책 §1.1](../server/05-async-execution-policy.ko.md)이 소유한다. 아래
 > §5.1은 호출 형태를 이해하기 위한 요약이다. 이 문서는 §5.2부터 HTTP 전송의
 > non-blocking 근거, cancellation과 timeout 경계를 정의한다.
 
@@ -17,7 +17,7 @@ typed response·callback `async`와 one-way `submit`을 구분한다. Shared Spo
 서버 HTTP request builder, 서버 request와 Worker call에 제공한다. Standalone client에는 반납할
 gate가 없으므로 제공하지 않는다.
 
-| 실행 방식 | 무엇을 기다리나 | [Spot](../01-glossary.ko.md#spot) 실행 줄 |
+| 실행 방식 | 무엇을 기다리나 | [Spot](../server/01-glossary.ko.md#spot) 실행 줄 |
 | --- | --- | --- |
 | **one-way submission** | HTTP 요청이 전송 경계에 제출될 때까지 기다린다 | 현재 turn을 유지한다. 정상 완료 값은 없다 |
 | **response completion** | HTTP response가 도착할 때까지 기다린다 | 현재 turn을 유지한다 |
@@ -40,7 +40,7 @@ Spot 실행 줄의 **새 turn**으로 들어간다
 **Terminator 이름은 framework 관용을 따른다.** .NET은 `Async(...)`, Kotlin wrapper는
 `await(...)`, Java·C++는 `submit(...)`을 사용한다. Node HTTP typed response와 callback은 TypeScript
 상속 signature 충돌을 피하기 위해 `async(...)`를 유지하고 raw response는 `submitRaw()`를 사용한다
-([04 §2](../05-async-execution-policy.ko.md)).
+([04 §2](../server/05-async-execution-policy.ko.md)).
 
 ## 5.2 외부 HTTP 대기와 Spot 실행 줄
 

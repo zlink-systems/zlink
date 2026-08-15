@@ -11,7 +11,7 @@
 > [common spec](../common/README.en.md).
 
 The common meaning of async execution, `CompletionStage`, and the Kotlin coroutine wrapper
-follows the [Async Execution And Coroutine Policy](../common/spec/05-async-execution-policy.en.md).
+follows the [Async Execution And Coroutine Policy](../common/spec/server/05-async-execution-policy.en.md).
 
 Sample and E2E config files, the ban on environment variables, and
 `@ConfigurationProperties`-binding criteria follow the
@@ -66,7 +66,7 @@ criteria **share the Java/Kotlin `internals/`.**
 | Document | Scope |
 |------|------|
 | [backend-dependency-policy](../java/internals/backend-dependency-policy.en.md) | Java binding dependency isolation |
-| [Common Internals](../common/spec/README.en.md) | Runtime architecture decisions shared across all four languages |
+| [Common Internals](../common/spec/server/README.en.md) | Runtime architecture decisions shared across all four languages |
 | [regression-test-matrix](../java/internals/regression-test-matrix.en.md) | JVM contract, E2E, and performance smoke criteria |
 
 ## 4. Samples (Kotlin)

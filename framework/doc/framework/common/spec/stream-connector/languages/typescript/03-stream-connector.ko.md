@@ -317,7 +317,7 @@ interface RequiredZlinkStreamConnectorOptions {
 connector 생성은 `zlinkStreamConnectorFactory.create(options)`를 사용한다.
 
 - **취소는 optional `AbortSignal`로 전달한다.** 다른 언어의 cancellation token 모양을 복제하지
-  않는다([비동기 실행과 coroutine 정책](../../../05-async-execution-policy.ko.md)).
+  않는다([비동기 실행과 coroutine 정책](../../../server/05-async-execution-policy.ko.md)).
 - **event 구독은 `Disposable`을 반환한다.** 해제는 그 `Disposable`로 한다.
 - `send`·`request`·`waitFor`는 즉시 실행하지 않고 **call builder를 반환한다.** builder에
   `packetName(...)`·`metadata(...)`·`timeout(...)`·`compress()`를 붙인 뒤 `submit()`으로 제출한다.
@@ -325,7 +325,7 @@ connector 생성은 `zlinkStreamConnectorFactory.create(options)`를 사용한�
   전달한다.
 - inbound handler가 시작한 관련 outbound에는 `flowFrom(message)`를 호출한다. 이 메서드는 message의
   `flowId`와 `flowOrigin`을 한 쌍으로 복사한다. 호출하지 않은 outbound는 `origin=application`인 새
-  flow를 시작한다. 자세한 비동기 문맥 경계는 [flow correlation §6](../../../27-flow-correlation.ko.md#6-async-작업과-execution-context)를
+  flow를 시작한다. 자세한 비동기 문맥 경계는 [flow correlation §6](../../../server/27-flow-correlation.ko.md#6-async-작업과-execution-context)를
   따른다.
 
 option의 기본값은 [공통 스펙 §6.1](../../32-stream-connector.ko.md)이 소유한다. TypeScript는 이를

@@ -23,7 +23,7 @@ reference.
 | [Stream Connector](../../../stream-connector/languages/java/03-stream-connector.en.md) | The client connector's public surface |
 
 **The meaning and behavioral rules of a feature are owned by the
-[common spec](../../../README.en.md).** This directory only fixes the
+[common spec](../../README.en.md).** This directory only fixes the
 **exact public API** that meaning takes in this language.
 
 ## Cancellation Representation
@@ -31,7 +31,7 @@ reference.
 A generic Framework token imitating .NET's `CancellationToken` isn't
 added to Java lifecycle callbacks and host operations. `CompletionStage`
 waiter cancellation doesn't interrupt an already-started shared
-operation, and [Spot](../../../01-glossary.en.md#spot) closing is
+operation, and [Spot](../../01-glossary.en.md#spot) closing is
 bounded by having the framework end the stage-completion wait at the
 context's absolute deadline.
 

@@ -1,6 +1,6 @@
 # C++ STREAM session exact interface
 
-[C++ exact interface 목차](README.ko.md) · [Session Actor dispatch](../../../../20-session-actor-dispatch.ko.md)
+[C++ exact interface 목차](README.ko.md) · [Session Actor dispatch](../../../20-session-actor-dispatch.ko.md)
 
 ## 1. Public session surface
 

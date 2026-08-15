@@ -9,13 +9,13 @@
 > 이 문서는 **NestJS 위에서 ZLink framework를 어떻게 구성하는가**를 소유한다. 패키지 구조, 배포,
 > 모듈 부트스트랩, DI, lifecycle, 그리고 각 기능의 **등록 표면**이다.
 >
-> **기능의 의미와 동작 규칙은 공통 스펙이 소유한다** — [channel-messaging](../../../08-channel-messaging.ko.md),
-> [spot-messaging](../../../12-spot-messaging.ko.md), [MeshNode](../../../13-mesh-node.ko.md),
-> [stream-session](../../../19-stream-session.ko.md), [actor-model](../../../14-actor-model.ko.md),
-> [session-actor-dispatch](../../../20-session-actor-dispatch.ko.md),
-> [runtime-monitoring](../../../24-runtime-monitoring.ko.md),
-> [location-runtime](../../../21-location-runtime.ko.md),
-> [channel-topology](../../../07-channel-topology.ko.md).
+> **기능의 의미와 동작 규칙은 공통 스펙이 소유한다** — [channel-messaging](../../08-channel-messaging.ko.md),
+> [spot-messaging](../../12-spot-messaging.ko.md), [MeshNode](../../13-mesh-node.ko.md),
+> [stream-session](../../19-stream-session.ko.md), [actor-model](../../14-actor-model.ko.md),
+> [session-actor-dispatch](../../20-session-actor-dispatch.ko.md),
+> [runtime-monitoring](../../24-runtime-monitoring.ko.md),
+> [location-runtime](../../21-location-runtime.ko.md),
+> [channel-topology](../../07-channel-topology.ko.md).
 >
 > **public 타입과 시그니처는 [인터페이스 목차](interfaces/README.ko.md)가 범주별로 소유한다.**
 > 이 문서는 Node framework의 시스템 구조와 package 경계만 정의하며 사용 예제와 튜토리얼은 포함하지 않는다.
@@ -39,8 +39,8 @@
 - **codec 구현을 core에 섞지 않는다.** JSON은 기본 codec이고, Protobuf·MessagePack은
   extension package로 분리한다. 현재 Node HTTP client는 framework codec registry를
   사용하지 않는다. Codec 공유 범위의 공통 계약은
-  [Framework API §9](../../../06-framework-api.ko.md#9-codec)을 따른다.
-- **[location store](../../../01-glossary.ko.md#location-store) 구현도 extension이다.** core는 store 계약만 알고 Redis 구현은 별도 package가
+  [Framework API §9](../../06-framework-api.ko.md#9-codec)을 따른다.
+- **[location store](../../01-glossary.ko.md#location-store) 구현도 extension이다.** core는 store 계약만 알고 Redis 구현은 별도 package가
   제공한다(§10).
 - **connector는 서버 framework package를 참조하지 않는다.** 반대 방향도 같다.
 - **`stream-wire`는 환경 중립이다.** `Uint8Array`만 사용하고 `Buffer`에 의존하지 않으므로 Node와
@@ -83,9 +83,9 @@ subpath는 제공하지 않는다. 정확한 계약은
 | channel/fanout/route handler | `providers` + handler 등록 표면 | channel이 그 handler group을 dispatch할 때 |
 | Entry Spot, user Spot | `providers` + `addEntrySpot(...)` / `addSpotFactory(...)` | MeshNode·SpotManager가 local Spot을 활성화할 때 |
 | Instance Spot | `providers` + `addInstanceSpotFactory(...)` | Spot direct fluent call이 Instance cold activation을 시작할 때 |
-| [Spot](../../../01-glossary.ko.md#spot) packet·subscribe·actor·timer handler | handler decorator + `zlinkDiscoverProviders(...)` | 그 Spot 실행 문맥에서 처리할 때 |
+| [Spot](../../01-glossary.ko.md#spot) packet·subscribe·actor·timer handler | handler decorator + `zlinkDiscoverProviders(...)` | 그 Spot 실행 문맥에서 처리할 때 |
 | actor factory | `providers` + `addActorFactory(...)` | ActorManager가 actor를 생성할 때 |
-| stream session(또는 [factory](../../../01-glossary.ko.md#factory)) | `providers` + `streams` 설정 | stream 연결을 session으로 활성화할 때 |
+| stream session(또는 [factory](../../01-glossary.ko.md#factory)) | `providers` + `streams` 설정 | stream 연결을 session으로 활성화할 때 |
 
 ### 4.1 Provider token
 
@@ -100,7 +100,7 @@ subpath는 제공하지 않는다. 정확한 계약은
 | `ZLINK_FANOUT_CLIENT` | fanout client |
 | `ZLINK_BOUND_SESSION_FACTORY` | bound session factory |
 | `ZLINK_CHANNEL_RUNTIME_OPTIONS` | channel runtime options |
-| `ZLinkDrainHealthIndicator` | [MeshNode](../../../01-glossary.ko.md#meshnode) readiness와 health indicator |
+| `ZLinkDrainHealthIndicator` | [MeshNode](../../01-glossary.ko.md#meshnode) readiness와 health indicator |
 | `ZLINK_MESSAGE_METADATA_POLICY` | metadata 정책 |
 | `ZLINK_FRAMEWORK_RUNTIME` · `ZLINK_FRAMEWORK_REGISTRATION` | runtime과 등록 |
 
@@ -126,7 +126,7 @@ subpath는 제공하지 않는다. 정확한 계약은
 NestJS의 `ZLinkModule`은 위 표의 등록 조건을 만족하는 runtime instance를 해당 token의 provider로 등록하고
 dynamic module 밖에서도 주입할 수 있도록 provider를 export한다.
 
-정적 `forRoot`에서 [RouteMesh](../../../01-glossary.ko.md#routemesh) MeshNode가 없으면 RouteMesh runtime provider를, [ClientServer Channel](../../../01-glossary.ko.md#clientserver-channel)이 없으면
+정적 `forRoot`에서 [RouteMesh](../../01-glossary.ko.md#routemesh) MeshNode가 없으면 RouteMesh runtime provider를, [ClientServer Channel](../../01-glossary.ko.md#clientserver-channel)이 없으면
 ClientServer runtime provider를 만들지 않는다. Manual fanout subscriber만 있으면 fanout runtime provider를
 만들지 않는다. `forRootFactory`에서 구성을 동적으로 정하는 경우에는 아래 공통 규칙대로 각 조건부 provider 값이
 `null`일 수 있다. Application은 다음 token으로 public monitoring interface만 주입받는다.
@@ -190,7 +190,7 @@ lifecycle 참여자는 **framework → monitoring** 순서다.
 
 ### 5.2 종료 순서
 
-NestJS [shutdown](../../../01-glossary.ko.md#shutdown) hook은 host 단위 `Shutdown`을 사용한다. Rolling maintenance에서 continuity가 필요하면
+NestJS [shutdown](../../01-glossary.ko.md#shutdown) hook은 host 단위 `Shutdown`을 사용한다. Rolling maintenance에서 continuity가 필요하면
 operator가 hook 전에 주입받은 `ZLinkFrameworkRuntime.relocate(...)`를 호출하고 `Relocated` 결과를 확인한 뒤
 `shutdown(...)`을 호출한다. Relocation이 필요하지 않으면 hook에서 `shutdown(...)`만 호출한다. Hook이
 시작될 때 이미 `Shutdown`이 `Draining`을 시작했다면 새 operation을 만들지 않고 그 shared operation에 합류한다.
@@ -206,7 +206,7 @@ operator가 hook 전에 주입받은 `ZLinkFrameworkRuntime.relocate(...)`를 �
 **startup에서 runtime state를 만들다 한 컴포넌트라도 실패하면, 그때까지 만든 state를 그 자리에서
 dispose한 뒤 예외를 다시 던진다.** 반쯤 열린 socket이나 매달린 context를 남기지 않는다.
 
-내부 정리 순서는 [runtime-lifecycle](../../../README.ko.md)이,
+내부 정리 순서는 [runtime-lifecycle](../../README.ko.md)이,
 backend 어댑터 포트는
 [backend-dependency-policy](../../../../../node/internals/backend-dependency-policy.ko.md)가 소유한다.
 
@@ -219,60 +219,60 @@ backend 어댑터 포트는
 | `addRouteMesh(meshName)` | 물리 MeshName과 MeshNode를 등록한다 | **필요** |
 | `listen(port?)` | MeshNode가 공유하는 ROUTER listener를 연다. 자동 discovery에서 생략하면 port 0을 사용한다 | 불필요 |
 | `channel(name).server()` | 논리 server membership과 handler namespace를 추가한다 | 불필요 |
-| `channel(name).client()` | server [membership](../../../01-glossary.ko.md#membership) 없이 ChannelName 호출 역할을 추가한다 | 불필요 |
+| `channel(name).client()` | server [membership](../../01-glossary.ko.md#membership) 없이 ChannelName 호출 역할을 추가한다 | 불필요 |
 | `addClientServerChannel(name)` | 단방향 request 시작 권한이 구분된 별도 topology를 구성한다 | role에 따름 |
 | `peerConnections()` | endpoint 또는 expected RID가 있는 manual peer intent를 추가한다 | 불필요 |
 | `enablePublisher(...)` | 이 channel로 event를 publish한다 | **필요** |
 | `enableSubscriber(...)` | 이 channel의 event를 받는다 | 불필요 |
 
 자동·수동 연결, dispatch key와 중복 검사 범위는
-[channel-topology §5](../../../07-channel-topology.ko.md)와
-[channel-messaging](../../../08-channel-messaging.ko.md)이 소유한다.
+[channel-topology §5](../../07-channel-topology.ko.md)와
+[channel-messaging](../../08-channel-messaging.ko.md)이 소유한다.
 
 ## 7. Spot·Actor 등록
 
-Spot·Actor factory는 owner MeshNode에 등록한다. [Spot direct](../../../01-glossary.ko.md#spot-direct)와 Logical Multicast는 Node·Channel
+Spot·Actor factory는 owner MeshNode에 등록한다. [Spot direct](../../01-glossary.ko.md#spot-direct)와 Logical Multicast는 Node·Channel
 메시징과 같은 ROUTER를 사용한다. Discovery는 등록된 Redis location store를 사용한다.
 
 | builder | 켜는 것 |
 |---|---|
-| `addRouteMesh(meshName).listen(port?)` | [owner](../../../01-glossary.ko.md#owner) MeshNode와 ROUTER listener |
-| `channel(name).server()` | [Logical Multicast](../../../01-glossary.ko.md#logical-multicast) 범위와 [handler namespace](../../../01-glossary.ko.md#handler-namespace) |
-| `channel(name).client()` | server membership이 없는 outbound [ChannelName](../../../01-glossary.ko.md#channelname) 호출 |
+| `addRouteMesh(meshName).listen(port?)` | [owner](../../01-glossary.ko.md#owner) MeshNode와 ROUTER listener |
+| `channel(name).server()` | [Logical Multicast](../../01-glossary.ko.md#logical-multicast) 범위와 [handler namespace](../../01-glossary.ko.md#handler-namespace) |
+| `channel(name).client()` | server membership이 없는 outbound [ChannelName](../../01-glossary.ko.md#channelname) 호출 |
 | `configureSpotPublisher()` | Logical Multicast의 ROUTER 송신 설정 |
 | `addEntrySpot(TEntrySpot)` | Entry Spot handler registry 타입 |
 | `addSpotFactory(TSpot)` | 이 노드가 만들 수 있는 spot 타입 |
-| `addInstanceSpotFactory(type, TSpot, placement, relocation)` | 이 노드가 activation할 수 있는 actor-free [Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) 타입 |
+| `addInstanceSpotFactory(type, TSpot, placement, relocation)` | 이 노드가 activation할 수 있는 actor-free [Instance Spot](../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) 타입 |
 | MeshNode channel client | Spot handler의 ChannelName send/request가 공유하는 client |
 
 중복 등록과 타입 규칙은
-[MeshNode](../../../13-mesh-node.ko.md)와 [spot-messaging](../../../12-spot-messaging.ko.md)이 소유한다.
+[MeshNode](../../13-mesh-node.ko.md)와 [spot-messaging](../../12-spot-messaging.ko.md)이 소유한다.
 
 ### 7.1 Entry Spot identity와 membership
 
 Framework는 MeshNode startup에서 Entry Spot의 global Spot ID를 발급한다. 애플리케이션은 Entry Spot ID를
 구성하거나 변경하지 않는다. Startup은 Entry Spot factory와 handler를 초기화하고 Ready barrier를 완료한 뒤
-[descriptor](../../../01-glossary.ko.md#descriptor)를 게시한다. Actor create는 선택한 owner MeshNode의 Entry Spot membership과 Actor [Ready](../../../01-glossary.ko.md#ready) barrier를
+[descriptor](../../01-glossary.ko.md#descriptor)를 게시한다. Actor create는 선택한 owner MeshNode의 Entry Spot membership과 Actor [Ready](../../01-glossary.ko.md#ready) barrier를
 같은 lifecycle에서 완료한다.
 
 이 순서는 Framework runtime의 내부 책임이다. Public interface에는 transport 객체, local handle 또는 resolver를
 노출하지 않는다.
 
 Spot message의 실패와 Spot 수명 규칙은
-[spot-messaging §6](../../../12-spot-messaging.ko.md#6-실패와-수명)이 소유한다. 수동 outbound
+[spot-messaging §6](../../12-spot-messaging.ko.md#6-실패와-수명)이 소유한다. 수동 outbound
 peer는 route mesh builder의 `connect(...)`로 지정한다.
 
 ### 7.2 Instance Spot 등록
 
 Instance Spot factory는 배포 사이에도 유지되는 stable type, actor-free Spot provider, placement limit과
-relocation policy를 함께 등록한다. 같은 MeshNode에서 같은 [stable type](../../../01-glossary.ko.md#stable-type)이나 같은 provider class를 User Spot
+relocation policy를 함께 등록한다. 같은 MeshNode에서 같은 [stable type](../../01-glossary.ko.md#stable-type)이나 같은 provider class를 User Spot
 factory와 중복 등록하면 socket bind 전에 구성 오류로 실패한다.
 
 Instance Spot provider는 direct packet과 timer handler만 등록할 수 있다. Actor handler나 Logical Multicast
 subscription을 등록하면 location을 `Ready`로 바꾸기 전에 activation이 실패한다. Provider scope는 activation이
 실패하거나 Instance Spot이 닫힐 때 한 번만 정리한다.
 
-Spot direct fluent call의 Instance intent만 global [Spot ID](../../../01-glossary.ko.md#spot-id), stable type과 최초 Mesh를 durable creation intent로
+Spot direct fluent call의 Instance intent만 global [Spot ID](../../01-glossary.ko.md#spot-id), stable type과 최초 Mesh를 durable creation intent로
 기록한다. Stable type을 생략하면 선택한 Mesh의 serving descriptor에 distinct Instance type이 하나일 때 자동
 선택하고 여러 type이면 caller가 stable type을 명시한다. Marker가 없는 일반 message는 Spot ID만 받으며
 missing RID에 intent를 만들거나 factory를 시작하지 않는다. Application은 target node, owner token, generation
@@ -289,19 +289,19 @@ Framework 내부에 유지하며 application callback에 전달하지 않는다.
 - **bind endpoint는 반드시 있어야 한다.**
 raw stream의 `write(...)`, `close(...)` 시그니처는
 [Channel과 routing 인터페이스](interfaces/02-channel-messaging.ko.md)가 소유하고, backpressure 의미는
-[stream-session](../../../19-stream-session.ko.md)이 소유한다.
+[stream-session](../../19-stream-session.ko.md)이 소유한다.
 
 ## 9. Session actor dispatch 등록
 
-계약은 [session-actor-dispatch](../../../20-session-actor-dispatch.ko.md)가 소유한다. Stream node에서 Actor dispatch를
-활성화하면 runtime이 global Actor ID와 current [authority](../../../01-glossary.ko.md#authority)로 route를 결정한다. Application은 [MeshName](../../../01-glossary.ko.md#meshname)이나 Spot
+계약은 [session-actor-dispatch](../../20-session-actor-dispatch.ko.md)가 소유한다. Stream node에서 Actor dispatch를
+활성화하면 runtime이 global Actor ID와 current [authority](../../01-glossary.ko.md#authority)로 route를 결정한다. Application은 [MeshName](../../01-glossary.ko.md#meshname)이나 Spot
 resolver를 추가로 등록하지 않는다. Bound-session push는 current connection에만 적용되는 one-way operation이며
 stale binding을 새 connection으로 retarget하지 않는다.
 
 ## 10. Monitoring · Location 등록
 
-계약은 [runtime-monitoring](../../../24-runtime-monitoring.ko.md)과
-[location-runtime](../../../21-location-runtime.ko.md)이 소유한다.
+계약은 [runtime-monitoring](../../24-runtime-monitoring.ko.md)과
+[location-runtime](../../21-location-runtime.ko.md)이 소유한다.
 
 | 대상 | 등록 조건 |
 |---|---|
@@ -317,8 +317,8 @@ Redis store는 `@zlink-systems/framework-locations-redis`가 제공한다(§1).
 ## 11. Startup validation
 
 검증 항목의 정본은
-[channel-messaging §9](../../../08-channel-messaging.ko.md#9-검증-요구)와
-[spot-messaging §8](../../../12-spot-messaging.ko.md)이 소유한다.
+[channel-messaging §9](../../08-channel-messaging.ko.md#9-검증-요구)와
+[spot-messaging §8](../../12-spot-messaging.ko.md)이 소유한다.
 
 **Node는 모든 위반을 startup 시점 설정 예외로 던진다.** 설정 실수를 즉시 드러내는 쪽이 기본
 규칙이다.

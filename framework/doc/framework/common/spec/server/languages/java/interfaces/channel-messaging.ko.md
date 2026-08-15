@@ -1,6 +1,6 @@
 # Java Channel messaging 공개 인터페이스
 
-[인터페이스 목차](README.ko.md) · [Channel messaging](../../../../08-channel-messaging.ko.md)
+[인터페이스 목차](README.ko.md) · [Channel messaging](../../../08-channel-messaging.ko.md)
 
 ChannelName은 process 안의 송신 경로를 선택한다. RouteMesh·ClientServer·fanout builder와 typed handler,
 client call의 정확한 payload type은 공통 계약의 역할 구분을 Java generic으로 투영한다. One-way operation은
@@ -111,17 +111,17 @@ public final class ZLinkRequestFailureException extends RuntimeException {
 
 ```
 
-Channel 호출은 process-local [ChannelName](../../../../01-glossary.ko.md#channelname) index만 사용한다. 호출자가 MeshName과 ChannelName을 함께 넘겨
+Channel 호출은 process-local [ChannelName](../../../01-glossary.ko.md#channelname) index만 사용한다. 호출자가 MeshName과 ChannelName을 함께 넘겨
 물리 배선을 고르는 overload는 제공하지 않는다. `sendToNode(String, RoutingId, Object)`는 exact RID를
-지정하므로 첫 인자를 [MeshName](../../../../01-glossary.ko.md#meshname)으로 해석한다.
+지정하므로 첫 인자를 [MeshName](../../../01-glossary.ko.md#meshname)으로 해석한다.
 
 Spot direct operation은 global SpotId만 address로 받고 Spot 전용 fluent call을 반환한다. 이 call의
 `instanceSpot()` marker와 optional stable type·최초 Mesh는 Missing Instance Spot의 cold activation intent를 표현한다. Marker가
-없으면 Missing authority를 not-found로 끝낸다. Existing [authority](../../../../01-glossary.ko.md#authority)는 저장된 kind·stable type과 current owner를
-사용하므로 type이나 Mesh를 다시 요구하지 않는다. 세부 member와 [cold activation](../../../../01-glossary.ko.md#cold-activation) 선택 규칙은
+없으면 Missing authority를 not-found로 끝낸다. Existing [authority](../../../01-glossary.ko.md#authority)는 저장된 kind·stable type과 current owner를
+사용하므로 type이나 Mesh를 다시 요구하지 않는다. 세부 member와 [cold activation](../../../01-glossary.ko.md#cold-activation) 선택 규칙은
 [Java Spot 인터페이스](spots.ko.md)가 소유한다.
 
-`channel(channelName)`이 반환하는 [RouteMesh](../../../../01-glossary.ko.md#routemesh) builder에서는 `client()` 또는 `server()`를 정확히 한 번
+`channel(channelName)`이 반환하는 [RouteMesh](../../../01-glossary.ko.md#routemesh) builder에서는 `client()` 또는 `server()`를 정확히 한 번
 선택한다. `addClientServerChannel(channelName)`의 builder에서는 두 역할 중 하나 또는 둘 다 등록할 수
 있지만 각 역할은 최대 한 번만 등록한다. 같은 ChannelName의 Client와 Server는 하나의 ClientServer
 topology를 공유하지만 `(ChannelName, Role)` key의 별도 registration이다. 같은 역할의 중복 등록은 startup
@@ -133,12 +133,12 @@ RouteMesh Channel Server, ClientServer Server와 node-wide placement weight는 �
 Weighted selection은 후보 weight 합계를 최소 64-bit 정수로 계산한다.
 
 ClientServer의 local Server도 listener와 service admission을 마친 뒤 remote Server와 같은 candidate
-집합에 포함한다. Ready, positive [weight](../../../../01-glossary.ko.md#weight), non-draining 조건을 동일하게 적용하며 local 우선순위나 remote
+집합에 포함한다. Ready, positive [weight](../../../01-glossary.ko.md#weight), non-draining 조건을 동일하게 적용하며 local 우선순위나 remote
 제외 규칙은 없다. Local Server를 선택해도 Client DEALER에서 Server ROUTER로 실제 transport message를
 전달하며 codec, HWM, timeout, cancellation, correlation과 terminal completion을 우회하지 않는다.
 
 `ZLinkFanoutClient.publish(...)`에 내부 liveness용 exact topic byte `01 5A 4C 46 31`을 명시하면 transport를
-시작하지 않고 `ZLinkConfigurationException`을 발생시킨다. [Topic](../../../../01-glossary.ko.md#topic)을 생략한 overload는 typed event의 packet
+시작하지 않고 `ZLinkConfigurationException`을 발생시킨다. [Topic](../../../01-glossary.ko.md#topic)을 생략한 overload는 typed event의 packet
 name을 사용하므로 이 내부 topic을 만들지 않는다.
 
 Framework는 public call 뒤에서 Java binding의 exported raw socket API만 사용한다. Core service object,

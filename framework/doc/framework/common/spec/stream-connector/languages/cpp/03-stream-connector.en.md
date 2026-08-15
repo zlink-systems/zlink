@@ -248,7 +248,7 @@ started from an inbound callback reuses the current inbound flow, and
 once the callback ends, the connector runtime cleans up the current
 flow context. The wire format and async context boundary is owned by
 [Common Stream Connector §4.2](../../32-stream-connector.en.md) and
-[Flow Correlation §6](../../../27-flow-correlation.en.md#6-async-work-and-execution-context).
+[Flow Correlation §6](../../../server/27-flow-correlation.en.md#6-async-work-and-execution-context).
 
 ## 6. Options
 
@@ -307,7 +307,7 @@ its boundary, and a metric processing failure doesn't change send,
 request, or connection state.
 
 `options()` returns a copy of the configuration the
-[factory](../../../01-glossary.en.md#factory) applied. The value the
+[factory](../../../server/01-glossary.en.md#factory) applied. The value the
 getter shows must be the value the actual connect, request, wait,
 queue, TLS, and compression paths use — a configuration value not
 reflected in behavior isn't exposed.

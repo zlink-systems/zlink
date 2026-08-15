@@ -1,8 +1,8 @@
 # .NET Framework Error Public Interface
 
 [.NET exact interface table of contents](README.en.md) ·
-[Common Framework API](../../../../06-framework-api.en.md) ·
-[Message Flow](../../../../26-message-flow-tracing.en.md)
+[Common Framework API](../../../06-framework-api.en.md) ·
+[Message Flow](../../../26-message-flow-tracing.en.md)
 
 ## 1. Scope
 
@@ -105,8 +105,8 @@ backend are configured by the application.
 A public callback-based message-flow observer, runtime error sink, and
 raw socket event DTO aren't provided. The stable operation names and
 attributes included in trace/metric/log are defined by the common
-[Message Flow](../../../../26-message-flow-tracing.en.md) and
-[Runtime Metrics](../../../../25-runtime-metrics.en.md).
+[Message Flow](../../../26-message-flow-tracing.en.md) and
+[Runtime Metrics](../../../25-runtime-metrics.en.md).
 
 A timer handler failure is recorded as a structured log and trace error
 that includes that Spot ID and timer name. Scheduler delivery index,

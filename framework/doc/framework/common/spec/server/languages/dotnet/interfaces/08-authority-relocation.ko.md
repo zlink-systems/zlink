@@ -1,8 +1,8 @@
 # .NET Location·Relocation provider 공개 인터페이스
 
-[.NET exact interface 목차](README.ko.md) · [Location runtime](../../../../21-location-runtime.ko.md) ·
-[Location Store provider](../../../../22-location-store-redis.ko.md) ·
-[Relocation Store provider](../../../../23-relocation-store-redis.ko.md)
+[.NET exact interface 목차](README.ko.md) · [Location runtime](../../../21-location-runtime.ko.md) ·
+[Location Store provider](../../../22-location-store-redis.ko.md) ·
+[Relocation Store provider](../../../23-relocation-store-redis.ko.md)
 
 ## 1. 범위
 

@@ -23,7 +23,7 @@
 소스가 아직 없는 초기 상태에서도 `ko` 생성은 그대로 동작해야 한다.
 
 상대 링크는 손대지 않는다. `common/guide/server/`와 `<lang>/guide/server/`는 깊이가 같아
-`../../../common/spec/...` 같은 링크가 그대로 성립한다.
+`../../../common/spec/server/...` 같은 링크가 그대로 성립한다.
 
 실행:
     python3 doc/site/scripts/generate_language_guides.py           # 생성

@@ -17,7 +17,7 @@ title: "9. STREAM · C++"
 
 # 9. STREAM
 
-> **이 장의 계약 소유 문서** — [STREAM 서버 session](../../../common/spec/19-stream-session.ko.md)이
+> **이 장의 계약 소유 문서** — [STREAM 서버 session](../../../common/spec/server/19-stream-session.ko.md)이
 > 동작을, [언어별 STREAM session 공개 계약](../../../common/spec/server/languages/README.ko.md)이
 > 서버의 정확한 시그니처를 소유한다. Client package는 Stream Connector 가이드와
 > [언어별 공개 계약](../../../common/spec/stream-connector/README.ko.md)을 따른다.

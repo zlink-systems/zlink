@@ -130,7 +130,7 @@ topologies are composed from the same RouteMesh, Spot, Actor, and STREAM
 primitives.
 
 See the [Framework server overview](./framework/doc/framework/common/guide/server/01-overview.en.md)
-for the guided introduction and the [common Framework specification](./framework/doc/framework/common/spec/README.en.md)
+for the guided introduction and the [common Framework specification](./framework/doc/framework/common/spec/server/README.en.md)
 for formal semantics and responsibility boundaries.
 
 ## Quick start
@@ -254,8 +254,8 @@ contract first, then select a language implementation.
 | Use a language Binding | [Bindings guide](./bindings/doc/guide/README.en.md) |
 | Read the formal Binding contracts | [Bindings specification](./bindings/doc/spec/README.en.md) |
 | Understand Framework and its use cases | [Framework server overview](./framework/doc/framework/common/guide/server/01-overview.en.md) |
-| Read the formal Framework contract | [Common Framework specification](./framework/doc/framework/common/spec/README.en.md) |
-| Understand Framework internals | [Framework internals](framework/doc/framework/common/spec/README.en.md) |
+| Read the formal Framework contract | [Common Framework specification](./framework/doc/framework/common/spec/server/README.en.md) |
+| Understand Framework internals | [Framework internals](framework/doc/framework/common/spec/server/README.en.md) |
 | Build and test Core from source | [Core build guide](./doc/building/build-guide.md) |
 | Build local Core and Binding packages from the current source | [Local package guide](./scripts/local-package/README.ko.md) |
 | Install and use a Binding package | [Bindings guide](./bindings/doc/guide/README.en.md) |

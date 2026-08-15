@@ -73,7 +73,7 @@ Queue에 capacity가 있으면 one-way call은 payload 없는 정상 terminal을
 - 절차: Family마다 고유 operation ID의 send 또는 publish를 한 번 시작한다.
 - 검증: 각 public awaitable은 결과 payload 없이 정상 완료한다. 대응 handler는 operation ID를 한 번
   기록한다.
-- 세부 동작: [오류 모델 §4](../spec/32-framework-error-model.ko.md)의 정상 send 완료를
+- 세부 동작: [오류 모델 §4](../spec/server/32-framework-error-model.ko.md)의 정상 send 완료를
   검증한다.
 
 #### SA-E2E-02 Shared job capacity가 회복되면 pending send를 수락한다
@@ -91,7 +91,7 @@ Target의 shared permit이 모두 예약돼도 deadline 전에 handler가 시작
   handler가 시작하고 permit을 반환하게 한다.
 - 검증: 원래 send가 결과 payload 없이 정상 완료하고 marker는 handler evidence에 한 번만 나타난다.
   Application은 send를 다시 호출하지 않는다.
-- 세부 동작: [오류 모델 §4](../spec/32-framework-error-model.ko.md)의 send-ready 대기를
+- 세부 동작: [오류 모델 §4](../spec/server/32-framework-error-model.ko.md)의 send-ready 대기를
   검증한다.
 
 #### SA-E2E-03 Pending send를 bounded terminal로 끝낸다
@@ -109,7 +109,7 @@ Shared job capacity wait 중에도 유한한 send 집합은 각자의 deadline �
   두 번째 target의 gate는 deadline까지 유지한다.
 - 검증: 모든 awaitable이 bounded 시간 안에 terminal 하나를 가진다. 첫 target의 marker는 최대 한 번이고
   두 번째 target의 operation은 `DeadlineExceeded`로 끝나며 handler evidence에 없다.
-- 세부 동작: [오류 모델 §4](../spec/32-framework-error-model.ko.md)를 검증한다.
+- 세부 동작: [오류 모델 §4](../spec/server/32-framework-error-model.ko.md)를 검증한다.
 
 #### SA-E2E-04 Deadline 뒤 늦은 capacity가 operation을 되살리지 않는다
 
@@ -123,7 +123,7 @@ Send deadline이 먼저 끝났다면 이후 queue capacity가 생겨도 완료�
 - 절차: Public send deadline이 끝날 때까지 gate를 유지한다. `DeadlineExceeded` terminal을 확인한 뒤 gate를
   열고 새 operation ID의 send를 보낸다.
 - 검증: 이전 marker는 handler evidence에 없고 새 marker만 한 번 처리된다.
-- 세부 동작: [오류 모델 §4](../spec/32-framework-error-model.ko.md)의 late admission
+- 세부 동작: [오류 모델 §4](../spec/server/32-framework-error-model.ko.md)의 late admission
   차단을 검증한다.
 
 #### SA-E2E-05 Target 부재와 route 미연결을 구분한다
@@ -139,7 +139,7 @@ Logical target이 없는 경우와 target은 있지만 current route를 사용�
 - 절차: 두 logical ID로 send를 각각 한 번 시작한다.
 - 검증: Missing ID는 `NotFound`, known ID는 `Unavailable` terminal 하나로 끝난다. 두 marker 모두 target
   handler evidence에 없다.
-- 세부 동작: [오류 모델 §4](../spec/32-framework-error-model.ko.md)의 error mapping을
+- 세부 동작: [오류 모델 §4](../spec/server/32-framework-error-model.ko.md)의 error mapping을
   검증한다.
 
 #### SA-E2E-06 Relocate와 Shutdown admission seal을 지킨다
@@ -155,8 +155,8 @@ Host가 신규 작업 수락을 닫은 뒤 시작한 send는 queue에 들어가�
   받지 않는 상태가 된 뒤 send를 한 번 시작한다.
 - 검증: Relocate variant는 해당 operation 계약의 rejection result, Shutdown variant는 `ShuttingDown`으로
   끝나며 target handler evidence가 없다.
-- 세부 동작: [Host state와 완료 결과](../spec/30-host-relocation-flow.ko.md#3-host-state와-완료-결과)와
-  [State별 admission](../spec/30-host-relocation-flow.ko.md#12-state별-admission)을 검증한다.
+- 세부 동작: [Host state와 완료 결과](../spec/server/30-host-relocation-flow.ko.md#3-host-state와-완료-결과)와
+  [State별 admission](../spec/server/30-host-relocation-flow.ko.md#12-state별-admission)을 검증한다.
 
 #### SA-E2E-07 Admission terminal과 publish commit을 구분한다
 
@@ -175,8 +175,8 @@ terminal 뒤 caller scope 종료는 기존 delivery를 취소하지 않는가.
   실행한다. 별도 multicast를 publish하여 정상 terminal을 받은 뒤 caller scope를 끝내고 handler gate를 연다.
 - 검증: Terminal send marker는 없다. Multicast marker는 수락된 target에서 최대 한 번 처리되고 public
   publish terminal은 바뀌지 않는다.
-- 세부 동작: [Spot messaging §4](../spec/12-spot-messaging.ko.md)와
-  [오류 모델 §4](../spec/32-framework-error-model.ko.md)를 검증한다.
+- 세부 동작: [Spot messaging §4](../spec/server/12-spot-messaging.ko.md)와
+  [오류 모델 §4](../spec/server/32-framework-error-model.ko.md)를 검증한다.
 
 ### Track B — Operation family가 같은 admission 의미를 사용
 
@@ -191,7 +191,7 @@ Target node가 같은 process인지 다른 process인지와 관계없이 send te
 - 시작 조건: Caller가 local Node RID와 remote Node RID에 모두 send할 수 있다.
 - 절차: 같은 payload 의미의 send를 local과 remote target에 각각 한 번 보낸다.
 - 검증: 두 awaitable은 결과 payload 없이 정상 완료하고 각 node handler가 자기 marker를 한 번 처리한다.
-- 세부 동작: [Interaction model §3](../spec/03-interaction-model.ko.md)을
+- 세부 동작: [Interaction model §3](../spec/server/03-interaction-model.ko.md)을
   검증한다.
 
 #### SA-E2E-09 Channel topology별 send deadline을 적용한다
@@ -211,8 +211,8 @@ RouteMesh와 ClientServer Channel send는 queue capacity가 없으면 family sen
   send는 gate를 deadline까지 유지한다.
 - 검증: 두 topology 모두 success send는 payload 없는 정상 terminal과 handler 1회를 만들고, timeout
   send는 `DeadlineExceeded`와 handler 0회를 만든다.
-- 세부 동작: [Channel messaging §7](../spec/08-channel-messaging.ko.md)과
-  [ClientServer Channel §6](../spec/09-client-server-channel.ko.md)를 검증한다.
+- 세부 동작: [Channel messaging §7](../spec/server/08-channel-messaging.ko.md)과
+  [ClientServer Channel §6](../spec/server/09-client-server-channel.ko.md)를 검증한다.
 
 #### SA-E2E-11 SpotId send의 admission과 logical identity를 유지한다
 
@@ -229,7 +229,7 @@ Spot send가 pending인 동안 route가 사라져도 다른 Spot으로 target을
   operation ID를 보낸다.
 - 검증: 이전 operation은 `Unavailable`이고 A·B 어느 handler에도 marker가 없다. 새 operation만 A에서 한
   번 처리된다.
-- 세부 동작: [Failover policy §2](../spec/31-failure-failover-policy.ko.md)을 검증한다.
+- 세부 동작: [Failover policy §2](../spec/server/31-failure-failover-policy.ko.md)을 검증한다.
 
 #### SA-E2E-12 ActorId send의 admission과 logical identity를 유지한다
 
@@ -244,7 +244,7 @@ Actor direct send도 original `ActorId`를 유지하며 route 복구를 이유�
   send한다.
 - 검증: 이전 send는 `Unavailable`이고 handler marker가 없다. 새 send는 정상 완료하고 Actor handler가 한
   번 처리한다.
-- 세부 동작: [Failover policy §4.1](../spec/31-failure-failover-policy.ko.md)을
+- 세부 동작: [Failover policy §4.1](../spec/server/31-failure-failover-policy.ko.md)을
   검증한다.
 
 #### SA-E2E-13 Logical Multicast는 수락 가능한 target을 한 번 처리한다
@@ -263,7 +263,7 @@ Logical Multicast는 current matching targets에 one-way로 전달하며 target�
   B는 처리하지 않는다. Target이 0개인 variant도 정상 완료한다. 일부 target만 처리되는 partial 전달의
   target별 결과는 public result나 publish 전용 monitoring으로 반환·집계하지 않는다. E2E는 private snapshot과
   attempt count를 읽지 않는다.
-- 세부 동작: [Spot messaging §4](../spec/12-spot-messaging.ko.md)를
+- 세부 동작: [Spot messaging §4](../spec/server/12-spot-messaging.ko.md)를
   검증한다.
 
 #### SA-E2E-14 Subscriber가 없어도 classic fanout publish를 완료한다
@@ -278,7 +278,7 @@ Classic fanout publish는 subscriber count나 delivery acknowledgement를 반환
 - 절차: Marker를 publish하여 terminal을 확인한 뒤 subscriber를 시작해 ready로 만든다. 새 marker는 보내지
   않는다.
 - 검증: Publish는 결과 payload 없이 정상 완료한다. Late subscriber handler에는 이전 marker가 없다.
-- 세부 동작: [Framework API §11](../spec/06-framework-api.ko.md)을 검증한다.
+- 세부 동작: [Framework API §11](../spec/server/06-framework-api.ko.md)을 검증한다.
 
 #### SA-E2E-15 Bound Session과 Session Actor relay의 local·remote 결과를 비교한다
 
@@ -295,9 +295,9 @@ Session owner와 Actor owner가 local인지 remote인지에 따라 one-way termi
 - 절차: 네 조합에서 정상 send를 한 번 실행하고, 별도 pending send는 deadline까지 capacity를 열지 않는다.
 - 검증: 정상 sends는 결과 payload 없이 완료하고 target evidence가 한 번씩 나타난다. Pending sends는
   `DeadlineExceeded`이며 이후 capacity 복구 뒤 replay되지 않는다.
-- 세부 동작: [One-way submit](../spec/05-async-execution-policy.ko.md#13-one-way-submit),
-  [Admission deadline](../spec/05-async-execution-policy.ko.md#14-admission-deadline)과
-  [Session Actor inbound dispatch](../spec/20-session-actor-dispatch.ko.md#3-inbound-dispatch와-reply)를 검증한다.
+- 세부 동작: [One-way submit](../spec/server/05-async-execution-policy.ko.md#13-one-way-submit),
+  [Admission deadline](../spec/server/05-async-execution-policy.ko.md#14-admission-deadline)과
+  [Session Actor inbound dispatch](../spec/server/20-session-actor-dispatch.ko.md#3-inbound-dispatch와-reply)를 검증한다.
 
 #### SA-E2E-16 Server Stream send 순서를 유지한다
 
@@ -316,8 +316,8 @@ send는 나중에 client에게 나타나면 안 된다.
   끝난 것을 확인한 뒤 긴 deadline이 끝나기 전에 gate를 연다.
 - 검증: Client가 받은 성공 sequence `1,2,3`은 source의 successful terminal 순서와 같고 중복이 없다.
   `timeout` marker는 client에게 도착하지 않는다.
-- 세부 동작: [Async execution — STREAM send call별 timeout](../spec/05-async-execution-policy.ko.md#stream-send-call별-timeout)과
-  [Stream session의 codec 계층 분리](../spec/19-stream-session.ko.md#5-codec-계층-분리)를 검증한다.
+- 세부 동작: [Async execution — STREAM send call별 timeout](../spec/server/05-async-execution-policy.ko.md#stream-send-call별-timeout)과
+  [Stream session의 codec 계층 분리](../spec/server/19-stream-session.ko.md#5-codec-계층-분리)를 검증한다.
 
 #### SA-E2E-17 Stream reply token은 한 번만 사용한다
 
@@ -333,7 +333,7 @@ Shutdown으로 끝나도 같은 token을 다시 사용할 수 없다. Cancellati
   socket send timeout과 Shutdown variant를 fresh request에서 반복하고, 지원 언어에서는 cancellation도 실행한다.
 - 검증: 각 request에서 한 call만 정상 또는 첫 terminal을 얻고 다른 call은 local invalid-state error다.
   Client reply는 최대 하나이며 terminal token을 재사용해도 reply가 생기지 않는다.
-- 세부 동작: [오류 모델 §3](../spec/32-framework-error-model.ko.md)의
+- 세부 동작: [오류 모델 §3](../spec/server/32-framework-error-model.ko.md)의
   one-shot state를 검증한다.
 
 ### Track C — Target 선택과 terminal 뒤 동작을 확인
@@ -353,8 +353,8 @@ eligible member 중 하나를 선택할 수 있다.
 - 절차: Direct A send와 ChannelName send를 각각 한 번 시작한다.
 - 검증: Direct send는 `Unavailable`이며 B logical target은 처리하지 않는다. Channel send는 정상 완료하고
   ready Server B가 marker를 한 번 처리한다.
-- 세부 동작: [Interaction model §3](../spec/03-interaction-model.ko.md)과
-  [Failover policy §2](../spec/31-failure-failover-policy.ko.md)을 검증한다.
+- 세부 동작: [Interaction model §3](../spec/server/03-interaction-model.ko.md)과
+  [Failover policy §2](../spec/server/31-failure-failover-policy.ko.md)을 검증한다.
 
 #### SA-E2E-19 Terminal 뒤 route 복구가 operation을 재제출하지 않는다
 
@@ -370,7 +370,7 @@ Timeout, connection loss 또는 Shutdown으로 끝난 operation은 route가 복�
   send한다.
 - 검증: 이전 marker는 target evidence에 없고 새 marker만 한 번 처리된다. 이전 awaitable의 terminal도
   바뀌지 않는다.
-- 세부 동작: [Transport liveness §6](../spec/29-transport-liveness.ko.md)의
+- 세부 동작: [Transport liveness §6](../spec/server/29-transport-liveness.ko.md)의
   non-replay를 검증한다.
 
 #### SA-E2E-20 Submit 완료와 remote handler 완료를 분리한다
@@ -387,7 +387,7 @@ Application이 send terminal을 remote 업무 완료로 해석하면 실제 hand
   확인한 뒤 release signal을 보낸다.
 - 검증: 각 send는 handler completion 전에 결과 payload 없이 정상 완료한다. Handler completion은 gate를
   연 뒤 한 번 기록된다.
-- 세부 동작: [오류 모델 §4](../spec/32-framework-error-model.ko.md)의 source admission
+- 세부 동작: [오류 모델 §4](../spec/server/32-framework-error-model.ko.md)의 source admission
   완료를 검증한다.
 
 ## 5. 완료 기준

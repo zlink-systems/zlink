@@ -3,19 +3,19 @@
   "version": 1,
   "contractSources": [
     {
-      "path": "framework/doc/framework/common/spec/15-spot-actor.ko.md",
+      "path": "framework/doc/framework/common/spec/server/15-spot-actor.ko.md",
       "sections": ["4.2", "5", "6", "7", "8"]
     },
     {
-      "path": "framework/doc/framework/common/spec/30-host-relocation-flow.ko.md",
+      "path": "framework/doc/framework/common/spec/server/30-host-relocation-flow.ko.md",
       "sections": ["7", "8", "14"]
     },
     {
-      "path": "framework/doc/framework/common/spec/20-session-actor-dispatch.ko.md",
+      "path": "framework/doc/framework/common/spec/server/20-session-actor-dispatch.ko.md",
       "sections": ["5", "6", "7"]
     },
     {
-      "path": "framework/doc/framework/common/spec/21-location-runtime.ko.md",
+      "path": "framework/doc/framework/common/spec/server/21-location-runtime.ko.md",
       "sections": ["7"]
     }
   ],

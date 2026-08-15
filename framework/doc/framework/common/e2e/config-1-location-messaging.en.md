@@ -136,9 +136,9 @@ receive the first request's reply?
   marker exactly once, and the other provider doesn't. The consumer's
   public status has both peers and two ready targets.
 - Detailed behavior: verifies
-  [RouteMesh Topology §6](../spec/07-channel-topology.en.md#6-how-to-find-a-peer-endpoint)
+  [RouteMesh Topology §6](../spec/server/07-channel-topology.en.md#6-how-to-find-a-peer-endpoint)
   and
-  [Runtime Monitoring §2.2](../spec/24-runtime-monitoring.en.md#22-topology-state).
+  [Runtime Monitoring §2.2](../spec/server/24-runtime-monitoring.en.md#22-topology-state).
 
 #### RM-A2 Connect A Provider Via A Manual Endpoint
 
@@ -165,9 +165,9 @@ does the same request produce the same result?
   runs exactly once. Even in the bidirectional repetition, the
   consumer's public status shows exactly one ready peer of that RID.
 - Detailed behavior: verifies the manual topology contract from
-  [RouteMesh Topology §5.1](../spec/07-channel-topology.en.md#51-automatic-only-the-meshnode-with-the-smaller-rid-starts-the-connection)
+  [RouteMesh Topology §5.1](../spec/server/07-channel-topology.en.md#51-automatic-only-the-meshnode-with-the-smaller-rid-starts-the-connection)
   and
-  [§6](../spec/07-channel-topology.en.md#6-how-to-find-a-peer-endpoint).
+  [§6](../spec/server/07-channel-topology.en.md#6-how-to-find-a-peer-endpoint).
 
 #### RM-A3 Whether An Object Client Pair Needs A Connection
 
@@ -200,10 +200,10 @@ Channel Server membership?
   Server membership or the need for a connection. It's a failure if
   `not_required` is shown as `not_connected` or a topology fault.
 - Detailed behavior: verifies
-  [RouteMesh Topology §4.2](../spec/07-channel-topology.en.md#42-a-channel-call-can-start-without-a-local-server-role),
-  [§5.1](../spec/07-channel-topology.en.md#51-automatic-only-the-meshnode-with-the-smaller-rid-starts-the-connection),
+  [RouteMesh Topology §4.2](../spec/server/07-channel-topology.en.md#42-a-channel-call-can-start-without-a-local-server-role),
+  [§5.1](../spec/server/07-channel-topology.en.md#51-automatic-only-the-meshnode-with-the-smaller-rid-starts-the-connection),
   and
-  [Runtime Monitoring §2.2](../spec/24-runtime-monitoring.en.md#22-topology-state).
+  [Runtime Monitoring §2.2](../spec/server/24-runtime-monitoring.en.md#22-topology-state).
 
 #### RM-A4 Use A New RID For A Provider Replacement
 
@@ -231,9 +231,9 @@ connection?
   public application evidence. The consumer isn't restarted, and it's
   a failure if v1 remains a ready peer or target in public status.
 - Detailed behavior: verifies
-  [MeshNode §3.1](../spec/13-mesh-node.en.md#31-the-rid-used-by-automatic-discovery)
+  [MeshNode §3.1](../spec/server/13-mesh-node.en.md#31-the-rid-used-by-automatic-discovery)
   and
-  [Transport Liveness §6](../spec/29-transport-liveness.en.md#6-connection-loss-and-reconnect).
+  [Transport Liveness §6](../spec/server/29-transport-liveness.en.md#6-connection-loss-and-reconnect).
 
 #### RM-A6 Isolate Different RouteMeshes
 
@@ -259,7 +259,7 @@ by that Mesh's provider?
   evidence. Removing the profile provider doesn't change
   `workflow-mesh`'s status, ready-target count, or handler evidence.
 - Detailed behavior: verifies the MeshName isolation contract from
-  [RouteMesh Topology §3](../spec/07-channel-topology.en.md#3-meshname-and-meshnode).
+  [RouteMesh Topology §3](../spec/server/07-channel-topology.en.md#3-meshname-and-meshnode).
 
 #### RM-A7 Global Actor/Spot Identity Conflict
 
@@ -284,8 +284,8 @@ Meshes converge to exactly one current Actor and Spot?
   operation requesting a different type/kind ends in the contracted
   mismatch result and doesn't build a second object.
 - Detailed behavior: verifies
-  [Location Runtime](../spec/21-location-runtime.en.md) and
-  [Spot Address Messaging](../spec/16-spot-address-messaging.en.md).
+  [Location Runtime](../spec/server/21-location-runtime.en.md) and
+  [Spot Address Messaging](../spec/server/16-spot-address-messaging.en.md).
 
 ### Track B — Changing Provider Count And Lifecycle
 
@@ -312,7 +312,7 @@ restart?
   both providers' handler counts is 40. All 40 client requests end
   with exactly one reply.
 - Detailed behavior: verifies ready-target selection from
-  [RouteMesh Topology §7](../spec/07-channel-topology.en.md#7-ready-state-and-channel-target-selection).
+  [RouteMesh Topology §7](../spec/server/07-channel-topology.en.md#7-ready-state-and-channel-target-selection).
 
 #### RM-B2 Exclude A Gracefully-Stopped Provider From The Target
 
@@ -335,9 +335,9 @@ is a new request processed only at the remaining A?
   has no marker after the stop, and B doesn't remain a ready peer or
   target in the consumer's public status.
 - Detailed behavior: verifies
-  [MeshNode §8](../spec/13-mesh-node.en.md#8-drain-and-shutdown)
+  [MeshNode §8](../spec/server/13-mesh-node.en.md#8-drain-and-shutdown)
   and
-  [Transport Liveness §7](../spec/29-transport-liveness.en.md#7-location-store-and-host-termination).
+  [Transport Liveness §7](../spec/server/29-transport-liveness.en.md#7-location-store-and-host-termination).
 
 #### RM-B3 Use The Remaining Provider After A Provider Crash
 
@@ -369,10 +369,10 @@ request being auto-rerun at B?
   consumer isn't restarted, and it's a failure if there's an infinite
   wait or automatic replay.
 - Detailed behavior: verifies
-  [Failure Response §3](../spec/31-failure-failover-policy.en.md#3-channel-target-and-connection-failure),
-  [Transport Liveness §6](../spec/29-transport-liveness.en.md#6-connection-loss-and-reconnect),
+  [Failure Response §3](../spec/server/31-failure-failover-policy.en.md#3-channel-target-and-connection-failure),
+  [Transport Liveness §6](../spec/server/29-transport-liveness.en.md#6-connection-loss-and-reconnect),
   and
-  [Error Model §5](../spec/32-framework-error-model.en.md#5-request-completion-and-failure).
+  [Error Model §5](../spec/server/32-framework-error-model.en.md#5-request-completion-and-failure).
 
 ### Track C — Process A Message On A Ready Connection
 
@@ -401,9 +401,9 @@ messages exactly once each?
   reply payload. The provider's request and command evidence each
   record their marker exactly once.
 - Detailed behavior: verifies
-  [Error Model §4](../spec/32-framework-error-model.en.md#4-send-completion-and-failure)
+  [Error Model §4](../spec/server/32-framework-error-model.en.md#4-send-completion-and-failure)
   and
-  [§5](../spec/32-framework-error-model.en.md#5-request-completion-and-failure).
+  [§5](../spec/server/32-framework-error-model.en.md#5-request-completion-and-failure).
 
 #### RM-C2 A Node Direct Request Specifying An RID
 
@@ -427,9 +427,9 @@ the specified provider, and does a non-existent RID end in
   request ends exactly once in `NotFound`, running no provider
   handler.
 - Detailed behavior: verifies
-  [Channel Messaging §3.1](../spec/08-channel-messaging.en.md#31-node-direct)
+  [Channel Messaging §3.1](../spec/server/08-channel-messaging.en.md#31-node-direct)
   and
-  [Error Model §5](../spec/32-framework-error-model.en.md#5-request-completion-and-failure).
+  [Error Model §5](../spec/server/32-framework-error-model.en.md#5-request-completion-and-failure).
 
 #### RM-C4 Discard A Late Reply After Timeout
 
@@ -457,7 +457,7 @@ reply?
   matching their marker. It's a failure if the late reply adds to the
   client result or links to a different correlation marker.
 - Detailed behavior: verifies the timeout and late-reply contract from
-  [Error Model §5](../spec/32-framework-error-model.en.md#5-request-completion-and-failure).
+  [Error Model §5](../spec/server/32-framework-error-model.en.md#5-request-completion-and-failure).
 
 #### RM-C5 Handle A Message With No Handler
 
@@ -484,10 +484,10 @@ end in `NotFound`, and does a send not run an application handler?
   handler executions. The normal request is unaffected and receives a
   reply.
 - Detailed behavior: verifies
-  [Channel Messaging §5](../spec/08-channel-messaging.en.md#5-how-to-find-and-run-a-handler),
-  [Error Model §4](../spec/32-framework-error-model.en.md#4-send-completion-and-failure),
+  [Channel Messaging §5](../spec/server/08-channel-messaging.en.md#5-how-to-find-and-run-a-handler),
+  [Error Model §4](../spec/server/32-framework-error-model.en.md#4-send-completion-and-failure),
   and
-  [Message Flow Tracing §3.1](../spec/26-message-flow-tracing.en.md#31-closed-values-shared-by-every-language).
+  [Message Flow Tracing §3.1](../spec/server/26-message-flow-tracing.en.md#31-closed-values-shared-by-every-language).
 
 #### RM-C7 Select Providers By Weight Profile
 
@@ -513,7 +513,7 @@ once in the deterministic smooth weighted-round-robin order?
   identifier order. The weighted profile follows the exact `3:1` cycle
   and per-request order defined by the spec's smooth weighted round robin.
 - Detailed behavior: verifies deterministic smooth weighted round robin from
-  [Channel Messaging §3.2](../spec/08-channel-messaging.en.md#32-channelname-select-one).
+  [Channel Messaging §3.2](../spec/server/08-channel-messaging.en.md#32-channelname-select-one).
   Excluding/restoring weight at runtime is verified by
   [Config 5 RL-B4](config-5-resilience-lifecycle.en.md).
 
@@ -539,10 +539,10 @@ sizes without a separate Framework message-size setting?
   with the provider handler running once for each request. The final normal
   request also receives a reply, and no evidence shows a partial payload.
 - Detailed behavior: verifies the SS boundary in
-  [RouteMesh Topology §8](../spec/07-channel-topology.en.md#8-routemesh-ss-message-size-and-mailbox-caps),
+  [RouteMesh Topology §8](../spec/server/07-channel-topology.en.md#8-routemesh-ss-message-size-and-mailbox-caps),
   where Framework doesn't provide a message-size setting. The StreamNode
   ceiling is defined separately in
-  [STREAM Session — internal recv loop and application surface](../spec/19-stream-session.en.md#4-the-frameworks-internal-recv-loop-and-the-application-surface).
+  [STREAM Session — internal recv loop and application surface](../spec/server/19-stream-session.en.md#4-the-frameworks-internal-recv-loop-and-the-application-surface).
 
 #### RM-C9 Resume Receiving After Application Job Queue Capacity
 
@@ -565,10 +565,10 @@ show reserved/queued/waiter values, then normal processing after handler start?
   both requests run exactly once. There is no drop or generic capacity error and RouteMesh
   status remains ready.
 - Detailed behavior: verifies
-  [Framework API §2.1](../spec/06-framework-api.en.md#21-separating-the-core-memory-budget-from-the-application-job-queue),
-  [Runtime Monitoring §2.1](../spec/24-runtime-monitoring.en.md#21-host-state),
+  [Framework API §2.1](../spec/server/06-framework-api.en.md#21-separating-the-core-memory-budget-from-the-application-job-queue),
+  [Runtime Monitoring §2.1](../spec/server/24-runtime-monitoring.en.md#21-host-state),
   and
-  [Error Model §4](../spec/32-framework-error-model.en.md#4-send-completion-and-failure).
+  [Error Model §4](../spec/server/32-framework-error-model.en.md#4-send-completion-and-failure).
 
 ## 5. Completion Conditions
 

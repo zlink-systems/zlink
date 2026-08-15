@@ -1,8 +1,8 @@
 # Node.js Location/Relocation Provider Exact Interface
 
 [Node.js public interface table of contents](README.en.md) ·
-[Location Runtime](../../../../21-location-runtime.en.md) ·
-[Redis Location Store](../../../../22-location-store-redis.en.md)
+[Location Runtime](../../../21-location-runtime.en.md) ·
+[Redis Location Store](../../../22-location-store-redis.en.md)
 
 This document fixes the minimal public SPI an external provider
 implements and the public declaration of the official Redis extension.

@@ -71,7 +71,7 @@ subscribers, so this scenario does not judge cross-subscriber ordering.
 - Verification: All three subscribers each record the `fanout-ready` marker. Delivery is not judged
   by publish terminal alone, and neither receive order across subscribers nor a complete unbroken
   sequence is required.
-- Detailed behavior: verifies fanout delivery in [Framework API §11](../spec/06-framework-api.en.md#11-classic-fanout).
+- Detailed behavior: verifies fanout delivery in [Framework API §11](../spec/server/06-framework-api.en.md#11-classic-fanout).
 
 #### PS-A2 Packet Name Selects The Typed Handler
 
@@ -89,7 +89,7 @@ their corresponding typed handler?
 - Verification: Each marker is recorded exactly once, only in the corresponding handler's evidence,
   and the typed payload value matches the input. The handler is not reselected by topic or payload
   field.
-- Detailed behavior: verifies the handler namespace in [Framework API §11](../spec/06-framework-api.en.md#11-classic-fanout).
+- Detailed behavior: verifies the handler namespace in [Framework API §11](../spec/server/06-framework-api.en.md#11-classic-fanout).
 
 #### PS-A3 A Late Subscriber Receives Events Starting From Ready
 
@@ -107,7 +107,7 @@ ready, without replaying the event published before?
   becomes ready, `after-ready` is published.
 - Verification: The late subscriber receives `after-ready` exactly once and does not receive
   `before-ready`. The existing subscriber receives both events.
-- Detailed behavior: verifies non-replay delivery in [Framework API §11](../spec/06-framework-api.en.md#11-classic-fanout).
+- Detailed behavior: verifies non-replay delivery in [Framework API §11](../spec/server/06-framework-api.en.md#11-classic-fanout).
 
 #### PS-A4 A Subscriber Receives New Events After Reconnect
 
@@ -126,7 +126,7 @@ handler registration, and not receive events published during the disconnection?
   released; once A becomes ready, `after-reconnect` is published.
 - Verification: B receives both events, and A receives only `after-reconnect`. A's process and
   handler registration persist throughout.
-- Detailed behavior: verifies fanout reconnect in [Transport Liveness §6](../spec/29-transport-liveness.en.md#6-connection-loss-and-reconnect).
+- Detailed behavior: verifies fanout reconnect in [Transport Liveness §6](../spec/server/29-transport-liveness.en.md#6-connection-loss-and-reconnect).
 
 ### Track B — Isolate Processing Across Subscribers
 
@@ -151,8 +151,8 @@ waiting, does another ready subscriber process its marker independently?
   public ready state or marker processing. Cross-subscriber ordering, lossless delivery, catch-up or
   drop counts, and completeness of the load-event sequence are not judged.
 - Detailed behavior: verifies subscriber-process isolation in
-  [Channel Topology](../spec/07-channel-topology.en.md) and fanout dispatch isolation in
-  [Framework API §11](../spec/06-framework-api.en.md).
+  [Channel Topology](../spec/server/07-channel-topology.en.md) and fanout dispatch isolation in
+  [Framework API §11](../spec/server/06-framework-api.en.md).
 
 #### PS-B2 An Existing Subscriber Receives New Events After Publisher Restart
 
@@ -169,7 +169,7 @@ without replaying events from the interruption period?
   publisher of the same role is restarted; once it becomes ready, a new marker is published.
 - Verification: The existing subscriber process receives the new marker exactly once. It does not
   call handler registration again, and no marker from the shutdown period appears later.
-- Detailed behavior: verifies [Transport Liveness §6](../spec/29-transport-liveness.en.md#6-connection-loss-and-reconnect).
+- Detailed behavior: verifies [Transport Liveness §6](../spec/server/29-transport-liveness.en.md#6-connection-loss-and-reconnect).
 
 ### Track C — Handle Automatic Discovery And Publisher Lifecycle
 
@@ -189,7 +189,7 @@ to ready and receive its event?
   status shows the publisher ready, a marker is published.
 - Verification: The ready-publisher count is 1, and the subscriber handler receives the marker
   exactly once. The subscriber's application input has no transport endpoint.
-- Detailed behavior: verifies automatic discovery in [Framework API §11](../spec/06-framework-api.en.md#11-classic-fanout).
+- Detailed behavior: verifies automatic discovery in [Framework API §11](../spec/server/06-framework-api.en.md#11-classic-fanout).
 
 #### PS-D2 Select Only The Live Fanout Publisher Of The Same ChannelName
 
@@ -207,7 +207,7 @@ publisher?
 - Procedure: Distinct markers are published on `events` and `audit`.
 - Verification: The `events` subscriber's status and handler evidence show only the live `events`
   publisher and its marker. The `audit` event and the other topology roles do not appear.
-- Detailed behavior: verifies fanout status in [Runtime Monitoring §2.2](../spec/24-runtime-monitoring.en.md#22-topology-state).
+- Detailed behavior: verifies fanout status in [Runtime Monitoring §2.2](../spec/server/24-runtime-monitoring.en.md#22-topology-state).
 
 #### PS-D3 Converges On Publisher Addition And Orderly Removal
 
@@ -224,7 +224,7 @@ event source match the current set?
   `pub-a` shuts down normally; once it is removed from status, B sends a new marker.
 - Verification: While both publishers are ready, both markers are received; after A is removed, only
   B remains ready in status, and B's new markers continue to arrive.
-- Detailed behavior: verifies [Transport Liveness §5](../spec/29-transport-liveness.en.md#5-ready-and-failure-determination).
+- Detailed behavior: verifies [Transport Liveness §5](../spec/server/29-transport-liveness.en.md#5-ready-and-failure-determination).
 
 #### PS-D4 Replace A Crashed Publisher With A Replacement
 
@@ -241,8 +241,8 @@ the replacement's events?
   not-ready or removed, a replacement is started; once it is ready, a new marker is published.
 - Verification: Only the replacement appears ready in status, and the subscriber receives the new
   marker exactly once. Events from the crash window are not replayed.
-- Detailed behavior: verifies [Transport Liveness §5](../spec/29-transport-liveness.en.md#5-ready-and-failure-determination)
-  and [§7](../spec/29-transport-liveness.en.md#7-location-store-and-host-termination).
+- Detailed behavior: verifies [Transport Liveness §5](../spec/server/29-transport-liveness.en.md#5-ready-and-failure-determination)
+  and [§7](../spec/server/29-transport-liveness.en.md#7-location-store-and-host-termination).
 
 #### PS-D5 Keeps An Existing Connection And Recovers During A Store Outage
 
@@ -261,7 +261,7 @@ Store outage, and converge on the current descriptor set after the Store recover
   a new marker is sent.
 - Verification: Both the marker during the outage and the marker after recovery are each received
   once. A Store outage alone does not immediately turn the existing publisher not-ready.
-- Detailed behavior: verifies [Transport Liveness §7](../spec/29-transport-liveness.en.md#7-location-store-and-host-termination).
+- Detailed behavior: verifies [Transport Liveness §7](../spec/server/29-transport-liveness.en.md#7-location-store-and-host-termination).
 
 #### PS-D6 Reconnects Even When A Port-0 Restart Changes The Endpoint
 
@@ -279,7 +279,7 @@ changes, with no endpoint reconfiguration?
   subscriber readiness are confirmed, a marker is published.
 - Verification: Both actual ports are nonzero and different from each other. The subscriber's
   application configuration is unchanged, and the new marker is received exactly once.
-- Detailed behavior: verifies [Network Listener Identity §4](../spec/10-network-listener-identity.en.md#4-how-to-confirm-the-port).
+- Detailed behavior: verifies [Network Listener Identity §4](../spec/server/10-network-listener-identity.en.md#4-how-to-confirm-the-port).
 
 #### PS-D7A Isolate A Slow Fanout Status Observer
 
@@ -298,7 +298,7 @@ handler still process the current state?
 - Verification: The normal observer provides the latest status, and the handler processes the event
   exactly once. If the slow observer's sequence has a gap, `GetStatus` can restore the current state,
   and canceling it does not terminate the other observer.
-- Detailed behavior: verifies [Runtime Monitoring §3](../spec/24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes).
+- Detailed behavior: verifies [Runtime Monitoring §3](../spec/server/24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes).
 
 #### PS-D7B Changing A Manual Endpoint Does Not Change Automatic Status
 
@@ -317,7 +317,7 @@ manual endpoint is added and removed?
 - Verification: The automatic subscriber's ready-publisher identity is preserved, and both markers
   are received. The manual change alone is not required to leave a mark on the automatic status
   sequence.
-- Detailed behavior: verifies mode separation in [Framework API §11](../spec/06-framework-api.en.md#11-classic-fanout).
+- Detailed behavior: verifies mode separation in [Framework API §11](../spec/server/06-framework-api.en.md#11-classic-fanout).
 
 ### Track D — Verify Manual Mode And Startup Validation
 
@@ -337,7 +337,7 @@ publisher it was given?
   `before-late` and `after-ready` markers.
 - Verification: The marker after readiness is received, and the marker before readiness is not
   replayed. No Store process or descriptor is used.
-- Detailed behavior: verifies manual mode in [Framework API §11](../spec/06-framework-api.en.md#11-classic-fanout).
+- Detailed behavior: verifies manual mode in [Framework API §11](../spec/server/06-framework-api.en.md#11-classic-fanout).
 
 #### PS-E2A Reject A Missing Store For An Automatic Subscriber At Startup
 
@@ -353,7 +353,7 @@ a configuration error?
 - Procedure: The runner starts the host and checks the process terminal and health.
 - Verification: The host does not expose a listener or ready status, and exits with a public
   configuration error.
-- Detailed behavior: verifies the automatic Store prerequisite in [Framework API — Classic Fanout](../spec/06-framework-api.en.md#11-classic-fanout).
+- Detailed behavior: verifies the automatic Store prerequisite in [Framework API — Classic Fanout](../spec/server/06-framework-api.en.md#11-classic-fanout).
 
 #### PS-E2B Reject Mixing Automatic And Manual Mode In One Registration
 
@@ -369,7 +369,7 @@ configuration error?
   and a manual endpoint together.
 - Procedure: The runner starts the host.
 - Verification: The host exits with a configuration error before starting any background connection.
-- Detailed behavior: verifies mode validation in [Framework API §11](../spec/06-framework-api.en.md#11-classic-fanout).
+- Detailed behavior: verifies mode validation in [Framework API §11](../spec/server/06-framework-api.en.md#11-classic-fanout).
 
 #### PS-E2C Reject A Missing Or Duplicated Automatic Publisher Identity
 
@@ -385,7 +385,7 @@ both approaches are chosen together?
 - Procedure: The runner starts each host in turn.
 - Verification: Both hosts exit with a public configuration error matching the cause, before the
   listener binds.
-- Detailed behavior: verifies publisher identity in [Framework API §11](../spec/06-framework-api.en.md#11-classic-fanout).
+- Detailed behavior: verifies publisher identity in [Framework API §11](../spec/server/06-framework-api.en.md#11-classic-fanout).
 
 ### Track E — Verify Per-Publisher Liveness
 
@@ -407,8 +407,8 @@ process the first event normally?
 - Verification: Each subscriber receives its own publisher's marker exactly once. A publisher is not
   used as a ready target before connection. The scenario does not require every brief intermediate
   state to have been seen by the observer.
-- Detailed behavior: verifies [Transport Liveness §4](../spec/29-transport-liveness.en.md#4-classic-fanout)
-  and [§5](../spec/29-transport-liveness.en.md#5-ready-and-failure-determination).
+- Detailed behavior: verifies [Transport Liveness §4](../spec/server/29-transport-liveness.en.md#4-classic-fanout)
+  and [§5](../spec/server/29-transport-liveness.en.md#5-ready-and-failure-determination).
 
 #### PS-F2 Isolate One Publisher's Receive Disconnection From Another
 
@@ -426,7 +426,7 @@ continue delivering events?
 - Verification: While B alone is excluded from the ready list, A's markers keep being processed. The
   host as a whole does not become Error. B becomes ready again after reconnect and delivers new
   markers.
-- Detailed behavior: verifies per-publisher liveness in [Transport Liveness §4](../spec/29-transport-liveness.en.md#4-classic-fanout).
+- Detailed behavior: verifies per-publisher liveness in [Transport Liveness §4](../spec/server/29-transport-liveness.en.md#4-classic-fanout).
 
 #### PS-F3 Reject A Reserved Liveness Topic On Application Publish
 
@@ -446,7 +446,7 @@ prefix is delivered normally?
 - Verification: The first call ends with a public argument error before transport admission, and the
   handler does not run. The second event is processed once by the handler. No private beacon frame is
   built directly in the E2E.
-- Detailed behavior: verifies the reserved topic in [Transport Liveness §4](../spec/29-transport-liveness.en.md#4-classic-fanout).
+- Detailed behavior: verifies the reserved topic in [Transport Liveness §4](../spec/server/29-transport-liveness.en.md#4-classic-fanout).
 
 #### PS-F4 Reflects Orderly Disconnect Before The Peer Deadline
 
@@ -463,7 +463,7 @@ while other publishers remain?
   timeout. A marker is published from B.
 - Verification: A drops out of the ready list before the fixed 15-second deadline, and B stays ready
   and delivers its marker exactly once.
-- Detailed behavior: verifies [Transport Liveness §5](../spec/29-transport-liveness.en.md#5-ready-and-failure-determination).
+- Detailed behavior: verifies [Transport Liveness §5](../spec/server/29-transport-liveness.en.md#5-ready-and-failure-determination).
 
 #### PS-F5 Keeps Liveness During Unsubscribed Traffic
 
@@ -483,8 +483,8 @@ unsubscribed topic is being published?
   runner tolerance.
 - Verification: There is no handler evidence for `events.a`, but the publisher status stays ready.
   A subsequent `events.b` marker is processed exactly once.
-- Detailed behavior: verifies [Transport Liveness §2](../spec/29-transport-liveness.en.md#2-fixed-times-and-public-api-boundary)
-  and [§4](../spec/29-transport-liveness.en.md#4-classic-fanout).
+- Detailed behavior: verifies [Transport Liveness §2](../spec/server/29-transport-liveness.en.md#2-fixed-times-and-public-api-boundary)
+  and [§4](../spec/server/29-transport-liveness.en.md#4-classic-fanout).
 
 ### Track F — Handle An Event With No Handler
 
@@ -505,8 +505,8 @@ application logger provider, while the next normal event is still processed?
   `zlink.dispatch_error` with `surface=classic_fanout`, `message_kind=send`, `outcome=failed`,
   `reason=no_handler`, and `action=drop`. It omits `channel_route_kind` and is a subscriber-local
   dispatch result, not a publisher delivery result. The normal event is processed exactly once.
-- Detailed behavior: verifies [Framework API §11](../spec/06-framework-api.en.md#11-classic-fanout)
-  and [Message Flow Tracing §2.2](../spec/26-message-flow-tracing.en.md#22-the-public-behavior-recorded).
+- Detailed behavior: verifies [Framework API §11](../spec/server/06-framework-api.en.md#11-classic-fanout)
+  and [Message Flow Tracing §2.2](../spec/server/26-message-flow-tracing.en.md#22-the-public-behavior-recorded).
 
 ## 5. Completion Criteria
 

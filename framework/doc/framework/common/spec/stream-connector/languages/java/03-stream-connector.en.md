@@ -136,14 +136,14 @@ send's `submit()` returns `CompletionStage<Void>`.** This stage only
 delivers completion and failure, and doesn't include transport result
 or admission status. A request/wait/lifecycle's `submit()` returns a
 `CompletionStage` carrying each operation's result
-([04 §1](../../../05-async-execution-policy.en.md)).
+([04 §1](../../../server/05-async-execution-policy.en.md)).
 The Java connector doesn't provide a separate blocking terminator that
 waits for the same operation on the current thread. Lifecycle also
 follows the same call builder convention, like `connect().submit()`,
 `dispatch().submit()`.
 The Kotlin wrapper waits for the `CompletionStage` obtained from
 `submit()` as a coroutine suspension. This execution meaning follows
-the [framework common policy](../../../05-async-execution-policy.en.md).
+the [framework common policy](../../../server/05-async-execution-policy.en.md).
 
 ## 4. Options
 
@@ -246,7 +246,7 @@ Metadata only carries a small key-value. Large work data is sent as
 payload. The STREAM wire header is a runtime-internal type. The
 connector user and server session don't build or pass a header object
 — they only handle the
-[packet name](../../../01-glossary.en.md#packet-name) and a metadata
+[packet name](../../../server/01-glossary.en.md#packet-name) and a metadata
 snapshot in the public model.
 
 ## 7. Send And Request
@@ -320,7 +320,7 @@ The current flow isn't guessed from a connector instance's mutable
 field or thread ID. The wire format and async context boundary is
 owned by
 [Stream Connector §4.2](../../32-stream-connector.en.md#42-header) and
-[Flow Correlation §6](../../../27-flow-correlation.en.md#6-async-work-and-execution-context).
+[Flow Correlation §6](../../../server/27-flow-correlation.en.md#6-async-work-and-execution-context).
 
 ### 7.2 Test Wait Surface
 
@@ -586,7 +586,7 @@ buffering policy from the Java connector. The extension copying options
 **must preserve every option value, including the receive message
 bound.** `messages(...)` and `errors()` wrap the Java connector's
 `on(...)`, `onErrorReceived(...)` handler with `callbackFlow`. So in
-manual [dispatch mode](../../../01-glossary.en.md#dispatch-mode), just
+manual [dispatch mode](../../../server/01-glossary.en.md#dispatch-mode), just
 like Java, the Kotlin wrapper's `dispatch().await()` must be called for
 the collector to receive a message or error event.
 

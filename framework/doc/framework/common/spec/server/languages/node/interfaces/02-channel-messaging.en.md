@@ -5,7 +5,7 @@
 This document fixes the exact TypeScript declarations related to
 Channel, request, and routing that `@zlink-systems/framework` and
 `@zlink-systems/nestjs` export in ZLink Framework. Behavioral meaning is
-owned by the [common spec](../../../../README.en.md) — this document
+owned by the [common spec](../../../README.en.md) — this document
 only defines names, generics, overloads, inheritance, members,
 parameters, and return types.
 
@@ -113,7 +113,7 @@ export interface ZLinkFanoutPublishCall {
 The Entry Spot ID is issued by the framework at MeshNode startup. The
 application doesn't provide the Entry Spot ID as a configuration value.
 Actor create finishes the selected owner
-[MeshNode](../../../../01-glossary.en.md#meshnode)'s Entry Spot
+[MeshNode](../../../01-glossary.en.md#meshnode)'s Entry Spot
 membership and Actor Ready barrier in the same lifecycle. Afterward, a
 one-way business message is delivered directly to the Actor queue,
 without going through the Entry Spot callback.
@@ -122,7 +122,7 @@ When maintenance materializes an Actor into a target Entry Spot,
 Snapshot first finishes the Actor adapter's `restore(...)`, and Recreate
 finishes factory materialization without payload restore. It restores
 the queue/Actor timer, commits Location authority/Entry
-[membership](../../../../01-glossary.en.md#membership), and then starts
+[membership](../../../01-glossary.en.md#membership), and then starts
 Actor message processing. The Bound Session location update is then
 performed with `sessionActorLocationUpdateReqMsg` and
 `sessionActorLocationUpdateResMsg` send messages, and Actor processing
@@ -137,7 +137,7 @@ either.
 
 `ZLinkFanoutClient.publish(...)` provides both a call that uses the
 typed event's packet name as topic, and a call that specifies
-[topic](../../../../01-glossary.en.md#topic) explicitly.
+[topic](../../../01-glossary.en.md#topic) explicitly.
 `ZLinkFanoutPublishCall.submit(...)` completes normally once the local
 publisher transport accepts the event. It doesn't return subscriber
 count or receipt completion. `ZLinkPublishCall` is Logical-Multicast-only
@@ -153,16 +153,16 @@ started or that channel isn't registered as a publisher.
 Passing the internal liveness-dedicated exact byte `01 5A 4C 46 31` to
 the overload that specifies topic raises `ZLinkConfigurationException`
 without starting transport. The overload that omits topic uses the
-typed event's [packet name](../../../../01-glossary.en.md#packet-name),
+typed event's [packet name](../../../01-glossary.en.md#packet-name),
 so it doesn't create this internal topic.
 
 A fanout publisher that registered a location store selects one of a
 fixed Publisher RID or automatic allocation before startup, and
-publishes a dedicated [descriptor](../../../../01-glossary.en.md#descriptor).
+publishes a dedicated [descriptor](../../../01-glossary.en.md#descriptor).
 A publisher with no Store can be used as a target with a manually
 delivered listener endpoint, but doesn't perform RID allocation or
 automatic discovery registration. `enableSubscriber()` with no argument
-queries the [location store](../../../../01-glossary.en.md#location-store)
+queries the [location store](../../../01-glossary.en.md#location-store)
 for every valid publisher descriptor of the same ChannelName and
 connects them all. The overload taking an endpoint configures a manual
 subscriber that only uses the specified endpoint. Configuring both
@@ -203,10 +203,10 @@ export declare function ZLinkPacket(packetName: string): ClassDecorator;
 
 The Node runtime also records Instance Spot observations with
 `ZLinkMeter`. The
-[Instance Spot](../../../../01-glossary.en.md#entry-user-instance-spot)
+[Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
 instrument name catalog used in this language is the following six
 values, and the name/kind/unit and attribute restrictions are owned by
-[runtime-metrics](../../../../25-runtime-metrics.en.md).
+[runtime-metrics](../../../25-runtime-metrics.en.md).
 
 - `zlink.instance_spot.activations`
 - `zlink.instance_spot.activation.duration`
@@ -221,8 +221,8 @@ attached. The standard structured logger records
 `eventId=zlink.message_flow`, the same surface, and `outcome=dropped`.
 Only the bounded type registered at startup is
 recorded in `instanceSpotType`, and
-[Spot ID](../../../../01-glossary.en.md#spot-id),
-[owner](../../../../01-glossary.en.md#owner) ID, and internal authority
+[Spot ID](../../../01-glossary.en.md#spot-id),
+[owner](../../../01-glossary.en.md#owner) ID, and internal authority
 fields aren't used as metric attributes. Reason and action use the closed
 values from the message-flow tracing contract, but aren't exposed as a public
 DTO or callback type.
@@ -307,7 +307,7 @@ export interface ZLinkMeshChannelRuntimeOptions {
 
 In the following example, `client` is a `ZLinkRouteClient` obtained
 through configuration or dependency injection. It starts a request with
-[ChannelName](../../../../01-glossary.en.md#channelname), and the
+[ChannelName](../../../01-glossary.en.md#channelname), and the
 Promise `submit(...)` returns waits until the terminal reply.
 
 ```ts
@@ -382,7 +382,7 @@ request timeout — it only uses that STREAM socket's send timeout.
 
 RouteMesh node/Channel/Spot/Actor use the send timeout of the selected
 MeshNode ROUTER, ClientServer uses the client DEALER,
-[classic fanout](../../../../01-glossary.en.md#classic-fanout) uses the
+[classic fanout](../../../01-glossary.en.md#classic-fanout) uses the
 publisher socket, and STREAM send/reply use that STREAM socket. A
 bound session uses one framework socket send timeout even if the
 local/remote Actor route changes. If there's no public setting, 1 second
@@ -391,15 +391,15 @@ a finite integer in range `1..2147483647`. `undefined` selects the
 default, and `0`, a negative value, a non-integer value, and exceeding
 the cap are rejected with `ZLinkConfigurationError`.
 
-[Logical Multicast](../../../../01-glossary.en.md#logical-multicast)'s
+[Logical Multicast](../../../01-glossary.en.md#logical-multicast)'s
 `ZLinkPublishCall.submit(...)` does a direct handoff to a bounded I/O
 executor. If a worker slot isn't obtained immediately, it waits for
 capacity up to the send timeout. After obtaining the slot but before the
 publish attempt starts, abort and
-[shutdown](../../../../01-glossary.en.md#shutdown) can block the
+[shutdown](../../../01-glossary.en.md#shutdown) can block the
 operation from starting. The moment the publish attempt starts is the
 operation commit barrier — an abort after that doesn't interrupt the
-already-confirmed [snapshot](../../../../01-glossary.en.md#snapshot)
+already-confirmed [snapshot](../../../01-glossary.en.md#snapshot)
 operation. Once the transaction has started, an individual target
 failure doesn't roll back an already-accepted target or automatically
 retry the whole publish. Per-target admission/failure results of remote

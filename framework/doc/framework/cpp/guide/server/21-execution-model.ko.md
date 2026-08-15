@@ -9,7 +9,7 @@ title: "21. 실행·구성 모델 · C++"
 # 21. 실행·구성 모델
 
 > **이 장의 계약 소유 문서** — [C++ 공통 runtime 공개 계약](../../../common/spec/server/languages/cpp/interfaces/01-common-runtime.ko.md)과
-> [비동기 실행 정책](../../../common/spec/05-async-execution-policy.ko.md)이 다룬다. 이
+> [비동기 실행 정책](../../../common/spec/server/05-async-execution-policy.ko.md)이 다룬다. 이
 > 챕터는 C++ framework가 그 개념을 실제로 실행하고 구성하는 방식을 설명한다.
 
 C++ framework가 개념을 실제로 실행하고 구성하는 방식이다. 개념 자체는
@@ -210,5 +210,5 @@ stateDiagram-v2
 ## 5. 관련 문서
 
 - 정식 계약: [C++ 공통 runtime 공개 계약](../../../common/spec/server/languages/cpp/interfaces/01-common-runtime.ko.md)
-- 비동기 terminal 규약: [비동기 실행 정책](../../../common/spec/05-async-execution-policy.ko.md)
+- 비동기 terminal 규약: [비동기 실행 정책](../../../common/spec/server/05-async-execution-policy.ko.md)
 - DI 주입 규칙: [18. DI 컨테이너](18-di-container.ko.md)

@@ -141,8 +141,8 @@ public sealed class DiagnosticsSwitch(IZLinkDiagnosticsRuntime diagnostics)
 trace나 count를 만들지 않는다.
 
 정확한 attribute와 전파 규칙은
-[메시지 흐름 추적](../../../common/spec/26-message-flow-tracing.ko.md)과
-[Flow 상관관계](../../../common/spec/27-flow-correlation.ko.md)를 참고한다.
+[메시지 흐름 추적](../../../common/spec/server/26-message-flow-tracing.ko.md)과
+[Flow 상관관계](../../../common/spec/server/27-flow-correlation.ko.md)를 참고한다.
 
 ## 4. 자주 발생하는 문제
 

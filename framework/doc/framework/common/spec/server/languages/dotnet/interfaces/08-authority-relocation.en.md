@@ -1,8 +1,8 @@
 # .NET Location/Relocation Provider Public Interface
 
-[.NET exact interface table of contents](README.en.md) · [Location Runtime](../../../../21-location-runtime.en.md) ·
-[Location Store Provider](../../../../22-location-store-redis.en.md) ·
-[Relocation Store Provider](../../../../23-relocation-store-redis.en.md)
+[.NET exact interface table of contents](README.en.md) · [Location Runtime](../../../21-location-runtime.en.md) ·
+[Location Store Provider](../../../22-location-store-redis.en.md) ·
+[Relocation Store Provider](../../../23-relocation-store-redis.en.md)
 
 ## 1. Scope
 

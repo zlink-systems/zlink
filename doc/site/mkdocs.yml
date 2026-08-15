@@ -354,60 +354,60 @@ nav:
       - Spec:
           - "Common spec": common/README.md
           - Conventions and glossary:
-              - "Public contract governance": common/spec/00-public-contract-governance.md
-              - "Messaging glossary": common/spec/01-glossary.md
+              - "Public contract governance": common/spec/server/00-public-contract-governance.md
+              - "Messaging glossary": common/spec/server/01-glossary.md
           - Foundation contracts:
-              - "Framework overview": common/spec/02-overview.md
-              - "Interaction model": common/spec/03-interaction-model.md
-              - "Message model": common/spec/04-message-model.md
-              - "Async execution policy": common/spec/05-async-execution-policy.md
-              - "Framework API": common/spec/06-framework-api.md
+              - "Framework overview": common/spec/server/02-overview.md
+              - "Interaction model": common/spec/server/03-interaction-model.md
+              - "Message model": common/spec/server/04-message-model.md
+              - "Async execution policy": common/spec/server/05-async-execution-policy.md
+              - "Framework API": common/spec/server/06-framework-api.md
           - Channel and network:
-              - "RouteMesh topology": common/spec/07-channel-topology.md
-              - "Channel messaging": common/spec/08-channel-messaging.md
-              - "ClientServer Channel": common/spec/09-client-server-channel.md
-              - "Network listener identity": common/spec/10-network-listener-identity.md
+              - "RouteMesh topology": common/spec/server/07-channel-topology.md
+              - "Channel messaging": common/spec/server/08-channel-messaging.md
+              - "ClientServer Channel": common/spec/server/09-client-server-channel.md
+              - "Network listener identity": common/spec/server/10-network-listener-identity.md
           - Object messaging:
-              - "Spot model": common/spec/11-spot-model.md
-              - "Spot messaging": common/spec/12-spot-messaging.md
-              - "MeshNode": common/spec/13-mesh-node.md
-              - "Actor model": common/spec/14-actor-model.md
-              - "Spot and Actor membership": common/spec/15-spot-actor.md
-              - "Spot address messaging": common/spec/16-spot-address-messaging.md
-              - "Stage wrapper on Spot": common/spec/17-stage-wrapper-on-spot.md
-              - "Spot·Actor routing": common/spec/18-object-routing.md
+              - "Spot model": common/spec/server/11-spot-model.md
+              - "Spot messaging": common/spec/server/12-spot-messaging.md
+              - "MeshNode": common/spec/server/13-mesh-node.md
+              - "Actor model": common/spec/server/14-actor-model.md
+              - "Spot and Actor membership": common/spec/server/15-spot-actor.md
+              - "Spot address messaging": common/spec/server/16-spot-address-messaging.md
+              - "Stage wrapper on Spot": common/spec/server/17-stage-wrapper-on-spot.md
+              - "Spot·Actor routing": common/spec/server/18-object-routing.md
           - STREAM and session:
-              - "STREAM server session": common/spec/19-stream-session.md
-              - "Session Actor dispatch": common/spec/20-session-actor-dispatch.md
+              - "STREAM server session": common/spec/server/19-stream-session.md
+              - "Session Actor dispatch": common/spec/server/20-session-actor-dispatch.md
           - Location Store and relocation:
-              - "Location runtime": common/spec/21-location-runtime.md
-              - "Location Store (Redis)": common/spec/22-location-store-redis.md
-              - "Relocation Store (Redis)": common/spec/23-relocation-store-redis.md
+              - "Location runtime": common/spec/server/21-location-runtime.md
+              - "Location Store (Redis)": common/spec/server/22-location-store-redis.md
+              - "Relocation Store (Redis)": common/spec/server/23-relocation-store-redis.md
           - Observability and shutdown:
-              - "Runtime status and diagnostics": common/spec/24-runtime-monitoring.md
-              - "Runtime metric": common/spec/25-runtime-metrics.md
-              - "Message flow tracing": common/spec/26-message-flow-tracing.md
-              - "Request correlation": common/spec/27-flow-correlation.md
-              - "Complete Actor and Spot relocation flow": common/spec/28-relocation-flow.md
-              - "Transport liveness": common/spec/29-transport-liveness.md
-              - "Complete Host relocation flow": common/spec/30-host-relocation-flow.md
-              - "Failure handling and failover": common/spec/31-failure-failover-policy.md
-              - "Framework error model": common/spec/32-framework-error-model.md
+              - "Runtime status and diagnostics": common/spec/server/24-runtime-monitoring.md
+              - "Runtime metric": common/spec/server/25-runtime-metrics.md
+              - "Message flow tracing": common/spec/server/26-message-flow-tracing.md
+              - "Request correlation": common/spec/server/27-flow-correlation.md
+              - "Complete Actor and Spot relocation flow": common/spec/server/28-relocation-flow.md
+              - "Transport liveness": common/spec/server/29-transport-liveness.md
+              - "Complete Host relocation flow": common/spec/server/30-host-relocation-flow.md
+              - "Failure handling and failover": common/spec/server/31-failure-failover-policy.md
+              - "Framework error model": common/spec/server/32-framework-error-model.md
       - Internals:
-          - "Internal design overview (non-normative)": common/spec/README.md
-          - "40. Layer boundary and identifier": common/spec/40-internal-layering.md
-          - "41. Spot and Actor execution serialization": common/spec/41-internal-serialization.md
-          - "42. Application and infrastructure isolation": common/spec/42-internal-progress-isolation.md
-          - "43. Operation completion": common/spec/43-internal-completion.md
-          - "44. Message continuity during a move": common/spec/44-internal-relocation-continuity.md
-          - "45. Target selection and route cache": common/spec/45-internal-routing-and-cache.md
-          - "46. Receive and dispatch loop": common/spec/46-internal-dispatch-loop.md
-          - "47. Object kind and activation": common/spec/47-internal-object-lifecycle.md
-          - "48. Session and Actor connection": common/spec/48-internal-session-binding.md
-          - "49. Liveness and status publication": common/spec/49-internal-liveness-and-state.md
-          - "50. Payload ownership and copy": common/spec/50-internal-message-ownership.md
-          - "51. Service wire protocol": common/spec/51-internal-service-wire-protocol.md
-          - "52. Relocation handoff state transitions": common/spec/52-internal-relocation-handoff.md
+          - "Internal design overview (non-normative)": common/spec/server/README.md
+          - "40. Layer boundary and identifier": common/spec/server/40-internal-layering.md
+          - "41. Spot and Actor execution serialization": common/spec/server/41-internal-serialization.md
+          - "42. Application and infrastructure isolation": common/spec/server/42-internal-progress-isolation.md
+          - "43. Operation completion": common/spec/server/43-internal-completion.md
+          - "44. Message continuity during a move": common/spec/server/44-internal-relocation-continuity.md
+          - "45. Target selection and route cache": common/spec/server/45-internal-routing-and-cache.md
+          - "46. Receive and dispatch loop": common/spec/server/46-internal-dispatch-loop.md
+          - "47. Object kind and activation": common/spec/server/47-internal-object-lifecycle.md
+          - "48. Session and Actor connection": common/spec/server/48-internal-session-binding.md
+          - "49. Liveness and status publication": common/spec/server/49-internal-liveness-and-state.md
+          - "50. Payload ownership and copy": common/spec/server/50-internal-message-ownership.md
+          - "51. Service wire protocol": common/spec/server/51-internal-service-wire-protocol.md
+          - "52. Relocation handoff state transitions": common/spec/server/52-internal-relocation-handoff.md
   - Bindings:
       - Guide:
         - Overview: bindings/guide/README.md

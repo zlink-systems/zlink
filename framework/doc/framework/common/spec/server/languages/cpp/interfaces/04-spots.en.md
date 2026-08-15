@@ -65,7 +65,7 @@ public:
 
 In `preserve_state_with<TAdapter>()`, `TAdapter` must implement
 `spot_relocation_adapter_t<TSpot>`. Passing an Actor adapter, or an
-adapter that doesn't match the [Spot](../../../../01-glossary.en.md#spot)
+adapter that doesn't match the [Spot](../../../01-glossary.en.md#spot)
 factory, fails as a configuration error before socket bind. The
 adapter exchanges application state only as an opaque byte vector, and
 doesn't expose typed state, a separate contract identifier, or a
@@ -422,12 +422,12 @@ public:
 
 `spot_context_t::publish(...)` takes the target ChannelName and topic
 together. Publish is submitted once per remote MeshNode through the
-[MeshNode](../../../../01-glossary.en.md#meshname) ROUTER, and the
+[MeshNode](../../../01-glossary.en.md#meshname) ROUTER, and the
 receiving node only checks the node-local subscription. Each remote
 ROUTER and local mailbox admits per target, and one target's failure
 doesn't cancel a previously accepted transmission. Spot/Actor
 registration belongs to the
-[owner](../../../../01-glossary.en.md#owner) `mesh_node_builder_t`.
+[owner](../../../01-glossary.en.md#owner) `mesh_node_builder_t`.
 
 `mesh_node_socket_config_t` doesn't provide a Framework-level message-size
 setting for RouteMesh SS. A sender or receiver doesn't reject a message because
@@ -440,7 +440,7 @@ bound on receive waiting. HWM must be 0 or greater.
 
 The Spot Actor Join/Relocation-related interface is also a formal
 contract recorded in this document, and its behavioral meaning follows
-the [common spec](../../../../15-spot-actor.en.md). If an implementation
+the [common spec](../../../15-spot-actor.en.md). If an implementation
 or contract test differs from this signature, it's treated as a
 contract mismatch.
 `join_entry_spot(...)` doesn't take a target node RID — the Framework
@@ -449,15 +449,15 @@ selects the current eligible Entry Spot.
 `spot_close_reason_t`'s values are `explicit_close=0`,
 `host_shutdown=1`, `relocation_out=2`, `idle_evicted=3`.
 `idle_evicted` is an
-[Instance Spot](../../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot)-only
+[Instance Spot](../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot)-only
 reason and isn't delivered to Entry Spot or User Spot. The idle
 judgment condition and the reactivation rule after cleanup are owned
 by
-[Spot Model §6.2](../../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
+[Spot Model §6.2](../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
 The context's `deadline` is the closing operation's absolute UTC time.
 The Framework doesn't request stop on `cleanup_cancellation` before the
 callback invocation, and requests it once the deadline ends. Only
-Entry/User/[Instance Spot](../../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot)
+Entry/User/[Instance Spot](../../../01-glossary.en.md#entry-spot-user-spot-and-instance-spot)
 receive the callback, and a per-Actor closing callback isn't provided.
 Host Shutdown runs the callback while Actor membership and the local
 instance are still valid, and cleans up scope and authority after
@@ -467,11 +467,11 @@ so it doesn't call this callback.
 `entry_spot_context_t::destroy_actor(...)` is only called from an
 Entry Spot. An Actor on a user Spot must first complete
 `leave_actor(...)` or an Entry Spot join. Since Destroy isn't a
-[membership](../../../../01-glossary.en.md#membership) move, it doesn't
+[membership](../../../01-glossary.en.md#membership) move, it doesn't
 call `on_leave_actor` again, and a duplicate destroy of the same Actor
 instance doesn't run an additional lifecycle callback and ends as
 success. The full order follows
-[Actor Model §6](../../../../14-actor-model.en.md#6-actor-lifecycle).
+[Actor Model §6](../../../14-actor-model.en.md#6-actor-lifecycle).
 
 The cross-node materialization behavior of an Actor and a User/Instance
 Spot is decided by the factory builder wired to the factory
@@ -496,7 +496,7 @@ restored after durable abort and source normalization. A failed
 restore's instance is discarded, and the same immutable payload is
 applied to the instance the new attempt's factory built. If the
 Framework cancels a callback due to the operation
-[deadline](../../../../01-glossary.en.md#deadline), it's classified as
+[deadline](../../../01-glossary.en.md#deadline), it's classified as
 `deadline_exceeded`. Because recovery can call both methods at least
 once and they can overlap between a stale attempt and its successor,
 the adapter must be retry-safe. The Framework doesn't guarantee
@@ -552,7 +552,7 @@ Framework wired in at creation through `context()`. The Framework uses
 Only a direct packet and timer handler can be registered in
 `configure(...)`. The instance context's dedicated registry has no
 Actor handler or Logical Multicast
-[subscription](../../../../01-glossary.en.md#subscription) registration
+[subscription](../../../01-glossary.en.md#subscription) registration
 member. Duplicate-registering the same stable `instance_spot_type` or
 the same Spot class in both a User Spot factory and an Instance factory
 on the same MeshNode fails as a configuration error before socket
@@ -575,7 +575,7 @@ location row that satisfies the fencing condition.
 A User Spot starts a `Creating` reservation with the manager's explicit
 Create/GetOrCreate. Only a direct call that selected `instance_spot()`
 on `spot_send_call_t` or `spot_request_call_t` starts
-[cold activation](../../../../01-glossary.en.md#cold-activation) of a
+[cold activation](../../../01-glossary.en.md#cold-activation) of a
 missing RID for an Instance Spot. For an ordinary send/request with no
 marker, a missing RID ends with `not_found` without running a factory
 or recording a creation intent.
@@ -583,7 +583,7 @@ or recording a creation intent.
 Source and target split roles in the following order.
 
 1. If the Source has `Ready`
-   [authority](../../../../01-glossary.en.md#authority), it sends an
+   [authority](../../../01-glossary.en.md#authority), it sends an
    ordinary message to the current owner.
 2. If authority is `Missing`, the Source selects a target. The Source
    doesn't create a creation reservation.
@@ -655,11 +655,11 @@ new target and moves the Actor as an independent unit.
 
 An Instance Spot factory only implements the actor-free lifecycle. The
 source runtime only sends a missing RID's
-[activation envelope](../../../../01-glossary.en.md#activation-envelope)
+[activation envelope](../../../01-glossary.en.md#activation-envelope)
 to the target from a direct call carrying an Instance Spot marker. The
 target runtime starts a creation claim to make itself owner based on
 the envelope. `instance_spot()` is a marker that omits the
-[stable type](../../../../01-glossary.en.md#stable-type), and
+[stable type](../../../01-glossary.en.md#stable-type), and
 `instance_spot(stable_type)` is a marker that specifies the type.
 `in_mesh(mesh_name)` selects the Mesh to first place a missing RID in.
 If an authority row that's already `Ready` exists, it's delivered to
@@ -780,10 +780,10 @@ can't be created or replaced through default construction, copy, or
 assignment.
 
 `route_mesh_runtime_options_t` is a public DI singleton. Looking up an
-unregistered [ChannelName](../../../../01-glossary.en.md#channelname)
+unregistered [ChannelName](../../../01-glossary.en.md#channelname)
 fails as a configuration error. Only the ChannelName weight can be
 changed while running. The maximum message size can't be changed after
-startup. [Weight](../../../../01-glossary.en.md#weight) is 0 through
+startup. [Weight](../../../01-glossary.en.md#weight) is 0 through
 10000, defaulting to 100. A value outside the range is a configuration
 error in both startup config and runtime change. 0 excludes that
 membership from a new select-one and Logical Multicast remote target.
@@ -861,7 +861,7 @@ The runtime's private dispatch converts `message_t` to a DTO, finds the
 current Spot instance and Actor, and calls the typed member function.
 The application doesn't receive an invoker, service provider,
 serializer registry, or
-[descriptor](../../../../01-glossary.en.md#descriptor) lookup surface.
+[descriptor](../../../01-glossary.en.md#descriptor) lookup surface.
 A sample is also considered to have verified framework behavior only
 if it goes through the public registration and call path.
 Even in Entry Spot membership state, an actor packet isn't registered
@@ -888,7 +888,7 @@ the owner Spot's serial execution queue. An Entry Spot timer also
 doesn't globally serialize different Entry Spot instances.
 
 Timer backend selection follows
-[Async Execution Policy §5](../../../../05-async-execution-policy.en.md#5-spot-timer).
+[Async Execution Policy §5](../../../05-async-execution-policy.en.md#5-spot-timer).
 `timer_tick_t` only provides common timer dispatch metadata.
 
 The public surface of ActorGateway session relay is
@@ -1017,7 +1017,7 @@ this value against that range. This rule interprets the existing
 `timer_options_t` fields and adds no public member.
 
 Timer registration validation is owned by
-[stage-wrapper §4.1](../../../../17-stage-wrapper-on-spot.en.md).
+[stage-wrapper §4.1](../../../17-stage-wrapper-on-spot.en.md).
 
 A Framework timer is a logical registration belonging to the owner
 Actor/Spot. On cross-node relocation, timer name, handler type, period,
@@ -1089,11 +1089,11 @@ different generation is `invalid_operation`; while moving it's
 The declarations in this document belong to public trace's
 `spot-instance` and `actor-relocation` category. The common meaning is
 owned by
-[Spot Address And Messaging](../../../../16-spot-address-messaging.en.md)
+[Spot Address And Messaging](../../../16-spot-address-messaging.en.md)
 and
-[Spot · Actor Membership](../../../../15-spot-actor.en.md).
+[Spot · Actor Membership](../../../15-spot-actor.en.md).
 
 **The lifecycle callback's call order is owned by
-[MeshNode §7](../../../../13-mesh-node.en.md)** — handler
+[MeshNode §7](../../../13-mesh-node.en.md)** — handler
 composition → creation callback → initialization **only if
 accepted** → close once.

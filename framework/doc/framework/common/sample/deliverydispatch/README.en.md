@@ -180,13 +180,13 @@ Tracking looks up the Customer Actor using CustomerId but does not directly sele
 
 | Behavior Needed | Element Chosen | Reason And Contract Basis |
 |---|---|---|
-| Find the current object by courier/customer ID. | Actor direct message | Using a global Actor ID lets the Framework resolve the current Ready owner. [Interaction Model §2](../../spec/03-interaction-model.en.md#2-common-model) |
-| Prepare the Actor for the first time and bind it to the same session. | Actor GetOrCreate and bound session | Use the exact ActorRef from the creation result only for that bind operation. [Actor model](../../spec/14-actor-model.en.md) · [Session-Actor dispatch](../../spec/20-session-actor-dispatch.en.md) |
-| Approve initial Actor membership. | Entry Spot | The creation callback only sets local initial state and returns quickly. [Spot model §4](../../spec/11-spot-model.en.md#4-entry-spot) |
-| Independent requests between the worker and Tracking | ClientServer Channel | Doesn't mix object RouteMesh with channel Server membership. [Channel topology](../../spec/07-channel-topology.en.md) |
-| Server push to the customer/courier | STREAM bound session | Pushes to the same logical Actor through the current binding FIFO even when the connection is replaced. [STREAM session §8](../../spec/03-interaction-model.en.md#8-stream-session) |
-| One-way offer/decision transmission | Actor send | Send admission doesn't guarantee handler execution completion or delivery to the peer. [Send and request §4](../../spec/03-interaction-model.en.md#4-send-and-request) |
-| Owner failure boundary | Failure/failover policy | A Ready owner failure doesn't turn into automatic cold activation or selecting a different owner. [Failure policy §4.4](../../spec/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure) |
+| Find the current object by courier/customer ID. | Actor direct message | Using a global Actor ID lets the Framework resolve the current Ready owner. [Interaction Model §2](../../spec/server/03-interaction-model.en.md#2-common-model) |
+| Prepare the Actor for the first time and bind it to the same session. | Actor GetOrCreate and bound session | Use the exact ActorRef from the creation result only for that bind operation. [Actor model](../../spec/server/14-actor-model.en.md) · [Session-Actor dispatch](../../spec/server/20-session-actor-dispatch.en.md) |
+| Approve initial Actor membership. | Entry Spot | The creation callback only sets local initial state and returns quickly. [Spot model §4](../../spec/server/11-spot-model.en.md#4-entry-spot) |
+| Independent requests between the worker and Tracking | ClientServer Channel | Doesn't mix object RouteMesh with channel Server membership. [Channel topology](../../spec/server/07-channel-topology.en.md) |
+| Server push to the customer/courier | STREAM bound session | Pushes to the same logical Actor through the current binding FIFO even when the connection is replaced. [STREAM session §8](../../spec/server/03-interaction-model.en.md#8-stream-session) |
+| One-way offer/decision transmission | Actor send | Send admission doesn't guarantee handler execution completion or delivery to the peer. [Send and request §4](../../spec/server/03-interaction-model.en.md#4-send-and-request) |
+| Owner failure boundary | Failure/failover policy | A Ready owner failure doesn't turn into automatic cold activation or selecting a different owner. [Failure policy §4.4](../../spec/server/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure) |
 
 The Courier and Customer Actor factories use `DisableRelocation` within this sample's scope. Even if
 planned relocation is added later, the same Actor identity and binding update must be verified, and

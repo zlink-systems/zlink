@@ -16,7 +16,8 @@ Spec에 사용법을, guide에 내부 구현을, internals에 사용자 사용�
 
 - Framework public contract는 구현할 범위를 정식 spec과 exact language interface에 먼저 확정하고,
   같은 작업에서 구현과 contract test를 맞춘다. 구현하지 않을 추측성 범위를 미리 확장하지 않는다.
-- 현재 구현과 목표가 다르면 Framework의 `99-implementation-gap`에 사실만 기록한다.
+- 현재 구현과 목표가 다르면 formal spec에 구현 진행 상태를 기록하지 않고, 구현과 기능 test를
+  확정된 계약에 맞춰 수렴한다.
 - RouteMesh 11 Core raw-only 계약은 `core/doc/spec/core/`에 목표를 먼저 확정할 수 있다. 진행 이력은
   정식 spec에 넣지 않는다.
 - 위 예외 밖의 미구현 Core·binding API는 `doc/spec/draft/`의 기능별 draft에 작성한다. 첫머리에

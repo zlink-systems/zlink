@@ -1,7 +1,7 @@
 <!-- framework-adapter-nav:start -->
 [Document List](../../../README.en.md) | [Previous: Backend Policy](backend-dependency-policy.en.md) | [Next: Regression Test Matrix](regression-test-matrix.en.md)<!-- framework-adapter-nav:end -->
 
-[Common layering](../../common/spec/40-internal-layering.en.md) | [Common spec](../../common/spec/README.en.md)
+[Common layering](../../common/spec/server/40-internal-layering.en.md) | [Common spec](../../common/spec/server/README.en.md)
 
 # .NET Runtime Integration and Receive Ownership
 
@@ -11,7 +11,7 @@ able to decide from this document whether a type is only forwarding arguments or
 translating Framework and binding meaning, ownership, lifecycle, and concurrency.
 
 This document does not add a Framework public contract. The Framework public contract is owned
-by the [common spec](../../common/spec/README.en.md) and the .NET exact-interface documents.
+by the [common spec](../../common/spec/server/README.en.md) and the .NET exact-interface documents.
 
 ## 1. Layering rule
 

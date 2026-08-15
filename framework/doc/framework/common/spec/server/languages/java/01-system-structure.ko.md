@@ -11,4 +11,4 @@ Object relocation은 `Relocate`, host 종료는 `Shutdown`으로 요청한다. �
 interface는 제공하지 않는다. 정확한 결과와 monitoring 계약은 [공통 runtime](interfaces/common-runtime.ko.md)과
 [Monitoring](interfaces/monitoring.ko.md)을 따른다.
 
-공통 동작은 [Framework 공통 spec](../../../README.ko.md)을 따른다.
+공통 동작은 [Framework 공통 spec](../../README.ko.md)을 따른다.

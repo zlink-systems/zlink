@@ -519,7 +519,7 @@ A framework error kind maps to HTTP status.
 | `protocol_error` | `400 Bad Request` | The client body didn't convert to a DTO, or the request meaning doesn't match the framework contract |
 | `not_found` | `404 Not Found` | The target route, channel, or service wasn't found |
 | `framework_exception_t::code() == std::errc::timed_out` | `504 Gateway Timeout` | A zlink request behind HTTP hosting didn't finish in time |
-| `framework_exception_t::code()` indicates a [shutdown](../../../01-glossary.en.md#shutdown) boundary and the host is shutting down | `503 Service Unavailable` | The host is shutting down |
+| `framework_exception_t::code()` indicates a [shutdown](../../01-glossary.en.md#shutdown) boundary and the host is shutting down | `503 Service Unavailable` | The host is shutting down |
 | `internal_failure` | `500 Internal Server Error` | An internal handler or runtime failure |
 
 If the HTTP server runtime detects a request that exceeded the body
@@ -545,7 +545,7 @@ The HTTP server runs as a `hosted_service_t`.
   shutdown timeout.
 - It doesn't indefinitely build a new zlink submit during shutdown.
 
-An HTTP endpoint switches to [ready](../../../01-glossary.en.md#ready)
+An HTTP endpoint switches to [ready](../../01-glossary.en.md#ready)
 only after the framework client the handler is injected becomes ready.
 On shutdown, it first rejects a new HTTP request and gives an
 in-progress handler a chance to complete within the messaging drain

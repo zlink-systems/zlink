@@ -1,7 +1,7 @@
 # Java Monitoring Public Interface
 
 [Interface table of contents](README.en.md) ·
-[Runtime Monitoring](../../../../24-runtime-monitoring.en.md)
+[Runtime Monitoring](../../../24-runtime-monitoring.en.md)
 
 ## 1. Scope
 
@@ -182,7 +182,7 @@ which case the latest state of a kept source isn't omitted. A terminal
 state isn't overwritten by an intermediate state, but if the retention
 cap is exceeded, the oldest terminal is discarded first and the count is
 reported to the observer
-([Runtime Status Query And Operational Diagnostics](../../../../24-runtime-monitoring.en.md)).
+([Runtime Status Query And Operational Diagnostics](../../../24-runtime-monitoring.en.md)).
 
 `ZLinkObservationLoss.coalescedCount` is the number of intermediate
 states this subscriber didn't see because of per-source latest-slot
@@ -195,7 +195,7 @@ are pinned at `Long.MAX_VALUE` (`2^63 - 1`) once exceeded. This cap is
 the same across all four languages. The framework doesn't complete or
 error-terminate the `Flow.Publisher` just because the subscriber's queue
 is full. The definition of the delivery unit is owned by
-[Runtime Monitoring §3](../../../../24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes).
+[Runtime Monitoring §3](../../../24-runtime-monitoring.en.md#3-querying-current-state-and-observing-changes).
 
 Placement's `isAvailable` is only `true` when the host is `SERVING` and
 Object Server, node-wide placement weight is positive, and both Actor

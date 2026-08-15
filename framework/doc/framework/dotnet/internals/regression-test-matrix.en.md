@@ -1,10 +1,10 @@
 <!-- framework-adapter-nav:start -->
-[Document List](../../../README.en.md) | [Previous: Runtime Execution](../../common/spec/41-internal-serialization.en.md) | [Next: Backend Dependency Policy](backend-dependency-policy.en.md)
+[Document List](../../../README.en.md) | [Previous: Runtime Execution](../../common/spec/server/41-internal-serialization.en.md) | [Next: Backend Dependency Policy](backend-dependency-policy.en.md)
 <!-- framework-adapter-nav:end -->
 
 [Spec Index](../../common/README.en.md)
 
-[.NET Bundle](../README.en.md) | [Runtime Lifecycle](../../common/spec/README.en.md) | [Runtime Execution](../../common/spec/41-internal-serialization.en.md) | [Backend Policy](backend-dependency-policy.en.md) | [Common E2E](../../common/e2e/README.en.md)
+[.NET Bundle](../README.en.md) | [Runtime Lifecycle](../../common/spec/server/README.en.md) | [Runtime Execution](../../common/spec/server/41-internal-serialization.en.md) | [Backend Policy](backend-dependency-policy.en.md) | [Common E2E](../../common/e2e/README.en.md)
 
 # ZLink Framework .NET Regression Test Matrix
 
@@ -251,7 +251,7 @@ follows the [.NET Stream Connector Public Contract](../../common/spec/stream-con
 The `.NET` public input rules for automatic routing id allocation follow
 [Configuration And Topology Exact Interface](../../common/spec/server/languages/dotnet/interfaces/03-configuration-topology.en.md).
 Descriptor claim and startup order are described in
-[Layering Boundaries And Identifiers](../../common/spec/40-internal-layering.en.md).
+[Layering Boundaries And Identifiers](../../common/spec/server/40-internal-layering.en.md).
 
 | Item | Layer | Pass Criteria |
 |------|------|-----------|
@@ -334,7 +334,7 @@ The target documents are as follows.
 - `06-location-store.ko.md`
 - `dotnet-http-client.ko.md`
 - `regression-test-matrix.ko.md`
-- `../../common/spec/README.ko.md`
+- `../../common/spec/server/README.ko.md`
 - `public-symbol-delta-v11.ko.md`
 - `backend-dependency-policy.ko.md`
 - `runtime-integration-and-ownership.ko.md`
@@ -354,7 +354,7 @@ The target documents are as follows.
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[Document List](../../../README.en.md) | [Previous: Runtime Execution](../../common/spec/41-internal-serialization.en.md) | [Next: Backend Dependency Policy](backend-dependency-policy.en.md)
+[Document List](../../../README.en.md) | [Previous: Runtime Execution](../../common/spec/server/41-internal-serialization.en.md) | [Next: Backend Dependency Policy](backend-dependency-policy.en.md)
 <!-- framework-adapter-nav:bottom:end -->
 
 ## 11. Regression Test Items Moved From The Public Contract Documents
@@ -431,7 +431,7 @@ this section. The contract's meaning is owned by the common spec.
 | Runtime Toggle | `IZLinkDiagnosticsRuntime.Level` (DI singleton) |
 | Standard Output | `ActivitySource("Zlink.Framework")`, `ILogger` structured log |
 | Common Concept | `.NET` |
-| Meter Name (Constant) | `ZLinkMeters.Framework` = `"zlink.framework"`, matching the [common metrics contract](../../common/spec/25-runtime-metrics.en.md) byte-exact |
+| Meter Name (Constant) | `ZLinkMeters.Framework` = `"zlink.framework"`, matching the [common metrics contract](../../common/spec/server/25-runtime-metrics.en.md) byte-exact |
 | Instrument Emission | `System.Diagnostics.Metrics.Meter("zlink.framework")` — `Counter`/`UpDownCounter`/`ObservableGauge`/`Histogram` |
 | App Wiring (Common Case) | OTel `MeterProviderBuilder.AddMeter(ZLinkMeters.Framework)` — that's all |
 | Non-OTel/Test Collection | .NET's standard `MeterListener` subscribes to `ZLinkMeters.Framework` directly — no zlink-specific listener interface |
@@ -443,7 +443,7 @@ this section. The contract's meaning is owned by the common spec.
 | Relocate Order | all-or-none preflight → admission seal → current turn completion → queue/journal/timer freeze → Actor/Spot relocation → STREAM barrier → authority commit |
 | User Spot Aggregate | relocates a User Spot and its member Actors as one aggregate, verifying every participant and generation in the Location Store commit |
 | Spot Creation Boundary | an Instance marker is specified on the direct Spot send/request's fluent builder. A missing Instance starts cold placement only when the marker selects exactly one factory type |
-| Terminal Result | the enum numbers and allowed combinations of `ZLinkFrameworkRelocationResult` and `ZLinkFrameworkTerminationResult` match the [graceful drain contract](../../common/spec/30-host-relocation-flow.en.md) |
+| Terminal Result | the enum numbers and allowed combinations of `ZLinkFrameworkRelocationResult` and `ZLinkFrameworkTerminationResult` match the [graceful drain contract](../../common/spec/server/30-host-relocation-flow.en.md) |
 | Explicit Control | `FrameworkRuntimeContracts.Relocation_and_shutdown_are_separate_host_operations`: the DI singleton `IZLinkFrameworkRuntime` separates `RelocateAsync(options, ...)` and `ShutdownAsync(...)`. The relocation deadline lives in options, and `deadline == null` is 30 seconds for both operations |
 | Concurrent Caller | after `Relocating`, the same relocation caller shares the shared operation's mode, deadline, and terminal result. `Blocked` is not put into the terminal cache |
 | Readiness Probe | `IZLinkFrameworkRuntime.Status.IsReady` is true only when the host is `Serving`, and component readiness includes the host state projection |

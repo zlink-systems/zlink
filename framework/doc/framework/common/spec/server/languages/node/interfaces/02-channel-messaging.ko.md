@@ -4,7 +4,7 @@
 
 이 문서는 ZLink Framework에서 `@zlink-systems/framework`와
 `@zlink-systems/nestjs`가 내보내는 Channel, request와 routing 관련 정확한 TypeScript declaration을 고정한다.
-동작 의미는 [공통 스펙](../../../../README.ko.md)이 소유하며, 이 문서는 이름, generic, overload,
+동작 의미는 [공통 스펙](../../../README.ko.md)이 소유하며, 이 문서는 이름, generic, overload,
 상속, member, parameter와 반환형만 정의한다.
 
 Node direct·Channel send/request와 classic fanout 구독 handler를 실행할 때마다 provider child
@@ -106,14 +106,14 @@ export interface ZLinkFanoutPublishCall {
 ```
 
 Entry Spot ID는 Framework가 MeshNode startup에서 발급한다. 애플리케이션은 Entry Spot ID를 구성값으로
-제공하지 않는다. Actor create는 선택한 owner [MeshNode](../../../../01-glossary.ko.md#meshnode)의 Entry Spot membership과 Actor Ready barrier를 같은
+제공하지 않는다. Actor create는 선택한 owner [MeshNode](../../../01-glossary.ko.md#meshnode)의 Entry Spot membership과 Actor Ready barrier를 같은
 lifecycle에서 완료한다. 이후 one-way 업무 message는 Actor queue로 직접 전달되며 Entry Spot callback을
 경유하지 않는다.
 
 Maintenance가 Actor를 target Entry Spot에 materialize할 때 Snapshot은 Actor adapter
 `restore(...)`를 먼저 완료하고 Recreate는 payload restore 없이 factory
 materialization을 완료한다. Queue·Actor timer를 복원하고 Location authority·Entry
-[membership](../../../../01-glossary.ko.md#membership)을 commit한 뒤 Actor message 처리를
+[membership](../../../01-glossary.ko.md#membership)을 commit한 뒤 Actor message 처리를
 시작한다. Bound Session 위치 갱신은 그 뒤 `sessionActorLocationUpdateReqMsg`와
 `sessionActorLocationUpdateResMsg` send message로 수행하며 응답이 없어도 Actor 처리를
 멈추지 않는다.
@@ -125,7 +125,7 @@ aggregate와 `PerActor` User Spot의 Actor relocation도 membership callback을
 호출하지 않는다.
 
 `ZLinkFanoutClient.publish(...)`는 typed event의 packet name을 topic으로 사용하는 호출과
-[topic](../../../../01-glossary.ko.md#topic)을 명시하는 호출을 함께 제공한다.
+[topic](../../../01-glossary.ko.md#topic)을 명시하는 호출을 함께 제공한다.
 `ZLinkFanoutPublishCall.submit(...)`은 local publisher transport가 event를 수락하면 정상 완료한다.
 Subscriber 수와 수신 완료는 반환하지 않는다. `ZLinkPublishCall`은 Logical Multicast 전용이며 classic
 fanout에 사용하지 않는다. Subscriber가 0개여도 publisher local queue가 event를 수락하면 정상 완료한다.
@@ -136,13 +136,13 @@ fanout에 사용하지 않는다. Subscriber가 0개여도 publisher local queue
 등록되지 않았으면 `ZLinkConfigurationException`으로 실패한다.
 
 Topic을 명시하는 overload에 내부 liveness용 exact byte `01 5A 4C 46 31`을 전달하면 transport를 시작하지
-않고 `ZLinkConfigurationException`을 발생시킨다. Topic을 생략한 overload는 typed event의 [packet name](../../../../01-glossary.ko.md#packet-name)을
+않고 `ZLinkConfigurationException`을 발생시킨다. Topic을 생략한 overload는 typed event의 [packet name](../../../01-glossary.ko.md#packet-name)을
 사용하므로 이 내부 topic을 만들지 않는다.
 
 Location store를 등록한 fanout publisher는 고정 Publisher RID와 자동 할당 중 하나를 startup 전에
 선택하고 전용 descriptor를 게시한다. Store가 없는 publisher는 listener endpoint를 수동으로 전달하는
 대상으로 사용할 수 있지만 RID allocation과 automatic discovery 등록은 수행하지 않는다. 인자 없는
-`enableSubscriber()`는 같은 ChannelName의 유효한 publisher [descriptor](../../../../01-glossary.ko.md#descriptor)를 [location store](../../../../01-glossary.ko.md#location-store)에서 조회해 모두
+`enableSubscriber()`는 같은 ChannelName의 유효한 publisher [descriptor](../../../01-glossary.ko.md#descriptor)를 [location store](../../../01-glossary.ko.md#location-store)에서 조회해 모두
 연결한다. Endpoint를 받는 overload는 명시한 endpoint만 사용하는 manual subscriber를 구성한다. 한
 channel에서 두 subscriber mode를 함께 설정하면 startup이 실패한다. Automatic subscriber는 location
 store가 필요하고, manual publisher와 manual subscriber만 사용하는 host에는 필요하지 않다.
@@ -177,9 +177,9 @@ export interface ZLinkOutboundRouteConfig {
 export declare function ZLinkPacket(packetName: string): ClassDecorator;
 ```
 
-Node runtime은 Instance Spot 관측값도 `ZLinkMeter`로 기록한다. 이 언어에서 사용하는 [Instance Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)
+Node runtime은 Instance Spot 관측값도 `ZLinkMeter`로 기록한다. 이 언어에서 사용하는 [Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)
 계기 이름 카탈로그는 다음 여섯 값이며, 이름·종류·단위와 attribute 제한은
-[runtime-metrics](../../../../25-runtime-metrics.ko.md)가 소유한다.
+[runtime-metrics](../../../25-runtime-metrics.ko.md)가 소유한다.
 
 - `zlink.instance_spot.activations`
 - `zlink.instance_spot.activation.duration`
@@ -191,7 +191,7 @@ Node runtime은 Instance Spot 관측값도 `ZLinkMeter`로 기록한다. 이 언
 One-way placement·activation 실패는 `zlink.mesh_node.messages.dropped`에
 `surface=instance_spot`을 붙여 기록한다. 표준 structured logger에는 `eventId=zlink.message_flow`, 같은
 surface와 `outcome=dropped`를 기록한다. `instanceSpotType`에는 startup에
-등록한 bounded type만 기록하며 [Spot ID](../../../../01-glossary.ko.md#spot-id), [owner](../../../../01-glossary.ko.md#owner) ID와 internal authority fields는 metric attribute로 사용하지
+등록한 bounded type만 기록하며 [Spot ID](../../../01-glossary.ko.md#spot-id), [owner](../../../01-glossary.ko.md#owner) ID와 internal authority fields는 metric attribute로 사용하지
 않는다. Reason과 action은 message-flow tracing 계약의 닫힌 값으로 기록하지만 이를 public DTO나 callback
 type으로 노출하지 않는다.
 
@@ -272,7 +272,7 @@ export interface ZLinkMeshChannelRuntimeOptions {
 }
 ```
 
-다음 예제에서 `client`는 구성이나 dependency injection으로 얻은 `ZLinkRouteClient`다. [ChannelName](../../../../01-glossary.ko.md#channelname)으로
+다음 예제에서 `client`는 구성이나 dependency injection으로 얻은 `ZLinkRouteClient`다. [ChannelName](../../../01-glossary.ko.md#channelname)으로
 요청을 시작하며, `submit(...)`이 반환한 Promise는 terminal reply까지 기다린다.
 
 ```ts
@@ -333,19 +333,19 @@ exceptional completion으로 끝난다. Token을 소비한 call이 `DeadlineExce
 다시 사용할 수 없다. 이미 사용한 token도 exceptional completion으로 처리한다. STREAM reply는 client request
 timeout을 전달받지 않으며 해당 STREAM socket의 send timeout만 사용한다.
 
-RouteMesh node·Channel·Spot·Actor는 선택한 MeshNode ROUTER, ClientServer는 client DEALER, [classic fanout](../../../../01-glossary.ko.md#classic-fanout)은
+RouteMesh node·Channel·Spot·Actor는 선택한 MeshNode ROUTER, ClientServer는 client DEALER, [classic fanout](../../../01-glossary.ko.md#classic-fanout)은
 publisher socket, STREAM send·reply는 해당 STREAM socket의 send timeout을 사용한다. Bound session은
 local·remote Actor route가 바뀌어도 framework socket send timeout 하나를 사용한다. 공개 설정이 없으면
 1초를 사용한다. One-way admission에 사용하는 millisecond 설정은 `1..2147483647` 범위의 유한 정수만
 허용한다. `undefined`는 기본값을 선택하며 `0`, 음수, 정수가 아닌 값과 상한 초과는
 `ZLinkConfigurationError`로 거부한다.
 
-[Logical Multicast](../../../../01-glossary.ko.md#logical-multicast)의
+[Logical Multicast](../../../01-glossary.ko.md#logical-multicast)의
 `ZLinkPublishCall.submit(...)`은 bounded I/O executor에 direct handoff한다. 즉시 worker slot을 얻지 못하면
 send timeout까지 capacity를 기다린다. Slot을 얻은 뒤 publish attempt가 시작되기 전에는 abort와
-[shutdown](../../../../01-glossary.ko.md#shutdown)이 operation 시작을 막을 수 있다. Publish attempt를 시작한
+[shutdown](../../../01-glossary.ko.md#shutdown)이 operation 시작을 막을 수 있다. Publish attempt를 시작한
 시점이 operation commit barrier이며, 그 뒤의 abort는 이미 확정한
-[snapshot](../../../../01-glossary.ko.md#snapshot) operation을 중단하지 않는다. Transaction이 시작된 뒤
+[snapshot](../../../01-glossary.ko.md#snapshot) operation을 중단하지 않는다. Transaction이 시작된 뒤
 개별 target 실패는 이미 수락한 target을 rollback하거나 전체 publish를 자동 재시도하지 않는다. Remote
 transport와 local Spot queue의 target별 수락·실패 결과는 반환하거나 monitoring에 집계하지 않는다.
 Target snapshot이 0개여도 정상 완료한다.

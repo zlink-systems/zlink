@@ -4,7 +4,7 @@
 
 [Spec table of contents](../../../../README.en.md)
 
-[C++ Bundle](../../../../../cpp/README.en.md) | [Runtime Architecture](../../../README.en.md) | [Application Framework](../../../server/languages/cpp/01-system-structure.en.md) | [Framework Interfaces](../../../server/languages/cpp/interfaces/README.en.md) | [HTTP Hosting](../../../server/languages/cpp/60-http-hosting.en.md)
+[C++ Bundle](../../../../../cpp/README.en.md) | [Runtime Architecture](../../../server/README.en.md) | [Application Framework](../../../server/languages/cpp/01-system-structure.en.md) | [Framework Interfaces](../../../server/languages/cpp/interfaces/README.en.md) | [HTTP Hosting](../../../server/languages/cpp/60-http-hosting.en.md)
 
 # Spec -- ZLink HTTP Client For C++
 

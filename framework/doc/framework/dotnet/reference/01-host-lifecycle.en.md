@@ -164,4 +164,4 @@ transitions without missing any, use `ObserveAsync`.
 The full basis is
 [Host registration exact interface](../../common/spec/server/languages/dotnet/interfaces/02-configuration-host.en.md),
 [Topology monitoring exact interface](../../common/spec/server/languages/dotnet/interfaces/10-topology-monitoring.en.md), and
-[Host Relocate·Shutdown·Handoff](../../common/spec/30-host-relocation-flow.en.md) (all Korean-only).
+[Host Relocate·Shutdown·Handoff](../../common/spec/server/30-host-relocation-flow.en.md) (all Korean-only).

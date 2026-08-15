@@ -1,6 +1,6 @@
 # Java 공통 runtime 공개 인터페이스
 
-[인터페이스 목차](README.ko.md) · [Host relocation과 종료 계약](../../../../30-host-relocation-flow.ko.md)
+[인터페이스 목차](README.ko.md) · [Host relocation과 종료 계약](../../../30-host-relocation-flow.ko.md)
 
 이 문서는 Java에서 host의 실행 상태, object relocation, 종료 요청과 공통 비동기 operation을 표현하는 공개 타입을
 고정한다. 공통 문서가 동작을 정의하며, 아래 선언은 Java에서 사용하는 타입과 member의 정확한 형태를
@@ -110,13 +110,13 @@ public final class ZLinkFrameworkRuntime
 사용한다는 사실만 고정한다.
 
 `relocate(options)`는 신규 application admission과 placement를 닫고 현재 object를 compatible target으로
-이전한다. 성공하면 `RELOCATED` 상태가 되며 host process와 infrastructure connection은 유지한다. User Spot은 [Spot](../../../../01-glossary.ko.md#spot)과 current
+이전한다. 성공하면 `RELOCATED` 상태가 되며 host process와 infrastructure connection은 유지한다. User Spot은 [Spot](../../../01-glossary.ko.md#spot)과 current
 member Actor 전체를 하나의 aggregate로 옮긴다. Participant 총수에 고정 상한을 두지 않는다.
 Aggregate participant 하나라도 `disableRelocation()`을 선택했으면
 `Blocked/RelocationDisabled`다. 요청한 application version과 등록 factory/type·relocation adapter eligibility를
 만족하는 target·capacity·reservation을 확보할 수 없으면 `Blocked/TargetUnavailable`로 끝난다. Target 선택 뒤
 전달한 state schema/type adapter가 호환되지 않으면 `Blocked/StateIncompatible`다. 이
-preflight failure는 admission을 변경하지 않는다. [User Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)이 존재한다는 사실만으로 relocation을 차단하지 않는다.
+preflight failure는 admission을 변경하지 않는다. [User Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)이 존재한다는 사실만으로 relocation을 차단하지 않는다.
 Local manual RouteMesh peer, ClientServer client endpoint, fanout subscriber endpoint 또는 manual fanout publisher가
 하나라도 있으면 `Blocked/ManualTopologyUnsupported`로 끝난다. Automatic RouteMesh는 source의 Core peer table에서
 descriptor와 같은 RID·lifecycle generation이 admitted·ready가 된 뒤에만 `RELOCATING`으로 전환한다.
@@ -349,7 +349,7 @@ public class systems.zlink.framework.errors.ZLinkFrameworkException extends java
 ```
 
 `ZLinkFrameworkErrorKind.value()`는 선언 순서와 무관하게 공통 숫자 `0..12`를 반환한다.
-`fromValue(int)`도 [공통 오류 모델](../../../../32-framework-error-model.ko.md)의 같은 mapping을 사용한다.
+`fromValue(int)`도 [공통 오류 모델](../../../32-framework-error-model.ko.md)의 같은 mapping을 사용한다.
 Public exception은 재시도 여부를 제공하지 않는다.
 
 ## Serializer와 오류 public signature

@@ -16,11 +16,11 @@ C++의 HTTP 공개 계약은 이 디렉토리에서 별도 문서로 정의한�
 | `60` | [HTTP hosting](60-http-hosting.ko.md) | HTTP 호스팅 계약 |
 | `61` | [내장 HTTP 서버](61-embedded-http-server.ko.md) | 내장 서버 |
 
-**기능의 의미와 동작 규칙은 [공통 스펙](../../../README.ko.md)이 소유한다.** 이 디렉토리는 그 의미가
+**기능의 의미와 동작 규칙은 [공통 스펙](../../README.ko.md)이 소유한다.** 이 디렉토리는 그 의미가
 C++에서 갖는 **정확한 public 표면**을 고정한다.
 
 **내부 runtime 구조는 공개 계약이 아니다** —
-[internals/runtime-architecture](../../../README.ko.md)가 소유한다.
+[internals/runtime-architecture](../../README.ko.md)가 소유한다.
 
 client connector는 [C++ Stream Connector 가이드](../../../../../cpp/guide/stream-connector/INDEX.ko.md)와
 [Stream Connector 공통 스펙](../../../stream-connector/32-stream-connector.ko.md)이 소유한다.

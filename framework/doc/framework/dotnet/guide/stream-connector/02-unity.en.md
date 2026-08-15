@@ -23,7 +23,7 @@ In Unity, `Dispatch.Async()` is called in `MonoBehaviour.Update()`. That runs th
 accumulated for that frame on the Unity main thread.
 
 The common meaning of asynchronous execution and the coroutine adapter follows the
-[Common Framework Policy](../../../common/spec/05-async-execution-policy.en.md). Even in Unity, the
+[Common Framework Policy](../../../common/spec/server/05-async-execution-policy.en.md). Even in Unity, the
 connector's public API is a `Task`/`ValueTask`-based asynchronous API, the same as general `.NET`.
 Calls like `Connect.Async()`, `Close.Async()`, `Dispatch.Async()`,
 `Request(...).Async<TReply>(...)`, `WaitFor(...).Async(...)` are used as-is.

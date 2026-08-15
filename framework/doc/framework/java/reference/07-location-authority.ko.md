@@ -73,7 +73,7 @@ Relocation에는 별도 participant·record·callback 동시성·in-flight byte 
 receive 전에 host의 공유 Application Job Queue reservation을 잠시 얻고 유한한 durable handoff 뒤
 반환하며, runnable turn은 이후 live permit을 점진적으로 얻는다. Core memory accounting, frame size와
 Store limit은 그대로 적용한다.
-[Relocation Flow §5.3](../../common/spec/28-relocation-flow.ko.md#53-relocation-전용-capacity-제한을-두지-않는다)을
+[Relocation Flow §5.3](../../common/spec/server/28-relocation-flow.ko.md#53-relocation-전용-capacity-제한을-두지-않는다)을
 참고한다.
 
 **선택 기준.** 기본값이 배포 환경(네트워크 지연, Store 응답 시간)에 맞지 않을 때만 조정한다.

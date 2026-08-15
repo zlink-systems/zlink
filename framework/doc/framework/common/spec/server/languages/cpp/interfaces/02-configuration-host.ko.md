@@ -124,7 +124,7 @@ source의 Core peer table에서 descriptor와 같은 RID·lifecycle generation�
 `relocating`으로 전환한다. 이 제한은 `shutdown()`에 적용하지 않는다.
 
 `blocked/deadline_exceeded`는 모든 target의 `Prepared` 완료와 host `Relocating` descriptor publication 전에
-deadline이 끝난 결과다. Connection-bound work가 pre-`Captured` [deadline](../../../../01-glossary.ko.md#deadline) 안에 terminal
+deadline이 끝난 결과다. Connection-bound work가 pre-`Captured` [deadline](../../../01-glossary.ko.md#deadline) 안에 terminal
 drain되지 않은 경우도 `relocation_disabled`가 아니라 이 결과를 사용한다. Bound-session request는 drain 대상이
 아니며 다른 Actor request와 같이 frozen journal과 ingress hold 규칙을 따른다. Framework는 relocation reference와
 reservation을 정리하고 reversible seal을 해제한 뒤 host state와 admission을 복원한다. 모든 target이
@@ -261,7 +261,7 @@ public:
   Framework는 내부 provider에서 `Dep1`, `Dep2`를 resolve한 뒤 `T(Dep1 &, Dep2 &)`를 호출한다.
 - `add_scoped<T>()`는 framework가 소유하는 scope 안에서만 resolve한다.
 - 복잡한 외부 객체 생성이나 조건부 생성이 필요한 경우에만
-  `add_factory<T, Dep1, Dep2>()`를 사용한다. [Factory](../../../../01-glossary.ko.md#factory)는 선언한 dependency의 typed reference만 받으며
+  `add_factory<T, Dep1, Dep2>()`를 사용한다. [Factory](../../../01-glossary.ko.md#factory)는 선언한 dependency의 typed reference만 받으며
   runtime provider나 scope를 받지 않는다.
 - Channel·HTTP handler class는 handler group이나 HTTP route에 등록하면 Framework가
   dispatch scope에서 생성한다. Application이 같은 handler type을 service collection에
@@ -274,8 +274,8 @@ public:
 
 `scoped` lifetime은 raw transport 기능이 아니라 Framework가 소유하는 DI lifetime이다. Framework는
 handler dispatch, STREAM session, Spot activation의 scope 경계를 내부에서 만든다.
-channel handler는 dispatch마다 scope를 만들고, [STREAM session](../../../../01-glossary.ko.md#stream-session)은 session scope를 가지며,
-[Spot](../../../../01-glossary.ko.md#spot)과 Entry Spot은 activation scope를 가진다. actor factory는 actor creation scope에서
+channel handler는 dispatch마다 scope를 만들고, [STREAM session](../../../01-glossary.ko.md#stream-session)은 session scope를 가지며,
+[Spot](../../../01-glossary.ko.md#spot)과 Entry Spot은 activation scope를 가진다. actor factory는 actor creation scope에서
 resolve하고, actor instance 자체는 actor runtime이 소유한다.
 
 예시는 아래와 같다.
@@ -338,15 +338,15 @@ handler registry 항목을 등록한다. `options.codecs().use(...)`는 일반 m
 단계가 아니라, 기본 JSON으로 표현할 수 없는 payload나 별도 binary serializer extension을
 연결하는 고급 확장점이다. 따라서 request/send/publish handler를 같은 group 이름으로
 묶고, channel builder의 `.add_handler_group(...)`에서 channel에 연결할 수 있다.
-handler group은 channel 종류와 맞아야 한다. [RouteMesh](../../../../01-glossary.ko.md#routemesh) ChannelName은 request/send
+handler group은 channel 종류와 맞아야 한다. [RouteMesh](../../../01-glossary.ko.md#routemesh) ChannelName은 request/send
 handler group을 받을 수 있고, fanout channel은 publish handler group만 받을 수 있다. 맞지 않는
 group을 연결하면 options 작성 시점에 설정 오류로 실패한다.
 같은 channel에 같은 packet 이름의 handler가 두 번 노출되면 host가 message를 받기 전에 startup 설정
 오류로 실패한다. 중복 handler는 실행 중 request protocol 오류로 처리하지 않는다.
 이 규칙은 fluent options의 handler group 경로에 적용한다. channel이 group을 먼저 참조한 뒤 handler가 들어오는 경우와 handler가 먼저
 등록되고 channel이 나중에 group을 참조하는 경우 모두 중복을 허용하지 않는다.
-MeshNode는 ROUTER listen endpoint와 0개 이상의 [ChannelName](../../../../01-glossary.ko.md#channelname) [membership](../../../../01-glossary.ko.md#membership)을 가질 수 있다. 호출 또는
-Node direct 전용 [MeshNode](../../../../01-glossary.ko.md#meshnode)는 membership 없이 시작할 수 있고, Channel handler를 제공하는 MeshNode는
+MeshNode는 ROUTER listen endpoint와 0개 이상의 [ChannelName](../../../01-glossary.ko.md#channelname) [membership](../../../01-glossary.ko.md#membership)을 가질 수 있다. 호출 또는
+Node direct 전용 [MeshNode](../../../01-glossary.ko.md#meshnode)는 membership 없이 시작할 수 있고, Channel handler를 제공하는 MeshNode는
 Server membership을 하나 이상 등록해야 한다. 각 Server ChannelName은 request/send handler group을
 가질 수 있다. fanout subscriber는 publish handler group을 하나 이상 등록해야 한다.
 Channel·HTTP handler에 생성자 의존성이 있으면 `using dependency_types =
@@ -391,7 +391,7 @@ app.add_zlink_framework ([&](zlink::framework::zlink_framework_options_t &option
 });
 ```
 
-자동 peer discovery를 사용하면 등록된 `location_store_t` provider에서 같은 [MeshName](../../../../01-glossary.ko.md#meshname)의
+자동 peer discovery를 사용하면 등록된 `location_store_t` provider에서 같은 [MeshName](../../../01-glossary.ko.md#meshname)의
 MeshNode descriptor를 찾는다. 공식 Redis package는 사용할 수 있는 provider 가운데 하나다.
 수동 peer는 `peer_connections().connect(endpoint)` 또는 expected RID를 함께 받는 overload로
 등록한다. fanout subscriber의 endpoint 목록은 RouteMesh peer intent와 별도다.
@@ -453,14 +453,14 @@ native packet session 이름으로 사용하고, 없으면 타입 이름 기반 
 `register_session(...)`을 중복 호출하면 마지막 값으로 덮어쓰지 않고 설정 오류로 처리한다.
 
 MeshNode는 `listen(...)`으로 ROUTER endpoint를 열고 `channel(...)` 뒤에 role을 선택한다.
-자동 peer는 Redis [descriptor](../../../../01-glossary.ko.md#descriptor)로, 수동 peer는 `peer_connections()`로 구성한다.
+자동 peer는 Redis [descriptor](../../../01-glossary.ko.md#descriptor)로, 수동 peer는 `peer_connections()`로 구성한다.
 Node·Channel·Spot·Actor 메시지는 같은 MeshNode ROUTER를 사용한다.
 fluent options에서 channel 이름, handler group 이름, endpoint, MeshName, stream node
 이름처럼 식별자나 연결 주소로 쓰이는 값은 빈 문자열이나 공백 문자열을 허용하지 않는다.
 잘못된 값은 low-level socket/runtime까지 전달하지 않고 builder 호출 또는 options 적용 시점의
 framework error로 닫는다.
-Spot 코드는 owner MeshNode의 client로 [Node direct](../../../../01-glossary.ko.md#node-direct), ChannelName select-one과 Logical Multicast를
-사용한다. [Logical Multicast](../../../../01-glossary.ko.md#logical-multicast)는 별도 PUB/SUB 역할을 구성하지 않는다. classic
+Spot 코드는 owner MeshNode의 client로 [Node direct](../../../01-glossary.ko.md#node-direct), ChannelName select-one과 Logical Multicast를
+사용한다. [Logical Multicast](../../../01-glossary.ko.md#logical-multicast)는 별도 PUB/SUB 역할을 구성하지 않는다. classic
 fanout만 독립 PUB/SUB socket을 사용한다.
 
 ### 4.1 HTTP Hosting
@@ -657,7 +657,7 @@ interface가 아니다. application은 위 builder method로만 HTTP 설정을 �
 
 Location runtime을 사용하는 application은 `add_location_store(...)`로 Location Store를 정확히 하나 등록한다.
 `RecreateOnRelocation` 또는 `PreserveStateWith` factory가 하나라도 있거나 Instance Spot factory가 하나라도 있으면
-`add_relocation_store(...)`로 Relocation Store도 정확히 하나 등록한다. [Instance Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) factory가 없고
+`add_relocation_store(...)`로 Relocation Store도 정확히 하나 등록한다. [Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) factory가 없고
 `DisableRelocation` factory만 있는 same-node 구성에는 Relocation Store가 필요하지 않다. 필요한 Store가 없거나
 같은 capability가 중복 등록되면 Framework는 socket bind 전에 configuration error로 종료한다.
 
@@ -944,7 +944,7 @@ metric payload callback, exporter lifecycle과 provider 내부 registry는 publi
 
 Framework가 표준 metric provider에 기록하는 Instance activation 계기는 다음 여섯 이름을 byte 단위로
 그대로 사용한다. 종류, 단위, label과 닫힌 outcome 값은
-[Runtime metrics §4](../../../../25-runtime-metrics.ko.md#4-object와-stream)가 소유한다.
+[Runtime metrics §4](../../../25-runtime-metrics.ko.md#4-object와-stream)가 소유한다.
 
 - `zlink.instance_spot.activations`
 - `zlink.instance_spot.activation.duration`
@@ -1048,7 +1048,7 @@ public:
 ```
 
 - **middleware는 `before`/`after` 쌍이다.** `next` delegate 방식이 아니다 —
-  [handler filter](../../../../06-framework-api.ko.md)와 모양이 다르다.
+  [handler filter](../../../06-framework-api.ko.md)와 모양이 다르다.
 - **middleware 인스턴스는 `create_instance`로 만들고 DI provider를 함께 받는다.**
 
 ## 7. Transport
@@ -1087,7 +1087,7 @@ configuration 등록 표면이 소유한다.
 - RouteMesh ChannelName과 classic fanout channel은 서로 다른 namespace와 socket 계약이다.
 - Spot·Actor 등록은 owner `mesh_node_builder_t`에 둔다.
 
-drain 중 claim 진행의 의미는 [Graceful Drain §5](../../../../30-host-relocation-flow.ko.md)가 소유한다.
+drain 중 claim 진행의 의미는 [Graceful Drain §5](../../../30-host-relocation-flow.ko.md)가 소유한다.
 
 ## 9. Configuration 조회
 

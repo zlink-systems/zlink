@@ -2,9 +2,9 @@
 
 이 문서는 .NET RuntimeMonitoring E2E가 Logical Multicast의 원격 전달과
 Application Job Queue 포화 상태를 어떤 순서로 검증하는지 설명한다. 공개 동작의 기준은
-[Spot messaging §4](../../common/spec/12-spot-messaging.ko.md)와
-[Core/Framework API §2.1](../../common/spec/06-framework-api.ko.md),
-[Runtime monitoring §2.2](../../common/spec/24-runtime-monitoring.ko.md)이다.
+[Spot messaging §4](../../common/spec/server/12-spot-messaging.ko.md)와
+[Core/Framework API §2.1](../../common/spec/server/06-framework-api.ko.md),
+[Runtime monitoring §2.2](../../common/spec/server/24-runtime-monitoring.ko.md)이다.
 
 ## 검증 구성
 

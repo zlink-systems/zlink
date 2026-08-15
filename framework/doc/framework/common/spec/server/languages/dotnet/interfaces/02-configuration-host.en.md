@@ -16,7 +16,7 @@ per-feature documents in the
 
 | Package | Responsibility |
 |---|---|
-| `Zlink.Framework` | Server application contract including handler, context, call, and [RouteMesh](../../../../01-glossary.en.md#routemesh), Spot, Actor, STREAM session, location runtime |
+| `Zlink.Framework` | Server application contract including handler, context, call, and [RouteMesh](../../../01-glossary.en.md#routemesh), Spot, Actor, STREAM session, location runtime |
 | `Zlink.Framework.Contracts` | Codec/error contract Server and HTTP client share |
 | `Zlink.Framework.AspNetCore` | `IServiceCollection` registration and host lifecycle wiring |
 | `Zlink.Framework.Codecs.Protobuf` | Optional Protobuf codec extension |
@@ -71,14 +71,14 @@ DI surface.
 
 | Service | Lifetime | Responsibility |
 |---|---|---|
-| `IZLinkRouteClient` | singleton | Node direct and [ChannelName](../../../../01-glossary.en.md#channelname) send/request |
+| `IZLinkRouteClient` | singleton | Node direct and [ChannelName](../../../01-glossary.en.md#channelname) send/request |
 | `IZLinkSpotClient` | singleton | Global SpotId direct send/request and explicit Instance cold activation |
 | `IZLinkSpotManager` | singleton | User Spot creation, resolve, and exact close |
-| `IZLinkSpotPublisherClient` | singleton | [Spot](../../../../01-glossary.en.md#spot) Logical Multicast publish |
+| `IZLinkSpotPublisherClient` | singleton | [Spot](../../../01-glossary.en.md#spot) Logical Multicast publish |
 | `IZLinkFanoutClient` | singleton | Publish typed events to a classic fanout ChannelName |
 | `IZLinkActorClient` | singleton | Global ActorId direct send/request |
 | `IZLinkActorManager` | singleton | Actor creation, resolve, and close |
-| `IZLinkRouteMeshRuntimeOptions` | singleton | Query/set Mesh placement weight and ChannelName [weight](../../../../01-glossary.en.md#weight) |
+| `IZLinkRouteMeshRuntimeOptions` | singleton | Query/set Mesh placement weight and ChannelName [weight](../../../01-glossary.en.md#weight) |
 | `IZLinkFrameworkRuntime` | singleton | Host state, readiness, `Relocate`, and `Shutdown` |
 | `IZLinkRouteMeshRuntime` | singleton | RouteMesh operational status |
 | `IZLinkClientServerRuntime` | singleton | ClientServer Channel operational status |
@@ -120,10 +120,10 @@ instance stores an immutable payload at a framework-issued reference. One
 instance implementing both capabilities together isn't provided as the
 official Redis contract.
 
-A [MeshNode](../../../../01-glossary.en.md#meshnode) that only uses manual
+A [MeshNode](../../../01-glossary.en.md#meshnode) that only uses manual
 peers and doesn't use distributed location features can start without a
-[location store](../../../../01-glossary.en.md#location-store). Manual
-peers also pass [MeshName](../../../../01-glossary.en.md#meshname), RID,
+[location store](../../../01-glossary.en.md#location-store). Manual
+peers also pass [MeshName](../../../01-glossary.en.md#meshname), RID,
 lifecycle generation, ChannelName set, and security identity admission.
 
 ## 6. Codec
@@ -137,7 +137,7 @@ as an extension.
 The codec is only responsible for converting between payload and
 business object. Packet name, metadata, routing, and reply correlation
 are owned by the framework. The
-[packet name](../../../../01-glossary.en.md#packet-name) is determined
+[packet name](../../../01-glossary.en.md#packet-name) is determined
 in the handler registration descriptor, and changing the codec doesn't
 change the dispatch key.
 
@@ -146,9 +146,9 @@ change the dispatch key.
 The host validates the following conditions before network bind.
 
 - Duplicate framework root and MeshName
-- The MeshNode's [Routing ID](../../../../01-glossary.en.md#routing-id)
+- The MeshNode's [Routing ID](../../../01-glossary.en.md#routing-id)
   and listener configuration. Server
-  [membership](../../../../01-glossary.en.md#membership) can be 0
+  [membership](../../../01-glossary.en.md#membership) can be 0
 - ChannelName's `Client()`/`Server()` role and process-local topology
   duplication
 - The location store needed for ClientServer automatic discovery
@@ -157,9 +157,9 @@ The host validates the following conditions before network bind.
 - Owner relationship of Spot, Actor, and STREAM factory
 - Duplicate Object role selection, Location Store registration for
   Client/Server role, and absence of a
-  [factory](../../../../01-glossary.en.md#factory) for None role
+  [factory](../../../01-glossary.en.md#factory) for None role
 - Duplicate stable type/implementation class for Actor/User Spot/
-  [Instance Spot](../../../../01-glossary.en.md#entry-user-instance-spot),
+  [Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot),
   explicit relocation policy, and per-type capacity
 - Node placement weight and active/pending capacity
 - Host `ApplicationVersion` range and `MaintenanceWave` format
@@ -171,7 +171,7 @@ The host validates the following conditions before network bind.
 - The store instance needed for automatic discovery or distributed
   location features
 - An invalid combination of
-  [automatic discovery](../../../../01-glossary.en.md#automatic-discovery)/
+  [automatic discovery](../../../01-glossary.en.md#automatic-discovery)/
   object role and fixed routing ID, and RID prefix format
 - TLS certificate, key, and trust configuration
 
@@ -198,7 +198,7 @@ different inbound frame doesn't satisfy the ACK deadline. A C# public
 option to change this value isn't provided, and it isn't treated as the
 same setting as the owner lease renew interval.
 
-A [Logical Multicast](../../../../01-glossary.en.md#logical-multicast)
+A [Logical Multicast](../../../01-glossary.en.md#logical-multicast)
 publisher doesn't provide a publish-only delivery policy option. Each
 remote target follows the MeshNode ROUTER's HWM and send timeout, and the
 local Spot queue accepts or drops independently.

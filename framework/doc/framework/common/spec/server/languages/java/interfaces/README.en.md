@@ -4,7 +4,7 @@
 
 This directory fixes the exact public signature of the Java server
 package, organized per feature. Common behavior is owned by the
-[server common spec](../../../../README.en.md).
+[server common spec](../../../README.en.md).
 
 - [Common Runtime](common-runtime.en.md)
 - [Configuration And Host](configuration-host.en.md)
@@ -38,13 +38,13 @@ topology, and `ZLinkFrameworkRuntimeState` represents the whole host's
 state. A Channel call only takes a process-local ChannelName. The first
 argument of `sendToNode(String, RoutingId, Object)`, which directly
 specifies a node, is
-[MeshName](../../../../01-glossary.en.md#meshname).
+[MeshName](../../../01-glossary.en.md#meshname).
 
 ActorId and User/Instance SpotId are global logical IDs. A regular
 message only takes the ID and resolves current
-[authority](../../../../01-glossary.en.md#authority), and exact mutation
+[authority](../../../01-glossary.en.md#authority), and exact mutation
 and session bind take an `ActorRef` or `SpotRef`. A
-[MeshNode](../../../../01-glossary.en.md#meshnode)'s object role is
+[MeshNode](../../../01-glossary.en.md#meshnode)'s object role is
 closed to `None`, `Client`, `Server`, and Client/Server require a
 Location Store.
 

@@ -1,5 +1,5 @@
 <!-- framework-adapter-nav:start -->
-[문서 목록](../README.ko.md) | [Runtime Lifecycle](../../common/spec/README.ko.md) | [Regression Matrix](regression-test-matrix.ko.md)
+[문서 목록](../README.ko.md) | [Runtime Lifecycle](../../common/spec/server/README.ko.md) | [Regression Matrix](regression-test-matrix.ko.md)
 <!-- framework-adapter-nav:end -->
 
 # Java Backend Dependency Policy
@@ -92,5 +92,5 @@ status는 꼭 필요한 경우 optional detail로만 둔다.
 
 ---
 <!-- framework-adapter-nav:bottom:start -->
-[문서 목록](../README.ko.md) | [Runtime Lifecycle](../../common/spec/README.ko.md) | [Regression Matrix](regression-test-matrix.ko.md)
+[문서 목록](../README.ko.md) | [Runtime Lifecycle](../../common/spec/server/README.ko.md) | [Regression Matrix](regression-test-matrix.ko.md)
 <!-- framework-adapter-nav:bottom:end -->

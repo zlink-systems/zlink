@@ -507,7 +507,7 @@ status 수이고, `discardedTerminalCount`는 보관 상한 초과로 폐기한 
 최댓값이며, 네 언어가 같은 상한을 쓰도록 여기에 맞췄다.
 Framework는 관찰자 queue가 가득 찼다는 이유로 iteration을 끝내지 않으며,
 `signal` abort만 해당 iteration을 종료한다. 전달 단위의 정의는
-[Runtime monitoring §3](../../../../24-runtime-monitoring.ko.md#3-현재-상태-조회와-변화-관찰)이 소유한다.
+[Runtime monitoring §3](../../../24-runtime-monitoring.ko.md#3-현재-상태-조회와-변화-관찰)이 소유한다.
 
 ## 7. Message wrapper
 

@@ -11,7 +11,7 @@ doesn't run the Actor disconnect callback. The route and physical
 connection of a different Actor not included in the relocation target
 aren't changed.
 
-[Interface table of contents](README.en.md) · [Common Spot Contract](../../../../12-spot-messaging.en.md)
+[Interface table of contents](README.en.md) · [Common Spot Contract](../../../12-spot-messaging.en.md)
 
 This document fixes the public interface expressing Spot identity,
 lifecycle, messaging, manager, and relocation adapter in Java. A regular
@@ -23,7 +23,7 @@ UTF-8 encoded size 1..255 bytes, compared as a case-sensitive exact
 value. Unicode normalization and case folding aren't applied.
 
 The information the Location Store holds, fixing the current owner and
-lifecycle state of a [Spot](../../../../01-glossary.en.md#spot), is
+lifecycle state of a [Spot](../../../01-glossary.en.md#spot), is
 called authority. The process of preparing a new Instance Spot when
 authority is Missing and the caller specified Instance intent is called
 cold activation.
@@ -196,8 +196,8 @@ application state that must be recovered is owned by the Spot or Actor.
 
 The exact builder member of factory registration is owned by
 [Configuration And Host](configuration-host.en.md). The Actor/User Spot/
-[Instance Spot](../../../../01-glossary.en.md#entry-user-instance-spot)
-[factory](../../../../01-glossary.en.md#factory) selects exactly one
+[Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
+[factory](../../../01-glossary.en.md#factory) selects exactly one
 relocation behavior in the configure callback, and an overload that
 omits the callback isn't provided. The Spot manager is User-Spot-only.
 Only `create(spotType)` and `getOrCreate(spotId, spotType)` create a
@@ -209,7 +209,7 @@ The two operations return `ZLinkSpotSendCall` and `ZLinkSpotRequestCall`
 respectively. Only an operation that called `instanceSpot()` or
 `instanceSpot(stableType)` can start cold activation of a Missing
 Instance Spot. An operation without the marker ends Missing
-[authority](../../../../01-glossary.en.md#authority) with `NOT_FOUND`
+[authority](../../../01-glossary.en.md#authority) with `NOT_FOUND`
 and doesn't create a creation intent.
 
 If existing authority exists, `instanceSpot()` uses the stable type
@@ -225,7 +225,7 @@ User, it's a type-mismatch error.
 
 `inMesh` selects the Mesh for Missing Instance cold activation. It
 doesn't relocate existing authority to a different
-[owner](../../../../01-glossary.en.md#owner), and doesn't apply to
+[owner](../../../01-glossary.en.md#owner), and doesn't apply to
 regular User Spot messaging either. This option and the Instance marker
 can each only be set once, and terminal `submit` can also only be called
 once.
@@ -259,7 +259,7 @@ empty payload or success. A null stage and null `byte[]` from capture,
 and a null stage from restore, are contract violations. A precommit
 adapter exception and contract violation where a deadline hasn't been
 fixed yet in host relocation are `Blocked/StateIncompatible`; once a
-[deadline](../../../../01-glossary.en.md#deadline) is fixed,
+[deadline](../../../01-glossary.en.md#deadline) is fixed,
 `Blocked/DeadlineExceeded`. Stale attempt cancellation can't commit a
 terminal result. Capture and restore are at-least-once and can overlap
 with a stale target attempt, so they must be retry-safe.
@@ -311,21 +311,21 @@ processed in the following order.
 1. The source looks up authority. If Ready, it sends a regular message
    to the current owner.
 2. If authority is Missing and there's
-   [Instance intent](../../../../01-glossary.en.md#instance-intent), the
+   [Instance intent](../../../01-glossary.en.md#instance-intent), the
    source selects an eligible target. It then puts SpotId, stable type,
    creation intent, and the first message into an activation envelope
    and sends it to the target. This envelope is a Framework
    infrastructure message that can be delivered even before
-   [Ready](../../../../01-glossary.en.md#ready), and isn't delivered to
+   [Ready](../../../01-glossary.en.md#ready), and isn't delivered to
    the application handler.
 3. The target runtime first stores the complete envelope, including
    metadata presence and frame, as an immutable recovery root in the
    Relocation Store, then confirms whether a local instance matching the
    requested SpotId and
-   [stable type](../../../../01-glossary.en.md#stable-type) exists.
+   [stable type](../../../01-glossary.en.md#stable-type) exists.
 4. Only when there's no instance does the target reserve `CREATING`
    authority and reserved capacity with itself as owner. The reserved
-   [snapshot](../../../../01-glossary.en.md#snapshot) is returned with a
+   [snapshot](../../../01-glossary.en.md#snapshot) is returned with a
    reservation fence identifying which reservation it is, and a receipt
    proving the recovery root's storage is complete, both received from
    the provider.
@@ -376,7 +376,7 @@ sequenceDiagram
 ```
 
 This diagram only shows the first message that starts
-[cold activation](../../../../01-glossary.en.md#cold-activation) and the
+[cold activation](../../../01-glossary.en.md#cold-activation) and the
 authority race. The handler's terminal completion or reply, activation
 failure cleanup, and recovery pointer removal are defined in the later
 steps of the numbered list.
@@ -421,20 +421,20 @@ CompletionStage<CartReply> reply = spotClient
 `IDLE_EVICTED` is an Instance-Spot-only reason and isn't delivered to
 Entry Spot or User Spot. The idle judgment condition and the
 reactivation rule after cleanup are owned by
-[Spot Model §6.2](../../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
+[Spot Model §6.2](../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
 The context's `deadline` is an absolute `Instant`. A separate Framework
 cancellation argument isn't added to the Java Spot closing callback. The
 framework ends the stage-completion wait at the deadline and proceeds
 with bounded teardown. Only Entry/User/Instance Spot receive this
 callback — a per-Actor closing callback isn't provided. Host
-[Shutdown](../../../../01-glossary.en.md#shutdown) runs the callback
+[Shutdown](../../../01-glossary.en.md#shutdown) runs the callback
 while Actor membership and the local instance are valid, and cleans up
 scope and authority after completion. A standalone Actor relocation
 doesn't close the Entry Spot, so it doesn't call this callback.
 
 A regular message resolves the Ready owner. On a Missing RID, only a
 call with the Instance marker above creates a target-owned
-[activation envelope](../../../../01-glossary.en.md#activation-envelope).
+[activation envelope](../../../01-glossary.en.md#activation-envelope).
 The stored envelope, stable type, and initial Mesh are used only to
 resume the first cold activation on the same target node and lifecycle
 before its terminal completion is recorded. Termination or lease expiry

@@ -1,6 +1,6 @@
 # Java Configuration And Host Public Interface
 
-[Interface table of contents](README.en.md) · [Transport Liveness](../../../../29-transport-liveness.en.md)
+[Interface table of contents](README.en.md) · [Transport Liveness](../../../29-transport-liveness.en.md)
 
 This document fixes the public interface a Java application uses to
 configure Mesh, Channel role, handler, and the Framework host. The
@@ -268,7 +268,7 @@ serverOptions.addRouteMesh("orders")
         CheckoutReply.class); // registers this node as a checkout request processing candidate.
 ```
 
-An automatic [RouteMesh](../../../../01-glossary.en.md#routemesh)
+An automatic [RouteMesh](../../../01-glossary.en.md#routemesh)
 compares RID in canonical byte order, and only the MeshNode with the
 smaller RID connects to the counterpart endpoint. A manual topology can
 connect from one or both sides depending on application endpoint
@@ -286,18 +286,18 @@ registration are separate physical topologies, so they aren't included
 in this judgment.
 
 ClientServer can use manual endpoint and location store
-[automatic discovery](../../../../01-glossary.en.md#automatic-discovery)
+[automatic discovery](../../../01-glossary.en.md#automatic-discovery)
 together. If the two sources point to the same Server RID and
-[lifecycle generation](../../../../01-glossary.en.md#lifecycle-generation),
+[lifecycle generation](../../../01-glossary.en.md#lifecycle-generation),
 the connection intent and ready target are merged into one. In both
 automatic and manual, only Client connects to server — Server doesn't
 look for a client endpoint or start an outbound connect. Client and
 Server can each be registered once on the same ChannelName, sharing one
 ClientServer topology through separate registrations under the
 `(ChannelName, Role)` key. Registering the same role twice fails
-startup, and the RouteMesh [ChannelName](../../../../01-glossary.en.md#channelname)
+startup, and the RouteMesh [ChannelName](../../../01-glossary.en.md#channelname)
 conflict rule is kept. A local Server, after listener and service
-admission, is also selected under the same readiness/[weight](../../../../01-glossary.en.md#weight)/
+admission, is also selected under the same readiness/[weight](../../../01-glossary.en.md#weight)/
 drain conditions as a remote Server, without local priority or calling a
 direct handler.
 
@@ -312,9 +312,9 @@ Omitting object role means `None`. `client()` only provides global
 object operations and doesn't become a placement target, and `server()`
 provides Client capability plus Entry Spot/factory registration. Client
 and Server require a
-[Location Store](../../../../01-glossary.en.md#location-store). The
+[Location Store](../../../01-glossary.en.md#location-store). The
 Actor/User Spot/Instance Spot
-[factory](../../../../01-glossary.en.md#factory) must take a stable type
+[factory](../../../01-glossary.en.md#factory) must take a stable type
 and configure callback, and there's no overload that omits relocation
 behavior selection.
 
@@ -385,7 +385,7 @@ helper, aren't provided.
 The 5-second periodic probe independent of application traffic, and the
 15-second matching-ACK deadline on the same current connection, are the
 JVM service runtime's fixed liveness profile. A different inbound frame
-doesn't satisfy the [deadline](../../../../01-glossary.en.md#deadline).
+doesn't satisfy the [deadline](../../../01-glossary.en.md#deadline).
 This value isn't exposed as a public option per Channel/handler/peer.
 The Location owner lease option is a separate store contract and doesn't
 substitute for transport liveness.
@@ -404,7 +404,7 @@ isn't `0` bytes, and even for a large payload, the fixed cost is still
 added. If the sum exceeds the `long` representable range, it's pinned to
 `Long.MAX_VALUE` and that submit is rejected. The accounting rule is
 owned by
-[Framework API §8.2](../../../../06-framework-api.en.md#82-handler-execution-object-and-dependency-lifetime).
+[Framework API §8.2](../../../06-framework-api.en.md#82-handler-execution-object-and-dependency-lifetime).
 Both values are only set before startup. `0` isn't unlimited — it
 selects the Framework profile's finite default. A negative value is a
 startup configuration error. A Logical Multicast local target also
@@ -421,12 +421,12 @@ other's value. Only Instance Spot is a cleanup target — Entry Spot and
 User Spot aren't affected by this setting. The idle judgment condition,
 the delivery of `ZLinkSpotCloseReason.IDLE_EVICTED`, and the
 cold-activation rule after cleanup are owned by
-[Spot Model §6.2](../../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
+[Spot Model §6.2](../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
 
 Automatic RID has the format `prefix-<lowercase-canonical-uuid-v4>`.
 UUID v4 is represented as a lowercase canonical string in `8-4-4-4-12`
 digit groups. Prefix is ASCII `[A-Za-z0-9._-]` 1..64 characters, and on
-conflict with an active [owner](../../../../01-glossary.en.md#owner), it
+conflict with an active [owner](../../../01-glossary.en.md#owner), it
 fails immediately with `ROUTING_ID_CONFLICT` instead of retrying with a
 new UUID. Fixed RID is only allowed in a manual topology with no object
 role and no Store descriptor. Slot count, allocation group, and a public
@@ -434,7 +434,7 @@ allocation provider aren't provided.
 
 The fully encoded MeshNode descriptor the framework builds from every
 registration must be at most 1 MiB.
-[Spot](../../../../01-glossary.en.md#spot) type and object capability
+[Spot](../../../01-glossary.en.md#spot) type and object capability
 collection are each at most 1024. The relocation adapter class and
 opaque application bytes aren't published in the peer descriptor. The
 runtime validates the completed descriptor all at once before socket

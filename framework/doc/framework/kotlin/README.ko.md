@@ -10,7 +10,7 @@
 > [공통 스펙](../common/README.ko.md)을 따른다.
 
 비동기 실행, `CompletionStage`, Kotlin coroutine wrapper의 공통 의미는
-[비동기 실행과 coroutine 정책](../common/spec/05-async-execution-policy.ko.md)을 따른다.
+[비동기 실행과 coroutine 정책](../common/spec/server/05-async-execution-policy.ko.md)을 따른다.
 
 Sample과 E2E의 설정 파일, 환경 변수 금지와 `@ConfigurationProperties` binding 기준은
 [Sample/E2E 설정 정책](../common/sample-e2e-configuration-policy.ko.md)을 따른다.
@@ -64,7 +64,7 @@ Java 타입은 Java spec을 따르고, Kotlin에서 새로 노출하는 `suspend
 | 문서 | 범위 |
 |------|------|
 | [backend-dependency-policy](../java/internals/backend-dependency-policy.ko.md) | Java binding 의존 격리 |
-| [공통 내부 구조](../common/spec/README.ko.md) | 네 언어가 공유하는 runtime 아키텍처 결정 |
+| [공통 내부 구조](../common/spec/server/README.ko.md) | 네 언어가 공유하는 runtime 아키텍처 결정 |
 | [regression-test-matrix](../java/internals/regression-test-matrix.ko.md) | JVM contract, E2E와 performance smoke 기준 |
 
 ## 4. 샘플 (Kotlin)

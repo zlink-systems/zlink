@@ -325,7 +325,7 @@ bool non_empty_directories_do_not_keep_gitkeep (const std::filesystem::path &roo
 bool actor_model_documents_actor_destroy_lifecycle (const std::filesystem::path &root)
 {
     const auto path =
-      root.parent_path ().parent_path () / "doc/framework/common/spec/14-actor-model.ko.md";
+      root.parent_path ().parent_path () / "doc/framework/common/spec/server/14-actor-model.ko.md";
     std::ifstream input (path);
     std::ostringstream buffer;
     buffer << input.rdbuf ();
@@ -360,7 +360,7 @@ bool actor_model_documents_actor_destroy_lifecycle (const std::filesystem::path 
 bool framework_api_documents_actor_destroy_lifecycle (const std::filesystem::path &root)
 {
     const auto path =
-      root.parent_path ().parent_path () / "doc/framework/common/spec/06-framework-api.ko.md";
+      root.parent_path ().parent_path () / "doc/framework/common/spec/server/06-framework-api.ko.md";
     std::ifstream input (path);
     std::ostringstream buffer;
     buffer << input.rdbuf ();
@@ -395,7 +395,7 @@ bool session_actor_dispatch_documents_disconnect_destroy_boundary (
 {
     const auto path =
       root.parent_path ().parent_path ()
-      / "doc/framework/common/spec/20-session-actor-dispatch.ko.md";
+      / "doc/framework/common/spec/server/20-session-actor-dispatch.ko.md";
     std::ifstream input (path);
     std::ostringstream buffer;
     buffer << input.rdbuf ();

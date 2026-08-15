@@ -17,8 +17,8 @@ title: "10. Location — 자동 연결과 Object 위치 · Java"
 
 # 10. Location — 자동 연결과 Object 위치
 
-> **이 장의 계약 소유 문서** — [Location runtime](../../../common/spec/21-location-runtime.ko.md),
-> [Location Store](../../../common/spec/22-location-store-redis.ko.md)와
+> **이 장의 계약 소유 문서** — [Location runtime](../../../common/spec/server/21-location-runtime.ko.md),
+> [Location Store](../../../common/spec/server/22-location-store-redis.ko.md)와
 > [언어별 location 공개 계약](../../../common/spec/server/languages/README.ko.md)이
 > 정의한다. 이 문서는 application에서 Store를 등록하고 상태를 확인하는 방법을 설명한다.
 
@@ -122,7 +122,7 @@ location.setMessageFollowDuration(Duration.ofSeconds(30));
 Relocation에는 별도 participant·record·동시성·in-flight byte capacity 설정이 없다. Target
 staging은 host의 공유 Application Job Queue reservation을 사용하고, live-job limit보다 큰 backlog도
 점진적으로 실행한다. Core memory accounting, negotiated frame size와 Store limit은 그대로 적용한다.
-[Relocation Flow §5.3](../../../common/spec/28-relocation-flow.ko.md#53-relocation-전용-capacity-제한을-두지-않는다)을
+[Relocation Flow §5.3](../../../common/spec/server/28-relocation-flow.ko.md#53-relocation-전용-capacity-제한을-두지-않는다)을
 참고한다.
 
 **lease 값 넷은 서로 묶여 있다.** 다음 관계를 어기면 startup error다. 값을 바꿀 때는
@@ -200,6 +200,6 @@ Location Store에서 current owner를 확인하고 이동 중에는 Message Foll
 ## 6. 관련 문서
 
 - 이 챕터 계약의 실행 검증 예문: [13. Interface 카탈로그](13-interface-catalog.ko.md) §6 — 검증 클래스 `LocationContracts`
-- 정식 계약: [Location runtime](../../../common/spec/21-location-runtime.ko.md)
+- 정식 계약: [Location runtime](../../../common/spec/server/21-location-runtime.ko.md)
 - 자동 연결이 없는 수동 연결: [05-channel-messaging §6](05-channel-messaging.ko.md#6-연결-제어)
 - Host relocate와 drain 관측: [12-operations](12-operations.ko.md)

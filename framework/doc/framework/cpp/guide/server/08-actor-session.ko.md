@@ -17,7 +17,7 @@ title: "8. Session과 Actor binding · C++"
 
 # 8. Session과 Actor binding
 
-> **이 장의 계약 소유 문서** — [Session Actor dispatch](../../../common/spec/20-session-actor-dispatch.ko.md)가
+> **이 장의 계약 소유 문서** — [Session Actor dispatch](../../../common/spec/server/20-session-actor-dispatch.ko.md)가
 > 동작을, [언어별 STREAM session · bound session 공개 계약](../../../common/spec/server/languages/README.ko.md)이
 > 정확한 시그니처를 소유한다.
 

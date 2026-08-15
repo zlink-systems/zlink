@@ -1,6 +1,6 @@
 # Node.js 공개 인터페이스 목차
 
-[Node.js 계약 목차](../README.ko.md) · [공통 스펙](../../../../README.ko.md)
+[Node.js 계약 목차](../README.ko.md) · [공통 스펙](../../../README.ko.md)
 
 이 디렉터리는 ZLink Framework의 `@zlink-systems/framework`,
 `@zlink-systems/nestjs`, `@zlink-systems/framework-locations-redis` package root가 내보내는 정확한
@@ -13,7 +13,7 @@ public TypeScript declaration을 범주별로 고정한다. 같은 declaration�
 | 01 | [기초 타입과 구성](01-foundation-configuration.ko.md) | global ID·ref, object role·capacity, Actor·Spot relocation adapter와 explicit policy |
 | 02 | [Channel, request와 routing](02-channel-messaging.ko.md) | Entry Spot actor messaging, Channel·Fanout·RouteMesh 호출과 handler |
 | 03 | [Location, host lifecycle과 observability](03-location-observability.ko.md) | 운영 조회, relocation mode·target version, runtime event, metric과 tracing |
-| 04 | [Spot과 Instance Spot](04-spots.ko.md) | [Spot](../../../../01-glossary.ko.md#spot) lifecycle, [User Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) manager와 Instance cold activation fluent call |
+| 04 | [Spot과 Instance Spot](04-spots.ko.md) | [Spot](../../../01-glossary.ko.md#spot) lifecycle, [User Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) manager와 Instance cold activation fluent call |
 | 05 | [Actor와 session binding](05-actors.ko.md) | Actor lifecycle, Actor call과 bound session |
 | 06 | [STREAM, timer와 worker](06-stream-worker.ko.md) | STREAM session, timer와 worker scheduling |
 | 07 | [NestJS host adapter](07-nestjs-host.ko.md) | module, DI token, decorator와 host builder |

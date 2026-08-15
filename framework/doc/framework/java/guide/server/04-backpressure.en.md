@@ -18,9 +18,9 @@ View in another language — [C#/.NET](../../../dotnet/guide/server/04-backpress
 # 4. Backpressure — When Arrival Outpaces Processing
 
 > **The documents that own this chapter's contract** — covered by the
-> [Async Execution Policy](../../../common/spec/05-async-execution-policy.en.md),
-> [Framework API](../../../common/spec/06-framework-api.en.md),
-> [Runtime Monitoring](../../../common/spec/24-runtime-monitoring.en.md), and the
+> [Async Execution Policy](../../../common/spec/server/05-async-execution-policy.en.md),
+> [Framework API](../../../common/spec/server/06-framework-api.en.md),
+> [Runtime Monitoring](../../../common/spec/server/24-runtime-monitoring.en.md), and the
 > [per-language topology public contract](../../../common/spec/server/languages/README.en.md).
 > This chapter explains that behavior as concepts and principles, and covers which options
 > affect it. Exact option names, defaults, and mutability are owned by each language's
@@ -253,8 +253,8 @@ is neither cancelled nor rolled back.
 | `receiveHighWaterMark` | Bytes that can be held **after receiving**, per peer. `0` means unlimited | `configureRouterSocket()` |
 | `maxMessageSize` | The max size of one message that will be accepted | `configureRouterSocket()` |
 | `sendHighWaterMark` · `linger` | The pub/sub publish socket's ceiling and how long a pending publish waits at shutdown | `configureSpotPublisher()` |
-| `CoreHwmMemoryLimitBytes` · `CoreHwmBudgetBytes` · `CoreHwmProfile` | The Core context's ordinary-queue byte budget | `configureDispatch()` |
-| `ApplicationJobQueueProfile` · `MaxQueuedApplicationJobs` | The host instance's queued-application-job limit | `configureDispatch()` |
+| `coreHwmMemoryLimitBytes` · `coreHwmBudgetBytes` · `CoreHwmProfile` | The Core context's ordinary-queue byte budget | `configureDispatch()` |
+| `ApplicationJobQueueProfile` · `maxQueuedApplicationJobs` | The host instance's queued-application-job limit | `configureDispatch()` |
 
 **"The ceiling for waiting on a send slot" isn't a single global value.** The value actually
 used is owned by the socket that call uses.
@@ -306,15 +306,15 @@ exact interface for each language's precise spelling.
 
 | Setting | Purpose |
 | --- | --- |
-| `CoreHwmMemoryLimitBytes` | A finite process/runtime memory-limit hint forwarded for Core budget calculation |
-| `CoreHwmBudgetBytes` | A positive manual Core budget that takes precedence over profile calculation |
+| `coreHwmMemoryLimitBytes` | A finite process/runtime memory-limit hint forwarded for Core budget calculation |
+| `coreHwmBudgetBytes` | A positive manual Core budget that takes precedence over profile calculation |
 | `CoreHwmProfile` | The Core Auto-budget profile. The default is `Balanced` |
 
 The framework and binding do not apply the profile ratio or divide the budget by connection
 count. They read Core's effective budget, directional queue HWMs, accounted bytes, and
-blocked ratio directly from the Core snapshot. `CoreHwmBudgetBytes` is not a hard process
+blocked ratio directly from the Core snapshot. `coreHwmBudgetBytes` is not a hard process
 RSS cap, so observe RSS, the managed heap, and allocator overhead separately
-([Runtime Monitoring](../../../common/spec/24-runtime-monitoring.en.md)).
+([Runtime Monitoring](../../../common/spec/server/24-runtime-monitoring.en.md)).
 
 For a manual production budget, measure current/peak Core-accounted bytes, blocked ratio,
 throughput, latency, and process memory under production-like payload distribution and
@@ -324,7 +324,7 @@ defines the measurement procedure.
 ### 4.2 Setting An HWM Directly
 
 `sendHighWaterMark` and `receiveHighWaterMark` are per-socket-direction manual HWMs. They use
-bytes like `CoreHwmBudgetBytes`, but have a different owner and scope. A manual socket HWM
+bytes like `coreHwmBudgetBytes`, but have a different owner and scope. A manual socket HWM
 applies to that directional queue; it is not a replacement calculation for the Core Auto
 budget.
 
@@ -348,9 +348,9 @@ count bytes or a memory ratio.
 | Acquisition | Core queue admission | Immediately before ordinary receive/claim |
 | Release | Core queue/retained-lease lifecycle | Immediately before the user callback's actual first instruction |
 | Saturation result | The sender for that origin waits | The ordinary ingress source waits for a permit |
-| Settings | `CoreHwmMemoryLimitBytes` · `CoreHwmBudgetBytes` · `CoreHwmProfile` | `ApplicationJobQueueProfile` · `MaxQueuedApplicationJobs` |
+| Settings | `coreHwmMemoryLimitBytes` · `coreHwmBudgetBytes` · `CoreHwmProfile` | `ApplicationJobQueueProfile` · `maxQueuedApplicationJobs` |
 
-Manual `MaxQueuedApplicationJobs` is an exact limit in `1..2,147,483,647`. `0` is not
+Manual `maxQueuedApplicationJobs` is an exact limit in `1..2,147,483,647`. `0` is not
 unlimited; it is a startup configuration error. Without a manual value, the framework
 calculates the value once at startup from the effective processor count and profile.
 
@@ -399,9 +399,9 @@ attribute first.
 ## 6. Framework Runtime Coverage
 
 This common guide does not list per-language implementation differences. Common behavior is
-owned by [Framework API §2.1](../../../common/spec/06-framework-api.en.md#21-separating-the-core-memory-budget-from-the-application-job-queue),
+owned by [Framework API §2.1](../../../common/spec/server/06-framework-api.en.md#21-separating-the-core-memory-budget-from-the-application-job-queue),
 and status/reset semantics are owned by
-[Runtime Monitoring](../../../common/spec/24-runtime-monitoring.en.md). See the language's
+[Runtime Monitoring](../../../common/spec/server/24-runtime-monitoring.en.md). See the language's
 `16. Options`, `11. Monitoring`, and
 [exact interface](../../../common/spec/server/languages/README.en.md) for its spelling and
 call form.
@@ -444,12 +444,12 @@ call form.
 
 - Option defaults and when they can change: [16. Options](16-options.en.md) §3
 - The formal contract for one-way submit and the completion boundary:
-  [Async Execution Policy](../../../common/spec/05-async-execution-policy.en.md)
+  [Async Execution Policy](../../../common/spec/server/05-async-execution-policy.en.md)
 - Core HWM and application job queue settings:
-  [Framework API §2.1](../../../common/spec/06-framework-api.en.md#21-separating-the-core-memory-budget-from-the-application-job-queue)
+  [Framework API §2.1](../../../common/spec/server/06-framework-api.en.md#21-separating-the-core-memory-budget-from-the-application-job-queue)
 - Status, metrics, and reset semantics:
-  [Runtime Monitoring](../../../common/spec/24-runtime-monitoring.en.md) ·
-  [Runtime Metrics](../../../common/spec/25-runtime-metrics.en.md)
+  [Runtime Monitoring](../../../common/spec/server/24-runtime-monitoring.en.md) ·
+  [Runtime Metrics](../../../common/spec/server/25-runtime-metrics.en.md)
 - The socket configuration surface:
   [per-language topology public contract](../../../common/spec/server/languages/README.en.md)
 - The byte-unit contract for a socket option: [the core guide's socket option](https://zlink-systems.github.io/zlink/guide/12-socket-options/)

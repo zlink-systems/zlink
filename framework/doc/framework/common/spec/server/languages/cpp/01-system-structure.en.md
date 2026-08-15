@@ -12,22 +12,22 @@
 > surface** of each capability.
 >
 > **The meaning and behavior rule of a capability is owned by the
-> common spec** — [channel-messaging](../../../08-channel-messaging.en.md),
-> [spot-messaging](../../../12-spot-messaging.en.md),
-> [MeshNode](../../../13-mesh-node.en.md),
-> [stream-session](../../../19-stream-session.en.md),
-> [actor-model](../../../14-actor-model.en.md),
-> [session-actor-dispatch](../../../20-session-actor-dispatch.en.md),
-> [runtime-monitoring](../../../24-runtime-monitoring.en.md),
-> [location-runtime](../../../21-location-runtime.en.md),
-> [channel-topology](../../../07-channel-topology.en.md).
+> common spec** — [channel-messaging](../../08-channel-messaging.en.md),
+> [spot-messaging](../../12-spot-messaging.en.md),
+> [MeshNode](../../13-mesh-node.en.md),
+> [stream-session](../../19-stream-session.en.md),
+> [actor-model](../../14-actor-model.en.md),
+> [session-actor-dispatch](../../20-session-actor-dispatch.en.md),
+> [runtime-monitoring](../../24-runtime-monitoring.en.md),
+> [location-runtime](../../21-location-runtime.en.md),
+> [channel-topology](../../07-channel-topology.en.md).
 >
 > **The public type and signature is owned by the
 > [exact interface per capability](interfaces/README.en.md).**
 > HTTP is owned by [60](60-http-hosting.en.md) ·
 > [61](61-embedded-http-server.en.md).
 > **The internal runtime structure is owned by
-> [internals/runtime-architecture](../../../README.en.md)**
+> [internals/runtime-architecture](../../README.en.md)**
 > — it isn't a public contract.
 
 ## 1. Product Position
@@ -80,7 +80,7 @@ class module_t;         // capability bundle registration
   split a large app by capability.
 - **Runtime is built at host startup and cleaned up at shutdown.** It
   isn't hidden behind lazy creation
-  ([channel-messaging §2](../../../08-channel-messaging.en.md)).
+  ([channel-messaging §2](../../08-channel-messaging.en.md)).
 
 ### 3.1 Hosted Service Execution Order
 
@@ -177,7 +177,7 @@ injection is used.
 | **`get_required` on an unregistered type** | **Fails** |
 | `get` on an unregistered type | **Returns an empty value.** Doesn't fail |
 | **Resolving a `scoped` service with no scope** | **Fails** — scoped requires a scope |
-| **Resolving from a closed provider** | **Fails as a [shutdown](../../../01-glossary.en.md#shutdown) boundary error** |
+| **Resolving from a closed provider** | **Fails as a [shutdown](../../01-glossary.en.md#shutdown) boundary error** |
 
 ### 4.6 Lifetime And Cleanup
 
@@ -260,7 +260,7 @@ scope's `scoped`/`transient` instances are cleaned up (§4.6).
 
 **Middleware is a `before`/`after` pair.** This differs from the
 handler filter's `next` delegate approach
-([Framework API §8.1](../../../06-framework-api.en.md#81-handler-filter)).
+([Framework API §8.1](../../06-framework-api.en.md#81-handler-filter)).
 
 | Stage | Order |
 |---|---|
@@ -275,7 +275,7 @@ handler filter's `next` delegate approach
 The handler registration surface and filter contract are owned by
 [Channel Messaging §3](interfaces/03-channel-messaging.en.md#3-handler-registry).
 Filter's language-neutral meaning is owned by
-[Framework API §8.1](../../../06-framework-api.en.md#81-handler-filter).
+[Framework API §8.1](../../06-framework-api.en.md#81-handler-filter).
 
 ## 9. Capability Registration
 
@@ -291,10 +291,10 @@ The registration surface of each capability is owned by the
 | Monitoring · Location | §13 Configuration and Logging |
 
 **The startup validation item is owned by the common spec** —
-[channel-messaging §4](../../../08-channel-messaging.en.md),
-[spot-messaging §8](../../../12-spot-messaging.en.md),
-[stream-session §7.2](../../../19-stream-session.en.md),
-[runtime-monitoring §6](../../../24-runtime-monitoring.en.md).
+[channel-messaging §4](../../08-channel-messaging.en.md),
+[spot-messaging §8](../../12-spot-messaging.en.md),
+[stream-session §7.2](../../19-stream-session.en.md),
+[runtime-monitoring §6](../../24-runtime-monitoring.en.md).
 
 **C++ turns every violation into a failure before host start.** The
 error follows the `result_t`/`framework_exception_t` boundary

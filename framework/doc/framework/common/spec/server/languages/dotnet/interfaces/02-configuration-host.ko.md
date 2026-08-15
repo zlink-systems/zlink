@@ -13,7 +13,7 @@ ChannelName membership, manual peer와 runtime option의 정확한 시그니처�
 
 | package | 책임 |
 |---|---|
-| `Zlink.Framework` | handler, context, call을 포함한 Server application contract와 [RouteMesh](../../../../01-glossary.ko.md#routemesh), Spot, Actor, STREAM session, location runtime |
+| `Zlink.Framework` | handler, context, call을 포함한 Server application contract와 [RouteMesh](../../../01-glossary.ko.md#routemesh), Spot, Actor, STREAM session, location runtime |
 | `Zlink.Framework.Contracts` | Server와 HTTP client가 함께 사용하는 codec·오류 contract |
 | `Zlink.Framework.AspNetCore` | `IServiceCollection` 등록과 host lifecycle 연결 |
 | `Zlink.Framework.Codecs.Protobuf` | 선택 Protobuf codec extension |
@@ -60,14 +60,14 @@ Framework를 등록하면 다음 service가 public DI surface로 제공된다.
 
 | service | lifetime | 책임 |
 |---|---|---|
-| `IZLinkRouteClient` | singleton | Node direct와 [ChannelName](../../../../01-glossary.ko.md#channelname) send/request |
+| `IZLinkRouteClient` | singleton | Node direct와 [ChannelName](../../../01-glossary.ko.md#channelname) send/request |
 | `IZLinkSpotClient` | singleton | global SpotId direct send/request와 명시적 Instance cold activation |
 | `IZLinkSpotManager` | singleton | User Spot 생성, resolve와 exact 종료 |
-| `IZLinkSpotPublisherClient` | singleton | [Spot](../../../../01-glossary.ko.md#spot) Logical Multicast publish |
+| `IZLinkSpotPublisherClient` | singleton | [Spot](../../../01-glossary.ko.md#spot) Logical Multicast publish |
 | `IZLinkFanoutClient` | singleton | classic fanout ChannelName에 typed event publish |
 | `IZLinkActorClient` | singleton | global ActorId direct send/request |
 | `IZLinkActorManager` | singleton | Actor 생성, resolve와 종료 |
-| `IZLinkRouteMeshRuntimeOptions` | singleton | Mesh placement weight와 ChannelName [weight](../../../../01-glossary.ko.md#weight) 조회·설정 |
+| `IZLinkRouteMeshRuntimeOptions` | singleton | Mesh placement weight와 ChannelName [weight](../../../01-glossary.ko.md#weight) 조회·설정 |
 | `IZLinkFrameworkRuntime` | singleton | host state, readiness, `Relocate`와 `Shutdown` |
 | `IZLinkRouteMeshRuntime` | singleton | RouteMesh 운영 status |
 | `IZLinkClientServerRuntime` | singleton | ClientServer Channel 운영 status |
@@ -102,8 +102,8 @@ Redis 전용 registration helper는 제공하지 않는다. Root의 `AddLocation
 snapshot scan을 제공한다. Relocation instance는 Framework가 발급한 reference에 immutable payload를 저장한다.
 한 instance가 두 capability를 함께 구현하는 것을 공식 Redis 계약으로 제공하지 않는다.
 
-Manual peer만 사용하고 분산 location 기능을 사용하지 않는 [MeshNode](../../../../01-glossary.ko.md#meshnode)는 [location store](../../../../01-glossary.ko.md#location-store) 없이 시작할 수 있다.
-Manual peer도 [MeshName](../../../../01-glossary.ko.md#meshname), RID, lifecycle generation, ChannelName set과 security identity admission을 통과한다.
+Manual peer만 사용하고 분산 location 기능을 사용하지 않는 [MeshNode](../../../01-glossary.ko.md#meshnode)는 [location store](../../../01-glossary.ko.md#location-store) 없이 시작할 수 있다.
+Manual peer도 [MeshName](../../../01-glossary.ko.md#meshname), RID, lifecycle generation, ChannelName set과 security identity admission을 통과한다.
 
 ## 6. Codec
 
@@ -112,7 +112,7 @@ Typed handler와 client는 업무 객체를 주고받는다. Framework는 JSON s
 codec registry에 extension 단위로 한 번 등록한다.
 
 Codec은 payload와 업무 객체의 변환만 담당한다. Packet name, metadata, routing과 reply correlation은
-Framework가 소유한다. [Packet name](../../../../01-glossary.ko.md#packet-name)은 handler registration descriptor에서 결정하며 codec을 바꾸어도
+Framework가 소유한다. [Packet name](../../../01-glossary.ko.md#packet-name)은 handler registration descriptor에서 결정하며 codec을 바꾸어도
 dispatch key는 바뀌지 않는다.
 
 ## 7. Startup validation
@@ -120,21 +120,21 @@ dispatch key는 바뀌지 않는다.
 Host는 network bind 전에 다음 조건을 검증한다.
 
 - framework root와 MeshName의 중복
-- MeshNode의 [routing ID](../../../../01-glossary.ko.md#routing-id)와 listener 설정. Server [membership](../../../../01-glossary.ko.md#membership)은 0개일 수 있다
+- MeshNode의 [routing ID](../../../01-glossary.ko.md#routing-id)와 listener 설정. Server [membership](../../../01-glossary.ko.md#membership)은 0개일 수 있다
 - ChannelName의 `Client()`·`Server()` 역할과 process-local topology 중복
 - ClientServer automatic discovery에 필요한 location store
 - wildcard BindHost를 사용할 때 connect 가능한 AdvertiseHost
 - 같은 owner namespace의 handler key 중복
 - Spot, Actor와 STREAM factory의 owner 관계
-- Object role의 중복 선택, Client·Server role의 Location Store 등록과 None role의 [factory](../../../../01-glossary.ko.md#factory) 부재
-- Actor·User Spot·[Instance Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)의 stable type·구현 class 중복, explicit relocation policy와 type별 capacity
+- Object role의 중복 선택, Client·Server role의 Location Store 등록과 None role의 [factory](../../../01-glossary.ko.md#factory) 부재
+- Actor·User Spot·[Instance Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot)의 stable type·구현 class 중복, explicit relocation policy와 type별 capacity
 - Node placement weight와 active/pending capacity
 - Host `ApplicationVersion` 범위와 `MaintenanceWave` 형식
 - `PreserveStateWith`의 Actor·Spot adapter type과 factory 대상의 일치 여부
 - `RecreateOnRelocation` 또는 `PreserveStateWith` factory가 하나라도 있거나 Instance Spot factory가 하나라도 있을 때 Relocation
   Store가 정확히 하나 등록되었는지 여부
 - 자동 discovery 또는 분산 location 기능에 필요한 store instance
-- [automatic discovery](../../../../01-glossary.ko.md#automatic-discovery)·object role과 fixed routing ID의 잘못된 조합, RID prefix 형식
+- [automatic discovery](../../../01-glossary.ko.md#automatic-discovery)·object role과 fixed routing ID의 잘못된 조합, RID prefix 형식
 - TLS certificate, key와 trust 설정
 
 검증 실패는 `ZLinkConfigurationException`으로 host startup을 실패시킨다. Runtime을 first call에서 만들지
@@ -153,5 +153,5 @@ matching ACK를 15초 안에 받아야 하는 profile로 고정한다. 다른 in
 않는다. 이 값을 바꾸는 C# public option은 제공하지 않으며 owner lease renew interval과 같은 설정으로
 취급하지 않는다.
 
-[Logical Multicast](../../../../01-glossary.ko.md#logical-multicast) publisher는 publish 전용 전달 정책 option을 제공하지 않는다. 각 remote target은
+[Logical Multicast](../../../01-glossary.ko.md#logical-multicast) publisher는 publish 전용 전달 정책 option을 제공하지 않는다. 각 remote target은
 MeshNode ROUTER의 HWM과 send timeout을 따르고, local Spot queue는 독립적으로 수락하거나 drop한다.

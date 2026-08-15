@@ -5,7 +5,7 @@
 This document fixes the exact TypeScript declarations related to
 foundation types and configuration that `@zlink-systems/framework` and
 `@zlink-systems/nestjs` export in ZLink Framework. Behavioral meaning is
-owned by the [common spec](../../../../README.en.md) — this document
+owned by the [common spec](../../../README.en.md) — this document
 only defines names, generics, overloads, inheritance, members,
 parameters, and return types.
 
@@ -323,12 +323,12 @@ but each role is registered at most once. The two roles of the same
 ChannelName share one topology through separate registrations under the
 `(ChannelName, Role)` key, and duplicating the same role is a startup
 error. The RouteMesh single-role-selection and
-[ChannelName](../../../../01-glossary.en.md#channelname) conflict rule
+[ChannelName](../../../01-glossary.en.md#channelname) conflict rule
 don't change.
 
-An automatic [RouteMesh](../../../../01-glossary.en.md#routemesh)
+An automatic [RouteMesh](../../../01-glossary.en.md#routemesh)
 compares RID in canonical byte order, and only the
-[MeshNode](../../../../01-glossary.en.md#meshnode) with the smaller RID
+[MeshNode](../../../01-glossary.en.md#meshnode) with the smaller RID
 connects to the counterpart endpoint. A manual topology can connect
 from one or both sides depending on application endpoint configuration.
 If bidirectional connection or automatic discovery contention/a stale
@@ -344,9 +344,9 @@ fanout registration are separate physical topologies, so they aren't
 included in this judgment.
 
 A Client can use manual endpoint and location store
-[automatic discovery](../../../../01-glossary.en.md#automatic-discovery)
+[automatic discovery](../../../01-glossary.en.md#automatic-discovery)
 together. If the two sources point to the same Server RID and
-[lifecycle generation](../../../../01-glossary.en.md#lifecycle-generation),
+[lifecycle generation](../../../01-glossary.en.md#lifecycle-generation),
 the connection intent and ready target are merged into one. In both
 automatic and manual, only Client connects to server — Server doesn't
 look for a client endpoint or start an outbound connect.
@@ -354,7 +354,7 @@ look for a client endpoint or start an outbound connect.
 If both Client and Server are registered on the same process, a local
 Server that finished listener and service admission is also included
 in the same candidate set as a remote Server. The same
-[Ready](../../../../01-glossary.en.md#ready), positive weight, and
+[Ready](../../../01-glossary.en.md#ready), positive weight, and
 non-draining conditions apply — there's no local priority or remote
 exclusion. Even when a local Server is selected, the actual transport
 message is delivered from the Client DEALER to the Server ROUTER,
@@ -396,7 +396,7 @@ a message wrapper. The framework only calls the adapter in
 `preserveStateWith(...)`'s cross-node materialization. An Actor adapter
 is used for maintenance handoff, remote User/Entry Spot join, and each
 Actor participant of a whole User Spot relocation. A
-[Spot](../../../../01-glossary.en.md#spot) adapter is used for the Spot
+[Spot](../../../01-glossary.en.md#spot) adapter is used for the Spot
 root of a whole User Spot and cross-node User/Instance Spot
 materialization. The adapter isn't called on a same-node join/
 relocation, and a `DisableRelocation` cross-node operation is rejected
@@ -425,7 +425,7 @@ owner CAS and queue opening after receiving cutover or after the existing 1,000m
 
 On a retry within the same source and target process, factory and
 `restore(...)` can be called more than once. `capture(...)` can also be
-repeated before the [authority](../../../../01-glossary.en.md#authority)
+repeated before the [authority](../../../01-glossary.en.md#authority)
 commit. Only the current owner and attempt fence can commit completion
 and open admission. Since the callback doesn't add a relocation ID,
 application restore and capture must be retry-safe, and exactly-once
@@ -461,7 +461,7 @@ cancellation can't commit a terminal result. A source capture failure
 releases the reversible seal after durable abort, and a target restore
 failure discards the staging instance. Before every target fails, a
 replacement can be attempted within the
-[deadline](../../../../01-glossary.en.md#deadline). Relocation Store,
+[deadline](../../../01-glossary.en.md#deadline). Relocation Store,
 authority CAS, recovery transport, and teardown failure aren't adapter
 failures — they're classified as `StoreUnavailable`,
 `RelocationFailed`, or `TeardownFailed` for that phase.
@@ -490,7 +490,7 @@ payload is empty, one job isn't `0` bytes, and even for a large
 payload, the fixed cost is still added. If the sum exceeds
 `Number.MAX_SAFE_INTEGER`, it's pinned to that value and that submit is
 rejected. The accounting rule is owned by
-[Framework API §8.2](../../../../06-framework-api.en.md#82-handler-execution-object-and-dependency-lifetime).
+[Framework API §8.2](../../../06-framework-api.en.md#82-handler-execution-object-and-dependency-lifetime).
 `0` isn't unlimited — it selects the Framework profile's finite
 default. A negative value, a non-integer value, and a value outside
 the safe integer range are startup configuration errors. A Logical
@@ -509,19 +509,19 @@ Instance Spot is a cleanup target — Entry Spot and User Spot aren't
 affected by this setting. The idle judgment condition, the delivery of
 `ZLinkSpotCloseReason.IdleEvicted`, and the cold-activation rule after
 cleanup are owned by
-[Spot Model §6.2](../../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
+[Spot Model §6.2](../../../11-spot-model.en.md#62-cleaning-up-an-idle-instance-spot).
 
 The fully encoded MeshNode descriptor the framework builds from every
 registration must be at most 1 MiB. Spot type and stateful object
 capability collection are each at most 1024. The runtime validates the
 completed descriptor all at once before socket bind. Exceeding the
 bound fails startup — it doesn't truncate/split the collection or
-publish part of the [descriptor](../../../../01-glossary.en.md#descriptor).
+publish part of the [descriptor](../../../01-glossary.en.md#descriptor).
 
 `configureNetwork()`'s default BindHost is `127.0.0.1`. If
 AdvertiseHost is omitted, a non-wildcard
-[BindHost](../../../../01-glossary.en.md#bindhost) is used, and for a
-wildcard BindHost, [AdvertiseHost](../../../../01-glossary.en.md#advertisehost)
+[BindHost](../../../01-glossary.en.md#bindhost) is used, and for a
+wildcard BindHost, [AdvertiseHost](../../../01-glossary.en.md#advertisehost)
 must be specified. If the automatic discovery listener's port is
 omitted, or the listener call itself is omitted, port `0` is used. A
 per-listener host setting takes priority over the root default.
@@ -531,7 +531,7 @@ A MeshNode's default object role is `ZLinkObjectRole.None`.
 and `objects().server()` provides that capability plus factory/Entry
 Spot hosting. Selecting the role twice, or registering a factory
 outside the Server builder, is a startup configuration error. Client or
-Server role needs a [Location Store](../../../../01-glossary.en.md#location-store).
+Server role needs a [Location Store](../../../01-glossary.en.md#location-store).
 
 A RouteMesh Channel Server can also be registered on an Object Client.
 An application Node direct handler can't be registered, and specifying
@@ -541,7 +541,7 @@ switching to a different RID.
 Every User/Instance Spot and Actor factory must specify a relocation
 policy. Omission isn't interpreted as Disabled. If there's no
 per-factory capacity, the MeshNode's object capacity is used. Placement
-[weight](../../../../01-glossary.en.md#weight) is an integer `0..10000`,
+[weight](../../../01-glossary.en.md#weight) is an integer `0..10000`,
 defaulting to `100`. RouteMesh Channel Server and ClientServer Server
 weight also use the same range and default. An out-of-range value is
 `InvalidOperation` in both startup config and runtime change. Weighted

@@ -107,7 +107,7 @@
         "systems.zlink.framework.codecs.protobuf",
         "systems.zlink.framework.codecs.msgpack"
       ],
-      "contractSourceOwner": "framework/doc/framework/common/spec/06-framework-api.ko.md",
+      "contractSourceOwner": "framework/doc/framework/common/spec/server/06-framework-api.ko.md",
       "boundaryGate": ":zlink-framework-codec-protobuf:test, :zlink-framework-codec-msgpack:test"
     }
   }

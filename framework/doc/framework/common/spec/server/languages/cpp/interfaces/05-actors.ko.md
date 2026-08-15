@@ -8,8 +8,8 @@ location snapshot을 갱신한다. 응답이 없어도 Actor 처리를 멈추지
 아니므로 Actor disconnect callback을 실행하지 않는다. relocation 대상에 포함되지 않은 다른 Actor의 route와 physical connection은
 변경하지 않는다.
 
-[C++ exact interface 목차](README.ko.md) · [Actor model](../../../../14-actor-model.ko.md) ·
-[Spot·Actor membership](../../../../15-spot-actor.ko.md)
+[C++ exact interface 목차](README.ko.md) · [Actor model](../../../14-actor-model.ko.md) ·
+[Spot·Actor membership](../../../15-spot-actor.ko.md)
 
 ## 1. Identity와 maintenance policy
 
@@ -188,7 +188,7 @@ public:
 } // namespace zlink::framework
 ```
 
-Actor send와 request는 global `actor_id_t`만 target으로 받는다. [MeshName](../../../../01-glossary.ko.md#meshname), ActorRef, [owner](../../../../01-glossary.ko.md#owner) NodeRid와 current
+Actor send와 request는 global `actor_id_t`만 target으로 받는다. [MeshName](../../../01-glossary.ko.md#meshname), ActorRef, [owner](../../../01-glossary.ko.md#owner) NodeRid와 current
 SpotId를 받는 overload는 없다. Runtime은 positive Ready route만 cache하고 negative cache를 두지 않는다.
 Missing route는 `not_found`, exact-ref generation mismatch는 `invalid_operation`으로 구분한다.
 
@@ -256,7 +256,7 @@ Mesh는 `not_found`다.
 
 `Create`는 existing identity에 `already_exists`를 반환하고 새 attempt에서는
 `actor_create_created_t` 또는 `actor_create_rejected_t`를 반환한다. `GetOrCreate`는
-같은 stable type의 [Ready](../../../../01-glossary.ko.md#ready) Actor를 callback 없이
+같은 stable type의 [Ready](../../../01-glossary.ko.md#ready) Actor를 callback 없이
 `actor_create_existing_t`로 반환한다. Creating이면 authority 변경을 기다리며 CAS loser는
 별도 factory나 callback을 시작하지 않는다. 서로 다른 operation은 Ready 뒤
 `actor_create_existing_t`를 받고 cleanup 뒤 새 reservation을 경쟁하며 앞선 application
@@ -265,14 +265,14 @@ reply를 공유하지 않는다. 같은 source Node RID·lifecycle generation·`
 correlation·reply route로 reply를 다시 encode한다. Terminal은 original deadline 뒤 5분
 동안 유지한다. Callback exception은 rejected result가
 아니라 typed creation failure다. Type이 다르면 `type_mismatch`다.
-[Deadline](../../../../01-glossary.ko.md#deadline)은 resolve, reservation, factory와
+[Deadline](../../../01-glossary.ko.md#deadline)은 resolve, reservation, factory와
 Ready 전체에 적용한다. `Find`는 Ready ref만 반환하며 생성하지 않는다. `FindSpot`은 current User Spot
-membership의 Ready `spot_ref_t`만 반환하고 Entry [membership](../../../../01-glossary.ko.md#membership) 또는 Missing Actor에는 빈 optional을 반환한다.
+membership의 Ready `spot_ref_t`만 반환하고 Entry [membership](../../../01-glossary.ko.md#membership) 또는 Missing Actor에는 빈 optional을 반환한다.
 `Destroy`는 exact ActorRef만 변경한다.
 같은 incarnation이 없으면 `false`, 다른 generation은 `invalid_operation`, 이동 중이면 `unavailable`이다.
 Public Actor directory와 local Actor bind overload는 제공하지 않는다.
 
-Actor creation은 selected owner MeshNode의 [Entry Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) membership을 Ready barrier 안에서 함께 확정한다. Actor
+Actor creation은 selected owner MeshNode의 [Entry Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) membership을 Ready barrier 안에서 함께 확정한다. Actor
 업무 payload는 membership 종류와 관계없이 Actor queue로 직접 전달하며 Entry Spot callback을 경유하지 않는다.
 Original creation payload와 일반 message는 다른 owner나 새 incarnation으로 hidden retry하지 않는다. Caller가
 timeout, cancellation 또는 moving 결과를 받으면 새 operation을 명시적으로 시작해야 한다.
@@ -323,13 +323,13 @@ Caller가 복사해 보관한 이전 `actor_ref_t` 값은 변경하지 않는다
 
 현재 STREAM binding을 통한 one-way push는 connection-bound operation이다. 유효한 binding이 없거나 connection
 generation이 바뀌면 session-not-bound 또는 stale 결과로 끝나며, Framework가 다른 session을 찾아 다시
-제출하지 않는다. Connection 종료는 Actor의 [Spot](../../../../01-glossary.ko.md#spot) membership을 바꾸거나 Actor를 자동 종료하지 않는다.
+제출하지 않는다. Connection 종료는 Actor의 [Spot](../../../01-glossary.ko.md#spot) membership을 바꾸거나 Actor를 자동 종료하지 않는다.
 
 ## 5. Public trace category
 
 이 문서의 declaration은 public trace의 `actor-relocation` category에 속한다. 공통 의미는
-[Actor model](../../../../14-actor-model.ko.md), [Spot·Actor membership](../../../../15-spot-actor.ko.md)과
-[Session Actor dispatch](../../../../20-session-actor-dispatch.ko.md)가 소유한다.
+[Actor model](../../../14-actor-model.ko.md), [Spot·Actor membership](../../../15-spot-actor.ko.md)과
+[Session Actor dispatch](../../../20-session-actor-dispatch.ko.md)가 소유한다.
 
 이 문서에 선언된 `yield()`와 `yield_message()`는 현재 Actor handler가 `SpotWide` User Spot의 shared
 execution gate에서 실행 중일 때만 유효하다. Entry Spot Actor와 `PerActor` User Spot의 Actor가 호출하면

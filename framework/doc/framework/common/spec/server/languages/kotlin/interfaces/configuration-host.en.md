@@ -1,7 +1,7 @@
 # Kotlin Configuration And Host Public Interface
 
 [Interface table of contents](README.en.md) · [Java Configuration](../../java/interfaces/configuration-host.en.md) ·
-[MeshNode Common Contract](../../../../13-mesh-node.en.md)
+[MeshNode Common Contract](../../../13-mesh-node.en.md)
 
 A Kotlin application directly uses the Java builder. The Kotlin DSL is
 only provided when a receiver and reified type genuinely reduce
@@ -25,7 +25,7 @@ manual topology can connect from one or both sides depending on
 application endpoint configuration. If bidirectional connection or
 automatic discovery contention/a stale snapshot creates a duplicate
 candidate, handshake and admission check the same RID and
-[lifecycle generation](../../../../01-glossary.en.md#lifecycle-generation)
+[lifecycle generation](../../../01-glossary.en.md#lifecycle-generation)
 and keep only one in ready state.
 
 A peer connection isn't needed only when both MeshNodes are Object
@@ -35,10 +35,10 @@ side has Channel Server membership, including weight `0`, a connection
 is needed. ClientServer and classic fanout are separate physical
 topologies, so they aren't included in this judgment.
 
-A [MeshNode](../../../../01-glossary.en.md#meshnode)'s object role is
+A [MeshNode](../../../01-glossary.en.md#meshnode)'s object role is
 one of `None`, `Client`, `Server`. Not calling `objects()` means
 `None`; `client()` provides an outbound manager and resolve; `server()`
-provides Client capability plus [factory](../../../../01-glossary.en.md#factory)/
+provides Client capability plus [factory](../../../01-glossary.en.md#factory)/
 Entry registration together. Client and Server need a Location Store.
 None has no object manager or factory. Selecting a duplicate role on
 one node is a startup configuration error. A RouteMesh Channel Server
@@ -54,10 +54,10 @@ or even one Instance Spot factory exists, exactly one Relocation Store
 must be registered. A missing or duplicate registration is a
 configuration error before socket bind. A Relocation Store isn't
 required for a same-node configuration with no
-[Instance Spot](../../../../01-glossary.en.md#entry-user-instance-spot)
+[Instance Spot](../../../01-glossary.en.md#entry-user-instance-spot)
 factory that only selected `disableRelocation()`. A Kotlin DSL or
 Redis-specific registration helper bundling both capabilities isn't
-provided. Every cross-node Actor/[Spot](../../../../01-glossary.en.md#spot)
+provided. Every cross-node Actor/[Spot](../../../01-glossary.en.md#spot)
 move that can complete uses the Relocation Store. `recreateOnRelocation()`
 also stores the accepted journal and recovery payload, and
 `preserveStateWith(...)` additionally stores application state. A
@@ -189,11 +189,11 @@ inline fun <reified TActor, reified TFactory>
 
 The factory configure callback has no default. The Actor factory
 builder has no setting other than relocation behavior selection. Node
-placement [weight](../../../../01-glossary.en.md#weight) is 0..10000,
+placement [weight](../../../01-glossary.en.md#weight) is 0..10000,
 defaulting to 100. An out-of-range value is a configuration error in
 both startup config and runtime change. It's independent of Channel
 weight, and the same value is used for runtime update and the
-descriptor [snapshot](../../../../01-glossary.en.md#snapshot).
+descriptor [snapshot](../../../01-glossary.en.md#snapshot).
 RouteMesh Channel Server and ClientServer Server weight also use the
 same range and default. Weighted selection computes the sum of
 candidate weight using at least a 64-bit integer.
@@ -206,7 +206,7 @@ RID is at most 255 UTF-8 bytes. On conflict with an active owner, it
 fails immediately with `RoutingIdConflict` instead of retrying with a
 new UUID. Fixed RID can only be used in a manual topology with no
 object role or automatic Store
-[descriptor](../../../../01-glossary.en.md#descriptor). There's no slot
+[descriptor](../../../01-glossary.en.md#descriptor). There's no slot
 count, allocation group, or public allocation provider.
 
 The Object Server's Entry Spot ID has the same-prefix format

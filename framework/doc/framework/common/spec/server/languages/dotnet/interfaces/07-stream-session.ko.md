@@ -137,7 +137,7 @@ terminator는 transport를 시작하기 전에 token을 원자적으로 claim하
 경쟁하면 claim에 실패한 call은 transport를 시도하지 않고 exceptional completion으로 끝난다. Send packet에서
 만든 reply, 이미 사용한 token과 중복 submit도 같은 방식으로 거부한다. Token을 소비한 call이 timeout,
 `DeadlineExceeded` 또는 cancellation로 끝나도 token을 다시 사용할 수 없다. 유효한 reply는 STREAM socket send
-timeout만 admission deadline으로 사용한다. Caller request timeout은 wire로 전달되지 않으므로 reply [deadline](../../../../01-glossary.ko.md#deadline)으로
+timeout만 admission deadline으로 사용한다. Caller request timeout은 wire로 전달되지 않으므로 reply [deadline](../../../01-glossary.ko.md#deadline)으로
 사용하지 않으며, timeout이나 cancellation 뒤에는 late reply를 보내지 않는다.
 
 `IZLinkSessionSendCall.Timeout(...)`은 이 send의 admission 대기만 줄인다. 생략하면 STREAM socket

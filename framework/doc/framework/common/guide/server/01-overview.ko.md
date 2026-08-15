@@ -1,6 +1,6 @@
 # 1. 개요
 
-> **이 장의 계약 소유 문서** — [Framework 개요](../../../common/spec/02-overview.ko.md)와
+> **이 장의 계약 소유 문서** — [Framework 개요](../../../common/spec/server/02-overview.ko.md)와
 > [언어별 공개 계약 목차](../../../common/spec/server/languages/README.ko.md)가 소유한다.
 
 === "C#/.NET"
@@ -8,7 +8,7 @@
     > 이 문서는 `.NET` 가이드의 진입점이다. 가이드는 `ASP.NET Core` 개발자가
     > ZLink Framework의 기능을 **읽고 바로 따라 쓸 수 있도록** 개념과 사용법을
     > 직접 설명한다. 개념의 **언어 중립 정식 정의**는 [공통 스펙
-    > 개요](../../../common/spec/02-overview.ko.md)가, `.NET` public API의 **정식 계약**은
+    > 개요](../../../common/spec/server/02-overview.ko.md)가, `.NET` public API의 **정식 계약**은
     > [spec/interfaces 목차](../../../common/spec/server/languages/dotnet/interfaces/README.ko.md) 문서가 다룬다. 두 표기가 어긋나면
     > spec이 우선이다.
 
@@ -17,7 +17,7 @@
     > 이 문서는 `C++` 가이드의 진입점이다. 가이드는 C++ 개발자가
     > ZLink Framework의 기능을 **읽고 바로 따라 쓸 수 있도록** 개념과 사용법을
     > 직접 설명한다. 개념의 **언어 중립 정식 정의**는 [공통 스펙
-    > 개요](../../../common/spec/02-overview.ko.md)가, `C++` public API의 **정식 계약**은
+    > 개요](../../../common/spec/server/02-overview.ko.md)가, `C++` public API의 **정식 계약**은
     > [C++ exact interface 목차](../../../common/spec/server/languages/cpp/interfaces/README.ko.md) 문서가 다룬다. 두 표기가 어긋나면
     > spec이 우선이다.
 
@@ -26,7 +26,7 @@
     > 이 문서는 `Java` 가이드의 진입점이다. 가이드는 Java 개발자가
     > ZLink Framework의 기능을 **읽고 바로 따라 쓸 수 있도록** 개념과 사용법을
     > 직접 설명한다. 개념의 **언어 중립 정식 정의**는 [공통 스펙
-    > 개요](../../../common/spec/02-overview.ko.md)가, `Java` public API의 **정식 계약**은
+    > 개요](../../../common/spec/server/02-overview.ko.md)가, `Java` public API의 **정식 계약**은
     > [Java exact interface 목차](../../../common/spec/server/languages/java/interfaces/README.ko.md) 문서가 다룬다. 두 표기가 어긋나면
     > spec이 우선이다.
 
@@ -35,7 +35,7 @@
     > 이 문서는 `Kotlin` 가이드의 진입점이다. 가이드는 Kotlin 개발자가
     > ZLink Framework의 기능을 **읽고 바로 따라 쓸 수 있도록** 개념과 사용법을
     > 직접 설명한다. 개념의 **언어 중립 정식 정의**는 [공통 스펙
-    > 개요](../../../common/spec/02-overview.ko.md)가, `Kotlin` public API의 **정식 계약**은
+    > 개요](../../../common/spec/server/02-overview.ko.md)가, `Kotlin` public API의 **정식 계약**은
     > [Java exact interface 목차](../../../common/spec/server/languages/java/interfaces/README.ko.md) 문서가 다룬다. 두 표기가 어긋나면
     > spec이 우선이다.
 
@@ -44,7 +44,7 @@
     > 이 문서는 `Node.js` 가이드의 진입점이다. 가이드는 Node.js 개발자가
     > ZLink Framework의 기능을 **읽고 바로 따라 쓸 수 있도록** 개념과 사용법을
     > 직접 설명한다. 개념의 **언어 중립 정식 정의**는 [공통 스펙
-    > 개요](../../../common/spec/02-overview.ko.md)가, `Node.js` public API의 **정식 계약**은
+    > 개요](../../../common/spec/server/02-overview.ko.md)가, `Node.js` public API의 **정식 계약**은
     > [Node.js exact interface 목차](../../../common/spec/server/languages/node/interfaces/README.ko.md) 문서가 다룬다. 두 표기가 어긋나면
     > spec이 우선이다.
 

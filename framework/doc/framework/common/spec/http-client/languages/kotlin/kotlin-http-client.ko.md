@@ -55,7 +55,7 @@ request 구성(`get/post/put/delete/patch/head/options`, `header`, `query`, `tim
   `CompletionStage`를 non-blocking coroutine bridge로 연결하며, 호출 coroutine의
   cancellation은 이미 제출한 HTTP operation을 취소하지 않는다. 네트워크 대기 중
   스레드는 점유되지 않는다.
-- handler·actor·[spot](../../../01-glossary.ko.md#spot) 경로는 suspend 함수 안에서 직접 호출한다. `runBlocking`은 테스트·CLI
+- handler·actor·[spot](../../../server/01-glossary.ko.md#spot) 경로는 suspend 함수 안에서 직접 호출한다. `runBlocking`은 테스트·CLI
   전용이다.
 - continuation은 호출한 coroutine의 dispatcher에서 재개된다. 재개 위치는 `withContext`로
   바꾼다.

@@ -110,4 +110,4 @@ loop가 남는다.
 
 이 문서의 코드는 Godot 사용법이며 connector 계약이 아니다. connector 자체는 Godot 타입에
 의존하지 않는다. 비동기 실행의 공통 의미는
-[framework 공통 정책](../../../common/spec/05-async-execution-policy.ko.md)을 따른다.
+[framework 공통 정책](../../../common/spec/server/05-async-execution-policy.ko.md)을 따른다.

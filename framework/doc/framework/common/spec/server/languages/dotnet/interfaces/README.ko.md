@@ -16,7 +16,7 @@ handler가 받는 provider-neutral payload까지만 포함한다.
 | [Configuration과 host](02-configuration-host.ko.md) | Package, ASP.NET Core host, DI와 startup interface를 정의한다. |
 | [Topology configuration](03-configuration-topology.ko.md) | RouteMesh, ClientServer와 fanout builder 및 runtime option을 정의한다. |
 | [Channel messaging](04-channel-messaging.ko.md) | Node direct, ChannelName과 Logical Multicast의 call과 handler를 정의한다. |
-| [Spots](05-spots.ko.md) | Entry·User·Instance Spot lifecycle, relocation adapter, [Spot](../../../../01-glossary.ko.md#spot) 전용 fluent call, [User Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) manager와 timer를 정의한다. |
+| [Spots](05-spots.ko.md) | Entry·User·Instance Spot lifecycle, relocation adapter, [Spot](../../../01-glossary.ko.md#spot) 전용 fluent call, [User Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) manager와 timer를 정의한다. |
 | [Actors](06-actors.ko.md) | Actor factory, context, client, manager, relocation adapter와 policy를 정의한다. |
 | [Bound STREAM session](07-bound-stream-session.ko.md) | Actor가 소유한 bound session call을 정의한다. |
 | [STREAM session](07-stream-session.ko.md) | STREAM server session과 handler interface를 정의한다. |

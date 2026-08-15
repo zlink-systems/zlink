@@ -1,6 +1,6 @@
 # Java STREAM Session Public Interface
 
-[Interface table of contents](README.en.md) · [STREAM Session](../../../../19-stream-session.en.md)
+[Interface table of contents](README.en.md) · [STREAM Session](../../../19-stream-session.en.md)
 
 STREAM session, Actor binding, and relay are owned by the JVM Framework
 runtime. Only session lifecycle, typed packet/push, and the Actor
@@ -21,10 +21,10 @@ AuthorityOwnerGeneration, binding generation, and session sequence before
 the application callback. Rebind and close are exact binding identity
 transitions. Since identity uses the session owner Node RID/lifecycle
 generation/owner-local
-[binding generation](../../../../01-glossary.en.md#binding-generation)
+[binding generation](../../../01-glossary.en.md#binding-generation)
 together, even a small local counter of a different
-[MeshNode](../../../../01-glossary.en.md#meshnode) or a restarted
-[owner](../../../../01-glossary.en.md#owner) can be registered as a new
+[MeshNode](../../../01-glossary.en.md#meshnode) or a restarted
+[owner](../../../01-glossary.en.md#owner) can be registered as a new
 binding. A push/ingress/tombstone from a previous owner lifecycle isn't
 applied to the current session.
 

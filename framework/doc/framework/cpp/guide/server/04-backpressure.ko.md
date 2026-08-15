@@ -17,9 +17,9 @@ title: "4. Backpressure — 처리보다 도착이 빠를 때 · C++"
 
 # 4. Backpressure — 처리보다 도착이 빠를 때
 
-> **이 장의 계약 소유 문서** — [비동기 실행 정책](../../../common/spec/05-async-execution-policy.ko.md)과
-> [Framework API](../../../common/spec/06-framework-api.ko.md),
-> [runtime monitoring](../../../common/spec/24-runtime-monitoring.ko.md)과
+> **이 장의 계약 소유 문서** — [비동기 실행 정책](../../../common/spec/server/05-async-execution-policy.ko.md)과
+> [Framework API](../../../common/spec/server/06-framework-api.ko.md),
+> [runtime monitoring](../../../common/spec/server/24-runtime-monitoring.ko.md)과
 > [언어별 topology 공개 계약](../../../common/spec/server/languages/README.ko.md)이
 > 다룬다. 이 챕터는 그 동작을 개념과 원리로 설명하고 어떤 옵션이 영향을 주는지 다룬다.
 > 옵션의 정확한 이름·기본값과 변경 시점은 언어별 [16. Options](16-options.ko.md)과 exact interface가 소유한다.
@@ -231,12 +231,12 @@ timeout으로 끝나도 이미 시작된 remote handler의 실행은 취소되�
 | --- | --- | --- |
 | `DefaultSocketSendTimeout` | 보낼 자리가 없을 때 기다리는 상한(기본 1초) | 루트 옵션 |
 | — | 실제로 적용되는 값은 **보내는 경로마다 다르다**(아래) | — |
-| `send_high_water_mark` | 상대별로 **보내려고** 보관할 수 있는 byte. `0`은 무제한 | `configure_router_socket()` |
-| `receive_high_water_mark` | 상대별로 **받아서** 보관할 수 있는 byte. `0`은 무제한 | `configure_router_socket()` |
+| `SendHighWaterMark` | 상대별로 **보내려고** 보관할 수 있는 byte. `0`은 무제한 | `configure_router_socket()` |
+| `ReceiveHighWaterMark` | 상대별로 **받아서** 보관할 수 있는 byte. `0`은 무제한 | `configure_router_socket()` |
 | `max_message_size` | 받아들일 message 하나의 최대 크기 | `configure_router_socket()` |
-| `send_high_water_mark` · `linger` | pub/sub 발행 소켓의 상한과 종료 시 잔여 발행 대기 | `ConfigureSpotPublisher()` |
-| `CoreHwmMemoryLimitBytes` · `CoreHwmBudgetBytes` · `CoreHwmProfile` | Core context의 ordinary queue byte budget | `configure_dispatch()` |
-| `ApplicationJobQueueProfile` · `MaxQueuedApplicationJobs` | host instance의 queued application job 상한 | `configure_dispatch()` |
+| `SendHighWaterMark` · `linger` | pub/sub 발행 소켓의 상한과 종료 시 잔여 발행 대기 | `ConfigureSpotPublisher()` |
+| `core_hwm_memory_limit_bytes` · `core_hwm_budget_bytes` · `CoreHwmProfile` | Core context의 ordinary queue byte budget | `configure_dispatch()` |
+| `ApplicationJobQueueProfile` · `max_queued_application_jobs` | host instance의 queued application job 상한 | `configure_dispatch()` |
 
 **"보낼 자리를 기다리는 상한"은 하나의 전역 값이 아니다.** 실제로 쓰이는 값은 그 호출이
 사용하는 socket이 소유한다.
@@ -282,14 +282,14 @@ exact interface에서 확인한다.
 
 | 설정 | 용도 |
 | --- | --- |
-| `CoreHwmMemoryLimitBytes` | Core budget 계산에 전달할 finite process/runtime memory limit hint |
-| `CoreHwmBudgetBytes` | profile 계산보다 우선하는 양수 manual Core budget |
+| `core_hwm_memory_limit_bytes` | Core budget 계산에 전달할 finite process/runtime memory limit hint |
+| `core_hwm_budget_bytes` | profile 계산보다 우선하는 양수 manual Core budget |
 | `CoreHwmProfile` | Core Auto-budget profile. 기본값은 `Balanced` |
 
 Framework와 binding은 profile 비율을 적용하거나 budget을 connection 수로 나누지 않는다. 실제
 effective budget, 방향별 queue HWM, accounted byte와 blocked ratio는 Core snapshot을 그대로 읽는다.
-`CoreHwmBudgetBytes`는 process RSS hard cap이 아니므로 RSS·managed heap과 allocator overhead는 별도로
-관찰한다([runtime monitoring](../../../common/spec/24-runtime-monitoring.ko.md)).
+`core_hwm_budget_bytes`는 process RSS hard cap이 아니므로 RSS·managed heap과 allocator overhead는 별도로
+관찰한다([runtime monitoring](../../../common/spec/server/24-runtime-monitoring.ko.md)).
 
 운영에서 manual budget을 사용할 때는 production과 같은 payload 분포와 connection 수에서 Core
 snapshot의 current·peak accounted byte, blocked ratio, throughput, latency와 process memory를 함께
@@ -298,8 +298,8 @@ snapshot의 current·peak accounted byte, blocked ratio, throughput, latency와 
 
 ### 4.2 HWM을 직접 지정할 때
 
-`send_high_water_mark`나 `receive_high_water_mark`는 socket 방향별 manual HWM이다. Core context의
-`CoreHwmBudgetBytes`와 단위는 byte로 같지만 owner와 적용 범위가 다르다. Manual socket HWM은
+`SendHighWaterMark`나 `ReceiveHighWaterMark`는 socket 방향별 manual HWM이다. Core context의
+`core_hwm_budget_bytes`와 단위는 byte로 같지만 owner와 적용 범위가 다르다. Manual socket HWM은
 해당 방향의 queue에 적용하고 Core Auto budget을 대신 계산하는 값이 아니다.
 
 - **`0`은 무제한이라는 뜻이다.** 상한을 없애는 설정이므로 "기본값으로 두겠다"는 의미로
@@ -320,9 +320,9 @@ Application Job Queue HWM은 handler 시작을 기다리는 job 수를 Framework
 | 획득 | Core queue admission | ordinary receive·claim 직전 |
 | 반환 | Core queue·retained lease lifecycle | 사용자 callback의 실제 첫 instruction 직전 |
 | 포화 결과 | 해당 origin의 sender가 기다린다 | ordinary ingress source가 permit을 기다린다 |
-| 설정 | `CoreHwmMemoryLimitBytes` · `CoreHwmBudgetBytes` · `CoreHwmProfile` | `ApplicationJobQueueProfile` · `MaxQueuedApplicationJobs` |
+| 설정 | `core_hwm_memory_limit_bytes` · `core_hwm_budget_bytes` · `CoreHwmProfile` | `ApplicationJobQueueProfile` · `max_queued_application_jobs` |
 
-Manual `MaxQueuedApplicationJobs`는 `1..2,147,483,647` 범위의 정확한 상한이다. `0`은 unlimited가
+Manual `max_queued_application_jobs`는 `1..2,147,483,647` 범위의 정확한 상한이다. `0`은 unlimited가
 아니라 startup configuration error다. Manual 값이 없으면 effective processor 수와 profile을 사용해
 startup에서 한 번 계산한다.
 
@@ -367,8 +367,8 @@ gauge를 유지하고 peak를 current로 재기준화하며 현재 epoch의 coun
 ## 6. Framework runtime 적용 범위
 
 이 공통 가이드는 언어별 구현 차이를 열거하지 않는다. 공통 동작은
-[Framework API §2.1](../../../common/spec/06-framework-api.ko.md#21-core-memory-budget과-application-job-queue를-분리한다),
-status와 reset 의미는 [runtime monitoring](../../../common/spec/24-runtime-monitoring.ko.md)이
+[Framework API §2.1](../../../common/spec/server/06-framework-api.ko.md#21-core-memory-budget과-application-job-queue를-분리한다),
+status와 reset 의미는 [runtime monitoring](../../../common/spec/server/24-runtime-monitoring.ko.md)이
 소유한다. 각 언어에서 실제로 사용하는 이름과 호출 형태는 해당 언어의 `16. Options`,
 `11. Monitoring`과 [exact interface](../../../common/spec/server/languages/README.ko.md)에서 확인한다.
 
@@ -404,12 +404,12 @@ status와 reset 의미는 [runtime monitoring](../../../common/spec/24-runtime-m
 
 - 옵션 기본값과 변경 시점: [16. Options](16-options.ko.md) §3
 - one-way submit과 완료 경계의 정식 계약:
-  [비동기 실행 정책](../../../common/spec/05-async-execution-policy.ko.md)
+  [비동기 실행 정책](../../../common/spec/server/05-async-execution-policy.ko.md)
 - Core HWM과 Application job queue 설정:
-  [Framework API §2.1](../../../common/spec/06-framework-api.ko.md#21-core-memory-budget과-application-job-queue를-분리한다)
+  [Framework API §2.1](../../../common/spec/server/06-framework-api.ko.md#21-core-memory-budget과-application-job-queue를-분리한다)
 - status·metric과 reset 의미:
-  [runtime monitoring](../../../common/spec/24-runtime-monitoring.ko.md) ·
-  [runtime metrics](../../../common/spec/25-runtime-metrics.ko.md)
+  [runtime monitoring](../../../common/spec/server/24-runtime-monitoring.ko.md) ·
+  [runtime metrics](../../../common/spec/server/25-runtime-metrics.ko.md)
 - 소켓 설정 표면: [언어별 topology 공개 계약](../../../common/spec/server/languages/README.ko.md)
 - socket option의 byte 단위 계약: [core guide의 socket option](https://zlink-systems.github.io/zlink/ko/guide/12-socket-options/)
 - 다음 축: [05-channel-messaging](05-channel-messaging.ko.md)

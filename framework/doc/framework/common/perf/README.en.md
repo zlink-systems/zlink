@@ -55,14 +55,14 @@ figure, while the S2S (channel/Spot) and AC (actor client no-bind) families are 
 | publish → subscriber fanout | Measures fanout throughput and delivery latency when one publisher broadcasts an event to multiple subscribers | 1 KiB | 4 KiB |
 
 The `publish → subscriber fanout` axis is based on the `publish-subscribe` common interaction model
-defined by §3.3 of `framework/doc/framework/common/spec/03-interaction-model.en.md` and
-`framework/doc/framework/common/spec/07-channel-topology.en.md`, and on the fanout scenario of
+defined by §3.3 of `framework/doc/framework/common/spec/server/03-interaction-model.en.md` and
+`framework/doc/framework/common/spec/server/07-channel-topology.en.md`, and on the fanout scenario of
 `framework/doc/framework/common/e2e/config-3-pubsub.en.md`. Since `publish-subscribe` is a public
 contract already implemented by all five languages, this axis is mandatory the same as the other
 five axes, with no per-language skip.
 
 The `actor client(no-bind) → actor echo` axis is based on the actor client contract in §6.1 of
-`framework/doc/framework/common/spec/14-actor-model.en.md` and the
+`framework/doc/framework/common/spec/server/14-actor-model.en.md` and the
 `framework/doc/framework/common/e2e/config-9-to-actor-messaging.en.md` scenario. Every framework
 language that provides a public actor client keeps this axis as the same mandatory perf scope.
 
@@ -1396,9 +1396,9 @@ A per-language perf implementation is considered complete once it satisfies the 
 This section defines how to measure the Core ordinary-queue byte budget and the framework
 host instance's queued-application-job limit under a production workload. Settings, errors,
 and status-reset semantics come from
-[Framework API §2.1](../spec/06-framework-api.en.md#21-separating-the-core-memory-budget-from-the-application-job-queue),
-[Runtime Monitoring](../spec/24-runtime-monitoring.en.md), and
-[Runtime Metrics](../spec/25-runtime-metrics.en.md). Perf fixtures verify those values and
+[Framework API §2.1](../spec/server/06-framework-api.en.md#21-separating-the-core-memory-budget-from-the-application-job-queue),
+[Runtime Monitoring](../spec/server/24-runtime-monitoring.en.md), and
+[Runtime Metrics](../spec/server/25-runtime-metrics.en.md). Perf fixtures verify those values and
 boundaries; they do not redefine the contract.
 
 ### 23.1 Fixed Workload And CPU Matrix

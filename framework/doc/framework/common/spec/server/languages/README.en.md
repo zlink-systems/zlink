@@ -12,9 +12,9 @@ and the HTTP client is owned by
 [Per-Language HTTP Client Contract](../../http-client/README.en.md).
 
 Behavior common across languages is defined by the
-[common spec](../../README.en.md), and the procedure for changing a
+[common spec](../README.en.md), and the procedure for changing a
 contract follows
-[Public Contract Governance](../../00-public-contract-governance.en.md).
+[Public Contract Governance](../00-public-contract-governance.en.md).
 
 | Language | Public contract |
 |------|-----------|

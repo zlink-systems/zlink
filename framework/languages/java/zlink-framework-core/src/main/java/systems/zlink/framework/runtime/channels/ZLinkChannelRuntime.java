@@ -1080,7 +1080,7 @@ public final class ZLinkChannelRuntime
 
     /**
      * Resolves the ClientServer send target for a Channel whose ready candidate set is still empty,
-     * per {@code framework/doc/framework/common/spec/08-channel-messaging.ko.md} 짠3.2: the call
+     * per {@code framework/doc/framework/common/spec/server/08-channel-messaging.ko.md} 짠3.2: the call
      * waits a bounded period and then fails with no-target. The bound is the shorter of this
      * Channel's request timeout and five seconds, mirroring the .NET reference
      * {@code ZLinkClientServerClientRuntime.WaitForReadyAsync}. Framework startup never waits for

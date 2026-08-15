@@ -121,7 +121,7 @@ room, zone, match와 actor 기반 서비스 같은 토폴로지는 동일한 Rou
 Actor와 STREAM 조합으로 구성할 수 있습니다.
 
 더 자세한 설명은 [Framework 서버 개요](./framework/doc/framework/common/guide/server/01-overview.ko.md)를,
-정식 의미와 책임 경계는 [Framework 공통 스펙](./framework/doc/framework/common/spec/README.ko.md)을
+정식 의미와 책임 경계는 [Framework 공통 스펙](./framework/doc/framework/common/spec/server/README.ko.md)을
 참고하세요.
 
 ## 빠른 시작
@@ -241,8 +241,8 @@ Framework sample은 단순 API 호출뿐 아니라 여러 역할의 server와 cl
 | 언어별 Binding 사용법 | [Bindings 가이드](./bindings/doc/guide/README.ko.md) |
 | Binding 정식 계약 | [Bindings 스펙](./bindings/doc/spec/README.ko.md) |
 | Framework 개념과 사용 상황 | [Framework 서버 개요](./framework/doc/framework/common/guide/server/01-overview.ko.md) |
-| Framework 정식 계약 | [Framework 공통 스펙](./framework/doc/framework/common/spec/README.ko.md) |
-| Framework 내부 구조 | [Framework internals](framework/doc/framework/common/spec/README.ko.md) |
+| Framework 정식 계약 | [Framework 공통 스펙](./framework/doc/framework/common/spec/server/README.ko.md) |
+| Framework 내부 구조 | [Framework internals](framework/doc/framework/common/spec/server/README.ko.md) |
 | Core를 소스에서 빌드하고 테스트 | [Core 빌드 가이드](./doc/building/build-guide.ko.md) |
 | 현재 source로 Core와 Bindings local package 생성 | [Local package 가이드](./scripts/local-package/README.ko.md) |
 | Binding package 설치와 사용 | [Bindings 가이드](./bindings/doc/guide/README.ko.md) |

@@ -145,7 +145,7 @@ The connection lifecycle guarantees the following public behavior.
 - A new connection exceeding `max_connections` ends with the overload
   result set in the server option.
 - No new connection is accepted after
-  [shutdown](../../../01-glossary.en.md#shutdown) starts.
+  [shutdown](../../01-glossary.en.md#shutdown) starts.
 - During shutdown drain, an active request waits to complete within
   the timeout.
 - A connection is closed once the drain timeout passes.

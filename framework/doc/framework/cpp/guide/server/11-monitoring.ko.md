@@ -96,7 +96,7 @@ operation의 terminal 결과를 바꾸지 않고 별도 진단으로 격리한�
 
 `flow_id`와 `flow_origin`은 한 요청이 여러 node를 거칠 때 그 조각들을 하나로 묶는
 식별자다. 상관관계 규칙은
-[흐름 상관관계](../../../common/spec/27-flow-correlation.ko.md)가 소유한다.
+[흐름 상관관계](../../../common/spec/server/27-flow-correlation.ko.md)가 소유한다.
 
 ## 4. Health check
 
@@ -134,7 +134,7 @@ runtime 상태 변화와 진단은 표준 logging provider로 나간다. provide
 - exporter lifecycle, registry와 provider 내부 상태
 
 metric 이름·종류·단위·label은
-[Runtime metric과 집계 규칙](../../../common/spec/25-runtime-metrics.ko.md)이 소유한다.
+[Runtime metric과 집계 규칙](../../../common/spec/server/25-runtime-metrics.ko.md)이 소유한다.
 
 ## 6. 자주 발생하는 문제
 

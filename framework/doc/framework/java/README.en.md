@@ -7,7 +7,7 @@
 > meaning concrete shape on the Java/Kotlin surface.
 
 The common meaning of async execution, `CompletionStage`, and the Kotlin coroutine wrapper
-follows the [Async Execution And Coroutine Policy](../common/spec/05-async-execution-policy.en.md).
+follows the [Async Execution And Coroutine Policy](../common/spec/server/05-async-execution-policy.en.md).
 
 Sample and E2E config files, the ban on environment variables, and
 `@ConfigurationProperties`-binding criteria follow the
@@ -36,7 +36,7 @@ for every framework language is managed together under `spec/<package>/languages
 | [Java interfaces](../common/spec/server/languages/java/interfaces/README.en.md) | The exact public signature per feature and the Spring host lifecycle |
 | [stream-connector](../common/spec/stream-connector/languages/java/03-stream-connector.en.md) | The client connector |
 
-**The meaning and behavioral rules of a feature are owned by the [common spec](../common/spec/README.en.md).**
+**The meaning and behavioral rules of a feature are owned by the [common spec](../common/spec/server/README.en.md).**
 Language-specific documents only fix what shape that meaning takes in Java/Kotlin.
 
 ## 3. Internal Criteria
@@ -47,7 +47,7 @@ maintainers.
 | Document | Scope |
 |------|------|
 | [backend-dependency-policy](internals/backend-dependency-policy.en.md) | Java binding dependency isolation |
-| [Common Internals](../common/spec/README.en.md) | Runtime architecture decisions shared across all four languages |
+| [Common Internals](../common/spec/server/README.en.md) | Runtime architecture decisions shared across all four languages |
 | [regression-test-matrix](internals/regression-test-matrix.en.md) | JVM contract, E2E, and performance smoke criteria |
 
 ## 4. Samples

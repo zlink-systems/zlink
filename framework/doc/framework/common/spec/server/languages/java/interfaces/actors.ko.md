@@ -8,7 +8,7 @@ location snapshot을 갱신한다. 응답이 없어도 Actor 처리를 멈추지
 아니므로 Actor disconnect callback을 실행하지 않는다. relocation 대상에 포함되지 않은 다른 Actor의 route와 physical connection은
 변경하지 않는다.
 
-[인터페이스 목차](README.ko.md) · [Actor 공통 계약](../../../../14-actor-model.ko.md)
+[인터페이스 목차](README.ko.md) · [Actor 공통 계약](../../../14-actor-model.ko.md)
 
 이 문서는 Java에서 Actor factory, context, messaging, manager와 relocation adapter를 표현하는 공개
 인터페이스를 고정한다. 일반 message는 ActorId로 대상을 지정하고, 특정 incarnation을 변경하는
@@ -36,7 +36,7 @@ public interface ZLinkActorRelocationAdapter<TActor extends ZLinkActor> {
 
 ```
 
-[Factory](../../../../01-glossary.ko.md#factory) registration의 정확한 builder member는
+[Factory](../../../01-glossary.ko.md#factory) registration의 정확한 builder member는
 [구성과 host](configuration-host.ko.md)가 소유한다. Cross-node relocation 동작은 Actor factory configure callback에
 직접 연결한다. Runtime은 factory가 반환한 Actor를 명시한 `actorClass`로 검사해 type 불일치를 startup
 오류로 반환한다. Factory와 분리된 relocation registry는 제공하지 않는다.
@@ -58,7 +58,7 @@ adapter는 stage가 끝난 뒤 그 배열을 보관하지 않는다. 길이가 0
 받지 않는다.
 
 Cross-node materialization에서 Actor factory가 `preserveStateWith(...)`를 사용하면 maintenance Actor relocation,
-remote User·[Entry Spot](../../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) join과 whole User Spot relocation의 각 Actor participant에 같은 Actor adapter를 사용한다.
+remote User·[Entry Spot](../../../01-glossary.ko.md#entry-spot-user-spot과-instance-spot) join과 whole User Spot relocation의 각 Actor participant에 같은 Actor adapter를 사용한다.
 Same-node join과 `disableRelocation()` 또는 `recreateOnRelocation()`을 선택한 factory에서는 adapter를 호출하지
 않는다. `recreateOnRelocation()`은 application state를 capture하지 않으므로 adapter가 없다.
 
@@ -66,10 +66,10 @@ Target은 restore와 accepted journal staging을 끝낸 뒤 owner를 commit한�
 작업을 실제 Actor queue에 먼저 넣고 relocation temporary queue 작업을 그 뒤에 옮긴다. Temporary queue
 등록을 제거하고 dispatch를 atomic하게 전환한 뒤 target을 `READY`로 연다. Source cleanup, `COMPLETED` 기록과
 bound-session 위치 갱신 응답은 target message 처리를 막지 않는다. `READY` 뒤 target process가 종료되면
-ordinary [owner](../../../../01-glossary.ko.md#owner) loss로 처리하며 이전 relocation을 자동 replay하지 않는다. 이 barrier를 조작하는 public phase API는 제공하지 않는다.
+ordinary [owner](../../../01-glossary.ko.md#owner) loss로 처리하며 이전 relocation을 자동 replay하지 않는다. 이 barrier를 조작하는 public phase API는 제공하지 않는다.
 
 같은 source와 target process 안의 재시도에서 factory와 `restore(...)`를 두 번 이상 호출할 수 있다.
-`capture(...)`도 [authority](../../../../01-glossary.ko.md#authority) commit 전에 반복될 수 있다. Current owner와 attempt fence만 completion을 commit하고
+`capture(...)`도 [authority](../../../01-glossary.ko.md#authority) commit 전에 반복될 수 있다. Current owner와 attempt fence만 completion을 commit하고
 admission을 열 수 있다. Callback에는 relocation ID를 추가하지 않으므로 application restore와 capture는 retry-safe해야
 하며 exactly-once external side effect를 보장하지 않는다. Factory는 target attempt마다 fresh Actor instance를
 만들고 Framework는 그 attempt의 `restore(...)`만 해당 instance에 호출한다. Source instance나 이전 target
@@ -79,7 +79,7 @@ Capture stage가 exception으로 끝나면 authority publication 전에 attempt�
 유지한다. Restore stage가 exception으로 끝나면 target admission을 sealed 상태로 유지하고 같은 target process에서
 동일한 payload로 다시 시도할 수 있다. 다른 target을 자동 선택하지 않는다. Exception을 빈 payload나 정상 completion으로 바꾸지 않는다. Capture의
 null stage와 null `byte[]`, Restore의 null stage는 adapter contract 위반이다. Host relocation에서 deadline이 먼저
-확정되지 않은 precommit adapter exception과 contract 위반은 `Blocked/StateIncompatible`로 분류한다. [Deadline](../../../../01-glossary.ko.md#deadline)이
+확정되지 않은 precommit adapter exception과 contract 위반은 `Blocked/StateIncompatible`로 분류한다. [Deadline](../../../01-glossary.ko.md#deadline)이
 먼저 확정되면 `Blocked/DeadlineExceeded`를 사용하며 stale target attempt의 cancellation은 terminal result를
 commit하지 못한다. Adapter는
 반복 호출과 stale attempt overlap을 허용하도록 retry-safe해야 하며 callback 안의 외부 side effect를 exactly-once로
@@ -106,7 +106,7 @@ eligibility를 만족하는 target·capacity·reservation 부재는 `BLOCKED/TAR
 전달한 state schema/type adapter 불일치는 `BLOCKED/STATE_INCOMPATIBLE`다. Actor unit은 target factory와
 restore를 끝내고 accepted journal을
 application handler가 실행하지 않은 staging queue로 준비한 뒤 `NEW_OWNER` CAS를 수행한다. 이 CAS는
-owner, authority owner generation과 current [Spot](../../../../01-glossary.ko.md#spot)을
+owner, authority owner generation과 current [Spot](../../../01-glossary.ko.md#spot)을
 target execution shell로 원자적으로 바꾼다. Infrastructure relocation은 application
 membership callback을 호출하지 않는다. Journal·queue·Actor timer replay, source
 relay와 durable cleanup을 끝낸 뒤 dispatch를 개방한다. 이 순서를 제어하는 public

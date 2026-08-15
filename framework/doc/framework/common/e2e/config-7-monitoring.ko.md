@@ -74,7 +74,7 @@ timeline처럼 비교하면 정상 상태를 오래된 값으로 오해할 수 �
 - 검증: 두 번째 RouteMesh status는 ready peer와 ready target 증가를 반영하고 같은 Mesh source의 첫
   sequence보다 크다. Host status는 Host state와 새 작업 수락 여부를 제공하며 자기 source 안에서만
   sequence를 비교한다. 처음 보관한 status 값은 후속 변화로 바뀌지 않는다.
-- 세부 동작: [Runtime monitoring §2](../spec/24-runtime-monitoring.ko.md)를
+- 세부 동작: [Runtime monitoring §2](../spec/server/24-runtime-monitoring.ko.md)를
   검증한다.
 
 #### MON-A2 Peer가 추가되고 제거된 결과를 관찰한다
@@ -91,8 +91,8 @@ Observer는 peer lifecycle의 모든 짧은 중간 state를 반드시 전달하�
   것을 확인한 뒤 새 process로 다시 시작한다.
 - 검증: 각 단계의 최신 status와 `GetStatus`가 같은 ready peer 집합을 제공한다. 재시작 뒤 새 Node RID가
   ready이고 이전 RID는 ready 목록에 없다. 관찰한 sequence는 같은 Mesh source에서 단조 증가한다.
-- 세부 동작: [Runtime monitoring §2.2](../spec/24-runtime-monitoring.ko.md)와
-  [§3](../spec/24-runtime-monitoring.ko.md)을 검증한다.
+- 세부 동작: [Runtime monitoring §2.2](../spec/server/24-runtime-monitoring.ko.md)와
+  [§3](../spec/server/24-runtime-monitoring.ko.md)을 검증한다.
 
 #### MON-A3 Channel readiness와 실제 request 결과를 대조한다
 
@@ -109,8 +109,8 @@ target이 하나도 없으면 선택 가능한 상태로 표시해서는 안 된
   반영된 뒤 새 request를 보낸다. Weight를 100으로 복원하고 ready가 된 즉시 다시 요청한다.
 - 검증: 처음과 복원 뒤 request는 handler에서 한 번 처리된다. Weight 0인 동안 status는 ready target이
   없음을 나타내고 request는 정식 오류 모델의 terminal 결과로 끝난다.
-- 세부 동작: [Runtime monitoring §2.2](../spec/24-runtime-monitoring.ko.md)와
-  [Channel topology §7](../spec/07-channel-topology.ko.md)을 검증한다.
+- 세부 동작: [Runtime monitoring §2.2](../spec/server/24-runtime-monitoring.ko.md)와
+  [Channel topology §7](../spec/server/07-channel-topology.ko.md)을 검증한다.
 
 #### MON-A4A 정상 replacement 뒤 readiness를 복원한다
 
@@ -126,7 +126,7 @@ target이 하나도 없으면 선택 가능한 상태로 표시해서는 안 된
   status가 ready가 되는 즉시 request를 보낸다.
 - 검증: 최신 status에는 새 RID만 ready target으로 나타나며 request는 새 process handler에서 한 번
   처리된다. Application retry와 추가 settle sleep을 사용하지 않는다.
-- 세부 동작: [Runtime monitoring §3](../spec/24-runtime-monitoring.ko.md)을
+- 세부 동작: [Runtime monitoring §3](../spec/server/24-runtime-monitoring.ko.md)을
   검증한다.
 
 #### MON-A4B Crash 뒤 stale peer를 제외하고 복구한다
@@ -143,7 +143,7 @@ ready target으로 사용하지 않고 새 process의 상태로 수렴해야 한
   process를 시작하고 ready를 기다린다.
 - 검증: 최신 status에는 crash한 RID가 ready로 남지 않고 새 RID가 ready다. Ready 직후의 request는 새
   handler에서 한 번 처리된다.
-- 세부 동작: [Runtime monitoring §2.2](../spec/24-runtime-monitoring.ko.md)를 검증한다.
+- 세부 동작: [Runtime monitoring §2.2](../spec/server/24-runtime-monitoring.ko.md)를 검증한다.
 
 #### MON-A5 Store 장애와 복구 상태를 관찰한다
 
@@ -159,8 +159,8 @@ degraded 상태를 확인하고, Store 복구 뒤 다시 ready 상태가 되는�
   바뀌는지 관찰한다. Store를 재시작하고 status가 ready로 복구될 때까지 기다린다.
 - 검증: 장애 중 status는 정식 topology state와 unavailable reason으로 Store 문제를 나타낸다. 복구 뒤
   ready target과 실제 request 성공이 함께 복원된다. 고정 sleep으로 grace 경계를 추정하지 않는다.
-- 세부 동작: [Location runtime §8](../spec/21-location-runtime.ko.md)과
-  [Runtime monitoring §2.2](../spec/24-runtime-monitoring.ko.md)를 검증한다.
+- 세부 동작: [Location runtime §8](../spec/server/21-location-runtime.ko.md)과
+  [Runtime monitoring §2.2](../spec/server/24-runtime-monitoring.ko.md)를 검증한다.
 
 #### MON-A6 Placement 집계와 capacity 결과를 대조한다
 
@@ -178,8 +178,8 @@ Count가 실제 create 결과와 다르면 scale-out 판단이 잘못된다.
 - 검증: Active count는 완료된 public lifecycle 결과와 단계마다 일치한다. Limit 초과 create는
   `CapacityExceeded`이고 status는 placement 불가를 나타낸다. Object 제거 뒤에는 available로 돌아오고 새
   create가 성공한다.
-- 세부 동작: [Runtime monitoring §2.2](../spec/24-runtime-monitoring.ko.md)와
-  [MeshNode §5](../spec/13-mesh-node.ko.md)를 검증한다.
+- 세부 동작: [Runtime monitoring §2.2](../spec/server/24-runtime-monitoring.ko.md)와
+  [MeshNode §5](../spec/server/13-mesh-node.ko.md)를 검증한다.
 
 #### MON-A7 Core HWM과 Application job queue snapshot을 reset한다
 
@@ -214,8 +214,8 @@ Logical Multicast는 target별 delivery report를 반환하지 않는다. 한 re
   RouteMesh status를 읽는다.
 - 검증: Public submit은 target별 결과 없이 정식 terminal 의미로 끝나며 수락 가능한 target은 marker를
   한 번 처리한다. Network와 peer 상태가 바뀌지 않았다면 ready peer와 Channel status도 유지된다.
-- 세부 동작: [Spot messaging §4](../spec/12-spot-messaging.ko.md)와
-  [Runtime monitoring §2.2](../spec/24-runtime-monitoring.ko.md)를 검증한다.
+- 세부 동작: [Spot messaging §4](../spec/server/12-spot-messaging.ko.md)와
+  [Runtime monitoring §2.2](../spec/server/24-runtime-monitoring.ko.md)를 검증한다.
 
 #### MON-B2 Local target handler 대기가 다른 target 전달을 막지 않는다
 
@@ -232,7 +232,7 @@ Topology status는 target별 delivery count를 대신하지 않는다.
   evidence를 수집한다. 다른 target의 evidence를 확인한 뒤 gate를 연다.
 - 검증: 다른 target은 marker를 gate가 닫힌 동안 한 번 처리하고, gate를 연 target도 이후 한 번 처리한다.
   Publish는 target별 결과 payload를 반환하지 않으며 RouteMesh의 peer·Channel status는 변하지 않는다.
-- 세부 동작: [Spot messaging §4](../spec/12-spot-messaging.ko.md)를
+- 세부 동작: [Spot messaging §4](../spec/server/12-spot-messaging.ko.md)를
   검증한다.
 
 ### Track C — Observer를 업무 처리에서 격리
@@ -253,7 +253,7 @@ Status observer는 운영 정보를 소비하는 Application callback이다. 한
 - 검증: Request는 deadline 안에 reply를 받고 정상 observer는 current status를 제공한다. 느린 observer의
   sequence에 gap이 있어도 `GetStatus`를 다시 읽으면 최신 상태와 일치한다. 느린 observer 종료가 정상
   observer를 종료하지 않는다.
-- 세부 동작: [Runtime monitoring §3](../spec/24-runtime-monitoring.ko.md)의
+- 세부 동작: [Runtime monitoring §3](../spec/server/24-runtime-monitoring.ko.md)의
   observer 격리를 검증한다.
 
 ### Track D — 잘못된 조회와 반복 장애를 처리
@@ -271,7 +271,7 @@ Application이 등록하지 않은 MeshName을 조회하면 다른 Mesh의 상�
 - 절차: Application endpoint가 `missing-mesh`의 `GetStatus`와 `Observe` 시작을 각각 시도한다.
 - 검증: 두 호출은 언어별 interface가 정한 configuration 또는 argument error로 끝나며 `game` status와
   observer에는 영향을 주지 않는다.
-- 세부 동작: [Runtime monitoring §6](../spec/24-runtime-monitoring.ko.md)를 검증한다.
+- 세부 동작: [Runtime monitoring §6](../spec/server/24-runtime-monitoring.ko.md)를 검증한다.
 
 #### MON-D1B 반복 crash와 restart 뒤에도 status를 계속 관찰한다
 
@@ -285,7 +285,7 @@ Observer가 한 번의 장애만 처리하고 이후 변화를 놓치면 장시�
 - 절차: `svc-b` 강제 종료, peer 제거 확인, 새 process 시작과 ready 확인을 세 번 반복한다.
 - 검증: 매 cycle의 최신 status는 실제 current RID와 ready target 수를 반영한다. 같은 source의 관찰
   sequence는 증가하며 마지막 `GetStatus`와 observer의 최신 값이 일치한다.
-- 세부 동작: [Runtime monitoring §3](../spec/24-runtime-monitoring.ko.md)을
+- 세부 동작: [Runtime monitoring §3](../spec/server/24-runtime-monitoring.ko.md)을
   검증한다.
 
 ## 5. 완료 기준

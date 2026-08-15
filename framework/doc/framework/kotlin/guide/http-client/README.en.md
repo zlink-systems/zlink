@@ -4,7 +4,7 @@
 > the [`.NET` guide](../../../dotnet/README.en.md). This document reflects an earlier state, and
 > **once the `.NET` guide is finished, this document will be deleted and rewritten based on it.**
 >
-> **When confirming the contract, don't trust this document — check the [spec tree](../../../common/spec/README.en.md).**
+> **When confirming the contract, don't trust this document — check the [spec tree](../../../common/spec/server/README.en.md).**
 
 `zlink-http-client-kotlin` is a client that calls HTTP APIs with Kotlin coroutines. It configures
 the client/request with a zlink-style DSL and fluent builder, and every submit is a true `suspend`

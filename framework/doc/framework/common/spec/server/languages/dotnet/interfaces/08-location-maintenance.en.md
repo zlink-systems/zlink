@@ -1,6 +1,6 @@
 # .NET Location Configuration And Operations Public Interface
 
-[.NET exact interface table of contents](README.en.md) · [Location Runtime](../../../../21-location-runtime.en.md) ·
+[.NET exact interface table of contents](README.en.md) · [Location Runtime](../../../21-location-runtime.en.md) ·
 [Provider SPI](08-authority-relocation.en.md) · [Host Monitoring](10-topology-monitoring.en.md)
 
 ## 1. Scope

@@ -4,7 +4,7 @@
 
 [가이드 홈](../index.ko.md) | [공통 스펙](../common/README.ko.md)
 
-[공통 스펙](../common/README.ko.md) | [비동기 실행](../common/spec/05-async-execution-policy.ko.md) | [Exact interface](../common/spec/server/languages/dotnet/interfaces/README.ko.md) | [Stream Connector](../common/spec/stream-connector/languages/dotnet/03-stream-connector.ko.md) | [Unity 가이드](guide/stream-connector/02-unity.ko.md) | [공통 내부 구조](../common/spec/README.ko.md) | [Regression Matrix](internals/regression-test-matrix.ko.md) | [Backend Policy](internals/backend-dependency-policy.ko.md) | [Runtime Integration](internals/runtime-integration-and-ownership.ko.md)
+[공통 스펙](../common/README.ko.md) | [비동기 실행](../common/spec/server/05-async-execution-policy.ko.md) | [Exact interface](../common/spec/server/languages/dotnet/interfaces/README.ko.md) | [Stream Connector](../common/spec/stream-connector/languages/dotnet/03-stream-connector.ko.md) | [Unity 가이드](guide/stream-connector/02-unity.ko.md) | [공통 내부 구조](../common/spec/server/README.ko.md) | [Regression Matrix](internals/regression-test-matrix.ko.md) | [Backend Policy](internals/backend-dependency-policy.ko.md) | [Runtime Integration](internals/runtime-integration-and-ownership.ko.md)
 
 # ZLink Framework for .NET
 
@@ -18,7 +18,7 @@
 > | [`guide/stream-connector/`](guide/stream-connector/README.ko.md) | **Stream connector** 사용 가이드(Unity·Godot 포함) |
 > | [`internals/`](internals/regression-test-matrix.ko.md) | 구현·검증 기준 |
 >
-> **공개 계약은 여기 없다.** [spec 트리](../common/spec/README.ko.md)가 소유한다 —
+> **공개 계약은 여기 없다.** [spec 트리](../common/spec/server/README.ko.md)가 소유한다 —
 > [server/languages/dotnet](../common/spec/server/languages/dotnet/README.ko.md) ·
 > [http-client/languages/dotnet](../common/spec/http-client/languages/dotnet/dotnet-http-client.ko.md) ·
 > [stream-connector/languages/dotnet](../common/spec/stream-connector/languages/dotnet/03-stream-connector.ko.md).
@@ -167,7 +167,7 @@ interface 목차의 대응 category를 참조한다.
 | [32-stream-connector.ko.md](../common/spec/stream-connector/languages/dotnet/03-stream-connector.ko.md) | 별도 client connector의 lifecycle, dispatch, codec, transport, 종료 사유 |
 | [public contract](../common/spec/server/languages/dotnet/README.ko.md) | 문서 계약과 실제 assembly·NuGet 산출물의 exact 검증 절차 |
 
-**기능의 의미와 동작 규칙은 [공통 스펙](../common/spec/README.ko.md)이 소유한다.** 언어별 문서는
+**기능의 의미와 동작 규칙은 [공통 스펙](../common/spec/server/README.ko.md)이 소유한다.** 언어별 문서는
 그 의미가 `.NET`에서 어떤 모양인지만 고정한다.
 
 ### 2.3 유지보수 문서
@@ -177,7 +177,7 @@ interface 목차의 대응 category를 참조한다.
 
 | 문서 | 다루는 범위 |
 |------|------------|
-| [공통 내부 구조](../common/spec/README.ko.md) | 네 언어가 공유하는 runtime 아키텍처 결정 |
+| [공통 내부 구조](../common/spec/server/README.ko.md) | 네 언어가 공유하는 runtime 아키텍처 결정 |
 | [regression-test-matrix.ko.md](internals/regression-test-matrix.ko.md) | 항상 유지해야 할 회귀 테스트 항목, CI 계층, release gate |
 | [backend-dependency-policy.ko.md](internals/backend-dependency-policy.ko.md) | backend 의존 관계와 저수준 라이브러리 교체 경계 |
 | [runtime-integration-and-ownership.ko.md](internals/runtime-integration-and-ownership.ko.md) | binding public API 선택, adapter 책임과 receive storage ownership |

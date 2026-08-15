@@ -4,7 +4,7 @@
 
 > This document is the language-neutral implementation standard for the Bingo sample shared by
 > every Framework language. Public behavior is owned by the
-> [common Framework spec](../../spec/README.en.md), and this document applies that contract to a
+> [common Framework spec](../../spec/server/README.en.md), and this document applies that contract to a
 > game flow.
 
 ## 1. Purpose And Scope
@@ -120,21 +120,21 @@ domain model don't need to change even if the number of servers changes.
 
 | Behavior Needed | Framework Element | Reason And Contract Basis |
 |---|---|---|
-| Handle requests and pushes over one client connection | STREAM session | The Framework owns dispatch and reply correlation. [STREAM server session §3](../../spec/19-stream-session.en.md#3-dispatch-model) |
-| Deliver a session request to the current player | Session Actor binding | Relays via the exact route stored at bind time. [Spot/Actor routing §3](../../spec/18-object-routing.en.md#3-how-to-relay-to-an-actor-bound-to-a-session) |
-| Keep per-player identity and lifecycle | Actor and Entry Spot | The Framework manages Actor creation and the initial entry point. [Spot model §4](../../spec/11-spot-model.en.md#4-entry-spot) |
-| Change per-room shared state in order | `SpotWide` User Spot | Handles room join, card, timer, and winner decisions in one shared turn. [Spot model §5.1](../../spec/11-spot-model.en.md#51-spotwide-relocation-boundary) |
-| Create a per-level-bucket matchmaker only when needed | Instance Spot | The first request in the `Missing` state starts cold activation. [SPOT messaging §3.2](../../spec/12-spot-messaging.en.md#32-newly-preparing-when-theres-no-instance-spot) |
-| Return the room turn during an external record call | `Yield` terminator | Once the result is decided, the continuation runs in a new Spot turn. [SPOT messaging §3.6](../../spec/12-spot-messaging.en.md#36-resuming-channel-request-execution) |
-| Deliver a reward to multiple Play nodes' local observer rooms | Logical Multicast | Scopes local subscription by Channel and topic. [SPOT messaging §4](../../spec/12-spot-messaging.en.md#4-channel-scoped-logical-multicast) |
-| Push to the current client even if the Actor moves | Bound session send | Uses the binding identity and route kept by the session owner. [Spot and Actor membership §9](../../spec/15-spot-actor.en.md#9-bound-session) |
-| Move the room and Actor on a planned node shutdown | Host Relocate | Moves the Spot and member Actors as the same relocation unit. [Host Relocate §8.5](../../spec/30-host-relocation-flow.en.md#85-spotwide-user-spot) |
+| Handle requests and pushes over one client connection | STREAM session | The Framework owns dispatch and reply correlation. [STREAM server session §3](../../spec/server/19-stream-session.en.md#3-dispatch-model) |
+| Deliver a session request to the current player | Session Actor binding | Relays via the exact route stored at bind time. [Spot/Actor routing §3](../../spec/server/18-object-routing.en.md#3-how-to-relay-to-an-actor-bound-to-a-session) |
+| Keep per-player identity and lifecycle | Actor and Entry Spot | The Framework manages Actor creation and the initial entry point. [Spot model §4](../../spec/server/11-spot-model.en.md#4-entry-spot) |
+| Change per-room shared state in order | `SpotWide` User Spot | Handles room join, card, timer, and winner decisions in one shared turn. [Spot model §5.1](../../spec/server/11-spot-model.en.md#51-spotwide-relocation-boundary) |
+| Create a per-level-bucket matchmaker only when needed | Instance Spot | The first request in the `Missing` state starts cold activation. [SPOT messaging §3.2](../../spec/server/12-spot-messaging.en.md#32-newly-preparing-when-theres-no-instance-spot) |
+| Return the room turn during an external record call | `Yield` terminator | Once the result is decided, the continuation runs in a new Spot turn. [SPOT messaging §3.6](../../spec/server/12-spot-messaging.en.md#36-resuming-channel-request-execution) |
+| Deliver a reward to multiple Play nodes' local observer rooms | Logical Multicast | Scopes local subscription by Channel and topic. [SPOT messaging §4](../../spec/server/12-spot-messaging.en.md#4-channel-scoped-logical-multicast) |
+| Push to the current client even if the Actor moves | Bound session send | Uses the binding identity and route kept by the session owner. [Spot and Actor membership §9](../../spec/server/15-spot-actor.en.md#9-bound-session) |
+| Move the room and Actor on a planned node shutdown | Host Relocate | Moves the Spot and member Actors as the same relocation unit. [Host Relocate §8.5](../../spec/server/30-host-relocation-flow.en.md#85-spotwide-user-spot) |
 
 Handlers are auto-registered via the typed handler contract and declarative metadata. .NET
 attributes, Java/Kotlin annotations, and Node decorators serve the same role. C++ explicitly
 declares the same handler set using compile-time types and a builder instead of a runtime scan.
 Only the registration method differs — the message and processing responsibility are the same. The
-contract follows [Framework API §8](../../spec/06-framework-api.en.md#8-handler-registration-and-dispatch).
+contract follows [Framework API §8](../../spec/server/06-framework-api.en.md#8-handler-registration-and-dispatch).
 
 ### 5.1 Instance Spot Lifetime And The Failure Boundary
 
@@ -151,7 +151,7 @@ This behavior must not be interpreted as crash failover. If the Ready owner proc
 abnormally or the lease becomes invalid, the Framework doesn't automatically release authority or
 create a new incarnation on another node. That operation ends as `Unavailable`. A planned
 `Relocate` is a separate lifecycle that moves the same generation to a target. See
-[Failure handling §4.4](../../spec/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure)
+[Failure handling §4.4](../../spec/server/31-failure-failover-policy.en.md#44-distinguishing-instance-spot-cold-activation-from-owner-failure)
 for the detailed distinction.
 
 ## 6. Message Contract
@@ -600,7 +600,7 @@ When the STREAM connection drops, the Framework automatically submits disconnect
 identity in the current binding snapshot. The current Spot's disconnect callback only reflects
 domain state that push can't reach. The Session callback doesn't iterate Actors or directly remove
 a binding. Disconnect doesn't destroy the Actor or change room membership. This boundary follows
-[Session Actor dispatch §4.1](../../spec/20-session-actor-dispatch.en.md#41-how-a-connection-disconnect-is-told-to-an-actor).
+[Session Actor dispatch §4.1](../../spec/server/20-session-actor-dispatch.en.md#41-how-a-connection-disconnect-is-told-to-an-actor).
 
 Player Actor cleanup after the game ends runs in a separate order.
 
@@ -837,8 +837,8 @@ That language's Bingo sample is considered complete once all of the following co
   order, and final result.
 
 An implementation that turns on observability features uses the per-language exact interface of
-[flow correlation](../../spec/27-flow-correlation.en.md),
-[runtime metrics](../../spec/25-runtime-metrics.en.md), and
-[Graceful Drain](../../spec/30-host-relocation-flow.en.md). Observability configuration and a
+[flow correlation](../../spec/server/27-flow-correlation.en.md),
+[runtime metrics](../../spec/server/25-runtime-metrics.en.md), and
+[Graceful Drain](../../spec/server/30-host-relocation-flow.en.md). Observability configuration and a
 100-Actor relocation workload aren't success criteria for this base sample — they're verified by
 [Config 11 Observability/Ops E2E](../../e2e/config-11-observability-ops.en.md).

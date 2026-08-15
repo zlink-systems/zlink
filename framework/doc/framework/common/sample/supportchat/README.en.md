@@ -132,13 +132,13 @@ Relocation Store is registered.
 
 | Behavior Needed | Element Chosen | Reason And Contract Basis |
 |---|---|---|
-| Connect the client connection to an actor. | STREAM session binding | Delivers server push through the current binding route. [STREAM session](../../spec/19-stream-session.en.md) |
-| Prepare the identity actor. | Actor GetOrCreate | Reuses the existing actor by its stable ActorId and type. [Interaction Model §2.1](../../spec/03-interaction-model.en.md#21-the-public-interface-that-starts-an-interaction) |
-| Create the logical address of a new conversation. | User Spot manager Create | The Framework issues the global SpotId and selects the owner. [Framework API](../../spec/06-framework-api.en.md) |
-| Join an actor to the ConversationSpot. | Public actor join | Doesn't send the ActorRef or owner NodeRid as application payload. [Spot/Actor membership](../../spec/15-spot-actor.en.md) |
-| Change conversation state in order. | Spot turn | Changes the domain aggregate's mutable state within one execution gate. [Async execution policy](../../spec/05-async-execution-policy.en.md) |
-| Relay to the current ConversationId's actor. | Session metadata routing | Session picks the bound actor from metadata without decoding the domain payload. [Session-Actor dispatch](../../spec/20-session-actor-dispatch.en.md) |
-| Express an owner failure. | Failure/failover policy | A Ready owner failure is not automatic replacement. [Failure policy](../../spec/31-failure-failover-policy.en.md#42-an-existing-actor-and-spot) |
+| Connect the client connection to an actor. | STREAM session binding | Delivers server push through the current binding route. [STREAM session](../../spec/server/19-stream-session.en.md) |
+| Prepare the identity actor. | Actor GetOrCreate | Reuses the existing actor by its stable ActorId and type. [Interaction Model §2.1](../../spec/server/03-interaction-model.en.md#21-the-public-interface-that-starts-an-interaction) |
+| Create the logical address of a new conversation. | User Spot manager Create | The Framework issues the global SpotId and selects the owner. [Framework API](../../spec/server/06-framework-api.en.md) |
+| Join an actor to the ConversationSpot. | Public actor join | Doesn't send the ActorRef or owner NodeRid as application payload. [Spot/Actor membership](../../spec/server/15-spot-actor.en.md) |
+| Change conversation state in order. | Spot turn | Changes the domain aggregate's mutable state within one execution gate. [Async execution policy](../../spec/server/05-async-execution-policy.en.md) |
+| Relay to the current ConversationId's actor. | Session metadata routing | Session picks the bound actor from metadata without decoding the domain payload. [Session-Actor dispatch](../../spec/server/20-session-actor-dispatch.en.md) |
+| Express an owner failure. | Failure/failover policy | A Ready owner failure is not automatic replacement. [Failure policy](../../spec/server/31-failure-failover-policy.en.md#42-an-existing-actor-and-spot) |
 
 Session doesn't directly cache the binding token or the current ActorRef. It uses the exact
 ActorRef from the GetOrCreate result only for that same bind operation. If the same ActorId is

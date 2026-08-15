@@ -9,7 +9,7 @@
 | [60 HTTP hosting](../common/spec/server/languages/cpp/60-http-hosting.ko.md) | HTTP 호스팅 계약 |
 | [61 내장 HTTP 서버](../common/spec/server/languages/cpp/61-embedded-http-server.ko.md) | 내장 서버 |
 
-**기능의 의미와 동작 규칙은 [공통 스펙](../common/spec/README.ko.md)이 소유한다.** C++ 문서는 그
+**기능의 의미와 동작 규칙은 [공통 스펙](../common/spec/server/README.ko.md)이 소유한다.** C++ 문서는 그
 의미가 C++에서 갖는 **정확한 public 표면**을 고정한다.
 
 Sample과 E2E의 JSON 설정 파일, 환경 변수 금지와 typed binding 기준은
@@ -28,7 +28,7 @@ HTTP를 직접 제공한다.**
 
 ## internals 목록
 
-[공통 내부 구조](../common/spec/README.ko.md) ·
+[공통 내부 구조](../common/spec/server/README.ko.md) ·
 [backend dependency policy](internals/backend-dependency-policy.ko.md) ·
 [regression test matrix](internals/regression-test-matrix.ko.md)
 
