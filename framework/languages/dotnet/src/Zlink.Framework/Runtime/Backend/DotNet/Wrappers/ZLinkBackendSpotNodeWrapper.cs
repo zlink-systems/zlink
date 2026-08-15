@@ -435,7 +435,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                     //  path emits SpotGenerationStale/RequestProtocolError/
                     //  WorkerTimedOut/RequestFailed; classify each rather than
                     //  collapsing protocol and deadline into InternalFailure.
-                    var activationKind = MapFrameworkErrorCode(record.FailureErrno);
+                    var activationKind = MapFrameworkErrorCode(record.TerminalResult, record.FailureErrno);
                     terminal.TrySetException(new ZLinkFrameworkException(
                         activationKind,
                         "Remote Instance Spot activation failed.",
@@ -502,7 +502,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 else
                 {
                     ZLinkMessageParts.DisposeAll(parts);
-                    var createKind = MapFrameworkErrorCode(record.FailureErrno);
+                    var createKind = MapFrameworkErrorCode(record.TerminalResult, record.FailureErrno);
                     terminal.TrySetException(new ZLinkFrameworkException(
                         createKind,
                         "Remote User Spot create failed.",
@@ -564,7 +564,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 ZLinkMessageParts.DisposeAll(parts);
                 var failure = (ServiceWireConstants.FrameworkErrorCode)
                     record.FailureErrno;
-                var kind = MapFrameworkErrorCode(record.FailureErrno);
+                var kind = MapFrameworkErrorCode(record.TerminalResult, record.FailureErrno);
                 var retryAdvice = RetryAdviceFor(kind);
                 terminal.TrySetException(new ZLinkFrameworkException(
                     kind,
@@ -614,16 +614,11 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 terminal.TrySetResult(completion.Destroyed);
                 return;
             }
+            var destroyKind = MapFrameworkErrorCode(record.TerminalResult, record.FailureErrno);
             terminal.TrySetException(new ZLinkFrameworkException(
-                record.FailureErrno
-                == (int)ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound
-                    ? ZLinkFrameworkErrorKind.NotFound
-                    : ZLinkFrameworkErrorKind.Unavailable,
+                destroyKind,
                 $"Remote Actor destroy failed for '{actor.ActorId}'.",
-                record.FailureErrno
-                != (int)ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound
-                    ? ZLinkRetryAdvice.RetryAfterBackoff
-                    : ZLinkRetryAdvice.DoNotRetry));
+                RetryAdviceFor(destroyKind)));
         },
             id => _node.DestroyActorRemote(
                 ToNativeActor(actor),
@@ -663,7 +658,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 terminal.TrySetResult(completion);
             else
             {
-                var closeKind = MapFrameworkErrorCode(record.FailureErrno);
+                var closeKind = MapFrameworkErrorCode(record.TerminalResult, record.FailureErrno);
                 terminal.TrySetException(new ZLinkFrameworkException(
                     closeKind,
                     "Remote User Spot close failed: "
@@ -1470,11 +1465,21 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
     //  RouteNotConnected, WorkerQueueFull, SpotMoving) is Unavailable, not a
     //  source-owned CapacityExceeded (spec 32:99-103); a fine failure code is
     //  classified precisely instead of collapsing into InternalFailure.
-    private static ZLinkFrameworkErrorKind MapFrameworkErrorCode(int failureErrno)
+    private static ZLinkFrameworkErrorKind MapFrameworkErrorCode(
+        int terminalResult, int failureErrno)
+    {
+        //  A fine failure code wins; otherwise the coarse remote terminal
+        //  classifies (spec 32:81-118, 99-103).
+        return MapFineFailureCode(failureErrno) ?? MapTerminalResult(terminalResult);
+    }
+
+    private static ZLinkFrameworkErrorKind? MapFineFailureCode(int failureErrno)
     {
         return (ServiceWireConstants.FrameworkErrorCode)failureErrno switch
         {
-            ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound =>
+            ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound
+                or ServiceWireConstants.FrameworkErrorCode.HandlerNotFound
+                or ServiceWireConstants.FrameworkErrorCode.RequestTargetNotFound =>
                 ZLinkFrameworkErrorKind.NotFound,
             ServiceWireConstants.FrameworkErrorCode.ActorAlreadyExists =>
                 ZLinkFrameworkErrorKind.AlreadyExists,
@@ -1497,6 +1502,29 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 ZLinkFrameworkErrorKind.DataLost,
             ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut =>
                 ZLinkFrameworkErrorKind.DeadlineExceeded,
+            ServiceWireConstants.FrameworkErrorCode.RequestFailed
+                or ServiceWireConstants.FrameworkErrorCode.WorkerFailed =>
+                ZLinkFrameworkErrorKind.InternalFailure,
+            _ => null,
+        };
+    }
+
+    //  Coarse remote-reply terminal fallback (spec 32:99-103): a terminal-only
+    //  conflict/busy is the remote target's owner/queue state -> Unavailable.
+    private static ZLinkFrameworkErrorKind MapTerminalResult(int terminalResult)
+    {
+        return (RequestResult)terminalResult switch
+        {
+            RequestResult.TimedOut => ZLinkFrameworkErrorKind.DeadlineExceeded,
+            RequestResult.NotFound => ZLinkFrameworkErrorKind.NotFound,
+            RequestResult.Terminated => ZLinkFrameworkErrorKind.ShuttingDown,
+            RequestResult.ProtocolError => ZLinkFrameworkErrorKind.ProtocolError,
+            RequestResult.Rejected => ZLinkFrameworkErrorKind.Rejected,
+            RequestResult.Conflict or RequestResult.Busy
+                or RequestResult.NotConnected =>
+                ZLinkFrameworkErrorKind.Unavailable,
+            RequestResult.InvalidArgument or RequestResult.InvalidState =>
+                ZLinkFrameworkErrorKind.InvalidOperation,
             _ => ZLinkFrameworkErrorKind.InternalFailure,
         };
     }
