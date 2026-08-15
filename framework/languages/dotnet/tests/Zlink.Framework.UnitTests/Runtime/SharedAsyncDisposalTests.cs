@@ -423,6 +423,10 @@ public sealed class SharedAsyncDisposalTests
             ArgumentNullException.ThrowIfNull(targetMethod);
             return targetMethod.Name switch
             {
+                // The runtime state wires the Application Job Queue into the
+                // backend context during construction; this dispose-sharing test
+                // does not exercise that path, so the proxy accepts it as a no-op.
+                nameof(IZLinkBackendRuntimeContext.ConfigureApplicationJobQueue) => null,
                 nameof(IAsyncDisposable.DisposeAsync) => Dispose(),
                 _ => throw new NotSupportedException(targetMethod.Name)
             };
