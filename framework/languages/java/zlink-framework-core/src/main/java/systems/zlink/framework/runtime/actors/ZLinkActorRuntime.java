@@ -2930,11 +2930,21 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return sealer.sealRouteUntilAck(seal, sessionRelocationSealTimeout)
             .thenApplyAsync(sealed -> new SealedDirectJoinSessionRoute(
                 seal, sealer))
-            .exceptionallyCompose(failure -> CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "RelocationFailed: command 42/43 did not seal the "
-                        + "bound Session for "
-                        + actorRef.actorId(), failure)));
+            .exceptionallyCompose(failure -> {
+                //  Preserve the typed seal failure (deadline -> DeadlineExceeded,
+                //  malformed ACK -> ProtocolError, route -> Unavailable, shutdown
+                //  -> ShuttingDown) instead of collapsing every command 42/43
+                //  seal failure to NotConfigured.
+                Throwable cause = failure instanceof CompletionException
+                    && failure.getCause() != null ? failure.getCause() : failure;
+                ZLinkFrameworkException typed = cause instanceof ZLinkFrameworkException framework
+                    ? framework
+                    : new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                        "RelocationFailed: command 42/43 did not seal the "
+                            + "bound Session for " + actorRef.actorId(), cause);
+                return CompletableFuture.failedFuture(typed);
+            });
     }
 
     CompletionStage<Void> abortDirectJoinSessionRoute(
@@ -4216,7 +4226,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             .execute()
             .thenCompose(result -> result instanceof ZLinkActorJoinOutcome.Accepted
                 ? CompletableFuture.<Void>completedFuture(null)
-                : CompletableFuture.<Void>failedFuture(new ZLinkConfigurationException(
+                //  Spec 15-spot-actor:404,459 — the internal return-to-Entry path
+                //  has no application admission, so a received Rejected reply
+                //  violates this operation's reply contract: ProtocolError.
+                : CompletableFuture.<Void>failedFuture(new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                     "actor Entry Spot join was rejected: " + actor.context().actorId())))
             .whenComplete((ignored, error) -> request.close());
     }
