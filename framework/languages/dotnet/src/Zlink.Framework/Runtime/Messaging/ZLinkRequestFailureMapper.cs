@@ -56,11 +56,14 @@ internal static class ZLinkRequestFailureMapper
                 ZLinkFrameworkErrorKind.ShuttingDown,
                 $"{operationName} failed because the runtime is shutting down.",
                 innerException: CreateRequestException(result)),
-            RequestResult.InvalidArgument or RequestResult.InvalidState or RequestResult.NotSupported
-                or RequestResult.InternalError => new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.InternalFailure,
-                    $"{operationName} failed with result '{result}'.",
-                    innerException: CreateRequestException(result)),
+            RequestResult.InvalidArgument or RequestResult.InvalidState => new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                $"{operationName} failed because the operation is invalid in the current state.",
+                innerException: CreateRequestException(result)),
+            RequestResult.NotSupported or RequestResult.InternalError => new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InternalFailure,
+                $"{operationName} failed with result '{result}'.",
+                innerException: CreateRequestException(result)),
             _ => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InternalFailure,
                 $"{operationName} failed with result '{result}'.")

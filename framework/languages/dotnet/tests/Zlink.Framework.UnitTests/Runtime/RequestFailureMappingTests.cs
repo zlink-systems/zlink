@@ -183,6 +183,14 @@ public sealed class RequestFailureMappingTests
     [InlineData(RequestResult.Terminated, ZLinkFrameworkErrorKind.ShuttingDown)]
     [InlineData(RequestResult.NotFound, ZLinkFrameworkErrorKind.NotFound)]
     [InlineData(RequestResult.TimedOut, ZLinkFrameworkErrorKind.DeadlineExceeded)]
+    [InlineData(RequestResult.ProtocolError, ZLinkFrameworkErrorKind.ProtocolError)]
+    [InlineData(RequestResult.Rejected, ZLinkFrameworkErrorKind.Rejected)]
+    [InlineData(RequestResult.NotConnected, ZLinkFrameworkErrorKind.Unavailable)]
+    [InlineData(RequestResult.Backpressured, ZLinkFrameworkErrorKind.CapacityExceeded)]
+    [InlineData(RequestResult.InvalidArgument, ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData(RequestResult.InvalidState, ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData(RequestResult.NotSupported, ZLinkFrameworkErrorKind.InternalFailure)]
+    [InlineData(RequestResult.InternalError, ZLinkFrameworkErrorKind.InternalFailure)]
     public void Completion_Maps_Native_Result_To_Framework_Error(
         RequestResult result,
         ZLinkFrameworkErrorKind expected)
