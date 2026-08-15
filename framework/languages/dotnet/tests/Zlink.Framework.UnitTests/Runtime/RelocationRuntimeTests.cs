@@ -1570,7 +1570,11 @@ public sealed class RelocationRuntimeTests
         }
 
         Assert.Equal(0, target.ActiveStageCount);
-        Assert.InRange(target.TerminalTombstoneCount, 1, 1_024);
+        // The spec bounds completed-stage retention by time (up to 5 minutes,
+        // 21-location-runtime), not by a fixed tombstone count. With no time
+        // elapsed every completed stage is still retained as a terminal
+        // tombstone, so all 2048 are present until RemoveExpiredTombstones runs.
+        Assert.Equal(2_048, target.TerminalTombstoneCount);
 
         target.RemoveExpiredTombstones(
             DateTimeOffset.UtcNow
