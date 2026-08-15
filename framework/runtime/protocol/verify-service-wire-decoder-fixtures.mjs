@@ -190,13 +190,14 @@ function decodeSessionRelocationBarrier(hex) {
     if (senderRole !== 1) fail("invalid-field");
     result = { command, relocation, coordinator, senderRole: "source", actor: actorFence(), session: session() };
   } else if (command === 43) {
+    // Command 43 returns only the exact seal-install result and carries no
+    // Session-message sequence or high-water (internal-service-wire-protocol).
     result = {
       command,
       relocation,
       coordinator,
       actor: actorFence(),
       session: session(),
-      lastAcceptedSessionSequence: u64(true),
     };
   } else if (command === 44) {
     const senderRole = byte();
@@ -209,12 +210,13 @@ function decodeSessionRelocationBarrier(hex) {
     let route;
     if (action === 1 && senderRole === 2) {
       route = {
+        // Command 44 carries no per-record ACK or numeric high-water
+        // (internal-service-wire-protocol).
         action: "commit",
         previousAuthorityOwnerGeneration: u64(),
         targetAuthorityOwnerGeneration: u64(),
         targetNodeRid: text8(),
         targetNodeGeneration: u64(),
-        replayedHighWater: u64(true),
       };
       if (BigInt(route.targetAuthorityOwnerGeneration)
           <= BigInt(route.previousAuthorityOwnerGeneration)) fail("invalid-field");
@@ -233,24 +235,9 @@ function decodeSessionRelocationBarrier(hex) {
       session: sessionFence,
       route,
     };
-  } else if (command === 45) {
-    const actorRef = actor();
-    const sessionFence = session();
-    const actionValue = byte();
-    const resultValue = byte();
-    if (actionValue < 1 || actionValue > 2 || resultValue > 3) fail("invalid-field");
-    result = {
-      command,
-      relocation,
-      coordinator,
-      actor: actorRef,
-      session: sessionFence,
-      action: actionValue === 1 ? "commit" : "abort",
-      result: ["applied", "alreadyApplied", "stale", "sessionOrBindingClosed"][resultValue],
-      currentAuthorityOwnerGeneration: u64(),
-      lastAcceptedSessionSequence: u64(true),
-    };
   } else {
+    // Command 44 has no reply, and reserved command 45 is neither sent nor
+    // accepted (internal-service-wire-protocol).
     fail("unknown-command");
   }
   if (offset !== bytes.length) fail("trailing-byte");
@@ -353,13 +340,11 @@ const barrierRecords = new Map(sessionBarrierFixture.canonical.map((fixture) => 
   }
   return [fixture.name, decoded];
 }));
-if (barrierRecords.size !== 6
+if (barrierRecords.size !== 4
     || !barrierRecords.has("sessionRelocationSeal")
     || !barrierRecords.has("sessionRelocationSealed")
     || !barrierRecords.has("sessionRelocationRouteCommit")
-    || !barrierRecords.has("sessionRelocationRoutedCommit")
-    || !barrierRecords.has("sessionRelocationRouteAbort")
-    || !barrierRecords.has("sessionRelocationRoutedAbort")) {
+    || !barrierRecords.has("sessionRelocationRouteAbort")) {
   throw new Error("session relocation barrier canonical fixture is incomplete");
 }
 const receiverCases = new Map(sessionBarrierFixture.receiverCases.map((entry) => [entry.name, entry]));
