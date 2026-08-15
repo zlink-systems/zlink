@@ -74,6 +74,7 @@ final class RoutedAdmission {
     private final ScheduledExecutorService deadlines;
     private final PartSnapshotter partSnapshotter;
     private final boolean ownsExecutor;
+    private final MemorySegment readyCallbackSocketHandle;
     private final Map<Target, ArrayDeque<Operation<?>>> pendingByTarget =
         new HashMap<>();
     private final ArrayDeque<Target> readyTargets = new ArrayDeque<>();
@@ -88,6 +89,19 @@ final class RoutedAdmission {
     private boolean pumpScheduled;
     private boolean pumping;
     private int activeAttempts;
+    private int activeNativeCallbacks;
+    private final RoutedRequestSupport.CallbackLifecycle nativeCallbacks =
+        new RoutedRequestSupport.CallbackLifecycle() {
+            @Override
+            public void enter() {
+                enterNativeCallback();
+            }
+
+            @Override
+            public void exit() {
+                exitNativeCallback();
+            }
+        };
 
     RoutedAdmission(MemorySegment socketHandle, boolean dealer,
                     OutboundRecordAttemptGate attemptGate) {
@@ -95,21 +109,21 @@ final class RoutedAdmission {
             new NativeReplyRegistry(),
             RuntimeResources.daemonSingleThreadExecutor(
                 "zlink-routed-admission"), SharedDeadlines.INSTANCE,
-            RoutedAdmission::snapshotSharedParts, true);
-        installReadyCallback(socketHandle);
+            RoutedAdmission::snapshotSharedParts, true, socketHandle);
     }
 
     RoutedAdmission(NativeAccess nativeAccess, ReplyRegistry replies,
                     Executor executor, ScheduledExecutorService deadlines) {
         this(nativeAccess, replies, executor, deadlines,
-            PartSnapshot::borrowed, false);
+            PartSnapshot::borrowed, false, MemorySegment.NULL);
     }
 
     private RoutedAdmission(NativeAccess nativeAccess, ReplyRegistry replies,
                             Executor executor,
                             ScheduledExecutorService deadlines,
                             PartSnapshotter partSnapshotter,
-                            boolean ownsExecutor) {
+                            boolean ownsExecutor,
+                            MemorySegment readyCallbackSocketHandle) {
         this.nativeAccess = Objects.requireNonNull(nativeAccess,
             "nativeAccess");
         this.replies = Objects.requireNonNull(replies, "replies");
@@ -118,6 +132,8 @@ final class RoutedAdmission {
         this.partSnapshotter = Objects.requireNonNull(partSnapshotter,
             "partSnapshotter");
         this.ownsExecutor = ownsExecutor;
+        this.readyCallbackSocketHandle = Objects.requireNonNull(
+            readyCallbackSocketHandle, "readyCallbackSocketHandle");
     }
 
     CompletionStage<Void> send(RoutingId selector, List<Message> parts,
@@ -125,6 +141,7 @@ final class RoutedAdmission {
         Objects.requireNonNull(parts, "parts");
         if (parts.isEmpty())
             throw new IllegalArgumentException("parts must not be empty");
+        ensureReadyCallbackInstalled();
         long started = System.nanoTime();
         long deadline = sendTimeoutMs < 0
             ? Long.MAX_VALUE
@@ -163,6 +180,7 @@ final class RoutedAdmission {
         Objects.requireNonNull(parts, "parts");
         if (parts.isEmpty())
             throw new IllegalArgumentException("parts must not be empty");
+        ensureReadyCallbackInstalled();
         long timeoutMs = RequestReplySupport.timeoutMillis(timeout);
         long deadline = saturatingDeadline(System.nanoTime(), timeoutMs);
         OperationFuture<List<Message>> future = new OperationFuture<>();
@@ -180,7 +198,7 @@ final class RoutedAdmission {
             requestId = replies.nextRequestId();
             operation = Operation.request(future, sources, snapshot, deadline,
                 requestId);
-            replies.register(requestId, future);
+            replies.register(requestId, future, nativeCallbacks);
         } catch (Throwable error) {
             if (requestId != 0L) {
                 try {
@@ -524,7 +542,8 @@ final class RoutedAdmission {
             if (closed)
                 return;
             closing = true;
-            while (activeAttempts != 0 || pumping) {
+            while (activeAttempts != 0 || pumping
+                   || activeNativeCallbacks != 0) {
                 try {
                     lock.wait();
                 } catch (InterruptedException ignored) {
@@ -700,6 +719,18 @@ final class RoutedAdmission {
         }
     }
 
+    private void ensureReadyCallbackInstalled() {
+        if (readyCallbackSocketHandle.address() == 0)
+            return;
+        synchronized (lock) {
+            if (callbackArena != null)
+                return;
+            if (closed || closing)
+                throw new ZlinkSubmitException(SubmitResult.TERMINATED);
+            installReadyCallback(readyCallbackSocketHandle);
+        }
+    }
+
     private MethodHandle readyCallbackHandle() {
         try {
             return MethodHandles.lookup().findVirtual(RoutedAdmission.class,
@@ -715,9 +746,10 @@ final class RoutedAdmission {
     private void handleNativeReady(MemorySegment subject,
                                    MemorySegment event,
                                    MemorySegment userdata) {
-        if (event == null || event.address() == 0)
-            return;
+        enterNativeCallback();
         try {
+            if (event == null || event.address() == 0)
+                return;
             MemorySegment value = event.reinterpret(
                 NativeLayouts.ROUTED_SEND_READY_EVENT_LAYOUT.byteSize());
             RoutingId routingId = NativeRoutingIds.read(
@@ -734,6 +766,21 @@ final class RoutedAdmission {
             onReady(target, state, terminalErrno);
         } catch (Throwable ignored) {
             // Native callbacks must never unwind through the foreign boundary.
+        } finally {
+            exitNativeCallback();
+        }
+    }
+
+    private void enterNativeCallback() {
+        synchronized (lock) {
+            activeNativeCallbacks++;
+        }
+    }
+
+    private void exitNativeCallback() {
+        synchronized (lock) {
+            activeNativeCallbacks--;
+            lock.notifyAll();
         }
     }
 
@@ -871,7 +918,8 @@ final class RoutedAdmission {
         long nextRequestId();
 
         void register(long requestId,
-                      CompletableFuture<List<Message>> future);
+                      CompletableFuture<List<Message>> future,
+                      RoutedRequestSupport.CallbackLifecycle callbackLifecycle);
 
         void remove(long requestId);
 
@@ -1025,8 +1073,11 @@ final class RoutedAdmission {
 
         @Override
         public void register(long requestId,
-                             CompletableFuture<List<Message>> future) {
-            RoutedRequestSupport.registerRoutedPending(requestId, future);
+                             CompletableFuture<List<Message>> future,
+                             RoutedRequestSupport.CallbackLifecycle
+                                 callbackLifecycle) {
+            RoutedRequestSupport.registerRoutedPending(requestId, future,
+                callbackLifecycle);
         }
 
         @Override

@@ -27,6 +27,13 @@ import systems.zlink.contracts.sockets.RouterSocket;
 /** Covers the canonical {@code CompletionStage} request terminal. */
 class AwaitTerminatorContractTest {
     @Test
+    void sequentialRequestContextsCloseWithoutLeakingTheRouter()
+        throws Exception {
+        completionStageCompletesWhenTheReplyArrives();
+        completionStagePreservesTheTypedRequestFailure();
+    }
+
+    @Test
     void completionStageCompletesWhenTheReplyArrives() throws Exception {
         TestSupport.assumeNative();
 
@@ -95,9 +102,6 @@ class AwaitTerminatorContractTest {
             ZlinkRequestException failure =
                 (ZlinkRequestException) completion.getCause();
             assertEquals(RequestResult.TIMED_OUT, failure.getResult());
-            // The runtime settles pending request bookkeeping shortly after
-            // the timeout fires; closing immediately can race that cleanup.
-            TestSupport.allowTcpRequestReplyCallbackHandshakeToSettle();
         }
     }
 }

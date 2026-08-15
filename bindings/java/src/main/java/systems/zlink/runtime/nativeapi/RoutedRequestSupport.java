@@ -29,7 +29,7 @@ public final class RoutedRequestSupport {
     private static final MemorySegment REPLY_CALLBACK = LINKER.upcallStub(
       callbackHandle(), FD_REPLY_CALLBACK, CALLBACK_ARENA);
     private static final AtomicLong NEXT_REQUEST_ID = new AtomicLong(1L);
-    private static final ConcurrentMap<Long, CompletableFuture<List<Message>>>
+    private static final ConcurrentMap<Long, PendingReply>
       ROUTED_PENDING = new ConcurrentHashMap<>();
 
     private RoutedRequestSupport() {
@@ -48,8 +48,10 @@ public final class RoutedRequestSupport {
     }
 
     public static void registerRoutedPending(
-            long requestId, CompletableFuture<List<Message>> future) {
-        ROUTED_PENDING.put(requestId, future);
+            long requestId, CompletableFuture<List<Message>> future,
+            CallbackLifecycle callbackLifecycle) {
+        ROUTED_PENDING.put(requestId,
+            new PendingReply(future, callbackLifecycle));
     }
 
     public static void removeRoutedPending(long requestId) {
@@ -95,12 +97,17 @@ public final class RoutedRequestSupport {
                                             long partCount,
                                             MemorySegment userData) {
         long requestId = userData.address();
-        CompletableFuture<List<Message>> routedFuture =
+        PendingReply pending =
             ROUTED_PENDING.remove(requestId);
-        if (routedFuture != null) {
-            completeRoutedFuture(routedFuture, result, parts, partCount);
-        } else {
+        if (pending == null) {
             NativeMessage.multipartClose(parts, partCount);
+            return;
+        }
+        pending.callbackLifecycle().enter();
+        try {
+            completeRoutedFuture(pending.future(), result, parts, partCount);
+        } finally {
+            pending.callbackLifecycle().exit();
         }
     }
 
@@ -141,6 +148,18 @@ public final class RoutedRequestSupport {
         } finally {
             NativeMessage.multipartClose(parts, partCount);
         }
+    }
+
+    /** Tracks callbacks installed and owned by the Java runtime. */
+    public interface CallbackLifecycle {
+        void enter();
+
+        void exit();
+    }
+
+    private record PendingReply(
+            CompletableFuture<List<Message>> future,
+            CallbackLifecycle callbackLifecycle) {
     }
 
 }

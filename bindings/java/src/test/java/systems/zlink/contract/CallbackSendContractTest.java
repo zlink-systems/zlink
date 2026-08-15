@@ -16,8 +16,6 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.contracts.sockets.StreamSocket;
-import systems.zlink.contracts.errors.CloseResult;
-import systems.zlink.contracts.errors.ZlinkCloseException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Arrays;
@@ -109,8 +107,6 @@ public class CallbackSendContractTest {
             routerThread.join(TestSupport.DEFAULT_TIMEOUT_MS);
             assertFalse(routerThread.isAlive(),
                 "router receive thread did not finish before socket close");
-            closeAfterCallback(dealer);
-            closeAfterCallback(router);
             assertNull(callbackError.get(),
                 "callback raised: " + callbackError.get());
             assertArrayEquals("pong".getBytes(StandardCharsets.UTF_8),
@@ -278,8 +274,6 @@ public class CallbackSendContractTest {
                     routerThread.join(TestSupport.DEFAULT_TIMEOUT_MS);
                     assertFalse(routerThread.isAlive(),
                         "router receive thread did not finish before socket close");
-                    closeAfterCallback(dealer);
-                    closeAfterCallback(router);
                 }
             }
         }
@@ -289,25 +283,6 @@ public class CallbackSendContractTest {
             "multi-round callback+send timed out");
         assertNull(callbackError.get(),
             "callback raised: " + callbackError.get());
-    }
-
-    private static void closeAfterCallback(AutoCloseable resource) {
-        long deadline = System.nanoTime()
-            + TestSupport.DEFAULT_TIMEOUT_MS * 1_000_000L;
-        while (true) {
-            try {
-                resource.close();
-                return;
-            } catch (ZlinkCloseException ex) {
-                if (ex.getResult() != CloseResult.BUSY
-                    || System.nanoTime() >= deadline) {
-                    throw ex;
-                }
-                Thread.yield();
-            } catch (Exception ex) {
-                throw new RuntimeException(ex);
-            }
-        }
     }
 
     @Test

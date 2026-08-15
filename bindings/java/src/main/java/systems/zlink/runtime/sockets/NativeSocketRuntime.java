@@ -20,6 +20,8 @@ import systems.zlink.contracts.sockets.*;
 import systems.zlink.contracts.messaging.SubscriptionEntry;
 import systems.zlink.contracts.messaging.SubscriptionEvent;
 import systems.zlink.contracts.messaging.TopicMessage;
+import systems.zlink.contracts.errors.CloseResult;
+import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
@@ -586,8 +588,10 @@ final class NativeSocketRuntime implements AutoCloseable {
         if (handle != null && handle.address() != 0) {
             if (own) {
                 int rc = Native.close(handle);
-                if (rc != 0)
-                    throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CLOSE);
+                if (rc != CloseResult.OK.value()) {
+                    throw new ZlinkCloseException(CloseResult.fromValue(rc),
+                        Native.errno());
+                }
             }
             socketCore.closeCommonState();
             handle = MemorySegment.NULL;

@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.runtime.nativeapi.RoutedRequestSupport;
 
 class RoutedAdmissionTest {
     private final ManualExecutor executor = new ManualExecutor();
@@ -328,7 +329,9 @@ class RoutedAdmissionTest {
 
         @Override
         public void register(long requestId,
-                             CompletableFuture<List<Message>> future) {
+                             CompletableFuture<List<Message>> future,
+                             RoutedRequestSupport.CallbackLifecycle
+                                 callbackLifecycle) {
             pending.put(requestId, future);
             registrationCount.incrementAndGet();
         }
