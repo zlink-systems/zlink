@@ -463,7 +463,8 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     );
     if (completion.terminalResult !== RequestResult.Ok) {
       closeMeshCompletion(completion);
-      throw mapRequestResult(completion.terminalResult, 'Actor request');
+      throw mapRequestResult(
+        completion.terminalResult, completion.failureErrno, 'Actor request');
     }
     return decodeActorReply<TReply>(
       completion.parts,
@@ -614,7 +615,8 @@ export async function forwardEncodedActorPacket(
   }));
   if (completion.terminalResult !== RequestResult.Ok) {
     closeMeshCompletion(completion);
-    throw mapRequestResult(completion.terminalResult, 'Actor handoff request');
+    throw mapRequestResult(
+      completion.terminalResult, completion.failureErrno, 'Actor handoff request');
   }
   return decodeActorReply(completion.parts, serializers, packetName);
 }
@@ -882,30 +884,75 @@ function submitted(): ZLinkSubmitResult {
   return { status: ZLinkSubmitStatus.Submitted };
 }
 
-function mapRequestResult(result: number, operationName: string): Error {
-  switch (result) {
-    case RequestResult.NotConnected:
-      return routeNotConnected(`${operationName} failed because the target route is not connected.`);
-    case RequestResult.NotFound:
-      return createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
-        `${operationName} failed because the actor route was not found.`
-      );
-    case RequestResult.Conflict:
-      return createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-        `${operationName} failed because the actor location is stale.`
-      );
-    default:
-      return createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestFailed,
-        `${operationName} failed with request result ${result}.`
-      );
+//  Ownership-aware Actor remote-reply translator (spec 32:81-118, 99-103):
+//  the reply comes from a remote target, so a fine framework failure code
+//  refines the coarse terminal, and a terminal-only conflict/busy is the
+//  target's owner/queue state (retryable stale/Unavailable), never a
+//  source-owned CapacityExceeded. Backpressure never appears on this reply
+//  path. Internal kinds are preserved so the stale-actor re-resolve retry
+//  (isStaleActorError) keeps working.
+function actorFailureCodeKind(
+  failureErrno: number
+): ZLinkFrameworkInternalErrorKind | undefined {
+  switch (failureErrno) {
+    case 9: case 14: return ZLinkFrameworkInternalErrorKind.RequestTargetNotFound;
+    case 12: case 16: return ZLinkFrameworkInternalErrorKind.RequestProtocolError;
+    //  routeNotConnected(13) and a remote worker queue full(18) are Unavailable.
+    case 13: case 18: return ZLinkFrameworkInternalErrorKind.RouteNotConnected;
+    case 15: return ZLinkFrameworkInternalErrorKind.RequestRejected;
+    case 19: return ZLinkFrameworkInternalErrorKind.WorkerTimedOut;
+    case 17: return ZLinkFrameworkInternalErrorKind.RequestFailed;
+    case 20: return ZLinkFrameworkInternalErrorKind.WorkerFailed;
+    case 21: return ZLinkFrameworkInternalErrorKind.ActorLocationStale;
+    case 33: return ZLinkFrameworkInternalErrorKind.ActorGenerationStale;
+    case 34: return ZLinkFrameworkInternalErrorKind.ActorMoving;
+    case 35: return ZLinkFrameworkInternalErrorKind.RelocationDataLost;
+    default: return undefined;
   }
 }
 
-function mapRequestError(error: { readonly result: number }, operationName: string): Error {
-  return mapRequestResult(error.result, operationName);
+function actorTerminalKind(result: number): ZLinkFrameworkInternalErrorKind {
+  switch (result) {
+    case RequestResult.TimedOut:
+      return ZLinkFrameworkInternalErrorKind.DeadlineExceeded;
+    case RequestResult.NotFound:
+      return ZLinkFrameworkInternalErrorKind.ActorRouteNotFound;
+    case RequestResult.Terminated:
+      return ZLinkFrameworkInternalErrorKind.RuntimeShutdown;
+    case RequestResult.ProtocolError:
+      return ZLinkFrameworkInternalErrorKind.RequestProtocolError;
+    case RequestResult.Rejected:
+      return ZLinkFrameworkInternalErrorKind.RequestRejected;
+    case RequestResult.NotConnected:
+      return ZLinkFrameworkInternalErrorKind.RouteNotConnected;
+    //  A terminal-only conflict/busy on a remote actor reply is the target's
+    //  stale/owner state: retryable ActorLocationStale (-> Unavailable).
+    case RequestResult.Conflict:
+    case RequestResult.Busy:
+      return ZLinkFrameworkInternalErrorKind.ActorLocationStale;
+    default:
+      return ZLinkFrameworkInternalErrorKind.RequestFailed;
+  }
+}
+
+function mapRequestResult(
+  result: number,
+  failureErrno: number,
+  operationName: string
+): Error {
+  const kind = actorFailureCodeKind(failureErrno) ?? actorTerminalKind(result);
+  return createInternalFrameworkException(
+    kind,
+    `${operationName} failed with request result ${result}`
+      + (failureErrno !== 0 ? ` (failure code ${failureErrno}).` : '.')
+  );
+}
+
+function mapRequestError(
+  error: { readonly result: number; readonly failureErrno?: number },
+  operationName: string
+): Error {
+  return mapRequestResult(error.result, error.failureErrno ?? 0, operationName);
 }
 
 
