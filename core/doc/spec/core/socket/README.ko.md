@@ -655,8 +655,8 @@ self-close는 콜백 에필로그까지 지연됩니다.
 
 **반환값:** 성공 시 `ZLINK_CLOSE_OK`, 실패 시 `zlink_close_result_t` 값. `zlink_errno()`는 진단용 내부 errno를 그대로 유지합니다.
 
-**에러:** 핸들이 유효한 소켓이 아니면 `ENOTSOCK`. 콜백이나 작업이 진행 중이면
-`EBUSY`.
+**에러:** 포인터가 유효하지 않으면 `EFAULT`, opaque value가 stale 상태이면 `ESTALE`.
+콜백이나 작업이 진행 중이면 `EBUSY`.
 
 **참고:** `zlink_socket`
 

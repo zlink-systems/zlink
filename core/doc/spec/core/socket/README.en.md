@@ -662,8 +662,8 @@ is deferred until callback epilogue.
 
 **Returns:** `ZLINK_CLOSE_OK` on success; otherwise a `zlink_close_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
 
-**Errors:** `ENOTSOCK` if the handle is not a valid socket. `EBUSY` if a
-callback or operation is in-flight on the handle.
+**Errors:** `EFAULT` if the pointer is invalid, or `ESTALE` if the opaque
+value is stale. `EBUSY` if a callback or operation is in-flight on the handle.
 
 **See also:** `zlink_socket`
 

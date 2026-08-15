@@ -92,10 +92,10 @@ configuration.
 
 ## 5. Native Runtime Package Synchronization
 
-The Java binding and Core package must use the same release version, `0.10.0`. When the Java binding
-is verified or published, the Core package at
-`/home/hep7/project/kairos/zlink/.artifacts/wsl/install/zlink-core/0.10.0` is supplied as the bridge
-input, and the same provenance manifest and native runtime are used.
+The Java binding and Core package must use the same release version, `0.11.1`. When the Java binding
+is verified or published, the Core package at the repository's
+`.artifacts/wsl/install/zlink-core/0.11.1/` is supplied as the bridge input, and the same provenance
+manifest and native runtime are used.
 
 The Java binding checks the native runtime named by `ZLINK_LIBRARY_PATH` before using the test
 classpath's source resource. If that variable is absent, a development native file left in the

@@ -81,8 +81,8 @@ package 설정을 따른다.
 
 ## 5. Native runtime package 동기화
 
-Java binding과 Core package의 release version은 `0.10.0`으로 일치해야 한다. Java binding을
-검증하거나 배포할 때는 `/home/hep7/project/kairos/zlink/.artifacts/wsl/install/zlink-core/0.10.0`의
+Java binding과 Core package의 release version은 `0.11.1`로 일치해야 한다. Java binding을
+검증하거나 배포할 때는 저장소의 `.artifacts/wsl/install/zlink-core/0.11.1/`
 Core package를 bridge 입력으로 지정하고, 같은 provenance manifest와 native runtime을 사용한다.
 
 Java binding은 test classpath의 `ZLINK_LIBRARY_PATH`가 가리키는 native runtime을 먼저 확인한다.
