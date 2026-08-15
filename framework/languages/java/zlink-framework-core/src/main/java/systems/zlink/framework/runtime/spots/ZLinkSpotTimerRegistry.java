@@ -98,7 +98,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             ? new ZLinkTimerOptions(
                 ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS,
                 1,
-                true)
+                false)
             : options;
         if (timerOptions.overrunPolicy() == null) {
             throw new ZLinkConfigurationException("timer overrun policy is required");

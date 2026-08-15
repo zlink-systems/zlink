@@ -86,6 +86,57 @@ final class ZLinkSpotTimerRegistryTest {
     }
 
     @Test
+    void omittedTimerOptionsKeepTickingAfterAnUnhandledException()
+        throws Exception {
+        ScheduledExecutorService executor =
+            Executors.newSingleThreadScheduledExecutor();
+        AtomicInteger ticks = new AtomicInteger();
+        ZLinkHandlerActivator activator = new ZLinkHandlerActivator() {
+            @Override
+            public Object create(Class<?> handlerType) {
+                return new ThrowingTimerHandler(ticks);
+            }
+
+            @Override
+            public void destroy(Object instance) {
+            }
+        };
+        ZLinkHandlerInstanceOwner handlers =
+            new ZLinkHandlerInstanceOwner(activator);
+        ZLinkSpotTimerRegistry registry = new ZLinkSpotTimerRegistry(
+            "spot",
+            executor,
+            handlers,
+            List.of(),
+            null,
+            "test",
+            (timerName, operation) -> operation.get());
+        registry.setSpot(new TestSpot());
+
+        try {
+            // Omitted timer options: the default must NOT stop the timer on an
+            // unhandled handler exception. The frozen spec default is
+            // stopOnUnhandledException = false (explicit in the C++/.NET/Node
+            // interfaces; the Java interface is silent and nothing authorizes
+            // true), so a repeating timer keeps ticking after each exception.
+            registry.add(
+                "timer",
+                Duration.ofMillis(5),
+                ThrowingTimerHandler.class,
+                null);
+            Thread.sleep(200);
+            assertTrue(
+                ticks.get() > 1,
+                "an omitted-options repeating timer must keep ticking after an "
+                    + "unhandled exception; ticks=" + ticks.get());
+        } finally {
+            registry.close();
+            handlers.close();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void dispatchesTimerHandlerThroughSpotExecutionPolicy() throws Exception {
         ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
         CountDownLatch handled = new CountDownLatch(1);
@@ -348,6 +399,19 @@ final class ZLinkSpotTimerRegistryTest {
 
         public void handle(ZLinkSpot<?> spot, ZLinkTimerTick tick) {
             handled.countDown();
+        }
+    }
+
+    public static final class ThrowingTimerHandler {
+        private final AtomicInteger ticks;
+
+        ThrowingTimerHandler(AtomicInteger ticks) {
+            this.ticks = ticks;
+        }
+
+        public void handle(ZLinkSpot<?> spot, ZLinkTimerTick tick) {
+            ticks.incrementAndGet();
+            throw new RuntimeException("timer handler failure");
         }
     }
 
