@@ -1944,7 +1944,12 @@ public sealed class ActorHandoffTests
         var time = new ManualTimeProvider();
         var admissions = new ZLinkActorHandoffAdmissions(time);
         var gate = new ZLinkDrainAdmissionGate();
-        var request = AdmissionRequest(time, "handoff-accepted-before-drain");
+        // The commit must reference the identity the target reserved and returned
+        // in the admission reply (reservation token, target node, actor
+        // generations); align the request, reply, and commit so this drain test
+        // exercises a spec-valid admission->commit.
+        var request = AdmissionRequest(time, "handoff-accepted-before-drain")
+            with { ActorGeneration = 1, ActorAuthorityOwnerGeneration = 1 };
         const string target = "target-spot";
 
         Assert.True(gate.TryEnterActorAdmission(out var admissionLease));
@@ -1955,7 +1960,10 @@ public sealed class ActorHandoffTests
                 true,
                 "application/json",
                 [],
-                request.DeadlineUnixTimeMilliseconds)),
+                request.DeadlineUnixTimeMilliseconds,
+                "handoff-reservation-token",
+                0,
+                new byte[] { 9 })),
             CancellationToken.None);
         admissionLease.Dispose();
         Assert.True(reply.Accepted);
@@ -1964,7 +1972,8 @@ public sealed class ActorHandoffTests
         Assert.False(gate.TryEnterActorAdmission(out var rejectedAdmission));
         rejectedAdmission.Dispose();
 
-        var commit = CommitRequest(request.HandoffId, []);
+        var commit = CommitRequest(request.HandoffId, [])
+            with { ReservationToken = "handoff-reservation-token", TargetNodeRid = new byte[] { 9 } };
         admissions.BeginCommit(commit, target);
         admissions.Complete(request.HandoffId);
 
