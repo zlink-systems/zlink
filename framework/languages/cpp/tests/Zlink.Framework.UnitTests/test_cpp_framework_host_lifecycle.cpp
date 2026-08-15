@@ -3,6 +3,8 @@
 #include <zlink/framework.hpp>
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/location_records.hpp"
+#include "runtime/host/relocation_target_eligibility.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -1467,11 +1469,113 @@ bool verify_application_signaled_relocation ()
     return passed;
 }
 
+bool verify_relocation_target_eligibility_applies_full_narrowing ()
+{
+    using zlink::framework::framework_runtime_state_t;
+    using zlink::framework::maintenance_policy_kind_t;
+    using zlink::framework::mesh_node_descriptor_t;
+    using zlink::framework::object_capability_t;
+    using zlink::framework::object_role_t;
+    using zlink::framework::placement_object_kind_t;
+    using zlink::framework::relocation_unit_target_eligible;
+
+    mesh_node_descriptor_t source;
+    source.application_version = 7;
+    source.maintenance_wave = "wave-a";
+    source.object_capabilities.push_back (
+      object_capability_t{placement_object_kind_t::user_spot, "room",
+                          maintenance_policy_kind_t::disabled, false, 0});
+    source.object_capabilities.push_back (
+      object_capability_t{placement_object_kind_t::actor, "player",
+                          maintenance_policy_kind_t::disabled, false, 0});
+
+    const auto make_eligible = [] () {
+        mesh_node_descriptor_t candidate;
+        candidate.state = framework_runtime_state_t::serving;
+        candidate.object_role = object_role_t::server;
+        candidate.placement_weight = 100;
+        candidate.application_version = 7;
+        candidate.object_capabilities.push_back (
+          object_capability_t{placement_object_kind_t::user_spot, "room",
+                              maintenance_policy_kind_t::disabled, false, 0});
+        candidate.object_capabilities.push_back (
+          object_capability_t{placement_object_kind_t::actor, "player",
+                              maintenance_policy_kind_t::disabled, false, 0});
+        return candidate;
+    };
+
+    if (!relocation_unit_target_eligible (source, make_eligible (), 7, "room",
+                                          {"player"})) {
+        std::cerr << "eligible relocation target was wrongly rejected\n";
+        return false;
+    }
+
+    // The pre-fix selector predicate checked only serving state, version, and
+    // object-type support, so it accepted every candidate below. The frozen
+    // 6-step narrowing (cpp interface 02-configuration-host) must reject them.
+    struct rejection_case_t
+    {
+        const char *name;
+        std::function<void (mesh_node_descriptor_t &)> mutate;
+    };
+    const rejection_case_t rejection_cases[] = {
+      {"zero placement weight",
+       [] (mesh_node_descriptor_t &c) { c.placement_weight = 0; }},
+      {"not an Object Server",
+       [] (mesh_node_descriptor_t &c) { c.object_role = object_role_t::none; }},
+      {"same maintenance wave as source",
+       [] (mesh_node_descriptor_t &c) { c.maintenance_wave = "wave-a"; }},
+      {"exhausted actor capacity",
+       [] (mesh_node_descriptor_t &c) {
+           c.capacity.actors.limit = 1;
+           c.capacity.actors.active = 1;
+       }},
+      {"wrong effective version",
+       [] (mesh_node_descriptor_t &c) { c.application_version = 8; }},
+    };
+    for (const auto &item : rejection_cases) {
+        auto candidate = make_eligible ();
+        item.mutate (candidate);
+        if (relocation_unit_target_eligible (source, candidate, 7, "room",
+                                             {"player"})) {
+            std::cerr << "ineligible relocation target was accepted: " << item.name
+                      << "\n";
+            return false;
+        }
+    }
+
+    // Snapshot relocation policy requires a snapshot adapter on the candidate.
+    {
+        mesh_node_descriptor_t snapshot_source = source;
+        snapshot_source.object_capabilities[0].policy =
+          maintenance_policy_kind_t::snapshot;
+        auto candidate = make_eligible ();
+        candidate.object_capabilities[0].policy = maintenance_policy_kind_t::snapshot;
+        candidate.object_capabilities[0].has_snapshot_adapter = false;
+        if (relocation_unit_target_eligible (snapshot_source, candidate, 7, "room",
+                                             {"player"})) {
+            std::cerr << "snapshot candidate without adapter was accepted\n";
+            return false;
+        }
+        candidate.object_capabilities[0].has_snapshot_adapter = true;
+        if (!relocation_unit_target_eligible (snapshot_source, candidate, 7, "room",
+                                              {"player"})) {
+            std::cerr << "snapshot candidate with adapter was rejected\n";
+            return false;
+        }
+    }
+
+    return true;
+}
+
 } // namespace
 
 int main ()
 {
     if (!verify_object_store_configuration_preflight ())
+        return EXIT_FAILURE;
+
+    if (!verify_relocation_target_eligibility_applies_full_narrowing ())
         return EXIT_FAILURE;
 
     if (!verify_remote_actor_create_completion_reaches_source ())

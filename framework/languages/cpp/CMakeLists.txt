@@ -196,6 +196,7 @@ add_library(zlink_framework STATIC
   framework/src/runtime/handlers/handler_registry.cpp
   framework/src/runtime/dispatch/projection.cpp
   framework/src/runtime/host/app.cpp
+  framework/src/runtime/host/relocation_target_eligibility.cpp
   framework/src/runtime/diagnostics/flow_context.cpp
   framework/src/runtime/http/http_listener.cpp
   framework/src/runtime/http/http_request_pipeline.cpp

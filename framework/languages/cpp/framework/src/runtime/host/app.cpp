@@ -39,6 +39,7 @@
 #include "runtime/diagnostics/runtime_observation.hpp"
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
+#include "runtime/host/relocation_target_eligibility.hpp"
 #include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/streams/stream_host_service.hpp"
 
@@ -3209,34 +3210,47 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 application_units = spot_runtime->application_relocation_units ();
             }
 
+            // Source's own descriptor supplies the maintenance wave and the
+            // declared relocation policy per capability for the candidate
+            // narrowing below. If it can't be read the wave/policy gates
+            // degrade off; the serving/role/weight/capacity gates still apply.
+            mesh_node_descriptor_t source_descriptor;
+            {
+                auto live_source =
+                  peers->get ().list_live_mesh_nodes (node->mesh_name ()).result ().value ();
+                const auto found = std::find_if (
+                  live_source.begin (), live_source.end (),
+                  [&] (const mesh_node_descriptor_t &descriptor) {
+                      return local_rid && descriptor.rid.to_hex () == local_rid->to_hex ();
+                  });
+                if (found != live_source.end ())
+                    source_descriptor = *found;
+            }
+
             std::set<std::string> aggregate_actor_ids;
             for (const auto &unit : application_units) {
                 const auto target = wait_for_relocation_target (
                   peers->get (), node->mesh_name (), deadline_at, topology_poll_interval,
                   shutdown_requested,
-                  [&] (const auto &peer) {
-                      if (peer.state != framework_runtime_state_t::serving
-                          || peer.application_version
-                               != terminal.effective_target_application_version
-                          || (local_rid && peer.rid.to_hex () == local_rid->to_hex ()))
+                  [&] (const mesh_node_descriptor_t &peer) {
+                      if (local_rid && peer.rid.to_hex () == local_rid->to_hex ())
                           return false;
-                      const auto supports = [&] (placement_object_kind_t kind,
-                                                 std::string_view stable_type) {
-                          return std::any_of (peer.object_capabilities.begin (),
-                                              peer.object_capabilities.end (),
-                                              [&] (const auto &capability) {
-                                                  return capability.object_kind == kind
-                                                         && capability.stable_type == stable_type;
-                                              });
-                      };
-                      if (!supports (placement_object_kind_t::user_spot, unit.spot_type))
-                          return false;
-                      return std::all_of (
-                        unit.actors.begin (), unit.actors.end (), [&] (const auto &actor) {
-                            return supports (
-                              placement_object_kind_t::actor,
-                              ::zlink::framework::detail::actor_ref_access_t::actor_type (actor));
-                        });
+                      std::vector<std::string> actor_types;
+                      actor_types.reserve (unit.actors.size ());
+                      for (const auto &actor : unit.actors)
+                          actor_types.emplace_back (
+                            ::zlink::framework::detail::actor_ref_access_t::actor_type (actor));
+                      // The actual target selection applies the same frozen
+                      // candidate narrowing the preflight applies
+                      // (supports_relocation_source): a serving Object Server on
+                      // the effective version, excluded from source's non-empty
+                      // maintenance wave, with relocation-policy/adapter
+                      // compatibility, positive placement weight, and
+                      // population/reservation capacity.
+                      return relocation_unit_target_eligible (
+                        source_descriptor, peer,
+                        terminal.effective_target_application_version, unit.spot_type,
+                        actor_types);
                   },
                   terminal.reason);
                 if (!target) {
