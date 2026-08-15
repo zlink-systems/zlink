@@ -78,7 +78,8 @@ build_node() {
       npm install --prefix "$bootstrap_dir" --no-save --no-package-lock \
         --ignore-scripts --no-audit --no-fund \
         typescript@5.8.3 @types/node@22.15.30 \
-        @opentelemetry/api@1.9.0 undici@6.27.0 "$zlink_package"
+        @opentelemetry/api@1.9.0 @opentelemetry/api-logs@0.221.0 \
+        undici@6.27.0 "$zlink_package"
       ln -s "$bootstrap_dir/node_modules" \
         "${repo_root}/framework/languages/node/node_modules"
       bootstrap_linked=1

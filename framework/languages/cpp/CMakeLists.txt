@@ -589,7 +589,10 @@ add_zlink_framework_codec_extension(
   extensions/framework-codec-protobuf)
 # The protobuf codec carries protobuf wire bytes, so it needs the runtime it
 # encodes with. Payload types come from protoc; the extension only serializes them.
-find_package(protobuf CONFIG REQUIRED)
+find_package(protobuf CONFIG QUIET)
+if(NOT protobuf_FOUND)
+  find_package(Protobuf MODULE REQUIRED)
+endif()
 target_link_libraries(zlink_framework_codec_protobuf INTERFACE protobuf::libprotobuf)
 
 # Generates protobuf sources for a sample/e2e schema and exposes them as a target.
