@@ -1483,7 +1483,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 ZLinkFrameworkErrorKind.NotFound,
             ServiceWireConstants.FrameworkErrorCode.ActorAlreadyExists =>
                 ZLinkFrameworkErrorKind.AlreadyExists,
-            ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch =>
+            ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch
+                or ServiceWireConstants.FrameworkErrorCode.SpotTypeMismatch =>
                 ZLinkFrameworkErrorKind.TypeMismatch,
             ServiceWireConstants.FrameworkErrorCode.ActorCreateRejected
                 or ServiceWireConstants.FrameworkErrorCode.RequestRejected =>

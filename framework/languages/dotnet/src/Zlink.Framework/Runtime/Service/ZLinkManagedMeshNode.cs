@@ -5547,6 +5547,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut,
                     Array.Empty<ReadOnlyMemory<byte>>());
             }
+            catch (ZLinkFrameworkException framework)
+                when (framework.Kind == ZLinkFrameworkErrorKind.CapacityExceeded)
+            {
+                //  Spec 32-framework-error-model:104-108 — placement/admission
+                //  capacity is CapacityExceeded, encoded as Backpressured(113).
+                terminal = new InstanceSpotActivationTerminal(
+                    RequestResult.Backpressured,
+                    ServiceWireConstants.FrameworkErrorCode.None,
+                    Array.Empty<ReadOnlyMemory<byte>>());
+            }
             catch
             {
                 terminal = new InstanceSpotActivationTerminal(
@@ -6033,9 +6043,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (terminal.Result != RequestResult.Ok)
         {
             if (terminal.Completion is not null
-                || terminal.FailureCode == ServiceWireConstants.FrameworkErrorCode.None)
+                || (terminal.FailureCode == ServiceWireConstants.FrameworkErrorCode.None
+                    && terminal.Result != RequestResult.Backpressured))
                 throw new InvalidOperationException(
-                    "A failed User Spot operation requires one failure code and no success completion.");
+                    "A failed User Spot operation requires one failure code (or the "
+                    + "Backpressured admission terminal) and no success completion.");
             if (terminal.FailureCode is ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
                 or ServiceWireConstants.FrameworkErrorCode.SpotMoving
                 && terminal.Result != RequestResult.Conflict)
@@ -6241,10 +6253,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 new UserSpotOperationTerminal(
                     RequestResult.Conflict,
                     ServiceWireConstants.FrameworkErrorCode.SpotCreateFailed),
+            //  Spec 32-framework-error-model:104-108 — target placement/admission
+            //  capacity is CapacityExceeded, wire-encoded as the bounded-admission
+            //  terminal Backpressured(113) with no fine code (distinct from a
+            //  genuine remote queue/table saturation, which stays Busy+WorkerQueueFull).
             ZLinkFrameworkErrorKind.CapacityExceeded =>
                 new UserSpotOperationTerminal(
-                    RequestResult.Busy,
-                    ServiceWireConstants.FrameworkErrorCode.WorkerQueueFull),
+                    RequestResult.Backpressured,
+                    ServiceWireConstants.FrameworkErrorCode.None),
             ZLinkFrameworkErrorKind.ProtocolError =>
                 new UserSpotOperationTerminal(
                     RequestResult.ProtocolError,
@@ -6561,9 +6577,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (terminal.Result != RequestResult.Ok)
         {
             if (terminal.Completion is not null
-                || terminal.FailureCode == ServiceWireConstants.FrameworkErrorCode.None)
+                || (terminal.FailureCode == ServiceWireConstants.FrameworkErrorCode.None
+                    && terminal.Result != RequestResult.Backpressured))
                 throw new InvalidOperationException(
-                    "A failed Actor create operation requires one failure code and no success completion.");
+                    "A failed Actor create operation requires one failure code (or the "
+                    + "Backpressured admission terminal) and no success completion.");
             return terminal;
         }
         if (terminal.FailureCode != ServiceWireConstants.FrameworkErrorCode.None
@@ -6691,10 +6709,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 new ActorCreateOperationTerminal(
                     RequestResult.Conflict,
                     ServiceWireConstants.FrameworkErrorCode.ActorAlreadyExists),
+            //  Spec 32-framework-error-model:104-108 — target placement/admission
+            //  capacity is CapacityExceeded, wire-encoded as Backpressured(113)
+            //  with no fine code (distinct from remote queue/table saturation).
             ZLinkFrameworkErrorKind.CapacityExceeded =>
                 new ActorCreateOperationTerminal(
-                    RequestResult.Busy,
-                    ServiceWireConstants.FrameworkErrorCode.WorkerQueueFull),
+                    RequestResult.Backpressured,
+                    ServiceWireConstants.FrameworkErrorCode.None),
             ZLinkFrameworkErrorKind.ProtocolError =>
                 new ActorCreateOperationTerminal(
                     RequestResult.ProtocolError,
