@@ -1205,20 +1205,17 @@ public sealed class ServiceRuntimeFoundationTests
         remote.Start();
         local.Start();
 
-        await WaitUntilAsync(() =>
-            local.Peers().Any(peer =>
-                peer.RoutingId == remoteRid
-                && peer.State == MeshPeerState.Admitted)
-            && local.Peers().Any(peer =>
-                peer.RoutingId == staleRid
-                && peer.State == MeshPeerState.Connecting));
-
-        var admitted = Assert.Single(
-            local.Peers(),
-            peer => peer.RoutingId == remoteRid);
+        // Both connect intents start Connecting. The unbound stale intent fails
+        // its connection and is not continuously retried (07-channel-topology
+        // §6: an excluded pair "isn't continuously retried"), so it is reaped
+        // rather than kept alongside the admitted peer — the Connecting and
+        // Admitted states never coexist in one snapshot. Capture and disconnect
+        // the connecting stale peer synchronously (it is present at startup),
+        // then confirm the remote peer reaches Admitted on its own.
         var stale = Assert.Single(
             local.Peers(),
             peer => peer.RoutingId == staleRid);
+        Assert.Equal(MeshPeerState.Connecting, stale.State);
 
         Assert.True(localBackend.DisconnectPeerBeforeAdmission(
             stale.RoutingId,
@@ -1228,9 +1225,15 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.DoesNotContain(
             local.Peers(),
             peer => peer.ConnectionIntentId == stale.ConnectionIntentId);
+
+        await WaitUntilAsync(() =>
+            local.Peers().Any(peer =>
+                peer.RoutingId == remoteRid
+                && peer.State == MeshPeerState.Admitted));
+
         var retained = Assert.Single(
             local.Peers(),
-            peer => peer.ConnectionIntentId == admitted.ConnectionIntentId);
+            peer => peer.RoutingId == remoteRid);
         Assert.Equal(MeshPeerState.Admitted, retained.State);
         Assert.False(localBackend.DisconnectPeerBeforeAdmission(
             retained.RoutingId,
