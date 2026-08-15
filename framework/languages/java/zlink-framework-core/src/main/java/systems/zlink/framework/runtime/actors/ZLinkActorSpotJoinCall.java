@@ -579,7 +579,9 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                     value.ownerLeaseGeneration(),
                     value.spotKind())))
             .thenApply(address -> address.orElseThrow(() ->
-                new ZLinkConfigurationException("SPOT transport address was not found: " + spotId)))
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "SPOT transport address was not found: " + spotId)))
             : resolveRemoteAddress(spotId).thenApply(address -> {
                 if (!internalTargetNode.equals(address.targetNodeRid())) {
                     throw new ZLinkConfigurationException(
@@ -846,7 +848,9 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 "SPOT transport resolver does not provide opaque handles"));
         }
         return handles.resolveSpotHandle(spotId).thenApply(handle -> handle.orElseThrow(() ->
-            new ZLinkConfigurationException("SPOT handle was not found: " + spotId)));
+            new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NOT_FOUND,
+                "SPOT handle was not found: " + spotId)));
     }
 
     @FunctionalInterface
