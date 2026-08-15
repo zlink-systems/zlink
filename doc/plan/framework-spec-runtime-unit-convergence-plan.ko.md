@@ -188,6 +188,28 @@ Static validator가 E2E/sample 파일의 존재를 읽는 것은 실행으로 �
    않는다.
 10. 관련 focused test가 green이 되기 전에는 구조 refactoring을 섞지 않는다.
 
+### 4.1 병렬 진행 주의사항
+
+- Coordinator 한 명만 local package 생성, shared build directory 관리, final full
+  gate, commit과 push를 수행한다.
+- Read-only gap 감사는 언어 또는 주제가 겹치지 않을 때만 병렬로 수행한다.
+- 구현 작업은 수정 파일, decision owner와 focused test가 모두 분리된 경우에만
+  병렬로 수행한다. 같은 파일이나 같은 lifecycle/queue/selector owner에는 writer를
+  한 명만 둔다.
+- 현재 확인된 C++ relocation 두 P0는 `app.cpp`와 m6c fixture를 공유하므로 순차로
+  처리한다. C++ 의미를 먼저 확정한 뒤 .NET, JVM, Node parity test는 서로 병렬로
+  진행할 수 있다.
+- Package 생성 중에는 다른 agent가 binding/Framework build를 시작하지 않는다.
+  Package 검증 완료 신호 뒤 동일한 immutable prefix만 사용한다.
+- C++ serial CTest, Gradle test와 동일 build directory를 여러 agent가 동시에
+  실행하지 않는다. Full gate가 실행 중일 때 source를 수정하지 않는다.
+- 각 agent는 `Spec`, `Owner`, `RED`, `Gate`, 변경 파일과 첫 failure를 coordinator에
+  반환한다. 다른 agent의 범위나 unrelated failure를 이어서 수정하지 않는다.
+- Agent는 개별 commit·push를 하지 않는다. Coordinator가 모든 결과를 검토하고
+  coherent owner slice 단위로 commit·push한다.
+- Shared file 변경, 예상하지 않은 tracked diff, package hash 변경이나 test resource
+  충돌을 발견하면 병렬 작업을 즉시 멈추고 coordinator가 ownership을 다시 나눈다.
+
 ## 5. 작업 시작 절차
 
 Repository root에서 실행한다.
