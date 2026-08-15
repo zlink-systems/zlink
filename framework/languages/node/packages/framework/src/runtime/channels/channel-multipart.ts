@@ -1,7 +1,12 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException,
+  requestResultToPublicErrorKind
+} from '../framework-errors-internal';
 import type { Message } from '../../contracts/Common/Message';
-import type { ZLinkBackendMessageLike as MessageLike } from '../backend/runtime-values';
+import { type ZLinkBackendMessageLike as MessageLike, isZLinkBackendResultError } from '../backend/runtime-values';
 import { ZLinkConfigurationException } from '../configuration';
+import { ZLinkFrameworkException } from '../../contracts';
 
 export interface ZLinkMultipartOperation<TNext> {
   message(message: MessageLike): TNext;
@@ -33,6 +38,15 @@ export async function submitRequestOperation(operation: {
   try {
     return await operation.submit();
   } catch (error) {
+    //  Spec 32-framework-error-model:81-92 — classify the backend request
+    //  terminal rather than collapsing every failure to Unavailable.
+    if (isZLinkBackendResultError(error) && error.operation === 'request') {
+      throw new ZLinkFrameworkException(
+        requestResultToPublicErrorKind(error.result),
+        `${label} failed with result ${error.result}.`,
+        error
+      );
+    }
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.RouteNotConnected,
       `${label} failed before a reply was received.`,

@@ -1,8 +1,10 @@
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
-  internalFrameworkErrorKind
+  internalFrameworkErrorKind,
+  requestResultToPublicErrorKind
 } from '../framework-errors-internal';
+import { isZLinkBackendResultError } from '../backend/runtime-values';
 import type { Message } from '../../contracts/Common/Message';
 import {
   ZLinkSubmitStatus,
@@ -144,6 +146,16 @@ export class ZLinkChannelOutboundOperations {
         try {
           replyParts = await dealer.request(parts, timeoutMs);
         } catch (error) {
+          //  Spec 32-framework-error-model:81-92 — classify the backend request
+          //  terminal (deadline -> DeadlineExceeded, lost route -> Unavailable,
+          //  etc.) instead of collapsing every failure to Unavailable.
+          if (isZLinkBackendResultError(error) && error.operation === 'request') {
+            throw new ZLinkFrameworkException(
+              requestResultToPublicErrorKind(error.result),
+              `Channel '${channelName}' request failed with result ${error.result}.`,
+              error
+            );
+          }
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.RouteNotConnected,
             `Channel '${channelName}' request failed before a reply was received.`,

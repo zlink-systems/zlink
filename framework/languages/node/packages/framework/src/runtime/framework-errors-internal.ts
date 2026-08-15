@@ -2,6 +2,7 @@ import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
 } from '../contracts/Errors/ZLinkFrameworkException';
+import { RequestResult } from './backend/runtime-values';
 
 /** Detailed failure reasons owned by Framework runtime bounded contexts. */
 export enum ZLinkFrameworkInternalErrorKind {
@@ -170,6 +171,44 @@ export function internalFrameworkErrorKind(
   error: ZLinkFrameworkException
 ): ZLinkFrameworkInternalErrorKind | undefined {
   return INTERNAL_KIND.get(error);
+}
+
+/**
+ * Maps a backend request terminal (RequestResult) to the public framework
+ * error kind. Mirrors the authoritative C++ request_failure_mapper /
+ * Java ZLinkBackendRequestResult.toFrameworkErrorKind so a client-side request
+ * terminal is classified identically across languages instead of collapsing to
+ * Unavailable. Spec 32-framework-error-model:81-92 (request-terminal
+ * classification); a deadline yields DeadlineExceeded, a lost route Unavailable.
+ * Backpressure on the REQUEST path is CapacityExceeded (distinct from the
+ * one-way submit path, which is DeadlineExceeded).
+ */
+export function requestResultToPublicErrorKind(result: number): ZLinkFrameworkErrorKind {
+  switch (result) {
+    case RequestResult.TimedOut:
+      return ZLinkFrameworkErrorKind.DeadlineExceeded;
+    case RequestResult.NotFound:
+      return ZLinkFrameworkErrorKind.NotFound;
+    case RequestResult.Terminated:
+      return ZLinkFrameworkErrorKind.ShuttingDown;
+    case RequestResult.ProtocolError:
+      return ZLinkFrameworkErrorKind.ProtocolError;
+    case RequestResult.Rejected:
+      return ZLinkFrameworkErrorKind.Rejected;
+    case RequestResult.Conflict:
+    case RequestResult.Busy:
+    case RequestResult.Backpressured:
+      return ZLinkFrameworkErrorKind.CapacityExceeded;
+    case RequestResult.NotConnected:
+      return ZLinkFrameworkErrorKind.Unavailable;
+    case RequestResult.InvalidArgument:
+    case RequestResult.InvalidState:
+      return ZLinkFrameworkErrorKind.InvalidOperation;
+    case RequestResult.InternalError:
+    case RequestResult.NotSupported:
+    default:
+      return ZLinkFrameworkErrorKind.InternalFailure;
+  }
 }
 
 export function internalFrameworkErrorCode(error: ZLinkFrameworkException): number {
