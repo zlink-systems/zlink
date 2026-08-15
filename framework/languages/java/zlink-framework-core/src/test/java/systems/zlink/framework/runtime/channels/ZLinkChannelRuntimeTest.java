@@ -182,7 +182,30 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
-    void serverOnlyClientServerRequestIsNotFound() {
+    void serverOnlyClientServerRequestIsNotConfigured() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addClientServerChannel("api").server();
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+        try (ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
+            backend,
+            options.registration(),
+            new ZLinkJsonMessageSerializer(),
+            handlers())) {
+            // A registered ClientServer Channel that lacks the Client role is a
+            // missing-role configuration (spec 32-framework-error-model
+            // NotConfigured = "required role isn't registered"; 09-client-server
+            // -channel: a Server can't start an outbound business call), not a
+            // missing target (NotFound).
+            ZLinkFrameworkException failure = assertThrows(
+                ZLinkFrameworkException.class,
+                () -> runtime.requestToChannel("api", new TestRequest("server-only")));
+
+            assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, failure.kind());
+        }
+    }
+
+    @Test
+    void serverOnlyClientServerSendIsNotConfigured() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addClientServerChannel("api").server();
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
@@ -193,9 +216,9 @@ final class ZLinkChannelRuntimeTest {
             handlers())) {
             ZLinkFrameworkException failure = assertThrows(
                 ZLinkFrameworkException.class,
-                () -> runtime.requestToChannel("api", new TestRequest("server-only")));
+                () -> runtime.sendToChannel("api", new TestRequest("server-only")));
 
-            assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, failure.kind());
+            assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, failure.kind());
         }
     }
 

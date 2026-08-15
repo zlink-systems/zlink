@@ -1016,6 +1016,16 @@ public final class ZLinkChannelRuntime
             }
         }
         encoded.payload().close();
+        if (sockets.hasServerRegistration(channelName)) {
+            // A registered ClientServer Server without the Client role is a
+            // missing-role configuration, not a missing target: a Server can't
+            // start an outbound business call (spec 09-client-server-channel),
+            // so NotConfigured, not NotFound.
+            throw new ZLinkConfigurationException(
+                ZLinkFrameworkErrorKind.NOT_CONFIGURED,
+                "ClientServer Client role is not registered for this channel: "
+                    + channelName);
+        }
         throw new ZLinkConfigurationException(
             ZLinkFrameworkErrorKind.NOT_FOUND,
             "channel has no request route: " + channelName);
@@ -1073,6 +1083,14 @@ public final class ZLinkChannelRuntime
             }
         }
         encoded.payload().close();
+        if (sockets.hasServerRegistration(channelName)) {
+            // A registered ClientServer Server without the Client role is a
+            // missing-role configuration, not a missing target.
+            throw new ZLinkConfigurationException(
+                ZLinkFrameworkErrorKind.NOT_CONFIGURED,
+                "ClientServer Client role is not registered for this channel: "
+                    + channelName);
+        }
         throw new ZLinkConfigurationException(
             ZLinkFrameworkErrorKind.NOT_FOUND,
             "channel has no request route: " + channelName);

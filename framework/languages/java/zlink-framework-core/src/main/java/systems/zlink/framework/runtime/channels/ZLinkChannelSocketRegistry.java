@@ -489,6 +489,13 @@ final class ZLinkChannelSocketRegistry {
             && registration.clientEnabled();
     }
 
+    synchronized boolean hasServerRegistration(String channelName) {
+        ChannelRegistration registration = registrations.get(channelName);
+        return registration != null
+            && registration.kind() == ChannelKind.CLIENT_SERVER
+            && registration.clientServerServerEnabled();
+    }
+
     void setClientServerServerDescriptor(
         String channelName,
         ZLinkClientServerServerDescriptor descriptor) {
