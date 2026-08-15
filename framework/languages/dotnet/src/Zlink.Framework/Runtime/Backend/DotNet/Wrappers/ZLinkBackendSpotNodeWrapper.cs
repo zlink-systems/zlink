@@ -435,18 +435,11 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                     //  path emits SpotGenerationStale/RequestProtocolError/
                     //  WorkerTimedOut/RequestFailed; classify each rather than
                     //  collapsing protocol and deadline into InternalFailure.
+                    var activationKind = MapFrameworkErrorCode(record.FailureErrno);
                     terminal.TrySetException(new ZLinkFrameworkException(
-                        (ServiceWireConstants.FrameworkErrorCode)record.FailureErrno switch
-                        {
-                            ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale =>
-                                ZLinkFrameworkErrorKind.InvalidOperation,
-                            ServiceWireConstants.FrameworkErrorCode.RequestProtocolError =>
-                                ZLinkFrameworkErrorKind.ProtocolError,
-                            ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut =>
-                                ZLinkFrameworkErrorKind.DeadlineExceeded,
-                            _ => ZLinkFrameworkErrorKind.InternalFailure,
-                        },
-                        "Remote Instance Spot activation failed."));
+                        activationKind,
+                        "Remote Instance Spot activation failed.",
+                        RetryAdviceFor(activationKind)));
                 }
             },
             id => _node.ActivateInstanceSpot(
@@ -509,12 +502,11 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 else
                 {
                     ZLinkMessageParts.DisposeAll(parts);
+                    var createKind = MapFrameworkErrorCode(record.FailureErrno);
                     terminal.TrySetException(new ZLinkFrameworkException(
-                        record.FailureErrno
-                        == (int)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
-                            ? ZLinkFrameworkErrorKind.InvalidOperation
-                            : ZLinkFrameworkErrorKind.Unavailable,
-                        "Remote User Spot create failed."));
+                        createKind,
+                        "Remote User Spot create failed.",
+                        RetryAdviceFor(createKind)));
                 }
             },
             id => _node.CreateUserSpot(
@@ -572,31 +564,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 ZLinkMessageParts.DisposeAll(parts);
                 var failure = (ServiceWireConstants.FrameworkErrorCode)
                     record.FailureErrno;
-                var kind = failure switch
-                {
-                    ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound =>
-                        ZLinkFrameworkErrorKind.NotFound,
-                    ServiceWireConstants.FrameworkErrorCode.ActorAlreadyExists =>
-                        ZLinkFrameworkErrorKind.AlreadyExists,
-                    ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch =>
-                        ZLinkFrameworkErrorKind.TypeMismatch,
-                    ServiceWireConstants.FrameworkErrorCode.ActorCreateRejected =>
-                        ZLinkFrameworkErrorKind.Rejected,
-                    ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
-                        or ServiceWireConstants.FrameworkErrorCode.RouteNotConnected
-                        or ServiceWireConstants.FrameworkErrorCode.WorkerQueueFull =>
-                        ZLinkFrameworkErrorKind.Unavailable,
-                    ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut =>
-                        ZLinkFrameworkErrorKind.DeadlineExceeded,
-                    ServiceWireConstants.FrameworkErrorCode.RequestProtocolError =>
-                        ZLinkFrameworkErrorKind.ProtocolError,
-                    _ => ZLinkFrameworkErrorKind.InternalFailure
-                };
-                var retryAdvice = kind is
-                    ZLinkFrameworkErrorKind.Unavailable
-                    or ZLinkFrameworkErrorKind.DeadlineExceeded
-                    ? ZLinkRetryAdvice.RetryAfterBackoff
-                    : ZLinkRetryAdvice.DoNotRetry;
+                var kind = MapFrameworkErrorCode(record.FailureErrno);
+                var retryAdvice = RetryAdviceFor(kind);
                 terminal.TrySetException(new ZLinkFrameworkException(
                     kind,
                     $"Remote Actor create failed. result={record.TerminalResult}; "
@@ -693,18 +662,15 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 && record.UserSpotCloseCompletion is { } completion)
                 terminal.TrySetResult(completion);
             else
+            {
+                var closeKind = MapFrameworkErrorCode(record.FailureErrno);
                 terminal.TrySetException(new ZLinkFrameworkException(
-                    record.FailureErrno
-                    == (int)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
-                        ? ZLinkFrameworkErrorKind.InvalidOperation
-                        : ZLinkFrameworkErrorKind.Unavailable,
+                    closeKind,
                     "Remote User Spot close failed: "
                     + $"result={record.TerminalResult}; "
                     + $"failure={record.FailureErrno}.",
-                    record.FailureErrno
-                    == (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving
-                        ? ZLinkRetryAdvice.RetryAfterBackoff
-                        : ZLinkRetryAdvice.DoNotRetry));
+                    RetryAdviceFor(closeKind)));
+            }
         },
             id => _node.CloseUserSpot(
                 targetNodeRid,
@@ -1497,5 +1463,50 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 throw;
             }
         }
+    }
+
+    //  Shared ownership-aware remote-reply translator for spot/actor command
+    //  replies. A remote target's owner/queue state (ActorLocationStale,
+    //  RouteNotConnected, WorkerQueueFull, SpotMoving) is Unavailable, not a
+    //  source-owned CapacityExceeded (spec 32:99-103); a fine failure code is
+    //  classified precisely instead of collapsing into InternalFailure.
+    private static ZLinkFrameworkErrorKind MapFrameworkErrorCode(int failureErrno)
+    {
+        return (ServiceWireConstants.FrameworkErrorCode)failureErrno switch
+        {
+            ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound =>
+                ZLinkFrameworkErrorKind.NotFound,
+            ServiceWireConstants.FrameworkErrorCode.ActorAlreadyExists =>
+                ZLinkFrameworkErrorKind.AlreadyExists,
+            ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch =>
+                ZLinkFrameworkErrorKind.TypeMismatch,
+            ServiceWireConstants.FrameworkErrorCode.ActorCreateRejected
+                or ServiceWireConstants.FrameworkErrorCode.RequestRejected =>
+                ZLinkFrameworkErrorKind.Rejected,
+            ServiceWireConstants.FrameworkErrorCode.PayloadDecodeFailed
+                or ServiceWireConstants.FrameworkErrorCode.RequestProtocolError =>
+                ZLinkFrameworkErrorKind.ProtocolError,
+            ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
+                or ServiceWireConstants.FrameworkErrorCode.RouteNotConnected
+                or ServiceWireConstants.FrameworkErrorCode.WorkerQueueFull
+                or ServiceWireConstants.FrameworkErrorCode.SpotMoving =>
+                ZLinkFrameworkErrorKind.Unavailable,
+            ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale =>
+                ZLinkFrameworkErrorKind.InvalidOperation,
+            ServiceWireConstants.FrameworkErrorCode.RelocationDataLost =>
+                ZLinkFrameworkErrorKind.DataLost,
+            ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut =>
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+            _ => ZLinkFrameworkErrorKind.InternalFailure,
+        };
+    }
+
+    private static ZLinkRetryAdvice RetryAdviceFor(ZLinkFrameworkErrorKind kind)
+    {
+        return kind is ZLinkFrameworkErrorKind.Unavailable
+            or ZLinkFrameworkErrorKind.DeadlineExceeded
+            or ZLinkFrameworkErrorKind.CapacityExceeded
+            ? ZLinkRetryAdvice.RetryAfterBackoff
+            : ZLinkRetryAdvice.DoNotRetry;
     }
 }
