@@ -941,7 +941,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_definitions(test_cpp_framework_authority_key_codec PRIVATE
     ZLINK_AUTHORITY_KEY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/authority-key-v1.json")
   target_link_libraries(test_cpp_framework_authority_key_codec PRIVATE
-    zlink::cpp
+    zlink::framework
     nlohmann_json::nlohmann_json)
   add_test(NAME test_cpp_framework_authority_key_codec
     COMMAND test_cpp_framework_authority_key_codec)
