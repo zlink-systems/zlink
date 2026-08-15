@@ -3234,19 +3234,29 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
 
             // Source's own descriptor supplies the maintenance wave and the
             // declared relocation policy per capability for the candidate
-            // narrowing below. If it can't be read the wave/policy gates
-            // degrade off; the serving/role/weight/capacity gates still apply.
+            // narrowing below. Match RID *and* lifecycle generation exactly as
+            // the preflight does, so a stale generation of a fixed-RID source is
+            // never used to drive eligibility; and fail closed if the source
+            // can't be read, matching the preflight's store_unavailable — never
+            // proceed with a default descriptor, which would silently disable
+            // the maintenance-wave and snapshot-policy gates.
             mesh_node_descriptor_t source_descriptor;
             {
+                const auto source_generation = node->status ().lifecycle_generation ();
                 auto live_source =
                   peers->get ().list_live_mesh_nodes (node->mesh_name ()).result ().value ();
                 const auto found = std::find_if (
                   live_source.begin (), live_source.end (),
                   [&] (const mesh_node_descriptor_t &descriptor) {
-                      return local_rid && descriptor.rid.to_hex () == local_rid->to_hex ();
+                      return local_rid && descriptor.rid.to_hex () == local_rid->to_hex ()
+                             && descriptor.lifecycle_generation == source_generation;
                   });
-                if (found != live_source.end ())
-                    source_descriptor = *found;
+                if (found == live_source.end ()) {
+                    terminal.reason = relocation_reason_t::store_unavailable;
+                    complete (terminal);
+                    co_return;
+                }
+                source_descriptor = *found;
             }
 
             std::set<std::string> aggregate_actor_ids;
