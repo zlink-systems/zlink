@@ -91,13 +91,8 @@ final class ZLinkSpotRouterNodeDispatcher {
                 + " requestSeq=" + reply.requestSeq().map(Object::toString).orElse(null)
                 + " parts=" + ZLinkChannelRuntime.describeTraceParts(reply.parts()));
             if (reply.result() != ZLinkBackendRequestResult.OK) {
-                ZLinkFrameworkErrorKind errorKind = switch (reply.result()) {
-                    case NOT_FOUND -> ZLinkFrameworkErrorKind.NOT_FOUND;
-                    case NOT_CONNECTED -> ZLinkFrameworkErrorKind.UNAVAILABLE;
-                    default -> ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
-                };
                 result.completeExceptionally(new ZLinkFrameworkException(
-                    errorKind,
+                    reply.result().toFrameworkErrorKind(),
                     "SPOT route request failed: " + reply.result()));
                 return;
             }

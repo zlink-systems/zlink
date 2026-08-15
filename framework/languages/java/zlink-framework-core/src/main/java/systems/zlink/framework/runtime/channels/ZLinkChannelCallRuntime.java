@@ -21,7 +21,6 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
@@ -119,8 +118,17 @@ final class ZLinkChannelCallRuntime {
         final java.util.concurrent.ScheduledFuture<?> timeoutTask;
         try {
             timeoutTask = timeoutExecutor.schedule(
-                () -> result.completeExceptionally(
-                    new TimeoutException("request timed out after " + timeout)),
+                () -> {
+                    String message = "request timed out after " + timeout;
+                    //  Spec 32-framework-error-model:90 — a reply not received
+                    //  within the deadline is DeadlineExceeded, not a raw
+                    //  language timeout. The TimeoutException cause is retained
+                    //  so timeout metrics tagging still recognises it.
+                    result.completeExceptionally(new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                        message,
+                        new TimeoutException(message)));
+                },
                 timeout.toNanos(),
                 TimeUnit.NANOSECONDS);
         } catch (RejectedExecutionException rejection) {
@@ -184,7 +192,7 @@ final class ZLinkChannelCallRuntime {
         CompletableFuture<TReply> result) {
         if (reply.result() != ZLinkBackendRequestResult.OK) {
             result.completeExceptionally(new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                reply.result().toFrameworkErrorKind(),
                 "channel request failed: " + reply.result()));
             return;
         }
@@ -241,8 +249,13 @@ final class ZLinkChannelCallRuntime {
         }
     }
 
-    private static ZLinkConfigurationException closedFailure() {
-        return new ZLinkConfigurationException("channel runtime is closed");
+    private static ZLinkFrameworkException closedFailure() {
+        //  Spec 32-framework-error-model — a request settled because the channel
+        //  runtime is closing/closed is ShuttingDown, not a NotConfigured
+        //  configuration error.
+        return new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+            "channel runtime is closed");
     }
 
     static ZLinkFrameworkException shuttingDownFailure(Throwable cause) {

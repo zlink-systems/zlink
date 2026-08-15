@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.channels;
 import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
@@ -131,7 +133,12 @@ final class ZLinkFanoutLocationRuntimeTest {
                 ExecutionException failure = assertThrows(
                     ExecutionException.class,
                     () -> request.get(500, TimeUnit.MILLISECONDS));
-                assertInstanceOf(TimeoutException.class, failure.getCause());
+                ZLinkFrameworkException timeout = assertInstanceOf(
+                    ZLinkFrameworkException.class, failure.getCause());
+                assertEquals(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, timeout.kind());
+                assertInstanceOf(
+                    TimeoutException.class, timeout.getCause());
                 assertTrue(
                     TimeUnit.NANOSECONDS.toMillis(
                         System.nanoTime() - startedNanos) < 250,

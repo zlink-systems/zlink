@@ -218,12 +218,8 @@ final class ZLinkSpotDirectOutbound {
                     spotId);
                 try {
                     if (reply.result() != ZLinkBackendRequestResult.OK) {
-                        ZLinkFrameworkErrorKind errorKind = reply.result()
-                            == ZLinkBackendRequestResult.NOT_FOUND
-                            ? ZLinkFrameworkErrorKind.NOT_FOUND
-                            : ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
                         result.completeExceptionally(new ZLinkFrameworkException(
-                            errorKind,
+                            reply.result().toFrameworkErrorKind(),
                             "SPOT direct request failed: " + reply.result()));
                         return;
                     }

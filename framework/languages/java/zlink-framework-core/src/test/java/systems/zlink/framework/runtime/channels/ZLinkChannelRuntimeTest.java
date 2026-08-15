@@ -421,10 +421,10 @@ final class ZLinkChannelRuntimeTest {
             CompletionException completion = assertThrows(
                 CompletionException.class,
                 send::join);
-            ZLinkConfigurationException failure = assertInstanceOf(
-                ZLinkConfigurationException.class,
+            ZLinkFrameworkException failure = assertInstanceOf(
+                ZLinkFrameworkException.class,
                 completion.getCause());
-            assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, failure.kind());
+            assertEquals(ZLinkFrameworkErrorKind.SHUTTING_DOWN, failure.kind());
             assertEquals("channel runtime is closed", failure.getMessage());
             assertEquals(1, backend.bridge.sendAttempts);
             assertTrue(backend.bridge.lastAttemptParts.stream().allMatch(Message::empty));
@@ -1342,7 +1342,10 @@ final class ZLinkChannelRuntimeTest {
             ExecutionException error = Assertions.assertThrows(
                 ExecutionException.class,
                 () -> request.toCompletableFuture().get(1, TimeUnit.SECONDS));
-            assertInstanceOf(ZLinkFrameworkException.class, error.getCause());
+            ZLinkFrameworkException failure = assertInstanceOf(
+                ZLinkFrameworkException.class, error.getCause());
+            assertEquals(
+                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, failure.kind());
         }
     }
 

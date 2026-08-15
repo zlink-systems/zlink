@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
@@ -74,10 +74,10 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
             calls.beginClose();
             bridge.sendAdmission.complete(null);
 
-            ZLinkConfigurationException failure = assertInstanceOf(
-                ZLinkConfigurationException.class,
+            ZLinkFrameworkException failure = assertInstanceOf(
+                ZLinkFrameworkException.class,
                 completionFailure(result));
-            assertEquals(ZLinkFrameworkErrorKind.NOT_CONFIGURED, failure.kind());
+            assertEquals(ZLinkFrameworkErrorKind.SHUTTING_DOWN, failure.kind());
             assertEquals(1, bridge.sendAttempts.get());
         } finally {
             calls.beginClose();
