@@ -5508,8 +5508,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (received.Parts.Count != payloadOffset + 1 || target is null)
         {
             if (request)
+                //  Schema terminal-failure-integrity: requestFailed(17) pairs
+                //  only with internalError(105); a boundary terminal cannot
+                //  carry a fine code.
                 Reply(
-                    target is null ? RequestResult.InvalidState : RequestResult.ProtocolError,
+                    target is null ? RequestResult.InternalError : RequestResult.ProtocolError,
                     (uint)(target is null
                         ? ServiceWireConstants.FrameworkErrorCode.RequestFailed
                         : ServiceWireConstants.FrameworkErrorCode.RequestProtocolError),
@@ -5728,10 +5731,23 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     + $"local_authority_gen={(hasTargetSpot ? spot!.AuthorityOwnerGeneration : 0)} "
                     + $"local_lease_gen={localOwnerLeaseGeneration}");
                 if (request)
-                    Reply(
-                        RequestResult.Conflict,
-                        (uint)ServiceWireConstants.FrameworkErrorCode.SpotRouteNotFound,
-                        Array.Empty<Message>());
+                {
+                    //  Schema terminal-failure-integrity: a genuinely missing
+                    //  Spot is spotRouteNotFound(6) which pairs with
+                    //  notFound(102); a present-but-stale Spot (generation or
+                    //  lease mismatch) is spotGenerationStale(33) which pairs
+                    //  with conflict(107).
+                    if (hasTargetSpot)
+                        Reply(
+                            RequestResult.Conflict,
+                            (uint)ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale,
+                            Array.Empty<Message>());
+                    else
+                        Reply(
+                            RequestResult.NotFound,
+                            (uint)ServiceWireConstants.FrameworkErrorCode.SpotRouteNotFound,
+                            Array.Empty<Message>());
+                }
                 return false;
             }
             owner = MailboxKey.ForSpot(spot, MeshReadyDomains.Application);
