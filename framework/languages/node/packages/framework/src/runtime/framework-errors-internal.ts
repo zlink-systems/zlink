@@ -218,6 +218,41 @@ export function requestResultToPublicErrorKind(result: number): ZLinkFrameworkEr
   }
 }
 
+/**
+ * Ownership-aware classification of a remote reply/completion terminal plus its
+ * fine failure code into a public framework exception (spec
+ * 32-framework-error-model:81-118, 99-108). A fine failure code refines the
+ * coarse terminal; when absent (0) or unrecognised, the coarse terminal
+ * classifies. Remote another-node queue/operation-table saturation
+ * (Conflict/Busy) is Unavailable — a resource this runtime does not own — while
+ * only the placement admission terminal Backpressured(113) is CapacityExceeded,
+ * a target-owned admission decision rather than a queue. Shared by the lifecycle
+ * completion paths (Actor join, User Spot create/close) so they classify
+ * identically to the request path instead of collapsing to a single kind.
+ */
+export function wireReplyFailureException(
+  terminalResult: number,
+  failureErrno: number,
+  message: string
+): ZLinkFrameworkException {
+  if (failureErrno !== 0) {
+    const fine = internalFrameworkErrorKindFromWireFailureCode(failureErrno);
+    if (fine !== undefined) {
+      return createInternalFrameworkException(fine, message);
+    }
+  }
+  if (terminalResult === RequestResult.Backpressured) {
+    return createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
+      message
+    );
+  }
+  return new ZLinkFrameworkException(
+    requestResultToPublicErrorKind(terminalResult),
+    message
+  );
+}
+
 export function internalFrameworkErrorCode(error: ZLinkFrameworkException): number {
   const kind = INTERNAL_KIND.get(error);
   return kind === undefined ? error.kind : ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES[kind];

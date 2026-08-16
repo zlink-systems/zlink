@@ -1,4 +1,4 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException, wireReplyFailureException  } from '../framework-errors-internal';
 import { createHash } from 'node:crypto';
 import type {
   RoutingId,
@@ -1100,39 +1100,17 @@ function remoteUserSpotFailure(
   failureCode: number,
   message: string
 ): ZLinkFrameworkException {
-  const detail = `${message} terminalResult=${terminalResult}, failureCode=${failureCode}.`;
-  if (failureCode === 33) {
-    return createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.SpotGenerationStale,
-      detail
-    );
-  }
-  if (failureCode === 34) {
-    return createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.SpotMoving,
-      detail,
-      true
-    );
-  }
-  if (terminalResult === 101) {
-    return createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-      detail,
-      true
-    );
-  }
-  if (terminalResult === 113) {
-    //  Spec 32-framework-error-model:104-108 — the bounded admission terminal
-    //  is target placement capacity: CapacityExceeded.
-    return createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
-      detail,
-      true
-    );
-  }
-  return createInternalFrameworkException(
-    ZLinkFrameworkInternalErrorKind.RequestFailed,
-    detail
+  //  Route every User Spot create terminal through the shared ownership-aware
+  //  translator (spec 32-framework-error-model:81-118, 99-108) rather than an
+  //  ad-hoc switch that defaulted unrecognised terminals to InternalFailure.
+  //  Remote operation-table saturation Busy(108)+None is Unavailable,
+  //  InvalidState(111)+None is InvalidOperation, every fine code follows the
+  //  shared table, and only placement admission Backpressured(113) stays
+  //  CapacityExceeded.
+  return wireReplyFailureException(
+    terminalResult,
+    failureCode,
+    `${message} terminalResult=${terminalResult}, failureCode=${failureCode}.`
   );
 }
 

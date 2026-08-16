@@ -1,4 +1,4 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException, internalFrameworkErrorKind  } from '../framework-errors-internal';
+import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException, internalFrameworkErrorKind, wireReplyFailureException  } from '../framework-errors-internal';
 import { randomUUID } from 'node:crypto';
 import {
   ZLinkFrameworkException,
@@ -142,19 +142,19 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
       result.terminalResult !== 0
       || result.tail?.kind !== 'userSpotClose'
     ) {
-      const kind = result.failureCode === 33
-        ? ZLinkFrameworkInternalErrorKind.SpotGenerationStale
-        : result.failureCode === 34
-          ? ZLinkFrameworkInternalErrorKind.SpotMoving
-          : result.terminalResult === 101
-            ? ZLinkFrameworkInternalErrorKind.DeadlineExceeded
-            : ZLinkFrameworkInternalErrorKind.RequestFailed;
-      throw createInternalFrameworkException(
-        kind,
-        `Remote User Spot close failed. terminalResult=${result.terminalResult}, failureCode=${result.failureCode}.`,
-        kind === ZLinkFrameworkInternalErrorKind.SpotMoving
-          || kind === ZLinkFrameworkInternalErrorKind.DeadlineExceeded
-      );
+      const message = `Remote User Spot close failed. terminalResult=${result.terminalResult}, failureCode=${result.failureCode}.`;
+      //  Route the close terminal through the shared ownership-aware translator
+      //  (spec 32-framework-error-model:81-118, 99-108) instead of an ad-hoc
+      //  switch that defaulted to InternalFailure: Busy(108)+None is Unavailable,
+      //  InvalidState(111)+None is InvalidOperation, and fine codes follow the
+      //  shared table. An OK terminal with the wrong tail kind is a protocol
+      //  violation, not a generic request failure.
+      throw result.terminalResult !== 0 || result.failureCode !== 0
+        ? wireReplyFailureException(result.terminalResult, result.failureCode, message)
+        : createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RequestProtocolError,
+            message
+          );
     }
     if (result.tail.closed) {
       this.options.forgetReadyRoute?.(current, snapshot);

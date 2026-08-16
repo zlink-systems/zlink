@@ -1,6 +1,7 @@
 import {
   ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
+  createInternalFrameworkException,
+  wireReplyFailureException
 } from '../framework-errors-internal';
 import { randomUUID } from 'node:crypto';
 import { isBackendNotConnectedError } from '../backend/runtime-values';
@@ -109,10 +110,21 @@ export class ZLinkLocalNativeActorJoin {
       control.actor === null
     ) {
       closeMeshCompletion(completion);
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
-        `Actor join failed for '${actor.context.actorId}' with result '${completion.terminalResult}' and errno '${completion.failureErrno}'.`
-      );
+      const message = `Actor join failed for '${actor.context.actorId}' with result '${completion.terminalResult}' and errno '${completion.failureErrno}'.`;
+      //  Classify the (terminal, fine) pair instead of collapsing every non-OK
+      //  or malformed join completion to NotFound (spec 32-framework-error-model:
+      //  83-118). An OK terminal that carries no join control is a protocol
+      //  violation, not a missing route.
+      throw completion.terminalResult !== 0 || completion.failureErrno !== 0
+        ? wireReplyFailureException(
+            completion.terminalResult,
+            completion.failureErrno,
+            message
+          )
+        : createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RequestProtocolError,
+            message
+          );
     }
     if (control.joinResult !== 0) {
       try {
@@ -127,8 +139,9 @@ export class ZLinkLocalNativeActorJoin {
     }
     if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
       closeMeshCompletion(completion);
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
+      throw wireReplyFailureException(
+        completion.terminalResult,
+        completion.failureErrno,
         `Actor join failed for '${actor.context.actorId}' with result '${completion.terminalResult}' and errno '${completion.failureErrno}'.`
       );
     }
@@ -229,10 +242,20 @@ export class ZLinkLocalNativeActorJoin {
       control.actor === null
     ) {
       closeMeshCompletion(completion);
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
-        `Actor entry SPOT join failed for '${actor.context.actorId}' with result '${completion.terminalResult}' and errno '${completion.failureErrno}'.`
-      );
+      const message = `Actor entry SPOT join failed for '${actor.context.actorId}' with result '${completion.terminalResult}' and errno '${completion.failureErrno}'.`;
+      //  Classify the (terminal, fine) pair instead of collapsing to NotFound
+      //  (spec 32-framework-error-model:83-118); an OK terminal with no join
+      //  control is a protocol violation.
+      throw completion.terminalResult !== 0 || completion.failureErrno !== 0
+        ? wireReplyFailureException(
+            completion.terminalResult,
+            completion.failureErrno,
+            message
+          )
+        : createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RequestProtocolError,
+            message
+          );
     }
     if (control.joinResult !== 0) {
       try {
@@ -247,8 +270,9 @@ export class ZLinkLocalNativeActorJoin {
     }
     if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
       closeMeshCompletion(completion);
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
+      throw wireReplyFailureException(
+        completion.terminalResult,
+        completion.failureErrno,
         `Actor entry SPOT join failed for '${actor.context.actorId}' with result '${completion.terminalResult}' and errno '${completion.failureErrno}'.`
       );
     }
@@ -365,10 +389,20 @@ export class ZLinkLocalNativeActorJoin {
     const control = admission.kindData;
     if (control?.kind !== 'actorJoinCompletion' || control.actor === null) {
       closeMeshCompletion(admission);
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
-        `Actor admission failed for '${actor.context.actorId}' with result '${admission.terminalResult}' and errno '${admission.failureErrno}'.`
-      );
+      const message = `Actor admission failed for '${actor.context.actorId}' with result '${admission.terminalResult}' and errno '${admission.failureErrno}'.`;
+      //  Classify the (terminal, fine) pair instead of collapsing to NotFound
+      //  (spec 32-framework-error-model:83-118); an OK terminal with no join
+      //  control is a protocol violation.
+      throw admission.terminalResult !== 0 || admission.failureErrno !== 0
+        ? wireReplyFailureException(
+            admission.terminalResult,
+            admission.failureErrno,
+            message
+          )
+        : createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RequestProtocolError,
+            message
+          );
     }
     if (control.joinResult !== 0) {
       try {
@@ -386,8 +420,9 @@ export class ZLinkLocalNativeActorJoin {
     }
     if (admission.terminalResult !== 0 || admission.failureErrno !== 0) {
       closeMeshCompletion(admission);
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
+      throw wireReplyFailureException(
+        admission.terminalResult,
+        admission.failureErrno,
         `Actor admission failed for '${actor.context.actorId}' with result '${admission.terminalResult}' and errno '${admission.failureErrno}'.`
       );
     }
