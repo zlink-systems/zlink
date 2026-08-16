@@ -552,7 +552,13 @@ int main ()
                 || ust::map_user_spot_wire_failure (reply_header_t{0, 107, 33}, true)
                      != framework_error_kind_t::invalid_operation
                 || ust::map_user_spot_wire_failure (reply_header_t{0, 103, 0}, true)
-                     != framework_error_kind_t::shutting_down) {
+                     != framework_error_kind_t::shutting_down
+                //  Spec 32:91-92 — a synthesized protocolError terminal from a
+                //  malformed reply decode is ProtocolError, not Unavailable.
+                || ust::map_user_spot_wire_failure (reply_header_t{0, 104, 0}, true)
+                     != framework_error_kind_t::protocol_error
+                || ust::map_user_spot_wire_failure (reply_header_t{0, 104, 0}, false)
+                     != framework_error_kind_t::protocol_error) {
                 return 27;
             }
         }

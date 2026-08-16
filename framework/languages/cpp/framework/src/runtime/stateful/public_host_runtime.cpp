@@ -2142,8 +2142,15 @@ task_t<bool> public_host_runtime_t::create_user_spot_remote (
                         protocol::decode_application_payload (parts[1]);
               }
               catch (const protocol::service_wire_error_t &) {
-                  terminal =
-                    foundation::operation_terminal_t::transport_failed;
+                  //  Spec 32-framework-error-model:91-92 — a reply that can't
+                  //  be processed is ProtocolError, not a transport failure.
+                  //  Synthesize the protocolError wire terminal so the
+                  //  consumer-side mapper classifies it correctly; the
+                  //  completed terminal is kept so the reply header is read.
+                  reply = {};
+                  reply.header.terminal_result = 104;
+                  reply.header.failure_code = 0;
+                  application_reply.reset ();
               }
           }
           completion (
@@ -2220,8 +2227,14 @@ task_t<bool> public_host_runtime_t::create_actor_remote (
                           parts[1]);
               }
               catch (const protocol::service_wire_error_t &) {
-                  terminal =
-                    foundation::operation_terminal_t::transport_failed;
+                  //  Spec 32-framework-error-model:91-92 — a reply that can't
+                  //  be processed is ProtocolError, not a transport failure.
+                  //  Synthesize the protocolError wire terminal so the
+                  //  consumer-side mapper classifies it correctly.
+                  reply = {};
+                  reply.header.terminal_result = 104;
+                  reply.header.failure_code = 0;
+                  application_reply.reset ();
               }
           }
           completion (terminal, std::move (reply),
@@ -2257,8 +2270,13 @@ task_t<bool> public_host_runtime_t::close_user_spot_remote (
                       parts.front ());
               }
               catch (const protocol::service_wire_error_t &) {
-                  terminal =
-                    foundation::operation_terminal_t::transport_failed;
+                  //  Spec 32-framework-error-model:91-92 — a reply that can't
+                  //  be processed is ProtocolError, not a transport failure.
+                  //  Synthesize the protocolError wire terminal so the
+                  //  consumer-side mapper classifies it correctly.
+                  reply = {};
+                  reply.header.terminal_result = 104;
+                  reply.header.failure_code = 0;
               }
           }
           completion (terminal, std::move (reply));

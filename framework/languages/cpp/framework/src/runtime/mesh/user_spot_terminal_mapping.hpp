@@ -15,6 +15,11 @@ inline framework_error_kind_t map_user_spot_wire_failure (
 {
     if (header.terminal_result == 101)
         return framework_error_kind_t::deadline_exceeded;
+    //  Spec 32-framework-error-model:91-92 — a reply that could not be
+    //  processed (including a synthesized protocolError terminal from a
+    //  malformed decode) is ProtocolError.
+    if (header.terminal_result == 104)
+        return framework_error_kind_t::protocol_error;
     if (header.terminal_result == 109)
         return framework_error_kind_t::unavailable;
     //  Spec 32-framework-error-model:104-108 — only a target's placement/
