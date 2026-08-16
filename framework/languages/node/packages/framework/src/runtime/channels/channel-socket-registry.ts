@@ -596,6 +596,17 @@ export class ZLinkChannelSocketRegistry {
     return this.selectClientServerDealer(channelName);
   }
 
+  selectedClientServerRid(
+    channelName: string,
+    dealer: ZLinkBackendDealerSocket
+  ): string | undefined {
+    for (const connection of this.clientServerConnections.values()) {
+      if (connection.channelName !== channelName || connection.dealer !== dealer) continue;
+      return connection.admittedDescriptor?.serverRoutingId;
+    }
+    return undefined;
+  }
+
   /**
    * Resolves a ClientServer send target, waiting when the ready candidate set is still empty, as
    * `framework/doc/framework/common/spec/server/08-channel-messaging.ko.md` §3.2 requires: the call waits

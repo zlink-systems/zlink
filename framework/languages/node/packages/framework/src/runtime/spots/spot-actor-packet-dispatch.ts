@@ -283,7 +283,19 @@ export class ZLinkSpotActorPacketDispatch {
       providerResolver: this.options.providerResolver,
       serial: this.options.serial,
       serialWorkOptions: workOptions,
-      messageSerializers: this.options.messageSerializers
+      messageSerializers: this.options.messageSerializers,
+      onAdmitted: () => this.trace(
+        ZLinkMessageFlowOutcome.Admitted,
+        actorId,
+        header,
+        messageKind
+      ),
+      onHandlerStart: () => this.trace(
+        ZLinkMessageFlowOutcome.Dispatched,
+        actorId,
+        header,
+        messageKind
+      )
     });
     try {
       if (header.kind === ZLinkStreamMessageKind.Send) {
@@ -292,7 +304,7 @@ export class ZLinkSpotActorPacketDispatch {
           metadata: zlinkMessageMetadata(header.metadata),
           correlationId: header.correlationId ?? undefined
         });
-        this.trace(ZLinkMessageFlowOutcome.Dispatched, actorId, header, ZLinkDispatchMessageKind.ActorSend);
+        this.trace(ZLinkMessageFlowOutcome.Completed, actorId, header, ZLinkDispatchMessageKind.ActorSend);
         return undefined;
       }
       if (header.kind !== ZLinkStreamMessageKind.Request || header.requestSeq === undefined) {

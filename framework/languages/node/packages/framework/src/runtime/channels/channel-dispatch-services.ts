@@ -6,7 +6,8 @@ import type {
 } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type {
-  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
+  ZLinkRuntimeMessageFlowResult
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import type {
   ZLinkDispatchErrorSurface,
@@ -40,8 +41,16 @@ export interface ZLinkChannelOutboundTrace {
   readonly channelName: string;
   readonly packetName: string | undefined;
   readonly correlationId: string | undefined;
+  readonly result?: ZLinkRuntimeMessageFlowResult;
+  readonly channelRouteKind?: 'route_mesh' | 'client_server';
+  readonly serverRid?: string;
+  readonly durationSeconds?: number;
   readonly topic?: string;
   readonly sourceRid?: string;
+}
+
+export interface ZLinkChannelOutboundTracePoint {
+  trace(trace: ZLinkChannelOutboundTrace): void;
 }
 
 export class ZLinkChannelDispatchServices {
@@ -174,25 +183,28 @@ export class ZLinkChannelDispatchServices {
     return runInHandlerInstanceScope(this.providerResolver, context, callback);
   }
 
-  traceOutbound(
+  beginOutbound(
     outcome: ZLinkMessageFlowOutcome,
-    createTrace: () => ZLinkChannelOutboundTrace
-  ): void {
-    const flow = flowIfEnabled(this.outboundFlow(), outcome);
-    if (flow === undefined) {
-      return;
-    }
-    const trace = createTrace();
-    flow.trace({
-      outcome,
-      surface: trace.surface,
-      messageKind: trace.messageKind,
-      channelName: trace.channelName,
-      packetName: trace.packetName,
-      correlationId: trace.correlationId,
-      topic: trace.topic,
-      sourceRid: trace.sourceRid
-    });
+    result?: ZLinkRuntimeMessageFlowResult
+  ): ZLinkChannelOutboundTracePoint | undefined {
+    const flow = flowIfEnabled(this.outboundFlow(), outcome, result);
+    if (flow === undefined) return undefined;
+    return {
+      trace: (event) => flow.trace({
+        outcome,
+        surface: event.surface,
+        messageKind: event.messageKind,
+        channelName: event.channelName,
+        packetName: event.packetName,
+        correlationId: event.correlationId,
+        result: event.result,
+        channelRouteKind: event.channelRouteKind,
+        serverRid: event.serverRid,
+        durationSeconds: event.durationSeconds,
+        topic: event.topic,
+        sourceRid: event.sourceRid
+      })
+    };
   }
 
   private messageFlowModeCell(): ZLinkMessageFlowModeCell {

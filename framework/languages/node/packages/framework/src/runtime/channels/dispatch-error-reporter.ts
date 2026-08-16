@@ -37,14 +37,14 @@ export class ZLinkDispatchErrorReporter {
   ) {
     const flowCtx: ZLinkDiagnosticsContext = ctx ?? {
       diagnostics: DEFAULT_ZLINK_DIAGNOSTICS,
-      liveMode: { mode: 'errors' }
+      liveMode: { mode: 'errors' },
+      sourceMeshGeneration: 0n
     };
     this.flow = new ZLinkMessageFlowTracer(flowCtx, errorSink);
   }
 
   report(event: ZLinkRuntimeDispatchFailure): void {
-    const errorInfo = dispatchErrorInfo(event);
-    this.reportedEvents += 1;
+    const tracePoint = this.flow.begin(ZLinkMessageFlowOutcome.Error);
     const dropReason = channelDropReason(event);
     if (dropReason !== undefined) {
       this.metrics?.count('zlink.mesh_node.messages.dropped', 1, {
@@ -53,12 +53,16 @@ export class ZLinkDispatchErrorReporter {
         reason: dropReason
       });
     }
-    this.flow.trace({
+    if (tracePoint === undefined) return;
+    const errorInfo = dispatchErrorInfo(event);
+    this.reportedEvents += 1;
+    tracePoint.trace({
       outcome: ZLinkMessageFlowOutcome.Error,
       surface: event.surface,
       messageKind: event.messageKind,
       packetName: event.packetName,
       channelName: event.channelName,
+      channelRouteKind: event.channelRouteKind,
       meshName: event.meshName,
       topic: event.topic,
       correlationId: event.correlationId,
@@ -66,6 +70,7 @@ export class ZLinkDispatchErrorReporter {
       flowOrigin: event.flowOrigin,
       sourceRid: event.sourceRid,
       targetRid: event.targetRid,
+      serverRid: event.serverRid,
       spotId: event.spotId,
       instanceSpotType: event.instanceSpotType,
       activationState: event.activationState,

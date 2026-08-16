@@ -39,30 +39,46 @@ export interface ZLinkDispatchOptionsBuilder {
  */
 export enum ZLinkRuntimeMessageFlowOutcome {
   Received = 'received',
+  Admitted = 'admitted',
   Dispatched = 'dispatched',
+  Completed = 'completed',
   Replied = 'replied',
   Dropped = 'dropped',
   Sent = 'sent',
   ReplyReceived = 'replyReceived',
+  Backpressured = 'backpressured',
   Error = 'error'
 }
 
+export type ZLinkRuntimeMessageFlowResult =
+  | 'succeeded'
+  | 'failed'
+  | 'backpressured'
+  | 'dropped'
+  | 'cancelled'
+  | 'shutdown';
+
 export interface ZLinkRuntimeMessageFlowEvent {
   readonly outcome: ZLinkRuntimeMessageFlowOutcome;
+  readonly result?: ZLinkRuntimeMessageFlowResult;
   readonly surface: ZLinkDispatchErrorSurface;
   readonly messageKind: ZLinkDispatchMessageKind;
   readonly packetName?: string;
   readonly channelName?: string;
+  readonly channelRouteKind?: 'route_mesh' | 'client_server';
   readonly meshName?: string;
   readonly topic?: string;
   readonly correlationId?: string;
   readonly sourceRid?: string;
   readonly targetRid?: string;
+  readonly serverRid?: string;
   readonly peerRid?: string;
   readonly socketRole?: string;
   readonly effectiveMode: ZLinkMessageFlowLogMode;
-  readonly flowId: string;
-  readonly flowOrigin: ZLinkFlowOrigin;
+  readonly flowId?: string;
+  readonly flowOrigin?: ZLinkFlowOrigin;
+  /** Source MeshNode lifecycle generation used only for flow-less sampling. */
+  readonly sourceMeshGeneration?: bigint | string;
   readonly spotId?: string;
   readonly instanceSpotType?: string;
   readonly activationState?: 'activating' | 'ready' | 'closing';
@@ -70,6 +86,7 @@ export interface ZLinkRuntimeMessageFlowEvent {
   /** Internal service-wire command carried by a RouteMesh control record. */
   readonly commandId?: number;
   readonly messageSize?: number;
+  readonly durationSeconds?: number;
   readonly errorReason?: ZLinkDispatchErrorReason;
   readonly errorAction?: ZLinkDispatchErrorAction;
   readonly errorType?: string;
@@ -94,6 +111,7 @@ export interface ZLinkDispatchFailure {
   readonly action: ZLinkDispatchErrorAction;
   readonly packetName?: string;
   readonly channelName?: string;
+  readonly channelRouteKind?: 'route_mesh' | 'client_server';
   readonly meshName?: string;
   readonly topic?: string;
   readonly spotId?: string;
@@ -103,6 +121,7 @@ export interface ZLinkDispatchFailure {
   readonly commandId?: number;
   readonly sourceRid?: string;
   readonly targetRid?: string;
+  readonly serverRid?: string;
   readonly correlationId?: string;
   readonly flowId?: string;
   readonly flowOrigin?: ZLinkFlowOrigin;
@@ -141,13 +160,16 @@ export const MESSAGE_FLOW_MODE_RANK: Record<ZLinkMessageFlowLogMode, number> = {
 };
 
 export enum ZLinkDispatchErrorSurface {
+  Node = 'node',
   Channel = 'channel',
   RouteMeshChannel = 'routeMeshChannel',
   SpotRoute = 'spotRoute',
   InstanceSpot = 'instance_spot',
   SpotSubscription = 'spotSubscription',
   SpotActor = 'spotActor',
-  StreamSession = 'streamSession'
+  StreamSession = 'streamSession',
+  ActorRelocation = 'actorRelocation',
+  ClassicFanout = 'classicFanout'
 }
 
 export enum ZLinkDispatchMessageKind {
@@ -156,6 +178,7 @@ export enum ZLinkDispatchMessageKind {
   Publish = 'publish',
   Response = 'response',
   Error = 'error',
+  Control = 'control',
   ActorRequest = 'actorRequest',
   ActorSend = 'actorSend'
 }

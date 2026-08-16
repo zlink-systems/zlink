@@ -7,10 +7,12 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { trace } = require('@opentelemetry/api');
 const { logs } = require('@opentelemetry/api-logs');
 const { LoggerProvider } = require('@opentelemetry/sdk-logs');
 
 const telemetryRecords = [];
+const traceRecords = [];
 let failTelemetryProvider = false;
 const loggerProvider = new LoggerProvider({
   processors: [{
@@ -23,12 +25,28 @@ const loggerProvider = new LoggerProvider({
   }]
 });
 logs.setGlobalLoggerProvider(loggerProvider);
+trace.setGlobalTracerProvider({
+  getTracer() {
+    return {
+      startSpan(eventName, options) {
+        traceRecords.push({ eventName, attributes: options.attributes });
+        return { setStatus() {}, end() {} };
+      }
+    };
+  }
+});
 
 const framework = require('../../packages/framework/dist/internal');
 const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
 const { ZLinkStreamFrameMessageFactory } = require('../../packages/framework/dist/runtime/streams/stream-frame-factory');
 const flowContext = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+const {
+  ZLinkChannelOutboundOperations
+} = require('../../packages/framework/dist/runtime/channels/channel-outbound-operations');
+const {
+  ZLinkChannelDispatchPipeline
+} = require('../../packages/framework/dist/runtime/channels/channel-dispatch-pipeline');
 const {
   ZLinkDispatchErrorReporter
 } = require('../../packages/framework/dist/runtime/channels/dispatch-error-reporter');
@@ -43,9 +61,12 @@ const {
 
 const ZLinkMessageFlowOutcome = {
   Received: 'received',
+  Admitted: 'admitted',
   Dispatched: 'dispatched',
+  Completed: 'completed',
   Replied: 'replied',
-  Dropped: 'dropped'
+  Dropped: 'dropped',
+  Backpressured: 'backpressured'
 };
 const ZLinkDispatchErrorSurface = { Channel: 'channel' };
 const ZLinkDispatchMessageKind = { Request: 'request' };
@@ -72,6 +93,7 @@ function makeTracer(diagnosticsOptions, sink = silentSink()) {
 
 test.beforeEach(() => {
   telemetryRecords.length = 0;
+  traceRecords.length = 0;
   failTelemetryProvider = false;
 });
 
@@ -114,11 +136,14 @@ test('MFLOW-003/005 standard logger provider receives the structured record', ()
   assert.equal(telemetryRecords.length, 1);
   const record = telemetryRecords[0];
   assert.equal(record.eventName, 'zlink.message_flow');
+  assert.match(record.body, /^zlink flow: /);
+  assert.equal(record.attributes.event, 'zlink.message_flow');
   assert.equal(record.attributes.phase, 'received');
   assert.equal(record.attributes.surface, 'channel');
-  assert.equal(record.attributes.packet_name, 'EchoRequest');
-  assert.equal(record.attributes.channel_name, 'api');
-  assert.equal(record.attributes.correlation_id, 'corr-1');
+  assert.equal(record.attributes.packet, 'EchoRequest');
+  assert.equal(record.attributes.channel, 'api');
+  assert.equal(record.attributes.channel_route, 'client_server');
+  assert.equal(record.attributes.corr, 'corr-1');
 });
 
 test('MFLOW-004 provider failures do not change the message operation', () => {
@@ -159,7 +184,7 @@ test('dispatch errors record service-wire command and deepest handler cause', ()
   });
 
   assert.equal(telemetryRecords.length, 1);
-  const attributes = telemetryRecords[0].attributes;
+  const attributes = traceRecords[0].attributes;
   assert.equal(attributes.command_id, 34);
   assert.equal(attributes.error_type, 'Error');
   assert.equal(
@@ -182,7 +207,7 @@ test('MFLOW-009 live-mode cell toggles every reader without rebuilding the trace
   assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Received), false);
 });
 
-test('MFLOW-009 snapshots live mode for every transition in one ambient flow', () => {
+test('MFLOW-009 reads live mode independently at every transition in one ambient flow', () => {
   const { tracer, cell } = makeTracer(diagnostics('normal'));
   const inbound = {
     flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
@@ -192,12 +217,337 @@ test('MFLOW-009 snapshots live mode for every transition in one ambient flow', (
   flowContext.runWithFlow(inbound, () => {
     tracer.trace(receivedEvent());
     cell.mode = 'off';
-    assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Dispatched), true);
+    assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Dispatched), false);
     tracer.trace({ ...receivedEvent(), outcome: ZLinkMessageFlowOutcome.Dispatched });
   });
 
-  assert.equal(tracer.tracedCount, 2);
+  assert.equal(tracer.tracedCount, 1);
   assert.equal(tracer.enabled(ZLinkMessageFlowOutcome.Dispatched), false);
+});
+
+test('spec 26 phases and outcomes use the closed vocabulary', () => {
+  const { tracer } = makeTracer(diagnostics('normal', { sampleRate: 0 }));
+  const phases = [
+    ZLinkMessageFlowOutcome.Admitted,
+    ZLinkMessageFlowOutcome.Completed,
+    ZLinkMessageFlowOutcome.Backpressured
+  ];
+  for (const outcome of phases) {
+    tracer.trace({ ...receivedEvent(), outcome });
+  }
+
+  assert.deepEqual(
+    telemetryRecords.map((record) => record.attributes.phase),
+    ['backpressured']
+  );
+  assert.equal(telemetryRecords[0].attributes.outcome, 'backpressured');
+  assert.equal(traceRecords[0].attributes.outcome, 'backpressured');
+});
+
+test('request failure terminals remain visible at Errors level', () => {
+  const { tracer } = makeTracer(diagnostics('errors', { sampleRate: 0 }));
+  tracer.trace({
+    ...receivedEvent(),
+    outcome: 'replyReceived',
+    result: 'failed'
+  });
+  assert.equal(telemetryRecords.length, 1);
+  assert.equal(telemetryRecords[0].attributes.phase, 'reply_received');
+  assert.equal(telemetryRecords[0].attributes.outcome, 'failed');
+});
+
+test('spec 26 maps every added surface and control without admitting publish as a flow kind', () => {
+  const { tracer } = makeTracer(diagnostics('normal'));
+  for (const surface of ['node', 'actorRelocation', 'classicFanout']) {
+    tracer.trace({
+      ...receivedEvent(),
+      surface,
+      messageKind: surface === 'actorRelocation' ? 'control' : 'send'
+    });
+  }
+  assert.deepEqual(
+    telemetryRecords.map((record) => [record.attributes.surface, record.attributes.kind]),
+    [['node', 'send'], ['actor_relocation', 'control'], ['classic_fanout', 'send']]
+  );
+  assert.throws(
+    () => tracer.trace({ ...receivedEvent(), messageKind: 'publish' }),
+    /fanout publish must not create/i
+  );
+});
+
+test('spec 26 structured log projection uses only the exact keys', () => {
+  const { tracer } = makeTracer(diagnostics('detailed', { includeMessageSizes: true }));
+  tracer.trace({
+    ...receivedEvent(),
+    channelRouteKind: 'client_server',
+    serverRid: 'server-1',
+    targetRid: 'target-1',
+    messageSize: 42,
+    durationSeconds: 0.125
+  });
+  const keys = Object.keys(telemetryRecords[0].attributes).sort();
+  const allowed = [
+    'activation_state', 'actor', 'channel', 'channel_route', 'corr', 'event', 'flow',
+    'instance_type', 'kind', 'mesh', 'origin', 'outcome', 'packet', 'phase', 'reason',
+    'server_rid', 'size', 'source_rid', 'spot', 'surface', 'target_rid', 'topic'
+  ];
+  assert.deepEqual(keys, allowed.filter((key) => keys.includes(key)).sort());
+  assert.equal(telemetryRecords[0].attributes.server_rid, 'server-1');
+  assert.equal(traceRecords[0].attributes.duration_seconds, 0.125);
+});
+
+test('spec 26 flow-less sampling does not create a flow context and backpressure bypasses sampling', () => {
+  const { tracer } = makeTracer(diagnostics('normal', { sampleRate: 0 }));
+  assert.equal(flowContext.currentFlowContext(), undefined);
+  tracer.trace({ ...receivedEvent(), sourceMeshGeneration: 17n });
+  assert.equal(flowContext.currentFlowContext(), undefined);
+  tracer.trace({
+    ...receivedEvent(),
+    outcome: ZLinkMessageFlowOutcome.Backpressured,
+    result: 'backpressured',
+    sourceMeshGeneration: 17n
+  });
+  assert.equal(telemetryRecords.length, 1);
+  assert.equal(telemetryRecords[0].attributes.flow, undefined);
+});
+
+test('dispatch reporter Off gate skips trace formatting and trace-only counters', () => {
+  const reporter = new ZLinkDispatchErrorReporter(
+    undefined,
+    undefined,
+    silentSink(),
+    { diagnostics: diagnostics('off'), liveMode: { mode: 'off' } }
+  );
+  const error = {};
+  Object.defineProperty(error, 'toString', {
+    value() { throw new Error('error formatting must remain behind the Off gate'); }
+  });
+  assert.doesNotThrow(() => reporter.report({
+    surface: 'channel',
+    messageKind: 'send',
+    reason: 'handler_exception',
+    action: 'drop',
+    error
+  }));
+  assert.equal(reporter.reportedCount, 0);
+  assert.equal(telemetryRecords.length, 0);
+});
+
+test('channel request completion owner records one terminal for failure, cancellation, and shutdown', async () => {
+  const cases = [
+    {
+      expected: 'failed',
+      sockets: {
+        async awaitClientDealerForOutbound() { return undefined; },
+        hasKnownClientServerTargets() { return false; }
+      }
+    },
+    {
+      expected: 'cancelled',
+      signal: AbortSignal.abort(new Error('cancelled')),
+      sockets: {
+        async awaitClientDealerForOutbound() { throw new Error('must not await'); },
+        hasKnownClientServerTargets() { return false; }
+      }
+    },
+    {
+      expected: 'failed',
+      sockets: {
+        async awaitClientDealerForOutbound() {
+          throw new framework.ZLinkFrameworkException(
+            framework.ZLinkFrameworkErrorKind.DeadlineExceeded,
+            'request deadline'
+          );
+        },
+        hasKnownClientServerTargets() { return true; }
+      }
+    },
+    {
+      expected: 'shutdown',
+      sockets: {
+        async awaitClientDealerForOutbound() {
+          throw new framework.ZLinkFrameworkException(
+            framework.ZLinkFrameworkErrorKind.ShuttingDown,
+            'runtime shutdown'
+          );
+        },
+        hasKnownClientServerTargets() { return false; }
+      }
+    }
+  ];
+
+  for (const scenario of cases) {
+    const events = [];
+    const operations = new ZLinkChannelOutboundOperations(
+      scenario.sockets,
+      undefined,
+      {
+        flowCreationEnabled() { return false; },
+        beginOutbound(outcome) {
+          return { trace(event) { events.push({ outcome, ...event }); } };
+        }
+      }
+    );
+    await assert.rejects(() => operations.request(
+      'api',
+      'EchoRequest',
+      { value: 'ping' },
+      10,
+      scenario.signal
+    ));
+    const terminals = events.filter((event) => event.outcome === 'replyReceived');
+    assert.equal(terminals.length, 1);
+    assert.equal(terminals[0].result, scenario.expected);
+  }
+});
+
+test('channel request completion owner records success and in-flight cancellation once', async () => {
+  const successEvents = [];
+  const successDealer = {
+    async request(parts) {
+      const messages = parts.map((part) =>
+        typeof part.data === 'function' ? part : bindingMessage(part));
+      const header = channelEnvelope.decodeChannelHeader(messages);
+      channelEnvelope.closeMessages(parts);
+      return channelEnvelope.encodeChannelReplyParts(header, { ok: true }).map((part) =>
+        typeof part.data === 'function' ? part : bindingMessage(part));
+    }
+  };
+  const success = new ZLinkChannelOutboundOperations(
+    {
+      async awaitClientDealerForOutbound() { return successDealer; },
+      hasKnownClientServerTargets() { return true; },
+      selectedClientServerRid() { return 'server-1'; }
+    },
+    undefined,
+    {
+      flowCreationEnabled() { return false; },
+      beginOutbound(outcome) {
+        return { trace(event) { successEvents.push({ outcome, ...event }); } };
+      }
+    }
+  );
+  assert.deepEqual(
+    await success.request('api', 'EchoRequest', { value: 'ping' }, 100),
+    { ok: true }
+  );
+  assert.deepEqual(
+    successEvents.filter((event) => event.outcome === 'replyReceived').map((event) => event.result),
+    ['succeeded']
+  );
+
+  const cancelledEvents = [];
+  const controller = new AbortController();
+  const pendingDealer = {
+    request(parts) {
+      channelEnvelope.closeMessages(parts);
+      return new Promise(() => {});
+    }
+  };
+  const pending = new ZLinkChannelOutboundOperations(
+    {
+      async awaitClientDealerForOutbound() { return pendingDealer; },
+      hasKnownClientServerTargets() { return true; },
+      selectedClientServerRid() { return 'server-2'; }
+    },
+    undefined,
+    {
+      flowCreationEnabled() { return false; },
+      beginOutbound(outcome) {
+        return { trace(event) { cancelledEvents.push({ outcome, ...event }); } };
+      }
+    }
+  );
+  const operation = pending.request(
+    'api', 'EchoRequest', { value: 'ping' }, 100, controller.signal
+  );
+  controller.abort();
+  await assert.rejects(operation, /aborted/i);
+  assert.deepEqual(
+    cancelledEvents.filter((event) => event.outcome === 'replyReceived').map((event) => event.result),
+    ['cancelled']
+  );
+});
+
+test('classic fanout omits normal delivery flow and reports only subscriber-local no-handler', async () => {
+  const flows = [];
+  const errors = [];
+  const pipeline = new ZLinkChannelDispatchPipeline({
+    channelName: 'events',
+    surface: 'channel',
+    dispatchErrors: {
+      flow: {
+        flowCreationEnabled() { return false; },
+        begin() {
+          return { trace(event) { flows.push(event); } };
+        }
+      },
+      report(event) { errors.push(event); }
+    }
+  });
+  await pipeline.dispatchOneWay({
+    fields: {
+      messageKind: 'publish',
+      packetName: 'Changed',
+      topic: 'orders'
+    },
+    envelope: {},
+    context: {}
+  });
+  assert.equal(flows.length, 0);
+  assert.equal(errors.length, 1);
+  assert.deepEqual(
+    {
+      surface: errors[0].surface,
+      messageKind: errors[0].messageKind,
+      reason: errors[0].reason,
+      action: errors[0].action,
+      channelRouteKind: errors[0].channelRouteKind
+    },
+    {
+      surface: 'classicFanout',
+      messageKind: 'send',
+      reason: 'no_handler',
+      action: 'drop',
+      channelRouteKind: undefined
+    }
+  );
+});
+
+test('channel one-way flow records queue admission, handler start, and terminal completion in order', async () => {
+  const phases = [];
+  const parts = channelEnvelope.encodeChannelEnvelopeParts(
+    3,
+    'api',
+    'Push',
+    { value: 1 },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    false
+  ).map((part) => typeof part.data === 'function' ? part : bindingMessage(part));
+  const pipeline = new ZLinkChannelDispatchPipeline({
+    channelName: 'api',
+    surface: 'channel',
+    dispatchErrors: {
+      flow: {
+        flowCreationEnabled() { return false; },
+        begin() {
+          return { trace(event) { phases.push(event.outcome); } };
+        }
+      },
+      report(error) { assert.fail(`unexpected dispatch error: ${error.reason}`); }
+    }
+  });
+  await pipeline.dispatchOneWay({
+    fields: { messageKind: 'send', packetName: 'Push' },
+    envelope: channelEnvelope.decodeChannelEnvelope(parts),
+    handler: { handle() {} },
+    context: {}
+  });
+  channelEnvelope.closeMessages(parts);
+  assert.deepEqual(phases, ['received', 'admitted', 'dispatched', 'completed']);
 });
 
 test('MFLOW-EXT flow sampling keeps or drops every event in one flow together', () => {
@@ -249,9 +599,9 @@ test('MFLOW-EXT channel wire and outbound trace use the same created flow', asyn
         const header = JSON.parse(Buffer.from(parts[0]).toString());
         const { tracer } = makeTracer(diagnostics('normal'));
         tracer.trace(receivedEvent());
-        assert.equal(telemetryRecords[0].attributes.flow_id, header.flowId);
+        assert.equal(telemetryRecords[0].attributes.flow, header.flowId);
         assert.equal(header.flowOrigin, 3);
-        assert.equal(telemetryRecords[0].attributes.flow_origin, 'Application');
+        assert.equal(telemetryRecords[0].attributes.origin, 'Application');
         resolve();
       } catch (error) {
         reject(error);
@@ -533,4 +883,13 @@ function writeMetadataEntry(header, offset, key, value) {
   offset += 2;
   value.copy(header, offset);
   return offset + value.length;
+}
+
+function bindingMessage(payload) {
+  const bytes = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
+  return {
+    data() { return bytes; },
+    toBytes() { return bytes; },
+    close() {}
+  };
 }

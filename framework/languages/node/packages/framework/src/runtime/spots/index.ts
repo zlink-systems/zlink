@@ -1550,8 +1550,16 @@ export class DefaultZLinkSpotManager {
             record.applicationMetadata?.byteLength ?? zlinkMetadataByteLength(envelope.header.metadata)
           )
         };
+        this.traceInstanceMessage(
+          ZLinkMessageFlowOutcome.Admitted,
+          meshName,
+          spotId,
+          record,
+          envelope,
+          'ready',
+          target?.stableType
+        );
         if (!request) {
-          await this.routedSpotPackets.sendEncoded(spotId, envelope.packetName, decodePayload, context);
           this.traceInstanceMessage(
             ZLinkMessageFlowOutcome.Dispatched,
             meshName,
@@ -1561,8 +1569,27 @@ export class DefaultZLinkSpotManager {
             'ready',
             target?.stableType
           );
+          await this.routedSpotPackets.sendEncoded(spotId, envelope.packetName, decodePayload, context);
+          this.traceInstanceMessage(
+            ZLinkMessageFlowOutcome.Completed,
+            meshName,
+            spotId,
+            record,
+            envelope,
+            'ready',
+            target?.stableType
+          );
           return;
         }
+        this.traceInstanceMessage(
+          ZLinkMessageFlowOutcome.Dispatched,
+          meshName,
+          spotId,
+          record,
+          envelope,
+          'ready',
+          target?.stableType
+        );
         const response = await this.routedSpotPackets.requestEncoded(
           spotId,
           envelope.packetName,

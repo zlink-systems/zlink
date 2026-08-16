@@ -107,6 +107,8 @@ export interface ZLinkSpotActorDispatcherOptions {
   };
   readonly serialWorkOptions?: ZLinkSerialWorkOptions;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
+  readonly onAdmitted?: () => void;
+  readonly onHandlerStart?: () => void;
 }
 
 interface ZLinkSpotActorReplyOptionsSnapshot {
@@ -135,6 +137,7 @@ export class ZLinkSpotActorDispatcher {
     return this.execute(async () => {
       const descriptor = this.requirePacket(ZLinkActorPacketKind.Send, actor, packetName);
       const message = decode();
+      this.options.onHandlerStart?.();
       await this.invokeHandler<
         ZLinkSpotActorSendHandler<ZLinkSpot, ZLinkActor, TMessage>,
         void
@@ -208,6 +211,7 @@ export class ZLinkSpotActorDispatcher {
     return this.execute(async () => {
       const descriptor = this.requirePacket(ZLinkActorPacketKind.Request, actor, packetName);
       const request = decode();
+      this.options.onHandlerStart?.();
       return await this.invokeHandler<
         ZLinkSpotActorRequestHandler<ZLinkSpot, ZLinkActor, TRequest, TReply>,
         TResult
@@ -325,8 +329,10 @@ export class ZLinkSpotActorDispatcher {
   }
 
   private execute<T>(operation: () => Promise<T> | T): Promise<T> {
-    return this.options.serial?.execute(operation, this.options.serialWorkOptions)
+    const pending = this.options.serial?.execute(operation, this.options.serialWorkOptions)
       ?? Promise.resolve().then(operation);
+    this.options.onAdmitted?.();
+    return pending;
   }
 
   private createContext(

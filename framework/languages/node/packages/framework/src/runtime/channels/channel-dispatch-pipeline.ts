@@ -82,6 +82,7 @@ export class ZLinkChannelDispatchPipeline {
 
   async dispatchOneWay<TContext extends ZLinkMessageContext>(dispatch: ZLinkOneWayDispatch<TContext>): Promise<void> {
     this.trace(ZLinkMessageFlowOutcome.Received, dispatch.fields);
+    this.trace(ZLinkMessageFlowOutcome.Admitted, dispatch.fields);
     if (dispatch.handler === undefined) {
       const action = dispatch.fields.messageKind === ZLinkDispatchMessageKind.Publish
         ? this.unhandled.publish
@@ -101,7 +102,7 @@ export class ZLinkChannelDispatchPipeline {
         dispatch.fields.flowOrigin,
         this.options.dispatchErrors.flow.flowCreationEnabled()
       );
-      await runWithFlow(flow, () => this.invoke(
+      const invocation = await runWithFlow(flow, () => this.invoke(
           dispatch.envelope,
           dispatch.codecs,
           dispatch.handler!,
@@ -109,7 +110,9 @@ export class ZLinkChannelDispatchPipeline {
           dispatch.fields,
           dispatch.signal
         ));
-      this.trace(ZLinkMessageFlowOutcome.Dispatched, dispatch.fields);
+      if (invocation.handlerInvoked) {
+        this.trace(ZLinkMessageFlowOutcome.Completed, dispatch.fields);
+      }
     } catch (error) {
       this.report(
         dispatch.fields,
@@ -122,6 +125,7 @@ export class ZLinkChannelDispatchPipeline {
 
   async dispatchRequest<TContext extends ZLinkMessageContext>(dispatch: ZLinkRequestDispatch<TContext>): Promise<void> {
     this.trace(ZLinkMessageFlowOutcome.Received, dispatch.fields);
+    this.trace(ZLinkMessageFlowOutcome.Admitted, dispatch.fields);
     if (dispatch.handler === undefined) {
       const missing = createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.HandlerNotFound,
@@ -224,6 +228,7 @@ export class ZLinkChannelDispatchPipeline {
         // Filters are the channel admission gate. Decode only after they have
         // allowed the handler turn to proceed.
         const payload = decodeChannelPayload(envelope, codecs);
+        this.trace(ZLinkMessageFlowOutcome.Dispatched, fields);
         value = await handler.handle(payload, context);
       },
       signal
@@ -275,9 +280,14 @@ export class ZLinkChannelDispatchPipeline {
     action: ZLinkDispatchErrorAction,
     error?: unknown
   ): void {
+    const classicFanout = fields.messageKind === ZLinkDispatchMessageKind.Publish;
     this.options.dispatchErrors.report({
-      surface: this.options.surface,
-      messageKind: fields.messageKind,
+      surface: classicFanout
+        ? ZLinkDispatchErrorSurface.ClassicFanout
+        : this.options.surface,
+      messageKind: classicFanout
+        ? ZLinkDispatchMessageKind.Send
+        : fields.messageKind,
       reason,
       action,
       packetName: fields.packetName,
@@ -292,11 +302,11 @@ export class ZLinkChannelDispatchPipeline {
   }
 
   private trace(outcome: ZLinkMessageFlowOutcome, fields: ZLinkChannelDispatchFields): void {
+    if (fields.messageKind === ZLinkDispatchMessageKind.Publish) return;
     const flow = this.options.dispatchErrors.flow;
-    if (!flow.enabled(outcome)) {
-      return;
-    }
-    flow.trace({
+    const tracePoint = flow.begin(outcome);
+    if (tracePoint === undefined) return;
+    tracePoint.trace({
       outcome,
       surface: this.options.surface,
       messageKind: fields.messageKind,

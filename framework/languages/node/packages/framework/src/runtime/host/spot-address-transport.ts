@@ -138,7 +138,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
           );
         } else {
           this.traceInstanceAddress(
-            ZLinkMessageFlowOutcome.Dropped,
+            submitResultFlowOutcome(result.status),
             ZLinkDispatchMessageKind.Send,
             spotId,
             message,
@@ -159,15 +159,18 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
         if (isSpotRouteRefreshError(error)) {
           this.options.resolver()?.invalidate?.(spotId);
         }
+        const reason = addressedInstanceErrorReason(error);
         this.traceInstanceAddress(
-          ZLinkMessageFlowOutcome.Dropped,
+          reason === ZLinkDispatchErrorReason.Backpressure
+            ? ZLinkMessageFlowOutcome.Backpressured
+            : ZLinkMessageFlowOutcome.Dropped,
           ZLinkDispatchMessageKind.Send,
           spotId,
           message,
           existing.routerChannelId,
           existing.stableType,
           existing.targetNodeRid,
-          addressedInstanceErrorReason(error)
+          reason
         );
         throw error;
       }
@@ -192,7 +195,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     if (selected.kind === 'capacity') {
       const error = missingInstancePlacementCapacity(spotId, call.instanceSpotType);
       this.traceInstanceAddress(
-        ZLinkMessageFlowOutcome.Dropped,
+        ZLinkMessageFlowOutcome.Backpressured,
         ZLinkDispatchMessageKind.Send,
         spotId,
         message,
@@ -232,9 +235,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
       deadline.signal
     ));
     this.traceInstanceAddress(
-      mapped.status === ZLinkSubmitStatus.Submitted
-        ? ZLinkMessageFlowOutcome.Sent
-        : ZLinkMessageFlowOutcome.Dropped,
+      submitResultFlowOutcome(mapped.status),
       ZLinkDispatchMessageKind.Send,
       spotId,
       message,
@@ -854,6 +855,20 @@ function submitResultReason(
   }
 }
 
+function submitResultFlowOutcome(status: ZLinkSubmitStatus): ZLinkMessageFlowOutcome {
+  switch (status) {
+    case ZLinkSubmitStatus.Submitted:
+      return ZLinkMessageFlowOutcome.Sent;
+    case ZLinkSubmitStatus.Backpressured:
+    case ZLinkSubmitStatus.TimedOut:
+      return ZLinkMessageFlowOutcome.Backpressured;
+    case ZLinkSubmitStatus.Shutdown:
+    case ZLinkSubmitStatus.TargetNotFound:
+    case ZLinkSubmitStatus.RouteNotConnected:
+      return ZLinkMessageFlowOutcome.Dropped;
+  }
+}
+
 function addressedInstanceErrorReason(error: unknown): ZLinkDispatchErrorReason {
   if (error instanceof ZLinkFrameworkException) {
     const kind = internalFrameworkErrorKind(error);
@@ -869,6 +884,14 @@ function addressedInstanceErrorReason(error: unknown): ZLinkDispatchErrorReason 
     }
     if (kind === ZLinkFrameworkInternalErrorKind.RuntimeShutdown) {
       return ZLinkDispatchErrorReason.Shutdown;
+    }
+    if (
+      kind === ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted
+      || kind === ZLinkFrameworkInternalErrorKind.WorkerQueueFull
+      || kind === ZLinkFrameworkInternalErrorKind.WorkerTimedOut
+      || kind === ZLinkFrameworkInternalErrorKind.DeadlineExceeded
+    ) {
+      return ZLinkDispatchErrorReason.Backpressure;
     }
   }
   return ZLinkDispatchErrorReason.HandlerException;

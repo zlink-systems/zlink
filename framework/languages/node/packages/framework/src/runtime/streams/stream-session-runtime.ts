@@ -519,7 +519,23 @@ export class ZLinkStreamSessionRuntime {
           correlationId: streamCorr,
           sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId)
         });
+        flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Admitted)?.trace({
+          outcome: ZLinkMessageFlowOutcome.Admitted,
+          surface: ZLinkDispatchErrorSurface.StreamSession,
+          messageKind: streamKind,
+          packetName: inboundHeader.name,
+          correlationId: streamCorr,
+          sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId)
+        });
         releaseApplicationJobPermitBeforeHandler();
+        flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Dispatched)?.trace({
+          outcome: ZLinkMessageFlowOutcome.Dispatched,
+          surface: ZLinkDispatchErrorSurface.StreamSession,
+          messageKind: streamKind,
+          packetName: inboundHeader.name,
+          correlationId: streamCorr,
+          sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId)
+        });
         await session.onDispatch?.(
           createDispatchContext(inboundHeader),
           wrapFrameworkPayloadMessage(
@@ -529,14 +545,16 @@ export class ZLinkStreamSessionRuntime {
             inboundHeader.name
           )
         );
-        flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Dispatched)?.trace({
-          outcome: ZLinkMessageFlowOutcome.Dispatched,
-          surface: ZLinkDispatchErrorSurface.StreamSession,
-          messageKind: streamKind,
-          packetName: inboundHeader.name,
-          correlationId: streamCorr,
-          sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId)
-        });
+        if (streamKind === ZLinkDispatchMessageKind.Send) {
+          flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Completed)?.trace({
+            outcome: ZLinkMessageFlowOutcome.Completed,
+            surface: ZLinkDispatchErrorSurface.StreamSession,
+            messageKind: streamKind,
+            packetName: inboundHeader.name,
+            correlationId: streamCorr,
+            sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId)
+          });
+        }
       });
     } catch (error) {
       this.options.dispatchErrors?.report({

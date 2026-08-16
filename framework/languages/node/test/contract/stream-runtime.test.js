@@ -7121,17 +7121,19 @@ test('stream session runtime does not invent correlation ids from request sequen
   runtime.start();
 
   socket.emitFrame('rid-correlation', streamRequestHeader('OkRequest', 41n), bindingMessage('{}'));
-  await waitForCondition(() => flowEvents.length === 2, 'successful request flow events');
+  await waitForCondition(() => flowEvents.length === 3, 'successful request flow events');
 
   socket.emitFrame('rid-correlation', streamRequestHeader('FailRequest', 42n), bindingMessage('{}'));
   await waitForCondition(
-    () => dispatchErrors.length === 1 && flowEvents.length === 4,
+    () => dispatchErrors.length === 1,
     'failed request flow events'
   );
 
+  assert.equal(flowEvents.length, 7);
+
   assert.deepEqual(
     [...flowEvents, ...dispatchErrors].map((event) => event.correlationId),
-    [undefined, undefined, undefined, undefined, undefined]
+    [undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined]
   );
   await runtime.dispose();
 });

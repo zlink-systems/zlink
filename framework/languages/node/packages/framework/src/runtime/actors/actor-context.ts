@@ -548,20 +548,18 @@ async function notifyJoinFailure(
       );
   //  The completion carries only an error kind, so trace the cause on the
   //  message flow under the same flow id as the Join that produced it.
-  coordinator?.messageFlow?.()?.traceLazy(
-    ZLinkMessageFlowOutcome.Error,
-    () => ({
-      outcome: ZLinkMessageFlowOutcome.Error,
-      surface: ZLinkDispatchErrorSurface.SpotActor,
-      messageKind: ZLinkDispatchMessageKind.ActorRequest,
-      packetName: 'JoinSpot',
-      actorId: actor.context.actorId,
-      errorReason: ZLinkDispatchErrorReason.HandlerException,
-      errorAction: ZLinkDispatchErrorAction.ReplyError,
-      errorType: String(frameworkError.kind),
-      errorMessage: String(error)
-    })
-  );
+  const tracePoint = coordinator?.messageFlow?.()?.begin(ZLinkMessageFlowOutcome.Error);
+  tracePoint?.trace({
+    outcome: ZLinkMessageFlowOutcome.Error,
+    surface: ZLinkDispatchErrorSurface.SpotActor,
+    messageKind: ZLinkDispatchMessageKind.ActorRequest,
+    packetName: 'JoinSpot',
+    actorId: actor.context.actorId,
+    errorReason: ZLinkDispatchErrorReason.HandlerException,
+    errorAction: ZLinkDispatchErrorAction.ReplyError,
+    errorType: String(frameworkError.kind),
+    errorMessage: String(error)
+  });
   await actor.onJoinCompleted?.({
     status: 'failed',
     operationId,

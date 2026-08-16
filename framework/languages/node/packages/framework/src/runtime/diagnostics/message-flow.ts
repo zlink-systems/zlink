@@ -13,10 +13,11 @@ import {
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind,
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
+  type ZLinkRuntimeMessageFlowResult,
   type ZLinkRuntimeMessageFlowEvent
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import type { ZLinkDispatchErrorSink } from './dispatch-error-port';
-import { currentFlowContext, currentOrCreateFlow } from './flow-context';
+import { currentFlowContext } from './flow-context';
 
 export interface ZLinkMessageFlowModeCell {
   mode: ZLinkMessageFlowLogMode;
@@ -25,6 +26,7 @@ export interface ZLinkMessageFlowModeCell {
 export interface ZLinkDiagnosticsContext {
   readonly diagnostics: ZLinkDiagnosticsOptions;
   readonly liveMode: ZLinkMessageFlowModeCell;
+  readonly sourceMeshGeneration: bigint;
 }
 
 export const DEFAULT_ZLINK_DIAGNOSTICS: ZLinkDiagnosticsOptions = {
@@ -35,31 +37,36 @@ export const DEFAULT_ZLINK_DIAGNOSTICS: ZLinkDiagnosticsOptions = {
 
 const telemetryLogger = openTelemetryLogs.getLogger('@zlink-systems/framework');
 const telemetryTracer = openTelemetryTrace.getTracer('@zlink-systems/framework');
+let diagnosticsGeneration = 0n;
 
 interface ZLinkTelemetryRecord {
   readonly eventId: 'zlink.message_flow' | 'zlink.dispatch_error';
   readonly timestamp: Date;
   readonly phase?: string;
-  readonly outcome: 'succeeded' | 'failed' | 'dropped';
-  readonly surface: 'channel' | 'spot' | 'instance_spot' | 'actor' | 'stream';
-  readonly messageKind: 'request' | 'send' | 'publish' | 'response' | 'error';
+  readonly outcome: ZLinkRuntimeMessageFlowResult;
+  readonly surface: 'node' | 'channel' | 'spot' | 'instance_spot' | 'actor' | 'stream'
+    | 'actor_relocation' | 'classic_fanout';
+  readonly messageKind: 'request' | 'send' | 'response' | 'error' | 'control';
   readonly reason?: string;
   readonly action?: string;
   readonly packetName?: string;
   readonly channelName?: string;
+  readonly channelRouteKind?: 'route_mesh' | 'client_server';
   readonly meshName?: string;
   readonly topic?: string;
   readonly correlationId?: string;
   readonly sourceRid?: string;
   readonly targetRid?: string;
-  readonly flowId: string;
-  readonly flowOrigin: string;
+  readonly serverRid?: string;
+  readonly flowId?: string;
+  readonly flowOrigin?: string;
   readonly spotId?: string;
   readonly instanceSpotType?: string;
   readonly activationState?: string;
   readonly actorId?: string;
   readonly commandId?: number;
   readonly messageSizeBytes?: number;
+  readonly durationSeconds?: number;
   readonly errorType?: string;
   readonly errorMessage?: string;
   readonly errorCauseType?: string;
@@ -83,28 +90,51 @@ export function createDiagnosticsContext(
 ): ZLinkDiagnosticsContext {
   return {
     diagnostics: dispatch?.diagnostics ?? DEFAULT_ZLINK_DIAGNOSTICS,
-    liveMode
+    liveMode,
+    sourceMeshGeneration: ++diagnosticsGeneration
   };
 }
 
-function requiredMode(outcome: ZLinkMessageFlowOutcome): ZLinkMessageFlowLogMode {
+function requiredMode(
+  outcome: ZLinkMessageFlowOutcome,
+  result?: ZLinkRuntimeMessageFlowResult
+): ZLinkMessageFlowLogMode {
   return outcome === ZLinkMessageFlowOutcome.Dropped
+    || outcome === ZLinkMessageFlowOutcome.Backpressured
     || outcome === ZLinkMessageFlowOutcome.Error
+    || (result !== undefined && result !== 'succeeded')
     ? 'errors'
     : 'normal';
 }
 
 export function flowIfEnabled(
   flow: ZLinkMessageFlowTracer | undefined,
-  outcome: ZLinkMessageFlowOutcome
-): ZLinkMessageFlowTracer | undefined {
-  return flow !== undefined && flow.accepts(outcome) ? flow : undefined;
+  outcome: ZLinkMessageFlowOutcome,
+  result?: ZLinkRuntimeMessageFlowResult
+): ZLinkMessageFlowTracePoint | undefined {
+  if (flow === undefined) return undefined;
+  return typeof flow.begin === 'function'
+    ? flow.begin(outcome, result)
+    : flow.accepts(outcome) ? flow : undefined;
 }
+
+export interface ZLinkMessageFlowTracePoint {
+  trace(flowInput: MessageFlowInput): void;
+}
+
+type MessageFlowInput = Omit<
+  ZLinkRuntimeMessageFlowEvent,
+  'effectiveMode' | 'flowId' | 'flowOrigin'
+> & {
+  readonly effectiveMode?: ZLinkMessageFlowLogMode;
+  readonly flowId?: string;
+  readonly flowOrigin?: import('../../contracts').ZLinkFlowOrigin;
+};
 
 export class ZLinkMessageFlowTracer {
   private tracedEvents = 0;
   private providerFailures = 0;
-  private readonly modeByFlow = new WeakMap<object, ZLinkMessageFlowLogMode>();
+  private localSamplingSequence = 0n;
 
   constructor(
     private readonly ctx: ZLinkDiagnosticsContext,
@@ -112,10 +142,7 @@ export class ZLinkMessageFlowTracer {
   ) {}
 
   enabled(outcome: ZLinkMessageFlowOutcome): boolean {
-    const ambient = currentFlowContext();
-    const mode = ambient === undefined
-      ? effectiveMessageFlow(this.ctx)
-      : this.modeByFlow.get(ambient) ?? effectiveMessageFlow(this.ctx);
+    const mode = effectiveMessageFlow(this.ctx);
     return MESSAGE_FLOW_MODE_RANK[mode] >= MESSAGE_FLOW_MODE_RANK[requiredMode(outcome)];
   }
 
@@ -123,58 +150,46 @@ export class ZLinkMessageFlowTracer {
     return this.enabled(outcome);
   }
 
+  begin(
+    outcome: ZLinkMessageFlowOutcome,
+    result?: ZLinkRuntimeMessageFlowResult
+  ): ZLinkMessageFlowTracePoint | undefined {
+    const mode = effectiveMessageFlow(this.ctx);
+    if (MESSAGE_FLOW_MODE_RANK[mode] < MESSAGE_FLOW_MODE_RANK[requiredMode(outcome, result)]) {
+      return undefined;
+    }
+    return { trace: (flowInput) => this.traceAtMode(flowInput, mode) };
+  }
+
   flowCreationEnabled(): boolean {
     return effectiveMessageFlow(this.ctx) !== 'off';
   }
 
-  /**
-   * Traces an event built only when the outcome is enabled.
-   *
-   * Use this on failure and other rare transitions: the thunk keeps the call
-   * site free of an explicit gate and never runs when tracing is off, at the
-   * cost of one closure per call. Hot paths that trace every message must keep
-   * the `if (enabled(outcome))` guard so no closure is allocated there either.
-   */
-  traceLazy(
-    outcome: ZLinkMessageFlowOutcome,
-    build: () => Omit<ZLinkRuntimeMessageFlowEvent, 'effectiveMode' | 'flowId' | 'flowOrigin'> & {
-      readonly effectiveMode?: ZLinkMessageFlowLogMode;
-      readonly flowId?: string;
-      readonly flowOrigin?: import('../../contracts').ZLinkFlowOrigin;
-    }
-  ): void {
-    if (!this.enabled(outcome)) return;
-    this.trace(build());
-  }
-
-  trace(flowInput: Omit<ZLinkRuntimeMessageFlowEvent, 'effectiveMode' | 'flowId' | 'flowOrigin'> & {
-    readonly effectiveMode?: ZLinkMessageFlowLogMode;
-    readonly flowId?: string;
-    readonly flowOrigin?: import('../../contracts').ZLinkFlowOrigin;
-  }): void {
-    const ambient = currentFlowContext();
-    const effectiveMode = flowInput.effectiveMode
-      ?? (ambient === undefined ? undefined : this.modeByFlow.get(ambient))
-      ?? effectiveMessageFlow(this.ctx);
-    if (ambient !== undefined && !this.modeByFlow.has(ambient)) {
-      this.modeByFlow.set(ambient, effectiveMode);
-    }
+  trace(flowInput: MessageFlowInput): void {
+    const effectiveMode = effectiveMessageFlow(this.ctx);
     if (
       MESSAGE_FLOW_MODE_RANK[effectiveMode]
-      < MESSAGE_FLOW_MODE_RANK[requiredMode(flowInput.outcome)]
+      < MESSAGE_FLOW_MODE_RANK[requiredMode(flowInput.outcome, flowInput.result)]
     ) return;
+    this.traceAtMode(flowInput, effectiveMode);
+  }
+
+  private traceAtMode(flowInput: MessageFlowInput, effectiveMode: ZLinkMessageFlowLogMode): void {
+    const ambient = currentFlowContext();
     const root = flowInput.flowId !== undefined && flowInput.flowOrigin !== undefined
       ? { flowId: flowInput.flowId, flowOrigin: flowInput.flowOrigin }
-      : currentOrCreateFlow();
+      : ambient;
     const flow: ZLinkRuntimeMessageFlowEvent = {
       ...flowInput,
-      ...root,
+      ...(root === undefined ? {} : root),
       effectiveMode
     };
     if (
       flow.outcome !== ZLinkMessageFlowOutcome.Dropped
+      && flow.outcome !== ZLinkMessageFlowOutcome.Backpressured
       && flow.outcome !== ZLinkMessageFlowOutcome.Error
-      && !this.sample(flow.flowId)
+      && (flow.result === undefined || flow.result === 'succeeded')
+      && !this.sample(flow.flowId, flow.sourceMeshGeneration)
     ) return;
 
     this.tracedEvents += 1;
@@ -194,11 +209,18 @@ export class ZLinkMessageFlowTracer {
     return this.providerFailures;
   }
 
-  private sample(flowId: string): boolean {
+  private sample(flowId: string | undefined, sourceMeshGeneration: bigint | string | undefined): boolean {
     const rate = this.ctx.diagnostics.sampleRate;
     if (rate >= 1.0) return true;
     if (rate <= 0.0) return false;
-    return hashFlowId(flowId) / 0x1_0000_0000 < rate;
+    const samplingKey = flowId
+      ?? `${sourceMeshGeneration ?? this.ctx.sourceMeshGeneration}:${this.nextSamplingSequence()}`;
+    return hashFlowId(samplingKey) / 0x1_0000_0000 < rate;
+  }
+
+  private nextSamplingSequence(): bigint {
+    this.localSamplingSequence += 1n;
+    return this.localSamplingSequence;
   }
 
   private publish(record: ZLinkTelemetryRecord): void {
@@ -216,8 +238,8 @@ export class ZLinkMessageFlowTracer {
         timestamp: record.timestamp,
         severityNumber,
         severityText: record.eventId === 'zlink.dispatch_error' ? 'ERROR' : 'INFO',
-        body: record.eventId,
-        attributes: telemetryAttributes(record)
+        body: structuredLogBody(record),
+        attributes: structuredLogAttributes(record)
       });
     } catch (error) {
       this.reportProviderFailure('logger-provider', error);
@@ -227,7 +249,7 @@ export class ZLinkMessageFlowTracer {
   private publishToTrace(record: ZLinkTelemetryRecord): void {
     try {
       const span = telemetryTracer.startSpan(record.eventId, {
-        attributes: telemetryAttributes(record)
+        attributes: traceAttributes(record)
       });
       if (record.eventId === 'zlink.dispatch_error') {
         span.setStatus({ code: SpanStatusCode.ERROR, message: record.reason });
@@ -258,18 +280,20 @@ function toTelemetryRecord(
       : 'zlink.message_flow',
     timestamp: new Date(),
     phase: messageFlowPhase(flow.outcome),
-    outcome: messageFlowOutcome(flow.outcome),
+    outcome: flow.result ?? messageFlowOutcome(flow.outcome),
     surface: messageFlowSurface(flow.surface),
     messageKind: messageFlowKind(flow.messageKind),
     reason: flow.errorReason,
     action: flow.errorAction,
     packetName: flow.packetName,
     channelName: flow.channelName,
+    channelRouteKind: flow.channelRouteKind ?? channelRouteKind(flow.surface),
     meshName: flow.meshName,
     topic: flow.topic,
     correlationId: flow.correlationId,
     sourceRid: flow.sourceRid,
     targetRid: flow.targetRid,
+    serverRid: flow.serverRid,
     flowId: flow.flowId,
     flowOrigin: flow.flowOrigin,
     spotId: flow.spotId,
@@ -278,6 +302,7 @@ function toTelemetryRecord(
     actorId: flow.actorId,
     commandId: flow.commandId,
     messageSizeBytes,
+    durationSeconds: flow.durationSeconds,
     errorType: flow.errorType,
     errorMessage: boundedText(flow.errorMessage),
     errorCauseType: flow.errorCauseType,
@@ -285,7 +310,7 @@ function toTelemetryRecord(
   };
 }
 
-function telemetryAttributes(record: ZLinkTelemetryRecord): Attributes {
+function traceAttributes(record: ZLinkTelemetryRecord): Attributes {
   const attributes: Attributes = {};
   for (const [name, value] of Object.entries(record)) {
     if (value === undefined || name === 'timestamp') continue;
@@ -294,14 +319,58 @@ function telemetryAttributes(record: ZLinkTelemetryRecord): Attributes {
   return attributes;
 }
 
+function structuredLogAttributes(record: ZLinkTelemetryRecord): Attributes {
+  return compactAttributes({
+    event: record.eventId,
+    phase: record.phase,
+    surface: record.surface,
+    kind: record.messageKind,
+    mesh: record.meshName,
+    channel: record.channelName,
+    channel_route: record.channelRouteKind,
+    source_rid: record.sourceRid,
+    target_rid: record.targetRid,
+    server_rid: record.serverRid,
+    packet: record.packetName,
+    topic: record.topic,
+    spot: record.spotId,
+    instance_type: record.instanceSpotType,
+    activation_state: record.activationState,
+    actor: record.actorId,
+    corr: record.correlationId,
+    flow: record.flowId,
+    origin: record.flowOrigin,
+    outcome: record.outcome,
+    reason: record.reason,
+    size: record.messageSizeBytes
+  });
+}
+
+function structuredLogBody(record: ZLinkTelemetryRecord): string {
+  return `zlink flow: ${Object.entries(structuredLogAttributes(record))
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(' ')}`;
+}
+
+function compactAttributes(values: Record<string, string | number | undefined>): Attributes {
+  const attributes: Attributes = {};
+  for (const [key, value] of Object.entries(values)) {
+    if (value !== undefined) attributes[key] = value;
+  }
+  return attributes;
+}
+
 function messageFlowPhase(outcome: ZLinkMessageFlowOutcome): string | undefined {
   switch (outcome) {
     case ZLinkMessageFlowOutcome.Received: return 'received';
+    case ZLinkMessageFlowOutcome.Admitted: return 'admitted';
     case ZLinkMessageFlowOutcome.Dispatched: return 'dispatched';
+    case ZLinkMessageFlowOutcome.Completed: return 'completed';
     case ZLinkMessageFlowOutcome.Replied: return 'replied';
     case ZLinkMessageFlowOutcome.Dropped: return 'dropped';
     case ZLinkMessageFlowOutcome.Sent: return 'sent';
     case ZLinkMessageFlowOutcome.ReplyReceived: return 'reply_received';
+    case ZLinkMessageFlowOutcome.Backpressured: return 'backpressured';
     case ZLinkMessageFlowOutcome.Error: return undefined;
   }
 }
@@ -310,6 +379,7 @@ function messageFlowOutcome(
   outcome: ZLinkMessageFlowOutcome
 ): ZLinkTelemetryRecord['outcome'] {
   if (outcome === ZLinkMessageFlowOutcome.Error) return 'failed';
+  if (outcome === ZLinkMessageFlowOutcome.Backpressured) return 'backpressured';
   if (outcome === ZLinkMessageFlowOutcome.Dropped) return 'dropped';
   return 'succeeded';
 }
@@ -318,6 +388,8 @@ function messageFlowSurface(
   surface: ZLinkDispatchErrorSurface
 ): ZLinkTelemetryRecord['surface'] {
   switch (surface) {
+    case ZLinkDispatchErrorSurface.Node:
+      return 'node';
     case ZLinkDispatchErrorSurface.Channel:
     case ZLinkDispatchErrorSurface.RouteMeshChannel:
       return 'channel';
@@ -330,6 +402,10 @@ function messageFlowSurface(
       return 'actor';
     case ZLinkDispatchErrorSurface.StreamSession:
       return 'stream';
+    case ZLinkDispatchErrorSurface.ActorRelocation:
+      return 'actor_relocation';
+    case ZLinkDispatchErrorSurface.ClassicFanout:
+      return 'classic_fanout';
   }
 }
 
@@ -343,13 +419,23 @@ function messageFlowKind(
     case ZLinkDispatchMessageKind.Send:
     case ZLinkDispatchMessageKind.ActorSend:
       return 'send';
-    case ZLinkDispatchMessageKind.Publish:
-      return 'publish';
     case ZLinkDispatchMessageKind.Response:
       return 'response';
     case ZLinkDispatchMessageKind.Error:
       return 'error';
+    case ZLinkDispatchMessageKind.Control:
+      return 'control';
+    case ZLinkDispatchMessageKind.Publish:
+      throw new Error('Classic fanout publish must not create a normal message-flow record.');
   }
+}
+
+function channelRouteKind(
+  surface: ZLinkDispatchErrorSurface
+): ZLinkTelemetryRecord['channelRouteKind'] {
+  if (surface === ZLinkDispatchErrorSurface.RouteMeshChannel) return 'route_mesh';
+  if (surface === ZLinkDispatchErrorSurface.Channel) return 'client_server';
+  return undefined;
 }
 
 function hashFlowId(flowId: string): number {
