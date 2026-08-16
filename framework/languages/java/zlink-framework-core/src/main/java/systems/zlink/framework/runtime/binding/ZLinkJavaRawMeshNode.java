@@ -2003,23 +2003,54 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 frames,
                 timeout)
             .thenApply(replyFrames -> {
-                if (replyFrames.isEmpty() || replyFrames.size() > 2) {
-                    throw new IllegalStateException(
-                        "invalid bound Actor request reply frame count");
+                try {
+                    if (replyFrames.isEmpty() || replyFrames.size() > 2) {
+                        //  Spec 32-framework-error-model:91-92 — a reply whose
+                        //  shape can't be processed is ProtocolError.
+                        throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                            "invalid bound Actor request reply frame count");
+                    }
+                    ZLinkServiceM6AWireCodec.Reply response =
+                        wire.decodeReplyHeader(replyFrames.getFirst());
+                    if (response.correlation() != correlation
+                        || (response.terminalResult() == 0)
+                            != (replyFrames.size() == 2)) {
+                        throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                            "bound Actor request reply terminal mismatch");
+                    }
+                    if (response.terminalResult() != 0) {
+                        //  Classify the carried terminal + fine failure code
+                        //  via the authoritative ownership-aware translator
+                        //  instead of discarding the fine code
+                        //  (spec 32-framework-error-model:83-118). The raw
+                        //  request exception stays as the cause so upstream
+                        //  terminal-shape probes keep working.
+                        throw new ZLinkFrameworkException(
+                            ZLinkBackendRequestResult
+                                .fromWireTerminal(response.terminalResult())
+                                .toFrameworkErrorKind(response.failureCode()),
+                            "bound Actor request failed: terminal="
+                                + response.terminalResult()
+                                + " failureCode=" + response.failureCode(),
+                            new ZlinkRequestException(
+                                RequestResult.fromValue(
+                                    response.terminalResult())));
+                    }
+                    return decodeApplicationMessages(replyFrames.get(1));
+                } catch (ZLinkFrameworkException failure) {
+                    throw failure;
+                } catch (IllegalArgumentException failure) {
+                    //  A codec/malformed-wire failure (ZLinkServiceWireException
+                    //  derives from IllegalArgumentException) means the reply
+                    //  can't be processed -> ProtocolError
+                    //  (spec 32-framework-error-model:91-92).
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                        "bound Actor request reply could not be processed",
+                        failure);
                 }
-                ZLinkServiceM6AWireCodec.Reply response =
-                    wire.decodeReplyHeader(replyFrames.getFirst());
-                if (response.correlation() != correlation
-                    || (response.terminalResult() == 0)
-                        != (replyFrames.size() == 2)) {
-                    throw new IllegalStateException(
-                        "bound Actor request reply terminal mismatch");
-                }
-                if (response.terminalResult() != 0) {
-                    throw new ZlinkRequestException(
-                        RequestResult.fromValue(response.terminalResult()));
-                }
-                return decodeApplicationMessages(replyFrames.get(1));
             })
             .whenComplete((ignored, failure) -> streamTrace(
                 "request bound actor "
@@ -2281,6 +2312,15 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     }
                     if (header.terminalResult() != 0
                         || header.failureCode() != 0) {
+                        //  Spec 51-internal-service-wire-protocol:97 — a
+                        //  failed reply carries exactly the header frame; an
+                        //  attached tail is rejected as a protocol error
+                        //  before the carried terminal is honored.
+                        if (replies.size() != 1) {
+                            throw new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                "invalid Instance Spot failed reply frame count");
+                        }
                         //  Classify the carried terminal + fine failure code
                         //  via the authoritative ownership-aware translator
                         //  instead of collapsing to a generic rejection
@@ -3371,6 +3411,15 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             }
             var terminal = reply.terminal();
             if (frames.size() == 2) {
+                //  Spec 51-internal-service-wire-protocol:97 — a failed
+                //  creation terminal carries no application payload tail; an
+                //  attached second frame on a failed terminal is rejected as a
+                //  protocol error instead of honoring the carried failure.
+                if (terminal.terminalResult() != 0) {
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                        "Actor create failed terminal carries a payload");
+                }
                 wire.decodeApplicationPayload(frames.get(1));
                 terminal =
                     new ZLinkServiceM6BWireCodec.ActorCreationTerminal(
