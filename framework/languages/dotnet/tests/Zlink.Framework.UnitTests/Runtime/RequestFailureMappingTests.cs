@@ -431,4 +431,34 @@ public sealed class RequestFailureMappingTests
             Systems.Zlink.Framework.Runtime.Protocol.ServiceWireConstants
                 .ValidTerminalFailure(terminal, failureCode));
     }
+
+    //  Round-15: the canonical relocation completion boundary enforces the
+    //  schema terminal-failure-integrity rule — legal pairs pass, an illegal
+    //  pair is rejected, and a failure terminal cannot carry a payload
+    //  (service-wire-v1.schema.json: applicationPayload forbidden on failures).
+    [Fact]
+    public void Canonical_Terminal_Completion_Enforces_The_Schema_Pairing()
+    {
+        var payload = new Zlink.Framework.Runtime.Locations
+            .ZLinkCanonicalApplicationPayload("packet", "content", new byte[2]);
+
+        //  Legal: success with payload.
+        _ = Zlink.Framework.Runtime.Locations.ZLinkRelocationEnvelopeCodec
+            .CreateCanonicalTerminalCompletion(
+                1, 2, "owner", 3, "node", 4, 5, 6, 0, 0, payload);
+        //  Legal: typed failure with its exact schema terminal, no payload.
+        _ = Zlink.Framework.Runtime.Locations.ZLinkRelocationEnvelopeCodec
+            .CreateCanonicalTerminalCompletion(
+                1, 2, "owner", 3, "node", 4, 5, 6, 105, 19, null);
+        //  Illegal pair: boundary terminal with a failure code.
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Zlink.Framework.Runtime.Locations.ZLinkRelocationEnvelopeCodec
+                .CreateCanonicalTerminalCompletion(
+                    1, 2, "owner", 3, "node", 4, 5, 6, 101, 19, null));
+        //  Illegal shape: a failure terminal carrying a payload.
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Zlink.Framework.Runtime.Locations.ZLinkRelocationEnvelopeCodec
+                .CreateCanonicalTerminalCompletion(
+                    1, 2, "owner", 3, "node", 4, 5, 6, 105, 19, payload));
+    }
 }

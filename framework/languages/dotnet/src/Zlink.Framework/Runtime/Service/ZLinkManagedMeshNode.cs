@@ -5913,7 +5913,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 sourceRid,
                 correlation,
                 record.Command,
-                RequestResult.Conflict,
+                RequestResult.ProtocolError,
                 ServiceWireConstants.FrameworkErrorCode.RequestProtocolError);
             return;
         }
@@ -5969,7 +5969,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 sourceRid,
                 correlation,
                 record.Command,
-                RequestResult.InvalidState,
+                RequestResult.InternalError,
                 ServiceWireConstants.FrameworkErrorCode.RequestFailed);
             return;
         }
@@ -5989,7 +5989,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         sourceRid,
                         correlation,
                         record.Command,
-                        RequestResult.Busy,
+                        RequestResult.Rejected,
                         ServiceWireConstants.FrameworkErrorCode.WorkerQueueFull);
                     return;
                 }
@@ -6283,7 +6283,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     ServiceWireConstants.FrameworkErrorCode.SpotTypeMismatch),
             ZLinkFrameworkErrorKind.AlreadyExists =>
                 new UserSpotOperationTerminal(
-                    RequestResult.Conflict,
+                    RequestResult.InternalError,
                     ServiceWireConstants.FrameworkErrorCode.SpotCreateFailed),
             //  Spec 32-framework-error-model:104-108 — target placement/admission
             //  capacity is CapacityExceeded, wire-encoded as the bounded-admission
@@ -6297,8 +6297,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 new UserSpotOperationTerminal(
                     RequestResult.ProtocolError,
                     ServiceWireConstants.FrameworkErrorCode.RequestProtocolError),
+            //  Schema terminal-failure-integrity: requestFailed(17) pairs
+            //  only with internalError(105); the retry hint is conveyed by the
+            //  fine code's public classification, not the wire terminal.
             _ => new UserSpotOperationTerminal(
-                exception.RetryAdvice != ZLinkRetryAdvice.DoNotRetry ? RequestResult.Busy : RequestResult.InternalError,
+                RequestResult.InternalError,
                 ServiceWireConstants.FrameworkErrorCode.RequestFailed)
         };
     }
@@ -6338,7 +6341,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             SendActorCreateFailure(
                 sourceRid,
                 operation.Correlation,
-                RequestResult.Conflict,
+                RequestResult.ProtocolError,
                 ServiceWireConstants.FrameworkErrorCode.RequestProtocolError);
             return;
         }
@@ -6391,7 +6394,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             SendActorCreateFailure(
                 sourceRid,
                 operation.Correlation,
-                RequestResult.InvalidState,
+                RequestResult.InternalError,
                 ServiceWireConstants.FrameworkErrorCode.RequestFailed);
             return;
         }
@@ -6413,7 +6416,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     SendActorCreateFailure(
                         sourceRid,
                         operation.Correlation,
-                        RequestResult.Busy,
+                        RequestResult.Rejected,
                         ServiceWireConstants.FrameworkErrorCode.WorkerQueueFull);
                     return;
                 }
@@ -6752,8 +6755,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 new ActorCreateOperationTerminal(
                     RequestResult.ProtocolError,
                     ServiceWireConstants.FrameworkErrorCode.RequestProtocolError),
+            //  Schema terminal-failure-integrity: actorCreateFailed(2) pairs
+            //  only with internalError(105); the retry hint is conveyed by the
+            //  fine code's public classification, not the wire terminal.
             _ => new ActorCreateOperationTerminal(
-                exception.RetryAdvice != ZLinkRetryAdvice.DoNotRetry ? RequestResult.Busy : RequestResult.InternalError,
+                RequestResult.InternalError,
                 ServiceWireConstants.FrameworkErrorCode.ActorCreateFailed)
         };
     }

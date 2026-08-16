@@ -763,6 +763,12 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal(105, terminal.TerminalResult);
         Assert.Equal(19U, terminal.FailureCode);
 
+        //  EncodeReply itself now rejects illegal pairs (schema
+        //  terminal-failure-integrity), so illegal frames for the decode
+        //  assertions below are byte-patched from a legal frame.
+        Assert.Throws<ArgumentException>(
+            () => ZLinkServiceWireCodec.EncodeReply(41, 101, 19));
+
         foreach (var (illegalTerminal, illegalFailure) in new[]
                  {
                      (-3, 19U),   // unknown terminal
@@ -771,8 +777,11 @@ public sealed class ServiceRuntimeFoundationTests
                      (102, 18U),  // typed pair mismatch
                  })
         {
-            var illegal = ZLinkServiceWireCodec.EncodeReply(
-                41, illegalTerminal, illegalFailure);
+            var illegal = ZLinkServiceWireCodec.EncodeReply(41, 105, 19);
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(
+                illegal.AsSpan(13), illegalTerminal);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(
+                illegal.AsSpan(17), illegalFailure);
             Assert.False(ZLinkServiceWireCodec.TryDecodeReply(
                 illegal,
                 out _,

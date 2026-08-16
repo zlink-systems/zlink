@@ -331,6 +331,15 @@ internal static partial class ZLinkServiceWireCodec
             throw new ArgumentOutOfRangeException(nameof(correlation));
         if (tail.Length > ushort.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(tail));
+        //  Schema terminal-failure-integrity (service-wire-v1.schema.json):
+        //  never wire-encode a terminal/failure pair the schema forbids.
+        if (terminalResult < 0
+            || !ServiceWireConstants.ValidTerminalFailure(
+                (uint)terminalResult, failureCode))
+            throw new ArgumentException(
+                $"The reply terminal/failure pair {terminalResult}+{failureCode} "
+                + "violates the service wire schema.",
+                nameof(failureCode));
 
         var bytes = Prefix(
             ServiceWireConstants.Command.Reply,

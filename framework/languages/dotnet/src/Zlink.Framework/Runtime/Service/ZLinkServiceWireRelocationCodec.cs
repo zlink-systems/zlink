@@ -220,48 +220,11 @@ internal static partial class ZLinkServiceWireCodec
         uint terminalResult,
         ServiceWireConstants.FrameworkErrorCode failureCode)
     {
-        if (!Enum.IsDefined(failureCode))
-            return false;
-        if (terminalResult == 0)
-            return failureCode == ServiceWireConstants.FrameworkErrorCode.None;
-        if (terminalResult is 101 or 103 or >= 108 and <= 113)
-            return failureCode == ServiceWireConstants.FrameworkErrorCode.None;
-        if (failureCode == ServiceWireConstants.FrameworkErrorCode.None)
-            return false;
-        return failureCode switch
-        {
-            ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound
-                or ServiceWireConstants.FrameworkErrorCode.SpotRouteNotFound
-                or ServiceWireConstants.FrameworkErrorCode.ActorSessionNotBound
-                or ServiceWireConstants.FrameworkErrorCode.HandlerNotFound
-                or ServiceWireConstants.FrameworkErrorCode.RouteHandlerNotFound
-                or ServiceWireConstants.FrameworkErrorCode.ActorDispatchHandlerNotFound
-                or ServiceWireConstants.FrameworkErrorCode.RequestTargetNotFound =>
-                terminalResult == 102,
-            ServiceWireConstants.FrameworkErrorCode.PayloadDecodeFailed
-                or ServiceWireConstants.FrameworkErrorCode.RequestProtocolError =>
-                terminalResult == 104,
-            ServiceWireConstants.FrameworkErrorCode.ActorCreateFailed
-                or ServiceWireConstants.FrameworkErrorCode.SpotCreateFailed
-                or ServiceWireConstants.FrameworkErrorCode.RouteNotConnected
-                or ServiceWireConstants.FrameworkErrorCode.RequestFailed
-                or ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut
-                or ServiceWireConstants.FrameworkErrorCode.WorkerFailed
-                or ServiceWireConstants.FrameworkErrorCode.RelocationDataLost =>
-                terminalResult == 105,
-            ServiceWireConstants.FrameworkErrorCode.RequestRejected
-                or ServiceWireConstants.FrameworkErrorCode.WorkerQueueFull
-                or ServiceWireConstants.FrameworkErrorCode.ActorCreateRejected =>
-                terminalResult == 106,
-            ServiceWireConstants.FrameworkErrorCode.ActorAlreadyExists
-                or ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch
-                or ServiceWireConstants.FrameworkErrorCode.SpotTypeMismatch
-                or ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
-                or ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale
-                or ServiceWireConstants.FrameworkErrorCode.SpotMoving =>
-                terminalResult == 107,
-            _ => false
-        };
+        //  Spec 51-internal-service-wire-protocol:43-47 — the schema is the
+        //  single source of the terminal/failure pairing table; delegate to the
+        //  generated predicate instead of redefining the pairs in source.
+        return ServiceWireConstants.ValidTerminalFailure(
+            terminalResult, (uint)failureCode);
     }
 
     private static void ValidateCoordinator(RelocationCoordinatorFence fence)

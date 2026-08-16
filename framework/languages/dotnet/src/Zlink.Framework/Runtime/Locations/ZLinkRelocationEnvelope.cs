@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Text;
 using System.Security.Cryptography;
+using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -189,6 +190,12 @@ internal static class ZLinkRelocationEnvelopeCodec
             || participantId == 0
             || acceptedSequence == 0
             || !IsCanonicalTerminalResult(terminalResult)
+            //  Schema terminal-failure-integrity: the completion's
+            //  terminal/failure pair must match the schema table, and a
+            //  failure terminal carries no application payload.
+            || !ServiceWireConstants.ValidTerminalFailure(
+                terminalResult, errorCode)
+            || terminalResult != 0 && payload is not null
             || !IsText8(sourceOwnerId)
             || !IsText8(sourceNodeRid)
             || payload is not null
@@ -1075,14 +1082,25 @@ internal static class ZLinkRelocationEnvelopeCodec
                 ReadCanonicalApplicationPayload(ref reader);
                 return;
             case 11:
-                if (!IsCanonicalTerminalResult(reader.ReadUInt32()))
+                //  Schema terminal-failure-integrity: the frozen completion's
+                //  terminal/failure pair must match the schema table, and a
+                //  failure terminal carries no application payload.
+                var completionTerminal = reader.ReadUInt32();
+                var completionFailure = reader.ReadUInt32();
+                if (!IsCanonicalTerminalResult(completionTerminal)
+                    || !ServiceWireConstants.ValidTerminalFailure(
+                        completionTerminal, completionFailure))
                     throw new InvalidDataException("The saved-work terminal result is invalid.");
-                _ = reader.ReadUInt32();
                 var hasPayload = reader.ReadByte();
                 if (hasPayload > 1)
                     throw new InvalidDataException("The saved-work payload flag is invalid.");
                 if (hasPayload == 1)
+                {
+                    if (completionTerminal != 0)
+                        throw new InvalidDataException(
+                            "A failed saved-work completion cannot carry a payload.");
                     ReadCanonicalApplicationPayload(ref reader);
+                }
                 return;
             case 12:
                 ReadCanonicalSendReadyDestination(ref reader);
@@ -1221,9 +1239,14 @@ internal static class ZLinkRelocationEnvelopeCodec
         if (relocationId.Span.IndexOfAnyExcept((byte)0) < 0)
             throw new InvalidDataException("The relocation control id is invalid.");
         ReadCanonicalRelocationObject(ref reader);
-        if (!IsCanonicalTerminalResult(reader.ReadUInt32()))
+        //  Schema terminal-failure-integrity: the relocation-control-data
+        //  terminal/failure pair must match the schema table.
+        var controlTerminal = reader.ReadUInt32();
+        var controlFailure = reader.ReadUInt32();
+        if (!IsCanonicalTerminalResult(controlTerminal)
+            || !ServiceWireConstants.ValidTerminalFailure(
+                controlTerminal, controlFailure))
             throw new InvalidDataException("The relocation control result is invalid.");
-        _ = reader.ReadUInt32();
     }
 
     private static void ReadCanonicalRelocationObject(ref CanonicalReader reader)
