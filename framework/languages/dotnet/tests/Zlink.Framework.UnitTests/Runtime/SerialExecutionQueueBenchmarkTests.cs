@@ -90,8 +90,13 @@ public sealed class SerialExecutionQueueBenchmarkTests(ITestOutputHelper output)
             firstReadmission.TotalMilliseconds,
             fullyDrained.TotalMilliseconds);
 
+        //  Capacity is owned by Application Job Queue admission
+        //  (ownership alignment, 8bae89dc0f); the serial execution queue
+        //  accepts every post until sealed, so a parked-turn burst reports
+        //  zero local rejections and the full burst as pending.
         Assert.Equal(AdmissionAttempts, accepted + rejected);
-        Assert.Equal(accepted + 1, firstRejectionOrdinal);
+        Assert.Equal(0, rejected);
+        Assert.Equal(0, firstRejectionOrdinal);
         Assert.Equal(accepted, peakPending);
         Assert.True(firstReadmission >= TimeSpan.Zero);
         Assert.True(fullyDrained >= firstReadmission);
