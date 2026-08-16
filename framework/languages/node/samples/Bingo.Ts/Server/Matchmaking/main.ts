@@ -1,7 +1,10 @@
 import 'reflect-metadata';
+import { enableFlowFileLogging } from '../flow-file-logging';
 import { NestFactory } from '@nestjs/core';
 import { createBingoMatchmakingModule } from './bingo-matchmaking-module';
 import { closeNestRuntime, waitForShutdown } from '../runtime-support';
+
+enableFlowFileLogging('matchmaking');
 
 async function main(): Promise<void> {
   const app = await NestFactory.createApplicationContext(createBingoMatchmakingModule(), {

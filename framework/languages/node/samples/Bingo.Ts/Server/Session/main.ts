@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { enableFlowFileLogging } from '../flow-file-logging';
 import { NestFactory } from '@nestjs/core';
 import { closeNestRuntime, waitForShutdown } from '../runtime-support';
 import { createBingoSessionModule } from './bingo-session-module';
@@ -31,4 +32,6 @@ bootstrap().catch((error: unknown) => {
   process.exitCode = 1;
 });
 
-export {};
+export {};enableFlowFileLogging('session');
+
+

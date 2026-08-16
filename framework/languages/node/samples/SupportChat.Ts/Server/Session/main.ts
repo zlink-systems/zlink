@@ -2,6 +2,9 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { createSupportChatSessionModule } from './supportchat-session-module';
 import { waitForShutdown } from '../runtime-support';
+import { enableFlowFileLogging } from '../flow-file-logging';
+
+enableFlowFileLogging('session');
 
 async function main(): Promise<void> {
   const app = await NestFactory.createApplicationContext(createSupportChatSessionModule(), {

@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { enableFlowFileLogging } from '../flow-file-logging';
 import { NestFactory } from '@nestjs/core';
 import { ZLINK_FRAMEWORK_RUNTIME } from '@zlink-systems/nestjs';
 import {
@@ -60,4 +61,6 @@ bootstrap().catch((error: unknown) => {
   process.exitCode = 1;
 });
 
-export {};
+export {};enableFlowFileLogging('play');
+
+

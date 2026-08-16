@@ -163,7 +163,10 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     if (conversation.shouldCloseAfterIdle(now)) {
       const closed = conversation.close();
       await this.notifications.publish(closed.event, this.actorRefs());
-      await this.context.close();
+      //  Keep the Spot alive in the logical Closed state (parity with the
+      //  .NET sample). A User Spot with remaining Actor members must not be
+      //  closed (spec 15 §Close), and the Closed-state domain rejection is
+      //  what turns later SendChatMessageReq into a typed Rejected reply.
       return closed.state.agentActorId;
     }
     return undefined;
