@@ -133,7 +133,13 @@ final class ZLinkChannelSubmissionContractTest {
                     .toCompletableFuture()
                     .join());
 
-            assertInstanceOf(TimeoutException.class, error.getCause());
+            //  Spec 32-framework-error-model:90 — a reply missing its deadline
+            //  is the classified DeadlineExceeded framework exception, not the
+            //  raw TimeoutException.
+            var timeout = assertInstanceOf(
+                ZLinkFrameworkException.class, error.getCause());
+            Assertions.assertEquals(
+                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, timeout.kind());
         }
     }
 
@@ -154,7 +160,13 @@ final class ZLinkChannelSubmissionContractTest {
         CompletionException error = Assertions.assertThrows(
             CompletionException.class,
             pending::join);
-        assertInstanceOf(ZLinkConfigurationException.class, error.getCause());
+        //  Spec 32-framework-error-model:118 — a pending request failed by
+        //  runtime close is the classified ShuttingDown framework exception,
+        //  not a configuration error.
+        var closed = assertInstanceOf(
+            ZLinkFrameworkException.class, error.getCause());
+        Assertions.assertEquals(
+            ZLinkFrameworkErrorKind.SHUTTING_DOWN, closed.kind());
     }
 
     @Test
@@ -262,12 +274,22 @@ final class ZLinkChannelSubmissionContractTest {
         @Override
         public ZLinkBackendDealerSocket createDealerSocket(ZLinkBackendContext context) {
             return new NoReplyDealer() {
+                //  Since 8bae89dc0f the BINDING owns one-way admission and its
+                //  deadline (ZLinkOneWayCalls: "the binding owns retries");
+                //  the framework no longer consults admissionTimeout() nor
+                //  bounds this stage. The fake therefore simulates a socket
+                //  whose admission wait ends at its own 20ms deadline with
+                //  backpressure, which adaptOneWay maps to DeadlineExceeded.
                 @Override public CompletionStage<Void> send(
                     List<Message> parts) {
-                    return new CompletableFuture<>();
-                }
-                public Duration admissionTimeout() {
-                    return Duration.ofMillis(20);
+                    CompletableFuture<Void> result = new CompletableFuture<>();
+                    CompletableFuture
+                        .delayedExecutor(20, java.util.concurrent.TimeUnit.MILLISECONDS)
+                        .execute(() -> result.completeExceptionally(
+                            new systems.zlink.contracts.errors.ZlinkSubmitException(
+                                systems.zlink.contracts.sockets.SubmitResult
+                                    .BACKPRESSURED)));
+                    return result;
                 }
             };
         }

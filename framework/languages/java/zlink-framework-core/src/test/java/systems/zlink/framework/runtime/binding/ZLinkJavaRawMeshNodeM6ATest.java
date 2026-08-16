@@ -1092,10 +1092,25 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             var failure = assertThrows(
                 ExecutionException.class,
                 () -> request.toCompletableFuture().get(2, TimeUnit.SECONDS));
-            assertTrue(failure.getCause() instanceof ZlinkRequestException);
+            //  The bound-Actor reply decode now classifies the carried
+            //  terminal via the ownership-aware translator (spec
+            //  32-framework-error-model:83-118) instead of surfacing the raw
+            //  ZlinkRequestException; the original transport exception is
+            //  preserved as the cause for terminal-shape probes.
+            assertTrue(
+                failure.getCause()
+                    instanceof systems.zlink.framework.errors.ZLinkFrameworkException);
+            assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.NOT_FOUND,
+                ((systems.zlink.framework.errors.ZLinkFrameworkException)
+                        failure.getCause())
+                    .kind());
+            assertTrue(
+                failure.getCause().getCause() instanceof ZlinkRequestException);
             assertEquals(
                 RequestResult.NOT_FOUND,
-                ((ZlinkRequestException) failure.getCause()).getResult());
+                ((ZlinkRequestException) failure.getCause().getCause())
+                    .getResult());
         }
     }
 

@@ -11,7 +11,11 @@ public final class OneWayTestStatus {
 
     public static Integer status(CompletionStage<Void> stage) {
         try {
-            stage.toCompletableFuture().join();
+            //  Bounded join: a stage that never completes must surface as a
+            //  red test (TimeoutException rethrown below), not a suite hang.
+            stage.toCompletableFuture()
+                .orTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                .join();
             return 0;
         } catch (CompletionException error) {
             Throwable cause = error.getCause();
