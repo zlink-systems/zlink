@@ -112,3 +112,35 @@ test('Actor destroy classifies the completion pair, not NotFound (round-10 findi
     );
   }
 });
+
+test('wire decode failures surface as public ProtocolError (round-11)', () => {
+  //  The wire codec throws ServiceWireProtocolError (a plain Error) when a
+  //  remote lifecycle reply cannot be processed — malformed actorCreate tail,
+  //  bad frame count, inconsistent payload. requestUserSpotOperation (User Spot
+  //  create/close + Actor create) and completeRemoteReply (destroy/join/...)
+  //  translate it at the awaiting boundary so callers observe the public
+  //  ProtocolError kind (spec 32-framework-error-model:58-60, 91-92).
+  const {
+    translateWireReplyDecodeError
+  } = require('../../packages/framework/dist/runtime/framework-errors-internal');
+  const {
+    ServiceWireProtocolError
+  } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
+  const {
+    ZLinkFrameworkException
+  } = require('../../packages/framework/dist/contracts/Errors/ZLinkFrameworkException');
+
+  const translated = translateWireReplyDecodeError(
+    new ServiceWireProtocolError('Truncated Actor create terminal.')
+  );
+  assert.ok(translated instanceof ZLinkFrameworkException);
+  assert.equal(translated.kind, ZLinkFrameworkErrorKind.ProtocolError);
+  assert.match(translated.message, /Truncated Actor create terminal\./);
+
+  //  Already-classified and unrelated errors pass through by reference so an
+  //  earlier classification (or a genuine transport error) keeps its kind.
+  const classified = wireReplyFailureException(RequestResult.Busy, 0, 'busy');
+  assert.equal(translateWireReplyDecodeError(classified), classified);
+  const unrelated = new Error('unrelated');
+  assert.equal(translateWireReplyDecodeError(unrelated), unrelated);
+});

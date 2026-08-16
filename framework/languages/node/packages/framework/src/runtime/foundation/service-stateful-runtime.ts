@@ -2,7 +2,8 @@ import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
   internalFrameworkErrorKind,
-  internalFrameworkWireReply
+  internalFrameworkWireReply,
+  translateWireReplyDecodeError
 } from '../framework-errors-internal';
 import { RequestResult, SubmitResult } from '../backend/runtime-values';
 import type {
@@ -3882,30 +3883,38 @@ export class ServiceStatefulRuntime {
         await new Promise(resolve => setTimeout(resolve, retryDelayMs));
       }
     }
-    if (parts.length < 1 || parts.length > 2) {
-      throw new ServiceWireProtocolError('Invalid creation operation reply parts.');
+    //  Spec 32-framework-error-model:58-60, 91-92 — a reply that cannot be
+    //  processed must surface to the awaiting lifecycle caller (User Spot
+    //  create/close, Actor create) as a Framework ProtocolError, not as the
+    //  codec's untyped ServiceWireProtocolError.
+    try {
+      if (parts.length < 1 || parts.length > 2) {
+        throw new ServiceWireProtocolError('Invalid creation operation reply parts.');
+      }
+      const decoded = decodeStatefulReply(parts[0]!, correlation, operationKind, parts.length >= 2);
+      if (
+        decoded.terminalResult !== RequestResult.Ok
+        && parts.length !== 1
+      ) {
+        throw new ServiceWireProtocolError('Failed creation operation reply carries a payload.');
+      }
+      if (
+        operationKind === 'userSpotClose'
+        && parts.length !== 1
+      ) {
+        throw new ServiceWireProtocolError('User Spot close reply carries a payload.');
+      }
+      return {
+        terminalResult: decoded.terminalResult,
+        failureCode: decoded.failureCode,
+        ...(decoded.tail === undefined ? {} : { tail: decoded.tail as never }),
+        ...(parts.length === 2
+          ? { payload: decodeApplicationPayload(parts[1]!) }
+          : {})
+      };
+    } catch (error) {
+      throw translateWireReplyDecodeError(error);
     }
-    const decoded = decodeStatefulReply(parts[0]!, correlation, operationKind, parts.length >= 2);
-    if (
-      decoded.terminalResult !== RequestResult.Ok
-      && parts.length !== 1
-    ) {
-      throw new ServiceWireProtocolError('Failed creation operation reply carries a payload.');
-    }
-    if (
-      operationKind === 'userSpotClose'
-      && parts.length !== 1
-    ) {
-      throw new ServiceWireProtocolError('User Spot close reply carries a payload.');
-    }
-    return {
-      terminalResult: decoded.terminalResult,
-      failureCode: decoded.failureCode,
-      ...(decoded.tail === undefined ? {} : { tail: decoded.tail as never }),
-      ...(parts.length === 2
-        ? { payload: decodeApplicationPayload(parts[1]!) }
-        : {})
-    };
   }
 
   private requestLocalInfrastructure(
@@ -4358,7 +4367,10 @@ export class ServiceStatefulRuntime {
         actor
       ));
     } catch (error) {
-      this.operations.fail(pending.id, error);
+      //  Spec 32-framework-error-model:58-60, 91-92 — an unprocessable remote
+      //  reply (decode/shape failure) fails the awaiting operation with a
+      //  Framework ProtocolError instead of leaking the codec's plain Error.
+      this.operations.fail(pending.id, translateWireReplyDecodeError(error));
     } finally {
       if (operationKind === 'actorJoin') {
         this.actorJoinPhases.delete(pending.id);

@@ -3,6 +3,7 @@ import {
   ZLinkFrameworkException
 } from '../contracts/Errors/ZLinkFrameworkException';
 import { RequestResult } from './backend/runtime-values';
+import { ServiceWireProtocolError } from './foundation/service-wire-m6a-codec';
 
 /** Detailed failure reasons owned by Framework runtime bounded contexts. */
 export enum ZLinkFrameworkInternalErrorKind {
@@ -251,6 +252,25 @@ export function wireReplyFailureException(
     requestResultToPublicErrorKind(terminalResult),
     message
   );
+}
+
+/**
+ * Translates a wire decode/shape failure raised while awaiting a remote
+ * lifecycle reply into the public ProtocolError classification.
+ * ServiceWireProtocolError is a plain Error thrown by the wire codec when a
+ * reply cannot be processed; spec 32-framework-error-model:58-60 and 91-92
+ * require the awaiting caller to observe a Framework ProtocolError instead of
+ * an untyped transport error. Every other error is returned unchanged so
+ * already-classified failures keep their kind.
+ */
+export function translateWireReplyDecodeError(error: unknown): unknown {
+  if (error instanceof ServiceWireProtocolError) {
+    return createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.RequestProtocolError,
+      error.message
+    );
+  }
+  return error;
 }
 
 export function internalFrameworkErrorCode(error: ZLinkFrameworkException): number {
