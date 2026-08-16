@@ -777,8 +777,11 @@ public sealed class RegressionTests
     [Fact]
     public void CanonicalCommonSpecOwnsLiveDotNetContracts()
     {
-        var specRoot = GetCommonSpecRoot();
-        var deletedSpecRoot = Path.GetFullPath(Path.Combine(specRoot, "..", "..", "spec"));
+        //  The canonical server chapters live under spec/server (the spec root
+        //  also hosts http-client/stream-connector/draft).
+        var specRoot = Path.Combine(GetCommonSpecRoot(), "server");
+        var deletedSpecRoot = Path.GetFullPath(
+            Path.Combine(GetCommonSpecRoot(), "..", "..", "spec"));
         var required = new[]
         {
             "07-channel-topology.ko.md",
@@ -787,7 +790,7 @@ public sealed class RegressionTests
             "29-transport-liveness.ko.md"
         };
         var writingGuide = Path.GetFullPath(Path.Combine(
-            specRoot,
+            GetCommonSpecRoot(),
             "..",
             "..",
             "..",
