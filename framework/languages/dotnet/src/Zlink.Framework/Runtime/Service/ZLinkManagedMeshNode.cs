@@ -7444,7 +7444,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         CancellationToken cancellationToken)
     {
         if (!TrySelectChannelTarget(channelName, out var targetRid))
-            throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
+            //  Spec 07-channel-topology:414-415 — when no admitted remote
+            //  Server has positive weight the call "ends with no target", and
+            //  spec 32:87 classifies a target that doesn't exist as NotFound.
+            //  Reuse the sync path's three-way selection-failure classification
+            //  (draining -> Terminated, known-but-not-ready -> NotConnected,
+            //  no target/member -> NotFound) instead of collapsing every
+            //  selection failure to NotConnected/Unavailable.
+            throw new ZlinkSubmitException(ChannelSelectionFailureResult(channelName) switch
+            {
+                SubmitResult.Terminated => ZlinkSubmitException.ErrorCode.Terminated,
+                SubmitResult.NotConnected => ZlinkSubmitException.ErrorCode.NotConnected,
+                _ => ZlinkSubmitException.ErrorCode.NotFound
+            });
         var peer = RequireDirectPeer(targetRid);
         await SendDirectWireAsync(
                 peer.PhysicalRoutingId,
@@ -7472,7 +7484,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         CancellationToken cancellationToken)
     {
         if (!TrySelectChannelTarget(channelName, out var targetRid))
-            throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
+            //  Spec 07-channel-topology:414-415 — when no admitted remote
+            //  Server has positive weight the call "ends with no target", and
+            //  spec 32:87 classifies a target that doesn't exist as NotFound.
+            //  Reuse the sync path's three-way selection-failure classification
+            //  (draining -> Terminated, known-but-not-ready -> NotConnected,
+            //  no target/member -> NotFound) instead of collapsing every
+            //  selection failure to NotConnected/Unavailable.
+            throw new ZlinkSubmitException(ChannelSelectionFailureResult(channelName) switch
+            {
+                SubmitResult.Terminated => ZlinkSubmitException.ErrorCode.Terminated,
+                SubmitResult.NotConnected => ZlinkSubmitException.ErrorCode.NotConnected,
+                _ => ZlinkSubmitException.ErrorCode.NotFound
+            });
         var peer = RequireDirectPeer(targetRid);
         var operationId = NextStandaloneOperationId();
         var reply = await RequestDirectWireAsync(
@@ -8794,15 +8818,56 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RoutingId physicalRoutingId,
         ulong connectionGeneration)
     {
+        var publishClosed = false;
+        RoutingId closedRid = default;
         lock (_gate)
         {
             var peer = _peersByIntent.Values.FirstOrDefault(candidate =>
                 candidate.PhysicalRoutingId == physicalRoutingId
                 && candidate.ConnectionGeneration == connectionGeneration
                 && candidate.State != MeshPeerState.Closed);
-            if (peer is not null)
+            if (peer is null)
+                return;
+            //  Spec 13-mesh-node:331-337 (and 07-channel-topology:571-576) —
+            //  in a manual fixed-RID topology a peer whose previous pipe ended
+            //  is reconnected as long as "the application configuration has
+            //  intent to connect to that peer". An outbound peer carries that
+            //  standing intent, so a failed control send may end only the
+            //  current connection epoch — mirroring DrainTransportDisconnects
+            //  — never the intent itself. Removing it here let the admission
+            //  retry Hello (whose routed send fails while the route is down)
+            //  erase the reconnect candidate, so the peer vanished from
+            //  status instead of reporting `connecting`.
+            if (peer.Direction == ZLinkServiceConnectionDirection.Outbound)
+            {
+                if (!peer.Admitted)
+                    //  Already demoted to a retrying epoch (for example by the
+                    //  transport-disconnect drain); the admission retry pump
+                    //  owns the next attempt.
+                    return;
+                peer.Admitted = false;
+                peer.State = MeshPeerState.Connecting;
+                peer.Admission = null;
+                peer.Liveness = null;
+                if (!peer.RoutingId.IsEmpty
+                    && _peersByRid.TryGetValue(peer.RoutingId, out var current)
+                    && ReferenceEquals(current, peer))
+                    _peersByRid.Remove(peer.RoutingId);
+                RebuildChannelSelectionPlansUnderLock();
+                peer.NextAdmissionTimestamp = Stopwatch.GetTimestamp();
+                _state = _peersByRid.Count == 0
+                    ? MeshNodeState.Started
+                    : MeshNodeState.PartialReady;
+                publishClosed = true;
+                closedRid = peer.RoutingId;
+            }
+            else
+            {
                 RemovePeer(peer, disconnect: true);
+            }
         }
+        if (publishClosed)
+            Publish(MeshMonitorEventKind.PeerClosed, peerRid: closedRid);
     }
 
     private bool TryScheduleRoutedSend(
