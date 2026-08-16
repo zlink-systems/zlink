@@ -8823,9 +8823,22 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             //  NotConnected/NotFound/Terminated fall through to the demotion
             //  below.
         }
+        catch (ZlinkSubmitException)
+        {
+            //  Only the route/lifecycle-terminal submit codes reach here
+            //  (NotConnected/NotFound/Terminated — everything else was
+            //  consumed above): terminal evidence, demote the epoch.
+            ClosePeerAfterControlSendFailure(target, connectionGeneration);
+        }
         catch (ZlinkException)
         {
-            ClosePeerAfterControlSendFailure(target, connectionGeneration);
+            //  Spec 13-mesh-node:331 (condition 3) — non-submit failures on
+            //  this path (ZlinkConfigException from native message
+            //  allocation/copy, ZlinkHandlerException from lazy routed-
+            //  admission handler registration) are local configuration/
+            //  allocation faults, not confirmation that the previous peer
+            //  pipe ended. Keep the admission/liveness generation fence
+            //  intact; the admission retry pump owns the retry.
         }
     }
 
