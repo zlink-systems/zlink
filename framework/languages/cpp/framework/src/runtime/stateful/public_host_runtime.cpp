@@ -6285,27 +6285,62 @@ zlink::submit_result_t public_host_runtime_t::begin_local_actor_join (
         return zlink::submit_result_t::backpressured;
     const auto current = resolve_actor (actor);
     const auto target = resolve_spot (target_spot_id);
-    auto reject = [&] {
+    //  Spec 32-framework-error-model:129-136 — typed Rejected is reserved for
+    //  the application callback decision. A Framework prerequisite failure
+    //  carries a classified wire terminal on the completion instead of a
+    //  synthesized rejection, and the consumer maps it to the public kind.
+    auto fail = [&] (std::uint32_t terminal_result,
+                     std::uint32_t failure_errno) {
         receive_record_t completion;
         completion.kind = record_kind_t::completion;
         completion.domain = ready_domain_t::infrastructure;
         completion.operation_id = operation;
         completion.operation_kind = operation_kind_t::actor_join;
         completion.source_node_rid = status ().routing_id ();
-        completion.join_completion = actor_join_completion_t{
-          join_admission_t::rejected, actor};
+        completion.terminal_result =
+          static_cast<int> (terminal_result);
+        completion.failure_errno = static_cast<int> (failure_errno);
         (void) enqueue_completion (
           operation, std::move (completion), {});
     };
-    if (!current || !target
-        || target->object_generation != target_spot_generation) {
-        reject ();
+    if (!current || !target) {
+        fail (102, 0); //  notFound: the join source or target doesn't exist.
+        return zlink::submit_result_t::ok;
+    }
+    if (target->object_generation != target_spot_generation) {
+        fail (107, 33); //  spotGenerationStale -> InvalidOperation.
         return zlink::submit_result_t::ok;
     }
     auto [error, membership] =
       _objects.begin_membership_move (*current, *target);
     if (error != stateful::stateful_error_t::none) {
-        reject ();
+        const auto classified =
+          [] (stateful::stateful_error_t failure)
+          -> std::pair<std::uint32_t, std::uint32_t> {
+            switch (failure) {
+                case stateful::stateful_error_t::not_found:
+                    return {102, 0};
+                case stateful::stateful_error_t::type_mismatch:
+                    return {107, 4};
+                case stateful::stateful_error_t::already_exists:
+                    return {107, 3};
+                case stateful::stateful_error_t::generation_stale:
+                    return {107, 33};
+                case stateful::stateful_error_t::moving:
+                    return {107, 34};
+                case stateful::stateful_error_t::conflict:
+                    return {107, 0};
+                case stateful::stateful_error_t::backpressured:
+                    return {113, 0};
+                case stateful::stateful_error_t::invalid:
+                case stateful::stateful_error_t::
+                  instance_manager_create_forbidden:
+                    return {111, 0};
+                default:
+                    return {105, 0};
+            }
+        }(error);
+        fail (classified.first, classified.second);
         return zlink::submit_result_t::ok;
     }
 
@@ -6360,10 +6395,12 @@ bool public_host_runtime_t::complete_local_actor_join (
         auto [error, current] =
           _objects.commit_membership_move (membership);
         if (error != stateful::stateful_error_t::none) {
-            completion.terminal_result = 1;
-            completion.join_completion = actor_join_completion_t{
-              join_admission_t::rejected,
-              framework_actor_ref (membership.actor, actor_type)};
+            //  Spec 32-framework-error-model:119-120 — a Framework execution
+            //  failure after the application ACCEPTED the join is not an
+            //  application rejection; carry a classified terminal
+            //  (internalError) instead of synthesizing typed Rejected.
+            completion.terminal_result = 105;
+            completion.failure_errno = 0;
         } else {
             const auto actor =
               framework_actor_ref (current, actor_type);

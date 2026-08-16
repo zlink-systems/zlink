@@ -2450,6 +2450,19 @@ mesh_node_runtime_t::actor_join_reply_from_completion (const host::receive_recor
                                                        const std::vector<zlink::message_t> &parts,
                                                        const actor_ref_t &actor)
 {
+    if (record.terminal_result != 0) {
+        //  Spec 32-framework-error-model:119-136 — a Framework failure carried
+        //  on the completion (prerequisite or post-accept commit failure) is
+        //  not an application rejection; classify it via the shared wire
+        //  mapper instead of returning typed Rejected.
+        const runtime::messaging::request_failure_mapper_t failure_mapper;
+        const auto failure = failure_mapper.reply_header_exception (
+          static_cast<std::uint32_t> (record.terminal_result),
+          static_cast<std::uint32_t> (record.failure_errno),
+          "Local Actor join");
+        return result_t<actor_join_reply_t>::failure (
+          failure.kind (), failure.what ());
+    }
     if (!record.join_completion) {
         return result_t<actor_join_reply_t>::failure (
           framework_error_kind_t::protocol_error,
