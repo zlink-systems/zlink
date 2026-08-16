@@ -109,6 +109,7 @@ export interface ZLinkStreamBindingRuntimeOptions {
   readonly streamCompression?: ZLinkStreamCompressionOptions;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
   readonly actorBindTimeoutMs?: number;
+  readonly sessionRelocationSealTimeoutMs?: number;
   readonly nativeActorMeshNameProvider?: () => string | undefined;
   readonly actorRefResolver?: (actor: ZLinkActor) => ActorRef;
   readonly actorAuthorityFenceResolver?: (
@@ -365,7 +366,11 @@ export class ZLinkStreamBindingRuntime {
       ...options,
       actorBindTimeoutMs: options.actorBindTimeoutMs ?? DEFAULT_ACTOR_BIND_TIMEOUT_MS
     };
-    this.routes = new ZLinkActorSessionBindingRegistry<DefaultZLinkSessionContext, DefaultZLinkSessionActor>();
+    this.routes = new ZLinkActorSessionBindingRegistry<DefaultZLinkSessionContext, DefaultZLinkSessionActor>(
+      4096,
+      4096,
+      runtimeOptions.sessionRelocationSealTimeoutMs ?? 3_000
+    );
     this.compressionCodec = resolveStreamCompressionCodec(runtimeOptions.streamCompression);
     this.frameMessages = new ZLinkStreamFrameMessageFactory(runtimeOptions);
     this.boundSessions = new ZLinkBoundSessionService(this.routes, this.frameMessages, runtimeOptions);

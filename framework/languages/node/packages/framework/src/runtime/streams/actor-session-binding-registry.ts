@@ -23,7 +23,7 @@ export interface ZLinkActorSessionRoute<
   readonly actor: TActor;
   readonly bindingToken: string;
   readonly sessionIdentity?: string;
-  activeFrames: number;
+  readonly activeFrames: ZLinkActorSessionActiveFrames;
   sealId?: string;
   authorityFence?: ZLinkActorSessionAuthorityFence;
 }
@@ -59,6 +59,22 @@ export interface ZLinkActorSessionRelocationSnapshot extends ZLinkActorSessionRe
 
 interface ZLinkActorSessionFrameAdmission {
   complete(): void;
+}
+
+interface ZLinkActorSessionRequestFrameAdmission extends ZLinkActorSessionFrameAdmission {
+  /**
+   * Claims the one allowed submission attempt. A request captured by a seal
+   * before this call waits for that exact seal to publish or abort its route;
+   * a request captured after this call only observes its original terminal.
+   */
+  beginSubmission(signal?: AbortSignal): Promise<void> | undefined;
+}
+
+interface ZLinkActorSessionActiveFrames {
+  count: number;
+  readonly requests: Set<{
+    captureBySeal(): void;
+  }>;
 }
 
 interface ZLinkActorSessionActiveFrameWaiter {
@@ -143,6 +159,9 @@ export class ZLinkActorSessionBindingRegistry<
     if (!Number.isSafeInteger(outboundCapacity) || outboundCapacity <= 0) {
       throw new RangeError('Session relocation outbound capacity must be a positive safe integer.');
     }
+    if (!Number.isSafeInteger(sealWaitTimeoutMs) || sealWaitTimeoutMs <= 0) {
+      throw new RangeError('Session relocation seal timeout must be a positive safe integer.');
+    }
   }
 
   bind(
@@ -157,7 +176,7 @@ export class ZLinkActorSessionBindingRegistry<
       actor,
       bindingToken,
       sessionIdentity: sessionIdentity ?? sessionIdentityFromContext(context),
-      activeFrames: 0,
+      activeFrames: { count: 0, requests: new Set() },
       authorityFence
     });
     context.bindLocal(actor, bindingToken);
@@ -366,19 +385,67 @@ export class ZLinkActorSessionBindingRegistry<
       const route = this.requireRoute(actorId);
       this.requireCurrentToken(actorId, bindingToken);
       if (route.sealId === undefined) {
-        route.activeFrames++;
+        route.activeFrames.count++;
         let completed = false;
         return {
           complete: () => {
             if (completed) return;
             completed = true;
-            route.activeFrames--;
-            if (route.activeFrames === 0) this.resolveActiveFrameWaiters(actorId);
+            route.activeFrames.count--;
+            if (
+              route.activeFrames.count === 0
+              && this.routes.get(actorId)?.activeFrames === route.activeFrames
+            ) {
+              this.resolveActiveFrameWaiters(actorId);
+            }
           }
         };
       }
       await this.waitForSealRelease(actorId, bindingToken, signal);
     }
+  }
+
+  async beginAcceptedRequestFrameWhenReady(
+    actorId: string,
+    bindingToken: string,
+    signal?: AbortSignal
+  ): Promise<ZLinkActorSessionRequestFrameAdmission> {
+    const frame = await this.beginAcceptedFrameWhenReady(actorId, bindingToken, signal);
+    const activeFrames = this.requireRoute(actorId).activeFrames;
+    let submissionStarted = false;
+    let capturedBySeal = false;
+    let finished = false;
+    const request = {
+      captureBySeal: () => {
+        if (finished || capturedBySeal) return;
+        capturedBySeal = true;
+        // Spec 20:389-396,408-412 — command 42 captures the Session-side
+        // frame, while the request correlation and its detached terminal
+        // remain alive. This removes the 42 -> request terminal -> 44 -> 42
+        // cycle without turning the capture into another submission.
+        frame.complete();
+      }
+    };
+    activeFrames.requests.add(request);
+    return {
+      beginSubmission: (submissionSignal) => {
+        if (submissionStarted) return undefined;
+        if (!capturedBySeal) {
+          // From here the request may already have reached the remote peer.
+          // Spec 32:153-157 forbids a second logical-target submission.
+          submissionStarted = true;
+          return undefined;
+        }
+        return this.acceptWhenReady(actorId, bindingToken, submissionSignal)
+          .then(() => { submissionStarted = true; });
+      },
+      complete: () => {
+        if (finished) return;
+        finished = true;
+        activeFrames.requests.delete(request);
+        frame.complete();
+      }
+    };
   }
 
   async runAcceptedFrameWhenReady<TResult>(
@@ -419,6 +486,12 @@ export class ZLinkActorSessionBindingRegistry<
       );
     }
     route.sealId = sealId;
+    // A pre-seal REQUEST is captured as part of installing command 42. Its
+    // Session frame no longer gates the seal; its single submission attempt
+    // and terminal continue under the request admission state above.
+    for (const request of [...route.activeFrames.requests]) {
+      request.captureBySeal();
+    }
   }
 
   async sealAndWait(
@@ -442,7 +515,7 @@ export class ZLinkActorSessionBindingRegistry<
       const existing = queue?.seals.get(claim.sealId);
       if (existing !== undefined) {
         assertRelocationClaim(existing, claim);
-        await existing.ready;
+        await waitForSessionRelocation(existing.ready, signal);
         return;
       }
       const predecessor = queue?.activeSealId === undefined
@@ -457,7 +530,7 @@ export class ZLinkActorSessionBindingRegistry<
           );
         }
         assertSuccessorSessionIdentity(predecessor, claim);
-        await predecessor.terminal;
+        await waitForSessionRelocation(predecessor.terminal, signal);
         continue;
       }
 
@@ -849,7 +922,7 @@ export class ZLinkActorSessionBindingRegistry<
       timer.unref?.();
       const onAbort = () => {
         removeWaiter();
-        rejectWaiter(createAbortError());
+        rejectWaiter(signal?.reason ?? createAbortError());
       };
       if (signal === undefined) return;
       if (signal.aborted) {
@@ -862,7 +935,7 @@ export class ZLinkActorSessionBindingRegistry<
 
   private async waitForActiveFrames(actorId: string, signal?: AbortSignal): Promise<void> {
     const route = this.requireRoute(actorId);
-    if (route.activeFrames === 0) return;
+    if (route.activeFrames.count === 0) return;
     await new Promise<void>((resolve, reject) => {
       const waiters = this.activeFrameWaiters.get(actorId) ?? new Set();
       let settled = false;
@@ -888,7 +961,7 @@ export class ZLinkActorSessionBindingRegistry<
       const onAbort = () => {
         waiters.delete(waiter);
         if (waiters.size === 0) this.activeFrameWaiters.delete(actorId);
-        waiter.reject(createAbortError());
+        waiter.reject(signal?.reason ?? createAbortError());
       };
       waiters.add(waiter);
       this.activeFrameWaiters.set(actorId, waiters);
@@ -1215,4 +1288,29 @@ function sessionIdentityFromContext<
   TContext extends ZLinkActorSessionBindingContext<TActor>
 >(context: TContext): string | undefined {
   return context.routingId === undefined ? undefined : String(context.routingId);
+}
+
+function waitForSessionRelocation(
+  operation: Promise<void>,
+  signal?: AbortSignal
+): Promise<void> {
+  if (signal === undefined) return operation;
+  if (signal.aborted) return Promise.reject(signal.reason ?? createAbortError());
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason ?? createAbortError());
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    operation.then(
+      () => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      },
+      error => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      }
+    );
+  });
 }

@@ -17,7 +17,6 @@ import {
   encodeServiceWireFrozenActorApplicationRecord,
   encodeSessionRelocationRoute,
   encodeSessionRelocationSeal,
-  encodeSessionRelocationSealed,
   type ServiceMaintenanceRelocationControl,
   type ServiceMaintenanceRelocationPrepare,
   type ServiceMaintenanceRelocationReady,
@@ -286,6 +285,33 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
       targetNodeGeneration: 6n
     }
   };
+  //  A relocation whose Actor owner IS the session owner: the 42/44
+  //  controls target the local node and dispatch through the inbound
+  //  handler (RouteMesh has no self connection), so their fences carry the
+  //  local node identity.
+  const selfSeal: ServiceSessionRelocationSeal = {
+    ...seal,
+    coordinator: { ...coordinator, nodeRid: 'session-owner', nodeGeneration: 4n },
+    actor: {
+      ...seal.actor,
+      actor: { ...seal.actor.actor, nodeRid: 'session-owner' },
+      targetNodeGeneration: 4n
+    }
+  };
+  const selfSealed: ServiceSessionRelocationSealed = {
+    relocation: selfSeal.relocation,
+    coordinator: selfSeal.coordinator,
+    actor: selfSeal.actor,
+    session: selfSeal.session
+  };
+  const selfRoute: ServiceSessionRelocationRoute = {
+    ...route,
+    route: {
+      ...route.route,
+      targetNodeRid: 'session-owner',
+      targetNodeGeneration: 4n
+    }
+  };
   const sent: Array<{ readonly target: string; readonly bytes: Buffer }> = [];
   const received: string[] = [];
   const runtime = new ZLinkHostServiceRelocationRuntime({
@@ -304,12 +330,22 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
     boundSessionRelocation: {
       receiveSeal: async (value: ServiceSessionRelocationSeal) => {
         received.push('seal');
-        assert.deepEqual(value, seal);
-        return sealed;
+        if (received.filter(entry => entry === 'seal').length === 1) {
+          assert.deepEqual(value, seal);
+          return sealed;
+        }
+        assert.deepEqual(value, selfSeal);
+        return selfSealed;
       },
       receiveRoute: async (value: ServiceSessionRelocationRoute) => {
         received.push('route');
-        assert.deepEqual(value, { ...route, actor: { ...route.actor, nodeRid: '' } });
+        //  The wire decode clears the sender actor nodeRid; a locally
+        //  dispatched self-target control arrives unchanged.
+        if (received.filter(entry => entry === 'route').length === 1) {
+          assert.deepEqual(value, { ...route, actor: { ...route.actor, nodeRid: '' } });
+        } else {
+          assert.deepEqual(value, selfRoute);
+        }
       }
     }
   } as never);
@@ -336,20 +372,24 @@ test('Session relocation is exact 42-to-43 and command 44 is one-way', async () 
     assert.deepEqual(received, ['seal', 'route']);
     assert.equal(sent.length, 1, 'command 44 must not produce a routed ACK');
 
+    //  This runtime is the session owner itself: a self-target 42/44 has
+    //  no RouteMesh self connection and dispatches through the inbound
+    //  handler locally without producing a wire submit.
     const pending = runtime.requestSessionRelocationSeal(
-      'mesh-a', 'session-owner', seal
+      'mesh-a', 'session-owner', selfSeal
     );
     assert.equal(
       pending,
-      runtime.requestSessionRelocationSeal('mesh-a', 'session-owner', seal),
+      runtime.requestSessionRelocationSeal('mesh-a', 'session-owner', selfSeal),
       'identical command 42 requests must share one waiter'
     );
-    assert.equal(sent.length, 2);
-    assert.equal(await dispatch('session-owner', encodeSessionRelocationSealed(sealed)), true);
-    assert.deepEqual(await pending, sealed);
+    assert.deepEqual(await pending, selfSealed);
+    assert.equal(sent.length, 1, 'self-target command 42 dispatches locally');
+    assert.deepEqual(received, ['seal', 'route', 'seal']);
 
-    await runtime.sendSessionRelocationRoute('mesh-a', 'session-owner', route);
-    assert.equal(sent.length, 3, 'command 44 completes at one-way submit');
+    await runtime.sendSessionRelocationRoute('mesh-a', 'session-owner', selfRoute);
+    assert.equal(sent.length, 1, 'self-target command 44 dispatches locally');
+    assert.deepEqual(received, ['seal', 'route', 'seal', 'route']);
   } finally {
     await runtime.dispose();
   }

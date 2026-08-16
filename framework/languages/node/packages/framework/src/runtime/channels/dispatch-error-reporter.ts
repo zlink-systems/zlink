@@ -70,10 +70,13 @@ export class ZLinkDispatchErrorReporter {
       instanceSpotType: event.instanceSpotType,
       activationState: event.activationState,
       actorId: event.actorId,
+      commandId: event.commandId,
       errorReason: event.reason,
       errorAction: event.action,
       errorType: errorInfo.errorType,
-      errorMessage: errorInfo.errorMessage
+      errorMessage: errorInfo.errorMessage,
+      errorCauseType: errorInfo.errorCauseType,
+      errorCauseMessage: errorInfo.errorCauseMessage
     });
   }
 
@@ -103,15 +106,43 @@ function channelDropReason(event: ZLinkRuntimeDispatchFailure): string | undefin
   }
 }
 
-function dispatchErrorInfo(event: ZLinkRuntimeDispatchFailure): { readonly errorType?: string; readonly errorMessage?: string } {
+function dispatchErrorInfo(event: ZLinkRuntimeDispatchFailure): {
+  readonly errorType?: string;
+  readonly errorMessage?: string;
+  readonly errorCauseType?: string;
+  readonly errorCauseMessage?: string;
+} {
   if (event.errorType !== undefined || event.errorMessage !== undefined) {
-    return { errorType: event.errorType, errorMessage: event.errorMessage };
+    return {
+      errorType: event.errorType,
+      errorMessage: event.errorMessage,
+      errorCauseType: event.errorCauseType,
+      errorCauseMessage: event.errorCauseMessage
+    };
   }
   if (event.error === undefined) {
     return {};
   }
   if (event.error instanceof Error) {
-    return { errorType: event.error.name, errorMessage: event.error.message };
+    const cause = deepestErrorCause(event.error);
+    return {
+      errorType: event.error.name,
+      errorMessage: event.error.message,
+      ...(cause === event.error ? {} : {
+        errorCauseType: cause instanceof Error ? cause.name : typeof cause,
+        errorCauseMessage: cause instanceof Error ? cause.message : String(cause)
+      })
+    };
   }
   return { errorType: typeof event.error, errorMessage: String(event.error) };
+}
+
+function deepestErrorCause(error: Error): unknown {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current instanceof Error && current.cause !== undefined && !seen.has(current)) {
+    seen.add(current);
+    current = current.cause;
+  }
+  return current;
 }

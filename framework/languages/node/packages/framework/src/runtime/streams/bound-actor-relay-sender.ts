@@ -12,7 +12,8 @@ import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
 import {
   encodeStreamHeader,
   messageToBytes,
-  type ZLinkStreamFrameHeader
+  type ZLinkStreamFrameHeader,
+  ZLinkStreamMessageKind
 } from './protocol';
 import { throwIfAborted } from '../abort';
 import { captureZLinkExecutionTurn } from '../execution';
@@ -49,6 +50,29 @@ export class ZLinkBoundActorRelaySender {
     payload: ZLinkMessage,
     signal?: AbortSignal
   ): Promise<ZLinkSubmitResult> {
+    const header = this.currentHeader(actor);
+    if (
+      header.kind === ZLinkStreamMessageKind.Request
+      && header.requestSeq !== undefined
+    ) {
+      const operation = async (): Promise<ZLinkSubmitResult> => {
+        const admission = await this.routes.beginAcceptedRequestFrameWhenReady(
+          actor.actorId,
+          actor.bindingToken,
+          signal
+        );
+        try {
+          return await this.relayAcceptedFrame(actor, payload, signal, header, admission);
+        } finally {
+          admission.complete();
+        }
+      };
+      if (this.routes.isSealed(actor.actorId) && captureZLinkExecutionTurn() !== undefined) {
+        void operation().catch(() => undefined);
+        return { status: ZLinkSubmitStatus.Submitted };
+      }
+      return await operation();
+    }
     if (this.routes.isSealed(actor.actorId) && captureZLinkExecutionTurn() !== undefined) {
       //  Spec 32:62 — a Send completes once the source outbound queue
       //  accepts it; spec 05 — infrastructure send progress must not depend
@@ -65,38 +89,71 @@ export class ZLinkBoundActorRelaySender {
       void this.routes.runAcceptedFrameWhenReady(
         actor.actorId,
         actor.bindingToken,
-        async () => await this.lifecycle.run(
-          actor.actorId,
-          () => this.relayInsideLifecycle(actor, payload, signal)
-        ),
+        () => this.relayAcceptedFrame(actor, payload, signal),
         signal
       ).catch(() => undefined);
       return { status: ZLinkSubmitStatus.Submitted };
     }
-    // A relocation seal can hold this request until the target route is
-    // published. Wait before entering the actor lifecycle lane: route
-    // publication uses the same lane and must be able to release the seal.
     return await this.routes.runAcceptedFrameWhenReady(
       actor.actorId,
       actor.bindingToken,
-      async () => await this.lifecycle.run(
-        actor.actorId,
-        () => this.relayInsideLifecycle(actor, payload, signal)
-      ),
+      () => this.relayAcceptedFrame(actor, payload, signal),
       signal
     );
+  }
+
+  private async relayAcceptedFrame(
+    actor: DefaultZLinkSessionActor,
+    payload: ZLinkMessage,
+    signal?: AbortSignal,
+    header = this.currentHeader(actor),
+    requestAdmission?: { beginSubmission(signal?: AbortSignal): Promise<void> | undefined }
+  ): Promise<ZLinkSubmitResult> {
+    const started = await this.lifecycle.run(actor.actorId, async () => {
+      const completion = this.relayInsideLifecycle(
+        actor,
+        payload,
+        signal,
+        header,
+        requestAdmission
+      );
+      if (
+        header.kind === ZLinkStreamMessageKind.Request
+        && header.requestSeq !== undefined
+      ) {
+        // A routed REQUEST only needs this lane while its ordered submission
+        // is started. Its admission acknowledgement can depend on relocation
+        // route publication, and command 44 uses the same lane. Keeping the
+        // lane until that acknowledgement arrives creates:
+        // REQUEST -> lane -> command 44 -> seal -> active REQUEST.
+        // The request admission remains observable outside the lane, so
+        // command 42 can capture its Session frame while the one original
+        // submission continues to its detached terminal.
+        return { kind: 'completion' as const, completion };
+      }
+      return { kind: 'result' as const, result: await completion };
+    });
+    return started.kind === 'result' ? started.result : await started.completion;
+  }
+
+  private currentHeader(actor: DefaultZLinkSessionActor): ZLinkStreamFrameHeader {
+    this.routes.requireCurrentToken(actor.actorId, actor.bindingToken);
+    const header = this.routes.requireRoute(actor.actorId).context.dispatchHeader;
+    if (header === undefined) {
+      throw new Error('Session actor relay requires an active stream dispatch.');
+    }
+    return header;
   }
 
   private async relayInsideLifecycle(
     actor: DefaultZLinkSessionActor,
     payload: ZLinkMessage,
-    signal?: AbortSignal
+    signal: AbortSignal | undefined,
+    currentHeader = this.currentHeader(actor),
+    requestAdmission?: { beginSubmission(signal?: AbortSignal): Promise<void> | undefined }
   ): Promise<ZLinkSubmitResult> {
-    this.routes.requireCurrentToken(actor.actorId, actor.bindingToken);
-    const currentHeader = this.routes.requireRoute(actor.actorId).context.dispatchHeader;
-    if (currentHeader === undefined) {
-      throw new Error('Session actor relay requires an active stream dispatch.');
-    }
+    const held = requestAdmission?.beginSubmission(signal);
+    if (held !== undefined) await held;
     throwIfAborted(signal);
     const payloadMessage = encodeFrameworkPayloadMessage(payload, this.options.messageSerializers);
     try {

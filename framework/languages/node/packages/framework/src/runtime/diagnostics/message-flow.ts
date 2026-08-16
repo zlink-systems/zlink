@@ -58,9 +58,12 @@ interface ZLinkTelemetryRecord {
   readonly instanceSpotType?: string;
   readonly activationState?: string;
   readonly actorId?: string;
+  readonly commandId?: number;
   readonly messageSizeBytes?: number;
   readonly errorType?: string;
   readonly errorMessage?: string;
+  readonly errorCauseType?: string;
+  readonly errorCauseMessage?: string;
 }
 
 export function effectiveMessageFlow(ctx: ZLinkDiagnosticsContext): ZLinkMessageFlowLogMode {
@@ -273,9 +276,12 @@ function toTelemetryRecord(
     instanceSpotType: flow.instanceSpotType,
     activationState: flow.activationState,
     actorId: flow.actorId,
+    commandId: flow.commandId,
     messageSizeBytes,
     errorType: flow.errorType,
-    errorMessage: boundedText(flow.errorMessage)
+    errorMessage: boundedText(flow.errorMessage),
+    errorCauseType: flow.errorCauseType,
+    errorCauseMessage: boundedText(flow.errorCauseMessage)
   };
 }
 

@@ -34,6 +34,12 @@ const {
   ZLinkActorSessionBindingRegistry
 } = require('../../packages/framework/dist/runtime/streams/actor-session-binding-registry');
 const {
+  ZLinkActorSessionLifecycleCoordinator
+} = require('../../packages/framework/dist/runtime/streams/actor-session-lifecycle-coordinator');
+const {
+  ZLinkBoundActorRelaySender
+} = require('../../packages/framework/dist/runtime/streams/bound-actor-relay-sender');
+const {
   actorSessionBindingRuntimeOwner,
   registerActorSessionBindingRuntimeOwner
 } = require('../../packages/framework/dist/runtime/streams/actor-session-binding-runtime-owner');
@@ -2170,6 +2176,300 @@ test('M1 actorJoin command 42 waits for every pre-seal accepted Actor frame to f
   });
 });
 
+test('route replacement shares the pre-bind active-frame drain with command 42', async () => {
+  const registry = new ZLinkActorSessionBindingRegistry(16, 16, 50);
+  const actorId = 'actor-replaced-active-frame';
+  const bindingToken = 'binding-replaced-active-frame';
+  const oldContext = { routingId: 'old-session', bindLocal() {}, unbindLocal() {} };
+  const newContext = { routingId: 'new-session', bindLocal() {}, unbindLocal() {} };
+  const oldActor = {
+    actorId,
+    ref: { actorId, objectGeneration: 5n, nodeRid: 'source', bindingGeneration: 6n }
+  };
+  registry.bind(oldContext, oldActor, bindingToken);
+
+  let releaseFrame;
+  const frame = registry.runAcceptedFrameWhenReady(actorId, bindingToken, async () =>
+    new Promise((resolve) => { releaseFrame = resolve; })
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  const previous = registry.requireRoute(actorId);
+  registry.replace(previous, newContext, {
+    actorId,
+    ref: { ...oldActor.ref, bindingGeneration: 7n }
+  }, bindingToken, undefined, 'new-session');
+
+  let sealed = false;
+  const sealing = registry.sealAndWait(actorId, 'replacement-seal', {
+    objectGeneration: 5n,
+    bindingGeneration: 7n
+  }).then(() => { sealed = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sealed, false, 'replacement must retain the still-active previous frame');
+
+  releaseFrame();
+  await frame;
+  await sealing;
+  assert.equal(sealed, true, 'previous frame completion must drain the replacement route');
+  assert.equal(registry.abortSeal(actorId, 'replacement-seal'), true);
+});
+
+test('seal captures an in-flight Session REQUEST frame and its detached terminal arrives after cutover once', async () => {
+  const registry = new ZLinkActorSessionBindingRegistry(16, 16, 50);
+  const lifecycle = new ZLinkActorSessionLifecycleCoordinator();
+  const actorId = 'actor-request-relocation-admission';
+  const bindingToken = 'binding-request-relocation-admission';
+  const context = {
+    routingId: 'session',
+    dispatchHeader: {
+      kind: streamProtocol.ZLinkStreamMessageKind.Request,
+      codec: streamProtocol.ZLinkStreamCodec.Json,
+      flags: streamProtocol.ZLinkStreamHeaderFlags.None,
+      name: 'PlaceMarkReq',
+      requestSeq: 2n,
+      metadata: new Map()
+    },
+    bindLocal() {},
+    unbindLocal() {}
+  };
+  const actor = {
+    actorId,
+    bindingToken,
+    ref: { actorId, objectGeneration: 5n, nodeRid: 'source', bindingGeneration: 6n }
+  };
+  registry.bind(context, actor, bindingToken);
+
+  let relayStarted;
+  const relayDidStart = new Promise((resolve) => { relayStarted = resolve; });
+  let finishRelay;
+  const relayCanFinish = new Promise((resolve) => { finishRelay = resolve; });
+  let relaySubmissions = 0;
+  let detachedTerminals = 0;
+  let relaySettled = false;
+  let cutoverPublished = false;
+  const sender = new ZLinkBoundActorRelaySender(
+    registry,
+    {},
+    {
+      async relay(_actor, header) {
+        relaySubmissions += 1;
+        assert.equal(header.name, 'PlaceMarkReq');
+        assert.equal(header.requestSeq, 2n, 'the original request correlation is preserved');
+        relayStarted();
+        await relayCanFinish;
+        assert.equal(cutoverPublished, true, 'the detached terminal is delivered after cutover');
+        detachedTerminals += 1;
+        return true;
+      }
+    },
+    lifecycle
+  );
+  const payload = framework.ZLinkMessage.fromEncoded(
+    framework.ZLinkEncodedPayload.from(new TextEncoder().encode('{"position":4}'))
+  );
+  const relaying = sender.relay(actor, payload).then((result) => {
+    relaySettled = true;
+    return result;
+  });
+  await relayDidStart;
+
+  await registry.sealAndWait(actorId, 'request-race-seal', {
+    objectGeneration: 5n,
+    bindingGeneration: 6n
+  });
+  assert.equal(
+    relaySettled,
+    false,
+    'command 42 captures the Session frame without waiting for the submitted REQUEST terminal'
+  );
+  assert.equal(relaySubmissions, 1, 'capture cannot resubmit an already-started REQUEST');
+
+  const previous = registry.requireRoute(actorId);
+  const targetContext = {
+    ...context,
+    routingId: 'session'
+  };
+  await lifecycle.run(actorId, async () => {
+    registry.replaceAndReleaseSeal(
+      previous,
+      targetContext,
+      {
+        ...actor,
+        ref: { ...actor.ref, nodeRid: 'target' }
+      },
+      bindingToken,
+      'request-race-seal',
+      undefined,
+      'session'
+    );
+    cutoverPublished = true;
+  });
+  assert.equal(cutoverPublished, true);
+
+  finishRelay();
+  await relaying;
+  assert.equal(relaySubmissions, 1);
+  assert.equal(cutoverPublished, true, 'the original REQUEST completes only after command 44');
+  assert.equal(detachedTerminals, 1, 'the preserved request correlation has one terminal');
+});
+
+test('seal journals a captured REQUEST that has not submitted and replays it on the command 44 route once', async () => {
+  const registry = new ZLinkActorSessionBindingRegistry(16, 16, 50);
+  const lifecycle = new ZLinkActorSessionLifecycleCoordinator();
+  const actorId = 'actor-request-captured-before-submit';
+  const bindingToken = 'binding-request-captured-before-submit';
+  const context = {
+    routingId: 'session',
+    dispatchHeader: {
+      kind: streamProtocol.ZLinkStreamMessageKind.Request,
+      codec: streamProtocol.ZLinkStreamCodec.Json,
+      flags: streamProtocol.ZLinkStreamHeaderFlags.None,
+      name: 'PlaceMarkReq',
+      requestSeq: 3n,
+      metadata: new Map()
+    },
+    bindLocal() {},
+    unbindLocal() {}
+  };
+  const actor = {
+    actorId,
+    bindingToken,
+    ref: { actorId, objectGeneration: 5n, nodeRid: 'source', bindingGeneration: 6n }
+  };
+  registry.bind(context, actor, bindingToken);
+
+  let releaseLane;
+  const laneCanFinish = new Promise((resolve) => { releaseLane = resolve; });
+  let laneStarted;
+  const laneDidStart = new Promise((resolve) => { laneStarted = resolve; });
+  const blockingTurn = lifecycle.run(actorId, async () => {
+    laneStarted();
+    await laneCanFinish;
+  });
+  await laneDidStart;
+
+  const submittedRoutes = [];
+  const sender = new ZLinkBoundActorRelaySender(
+    registry,
+    {},
+    {
+      async relay() {
+        submittedRoutes.push(registry.requireRoute(actorId).actor.ref.nodeRid);
+        return true;
+      }
+    },
+    lifecycle
+  );
+  const relaying = sender.relay(actor, framework.ZLinkMessage.fromEncoded(
+    framework.ZLinkEncodedPayload.from(new TextEncoder().encode('{"position":5}'))
+  ));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  await registry.sealAndWait(actorId, 'request-before-submit-seal', {
+    objectGeneration: 5n,
+    bindingGeneration: 6n
+  });
+  assert.deepEqual(submittedRoutes, [], 'capture before submit must not execute on the source route');
+
+  releaseLane();
+  await blockingTurn;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(submittedRoutes, [], 'the journaled REQUEST remains held until command 44');
+
+  const previous = registry.requireRoute(actorId);
+  await lifecycle.run(actorId, async () => registry.replaceAndReleaseSeal(
+    previous,
+    context,
+    { ...actor, ref: { ...actor.ref, nodeRid: 'target' } },
+    bindingToken,
+    'request-before-submit-seal',
+    undefined,
+    'session'
+  ));
+  await relaying;
+  assert.deepEqual(submittedRoutes, ['target'], 'held replay submits once on the published target route');
+});
+
+test('one-way remote Actor relay releases its Session frame before a deferred Join terminal', async () => {
+  const registry = new ZLinkActorSessionBindingRegistry(16, 16, 100);
+  const actorId = 'actor-deferred-join-relay';
+  const bindingToken = 'binding-deferred-join-relay';
+  const context = { routingId: 'session', bindLocal() {}, unbindLocal() {} };
+  const actor = {
+    actorId,
+    ref: { actorId, objectGeneration: 5n, nodeRid: 'source', bindingGeneration: 6n }
+  };
+  registry.bind(context, actor, bindingToken);
+
+  let handlerStarted;
+  const handlerDidStart = new Promise((resolve) => { handlerStarted = resolve; });
+  let releaseHandler;
+  const handlerCanFinish = new Promise((resolve) => { releaseHandler = resolve; });
+  let handlerFinished = false;
+  let detachedDispatch;
+  const failures = [];
+  const relay = new ZLinkActorPacketRelay({
+    routeTransport: {},
+    streamBindingRuntime: () => ({ find() {} }),
+    meshRouters: {
+      defaultSpotRouterChannelId() { return undefined; },
+      defaultRouterChannelId() { return undefined; }
+    },
+    actorManager: () => ({
+      getState() { return { spotId: 'game-room' }; }
+    }),
+    spotManager: () => ({
+      async dispatchRoutedActorPacket() {
+        handlerStarted();
+        await handlerCanFinish;
+        handlerFinished = true;
+      }
+    }),
+    spotNodeRuntime: () => undefined,
+    detachedTaskRunner: {
+      runDetached(_taskName, callback) {
+        detachedDispatch = callback();
+      }
+    },
+    errorSink: () => ({
+      reportRuntimeTaskException(_taskName, error) { failures.push(error); }
+    })
+  });
+  const payload = actorPacketWire.encodeRemoteActorPacketRelayPayload({
+    actorId,
+    header: streamProtocol.encodeStreamHeader({
+      kind: streamProtocol.ZLinkStreamMessageKind.Send,
+      codec: streamProtocol.ZLinkStreamCodec.Json,
+      flags: streamProtocol.ZLinkStreamHeaderFlags.None,
+      name: 'JoinGameMsg',
+      metadata: new Map()
+    }),
+    payload: Buffer.from('{"roomId":"room-a"}')
+  });
+
+  const frame = registry.runAcceptedFrameWhenReady(actorId, bindingToken, async () => {
+    const accepted = await relay.receiveRemoteActorPacketRelay(payload, {
+      meshName: 'tictactoe',
+      sourceNodeRid: 'session-owner'
+    });
+    assert.equal(accepted.ok, true, JSON.stringify(accepted));
+  });
+  await frame;
+  await handlerDidStart;
+  assert.equal(handlerFinished, false, 'deferred Join terminal still owns the Actor FIFO turn');
+
+  await registry.sealAndWait(actorId, 'deferred-join-seal', {
+    objectGeneration: 5n,
+    bindingGeneration: 6n
+  });
+  assert.equal(registry.abortSeal(actorId, 'deferred-join-seal'), true);
+
+  releaseHandler();
+  await detachedDispatch;
+  assert.equal(handlerFinished, true);
+  assert.deepEqual(failures, []);
+});
+
 test('Session relocation seal timeout uses the configured Location option', async () => {
   const registration = framework.createFrameworkRegistration(
     framework.createFrameworkOptions((builder) => {
@@ -2177,6 +2477,15 @@ test('Session relocation seal timeout uses the configured Location option', asyn
     })
   );
   const host = new framework.ZLinkFrameworkRuntimeHost({ registration });
+  let releaseFrame;
+  host.streamBindingRuntime = new framework.ZLinkStreamBindingRuntime({
+    messageFactory: binaryMessageFactory(),
+    async relay() {
+      await new Promise((resolve) => { releaseFrame = resolve; });
+      return true;
+    },
+    sessionRelocationSealTimeoutMs: 10
+  });
   const context = host.streamBindingRuntime.createSessionContext(
     fakeStream('session-configured-seal-timeout', 'session')
   );
@@ -2190,13 +2499,55 @@ test('Session relocation seal timeout uses the configured Location option', asyn
     disconnected.push(actorId);
   };
 
-  await host.boundSessionRelay.boundSessions
-    .receiveServiceWireSessionRelocationSeal(serviceSessionRelocationSeal(actor.actorId));
-  await waitForCondition(
-    () => disconnected.length === 1,
-    'configured Session relocation seal timeout'
-  );
+  context.enterDispatch(serviceRelayDispatchHeader('FrameHeldAcrossSeal'));
+  const frame = actor.relay(serviceRelayMessage('{"held":true}'));
+  await waitForCondition(() => releaseFrame !== undefined, 'active Session frame');
+  const keepAlive = setTimeout(() => {}, 1_000);
+  try {
+    await assert.rejects(
+      host.boundSessionRelay.boundSessions
+        .receiveServiceWireSessionRelocationSeal(serviceSessionRelocationSeal(actor.actorId)),
+      error => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+    );
+  } finally {
+    clearTimeout(keepAlive);
+  }
   assert.deepEqual(disconnected, [actor.actorId]);
+  releaseFrame();
+  await frame;
+  context.exitDispatch();
+});
+
+test('command 42 sender deadline terminates even while RouteMesh submit is pending', async () => {
+  const registration = framework.createFrameworkRegistration(
+    framework.createFrameworkOptions((builder) => {
+      builder.configureLocations().sessionRelocationSealTimeoutMs(10);
+    })
+  );
+  const relocationRuntime = new ZLinkHostServiceRelocationRuntime({
+    registration,
+    locationStore: () => undefined,
+    liveDescriptors: async () => [],
+    currentOwner: () => undefined,
+    meshNode: () => ({
+      sendToNode: async () => await new Promise(() => {})
+    })
+  });
+
+  const keepAlive = setTimeout(() => {}, 1_000);
+  try {
+    await assert.rejects(
+      relocationRuntime.requestSessionRelocationSeal(
+        'play.route',
+        'session-owner',
+        serviceSessionRelocationSeal('actor-pending-command-42')
+      ),
+      error => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+    );
+  } finally {
+    clearTimeout(keepAlive);
+  }
+  await relocationRuntime.dispose();
 });
 
 test('service-wire command 42 holds post-seal ingress and matching abort releases only its waiter', async () => {

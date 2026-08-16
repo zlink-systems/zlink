@@ -40,6 +40,10 @@ import {
 } from '../foundation/service-stateful-wire-codec';
 import { ServiceWireProtocolError } from '../foundation/service-wire-m6a-codec';
 import { BoundedReplayMap } from './bounded-replay-map';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 
 export interface ZLinkRemoteBoundSessionRelayOptions {
   readonly requestTimeoutMs?: number;
@@ -67,6 +71,8 @@ interface ActiveServiceWireSessionRelocation {
   readonly sealPromise: Promise<ServiceSessionRelocationSealed>;
   sealed?: ServiceSessionRelocationSealed;
   sealTimer?: ReturnType<typeof setTimeout>;
+  sealController?: AbortController;
+  sealAbortCleanup?: () => void;
   terminal?: boolean;
   routeRequestFingerprint?: string;
   routeFingerprint?: string;
@@ -239,7 +245,8 @@ export class ZLinkRemoteBoundSessionRelay {
   }
 
   async receiveServiceWireSessionRelocationSeal(
-    value: ServiceSessionRelocationSeal
+    value: ServiceSessionRelocationSeal,
+    signal?: AbortSignal
   ): Promise<ServiceSessionRelocationSealed> {
     const key = serviceWireBarrierKey(value);
     const fingerprint = encodeSessionRelocationSeal(value).toString('base64');
@@ -268,6 +275,7 @@ export class ZLinkRemoteBoundSessionRelay {
     // Concurrent identical commands join this promise; different bytes for
     // the same identity fail before they can install another seal.
     let state!: ActiveServiceWireSessionRelocation;
+    const sealController = new AbortController();
     const sealPromise = Promise.resolve().then(async () => {
       this.validateServiceWireSessionRoute(value);
       await actorSessionBindingRuntimeOwner(this.options.streamBindingRuntime()).sealRelocation(
@@ -283,7 +291,8 @@ export class ZLinkRemoteBoundSessionRelay {
         {
           objectGeneration: value.actor.actor.generation,
           bindingGeneration: value.session.bindingGeneration
-        }
+        },
+        sealController.signal
       );
       return {
         relocation: value.relocation,
@@ -295,38 +304,65 @@ export class ZLinkRemoteBoundSessionRelay {
     state = {
       actorId,
       sealFingerprint: fingerprint,
-      sealPromise
+      sealPromise,
+      sealController
     };
     this.activeServiceWireRelocations.set(key, state);
-    try {
-      const sealed = await sealPromise;
-      state.sealed = sealed;
-      state.sealTimer = setTimeout(() => {
-        if (state.terminal === true || state.routePromise !== undefined) return;
-        state.terminal = true;
-        if (this.activeServiceWireRelocations.get(key) === state) {
-          this.activeServiceWireRelocations.delete(key);
-        }
-        this.terminalServiceWireRelocations.remember(key, {
-          actorId,
-          sealFingerprint: state.sealFingerprint,
-          sealed
-        });
-        const timeout = new Error(
-          `Actor '${actorId}' Session relocation route update timed out.`
-        );
-        actorSessionBindingRuntimeOwner(this.options.streamBindingRuntime())
-          .clearRelocation(actorId, timeout);
-        void this.options.streamBindingRuntime().disconnectBoundSession(actorId)
-          .catch(error => this.options.reportOwnershipRefreshError?.(actorId, error));
-      }, this.options.sessionRelocationSealTimeoutMs);
-      state.sealTimer.unref();
-      return sealed;
-    } catch (error) {
+    const expire = (error: unknown): void => {
+      if (state.terminal === true || state.routePromise !== undefined) return;
+      state.terminal = true;
+      sealController.abort(error);
       if (this.activeServiceWireRelocations.get(key) === state) {
         this.activeServiceWireRelocations.delete(key);
       }
-      throw error;
+      if (state.sealed !== undefined) {
+        this.terminalServiceWireRelocations.remember(key, {
+          actorId,
+          sealFingerprint: state.sealFingerprint,
+          sealed: state.sealed
+        });
+      }
+      const owner = actorSessionBindingRuntimeOwner(this.options.streamBindingRuntime());
+      owner.clearRelocation(actorId, error);
+      void this.options.streamBindingRuntime().disconnectBoundSession(actorId)
+        .catch(disconnectError => this.options.reportOwnershipRefreshError?.(actorId, disconnectError));
+      state.sealAbortCleanup?.();
+    };
+    const timeoutError = () => createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+      `Actor '${actorId}' Session relocation seal exceeded its absolute deadline.`,
+      true
+    );
+    state.sealTimer = setTimeout(
+      () => expire(timeoutError()),
+      this.options.sessionRelocationSealTimeoutMs ?? 3_000
+    );
+    state.sealTimer.unref?.();
+    if (signal !== undefined) {
+      const onAbort = () => expire(signal.reason ?? timeoutError());
+      state.sealAbortCleanup = () => signal.removeEventListener('abort', onAbort);
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
+    try {
+      const sealed = await sealPromise;
+      state.sealed = sealed;
+      return sealed;
+    } catch (error) {
+      if (state.sealTimer !== undefined) clearTimeout(state.sealTimer);
+      state.sealAbortCleanup?.();
+      if (this.activeServiceWireRelocations.get(key) === state) {
+        this.activeServiceWireRelocations.delete(key);
+      }
+      if (state.terminal !== true) {
+        const owner = actorSessionBindingRuntimeOwner(this.options.streamBindingRuntime());
+        if (owner.relocationSnapshot(actorId, key) !== undefined) {
+          owner.clearRelocation(actorId, error);
+          void this.options.streamBindingRuntime().disconnectBoundSession(actorId)
+            .catch(disconnectError => this.options.reportOwnershipRefreshError?.(actorId, disconnectError));
+        }
+      }
+      throw sealController.signal.aborted ? sealController.signal.reason : error;
     }
   }
 
@@ -383,6 +419,7 @@ export class ZLinkRemoteBoundSessionRelay {
     state.routeRequestFingerprint = routeRequestFingerprint;
     state.routeFingerprint = fingerprint;
     if (state.sealTimer !== undefined) clearTimeout(state.sealTimer);
+    state.sealAbortCleanup?.();
     const routePromise = state.sealPromise.then(async sealed => {
       validateSessionRelocationRouteAgainstSeal(value, sealed);
       await this.applyServiceWireSessionRelocationRoute(

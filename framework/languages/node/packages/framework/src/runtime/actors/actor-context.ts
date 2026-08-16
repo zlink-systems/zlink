@@ -42,7 +42,6 @@ import {
   type ZLinkActorLifecycleSnapshotSource
 } from './actor-lifecycle-snapshot';
 import { createRandomOperationIdentity } from '../foundation/operation-identity';
-import { performance } from 'node:perf_hooks';
 import { deferActorJoin } from './actor-join-deferred-scope';
 import { captureZLinkSpotSerialTurn } from '../execution';
 
@@ -196,12 +195,13 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
       );
     }
     this.deferred = true;
-    const deadline = performance.now() + this.timeoutMs;
+    const deadline = createDeferredJoinDeadline(this.timeoutMs);
     const sourceNodeRid = this.state.nativeActorRef?.nodeRid;
     const requestMessage = encodeJoinRequest(this.request, this.messageSerializers);
     try {
       claimDeferredJoin(this.state);
     } catch (error) {
+      deadline.close();
       requestMessage.close();
       throw error;
     }
@@ -216,6 +216,7 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
       try {
         await this.coordinator.abortDeferredJoin?.(this.actor, this.state, operationId);
       } finally {
+        deadline.close();
         requestMessage.close();
       }
     };
@@ -236,8 +237,8 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
               this.state,
               this.spotId,
               requestMessage,
-              remainingJoinTimeout(deadline),
-              undefined,
+              remainingJoinTimeout(deadline.atMs),
+              deadline.signal,
               operationId
             );
             if (this.turn === undefined) {
@@ -257,8 +258,8 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
             this.state,
             this.spotId,
             requestMessage,
-            remainingJoinTimeout(deadline),
-            undefined,
+            remainingJoinTimeout(deadline.atMs),
+            deadline.signal,
             operationId
           );
           result = this.turn === undefined
@@ -271,6 +272,7 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
             .catch(() => undefined);
           return;
         } finally {
+          deadline.close();
           requestMessage.close();
         }
         if (
@@ -320,12 +322,13 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
       );
     }
     this.deferred = true;
-    const deadline = performance.now() + this.timeoutMs;
+    const deadline = createDeferredJoinDeadline(this.timeoutMs);
     const sourceNodeRid = this.state.nativeActorRef?.nodeRid;
     const requestMessage = encodeJoinRequest(this.request, this.messageSerializers);
     try {
       claimDeferredJoin(this.state);
     } catch (error) {
+      deadline.close();
       requestMessage.close();
       throw error;
     }
@@ -340,6 +343,7 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
       try {
         await this.coordinator.abortDeferredJoin?.(this.actor, this.state, operationId);
       } finally {
+        deadline.close();
         requestMessage.close();
       }
     };
@@ -357,8 +361,8 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
               this.state,
               undefined,
               requestMessage,
-              remainingJoinTimeout(deadline),
-              undefined,
+              remainingJoinTimeout(deadline.atMs),
+              deadline.signal,
               operationId
             );
             if (this.turn === undefined) {
@@ -378,8 +382,8 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
             this.state,
             undefined,
             requestMessage,
-            remainingJoinTimeout(deadline),
-            undefined,
+            remainingJoinTimeout(deadline.atMs),
+            deadline.signal,
             operationId
           );
           result = this.turn === undefined
@@ -392,6 +396,7 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
             .catch(() => undefined);
           return;
         } finally {
+          deadline.close();
           requestMessage.close();
         }
         if (
@@ -462,7 +467,7 @@ function claimDeferredJoin(state: ZLinkActorRuntimeState): void {
 }
 
 function remainingJoinTimeout(deadline: number): number {
-  const remaining = deadline - performance.now();
+  const remaining = deadline - Date.now();
   if (remaining <= 0) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
@@ -471,6 +476,25 @@ function remainingJoinTimeout(deadline: number): number {
     );
   }
   return Math.ceil(remaining);
+}
+
+function createDeferredJoinDeadline(timeoutMs: number): {
+  readonly atMs: number;
+  readonly signal: AbortSignal;
+  close(): void;
+} {
+  const controller = new AbortController();
+  const atMs = Date.now() + timeoutMs;
+  const timer = setTimeout(() => controller.abort(createInternalFrameworkException(
+    ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+    'Deferred Actor join exceeded its absolute deadline.',
+    true
+  )), timeoutMs);
+  return {
+    atMs,
+    signal: controller.signal,
+    close: () => clearTimeout(timer)
+  };
 }
 
 function createJoinOperationId(): { readonly high: bigint; readonly low: bigint } {

@@ -26,6 +26,10 @@ import {
   ZLinkUserSpotExecutionMode
 } from '../../contracts';
 import { zlinkRuntimeDefaultLocationOptions } from '../../contracts/Locations/Options';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import type { ZLinkDomainLocationStore as ZLinkLocationStore } from '../locations/domain-store-contract';
 import type { ZLinkTrackedInstanceAuthority } from '../locations/spot-location-claims';
 import {
@@ -186,7 +190,10 @@ interface ZLinkHostRelocationOptions {
   readonly actorManager: () => DefaultZLinkActorManager | undefined;
   readonly actorTransfer: ZLinkActorTransferRuntime;
   readonly boundSessionRelocation?: {
-    receiveSeal(value: ServiceSessionRelocationSeal): Promise<ServiceSessionRelocationSealed>;
+    receiveSeal(
+      value: ServiceSessionRelocationSeal,
+      signal?: AbortSignal
+    ): Promise<ServiceSessionRelocationSealed>;
     receiveRoute(value: ServiceSessionRelocationRoute): Promise<void>;
     clear?(): void;
   };
@@ -284,7 +291,8 @@ interface PendingSessionRelocation {
   readonly promise: Promise<ServiceSessionRelocationSealed>;
   readonly resolve: (response: ServiceSessionRelocationSealed) => void;
   readonly reject: (error: unknown) => void;
-  timer?: ReturnType<typeof setTimeout>;
+  retryTimer?: ReturnType<typeof setTimeout>;
+  deadlineTimer?: ReturnType<typeof setTimeout>;
 }
 
 interface TerminalSessionRelocationControl {
@@ -416,7 +424,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
     this.pendingReplyRelays.clear();
     for (const pending of this.pendingSessionRelocations.values()) {
-      if (pending.timer !== undefined) clearTimeout(pending.timer);
+      if (pending.retryTimer !== undefined) clearTimeout(pending.retryTimer);
+      if (pending.deadlineTimer !== undefined) clearTimeout(pending.deadlineTimer);
       pending.reject(stopped);
     }
     this.pendingSessionRelocations.clear();
@@ -695,13 +704,46 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     request: ServiceSessionRelocationRoute,
     signal?: AbortSignal
   ): Promise<void> {
-    signal?.throwIfAborted();
-    const submitted = await this.requireMeshNode(meshName).sendToNode(
-      targetNodeRid,
-      encodeSessionRelocationRoute(request)
-    );
-    if (submitted !== SubmitResult.Ok) {
-      throw new Error('Session relocation route was not accepted by RouteMesh.');
+    //  A relocation whose session owner IS this node publishes the route
+    //  to itself; RouteMesh has no self connection (NotConnected), so the
+    //  control dispatches through the same inbound handler locally.
+    const localRid =
+      this.requireMeshNode(meshName).status?.().routingId ?? null;
+    if (localRid !== null && String(localRid) === String(targetNodeRid)) {
+      await this.handleSessionRelocationRoute(
+        meshName,
+        request,
+        localRid,
+        signal
+      );
+      return;
+    }
+    //  Spec 32:87 — a route/connection that is not usable yet is the
+    //  retryable Unavailable class. A one-shot submit rejection here loses
+    //  the post-commit route publication (command 44), so the sealed
+    //  session is never released and dies on the seal timeout instead.
+    //  Retry the identical bytes within the seal window; identical-byte
+    //  resends of this one-way control are the same idempotent pattern
+    //  the command 42 loop uses.
+    const bytes = encodeSessionRelocationRoute(request);
+    const deadline = Date.now() + 2_500;
+    for (;;) {
+      signal?.throwIfAborted();
+      const submitted = await this.requireMeshNode(meshName).sendToNode(
+        targetNodeRid,
+        bytes
+      );
+      if (submitted === SubmitResult.Ok) return;
+      if (Date.now() > deadline) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RelocationTargetUnavailable,
+          'Session relocation route was not accepted by RouteMesh'
+            + ` (submit=${String(submitted)}`
+            + ` target=${String(targetNodeRid)}).`,
+          true
+        );
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
 
@@ -748,25 +790,88 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         rejectPromise = reject;
       }
     );
+    let abortListener: (() => void) | undefined;
+    let settled = false;
     const finish = (action: () => void) => {
-      const pending = this.pendingSessionRelocations.get(key);
-      if (pending?.timer !== undefined) clearTimeout(pending.timer);
-      this.pendingSessionRelocations.delete(key);
+      if (settled) return;
+      settled = true;
+      const current = this.pendingSessionRelocations.get(key);
+      if (current === pending) {
+        if (current.retryTimer !== undefined) clearTimeout(current.retryTimer);
+        if (current.deadlineTimer !== undefined) clearTimeout(current.deadlineTimer);
+        this.pendingSessionRelocations.delete(key);
+      }
+      if (abortListener !== undefined) {
+        signal?.removeEventListener('abort', abortListener);
+      }
       action();
     };
     let pending!: PendingSessionRelocation;
+    // Spec 48:205/20:408 — the seal control keeps the operation's deadline
+    // and cancellation contract; an unbounded identical-bytes resend loop
+    // turned a lost ACK into a permanent relocation stall (observed ~30s
+    // admission interruption until teardown). Resends stay within the
+    // relocation seal window, then the join terminates DeadlineExceeded
+    // (spec 32:88).
+    // Spec 06 — the configured SessionRelocationSealTimeout is an additional
+    // finite upper bound; the caller's earlier absolute deadline still wins.
+    const sealTimeoutMs = this.options.registration?.locations.options
+      .sessionRelocationSealTimeoutMs
+      ?? zlinkRuntimeDefaultLocationOptions.sessionRelocationSealTimeoutMs;
+    const resendDeadline = Date.now() + sealTimeoutMs;
     const send = async (): Promise<void> => {
       if (signal?.aborted === true) {
         finish(() => rejectPromise(signal.reason));
         return;
       }
+      //  A seal whose session owner IS this node has no RouteMesh self
+      //  connection (NotConnected); dispatch through the inbound handler
+      //  locally instead of the wire.
+      const localRid =
+        this.requireMeshNode(meshName).status?.().routingId ?? null;
+      if (localRid !== null && String(localRid) === expectedTarget) {
+        try {
+          const response = await this.handleSessionRelocationSeal(
+            meshName,
+            request,
+            localRid,
+            signal
+          );
+          pending.resolve(response);
+        } catch (error) {
+          pending.reject(error);
+        }
+        return;
+      }
+      if (Date.now() >= resendDeadline) {
+        pending.reject(createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+          `Session relocation seal '${key}' was not acknowledged within the relocation seal timeout.`,
+          true
+        ));
+        return;
+      }
       try {
-        await this.requireMeshNode(meshName).sendToNode(targetNodeRid, bytes);
+        const submitted = await this.requireMeshNode(meshName)
+          .sendToNode(targetNodeRid, bytes);
+        if (submitted !== SubmitResult.Ok) {
+          pending.reject(createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RelocationTargetUnavailable,
+            `Session relocation seal '${key}' was not accepted by RouteMesh.`,
+            true
+          ));
+          return;
+        }
         if (this.pendingSessionRelocations.get(key) === pending) {
-          pending.timer = setTimeout(() => void send(), 250);
+          pending.retryTimer = setTimeout(() => void send(), 250);
         }
       } catch (error) {
-        pending.reject(error);
+        pending.reject(createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RelocationTargetUnavailable,
+          `Session relocation seal '${key}' could not reach its RouteMesh owner.`,
+          true,
+          error
+        ));
       }
     };
     pending = {
@@ -786,6 +891,26 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       reject: error => finish(() => rejectPromise(error))
     };
     this.pendingSessionRelocations.set(key, pending);
+    pending.deadlineTimer = setTimeout(() => pending.reject(
+      createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+        `Session relocation seal '${key}' was not acknowledged within the relocation seal timeout.`,
+        true
+      )
+    ), Math.max(0, resendDeadline - Date.now()));
+    pending.deadlineTimer.unref?.();
+    abortListener = () => pending.reject(
+      signal?.reason ?? createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+        `Session relocation seal '${key}' was cancelled.`,
+        true
+      )
+    );
+    if (signal?.aborted === true) {
+      abortListener();
+      return promise;
+    }
+    signal?.addEventListener('abort', abortListener, { once: true });
     void send();
     return promise;
   }
@@ -827,11 +952,31 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
   }
 
+  //  A relocation control dispatched locally names THIS node as its
+  //  source; the peers() view never contains the local node, so its
+  //  lifecycle generation comes from the node status instead.
+  private sourceLifecycleGeneration(
+    meshName: string,
+    sourceNodeRid: RoutingId | null
+  ): bigint | undefined {
+    if (sourceNodeRid === null) return undefined;
+    const node = this.requireMeshNode(meshName);
+    const status = node.status?.();
+    if (status?.routingId !== null && status !== undefined
+        && String(status.routingId) === String(sourceNodeRid)) {
+      return status.lifecycleGeneration;
+    }
+    return node.peers().find(
+      peer => peer.routingId !== null
+        && String(peer.routingId) === String(sourceNodeRid)
+    )?.lifecycleGeneration;
+  }
+
   private async handleSessionRelocationSeal(
     meshName: string,
     request: ServiceSessionRelocationSeal,
     sourceNodeRid: RoutingId | null,
-    _signal?: AbortSignal
+    signal?: AbortSignal
   ): Promise<ServiceSessionRelocationSealed> {
     if (
       sourceNodeRid === null
@@ -843,11 +988,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       );
     }
     this.validateSessionOwnerFence(meshName, request.session);
-    const sourcePeer = this.requireMeshNode(meshName).peers().find(
-      peer => peer.routingId !== null && String(peer.routingId) === String(sourceNodeRid)
-    );
-    if (sourcePeer?.lifecycleGeneration !== request.actor.targetNodeGeneration
-      || sourcePeer.lifecycleGeneration !== request.coordinator.nodeGeneration) {
+    const sealSourceGeneration =
+      this.sourceLifecycleGeneration(meshName, sourceNodeRid);
+    if (sealSourceGeneration !== request.actor.targetNodeGeneration
+      || sealSourceGeneration !== request.coordinator.nodeGeneration) {
       throw new ServiceWireProtocolError(
         'Session relocation seal source lifecycle generation is stale.'
       );
@@ -856,7 +1000,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     if (handler === undefined) {
       throw new Error('Session relocation seal ingress is not configured.');
     }
-    return await handler(request);
+    return await handler(request, signal);
   }
 
   private async handleSessionRelocationRoute(
@@ -874,13 +1018,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         'Session relocation route source does not match its action fence.'
       );
     }
-    const sourcePeer = this.requireMeshNode(meshName).peers().find(
-      peer => peer.routingId !== null && String(peer.routingId) === String(sourceNodeRid)
-    );
+    const routeSourceGeneration =
+      this.sourceLifecycleGeneration(meshName, sourceNodeRid);
     const expectedSourceGeneration = request.route.action === 'commit'
       ? request.route.targetNodeGeneration
       : request.coordinator.nodeGeneration;
-    if (sourcePeer?.lifecycleGeneration !== expectedSourceGeneration) {
+    if (routeSourceGeneration !== expectedSourceGeneration) {
       throw new ServiceWireProtocolError(
         'Session relocation route source lifecycle generation is stale.'
       );

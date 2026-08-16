@@ -477,6 +477,70 @@ test('backend mesh dispatch releases a reserved permit when a claim batch is emp
   }
 });
 
+test('backend mesh dispatch reports service-wire command context before closing a failed record', async () => {
+  let readyHandler;
+  let received = false;
+  let partClosed = false;
+  let resolveFailure;
+  const failure = new Promise((resolve) => { resolveFailure = resolve; });
+  const part = {
+    data() { return Buffer.from([0x5a, 0x4d, 0x01, 34, 0x00]); },
+    close() { partClosed = true; }
+  };
+  const claim = {
+    recvBatch() {
+      if (received) return { ok: false, records: [] };
+      received = true;
+      return {
+        ok: true,
+        records: [{
+          kind: framework.ReceiveKind.ChannelSend,
+          operationKind: 0,
+          packetName: undefined,
+          sourceNodeRid: 'source-node',
+          parts: [part]
+        }]
+      };
+    },
+    release() {}
+  };
+  const node = {
+    setReadyHandler(handler) { readyHandler = handler; },
+    createReadyBatch() {
+      return { reset() {}, takeClaim() { return claim; }, close() {} };
+    },
+    createReceiveBatch() {
+      return { reset() {}, close() {} };
+    },
+    drainReady() {
+      return {
+        ok: true,
+        hasResidue: false,
+        records: [{ ownerKind: framework.ReadyOwnerKind.Node }]
+      };
+    }
+  };
+  const rootCause = new Error('target authority lost relocation envelope');
+  const pump = new backend.ZLinkMeshDispatchPump(node, {
+    applicationJobQueue: applicationJobQueue(),
+    dispatch() { throw rootCause; },
+    reportError(error, context) { resolveFailure({ error, context }); }
+  });
+
+  try {
+    pump.start();
+    readyHandler(framework.ReadyDomain.Infrastructure);
+    const reported = await failure;
+    assert.equal(reported.error, rootCause);
+    assert.equal(reported.context.commandId, 34);
+    assert.equal(reported.context.packetName, undefined);
+    assert.equal(reported.context.sourceNodeRid, 'source-node');
+    assert.equal(partClosed, true);
+  } finally {
+    await pump.dispose();
+  }
+});
+
 test('backend mesh dispatch pump yields between continuous receive batches', async () => {
   const totalBatches = 32;
   let readyHandler;

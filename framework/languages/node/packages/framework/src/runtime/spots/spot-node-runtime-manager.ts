@@ -370,12 +370,15 @@ export class ZLinkSpotNodeRuntimeManager {
         pump = new ZLinkMeshDispatchPump(node, {
           applicationJobQueue: this.applicationJobQueue,
           dispatch: (owner, record) => this.dispatchMeshRecord(spotNodeName, owner, record),
-          reportError: (error) => this.options.dispatchErrors?.report({
+          reportError: (error, context) => this.options.dispatchErrors?.report({
             surface: ZLinkDispatchErrorSurface.RouteMeshChannel,
             messageKind: ZLinkDispatchMessageKind.Send,
             reason: ZLinkDispatchErrorReason.HandlerException,
             action: ZLinkDispatchErrorAction.Drop,
             channelName: spotNodeName,
+            packetName: context?.packetName,
+            sourceRid: context?.sourceNodeRid,
+            commandId: context?.commandId,
             error
           })
         });

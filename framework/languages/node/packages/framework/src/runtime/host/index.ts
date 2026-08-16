@@ -389,6 +389,9 @@ export class ZLinkFrameworkRuntimeHost implements
       streamPayloadCodec: resolveStreamPayloadCodec(options.registration),
       streamCompression: options.registration.streamCompression,
       messageSerializers: options.registration.messageSerializers,
+      sessionRelocationSealTimeoutMs:
+        options.registration.locations.options.sessionRelocationSealTimeoutMs
+        ?? zlinkDefaultLocationOptions.sessionRelocationSealTimeoutMs,
       metrics: this.metrics,
       flowCreationEnabled: () => this.flowCreationEnabled(),
       nativeActorNodeProvider: () => this.spotNodeRuntime?.primaryMeshNode,
@@ -716,8 +719,8 @@ export class ZLinkFrameworkRuntimeHost implements
       actorManager: () => this.actorManager,
       actorTransfer: this.actorTransferRuntime,
       boundSessionRelocation: {
-        receiveSeal: value =>
-          this.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(value),
+        receiveSeal: (value, signal) =>
+          this.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(value, signal),
         receiveRoute: value =>
           this.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationRoute(value),
         clear: () =>

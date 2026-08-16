@@ -316,6 +316,55 @@ export class ZLinkActorPacketRelay {
         this.requireCurrentRemoteBinding(relay, _routeContext);
       }
       const state = this.options.actorManager()?.getState(relay.actorId);
+      if (frameHeader.kind === ZLinkStreamMessageKind.Send) {
+        const dispatch = state?.spotId === undefined
+          ? this.requireSpotNodeRuntime().dispatchEntryActorPacket(
+              relay.actorId,
+              [header, body],
+              false,
+              remoteBoundSessionTarget,
+              fallbackActorRef
+            )
+          : this.requireSpotManager().dispatchRoutedActorPacket(
+              state.spotId,
+              relay.actorId,
+              [header, body],
+              false,
+              remoteBoundSessionTarget,
+              fallbackActorRef
+            );
+        // Spec 05 §1.3: a one-way Session Actor relay completes at relay
+        // queue admission, not after the remote application turn. In
+        // particular, a handler may register a deferred Join whose relocation
+        // seal must drain the ingress frame that triggered this relay. Keeping
+        // the route send open until that Join finalizes makes command 42 wait
+        // on the very Actor turn that is waiting for relocation. The Actor
+        // queue already owns the accepted frame here, so retain its messages
+        // and observe the ordered handler terminal on a detached runtime task.
+        closeFrameMessages = false;
+        this.options.detachedTaskRunner.runDetached(
+          'remote actor one-way packet relay',
+          async () => {
+            try {
+              await dispatch;
+            } catch (error) {
+              this.options.errorSink().reportRuntimeTaskException(
+                'remote actor packet relay',
+                error
+              );
+            } finally {
+              header.close();
+              body.close();
+            }
+          }
+        );
+        return {
+          ok: true,
+          actorPacketTarget: encodeRemoteActorPacketTarget(
+            this.actorPacketTargetForState(relay.actorId, relay.routerChannelId)
+          )
+        };
+      }
       if (
         frameHeader.kind === ZLinkStreamMessageKind.Request
         && frameHeader.requestSeq !== undefined

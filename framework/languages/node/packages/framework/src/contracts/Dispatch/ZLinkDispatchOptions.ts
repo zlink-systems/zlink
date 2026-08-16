@@ -67,11 +67,15 @@ export interface ZLinkRuntimeMessageFlowEvent {
   readonly instanceSpotType?: string;
   readonly activationState?: 'activating' | 'ready' | 'closing';
   readonly actorId?: string;
+  /** Internal service-wire command carried by a RouteMesh control record. */
+  readonly commandId?: number;
   readonly messageSize?: number;
   readonly errorReason?: ZLinkDispatchErrorReason;
   readonly errorAction?: ZLinkDispatchErrorAction;
   readonly errorType?: string;
   readonly errorMessage?: string;
+  readonly errorCauseType?: string;
+  readonly errorCauseMessage?: string;
 }
 
 /**
@@ -96,6 +100,7 @@ export interface ZLinkDispatchFailure {
   readonly instanceSpotType?: string;
   readonly activationState?: 'activating' | 'ready' | 'closing';
   readonly actorId?: string;
+  readonly commandId?: number;
   readonly sourceRid?: string;
   readonly targetRid?: string;
   readonly correlationId?: string;
@@ -103,6 +108,8 @@ export interface ZLinkDispatchFailure {
   readonly flowOrigin?: ZLinkFlowOrigin;
   readonly errorType?: string;
   readonly errorMessage?: string;
+  readonly errorCauseType?: string;
+  readonly errorCauseMessage?: string;
 }
 
 export interface ZLinkUnhandledDispatchOptions {

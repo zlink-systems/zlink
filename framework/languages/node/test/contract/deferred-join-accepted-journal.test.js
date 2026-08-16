@@ -10,6 +10,20 @@ const {
 const {
   encodeActorAuthorityIdentity
 } = require('../../packages/framework/dist/runtime/actors/actor-authority-publication');
+const {
+  ServiceRelocationAuthorityPayloadCodec,
+  serviceRelocationAuthorityApplicationPayload
+} = require('../../packages/framework/dist/runtime/foundation/service-relocation-runtime');
+
+const relocationPublication = {
+  reference: 'relocation-root',
+  checksumCrc32c: 7,
+  aggregateId: '11111111-1111-4111-8111-111111111111',
+  aggregateGeneration: 2n,
+  inventoryDigest: 'a'.repeat(64),
+  targetOwnerId: 'owner-a',
+  targetOwnerLeaseGeneration: 13n
+};
 
 function harness(options = {}) {
   const roots = new Map();
@@ -17,23 +31,29 @@ function harness(options = {}) {
   const references = [];
   let authorityVersion = 1;
   let compareExchangeCalls = 0;
+  const actorAuthorityPayload = encodeActorAuthorityIdentity({
+    actorType: 'player',
+    actor: {
+      nodeRid: 'node-a',
+      actorId: 'actor-a',
+      objectGeneration: 17n
+    },
+    meshName: 'game',
+    ownerNodeGeneration: 1n,
+    owner: {
+      ownerId: 'owner-a',
+      leaseGeneration: 5n
+    }
+  });
   let authority = {
     kind: 'snapshot',
     storeVersion: { value: String(authorityVersion) },
-    payload: encodeActorAuthorityIdentity({
-      actorType: 'player',
-      actor: {
-        nodeRid: 'node-a',
-        actorId: 'actor-a',
-        objectGeneration: 17n
-      },
-      meshName: 'game',
-      ownerNodeGeneration: 1n,
-      owner: {
-        ownerId: 'owner-a',
-        leaseGeneration: 5n
-      }
-    }),
+    payload: options.relocationEnvelope === true
+      ? new ServiceRelocationAuthorityPayloadCodec().publish(
+          actorAuthorityPayload,
+          relocationPublication
+        )
+      : actorAuthorityPayload,
     objectGeneration: 17n,
     authorityOwnerGeneration: 3n,
     ownerId: 'owner-a',
@@ -104,9 +124,69 @@ function harness(options = {}) {
     references,
     roots,
     journal: new ZLinkDeferredJoinAcceptedJournal(authorityStore, relocationStore),
-    restartJournal: () => new ZLinkDeferredJoinAcceptedJournal(authorityStore, relocationStore)
+    restartJournal: () => new ZLinkDeferredJoinAcceptedJournal(authorityStore, relocationStore),
+    authorityPayload: () => Buffer.from(authority.payload)
   };
 }
+
+test('deferred Join cursor and release writes preserve the relocation authority envelope', async () => {
+  const { journal, authorityPayload } = harness({ relocationEnvelope: true });
+  const codec = new ServiceRelocationAuthorityPayloadCodec();
+  const sourceActorRef = {
+    nodeRid: 'node-a',
+    actorId: 'actor-a',
+    objectGeneration: 17n,
+    meshName: 'game'
+  };
+  const targetActorRef = { ...sourceActorRef, nodeRid: 'node-b' };
+
+  const prepared = await journal.prepare(
+    sourceActorRef.actorId,
+    { high: 1n, low: 2n },
+    sourceActorRef,
+    Buffer.from('"accepted"')
+  );
+  assert.deepEqual(codec.read(authorityPayload()), relocationPublication);
+
+  const committed = await journal.markCommitted(prepared, targetActorRef);
+  assert.deepEqual(codec.read(authorityPayload()), relocationPublication);
+
+  const delivered = await journal.deliver(
+    committed,
+    { actorId: targetActorRef.actorId, async onJoinCompleted() {} },
+    targetActorRef,
+    operation => operation()
+  );
+  assert.equal(delivered.cursor, 'delivered');
+  assert.deepEqual(codec.read(authorityPayload()), relocationPublication);
+  assert.notEqual(
+    serviceRelocationAuthorityApplicationPayload(authorityPayload()).byteLength,
+    0
+  );
+  assert.equal(await journal.recover(targetActorRef.actorId), undefined);
+});
+
+test('discarding a prepared Join preserves the relocation authority envelope', async () => {
+  const { journal, authorityPayload } = harness({ relocationEnvelope: true });
+  const codec = new ServiceRelocationAuthorityPayloadCodec();
+  const actorRef = {
+    nodeRid: 'node-a',
+    actorId: 'actor-a',
+    objectGeneration: 17n,
+    meshName: 'game'
+  };
+  const prepared = await journal.prepare(
+    actorRef.actorId,
+    { high: 3n, low: 4n },
+    actorRef,
+    Buffer.alloc(0)
+  );
+
+  await journal.discardPrepared(prepared);
+
+  assert.deepEqual(codec.read(authorityPayload()), relocationPublication);
+  assert.equal(await journal.recover(actorRef.actorId), undefined);
+});
 
 test('cross-node Accepted root preserves identity, reply and cursor across mailbox retry', async () => {
   const { events, references, roots, journal } = harness();

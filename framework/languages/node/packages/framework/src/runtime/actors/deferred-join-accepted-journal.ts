@@ -184,7 +184,10 @@ export class ZLinkDeferredJoinAcceptedJournal {
         {
           kind: 'put',
           generationTransition: 'preserve',
-          payload: publication.applicationPayload
+          payload: replaceServiceRelocationAuthorityApplicationPayload(
+            read.payload,
+            publication.applicationPayload
+          )
         },
         signal
       );
@@ -265,7 +268,10 @@ export class ZLinkDeferredJoinAcceptedJournal {
         {
           kind: 'put',
           generationTransition: 'preserve',
-          payload: publication.applicationPayload
+          payload: replaceServiceRelocationAuthorityApplicationPayload(
+            read.payload,
+            publication.applicationPayload
+          )
         },
         signal
       );
@@ -326,13 +332,16 @@ export class ZLinkDeferredJoinAcceptedJournal {
       {
         kind: 'put',
         generationTransition: 'preserve',
-        payload: encodeAuthorityPublication({
-          applicationPayload: actor === undefined
-            ? publication.applicationPayload
-            : encodeActorAuthorityIdentity({ ...identity, actor }),
-          reference: replacement.reference,
-          checksumCrc32c: replacement.checksumCrc32c
-        })
+        payload: replaceServiceRelocationAuthorityApplicationPayload(
+          read.payload,
+          encodeAuthorityPublication({
+            applicationPayload: actor === undefined
+              ? publication.applicationPayload
+              : encodeActorAuthorityIdentity({ ...identity, actor }),
+            reference: replacement.reference,
+            checksumCrc32c: replacement.checksumCrc32c
+          })
+        )
       },
       signal
     );
@@ -422,7 +431,8 @@ export class ZLinkDeferredJoinAcceptedJournal {
 function requireAuthorityActor(payload: Uint8Array, actor: ActorRef): void {
   const publication = decodeAuthorityPublication(payload);
   const identity = decodeActorAuthorityIdentity(
-    publication?.applicationPayload ?? payload
+    publication?.applicationPayload
+      ?? serviceRelocationAuthorityApplicationPayload(payload)
   );
   if (
     identity === undefined

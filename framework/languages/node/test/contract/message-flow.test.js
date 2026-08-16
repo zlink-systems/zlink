@@ -29,6 +29,9 @@ const streamProtocol = require('../../packages/framework/dist/runtime/streams/pr
 const { ZLinkStreamFrameMessageFactory } = require('../../packages/framework/dist/runtime/streams/stream-frame-factory');
 const flowContext = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+const {
+  ZLinkDispatchErrorReporter
+} = require('../../packages/framework/dist/runtime/channels/dispatch-error-reporter');
 const connector = require('../../packages/stream-connector/dist');
 const protocolCodecs = require('./helpers/stream-protocol-codecs');
 
@@ -131,6 +134,43 @@ test('MFLOW-004 provider failures do not change the message operation', () => {
   assert.equal(failures[0].taskName, 'logger-provider');
   assert.equal(failures[0].error.message, 'logger provider failed');
   assert.equal(tracer.providerFailureCount, 1);
+});
+
+test('dispatch errors record service-wire command and deepest handler cause', () => {
+  const reporter = new ZLinkDispatchErrorReporter(
+    undefined,
+    undefined,
+    silentSink(),
+    {
+      diagnostics: diagnostics('errors'),
+      liveMode: { mode: 'errors' }
+    }
+  );
+  reporter.report({
+    surface: 'routeMeshChannel',
+    messageKind: 'send',
+    reason: 'handler_exception',
+    action: 'drop',
+    channelName: 'play',
+    commandId: 34,
+    error: new Error('Relocation owner committed, but target publication failed.', {
+      cause: new TypeError('Location authority relocation envelope is missing.')
+    })
+  });
+
+  assert.equal(telemetryRecords.length, 1);
+  const attributes = telemetryRecords[0].attributes;
+  assert.equal(attributes.command_id, 34);
+  assert.equal(attributes.error_type, 'Error');
+  assert.equal(
+    attributes.error_message,
+    'Relocation owner committed, but target publication failed.'
+  );
+  assert.equal(attributes.error_cause_type, 'TypeError');
+  assert.equal(
+    attributes.error_cause_message,
+    'Location authority relocation envelope is missing.'
+  );
 });
 
 test('MFLOW-009 live-mode cell toggles every reader without rebuilding the tracer', () => {

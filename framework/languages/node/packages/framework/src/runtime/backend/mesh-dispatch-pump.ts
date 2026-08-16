@@ -23,8 +23,26 @@ export interface ZLinkMeshDispatchPumpOptions {
   readonly partCapacity?: number;
   readonly dispatch: (owner: ReadyRecord, record: ReceiveRecord) => void | Promise<void>;
   readonly applicationJobQueue: ApplicationJobQueuePort;
-  readonly reportError?: (error: unknown) => void;
+  readonly reportError?: (error: unknown, context?: ZLinkMeshDispatchFailureContext) => void;
   readonly monotonicNowMs?: () => number;
+}
+
+export interface ZLinkMeshDispatchFailureContext {
+  readonly receiveKind: number;
+  readonly operationKind: number;
+  readonly packetName?: string;
+  readonly sourceNodeRid?: string;
+  readonly commandId?: number;
+}
+
+class ZLinkMeshDispatchFailure extends Error {
+  constructor(
+    readonly context: ZLinkMeshDispatchFailureContext,
+    readonly dispatchCause: unknown
+  ) {
+    super('Mesh record dispatch failed.', { cause: dispatchCause });
+    this.name = 'ZLinkMeshDispatchFailure';
+  }
 }
 
 export class ZLinkMeshDispatchPump {
@@ -71,7 +89,13 @@ export class ZLinkMeshDispatchPump {
     this.scheduled = true;
     const drain = yieldToEventLoop()
       .then(() => this.drain())
-      .catch((error) => this.options.reportError?.(error));
+      .catch((error) => {
+        if (error instanceof ZLinkMeshDispatchFailure) {
+          this.options.reportError?.(error.dispatchCause, error.context);
+          return;
+        }
+        this.options.reportError?.(error);
+      });
     this.activeDrains.add(drain);
     this.drainPromise = drain;
     void drain.finally(() => {
@@ -181,7 +205,14 @@ export class ZLinkMeshDispatchPump {
                   const dispatch = () => runZLinkExecutionArea(
                     domain === ReadyDomain.Infrastructure ? 'infrastructure' : 'application',
                     async () => {
-                      await this.options.dispatch(drained.records[index], record);
+                      try {
+                        await this.options.dispatch(drained.records[index], record);
+                      } catch (error) {
+                        throw new ZLinkMeshDispatchFailure(
+                          meshDispatchFailureContext(record),
+                          error
+                        );
+                      }
                       await record.onTerminalCompletion?.();
                     }
                   );
@@ -244,6 +275,25 @@ export class ZLinkMeshDispatchPump {
       throw error;
     }
   }
+}
+
+function meshDispatchFailureContext(record: ReceiveRecord): ZLinkMeshDispatchFailureContext {
+  const commandId = serviceWireCommand(record);
+  return {
+    receiveKind: record.kind,
+    operationKind: record.operationKind,
+    ...(record.packetName === undefined ? {} : { packetName: record.packetName }),
+    ...(record.sourceNodeRid === null ? {} : { sourceNodeRid: String(record.sourceNodeRid) }),
+    ...(commandId === undefined ? {} : { commandId })
+  };
+}
+
+function serviceWireCommand(record: ReceiveRecord): number | undefined {
+  if (record.parts.length !== 1) return undefined;
+  const bytes = record.parts[0]!.data();
+  return bytes.byteLength >= 5 && bytes[0] === 0x5a && bytes[1] === 0x4d && bytes[2] === 1
+    ? bytes[3]
+    : undefined;
 }
 
 function yieldToEventLoop(): Promise<void> {
