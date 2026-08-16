@@ -52,6 +52,7 @@ stream_connection_t stream_session_registry_t::open (
     const auto previous = _connections.find (connection.connection_id);
     if (previous != _connections.end ()) {
         for (auto &[actor_id, aggregate] : previous->second.bindings) {
+            aggregate.ingress_drain->accepts_completion = false;
             const auto indexed = _actor_bindings.find (actor_id);
             if (indexed != _actor_bindings.end ()
                 && indexed->second.connection
@@ -85,6 +86,7 @@ bool stream_session_registry_t::close (
         return false;
     }
     for (auto &[actor_id, aggregate] : current->second.bindings) {
+        aggregate.ingress_drain->accepts_completion = false;
         const auto indexed = _actor_bindings.find (actor_id);
         if (indexed != _actor_bindings.end ()
             && indexed->second.connection
@@ -105,6 +107,22 @@ bool stream_session_registry_t::close (
     return true;
 }
 
+std::vector<stream_binding_t> stream_session_registry_t::bindings (
+  const stream_connection_t &connection) const
+{
+    std::lock_guard lock (_mutex);
+    const auto current = _connections.find (connection.connection_id);
+    if (current == _connections.end ()
+        || current->second.connection != connection) {
+        return {};
+    }
+    std::vector<stream_binding_t> result;
+    result.reserve (current->second.bindings.size ());
+    for (const auto &[_, aggregate] : current->second.bindings)
+        result.push_back (aggregate.binding);
+    return result;
+}
+
 std::pair<stateful_error_t, stream_binding_t>
 stream_session_registry_t::bind (
   const stream_connection_t &connection,
@@ -121,7 +139,7 @@ stream_session_registry_t::bind (
 
     return bind_verified (
       connection, actor, target_node_generation,
-      owner_lease_generation);
+      owner_lease_generation, false);
 }
 
 std::pair<stateful_error_t, stream_binding_t>
@@ -129,7 +147,8 @@ stream_session_registry_t::bind_remote (
   const stream_connection_t &connection,
   const object_ref_t &verified_actor,
   std::uint64_t target_node_generation,
-  std::uint64_t owner_lease_generation)
+  std::uint64_t owner_lease_generation,
+  bool route_publish_pending)
 {
     if (verified_actor.kind != object_kind_t::actor
         || verified_actor.key.empty ()
@@ -142,7 +161,7 @@ stream_session_registry_t::bind_remote (
     }
     return bind_verified (
       connection, verified_actor, target_node_generation,
-      owner_lease_generation);
+      owner_lease_generation, route_publish_pending);
 }
 
 std::pair<stateful_error_t, stream_binding_t>
@@ -150,7 +169,8 @@ stream_session_registry_t::bind_verified (
   const stream_connection_t &connection,
   const object_ref_t &actor,
   std::uint64_t target_node_generation,
-  std::uint64_t owner_lease_generation)
+  std::uint64_t owner_lease_generation,
+  bool route_publish_pending)
 {
 
     std::unique_lock lock (_mutex);
@@ -168,13 +188,28 @@ stream_session_registry_t::bind_verified (
         existing != state.bindings.end ()
         && existing->second.barrier_token)
         return {stateful_error_t::moving, {}};
+    if (_next_binding_generation == 0
+        || _next_binding_generation
+             == std::numeric_limits<std::uint64_t>::max ()) {
+        return {stateful_error_t::conflict, {}};
+    }
+    // Binding generation is owner-lifecycle local, not connection local.
+    // A reconnect therefore cannot alias the previous physical Session just
+    // because both connections would otherwise start at generation one.
     stream_binding_t binding{
-      connection, state.next_binding_generation++, actor,
+      connection, _next_binding_generation++, actor,
       target_node_generation, owner_lease_generation};
+    // Spec 20 section 7 makes route replacement, held submission, and release
+    // one serial span. The drain therefore belongs to that span, not to one
+    // binding generation: an admitted frame retains its exact completion fence
+    // while a reconnect installs the successor binding.
+    std::shared_ptr<stream_ingress_drain_t> inherited_ingress_drain;
     const auto discard_binding = [&] (connection_state_t &owner) {
         const auto found = owner.bindings.find (actor_id);
         if (found == owner.bindings.end ())
             return;
+        if (!inherited_ingress_drain)
+            inherited_ingress_drain = found->second.ingress_drain;
         while (!found->second.retained_outbound.empty ()) {
             displaced.push_back (std::move (
               found->second.retained_outbound.front ().completion));
@@ -195,6 +230,9 @@ stream_session_registry_t::bind_verified (
     discard_binding (state);
     session_binding_aggregate_t aggregate;
     aggregate.binding = binding;
+    aggregate.route_publish_pending = route_publish_pending;
+    if (inherited_ingress_drain)
+        aggregate.ingress_drain = std::move (inherited_ingress_drain);
     state.bindings[actor_id] = std::move (aggregate);
     _actor_bindings[actor_id] = actor_binding_locator_t{
       binding.connection, binding.binding_generation};
@@ -202,6 +240,35 @@ stream_session_registry_t::bind_verified (
     lock.unlock ();
     settle_retained_outbound (std::move (displaced), false);
     return {stateful_error_t::none, binding};
+}
+
+std::optional<std::vector<stream_retained_outbound_t>>
+stream_session_registry_t::complete_route_publish (
+  const stream_binding_t &binding)
+{
+    std::unique_lock lock (_mutex);
+    auto *aggregate = current_aggregate_unlocked (binding.actor.key);
+    if (aggregate == nullptr || aggregate->binding != binding
+        || !aggregate->route_publish_pending) {
+        return std::nullopt;
+    }
+    aggregate->route_publish_pending = false;
+    std::vector<stream_retained_outbound_t> retained;
+    std::deque<retained_outbound_state_t> still_held;
+    while (!aggregate->retained_outbound.empty ()) {
+        auto pending = std::move (
+          aggregate->retained_outbound.front ());
+        aggregate->retained_outbound.pop_front ();
+        if (exact_tenure_target (pending.tenure, binding)) {
+            retained.push_back (std::move (pending.completion));
+        }
+        else {
+            still_held.push_back (std::move (pending));
+        }
+    }
+    aggregate->retained_outbound = std::move (still_held);
+    _changed.notify_all ();
+    return retained;
 }
 
 stateful_error_t stream_session_registry_t::unbind (
@@ -219,6 +286,7 @@ stateful_error_t stream_session_registry_t::unbind (
         return stateful_error_t::conflict;
     }
     auto &aggregate = current->second.bindings.at (binding.actor.key);
+    aggregate.ingress_drain->accepts_completion = false;
     while (!aggregate.retained_outbound.empty ()) {
         discarded.push_back (std::move (
           aggregate.retained_outbound.front ().completion));
@@ -270,10 +338,9 @@ stateful_error_t stream_session_registry_t::restore (
     current->second.bindings[binding.actor.key] = std::move (aggregate);
     _actor_bindings[binding.actor.key] = actor_binding_locator_t{
       binding.connection, binding.binding_generation};
-    if (current->second.next_binding_generation
-        <= binding.binding_generation
+    if (_next_binding_generation <= binding.binding_generation
         && binding.binding_generation != std::numeric_limits<std::uint64_t>::max ()) {
-        current->second.next_binding_generation = binding.binding_generation + 1;
+        _next_binding_generation = binding.binding_generation + 1;
     }
     return stateful_error_t::none;
 }
@@ -302,11 +369,11 @@ stream_session_registry_t::admit_inbound (
         return {stateful_error_t::conflict, std::nullopt};
     }
     const auto sequence = aggregate.next_inbound_sequence++;
-    aggregate.active_inbound.emplace (
+    aggregate.ingress_drain->active.emplace (
       binding.binding_generation, sequence);
     return {stateful_error_t::none,
             stream_dispatch_t{
-              binding, sequence}};
+              binding, sequence, aggregate.ingress_drain}};
 }
 
 std::pair<stateful_error_t, std::optional<stream_dispatch_t>>
@@ -342,11 +409,12 @@ stream_session_registry_t::admit_inbound (
             }
             if (aggregate->next_inbound_sequence == expected_sequence) {
                 const auto sequence = aggregate->next_inbound_sequence++;
-                aggregate->active_inbound.emplace (
+                aggregate->ingress_drain->active.emplace (
                   binding_generation, sequence);
                 _changed.notify_all ();
                 return {stateful_error_t::none,
-                        stream_dispatch_t{aggregate->binding, sequence}};
+                        stream_dispatch_t{aggregate->binding, sequence,
+                                          aggregate->ingress_drain}};
             }
         }
         if (timeout == std::chrono::milliseconds::zero ()
@@ -374,21 +442,13 @@ stateful_error_t stream_session_registry_t::complete_inbound (
   const stream_dispatch_t &dispatch)
 {
     std::lock_guard lock (_mutex);
-    const auto current =
-      _connections.find (dispatch.binding.connection.connection_id);
-    if (current == _connections.end ()
-        || current->second.connection != dispatch.binding.connection)
+    if (!dispatch.drain || !dispatch.drain->accepts_completion)
         return stateful_error_t::conflict;
-    const auto actor = current->second.bindings.find (
-      dispatch.binding.actor.key);
-    if (actor == current->second.bindings.end ()
-        || actor->second.binding != dispatch.binding)
-        return stateful_error_t::not_found;
-    const auto active = actor->second.active_inbound.find (
+    const auto active = dispatch.drain->active.find (
       {dispatch.binding.binding_generation, dispatch.inbound_sequence});
-    if (active == actor->second.active_inbound.end ())
+    if (active == dispatch.drain->active.end ())
         return stateful_error_t::not_found;
-    actor->second.active_inbound.erase (active);
+    dispatch.drain->active.erase (active);
     _changed.notify_all ();
     return stateful_error_t::none;
 }
@@ -403,7 +463,7 @@ stream_session_registry_t::try_seal_actor (const object_ref_t &actor)
     if (affected != nullptr && exact_actor (affected->binding.actor, actor)) {
         if (affected->barrier_token)
             return {stateful_error_t::moving, {}};
-        if (!affected->active_inbound.empty ())
+        if (!affected->ingress_drain->active.empty ())
             return {stateful_error_t::backpressured, {}};
     }
     else {
@@ -483,7 +543,7 @@ stream_session_registry_t::seal_remote_route (
         return {stateful_error_t::not_found, std::nullopt, {}, 0};
     }
     const auto last_sequence = aggregate->next_inbound_sequence - 1;
-    const auto active = !aggregate->active_inbound.empty ();
+    const auto active = !aggregate->ingress_drain->active.empty ();
     if (aggregate->binding.actor.kind != object_kind_t::actor
         || actor.kind != object_kind_t::actor
         || aggregate->binding.actor.key != actor.key
@@ -526,7 +586,7 @@ bool stream_session_registry_t::remote_route_seal_ready (
       barrier.actor.key);
     if (aggregate == nullptr)
         return true;
-    return aggregate->active_inbound.empty ();
+    return aggregate->ingress_drain->active.empty ();
 }
 
 bool stream_session_registry_t::close_remote_route_seal (
@@ -551,6 +611,7 @@ bool stream_session_registry_t::close_remote_route_seal (
     std::vector<stream_retained_outbound_t> discarded;
     for (auto &[actor_id, binding] :
          connection_found->second.bindings) {
+        binding.ingress_drain->accepts_completion = false;
         _actor_bindings.erase (actor_id);
         while (!binding.retained_outbound.empty ()) {
             discarded.push_back (std::move (
@@ -633,6 +694,17 @@ stream_outbound_admission_t stream_session_registry_t::admit_outbound (
         || aggregate->binding.actor.object_generation
              != tenure.object_generation) {
         return {stateful_error_t::conflict};
+    }
+    if (exact_tenure_target (tenure, aggregate->binding)
+        && aggregate->route_publish_pending) {
+        if (!retained || aggregate->next_outbound_token == 0)
+            return {stateful_error_t::conflict};
+        const auto token = aggregate->next_outbound_token++;
+        aggregate->retained_outbound.push_back (
+          retained_outbound_state_t{
+            token, tenure, std::move (retained)});
+        return {stateful_error_t::none,
+                stream_outbound_admission_kind_t::retained, token};
     }
     if (exact_tenure_target (tenure, aggregate->binding)) {
         return {stateful_error_t::none,
@@ -740,7 +812,7 @@ stream_route_admission_t stream_session_registry_t::commit_remote_route (
              <= previous_authority_owner_generation
         || target_node_generation == 0
         || target_owner_lease_generation == 0
-        || !aggregate->active_inbound.empty ()) {
+        || !aggregate->ingress_drain->active.empty ()) {
         return {stateful_error_t::conflict,
                 aggregate->binding, last_sequence, {}};
     }
@@ -857,7 +929,7 @@ bool stream_session_registry_t::try_seal_all ()
         return true;
     for (const auto &[_, state] : _connections) {
         for (const auto &[__, aggregate] : state.bindings)
-            if (!aggregate.active_inbound.empty ())
+            if (!aggregate.ingress_drain->active.empty ())
                 return false;
     }
     _all_sealed = true;
@@ -879,6 +951,10 @@ void stream_session_registry_t::force_close_all () noexcept
         _all_sealed = true;
         _barriers.clear ();
         _actor_bindings.clear ();
+        for (auto &[_, connection] : _connections) {
+            for (auto &[__, aggregate] : connection.bindings)
+                aggregate.ingress_drain->accepts_completion = false;
+        }
         closed.swap (_connections);
         _changed.notify_all ();
     }

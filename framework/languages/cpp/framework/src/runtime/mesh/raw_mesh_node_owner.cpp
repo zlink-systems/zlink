@@ -859,9 +859,12 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
 task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_with_header_result (
   const std::vector<std::uint8_t> &target_routing_id,
   std::vector<std::uint8_t> header,
-  const protocol::application_payload_t &application_payload)
+  const protocol::application_payload_t &application_payload,
+  detail::backend::raw_send_stage_trace_t trace)
 {
     if (!_topology.peer (target_routing_id)) {
+        if (trace)
+            trace ("router_admission_submit", "not_connected");
         co_return zlink::submit_result_t::not_connected;
     }
     std::shared_ptr<detail::backend::raw_route_port_t> port;
@@ -870,13 +873,15 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_with_header_result (
         port = _port;
     }
     if (!port) {
+        if (trace)
+            trace ("router_admission_submit", "terminated");
         co_return zlink::submit_result_t::terminated;
     }
     detail::backend::raw_message_t parts{
       std::move (header),
       protocol::encode_application_payload (application_payload)};
     const auto result = co_await port->send_result (
-      target_routing_id, parts);
+      target_routing_id, parts, std::move (trace));
     co_return result;
 }
 
@@ -1342,7 +1347,8 @@ task_t<bool> raw_mesh_node_owner_t::send_bound_session (
 task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_bound_session_result (
   const std::vector<std::uint8_t> &session_owner_routing_id,
   const protocol::bound_session_send_t &record,
-  const protocol::application_payload_t &application_payload)
+  const protocol::application_payload_t &application_payload,
+  detail::backend::raw_send_stage_trace_t trace)
 {
     const auto local = _topology.local_descriptor ();
     if (record.actor.target_node_routing_id != local.node_routing_id
@@ -1354,7 +1360,7 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_bound_session_result 
     co_return co_await send_with_header_result (
       session_owner_routing_id,
       protocol::encode_bound_session_send (record),
-      application_payload);
+      application_payload, std::move (trace));
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (

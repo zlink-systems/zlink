@@ -234,7 +234,8 @@ class raw_mesh_node_owner_t
     task_t<zlink::submit_result_t> send_bound_session_result (
       const std::vector<std::uint8_t> &session_owner_routing_id,
       const protocol::bound_session_send_t &record,
-      const protocol::application_payload_t &application_payload);
+      const protocol::application_payload_t &application_payload,
+      detail::backend::raw_send_stage_trace_t trace = {});
     task_t<bool> request_bound_session_bind (
       const std::vector<std::uint8_t> &actor_owner_routing_id,
       protocol::bound_session_bind_t record,
@@ -381,7 +382,8 @@ class raw_mesh_node_owner_t
     task_t<zlink::submit_result_t> send_with_header_result (
       const std::vector<std::uint8_t> &target_routing_id,
       std::vector<std::uint8_t> header,
-      const protocol::application_payload_t &application_payload);
+      const protocol::application_payload_t &application_payload,
+      detail::backend::raw_send_stage_trace_t trace = {});
     task_t<bool> send_header_only (
       const std::vector<std::uint8_t> &target_routing_id,
       std::vector<std::uint8_t> header);

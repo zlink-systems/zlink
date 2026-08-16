@@ -31,8 +31,11 @@ namespace zlink::framework::detail
 // off there is ZERO allocation on the dispatch hot path.
 //
 // Mode gating (modes are ordered off < errors < normal < detailed):
-//   * received / dispatched / replied / sent / reply_received require normal+.
+//   * received / admitted / dispatched / replied / sent / reply_received require normal+.
 //   * dropped / error require errors or higher.
+//   * Callers that use detail_stage for internal pipeline tracing must also
+//     gate the call with enabled(detailed); detail fields alone do not raise
+//     the event's required mode.
 //   * message sizes are appended only at detailed when include_message_sizes.
 class message_flow_tracer_t
 {
@@ -225,7 +228,7 @@ class message_flow_tracer_t
             // Build structured key/value fields once (so collectors can ingest
             // without parsing text); reuse them for the clog fallback too.
             std::vector<log_field_t> fields;
-            fields.reserve (14);
+            fields.reserve (16);
             auto add = [&fields] (const char *key, std::string value) {
                 diagnostic_event_sink_t::append_field (fields, key, std::move (value));
             };
@@ -270,6 +273,12 @@ class message_flow_tracer_t
             if (event.message_size && enabled (message_flow_log_mode_t::detailed)
                 && _options->diagnostics.include_message_sizes ()) {
                 add ("size", std::to_string (*event.message_size));
+            }
+            if (enabled (message_flow_log_mode_t::detailed)) {
+                if (event.detail_stage)
+                    add ("stage", *event.detail_stage);
+                if (event.detail_result)
+                    add ("result", *event.detail_result);
             }
             // Prefer the framework logger with structured fields (so a file/console
             // sink renders them and a collector callback gets record.fields); fall

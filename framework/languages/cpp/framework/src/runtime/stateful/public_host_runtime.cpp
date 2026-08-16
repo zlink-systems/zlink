@@ -2608,7 +2608,8 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_bound_session (
   std::uint64_t expected_binding_generation,
   std::uint64_t authority_owner_generation,
   std::uint64_t owner_lease_generation,
-  const std::vector<zlink::message_t> &parts)
+  const std::vector<zlink::message_t> &parts,
+  zlink::framework::detail::backend::raw_send_stage_trace_t trace)
 {
     const auto local = status ();
     const auto target_node = zlink::routing_id_t::from (
@@ -2665,7 +2666,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_bound_session (
           authority_owner_generation,
           owner_lease_generation},
         expected_binding_generation},
-      encode_application (parts));
+      encode_application (parts), std::move (trace));
 }
 
 task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
@@ -5553,20 +5554,6 @@ bool public_host_runtime_t::dispatch_bound_session_send (
     const auto application = protocol::decode_application_payload (
       mailbox_record.parts.back ());
     auto parts = decode_application (application);
-    std::optional<bound_session_operations_t::delivery_capability_t>
-      delivery;
-    if (operations.capture_send) {
-        delivery = operations.capture_send (record);
-        if (!delivery)
-            return false;
-    }
-    else {
-        delivery = [send = operations.send, record] (
-          std::vector<zlink::message_t> admitted_parts) mutable {
-            return send (
-              record, std::move (admitted_parts));
-        };
-    }
     const auto target_node = zlink::routing_id_t::from (
       record.actor.target_node_routing_id);
     const stateful::stream_remote_tenure_t tenure{
@@ -5617,13 +5604,24 @@ bool public_host_runtime_t::dispatch_bound_session_send (
         first_proof = stateful::stream_remote_tenure_proof_t{
           tenure, target_owner->owner_id};
     }
+    const auto execute_delivery = [operations, record] (
+                                   std::vector<zlink::message_t> admitted_parts) {
+        if (operations.capture_send) {
+            auto capability = operations.capture_send (record);
+            return capability
+              ? (*capability) (std::move (admitted_parts))
+              : stateful::stateful_error_t::conflict;
+        }
+        return operations.send (
+          record, std::move (admitted_parts));
+    };
     auto retained_delivery =
-      [capability = *delivery, parts,
+      [execute_delivery, parts,
        release = std::move (release_mailbox_reservation)] (
-        bool deliver) mutable {
-          if (deliver) {
+        bool should_deliver) mutable {
+          if (should_deliver) {
               try {
-                  (void) capability (std::move (parts));
+                  (void) execute_delivery (std::move (parts));
               }
               catch (...) {
               }
@@ -5646,7 +5644,7 @@ bool public_host_runtime_t::dispatch_bound_session_send (
         retain_mailbox_reservation ();
         return true;
     }
-    return (*delivery) (std::move (parts))
+    return execute_delivery (std::move (parts))
            == stateful::stateful_error_t::none;
 }
 

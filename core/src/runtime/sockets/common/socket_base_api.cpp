@@ -229,9 +229,18 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
     }
     if (ready_application && socket_type () == ZLINK_CORE_SOCKET_ROUTER)
         emit_transport_pair_ready (ready_application);
-    if (ready_application
-        && ready_application->release_writes_for_transport_pair ())
+    const bool transport_write_released =
+      ready_application
+      && ready_application->release_writes_for_transport_pair ();
+    if (transport_write_released) {
         write_activated (ready_application);
+        // A routed async submit can already be parked on transport_wait when
+        // the Application/Completion pair becomes Ready. HWM recovery emits
+        // its own edge from write_activated(), but releasing the pair hold is
+        // a distinct admission transition and must wake that exact target too.
+        (void) enqueue_routed_send_ready (
+          ready_application, ZLINK_ROUTED_SEND_WRITABLE, 0);
+    }
     if (ready_application && socket_type () != ZLINK_CORE_SOCKET_ROUTER) {
         // A Router may still be waiting for RID adoption after pair
         // validation. Publish here only when the Application pipe already

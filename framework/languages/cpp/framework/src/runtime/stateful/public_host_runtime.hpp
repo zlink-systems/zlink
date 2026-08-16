@@ -816,7 +816,8 @@ class public_host_runtime_t :
       std::uint64_t expected_binding_generation,
       std::uint64_t authority_owner_generation,
       std::uint64_t owner_lease_generation,
-      const std::vector<zlink::message_t> &parts);
+      const std::vector<zlink::message_t> &parts,
+      zlink::framework::detail::backend::raw_send_stage_trace_t trace = {});
     task_t<zlink::submit_result_t> request_to_actor (
       const actor_ref_t &target,
       const std::vector<zlink::message_t> &parts,

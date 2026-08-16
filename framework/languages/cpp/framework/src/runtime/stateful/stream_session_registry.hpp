@@ -9,6 +9,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -39,10 +40,17 @@ struct stream_binding_t
                             const stream_binding_t &) = default;
 };
 
+struct stream_ingress_drain_t
+{
+    std::set<std::pair<std::uint64_t, std::uint64_t>> active;
+    bool accepts_completion = true;
+};
+
 struct stream_dispatch_t
 {
     stream_binding_t binding;
     std::uint64_t inbound_sequence = 0;
+    std::shared_ptr<stream_ingress_drain_t> drain;
 };
 
 struct stream_barrier_t
@@ -116,6 +124,8 @@ class stream_session_registry_t
 
     stream_connection_t open (std::string connection_id);
     bool close (const stream_connection_t &connection);
+    std::vector<stream_binding_t> bindings (
+      const stream_connection_t &connection) const;
     std::pair<stateful_error_t, stream_binding_t> bind (
       const stream_connection_t &connection,
       const object_ref_t &actor,
@@ -125,7 +135,10 @@ class stream_session_registry_t
       const stream_connection_t &connection,
       const object_ref_t &verified_actor,
       std::uint64_t target_node_generation,
-      std::uint64_t owner_lease_generation);
+      std::uint64_t owner_lease_generation,
+      bool route_publish_pending = false);
+    std::optional<std::vector<stream_retained_outbound_t>>
+    complete_route_publish (const stream_binding_t &binding);
     stateful_error_t unbind (const stream_binding_t &binding);
     /* Restores a binding that was displaced by a later bind operation. This
      * is an internal transaction-compensation step for a failed owner-layer
@@ -218,17 +231,18 @@ class stream_session_registry_t
     {
         stream_binding_t binding;
         std::uint64_t next_inbound_sequence = 1;
-        std::set<std::pair<std::uint64_t, std::uint64_t>> active_inbound;
+        std::shared_ptr<stream_ingress_drain_t> ingress_drain =
+          std::make_shared<stream_ingress_drain_t> ();
         std::optional<std::uint64_t> barrier_token;
         std::optional<stream_remote_tenure_proof_t> pending_remote_tenure;
         std::deque<retained_outbound_state_t> retained_outbound;
         std::uint64_t next_outbound_token = 1;
+        bool route_publish_pending = false;
     };
 
     struct connection_state_t
     {
         stream_connection_t connection;
-        std::uint64_t next_binding_generation = 1;
         std::map<std::string, session_binding_aggregate_t> bindings;
     };
 
@@ -244,7 +258,8 @@ class stream_session_registry_t
       const stream_connection_t &connection,
       const object_ref_t &actor,
       std::uint64_t target_node_generation,
-      std::uint64_t owner_lease_generation);
+      std::uint64_t owner_lease_generation,
+      bool route_publish_pending = false);
     session_binding_aggregate_t *current_aggregate_unlocked (
       const std::string &actor_id);
     const session_binding_aggregate_t *current_aggregate_unlocked (
@@ -264,6 +279,7 @@ class stream_session_registry_t
     std::map<std::string, std::uint64_t> _last_connection_generation;
     std::map<std::string, actor_binding_locator_t> _actor_bindings;
     std::map<std::uint64_t, object_ref_t> _barriers;
+    std::uint64_t _next_binding_generation = 1;
     std::uint64_t _next_barrier_token = 1;
     bool _all_sealed = false;
 };

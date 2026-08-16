@@ -102,6 +102,8 @@ inline std::string_view enum_name (message_flow_outcome_t value) noexcept
             return "reply_received";
         case message_flow_outcome_t::error:
             return "error";
+        case message_flow_outcome_t::admitted:
+            return "admitted";
     }
     return "unknown";
 }

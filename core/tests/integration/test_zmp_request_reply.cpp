@@ -99,11 +99,13 @@ struct routed_self_close_probe_t
     std::mutex mutex;
     std::condition_variable cv;
     bool closed;
+    bool writable;
     zlink_close_result_t result;
     int errnum;
 
     routed_self_close_probe_t () :
-        closed (false), result (ZLINK_CLOSE_INTERNAL_ERROR), errnum (0)
+        closed (false), writable (false),
+        result (ZLINK_CLOSE_INTERNAL_ERROR), errnum (0)
     {
     }
 };
@@ -200,11 +202,21 @@ void ignore_routed_ready (void *,
 void close_on_routed_terminal (
   void *socket_, const zlink_routed_send_ready_event_t *event_, void *userdata_)
 {
-    if (!event_ || event_->state != ZLINK_ROUTED_SEND_TERMINAL)
+    if (!event_)
         return;
 
     routed_self_close_probe_t *probe =
       static_cast<routed_self_close_probe_t *> (userdata_);
+    if (event_->state == ZLINK_ROUTED_SEND_WRITABLE) {
+        {
+            std::lock_guard<std::mutex> lock (probe->mutex);
+            probe->writable = true;
+        }
+        probe->cv.notify_all ();
+        return;
+    }
+    if (event_->state != ZLINK_ROUTED_SEND_TERMINAL)
+        return;
     const zlink_close_result_t result = zlink_close (socket_);
     const int errnum = result == ZLINK_CLOSE_OK ? 0 : zlink_errno ();
     {
@@ -2418,6 +2430,14 @@ void test_router_exact_request_to_dealer_completes_on_async_owner ()
           std::chrono::steady_clock::now () < target_deadline,
           "ROUTER exact target did not become selectable");
         msleep (1);
+    }
+    {
+        std::unique_lock<std::mutex> lock (router_close_probe.mutex);
+        TEST_ASSERT_TRUE_MESSAGE (
+          router_close_probe.cv.wait_for (
+            lock, std::chrono::seconds (3),
+            [&router_close_probe] { return router_close_probe.writable; }),
+          "paired ROUTER did not publish writable after transport admission");
     }
     zlink_routed_submit_target_t dealer_target;
     memset (&dealer_target, 0, sizeof (dealer_target));

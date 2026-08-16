@@ -1264,6 +1264,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_actor_gateway
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway.cpp
     "framework-unit;framework-regression;framework-actor;stream")
+  target_include_directories(test_cpp_framework_actor_gateway PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_app_host PRIVATE zlink::http_client)
   if(ZLINK_FRAMEWORK_CPP_ENABLE_COVERAGE)
     set(ZLINK_FRAMEWORK_HTTP_TEST_HTTP_ENDPOINT "http://127.0.0.1:18180")

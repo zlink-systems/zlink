@@ -394,6 +394,10 @@ class mesh_node_runtime_t
                                     std::uint64_t binding_generation,
                                     const runtime::spot_address_t &actor_route,
                                     std::chrono::milliseconds timeout);
+    task_t<void> retire_application_actor_session (
+      const runtime::stateful::stream_binding_t &binding,
+      const zlink::routing_id_t &session_rid,
+      std::chrono::milliseconds timeout);
     std::optional<runtime::spot_address_t>
     resolve_application_actor_route (const actor_ref_t &actor) const;
     std::optional<runtime::spot_address_t>

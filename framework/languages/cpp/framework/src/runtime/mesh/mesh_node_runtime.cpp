@@ -2998,6 +2998,76 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
     }
 }
 
+task_t<void> mesh_node_runtime_t::retire_application_actor_session (
+  const runtime::stateful::stream_binding_t &binding,
+  const zlink::routing_id_t &session_rid,
+  std::chrono::milliseconds timeout)
+{
+    if (binding.binding_generation == 0
+        || binding.actor.kind != runtime::stateful::object_kind_t::actor
+        || binding.actor.key.empty () || binding.actor.object_generation == 0
+        || binding.actor.authority_owner_generation == 0
+        || binding.actor.node_id.empty ()
+        || binding.target_node_generation == 0
+        || binding.owner_lease_generation == 0
+        || session_rid.to_bytes ().empty ()) {
+        throw framework_exception_t (
+          framework_error_kind_t::invalid_operation,
+          "retired Actor session binding fence is invalid");
+    }
+    auto completion = std::make_shared<
+      detail::task_completion_source_t<runtime::protocol::reply_header_t>> ();
+    auto output = completion->task ();
+    const auto actor_owner = zlink::routing_id_t::from (
+      binding.actor.node_id);
+    const auto submitted = co_await _node->transport ().request_bound_session_bind (
+      actor_owner.to_bytes (),
+      runtime::protocol::bound_session_bind_t{
+        0,
+        runtime::protocol::actor_route_fence_t{
+          binding.actor.key, binding.actor.object_generation,
+          actor_owner.to_bytes (), binding.target_node_generation,
+          binding.actor.authority_owner_generation,
+          binding.owner_lease_generation},
+        session_rid.to_bytes (),
+        {runtime::protocol::bound_session_binding_state_t::tombstone,
+         binding.binding_generation}},
+      timeout,
+      [completion] (runtime::foundation::operation_terminal_t terminal,
+                    std::vector<std::uint8_t> payload) {
+          if (terminal != runtime::foundation::operation_terminal_t::completed) {
+              completion->complete (
+                result_t<runtime::protocol::reply_header_t>::failure (
+                  framework_error_kind_t::unavailable,
+                  "retired Actor session binding did not complete"));
+              return;
+          }
+          try {
+              completion->complete (
+                result_t<runtime::protocol::reply_header_t>::success (
+                  runtime::protocol::decode_reply_header (payload)));
+          }
+          catch (const runtime::protocol::service_wire_error_t &) {
+              completion->complete (
+                result_t<runtime::protocol::reply_header_t>::failure (
+                  framework_error_kind_t::protocol_error,
+                  "retired Actor session binding reply decode failed"));
+          }
+      });
+    if (!submitted) {
+        throw framework_exception_t (
+          framework_error_kind_t::not_configured,
+          "retired Actor session binding was not accepted");
+    }
+    const auto reply = co_await output;
+    if (reply.terminal_result != 0) {
+        throw framework_exception_t (
+          framework_error_kind_t::invalid_operation,
+          "retired Actor session binding was rejected");
+    }
+    co_return;
+}
+
 task_t<void> mesh_node_runtime_t::notify_application_actor_disconnected (
   const actor_ref_t &actor, const node_rid_t &target_node, std::chrono::milliseconds timeout)
 {

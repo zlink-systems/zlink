@@ -18,7 +18,8 @@ enum class message_flow_outcome_t
     dropped = 3,
     sent = 4,
     reply_received = 5,
-    error = 6
+    error = 6,
+    admitted = 7
 };
 
 enum class dispatch_error_surface_t
@@ -95,6 +96,8 @@ struct message_flow_event_t
     std::exception_ptr exception;
     std::optional<std::string> flow_id;
     std::optional<flow_origin_t> flow_origin;
+    std::optional<std::string> detail_stage;
+    std::optional<std::string> detail_result;
 };
 
 } // namespace zlink::framework

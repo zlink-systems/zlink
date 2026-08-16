@@ -1774,7 +1774,9 @@ class spot_handler_registry_t
                                             actor_queue_dispatch_t actor_queue_dispatch =
                                               actor_queue_dispatch_t::acquire,
                                             std::function<void ()>
-                                              before_application_handler = {}) const;
+                                              before_application_handler = {},
+                                            std::function<void ()>
+                                              after_application_admission = {}) const;
 
     void register_actor_admission_erased (std::type_index actor_type,
                                           detail::spot_actor_admission_callbacks_t callbacks);

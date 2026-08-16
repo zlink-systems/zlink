@@ -1155,7 +1155,9 @@ class spot_node_runtime_t
                         const runtime::protocol::actor_route_fence_t *
                           admitted_message_follow_target = nullptr,
                         std::function<void ()>
-                          before_application_handler = {});
+                          before_application_handler = {},
+                        std::function<void ()>
+                          after_application_admission = {});
     result_t<void> notify_actor_disconnected_erased (const actor_ref_t &actor_ref) const;
 
     template <typename TActor>

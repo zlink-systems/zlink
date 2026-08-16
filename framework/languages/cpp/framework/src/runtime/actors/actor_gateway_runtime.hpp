@@ -194,6 +194,11 @@ class actor_gateway_state_t
         std::shared_ptr<task_completion_source_t<void>> completion;
     };
 
+    struct pending_bound_session_send_t
+    {
+        std::function<task_t<result_t<void>> ()> dispatch;
+    };
+
     std::map<std::string, actor_record_t> actors_by_id;
     std::map<std::string, std::shared_ptr<bound_session_sink_t>> bound_session_sinks;
     std::map<std::string, std::shared_ptr<bound_session_replacement_handler_t>>
@@ -202,6 +207,9 @@ class actor_gateway_state_t
     std::vector<relayed_frame_t> bound_session_pushes;
     std::map<std::string, std::deque<pending_session_relay_t>> pending_session_relays;
     std::set<std::string> active_session_relays;
+    std::map<std::string, std::deque<pending_bound_session_send_t>>
+      pending_bound_session_sends;
+    std::set<std::string> active_bound_session_sends;
     std::set<session_relay_completion_fence_t> active_session_relay_completions;
     create_dispatcher_t create_dispatcher;
     join_spot_dispatcher_t join_spot_dispatcher;
@@ -233,6 +241,10 @@ class actor_gateway_runtime_t
     std::vector<relayed_frame_t> bound_session_pushes () const;
     std::optional<actor_bound_session_route_t>
     bound_session_route (const actor_ref_t &actor_ref) const;
+    std::optional<actor_bound_session_route_t>
+    resolve_bound_session_push_route (
+      const actor_ref_t &actor_ref,
+      const actor_bound_session_route_t &staged_route) const;
     bool actor_bound (std::string actor_id) const;
     bool actor_disconnected (std::string actor_id) const;
     actor_context_t actor_context (const actor_ref_t &actor_ref,
@@ -348,6 +360,10 @@ class actor_gateway_runtime_t
     void on_disconnect (actor_gateway_state_t::disconnect_dispatcher_t dispatcher);
     void on_bound_session (actor_gateway_state_t::bound_session_registrar_t registrar);
     void on_bound_session_send (actor_gateway_state_t::bound_session_sender_t sender);
+    void trace_bound_session_send_stage (
+      const std::string &actor_id,
+      std::string stage,
+      std::string result = {}) const;
     void bind_serializers (serializer_registry_t &serializers);
     void set_dispatch (dispatch_options_t options);
 

@@ -13,6 +13,30 @@
 
 namespace zlink::framework::detail::backend
 {
+namespace
+{
+const char *submit_result_name (zlink::submit_result_t result) noexcept
+{
+    switch (result) {
+        case zlink::submit_result_t::ok: return "ok";
+        case zlink::submit_result_t::backpressured: return "backpressured";
+        case zlink::submit_result_t::not_connected: return "not_connected";
+        case zlink::submit_result_t::not_found: return "not_found";
+        case zlink::submit_result_t::terminated: return "terminated";
+        case zlink::submit_result_t::invalid_handle: return "invalid_handle";
+        case zlink::submit_result_t::invalid_argument: return "invalid_argument";
+        case zlink::submit_result_t::not_supported: return "not_supported";
+        case zlink::submit_result_t::invalid_state: return "invalid_state";
+        case zlink::submit_result_t::thread_violation: return "thread_violation";
+        case zlink::submit_result_t::out_of_memory: return "out_of_memory";
+        case zlink::submit_result_t::seq_exhausted: return "seq_exhausted";
+        case zlink::submit_result_t::internal_error: return "internal_error";
+        case zlink::submit_result_t::not_admitted: return "not_admitted";
+    }
+    return "unknown";
+}
+}
+
 raw_route_port_t::raw_route_port_t (zlink::router_socket_t &socket,
                                     std::mutex *shared_socket_mutex,
                                     zlink::poll_event_flag_t receive_events,
@@ -36,32 +60,62 @@ raw_route_port_t::raw_route_port_t (zlink::router_socket_t &socket,
 
 task_t<zlink::submit_result_t> raw_route_port_t::send_result (
   const raw_bytes_t &target_routing_id,
-  const raw_message_t &parts)
+  const raw_message_t &parts,
+  raw_send_stage_trace_t trace)
 {
     if (target_routing_id.empty () || parts.empty ()) {
         throw std::invalid_argument ("raw route send requires a target and message parts");
     }
     auto messages = materialize_binding_parts (parts);
     std::optional<zlink::async_result_t<void>> pending;
-    {
-        std::lock_guard lock (*_socket_mutex);
-        if (_socket == nullptr) {
-            co_return zlink::submit_result_t::terminated;
+    try {
+        if (trace)
+            trace ("router_admission_submit", "begin");
+        {
+            std::lock_guard lock (*_socket_mutex);
+            if (_socket == nullptr) {
+                if (trace)
+                    trace ("router_admission_submit", "terminated");
+                co_return zlink::submit_result_t::terminated;
+            }
+            auto operation = std::move (_socket->send (
+                                          zlink::routing_id_t::from (target_routing_id)))
+                               .message (messages[0]);
+            for (std::size_t index = 1; index < messages.size (); ++index) {
+                operation = std::move (operation).message (messages[index]);
+            }
+            pending.emplace (std::move (operation).async ());
         }
-        auto operation = std::move (_socket->send (
-                                      zlink::routing_id_t::from (target_routing_id)))
-                           .message (messages[0]);
-        for (std::size_t index = 1; index < messages.size (); ++index) {
-            operation = std::move (operation).message (messages[index]);
+        if (trace) {
+            trace ("router_admission_submit", "queued");
+            trace ("router_admission_wait", "pending");
         }
-        pending.emplace (std::move (operation).async ());
+    }
+    catch (const zlink::submit_error_t &error) {
+        if (trace)
+            trace ("router_admission_submit", submit_result_name (error.result ()));
+        co_return error.result ();
+    }
+    catch (...) {
+        if (trace)
+            trace ("router_admission_submit", "exception");
+        throw;
     }
     try {
         co_await std::move (*pending);
+        if (trace)
+            trace ("router_admission_complete", "ok");
         co_return zlink::submit_result_t::ok;
     }
     catch (const zlink::submit_error_t &error) {
+        if (trace)
+            trace ("router_admission_complete", submit_result_name (error.result ()));
         co_return error.result ();
+    }
+    catch (...) {
+        if (trace)
+            trace ("router_admission_complete", "exception");
+        throw;
     }
 }
 

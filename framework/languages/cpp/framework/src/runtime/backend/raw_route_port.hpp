@@ -3,10 +3,12 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <vector>
+#include <string_view>
 
 #include <zlink/Contracts/Eventing/poller.hpp>
 #include <zlink/Contracts/Messaging/received.hpp>
@@ -25,6 +27,8 @@ namespace zlink::framework::detail::backend
 
 using raw_bytes_t = std::vector<std::uint8_t>;
 using raw_message_t = std::vector<raw_bytes_t>;
+using raw_send_stage_trace_t =
+  std::function<void (std::string_view, std::string_view)>;
 
 struct raw_received_t
 {
@@ -62,7 +66,8 @@ class raw_route_port_t
 
     task_t<zlink::submit_result_t> send_result (
       const raw_bytes_t &target_routing_id,
-      const raw_message_t &parts);
+      const raw_message_t &parts,
+      raw_send_stage_trace_t trace = {});
     task_t<bool> send (const raw_bytes_t &target_routing_id,
                        const raw_message_t &parts);
     task_t<raw_request_completion_t> request (

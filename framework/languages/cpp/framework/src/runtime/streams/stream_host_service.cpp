@@ -1937,7 +1937,7 @@ class stream_host_service_t::listener_t
                 transport_connection, verified_actor.value (),
                 actor_route->node_generation,
                 static_cast<std::uint64_t> (
-                  actor_route->owner.lease_generation));
+                  actor_route->owner.lease_generation), true);
         } else {
             const runtime::stateful::object_ref_t verified_actor{
               runtime::stateful::object_kind_t::actor,
@@ -1951,7 +1951,7 @@ class stream_host_service_t::listener_t
                 transport_connection, verified_actor,
                 actor_route->node_generation,
                 static_cast<std::uint64_t> (
-                  actor_route->owner.lease_generation));
+                  actor_route->owner.lease_generation), true);
         }
         if (error != runtime::stateful::stateful_error_t::none) {
             throw framework_exception_t (
@@ -1983,6 +1983,14 @@ class stream_host_service_t::listener_t
                   transition.error () ? transition.error ()->what ()
                                       : "bound Session route registration failed");
             }
+            actor_gateway.trace_bound_session_send_stage (
+              std::string (actor.actor_id ().value ()),
+              "session_owner_route_publish",
+              "session_rid=" + session_rid.to_hex ()
+                + " binding_generation="
+                + std::to_string (binding.binding_generation)
+                + " replaced="
+                + (transition.value ().changed ? "true" : "false"));
             if (transition.value ().changed
                 && transition.value ().previous
                 && transition.value ().previous->session_rid
@@ -2075,6 +2083,34 @@ class stream_host_service_t::listener_t
                     actor.object_generation (),
                     binding.binding_generation});
             }
+            auto retained = _mesh_node->native_node ().sessions ()
+                              .complete_route_publish (binding);
+            if (!retained) {
+                recorded = result_t<void>::failure (
+                  framework_error_kind_t::internal_failure,
+                  "STREAM Actor route publication lost its binding fence");
+            }
+            else {
+                auto actor_gateway =
+                  _services->get_required<detail::actor_gateway_runtime_t> ();
+                actor_gateway.trace_bound_session_send_stage (
+                  std::string (actor.actor_id ().value ()),
+                  "session_owner_route_publish_complete",
+                  "session_rid=" + session_rid.to_hex ()
+                    + " binding_generation="
+                    + std::to_string (binding.binding_generation)
+                    + " held_pushes="
+                    + std::to_string (retained->size ()));
+                for (auto &settle : *retained) {
+                    asio::post (
+                      _io, [settle = std::move (settle)] () mutable {
+                          if (settle)
+                              settle (true);
+                      });
+                }
+            }
+        }
+        if (recorded) {
             co_return;
         }
 
@@ -2095,6 +2131,68 @@ class stream_host_service_t::listener_t
                 ? *recorded.error ()
                 : framework_exception_t (framework_error_kind_t::internal_failure,
                                          "Framework STREAM actor binding failed");
+    }
+
+    task_t<void> retire_actor_session_bindings (
+      const runtime::stateful::stream_connection_t &connection,
+      const zlink::routing_id_t &session_rid)
+    {
+        if (!_mesh_node)
+            co_return;
+        const auto local = _mesh_node->native_node ().status ();
+        const auto bindings = _mesh_node->native_node ().sessions ().bindings (
+          connection);
+        auto actor_gateway =
+          _services->get_required<detail::actor_gateway_runtime_t> ();
+        for (const auto &binding : bindings) {
+            try {
+                if (binding.actor.node_id
+                    == local.routing_id ().to_string ()) {
+                    const auto actor = detail::actor_ref_access_t::make (
+                      node_rid_t::from_string (binding.actor.node_id), {},
+                      binding.actor.key, binding.actor.object_generation);
+                    const auto retired = actor_gateway.retire_bound_session_route (
+                      actor, local.routing_id (), session_rid,
+                      binding.binding_generation);
+                    if (!retired)
+                        continue;
+                }
+                else {
+                    co_await _mesh_node->retire_application_actor_session (
+                      binding, session_rid, std::chrono::seconds (5));
+                }
+                actor_gateway.trace_bound_session_send_stage (
+                  binding.actor.key, "session_owner_route_tombstone",
+                  "session_rid=" + session_rid.to_hex ()
+                    + " binding_generation="
+                    + std::to_string (binding.binding_generation));
+            }
+            catch (const std::exception &error) {
+                actor_gateway.trace_bound_session_send_stage (
+                  binding.actor.key, "session_owner_route_tombstone_failed",
+                  "session_rid=" + session_rid.to_hex ()
+                    + " binding_generation="
+                    + std::to_string (binding.binding_generation)
+                    + " error=" + error.what ());
+            }
+        }
+        co_return;
+    }
+
+    void retire_actor_session_bindings_async (
+      runtime::stateful::stream_connection_t connection,
+      zlink::routing_id_t session_rid,
+      std::function<void ()> completed)
+    {
+        auto pending = std::make_shared<task_t<void>> (
+          retire_actor_session_bindings (connection, session_rid));
+        detail::observe_task_completion (
+          *pending,
+          [pending, completed = std::move (completed)] (
+            const result_t<void> &) mutable {
+              if (completed)
+                  completed ();
+          });
     }
 
     std::shared_ptr<core_session_t>
@@ -2266,7 +2364,12 @@ class stream_host_service_t::listener_t
         }
 
         auto finalize = [this, retirement_id, current] (const result_t<void> &) {
-            finalize_core_session (retirement_id, current);
+            retire_actor_session_bindings_async (
+              current->transport_connection,
+              zlink::routing_id_t::from (current->stream.session_id ()),
+              [this, retirement_id, current] {
+                  finalize_core_session (retirement_id, current);
+              });
         };
         if (dispatch_disconnected) {
             auto submitted = _runtime.dispatch_disconnected_async (
@@ -3471,7 +3574,13 @@ class stream_host_service_t::listener_t
             auto dispatch_disconnect = [this, &session, &stream, connection_state] {
                 auto completed = [this, connection_state] (const result_t<void> &) {
                     trace_stream_host ("dispatch-disconnected-end", _stream);
-                    (void) connection_state;
+                    if (!connection_state->transport_connection)
+                        return;
+                    retire_actor_session_bindings_async (
+                      *connection_state->transport_connection,
+                      zlink::routing_id_t::from (
+                        connection_state->stream.session_id ()),
+                      [connection_state] { (void) connection_state; });
                 };
                 auto submitted = _runtime.dispatch_disconnected_async (
                   session, stream, completed);

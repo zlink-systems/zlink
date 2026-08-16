@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/spots/spot_runtime.hpp"
+#include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
@@ -816,6 +820,12 @@ int bound_session_send_does_not_publish_caller_location ()
                   .send (std::string ("push"))
                   .submit ()
                   .result ();
+    const auto delivery_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (1);
+    while (sends.load (std::memory_order_acquire) != 1
+           && std::chrono::steady_clock::now () < delivery_deadline) {
+        std::this_thread::yield ();
+    }
     if (!sent || sends.load () != 1) {
         return 2;
     }
@@ -989,6 +999,96 @@ int bound_session_route_installs_sink_and_fence_together ()
              && preserved->session_rid->to_string () == "session-rid"
            ? 0
            : 7;
+}
+
+int bound_session_push_detaches_before_direct_sink_entry ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    serializer_registry_t serializers;
+    state->serializers = &serializers;
+    actor_gateway_runtime_t gateway (state);
+    const auto actor = test_actor_ref (
+      "actor-owner", "player", "detached-bound-session", 7);
+
+    std::mutex gate_mutex;
+    std::condition_variable gate_changed;
+    int sender_started = 0;
+    bool release_sender = false;
+    auto direct_stream_sink =
+      [&] (std::string, stream_codec_t,
+           const zlink::message_t &) -> task_t<void> {
+          const auto ordinal = [&] {
+              std::unique_lock lock (gate_mutex);
+              const auto value = ++sender_started;
+              gate_changed.notify_all ();
+              if (value == 1)
+                  gate_changed.wait (lock, [&] { return release_sender; });
+              return value;
+          } ();
+          if (ordinal < 1)
+              throw framework_exception_t (
+                framework_error_kind_t::internal_failure,
+                "invalid detached sink order");
+          co_return;
+      };
+    const auto installed = gateway.replace_session_route (
+      actor, std::move (direct_stream_sink),
+      actor_bound_session_route_t{
+        zlink::routing_id_t::from ("session-owner"),
+        zlink::routing_id_t::from ("session-rid"),
+        7, 11, 13, 17, 19, 23, 0});
+    if (!installed) {
+        return 1;
+    }
+
+    auto submitted = std::async (
+      std::launch::async,
+      [&] {
+          return gateway.actor_context (actor)
+            .bound_session ()
+            .send (std::string ("joined"))
+            .submit ()
+            .result ();
+      });
+    const auto immediate = submitted.wait_for (
+      std::chrono::milliseconds (100));
+    auto second = gateway.actor_context (actor)
+                    .bound_session ()
+                    .send (std::string ("joined-again"))
+                    .submit ();
+    {
+        std::unique_lock lock (gate_mutex);
+        if (!gate_changed.wait_for (
+              lock, std::chrono::seconds (1),
+              [&] { return sender_started == 1; })) {
+            release_sender = true;
+            gate_changed.notify_all ();
+            return 2;
+        }
+        if (sender_started != 1 || !second.await_ready ()) {
+            release_sender = true;
+            gate_changed.notify_all ();
+            return 3;
+        }
+        release_sender = true;
+    }
+    gate_changed.notify_all ();
+    if (immediate != std::future_status::ready)
+        return 4;
+    if (!submitted.get () || !second.result ())
+        return 5;
+    {
+        std::unique_lock lock (gate_mutex);
+        if (!gate_changed.wait_for (
+              lock, std::chrono::seconds (1),
+              [&] { return sender_started == 2; })) {
+            return 6;
+        }
+    }
+    return 0;
 }
 
 int bound_session_transition_is_atomic_and_idempotent ()
@@ -1191,6 +1291,32 @@ int authority_only_route_update_keeps_physical_session_current ()
     if (!local_dispatched || local_stream_calls.load () != 1
         || replacement_sink_calls.load () != 0)
         return 7;
+    auto local_rebound = local_relocated;
+    local_rebound.session_rid = zlink::routing_id_t::from (
+      std::string ("replacement-session"));
+    local_rebound.binding_generation = 97;
+    const auto rebound = local_gateway.replace_session_route (
+      test_actor_ref ("actor-target", "game.actor",
+                      "actor-local-stream", 59),
+      [&replacement_sink_calls] (std::string, stream_codec_t,
+                                 const zlink::message_t &) {
+          ++replacement_sink_calls;
+          return task_t<void> (result_t<void>::success ());
+      },
+      local_rebound, stream_codec_t::message_pack);
+    if (!rebound || !rebound.value ().changed
+        || !rebound.value ().previous
+        || rebound.value ().previous->session_rid != session_rid
+        || rebound.value ().previous->binding_generation != 73)
+        return 8;
+    const auto rebound_dispatch = local_gateway.dispatch_bound_session_send (
+      test_actor_ref ("actor-target", "game.actor",
+                      "actor-local-stream", 59),
+      "ReconnectedNotify", stream_codec_t::message_pack,
+      zlink::message_t{});
+    if (!rebound_dispatch || local_stream_calls.load () != 1
+        || replacement_sink_calls.load () != 1)
+        return 9;
     return 0;
 }
 
@@ -1543,10 +1669,436 @@ int relay_send_survives_pending_dispatcher_completion ()
     return relayed.result () ? 0 : 2;
 }
 
+int actor_send_reports_fifo_admission_before_handler_terminal ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    serializer_registry_t serializers;
+    auto node = std::make_shared<spot_node_builder_state_t> (
+      "actor-send-admission-node");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (
+      1, 16, "actor-send-admission");
+    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+
+    auto spot = std::make_shared<spot_context_state_t> ();
+    spot->node = node;
+    spot->node_rid = node_rid_t::from_string (
+      "actor-send-admission-node");
+    spot->spot_id = spot_id_t ("actor-send-admission-spot");
+    spot->spot_name = "actor-send-admission";
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    spot->channel_runtime->serializers = &serializers;
+    spot->serial_executor = node->worker_executor;
+    node->spot_contexts_by_id.emplace (
+      spot->spot_id, spot_context_access_t::create (spot));
+
+    std::atomic_bool disconnected_started{false};
+    spot_actor_admission_callbacks_t admission_callbacks;
+    admission_callbacks.on_disconnect_actor =
+      [&disconnected_started] (void *, void *) -> task_t<void> {
+          disconnected_started.store (true, std::memory_order_release);
+          co_return;
+      };
+    spot->actor_admissions.emplace (
+      std::type_index (typeid (int)), std::move (admission_callbacks));
+
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.create_instance = [] (std::string) {
+        return std::make_shared<int> (7);
+    };
+    factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+    node->actor_factories.emplace ("player", std::move (factory));
+
+    const auto actor = test_actor_ref (
+      "actor-send-admission-node", "player", "reconnect-player", 1);
+    const auto actor_key = std::string ("player:reconnect-player");
+    node->actor_instances.emplace (actor_key, std::make_shared<int> (7));
+    node->actor_spot_ids.emplace (actor_key, spot->spot_id);
+    node->actor_generations.emplace (actor_key, 1);
+
+    auto handler_terminal =
+      std::make_shared<task_completion_source_t<void>> ();
+    std::atomic_bool handler_started{false};
+    spot->handlers.push_back (spot_handler_descriptor_t{
+      spot_handler_kind_t::actor_send, "JoinGameMsg", "",
+      std::type_index (typeid (int)), std::type_index (typeid (void)),
+      std::type_index (typeid (int)), std::type_index (typeid (void))});
+    spot->handler_invokers.push_back (
+      [handler_terminal, &handler_started] (
+        void *, void *, service_provider_t &, serializer_registry_t &,
+        const zlink::message_t &, const spot_inbound_message_t &)
+        -> task_t<zlink::message_t> {
+          handler_started.store (true, std::memory_order_release);
+          co_await handler_terminal->task ();
+          co_return zlink::message_t{};
+      });
+
+    service_collection_t services;
+    auto provider = services.build_provider ();
+    actor_gateway_runtime_t gateway;
+    std::atomic_int admitted{0};
+    auto relayed = spot_node_runtime_t (node).relay_actor_packet (
+      actor, gateway.actor_context (actor), stream_message_kind_t::send,
+      "JoinGameMsg", zlink::message_t::from ("join"), provider,
+      serializers, {}, nullptr, {},
+      [&admitted] {
+          admitted.fetch_add (1, std::memory_order_acq_rel);
+      });
+
+    const auto handler_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (1);
+    while (!handler_started.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < handler_deadline) {
+        std::this_thread::yield ();
+    }
+    if (admitted.load (std::memory_order_acquire) != 1
+        || relayed.await_ready ()) {
+        return 1;
+    }
+    auto disconnected = std::async (
+      std::launch::async,
+      [node, actor] {
+          return spot_node_runtime_t (node)
+            .notify_actor_disconnected_erased (actor);
+      });
+    if (disconnected.wait_for (std::chrono::milliseconds (50))
+          != std::future_status::timeout
+        || disconnected_started.load (std::memory_order_acquire)) {
+        handler_terminal->complete (result_t<void>::success ());
+        (void) disconnected.get ();
+        return 2;
+    }
+    handler_terminal->complete (result_t<void>::success ());
+    if (!relayed.result ())
+        return 3;
+    if (disconnected.wait_for (std::chrono::seconds (1))
+          != std::future_status::ready) {
+        return 4;
+    }
+    const auto disconnected_result = disconnected.get ();
+    return disconnected_result
+             && disconnected_started.load (std::memory_order_acquire)
+           ? 0
+           : 5;
+}
+
+int rebound_session_keeps_prior_ingress_exact_fence ()
+{
+    using namespace zlink::framework::runtime::stateful;
+
+    const object_ref_t actor{
+      object_kind_t::actor, "reconnect-player", 1, 7, "player", "node-a"};
+    stream_session_registry_t sessions (
+      [actor] (const std::string &actor_id) -> std::optional<object_ref_t> {
+          return actor_id == actor.key ? std::make_optional (actor)
+                                       : std::nullopt;
+      });
+    const auto connection = sessions.open ("reconnect-session");
+    const auto [first_error, first] = sessions.bind (
+      connection, actor, 11, 13);
+    if (first_error != stateful_error_t::none)
+        return 1;
+    const auto [admit_error, admitted] = sessions.admit_inbound (first);
+    if (admit_error != stateful_error_t::none || !admitted)
+        return 2;
+
+    const auto [rebind_error, rebound] = sessions.bind (
+      connection, actor, 11, 13);
+    if (rebind_error != stateful_error_t::none
+        || rebound.binding_generation == first.binding_generation) {
+        return 3;
+    }
+    const auto seal = sessions.seal_remote_route (
+      connection.connection_id, rebound.binding_generation,
+      actor, 11, 13);
+    if (seal.error != stateful_error_t::backpressured
+        || sessions.remote_route_seal_ready (seal.barrier)) {
+        return 4;
+    }
+    if (sessions.complete_inbound (*admitted)
+          != stateful_error_t::none
+        || !sessions.remote_route_seal_ready (seal.barrier)) {
+        return 5;
+    }
+    return sessions.abort_barrier (seal.barrier)
+               == stateful_error_t::none
+             ? 0
+             : 6;
+}
+
+int reconnect_binding_publish_holds_new_route_push ()
+{
+    using namespace zlink::framework::runtime::stateful;
+
+    const object_ref_t actor{
+      object_kind_t::actor, "reconnect-route-actor", 7, 11,
+      "player", "actor-owner"};
+    stream_session_registry_t sessions (
+      [actor] (const std::string &actor_id)
+        -> std::optional<object_ref_t> {
+          return actor_id == actor.key ? std::make_optional (actor)
+                                       : std::nullopt;
+      });
+    const auto old_connection = sessions.open ("old-session-rid");
+    const auto [old_error, old_binding] = sessions.bind_remote (
+      old_connection, actor, 13, 17);
+    if (old_error != stateful_error_t::none)
+        return 1;
+
+    const auto new_connection = sessions.open ("new-session-rid");
+    const auto [new_error, new_binding] = sessions.bind_remote (
+      new_connection, actor, 13, 17, true);
+    if (new_error != stateful_error_t::none
+        || new_binding.binding_generation
+             <= old_binding.binding_generation)
+        return 2;
+
+    std::atomic_int settled{0};
+    std::atomic_bool delivered{false};
+    const stream_remote_tenure_t new_tenure{
+      actor.key, actor.object_generation,
+      actor.authority_owner_generation, actor.node_id, 13, 17,
+      new_binding.binding_generation};
+    const auto held = sessions.admit_outbound (
+      new_tenure, std::nullopt,
+      [&] (bool accepted) {
+          delivered.store (accepted, std::memory_order_release);
+          settled.fetch_add (1, std::memory_order_acq_rel);
+      });
+    if (held.error != stateful_error_t::none
+        || held.kind != stream_outbound_admission_kind_t::retained
+        || settled.load (std::memory_order_acquire) != 0)
+        return 3;
+
+    auto retained = sessions.complete_route_publish (new_binding);
+    if (!retained)
+        return 4;
+    for (auto &settle : *retained)
+        settle (true);
+    if (settled.load (std::memory_order_acquire) != 1
+        || !delivered.load (std::memory_order_acquire))
+        return 5;
+
+    const stream_remote_tenure_t stale_tenure{
+      actor.key, actor.object_generation,
+      actor.authority_owner_generation, actor.node_id, 13, 17,
+      old_binding.binding_generation};
+    return sessions.admit_outbound (
+             stale_tenure, std::nullopt, [] (bool) {})
+               .error == stateful_error_t::conflict
+             ? 0
+             : 6;
+}
+
+int reconnect_push_reaches_new_session_across_two_hosts ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    auto actor_owner_state = std::make_shared<actor_gateway_state_t> ();
+    auto session_owner_state = std::make_shared<actor_gateway_state_t> ();
+    serializer_registry_t serializers;
+    actor_owner_state->serializers = &serializers;
+    session_owner_state->serializers = &serializers;
+    actor_gateway_runtime_t actor_owner (actor_owner_state);
+    actor_gateway_runtime_t session_owner (session_owner_state);
+    const auto actor = test_actor_ref (
+      "actor-owner", "player", "two-host-reconnect", 7);
+    const auto session_owner_rid = zlink::routing_id_t::from (
+      "session-owner");
+    const zlink::framework::runtime::stateful::object_ref_t session_actor{
+      zlink::framework::runtime::stateful::object_kind_t::actor,
+      "two-host-reconnect", 7, 13, "player", "actor-owner"};
+    zlink::framework::runtime::stateful::stream_session_registry_t
+      stream_sessions (
+        [session_actor] (const std::string &actor_id)
+          -> std::optional<zlink::framework::runtime::stateful::object_ref_t> {
+            return actor_id == session_actor.key
+                     ? std::make_optional (session_actor)
+                     : std::nullopt;
+        });
+    const auto old_connection = stream_sessions.open ("old-session");
+    const auto [old_bind_error, old_binding] =
+      stream_sessions.bind_remote (
+        old_connection, session_actor, 11, 17);
+    const auto new_connection = stream_sessions.open ("new-session");
+    const auto [new_bind_error, new_binding] =
+      stream_sessions.bind_remote (
+        new_connection, session_actor, 11, 17, true);
+    if (old_bind_error
+          != zlink::framework::runtime::stateful::stateful_error_t::none
+        || new_bind_error
+          != zlink::framework::runtime::stateful::stateful_error_t::none
+        || new_binding.binding_generation
+             <= old_binding.binding_generation) {
+        return 1;
+    }
+    const actor_bound_session_route_t old_route{
+      session_owner_rid, zlink::routing_id_t::from ("old-session"),
+      7, 11, 13, 17, old_binding.binding_generation, 0, 0};
+    const actor_bound_session_route_t new_route{
+      session_owner_rid, zlink::routing_id_t::from ("new-session"),
+      7, 11, 13, 17, new_binding.binding_generation, 0, 0};
+
+    std::atomic_int old_client_received{0};
+    std::atomic_int new_client_received{0};
+    if (!session_owner.replace_session_route (
+          actor,
+          [&old_client_received] (std::string, stream_codec_t,
+                                  const zlink::message_t &) {
+              old_client_received.fetch_add (1, std::memory_order_acq_rel);
+              return task_t<void> (result_t<void>::success ());
+          },
+          old_route)) {
+        return 2;
+    }
+
+    std::atomic_bool saw_correlated_split{false};
+    dispatch_options_t trace_options;
+    trace_options.message_flow (message_flow_log_mode_t::detailed);
+    dispatch_options_access_t::set_observer_for_tests (
+      trace_options,
+      [&] (const message_flow_event_t &event) {
+          if (event.detail_stage
+                == std::optional<std::string> (
+                  "actor_owner_push_target")
+              && event.detail_result
+              && event.detail_result->find (
+                   "current=session_rid="
+                   + new_route.session_rid->to_hex () + "/bg="
+                   + std::to_string (new_binding.binding_generation))
+                   != std::string::npos
+              && event.detail_result->find (
+                   "staged=session_rid="
+                   + old_route.session_rid->to_hex () + "/bg="
+                   + std::to_string (old_binding.binding_generation))
+                   != std::string::npos) {
+              saw_correlated_split.store (true, std::memory_order_release);
+          }
+      });
+    actor_owner.set_dispatch (std::move (trace_options));
+
+    const auto make_remote_sink =
+      [&actor_owner, &session_owner, actor] (
+        actor_bound_session_route_t staged_route) {
+          return [&actor_owner, &session_owner, actor,
+                  staged_route = std::move (staged_route)] (
+                   std::string packet_name, stream_codec_t codec,
+                   const zlink::message_t &payload) mutable -> task_t<void> {
+              const auto current = actor_owner.resolve_bound_session_push_route (
+                actor, staged_route);
+              if (!current) {
+                  throw framework_exception_t (
+                    framework_error_kind_t::not_configured,
+                    "current reconnect route is unavailable");
+              }
+              auto delivery = session_owner.admit_bound_session_delivery (
+                actor, current->binding_generation);
+              if (!delivery) {
+                  throw framework_exception_t (
+                    framework_error_kind_t::not_configured,
+                    "new Session host rejected the push");
+              }
+              const auto delivered = (*delivery) (
+                std::move (packet_name), codec, payload);
+              if (!delivered) {
+                  throw delivered.error ()
+                          ? *delivered.error ()
+                          : framework_exception_t (
+                              framework_error_kind_t::internal_failure,
+                              "new Session client delivery failed");
+              }
+              co_return;
+          };
+      };
+
+    if (!actor_owner.replace_session_route (
+          actor, make_remote_sink (old_route), old_route)) {
+        return 3;
+    }
+    std::shared_ptr<bound_session_sink_t> staged_old_sink;
+    {
+        const std::lock_guard lock (actor_owner_state->mutex);
+        staged_old_sink = actor_owner_state->bound_session_sinks.at (
+          "two-host-reconnect");
+    }
+
+    if (!session_owner.replace_session_route (
+          actor,
+          [&new_client_received] (std::string, stream_codec_t,
+                                  const zlink::message_t &) {
+              new_client_received.fetch_add (1, std::memory_order_acq_rel);
+              return task_t<void> (result_t<void>::success ());
+          },
+          new_route)
+        || !actor_owner.replace_session_route (
+          actor, make_remote_sink (new_route), new_route)) {
+        return 4;
+    }
+    if (!stream_sessions.complete_route_publish (new_binding))
+        return 5;
+
+    const auto stale_capability_push = (*staged_old_sink) (
+      "reconnected-push", stream_codec_t::message_pack,
+      zlink::message_t::from ("payload")).result ();
+    if (!stale_capability_push)
+        return 6;
+
+    const auto public_push = actor_owner.actor_context (actor)
+                               .bound_session ()
+                               .send (std::string ("public-push"))
+                               .submit ()
+                               .result ();
+    if (!public_push)
+        return 7;
+    const auto deadline = std::chrono::steady_clock::now ()
+                          + std::chrono::seconds (1);
+    while ((new_client_received.load (std::memory_order_acquire) != 2
+            || !saw_correlated_split.load (std::memory_order_acquire))
+           && std::chrono::steady_clock::now () < deadline) {
+        std::this_thread::yield ();
+    }
+    return old_client_received.load (std::memory_order_acquire) == 0
+             && new_client_received.load (std::memory_order_acquire) == 2
+             && saw_correlated_split.load (std::memory_order_acquire)
+           ? 0
+           : 8;
+}
+
 } // namespace
 
 int main ()
 {
+    if (const auto reconnect =
+          reconnect_push_reaches_new_session_across_two_hosts ();
+        reconnect != 0) {
+        return 240 + reconnect;
+    }
+    if (const auto reconnect =
+          reconnect_binding_publish_holds_new_route_push ();
+        reconnect != 0) {
+        return 230 + reconnect;
+    }
+    if (const auto detached =
+          bound_session_push_detaches_before_direct_sink_entry ();
+        detached != 0) {
+        return 220 + detached;
+    }
+    if (const auto fence =
+          rebound_session_keeps_prior_ingress_exact_fence ();
+        fence != 0) {
+        return 210 + fence;
+    }
+    if (const auto admission =
+          actor_send_reports_fifo_admission_before_handler_terminal ();
+        admission != 0) {
+        return 200 + admission;
+    }
     if (const auto pending =
           disconnect_notification_survives_pending_dispatcher_completion ();
         pending != 0) {

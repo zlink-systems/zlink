@@ -10,6 +10,7 @@
 #include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -173,6 +174,33 @@ int main ()
         });
         if (contains (out, "size=")) {
             return 10;
+        }
+    }
+
+    // Internal bound-session pipeline stages are Detailed-only even though
+    // they use the admitted phase shared by normal message-flow events.
+    {
+        zlink::framework::detail::actor_gateway_runtime_t gateway;
+        gateway.set_dispatch (
+          options_with_mode (message_flow_log_mode_t::normal));
+        const auto normal = capture_clog ([&] {
+            gateway.trace_bound_session_send_stage (
+              "player-1", "router_admission_wait", "pending");
+        });
+        if (!normal.empty ())
+            return 33;
+
+        gateway.set_dispatch (
+          options_with_mode (message_flow_log_mode_t::detailed));
+        const auto detailed = capture_clog ([&] {
+            gateway.trace_bound_session_send_stage (
+              "player-1", "router_admission_wait", "pending");
+        });
+        if (!contains (detailed, "phase=admitted")
+            || !contains (detailed, "actor=player-1")
+            || !contains (detailed, "stage=router_admission_wait")
+            || !contains (detailed, "result=pending")) {
+            return 34;
         }
     }
 
@@ -441,6 +469,7 @@ int main ()
             return 27;
         }
         if (enum_name (message_flow_outcome_t::received) != "received"
+            || enum_name (message_flow_outcome_t::admitted) != "admitted"
             || enum_name (message_flow_outcome_t::dispatched) != "dispatched"
             || enum_name (message_flow_outcome_t::replied) != "replied"
             || enum_name (message_flow_outcome_t::dropped) != "dropped"
