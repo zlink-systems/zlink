@@ -15,6 +15,7 @@ import {
   type ZLinkStreamFrameHeader
 } from './protocol';
 import { throwIfAborted } from '../abort';
+import { captureZLinkExecutionTurn } from '../execution';
 import {
   ZLinkActorSessionBindingRegistry
 } from './actor-session-binding-registry';
@@ -48,6 +49,30 @@ export class ZLinkBoundActorRelaySender {
     payload: ZLinkMessage,
     signal?: AbortSignal
   ): Promise<ZLinkSubmitResult> {
+    if (this.routes.isSealed(actor.actorId) && captureZLinkExecutionTurn() !== undefined) {
+      //  Spec 32:62 — a Send completes once the source outbound queue
+      //  accepts it; spec 05 — infrastructure send progress must not depend
+      //  on the application turn. When the CALLER IS an application turn
+      //  (a lifecycle callback pushing to a bound actor), awaiting the seal
+      //  release here deadlocks: the relocation seal waits for that very
+      //  callback to finish (onJoinedActor -> push -> seal ->
+      //  onJoinedActor). Accept the frame now and deliver it after the
+      //  seal releases, in per-actor order through the lifecycle lane; the
+      //  bounded seal wait converts a stuck seal into a typed failure.
+      //  Non-turn callers (stream ingress relays) keep the waiting
+      //  semantics so a held frame across a failed rebind still
+      //  terminalizes to the caller.
+      void this.routes.runAcceptedFrameWhenReady(
+        actor.actorId,
+        actor.bindingToken,
+        async () => await this.lifecycle.run(
+          actor.actorId,
+          () => this.relayInsideLifecycle(actor, payload, signal)
+        ),
+        signal
+      ).catch(() => undefined);
+      return { status: ZLinkSubmitStatus.Submitted };
+    }
     // A relocation seal can hold this request until the target route is
     // published. Wait before entering the actor lifecycle lane: route
     // publication uses the same lane and must be able to release the seal.

@@ -432,10 +432,34 @@ export class ZLinkActorPacketRelay {
     payload: Message,
     signal?: AbortSignal
   ): Promise<boolean> {
-    if (await this.relayRemoteActorPacket(actor, frameHeader, payload, signal)) {
-      return true;
+    //  Spec 32:87 — a route/owner that is not currently usable is
+    //  Unavailable and retryable within the request deadline. Right after a
+    //  relocation the cached packet target can carry a transiently
+    //  incomplete Ready authority fence (route publication still
+    //  converging); failing the request on the fence check would surface a
+    //  NotFound for a Spot that exists and is Ready on its owner. Clear the
+    //  stale hint and re-resolve with a short bound instead.
+    const fenceRetryDeadlineMs = Date.now() + 1_000;
+    for (;;) {
+      try {
+        if (await this.relayRemoteActorPacket(actor, frameHeader, payload, signal)) {
+          return true;
+        }
+        return await this.relayLocalActorPacket(actor, frameHeader, payload, signal);
+      } catch (error) {
+        if (
+          !(error instanceof Error
+            && error.message.includes('no complete Ready authority fence'))
+          || Date.now() >= fenceRetryDeadlineMs
+        ) {
+          throw error;
+        }
+        this.targets.clear(actor.actorId);
+        this.options.actorManager()?.getState(actor.actorId)
+          ?.setRemoteActorPacketTarget(undefined);
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      }
     }
-    return await this.relayLocalActorPacket(actor, frameHeader, payload, signal);
   }
 
   async confirmRemoteSessionBinding(

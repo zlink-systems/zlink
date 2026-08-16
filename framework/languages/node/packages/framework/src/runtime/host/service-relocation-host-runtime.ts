@@ -2071,21 +2071,36 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       stage.staging.primaryAuthorityKey.value,
       signal
     );
-    const publication = this.codec.read(primary.payload);
-    if (publication === undefined) return;
-    const result = await this.requireLocationStore().compareExchangeAuthority(
-      stage.staging.primaryAuthorityKey,
-      primary.storeVersion,
-      {
-        kind: 'put',
-        generationTransition: 'preserve',
-        payload: this.codec.clear(primary.payload, publication.reference)
-      },
-      signal
-    );
-    if (result.kind !== 'stored') {
-      throw new Error('Relocation target authority normalization CAS failed.');
+    //  The deferred-Join journal advances its completion cursor with its
+    //  own authority CAS while the target finalizes, so the initially
+    //  captured storeVersion can be stale by the time the relocation
+    //  wrapper is cleared. Re-read and retry on conflict instead of turning
+    //  a completed relocation into a post-commit failure (spec 28 —
+    //  retryable store conflicts converge on the same CAS and the same
+    //  relocation identity until the outcome is determined).
+    let current: ZLinkAuthoritySnapshot = primary;
+    for (let attempt = 0; attempt < 16; attempt += 1) {
+      const publication = this.codec.read(current.payload);
+      if (publication === undefined) return;
+      const result = await this.requireLocationStore().compareExchangeAuthority(
+        stage.staging.primaryAuthorityKey,
+        current.storeVersion,
+        {
+          kind: 'put',
+          generationTransition: 'preserve',
+          payload: this.codec.clear(current.payload, publication.reference)
+        },
+        signal
+      );
+      if (result.kind === 'stored') return;
+      const read = await this.requireLocationStore().readAuthority(
+        stage.staging.primaryAuthorityKey,
+        signal
+      );
+      if (read.kind !== 'snapshot') break;
+      current = read;
     }
+    throw new Error('Relocation target authority normalization CAS failed.');
   }
 
   private async readSharedEnvelope(

@@ -128,7 +128,14 @@ export class ZLinkActorSessionBindingRegistry<
 
   constructor(
     private readonly terminalRelocationCapacity = 4096,
-    private readonly outboundCapacity = 4096
+    private readonly outboundCapacity = 4096,
+    //  Spec 06 — SessionRelocationSealTimeout bounds how long a session
+    //  relocation seal may hold ingress (default 3,000 ms, finite only).
+    //  Every wait on the seal (accept paths) and on active-frame drain
+    //  (the sealing side) must observe that bound; an unbounded wait here
+    //  turns a lost control or a lifecycle interlock into a silent stall
+    //  (spec 48:205 — transport/deadline limits apply during relocation).
+    private readonly sealWaitTimeoutMs = 3_000
   ) {
     if (!Number.isSafeInteger(terminalRelocationCapacity) || terminalRelocationCapacity <= 0) {
       throw new RangeError('Session relocation terminal capacity must be a positive safe integer.');
@@ -791,6 +798,11 @@ export class ZLinkActorSessionBindingRegistry<
       && route.sealId === sealId;
   }
 
+  /** True while a relocation seal currently holds this actor's ingress. */
+  isSealed(actorId: string): boolean {
+    return this.routes.get(actorId)?.sealId !== undefined;
+  }
+
   private async waitForSealRelease(
     actorId: string,
     bindingToken: string,
@@ -802,7 +814,11 @@ export class ZLinkActorSessionBindingRegistry<
     await new Promise<void>((resolve, reject) => {
       const waiters = this.sealWaiters.get(actorId) ?? new Set();
       let settled = false;
-      const cleanup = () => signal?.removeEventListener('abort', onAbort);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const cleanup = () => {
+        if (timer !== undefined) clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+      };
       const resolveWaiter = () => {
         if (settled) return;
         settled = true;
@@ -818,9 +834,21 @@ export class ZLinkActorSessionBindingRegistry<
       const waiter = { bindingToken, resolve: resolveWaiter, reject: rejectWaiter };
       waiters.add(waiter);
       this.sealWaiters.set(actorId, waiters);
-      const onAbort = () => {
+      const removeWaiter = () => {
         waiters.delete(waiter);
         if (waiters.size === 0) this.sealWaiters.delete(actorId);
+      };
+      timer = setTimeout(() => {
+        removeWaiter();
+        rejectWaiter(createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+          `Actor '${actorId}' session seal was not released within the relocation seal timeout.`,
+          true
+        ));
+      }, this.sealWaitTimeoutMs);
+      timer.unref?.();
+      const onAbort = () => {
+        removeWaiter();
         rejectWaiter(createAbortError());
       };
       if (signal === undefined) return;
@@ -838,7 +866,11 @@ export class ZLinkActorSessionBindingRegistry<
     await new Promise<void>((resolve, reject) => {
       const waiters = this.activeFrameWaiters.get(actorId) ?? new Set();
       let settled = false;
-      const cleanup = () => signal?.removeEventListener('abort', onAbort);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const cleanup = () => {
+        if (timer !== undefined) clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+      };
       const waiter: ZLinkActorSessionActiveFrameWaiter = {
         resolve: () => {
           if (settled) return;
@@ -860,6 +892,19 @@ export class ZLinkActorSessionBindingRegistry<
       };
       waiters.add(waiter);
       this.activeFrameWaiters.set(actorId, waiters);
+      //  Spec 48:205 — transport/deadline limits keep applying during
+      //  relocation: the sealing side must not wait forever for active
+      //  frames that themselves may be waiting on this relocation.
+      timer = setTimeout(() => {
+        waiters.delete(waiter);
+        if (waiters.size === 0) this.activeFrameWaiters.delete(actorId);
+        waiter.reject(createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+          `Actor '${actorId}' session seal timed out waiting for active frames.`,
+          true
+        ));
+      }, this.sealWaitTimeoutMs);
+      timer.unref?.();
       if (signal === undefined) return;
       if (signal.aborted) onAbort();
       else signal.addEventListener('abort', onAbort, { once: true });
