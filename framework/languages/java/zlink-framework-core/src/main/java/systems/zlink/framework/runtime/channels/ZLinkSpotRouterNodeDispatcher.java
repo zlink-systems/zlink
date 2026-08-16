@@ -7,6 +7,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -71,10 +72,41 @@ final class ZLinkSpotRouterNodeDispatcher {
                 if (failure == null) {
                     completeReply(reply, result, requestStartedNanos);
                 } else {
-                    result.completeExceptionally(failure);
+                    result.completeExceptionally(classifyTransportFailure(failure));
                 }
             });
         return result;
+    }
+
+    /**
+     * Spec 32:58,87 — a Framework failure discovered while waiting on route
+     * resolution or the remote reply is delivered as a typed Framework
+     * exception; a route or connection that is not available is
+     * {@code Unavailable}. The binding's local preflight throws the raw
+     * {@link ZlinkRequestException}; keep it as the cause.
+     */
+    private static Throwable classifyTransportFailure(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof ZLinkFrameworkException) {
+                return failure;
+            }
+            if (current instanceof ZlinkRequestException request) {
+                return switch (request.getResult()) {
+                    case NOT_CONNECTED, CONFLICT -> new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        "SPOT route request failed because the target route is not available.",
+                        request);
+                    case NOT_FOUND -> new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.NOT_FOUND,
+                        "SPOT route request failed because the target route was not found.",
+                        request);
+                    default -> failure;
+                };
+            }
+            current = current.getCause();
+        }
+        return failure;
     }
 
     private static void completeReply(

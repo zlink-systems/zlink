@@ -24,6 +24,14 @@ public interface RouterSocket extends Socket {
     void setRoutingId(RoutingId rid);
     RoutingId getRoutingId();
     RoutedSendOperation send(RoutingId rid);
+    /**
+     * Creates a send operation pinned to the specified physical transport
+     * pair. The pair identity must come from a monitor or receive event for
+     * this router; a stale or unknown pair is rejected by the native socket.
+     */
+    RoutedSendOperation send(RoutingId rid,
+                             long transportPairId,
+                             long transportPairGeneration);
     boolean recv(Received result, RecvFlags flags);
     /**
      * Receives for a Framework backend and retains each physical part's

@@ -202,6 +202,9 @@ public final class ContractAccess {
         void adoptFrom(Received target, Received source);
 
         void adoptRetainedCredit(Received received, Runnable release);
+
+        void setTransportPair(Received received, long transportPairId,
+                              long transportPairGeneration);
     }
 
     public interface SubscriptionEventAccess {
@@ -650,6 +653,14 @@ public final class ContractAccess {
     public static void receivedAdoptRetainedCredit(Received received,
                                                    Runnable release) {
         receivedAccess().adoptRetainedCredit(received, release);
+    }
+
+    public static void receivedSetTransportPair(
+      Received received,
+      long transportPairId,
+      long transportPairGeneration) {
+        receivedAccess().setTransportPair(received, transportPairId,
+            transportPairGeneration);
     }
 
     public static void receivedPopulateRoutedSinglePart(

@@ -79,6 +79,15 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         RouterSocket router,
         RoutingId target,
         List<byte[]> frames) {
+        return send(router, target, 0L, 0L, frames);
+    }
+
+    synchronized CompletionStage<Void> send(
+        RouterSocket router,
+        RoutingId target,
+        long transportPairId,
+        long transportPairGeneration,
+        List<byte[]> frames) {
         ensureOwned(router);
         Objects.requireNonNull(target, "target");
         if (frames.isEmpty()) {
@@ -89,7 +98,11 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             .toList();
         boolean submitted = false;
         try {
-            var submit = router.send(target).message(messages.getFirst());
+            var send = transportPairId == 0 || transportPairGeneration == 0
+                ? router.send(target)
+                : router.send(target, transportPairId,
+                    transportPairGeneration);
+            var submit = send.message(messages.getFirst());
             for (int index = 1; index < messages.size(); index++) {
                 submit.message(messages.get(index));
             }
@@ -224,6 +237,8 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             Inbound inbound = new Inbound(
                 source,
                 received.requestSeq().orElse(null),
+                received.transportPairId(),
+                received.transportPairGeneration(),
                 frames,
                 received);
             transferred = true;
@@ -277,6 +292,8 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     record Inbound(
         RoutingId source,
         Long requestSequence,
+        long transportPairId,
+        long transportPairGeneration,
         List<byte[]> frames,
         Received retained) implements AutoCloseable {
         Inbound {

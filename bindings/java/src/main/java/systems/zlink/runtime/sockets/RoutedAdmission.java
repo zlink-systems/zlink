@@ -138,6 +138,18 @@ final class RoutedAdmission {
 
     CompletionStage<Void> send(RoutingId selector, List<Message> parts,
                                int sendTimeoutMs) {
+        return send(selector, null, parts, sendTimeoutMs);
+    }
+
+    CompletionStage<Void> send(Target exactTarget, List<Message> parts,
+                               int sendTimeoutMs) {
+        Objects.requireNonNull(exactTarget, "exactTarget");
+        return send(null, exactTarget, parts, sendTimeoutMs);
+    }
+
+    private CompletionStage<Void> send(
+            RoutingId selector, Target exactTarget, List<Message> parts,
+            int sendTimeoutMs) {
         Objects.requireNonNull(parts, "parts");
         if (parts.isEmpty())
             throw new IllegalArgumentException("parts must not be empty");
@@ -157,7 +169,7 @@ final class RoutedAdmission {
         }
         Operation<Void> operation = Operation.send(future,
             sources, snapshot, deadline, sendTimeoutMs == 0);
-        begin(operation, selector, null);
+        begin(operation, selector, exactTarget);
         return future;
     }
 

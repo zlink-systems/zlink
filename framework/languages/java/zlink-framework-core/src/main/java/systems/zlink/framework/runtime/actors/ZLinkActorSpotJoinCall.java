@@ -13,6 +13,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
@@ -64,8 +66,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         new AtomicBoolean();
     //  Set only on the bounded call executing a deferred Join: the handle to
     //  the mailbox-barrier turn that is active while the Join runs.
-    private systems.zlink.framework.execution.ZLinkAsyncSerialQueue
-        .ActiveTurnSealHandle deferredActiveTurnSeal;
+    private ZLinkAsyncSerialQueue.ActiveTurnSealHandle deferredActiveTurnSeal;
 
     ZLinkActorSpotJoinCall(
         ZLinkActorRuntime.DefaultActorContext context,
@@ -630,7 +631,8 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                     requestPart,
                     operationId);
                 try {
-                    return requestTransfer(target, admissionParts)
+                    return requestTransferWithReconciliation(
+                            target, admissionParts, deadlineNanos)
                         .thenCompose(replyParts -> {
                             try {
                                 if (replyParts.isEmpty()) {
@@ -750,6 +752,50 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
             target.spotGeneration(),
             target.authorityOwnerGeneration(),
             target.ownerLeaseGeneration());
+    }
+
+    /**
+     * Spec 32:58,87 — a route or connection that is not yet available ends
+     * as {@code Unavailable}; spec 15 §4 keeps the whole cross-node Join
+     * inside one operation deadline. The pre-admission transfer request can
+     * race automatic peer convergence (the guest node may not have admitted
+     * its direct play peer yet), so mirror .NET's reconciliation: retry an
+     * {@code Unavailable} transfer failure with backoff until the Join
+     * deadline. A transfer request that completed exceptionally produced no
+     * admission reply, so no admission handler may have accepted it and the
+     * retry cannot double-admit.
+     */
+    private CompletionStage<List<Message>> requestTransferWithReconciliation(
+        SpotTransportAddress address,
+        List<Message> parts,
+        long deadlineNanos) {
+        return requestTransfer(address, parts).handle((reply, failure) -> {
+                if (failure == null) {
+                    return CompletableFuture.completedFuture(reply);
+                }
+                if (!isUnavailableTransferFailure(failure)
+                    || remainingTimeout(deadlineNanos) == null) {
+                    return CompletableFuture.<List<Message>>failedFuture(
+                        unwrap(failure));
+                }
+                Executor retryDelay = CompletableFuture.delayedExecutor(
+                    50, TimeUnit.MILLISECONDS);
+                return CompletableFuture.supplyAsync(() -> null, retryDelay)
+                    .thenCompose(ignored -> requestTransferWithReconciliation(
+                        address, parts, deadlineNanos));
+            })
+            .thenCompose(stage -> stage);
+    }
+
+    private static boolean isUnavailableTransferFailure(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof ZLinkFrameworkException framework) {
+                return framework.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private CompletionStage<List<Message>> requestTransfer(

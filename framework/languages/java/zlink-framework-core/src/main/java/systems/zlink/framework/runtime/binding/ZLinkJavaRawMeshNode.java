@@ -805,7 +805,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             throw new IllegalArgumentException(
                 "expected lifecycle generation must not be negative");
         }
-        current.connect(endpoint);
         long intent = nextIntent.getAndIncrement();
         peerIntents.put(
             intent,
@@ -823,6 +822,21 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (expectedRoutingId != null) {
             rejectedPeers.remove(expectedRoutingId);
             nextAnnouncementNanos.put(expectedRoutingId, 0L);
+        }
+        try {
+            // Publish the intent and its admission fence before native
+            // connect can deliver an inproc HELLO/ADMIT. Registering after
+            // connect lets the caller-side initialization erase a rejection
+            // that already arrived on the pump thread.
+            current.connect(endpoint);
+        } catch (RuntimeException failure) {
+            peerIntents.remove(intent);
+            closedPeerIntents.remove(intent);
+            closeRequestedPeerIntents.remove(intent);
+            livePeerIntents.remove(intent);
+            peerIntentRoutingIds.remove(intent);
+            peerIntentTransports.remove(intent);
+            throw failure;
         }
         return intent;
     }
@@ -4034,13 +4048,40 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             if (frames.size() == 1) {
                 try {
                     int reason = wire.decodeReject(head);
+                    streamTrace("reject-received source=" + inbound.source()
+                        + " reason=" + reason);
+                    TransportPair rejectedPair = transportPair(inbound);
+                    if (rejectedPair != null && reason == 3) {
+                        // The reply is pinned to the admission pair, so it is
+                        // authoritative only for that losing physical
+                        // candidate. If the local topology still calls that
+                        // exact pair current (for example after an expected
+                        // route mismatch), remove the corresponding logical
+                        // admission too; otherwise leave the survivor alone.
+                        String rejectedConnectionId = topology
+                            .peer(inbound.source())
+                            .filter(current -> selectedTransportPair(current)
+                            .filter(rejectedPair::equals)
+                            .isPresent())
+                            .map(ZLinkServiceTopologyRegistry.Peer::connectionId)
+                            .orElse(null);
+                        disconnectTransportPair(rejectedPair);
+                        if (rejectedConnectionId != null) {
+                            disconnectAdmitted(
+                                inbound.source(), rejectedConnectionId);
+                        }
+                    }
                     if (reason == 4) {
                         disconnectAdmitted(inbound.source());
                         admittedPeerObjectRoles.put(
                             inbound.source(),
                             ZLinkServiceNodeDescriptor.ObjectRole.CLIENT);
                         notRequiredPeers.add(inbound.source());
-                        disconnectNotRequiredTransport(inbound.source());
+                        if (rejectedPair == null) {
+                            disconnectNotRequiredTransport(inbound.source());
+                        } else {
+                            disconnectTransportPair(rejectedPair);
+                        }
                     }
                 } catch (RuntimeException ignored) {
                 }
@@ -5763,6 +5804,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             return;
         }
         try {
+            // A null inbound pair means this lane cannot distinguish
+            // physical candidates; admission must still proceed with the
+            // legacy RID-addressed surface (spec 07 duplicate confirmation
+            // is a no-op when only one physical connection can exist).
+            TransportPair inboundPair = transportPair(inbound);
             ZLinkServiceNodeDescriptor descriptor =
                 wire.decodeAdmission(
                     inbound.frames().getFirst(),
@@ -5795,10 +5841,21 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     expectedLifecycleGeneration,
                     descriptor)) {
                 rejectedPeers.add(inbound.source());
-                trySendAdmissionControl(
-                    inbound.source(),
-                    List.of(wire.encodeReject(3)),
-                    "expected-route-mismatch");
+                if (inboundPair == null) {
+                    trySendAdmissionControl(
+                        inbound.source(),
+                        List.of(wire.encodeReject(3)),
+                        "expected-route-mismatch");
+                } else {
+                    // A descriptor fence failure terminates this physical
+                    // candidate. Queueing an exact-pair REJECT leaves a send
+                    // racing the caller-visible ERROR cleanup; if teardown
+                    // wins, that failed send can contaminate the following
+                    // reconnect's ROUTER envelope. Closing the identified
+                    // pair is the terminal admission result and cannot be
+                    // laundered onto a replacement pair.
+                    disconnectTransportPair(inboundPair);
+                }
                 return;
             }
             if (routeMeshConnectionNotRequired(
@@ -5812,6 +5869,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 notRequiredPeers.add(inbound.source());
                 trySendAdmissionControl(
                     inbound.source(),
+                    inboundPair,
                     List.of(wire.encodeReject(4)),
                     "route-not-required");
                 return;
@@ -5829,36 +5887,73 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 ZLinkServiceAdmissionGuard
                                     .ConnectionDirection.OUTBOUND);
             String connectionId = connectionIdForAdmission(
-                inbound.source(), direction);
+                inbound.source(), direction, inboundPair);
             String previousConnectionId =
                 connectionIds.get(inbound.source());
+            ZLinkServiceTopologyRegistry.Connection candidate =
+                new ZLinkServiceTopologyRegistry.Connection(
+                    connectionId,
+                    direction,
+                    direction.name().toLowerCase(
+                        Locale.ROOT)
+                        + ":"
+                        + descriptor.advertisedEndpoint()
+                        + ":"
+                        + connectionId);
+            ZLinkServiceTopologyRegistry.Peer currentPeer =
+                topology.peer(inbound.source()).orElse(null);
+            boolean distinctInboundReplacement = currentPeer != null
+                && direction
+                    == ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND
+                && currentPeer.connection().direction()
+                    == ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND
+                && inboundPair != null
+                && selectedTransportPair(currentPeer)
+                    .filter(currentPair -> !currentPair.equals(inboundPair))
+                    .isPresent()
+                && !liveness.isReady(
+                    inbound.source(), currentPeer.connectionId())
+                && peerIntents.values().stream().noneMatch(intent ->
+                    inbound.source().equals(intent.expectedRoutingId())
+                        || intent.expectedRoutingId() == null
+                            && descriptor.advertisedEndpoint().equals(
+                                intent.endpoint()));
+            if (distinctInboundReplacement) {
+                // A pure inbound peer has no competing local connection
+                // intent. If its current pair never became live and a fresh
+                // inbound pair arrives, the old entry is a disconnected
+                // admission zombie whose monitor edge lost the race with the
+                // new HELLO. Replace it immediately. Bilateral/manual peers
+                // retain the RID-direction duplicate arbitration below.
+                disconnectAdmitted(
+                    inbound.source(), currentPeer.connectionId());
+            }
             ZLinkServiceTopologyRegistry.AdmissionResult admitted =
-                topology.admit(
-                    descriptor,
-                    new ZLinkServiceTopologyRegistry.Connection(
-                        connectionId,
-                        direction,
-                        direction.name().toLowerCase(
-                            Locale.ROOT)
-                            + ":"
-                            + descriptor.advertisedEndpoint()
-                            + ":"
-                            + connectionId));
+                topology.admit(descriptor, candidate);
             if (admitted
                 == ZLinkServiceTopologyRegistry.AdmissionResult
                     .DUPLICATE_REJECTED) {
-                rejectedPeers.add(inbound.source());
+                streamTrace("duplicate-admission-reject source="
+                    + inbound.source()
+                    + " connection=" + connectionId
+                    + " pair=" + (inboundPair == null
+                        ? "none" : inboundPair.id()
+                            + "/" + inboundPair.generation()));
                 trySendAdmissionControl(
                     inbound.source(),
+                    inboundPair,
                     List.of(wire.encodeReject(3)),
                     "duplicate-admission");
                 return;
             }
             if (admitted
                 != ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED) {
-                rejectedPeers.add(inbound.source());
+                if (topology.peer(inbound.source()).isEmpty()) {
+                    rejectedPeers.add(inbound.source());
+                }
                 trySendAdmissionControl(
                     inbound.source(),
+                    inboundPair,
                     List.of(wire.encodeReject(3)),
                     "admission-rejected");
                 return;
@@ -5892,6 +5987,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 // retain that stale lifecycle state indefinitely.
                 trySendAdmissionControl(
                     inbound.source(),
+                    inboundPair,
                     List.of(wire.encodeAdmission(
                         ServiceWireConstants.COMMAND_UPDATE,
                         localDescriptor)),
@@ -5900,6 +5996,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             if (command == ServiceWireConstants.COMMAND_HELLO) {
                 trySendAdmissionControl(
                     inbound.source(),
+                    inboundPair,
                     List.of(wire.encodeAdmission(
                         ServiceWireConstants.COMMAND_ADMIT,
                         localDescriptor)),
@@ -5908,6 +6005,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         } catch (RuntimeException invalid) {
             trySendAdmissionControl(
                 inbound.source(),
+                transportPair(inbound),
                 List.of(wire.encodeReject(3)),
                 "invalid-admission");
         }
@@ -5915,8 +6013,73 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     private boolean trySendAdmissionControl(
         RoutingId target,
+        TransportPair pair,
         List<byte[]> frames,
         String reason) {
+        streamTrace("admission-control-send target=" + target
+            + " reason=" + reason
+            + " pair=" + (pair == null
+                ? "none" : pair.id() + "/" + pair.generation()));
+        if (pair == null) {
+            // The transport did not identify a physical pair for this
+            // exchange (single-connection lanes report no pair identity).
+            // Duplicate-pair confirmation (spec 07 §manual topology) only
+            // applies when pairs are distinguishable; fall back to the
+            // RID-addressed admission path instead of dropping the exchange.
+            return trySendAdmissionControl(target, frames, reason);
+        }
+        int command = wire.decodeHeader(frames.getFirst()).command();
+        String connectionId = connectionIds.getOrDefault(target, "");
+        try {
+            port.send(
+                requireStarted(),
+                target,
+                pair.id(),
+                pair.generation(),
+                frames)
+                .whenComplete((ignored, failure) -> {
+                    if (failure == null) {
+                        markAdmissionControlReady(
+                            target, connectionId, command);
+                        return;
+                    }
+                    streamTrace("admission-control-send-failed target="
+                        + target
+                        + " reason=" + reason
+                        + " error=" + failure.getClass().getSimpleName()
+                        + ":" + String.valueOf(failure.getMessage()));
+                    if (isAdmissionStateBroadcast(command)) {
+                        // ADMIT/UPDATE publish current admission state, so a
+                        // stale exact pair may retry on the current RID route.
+                        // REJECT is candidate-specific and must never be
+                        // laundered onto a replacement pair.
+                        trySendAdmissionControl(target, frames, reason);
+                    }
+                });
+            return true;
+        } catch (RuntimeException failure) {
+            streamTrace("admission-control-send-failed target="
+                + target
+                + " reason=" + reason
+                + " result=PERMANENT_FAILURE"
+                + " error=" + failure.getClass().getSimpleName()
+                + ":" + String.valueOf(failure.getMessage()));
+            return isAdmissionStateBroadcast(command)
+                && trySendAdmissionControl(target, frames, reason);
+        }
+    }
+
+    private static boolean isAdmissionStateBroadcast(int command) {
+        return command == ServiceWireConstants.COMMAND_ADMIT
+            || command == ServiceWireConstants.COMMAND_UPDATE;
+    }
+
+    private boolean trySendAdmissionControl(
+        RoutingId target,
+        List<byte[]> frames,
+        String reason) {
+        streamTrace("admission-control-send-rid target=" + target
+            + " reason=" + reason);
         int command = wire.decodeHeader(frames.getFirst()).command();
         String connectionId = connectionIds.getOrDefault(target, "");
         try {
@@ -5970,6 +6133,33 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             long probeId = ByteBuffer.wrap(record.frames().getFirst()).getLong();
             ZLinkServiceTopologyRegistry.Peer peer =
                 topology.peer(inbound.source()).orElseThrow();
+            TransportPair inboundPair = transportPair(inbound);
+            // Anti-laundering: an ack must not refresh the admitted
+            // connection when its frame demonstrably traveled on a pair
+            // OWNED BY A DIFFERENT connection of the same peer. Pair ids
+            // differ per transport lane, so comparing against the single
+            // recorded "selected" pair rejects legitimate control-lane
+            // liveness and starves readiness; only a positive ownership
+            // mismatch is a laundering signal.
+            if (inboundPair != null) {
+                String owning = topology.peers().stream()
+                    .filter(candidate -> selectedTransportPair(candidate)
+                        .filter(inboundPair::equals)
+                        .isPresent())
+                    .map(ZLinkServiceTopologyRegistry.Peer::connectionId)
+                    .filter(owner -> !owner.equals(peer.connectionId()))
+                    .findFirst()
+                    .orElse(null);
+                if (owning != null && !owning.equals(peer.connectionId())) {
+                    streamTrace("liveness-ignored-foreign-pair source="
+                        + inbound.source()
+                        + " connection=" + peer.connectionId()
+                        + " owning=" + owning
+                        + " pair=" + inboundPair.id()
+                        + "/" + inboundPair.generation());
+                    return;
+                }
+            }
             if (command == ServiceWireConstants.COMMAND_LIVENESS_PROBE) {
                 streamTrace("liveness-probe source=" + inbound.source()
                     + " connection=" + peer.connectionId());
@@ -5977,9 +6167,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     inbound.source(),
                     peer.connectionId(),
                     probeId).isPresent()) {
-                    port.send(
-                        requireStarted(),
+                    sendLiveness(
                         inbound.source(),
+                        inboundPair,
                         encodeLiveness(
                             ServiceWireConstants.COMMAND_LIVENESS_ACK,
                             probeId));
@@ -6055,12 +6245,42 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 nextAnnouncementNanos.put(peer.orElseThrow(), 0L);
             } else if (event.event() == MonitorEventType.DISCONNECTED
                 || event.event() == MonitorEventType.CLOSED) {
-                markPeerIntentsClosed(event, peer.orElseThrow());
+                RoutingId peerRid = peer.orElseThrow();
+                markPeerIntentsClosed(event, peerRid);
                 String disconnectedId = removeTransportConnection(event);
+                if (disconnectedId == null) {
+                    // The monitor edge could not be mapped back to its
+                    // registered connection id (pair churn). Leaving the
+                    // topology's current connection in place makes it a
+                    // zombie that rejects every fresh candidate as a
+                    // duplicate until the liveness timeout (~30s admission
+                    // lockout). Attribute the edge to the current
+                    // connection when its recorded pair matches — or when
+                    // no pair was recorded to check against — and evict it
+                    // now; re-admission is one HELLO round-trip.
+                    final long edgePairId = event.transportPairId();
+                    final long edgePairGeneration =
+                        event.transportPairGeneration();
+                    // Attribute only on a positive pair match: transports
+                    // without pair identity (inproc lanes) see unrelated
+                    // DISCONNECTED edges, and evicting the admitted peer on
+                    // those churns admission forever.
+                    disconnectedId = topology.peer(peerRid)
+                        .filter(current -> selectedTransportPair(current)
+                            .map(pair -> pair.id() == edgePairId
+                                && pair.generation() == edgePairGeneration)
+                            .orElse(false))
+                        .map(ZLinkServiceTopologyRegistry.Peer::connectionId)
+                        .orElse(null);
+                    if (disconnectedId != null) {
+                        streamTrace("monitor-disconnect-evicts-current peer="
+                            + peerRid + " connection=" + disconnectedId);
+                    }
+                }
                 discardPendingConnectionId(disconnectedId);
-                disconnectAdmitted(peer.orElseThrow(), disconnectedId);
-                removeApplicationTransportPair(peer.orElseThrow(), event);
-                nextAnnouncementNanos.put(peer.orElseThrow(), 0L);
+                disconnectAdmitted(peerRid, disconnectedId);
+                removeApplicationTransportPair(peerRid, event);
+                nextAnnouncementNanos.put(peerRid, 0L);
             }
         }
     }
@@ -6229,9 +6449,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         ZLinkServiceLivenessRegistry.Tick tick = liveness.tick(nowNanos);
         for (ZLinkServiceLivenessRegistry.Probe probe : tick.probes()) {
             try {
-                port.send(
-                        requireStarted(),
+                // RID-addressed: the probe rides whatever lane/pair the
+                // native route currently uses; pinning to the recorded
+                // admission pair mis-lanes the control probe when pair ids
+                // differ per transport lane.
+                sendLiveness(
                         probe.nodeRoutingId(),
+                        null,
                         encodeLiveness(
                             ServiceWireConstants.COMMAND_LIVENESS_PROBE,
                             probe.probeId()))
@@ -6252,6 +6476,20 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             }
         }
         tick.timedOutNodes().forEach(this::disconnectAdmitted);
+    }
+
+    private CompletionStage<Void> sendLiveness(
+        RoutingId target,
+        TransportPair pair,
+        List<byte[]> frames) {
+        return pair == null
+            ? port.send(requireStarted(), target, frames)
+            : port.send(
+                requireStarted(),
+                target,
+                pair.id(),
+                pair.generation(),
+                frames);
     }
 
     private static List<byte[]> encodeLiveness(int command, long probeId) {
@@ -6318,16 +6556,50 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     private String connectionIdForAdmission(
         RoutingId peer,
-        ZLinkServiceAdmissionGuard.ConnectionDirection direction) {
+        ZLinkServiceAdmissionGuard.ConnectionDirection direction,
+        TransportPair pair) {
         ConnectionCandidate candidate =
             new ConnectionCandidate(peer, direction);
         var pending = pendingConnectionIds.get(candidate);
-        String connectionId = pending == null ? null : pending.poll();
+        String connectionId = null;
+        if (pending != null && pair != null) {
+            connectionId = pending.stream()
+                .filter(id -> pair.equals(transportPairs.get(id)))
+                .findFirst()
+                .orElse(null);
+            if (connectionId != null) {
+                pending.remove(connectionId);
+            }
+        }
+        if (connectionId == null && pending != null && pair == null) {
+            connectionId = pending.poll();
+        }
         if (pending != null && pending.isEmpty()) {
             pendingConnectionIds.remove(candidate, pending);
         }
         if (connectionId != null) {
             return connectionId;
+        }
+        if (pair != null) {
+            // Admission announcements can be retransmitted on the same
+            // physical pair after its pending monitor id was consumed. Keep
+            // that pair attached to the current connection; manufacturing a
+            // new id here turns a retransmission into a false duplicate and
+            // makes both sides reject and disconnect the live pipe. HELLO
+            // and ADMIT describe opposite local directions while completing
+            // the same pair's handshake, so pair identity takes precedence
+            // over the command-derived direction here.
+            String currentConnectionId = topology.peer(peer)
+                .filter(current -> pair.equals(
+                    transportPairs.get(current.connectionId())))
+                .map(ZLinkServiceTopologyRegistry.Peer::connectionId)
+                .orElse(null);
+            if (currentConnectionId != null) {
+                return currentConnectionId;
+            }
+            String generated = UUID.randomUUID().toString();
+            transportPairs.put(generated, pair);
+            return generated;
         }
         return topology.peer(peer)
             .filter(current ->
@@ -6375,11 +6647,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             && event.transportPairGeneration() != 0) {
             TransportPair pair = new TransportPair(
                 event.transportPairId(), event.transportPairGeneration());
-            transportPairs.put(id, pair);
             if (event.transportLane() == 0
                 && (event.connectionId() != 0
                     || !event.localAddr().isBlank())) {
-                applicationTransportPairs.put(peer, pair);
+                transportPairs.put(id, pair);
+                topology.peer(peer)
+                    .filter(admitted -> admitted.connectionId().equals(id))
+                    .ifPresent(ignored ->
+                        applicationTransportPairs.put(peer, pair));
             }
         }
         return id;
@@ -6387,6 +6662,39 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     private TransportPair transportPairFor(RoutingId peer) {
         return applicationTransportPairs.get(peer);
+    }
+
+    private Optional<TransportPair> selectedTransportPair(RoutingId peer) {
+        return topology.peer(peer).flatMap(this::selectedTransportPair);
+    }
+
+    private Optional<TransportPair> selectedTransportPair(
+        ZLinkServiceTopologyRegistry.Peer peer) {
+        return Optional.ofNullable(transportPairs.get(peer.connectionId()));
+    }
+
+    private static TransportPair transportPair(
+        ZLinkJavaRawServicePort.Inbound inbound) {
+        return inbound.transportPairId() == 0
+                || inbound.transportPairGeneration() == 0
+            ? null
+            : new TransportPair(
+                inbound.transportPairId(),
+                inbound.transportPairGeneration());
+    }
+
+    private void disconnectTransportPair(TransportPair pair) {
+        RouterSocket current = router;
+        if (current == null || pair == null) {
+            return;
+        }
+        streamTrace("disconnect-transport-pair id=" + pair.id()
+            + " generation=" + pair.generation());
+        try {
+            current.disconnectTransportPair(pair.id(), pair.generation());
+        } catch (RuntimeException ignored) {
+            // The pair may already have reached its terminal monitor edge.
+        }
     }
 
     private void removeApplicationTransportPair(
@@ -6428,7 +6736,21 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (ids == null) {
             return null;
         }
-        String id = ids.poll();
+        TransportPair eventPair = event.transportPairId() == 0
+                || event.transportPairGeneration() == 0
+            ? null
+            : new TransportPair(
+                event.transportPairId(), event.transportPairGeneration());
+        String id = eventPair == null
+            ? ids.poll()
+            : ids.stream()
+                .filter(candidate -> eventPair.equals(
+                    transportPairs.get(candidate)))
+                .findFirst()
+                .orElse(null);
+        if (id != null && eventPair != null) {
+            ids.remove(id);
+        }
         if (ids.isEmpty()) {
             monitorConnectionIds.remove(key, ids);
         }

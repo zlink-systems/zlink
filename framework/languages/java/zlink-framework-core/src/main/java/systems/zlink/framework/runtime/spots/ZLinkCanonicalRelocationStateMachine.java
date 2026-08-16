@@ -143,15 +143,12 @@ final class ZLinkCanonicalRelocationStateMachine
                     "duplicate canonical relocation prepare differs"));
             }
             attempt.activeWaiters().incrementAndGet();
-            CompletionStage<Void> submitted = current == null
-                    || !attempt.ready().isDone()
-                ? send(targetNodeRid,
-                    ZLinkCanonicalRelocationProtocol.encodePrepare(prepare))
-                : CompletableFuture.completedFuture(null);
-            return submitted
-                .exceptionallyCompose(failure -> failed(unwrap(failure)))
-                .thenCompose(ignored -> timed(
-                    attempt.ready(), timeout, "relocation relay readiness"))
+            long readyDeadlineNanos = System.nanoTime() + timeout.toNanos();
+            return awaitReadyWithPrepareResend(
+                    targetNodeRid,
+                    attempt,
+                    readyDeadlineNanos,
+                    current == null || !attempt.ready().isDone())
                 .whenComplete((ignored, failure) -> {
                     int remaining = attempt.activeWaiters().decrementAndGet();
                     if (failure != null
@@ -998,6 +995,51 @@ final class ZLinkCanonicalRelocationStateMachine
             throw new IllegalArgumentException(
                 "relocation timeout must be positive");
         }
+    }
+
+    /**
+     * Spec 15 §4.3 — the source's Actor Restore request is retried within
+     * the Join deadline while the same target process is running, and a
+     * duplicate PREPARE is idempotent on the target. PREPARE is a one-way
+     * submission that can be lost while symmetric manual duplicate
+     * connections converge (spec 07 §518), so waiting the whole deadline on
+     * one submission turns a lost frame into a silent Join stall. Resend the
+     * idempotent PREPARE each bounded slice until relay readiness or the
+     * remaining deadline is spent.
+     */
+    private CompletionStage<Void> awaitReadyWithPrepareResend(
+        RoutingId targetNodeRid,
+        SourceAttempt attempt,
+        long deadlineNanos,
+        boolean submitFirst) {
+        long remainingNanos = deadlineNanos - System.nanoTime();
+        if (remainingNanos <= 0) {
+            return failed(new TimeoutException(
+                "relocation relay readiness timed out"));
+        }
+        CompletionStage<Void> submitted = submitFirst && !attempt.ready().isDone()
+            ? send(targetNodeRid,
+                ZLinkCanonicalRelocationProtocol.encodePrepare(attempt.prepare()))
+            : CompletableFuture.completedFuture(null);
+        Duration slice = Duration.ofNanos(
+            Math.min(remainingNanos, TimeUnit.SECONDS.toNanos(1)));
+        return submitted
+            .exceptionallyCompose(failure -> failed(unwrap(failure)))
+            .thenCompose(ignored -> timed(
+                    attempt.ready(), slice, "relocation relay readiness")
+                .handle((ready, failure) -> {
+                    if (failure == null) {
+                        return CompletableFuture.<Void>completedFuture(null);
+                    }
+                    if (unwrap(failure) instanceof TimeoutException
+                        && deadlineNanos - System.nanoTime() > 0) {
+                        return awaitReadyWithPrepareResend(
+                            targetNodeRid, attempt, deadlineNanos, true)
+                            .toCompletableFuture();
+                    }
+                    return CompletableFuture.<Void>failedFuture(unwrap(failure));
+                })
+                .thenCompose(stage -> stage));
     }
 
     private static CompletionStage<Void> timed(

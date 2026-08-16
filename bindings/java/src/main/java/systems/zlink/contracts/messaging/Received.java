@@ -61,6 +61,8 @@ public final class Received implements AutoCloseable {
     // per-recv Received allocation.
     private long requestSequence;
     private boolean hasRequestSequence;
+    private long transportPairId;
+    private long transportPairGeneration;
     private BiConsumer<List<Message>, SendFlags> replySender;
     private BiFunction<List<Message>, SendFlags, Boolean> sendSender;
     private BiFunction<Message, SendFlags, Boolean> singleSendSender;
@@ -207,6 +209,14 @@ public final class Received implements AutoCloseable {
                                             Runnable release) {
                 received.adoptRetainedCredit(release);
             }
+
+            @Override
+            public void setTransportPair(Received received,
+                                         long transportPairId,
+                                         long transportPairGeneration) {
+                received.setTransportPair(transportPairId,
+                    transportPairGeneration);
+            }
         });
     }
 
@@ -219,6 +229,8 @@ public final class Received implements AutoCloseable {
     public Received() {
         this.requestSequence = 0L;
         this.hasRequestSequence = false;
+        this.transportPairId = 0L;
+        this.transportPairGeneration = 0L;
         this.replySender = null;
         this.sendSender = null;
         this.singleSendSender = null;
@@ -283,6 +295,8 @@ public final class Received implements AutoCloseable {
         this.routingIdBytes = routingIdBytes;
         this.requestSequence = requestSequence;
         this.hasRequestSequence = hasRequestSequence;
+        this.transportPairId = 0L;
+        this.transportPairGeneration = 0L;
         this.replySender = replySender;
         this.sendSender = null;
         this.singleSendSender = null;
@@ -330,6 +344,8 @@ public final class Received implements AutoCloseable {
 
         this.requestSequence = source.requestSequence;
         this.hasRequestSequence = source.hasRequestSequence;
+        this.transportPairId = source.transportPairId;
+        this.transportPairGeneration = source.transportPairGeneration;
         this.replySender = source.replySender;
         this.sendSender = source.sendSender;
         this.singleSendSender = source.singleSendSender;
@@ -346,6 +362,8 @@ public final class Received implements AutoCloseable {
         // Detach source so its own close() / finalizer is a no-op.
         source.requestSequence = 0L;
         source.hasRequestSequence = false;
+        source.transportPairId = 0L;
+        source.transportPairGeneration = 0L;
         source.replySender = null;
         source.sendSender = null;
         source.singleSendSender = null;
@@ -546,6 +564,25 @@ public final class Received implements AutoCloseable {
     public Optional<Long> requestSeq() {
         return hasRequestSequence ? Optional.of(requestSequence)
             : Optional.empty();
+    }
+
+    /** Returns the physical transport-pair id for this routed receive. */
+    public long transportPairId() {
+        return transportPairId;
+    }
+
+    /** Returns the generation paired with {@link #transportPairId()}. */
+    public long transportPairGeneration() {
+        return transportPairGeneration;
+    }
+
+    private void setTransportPair(long id, long generation) {
+        if ((id == 0L) != (generation == 0L)) {
+            throw new IllegalArgumentException(
+                "transport pair identity must be entirely present or absent");
+        }
+        transportPairId = id;
+        transportPairGeneration = generation;
     }
 
     /** Returns whether exactly one payload part was received. */

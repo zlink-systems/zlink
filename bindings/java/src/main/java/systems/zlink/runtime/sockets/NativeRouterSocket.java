@@ -65,6 +65,19 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
             rid, parts, runtime().getOption(SocketOptions.SNDTIMEO)));
     }
 
+    public RoutedSendOperation send(RoutingId rid,
+                                    long transportPairId,
+                                    long transportPairGeneration) {
+        if (transportPairId == 0 || transportPairGeneration == 0) {
+            throw new IllegalArgumentException(
+                "transport pair identity must be non-zero");
+        }
+        RoutedAdmission.Target target = new RoutedAdmission.Target(rid,
+            transportPairId, transportPairGeneration);
+        return MessageOperations.routedSend(parts -> routedAdmission.send(
+            target, parts, runtime().getOption(SocketOptions.SNDTIMEO)));
+    }
+
     private boolean sendInternal(RoutingId rid, Message part, SendFlags flags) {
         return outboundRecordAttempts.call(() -> runtime().send(rid, part,
             SendFlag.fromValue(flags.value())));

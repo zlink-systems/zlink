@@ -211,9 +211,16 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
                 NativeRoutingIds.readBytesOut(scratch.sourceNodeRidOut);
             long requestSequence =
                 scratch.requestSeqOut.get(ValueLayout.JAVA_LONG, 0);
+            long transportPairId =
+                scratch.transportPairIdOut.get(ValueLayout.JAVA_LONG, 0);
+            long transportPairGeneration =
+                scratch.transportPairGenerationOut.get(
+                    ValueLayout.JAVA_LONG, 0);
             if (!firstPart.more() && requestSequence == 0L) {
                 ContractAccess.receivedPopulateRoutedSinglePart(target,
                     nodeRidBytes, firstPart, 0L, false, null, null);
+                ContractAccess.receivedSetTransportPair(target,
+                    transportPairId, transportPairGeneration);
                 firstPart = null;
                 ContractAccess.receivedAdoptRetainedCredit(target, leases);
                 ownerAdopted = true;
@@ -252,6 +259,8 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
                 fresh.close();
                 throw ex;
             }
+            ContractAccess.receivedSetTransportPair(target,
+                transportPairId, transportPairGeneration);
             ownerAdopted = true;
             return true;
         } finally {

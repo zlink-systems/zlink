@@ -47,7 +47,8 @@ final class NativeDealerSocket extends NativeSocketBase implements DealerSocket 
 
     public RoutedSendOperation send() {
         return MessageOperations.routedSend(parts -> routedAdmission.send(
-            null, parts, runtime().getOption(SocketOptions.SNDTIMEO)));
+            (RoutingId) null, parts,
+            runtime().getOption(SocketOptions.SNDTIMEO)));
     }
     SendResult sendNoWaitResult(Message part) {
         return outboundRecordAttempts.call(
