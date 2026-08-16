@@ -39,6 +39,48 @@ final class ZLinkApplicationJobQueueExecutionBoundaryTest {
     }
 
     @Test
+    void transferredQueuedJobOutlivesItsParentCallAndReleasesExactlyOnce() {
+        ZLinkApplicationJobQueue queue = queue(1);
+        ZLinkApplicationJobContext.QueuedOwnership ownership;
+        ZLinkApplicationJobQueue.Permit permit =
+            queue.acquire().toCompletableFuture().join();
+
+        try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+            ownership = ZLinkApplicationJobContext.transferToQueuedJob();
+        } finally {
+            permit.abandonReservation();
+        }
+        assertTrue(ownership != null);
+
+        //  The parent call has returned and its finally ran, yet the queued
+        //  job still owns the permit (spec 33 §4/§8 — an asynchronous
+        //  activation that outlives its parent call retains the admission it
+        //  was handed; the post-handoff abandonReservation is a no-op).
+        assertEquals(1, queue.snapshot().queuedApplicationJobs());
+        assertEquals(1, queue.snapshot().permitsInUse());
+        assertEquals(0, queue.snapshot().reservedSupplyPermits());
+        CompletableFuture<ZLinkApplicationJobQueue.Permit> waiter =
+            queue.acquire().toCompletableFuture();
+        assertFalse(waiter.isDone());
+
+        //  The later executor turn re-enters the transferred ownership and
+        //  returns capacity immediately before the first application
+        //  instruction, handing it to the parked waiter.
+        try (var ignored = ZLinkApplicationJobContext.enterQueued(ownership)) {
+            ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
+        }
+        assertEquals(0, queue.snapshot().queuedApplicationJobs());
+        assertTrue(waiter.isDone());
+
+        //  Closing the ownership after handler entry cannot double-release:
+        //  the waiter's permit remains the only one in use.
+        ownership.close();
+        assertEquals(1, queue.snapshot().permitsInUse());
+        waiter.join().close();
+        assertEquals(0, queue.snapshot().permitsInUse());
+    }
+
+    @Test
     void rejectedOrNonDispatchedReservationIsReturnedWithoutAHiddenBacklog() {
         ZLinkApplicationJobQueue queue = queue(1);
         ZLinkApplicationJobQueue.Permit permit =

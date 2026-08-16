@@ -147,6 +147,70 @@ final class ZLinkApplicationJobQueueTest {
         assertEquals(0, queue.snapshot().permitsInUse());
     }
 
+    @Test
+    void closeReleasesParkedWaitersExactlyOnceAndStaysIdempotent() {
+        ZLinkApplicationJobQueue queue = queue(1);
+        ZLinkApplicationJobQueue.Permit held =
+            queue.acquire().toCompletableFuture().join();
+        CompletableFuture<ZLinkApplicationJobQueue.Permit> parked =
+            queue.acquire().toCompletableFuture();
+        assertFalse(parked.isDone());
+        assertEquals(1, queue.snapshot().capacityWaiters());
+
+        //  Spec 33 §8 — shutdown releases parked waiters exactly once.
+        queue.close();
+        assertTrue(parked.isCancelled());
+        assertEquals(0, queue.snapshot().capacityWaiters());
+
+        //  The still-held permit returns exactly once after shutdown;
+        //  repeated releases cannot double-return capacity.
+        held.close();
+        held.close();
+        assertQueue(queue, 0, 0, 0, 1, 0);
+
+        //  Shutdown is idempotent and later acquires fail promptly instead
+        //  of parking forever.
+        queue.close();
+        assertQueue(queue, 0, 0, 0, 1, 0);
+        assertTrue(
+            queue.acquire().toCompletableFuture().isCompletedExceptionally());
+    }
+
+    @Test
+    void oneToManyChildrenNeverMaterializeBeyondSecuredPermits() {
+        //  Spec 33 §5/§8 — 1:N children acquire one permit each, lazily and
+        //  in order; no more children materialize than secured permits.
+        ZLinkApplicationJobQueue queue = queue(1);
+        List<Integer> materialized = new ArrayList<>();
+
+        ZLinkApplicationJobQueue.Permit firstChild =
+            queue.acquire().toCompletableFuture().join();
+        firstChild.queued();
+        materialized.add(1);
+        CompletableFuture<ZLinkApplicationJobQueue.Permit> secondChild =
+            queue.acquire().toCompletableFuture();
+        assertFalse(secondChild.isDone());
+        assertEquals(List.of(1), materialized);
+
+        firstChild.handlerStarted();
+        ZLinkApplicationJobQueue.Permit secondPermit = secondChild.join();
+        secondPermit.queued();
+        materialized.add(2);
+        CompletableFuture<ZLinkApplicationJobQueue.Permit> thirdChild =
+            queue.acquire().toCompletableFuture();
+        assertFalse(thirdChild.isDone());
+
+        secondPermit.handlerStarted();
+        ZLinkApplicationJobQueue.Permit thirdPermit = thirdChild.join();
+        thirdPermit.queued();
+        materialized.add(3);
+        thirdPermit.handlerStarted();
+
+        assertEquals(List.of(1, 2, 3), materialized);
+        assertEquals(1, queue.snapshot().peakPermitsInUse());
+        assertEquals(0, queue.snapshot().permitsInUse());
+    }
+
     private static long resolved(
         ZLinkApplicationJobQueueProfile profile,
         ZLinkApplicationJobQueue.ProcessorCandidates candidates) {
