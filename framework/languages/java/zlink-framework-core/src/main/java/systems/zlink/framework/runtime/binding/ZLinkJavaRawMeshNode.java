@@ -4392,15 +4392,28 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private void dispatchSessionRelocationSeal(
         ZLinkJavaRawServicePort.Inbound inbound) {
         var handler = sessionRelocationSealHandler;
-        if (handler == null
-            || inbound.requestSequence() == null
+        if (handler == null) {
+            return;
+        }
+        if (inbound.requestSequence() == null
             || inbound.frames().size() != 1) {
+            //  A malformed command 42 (seal request) is a transport-boundary
+            //  violation; drop it before the handler but record a bounded
+            //  diagnostic (a conforming sender never reaches this branch).
+            streamTrace("session-seal-command42-malformed-shape source="
+                + inbound.source()
+                + " requestSequence=" + inbound.requestSequence()
+                + " frames=" + inbound.frames().size());
             return;
         }
         byte[] command42 = inbound.frames().getFirst();
         try {
             statefulWire.decodeSessionRelocationSeal(command42);
         } catch (RuntimeException invalid) {
+            streamTrace("session-seal-command42-decode-failed source="
+                + inbound.source()
+                + " error=" + invalid.getClass().getSimpleName()
+                + ": " + String.valueOf(invalid.getMessage()));
             return;
         }
         CompletionStage<byte[]> completion;
