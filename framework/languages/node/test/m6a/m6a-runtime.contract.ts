@@ -288,11 +288,14 @@ test('reply header preserves the schema tail length field', () => {
     tail: Buffer.alloc(0)
   });
 
-  const tail = encodeReplyHeader(8n, 102, 17, Uint8Array.from([1, 2, 3]));
+  //  102+14 (requestTargetNotFound -> notFound) is a schema-legal exact pair;
+  //  the previous 102+17 row predated the terminal-failure-integrity check
+  //  (17 requestFailed pairs with 105 internalError).
+  const tail = encodeReplyHeader(8n, 102, 14, Uint8Array.from([1, 2, 3]));
   assert.deepEqual(decodeReplyHeader(tail), {
     correlation: 8n,
     terminalResult: 102,
-    failureCode: 17,
+    failureCode: 14,
     tail: Buffer.from([1, 2, 3])
   });
 });

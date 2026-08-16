@@ -8,7 +8,8 @@ import {
   SERVICE_WIRE_MAGIC,
   SERVICE_WIRE_MAJOR,
   SERVICE_WIRE_REQUIRED_CAPABILITY,
-  ServiceWireCommand
+  ServiceWireCommand,
+  isValidServiceWireTerminalFailure
 } from './service-wire-constants.generated';
 import {
   decodeCanonicalServiceWireText,
@@ -495,16 +496,16 @@ function validateAdmissionCommand(command: number): void {
 }
 
 function validateReplyFields(correlation: bigint, terminal: number, failure: number): void {
-  const typedFailure = terminal === 102 || (terminal >= 104 && terminal <= 107);
-  const validFailure = (failure >= 0 && failure <= 22) || failure === 35;
+  //  Schema terminal-failure-integrity (spec 51:43-47 +
+  //  service-wire-v1.schema.json): success is ok+none, boundary terminals
+  //  carry none, typed failures must match their exact schema terminal, and
+  //  an unknown or mismatched pair is a protocol error before dispatch. The
+  //  generated predicate replaces the old broad-category check, which
+  //  accepted any typed pairing and wrongly rejected defined codes 33/34.
   if (
     correlation <= 0n
     || correlation > MAX_U64
-    || (terminal !== 0 && (terminal < 101 || terminal > 113))
-    || !validFailure
-    || (terminal === 0 && failure !== 0)
-    || (typedFailure && failure === 0)
-    || (!typedFailure && failure !== 0)
+    || !isValidServiceWireTerminalFailure(terminal, failure)
   ) {
     fail('Invalid reply terminal fields.');
   }
