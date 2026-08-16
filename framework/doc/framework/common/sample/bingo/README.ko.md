@@ -648,7 +648,8 @@ RelayReady reply가 accepted되기 전 명시 failure는 source state를 유지�
 1초 fallback으로 같은 relocation을 완료한다. 이전 route로 도착한 message는 active Message Follow가
 있으면 target으로 전달한다.
 Route가 없거나 만료되었거나 loop가 생기면 `Unavailable`, generation이 다르면 `InvalidOperation`,
-capacity 한도를 넘으면 `CapacityExceeded`로 끝난다. Sample은 이 error를 정상 성공으로 바꾸거나
+target node의 placement 수용량이 부족하면 `CapacityExceeded`로 끝난다. Message Follow 보관량과
+Application Job Queue 포화는 이 결과의 원인이 아니다. Sample은 이 error를 정상 성공으로 바꾸거나
 다른 node에 새 object를 만들어 우회하지 않는다.
 
 ## 8. 구현 구조

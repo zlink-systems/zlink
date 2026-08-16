@@ -436,8 +436,9 @@ or `PlaceMarkReq` before authentication doesn't create an Actor; the call ends i
 ### 7.2 Making A Move And The Final State
 
 The requesting client receives `PlaceMarkRes`, and the other client receives `GameStateNotify`. A
-wrong turn, an occupied cell, and a finished room end in an error response. The final state's status
-and winner must be the same on both clients.
+wrong turn, an occupied cell, and a finished room are Application callback rejections, so they end
+in a typed `Rejected` error response; only transport, route, and protocol failures end with other
+Framework `ErrorKind` values. The final state's status and winner must be the same on both clients.
 
 ```mermaid
 sequenceDiagram

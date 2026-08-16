@@ -417,8 +417,9 @@ sequenceDiagram
 ```
 
 Chat response는 접수·검증과 MessageSeq 확정을 뜻하지만 상대방이 읽었음을 뜻하지 않는다.
-Closed 상태의 SendChatMessageReq는 오류 response를 반환하고, Closed 상태의 SetTypingMsg는
-조용히 무시한다.
+Closed 상태의 SendChatMessageReq는 Application callback의 거부이므로 typed `Rejected` 오류
+response를 반환하고, Closed 상태의 SetTypingMsg는 조용히 무시한다. 이 domain 거부는
+transport·route·protocol 실패의 Framework `ErrorKind`와 구분된다.
 
 ### 7.3 idle, close와 reconnect
 
@@ -560,8 +561,8 @@ builder로 같은 handler 집합을 명시 등록한다. 이 차이는 등록 �
     agent는 availability 재등록과 각 방 재join을 확인한다.
 11. idle notify 뒤 grace 기간 안에 메시지를 보내면 Active로 복귀하고, 기간을 넘기면 양쪽에
     Closed notify가 오는지 확인한다.
-12. Closed conversation의 SendChatMessageReq와 CloseConversationReq가 오류 response를 반환하고,
-    SetTypingMsg는 무시되는지 확인한다.
+12. Closed conversation의 SendChatMessageReq와 CloseConversationReq가 Application callback 거부의
+    typed `Rejected` 오류 response를 반환하고, SetTypingMsg는 무시되는지 확인한다.
 13. Agent가 없는 상태의 OpenConversationReq가 오류가 아니라 WaitingForAgent로 남는지 확인한다.
 14. response와 push에 owner NodeRid, ActorRef와 session route가 포함되지 않는지 확인한다.
 

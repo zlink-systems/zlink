@@ -423,8 +423,10 @@ sequenceDiagram
 ```
 
 A chat response means acceptance, validation, and MessageSeq confirmation, but it doesn't mean the
-counterpart read it. A `SendChatMessageReq` in the Closed state returns an error response, and a
-`SetTypingMsg` in the Closed state is silently ignored.
+counterpart read it. A `SendChatMessageReq` in the Closed state is an Application callback
+rejection and returns a typed `Rejected` error response, and a `SetTypingMsg` in the Closed state
+is silently ignored. This domain rejection is distinct from the Framework `ErrorKind` values used
+for transport, route, and protocol failures.
 
 ### 7.3 Idle, Close, And Reconnect
 
@@ -574,8 +576,9 @@ registration method and doesn't change the message or processing responsibility.
     existing state, and confirm the agent re-registers availability and rejoins each room.
 11. Confirm that sending a message within the grace period after the idle notify returns to Active,
     and that exceeding the period delivers a Closed notify to both sides.
-12. Confirm that `SendChatMessageReq` and `CloseConversationReq` on a Closed conversation return an
-    error response, and that `SetTypingMsg` is ignored.
+12. Confirm that `SendChatMessageReq` and `CloseConversationReq` on a Closed conversation return a
+    typed `Rejected` error response from the Application callback rejection, and that
+    `SetTypingMsg` is ignored.
 13. Confirm that `OpenConversationReq` with no Agent present isn't an error and stays at
     WaitingForAgent.
 14. Confirm that owner NodeRid, ActorRef, and the session route aren't included in the response or

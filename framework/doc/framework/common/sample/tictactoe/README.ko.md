@@ -424,8 +424,9 @@ Join failure는 current session에 보내는 `JoinGameFailedNotify`로 알린다
 ### 7.2 수 두기와 최종 state
 
 request client는 PlaceMarkRes를 받고 상대 client는 GameStateNotify를 받는다. 잘못된 turn,
-사용한 cell과 종료된 room은 오류 response로 끝난다. 최종 state의 status와 winner는 양쪽
-client에서 같아야 한다.
+사용한 cell과 종료된 room은 Application callback의 거부이므로 typed `Rejected` 오류 response로
+끝난다. Transport·route·protocol 실패만 Framework의 다른 `ErrorKind`로 끝난다. 최종 state의
+status와 winner는 양쪽 client에서 같아야 한다.
 
 ```mermaid
 sequenceDiagram

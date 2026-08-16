@@ -673,9 +673,10 @@ RelayReady is accepted, the source isn't restored regardless of the CUTOVER subm
 target completes the same relocation when it receives CUTOVER or through the existing one-second
 fallback. A message that arrives on the previous route is delivered to the target if there's an
 active Message Follow. It ends as `Unavailable` if there's no route, the route expired, or a loop
-forms; as `InvalidOperation` if the generation differs; and as `CapacityExceeded` if the capacity
-limit is exceeded. The sample doesn't turn this error into normal success or work around it by
-creating a new object on another node.
+forms; as `InvalidOperation` if the generation differs; and as `CapacityExceeded` if the target
+node's placement capacity is insufficient. Message Follow retention and Application Job Queue
+saturation are not causes of this result. The sample doesn't turn this error into normal success
+or work around it by creating a new object on another node.
 
 ## 8. Implementation Structure
 
