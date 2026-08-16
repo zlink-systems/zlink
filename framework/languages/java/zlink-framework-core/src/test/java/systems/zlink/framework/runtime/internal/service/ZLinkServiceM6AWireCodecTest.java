@@ -3,6 +3,7 @@ import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -248,6 +249,28 @@ final class ZLinkServiceM6AWireCodecTest {
             100,
             4,
             2);
+    }
+
+    @Test
+    void terminalFailurePairsFollowTheSchemaIntegrityTable() {
+        //  Schema terminal-failure-integrity (spec 51:43-47,
+        //  service-wire-v1.schema.json): exact typed pairs and boundary
+        //  terminals with none are valid; mismatched or unknown pairs are not.
+        assertTrue(ServiceWireConstants.validTerminalFailure(102, 9));
+        assertTrue(ServiceWireConstants.validTerminalFailure(105, 17));
+        assertTrue(ServiceWireConstants.validTerminalFailure(106, 18));
+        assertTrue(ServiceWireConstants.validTerminalFailure(104, 16));
+        assertTrue(ServiceWireConstants.validTerminalFailure(108, 0));
+        assertFalse(ServiceWireConstants.validTerminalFailure(104, 3));
+        assertFalse(ServiceWireConstants.validTerminalFailure(102, 18));
+        assertFalse(ServiceWireConstants.validTerminalFailure(108, 5));
+        assertFalse(ServiceWireConstants.validTerminalFailure(102, 23));
+        assertFalse(ServiceWireConstants.validTerminalFailure(102, 99));
+        //  The codec enforces the same rule on encode and decode.
+        assertThrows(RuntimeException.class,
+            () -> codec.encodeReplyHeader(1, 104, 3));
+        assertThrows(RuntimeException.class,
+            () -> codec.encodeReplyHeader(1, 102, 18));
     }
 
     @Test

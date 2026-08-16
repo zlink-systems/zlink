@@ -1829,6 +1829,49 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 == targetNodeGeneration;
     }
 
+    /**
+     * Carries the exact (terminalResult, failureCode) pair received from the
+     * relocation-forward target so the relay reply preserves it
+     * (spec 32-framework-error-model:83-92).
+     */
+    static final class ZLinkRelayedReplyTerminalException
+        extends RuntimeException {
+        final int terminalResult;
+        final int failureCode;
+
+        ZLinkRelayedReplyTerminalException(int terminalResult, int failureCode) {
+            super("relocation-forward reply terminal=" + terminalResult
+                + " failureCode=" + failureCode);
+            this.terminalResult = terminalResult;
+            this.failureCode = failureCode;
+        }
+    }
+
+    /**
+     * Maps a relocation-forward failure to the schema-valid wire pair the
+     * relay reply encodes. A received terminal relays unchanged (it was
+     * validated on decode); a transport failure relays its boundary terminal
+     * with none; a malformed forwarded reply relays
+     * protocolError+requestProtocolError (spec 32:91-92; the schema
+     * terminal-failure-integrity rule requires typed terminals to carry their
+     * exact fine code, so a bare 104+0 would itself be invalid); anything
+     * else relays internalError+requestFailed (spec 32:119-120).
+     */
+    static int[] relayedFailurePair(Throwable relayFailure) {
+        if (relayFailure instanceof ZLinkRelayedReplyTerminalException relayed) {
+            return new int[] {relayed.terminalResult, relayed.failureCode};
+        }
+        if (relayFailure instanceof ZlinkRequestException transport
+            && ServiceWireConstants.validTerminalFailure(
+                transport.getResult().value(), 0)) {
+            return new int[] {transport.getResult().value(), 0};
+        }
+        if (relayFailure instanceof IllegalArgumentException) {
+            return new int[] {104, 16};
+        }
+        return new int[] {105, 17};
+    }
+
     private void forwardRelocationReply(
         Long correlation,
         RequestResult result,
@@ -1853,8 +1896,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     "relocation-forward reply terminal differs");
             }
             if (response.terminalResult() != 0) {
-                failure.accept(new ZlinkRequestException(
-                    RequestResult.fromValue(response.terminalResult())));
+                //  Spec 32-framework-error-model:83-92 — preserve the received
+                //  terminal AND fine failure code so the relay re-encodes the
+                //  real pair instead of collapsing every forwarded failure
+                //  (the old path discarded response.failureCode()).
+                failure.accept(new ZLinkRelayedReplyTerminalException(
+                    response.terminalResult(), response.failureCode()));
                 return;
             }
             List<Message> decoded = decodeApplicationMessages(
@@ -4721,7 +4768,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 .completion.ZLinkTerminalWinner.Cause.FAILURE)) {
                             return;
                         }
-                        replySpotFailure(inbound, header, 102, 1);
+                        //  Relay the real received/classified pair instead of a
+                        //  fixed 102+1 (spec 32-framework-error-model:83-92).
+                        int[] pair = relayedFailurePair(relayFailure);
+                        replySpotFailure(inbound, header, pair[0], pair[1]);
                     },
                     inbound::close);
             if (!accepted) {
@@ -5493,7 +5543,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 .completion.ZLinkTerminalWinner.Cause.FAILURE)) {
                             return;
                         }
-                        replyActorFailure(inbound, header, 102, 1);
+                        //  Relay the real received/classified pair instead of a
+                        //  fixed 102+1 (spec 32-framework-error-model:83-92).
+                        int[] pair = relayedFailurePair(relayFailure);
+                        replyActorFailure(inbound, header, pair[0], pair[1]);
                     },
                     inbound::close);
             if (!accepted) {

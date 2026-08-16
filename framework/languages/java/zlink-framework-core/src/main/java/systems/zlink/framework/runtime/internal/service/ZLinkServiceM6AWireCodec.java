@@ -427,17 +427,14 @@ public final class ZLinkServiceM6AWireCodec {
         long correlation,
         int terminal,
         int failure) {
-        boolean typedFailure =
-            terminal == 102 || (terminal >= 104 && terminal <= 107);
-        boolean validFailure =
-            (failure >= 0 && failure <= 22)
-                || (failure >= 33 && failure <= 35);
+        //  Schema terminal-failure-integrity (spec 51-internal-service-wire
+        //  -protocol:43-47, service-wire-v1.schema.json): success is ok+none,
+        //  boundary terminals carry none, a typed failure code must match its
+        //  exact schema terminal, and an unknown failure code is rejected as a
+        //  protocol error before dispatch. The generated predicate is the
+        //  single source of that pairing table.
         if (correlation <= 0
-            || (terminal != 0 && (terminal < 101 || terminal > 113))
-            || !validFailure
-            || (terminal == 0 && failure != 0)
-            || (typedFailure && failure == 0)
-            || (!typedFailure && failure != 0)) {
+            || !ServiceWireConstants.validTerminalFailure(terminal, failure)) {
             throw protocol("invalid reply terminal fields");
         }
     }
