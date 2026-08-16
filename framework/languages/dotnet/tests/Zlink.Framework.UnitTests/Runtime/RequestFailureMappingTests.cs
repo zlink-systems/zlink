@@ -397,4 +397,38 @@ public sealed class RequestFailureMappingTests
         Assert.Throws<ObjectDisposedException>(() => duplicate.AsReadOnlySpan());
     }
 
+    //  Pins the generated schema terminal-failure-integrity predicate
+    //  (service-wire-v1.schema.json; spec 51-internal-service-wire-protocol:
+    //  43-47): success is ok+none, boundary terminals carry none, typed
+    //  failures must match their exact schema terminal, unknown or reserved
+    //  failure codes are invalid. NOTE: the predicate is not yet wired into
+    //  TryDecodeReply — live .NET producers still emit the schema-illegal
+    //  TimedOut(101)+WorkerTimedOut(19) pair (see the 101+19 row below), which
+    //  must be fixed across languages before decode-side enforcement lands.
+    [Theory]
+    [InlineData(0u, 0u, true)]          // ok + none
+    [InlineData(102u, 9u, true)]        // notFound + handlerNotFound
+    [InlineData(105u, 17u, true)]       // internalError + requestFailed
+    [InlineData(105u, 19u, true)]       // internalError + workerTimedOut
+    [InlineData(106u, 18u, true)]       // rejected + workerQueueFull
+    [InlineData(104u, 16u, true)]       // protocolError + requestProtocolError
+    [InlineData(107u, 33u, true)]       // conflict + spotGenerationStale
+    [InlineData(108u, 0u, true)]        // busy boundary + none
+    [InlineData(113u, 0u, true)]        // backpressured boundary + none
+    [InlineData(104u, 3u, false)]       // protocolError + actorAlreadyExists
+    [InlineData(102u, 18u, false)]      // notFound + workerQueueFull
+    [InlineData(108u, 5u, false)]       // boundary busy + spotCreateFailed
+    [InlineData(0u, 9u, false)]         // ok + non-none
+    [InlineData(101u, 19u, false)]      // boundary timedOut + workerTimedOut
+    [InlineData(105u, 23u, false)]      // reserved failure code
+    [InlineData(105u, 26u, false)]      // reserved failure code
+    [InlineData(105u, 99u, false)]      // unknown failure code
+    public void Schema_Terminal_Failure_Integrity_Predicate_Matches_The_Schema(
+        uint terminal, uint failureCode, bool valid)
+    {
+        Assert.Equal(
+            valid,
+            Systems.Zlink.Framework.Runtime.Protocol.ServiceWireConstants
+                .ValidTerminalFailure(terminal, failureCode));
+    }
 }
