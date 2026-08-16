@@ -465,14 +465,9 @@ public sealed class RelocationTreeParallelIoTests
             checked((ulong)stateBytes + sizeof(ulong)));
         WriteUInt64BigEndian(stream, checked((ulong)stateBytes));
         stream.Write(new byte[stateBytes]);
-        WriteUInt32BigEndian(stream, 1); // Progress count.
-        WriteUInt64BigEndian(stream, 1); // Participant id.
-        WriteUInt64BigEndian(stream, 0); // Accepted boundary.
-        WriteUInt64BigEndian(stream, 0); // Replay cursor.
-        WriteUInt32BigEndian(stream, 0); // Journal count.
+        WriteUInt32BigEndian(stream, 0); // Saved-work count.
         WriteUInt32BigEndian(stream, 0); // Timer count.
-        WriteUInt32BigEndian(stream, 0); // Pending tick count.
-        WriteUInt32BigEndian(stream, 0); // Completion count.
+        WriteUInt32BigEndian(stream, 0); // Pending timer tick count.
         return stream.ToArray();
     }
 
