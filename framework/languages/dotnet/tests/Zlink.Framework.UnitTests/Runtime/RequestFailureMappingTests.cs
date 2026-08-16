@@ -357,6 +357,29 @@ public sealed class RequestFailureMappingTests
         Assert.Throws<ObjectDisposedException>(() => lateReply.AsReadOnlySpan());
     }
 
+    //  Spec 32-framework-error-model:91-92 — an Ok lifecycle record whose reply
+    //  lacks the operation-specific completion cannot be processed:
+    //  ProtocolError, never InternalFailure via the coarse terminal map.
+    //  Non-OK records keep the ownership-aware terminal/fine classification
+    //  (codex round-11 findings 3 and 6).
+    [Theory]
+    [InlineData((int)RequestResult.Ok, 0, ZLinkFrameworkErrorKind.ProtocolError)]
+    [InlineData((int)RequestResult.Ok, 18, ZLinkFrameworkErrorKind.ProtocolError)]
+    [InlineData((int)RequestResult.Busy, 0, ZLinkFrameworkErrorKind.Unavailable)]
+    [InlineData((int)RequestResult.TimedOut, 0, ZLinkFrameworkErrorKind.DeadlineExceeded)]
+    [InlineData((int)RequestResult.Terminated, 0, ZLinkFrameworkErrorKind.ShuttingDown)]
+    [InlineData((int)RequestResult.Backpressured, 0, ZLinkFrameworkErrorKind.CapacityExceeded)]
+    [InlineData((int)RequestResult.Conflict, 18, ZLinkFrameworkErrorKind.Unavailable)]
+    [InlineData((int)RequestResult.Conflict, 19, ZLinkFrameworkErrorKind.DeadlineExceeded)]
+    public void Lifecycle_Failure_Classifies_Ok_Missing_Completion_As_Protocol_Error(
+        int terminalResult, int failureErrno, ZLinkFrameworkErrorKind expected)
+    {
+        Assert.Equal(
+            expected,
+            ZLinkBackendSpotNodeWrapper.MapLifecycleFailure(
+                terminalResult, failureErrno));
+    }
+
     [Fact]
     public async Task SpotRouteNativeReply_NormalWinnerTransfersOwnershipAndDisposesDuplicateReply()
     {

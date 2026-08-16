@@ -502,7 +502,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 else
                 {
                     ZLinkMessageParts.DisposeAll(parts);
-                    var createKind = MapFrameworkErrorCode(record.TerminalResult, record.FailureErrno);
+                    var createKind = MapLifecycleFailure(record.TerminalResult, record.FailureErrno);
                     terminal.TrySetException(new ZLinkFrameworkException(
                         createKind,
                         "Remote User Spot create failed.",
@@ -564,7 +564,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 ZLinkMessageParts.DisposeAll(parts);
                 var failure = (ServiceWireConstants.FrameworkErrorCode)
                     record.FailureErrno;
-                var kind = MapFrameworkErrorCode(record.TerminalResult, record.FailureErrno);
+                var kind = MapLifecycleFailure(record.TerminalResult, record.FailureErrno);
                 var retryAdvice = RetryAdviceFor(kind);
                 terminal.TrySetException(new ZLinkFrameworkException(
                     kind,
@@ -614,7 +614,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 terminal.TrySetResult(completion.Destroyed);
                 return;
             }
-            var destroyKind = MapFrameworkErrorCode(record.TerminalResult, record.FailureErrno);
+            var destroyKind = MapLifecycleFailure(record.TerminalResult, record.FailureErrno);
             terminal.TrySetException(new ZLinkFrameworkException(
                 destroyKind,
                 $"Remote Actor destroy failed for '{actor.ActorId}'.",
@@ -658,7 +658,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 terminal.TrySetResult(completion);
             else
             {
-                var closeKind = MapFrameworkErrorCode(record.TerminalResult, record.FailureErrno);
+                var closeKind = MapLifecycleFailure(record.TerminalResult, record.FailureErrno);
                 terminal.TrySetException(new ZLinkFrameworkException(
                     closeKind,
                     "Remote User Spot close failed: "
@@ -1080,10 +1080,24 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         var correlationId = _node.AllocateOperationId();
         _completions.RegisterBeforeSubmit(
             correlationId,
-            (_, parts) =>
+            (record, parts) =>
             {
                 ZLinkMessageParts.DisposeAll(parts);
-                completion.TrySetResult();
+                //  Spec 32-framework-error-model:83-120 — an awaited destroy
+                //  that cannot produce its normal result completes with the
+                //  distinguishable ErrorKind instead of ignoring the terminal
+                //  and reporting success for every completion.
+                if (record.TerminalResult == (int)RequestResult.Ok)
+                {
+                    completion.TrySetResult();
+                    return;
+                }
+                var destroyKind = MapFrameworkErrorCode(
+                    record.TerminalResult, record.FailureErrno);
+                completion.TrySetException(new ZLinkFrameworkException(
+                    destroyKind,
+                    $"Actor destroy failed for '{actor.ActorId}'.",
+                    RetryAdviceFor(destroyKind)));
             },
             id =>
             {
@@ -1464,6 +1478,18 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 throw;
             }
         }
+    }
+
+    //  Spec 32-framework-error-model:91-92 — an Ok terminal whose reply lacks
+    //  the operation-specific completion cannot be processed: ProtocolError,
+    //  never the coarse terminal map (MapTerminalResult(Ok) would land on
+    //  InternalFailure). Only non-OK records use terminal/fine mapping.
+    internal static ZLinkFrameworkErrorKind MapLifecycleFailure(
+        int terminalResult, int failureErrno)
+    {
+        return terminalResult == (int)RequestResult.Ok
+            ? ZLinkFrameworkErrorKind.ProtocolError
+            : MapFrameworkErrorCode(terminalResult, failureErrno);
     }
 
     //  Shared ownership-aware remote-reply translator for spot/actor command

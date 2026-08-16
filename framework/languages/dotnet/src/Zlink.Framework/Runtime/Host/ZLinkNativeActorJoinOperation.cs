@@ -123,7 +123,11 @@ internal sealed class ZLinkNativeActorJoinOperation(
                     $"Actor join for '{actorId}' to SPOT '{spotId}'");
 
             if (replyParts.Count == 0)
-                throw new InvalidOperationException(
+                //  Spec 32-framework-error-model:91-92 — an empty successful
+                //  reply cannot be processed: ProtocolError, not a plain
+                //  InvalidOperationException.
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.ProtocolError,
                     "Actor join reply was empty.");
 
             var header = ZLinkEnvelopeCodec.DecodeHeader(replyParts);
