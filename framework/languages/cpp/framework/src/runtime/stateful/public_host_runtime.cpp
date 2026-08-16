@@ -4748,8 +4748,13 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         }
                         if (_user_spot_terminals.size ()
                             >= _options.user_spot_operation_capacity) {
+                            //  Spec 32-framework-error-model:99-103 — encode
+                            //  local operation-table saturation as Busy(108)+
+                            //  None so the requesting peer classifies it as the
+                            //  target's queue state (Unavailable). Terminated
+                            //  (103) is reserved for actual shutdown.
                             protocol::user_spot_create_reply_t reply{
-                              {request.correlation, 103, 0},
+                              {request.correlation, 108, 0},
                               protocol::user_spot_create_result_t::rejected,
                               {},
                               0};
@@ -5231,8 +5236,11 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     }
                     if (_user_spot_terminals.size ()
                         >= _options.user_spot_operation_capacity) {
+                        //  Spec 32-framework-error-model:99-103 — Busy(108)+
+                        //  None: the target's operation-table saturation, not a
+                        //  shutdown terminal (103).
                         protocol::user_spot_close_reply_t reply{
-                          {request.correlation, 103, 0}, false};
+                          {request.correlation, 108, 0}, false};
                         (void) _transport->reply_user_spot_close (
                           mailbox_record, reply);
                         continue;

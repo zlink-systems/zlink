@@ -6152,7 +6152,11 @@ void verify_remote_user_spot_create_close_terminal_once ()
         std::this_thread::sleep_for (1ms);
     }
     assert (capacity_reply);
-    assert (capacity_reply->header.terminal_result == 103);
+    //  Spec 32-framework-error-model:99-103 — operation-table saturation is
+    //  wire-encoded Busy(108)+None (the target's queue state -> Unavailable at
+    //  the requester), not Terminated(103), which is reserved for shutdown.
+    assert (capacity_reply->header.terminal_result == 108);
+    assert (capacity_reply->header.failure_code == 0);
     assert (materialize_count == 1);
     std::this_thread::sleep_for (200ms);
     auto expired_create = create;
