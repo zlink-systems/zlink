@@ -1384,6 +1384,111 @@ test('raw runtime admits peers and completes node/channel requests once', async 
   }
 });
 
+//  Spec 33-core-hwm-application-job-flow §8 (R6): a terminal reply completion
+//  progresses independently of ordinary job-flow saturation. The requester's
+//  ApplicationJobQueue is saturated at limit 1 (permit held, the ordinary
+//  receive pump parked pre-receive as a capacity waiter), yet the wire reply
+//  for an outstanding request still completes — reply completions resolve on
+//  the native request path and never pass the application admission gate.
+test('terminal reply completion progresses while ordinary job flow is saturated', async () => {
+  const endpointNonce = `${process.pid}-${Date.now()}`;
+  const leftDescriptor = descriptor(
+    'm6a-r6-left',
+    `ipc:///tmp/zlink-m6a-r6-left-${endpointNonce}.sock`
+  );
+  const rightDescriptor = descriptor(
+    'm6a-r6-right',
+    `ipc:///tmp/zlink-m6a-r6-right-${endpointNonce}.sock`
+  );
+  const leftJobs = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration(
+    { maxQueuedApplicationJobs: 1n },
+    () => 1n
+  ));
+  const left = rawServiceRuntime({
+    descriptor: leftDescriptor,
+    applicationJobQueue: leftJobs
+  });
+  const right = rawServiceRuntime({ descriptor: rightDescriptor });
+  left.start();
+  right.start();
+  try {
+    left.connectPeer(rightDescriptor.advertisedEndpoint, rightDescriptor);
+    await pollUntil(async () => {
+      await left.announceExpectedPeers();
+      await right.pumpOne();
+      await left.pumpOne();
+      await left.tickLiveness();
+      await right.tickLiveness();
+      return left.topology.peer('m6a-r6-right') !== undefined
+        && right.topology.peer('m6a-r6-left') !== undefined
+        && left.isPeerRouteReady('m6a-r6-right')
+        && right.isPeerRouteReady('m6a-r6-left');
+    });
+    //  Drain any admission-handshake leftovers so the saturated pump below
+    //  parks in front of exactly one ordinary application record.
+    while (await left.pumpOne() !== 'noData') { /* drain */ }
+
+    //  Saturate the requester's ordinary job flow: hold its only permit and
+    //  park the receive pump as a capacity waiter.
+    const occupied = await leftJobs.acquire();
+    const parked = left.pumpOne();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(leftJobs.snapshot().capacityWaiters, 1n);
+    assert.equal(leftJobs.snapshot().permitsInUse, 1n);
+
+    //  An ordinary inbound record cannot be received while saturated.
+    assert.equal(await right.sendToNode('m6a-r6-left', {
+      packetName: 'OrdinaryNotice',
+      contentType: 'application/json',
+      payload: Buffer.from('parked')
+    }), true);
+
+    //  The terminal reply completion still progresses.
+    const pending = left.requestToNode('m6a-r6-right', {
+      packetName: 'Question',
+      contentType: 'application/json',
+      payload: Buffer.from('request')
+    }, 2_000);
+    await pollUntil(async () => await right.pumpOne() === 'application');
+    const request = right.mailbox.tryClaim('application', 1, 4096)!;
+    right.reply(request.records[0]!, {
+      packetName: 'Answer',
+      contentType: 'application/json',
+      payload: Buffer.from('reply')
+    });
+    assert.equal(right.mailbox.release(request), true);
+    const result = await awaitWithin(
+      pending.promise,
+      2_000,
+      'Timed out waiting for the reply terminal under saturation.'
+    );
+    assert.equal(result.terminalResult, 0);
+    assert.equal(Buffer.from(result.payload!.payload).toString(), 'reply');
+    //  The ordinary job flow stayed saturated the whole time: the reply
+    //  terminal did not consume (or wait for) an application permit.
+    assert.equal(leftJobs.snapshot().capacityWaiters, 1n);
+    assert.equal(leftJobs.snapshot().permitsInUse, 1n);
+
+    //  Releasing the permit drains the parked ordinary record normally.
+    occupied.releaseAfterInternalProcessing();
+    const parkedResult = await parked;
+    assert.ok(parkedResult === 'application' || parkedResult === 'noData');
+    if (parkedResult !== 'application') {
+      await pollUntil(async () => await left.pumpOne() === 'application');
+    }
+    const drained = left.mailbox.tryClaim('application', 1, Number.MAX_SAFE_INTEGER)!;
+    assert.equal(drained.owner, 'node:m6a-r6-left');
+    const record = drained.records[0]!;
+    record.applicationJob!.releaseBeforeHandler();
+    record.applicationJob!.close();
+    assert.equal(left.mailbox.release(drained), true);
+    assert.equal(leftJobs.snapshot().permitsInUse, 0n);
+  } finally {
+    left.close();
+    right.close();
+  }
+});
+
 test('normal receive pump carries application and liveness traffic on one route', async () => {
   const endpointNonce = `${process.pid}-${Date.now()}`;
   const leftDescriptor = descriptor(
