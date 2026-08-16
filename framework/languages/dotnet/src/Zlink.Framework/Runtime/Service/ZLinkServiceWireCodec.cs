@@ -379,6 +379,15 @@ internal static partial class ZLinkServiceWireCodec
             error = DecodeError.InvalidField;
             return false;
         }
+        //  Schema terminal-failure-integrity (spec 51:43-47): reject replies
+        //  whose terminal/failure-code pair is outside the generated table —
+        //  unknown or mismatched pairs are a protocol error before dispatch.
+        if (!ServiceWireConstants.ValidTerminalFailure(
+                unchecked((uint)terminalResult), failureCode))
+        {
+            error = DecodeError.InvalidField;
+            return false;
+        }
         if (span.Length - 18 < tailLength)
         {
             error = DecodeError.TruncatedField;
@@ -396,6 +405,38 @@ internal static partial class ZLinkServiceWireCodec
             failureCode,
             span.Slice(18, tailLength).ToArray());
         error = DecodeError.None;
+        return true;
+    }
+
+    //  Schema terminal-failure-integrity fallback for dispatch chains: when a
+    //  frame is a well-formed Reply whose terminal/failure-code pair violates
+    //  the generated table, surface a synthesized
+    //  protocolError(104)+requestProtocolError(16) reply carrying the original
+    //  correlation, so the pending operation completes with ProtocolError
+    //  instead of being dropped (which would surface as DeadlineExceeded).
+    internal static bool TryDecodeReplyIntegrityViolation(
+        ReadOnlySpan<byte> bytes,
+        out ReplyRecord synthesized)
+    {
+        synthesized = default;
+        if (!TryDecodePrefix(bytes, out var command, out var flags, out _)
+            || command != ServiceWireConstants.Command.Reply
+            || flags != ServiceWireConstants.Flag.None
+            || bytes.Length < 23)
+            return false;
+        var span = bytes[5..];
+        var correlation = BinaryPrimitives.ReadUInt64BigEndian(span);
+        var terminalResult = BinaryPrimitives.ReadInt32BigEndian(span[8..]);
+        var failureCode = BinaryPrimitives.ReadUInt32BigEndian(span[12..]);
+        if (correlation == 0
+            || ServiceWireConstants.ValidTerminalFailure(
+                unchecked((uint)terminalResult), failureCode))
+            return false;
+        synthesized = new ReplyRecord(
+            correlation,
+            104,
+            (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
+            Array.Empty<byte>());
         return true;
     }
 

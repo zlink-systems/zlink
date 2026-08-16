@@ -749,15 +749,54 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal("worker", application.ChannelName);
         Assert.True(application.HasMetadata);
 
-        var reply = ZLinkServiceWireCodec.EncodeReply(41, -3, 19);
+        //  Schema terminal-failure-integrity (spec 51:43-47): a legal pair
+        //  round-trips exactly; an illegal or unknown pair is rejected on
+        //  decode and surfaces through the integrity-violation fallback with
+        //  the synthesized protocolError(104)+requestProtocolError(16) pair.
+        var reply = ZLinkServiceWireCodec.EncodeReply(41, 105, 19);
         Assert.True(ZLinkServiceWireCodec.TryDecodeReply(
             reply,
             out var terminal,
             out var replyError));
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, replyError);
         Assert.Equal(41UL, terminal.Correlation);
-        Assert.Equal(-3, terminal.TerminalResult);
+        Assert.Equal(105, terminal.TerminalResult);
         Assert.Equal(19U, terminal.FailureCode);
+
+        foreach (var (illegalTerminal, illegalFailure) in new[]
+                 {
+                     (-3, 19U),   // unknown terminal
+                     (101, 19U),  // boundary terminal must carry None
+                     (104, 3U),   // typed pair mismatch
+                     (102, 18U),  // typed pair mismatch
+                 })
+        {
+            var illegal = ZLinkServiceWireCodec.EncodeReply(
+                41, illegalTerminal, illegalFailure);
+            Assert.False(ZLinkServiceWireCodec.TryDecodeReply(
+                illegal,
+                out _,
+                out var illegalError));
+            Assert.Equal(
+                ZLinkServiceWireCodec.DecodeError.InvalidField, illegalError);
+            Assert.True(ZLinkServiceWireCodec.TryDecodeReplyIntegrityViolation(
+                illegal,
+                out var synthesized));
+            Assert.Equal(41UL, synthesized.Correlation);
+            Assert.Equal(104, synthesized.TerminalResult);
+            Assert.Equal(16U, synthesized.FailureCode);
+        }
+
+        var legalSynthesis = ZLinkServiceWireCodec.EncodeReply(41, 104, 16);
+        Assert.True(ZLinkServiceWireCodec.TryDecodeReply(
+            legalSynthesis,
+            out var synthesizedPair,
+            out var synthesizedError));
+        Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, synthesizedError);
+        Assert.Equal(16U, synthesizedPair.FailureCode);
+        Assert.False(ZLinkServiceWireCodec.TryDecodeReplyIntegrityViolation(
+            legalSynthesis,
+            out _));
     }
 
     [Fact]

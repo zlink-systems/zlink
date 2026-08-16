@@ -3825,7 +3825,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
             if (remainingMilliseconds == 0)
                 return new InstanceSpotActivationTerminal(
-                    RequestResult.TimedOut,
+                    RequestResult.InternalError,
                     ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut,
                     Array.Empty<ReadOnlyMemory<byte>>());
             var remaining = TimeSpan.FromMilliseconds(
@@ -3894,12 +3894,28 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             IReadOnlyList<Message> replyParts)
     {
         if (transportResult != RequestResult.Ok)
+        {
+            //  Schema terminal-failure-integrity: a worker timeout is encoded
+            //  as internalError+workerTimedOut (19 pairs only with 105; the
+            //  fine code still classifies publicly to DeadlineExceeded), a
+            //  boundary transport terminal carries None, and any other typed
+            //  transport terminal falls back to internalError+requestFailed.
+            if (transportResult == RequestResult.TimedOut)
+                return new InstanceSpotActivationTerminal(
+                    RequestResult.InternalError,
+                    ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut,
+                    Array.Empty<ReadOnlyMemory<byte>>());
+            if (ServiceWireConstants.ValidTerminalFailure(
+                    unchecked((uint)transportResult), 0u))
+                return new InstanceSpotActivationTerminal(
+                    transportResult,
+                    ServiceWireConstants.FrameworkErrorCode.None,
+                    Array.Empty<ReadOnlyMemory<byte>>());
             return new InstanceSpotActivationTerminal(
-                transportResult,
-                transportResult == RequestResult.TimedOut
-                    ? ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut
-                    : ServiceWireConstants.FrameworkErrorCode.RequestFailed,
+                RequestResult.InternalError,
+                ServiceWireConstants.FrameworkErrorCode.RequestFailed,
                 Array.Empty<ReadOnlyMemory<byte>>());
+        }
         if (replyParts.Count == 0
             || !ZLinkServiceWireCodec.TryDecodeReply(
                 replyParts[0].ToArray(),
@@ -4720,6 +4736,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             CompleteOperation(reply, parts);
             return true;
         }
+        if (ZLinkServiceWireCodec.TryDecodeReplyIntegrityViolation(
+                head, out var violatedReply))
+        {
+            //  Schema terminal-failure-integrity (spec 51:43-47): a Reply
+            //  whose terminal/failure pair violates the generated table
+            //  completes the pending operation as ProtocolError instead of
+            //  falling through the command chain and being dropped.
+            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+            CompleteOperation(violatedReply, Array.Empty<Message>());
+            return true;
+        }
         if (ZLinkServiceWireCodec.TryDecodeReplyRelayAck(
                 head,
                 out var relayAck,
@@ -5530,7 +5557,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (remaining <= 0)
         {
             terminal = new InstanceSpotActivationTerminal(
-                RequestResult.TimedOut,
+                RequestResult.InternalError,
                 ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut,
                 Array.Empty<ReadOnlyMemory<byte>>());
         }
@@ -5548,7 +5575,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             catch (OperationCanceledException) when (deadline.IsCancellationRequested)
             {
                 terminal = new InstanceSpotActivationTerminal(
-                    RequestResult.TimedOut,
+                    RequestResult.InternalError,
                     ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut,
                     Array.Empty<ReadOnlyMemory<byte>>());
             }
@@ -5652,7 +5679,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                <= checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
         {
             Reply(
-                RequestResult.TimedOut,
+                RequestResult.InternalError,
                 (uint)ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut,
                 Array.Empty<Message>());
             return false;
@@ -5932,7 +5959,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 sourceRid,
                 correlation,
                 record.Command,
-                RequestResult.TimedOut,
+                RequestResult.InternalError,
                 ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut);
             return;
         }
@@ -5998,7 +6025,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         - _deadlineClock.GetUnixTimeMilliseconds();
         if (remaining <= 0)
             return new UserSpotOperationTerminal(
-                RequestResult.TimedOut,
+                RequestResult.InternalError,
                 ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut);
 
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
@@ -6014,7 +6041,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         catch (OperationCanceledException) when (deadline.IsCancellationRequested)
         {
             return new UserSpotOperationTerminal(
-                RequestResult.TimedOut,
+                RequestResult.InternalError,
                 ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut);
         }
         catch (ZLinkFrameworkException exception)
@@ -6355,7 +6382,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             SendActorCreateFailure(
                 sourceRid,
                 operation.Correlation,
-                RequestResult.TimedOut,
+                RequestResult.InternalError,
                 ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut);
             return;
         }
@@ -6539,7 +6566,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         - _deadlineClock.GetUnixTimeMilliseconds();
         if (remaining <= 0)
             return new ActorCreateOperationTerminal(
-                RequestResult.TimedOut,
+                RequestResult.InternalError,
                 ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut);
 
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
@@ -6554,7 +6581,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         catch (OperationCanceledException) when (deadline.IsCancellationRequested)
         {
             return new ActorCreateOperationTerminal(
-                RequestResult.TimedOut,
+                RequestResult.InternalError,
                 ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut);
         }
         catch (ZLinkFrameworkException exception)
