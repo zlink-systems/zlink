@@ -253,8 +253,23 @@ void zlink::router_t::xpipe_terminated (pipe_t *pipe_)
     socket_msg_dispatch_lock_t dispatch_lock = lock_socket_msg_dispatch ();
     const blob_t &terminated_routing_id =
       pipe_->get_routing_id ();
-    const bool was_standby =
-      _standby_pipes.erase (pipe_) != 0;
+    const std::map<pipe_t *, blob_t>::iterator terminated_standby =
+      _standby_pipes.find (pipe_);
+    const bool was_standby = terminated_standby != _standby_pipes.end ();
+    if (was_standby) {
+        zlink_routing_id_t public_rid;
+        copy_routing_id_from_bytes (
+          terminated_standby->second.data (), terminated_standby->second.size (),
+          &public_rid);
+        // Handover gives a standby pipe an internal routing id. Its terminal
+        // edge must still close admission parked on the public RID capability
+        // that selected this exact pair.
+        (void) enqueue_routed_send_ready_exact (
+          &public_rid, pipe_->get_transport_pair_id (),
+          pipe_->get_transport_pair_generation (),
+          ZLINK_ROUTED_SEND_TERMINAL, ENOTCONN);
+        _standby_pipes.erase (terminated_standby);
+    }
     pipe_t *standby_to_promote = NULL;
     blob_t standby_routing_id;
     if (!was_standby) {

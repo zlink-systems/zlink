@@ -191,6 +191,19 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
                                             std::nullopt,
                                             std::nullopt};
             });
+            flow.trace (message_flow_outcome_t::completed, [&] {
+                return message_flow_event_t{message_flow_outcome_t::completed,
+                                            dispatch_error_surface_t::channel,
+                                            inbound_kind,
+                                            header.value ().message_name,
+                                            channel_name,
+                                            header.value ().topic,
+                                            header.value ().correlation_id,
+                                            std::nullopt,
+                                            std::nullopt,
+                                            std::nullopt,
+                                            std::nullopt};
+            });
         }
         return result_t<runtime::messaging::message_parts_t>::success (
           runtime::messaging::message_parts_t{});

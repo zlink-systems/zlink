@@ -33,6 +33,42 @@ class dispatch_options_access_t
       std::shared_ptr<std::atomic<message_flow_log_mode_t>> live)
     {
         options._live_mode = std::move (live);
+        if (!options._diagnostics_source_generation
+            || options._diagnostics_source_generation->load (std::memory_order_relaxed) == 0) {
+            static std::atomic<std::uint64_t> next_generation{0};
+            options._diagnostics_source_generation =
+              std::make_shared<std::atomic<std::uint64_t>> (
+                next_generation.fetch_add (1, std::memory_order_relaxed) + 1);
+        }
+        if (!options._diagnostics_local_sequence) {
+            options._diagnostics_local_sequence =
+              std::make_shared<std::atomic<std::uint64_t>> (0);
+        }
+    }
+
+    static std::uint64_t source_mesh_generation (
+      const dispatch_options_t &options) noexcept
+    {
+        return options._diagnostics_source_generation
+          ? options._diagnostics_source_generation->load (std::memory_order_relaxed)
+          : 0;
+    }
+
+    static std::uint64_t next_local_sampling_sequence (
+      const dispatch_options_t &options) noexcept
+    {
+        return options._diagnostics_local_sequence
+          ? options._diagnostics_local_sequence->fetch_add (1, std::memory_order_relaxed) + 1
+          : 1;
+    }
+
+    static void set_source_mesh_generation (
+      dispatch_options_t &options, std::uint64_t generation) noexcept
+    {
+        if (options._diagnostics_source_generation) {
+            options._diagnostics_source_generation->store (generation,
+                                                            std::memory_order_relaxed);
+        }
     }
 
     static message_flow_log_mode_t effective_message_flow (

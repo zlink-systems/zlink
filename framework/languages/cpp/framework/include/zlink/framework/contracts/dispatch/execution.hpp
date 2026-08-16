@@ -58,7 +58,7 @@ class dispatch_diagnostics_options_t
 
     message_flow_log_mode_t _message_flow = message_flow_log_mode_t::errors;
     double _sample_rate = 1.0;
-    bool _include_message_sizes = true;
+    bool _include_message_sizes = false;
 };
 
 struct dispatch_options_t
@@ -94,6 +94,10 @@ struct dispatch_options_t
     std::optional<logger_t<>> _diagnostics_logger;
     std::function<void (const void *)> _message_flow_observer;
     std::shared_ptr<std::atomic<message_flow_log_mode_t>> _live_mode;
+    std::shared_ptr<std::atomic<std::uint64_t>> _diagnostics_source_generation =
+      std::make_shared<std::atomic<std::uint64_t>> (0);
+    std::shared_ptr<std::atomic<std::uint64_t>> _diagnostics_local_sequence =
+      std::make_shared<std::atomic<std::uint64_t>> (0);
 };
 
 } // namespace zlink::framework

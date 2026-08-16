@@ -773,8 +773,8 @@ void fanout_location_runtime_t::pump ()
                       zlink::framework::detail::dispatch_error_reporter_t (
                         runtime.dispatch_options ())
                         .report (message_dispatch_error_event_t{
-                          .surface = dispatch_error_surface_t::channel,
-                          .message_kind = dispatch_message_kind_t::publish,
+                          .surface = dispatch_error_surface_t::classic_fanout,
+                          .message_kind = dispatch_message_kind_t::send,
                           .reason = zlink::framework::detail::dispatch_reason_from_error (
                             result.error ()),
                           .action = dispatch_error_action_t::drop,

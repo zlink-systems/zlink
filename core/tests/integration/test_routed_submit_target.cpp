@@ -16,6 +16,50 @@ SETUP_TEARDOWN_TESTCONTEXT
 
 namespace
 {
+struct routed_terminal_probe_t
+{
+    routed_terminal_probe_t () : seen (false), expected_pair_id (0),
+                                 expected_pair_generation (0), pair_id (0),
+                                 pair_generation (0), terminal_errno (0)
+    {
+    }
+
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool seen;
+    uint64_t expected_pair_id;
+    uint64_t expected_pair_generation;
+    std::string expected_rid;
+    uint64_t pair_id;
+    uint64_t pair_generation;
+    int terminal_errno;
+};
+
+void capture_routed_terminal (
+  void *, const zlink_routed_send_ready_event_t *event_, void *userdata_)
+{
+    routed_terminal_probe_t *probe =
+      static_cast<routed_terminal_probe_t *> (userdata_);
+    if (!probe || !event_ || event_->state != ZLINK_ROUTED_SEND_TERMINAL)
+        return;
+    {
+        std::lock_guard<std::mutex> lock (probe->mutex);
+        const std::string rid (
+          reinterpret_cast<const char *> (event_->peer_rid.data),
+          event_->peer_rid.size);
+        if (probe->expected_pair_id != event_->transport_pair_id
+            || probe->expected_pair_generation
+                 != event_->transport_pair_generation
+            || probe->expected_rid != rid)
+            return;
+        probe->seen = true;
+        probe->pair_id = event_->transport_pair_id;
+        probe->pair_generation = event_->transport_pair_generation;
+        probe->terminal_errno = event_->terminal_errno;
+    }
+    probe->changed.notify_all ();
+}
+
 zlink_routing_id_t make_rid (const char *value_)
 {
     zlink_routing_id_t rid;
@@ -76,6 +120,20 @@ zlink_submit_result_t router_send_text (
       router_, &target_->peer_rid, target_->transport_pair_id,
       target_->transport_pair_generation, &part, ZLINK_SEND_FLAGS_DONTWAIT,
       ZLINK_PART_FINAL);
+}
+
+zlink_submit_result_t router_send_bytes (
+  void *router_, const zlink_routed_submit_target_t *target_, size_t size_)
+{
+    zlink_msg_t part;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_msg_init_size (&part, size_));
+    if (size_ != 0)
+        memset (zlink_msg_data (&part), 0x5a, size_);
+    return zlink_send_part_transport_pair (
+      router_, &target_->peer_rid, target_->transport_pair_id,
+      target_->transport_pair_generation, &part,
+      ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL);
 }
 
 bool recv_part_eventually (void *socket_, const char *expected_,
@@ -504,6 +562,106 @@ void test_router_selects_exact_target_and_rejects_stale_generation ()
     test_context_socket_close_zero_linger (router);
 }
 
+void test_router_exact_target_is_invalid_after_same_rid_handover ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer_a = test_context_socket (ZLINK_SOCKET_DEALER);
+    void *dealer_b = test_context_socket (ZLINK_SOCKET_DEALER);
+    routed_terminal_probe_t terminal;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_HANDLER_OK,
+      zlink_routed_send_ready_handler (
+        router, &capture_routed_terminal, &terminal));
+    const int handover = ZLINK_RID_DUPLICATE_HANDOVER;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (router, ZLINK_OPT_RID_DUPLICATE_POLICY, &handover,
+                        sizeof (handover)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (router, "R", 1));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer_a, "D", 1));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer_b, "D", 1));
+    const uint64_t hwm = 65536u + sizeof (zlink_msg_t);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (router, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (dealer_a, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://routed-submit-same-rid-handover"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer_a, "inproc://routed-submit-same-rid-handover"));
+
+    const zlink_routing_id_t dealer_rid = make_rid ("D");
+    const zlink_routed_submit_target_t target_a =
+      select_router_target_eventually (router, &dealer_rid);
+    {
+        std::lock_guard<std::mutex> lock (terminal.mutex);
+        terminal.expected_pair_id = target_a.transport_pair_id;
+        terminal.expected_pair_generation = target_a.transport_pair_generation;
+        terminal.expected_rid = "D";
+    }
+
+    bool old_target_backpressured = false;
+    for (int i = 0; i < 32; ++i) {
+        const zlink_submit_result_t result =
+          router_send_bytes (router, &target_a, 65536);
+        if (result == ZLINK_SUBMIT_BACKPRESSURED) {
+            old_target_backpressured = true;
+            break;
+        }
+        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, result);
+    }
+    TEST_ASSERT_TRUE_MESSAGE (
+      old_target_backpressured,
+      "old exact target did not reach backpressure before handover");
+
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer_b, "inproc://routed-submit-same-rid-handover"));
+    zlink_routed_submit_target_t target_b;
+    memset (&target_b, 0, sizeof (target_b));
+    for (int i = 0; i < 3000; ++i) {
+        target_b = select_router_target_eventually (router, &dealer_rid);
+        if (target_b.transport_pair_id != target_a.transport_pair_id
+            || target_b.transport_pair_generation
+                 != target_a.transport_pair_generation)
+            break;
+        msleep (1);
+    }
+    TEST_ASSERT_TRUE_MESSAGE (
+      target_b.transport_pair_id != target_a.transport_pair_id
+        || target_b.transport_pair_generation
+             != target_a.transport_pair_generation,
+      "same-RID replacement did not publish a new exact target");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_NOT_CONNECTED,
+      router_send_text (router, &target_a, "must-not-enter-old-pair"));
+    TEST_ASSERT_EQUAL_INT (EHOSTUNREACH, zlink_errno ());
+
+    dealer_a = test_context_socket_close_zero_linger (dealer_a);
+    {
+        std::unique_lock<std::mutex> lock (terminal.mutex);
+        TEST_ASSERT_TRUE_MESSAGE (
+          terminal.changed.wait_for (
+            lock, std::chrono::seconds (3),
+            [&terminal] { return terminal.seen; }),
+          "superseded exact target teardown did not report failure");
+        TEST_ASSERT_EQUAL_UINT64 (target_a.transport_pair_id,
+                                  terminal.pair_id);
+        TEST_ASSERT_EQUAL_UINT64 (target_a.transport_pair_generation,
+                                  terminal.pair_generation);
+        TEST_ASSERT_EQUAL_INT (ENOTCONN, terminal.terminal_errno);
+    }
+
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      router_send_text (router, &target_b, "new-pair"));
+    TEST_ASSERT_TRUE (recv_part_eventually (dealer_b, "new-pair"));
+
+    test_context_socket_close_zero_linger (dealer_b);
+    test_context_socket_close_zero_linger (router);
+}
+
 void test_dealer_exact_target_keeps_blocked_a_isolated_from_b ()
 {
     const uint64_t hwm = 65536u + sizeof (zlink_msg_t);
@@ -700,6 +858,7 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (
       test_router_selects_exact_target_and_rejects_stale_generation);
+    RUN_TEST (test_router_exact_target_is_invalid_after_same_rid_handover);
     RUN_TEST (test_dealer_exact_target_keeps_blocked_a_isolated_from_b);
     RUN_TEST (test_dealer_exact_multipart_failure_rolls_back_only_target_a);
     RUN_TEST (

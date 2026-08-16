@@ -1248,6 +1248,22 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                       std::nullopt,
                       std::nullopt};
                 });
+                flow.trace (message_flow_outcome_t::admitted, [&] {
+                    return message_flow_event_t{
+                      message_flow_outcome_t::admitted,
+                      dispatch_error_surface_t::channel,
+                      record.request_sequence
+                        ? dispatch_message_kind_t::request
+                        : dispatch_message_kind_t::send,
+                      payload.packet_name,
+                      record.owner,
+                      std::nullopt,
+                      inbound.message.correlation_id,
+                      std::nullopt,
+                      std::nullopt,
+                      std::nullopt,
+                      std::nullopt};
+                });
                 auto scope =
                   zlink::framework::detail::service_scope_t::create (
                     _services,
@@ -1300,6 +1316,21 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                           dispatch_message_kind_t::send,
                           dispatch_error_action_t::drop,
                           error);
+                    } else {
+                        flow.trace (message_flow_outcome_t::completed, [&] {
+                            return message_flow_event_t{
+                              message_flow_outcome_t::completed,
+                              dispatch_error_surface_t::channel,
+                              dispatch_message_kind_t::send,
+                              payload.packet_name,
+                              record.owner,
+                              std::nullopt,
+                              inbound.message.correlation_id,
+                              std::nullopt,
+                              std::nullopt,
+                              std::nullopt,
+                              std::nullopt};
+                        });
                     }
                 }
             }

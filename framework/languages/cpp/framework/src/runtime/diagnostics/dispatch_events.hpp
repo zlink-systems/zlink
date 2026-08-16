@@ -18,8 +18,9 @@ enum class message_flow_outcome_t
     dropped = 3,
     sent = 4,
     reply_received = 5,
-    error = 6,
-    admitted = 7
+    admitted = 6,
+    completed = 7,
+    backpressured = 8
 };
 
 enum class dispatch_error_surface_t
@@ -29,7 +30,11 @@ enum class dispatch_error_surface_t
     spot_route = 2,
     spot_subscription = 3,
     spot_actor = 4,
-    stream_session = 5
+    stream_session = 5,
+    node = 6,
+    instance_spot = 7,
+    actor_relocation = 8,
+    classic_fanout = 9
 };
 
 enum class dispatch_message_kind_t
@@ -40,7 +45,8 @@ enum class dispatch_message_kind_t
     response = 3,
     error = 4,
     actor_request = 5,
-    actor_send = 6
+    actor_send = 6,
+    control = 7
 };
 
 enum class dispatch_error_reason_t
@@ -50,7 +56,10 @@ enum class dispatch_error_reason_t
     handler_exception = 2,
     invalid_frame = 3,
     reply_path_missing = 4,
-    unexpected_reply = 5
+    unexpected_reply = 5,
+    backpressure = 6,
+    stale_target = 7,
+    shutdown = 8
 };
 
 enum class dispatch_error_action_t
@@ -58,6 +67,27 @@ enum class dispatch_error_action_t
     reply_error = 0,
     drop = 1,
     fail_caller = 2
+};
+
+enum class message_flow_result_t
+{
+    succeeded = 0,
+    failed = 1,
+    backpressured = 2,
+    dropped = 3,
+    cancelled = 4,
+    shutdown = 5
+};
+
+enum class message_flow_reason_t
+{
+    backpressure = 0,
+    stale_target = 1,
+    target_closed = 2,
+    shutdown = 3,
+    location_unavailable = 4,
+    activation_rejected = 5,
+    activation_timeout = 6
 };
 
 struct message_dispatch_error_event_t
@@ -76,6 +106,12 @@ struct message_dispatch_error_event_t
     std::exception_ptr exception;
     std::optional<std::string> flow_id;
     std::optional<flow_origin_t> flow_origin;
+    std::optional<std::string> mesh_name;
+    std::optional<std::string> channel_route_kind;
+    std::optional<std::string> target_rid;
+    std::optional<std::string> server_rid;
+    std::optional<std::string> instance_spot_type;
+    std::optional<std::string> activation_state;
 };
 
 struct message_flow_event_t
@@ -98,6 +134,16 @@ struct message_flow_event_t
     std::optional<flow_origin_t> flow_origin;
     std::optional<std::string> detail_stage;
     std::optional<std::string> detail_result;
+    std::optional<std::string> mesh_name;
+    std::optional<std::string> channel_route_kind;
+    std::optional<std::string> target_rid;
+    std::optional<std::string> server_rid;
+    std::optional<std::string> instance_spot_type;
+    std::optional<std::string> activation_state;
+    std::optional<double> duration_seconds;
+    std::optional<std::uint64_t> source_mesh_generation;
+    std::optional<message_flow_result_t> result;
+    std::optional<message_flow_reason_t> reason;
 };
 
 } // namespace zlink::framework

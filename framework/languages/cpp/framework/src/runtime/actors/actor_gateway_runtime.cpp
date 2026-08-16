@@ -48,14 +48,16 @@ void trace_detached_bound_session_send_failure (
   std::string result)
 {
     detail::message_flow_tracer_t (state->dispatch)
-      .trace (message_flow_outcome_t::error, [&] {
+      .trace (message_flow_outcome_t::dropped, [&] {
           auto event = message_flow_event_t{
-            message_flow_outcome_t::error,
+            message_flow_outcome_t::dropped,
             dispatch_error_surface_t::stream_session,
             dispatch_message_kind_t::send,
-            std::string ("bound_session_push_delivery_failed"),
-            {}, std::move (result)};
+            std::string ("bound_session_push")};
           event.actor_id = actor_id;
+          event.detail_stage = "detached_delivery";
+          event.detail_result = std::move (result);
+          event.reason = message_flow_reason_t::target_closed;
           return event;
       });
 }
@@ -67,9 +69,8 @@ void trace_detached_bound_session_send_stage (
   std::string result)
 {
     const detail::message_flow_tracer_t tracer (state->dispatch);
-    if (!tracer.enabled (message_flow_log_mode_t::detailed))
-        return;
-    tracer.trace (message_flow_outcome_t::admitted, [&] {
+    tracer.trace (message_flow_log_mode_t::detailed,
+                  message_flow_outcome_t::admitted, [&] {
         auto event = message_flow_event_t{
           message_flow_outcome_t::admitted,
           dispatch_error_surface_t::stream_session,
@@ -1573,13 +1574,15 @@ make_session_owner_sink (
                                + std::to_string (fence.owner_lease_generation);
                     };
                   detail::message_flow_tracer_t (state->dispatch)
-                    .trace (message_flow_outcome_t::error, [&] {
+                    .trace (message_flow_log_mode_t::detailed,
+                            message_flow_outcome_t::dropped, [&] {
                         auto event = message_flow_event_t{
-                          message_flow_outcome_t::error,
+                          message_flow_outcome_t::dropped,
                           dispatch_error_surface_t::stream_session,
                           dispatch_message_kind_t::send,
-                          std::string ("bound_session_push_refused"),
-                          found == state->actors_by_id.end ()
+                          std::string ("bound_session_push")};
+                        event.detail_stage = "route_fence";
+                        event.detail_result = found == state->actors_by_id.end ()
                             ? std::string ("reason=actor-missing")
                             : !found->second.bound
                                 ? std::string ("reason=not-bound")
@@ -1590,9 +1593,10 @@ make_session_owner_sink (
                                         : "live="
                                             + describe (
                                                 *found->second
-                                                   .bound_session_route),
-                          "staged=" + describe (staged_route)};
+                                                   .bound_session_route)
+                                             + " staged=" + describe (staged_route);
                         event.actor_id = actor_id;
+                        event.reason = message_flow_reason_t::stale_target;
                         return event;
                     });
                   return task_t<void> (result_t<void>::failure (

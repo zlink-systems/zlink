@@ -27,6 +27,11 @@ class dispatch_error_reporter_t
 
     void report (message_dispatch_error_event_t event) const noexcept
     {
+        const auto effective_mode =
+          dispatch_options_access_t::effective_message_flow (_options);
+        if (effective_mode == message_flow_log_mode_t::off) {
+            return;
+        }
         reported_count ().fetch_add (1, std::memory_order_relaxed);
         if (event.flow_id.has_value () != event.flow_origin.has_value ()) {
             event.flow_id.reset ();
@@ -40,19 +45,7 @@ class dispatch_error_reporter_t
                 }
             }
         }
-        // off silences the default error log; every other mode keeps reporting
-        // errors (errors is the default). A registered observer still fires
-        // regardless of mode — it is an explicit, separate subscription.
-        if (message_flow_tracer_t (_options).mode ()
-            != message_flow_log_mode_t::off) {
-            log_default (event);
-        }
-        message_flow_tracer_t (_options).trace (message_flow_event_t{
-          message_flow_outcome_t::error, event.surface, event.message_kind,
-          std::move (event.packet_name), std::move (event.channel_name), std::move (event.topic),
-          std::move (event.correlation_id), std::move (event.source_rid),
-          std::move (event.spot_id), std::move (event.actor_id), std::nullopt, event.reason,
-          event.action, event.exception, event.flow_id, event.flow_origin});
+        log_default (event);
     }
 
     static std::uint64_t reported () noexcept
@@ -98,7 +91,7 @@ class dispatch_error_reporter_t
             auto add = [&fields] (const char *key, std::string value) {
                 diagnostic_event_sink_t::append_field (fields, key, std::move (value));
             };
-            add ("event_id", "zlink.dispatch_error");
+            add ("event", "zlink.dispatch_error");
             add ("outcome", "failed");
             add ("surface", std::string (enum_name (event.surface)));
             add ("kind", std::string (enum_name (event.message_kind)));
@@ -110,6 +103,16 @@ class dispatch_error_reporter_t
             if (event.channel_name) {
                 add ("channel", *event.channel_name);
             }
+            if (event.channel_route_kind) {
+                add ("channel_route", *event.channel_route_kind);
+            } else if (event.surface == dispatch_error_surface_t::route_mesh_channel) {
+                add ("channel_route", "route_mesh");
+            } else if (event.surface == dispatch_error_surface_t::channel) {
+                add ("channel_route", "client_server");
+            }
+            if (event.mesh_name) {
+                add ("mesh", *event.mesh_name);
+            }
             if (event.topic) {
                 add ("topic", *event.topic);
             }
@@ -119,8 +122,17 @@ class dispatch_error_reporter_t
             if (event.flow_id) {
                 add ("flow", *event.flow_id);
             }
+            if (event.flow_origin) {
+                add ("origin", std::string (enum_name (*event.flow_origin)));
+            }
             if (event.source_rid) {
-                add ("src", *event.source_rid);
+                add ("source_rid", *event.source_rid);
+            }
+            if (event.target_rid) {
+                add ("target_rid", *event.target_rid);
+            }
+            if (event.server_rid) {
+                add ("server_rid", *event.server_rid);
             }
             if (event.spot_id) {
                 add ("spot", *event.spot_id);
@@ -128,22 +140,17 @@ class dispatch_error_reporter_t
             if (event.actor_id) {
                 add ("actor", *event.actor_id);
             }
-            if (event.exception) {
-                try {
-                    std::rethrow_exception (event.exception);
-                }
-                catch (const std::exception &error) {
-                    add ("error", error.what ());
-                }
-                catch (...) {
-                    add ("error", "unknown exception");
-                }
+            if (event.instance_spot_type) {
+                add ("instance_type", *event.instance_spot_type);
+            }
+            if (event.activation_state) {
+                add ("activation_state", *event.activation_state);
             }
             // Structured fields through the framework logger (collector-friendly);
             // flat clog line when no logger is wired (tests, no-app usage).
             diagnostic_event_sink_t::log_or_clog (
               dispatch_options_access_t::logger (_options), default_log_level (event), "dispatch error",
-              "zlink framework dispatch error:", std::move (fields));
+              "zlink flow:", std::move (fields));
         }
         catch (...) {
             (void) observer_failures ();
@@ -166,6 +173,10 @@ inline dispatch_error_reason_t dispatch_reason_from_error (framework_error_kind_
             return dispatch_error_reason_t::handler_missing;
         case framework_error_kind_t::protocol_error:
             return dispatch_error_reason_t::invalid_frame;
+        case framework_error_kind_t::capacity_exceeded:
+            return dispatch_error_reason_t::backpressure;
+        case framework_error_kind_t::shutting_down:
+            return dispatch_error_reason_t::shutdown;
         default:
             return dispatch_error_reason_t::handler_exception;
     }
@@ -177,6 +188,16 @@ dispatch_reason_from_error (const framework_exception_t *error) noexcept
     if (error != nullptr
         && detail::failure_origin (*error) == detail::failure_origin_t::payload_decode) {
         return dispatch_error_reason_t::payload_decode_failed;
+    }
+    if (error != nullptr) {
+        switch (detail::boundary_state (*error)) {
+            case detail::boundary_error_t::shutdown:
+                return dispatch_error_reason_t::shutdown;
+            case detail::boundary_error_t::stale_generation:
+                return dispatch_error_reason_t::stale_target;
+            default:
+                break;
+        }
     }
     return dispatch_reason_from_error (
       error != nullptr ? error->kind () : framework_error_kind_t::internal_failure);

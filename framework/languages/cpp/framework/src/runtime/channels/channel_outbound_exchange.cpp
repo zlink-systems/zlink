@@ -267,6 +267,26 @@ framework_exception_t map_native_send_exception (const std::exception &error)
       framework_error_kind_t::internal_failure, error.what ());
 }
 
+void trace_channel_backpressure (const dispatch_options_t &dispatch,
+                                 const std::string &channel_name,
+                                 const std::string &packet_name,
+                                 const std::optional<std::string> &correlation_id = std::nullopt)
+{
+    message_flow_tracer_t (dispatch).trace (
+      message_flow_outcome_t::backpressured, [&] {
+          return message_flow_event_t{
+            .outcome = message_flow_outcome_t::backpressured,
+            .surface = dispatch_error_surface_t::channel,
+            .message_kind = dispatch_message_kind_t::send,
+            .packet_name = packet_name,
+            .channel_name = channel_name,
+            .correlation_id = correlation_id,
+            .channel_route_kind = std::string ("client_server"),
+            .result = message_flow_result_t::backpressured,
+            .reason = message_flow_reason_t::backpressure};
+      });
+}
+
 struct channel_endpoint_snapshot_t
 {
     std::vector<std::string> endpoints;
@@ -412,7 +432,9 @@ class channel_native_client_t
 
     task_t<void> send (const runtime::messaging::message_parts_t &parts,
                        const endpoint_provider_t &endpoints,
-                       std::chrono::milliseconds timeout)
+                       std::chrono::milliseconds timeout,
+                       const std::string &packet_name,
+                       std::optional<std::string> correlation_id)
     {
         if (_closed.load (std::memory_order_acquire)) {
             throw detail::make_boundary_exception (
@@ -481,6 +503,11 @@ class channel_native_client_t
             throw;
         }
         catch (const zlink::submit_error_t &error) {
+            if (error.result () == zlink::submit_result_t::backpressured) {
+                trace_channel_backpressure (
+                  _runtime.dispatch_options_ref (), _channel_name,
+                  packet_name, correlation_id);
+            }
             const auto mapped = map_native_send_exception (error);
             throw mapped;
         }
@@ -955,6 +982,83 @@ struct channel_request_metrics_guard_t
     bool timed_out = false;
 };
 
+message_flow_result_t request_terminal_result (const framework_exception_t &error) noexcept
+{
+    if (error.kind () == framework_error_kind_t::shutting_down
+        || detail::boundary_state (error) == detail::boundary_error_t::shutdown) {
+        return message_flow_result_t::shutdown;
+    }
+    if (detail::boundary_state (error) == detail::boundary_error_t::cancelled) {
+        return message_flow_result_t::cancelled;
+    }
+    if (error.kind () == framework_error_kind_t::capacity_exceeded) {
+        return message_flow_result_t::backpressured;
+    }
+    return message_flow_result_t::failed;
+}
+
+struct channel_request_terminal_trace_t
+{
+    channel_request_terminal_trace_t (const dispatch_options_t &dispatch_options,
+                                      const std::string &channel,
+                                      const std::string &packet) :
+        dispatch (&dispatch_options),
+        channel_name (channel),
+        packet_name (packet)
+    {
+        const auto mode = message_flow_tracer_t (*dispatch).mode ();
+        if (mode == message_flow_log_mode_t::detailed) {
+            duration_started = true;
+            started = std::chrono::steady_clock::now ();
+        }
+    }
+
+    channel_request_terminal_trace_t (const channel_request_terminal_trace_t &) = delete;
+    channel_request_terminal_trace_t &operator= (const channel_request_terminal_trace_t &) = delete;
+
+    ~channel_request_terminal_trace_t () noexcept
+    {
+        message_flow_tracer_t (*dispatch).trace (
+          message_flow_outcome_t::reply_received, result, [&] {
+              message_flow_event_t event{
+                .outcome = message_flow_outcome_t::reply_received,
+                .surface = dispatch_error_surface_t::channel,
+                .message_kind = dispatch_message_kind_t::request,
+                .packet_name = packet_name,
+                .channel_name = channel_name,
+                .correlation_id = correlation_id,
+                .channel_route_kind = std::string ("client_server"),
+                .result = result};
+              if (duration_started) {
+                  event.duration_seconds = std::chrono::duration<double> (
+                    std::chrono::steady_clock::now () - started).count ();
+              }
+              return event;
+          });
+    }
+
+    void succeeded () noexcept { result = message_flow_result_t::succeeded; }
+    void backpressured () noexcept
+    {
+        result = message_flow_result_t::backpressured;
+    }
+    void failed_as (const framework_exception_t &error) noexcept
+    {
+        if (result == message_flow_result_t::backpressured) {
+            return;
+        }
+        result = request_terminal_result (error);
+    }
+
+    const dispatch_options_t *dispatch;
+    const std::string &channel_name;
+    const std::string &packet_name;
+    std::optional<std::string> correlation_id;
+    message_flow_result_t result = message_flow_result_t::failed;
+    bool duration_started = false;
+    std::chrono::steady_clock::time_point started{};
+};
+
 } // namespace
 
 task_t<zlink::message_t>
@@ -971,6 +1075,8 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
     channel_runtime_t runtime (_state);
     const auto *client = client_capability (*_state, channel_name);
     const auto call_packet_name = std::move (packet_name);
+    channel_request_terminal_trace_t terminal_trace (
+      _state->dispatch, channel_name, call_packet_name);
     {
         std::lock_guard lock (_state->mutex);
         _state->outbound_calls.push_back (
@@ -978,6 +1084,12 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
     }
     auto reservation = runtime.reserve_outbound_request (channel_name);
     if (!reservation) {
+        if (reservation.error () != nullptr) {
+            terminal_trace.failed_as (*reservation.error ());
+        } else {
+            terminal_trace.failed_as (framework_exception_t (
+              reservation.error_kind (), "channel request reservation failed"));
+        }
         co_return reservation.error () != nullptr
                     ? detail::result_access_t::failure<zlink::message_t> (
                         *reservation.error ())
@@ -989,10 +1101,12 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
       runtime::runtime_metrics_t (_state->monitoring), channel_name);
     if (!can_wait_for_client_endpoint (_state, client)) {
         (void) runtime.cancel_outbound_request (reservation.value ());
+        const auto error = detail::make_boundary_exception (
+          detail::boundary_error_t::disconnected,
+          "channel client is not connected");
+        terminal_trace.failed_as (error);
         co_return detail::result_access_t::failure<zlink::message_t> (
-          detail::make_boundary_exception (
-            detail::boundary_error_t::disconnected,
-            "channel client is not connected"));
+          error);
     }
     if (_state->serializers != nullptr && client != nullptr) {
         if (const auto requester = client_server_requester (_state, channel_name)) {
@@ -1025,9 +1139,11 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                                     framework_error_kind_t::internal_failure,
                                     "channel request failed");
                 }
+                terminal_trace.succeeded ();
                 co_return reply;
             }
             catch (const framework_exception_t &error) {
+                terminal_trace.failed_as (error);
                 (void) runtime.cancel_outbound_request (reservation.value ());
                 request_metrics.timed_out =
                   detail::boundary_state (error)
@@ -1037,7 +1153,13 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
             }
             catch (const std::exception &error) {
                 (void) runtime.cancel_outbound_request (reservation.value ());
+                if (const auto *submit_error = dynamic_cast<const zlink::submit_error_t *> (&error);
+                    submit_error != nullptr
+                    && submit_error->result () == zlink::submit_result_t::backpressured) {
+                    terminal_trace.backpressured ();
+                }
                 const auto mapped = map_native_request_exception (error);
+                terminal_trace.failed_as (mapped);
                 request_metrics.timed_out =
                   detail::boundary_state (mapped)
                   == detail::boundary_error_t::timed_out;
@@ -1053,6 +1175,9 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                                                  channel_name, call_packet_name,
                                                  effective_timeout);
             header.metadata = metadata;
+            if (detail::message_flow_tracer_t (_state->dispatch).capture_enabled ()) {
+                terminal_trace.correlation_id = header.correlation_id;
+            }
             detail::message_flow_tracer_t (_state->dispatch)
               .trace (message_flow_outcome_t::sent, [&] {
                   return message_flow_event_t{message_flow_outcome_t::sent,
@@ -1141,23 +1266,11 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                                 framework_error_kind_t::internal_failure,
                                 "channel reply body decode failed");
             }
-            detail::message_flow_tracer_t (_state->dispatch)
-              .trace (message_flow_outcome_t::reply_received, [&] {
-                  return message_flow_event_t{message_flow_outcome_t::reply_received,
-                                              dispatch_error_surface_t::channel,
-                                              dispatch_message_kind_t::response,
-                                              call_packet_name,
-                                              channel_name,
-                                              std::nullopt,
-                                              header.correlation_id,
-                                              std::nullopt,
-                                              std::nullopt,
-                                              std::nullopt,
-                                              std::nullopt};
-              });
+            terminal_trace.succeeded ();
             co_return body.value ();
         }
         catch (const framework_exception_t &error) {
+            terminal_trace.failed_as (error);
             (void) runtime.cancel_outbound_request (reservation.value ());
             request_metrics.timed_out =
               detail::boundary_state (error)
@@ -1166,7 +1279,13 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
         }
         catch (const std::exception &error) {
             (void) runtime.cancel_outbound_request (reservation.value ());
+            if (const auto *submit_error = dynamic_cast<const zlink::submit_error_t *> (&error);
+                submit_error != nullptr
+                && submit_error->result () == zlink::submit_result_t::backpressured) {
+                terminal_trace.backpressured ();
+            }
             const auto mapped = map_native_request_exception (error);
+            terminal_trace.failed_as (mapped);
             request_metrics.timed_out =
               detail::boundary_state (mapped)
               == detail::boundary_error_t::timed_out;
@@ -1239,12 +1358,32 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
                   _state->serializers->content_type (message_type),
                   std::move (payload),
                   resolve_send_wait_timeout (timeout));
+                detail::message_flow_tracer_t (_state->dispatch)
+                  .trace (message_flow_outcome_t::sent, [&] {
+                      return message_flow_event_t{
+                        .outcome = message_flow_outcome_t::sent,
+                        .surface = dispatch_error_surface_t::channel,
+                        .message_kind = dispatch_message_kind_t::send,
+                        .packet_name = call_packet_name,
+                        .channel_name = channel_name,
+                        .channel_route_kind = std::string ("client_server")};
+                  });
                 co_return;
             }
-            catch (const framework_exception_t &) {
+            catch (const framework_exception_t &error) {
+                if (error.kind () == framework_error_kind_t::capacity_exceeded) {
+                    trace_channel_backpressure (
+                      _state->dispatch, channel_name, call_packet_name);
+                }
                 throw;
             }
             catch (const std::exception &error) {
+                if (const auto *submit_error = dynamic_cast<const zlink::submit_error_t *> (&error);
+                    submit_error != nullptr
+                    && submit_error->result () == zlink::submit_result_t::backpressured) {
+                    trace_channel_backpressure (
+                      _state->dispatch, channel_name, call_packet_name);
+                }
                 throw framework_exception_t (
                   framework_error_kind_t::internal_failure, error.what ());
             }
@@ -1254,20 +1393,6 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
             auto header = codec.create_envelope (runtime::messaging::message_kind_t::command,
                                                  channel_name, call_packet_name, timeout);
             header.metadata = metadata;
-            detail::message_flow_tracer_t (_state->dispatch)
-              .trace (message_flow_outcome_t::sent, [&] {
-                  return message_flow_event_t{message_flow_outcome_t::sent,
-                                              dispatch_error_surface_t::channel,
-                                              dispatch_message_kind_t::send,
-                                              call_packet_name,
-                                              channel_name,
-                                              std::nullopt,
-                                              header.correlation_id,
-                                              std::nullopt,
-                                              std::nullopt,
-                                              std::nullopt,
-                                              std::nullopt};
-            });
             auto parts = encode_channel_payload_parts (header, message_type, encode_payload,
                                                        *_state->serializers);
             if (exceeds_configured_max_message_size (parts, *client)) {
@@ -1294,7 +1419,21 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
             auto endpoints = make_client_endpoint_provider (_state, channel_name);
             const auto effective_timeout = resolve_send_wait_timeout (timeout);
             co_await native_client->send (
-              parts, endpoints, effective_timeout);
+              parts, endpoints, effective_timeout, call_packet_name,
+              header.correlation_id.empty ()
+                ? std::nullopt
+                : std::make_optional (header.correlation_id));
+            detail::message_flow_tracer_t (_state->dispatch)
+              .trace (message_flow_outcome_t::sent, [&] {
+                  return message_flow_event_t{
+                    .outcome = message_flow_outcome_t::sent,
+                    .surface = dispatch_error_surface_t::channel,
+                    .message_kind = dispatch_message_kind_t::send,
+                    .packet_name = call_packet_name,
+                    .channel_name = channel_name,
+                    .correlation_id = header.correlation_id,
+                    .channel_route_kind = std::string ("client_server")};
+              });
             co_return;
         }
         catch (const framework_exception_t &) {

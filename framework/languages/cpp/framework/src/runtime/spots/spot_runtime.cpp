@@ -929,31 +929,36 @@ void report_spot_dispatch_trace (const std::shared_ptr<detail::spot_node_builder
                                  std::string_view topic = {},
                                  std::string_view spot_id = {},
                                  std::string_view actor_id = {},
-                                 std::string_view correlation_id = {})
+                                 std::string_view correlation_id = {},
+                                 std::optional<message_flow_result_t> result = std::nullopt,
+                                 std::optional<message_flow_reason_t> reason = std::nullopt)
 {
     if (!state) {
         return;
     }
     // string_view params + lazy build: callers pass cheap views; std::string is
     // only allocated inside the lambda after the gate passes (zero cost when off).
-    detail::message_flow_tracer_t (state->dispatch).trace (outcome, [&] {
+    detail::message_flow_tracer_t (state->dispatch).trace (outcome, result, [&] {
         auto field = [] (std::string_view value) -> std::optional<std::string> {
             if (value.empty ()) {
                 return std::nullopt;
             }
             return std::string (value);
         };
-        return message_flow_event_t{outcome,
-                                    surface,
-                                    message_kind,
-                                    field (packet_name),
-                                    std::nullopt,
-                                    field (topic),
-                                    field (correlation_id),
-                                    std::nullopt,
-                                    field (spot_id),
-                                    field (actor_id),
-                                    std::nullopt};
+        auto event = message_flow_event_t{outcome,
+                                          surface,
+                                          message_kind,
+                                          field (packet_name),
+                                          std::nullopt,
+                                          field (topic),
+                                          field (correlation_id),
+                                          std::nullopt,
+                                          field (spot_id),
+                                          field (actor_id),
+                                          std::nullopt};
+        event.result = result;
+        event.reason = reason;
+        return event;
     });
 }
 
@@ -971,11 +976,8 @@ void report_actor_dispatch_stage_trace (
         return;
     }
     detail::message_flow_tracer_t tracer (state->dispatch);
-    if (!tracer.enabled (message_flow_log_mode_t::detailed)) {
-        return;
-    }
     tracer.trace (
-      outcome,
+      message_flow_log_mode_t::detailed, outcome,
       [outcome, message_kind, packet_name = std::string (packet_name),
        spot_id = std::string (spot_id), actor_id = std::string (actor_id),
        stage = std::string (stage), result = std::move (result)] () mutable {
@@ -2410,29 +2412,34 @@ task_t<actor_ref_t> spot_context_t::leave_actor_erased (
                                                  std::move (update_actor_ref))
                             .result ();
                         report_spot_dispatch_trace (state->node,
-                                                    completed ? message_flow_outcome_t::replied
-                                                              : message_flow_outcome_t::error,
+                                                    message_flow_outcome_t::replied,
                                                     dispatch_error_surface_t::spot_actor,
                                                     dispatch_message_kind_t::actor_request,
                                                     completed ? "actor_leave_deferred_complete"
                                                               : "actor_leave_deferred_failed",
                                                     {}, state->spot_id,
-                                                    deferred_ref.actor_id ().value ());
+                                                    deferred_ref.actor_id ().value (), {},
+                                                    completed
+                                                      ? message_flow_result_t::succeeded
+                                                      : message_flow_result_t::failed);
                     }
                     catch (...) {
                         report_spot_dispatch_trace (
-                          state->node, message_flow_outcome_t::error,
+                          state->node, message_flow_outcome_t::replied,
                           dispatch_error_surface_t::spot_actor,
                           dispatch_message_kind_t::actor_request, "actor_leave_deferred_exception",
-                          {}, state->spot_id, deferred_ref.actor_id ().value ());
+                          {}, state->spot_id, deferred_ref.actor_id ().value (), {},
+                          message_flow_result_t::failed);
                     }
                 });
               if (!submitted) {
-                  report_spot_dispatch_trace (state->node, message_flow_outcome_t::error,
+                  report_spot_dispatch_trace (state->node, message_flow_outcome_t::backpressured,
                                               dispatch_error_surface_t::spot_actor,
                                               dispatch_message_kind_t::actor_request,
                                               "actor_leave_deferred_rejected", {}, state->spot_id,
-                                              deferred_ref.actor_id ().value ());
+                                              deferred_ref.actor_id ().value (), {},
+                                              message_flow_result_t::backpressured,
+                                              message_flow_reason_t::backpressure);
               }
           },
           runtime::serial_work_options_t{runtime::serial_work_lane_t::lifecycle,
@@ -2928,22 +2935,6 @@ send_call_t spot_context_t::publish_erased (std::string topic,
               catch (const std::exception &error) {
                   return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                                   error.what ());
-              }
-              if (state->node) {
-                  detail::message_flow_tracer_t (state->node->dispatch)
-                    .trace (message_flow_outcome_t::sent, [&] {
-                        return message_flow_event_t{message_flow_outcome_t::sent,
-                                                    dispatch_error_surface_t::spot_subscription,
-                                                    dispatch_message_kind_t::publish,
-                                                    submitted_packet_name,
-                                                    std::nullopt,
-                                                    topic,
-                                                    std::nullopt,
-                                                    std::nullopt,
-                                                    std::string (state->spot_id),
-                                                    std::nullopt,
-                                                    std::nullopt};
-                    });
               }
           }
           return result_t<void>::success ();
@@ -6007,9 +5998,10 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
         const auto failed_kind =
           std::get<actor_join_failed_t> (*completion_owner).error_kind;
         detail::message_flow_tracer_t (_state->dispatch)
-          .trace (message_flow_outcome_t::error, [&] {
-              return message_flow_event_t{
-                message_flow_outcome_t::error,
+          .trace (message_flow_outcome_t::replied,
+                  message_flow_result_t::failed, [&] {
+              auto event = message_flow_event_t{
+                message_flow_outcome_t::replied,
                 dispatch_error_surface_t::spot_actor,
                 dispatch_message_kind_t::actor_request,
                 std::string ("JoinSpot"),
@@ -6025,6 +6017,9 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
                 std::make_exception_ptr (
                   framework_exception_t (failed_kind,
                                          "deferred Actor Join failed"))};
+              event.result = message_flow_result_t::failed;
+              event.reason = message_flow_reason_t::activation_rejected;
+              return event;
           });
     }
 
@@ -7682,10 +7677,9 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
               packet_name, {}, actor_ref.actor_id ().value (),
               "relay_actor_packet.follow_admission", "accepted=false");
             {
-                //  spec 26 Detailed-scope diagnostics: surface both fence
-                //  tuples so a rejected Follow admission is attributable.
-                //  The message fence rides in `topic`, the locally recorded
-                //  fence in `channel_name`.
+                //  Spec 26 Detailed-scope diagnostics: retain both fence
+                //  tuples in the Detailed-only stage/result extension without
+                //  overloading any standard address attribute.
                 std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
                 const auto current = _state->actor_authority_fences.find (key);
                 const auto &m = *admitted_message_follow_target;
@@ -7700,18 +7694,21 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
                              + std::to_string (fence.owner_lease_generation);
                   };
                 detail::message_flow_tracer_t (_state->dispatch)
-                  .trace (message_flow_outcome_t::error, [&] {
+                  .trace (message_flow_outcome_t::dropped, [&] {
                       auto event = message_flow_event_t{
-                        message_flow_outcome_t::error,
+                        message_flow_outcome_t::dropped,
                         dispatch_error_surface_t::spot_actor,
                         dispatch_message_kind_t::actor_send,
-                        std::string ("follow_fence_rejected"),
-                        current == _state->actor_authority_fences.end ()
+                        std::string ("follow_fence")};
+                      event.detail_stage = "admission";
+                      event.detail_result = current == _state->actor_authority_fences.end ()
                           ? std::string ("local=none")
-                          : "local=" + describe (current->second),
-                        "message=" + describe (m)};
+                          : "local=" + describe (current->second);
+                      event.detail_result = *event.detail_result
+                                            + " message=" + describe (m);
                       event.actor_id =
                         std::string (actor_ref.actor_id ().value ());
+                      event.reason = message_flow_reason_t::stale_target;
                       return event;
                   });
             }
@@ -10504,19 +10501,12 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
         }
     }
     if (report_decode_failure) {
-        report_spot_dispatch_error (
-          _state, dispatch_error_surface_t::spot_subscription, dispatch_message_kind_t::publish,
-          dispatch_error_reason_t::payload_decode_failed, dispatch_error_action_t::drop,
-          std::nullopt, topic, std::string (context._state->spot_id));
         return result_t<void>::success ();
     }
     const auto diagnostics_mode = detail::message_flow_tracer_t (_state->dispatch).mode ();
     auto flow_scope = runtime::flow_context_t::enter (std::move (flow_id), flow_origin,
                                                       diagnostics_mode, flow_origin_t::inbound);
     const auto &message = body;
-    report_spot_dispatch_trace (
-      _state, message_flow_outcome_t::received, dispatch_error_surface_t::spot_subscription,
-      dispatch_message_kind_t::publish, {}, topic, context._state->spot_id);
     bool handler_found = false;
     for (const auto &descriptor : context._state->handlers) {
         if (packet_name && descriptor.kind == spot_handler_kind_t::subscription
@@ -10527,7 +10517,7 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
     }
     if (!handler_found) {
         report_spot_dispatch_error (
-          _state, dispatch_error_surface_t::spot_subscription, dispatch_message_kind_t::publish,
+          _state, dispatch_error_surface_t::spot_route, dispatch_message_kind_t::send,
           dispatch_error_reason_t::handler_missing, dispatch_error_action_t::drop, packet_name,
           topic, std::string (context._state->spot_id));
         return result_t<void>::success ();
@@ -10546,16 +10536,8 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
         const auto *error = result.error ();
         const framework_exception_t exception (
           result.error_kind (), error != nullptr ? error->what () : "spot subscription failed");
-        report_spot_dispatch_error (
-          _state, dispatch_error_surface_t::spot_subscription, dispatch_message_kind_t::publish,
-          dispatch_reason_from_error (exception.kind ()), dispatch_error_action_t::drop,
-          *packet_name, topic, std::string (context._state->spot_id), std::nullopt,
-          std::make_exception_ptr (exception));
         return detail::result_access_t::failure<void> (exception);
     }
-    report_spot_dispatch_trace (
-      _state, message_flow_outcome_t::dispatched, dispatch_error_surface_t::spot_subscription,
-      dispatch_message_kind_t::publish, *packet_name, topic, context._state->spot_id);
     return result_t<void>::success ();
 }
 

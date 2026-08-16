@@ -406,6 +406,13 @@ void test_routed_send_ready_isolated_by_exact_target_and_terminal_cause ()
     send_string_expect_success (dealer_b, "ready-b", 0);
     recv_string_expect_success (router, "B", 0);
     recv_string_expect_success (router, "ready-b", 0);
+    {
+        // Pair attachment legitimately publishes an initial WRITABLE edge for
+        // both targets. This assertion is about A's later HWM recovery, so
+        // discard the attachment baseline before creating backpressure.
+        std::lock_guard<std::mutex> lock (probe.sync);
+        probe.events.clear ();
+    }
 
     const zlink_routing_id_t rid_a = make_rid ("A");
     const zlink_routing_id_t rid_b = make_rid ("B");

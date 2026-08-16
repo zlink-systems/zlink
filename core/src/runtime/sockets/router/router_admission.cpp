@@ -107,22 +107,12 @@ pipe_t *router_t::find_transport_pair_pipe (
                      static_cast<unsigned long long> (transport_pair_generation_));
         return current->pipe;
     }
-
-    for (std::map<pipe_t *, blob_t>::const_iterator it = _standby_pipes.begin ();
-         it != _standby_pipes.end (); ++it) {
-        if (!(it->second < target_rid) && !(target_rid < it->second)
-            && it->first
-            && it->first->get_transport_lane () == transport_lane_application
-            && it->first->get_transport_pair_id () == transport_pair_id_
-            && it->first->get_transport_pair_generation () == transport_pair_generation_) {
-            if (router_debug_enabled ())
-                fprintf (stderr, "router pair lookup: standby pipe=%p pair=%llu/%llu\\n",
-                         static_cast<void *> (it->first),
-                         static_cast<unsigned long long> (transport_pair_id_),
-                         static_cast<unsigned long long> (transport_pair_generation_));
-            return it->first;
-        }
-    }
+    // Exact targets are capabilities for the current RID binding. A handover
+    // keeps the superseded pipe in _standby_pipes only so it can be promoted
+    // if the winner terminates; accepting new work into that pipe can report
+    // success after its transport has already disconnected. Once another
+    // pair owns the RID, callers must observe the old capability as stale and
+    // select the replacement target instead.
     return NULL;
 }
 

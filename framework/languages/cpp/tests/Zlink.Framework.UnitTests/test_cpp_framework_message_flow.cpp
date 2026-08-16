@@ -83,6 +83,16 @@ bool contains (const std::string &haystack, const std::string &needle)
     return haystack.find (needle) != std::string::npos;
 }
 
+std::size_t occurrences (const std::string &haystack, const std::string &needle)
+{
+    std::size_t count = 0;
+    for (std::size_t at = 0; (at = haystack.find (needle, at)) != std::string::npos;
+         at += needle.size ()) {
+        ++count;
+    }
+    return count;
+}
+
 bool wait_until (const std::function<bool ()> &predicate)
 {
     for (int attempt = 0; attempt < 50; ++attempt) {
@@ -135,7 +145,8 @@ int main ()
             tracer.trace (flow_event (message_flow_outcome_t::received));
             tracer.trace (flow_event (message_flow_outcome_t::replied));
         });
-        if (!contains (out, "event_id=zlink.message_flow")) {
+        if (!contains (out, "zlink flow:")
+            || !contains (out, "event=zlink.message_flow")) {
             return 4;
         }
         if (!contains (out, "phase=received")
@@ -157,8 +168,10 @@ int main ()
     // detailed appends the message size...
     {
         const auto out = capture_clog ([] {
-            message_flow_tracer_t (options_with_mode (message_flow_log_mode_t::detailed))
-              .trace (flow_event (message_flow_outcome_t::received));
+            auto options = options_with_mode (message_flow_log_mode_t::detailed);
+            options.include_message_sizes (true);
+            message_flow_tracer_t (options).trace (
+              flow_event (message_flow_outcome_t::received));
         });
         if (!contains (out, "size=42")) {
             return 9;
@@ -206,11 +219,13 @@ int main ()
 
     // off also silences the dispatch error log...
     {
+        const auto reported_before = dispatch_error_reporter_t::reported ();
         const auto out = capture_clog ([] {
             dispatch_error_reporter_t (options_with_mode (message_flow_log_mode_t::off))
               .report (error_event ());
         });
-        if (!out.empty ()) {
+        if (!out.empty ()
+            || dispatch_error_reporter_t::reported () != reported_before) {
             return 11;
         }
     }
@@ -221,14 +236,14 @@ int main ()
             dispatch_error_reporter_t (options_with_mode (message_flow_log_mode_t::errors))
               .report (error_event ());
         });
-        if (!contains (out, "dispatch error")) {
+        if (!contains (out, "zlink flow:")) {
             return 12;
         }
-        if (!contains (out, "event_id=zlink.dispatch_error")
+        if (!contains (out, "event=zlink.dispatch_error")
             || !contains (out, "outcome=failed")) {
             return 13;
         }
-        if (!contains (out, "reason=handler_missing")) {
+        if (!contains (out, "reason=no_handler")) {
             return 14;
         }
         // failure lines now carry the correlation id, so a single grep corr=<id>
@@ -238,8 +253,8 @@ int main ()
         }
     }
 
-    // live_mode changes apply when the next message enters the runtime. Every
-    // transition for a message already in progress uses its entry snapshot.
+    // Every processing point reads the live shared mode once; ambient entry
+    // snapshots never override a later runtime change.
     {
         auto options = options_with_mode (message_flow_log_mode_t::off);
         auto live = std::make_shared<std::atomic<message_flow_log_mode_t>> (
@@ -264,8 +279,8 @@ int main ()
             return 16;
         }
 
-        // Capture normal for one message, then turn diagnostics off
-        // before its transition. The in-progress message remains complete.
+        // Enter while normal, then turn diagnostics off before the processing
+        // point: the transition is silent.
         out = capture_clog ([&] {
             auto message_scope =
               runtime::flow_context_t::enter_current_or_create (
@@ -275,7 +290,7 @@ int main ()
             message_flow_tracer_t (options).trace (
               flow_event (message_flow_outcome_t::received));
         });
-        if (!contains (out, "phase=received")) {
+        if (!out.empty ()) {
             return 29;
         }
 
@@ -293,8 +308,8 @@ int main ()
             return 30;
         }
 
-        // A message that entered while off stays silent even if diagnostics
-        // turns on before a later transition. The following message sees on.
+        // Enter while off, then turn diagnostics on before the processing
+        // point: that transition uses the new live level.
         out = capture_clog ([&] {
             auto message_scope =
               runtime::flow_context_t::enter_current_or_create (
@@ -304,7 +319,7 @@ int main ()
             message_flow_tracer_t (options).trace (
               flow_event (message_flow_outcome_t::received));
         });
-        if (!out.empty ()) {
+        if (!contains (out, "phase=received")) {
             return 31;
         }
         out = capture_clog ([&] {
@@ -320,20 +335,67 @@ int main ()
         }
     }
 
-    // sample_rate gates healthy transitions but never drops error transitions.
+    // sample_rate gates healthy transitions but never backpressure or drops.
     {
         auto options = options_with_mode (message_flow_log_mode_t::normal);
         options.trace_sample_rate (0.0);
         const auto out = capture_clog ([&] {
             message_flow_tracer_t tracer (options);
             tracer.trace (flow_event (message_flow_outcome_t::received));
-            tracer.trace (flow_event (message_flow_outcome_t::error));
+            tracer.trace (flow_event (message_flow_outcome_t::backpressured));
         });
         if (contains (out, "phase=received")) {
             return 18;
         }
-        if (!contains (out, "phase=error")) {
+        if (!contains (out, "phase=backpressured")
+            || contains (out, "phase=error")) {
             return 19;
+        }
+    }
+
+    // Failed/cancelled/shutdown request terminals are also never sampled,
+    // even though their phase is reply_received.
+    {
+        auto options = options_with_mode (message_flow_log_mode_t::errors);
+        options.trace_sample_rate (0.0);
+        const auto out = capture_clog ([&] {
+            auto event = flow_event (message_flow_outcome_t::reply_received);
+            event.result = message_flow_result_t::cancelled;
+            message_flow_tracer_t (options).trace (
+              message_flow_outcome_t::reply_received,
+              message_flow_result_t::cancelled,
+              [&] { return event; });
+        });
+        if (!contains (out, "phase=reply_received")
+            || !contains (out, "outcome=cancelled")) {
+            return 35;
+        }
+    }
+
+    // Structured logging uses the spec projection rather than legacy keys.
+    {
+        const auto out = capture_clog ([] {
+            auto event = flow_event (message_flow_outcome_t::sent);
+            event.surface = dispatch_error_surface_t::route_mesh_channel;
+            event.message_kind = dispatch_message_kind_t::control;
+            event.mesh_name = "game-mesh";
+            event.channel_route_kind = "route_mesh";
+            event.source_rid = "source-1";
+            event.target_rid = "target-2";
+            event.server_rid = "server-3";
+            message_flow_tracer_t (options_with_mode (message_flow_log_mode_t::normal))
+              .trace (std::move (event));
+        });
+        if (!contains (out, "event=zlink.message_flow")
+            || !contains (out, "kind=control")
+            || !contains (out, "mesh=game-mesh")
+            || !contains (out, "channel_route=route_mesh")
+            || !contains (out, "source_rid=source-1")
+            || !contains (out, "target_rid=target-2")
+            || !contains (out, "server_rid=server-3")
+            || contains (out, "event_id=")
+            || contains (out, " src=")) {
+            return 36;
         }
     }
 
@@ -360,43 +422,30 @@ int main ()
         }
     }
 
-    // Classic fanout dispatch has no reply frame.  A missing subscriber handler
-    // must still be observable as publish/handler_missing/drop so the runtime
-    // owner can preserve the public negative-dispatch contract.
+    // Classic fanout dispatch has no normal flow record. A missing subscriber
+    // handler emits exactly one closed-vocabulary dispatch-error record.
     {
         auto options = options_with_mode (message_flow_log_mode_t::normal);
-        std::atomic_bool saw_fanout_failure{false};
-        zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
-          options, [&] (const message_flow_event_t &event) {
-            if (event.outcome == message_flow_outcome_t::error
-                && event.surface == dispatch_error_surface_t::channel
-                && event.message_kind == dispatch_message_kind_t::publish
-                && event.packet_name && *event.packet_name == "MissingEventMsg"
-                && event.channel_name && *event.channel_name == "pubsub.events"
-                && event.topic && *event.topic == "fanout"
-                && event.error_reason
-                   == std::optional<dispatch_error_reason_t> (
-                     dispatch_error_reason_t::handler_missing)
-                && event.error_action
-                   == std::optional<dispatch_error_action_t> (
-                     dispatch_error_action_t::drop)) {
-                saw_fanout_failure.store (true, std::memory_order_release);
-            }
-          });
         const framework_exception_t missing_handler (
           framework_error_kind_t::not_found, "handler is not registered");
-        dispatch_error_reporter_t (options).report (message_dispatch_error_event_t{
-          .surface = dispatch_error_surface_t::channel,
-          .message_kind = dispatch_message_kind_t::publish,
-          .reason = detail::dispatch_reason_from_error (&missing_handler),
-          .action = dispatch_error_action_t::drop,
-          .packet_name = std::string ("MissingEventMsg"),
-          .channel_name = std::string ("pubsub.events"),
-          .topic = std::string ("fanout"),
-          .exception = std::make_exception_ptr (missing_handler)});
-        if (!wait_until ([&] {
-                return saw_fanout_failure.load (std::memory_order_acquire);
-            })) {
+        const auto out = capture_clog ([&] {
+            dispatch_error_reporter_t (options).report (message_dispatch_error_event_t{
+              .surface = dispatch_error_surface_t::classic_fanout,
+              .message_kind = dispatch_message_kind_t::send,
+              .reason = detail::dispatch_reason_from_error (&missing_handler),
+              .action = dispatch_error_action_t::drop,
+              .packet_name = std::string ("MissingEventMsg"),
+              .channel_name = std::string ("pubsub.events"),
+              .topic = std::string ("fanout"),
+              .exception = std::make_exception_ptr (missing_handler)});
+        });
+        if (!contains (out, "event=zlink.dispatch_error")
+            || !contains (out, "surface=classic_fanout")
+            || !contains (out, "kind=send")
+            || !contains (out, "reason=no_handler")
+            || contains (out, "channel_route=")
+            || occurrences (out, "event=zlink.dispatch_error") != 1
+            || contains (out, "event=zlink.message_flow")) {
             return 28;
         }
     }
@@ -406,29 +455,37 @@ int main ()
         using zlink::framework::detail::enum_name;
         if (enum_name (dispatch_error_surface_t::channel) != "channel"
             || enum_name (dispatch_error_surface_t::route_mesh_channel)
-                 != "route_mesh_channel"
-            || enum_name (dispatch_error_surface_t::spot_route) != "spot_route"
-            || enum_name (dispatch_error_surface_t::spot_subscription) != "spot_subscription"
-            || enum_name (dispatch_error_surface_t::spot_actor) != "spot_actor"
-            || enum_name (dispatch_error_surface_t::stream_session) != "stream_session") {
+                 != "channel"
+            || enum_name (dispatch_error_surface_t::spot_route) != "spot"
+            || enum_name (dispatch_error_surface_t::spot_subscription) != "spot"
+            || enum_name (dispatch_error_surface_t::spot_actor) != "actor"
+            || enum_name (dispatch_error_surface_t::stream_session) != "stream"
+            || enum_name (dispatch_error_surface_t::node) != "node"
+            || enum_name (dispatch_error_surface_t::instance_spot) != "instance_spot"
+            || enum_name (dispatch_error_surface_t::actor_relocation) != "actor_relocation"
+            || enum_name (dispatch_error_surface_t::classic_fanout) != "classic_fanout") {
             return 22;
         }
         if (enum_name (dispatch_message_kind_t::send) != "send"
             || enum_name (dispatch_message_kind_t::request) != "request"
-            || enum_name (dispatch_message_kind_t::publish) != "publish"
+            || enum_name (dispatch_message_kind_t::publish) != "send"
             || enum_name (dispatch_message_kind_t::response) != "response"
             || enum_name (dispatch_message_kind_t::error) != "error"
-            || enum_name (dispatch_message_kind_t::actor_send) != "actor_send"
-            || enum_name (dispatch_message_kind_t::actor_request) != "actor_request") {
+            || enum_name (dispatch_message_kind_t::actor_send) != "send"
+            || enum_name (dispatch_message_kind_t::actor_request) != "request"
+            || enum_name (dispatch_message_kind_t::control) != "control") {
             return 23;
         }
-        if (enum_name (dispatch_error_reason_t::handler_missing) != "handler_missing"
+        if (enum_name (dispatch_error_reason_t::handler_missing) != "no_handler"
             || enum_name (dispatch_error_reason_t::payload_decode_failed)
-                 != "payload_decode_failed"
+                 != "decode_error"
             || enum_name (dispatch_error_reason_t::handler_exception) != "handler_exception"
             || enum_name (dispatch_error_reason_t::invalid_frame) != "invalid_frame"
             || enum_name (dispatch_error_reason_t::reply_path_missing) != "reply_path_missing"
-            || enum_name (dispatch_error_reason_t::unexpected_reply) != "unexpected_reply") {
+            || enum_name (dispatch_error_reason_t::unexpected_reply) != "unexpected_reply"
+            || enum_name (dispatch_error_reason_t::backpressure) != "backpressure"
+            || enum_name (dispatch_error_reason_t::stale_target) != "stale_target"
+            || enum_name (dispatch_error_reason_t::shutdown) != "shutdown") {
             return 24;
         }
         /* framework API §2.4.3: reply frame이 없는 local 경로의 실패는 fail_caller로 관측한다. */
@@ -471,12 +528,33 @@ int main ()
         if (enum_name (message_flow_outcome_t::received) != "received"
             || enum_name (message_flow_outcome_t::admitted) != "admitted"
             || enum_name (message_flow_outcome_t::dispatched) != "dispatched"
+            || enum_name (message_flow_outcome_t::completed) != "completed"
             || enum_name (message_flow_outcome_t::replied) != "replied"
             || enum_name (message_flow_outcome_t::dropped) != "dropped"
             || enum_name (message_flow_outcome_t::sent) != "sent"
             || enum_name (message_flow_outcome_t::reply_received) != "reply_received"
-            || enum_name (message_flow_outcome_t::error) != "error") {
+            || enum_name (message_flow_outcome_t::backpressured) != "backpressured") {
             return 26;
+        }
+        if (enum_name (message_flow_result_t::succeeded) != "succeeded"
+            || enum_name (message_flow_result_t::failed) != "failed"
+            || enum_name (message_flow_result_t::backpressured) != "backpressured"
+            || enum_name (message_flow_result_t::dropped) != "dropped"
+            || enum_name (message_flow_result_t::cancelled) != "cancelled"
+            || enum_name (message_flow_result_t::shutdown) != "shutdown") {
+            return 37;
+        }
+        if (enum_name (message_flow_reason_t::backpressure) != "backpressure"
+            || enum_name (message_flow_reason_t::stale_target) != "stale_target"
+            || enum_name (message_flow_reason_t::target_closed) != "target_closed"
+            || enum_name (message_flow_reason_t::shutdown) != "shutdown"
+            || enum_name (message_flow_reason_t::location_unavailable)
+                 != "location_unavailable"
+            || enum_name (message_flow_reason_t::activation_rejected)
+                 != "activation_rejected"
+            || enum_name (message_flow_reason_t::activation_timeout)
+                 != "activation_timeout") {
+            return 38;
         }
     }
 

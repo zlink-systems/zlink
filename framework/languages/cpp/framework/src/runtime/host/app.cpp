@@ -746,7 +746,9 @@ struct instance_spot_activation_trace_context_t
     std::string mesh_name;
     zlink::routing_id_t target_node;
     zlink::framework::spot_id_t spot_id;
+    std::string instance_spot_type;
     std::string correlation_id;
+    std::uint64_t source_node_generation = 0;
 };
 
 std::optional<instance_spot_activation_trace_context_t>
@@ -762,7 +764,9 @@ make_instance_spot_activation_trace_context (
         return std::nullopt;
     return instance_spot_activation_trace_context_t{
       std::string (packet_name), std::string (mesh_name), target_node, spot_id,
-      std::to_string (header.operation.high) + ":" + std::to_string (header.operation.low)};
+      header.target.stable_type,
+      std::to_string (header.operation.high) + ":" + std::to_string (header.operation.low),
+      header.source_node_generation};
 }
 
 void trace_instance_spot_activation (
@@ -770,18 +774,21 @@ void trace_instance_spot_activation (
   const std::optional<zlink::framework::runtime::flow_value_t> &flow,
   zlink::framework::message_flow_outcome_t outcome,
   zlink::framework::dispatch_message_kind_t message_kind,
-  const instance_spot_activation_trace_context_t &context)
+  const instance_spot_activation_trace_context_t &context,
+  std::optional<zlink::framework::message_flow_result_t> result = std::nullopt,
+  std::optional<zlink::framework::message_flow_reason_t> reason = std::nullopt)
 {
-    zlink::framework::detail::message_flow_tracer_t (dispatch).trace (outcome, [&] {
+    zlink::framework::detail::message_flow_tracer_t (dispatch).trace (
+      outcome, result, [&] {
         zlink::framework::message_flow_event_t event{
           outcome,
-          zlink::framework::dispatch_error_surface_t::spot_route,
+          zlink::framework::dispatch_error_surface_t::instance_spot,
           message_kind,
           context.packet_name,
-          context.mesh_name,
+          std::nullopt,
           std::nullopt,
           context.correlation_id,
-          context.target_node.to_string (),
+          std::nullopt,
           std::string (context.spot_id),
           std::nullopt,
           std::nullopt,
@@ -794,8 +801,23 @@ void trace_instance_spot_activation (
             event.flow_id = flow->flow_id;
             event.flow_origin = flow->origin;
         }
+        event.mesh_name = context.mesh_name;
+        event.target_rid = context.target_node.to_string ();
+        event.instance_spot_type = context.instance_spot_type;
+        event.activation_state =
+          outcome == zlink::framework::message_flow_outcome_t::reply_received
+                                   && (!result
+                                       || *result
+                                            == zlink::framework::message_flow_result_t::succeeded)
+                                   ? "ready"
+                                   : "activating";
+        event.source_mesh_generation = context.source_node_generation;
+        if (result)
+            event.result = *result;
+        if (reason)
+            event.reason = *reason;
         return event;
-    });
+      });
 }
 
 zlink::framework::result_t<void> one_way_native_submit_result (zlink::submit_result_t result,
@@ -1863,8 +1885,9 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                     if (terminal != runtime::foundation::operation_terminal_t::completed) {
                         if (trace_context) {
                             trace_instance_spot_activation (
-                              dispatch, flow, message_flow_outcome_t::error,
-                              dispatch_message_kind_t::request, *trace_context);
+                              dispatch, flow, message_flow_outcome_t::reply_received,
+                              dispatch_message_kind_t::request, *trace_context,
+                              message_flow_result_t::failed);
                         }
                         completion->complete (result_t<zlink::message_t>::failure (
                           framework_error_kind_t::unavailable,
@@ -1874,8 +1897,10 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                     if (reply.terminal_result != 0) {
                         if (trace_context) {
                             trace_instance_spot_activation (
-                              dispatch, flow, message_flow_outcome_t::error,
-                              dispatch_message_kind_t::request, *trace_context);
+                              dispatch, flow, message_flow_outcome_t::reply_received,
+                              dispatch_message_kind_t::request, *trace_context,
+                              message_flow_result_t::failed,
+                              message_flow_reason_t::activation_rejected);
                         }
                         completion->complete (detail::result_access_t::failure<zlink::message_t> (
                           runtime::messaging::request_failure_mapper_t{}.reply_header_exception (
@@ -1886,8 +1911,9 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                     if (!application_reply) {
                         if (trace_context) {
                             trace_instance_spot_activation (
-                              dispatch, flow, message_flow_outcome_t::error,
-                              dispatch_message_kind_t::request, *trace_context);
+                              dispatch, flow, message_flow_outcome_t::reply_received,
+                              dispatch_message_kind_t::request, *trace_context,
+                              message_flow_result_t::failed);
                         }
                         completion->complete (result_t<zlink::message_t>::failure (
                           framework_error_kind_t::protocol_error,
@@ -1904,9 +1930,11 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                 });
               if (!submitted) {
                   if (trace_context) {
-                      trace_instance_spot_activation (dispatch, flow, message_flow_outcome_t::error,
-                                                      dispatch_message_kind_t::request,
-                                                      *trace_context);
+                      trace_instance_spot_activation (
+                        dispatch, flow, message_flow_outcome_t::reply_received,
+                        dispatch_message_kind_t::request, *trace_context,
+                        message_flow_result_t::failed,
+                        message_flow_reason_t::activation_rejected);
                   }
                   completion->complete (result_t<zlink::message_t>::failure (
                     framework_error_kind_t::unavailable,

@@ -1964,7 +1964,10 @@ int reconnect_push_reaches_new_session_across_two_hosts ()
     dispatch_options_access_t::set_observer_for_tests (
       trace_options,
       [&] (const message_flow_event_t &event) {
-          if (event.detail_stage
+          if (event.outcome == message_flow_outcome_t::admitted
+              && event.surface == dispatch_error_surface_t::stream_session
+              && event.message_kind == dispatch_message_kind_t::send
+              && event.detail_stage
                 == std::optional<std::string> (
                   "actor_owner_push_target")
               && event.detail_result
