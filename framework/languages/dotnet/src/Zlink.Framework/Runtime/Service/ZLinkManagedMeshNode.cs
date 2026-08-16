@@ -7546,13 +7546,23 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 throw new ZlinkRequestException(
                     ZlinkRequestException.ErrorCode.ProtocolError);
             if (reply.TerminalResult != (int)RequestResult.Ok)
+            {
+                //  Spec 51-internal-service-wire-protocol:97 — an unexpected
+                //  conditional tail is rejected as a protocol error: a failed
+                //  reply carries exactly the header frame, so an attached
+                //  payload makes the reply unprocessable (spec 32:91-92)
+                //  rather than a carrier of its semantic terminal.
+                if (replyParts.Count != 1)
+                    throw new ZlinkRequestException(
+                        ZlinkRequestException.ErrorCode.ProtocolError);
                 //  Application terminal from a node/channel reply header — carry the
-                //  fine failure code for ownership-aware refinement. (The two
+                //  fine failure code for ownership-aware refinement. (The
                 //  ProtocolError throws in this method are local decode failures
                 //  with no fine code and stay plain ZlinkRequestExceptions.)
                 throw new ZLinkRequestTerminalException(
                     (RequestResult)reply.TerminalResult,
                     checked((int)reply.FailureCode));
+            }
             if (replyParts.Count != 2
                 || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
                     replyParts[1].AsReadOnlyMemory(), out var decoded))
