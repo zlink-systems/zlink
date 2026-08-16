@@ -185,6 +185,20 @@ request_failure_mapper_t::reply_header_exception (
   const std::string &operation_name) const
 {
     switch (failure_code) {
+        case 3:
+            return framework_exception_t (
+              framework_error_kind_t::already_exists,
+              operation_name + " failed because the actor already exists.");
+        case 4:
+        case 7:
+            return framework_exception_t (
+              framework_error_kind_t::type_mismatch,
+              operation_name + " failed because the object type did not match.");
+        case 8:
+            return framework_exception_t (
+              framework_error_kind_t::invalid_operation,
+              operation_name
+                + " failed because the actor session is not bound.");
         case 9:
             return framework_exception_t (
               framework_error_kind_t::not_found,

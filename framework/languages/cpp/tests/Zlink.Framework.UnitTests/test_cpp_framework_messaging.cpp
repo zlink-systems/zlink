@@ -487,6 +487,14 @@ int main ()
           107, 0, "RouteMesh request");
         const auto remote_busy = mapper.reply_header_exception (
           108, 0, "RouteMesh request");
+        const auto already_exists = mapper.reply_header_exception (
+          107, 3, "RouteMesh request");
+        const auto actor_type_mismatch = mapper.reply_header_exception (
+          107, 4, "RouteMesh request");
+        const auto spot_type_mismatch = mapper.reply_header_exception (
+          107, 7, "RouteMesh request");
+        const auto session_not_bound = mapper.reply_header_exception (
+          107, 8, "RouteMesh request");
         if (zlink::framework::detail::boundary_state (native_timeout)
                 != zlink::framework::detail::boundary_error_t::timed_out
             || zlink::framework::detail::boundary_state (native_disconnected)
@@ -495,6 +503,13 @@ int main ()
                  != framework_error_kind_t::unavailable
             || remote_conflict.kind () != framework_error_kind_t::unavailable
             || remote_busy.kind () != framework_error_kind_t::unavailable
+            || already_exists.kind () != framework_error_kind_t::already_exists
+            || actor_type_mismatch.kind ()
+                 != framework_error_kind_t::type_mismatch
+            || spot_type_mismatch.kind ()
+                 != framework_error_kind_t::type_mismatch
+            || session_not_bound.kind ()
+                 != framework_error_kind_t::invalid_operation
             || spot_moving.kind () != framework_error_kind_t::unavailable
             || actor_location_stale.kind ()
                  != framework_error_kind_t::unavailable
