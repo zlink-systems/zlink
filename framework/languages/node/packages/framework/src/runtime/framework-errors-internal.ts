@@ -137,10 +137,14 @@ export const ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES: Readonly<Record<ZLinkFr
   [ZLinkFrameworkInternalErrorKind.InvalidOperation]: 40
 });
 
-const INTERNAL_KIND_BY_WIRE_FAILURE_CODE: ReadonlyMap<number, ZLinkFrameworkInternalErrorKind> = new Map(
-  Object.entries(ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES)
-    .map(([kind, code]) => [code + 1, kind as ZLinkFrameworkInternalErrorKind])
-);
+const INTERNAL_KIND_BY_WIRE_FAILURE_CODE: ReadonlyMap<number, ZLinkFrameworkInternalErrorKind> = new Map<number, ZLinkFrameworkInternalErrorKind>([
+  ...Object.entries(ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES)
+    .map(([kind, code]) => [code + 1, kind as ZLinkFrameworkInternalErrorKind] as const),
+  //  Spec 32-framework-error-model:99-103 — a workerQueueFull(18) received in a
+  //  remote reply is the target's queue state (Unavailable), not the source-owned
+  //  CapacityExceeded that the wire-value-minus-one derivation would give.
+  [18, ZLinkFrameworkInternalErrorKind.RouteNotConnected]
+]);
 
 const WIRE_TERMINAL_RESULT_BY_FAILURE_CODE: ReadonlyMap<number, number> = new Map([
   ...[1, 6, 8, 9, 10, 11, 14].map(code => [code, 102] as const),

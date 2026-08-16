@@ -734,9 +734,13 @@ function missingInstanceRequestFailure(
         ? ZLinkFrameworkInternalErrorKind.DeadlineExceeded
         : result === RequestResult.Terminated
           ? ZLinkFrameworkInternalErrorKind.RuntimeShutdown
-          : result === RequestResult.NotConnected || result === RequestResult.Backpressured
-            ? ZLinkFrameworkInternalErrorKind.RouteNotConnected
-            : wireKind ?? ZLinkFrameworkInternalErrorKind.RequestFailed;
+          : result === RequestResult.Backpressured
+            //  Spec 32-framework-error-model:104-108 — the bounded admission
+            //  terminal is target placement capacity: CapacityExceeded.
+            ? ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted
+            : result === RequestResult.NotConnected
+              ? ZLinkFrameworkInternalErrorKind.RouteNotConnected
+              : wireKind ?? ZLinkFrameworkInternalErrorKind.RequestFailed;
   return createInternalFrameworkException(
     kind,
     `Instance Spot request failed with result ${result} and errno ${nativeErrno}.`

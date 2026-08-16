@@ -156,7 +156,12 @@ export class ZLinkActorPlacementCoordinator {
           || remote.tail?.kind !== 'actorCreate'
         ) {
           throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.ActorCreateFailed,
+            //  Spec 32-framework-error-model:104-108 — the bounded admission
+            //  terminal Backpressured(113) is target placement capacity:
+            //  CapacityExceeded, not a generic InternalFailure.
+            remote.terminalResult === RequestResult.Backpressured
+              ? ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted
+              : ZLinkFrameworkInternalErrorKind.ActorCreateFailed,
             `Remote Actor '${actorId}' creation failed with result ${remote.terminalResult}, `
               + `failure code ${remote.failureCode}, and tail ${remote.tail?.kind ?? 'none'}.`,
             remote.terminalResult !== RequestResult.InvalidState

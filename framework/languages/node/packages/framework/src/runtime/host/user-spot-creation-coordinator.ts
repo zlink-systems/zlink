@@ -1121,6 +1121,15 @@ function remoteUserSpotFailure(
       true
     );
   }
+  if (terminalResult === 113) {
+    //  Spec 32-framework-error-model:104-108 — the bounded admission terminal
+    //  is target placement capacity: CapacityExceeded.
+    return createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
+      detail,
+      true
+    );
+  }
   return createInternalFrameworkException(
     ZLinkFrameworkInternalErrorKind.RequestFailed,
     detail

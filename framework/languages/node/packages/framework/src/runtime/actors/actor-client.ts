@@ -895,6 +895,10 @@ function actorFailureCodeKind(
   failureErrno: number
 ): ZLinkFrameworkInternalErrorKind | undefined {
   switch (failureErrno) {
+    case 3: return ZLinkFrameworkInternalErrorKind.ActorAlreadyExists;
+    case 4: return ZLinkFrameworkInternalErrorKind.ActorTypeMismatch;
+    case 7: return ZLinkFrameworkInternalErrorKind.SpotTypeMismatch;
+    case 8: return ZLinkFrameworkInternalErrorKind.ActorSessionNotBound;
     case 9: case 14: return ZLinkFrameworkInternalErrorKind.RequestTargetNotFound;
     case 12: case 16: return ZLinkFrameworkInternalErrorKind.RequestProtocolError;
     //  routeNotConnected(13) and a remote worker queue full(18) are Unavailable.
