@@ -78,3 +78,50 @@ export const ServiceWireFrameworkErrorCode = {
   spotMoving: 34,
   relocationDataLost: 35,
 } as const;
+export const ServiceWireBoundaryTerminalResults = [101, 103, 108, 109, 110, 111, 112, 113] as const;
+export const ServiceWireExactTerminalByFailureCode = {
+  1: 102, // actorRouteNotFound
+  2: 105, // actorCreateFailed
+  3: 107, // actorAlreadyExists
+  4: 107, // actorTypeMismatch
+  5: 105, // spotCreateFailed
+  6: 102, // spotRouteNotFound
+  7: 107, // spotTypeMismatch
+  8: 102, // actorSessionNotBound
+  9: 102, // handlerNotFound
+  10: 102, // routeHandlerNotFound
+  11: 102, // actorDispatchHandlerNotFound
+  12: 104, // payloadDecodeFailed
+  13: 105, // routeNotConnected
+  14: 102, // requestTargetNotFound
+  15: 106, // requestRejected
+  16: 104, // requestProtocolError
+  17: 105, // requestFailed
+  18: 106, // workerQueueFull
+  19: 105, // workerTimedOut
+  20: 105, // workerFailed
+  21: 107, // actorLocationStale
+  22: 106, // actorCreateRejected
+  33: 107, // spotGenerationStale
+  34: 107, // spotMoving
+  35: 105, // relocationDataLost
+} as const;
+// Schema terminal-failure-integrity: success is ok+none, boundary terminals
+// carry none, typed failures must match their exact terminal, and an unknown
+// failure code is a protocol error before dispatch.
+export const isValidServiceWireTerminalFailure = (
+  terminal: number,
+  failureCode: number
+): boolean => {
+  if (terminal === 0) {
+    return failureCode === 0;
+  }
+  if ((ServiceWireBoundaryTerminalResults as readonly number[]).includes(terminal)) {
+    return failureCode === 0;
+  }
+  if (failureCode === 0) {
+    return false;
+  }
+  const expected = (ServiceWireExactTerminalByFailureCode as Record<number, number>)[failureCode];
+  return expected !== undefined && expected === terminal;
+};

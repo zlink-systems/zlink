@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ServiceWireFrameworkErrorCode = exports.ServiceWireFlag = exports.ServiceWireCommand = exports.SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE = exports.SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME = exports.SERVICE_WIRE_REQUIRED_CAPABILITY = exports.SERVICE_WIRE_MAJOR = exports.SERVICE_WIRE_MAGIC = void 0;
+exports.isValidServiceWireTerminalFailure = exports.ServiceWireExactTerminalByFailureCode = exports.ServiceWireBoundaryTerminalResults = exports.ServiceWireFrameworkErrorCode = exports.ServiceWireFlag = exports.ServiceWireCommand = exports.SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE = exports.SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME = exports.SERVICE_WIRE_REQUIRED_CAPABILITY = exports.SERVICE_WIRE_MAJOR = exports.SERVICE_WIRE_MAGIC = void 0;
 // Generated from service-wire-v1.schema.json. Do not edit.
 exports.SERVICE_WIRE_MAGIC = [90, 77];
 exports.SERVICE_WIRE_MAJOR = 1;
@@ -81,3 +81,48 @@ exports.ServiceWireFrameworkErrorCode = {
     spotMoving: 34,
     relocationDataLost: 35,
 };
+exports.ServiceWireBoundaryTerminalResults = [101, 103, 108, 109, 110, 111, 112, 113];
+exports.ServiceWireExactTerminalByFailureCode = {
+    1: 102,
+    2: 105,
+    3: 107,
+    4: 107,
+    5: 105,
+    6: 102,
+    7: 107,
+    8: 102,
+    9: 102,
+    10: 102,
+    11: 102,
+    12: 104,
+    13: 105,
+    14: 102,
+    15: 106,
+    16: 104,
+    17: 105,
+    18: 106,
+    19: 105,
+    20: 105,
+    21: 107,
+    22: 106,
+    33: 107,
+    34: 107,
+    35: 105,
+};
+// Schema terminal-failure-integrity: success is ok+none, boundary terminals
+// carry none, typed failures must match their exact terminal, and an unknown
+// failure code is a protocol error before dispatch.
+const isValidServiceWireTerminalFailure = (terminal, failureCode) => {
+    if (terminal === 0) {
+        return failureCode === 0;
+    }
+    if (exports.ServiceWireBoundaryTerminalResults.includes(terminal)) {
+        return failureCode === 0;
+    }
+    if (failureCode === 0) {
+        return false;
+    }
+    const expected = exports.ServiceWireExactTerminalByFailureCode[failureCode];
+    return expected !== undefined && expected === terminal;
+};
+exports.isValidServiceWireTerminalFailure = isValidServiceWireTerminalFailure;
