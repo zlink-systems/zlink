@@ -7,7 +7,7 @@ contract test에 필요한 입력, 상태, 정상 흐름, 실패와 완료 조�
 이 디렉터리와 언어별 exact interface가 Framework 공개 계약의 단일 정본이다.
 이 디렉터리의 `40`~`52` 문서는 계약을 구현하는 상태와 component 구조를 설명하는 내부 설계
 문서이며 새 공개 동작을 추가하지 않는다. 같은 디렉터리에 두어도 이 문서가 규범 계약으로
-바뀌지는 않는다. 공개 동작이 다르면 `00`~`32` 문서와 언어별 exact interface가 우선한다.
+바뀌지는 않는다. 공개 동작이 다르면 `00`~`33` 문서와 언어별 exact interface가 우선한다.
 
 ## 검증 runner 격리
 
@@ -60,6 +60,7 @@ namespace를 사용하므로 지원하지 않는다.
 - [12 Spot 메시징](12-spot-messaging.ko.md)
 - [17 Stage wrapper on Spot](17-stage-wrapper-on-spot.ko.md)
 - [32 Framework 오류 모델](32-framework-error-model.ko.md) — 공통 `ErrorKind`, Send·Request 완료 조건과 Application의 재시도 판단 경계를 정의한다.
+- [33 Core byte HWM과 Application job flow](33-core-hwm-application-job-flow.ko.md) — Core의 byte 예산과 Framework의 job 개수 예산을 분리하고 pre-handler 비동기 단계를 하나의 structured flow로 묶는다.
 - [46. 수신과 dispatch 루프](46-internal-dispatch-loop.ko.md) — 비규범 내부 설계. message마다 깨울 것인가 모아서 처리할 것인가. 무엇으로 깨우는가
 
 ### Spot, Actor와 Session
@@ -107,7 +108,7 @@ namespace를 사용하므로 지원하지 않는다.
 
 ## 내부 설계 문서(비규범)
 
-> **문서 성격 — 공개 규범 스펙이 아닌 내부 설계 문서.** 아래 `40`~`52` 문서는 `00`~`32`의 공개 계약을 만족시키는 구현 구조를 설명한다. Application이 관찰하는 동작을 추가하거나 변경하지 않는다.
+> **문서 성격 — 공개 규범 스펙이 아닌 내부 설계 문서.** 아래 `40`~`52` 문서는 `00`~`33`의 공개 계약을 만족시키는 구현 구조를 설명한다. Application이 관찰하는 동작을 추가하거나 변경하지 않는다.
 
 C++·.NET·JVM·Node.js service runtime은 서로 다른 언어로 구현된다. 이 문서 묶음은 네
 runtime이 application에 같은 결과를 제공하려면 **공통으로 따라야 하는 내부 설계 결정**을

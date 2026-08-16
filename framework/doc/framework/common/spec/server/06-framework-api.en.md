@@ -131,6 +131,10 @@ are granted in oldest-waiter order. Batch receive and 1:N fanout reserve one per
 application job and never publish more jobs than the secured permits. When Core receive
 queues fill, their byte HWM propagates backpressure to the sender.
 
+[Core Byte HWM And Application Job Flow](33-core-hwm-application-job-flow.en.md) defines the
+pre-handler asynchronous ownership flow, the distinct release boundaries of the Core lease and
+Framework permit, and the durable-relocation staging boundary.
+
 The root Location options own startup-only `SessionRelocationSealTimeout`. It defaults to
 `3,000 ms` and accepts only a finite positive duration. Zero, negative, infinite, or a
 value the exact language interface cannot represent as finite milliseconds is a

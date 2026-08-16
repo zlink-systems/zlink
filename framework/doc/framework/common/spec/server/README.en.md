@@ -67,6 +67,7 @@ index places public specs and internal designs together by topic and lists each 
 - [12 Spot messaging](12-spot-messaging.en.md)
 - [17 Stage wrapper on Spot](17-stage-wrapper-on-spot.en.md)
 - [32 Framework error model](32-framework-error-model.en.md) — defines the shared `ErrorKind`, Send/Request completion conditions, and the boundary of an application's retry decision.
+- [33 Core byte HWM and Application job flow](33-core-hwm-application-job-flow.en.md) — separates Core byte capacity from Framework job-count capacity and keeps pre-handler asynchronous stages in one structured flow.
 - [46. Receive And Dispatch Loop](46-internal-dispatch-loop.en.md) — non-normative internal design. Whether to wake per message or batch-process. What wakes it
 
 ### Spot, Actor, And Session
@@ -114,7 +115,7 @@ index places public specs and internal designs together by topic and lists each 
 
 ## Internal Design Documents (Non-Normative)
 
-> **Document status — internal design, not normative public specification.** The `40`–`52` documents below explain implementation structure used to satisfy the public contracts in `00`–`32`. They do not add or change application-visible behavior.
+> **Document status — internal design, not normative public specification.** The `40`–`52` documents below explain implementation structure used to satisfy the public contracts in `00`–`33`. They do not add or change application-visible behavior.
 
 The C++, .NET, JVM, and Node.js service runtimes are implemented in different
 languages. This document set explains the **internal design decisions they must share

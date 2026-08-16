@@ -131,6 +131,7 @@ plugins:
             Complete Actor and Spot relocation flow: Actor와 Spot relocation 전체 흐름
             Failure handling and failover: 장애 대응과 failover
             Framework error model: Framework 오류 모델
+            Core Byte HWM And Application Job Flow: Core byte HWM과 Application job flow
             Complete Host relocation flow: Host relocation 전체 흐름
             Implementation gap record: Framework 구현 차이 기록
 
@@ -362,6 +363,7 @@ nav:
               - "Message model": common/spec/server/04-message-model.md
               - "Async execution policy": common/spec/server/05-async-execution-policy.md
               - "Framework API": common/spec/server/06-framework-api.md
+              - "Core Byte HWM And Application Job Flow": common/spec/server/33-core-hwm-application-job-flow.md
           - Channel and network:
               - "RouteMesh topology": common/spec/server/07-channel-topology.md
               - "Channel messaging": common/spec/server/08-channel-messaging.md

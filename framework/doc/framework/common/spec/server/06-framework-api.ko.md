@@ -121,6 +121,10 @@ polling, busy spin과 unbounded 임시 queue로 바꾸지 않는다. 가장 오�
 많은 handler job을 먼저 만들 수 없다. Core receive queue가 채워지면 기존 origin별 byte HWM이 sender까지
 backpressure를 전달한다.
 
+Pre-handler 비동기 ownership flow, Core lease와 Framework permit의 서로 다른 반환 경계, relocation
+durable staging 경계는 [Core byte HWM과 Application job flow](33-core-hwm-application-job-flow.ko.md)가
+정의한다.
+
 Root Location option은 startup-only `SessionRelocationSealTimeout`을 소유한다. 기본값은 `3,000 ms`이며
 finite positive duration만 허용한다. 0, 음수, 무한대와 exact language interface가 유한 millisecond로
 표현할 수 없는 값은 socket bind 전에 configuration error다. Session owner가 relocation seal의 terminal

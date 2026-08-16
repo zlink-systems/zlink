@@ -4,7 +4,7 @@ title: "Framework Error Model"
 
 # Framework Error Model
 
-[Spec index](README.en.md) · [Previous: Failure handling and failover scope](31-failure-failover-policy.en.md)
+[Spec index](README.en.md) · [Previous: Failure handling and failover scope](31-failure-failover-policy.en.md) · [Next: Core Byte HWM And Application Job Flow](33-core-hwm-application-job-flow.en.md)
 
 > **What this chapter defines** — the shared error delivered to an
 > Application when `Send`, `Request`, or a lifecycle operation fails.
