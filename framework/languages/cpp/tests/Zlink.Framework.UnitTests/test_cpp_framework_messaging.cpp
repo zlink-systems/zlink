@@ -7,6 +7,7 @@
 #include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
+#include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 
 #include <service_wire_constants.hpp>
@@ -527,6 +528,33 @@ int main ()
             || mapper.reply_header_exception (113, 0, "native request").kind ()
                  != framework_error_kind_t::capacity_exceeded) {
             return 26;
+        }
+        {
+            namespace ust = zlink::framework::runtime::user_spot_terminal;
+            using zlink::framework::runtime::protocol::reply_header_t;
+            //  Spec 32-framework-error-model:99-108 — user-spot remote reply
+            //  ownership: a peer's operation-table/queue saturation
+            //  Conflict(107)/Busy(108)+None is the target's resource, so
+            //  Unavailable; only a target's placement/admission capacity
+            //  Backpressured(113)+None is CapacityExceeded. Fine codes still
+            //  refine (spotMoving(34)->Unavailable, spotGenerationStale(33)->
+            //  InvalidOperation); Terminated(103)->ShuttingDown.
+            if (ust::map_user_spot_wire_failure (reply_header_t{0, 108, 0}, true)
+                    != framework_error_kind_t::unavailable
+                || ust::map_user_spot_wire_failure (reply_header_t{0, 107, 0}, true)
+                     != framework_error_kind_t::unavailable
+                || ust::map_user_spot_wire_failure (reply_header_t{0, 108, 0}, false)
+                     != framework_error_kind_t::unavailable
+                || ust::map_user_spot_wire_failure (reply_header_t{0, 113, 0}, true)
+                     != framework_error_kind_t::capacity_exceeded
+                || ust::map_user_spot_wire_failure (reply_header_t{0, 107, 34}, true)
+                     != framework_error_kind_t::unavailable
+                || ust::map_user_spot_wire_failure (reply_header_t{0, 107, 33}, true)
+                     != framework_error_kind_t::invalid_operation
+                || ust::map_user_spot_wire_failure (reply_header_t{0, 103, 0}, true)
+                     != framework_error_kind_t::shutting_down) {
+                return 27;
+            }
         }
         const auto not_connected = mapper.completion_exception (
           zlink::framework::runtime::messaging::request_result_t::not_connected, "profile request");

@@ -17,11 +17,20 @@ inline framework_error_kind_t map_user_spot_wire_failure (
         return framework_error_kind_t::deadline_exceeded;
     if (header.terminal_result == 109)
         return framework_error_kind_t::unavailable;
+    //  Spec 32-framework-error-model:104-108 — only a target's placement/
+    //  admission capacity (Backpressured(113)+None) is CapacityExceeded; it is an
+    //  admission decision, not a queue.
     if (creation
-        && (header.terminal_result == 108
-            || header.terminal_result == 113)
+        && header.terminal_result == 113
         && header.failure_code == 0)
         return framework_error_kind_t::capacity_exceeded;
+    //  Spec 32-framework-error-model:99-103 — a remote target's operation-table/
+    //  queue saturation (Conflict(107)/Busy(108)+None) is the target's own
+    //  resource, so Unavailable, not source-owned CapacityExceeded. This matches
+    //  the request-path reply_header_exception remote mapper.
+    if ((header.terminal_result == 107 || header.terminal_result == 108)
+        && header.failure_code == 0)
+        return framework_error_kind_t::unavailable;
 
     switch (
       static_cast<protocol::framework_error_code> (

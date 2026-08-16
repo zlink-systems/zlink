@@ -2704,10 +2704,20 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
       map_user_spot_operation_failure (
         operation_terminal_t::completed, {1, 107, 7},
         true));
+    //  Spec 32-framework-error-model:99-103 — a peer's operation-table/queue
+    //  saturation Busy(108)+None is the target's resource, so Unavailable, not
+    //  source-owned CapacityExceeded.
+    EXPECT_EQ (
+      framework_error_kind_t::unavailable,
+      map_user_spot_operation_failure (
+        operation_terminal_t::completed, {1, 108, 0},
+        true));
+    //  Spec 32-framework-error-model:104-108 — only a target's placement/
+    //  admission capacity Backpressured(113)+None is CapacityExceeded.
     EXPECT_EQ (
       framework_error_kind_t::capacity_exceeded,
       map_user_spot_operation_failure (
-        operation_terminal_t::completed, {1, 108, 0},
+        operation_terminal_t::completed, {1, 113, 0},
         true));
     EXPECT_EQ (
       framework_error_kind_t::rejected,
