@@ -8809,13 +8809,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             ClosePeerAfterControlSendFailure(target, connectionGeneration);
         }
         catch (ZlinkSubmitException submit)
-            when (submit.Result == ZlinkSubmitException.ErrorCode.Backpressured)
+            when (submit.Result != ZlinkSubmitException.ErrorCode.NotConnected
+                  && submit.Result != ZlinkSubmitException.ErrorCode.NotFound
+                  && submit.Result != ZlinkSubmitException.ErrorCode.Terminated)
         {
-            //  Spec 13-mesh-node:331 (condition 3) — queue backpressure is not
-            //  evidence the previous pipe ended. Keep the peer's admission/
-            //  liveness generation fence intact and let the admission retry
-            //  pump try again; only a confirmed transport failure below
-            //  demotes the connection epoch.
+            //  Spec 13-mesh-node:331 (condition 3) — only route/lifecycle
+            //  terminal evidence ("the previous pipe has ended") may demote
+            //  the peer epoch. Backpressure (queue/HWM/submit timeout),
+            //  NotAdmitted (a LIVE route rejecting admission, e.g. zero
+            //  weight), and caller-contract or internal submit failures are
+            //  not that evidence: keep the admission/liveness generation
+            //  fence intact and let the admission retry pump try again.
+            //  NotConnected/NotFound/Terminated fall through to the demotion
+            //  below.
         }
         catch (ZlinkException)
         {
