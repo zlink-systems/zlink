@@ -1898,7 +1898,14 @@ task_t<bool> public_host_runtime_t::activate_instance_spot_remote (
                         protocol::decode_application_payload (parts[1]);
               }
               catch (const protocol::service_wire_error_t &) {
-                  terminal = foundation::operation_terminal_t::transport_failed;
+                  //  Spec 32-framework-error-model:91-92 — a reply that can't
+                  //  be processed is ProtocolError, not a transport failure.
+                  //  Synthesize the protocolError wire terminal; the sink's
+                  //  reply_header_exception mapper classifies it.
+                  reply = {};
+                  reply.terminal_result = 104;
+                  reply.failure_code = 0;
+                  application_reply.reset ();
               }
           }
           completion (terminal, reply, std::move (application_reply));
@@ -6329,7 +6336,12 @@ zlink::submit_result_t public_host_runtime_t::begin_local_actor_join (
                 case stateful::stateful_error_t::moving:
                     return {107, 34};
                 case stateful::stateful_error_t::conflict:
-                    return {107, 0};
+                    //  Source-local conflict (an active application turn or a
+                    //  not-ready local object) is an operation forbidden in the
+                    //  current state -> InvalidOperation (spec 32:41), not the
+                    //  remote-owner Unavailable a bare conflict terminal maps
+                    //  to (spec 32:99-103).
+                    return {111, 0};
                 case stateful::stateful_error_t::backpressured:
                     return {113, 0};
                 case stateful::stateful_error_t::invalid:
