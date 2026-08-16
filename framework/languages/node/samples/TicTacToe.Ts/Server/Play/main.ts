@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { enableFlowFileLogging } from '../flow-file-logging';
 import { NestFactory } from '@nestjs/core';
 import { ZLinkPeerState, type ZLinkRouteMeshRuntime } from '@zlink-systems/framework';
 import { ZLINK_ROUTE_MESH_RUNTIME } from '@zlink-systems/nestjs';
@@ -7,6 +8,8 @@ import { TICTACTOE_SAMPLE_CONFIG } from '../Configuration/sample-config';
 import type { TicTacToeSampleConfig } from '../Configuration/sample-config';
 import { SampleNames } from '../Configuration/sample-settings';
 import { createTicTacToePlayModule } from './tictactoe-play-module';
+
+enableFlowFileLogging('play');
 
 async function main(): Promise<void> {
   const TicTacToePlayModule = createTicTacToePlayModule();

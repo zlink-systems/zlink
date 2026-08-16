@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { enableFlowFileLogging } from '../flow-file-logging';
 import * as http from 'node:http';
 import { NestFactory } from '@nestjs/core';
 import { closeNestRuntime, waitForRouteMeshReady, waitForShutdown } from '../runtime-support';
@@ -15,6 +16,8 @@ type HttpEndpoint = {
   host: string;
   port: number;
 };
+
+enableFlowFileLogging('api');
 
 async function main(): Promise<void> {
   const TicTacToeApiModule = createTicTacToeApiModule();
