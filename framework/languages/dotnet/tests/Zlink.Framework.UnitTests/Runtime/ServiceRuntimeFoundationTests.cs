@@ -1926,6 +1926,124 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
+    public async Task Managed_mesh_terminal_completion_progresses_while_ordinary_job_flow_is_saturated()
+    {
+        //  Spec 33-core-hwm-application-job-flow §8: terminal reply/error
+        //  completion progresses independently of ordinary job-flow
+        //  saturation. The requester's Application Job Queue is saturated
+        //  (limit 1 held externally, an ordinary record parked pre-receive),
+        //  yet a request reply terminal still completes through the native
+        //  completion path onto the Infrastructure domain.
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var applicationJobQueue = new ZLinkApplicationJobQueue(
+            new ZLinkApplicationJobQueueCapacity(
+                ZLinkApplicationJobQueueProfile.Balanced,
+                ConfiguredManualMax: 1,
+                EffectiveProcessorCount: 8,
+                EffectiveMaxQueuedApplicationJobs: 1));
+        await using var requester = new ZLinkManagedMeshNode(
+            context,
+            "orders",
+            applicationJobQueue: applicationJobQueue);
+        await using var replier = new ZLinkManagedMeshNode(context, "orders");
+        var suffix = Guid.NewGuid().ToString("N");
+        var requesterEndpoint = $"inproc://orders-saturated-requester-{suffix}";
+        var replierEndpoint = $"inproc://orders-saturated-replier-{suffix}";
+        var requesterRid = RoutingId.From("orders-saturated-requester");
+        var replierRid = RoutingId.From("orders-saturated-replier");
+
+        requester.SetRoutingId(requesterRid);
+        requester.SetBind(requesterEndpoint);
+        requester.ConnectPeer(replierEndpoint, replierRid);
+        replier.SetRoutingId(replierRid);
+        replier.SetBind(replierEndpoint);
+        replier.Start();
+        requester.Start();
+
+        await WaitUntilAsync(() =>
+            requester.Status().AdmittedPeerCount == 1
+            && replier.Status().AdmittedPeerCount == 1);
+
+        //  Saturate the requester's ordinary job flow: the single permit is
+        //  held externally, so an inbound ordinary record parks pre-receive.
+        using var occupied = await applicationJobQueue
+            .AcquireAsync(CancellationToken.None);
+        using var ordinary = Message.From(new byte[] { 1, 2, 3 });
+        Assert.Equal(
+            SubmitResult.Ok,
+            replier.SendToNode(requesterRid, [ordinary]));
+        await WaitUntilAsync(() =>
+            applicationJobQueue.GetStatus().CapacityWaiters == 1);
+        Assert.Equal(0UL, requester.Status().PendingApplicationMessages);
+
+        //  The saturated requester issues a request; the replier answers.
+        using var requestPart = Message.From(new byte[] { 4, 5, 6 });
+        Assert.Equal(
+            SubmitResult.Ok,
+            requester.RequestToNode(
+                replierRid,
+                [requestPart],
+                out var operationId,
+                TimeSpan.FromSeconds(3)));
+
+        using var replierReady = new MeshReadyBatch();
+        await WaitUntilAsync(() =>
+        {
+            replierReady.Reset();
+            replier.DrainReady(
+                MeshReadyDomains.Application,
+                replierReady,
+                RecvFlags.DontWait);
+            return replierReady.Count == 1;
+        });
+        using var replierClaim = replierReady.TakeClaim(0);
+        using var replierBatch = new MeshReceiveBatch();
+        Assert.True(replierClaim.Receive(replierBatch, RecvFlags.DontWait));
+        Assert.Equal(1, replierBatch.Count);
+        var request = replierBatch[0];
+        Assert.Equal(MeshRecordKind.NodeRequest, request.Kind);
+        using var replyPart = Message.From(new byte[] { 9, 8, 7 });
+        Assert.Equal(SubmitResult.Ok, request.Reply([replyPart]));
+
+        //  The reply terminal completes while the ordinary lane stays
+        //  saturated: the completion is drained from the Infrastructure
+        //  domain without ever passing the application admission gate.
+        using var completionReady = new MeshReadyBatch();
+        await WaitUntilAsync(() =>
+        {
+            completionReady.Reset();
+            requester.DrainReady(
+                MeshReadyDomains.Infrastructure,
+                completionReady,
+                RecvFlags.DontWait);
+            return completionReady.Count == 1;
+        });
+        Assert.Equal(1UL, applicationJobQueue.GetStatus().CapacityWaiters);
+        Assert.Equal(0UL, requester.Status().PendingApplicationMessages);
+        using var completionClaim = completionReady.TakeClaim(0);
+        using var completionBatch = new MeshReceiveBatch();
+        Assert.True(completionClaim.Receive(completionBatch, RecvFlags.DontWait));
+        Assert.Equal(1, completionBatch.Count);
+        var completion = completionBatch[0];
+        Assert.Equal(MeshRecordKind.Completion, completion.Kind);
+        Assert.Equal(operationId, completion.OperationId);
+        Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
+
+        //  Releasing the external permit lets the parked ordinary record
+        //  drain normally.
+        occupied.ReleaseForHandlerStart();
+        await WaitUntilAsync(() =>
+        {
+            using var ready = new MeshReadyBatch();
+            requester.DrainReady(
+                MeshReadyDomains.Application,
+                ready,
+                RecvFlags.DontWait);
+            return ready.Count > 0;
+        });
+    }
+
+    [Fact]
     public async Task Managed_mesh_node_releases_shared_permit_after_finite_control_and_malformed_records()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();

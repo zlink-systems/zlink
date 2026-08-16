@@ -239,6 +239,62 @@ public sealed class ApplicationJobQueueTests
     }
 
     [Fact]
+    public async Task Detached_async_activation_outliving_its_parent_call_retains_permit_and_core_credit()
+    {
+        //  Spec 33-core-hwm-application-job-flow §8: an asynchronous activation
+        //  that outlives its parent call retains BOTH the job permit and the
+        //  retained Core lease, and a terminal releases each exactly once.
+        using var queue = CreateQueue(limit: 1);
+        var coreCredit = new CountingDisposable();
+        var activationStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishActivation = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Task? detachedActivation = null;
+
+        async Task ParentCallAsync()
+        {
+            var lease = await queue.AcquireAsync(CancellationToken.None);
+            lease.MarkQueued();
+            //  The record-carried bundle the runtime attaches to inbound
+            //  records: Core retained credit + application job admission.
+            var admission = new ZLinkApplicationJobQueueCreditOwner(
+                coreCredit,
+                lease);
+            detachedActivation = Task.Run(async () =>
+            {
+                activationStarted.SetResult();
+                await finishActivation.Task;
+                admission.Dispose();
+                //  Exactly-once: a second terminal-path dispose is a no-op.
+                admission.Dispose();
+            });
+            //  The parent call returns here while the detached activation
+            //  still owns permit + credit.
+        }
+
+        await ParentCallAsync();
+        await activationStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        var held = queue.GetStatus();
+        Assert.Equal(1UL, held.QueuedApplicationJobs);
+        Assert.Equal(1UL, held.PermitsInUse);
+        Assert.Equal(0, coreCredit.DisposeCount);
+        var waiter = queue.AcquireAsync(CancellationToken.None).AsTask();
+        Assert.False(waiter.IsCompleted);
+        Assert.Equal(1UL, queue.GetStatus().CapacityWaiters);
+
+        finishActivation.SetResult();
+        await detachedActivation!.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(1, coreCredit.DisposeCount);
+        using var admitted = await waiter.WaitAsync(TimeSpan.FromSeconds(1));
+        var released = queue.GetStatus();
+        Assert.Equal(1UL, released.PermitsInUse);
+        Assert.Equal(0UL, released.CapacityWaiters);
+    }
+
+    [Fact]
     public void Only_terminal_record_kinds_bypass_dispatch_admission()
     {
         Assert.False(ZLinkMeshDispatchPump.RequiresApplicationAdmission(
@@ -279,4 +335,13 @@ public sealed class ApplicationJobQueueTests
             ConfiguredManualMax: limit,
             EffectiveProcessorCount: 8,
             EffectiveMaxQueuedApplicationJobs: limit));
+
+    private sealed class CountingDisposable : IDisposable
+    {
+        private int _disposeCount;
+
+        internal int DisposeCount => Volatile.Read(ref _disposeCount);
+
+        public void Dispose() => Interlocked.Increment(ref _disposeCount);
+    }
 }
