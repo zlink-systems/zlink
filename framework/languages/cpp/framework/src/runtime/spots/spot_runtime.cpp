@@ -3522,14 +3522,16 @@ spot_handler_registry_t::invoke_erased (spot_handler_kind_t kind,
     }
     std::ostringstream error_message;
     error_message << "spot handler is not registered: packet='" << packet_name << "', topic='"
-                  << topic << "', actor_type='" << actor_type.name () << "', registered=[";
+                  << topic << "', kind=" << static_cast<int> (kind) << ", actor_type='"
+                  << actor_type.name () << "', registered=[";
     for (std::size_t index = 0; index < _state->handlers.size (); ++index) {
         if (index > 0) {
             error_message << "; ";
         }
         const auto &descriptor = _state->handlers[index];
         error_message << "packet='" << descriptor.packet_name << "', topic='" << descriptor.topic
-                      << "', actor_type='" << descriptor.actor_type.name () << "'";
+                      << "', kind=" << static_cast<int> (descriptor.kind) << ", actor_type='"
+                      << descriptor.actor_type.name () << "'";
     }
     error_message << "]";
     return task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
@@ -7497,10 +7499,62 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
                 ? current->second == *admitted_message_follow_target
                 : !_state->actor_transfer_coordinator.has_message_follow_route (
                     key);
+            if (!targets_current_authority
+                && current != _state->actor_authority_fences.end ()) {
+                //  Spec 21 §6.3: a followed message is deliverable when the
+                //  new owner's AuthorityOwnerGeneration is greater than the
+                //  edge value the previous owner retained at move
+                //  completion — forwarding can traverse several moves, so
+                //  the final owner's fence is ordered against, not equal
+                //  to, the followed edge's fence. The object incarnation
+                //  and the fenced target node must still match exactly.
+                const auto &m = *admitted_message_follow_target;
+                targets_current_authority =
+                  current->second.actor_id == m.actor_id
+                  && current->second.object_generation == m.object_generation
+                  && current->second.target_node_routing_id
+                       == m.target_node_routing_id
+                  && current->second.authority_owner_generation
+                       > m.authority_owner_generation;
+            }
         }
         if (!targets_current_authority
             && !matches_actor_message_follow_source (
               actor_ref, *admitted_message_follow_target)) {
+            {
+                //  spec 26 Detailed-scope diagnostics: surface both fence
+                //  tuples so a rejected Follow admission is attributable.
+                //  The message fence rides in `topic`, the locally recorded
+                //  fence in `channel_name`.
+                std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+                const auto current = _state->actor_authority_fences.find (key);
+                const auto &m = *admitted_message_follow_target;
+                const auto describe =
+                  [] (const runtime::protocol::actor_route_fence_t &fence) {
+                      return fence.actor_id + "/og="
+                             + std::to_string (fence.object_generation) + "/ng="
+                             + std::to_string (fence.target_node_generation)
+                             + "/ag="
+                             + std::to_string (fence.authority_owner_generation)
+                             + "/lg="
+                             + std::to_string (fence.owner_lease_generation);
+                  };
+                detail::message_flow_tracer_t (_state->dispatch)
+                  .trace (message_flow_outcome_t::error, [&] {
+                      auto event = message_flow_event_t{
+                        message_flow_outcome_t::error,
+                        dispatch_error_surface_t::spot_actor,
+                        dispatch_message_kind_t::actor_send,
+                        std::string ("follow_fence_rejected"),
+                        current == _state->actor_authority_fences.end ()
+                          ? std::string ("local=none")
+                          : "local=" + describe (current->second),
+                        "message=" + describe (m)};
+                      event.actor_id =
+                        std::string (actor_ref.actor_id ().value ());
+                      return event;
+                  });
+            }
             co_return result_t<std::optional<zlink::message_t>>::failure (
               framework_error_kind_t::unavailable,
               "Actor Message Follow target fence is not admitted");
@@ -7562,6 +7616,22 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
                     ? current->second == *admitted_message_follow_target
                     : !_state->actor_transfer_coordinator
                          .has_message_follow_route (key);
+                if (!targets_current_authority
+                    && current != _state->actor_authority_fences.end ()) {
+                    //  Spec 21 §6.3: the follow chain admits at the final
+                    //  owner when its AuthorityOwnerGeneration exceeds the
+                    //  followed edge's value for the same incarnation and
+                    //  fenced target node (see the primary admission above).
+                    const auto &m = *admitted_message_follow_target;
+                    targets_current_authority =
+                      current->second.actor_id == m.actor_id
+                      && current->second.object_generation
+                           == m.object_generation
+                      && current->second.target_node_routing_id
+                           == m.target_node_routing_id
+                      && current->second.authority_owner_generation
+                           > m.authority_owner_generation;
+                }
             }
         }
         const bool targets_committed_source =
@@ -9768,8 +9838,18 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
               actor_packet && actor_transfer_in_progress (actor);
             if (follows_committed_source && !follows_in_flight_source
                 && _state->actor_message_follow_relay) {
+                //  The wire record kind is the authoritative send/request
+                //  semantic; the envelope header may carry a request kind
+                //  for a one-way relay. Stamp the relay-kind marker so the
+                //  follow target dispatches the handler registered for the
+                //  actual semantic (actor_send vs actor_request).
+                auto follow_header = header.value ();
+                if (record.kind == service::record_kind_t::actor_send) {
+                    follow_header.metadata.insert_or_assign (
+                      "__zlink.actorRelayKind", "send");
+                }
                 return _state->actor_message_follow_relay (
-                  actor, header.value (), body.value (), std::chrono::seconds (30),
+                  actor, follow_header, body.value (), std::chrono::seconds (30),
                   record.source_node_rid,
                   record.actor_route.value_or (runtime::protocol::actor_route_fence_t{}),
                   record.message_follow_hop_count,
@@ -9820,9 +9900,15 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
                 relay_metadata.values[std::string (detail::actor_handoff_hop_count_key)] =
                   std::to_string (record.message_follow_hop_count);
             }
+            //  The wire record kind is authoritative for the send/request
+            //  semantic; a bound-session one-way relay can carry a request
+            //  envelope header while its record kind is actor_send.
             return relay_actor_packet (actor, std::move (actor_context),
-                                       semantic_send ? stream_message_kind_t::send
-                                                     : stream_message_kind_t::request,
+                                       semantic_send
+                                           || record.kind
+                                                == service::record_kind_t::actor_send
+                                         ? stream_message_kind_t::send
+                                         : stream_message_kind_t::request,
                                        header.value ().message_name, body.value (), services,
                                        serializers, std::move (relay_metadata),
                                        targets_current_authority && record.actor_route

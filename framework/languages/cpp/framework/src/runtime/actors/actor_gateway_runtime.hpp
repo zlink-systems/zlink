@@ -74,6 +74,11 @@ struct actor_bound_session_route_t
     std::uint64_t binding_generation = 0;
     std::uint64_t binding_token = 0;
     std::uint64_t session_sequence = 0;
+    //  A relocation-target route does not know the source's relay
+    //  high-water (command 43/44 carry no numeric high-water by spec 20).
+    //  The first positive sequence admitted on the exact route becomes the
+    //  baseline; ordinary initial binds keep the known baseline 0.
+    bool session_sequence_baseline_unknown = false;
 
     friend bool operator== (const actor_bound_session_route_t &,
                             const actor_bound_session_route_t &) = default;
@@ -276,7 +281,8 @@ class actor_gateway_runtime_t
                                 std::uint64_t owner_lease_generation = 0,
                                 std::uint64_t binding_generation = 0,
                                 std::uint64_t binding_token = 0,
-                                std::uint64_t session_sequence = 0);
+                                std::uint64_t session_sequence = 0,
+                                bool session_sequence_baseline_unknown = false);
     result_t<actor_bound_session_transition_t>
     record_bound_session_route_transition (const actor_ref_t &actor_ref,
                                            actor_bound_session_route_t route);

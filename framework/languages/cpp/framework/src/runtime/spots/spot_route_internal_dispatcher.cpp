@@ -297,9 +297,14 @@ bool spot_route_internal_dispatcher_t::dispatch_request_async (
                   request.actor_node_generation,
                   request.actor_authority_owner_generation,
                   request.actor_owner_lease_generation});
+            //  Read (and consume) the relay-kind marker BEFORE the call:
+            //  evaluating it inside the argument list is unsequenced with
+            //  the move of `metadata` into the by-value parameter, so the
+            //  marker could be read from a moved-from map.
+            const auto relay_kind = actor_relay_kind_from_metadata (metadata);
             auto relayed = runtime.manager ().relay_actor_packet (
               actor_ref, actor_gateway.actor_context (actor_ref),
-              actor_relay_kind_from_metadata (metadata), request.packet_name_value,
+              relay_kind, request.packet_name_value,
               zlink::message_t::from (request.payload), services, *_serializers,
               std::move (metadata), follow_target ? &*follow_target : nullptr);
             detail::observe_task_completion (
@@ -642,7 +647,8 @@ void spot_route_internal_dispatcher_t::dispatch_actor_commit_request (
                     committed_authority_owner_generation,
                     request.target_owner_lease_generation,
                     route.binding_generation, 0,
-                    0);
+                    /*session_sequence=*/0,
+                    /*session_sequence_baseline_unknown=*/true);
                 if (!staged) {
                     complete (detail::propagate_failure<
                       zlink::message_t> (
@@ -795,7 +801,8 @@ void spot_route_internal_dispatcher_t::dispatch_actor_commit_request (
                               target_authority_owner_generation,
                               target_owner_lease_generation,
                               route.binding_generation, 0,
-                              0);
+                              /*session_sequence=*/0,
+                              /*session_sequence_baseline_unknown=*/true);
                           if (!recorded) {
                               complete (detail::propagate_failure<
                                 zlink::message_t> (

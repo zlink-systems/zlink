@@ -1343,6 +1343,10 @@ merge_bound_session_route_fence (const actor_bound_session_route_t &current,
         next.binding_token = current.binding_token;
     next.session_sequence = std::max (
       current.session_sequence, next.session_sequence);
+    //  A known baseline survives a re-registration that arrives without one.
+    next.session_sequence_baseline_unknown =
+      next.session_sequence_baseline_unknown
+      && current.session_sequence_baseline_unknown;
     return next;
 }
 
@@ -1372,12 +1376,31 @@ make_session_owner_sink (
           {
               const std::lock_guard lock (state->mutex);
               const auto found = state->actors_by_id.find (actor_id);
+              //  The fence guards against the route being REPLACED between
+              //  staging and send. Relay progress (session_sequence and its
+              //  baseline flag) advances on the same route while it stays
+              //  current, so identity/authority fields alone participate.
+              const auto same_route_fence =
+                [] (const actor_bound_session_route_t &live,
+                    const actor_bound_session_route_t &staged) {
+                    return live.node_rid.to_bytes ()
+                             == staged.node_rid.to_bytes ()
+                           && live.session_rid == staged.session_rid
+                           && live.object_generation == staged.object_generation
+                           && live.node_generation == staged.node_generation
+                           && live.authority_owner_generation
+                                == staged.authority_owner_generation
+                           && live.owner_lease_generation
+                                == staged.owner_lease_generation
+                           && live.binding_generation == staged.binding_generation
+                           && live.binding_token == staged.binding_token;
+                };
               if (found == state->actors_by_id.end ()
                   || !found->second.bound
                   || found->second.disconnected
                   || !found->second.bound_session_route
-                  || *found->second.bound_session_route
-                       != staged_route) {
+                  || !same_route_fence (*found->second.bound_session_route,
+                                        staged_route)) {
                   return task_t<void> (result_t<void>::failure (
                     framework_error_kind_t::not_configured,
                     "bound Session route fence changed before send"));
@@ -1855,13 +1878,15 @@ actor_gateway_runtime_t::record_bound_session_route (const actor_ref_t &actor_re
                                                      std::uint64_t owner_lease_generation,
                                                      std::uint64_t binding_generation,
                                                      std::uint64_t binding_token,
-                                                     std::uint64_t session_sequence)
+                                                     std::uint64_t session_sequence,
+                                                     bool session_sequence_baseline_unknown)
 {
     auto transition = record_bound_session_route_transition (
       actor_ref, actor_bound_session_route_t{std::move (node_rid), std::move (session_rid),
                                              actor_ref.object_generation (), node_generation,
                                              authority_owner_generation, owner_lease_generation,
-                                             binding_generation, binding_token, session_sequence});
+                                             binding_generation, binding_token, session_sequence,
+                                             session_sequence_baseline_unknown});
     if (!transition) {
         return result_t<void>::failure (transition.error_kind (),
                                         transition.error ()
@@ -1973,6 +1998,15 @@ actor_gateway_runtime_t::admit_session_relay (const actor_ref_t &actor_ref,
         return detail::propagate_failure<void> (
           exact, "bound Session relay admission failed");
     auto &route = *exact.value ();
+    if (route.session_sequence_baseline_unknown) {
+        //  Relocation-target routes learn the source's relay high-water from
+        //  the first sequence admitted on the exact route (spec 20 keeps
+        //  command 43/44 free of numeric high-water); afterwards the strict
+        //  next check applies.
+        route.session_sequence = session_sequence;
+        route.session_sequence_baseline_unknown = false;
+        return result_t<void>::success ();
+    }
     if (route.session_sequence == std::numeric_limits<std::uint64_t>::max ()
         || session_sequence != route.session_sequence + 1) {
         return result_t<void>::failure (framework_error_kind_t::invalid_operation,
@@ -2004,7 +2038,8 @@ actor_gateway_runtime_t::begin_session_relay_completion (
           exact, "bound Session relay completion admission failed");
     }
     const auto &route = *exact.value ();
-    if (session_sequence != route.session_sequence
+    if (!route.session_sequence_baseline_unknown
+        && session_sequence != route.session_sequence
         && (route.session_sequence
               == std::numeric_limits<std::uint64_t>::max ()
             || session_sequence != route.session_sequence + 1)) {
@@ -2059,6 +2094,12 @@ actor_gateway_runtime_t::complete_session_relay (const actor_ref_t &actor_ref,
         return result_t<void>::success ();
     }
     auto &route = *exact.value ();
+    if (route.session_sequence_baseline_unknown) {
+        route.session_sequence = session_sequence;
+        route.session_sequence_baseline_unknown = false;
+        _state->active_session_relay_completions.erase (active);
+        return result_t<void>::success ();
+    }
     if (session_sequence == route.session_sequence) {
         _state->active_session_relay_completions.erase (active);
         return result_t<void>::success ();
