@@ -4295,7 +4295,12 @@ test('actor packet target keeps a Ready snapshot across equivalent routing-id in
   assert.strictEqual(store.targetForState('actor-ready-fence'), target);
 });
 
-test('runtime host joined Spot route keeps remote owner node when actor ref is local to a relay node', () => {
+//  Spec 12 — a direct payload to an existing Ready Spot uses the Location
+//  Store's CURRENT owner route. A cached packet target that still points at
+//  the previous Entry membership must not be combined with the new room
+//  spot id: that fabricated route has no complete Ready authority fence and
+//  the next request fails the fence check instead of re-resolving.
+test('runtime host joined Spot route invalidates a stale entry target instead of fabricating a room route', () => {
   const host = new framework.ZLinkFrameworkRuntimeHost({
     registration: framework.createFrameworkRegistration()
   });
@@ -4326,10 +4331,7 @@ test('runtime host joined Spot route keeps remote owner node when actor ref is l
   });
 
   const target = host.boundSessionRelay.actorPackets.actorPacketTargetForState('actor-remote-room');
-  assert.equal(target.routerChannelId, 'room.route');
-  assert.equal(target.targetNodeRid, 'room-owner-node');
-  assert.equal(String(target.spotId), 'room-spot');
-  assert.equal(target.spotKind, framework.ZLinkSpotKind.User);
+  assert.equal(target, undefined);
 });
 
 test('runtime host actor packet target uses spot mesh when route mesh also exists', () => {

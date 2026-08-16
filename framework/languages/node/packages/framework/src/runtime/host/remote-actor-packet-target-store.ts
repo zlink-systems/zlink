@@ -100,15 +100,16 @@ export class ZLinkRemoteActorPacketTargetStore {
     }
     const spotId = state?.spotId;
     if (spotId !== undefined && state?.remoteActorPacketTarget !== undefined) {
-      return {
-        routerChannelId: state.remoteActorPacketTarget.routerChannelId,
-        targetNodeRid: state.remoteActorPacketTarget.targetNodeRid,
-        spotId: validateSpotId(spotId),
-        spotKind: ZLinkSpotKind.User,
-        ...(state.spotGeneration === undefined
-          ? {}
-          : { targetSpotGeneration: state.spotGeneration })
-      };
+      //  The cached packet target refers to a different Spot than the
+      //  actor's current membership (the actor just moved Entry -> User).
+      //  Combining the stale target's node with the new Spot id fabricates
+      //  a route with no complete Ready authority fence, and the next
+      //  direct request then fails the fence check instead of resolving
+      //  the current owner route (spec 12 §direct payload uses the
+      //  Location Store's current owner route; spec 32:87 — an unavailable
+      //  route is Unavailable, not a fabricated hit). Publish no hint so
+      //  the source clears its cache and re-resolves completely.
+      return undefined;
     }
     const actorRef = state?.nativeActorRef as ActorRef | undefined;
     const targetNodeRid = actorRef?.nodeRid as RoutingId | undefined
