@@ -1428,10 +1428,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const id = { high: 1n, low };
     void promise.then(
       result => this.enqueueCompletion(id, operationKind, result),
-      () => this.enqueueCompletion(id, operationKind, {
-        terminalResult: RequestResult.NotConnected,
-        failureCode: 0
-      })
+      error => this.enqueueCompletion(
+        id, operationKind, genericOperationFailure(error))
     );
     return id;
   }
@@ -2232,6 +2230,22 @@ function readyDomain(domain: ServiceMailboxDomain): number {
   return domain === 'infrastructure'
     ? ReadyDomain.Infrastructure
     : ReadyDomain.Application;
+}
+
+/**
+ * Classifies a generic node/channel request rejection into a completion
+ * terminal. Spec 32-framework-error-model:91-92 — a reply that could not be
+ * decoded (ServiceWireProtocolError from the reply parser) is a protocol
+ * failure, not connection loss; only genuine transport rejections collapse to
+ * NotConnected.
+ */
+export function genericOperationFailure(error: unknown): RawServiceRequestResult {
+  return {
+    terminalResult: error instanceof ServiceWireProtocolError
+      ? RequestResult.ProtocolError
+      : RequestResult.NotConnected,
+    failureCode: 0
+  };
 }
 
 function statefulOperationFailure(error: unknown): RawServiceRequestResult {

@@ -49,3 +49,29 @@ test('ClientServer request terminals map to the spec public kind (not collapsed 
     );
   }
 });
+
+test('malformed reply rejections synthesize ProtocolError, not NotConnected (round-12)', () => {
+  //  Spec 32-framework-error-model:58-60 + 91-92 — a reply that could not be
+  //  decoded while awaiting a node/channel request must surface publicly as
+  //  ProtocolError; only genuine transport rejections collapse to
+  //  NotConnected (public Unavailable). The generic completion path formerly
+  //  discarded the decode error and synthesized NotConnected for every
+  //  rejection.
+  const {
+    genericOperationFailure
+  } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+  const {
+    ServiceWireProtocolError
+  } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
+
+  assert.deepEqual(
+    genericOperationFailure(new ServiceWireProtocolError('Invalid reply parts.')),
+    { terminalResult: RequestResult.ProtocolError, failureCode: 0 }
+  );
+  //  Genuine transport rejection stays NotConnected (-> public Unavailable via
+  //  the terminal table pinned above).
+  assert.deepEqual(
+    genericOperationFailure(new Error('socket closed')),
+    { terminalResult: RequestResult.NotConnected, failureCode: 0 }
+  );
+});
