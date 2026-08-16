@@ -1369,6 +1369,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 ActorId: actor.Context.ActorId));
         var reply = DecodeNativeJoinReply(
             joinResult.Result,
+            joinResult.FailureErrno,
             replyParts,
             actor.Context.ActorId,
             targetSpotId);
@@ -1389,6 +1390,7 @@ internal sealed class ZLinkActorRemoteJoiner(
 
     private ZLinkMessage DecodeNativeJoinReply(
         RequestResult result,
+        int failureErrno,
         IReadOnlyList<Message> replyParts,
         string actorId,
         string spotId)
@@ -1396,9 +1398,14 @@ internal sealed class ZLinkActorRemoteJoiner(
         try
         {
             if (result != RequestResult.Ok)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.NotFound,
-                    $"Actor join was rejected for '{actorId}' to SPOT '{spotId}'.");
+                //  Classify the join terminal via the shared ownership-aware mapper
+                //  (fine code refines the coarse terminal) instead of collapsing
+                //  every non-OK terminal to NotFound (spec 32-framework-error-model:
+                //  81-118), matching ZLinkNativeActorJoinOperation.
+                throw ZLinkRequestFailureMapper.CreateCompletionException(
+                    result,
+                    failureErrno,
+                    $"Actor join for '{actorId}' to SPOT '{spotId}'");
 
             if (replyParts.Count == 0)
                 throw new InvalidOperationException(

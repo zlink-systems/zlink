@@ -1051,7 +1051,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             completion?.Actor.ToBackend() ?? fallback,
             completion?.Location.SpotId ?? string.Empty,
             completion?.Location.MembershipEpoch ?? 0,
-            0);
+            0,
+            record.FailureErrno);
     }
 
     private static ZLinkBackendActorJoinEntrySpotResult BuildEntrySpotJoinResult(
@@ -1065,7 +1066,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             targetNodeRid,
             completion?.Location.SpotId ?? string.Empty,
             completion?.Location.MembershipEpoch ?? 0,
-            0);
+            0,
+            record.FailureErrno);
     }
 
     public async ValueTask DestroyActorAsync(
@@ -1211,8 +1213,12 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
                 }
 
                 ZLinkMessageParts.DisposeAll(replyParts);
+                //  Application terminal from an actor request reply — carry the
+                //  fine failure code so the actor client's classifier can refine
+                //  it (spec 32-framework-error-model:81-118).
                 completion.TrySetException(
-                    new ZlinkRequestException((ZlinkRequestException.ErrorCode)(int)result));
+                    new Messaging.ZLinkRequestTerminalException(
+                        result, record.FailureErrno));
             },
             id => _node.RequestToActor(
                 ToNativeActor(actor), parts, id, timeout ?? default));
@@ -1473,42 +1479,12 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
         return MapFineFailureCode(failureErrno) ?? MapTerminalResult(terminalResult);
     }
 
-    private static ZLinkFrameworkErrorKind? MapFineFailureCode(int failureErrno)
-    {
-        return (ServiceWireConstants.FrameworkErrorCode)failureErrno switch
-        {
-            ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound
-                or ServiceWireConstants.FrameworkErrorCode.HandlerNotFound
-                or ServiceWireConstants.FrameworkErrorCode.RequestTargetNotFound =>
-                ZLinkFrameworkErrorKind.NotFound,
-            ServiceWireConstants.FrameworkErrorCode.ActorAlreadyExists =>
-                ZLinkFrameworkErrorKind.AlreadyExists,
-            ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch
-                or ServiceWireConstants.FrameworkErrorCode.SpotTypeMismatch =>
-                ZLinkFrameworkErrorKind.TypeMismatch,
-            ServiceWireConstants.FrameworkErrorCode.ActorCreateRejected
-                or ServiceWireConstants.FrameworkErrorCode.RequestRejected =>
-                ZLinkFrameworkErrorKind.Rejected,
-            ServiceWireConstants.FrameworkErrorCode.PayloadDecodeFailed
-                or ServiceWireConstants.FrameworkErrorCode.RequestProtocolError =>
-                ZLinkFrameworkErrorKind.ProtocolError,
-            ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
-                or ServiceWireConstants.FrameworkErrorCode.RouteNotConnected
-                or ServiceWireConstants.FrameworkErrorCode.WorkerQueueFull
-                or ServiceWireConstants.FrameworkErrorCode.SpotMoving =>
-                ZLinkFrameworkErrorKind.Unavailable,
-            ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale =>
-                ZLinkFrameworkErrorKind.InvalidOperation,
-            ServiceWireConstants.FrameworkErrorCode.RelocationDataLost =>
-                ZLinkFrameworkErrorKind.DataLost,
-            ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut =>
-                ZLinkFrameworkErrorKind.DeadlineExceeded,
-            ServiceWireConstants.FrameworkErrorCode.RequestFailed
-                or ServiceWireConstants.FrameworkErrorCode.WorkerFailed =>
-                ZLinkFrameworkErrorKind.InternalFailure,
-            _ => null,
-        };
-    }
+    //  Single source of truth for the fine failure-code table lives in
+    //  ZLinkRequestFailureMapper so the join/create/destroy/close classification
+    //  here and the remote request-reply classification there cannot drift
+    //  (spec 32-framework-error-model).
+    private static ZLinkFrameworkErrorKind? MapFineFailureCode(int failureErrno) =>
+        Messaging.ZLinkRequestFailureMapper.ClassifyFineFailure(failureErrno);
 
     //  Coarse remote-reply terminal fallback (spec 32:99-103): a terminal-only
     //  conflict/busy is the remote target's owner/queue state -> Unavailable.

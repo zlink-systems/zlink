@@ -82,6 +82,7 @@ internal sealed class ZLinkNativeActorJoinOperation(
                 ActorId: actor.Context.ActorId));
         var reply = DecodeReply(
             joinResult.Result,
+            joinResult.FailureErrno,
             replyParts,
             actor.Context.ActorId,
             targetSpotId);
@@ -103,6 +104,7 @@ internal sealed class ZLinkNativeActorJoinOperation(
 
     private ZLinkMessage DecodeReply(
         RequestResult result,
+        int failureErrno,
         IReadOnlyList<Message> replyParts,
         string actorId,
         string spotId)
@@ -112,10 +114,12 @@ internal sealed class ZLinkNativeActorJoinOperation(
             if (result != RequestResult.Ok)
                 //  Classify the join terminal via the shared request mapper
                 //  (Terminated -> ShuttingDown, TimedOut -> DeadlineExceeded,
-                //  Conflict/Busy -> Unavailable, ...) instead of collapsing every
-                //  non-OK terminal to NotFound (spec 32-framework-error-model:81).
+                //  Conflict/Busy -> Unavailable, fine code refines further ...)
+                //  instead of collapsing every non-OK terminal to NotFound
+                //  (spec 32-framework-error-model:81-118).
                 throw ZLinkRequestFailureMapper.CreateCompletionException(
                     result,
+                    failureErrno,
                     $"Actor join for '{actorId}' to SPOT '{spotId}'");
 
             if (replyParts.Count == 0)

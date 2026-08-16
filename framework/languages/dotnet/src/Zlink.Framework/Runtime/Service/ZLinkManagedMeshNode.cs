@@ -3297,8 +3297,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (completion.Result != RequestResult.Ok)
             {
                 DisposeParts(completion.Parts);
-                throw new ZlinkRequestException(
-                    (ZlinkRequestException.ErrorCode)completion.Result);
+                //  Application terminal from a spot completion — carry the fine
+                //  failure code so the source-side classifier can refine it
+                //  (spec 32-framework-error-model:81-118).
+                throw new ZLinkRequestTerminalException(
+                    completion.Result,
+                    completion.FailureErrno);
             }
             return completion.Parts;
         }
@@ -4124,7 +4128,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (operation.AwaitedCompletion is { } awaitedCompletion)
         {
             if (!awaitedCompletion.TrySetResult(
-                    new ManagedRequestCompletion(result, parts)))
+                    new ManagedRequestCompletion(result, parts, failure)))
                 DisposeParts(parts);
             return;
         }
@@ -4220,7 +4224,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (!awaitedCompletion.TrySetResult(
                     new ManagedRequestCompletion(
                         (RequestResult)relay.TerminalResult,
-                        payload)))
+                        payload,
+                        checked((int)relay.FailureCode))))
                 ZLinkMessageParts.DisposeAll(payload);
         }
         else
@@ -7541,8 +7546,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 throw new ZlinkRequestException(
                     ZlinkRequestException.ErrorCode.ProtocolError);
             if (reply.TerminalResult != (int)RequestResult.Ok)
-                throw new ZlinkRequestException(
-                    (ZlinkRequestException.ErrorCode)reply.TerminalResult);
+                //  Application terminal from a node/channel reply header — carry the
+                //  fine failure code for ownership-aware refinement. (The two
+                //  ProtocolError throws in this method are local decode failures
+                //  with no fine code and stay plain ZlinkRequestExceptions.)
+                throw new ZLinkRequestTerminalException(
+                    (RequestResult)reply.TerminalResult,
+                    checked((int)reply.FailureCode));
             if (replyParts.Count != 2
                 || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
                     replyParts[1].AsReadOnlyMemory(), out var decoded))
@@ -9267,7 +9277,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private readonly record struct ManagedRequestCompletion(
         RequestResult Result,
-        IReadOnlyList<Message> Parts);
+        IReadOnlyList<Message> Parts,
+        int FailureErrno = 0);
 
     private readonly record struct RelocationReplyTerminalKey(
         ulong ReplyRouteId,

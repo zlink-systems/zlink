@@ -226,6 +226,13 @@ internal sealed class ZLinkSpotOutboundTransport(
                     channelName, parts, SendFlags.None, timeout, cancellationToken, metadata)
                 .ConfigureAwait(false);
         }
+        catch (ZLinkRequestTerminalException terminal)
+        {
+            throw ZLinkRequestFailureMapper.CreateCompletionException(
+                terminal.Result,
+                terminal.FailureErrno,
+                $"Channel request to '{channelName}' failed with result '{terminal.Result}'.");
+        }
         catch (ZlinkRequestException failure)
         {
             throw ZLinkRequestFailureMapper.CreateChannelCompletionException(
@@ -270,6 +277,13 @@ internal sealed class ZLinkSpotOutboundTransport(
                     cancellationToken,
                     metadata)
                 .ConfigureAwait(false);
+        }
+        catch (ZLinkRequestTerminalException terminal)
+        {
+            throw ZLinkRequestFailureMapper.CreateCompletionException(
+                terminal.Result,
+                terminal.FailureErrno,
+                $"SPOT request to '{targetSpotId}' on node '{targetNodeRid}' failed with result '{terminal.Result}'.");
         }
         catch (ZlinkRequestException failure)
         {

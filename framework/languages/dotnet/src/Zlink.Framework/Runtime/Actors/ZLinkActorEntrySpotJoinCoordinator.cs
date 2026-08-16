@@ -105,12 +105,13 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
                 SourceRid: spotNodeRid.ToString(),
                 ActorId: actor.Context.ActorId));
 
-        var reply = DecodeEntrySpotJoinReply(result.Result, replyParts, actor.Context.ActorId, spotNodeRid);
+        var reply = DecodeEntrySpotJoinReply(
+            result.Result,
+            result.FailureErrno,
+            replyParts,
+            actor.Context.ActorId,
+            spotNodeRid);
         var accepted = result.JoinResultCode == 0;
-        if (result.Result != RequestResult.Ok)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Actor entry SPOT join failed for '{actor.Context.ActorId}' with '{result.Result}'.");
 
         if (accepted)
         {
@@ -367,6 +368,7 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
 
     private ZLinkMessage DecodeEntrySpotJoinReply(
         RequestResult result,
+        int failureErrno,
         IReadOnlyList<Message> replyParts,
         string actorId,
         RoutingId spotNodeRid)
@@ -374,9 +376,14 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
         try
         {
             if (result != RequestResult.Ok)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.NotFound,
-                    $"Actor entry SPOT join was rejected for '{actorId}' to node '{spotNodeRid}'.");
+                //  Classify the entry-spot join terminal via the shared
+                //  ownership-aware mapper (fine code refines the coarse terminal)
+                //  instead of collapsing every non-OK terminal to NotFound
+                //  (spec 32-framework-error-model:81-118).
+                throw ZLinkRequestFailureMapper.CreateCompletionException(
+                    result,
+                    failureErrno,
+                    $"Actor entry SPOT join for '{actorId}' to node '{spotNodeRid}'");
 
             if (replyParts.Count == 0) return ZLinkMessage.Empty;
 

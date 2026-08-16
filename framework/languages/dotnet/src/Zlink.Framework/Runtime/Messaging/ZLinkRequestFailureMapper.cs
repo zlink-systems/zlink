@@ -1,3 +1,5 @@
+using Systems.Zlink.Framework.Runtime.Protocol;
+
 namespace Zlink.Framework.Runtime.Messaging;
 
 internal static class ZLinkRequestFailureMapper
@@ -7,6 +9,78 @@ internal static class ZLinkRequestFailureMapper
         string operationName)
     {
         return CreateCompletionException(result, operationName);
+    }
+
+    //  Ownership-aware remote-reply mapper. A remote request reply may carry a
+    //  Framework fine failure code (ServiceWireConstants.FrameworkErrorCode) that
+    //  refines the coarse terminal (spec 32-framework-error-model:81-118). This
+    //  overload is REMOTE-only, exactly like the string-only overload below: every
+    //  caller translates a peer reply header (C++ reply_header_exception), never a
+    //  source-owned bounded resource. When the reply carried no fine code (errno 0
+    //  = None) or an unrecognised one, it falls through to the coarse terminal map,
+    //  which preserves Backpressured(113)+None -> CapacityExceeded (placement/
+    //  admission capacity) and Conflict/Busy -> Unavailable (remote owner/queue).
+    public static Exception CreateCompletionException(
+        RequestResult result,
+        int failureErrno,
+        string operationName)
+    {
+        if (ClassifyFineFailure(failureErrno) is not { } kind)
+            return CreateCompletionException(result, operationName);
+        return new ZLinkFrameworkException(
+            kind,
+            $"{operationName} failed with result '{result}' "
+            + $"(framework error code {failureErrno}).",
+            innerException: CreateRequestException(result));
+    }
+
+    //  Fine failure-code table shared with ZLinkBackendSpotNodeWrapper's
+    //  join/create/destroy/close classification so both surfaces stay in lockstep
+    //  (spec 32-framework-error-model). Returns null for None(0) or any code with
+    //  no fine refinement, leaving the coarse terminal to classify.
+    internal static ZLinkFrameworkErrorKind? ClassifyFineFailure(int failureErrno)
+    {
+        return (ServiceWireConstants.FrameworkErrorCode)failureErrno switch
+        {
+            ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound
+                or ServiceWireConstants.FrameworkErrorCode.HandlerNotFound
+                or ServiceWireConstants.FrameworkErrorCode.RequestTargetNotFound =>
+                ZLinkFrameworkErrorKind.NotFound,
+            ServiceWireConstants.FrameworkErrorCode.ActorAlreadyExists =>
+                ZLinkFrameworkErrorKind.AlreadyExists,
+            ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch
+                or ServiceWireConstants.FrameworkErrorCode.SpotTypeMismatch =>
+                ZLinkFrameworkErrorKind.TypeMismatch,
+            //  actorSessionNotBound(8): a bound-session precondition was violated,
+            //  an invalid operation in the current state — not NotFound/Rejected
+            //  (spec 32-framework-error-model; matches the Java reference table).
+            ServiceWireConstants.FrameworkErrorCode.ActorSessionNotBound =>
+                ZLinkFrameworkErrorKind.InvalidOperation,
+            ServiceWireConstants.FrameworkErrorCode.ActorCreateRejected
+                or ServiceWireConstants.FrameworkErrorCode.RequestRejected =>
+                ZLinkFrameworkErrorKind.Rejected,
+            ServiceWireConstants.FrameworkErrorCode.PayloadDecodeFailed
+                or ServiceWireConstants.FrameworkErrorCode.RequestProtocolError =>
+                ZLinkFrameworkErrorKind.ProtocolError,
+            //  workerQueueFull(18) on a remote reply is the target's queue state,
+            //  a resource this runtime does not own -> Unavailable, not
+            //  CapacityExceeded (spec 32-framework-error-model:99-108).
+            ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
+                or ServiceWireConstants.FrameworkErrorCode.RouteNotConnected
+                or ServiceWireConstants.FrameworkErrorCode.WorkerQueueFull
+                or ServiceWireConstants.FrameworkErrorCode.SpotMoving =>
+                ZLinkFrameworkErrorKind.Unavailable,
+            ServiceWireConstants.FrameworkErrorCode.SpotGenerationStale =>
+                ZLinkFrameworkErrorKind.InvalidOperation,
+            ServiceWireConstants.FrameworkErrorCode.RelocationDataLost =>
+                ZLinkFrameworkErrorKind.DataLost,
+            ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut =>
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+            ServiceWireConstants.FrameworkErrorCode.RequestFailed
+                or ServiceWireConstants.FrameworkErrorCode.WorkerFailed =>
+                ZLinkFrameworkErrorKind.InternalFailure,
+            _ => null,
+        };
     }
 
     public static Exception CreateCompletionException(

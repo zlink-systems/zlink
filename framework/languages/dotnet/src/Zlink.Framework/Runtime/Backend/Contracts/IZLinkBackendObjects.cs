@@ -68,7 +68,11 @@ internal readonly record struct ZLinkBackendActorJoinResult(
     ZLinkBackendActorRef Actor,
     string JoinedSpotId,
     ulong JoinEpoch,
-    uint Flags);
+    uint Flags,
+    //  Fine failure code (ServiceWireConstants.FrameworkErrorCode) from the join
+    //  reply header, 0 (None) on success or when the reply carried no fine code.
+    //  Defaulted so existing/test constructors need not thread it.
+    int FailureErrno = 0);
 
 internal readonly record struct ZLinkBackendActorJoinEntrySpotResult(
     RequestResult Result,
@@ -77,7 +81,8 @@ internal readonly record struct ZLinkBackendActorJoinEntrySpotResult(
     RoutingId TargetNodeRid,
     string JoinedSpotId,
     ulong JoinEpoch,
-    uint Flags);
+    uint Flags,
+    int FailureErrno = 0);
 
 internal delegate void ActorJoinCallback(
     ZLinkBackendActorJoinResult result,

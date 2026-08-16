@@ -252,6 +252,10 @@ internal sealed class ZLinkActorClient(
         {
             throw MapSubmitException(error, "Actor request");
         }
+        catch (ZLinkRequestTerminalException terminal)
+        {
+            throw MapRequestException(terminal, "Actor request");
+        }
         catch (ZlinkRequestException error)
         {
             throw MapRequestException(error, "Actor request");
@@ -362,6 +366,45 @@ internal sealed class ZLinkActorClient(
                 error),
             _ => ZLinkRequestFailureMapper.CreateCompletionException(
                 (RequestResult)(int)error.Result,
+                operationName)
+        };
+    }
+
+    //  An application terminal from an actor reply may carry a fine failure code.
+    //  When it refines the coarse terminal it wins over the actor-route special
+    //  cases below (spec 32-framework-error-model:81-118). The coarse fallbacks
+    //  keep a synthetic ZlinkRequestException inner so downstream terminal-shape
+    //  probes (e.g. authority-transition conflict) continue to observe it.
+    private static Exception MapRequestException(
+        ZLinkRequestTerminalException terminal,
+        string operationName)
+    {
+        if (ZLinkRequestFailureMapper.ClassifyFineFailure(terminal.FailureErrno) is not null)
+            return ZLinkRequestFailureMapper.CreateCompletionException(
+                terminal.Result,
+                terminal.FailureErrno,
+                operationName);
+        var inner = new ZlinkRequestException(
+            (ZlinkRequestException.ErrorCode)(int)terminal.Result);
+        return terminal.Result switch
+        {
+            RequestResult.NotConnected => new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"{operationName} failed because the target route is not connected.",
+                ZLinkRetryAdvice.RetryAfterBackoff,
+                inner),
+            RequestResult.NotFound => new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"{operationName} failed because the actor route was not found.",
+                innerException: inner),
+            RequestResult.Conflict => new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"{operationName} failed because the actor location is stale.",
+                ZLinkRetryAdvice.RetryAfterBackoff,
+                inner),
+            _ => ZLinkRequestFailureMapper.CreateCompletionException(
+                terminal.Result,
+                terminal.FailureErrno,
                 operationName)
         };
     }

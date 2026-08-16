@@ -19,6 +19,16 @@ internal static class ZLinkRawRequestSubmitter
             return await request(parts, timeout, cancellationToken)
                 .ConfigureAwait(false);
         }
+        catch (ZLinkRequestTerminalException terminal)
+        {
+            throw ZLinkRequestFailureMapper.CreateCompletionException(
+                terminal.Result,
+                terminal.FailureErrno,
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    failureMessage,
+                    terminal.Result));
+        }
         catch (ZlinkRequestException error)
         {
             throw ZLinkRequestFailureMapper.CreateCompletionException(

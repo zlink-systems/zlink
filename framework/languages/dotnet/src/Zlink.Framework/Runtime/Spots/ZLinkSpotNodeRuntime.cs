@@ -596,6 +596,13 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                     metadata)
                 .ConfigureAwait(false);
         }
+        catch (ZLinkRequestTerminalException terminal)
+        {
+            throw ZLinkRequestFailureMapper.CreateCompletionException(
+                terminal.Result,
+                terminal.FailureErrno,
+                $"Node request to '{targetNodeRid}' failed with result '{terminal.Result}'.");
+        }
         catch (ZlinkRequestException failure)
         {
             throw ZLinkRequestFailureMapper.CreateCompletionException(
