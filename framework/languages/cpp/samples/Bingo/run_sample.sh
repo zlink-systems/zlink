@@ -357,6 +357,13 @@ wait_log_contains "play-a API channel readiness" \
   "bingo play api channel ready node=a" "$LOG_DIR/play-a.stdout.log"
 wait_log_contains "play-b API channel readiness" \
   "bingo play api channel ready node=b" "$LOG_DIR/play-b.stdout.log"
+# A remote observer User Spot creation may select the other Play node; do not
+# start the client until the Play-to-Play peer connection is admitted on both
+# sides (spec 07 §7 — a peer is usable only after handshake and admission).
+wait_log_contains "play-a peer route readiness" \
+  "bingo play route ready node=a peer=bingo-play-b" "$LOG_DIR/play-a.stdout.log"
+wait_log_contains "play-b peer route readiness" \
+  "bingo play route ready node=b peer=bingo-play-a" "$LOG_DIR/play-b.stdout.log"
 wait_log_contains "api-a matchmaking route readiness" \
   "bingo route ready node=api-a mesh=matchmaking" "$LOG_DIR/api-a.stdout.log"
 wait_log_contains "api-a room route readiness" \

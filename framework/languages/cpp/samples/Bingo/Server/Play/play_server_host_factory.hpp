@@ -87,6 +87,12 @@ class play_server_host_factory_t
                 });
         });
         if (!auto_stop) {
+            app.add_hosted_service (
+              std::make_unique<play_peer_route_readiness_service_t> (
+                sample_names_t::room_spot_mesh,
+                topology.play_node,
+                "bingo-play-" + (topology.play_node == "a" ? std::string ("b")
+                                                           : std::string ("a"))));
             app.add_hosted_service (std::make_unique<
               play_api_channel_readiness_service_t> (topology.play_node));
         }

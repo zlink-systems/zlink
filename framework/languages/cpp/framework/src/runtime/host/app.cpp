@@ -2223,27 +2223,40 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                     dispatch->inbound_sequence;
               }
               const auto admitted_source = bound_session_source;
-              auto relayed = co_await (stale_route.owner_lease_generation == 0
-                ? application_mesh->relay_application_actor (
-                    routed_actor, header, payload, request_timeout, true,
-                    std::move (bound_session_source))
-                : application_mesh->relay_application_actor (
-                    routed_actor,
-                    runtime::messaging::envelope_header_t{
-                      .kind = header.kind ()
-                                == detail::stream_message_kind_t::send
-                              ? runtime::messaging::message_kind_t::command
-                              : runtime::messaging::message_kind_t::request,
-                      .channel_name = "actor",
-                      .message_name = std::string (header.packet_name ()),
-                      .content_type = std::string (
-                        detail::stream_content_type (header.codec ())),
-                      .metadata = header.metadata ().values ()},
-                    payload, request_timeout,
-                    zlink::routing_id_t::from (std::uint32_t{0}),
-                    stale_route, 0,
-                    runtime::protocol::wire_operation_id_t{}, 0, true,
-                    std::move (bound_session_source)));
+              //  Spec 20-session-actor-dispatch §3/§7 — the admitted ingress
+              //  and relay-sequence fences must complete exactly once even
+              //  when the application handler throws. Skipping the tail
+              //  leaves the owner's recorded sequence behind, so every later
+              //  request on this binding is rejected with "bound Session
+              //  relay completion is not current or next".
+              std::exception_ptr relay_failure;
+              std::optional<zlink::message_t> relayed;
+              try {
+                  relayed = co_await (stale_route.owner_lease_generation == 0
+                    ? application_mesh->relay_application_actor (
+                        routed_actor, header, payload, request_timeout, true,
+                        std::move (bound_session_source))
+                    : application_mesh->relay_application_actor (
+                        routed_actor,
+                        runtime::messaging::envelope_header_t{
+                          .kind = header.kind ()
+                                    == detail::stream_message_kind_t::send
+                                  ? runtime::messaging::message_kind_t::command
+                                  : runtime::messaging::message_kind_t::request,
+                          .channel_name = "actor",
+                          .message_name = std::string (header.packet_name ()),
+                          .content_type = std::string (
+                            detail::stream_content_type (header.codec ())),
+                          .metadata = header.metadata ().values ()},
+                        payload, request_timeout,
+                        zlink::routing_id_t::from (std::uint32_t{0}),
+                        stale_route, 0,
+                        runtime::protocol::wire_operation_id_t{}, 0, true,
+                        std::move (bound_session_source)));
+              }
+              catch (...) {
+                  relay_failure = std::current_exception ();
+              }
               const auto completed = ingress.complete ();
               result_t<void> observed = result_t<void>::success ();
               if (admitted_source) {
@@ -2258,6 +2271,11 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                           framework_error_kind_t::not_found,
                           "bound Session owner identity is unavailable");
               }
+              //  The original application error stays the single terminal;
+              //  fence completion above ran regardless, and its own failure
+              //  is reported only when the relay itself succeeded.
+              if (relay_failure)
+                  std::rethrow_exception (relay_failure);
               if (completed
                   != runtime::stateful::stateful_error_t::none) {
                   co_return result_t<std::optional<zlink::message_t>>::failure (

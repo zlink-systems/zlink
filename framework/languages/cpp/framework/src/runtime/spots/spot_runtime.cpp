@@ -1265,6 +1265,16 @@ result_t<void> update_actor_location_after_move (detail::spot_node_builder_state
         || ::zlink::framework::detail::actor_ref_access_t::empty (actor)) {
         return result_t<void>::success ();
     }
+    //  Spot context teardown can detach `node` while a membership commit is
+    //  still completing on another boundary. Building the location would
+    //  dereference the detached pointer; report a typed lifecycle failure
+    //  instead (spec 15 §3 — membership/lifecycle stay ordered on the Spot
+    //  turn boundary; a detached context means that boundary has ended).
+    if (context.node == nullptr) {
+        return result_t<void>::failure (
+          framework_error_kind_t::unavailable,
+          "actor committed location update raced Spot context teardown");
+    }
     auto location =
       entry ? make_entry_actor_location (actor, context) : make_actor_location (actor, context);
     const auto tracked = state.location_lifecycle->owns_actor (
@@ -6559,6 +6569,41 @@ spot_node_runtime_t::commit_remote_actor_authority (const std::string &transfer_
             target_node_lifecycle_generation,
             current->target.authority_owner_generation,
             static_cast<std::uint64_t> (target_owner.lease_generation)});
+    }
+    //  Spec 28-relocation-flow §8: the cross-node Join moved the Actor owner
+    //  to this target in the same CAS, and the staged transfer skips the
+    //  ordinary local claim. Adopt the committed authority into this node's
+    //  location lifecycle now — otherwise update_actor_location_after_move
+    //  and a later Spot leave renew against an untracked entry.
+    if (_state->location_lifecycle
+        && !_state->location_lifecycle->owns_actor (actor_location_key_t{
+             _state->snapshot.name, std::string (target_actor.actor_id ().value ())})) {
+        std::uint64_t adopted_membership_epoch = 0;
+        const auto epoch = _state->core_actor_membership_epochs.find (
+          std::string (target_actor.actor_id ().value ()));
+        if (epoch != _state->core_actor_membership_epochs.end ())
+            adopted_membership_epoch = epoch->second;
+        const auto adopted = _state->location_lifecycle->claim_actor (
+          actor_location_t{
+            .mesh_name = _state->snapshot.name,
+            .actor_id = std::string (target_actor.actor_id ().value ()),
+            .actor_type = std::string (
+              ::zlink::framework::detail::actor_ref_access_t::actor_type (target_actor)),
+            .actor_ref = target_actor,
+            .owner_node_rid = zlink::routing_id_t::from (std::string (target_node_id)),
+            .owner_node_generation = target_node_lifecycle_generation,
+            .spot_id = target_spot_id,
+            .spot_generation = target_spot_generation,
+            .spot_kind = zlink::spot_kind::user,
+            .membership_epoch = adopted_membership_epoch},
+          [weak_state = std::weak_ptr<detail::spot_node_builder_state_t> (_state)] (
+            const actor_location_t &lost) { deactivate_actor_location (weak_state, lost); },
+          true);
+        if (adopted.status != location_write_status_t::stored) {
+            return result_t<void>::failure (
+              framework_error_kind_t::internal_failure,
+              "committed remote Actor authority adoption failed");
+        }
     }
     if (committed_authority_owner_generation != nullptr)
         *committed_authority_owner_generation = current->target.authority_owner_generation;

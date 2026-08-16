@@ -1785,12 +1785,23 @@ mesh_node_host_service_t::create_user_spot (
                 (void) cleanup_source_created_reservation (
                   store, key, fence,
                   source_created_reservation);
+            //  Spec 16 §9 / 26 — preserve the mapped kind and the exact
+            //  operation/wire terminal in the message instead of
+            //  collapsing every failure into one opaque string.
+            const auto mapped_kind = user_spot_terminal::
+              map_user_spot_operation_failure (
+                terminal, reply.header, true);
             completion->complete (
               result_t<spot_create_result_t>::failure (
-                user_spot_terminal::
-                  map_user_spot_operation_failure (
-                  terminal, reply.header, true),
-                "Remote User Spot creation failed"));
+                mapped_kind,
+                "Remote User Spot creation failed (kind="
+                  + std::to_string (static_cast<int> (mapped_kind))
+                  + ", operationTerminal="
+                  + std::to_string (static_cast<int> (terminal))
+                  + ", terminalResult="
+                  + std::to_string (reply.header.terminal_result)
+                  + ", failureCode="
+                  + std::to_string (reply.header.failure_code) + ")"));
             return;
         }
         if (reply.result

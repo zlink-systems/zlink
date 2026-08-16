@@ -661,7 +661,13 @@ class http_options_builder_t
         if constexpr (detail::is_json_serializer_compatible_v<T>) {
             _serializers->template add<T> (
               [] (const T &value) {
-                  return detail::encoded_payload_from_raw (zlink::message_t::from_json (value));
+                  //  from_raw only borrows the message buffer, and the
+                  //  temporary message closes at the end of this full
+                  //  expression — the returned payload must OWN its bytes
+                  //  or every later read (http response_from_value
+                  //  to_string) is a use-after-free.
+                  const auto message = zlink::message_t::from_json (value);
+                  return encoded_payload_t::from_bytes (message.bytes ());
               },
               [] (const encoded_payload_t &payload) {
                   return detail::encoded_payload_to_raw (payload).template parse_json<T> ();

@@ -719,6 +719,21 @@ class actor_context_t
     bound_session_t bound_session () const;
 
   private:
+    //  Coroutine parameters are copied into the coroutine frame, but a
+    //  coroutine LAMBDA keeps referencing its function object's captures.
+    //  The deferred call object may be destroyed while the join is still
+    //  suspended, so the context must enter the frame as a parameter —
+    //  otherwise the resumed join reads a freed actor context
+    //  (heap-use-after-free in join_spot_erased).
+    static task_t<void> run_deferred_spot_join (std::shared_ptr<actor_context_t> context,
+                                                spot_id_t spot_id,
+                                                zlink::message_t request,
+                                                std::chrono::milliseconds timeout)
+    {
+        (void) co_await context->join_spot_erased (std::move (spot_id), request, timeout);
+        co_return;
+    }
+
     actor_join_call_t join_spot_payload (spot_id_t spot_id, const zlink::message_t &request)
     {
         auto context = std::shared_ptr<actor_context_t> (
@@ -728,9 +743,8 @@ class actor_context_t
           actor_join_call_t::async_deferred_fn_t{
           [context, spot_id = std::move (spot_id),
            request] (std::chrono::milliseconds timeout) mutable -> task_t<void> {
-              (void) co_await context->join_spot_erased (
-                std::move (spot_id), request, timeout);
-              co_return;
+              return run_deferred_spot_join (
+                std::move (context), std::move (spot_id), std::move (request), timeout);
           }},
           [context] { return context->reserve_join_barrier (); });
     }

@@ -2798,6 +2798,24 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
               "Actor relay request was not accepted");
         }
         auto completed = co_await await_completion (operation);
+        //  Spec 20 §3/§4 — an ordered bound-session relay of a one-way send
+        //  awaits only the remote admission terminal. Classify a non-OK
+        //  terminal (spec 32 §5), and for a command return success before
+        //  touching the parts: a successful one-way completion carries no
+        //  application reply, so decoding an envelope from the empty parts
+        //  fabricated an invalid_frame failure and dropped the message.
+        if (completed.record.terminal_result
+            != static_cast<int> (zlink::request_result_t::ok)) {
+            const runtime::messaging::request_failure_mapper_t failure_mapper;
+            const auto failure = failure_mapper.reply_header_exception (
+              completed.record.terminal_result,
+              completed.record.failure_errno,
+              "Actor relay request");
+            co_return result_t<std::optional<zlink::message_t>>::failure (
+              failure.kind (), failure.what ());
+        }
+        if (kind == runtime::messaging::message_kind_t::command)
+            co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
         runtime::messaging::message_parts_t reply (std::move (completed.parts));
         auto reply_header = runtime::messaging::envelope_codec_t{}.decode_header (reply);
         if (!reply_header) {
@@ -2817,8 +2835,6 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
                                                                  std::move (mapped));
             co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (mapped);
         }
-        if (kind == runtime::messaging::message_kind_t::command)
-            co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
         auto body = runtime::messaging::envelope_codec_t{}.decode_body (reply);
         if (!body)
             co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);

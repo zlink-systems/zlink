@@ -45,8 +45,12 @@ class protobuf_codec_extension_t
                        "protobuf codec requires a protobuf message type");
         codecs.template add_serializer<TMessage> (
           [] (const TMessage &value) {
-              return zlink::framework::detail::encoded_payload_from_raw (
-                zlink::message_t::from (serialize (value)));
+              //  from_raw only borrows the message buffer (a small message
+              //  even stores its bytes inline in the temporary itself), and
+              //  the temporary dies at the end of this full expression — the
+              //  returned payload must OWN its bytes.
+              return zlink::framework::encoded_payload_t::from_string (
+                serialize (value));
           },
           [] (const zlink::framework::encoded_payload_t &payload) {
               TMessage value;
@@ -66,8 +70,10 @@ class protobuf_codec_extension_t
           [] (const TPayload &value) {
               TMessage message;
               to_protobuf (value, message);
-              return zlink::framework::detail::encoded_payload_from_raw (
-                zlink::message_t::from (serialize (message)));
+              //  Same ownership rule as above: never return a payload that
+              //  borrows a temporary message's buffer.
+              return zlink::framework::encoded_payload_t::from_string (
+                serialize (message));
           },
           [] (const zlink::framework::encoded_payload_t &payload) {
               TMessage message;
