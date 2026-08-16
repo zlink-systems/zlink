@@ -235,7 +235,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         ZLinkActorJoinRelocationPort.Goal directJoin,
         ZLinkStoreCancellation cancellation) {
         return sealAtTurnBoundary(
-                admission.owned().actorId(), cancellation)
+                admission.owned().actorId(),
+                directJoin == null ? null : directJoin.activeTurnSeal(),
+                cancellation)
             .thenCompose(sealed -> {
                 if (sealed.isEmpty()) {
                     return failed(new IllegalStateException(
@@ -339,8 +341,21 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
     private CompletionStage<Optional<ZLinkAsyncSerialQueue.RelocationSeal>>
         sealAtTurnBoundary(
             String actorId,
+            ZLinkAsyncSerialQueue.ActiveTurnSealHandle activeTurnSeal,
             ZLinkStoreCancellation cancellation) {
         ZLinkAsyncSerialQueue queue = actors.actorRelocationLane(actorId);
+        if (activeTurnSeal != null) {
+            //  A deferred Join holds this queue's active turn (its mailbox
+            //  barrier). Reserving a lifecycle boundary here would queue it
+            //  behind that turn and never reach it; seal the captured active
+            //  turn directly instead (spec 28 §2 — the source finishes the
+            //  current application turn and stops new dispatch; the barrier
+            //  IS that current turn).
+            return CompletableFuture.completedFuture(
+                cancellation.isCancellationRequested()
+                    ? Optional.empty()
+                    : queue.trySealRelocation(activeTurnSeal));
+        }
         Optional<ZLinkAsyncSerialQueue.RelocationBoundary> reserved =
             queue.reserveRelocationTurnBoundary();
         if (reserved.isEmpty()) {

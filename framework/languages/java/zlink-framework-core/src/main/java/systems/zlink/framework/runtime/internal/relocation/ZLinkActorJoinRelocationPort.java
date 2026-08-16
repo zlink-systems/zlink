@@ -7,6 +7,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
@@ -28,7 +29,12 @@ public interface ZLinkActorJoinRelocationPort {
         long targetNodeGeneration,
         long targetSpotAuthorityOwnerGeneration,
         long targetOwnerLeaseGeneration,
-        byte[] rawReply) {
+        byte[] rawReply,
+        //  Non-null only for a deferred Join whose mailbox barrier is the
+        //  actor queue's active turn: source preparation must seal that
+        //  exact active turn instead of reserving a new lifecycle boundary
+        //  that would queue behind the barrier itself and never activate.
+        ZLinkAsyncSerialQueue.ActiveTurnSealHandle activeTurnSeal) {
         public Goal {
             Objects.requireNonNull(relocationId, "relocationId");
             Objects.requireNonNull(operationId, "operationId");

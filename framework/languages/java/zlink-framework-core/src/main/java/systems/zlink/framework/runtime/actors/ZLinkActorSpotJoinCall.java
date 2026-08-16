@@ -62,6 +62,10 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     private AtomicBoolean deferred = new AtomicBoolean();
     private final AtomicBoolean acceptedCallbackDeliveredOnTarget =
         new AtomicBoolean();
+    //  Set only on the bounded call executing a deferred Join: the handle to
+    //  the mailbox-barrier turn that is active while the Join runs.
+    private systems.zlink.framework.execution.ZLinkAsyncSerialQueue
+        .ActiveTurnSealHandle deferredActiveTurnSeal;
 
     ZLinkActorSpotJoinCall(
         ZLinkActorRuntime.DefaultActorContext context,
@@ -291,6 +295,14 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         }
         ZLinkActorSpotJoinCall bounded =
             (ZLinkActorSpotJoinCall) timeout(remaining);
+        //  This runs as the deferred-Join mailbox barrier's own turn. Bind
+        //  that active turn now so canonical source preparation can seal it
+        //  directly; reserving another lifecycle boundary from inside this
+        //  operation would queue behind this very turn and deadlock.
+        bounded.deferredActiveTurnSeal = services.actors()
+            .actorRelocationLane(context.actorRef().actorId())
+            .captureActiveTurnSealHandle()
+            .orElse(null);
         // A deferred Join is an infrastructure/lifecycle operation. It must
         // not inherit the application execution context of the handler that
         // registered it; otherwise a synchronous barrier activation can make
@@ -687,7 +699,8 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 address.targetNodeGeneration(),
                 address.authorityOwnerGeneration(),
                 address.ownerLeaseGeneration(),
-                rawReply);
+                rawReply,
+                deferredActiveTurnSeal);
         return services.actors().relocateActorJoin(goal, remaining)
             .thenApply(submission -> {
                 acceptedCallbackDeliveredOnTarget.set(true);

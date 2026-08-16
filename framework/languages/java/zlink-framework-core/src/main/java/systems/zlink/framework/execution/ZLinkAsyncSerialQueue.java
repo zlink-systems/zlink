@@ -721,7 +721,7 @@ public final class ZLinkAsyncSerialQueue {
     }
 
     public synchronized Optional<RelocationSeal> trySealRelocation() {
-        return trySealRelocation(null);
+        return trySealRelocation((RelocationBoundary) null);
     }
 
     /**
@@ -782,6 +782,48 @@ public final class ZLinkAsyncSerialQueue {
                 }
             }
         }
+        return sealNowLocked();
+    }
+
+    /**
+     * Binds the exact turn that is active on the calling thread so a later
+     * asynchronous continuation can seal this queue underneath it. A
+     * deferred Actor Join runs its complete cross-node relocation while its
+     * mailbox barrier stays the active turn; reserving another lifecycle
+     * boundary from inside that operation would queue the boundary behind
+     * the barrier itself and never reach it.
+     */
+    public synchronized Optional<ActiveTurnSealHandle>
+        captureActiveTurnSealHandle() {
+        if (CURRENT.get() != this || active == null) {
+            return Optional.empty();
+        }
+        return Optional.of(new ActiveTurnSealHandle(this, active));
+    }
+
+    /** Seals this queue while the captured turn is still the active turn. */
+    public synchronized Optional<RelocationSeal> trySealRelocation(
+        ActiveTurnSealHandle handle) {
+        if (relocated || relocation != null) {
+            return Optional.empty();
+        }
+        if (handle == null || handle.owner != this || handle.entry != active) {
+            return Optional.empty();
+        }
+        return sealNowLocked();
+    }
+
+    public static final class ActiveTurnSealHandle {
+        private final ZLinkAsyncSerialQueue owner;
+        private final Entry entry;
+
+        private ActiveTurnSealHandle(ZLinkAsyncSerialQueue owner, Entry entry) {
+            this.owner = owner;
+            this.entry = entry;
+        }
+    }
+
+    private Optional<RelocationSeal> sealNowLocked() {
         if (suspendedContinuations != 0
             || !continuationPending.isEmpty()
             || applicationPending.stream().anyMatch(

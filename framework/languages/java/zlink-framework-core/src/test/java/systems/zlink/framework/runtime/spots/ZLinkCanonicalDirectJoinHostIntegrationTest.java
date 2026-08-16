@@ -372,7 +372,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 targetDescriptor.lifecycleGeneration(),
                 targetSpotAuthority.authorityOwnerGeneration(),
                 targetDescriptor.leaseGeneration(),
-                new byte[] {9, 4});
+                new byte[] {9, 4},
+                null);
 
             link.readyHook.set(() -> {
                 CompletionStage<Void> b2 = sourceQueue.enqueueRelocatable(
