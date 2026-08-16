@@ -1904,7 +1904,9 @@ task_t<bool> public_host_runtime_t::activate_instance_spot_remote (
                   //  reply_header_exception mapper classifies it.
                   reply = {};
                   reply.terminal_result = 104;
-                  reply.failure_code = 0;
+                  //  requestProtocolError(16): the schema integrity rule
+                  //  forbids a typed terminal with failure none.
+                  reply.failure_code = 16;
                   application_reply.reset ();
               }
           }
@@ -2156,7 +2158,9 @@ task_t<bool> public_host_runtime_t::create_user_spot_remote (
                   //  completed terminal is kept so the reply header is read.
                   reply = {};
                   reply.header.terminal_result = 104;
-                  reply.header.failure_code = 0;
+                  //  requestProtocolError(16): the schema integrity rule
+                  //  forbids a typed terminal with failure none.
+                  reply.header.failure_code = 16;
                   application_reply.reset ();
               }
           }
@@ -2240,7 +2244,9 @@ task_t<bool> public_host_runtime_t::create_actor_remote (
                   //  consumer-side mapper classifies it correctly.
                   reply = {};
                   reply.header.terminal_result = 104;
-                  reply.header.failure_code = 0;
+                  //  requestProtocolError(16): the schema integrity rule
+                  //  forbids a typed terminal with failure none.
+                  reply.header.failure_code = 16;
                   application_reply.reset ();
               }
           }
@@ -2283,7 +2289,9 @@ task_t<bool> public_host_runtime_t::close_user_spot_remote (
                   //  consumer-side mapper classifies it correctly.
                   reply = {};
                   reply.header.terminal_result = 104;
-                  reply.header.failure_code = 0;
+                  //  requestProtocolError(16): the schema integrity rule
+                  //  forbids a typed terminal with failure none.
+                  reply.header.failure_code = 16;
               }
           }
           completion (terminal, std::move (reply));

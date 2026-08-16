@@ -1200,7 +1200,7 @@ raw_client_server_client_t::request (
         //  consumer's reply_header_exception mapper classifies it.
         co_return client_server_request_completion_t{
           foundation::operation_terminal_t::completed,
-          protocol::reply_header_t{correlation, 104, 0},
+          protocol::reply_header_t{correlation, 104, 16},
           {}};
     }
 }

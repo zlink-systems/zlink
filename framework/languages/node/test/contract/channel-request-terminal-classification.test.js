@@ -64,9 +64,11 @@ test('malformed reply rejections synthesize ProtocolError, not NotConnected (rou
     ServiceWireProtocolError
   } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 
+  //  failureCode 16 (requestProtocolError): the schema integrity rule forbids
+  //  a typed terminal with failure none, so the legal synthesis is 104+16.
   assert.deepEqual(
     genericOperationFailure(new ServiceWireProtocolError('Invalid reply parts.')),
-    { terminalResult: RequestResult.ProtocolError, failureCode: 0 }
+    { terminalResult: RequestResult.ProtocolError, failureCode: 16 }
   );
   //  Genuine transport rejection stays NotConnected (-> public Unavailable via
   //  the terminal table pinned above).

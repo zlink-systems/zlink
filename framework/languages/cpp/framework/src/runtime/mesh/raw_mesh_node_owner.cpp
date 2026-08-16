@@ -747,7 +747,7 @@ task_t<bool> raw_mesh_node_owner_t::submit_request (
                 request.operation,
                 foundation::operation_terminal_t::transport_failed,
                 protocol::encode_reply_header (
-                  request.correlation, 104, 0));
+                  request.correlation, 104, 16));
           }
       });
     co_return true;
@@ -1616,7 +1616,7 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
                 id,
                 pack_infrastructure_reply (
                   detail::backend::raw_message_t{
-                    protocol::encode_reply_header (correlation, 104, 0)}));
+                    protocol::encode_reply_header (correlation, 104, 16)}));
           }
       });
     co_return true;

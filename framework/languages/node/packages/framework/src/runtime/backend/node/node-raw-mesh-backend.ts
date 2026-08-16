@@ -2240,12 +2240,12 @@ function readyDomain(domain: ServiceMailboxDomain): number {
  * NotConnected.
  */
 export function genericOperationFailure(error: unknown): RawServiceRequestResult {
-  return {
-    terminalResult: error instanceof ServiceWireProtocolError
-      ? RequestResult.ProtocolError
-      : RequestResult.NotConnected,
-    failureCode: 0
-  };
+  //  requestProtocolError(16): the schema terminal-failure-integrity rule
+  //  forbids a typed terminal (104) with failure none, so the synthesized
+  //  decode-failure pair is 104+16; genuine transport loss stays 109+0.
+  return error instanceof ServiceWireProtocolError
+    ? { terminalResult: RequestResult.ProtocolError, failureCode: 16 }
+    : { terminalResult: RequestResult.NotConnected, failureCode: 0 };
 }
 
 function statefulOperationFailure(error: unknown): RawServiceRequestResult {
