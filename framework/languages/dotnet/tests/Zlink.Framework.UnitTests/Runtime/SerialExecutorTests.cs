@@ -477,27 +477,41 @@ public sealed class SerialExecutorTests
         var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finalRan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        Assert.True(queue.TryPost(
-            async _ =>
-            {
-                firstStarted.TrySetResult();
-                await releaseFirst.Task.ConfigureAwait(false);
-            },
-            out _));
-        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        //  Release the pending first turn even when an assertion below fails —
+        //  otherwise DisposeAsync waits on the drained signal forever and the
+        //  failure surfaces as a hang instead of a red test.
+        try
+        {
+            Assert.True(queue.TryPost(
+                async _ =>
+                {
+                    firstStarted.TrySetResult();
+                    await releaseFirst.Task.ConfigureAwait(false);
+                },
+                out _));
+            await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.False(queue.TryPost(static _ => ValueTask.CompletedTask, out _));
-        Assert.True(queue.TryPostFinal(
-            _ =>
-            {
-                finalRan.TrySetResult();
-                return ValueTask.CompletedTask;
-            },
-            out _));
-        Assert.False(queue.TryPost(static _ => ValueTask.CompletedTask, out _));
-        Assert.False(queue.TryPostFinal(static _ => ValueTask.CompletedTask, out _));
+            //  The serial queue no longer owns record-count capacity — that
+            //  moved to the Application Job Queue admission (see the sibling
+            //  SerialExecutionQueue_TryPost_AdmitsWhileApplicationWorkIsPending)
+            //  — so an ordinary post while the first turn is pending is
+            //  admitted, not refused.
+            Assert.True(queue.TryPost(static _ => ValueTask.CompletedTask, out _));
+            Assert.True(queue.TryPostFinal(
+                _ =>
+                {
+                    finalRan.TrySetResult();
+                    return ValueTask.CompletedTask;
+                },
+                out _));
+            Assert.False(queue.TryPost(static _ => ValueTask.CompletedTask, out _));
+            Assert.False(queue.TryPostFinal(static _ => ValueTask.CompletedTask, out _));
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+        }
 
-        releaseFirst.TrySetResult();
         await finalRan.Task.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
