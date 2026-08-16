@@ -52,7 +52,10 @@ export class ZLinkBoundSessionRelay {
       spotNodeRuntime: options.spotNodeRuntime,
       detachedTaskRunner: options.detachedTaskRunner,
       errorSink: options.errorSink,
-      actorLocationResolver: options.actorLocationResolver
+      actorLocationResolver: options.actorLocationResolver,
+      //  Lazy: boundSessions is constructed right after actorPackets and the
+      //  sender only fires from detached dispatch continuations.
+      actorErrorSender: (...args) => this.boundSessions.sendActorError(...args)
     });
     this.boundSessions = new ZLinkRemoteBoundSessionRelay({
       requestTimeoutMs: options.requestTimeoutMs,

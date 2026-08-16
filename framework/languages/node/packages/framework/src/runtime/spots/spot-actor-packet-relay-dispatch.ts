@@ -112,10 +112,22 @@ export class ZLinkSpotActorPacketRelayDispatch {
           `Actor request '${actorPacketRelay.actorId}' expired before target handler admission.`
         );
       }
+      //  Spec 28 §5.2/§10 — a Message Follow relay is a one-way send that
+      //  preserves the ORIGINAL bound-session reply route. When the outer
+      //  transport cannot carry a bridge reply for such a followed request,
+      //  the inner dispatch must deliver its terminal completion (response
+      //  or error) through that original route via actorResponseSender/
+      //  actorErrorSender instead of returning it locally, where it would
+      //  be discarded. Non-follow relays keep the synchronous-return path.
+      const outerReplyable = isReplyableRequestSeq(received.requestSeq);
+      const followedBoundSessionReply =
+        !outerReplyable
+        && actorPacketRelay.messageFollowContext !== undefined
+        && remoteBoundSessionTarget !== undefined;
       const response = await this.options.actorPacketHandler({
         actorId: actorPacketRelay.actorId,
         parts: [header, payload],
-        returnResponse: true,
+        returnResponse: !followedBoundSessionReply,
         remoteBoundSessionTarget,
         fallbackActorRef: actorPacketRelay.actorRef
       });

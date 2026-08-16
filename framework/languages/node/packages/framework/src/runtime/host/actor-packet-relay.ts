@@ -79,6 +79,15 @@ export interface ZLinkActorPacketRelayOptions {
   readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
   readonly errorSink: () => { reportRuntimeTaskException(taskName: string, error: unknown): void };
   readonly actorLocationResolver?: () => ZLinkStoreLocationResolvers | undefined;
+  readonly actorErrorSender?: (
+    actorId: string,
+    packetName: string,
+    requestSeq: bigint,
+    error: unknown,
+    metadata: ReadonlyMap<string, string>,
+    fallbackBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
+    fallbackActorRef?: ActorRef
+  ) => Promise<void>;
 }
 
 export class ZLinkActorPacketRelay {
@@ -329,9 +338,44 @@ export class ZLinkActorPacketRelay {
               fallbackActorRef
             );
         closeFrameMessages = false;
-        void dispatch.catch((error) =>
-          this.options.errorSink().reportRuntimeTaskException('remote actor packet relay', error)
-        ).finally(() => {
+        const deferredPacketName = frameHeader.name;
+        const deferredRequestSeq = frameHeader.requestSeq;
+        const deferredMetadata = frameHeader.metadata;
+        void dispatch.catch(async (error) => {
+          //  Spec 32 §5 — an accepted Request must end in exactly one
+          //  terminal completion. deferredResponse already told the source
+          //  the reply will arrive on the bound-session route, so a routed
+          //  dispatch REJECTED BEFORE DISPATCH (a closing/missing Spot
+          //  throws ZLinkConfigurationException from activation resolution)
+          //  must send its error there instead of only sinking it. Failures
+          //  past that boundary already produce their own terminal through
+          //  the inner actorErrorSender path — also sending here would emit
+          //  a duplicate terminal for the same requestSeq.
+          if (
+            error instanceof ZLinkConfigurationException
+            && deferredRequestSeq !== undefined
+            && this.options.actorErrorSender !== undefined
+          ) {
+            try {
+              await this.options.actorErrorSender(
+                relay.actorId,
+                deferredPacketName,
+                deferredRequestSeq,
+                error,
+                deferredMetadata ?? new Map<string, string>(),
+                remoteBoundSessionTarget,
+                fallbackActorRef
+              );
+              return;
+            } catch (sendFailure) {
+              this.options.errorSink().reportRuntimeTaskException(
+                'remote actor packet relay error reply',
+                sendFailure
+              );
+            }
+          }
+          this.options.errorSink().reportRuntimeTaskException('remote actor packet relay', error);
+        }).finally(() => {
           header.close();
           body.close();
         });

@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { captureZLinkExecutionTurn } from '../execution';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -328,6 +330,12 @@ export interface ServiceUserSpotOperationHandler {
  * remain in the common mailbox, where a claimed Spot or Actor owner is serial.
  */
 export class ServiceStatefulRuntime {
+  //  Captured at module load, before any application turn exists: running a
+  //  callback through this snapshot detaches every AsyncLocalStorage context
+  //  (Spot serial turn, execution area, flow) so local loopback ingress
+  //  behaves exactly like a frame arriving from the receive pump.
+  private static readonly detachedIngressScope = AsyncLocalStorage.snapshot();
+
   readonly registry: ServiceStatefulRegistry;
 
   private readonly operations = new ServiceTerminalOperationRegistry<ServiceStatefulResult>();
@@ -3970,6 +3978,35 @@ export class ServiceStatefulRuntime {
     this.requireOpen();
     if (targetNodeRid === this.nodeRid) {
       const applicationJobOwner = await this.raw.reserveLocalIngress();
+      if (captureZLinkExecutionTurn() !== undefined) {
+        //  The sender is inside a Spot serial turn. Running ingress inline
+        //  would inherit that turn, so a send to an object of the same
+        //  serial owner nests a turn and is rejected with "cannot
+        //  implicitly execute another turn for the same owner". A one-way
+        //  submit completes at admission, exactly like the remote path
+        //  (sendService returns once the transport accepts the frame), so
+        //  run the ingress detached like a frame arriving on the receive
+        //  pump (spec 26 §2.1 `sent` boundary; spec 33 pre-handler flow).
+        void ServiceStatefulRuntime.detachedIngressScope(async () => {
+          try {
+            await this.ingress({
+              command: parts[0]![3]!,
+              flags: parts[0]![4]!,
+              sourceRoutingId: this.nodeRid,
+              sourceNodeGeneration: this.nodeGeneration,
+              parts,
+              applicationJobOwner
+            });
+          } catch {
+            //  Dispatch failures already produced their
+            //  zlink.dispatch_error record; a one-way submit has no caller
+            //  completion to fail, matching the remote pump's handling.
+          } finally {
+            applicationJobOwner.close();
+          }
+        });
+        return SubmitResult.Ok;
+      }
       try {
         const result = await this.ingress({
           command: parts[0]![3]!,
