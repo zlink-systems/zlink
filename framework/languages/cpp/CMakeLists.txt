@@ -1466,6 +1466,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_libraries(test_cpp_framework_channel_reply_admission PRIVATE
     GTest::gtest_main)
   add_zlink_framework_test(
+    test_cpp_framework_application_job_queue
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_application_job_queue.cpp
+    "framework-unit;framework-regression;execution;admission")
+  target_link_libraries(test_cpp_framework_application_job_queue PRIVATE
+    GTest::gtest_main)
+  add_zlink_framework_test(
     test_cpp_framework_instance_spot_activation
     tests/Zlink.Framework.UnitTests/test_cpp_framework_instance_spot_activation.cpp
     "framework-unit;framework-regression;spot;instance-activation")
