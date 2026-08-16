@@ -739,9 +739,15 @@ task_t<bool> raw_mesh_node_owner_t::submit_request (
                 request.operation, std::move (parts[1]));
           }
           catch (const protocol::service_wire_error_t &) {
+              //  Spec 32-framework-error-model:91-92 — a malformed reply is
+              //  ProtocolError, not a transport failure. Carry a synthesized
+              //  protocolError header; complete_operation decodes it into
+              //  terminal 104 instead of collapsing to internal_error.
               (void) operations->fail (
                 request.operation,
-                foundation::operation_terminal_t::transport_failed);
+                foundation::operation_terminal_t::transport_failed,
+                protocol::encode_reply_header (
+                  request.correlation, 104, 0));
           }
       });
     co_return true;
@@ -1602,8 +1608,15 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
                 id, pack_infrastructure_reply (reply_parts));
           }
           catch (const protocol::service_wire_error_t &) {
-              (void) operations->fail (
-                id, foundation::operation_terminal_t::transport_failed);
+              //  Spec 32-framework-error-model:91-92 — a reply that can't be
+              //  processed is ProtocolError, not a transport failure. Complete
+              //  with a synthesized protocolError header so the upper adapter
+              //  and sink classify it via reply_header_exception.
+              (void) operations->complete (
+                id,
+                pack_infrastructure_reply (
+                  detail::backend::raw_message_t{
+                    protocol::encode_reply_header (correlation, 104, 0)}));
           }
       });
     co_return true;

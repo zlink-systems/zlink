@@ -1194,8 +1194,14 @@ raw_client_server_client_t::request (
           std::move (parts[1])};
     }
     catch (const protocol::service_wire_error_t &) {
+        //  Spec 32-framework-error-model:91-92 — a malformed ClientServer
+        //  reply is ProtocolError, not a transport failure. Return a
+        //  completed terminal with a synthesized protocolError header; the
+        //  consumer's reply_header_exception mapper classifies it.
         co_return client_server_request_completion_t{
-          foundation::operation_terminal_t::transport_failed, {}, {}};
+          foundation::operation_terminal_t::completed,
+          protocol::reply_header_t{correlation, 104, 0},
+          {}};
     }
 }
 
