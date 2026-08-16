@@ -10,7 +10,11 @@ import type { ZLinkAuthoritySnapshot } from '../../contracts/Locations';
 import type { ZLinkAuthorityStore } from '../locations/internal-store-contracts';
 import { ZLinkEncodedPayload, ZLinkMessage } from '../../contracts';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
-import { crc32c } from '../foundation/service-relocation-runtime';
+import {
+  crc32c,
+  replaceServiceRelocationAuthorityApplicationPayload,
+  serviceRelocationAuthorityApplicationPayload
+} from '../foundation/service-relocation-runtime';
 import { putNewRelocationBlob } from '../locations/relocation-blob';
 import { decodeRoutingId, routingIdWireHex } from '../routing-id';
 import {
@@ -90,7 +94,8 @@ export class ZLinkDeferredJoinAcceptedJournal {
     const currentPublication = decodeAuthorityPublication(read.payload);
     const publication: DeferredJoinAuthorityPublication = {
       applicationPayload: Buffer.from(
-        currentPublication?.applicationPayload ?? read.payload
+        currentPublication?.applicationPayload
+          ?? serviceRelocationAuthorityApplicationPayload(read.payload)
       ),
       reference: root.reference,
       checksumCrc32c: root.checksumCrc32c
@@ -101,7 +106,12 @@ export class ZLinkDeferredJoinAcceptedJournal {
       {
         kind: 'put',
         generationTransition: 'preserve',
-        payload: encodeAuthorityPublication(publication)
+        //  Preserve the outer relocation metadata: only the inner
+        //  application payload belongs to this journal.
+        payload: replaceServiceRelocationAuthorityApplicationPayload(
+          read.payload,
+          encodeAuthorityPublication(publication)
+        )
       },
       signal
     );
@@ -519,7 +529,14 @@ function decodeAuthorityPublication(
     };
   };
   try {
-    value = JSON.parse(Buffer.from(payload).toString('utf8'));
+    //  A cross-node Join relocation wraps the owner authority payload in the
+    //  relocation envelope (spec 28 §8: the same CAS carries the relocation
+    //  publication). The deferred-Join root lives in the INNER application
+    //  payload; decoding the raw payload here made every cross-node deferred
+    //  Join lose its completion root right after the owner CAS.
+    value = JSON.parse(
+      serviceRelocationAuthorityApplicationPayload(payload).toString('utf8')
+    );
   } catch {
     return undefined;
   }
