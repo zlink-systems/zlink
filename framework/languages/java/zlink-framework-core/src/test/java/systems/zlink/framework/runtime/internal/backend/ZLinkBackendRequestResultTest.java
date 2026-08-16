@@ -80,4 +80,30 @@ class ZLinkBackendRequestResultTest {
         assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND,
             ZLinkBackendRequestResult.NOT_FOUND.toFrameworkErrorKind(0));
     }
+
+    @Test
+    void remoteUserSpotCreateFailureClassesMatchProducerWireEncoding() {
+        //  The remote User Spot create/close producer emits these
+        //  (terminalResult, failureCode) classes; completeUserSpotCreate /
+        //  completeUserSpotClose now classify them through
+        //  fromWireTerminal(terminal).toFrameworkErrorKind(failureCode) instead
+        //  of collapsing to a generic rejection (spec 32:81-118, 99-108).
+        assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION,
+            ZLinkBackendRequestResult.fromWireTerminal(107)
+                .toFrameworkErrorKind(33)); // conflict + spotGenerationStale
+        assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION,
+            ZLinkBackendRequestResult.fromWireTerminal(110)
+                .toFrameworkErrorKind(0));  // invalidArgument
+        assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+            ZLinkBackendRequestResult.fromWireTerminal(101)
+                .toFrameworkErrorKind(0));  // timedOut
+        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE,
+            ZLinkBackendRequestResult.fromWireTerminal(108)
+                .toFrameworkErrorKind(0));  // busy: remote queue -> Unavailable
+        //  A generic conflict terminal carrying a remote-queue fine code stays
+        //  Unavailable rather than collapsing.
+        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE,
+            ZLinkBackendRequestResult.fromWireTerminal(107)
+                .toFrameworkErrorKind(18)); // conflict + workerQueueFull
+    }
 }

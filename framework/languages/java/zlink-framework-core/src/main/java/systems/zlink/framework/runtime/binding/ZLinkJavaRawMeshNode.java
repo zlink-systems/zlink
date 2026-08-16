@@ -3250,16 +3250,32 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             ZLinkServiceM6BWireCodec.UserSpotCreateReply reply =
                 statefulWire.decodeUserSpotCreateReply(
                     frames.getFirst());
-            if (reply.correlation() != correlation
-                || reply.terminalResult() != 0
-                || reply.failureCode() != 0
-                || reply.success() == null
+            if (reply.correlation() != correlation) {
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "remote User Spot create correlation mismatch");
+            }
+            if (reply.terminalResult() != 0 || reply.failureCode() != 0) {
+                //  Classify the carried terminal + fine failure code via the
+                //  authoritative ownership-aware translator instead of
+                //  collapsing to a generic rejection
+                //  (spec 32-framework-error-model:81-118, 99-108).
+                throw new ZLinkFrameworkException(
+                    ZLinkBackendRequestResult
+                        .fromWireTerminal(reply.terminalResult())
+                        .toFrameworkErrorKind(reply.failureCode()),
+                    "remote User Spot create failed: terminal="
+                        + reply.terminalResult()
+                        + " failureCode=" + reply.failureCode());
+            }
+            if (reply.success() == null
                 || (reply.success().result()
                         == ZLinkServiceM6BWireCodec
                             .UserSpotCreateResult.EXISTING
                     && frames.size() != 1)) {
-                throw new IllegalStateException(
-                    "remote User Spot create was rejected");
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "remote User Spot create reply was malformed");
             }
             List<Message> applicationReply;
             if (frames.size() == 2) {
@@ -3345,12 +3361,28 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             ZLinkServiceM6BWireCodec.UserSpotCloseReply reply =
                 statefulWire.decodeUserSpotCloseReply(
                     frames.getFirst());
-            if (reply.correlation() != correlation
-                || reply.terminalResult() != 0
-                || reply.failureCode() != 0
-                || reply.closed() == null) {
-                throw new IllegalStateException(
-                    "remote User Spot close was rejected");
+            if (reply.correlation() != correlation) {
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "remote User Spot close correlation mismatch");
+            }
+            if (reply.terminalResult() != 0 || reply.failureCode() != 0) {
+                //  Classify the carried terminal + fine failure code via the
+                //  authoritative ownership-aware translator instead of
+                //  collapsing to a generic rejection
+                //  (spec 32-framework-error-model:81-118, 99-108).
+                throw new ZLinkFrameworkException(
+                    ZLinkBackendRequestResult
+                        .fromWireTerminal(reply.terminalResult())
+                        .toFrameworkErrorKind(reply.failureCode()),
+                    "remote User Spot close failed: terminal="
+                        + reply.terminalResult()
+                        + " failureCode=" + reply.failureCode());
+            }
+            if (reply.closed() == null) {
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "remote User Spot close reply was malformed");
             }
             operations.complete(
                 operationId,
