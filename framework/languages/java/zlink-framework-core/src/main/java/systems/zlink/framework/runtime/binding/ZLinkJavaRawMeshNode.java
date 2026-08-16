@@ -2274,11 +2274,29 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         + " replyCorrelation=" + header.correlation()
                         + " terminal=" + header.terminalResult()
                         + " frames=" + replies.size());
-                    if (header.correlation() != correlation
-                        || header.terminalResult() != 0
-                        || replies.size() != 2) {
-                        throw new IllegalStateException(
-                            "remote Instance Spot request was rejected");
+                    if (header.correlation() != correlation) {
+                        throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                            "Instance Spot request correlation mismatch");
+                    }
+                    if (header.terminalResult() != 0
+                        || header.failureCode() != 0) {
+                        //  Classify the carried terminal + fine failure code
+                        //  via the authoritative ownership-aware translator
+                        //  instead of collapsing to a generic rejection
+                        //  (spec 32-framework-error-model:81-118, 99-108).
+                        throw new ZLinkFrameworkException(
+                            ZLinkBackendRequestResult
+                                .fromWireTerminal(header.terminalResult())
+                                .toFrameworkErrorKind(header.failureCode()),
+                            "remote Instance Spot request failed: terminal="
+                                + header.terminalResult()
+                                + " failureCode=" + header.failureCode());
+                    }
+                    if (replies.size() != 2) {
+                        throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                            "invalid Instance Spot request reply frame count");
                     }
                     var payload = wire.decodeApplicationPayload(
                         replies.get(1));
@@ -2287,6 +2305,21 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     if (!operations.complete(operation.id(), replyParts)) {
                         replyParts.forEach(Message::close);
                     }
+                } catch (ZLinkFrameworkException decodeFailure) {
+                    operations.completeExceptionally(
+                        operation.id(), decodeFailure);
+                } catch (IllegalArgumentException decodeFailure) {
+                    //  A codec/malformed-wire failure (ZLinkServiceWireException
+                    //  and friends derive from IllegalArgumentException) means
+                    //  the reply can't be processed -> ProtocolError
+                    //  (spec 32-framework-error-model:91-92).
+                    operations.completeExceptionally(
+                        operation.id(),
+                        new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                            "remote Instance Spot request reply could not be"
+                                + " processed",
+                            decodeFailure));
                 } catch (RuntimeException decodeFailure) {
                     operations.completeExceptionally(
                         operation.id(), decodeFailure);
@@ -3325,13 +3358,15 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
         try {
             if (frames.isEmpty() || frames.size() > 2) {
-                throw new IllegalArgumentException(
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                     "invalid Actor create reply frame count");
             }
             var reply = statefulWire.decodeActorCreateReply(
                 frames.getFirst(), meshName);
             if (reply.correlation() != correlation) {
-                throw new IllegalArgumentException(
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                     "Actor create correlation mismatch");
             }
             var terminal = reply.terminal();
@@ -3349,6 +3384,19 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 new ZLinkInternalMeshNode.ActorCreateResponse(
                     statefulWire.encodeCreationOperationTerminal(
                         terminal)));
+        } catch (ZLinkFrameworkException failure) {
+            operations.completeExceptionally(operationId, failure);
+        } catch (IllegalArgumentException failure) {
+            //  A codec/malformed-wire failure (ZLinkServiceWireException and
+            //  friends derive from IllegalArgumentException) means the reply
+            //  can't be processed -> ProtocolError
+            //  (spec 32-framework-error-model:91-92).
+            operations.completeExceptionally(
+                operationId,
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "remote Actor create reply could not be processed",
+                    failure));
         } catch (RuntimeException failure) {
             operations.completeExceptionally(operationId, failure);
         }

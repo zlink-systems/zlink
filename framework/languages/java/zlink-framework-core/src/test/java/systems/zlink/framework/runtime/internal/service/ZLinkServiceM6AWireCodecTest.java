@@ -4,6 +4,7 @@ import java.util.Arrays;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -247,6 +248,23 @@ final class ZLinkServiceM6AWireCodecTest {
             100,
             4,
             2);
+    }
+
+    @Test
+    void malformedReplyHeaderThrowsIllegalArgumentForProtocolError() {
+        //  The Instance Spot request completion converts any
+        //  IllegalArgumentException (which every codec malformed-wire
+        //  ZLinkServiceWireException derives from) into
+        //  ZLinkFrameworkException(PROTOCOL_ERROR): a reply that can't be
+        //  processed is a ProtocolError (spec 32-framework-error-model:91-92).
+        //  This pins the inheritance that conversion relies on.
+        assertTrue(IllegalArgumentException.class.isAssignableFrom(
+            ZLinkServiceWireException.class));
+        byte[] reply = codec.encodeReplyHeader(43, 0, 0);
+        ZLinkServiceWireException failure = assertThrows(
+            ZLinkServiceWireException.class,
+            () -> codec.decodeReplyHeader(truncated(reply)));
+        assertTrue(failure instanceof IllegalArgumentException);
     }
 
     private static byte[] truncated(byte[] value) {

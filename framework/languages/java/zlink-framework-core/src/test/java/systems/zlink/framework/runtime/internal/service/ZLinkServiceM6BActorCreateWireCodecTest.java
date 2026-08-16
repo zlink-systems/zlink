@@ -3,7 +3,10 @@ package systems.zlink.framework.runtime.internal.service;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ActorRef;
@@ -71,6 +74,35 @@ final class ZLinkServiceM6BActorCreateWireCodecTest {
         assertArrayEquals(
             durable,
             codec.encodeCreationOperationTerminal(restored));
+    }
+
+    @Test
+    void malformedActorCreateReplyThrowsIllegalArgumentForProtocolError() {
+        //  completeActorCreate converts any IllegalArgumentException (which
+        //  every codec malformed-wire ZLinkServiceWireException derives from)
+        //  into ZLinkFrameworkException(PROTOCOL_ERROR): a reply that can't be
+        //  processed is a ProtocolError (spec 32-framework-error-model:91-92).
+        //  This pins the inheritance that conversion relies on.
+        assertTrue(IllegalArgumentException.class.isAssignableFrom(
+            ZLinkServiceWireException.class));
+        var terminal =
+            new ZLinkServiceM6BWireCodec.ActorCreationTerminal(
+                0,
+                0,
+                new ZLinkServiceM6BWireCodec.ActorCreateTerminal(
+                    ZLinkServiceM6BWireCodec.ActorCreateResult.CREATED,
+                    new ActorRef(
+                        "actor-1",
+                        9,
+                        "game",
+                        RoutingId.from("target"))),
+                null);
+        byte[] reply = codec.encodeActorCreateReply(101, terminal);
+        ZLinkServiceWireException failure = assertThrows(
+            ZLinkServiceWireException.class,
+            () -> codec.decodeActorCreateReply(
+                Arrays.copyOf(reply, reply.length - 1), "game"));
+        assertTrue(failure instanceof IllegalArgumentException);
     }
 
     private static ZLinkServiceM6BWireCodec.ReservationFence
