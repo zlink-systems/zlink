@@ -63,3 +63,52 @@ test('fine failure codes refine the coarse terminal (finding 1)', () => {
     assert.equal(error.kind, expected, `errno ${errno} => ${expected}`);
   }
 });
+
+test('remote Actor create classifies by ownership, not InternalFailure (round-10 finding 2)', () => {
+  //  actor-placement-coordinator now routes every non-OK remote create
+  //  completion through wireReplyFailureException instead of collapsing to
+  //  ActorCreateFailed/InternalFailure.
+  const cases = [
+    //  Target operation-table/queue saturation: another node's queue.
+    [RequestResult.Busy, 0, ZLinkFrameworkErrorKind.Unavailable],
+    //  Reply not received within the deadline.
+    [RequestResult.TimedOut, 0, ZLinkFrameworkErrorKind.DeadlineExceeded],
+    //  Target shutting down is not an internal failure.
+    [RequestResult.Terminated, 0, ZLinkFrameworkErrorKind.ShuttingDown],
+    //  Placement admission capacity keeps its round-9 classification.
+    [RequestResult.Backpressured, 0, ZLinkFrameworkErrorKind.CapacityExceeded],
+    //  A protocol-level fine code refines the terminal.
+    [RequestResult.Conflict, 16, ZLinkFrameworkErrorKind.ProtocolError]
+  ];
+  for (const [terminal, errno, expected] of cases) {
+    const error = wireReplyFailureException(terminal, errno, 'remote create failure');
+    assert.equal(
+      error.kind,
+      expected,
+      `create terminal ${terminal} errno ${errno} => ${expected}`
+    );
+  }
+});
+
+test('Actor destroy classifies the completion pair, not NotFound (round-10 finding 4)', () => {
+  //  actors/index destroy now routes the (terminalResult, failureErrno) pair
+  //  through wireReplyFailureException instead of collapsing every failure to
+  //  ActorRouteNotFound; only genuine route/target-not-found causes stay
+  //  NotFound.
+  const cases = [
+    [105, 18, ZLinkFrameworkErrorKind.Unavailable],       // workerQueueFull
+    [105, 19, ZLinkFrameworkErrorKind.DeadlineExceeded],  // workerTimedOut
+    [RequestResult.Terminated, 0, ZLinkFrameworkErrorKind.ShuttingDown],
+    [105, 9, ZLinkFrameworkErrorKind.NotFound],           // routeHandlerNotFound
+    [105, 14, ZLinkFrameworkErrorKind.NotFound],          // requestTargetNotFound
+    [RequestResult.NotFound, 0, ZLinkFrameworkErrorKind.NotFound]
+  ];
+  for (const [terminal, errno, expected] of cases) {
+    const error = wireReplyFailureException(terminal, errno, 'destroy failure');
+    assert.equal(
+      error.kind,
+      expected,
+      `destroy terminal ${terminal} errno ${errno} => ${expected}`
+    );
+  }
+});

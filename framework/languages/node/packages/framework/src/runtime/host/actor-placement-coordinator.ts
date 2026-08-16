@@ -1,4 +1,8 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException,
+  wireReplyFailureException
+} from '../framework-errors-internal';
 import { createHash } from 'node:crypto';
 import { RequestResult } from '../backend/runtime-values';
 import type {
@@ -153,18 +157,27 @@ export class ZLinkActorPlacementCoordinator {
         );
         if (
           remote.terminalResult !== RequestResult.Ok
-          || remote.tail?.kind !== 'actorCreate'
+          || remote.failureCode !== 0
         ) {
-          throw createInternalFrameworkException(
-            //  Spec 32-framework-error-model:104-108 — the bounded admission
-            //  terminal Backpressured(113) is target placement capacity:
-            //  CapacityExceeded, not a generic InternalFailure.
-            remote.terminalResult === RequestResult.Backpressured
-              ? ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted
-              : ZLinkFrameworkInternalErrorKind.ActorCreateFailed,
+          //  Classify the (terminal, fine failure code) pair via the shared
+          //  ownership-aware translator instead of collapsing every non-OK
+          //  remote create to InternalFailure (spec 32-framework-error-model:
+          //  83-118, 99-108). Backpressured(113) still surfaces as target
+          //  placement capacity -> CapacityExceeded through the shared path.
+          throw wireReplyFailureException(
+            remote.terminalResult,
+            remote.failureCode,
             `Remote Actor '${actorId}' creation failed with result ${remote.terminalResult}, `
-              + `failure code ${remote.failureCode}, and tail ${remote.tail?.kind ?? 'none'}.`,
-            remote.terminalResult !== RequestResult.InvalidState
+              + `failure code ${remote.failureCode}, and tail ${remote.tail?.kind ?? 'none'}.`
+          );
+        }
+        if (remote.tail?.kind !== 'actorCreate') {
+          //  An OK terminal whose reply lacks the actorCreate tail is a
+          //  protocol violation, not a create failure.
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RequestProtocolError,
+            `Remote Actor '${actorId}' create reply carried tail `
+              + `${remote.tail?.kind ?? 'none'} on an OK terminal.`
           );
         }
         if (remote.tail.createResult === 'rejected') {
@@ -180,8 +193,10 @@ export class ZLinkActorPlacementCoordinator {
         }
         const actor = remote.tail.actor;
         if (actor === undefined) {
+          //  A created/existing terminal without an ActorRef is a malformed
+          //  reply (spec 32-framework-error-model:91-92).
           throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.ActorCreateFailed,
+            ZLinkFrameworkInternalErrorKind.RequestProtocolError,
             'Remote Actor create terminal omitted ActorRef.'
           );
         }

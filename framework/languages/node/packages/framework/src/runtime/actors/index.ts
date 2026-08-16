@@ -1,4 +1,8 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException,
+  wireReplyFailureException
+} from '../framework-errors-internal';
 import type {
   ActorRef,
   RoutingId,
@@ -220,8 +224,14 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
         );
         try {
           if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
-            throw createInternalFrameworkException(
-              ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
+            //  Classify the (terminal, fine) pair via the shared translator
+            //  (spec 32-framework-error-model:83-118, 99-108) instead of
+            //  collapsing every destroy failure to NotFound; genuine
+            //  route-not-found fine codes still yield NotFound through the
+            //  shared table.
+            throw wireReplyFailureException(
+              completion.terminalResult,
+              completion.failureErrno,
               `Actor '${actor.actorId}' destroy failed with result '${completion.terminalResult}' and errno '${completion.failureErrno}'.`
             );
           }
