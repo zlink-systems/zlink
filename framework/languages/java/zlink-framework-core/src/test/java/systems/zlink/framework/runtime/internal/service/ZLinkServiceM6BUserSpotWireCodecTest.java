@@ -138,6 +138,23 @@ final class ZLinkServiceM6BUserSpotWireCodecTest {
             () -> codec.decodeUserSpotCloseHeader(wrongVersion));
     }
 
+    @Test
+    void malformedWireExceptionIsIllegalArgumentForProtocolErrorMapping() {
+        //  completeUserSpotCreate/completeUserSpotClose convert any
+        //  IllegalArgumentException (which every codec malformed-wire
+        //  ZLinkServiceWireException derives from) into
+        //  ZLinkFrameworkException(PROTOCOL_ERROR): a reply that can't be
+        //  processed is a ProtocolError (spec 32-framework-error-model:91-92).
+        //  This pins the inheritance that conversion relies on.
+        assertTrue(IllegalArgumentException.class.isAssignableFrom(
+            ZLinkServiceWireException.class));
+        ZLinkServiceWireException failure =
+            assertThrows(
+                ZLinkServiceWireException.class,
+                () -> codec.decodeUserSpotCreateReply(new byte[] {1}));
+        assertTrue(failure instanceof IllegalArgumentException);
+    }
+
     private static ZLinkServiceM6BWireCodec.ReservationFence
         reservation() {
         return new ZLinkServiceM6BWireCodec.ReservationFence(

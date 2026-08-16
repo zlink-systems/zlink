@@ -3244,7 +3244,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
         try {
             if (frames.isEmpty() || frames.size() > 2) {
-                throw new IllegalArgumentException(
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                     "invalid User Spot create reply frame count");
             }
             ZLinkServiceM6BWireCodec.UserSpotCreateReply reply =
@@ -3292,6 +3293,19 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             if (!operations.complete(operationId, response)) {
                 response.applicationReply().forEach(Message::close);
             }
+        } catch (ZLinkFrameworkException failure) {
+            operations.completeExceptionally(operationId, failure);
+        } catch (IllegalArgumentException failure) {
+            //  A codec/malformed-wire failure (ZLinkServiceWireException and
+            //  friends derive from IllegalArgumentException) means the reply
+            //  can't be processed -> ProtocolError
+            //  (spec 32-framework-error-model:91-92).
+            operations.completeExceptionally(
+                operationId,
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "remote User Spot create reply could not be processed",
+                    failure));
         } catch (RuntimeException failure) {
             operations.completeExceptionally(operationId, failure);
         }
@@ -3355,7 +3369,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
         try {
             if (frames.size() != 1) {
-                throw new IllegalArgumentException(
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                     "invalid User Spot close reply frame count");
             }
             ZLinkServiceM6BWireCodec.UserSpotCloseReply reply =
@@ -3388,6 +3403,19 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 operationId,
                 new ZLinkInternalMeshNode.UserSpotCloseResponse(
                     reply.closed()));
+        } catch (ZLinkFrameworkException failure) {
+            operations.completeExceptionally(operationId, failure);
+        } catch (IllegalArgumentException failure) {
+            //  A codec/malformed-wire failure (ZLinkServiceWireException and
+            //  friends derive from IllegalArgumentException) means the reply
+            //  can't be processed -> ProtocolError
+            //  (spec 32-framework-error-model:91-92).
+            operations.completeExceptionally(
+                operationId,
+                new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "remote User Spot close reply could not be processed",
+                    failure));
         } catch (RuntimeException failure) {
             operations.completeExceptionally(operationId, failure);
         }
