@@ -174,27 +174,10 @@ public final class ZLinkServiceRelocationWireCodec {
 
     private static boolean validTerminalFailure(
         int terminalResult, int failureCode) {
-        if (terminalResult == 0
-            || terminalResult == 101 || terminalResult == 103
-            || terminalResult >= 108 && terminalResult <= 113) {
-            return failureCode == 0;
-        }
-        return switch (terminalResult) {
-            case 102 -> failureCode == 1 || failureCode == 6
-                || failureCode >= 8 && failureCode <= 11
-                || failureCode == 14;
-            case 104 -> failureCode == 12 || failureCode == 16;
-            case 105 -> failureCode == 2 || failureCode == 5
-                || failureCode == 13 || failureCode == 17
-                || failureCode == 19 || failureCode == 20
-                || failureCode == 35;
-            case 106 -> failureCode == 15 || failureCode == 18
-                || failureCode == 22;
-            case 107 -> failureCode == 3 || failureCode == 4
-                || failureCode == 7 || failureCode == 21
-                || failureCode == 33 || failureCode == 34;
-            default -> false;
-        };
+        //  Schema terminal-failure-integrity (spec 51:43-47): delegate to the
+        //  generated single source instead of redefining the pair table here.
+        return ServiceWireConstants.validTerminalFailure(
+            terminalResult, failureCode);
     }
 
     private static IllegalArgumentException invalid(String field) {

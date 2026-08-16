@@ -243,18 +243,9 @@ final class ZLinkCanonicalRelocationControlCodec {
     }
 
     private static boolean validTerminalFailure(int terminal, int failure) {
-        if (terminal == 0 || terminal == 101 || terminal == 103
-            || terminal >= 108 && terminal <= 113) return failure == 0;
-        return switch (terminal) {
-            case 102 -> failure == 1 || failure == 6 || failure >= 8 && failure <= 11 || failure == 14;
-            case 104 -> failure == 12 || failure == 16;
-            case 105 -> failure == 2 || failure == 5 || failure == 13
-                || failure == 17 || failure == 19 || failure == 20 || failure == 35;
-            case 106 -> failure == 15 || failure == 18 || failure == 22;
-            case 107 -> failure == 3 || failure == 4 || failure == 7
-                || failure == 21 || failure == 33 || failure == 34;
-            default -> false;
-        };
+        //  Schema terminal-failure-integrity (spec 51:43-47): delegate to the
+        //  generated single source instead of redefining the pair table here.
+        return ServiceWireConstants.validTerminalFailure(terminal, failure);
     }
 
     private static IllegalArgumentException invalid(String field) {

@@ -105,6 +105,39 @@ final class ZLinkServiceM6BActorCreateWireCodecTest {
         assertTrue(failure instanceof IllegalArgumentException);
     }
 
+    @Test
+    void actorCreateReplyRejectsSchemaMismatchedTerminalFailurePairs() {
+        //  Schema terminal-failure-integrity (spec 51:43-47): the Actor create
+        //  reply shares the generated pairing predicate, so a mismatched pair
+        //  (104+3: actorAlreadyExists pairs only with conflict) and an unknown
+        //  code (105+23, reserved) are protocol errors before dispatch.
+        assertThrows(
+            ZLinkServiceWireException.class,
+            () -> codec.encodeActorCreateReply(
+                101,
+                new ZLinkServiceM6BWireCodec.ActorCreationTerminal(
+                    104, 3, null, null)));
+        assertThrows(
+            ZLinkServiceWireException.class,
+            () -> codec.encodeActorCreateReply(
+                102,
+                new ZLinkServiceM6BWireCodec.ActorCreationTerminal(
+                    105, 23, null, null)));
+        //  The exact schema pair still encodes, and a failed reply carries no
+        //  creation tail (the failure producers pass creation == null; the
+        //  encoder formerly wrote the tail unconditionally and NPEd).
+        var failed = codec.decodeActorCreateReply(
+            codec.encodeActorCreateReply(
+                103,
+                new ZLinkServiceM6BWireCodec.ActorCreationTerminal(
+                    107, 3, null, null)),
+            "game");
+        assertEquals(103, failed.correlation());
+        assertEquals(107, failed.terminal().terminalResult());
+        assertEquals(3, failed.terminal().failureCode());
+        assertEquals(null, failed.terminal().creation());
+    }
+
     private static ZLinkServiceM6BWireCodec.ReservationFence
         reservation() {
         return new ZLinkServiceM6BWireCodec.ReservationFence(

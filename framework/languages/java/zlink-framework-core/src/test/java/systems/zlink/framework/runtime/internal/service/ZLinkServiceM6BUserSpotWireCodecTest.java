@@ -155,6 +155,50 @@ final class ZLinkServiceM6BUserSpotWireCodecTest {
         assertTrue(failure instanceof IllegalArgumentException);
     }
 
+    @Test
+    void replyTerminalFailurePairsFollowTheSchemaIntegrityTable() {
+        //  Schema terminal-failure-integrity (spec 51:43-47,
+        //  service-wire-v1.schema.json): a typed failure code must match its
+        //  exact schema terminal and unknown codes are rejected before
+        //  dispatch. The former loose typed-vs-boundary grouping accepted
+        //  mismatches like 102+18 and 104+3.
+        codec.encodeUserSpotCreateReply(1, 106, 18, null);
+        codec.encodeUserSpotCreateReply(2, 107, 3, null);
+        codec.encodeUserSpotCreateReply(3, 104, 16, null);
+        codec.encodeUserSpotCreateReply(4, 108, 0, null);
+        assertThrows(
+            ZLinkServiceWireException.class,
+            () -> codec.encodeUserSpotCreateReply(5, 102, 18, null));
+        assertThrows(
+            ZLinkServiceWireException.class,
+            () -> codec.encodeUserSpotCreateReply(6, 104, 3, null));
+        assertThrows(
+            ZLinkServiceWireException.class,
+            () -> codec.encodeUserSpotCreateReply(7, 105, 23, null));
+        assertThrows(
+            ZLinkServiceWireException.class,
+            () -> codec.encodeUserSpotCreateReply(8, 106, 99, null));
+
+        //  The decode side shares the same predicate: patch the failure-code
+        //  byte of a legal failed reply (107+33 vs 107+34 differ only there)
+        //  into the mismatched pair 107+18.
+        byte[] legal = codec.encodeUserSpotCreateReply(9, 107, 33, null);
+        byte[] sibling = codec.encodeUserSpotCreateReply(9, 107, 34, null);
+        int failureOffset = -1;
+        for (int index = 0; index < legal.length; index++) {
+            if (legal[index] != sibling[index]) {
+                failureOffset = index;
+                break;
+            }
+        }
+        assertTrue(failureOffset >= 0);
+        byte[] mismatched = legal.clone();
+        mismatched[failureOffset] = 18;
+        assertThrows(
+            ZLinkServiceWireException.class,
+            () -> codec.decodeUserSpotCreateReply(mismatched));
+    }
+
     private static ZLinkServiceM6BWireCodec.ReservationFence
         reservation() {
         return new ZLinkServiceM6BWireCodec.ReservationFence(

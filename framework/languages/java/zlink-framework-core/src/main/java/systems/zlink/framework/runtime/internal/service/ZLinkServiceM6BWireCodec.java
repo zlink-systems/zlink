@@ -783,7 +783,12 @@ public final class ZLinkServiceM6BWireCodec {
             correlation,
             terminal.terminalResult(),
             terminal.failureCode());
-        writeActorCreateTerminal(writer, terminal.creation());
+        //  Mirror the decode side: a failed terminal carries no creation tail
+        //  (writing one would NPE on the null creation the failure producers
+        //  pass — replyActorCreateFailure sends (terminal, failure, null)).
+        if (terminal.terminalResult() == 0) {
+            writeActorCreateTerminal(writer, terminal.creation());
+        }
         return writer.toByteArray();
     }
 
@@ -1904,12 +1909,12 @@ public final class ZLinkServiceM6BWireCodec {
     private static boolean validTerminalFailurePair(
         int terminalResult,
         int failureCode) {
-        if (terminalResult == 0) {
-            return failureCode == 0;
-        }
-        boolean typedFailure = terminalResult == 102
-            || terminalResult >= 104 && terminalResult <= 107;
-        return typedFailure ? failureCode != 0 : failureCode == 0;
+        //  Schema terminal-failure-integrity (spec 51:43-47): delegate to the
+        //  generated single source instead of a loose typed-vs-boundary group
+        //  check, so mismatched pairs (102+18, 104+3) and unknown codes are
+        //  rejected as protocol errors before dispatch.
+        return ServiceWireConstants.validTerminalFailure(
+            terminalResult, failureCode);
     }
 
     private static void writeRelocationIdentity(
