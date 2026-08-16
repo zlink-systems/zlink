@@ -24,7 +24,7 @@ class ZLinkDispatchErrorReporterTest {
 
         reporter.report(failure());
 
-        assertEquals(1L, reporter.reportedCount());
+        assertEquals(0L, reporter.reportedCount());
         assertEquals(0L, reporter.flow().tracedCount());
     }
 

@@ -36,12 +36,12 @@ public final class ZLinkDispatchErrorReporter {
     }
 
     public void report(ZLinkDispatchFailure error) {
-        reportedCount.incrementAndGet();
-        if (!flow.enabled(ZLinkMessageFlowOutcome.ERROR)) {
+        ZLinkMessageFlowTracer.TracePoint tracePoint = flow.beginDispatchError();
+        if (tracePoint == null) {
             return;
         }
-        flow.trace(new ZLinkMessageFlowEvent(
-            ZLinkMessageFlowOutcome.ERROR,
+        reportedCount.incrementAndGet();
+        tracePoint.trace(ZLinkMessageFlowEvent.dispatchError(
             error.surface(),
             error.messageKind(),
             error.packetName(),
@@ -51,7 +51,6 @@ public final class ZLinkDispatchErrorReporter {
             error.sourceRid(),
             error.spotId(),
             error.actorId(),
-            null,
             error.reason(),
             error.action(),
             error.errorType(),

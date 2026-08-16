@@ -2005,11 +2005,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     + " actor=" + actorId
                     + " correlation=" + correlationId);
         }
-        if (flow == null
-            || !flow.enabled(ZLinkMessageFlowOutcome.DISPATCHED)) {
+        ZLinkMessageFlowTracer.TracePoint tracePoint = flow == null
+            ? null : flow.begin(ZLinkMessageFlowOutcome.DISPATCHED);
+        if (tracePoint == null) {
             return;
         }
-        flow.trace(new ZLinkMessageFlowEvent(
+        tracePoint.trace(new ZLinkMessageFlowEvent(
             ZLinkMessageFlowOutcome.DISPATCHED,
             ZLinkDispatchErrorSurface.SPOT_ACTOR,
             ZLinkDispatchMessageKind.ACTOR_SEND,

@@ -2,31 +2,35 @@ package systems.zlink.framework.runtime.diagnostics;
 
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 
-// Shared formatter for the file/JUL key=value lines (present fields only) used by both
-// the flow tracer and the dispatch error reporter. Mirrors the C++/.NET trace format.
+/** Spec 26 structured-log projection. */
 final class ZLinkTraceFormat {
     private ZLinkTraceFormat() {
     }
 
-    static String flowLine(ZLinkMessageFlowEvent flow, String nodeId, Long size) {
-        StringBuilder builder = new StringBuilder("message flow");
-        append(builder, "outcome", String.valueOf(flow.outcome()));
-        append(builder, "surface", String.valueOf(flow.surface()));
-        append(builder, "kind", String.valueOf(flow.messageKind()));
-        append(builder, "label", nodeId);
-        append(builder, "reason", enumName(flow.errorReason()));
-        append(builder, "action", enumName(flow.errorAction()));
-        append(builder, "packet", flow.packetName());
+    static String flowLine(ZLinkMessageFlowEvent flow, Long size) {
+        StringBuilder builder = new StringBuilder("zlink flow:");
+        append(builder, "event", flow.eventId().traceName());
+        append(builder, "phase", token(flow.phase()));
+        append(builder, "surface", flow.surface().traceName());
+        append(builder, "kind", flow.messageKind().traceName());
+        append(builder, "mesh", flow.meshName());
         append(builder, "channel", flow.channelName());
+        append(builder, "channel_route", token(flow.channelRouteKind()));
+        append(builder, "source_rid", flow.sourceRid());
+        append(builder, "target_rid", flow.targetRid());
+        append(builder, "server_rid", flow.serverRid());
+        append(builder, "packet", flow.packetName());
         append(builder, "topic", flow.topic());
+        append(builder, "spot", flow.spotId());
+        append(builder, "instance_type", flow.instanceSpotType());
+        append(builder, "activation_state", token(flow.activationState()));
+        append(builder, "actor", flow.actorId());
         append(builder, "corr", flow.correlationId());
         append(builder, "flow", flow.flowId());
-        append(builder, "origin", enumName(flow.flowOrigin()));
-        append(builder, "src", flow.sourceRid());
-        append(builder, "spot", flow.spotId());
-        append(builder, "actor", flow.actorId());
-        append(builder, "errorType", flow.errorType());
-        append(builder, "errorMessage", flow.errorMessage());
+        append(builder, "origin", token(flow.flowOrigin()));
+        append(builder, "outcome", flow.outcome().traceName());
+        append(builder, "reason", flow.errorReason() == null
+            ? null : flow.errorReason().traceName());
         if (size != null) {
             append(builder, "size", String.valueOf(size.longValue()));
         }
@@ -39,7 +43,7 @@ final class ZLinkTraceFormat {
         }
     }
 
-    private static String enumName(Enum<?> value) {
-        return value == null ? null : String.valueOf(value);
+    private static String token(Enum<?> value) {
+        return value == null ? null : value.name().toLowerCase(java.util.Locale.ROOT);
     }
 }

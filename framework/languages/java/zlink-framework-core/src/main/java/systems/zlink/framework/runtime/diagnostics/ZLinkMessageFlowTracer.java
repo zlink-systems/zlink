@@ -4,33 +4,33 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import systems.zlink.framework.configuration.ZLinkLogLevel;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
-import systems.zlink.framework.configuration.ZLinkLogLevel;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
-import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
-import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
-import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
-import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowResult;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkTraceEventId;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 
-// Message-flow tracer for success transitions and dispatch errors, keyed by
-// correlation id. Mirrors the C++ message_flow_tracer / .NET ZLinkMessageFlowTracer.
-//
-// PERFORMANCE: callers MUST guard event construction with enabled(outcome) so an "off"
-// dispatch pays nothing but a volatile mode read:
-//     if (tracer.enabled(outcome)) tracer.trace(new ZLinkMessageFlowEvent(...));
+/** Internal Spec 26 message-flow tracer. */
 public final class ZLinkMessageFlowTracer {
     private static final Logger LOGGER =
         Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+    private static final AtomicLong NEXT_SOURCE_GENERATION = new AtomicLong();
 
     private final ZLinkDispatchOptionsRegistration options;
     private final ZLinkRuntimeEventDispatcher eventDispatcher;
+    private final long sourceMeshGeneration = NEXT_SOURCE_GENERATION.incrementAndGet();
+    private final AtomicLong localSamplingSequence = new AtomicLong();
     private final AtomicLong tracedCount = new AtomicLong();
     private final AtomicLong providerFailureCount = new AtomicLong();
-    private final AtomicLong sampleCounter = new AtomicLong();
 
     public ZLinkMessageFlowTracer(
         ZLinkDispatchOptionsRegistration options,
@@ -48,63 +48,99 @@ public final class ZLinkMessageFlowTracer {
         this.eventDispatcher = eventDispatcher;
     }
 
-    // Cheap mode gate (volatile read of the live mode). Build the event only after
-    // this returns true.
-    public boolean enabled(ZLinkMessageFlowOutcome outcome) {
-        return options.diagnostics().effectiveMessageFlow().value() >= requiredMode(outcome).value();
+    /** Compatibility query. Processing points should use begin so mode is read once. */
+    public boolean enabled(ZLinkMessageFlowOutcome phase) {
+        ZLinkMessageFlowLogMode mode = options.diagnostics().effectiveMessageFlow();
+        return accepts(mode, defaultResult(phase));
+    }
+
+    public TracePoint begin(ZLinkMessageFlowOutcome phase) {
+        return begin(phase, defaultResult(phase));
+    }
+
+    public TracePoint begin(
+        ZLinkMessageFlowOutcome phase,
+        ZLinkMessageFlowResult result) {
+        ZLinkMessageFlowLogMode mode = options.diagnostics().effectiveMessageFlow();
+        if (!accepts(mode, result)) {
+            return null;
+        }
+        return event -> traceAtMode(event, mode);
+    }
+
+    public TracePoint beginDispatchError() {
+        ZLinkMessageFlowLogMode mode = options.diagnostics().effectiveMessageFlow();
+        if (!accepts(mode, ZLinkMessageFlowResult.FAILED)) {
+            return null;
+        }
+        return event -> traceAtMode(event, mode);
     }
 
     /**
-     * Traces a flow event built only when the outcome is enabled.
-     *
-     * <p>Use this on failure and other rare transitions: the supplier keeps the
-     * call site free of an explicit gate and never runs when tracing is off, at
-     * the cost of one lambda per call. Hot paths that trace every message must
-     * keep the {@code if (enabled(outcome))} guard so no lambda is allocated
-     * there either.
+     * Captures the live level before doing terminal-only classification work.
+     * The returned point owns the request's one terminal message-flow record.
      */
-    public void traceLazy(
-        ZLinkMessageFlowOutcome outcome,
-        java.util.function.Supplier<ZLinkMessageFlowEvent> flow) {
-        if (!enabled(outcome)) {
-            return;
+    public TerminalTracePoint beginRequestTerminal(
+        Throwable failure,
+        java.util.concurrent.Future<?> request) {
+        ZLinkMessageFlowLogMode mode = options.diagnostics().effectiveMessageFlow();
+        if (mode == ZLinkMessageFlowLogMode.OFF) {
+            return null;
         }
-        trace(flow.get());
+        return beginRequestTerminalAtMode(
+            failure, request != null && request.isCancelled(), mode);
+    }
+
+    private TerminalTracePoint beginRequestTerminalAtMode(
+        Throwable failure,
+        boolean cancelled,
+        ZLinkMessageFlowLogMode mode) {
+        ZLinkMessageFlowResult result = requestTerminalResult(failure, cancelled);
+        if (!accepts(mode, result)) {
+            return null;
+        }
+        return event -> traceAtMode(event.withOutcome(result), mode);
+    }
+
+    public void traceLazy(
+        ZLinkMessageFlowOutcome phase,
+        java.util.function.Supplier<ZLinkMessageFlowEvent> flow) {
+        TracePoint point = begin(phase);
+        if (point != null) {
+            point.trace(flow.get());
+        }
     }
 
     public void trace(ZLinkMessageFlowEvent flow) {
-        if (!enabled(flow.outcome())) {
+        ZLinkMessageFlowLogMode mode = options.diagnostics().effectiveMessageFlow();
+        if (!accepts(mode, flow.outcome())) {
             return;
         }
-        ZLinkMessageFlowEvent tracedFlow = attachFlow(flow);
-        if (tracedFlow.outcome() != ZLinkMessageFlowOutcome.DROPPED
-            && tracedFlow.outcome() != ZLinkMessageFlowOutcome.ERROR
-            && !sample(tracedFlow.flowId())) {
+        traceAtMode(flow, mode);
+    }
+
+    private void traceAtMode(
+        ZLinkMessageFlowEvent event,
+        ZLinkMessageFlowLogMode mode) {
+        ZLinkMessageFlowEvent tracedFlow = attachAmbientFlow(event);
+        if (sampled(tracedFlow) && !sample(
+            tracedFlow.flowId(), tracedFlow.sourceMeshGeneration())) {
             return;
         }
         tracedCount.incrementAndGet();
         try {
-            logDefault(tracedFlow);
+            logDefault(tracedFlow, mode);
         } catch (Throwable ex) {
             reportProviderFailure(ex);
         }
     }
 
-    private ZLinkMessageFlowEvent attachFlow(ZLinkMessageFlowEvent event) {
+    private static ZLinkMessageFlowEvent attachAmbientFlow(ZLinkMessageFlowEvent event) {
         if (event.flowId() != null) {
             return event;
         }
         ZLinkFlowContext.State state = ZLinkFlowContext.current();
-        if (state == null) {
-            state = ZLinkFlowContext.create(originFor(event));
-        }
-        return event.withFlow(state.flowId(), state.origin());
-    }
-
-    private static ZLinkFlowOrigin originFor(ZLinkMessageFlowEvent event) {
-        return event.outcome() == ZLinkMessageFlowOutcome.RECEIVED
-            ? ZLinkFlowOrigin.INBOUND
-            : ZLinkFlowOrigin.APPLICATION;
+        return state == null ? event : event.withFlow(state.flowId(), state.origin());
     }
 
     public long tracedCount() {
@@ -115,14 +151,55 @@ public final class ZLinkMessageFlowTracer {
         return providerFailureCount.get();
     }
 
-    private static ZLinkMessageFlowLogMode requiredMode(ZLinkMessageFlowOutcome outcome) {
-        return outcome == ZLinkMessageFlowOutcome.DROPPED
-            || outcome == ZLinkMessageFlowOutcome.ERROR
-            ? ZLinkMessageFlowLogMode.ERRORS
-            : ZLinkMessageFlowLogMode.NORMAL;
+    private static boolean accepts(
+        ZLinkMessageFlowLogMode mode,
+        ZLinkMessageFlowResult result) {
+        ZLinkMessageFlowLogMode required = result == ZLinkMessageFlowResult.SUCCEEDED
+            ? ZLinkMessageFlowLogMode.NORMAL
+            : ZLinkMessageFlowLogMode.ERRORS;
+        return mode.value() >= required.value();
     }
 
-    private boolean sample(String flowId) {
+    private static ZLinkMessageFlowResult defaultResult(ZLinkMessageFlowOutcome phase) {
+        if (phase == ZLinkMessageFlowOutcome.BACKPRESSURED) {
+            return ZLinkMessageFlowResult.BACKPRESSURED;
+        }
+        if (phase == ZLinkMessageFlowOutcome.DROPPED) {
+            return ZLinkMessageFlowResult.DROPPED;
+        }
+        return ZLinkMessageFlowResult.SUCCEEDED;
+    }
+
+    static ZLinkMessageFlowResult requestTerminalResult(
+        Throwable failure,
+        boolean cancelled) {
+        if (cancelled || failure instanceof java.util.concurrent.CancellationException) {
+            return ZLinkMessageFlowResult.CANCELLED;
+        }
+        Throwable actual = failure;
+        while (actual instanceof java.util.concurrent.CompletionException
+            && actual.getCause() != null) {
+            actual = actual.getCause();
+        }
+        if (actual instanceof ZLinkFrameworkException frameworkFailure) {
+            if (frameworkFailure.kind() == ZLinkFrameworkErrorKind.SHUTTING_DOWN) {
+                return ZLinkMessageFlowResult.SHUTDOWN;
+            }
+            if (frameworkFailure.kind() == ZLinkFrameworkErrorKind.CAPACITY_EXCEEDED) {
+                return ZLinkMessageFlowResult.BACKPRESSURED;
+            }
+        }
+        return actual == null
+            ? ZLinkMessageFlowResult.SUCCEEDED
+            : ZLinkMessageFlowResult.FAILED;
+    }
+
+    private static boolean sampled(ZLinkMessageFlowEvent flow) {
+        return flow.eventId() == ZLinkTraceEventId.MESSAGE_FLOW
+            && flow.outcome() == ZLinkMessageFlowResult.SUCCEEDED;
+    }
+
+    private boolean sample(String flowId, Long eventSourceGeneration) {
         double rate = options.diagnostics().sampleRate();
         if (rate >= 1.0d) {
             return true;
@@ -130,11 +207,24 @@ public final class ZLinkMessageFlowTracer {
         if (rate <= 0.0d) {
             return false;
         }
-        long stride = Math.max(1L, Math.round(1.0d / rate));
-        if (flowId != null) {
-            return Math.floorMod(flowId.hashCode(), stride) == 0;
+        String samplingKey = flowId;
+        if (samplingKey == null) {
+            long generation = eventSourceGeneration == null
+                ? sourceMeshGeneration : eventSourceGeneration.longValue();
+            samplingKey = generation + ":" + localSamplingSequence.incrementAndGet();
         }
-        return sampleCounter.incrementAndGet() % stride == 0;
+        long unsignedHash = Integer.toUnsignedLong(fnv1a(samplingKey));
+        return unsignedHash / 4294967296.0d < rate;
+    }
+
+    private static int fnv1a(String value) {
+        int hash = 0x811c9dc5;
+        byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        for (byte current : bytes) {
+            hash ^= current & 0xff;
+            hash *= 0x01000193;
+        }
+        return hash;
     }
 
     private void reportProviderFailure(Throwable error) {
@@ -143,27 +233,24 @@ public final class ZLinkMessageFlowTracer {
             return;
         }
         eventDispatcher.publishObserverFailure(
-            "message-flow",
-            "standard-logger",
-            error);
+            "message-flow", "standard-logger", error);
     }
 
-    private void logDefault(ZLinkMessageFlowEvent flow) {
-        ZLinkDispatchOptionsRegistration.DiagnosticsOptions diagnostics = options.diagnostics();
+    private void logDefault(
+        ZLinkMessageFlowEvent flow,
+        ZLinkMessageFlowLogMode mode) {
         Long size = null;
         if (flow.messageSize() != null
-            && diagnostics.effectiveMessageFlow().value() >= ZLinkMessageFlowLogMode.DETAILED.value()
-            && diagnostics.includeMessageSizes()) {
+            && mode.value() >= ZLinkMessageFlowLogMode.DETAILED.value()
+            && options.diagnostics().includeMessageSizes()) {
             size = flow.messageSize();
         }
-
-        String line = ZLinkTraceFormat.flowLine(flow, null, size);
-        LOGGER.log(logLevel(flow), line);
+        LOGGER.log(logLevel(flow), ZLinkTraceFormat.flowLine(flow, size));
     }
 
     Level logLevel(ZLinkMessageFlowEvent flow) {
-        if (flow.outcome() != ZLinkMessageFlowOutcome.ERROR
-            && flow.outcome() != ZLinkMessageFlowOutcome.DROPPED) {
+        if (flow.eventId() == ZLinkTraceEventId.MESSAGE_FLOW
+            && flow.outcome() == ZLinkMessageFlowResult.SUCCEEDED) {
             return Level.INFO;
         }
         if (flow.errorReason() == ZLinkDispatchErrorReason.HANDLER_EXCEPTION) {
@@ -187,5 +274,15 @@ public final class ZLinkMessageFlowTracer {
             case WARN -> Level.WARNING;
             case ERROR -> Level.SEVERE;
         };
+    }
+
+    @FunctionalInterface
+    public interface TracePoint {
+        void trace(ZLinkMessageFlowEvent event);
+    }
+
+    @FunctionalInterface
+    public interface TerminalTracePoint {
+        void trace(ZLinkMessageFlowEvent event);
     }
 }

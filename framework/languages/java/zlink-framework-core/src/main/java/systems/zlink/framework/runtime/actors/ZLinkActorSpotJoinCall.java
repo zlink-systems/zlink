@@ -30,6 +30,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSu
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -451,8 +452,10 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     }
 
     private void traceJoinSent() {
-        if (services.flow() != null && services.flow().enabled(ZLinkMessageFlowOutcome.SENT)) {
-            services.flow().trace(new ZLinkMessageFlowEvent(
+        ZLinkMessageFlowTracer.TracePoint tracePoint = services.flow() == null
+            ? null : services.flow().begin(ZLinkMessageFlowOutcome.SENT);
+        if (tracePoint != null) {
+            tracePoint.trace(new ZLinkMessageFlowEvent(
                 ZLinkMessageFlowOutcome.SENT,
                 ZLinkDispatchErrorSurface.SPOT_ACTOR,
                 ZLinkDispatchMessageKind.ACTOR_REQUEST,
@@ -465,26 +468,27 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         if (services.flow() == null) {
             return;
         }
-        services.flow().traceLazy(
-            ZLinkMessageFlowOutcome.ERROR,
-            () -> new ZLinkMessageFlowEvent(
-                ZLinkMessageFlowOutcome.ERROR,
+        ZLinkMessageFlowTracer.TracePoint tracePoint =
+            services.flow().beginDispatchError();
+        if (tracePoint != null) {
+            tracePoint.trace(ZLinkMessageFlowEvent.dispatchError(
                 ZLinkDispatchErrorSurface.SPOT_ACTOR,
                 ZLinkDispatchMessageKind.ACTOR_REQUEST,
                 "JoinSpot", null, null, null, null,
                 spotId == null ? null : spotId.toString(),
-                context.actorRef().actorId(), null,
+                context.actorRef().actorId(),
                 ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
                 ZLinkDispatchErrorAction.REPLY_ERROR,
                 kind.name(),
                 cause == null ? null : cause.toString()));
+        }
     }
 
     private void traceJoinReplyReceived(Throwable error) {
-        if (error == null
-            && services.flow() != null
-            && services.flow().enabled(ZLinkMessageFlowOutcome.REPLY_RECEIVED)) {
-            services.flow().trace(new ZLinkMessageFlowEvent(
+        ZLinkMessageFlowTracer.TracePoint tracePoint = error != null || services.flow() == null
+            ? null : services.flow().begin(ZLinkMessageFlowOutcome.REPLY_RECEIVED);
+        if (tracePoint != null) {
+            tracePoint.trace(new ZLinkMessageFlowEvent(
                 ZLinkMessageFlowOutcome.REPLY_RECEIVED,
                 ZLinkDispatchErrorSurface.SPOT_ACTOR,
                 ZLinkDispatchMessageKind.RESPONSE,

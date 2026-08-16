@@ -238,6 +238,14 @@ public final class ZLinkMeshApplicationDispatcher
                          ZLinkApplicationJobContext.enter(permit)) {
                     boolean accepted = namespace.sendQueue.tryEnqueue(() -> {
                         try {
+                            traceLocalNodeSend(
+                                ZLinkMessageFlowOutcome.ADMITTED,
+                                packetName,
+                                sourceNodeRid);
+                            traceLocalNodeSend(
+                                ZLinkMessageFlowOutcome.DISPATCHED,
+                                packetName,
+                                sourceNodeRid);
                             return invoker.executeHandler(() ->
                                     invoker.invokeRouteSendHandler(
                                         null,
@@ -246,9 +254,16 @@ public final class ZLinkMeshApplicationDispatcher
                                         ownedPayload,
                                         metadata,
                                         contentType))
-                                .whenComplete((unused, error) ->
+                                .whenComplete((unused, error) -> {
+                                    if (error == null) {
+                                        traceLocalNodeSend(
+                                            ZLinkMessageFlowOutcome.COMPLETED,
+                                            packetName,
+                                            sourceNodeRid);
+                                    }
                                     closeLocalSubmission(
-                                        ownedPayload, claim));
+                                        ownedPayload, claim);
+                                });
                         } catch (RuntimeException handlerFailure) {
                             closeLocalSubmission(ownedPayload, claim);
                             return CompletableFuture.failedFuture(
@@ -256,6 +271,10 @@ public final class ZLinkMeshApplicationDispatcher
                         }
                     });
                     if (!accepted) {
+                        traceLocalNodeSend(
+                            ZLinkMessageFlowOutcome.BACKPRESSURED,
+                            packetName,
+                            sourceNodeRid);
                         permit.abandonReservation();
                         closeLocalSubmission(ownedPayload, claim);
                         admission.complete(ZLinkOneWayCalls.BACKPRESSURED);
@@ -314,6 +333,14 @@ public final class ZLinkMeshApplicationDispatcher
         try {
             CompletionStage<Void> queued = namespace.sendQueue
                 .enqueue(() -> {
+                traceFlow(
+                    ZLinkMessageFlowOutcome.ADMITTED,
+                    record,
+                    packetName);
+                traceFlow(
+                    ZLinkMessageFlowOutcome.DISPATCHED,
+                    record,
+                    packetName);
                 CompletionStage<Void> invocation = route != null
                     ? invoker.executeHandler(() -> invoker.invokeRouteSendHandler(
                         null,
@@ -332,7 +359,7 @@ public final class ZLinkMeshApplicationDispatcher
                 return invocation.whenComplete((ignored, error) -> {
                     if (error == null) {
                         traceFlow(
-                            ZLinkMessageFlowOutcome.DISPATCHED,
+                            ZLinkMessageFlowOutcome.COMPLETED,
                             record,
                             packetName);
                     }
@@ -373,6 +400,14 @@ public final class ZLinkMeshApplicationDispatcher
         try {
             CompletionStage<Void> queued = namespace.requestQueue
                 .enqueue(() -> {
+                traceFlow(
+                    ZLinkMessageFlowOutcome.ADMITTED,
+                    record,
+                    packetName);
+                traceFlow(
+                    ZLinkMessageFlowOutcome.DISPATCHED,
+                    record,
+                    packetName);
                 try {
                             CompletionStage<Message> invocation = route != null
                                 ? invoker.executeHandler(() -> invoker.invokeRouteRequestHandler(
@@ -511,7 +546,8 @@ public final class ZLinkMeshApplicationDispatcher
         ZLinkMessageFlowOutcome outcome,
         ZLinkMeshDispatchRecord record,
         String packetName) {
-        if (!flow.enabled(outcome)) {
+        ZLinkMessageFlowTracer.TracePoint tracePoint = flow.begin(outcome);
+        if (tracePoint == null) {
             return;
         }
         ReceiveRecord receive = record.receive();
@@ -520,7 +556,7 @@ public final class ZLinkMeshApplicationDispatcher
             default -> ZLinkDispatchMessageKind.SEND;
         };
         Long correlation = receive.applicationCorrelation();
-        flow.trace(new ZLinkMessageFlowEvent(
+        tracePoint.trace(new ZLinkMessageFlowEvent(
             outcome,
             ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
             kind,
@@ -529,6 +565,28 @@ public final class ZLinkMeshApplicationDispatcher
             null,
             correlation == null ? null : Long.toUnsignedString(correlation),
             receive.sourceNodeRid() == null ? null : receive.sourceNodeRid().toString(),
+            null,
+            null,
+            null));
+    }
+
+    private void traceLocalNodeSend(
+        ZLinkMessageFlowOutcome phase,
+        String packetName,
+        RoutingId sourceNodeRid) {
+        ZLinkMessageFlowTracer.TracePoint tracePoint = flow.begin(phase);
+        if (tracePoint == null) {
+            return;
+        }
+        tracePoint.trace(new ZLinkMessageFlowEvent(
+            phase,
+            ZLinkDispatchErrorSurface.NODE,
+            ZLinkDispatchMessageKind.SEND,
+            packetName,
+            null,
+            null,
+            null,
+            sourceNodeRid == null ? null : sourceNodeRid.toString(),
             null,
             null,
             null));

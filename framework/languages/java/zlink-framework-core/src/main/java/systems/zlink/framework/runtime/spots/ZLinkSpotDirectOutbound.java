@@ -246,13 +246,6 @@ final class ZLinkSpotDirectOutbound {
         Optional<String> packetName,
         String contentType,
         ZLinkApplicationMetadata metadata) {
-        trace(
-            ZLinkMessageFlowOutcome.SENT,
-            ZLinkDispatchMessageKind.PUBLISH,
-            packetName,
-            topic,
-            null,
-            null);
         List<Message> parts = messages.encode(packetName, payload, contentType);
         CompletionStage<Void> result = ZLinkOneWayCalls.adaptOneWay(
             spot.publishAsync(
@@ -273,10 +266,11 @@ final class ZLinkSpotDirectOutbound {
         String topic,
         RoutingId targetNodeRid,
         String spotId) {
-        if (!flow.enabled(outcome)) {
+        ZLinkMessageFlowTracer.TracePoint tracePoint = flow.begin(outcome);
+        if (tracePoint == null) {
             return;
         }
-        flow.trace(new ZLinkMessageFlowEvent(
+        tracePoint.trace(new ZLinkMessageFlowEvent(
             outcome,
             topic == null
                 ? ZLinkDispatchErrorSurface.SPOT_ROUTE

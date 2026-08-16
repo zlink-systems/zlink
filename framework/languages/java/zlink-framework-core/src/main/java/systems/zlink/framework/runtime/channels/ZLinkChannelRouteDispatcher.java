@@ -372,8 +372,9 @@ final class ZLinkChannelRouteDispatcher {
         String channelName,
         String correlationId,
         RoutingId source) {
-        if (flow.enabled(outcome)) {
-            flow.trace(new ZLinkMessageFlowEvent(
+        ZLinkMessageFlowTracer.TracePoint tracePoint = flow.begin(outcome);
+        if (tracePoint != null) {
+            tracePoint.trace(new ZLinkMessageFlowEvent(
                 outcome,
                 ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
                 kind,

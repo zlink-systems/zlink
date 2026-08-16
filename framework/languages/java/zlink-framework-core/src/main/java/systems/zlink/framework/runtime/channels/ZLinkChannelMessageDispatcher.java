@@ -51,7 +51,7 @@ final class ZLinkChannelMessageDispatcher {
             ParsedPacket packet = parsePacket(received.parts());
             if (ZLinkFrameworkErrorReply.isPacketName(packet.packetName())) {
                 errors.report(
-                    ZLinkDispatchErrorSurface.CHANNEL,
+                    ZLinkDispatchErrorSurface.CLASSIC_FANOUT,
                     received.requestSeq().isPresent()
                         ? ZLinkDispatchMessageKind.REQUEST
                         : ZLinkDispatchMessageKind.SEND,
@@ -124,7 +124,7 @@ final class ZLinkChannelMessageDispatcher {
                 registry.publishHandler(channelName, packet.packetName());
             if (registration == null) {
                 errors.report(
-                    ZLinkDispatchErrorSurface.CHANNEL,
+                    ZLinkDispatchErrorSurface.CLASSIC_FANOUT,
                     ZLinkDispatchMessageKind.PUBLISH,
                     ZLinkDispatchErrorReason.HANDLER_MISSING,
                     ZLinkDispatchErrorAction.DROP,
@@ -137,13 +137,6 @@ final class ZLinkChannelMessageDispatcher {
             }
             String packetName = packet.packetName();
             String topic = received.topic();
-            traceFlow(
-                ZLinkMessageFlowOutcome.RECEIVED,
-                ZLinkDispatchMessageKind.PUBLISH,
-                packetName,
-                channelName,
-                topic,
-                null);
             Message payload = Message.from(packet.payload());
             try {
                 CompletionStage<Void> queued = registry.publishQueue(channelName)
@@ -154,7 +147,7 @@ final class ZLinkChannelMessageDispatcher {
                         .whenComplete((ignored, error) -> {
                             if (error != null) {
                                 errors.report(
-                                    ZLinkDispatchErrorSurface.CHANNEL,
+                                    ZLinkDispatchErrorSurface.CLASSIC_FANOUT,
                                     ZLinkDispatchMessageKind.PUBLISH,
                                     ZLinkChannelDispatchReporter.reasonFrom(error),
                                     ZLinkDispatchErrorAction.DROP,
@@ -163,14 +156,6 @@ final class ZLinkChannelMessageDispatcher {
                                     topic,
                                     null,
                                     error);
-                            } else {
-                                traceFlow(
-                                    ZLinkMessageFlowOutcome.DISPATCHED,
-                                    ZLinkDispatchMessageKind.PUBLISH,
-                                    packetName,
-                                    channelName,
-                                    topic,
-                                    null);
                             }
                         })
                         .whenComplete((ignored, error) -> {
@@ -220,34 +205,47 @@ final class ZLinkChannelMessageDispatcher {
         Message payload = Message.from(packet.payload());
         try {
             CompletionStage<Void> queued = registry.sendQueue(channelName)
-                .enqueue(() ->
-                invokeStarted(() -> invoker.executeHandler(() ->
-                    invoker.invokeSendHandler(
-                        channelName, registration, payload, Map.of(), contentType)))
-                    .whenComplete((ignored, error) -> {
-                        if (error != null) {
-                            errors.report(
-                                ZLinkDispatchErrorSurface.CHANNEL,
-                                ZLinkDispatchMessageKind.SEND,
-                                ZLinkChannelDispatchReporter.reasonFrom(error),
-                                ZLinkDispatchErrorAction.DROP,
-                                packetName,
-                                channelName,
-                                null,
-                                error);
-                        } else {
-                            traceFlow(
-                                ZLinkMessageFlowOutcome.DISPATCHED,
-                                ZLinkDispatchMessageKind.SEND,
-                                packetName,
-                                channelName,
-                                null,
-                                null);
-                        }
-                    })
-                    .whenComplete((ignored, error) -> {
-                        payload.close();
-                    }));
+                .enqueue(() -> {
+                    traceFlow(
+                        ZLinkMessageFlowOutcome.ADMITTED,
+                        ZLinkDispatchMessageKind.SEND,
+                        packetName,
+                        channelName,
+                        null,
+                        null);
+                    traceFlow(
+                        ZLinkMessageFlowOutcome.DISPATCHED,
+                        ZLinkDispatchMessageKind.SEND,
+                        packetName,
+                        channelName,
+                        null,
+                        null);
+                    return invokeStarted(() -> invoker.executeHandler(() ->
+                        invoker.invokeSendHandler(
+                            channelName, registration, payload, Map.of(), contentType)))
+                        .whenComplete((ignored, error) -> {
+                            if (error != null) {
+                                errors.report(
+                                    ZLinkDispatchErrorSurface.CHANNEL,
+                                    ZLinkDispatchMessageKind.SEND,
+                                    ZLinkChannelDispatchReporter.reasonFrom(error),
+                                    ZLinkDispatchErrorAction.DROP,
+                                    packetName,
+                                    channelName,
+                                    null,
+                                    error);
+                            } else {
+                                traceFlow(
+                                    ZLinkMessageFlowOutcome.COMPLETED,
+                                    ZLinkDispatchMessageKind.SEND,
+                                    packetName,
+                                    channelName,
+                                    null,
+                                    null);
+                            }
+                        })
+                        .whenComplete((ignored, error) -> payload.close());
+                });
             queued.whenComplete((ignored, error) -> {
                 if (error != null) {
                     payload.close();
@@ -271,8 +269,22 @@ final class ZLinkChannelMessageDispatcher {
         Message payload = Message.from(packet.payload());
         try {
             CompletionStage<Void> queued = registry.requestQueue(channelName)
-                .enqueue(() ->
-                CompletableFuture.completedFuture(null)
+                .enqueue(() -> {
+                traceFlow(
+                    ZLinkMessageFlowOutcome.ADMITTED,
+                    ZLinkDispatchMessageKind.REQUEST,
+                    packetName,
+                    channelName,
+                    null,
+                    String.valueOf(requestSeq));
+                traceFlow(
+                    ZLinkMessageFlowOutcome.DISPATCHED,
+                    ZLinkDispatchMessageKind.REQUEST,
+                    packetName,
+                    channelName,
+                    null,
+                    String.valueOf(requestSeq));
+                return CompletableFuture.completedFuture(null)
                     .thenCompose(permit -> {
                         try {
                             return invokeStarted(() -> invoker.executeHandler(() ->
@@ -323,7 +335,8 @@ final class ZLinkChannelMessageDispatcher {
                     .whenComplete((ignored, error) -> {
                         payload.close();
                     })
-                    .thenApply(ignored -> null));
+                    .thenApply(ignored -> null);
+                });
             queued.whenComplete((ignored, error) -> {
                 if (error != null) {
                     payload.close();
@@ -360,20 +373,22 @@ final class ZLinkChannelMessageDispatcher {
         String channelName,
         String topic,
         String correlationId) {
-        if (flow.enabled(outcome)) {
-            flow.trace(new ZLinkMessageFlowEvent(
-                outcome,
-                ZLinkDispatchErrorSurface.CHANNEL,
-                kind,
-                packetName,
-                channelName,
-                topic,
-                correlationId,
-                null,
-                null,
-                null,
-                null));
+        ZLinkMessageFlowTracer.TracePoint tracePoint = flow.begin(outcome);
+        if (tracePoint == null) {
+            return;
         }
+        tracePoint.trace(new ZLinkMessageFlowEvent(
+            outcome,
+            ZLinkDispatchErrorSurface.CHANNEL,
+            kind,
+            packetName,
+            channelName,
+            topic,
+            correlationId,
+            null,
+            null,
+            null,
+            null));
     }
 
     private static ParsedPacket parsePacket(List<Message> parts) {

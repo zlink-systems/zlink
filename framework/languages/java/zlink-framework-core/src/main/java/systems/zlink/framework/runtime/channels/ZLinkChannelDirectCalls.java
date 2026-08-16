@@ -60,6 +60,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSu
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -221,8 +222,10 @@ final class SendCall implements ZLinkSendCall {
         if (duplicate != null) {
             return duplicate;
         }
-            if (runtime.flow().enabled(ZLinkMessageFlowOutcome.SENT)) {
-                runtime.flow().trace(new ZLinkMessageFlowEvent(
+        ZLinkMessageFlowTracer.TracePoint sent =
+            runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
+        if (sent != null) {
+            sent.trace(new ZLinkMessageFlowEvent(
                 ZLinkMessageFlowOutcome.SENT,
                 ZLinkDispatchErrorSurface.CHANNEL,
                 ZLinkDispatchMessageKind.SEND,
@@ -312,6 +315,18 @@ final class RequestCall implements ZLinkRequestCall {
             return duplicate;
         }
         CompletableFuture<TReply> result = new CompletableFuture<>();
+        String reqPacket = packetName.orElse(null);
+        result.whenComplete((ignored, error) -> {
+            ZLinkMessageFlowTracer.TerminalTracePoint terminal =
+                runtime.flow().beginRequestTerminal(error, result);
+            if (terminal != null) {
+                terminal.trace(new ZLinkMessageFlowEvent(
+                    ZLinkMessageFlowOutcome.REPLY_RECEIVED,
+                    ZLinkDispatchErrorSurface.CHANNEL,
+                    ZLinkDispatchMessageKind.REQUEST,
+                    reqPacket, null, null, null, null, null, null, null));
+            }
+        });
         //  Nothing on this path allocates while metrics are off: no label map is
         //  built and no completion callback is registered.
         if (ZLinkRuntimeMetrics.enabled()) {
@@ -336,9 +351,10 @@ final class RequestCall implements ZLinkRequestCall {
         List<Message> requestParts = ZLinkChannelCallRuntime.parts(
             packetName, payload, contentType);
         result.whenComplete((ignored, error) -> requestParts.forEach(Message::close));
-        String reqPacket = packetName.orElse(null);
-            if (runtime.flow().enabled(ZLinkMessageFlowOutcome.SENT)) {
-                runtime.flow().trace(new ZLinkMessageFlowEvent(
+        ZLinkMessageFlowTracer.TracePoint sent =
+            runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
+        if (sent != null) {
+            sent.trace(new ZLinkMessageFlowEvent(
                 ZLinkMessageFlowOutcome.SENT,
                 ZLinkDispatchErrorSurface.CHANNEL,
                 ZLinkDispatchMessageKind.REQUEST,
@@ -357,13 +373,6 @@ final class RequestCall implements ZLinkRequestCall {
                 }
                 try {
                     runtime.completeReply(reply, replyType, result);
-                        if (runtime.flow().enabled(ZLinkMessageFlowOutcome.REPLY_RECEIVED)) {
-                            runtime.flow().trace(new ZLinkMessageFlowEvent(
-                            ZLinkMessageFlowOutcome.REPLY_RECEIVED,
-                            ZLinkDispatchErrorSurface.CHANNEL,
-                            ZLinkDispatchMessageKind.RESPONSE,
-                            reqPacket, null, null, null, null, null, null, null));
-                    }
                 } catch (RuntimeException ex) {
                     result.completeExceptionally(ex);
                 } finally {

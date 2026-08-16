@@ -37,6 +37,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocati
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityExhausted;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.spots.SpotRef;
@@ -3081,34 +3082,61 @@ public final class ZLinkSpotRuntime
             actorId);
         CompletionStage<Optional<Message>> stage = withCurrentOutbound(
             outbound,
-            () -> actorSessions.runPacketTurn(
-                actor,
-                packetHeader.requestSeq().isPresent(),
-                noBindRequest,
-                        headerPart,
-                        primaryNode,
-                () -> actorIsRequest
-                    ? invokeActorRequestHandler(
-                        handler,
-                        spotSurface,
-                        actor,
-                        payload,
-                        actorPacketContentType(packetHeader, headerPart),
-                        packetHeader.metadata())
-                    : invokeActorSendHandler(
-                        handler,
-                        spotSurface,
-                        actor,
-                        payload,
-                        actorPacketContentType(packetHeader, headerPart),
-                        packetHeader.metadata())
-                        .thenApply(ignored -> Optional.empty()),
-                relocationReply == null
-                    ? headerPart::acceptedJournalRecord
-                    : relocationReply::record,
-                relocationReply == null
-                    ? () -> { }
-                    : relocationReply::releaseForRelocation));
+            () -> {
+                CompletionStage<Optional<Message>> admitted = actorSessions.runPacketTurn(
+                    actor,
+                    packetHeader.requestSeq().isPresent(),
+                    noBindRequest,
+                    headerPart,
+                    primaryNode,
+                    () -> {
+                        traceMessageFlow(
+                            ZLinkMessageFlowOutcome.ADMITTED,
+                            ZLinkDispatchErrorSurface.SPOT_ACTOR,
+                            actorKind,
+                            actorPacketName,
+                            null,
+                            null,
+                            packetHeader.requestSeq().map(String::valueOf).orElse(null),
+                            null,
+                            null,
+                            actorId);
+                        traceMessageFlow(
+                            ZLinkMessageFlowOutcome.DISPATCHED,
+                            ZLinkDispatchErrorSurface.SPOT_ACTOR,
+                            actorKind,
+                            actorPacketName,
+                            null,
+                            null,
+                            packetHeader.requestSeq().map(String::valueOf).orElse(null),
+                            null,
+                            null,
+                            actorId);
+                        return actorIsRequest
+                            ? invokeActorRequestHandler(
+                                handler,
+                                spotSurface,
+                                actor,
+                                payload,
+                                actorPacketContentType(packetHeader, headerPart),
+                                packetHeader.metadata())
+                            : invokeActorSendHandler(
+                                handler,
+                                spotSurface,
+                                actor,
+                                payload,
+                                actorPacketContentType(packetHeader, headerPart),
+                                packetHeader.metadata())
+                                .thenApply(ignored -> Optional.empty());
+                    },
+                    relocationReply == null
+                        ? headerPart::acceptedJournalRecord
+                        : relocationReply::record,
+                    relocationReply == null
+                        ? () -> { }
+                        : relocationReply::releaseForRelocation);
+                return admitted;
+            });
         return stage.handle((reply, error) -> {
                 if (error != null) {
                     reportDispatchError(DispatchFailureReport.of(
@@ -3176,7 +3204,7 @@ public final class ZLinkSpotRuntime
                     if (error == null) {
                         ZLinkMessageFlowOutcome phase = actorIsRequest
                             ? ZLinkMessageFlowOutcome.REPLIED
-                            : ZLinkMessageFlowOutcome.DISPATCHED;
+                            : ZLinkMessageFlowOutcome.COMPLETED;
                         traceMessageFlow(
                             phase,
                             ZLinkDispatchErrorSurface.SPOT_ACTOR,
@@ -4722,10 +4750,12 @@ public final class ZLinkSpotRuntime
         String sourceRid,
         String spotId,
         String actorId) {
-        if (!dispatchErrors.flow().enabled(outcome)) {
+        ZLinkMessageFlowTracer.TracePoint tracePoint =
+            dispatchErrors.flow().begin(outcome);
+        if (tracePoint == null) {
             return;
         }
-        dispatchErrors.flow().trace(new ZLinkMessageFlowEvent(
+        tracePoint.trace(new ZLinkMessageFlowEvent(
             outcome,
             surface,
             messageKind,

@@ -68,6 +68,7 @@ import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDisp
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
+import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerScanner;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
@@ -150,8 +151,10 @@ final class RouteSendCall implements ZLinkSendCall {
         if (duplicate != null) {
             return duplicate;
         }
-        if (runtime.flow().enabled(ZLinkMessageFlowOutcome.SENT)) {
-            runtime.flow().trace(new ZLinkMessageFlowEvent(
+        ZLinkMessageFlowTracer.TracePoint sent =
+            runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
+        if (sent != null) {
+            sent.trace(new ZLinkMessageFlowEvent(
                 ZLinkMessageFlowOutcome.SENT,
                 ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
                 ZLinkDispatchMessageKind.SEND,
@@ -250,11 +253,25 @@ final class RouteRequestCall implements ZLinkRequestCall {
             return duplicate;
         }
         CompletableFuture<TReply> result = new CompletableFuture<>();
+        result.whenComplete((ignored, error) -> {
+            ZLinkMessageFlowTracer.TerminalTracePoint terminal =
+                runtime.flow().beginRequestTerminal(error, result);
+            if (terminal != null) {
+                terminal.trace(new ZLinkMessageFlowEvent(
+                    ZLinkMessageFlowOutcome.REPLY_RECEIVED,
+                    ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                    ZLinkDispatchMessageKind.REQUEST,
+                    packetName.orElse(null), channelName, null, null,
+                    target.toString(), null, null, null));
+            }
+        });
         runtime.track(result, timeout);
         List<Message> requestParts = ZLinkChannelCallRuntime.parts(
             packetName, payload, contentType);
-        if (runtime.flow().enabled(ZLinkMessageFlowOutcome.SENT)) {
-            runtime.flow().trace(new ZLinkMessageFlowEvent(
+        ZLinkMessageFlowTracer.TracePoint sent =
+            runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
+        if (sent != null) {
+            sent.trace(new ZLinkMessageFlowEvent(
                 ZLinkMessageFlowOutcome.SENT,
                 ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
                 ZLinkDispatchMessageKind.REQUEST,
@@ -275,14 +292,6 @@ final class RouteRequestCall implements ZLinkRequestCall {
                 }
                     try {
                         runtime.completeReply(reply, replyType, result);
-                        if (runtime.flow().enabled(ZLinkMessageFlowOutcome.REPLY_RECEIVED)) {
-                            runtime.flow().trace(new ZLinkMessageFlowEvent(
-                                ZLinkMessageFlowOutcome.REPLY_RECEIVED,
-                                ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
-                                ZLinkDispatchMessageKind.RESPONSE,
-                                packetName.orElse(null), channelName, null, null,
-                                target.toString(), null, null, null));
-                        }
                     } catch (RuntimeException ex) {
                         result.completeExceptionally(ex);
                     } finally {
@@ -379,8 +388,10 @@ final class MeshNodeRouteSendCall implements ZLinkSendCall {
         if (duplicate != null) {
             return duplicate;
         }
-        if (runtime.flow().enabled(ZLinkMessageFlowOutcome.SENT)) {
-            runtime.flow().trace(new ZLinkMessageFlowEvent(
+        ZLinkMessageFlowTracer.TracePoint sent =
+            runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
+        if (sent != null) {
+            sent.trace(new ZLinkMessageFlowEvent(
                 ZLinkMessageFlowOutcome.SENT,
                 ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
                 ZLinkDispatchMessageKind.SEND,
@@ -617,6 +628,18 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
             return duplicate;
         }
         CompletableFuture<TReply> result = new CompletableFuture<>();
+        result.whenComplete((ignored, error) -> {
+            ZLinkMessageFlowTracer.TerminalTracePoint terminal =
+                runtime.flow().beginRequestTerminal(error, result);
+            if (terminal != null) {
+                terminal.trace(new ZLinkMessageFlowEvent(
+                    ZLinkMessageFlowOutcome.REPLY_RECEIVED,
+                    ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                    ZLinkDispatchMessageKind.REQUEST,
+                    packetName.orElse(null), channelName, null, null,
+                    null, null, null, null));
+            }
+        });
         runtime.track(result, timeout);
         Optional<Integer> classified =
             node.classifyChannelTarget(channelName);
@@ -771,11 +794,25 @@ final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
             return duplicate;
         }
         CompletableFuture<TReply> result = new CompletableFuture<>();
+        result.whenComplete((ignored, error) -> {
+            ZLinkMessageFlowTracer.TerminalTracePoint terminal =
+                runtime.flow().beginRequestTerminal(error, result);
+            if (terminal != null) {
+                terminal.trace(new ZLinkMessageFlowEvent(
+                    ZLinkMessageFlowOutcome.REPLY_RECEIVED,
+                    ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                    ZLinkDispatchMessageKind.REQUEST,
+                    packetName.orElse(null), channelName, null, null,
+                    target.toString(), null, null, null));
+            }
+        });
         runtime.track(result, timeout);
         List<Message> requestParts = ZLinkChannelCallRuntime.parts(
             packetName, payload, contentType);
-        if (runtime.flow().enabled(ZLinkMessageFlowOutcome.SENT)) {
-            runtime.flow().trace(new ZLinkMessageFlowEvent(
+        ZLinkMessageFlowTracer.TracePoint sent =
+            runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
+        if (sent != null) {
+            sent.trace(new ZLinkMessageFlowEvent(
                 ZLinkMessageFlowOutcome.SENT,
                 ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
                 ZLinkDispatchMessageKind.REQUEST,
@@ -818,14 +855,6 @@ final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
                     }
                     try {
                         runtime.completeReply(reply, replyType, result);
-                        if (runtime.flow().enabled(ZLinkMessageFlowOutcome.REPLY_RECEIVED)) {
-                            runtime.flow().trace(new ZLinkMessageFlowEvent(
-                                ZLinkMessageFlowOutcome.REPLY_RECEIVED,
-                                ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
-                                ZLinkDispatchMessageKind.RESPONSE,
-                                packetName.orElse(null), channelName, null, null,
-                                target.toString(), null, null, null));
-                        }
                     } catch (RuntimeException error) {
                         result.completeExceptionally(error);
                     } finally {

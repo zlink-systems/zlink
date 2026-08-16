@@ -251,11 +251,12 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     }
 
     private void traceRelay(ZLinkStreamHeader header) {
-        if (flow == null
-            || !flow.enabled(ZLinkMessageFlowOutcome.SENT)) {
+        ZLinkMessageFlowTracer.TracePoint tracePoint = flow == null
+            ? null : flow.begin(ZLinkMessageFlowOutcome.SENT);
+        if (tracePoint == null) {
             return;
         }
-        flow.trace(new ZLinkMessageFlowEvent(
+        tracePoint.trace(new ZLinkMessageFlowEvent(
             ZLinkMessageFlowOutcome.SENT,
             ZLinkDispatchErrorSurface.SPOT_ACTOR,
             header.requestSequence().isPresent()

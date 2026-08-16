@@ -1166,9 +1166,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             return CompletableFuture.completedFuture(null);
         }
         state.markApplicationReceived();
-        if (flow.enabled(ZLinkMessageFlowOutcome.RECEIVED)) {
+        ZLinkMessageFlowTracer.TracePoint received =
+            flow.begin(ZLinkMessageFlowOutcome.RECEIVED);
+        if (received != null) {
             String corr = ZLinkStreamCorrelations.forTrace(dispatchHeader);
-            flow.trace(new ZLinkMessageFlowEvent(
+            received.trace(new ZLinkMessageFlowEvent(
                 ZLinkMessageFlowOutcome.RECEIVED,
                 ZLinkDispatchErrorSurface.STREAM_SESSION,
                 dispatchHeader.requestSequence().isPresent()
@@ -1195,6 +1197,10 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             + " correlation=" + dispatchHeader.correlationId().orElse(null));
         CompletionStage<Void> completion = state.queue().enqueue(
             () -> {
+            traceStreamPhase(
+                dispatchHeader, incomingFlow, ZLinkMessageFlowOutcome.ADMITTED);
+            traceStreamPhase(
+                dispatchHeader, incomingFlow, ZLinkMessageFlowOutcome.DISPATCHED);
             if (incomingFlow == null) {
                 return executeHandler(() ->
                     state.context().dispatchStage(dispatchHeader, sessionPayload, state.session()));
@@ -1204,7 +1210,28 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     state.context().dispatchStage(dispatchHeader, sessionPayload, state.session()));
             }
         });
-          return completion;
+        return completion;
+    }
+
+    private void traceStreamPhase(
+        ZLinkStreamHeader header,
+        ZLinkFlowContext.State incomingFlow,
+        ZLinkMessageFlowOutcome phase) {
+        ZLinkMessageFlowTracer.TracePoint tracePoint = flow.begin(phase);
+        if (tracePoint == null) {
+            return;
+        }
+        tracePoint.trace(new ZLinkMessageFlowEvent(
+            phase,
+            ZLinkDispatchErrorSurface.STREAM_SESSION,
+            header.requestSequence().isPresent()
+                ? ZLinkDispatchMessageKind.REQUEST
+                : ZLinkDispatchMessageKind.SEND,
+            header.packetName(), null, null,
+            ZLinkStreamCorrelations.forTrace(header), null, null, null, null,
+            null, null, null, null,
+            incomingFlow == null ? null : incomingFlow.flowId(),
+            incomingFlow == null ? null : incomingFlow.origin()));
     }
 
     private void dispatchControl(

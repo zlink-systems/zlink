@@ -242,10 +242,11 @@ final class ZLinkSpotRoutedOutbound {
         Optional<String> packetName,
         String routerChannelId,
         String spotId) {
-        if (!flow.enabled(outcome)) {
+        ZLinkMessageFlowTracer.TracePoint tracePoint = flow.begin(outcome);
+        if (tracePoint == null) {
             return;
         }
-        flow.trace(new ZLinkMessageFlowEvent(
+        tracePoint.trace(new ZLinkMessageFlowEvent(
             outcome,
             ZLinkDispatchErrorSurface.SPOT_ROUTE,
             kind,
