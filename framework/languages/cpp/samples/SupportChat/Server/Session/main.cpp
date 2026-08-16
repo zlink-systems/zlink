@@ -133,9 +133,38 @@ class supportchat_session_t final : public packet_stream_session_t
                                                       conversation_id})
             .submit<ensure_agent_conversation_res_t> ();
         auto actor_ref = ensured.actor.to_actor_ref (sample_names_t::mesh);
-        auto bound = co_await _actors.bind_or_get (actor_ref).submit ();
-        const auto conversation_actor_id = std::string (bound.actor_id ());
-        _conversation_actor_ids[conversation_id] = conversation_actor_id;
+        /* The Ensure reply returns as soon as the conversation join is
+         * scheduled (Defer); the agent actor may still be materializing on
+         * its destination Spot, and the bind then fails with the retryable
+         * `Unavailable` classification (spec 32 — a route/owner that is not
+         * usable yet). Retry the bind, refreshing the exact ActorRef with a
+         * fresh Ensure round-trip each attempt so the post-materialization
+         * incarnation is used. */
+        for (int attempt = 0;; ++attempt) {
+            bool retry_bind = false;
+            try {
+                auto bound = co_await _actors.bind_or_get (actor_ref).submit ();
+                _conversation_actor_ids[conversation_id] = std::string (bound.actor_id ());
+                break;
+            }
+            catch (const framework_exception_t &error) {
+                if (error.kind () != framework_error_kind_t::unavailable || attempt >= 50)
+                    throw;
+                retry_bind = true;
+            }
+            if (retry_bind) {
+                /* Refresh only the exact ActorRef; the FIRST Ensure reply is
+                 * what the caller reports (its `scheduled` flag reflects the
+                 * original deferred membership operation). */
+                const auto refreshed =
+                  co_await _channels
+                    .request ("supportchat.support",
+                              ensure_agent_conversation_req_t{
+                                _identity_actor_id, _identity_display_name, conversation_id})
+                    .submit<ensure_agent_conversation_res_t> ();
+                actor_ref = refreshed.actor.to_actor_ref (sample_names_t::mesh);
+            }
+        }
         co_return ensured;
     }
 

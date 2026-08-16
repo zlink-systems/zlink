@@ -500,11 +500,13 @@ class mesh_node_runtime_t
       runtime::messaging::message_parts_t encoded,
       std::chrono::milliseconds timeout);
 
+    //  Coroutine: parameters are taken by value so the frame owns them for
+    //  the whole suspended seal exchange (callers pass temporaries).
     task_t<session_relocation_seal_outcome_t> seal_bound_sessions (
-      const std::vector<std::pair<runtime::stateful::object_ref_t,
-                                  authority_snapshot_t>> &participants,
-      const runtime::protocol::relocation_id_t &relocation,
-      const runtime::protocol::relocation_coordinator_fence_t &coordinator,
+      std::vector<std::pair<runtime::stateful::object_ref_t,
+                            authority_snapshot_t>> participants,
+      runtime::protocol::relocation_id_t relocation,
+      runtime::protocol::relocation_coordinator_fence_t coordinator,
       std::chrono::milliseconds timeout);
     task_t<std::optional<std::vector<
       runtime::protocol::session_relocation_route_t>>>

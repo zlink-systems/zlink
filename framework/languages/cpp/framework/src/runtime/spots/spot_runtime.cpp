@@ -2763,6 +2763,20 @@ task_t<void> entry_spot_context_t::destroy_actor_erased (const actor_ref_t &acto
     return task_t<void> (result_t<void>::success ());
 }
 
+namespace
+{
+//  Coroutine parameters are copied into the frame; publish_tail borrows its
+//  parts/metadata for the whole suspended fanout, so the owning copies must
+//  live in this frame rather than in the caller's synchronous scope.
+task_t<void> run_spot_publish_fanout (std::shared_ptr<service::spot_t> native,
+                                      std::vector<zlink::message_t> parts,
+                                      std::vector<std::uint8_t> metadata)
+{
+    co_await native->publish_tail (parts, metadata);
+    co_return;
+}
+} // namespace
+
 send_call_t spot_context_t::publish_erased (std::string topic,
                                             std::string packet_name,
                                             std::string content_type,
@@ -2830,6 +2844,45 @@ send_call_t spot_context_t::publish_erased (std::string topic,
                       return result_t<void>::failure (
                         runtime::messaging::map_submit_result_error_kind (submitted),
                         "spot publish failed");
+                  }
+                  /* Spec 12 §1/§9 — a Logical Multicast publish is sent
+                   * once per participating node and every node checks its
+                   * own local subscriptions. The entry-spot publish() above
+                   * owns only the LOCAL dequeue acceptance (its own
+                   * comment: physical fanout is scheduled by the logical
+                   * multicast executor). Run the same remote fanout tail
+                   * the public spot publisher client already uses;
+                   * failures are reported through the standard
+                   * logical-multicast failure path and never alter the
+                   * accepted publish result. */
+                  {
+                      //  publish_tail takes its parts/metadata by reference
+                      //  and suspends; feed it through a coroutine whose
+                      //  PARAMETERS own copies for the frame's lifetime.
+                      auto tail = run_spot_publish_fanout (
+                        native, encoded.items (),
+                        detail::mesh_metadata_codec_t::encode ({}));
+                      detail::observe_task_completion (
+                        tail,
+                        [node = state->node,
+                         topic,
+                         packet = submitted_packet_name] (
+                          const result_t<void> &fanout) {
+                            if (fanout || !node)
+                                return;
+                            detail::report_logical_multicast_failure (
+                              node,
+                              node->snapshot.name,
+                              topic,
+                              packet,
+                              fanout.error () != nullptr
+                                ? framework_exception_t (
+                                    fanout.error_kind (),
+                                    fanout.error ()->what ())
+                                : framework_exception_t (
+                                    framework_error_kind_t::internal_failure,
+                                    "logical multicast fanout failed"));
+                        });
                   }
               }
               catch (const std::exception &error) {

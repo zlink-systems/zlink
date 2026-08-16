@@ -572,8 +572,7 @@ return result
     {
         return task_t<T> (result_t<T>::failure (
           framework_error_kind_t::internal_failure,
-          "redis-plus-plus client is not available in this build",
-          true));
+          "redis-plus-plus client is not available in this build"));
     }
 
     static void validate_key (const std::string &key)
@@ -943,8 +942,7 @@ class redis_relocation_store_t final : public relocation_store_t
         (void) reference;
         return task_t<void> (result_t<void>::failure (
           framework_error_kind_t::internal_failure,
-          "redis-plus-plus client is not available in this build",
-          true));
+          "redis-plus-plus client is not available in this build"));
 #endif
     }
 
@@ -972,8 +970,7 @@ return {'stored', tostring(nowMs),
     {
         return task_t<T> (result_t<T>::failure (
           framework_error_kind_t::internal_failure,
-          "redis-plus-plus client is not available in this build",
-          true));
+          "redis-plus-plus client is not available in this build"));
     }
 
     static void validate_reference (

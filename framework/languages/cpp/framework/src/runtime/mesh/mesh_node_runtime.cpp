@@ -710,10 +710,10 @@ void mesh_node_runtime_t::configure_bound_session_relocation_resolver (
 
 task_t<mesh_node_runtime_t::session_relocation_seal_outcome_t>
 mesh_node_runtime_t::seal_bound_sessions (
-  const std::vector<std::pair<runtime::stateful::object_ref_t,
-                              authority_snapshot_t>> &participants,
-  const runtime::protocol::relocation_id_t &relocation,
-  const runtime::protocol::relocation_coordinator_fence_t &coordinator,
+  std::vector<std::pair<runtime::stateful::object_ref_t,
+                        authority_snapshot_t>> participants,
+  runtime::protocol::relocation_id_t relocation,
+  runtime::protocol::relocation_coordinator_fence_t coordinator,
   std::chrono::milliseconds timeout)
 {
     using runtime::foundation::operation_terminal_t;
