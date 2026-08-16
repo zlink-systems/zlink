@@ -1147,6 +1147,23 @@ internal sealed partial class ZLinkFrameworkRuntime
                     committedAuthority.NodeGeneration,
                     committedAuthority.OwnerLeaseGeneration);
             }
+            //  Spec 28-relocation-flow: a cross-node Actor Join moves the
+            //  Actor owner to the target in the same CAS, and the staged
+            //  relocation skipped the target-side claim. Without adopting
+            //  the committed authority into this node's location owner,
+            //  a later Spot leave/join renews against an untracked entry
+            //  and fails with "not tracked by this location owner"
+            //  (mirrors FinishRelocationTargetAsync; adoption is a no-op
+            //  when the entry already exists).
+            if (actorState.ActorType is { } committedActorType)
+                await actorLocations.AdoptCommittedActorAuthorityAsync(
+                        request.ActorId,
+                        committedActorType,
+                        actorRef.ToNative(publishedActorAuthority.MeshName),
+                        _ => DeactivateActorOnOwnershipLossAsync(
+                            actorState.ActorId),
+                        cancellationToken)
+                    .ConfigureAwait(false);
             try
             {
                 var lifecycleReply =
