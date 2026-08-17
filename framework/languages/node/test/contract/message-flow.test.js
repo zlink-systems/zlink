@@ -141,6 +141,18 @@ test('message-flow begin reuses its gated trace point instead of allocating per 
   assert.equal(tracer.begin(ZLinkMessageFlowOutcome.Received), undefined);
 });
 
+test('message-flow begin rejects a sampled-out event before its trace DTO is built', () => {
+  const { tracer } = makeTracer(diagnostics('normal', { sampleRate: 0 }));
+  assert.equal(
+    tracer.begin(
+      ZLinkMessageFlowOutcome.Received,
+      undefined,
+      '018f2b63-9d4a-7abc-8def-0123456789ab'
+    ),
+    undefined
+  );
+});
+
 test('MFLOW-003/005 standard logger provider receives the structured record', () => {
   const { tracer } = makeTracer(diagnostics('normal'));
   tracer.trace(receivedEvent());
@@ -148,8 +160,8 @@ test('MFLOW-003/005 standard logger provider receives the structured record', ()
   assert.equal(telemetryRecords.length, 1);
   const record = telemetryRecords[0];
   assert.equal(record.eventName, 'zlink.message_flow');
-  assert.match(record.body, /^zlink flow: event_id=zlink\.message_flow /);
-  assert.equal(record.attributes.event_id, 'zlink.message_flow');
+  assert.match(record.body, /^zlink flow: event=zlink\.message_flow /);
+  assert.equal(record.attributes.event, 'zlink.message_flow');
   assert.equal(record.attributes.phase, 'received');
   assert.equal(record.attributes.surface, 'channel');
   assert.equal(record.attributes.packet, 'EchoRequest');
@@ -703,7 +715,7 @@ test('MFLOW-EXT Off host does not create channel or stream flow fields', async (
   });
 });
 
-test('MFLOW-EXT Off host preserves an inbound ambient flow on outbound wire', () => {
+test('MFLOW-EXT Off host suppresses an inbound ambient flow on outbound wire', () => {
   const inbound = {
     flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
     flowOrigin: 'Inbound'
@@ -722,8 +734,8 @@ test('MFLOW-EXT Off host preserves an inbound ambient flow on outbound wire', ()
     );
     try {
       const header = JSON.parse(Buffer.from(parts[0]).toString());
-      assert.equal(header.flowId, inbound.flowId);
-      assert.equal(header.flowOrigin, 1);
+      assert.equal(header.flowId, undefined);
+      assert.equal(header.flowOrigin, undefined);
     } finally {
       channelEnvelope.closeMessages(parts);
     }
@@ -733,6 +745,15 @@ test('MFLOW-EXT Off host preserves an inbound ambient flow on outbound wire', ()
 test('MFLOW-EXT absent disabled flow does not create an ambient context', () => {
   const absent = flowContext.createInboundFlow(undefined, undefined, false);
   assert.equal(absent, undefined);
+  assert.equal(
+    flowContext.createInboundFlow(
+      '018f2b63-9d4a-7abc-8def-0123456789ab',
+      'Inbound',
+      false
+    ),
+    undefined,
+    'Off must not read an inbound wire flow into async-local context'
+  );
   flowContext.runWithFlow(absent, () => {
     assert.equal(flowContext.currentOrCreateFlow('Application', false), undefined);
   });

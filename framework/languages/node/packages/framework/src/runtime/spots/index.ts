@@ -1656,7 +1656,12 @@ export class DefaultZLinkSpotManager {
     instanceSpotType?: string,
     errorReason?: ZLinkDispatchErrorReason
   ): void {
-    const flow = flowIfEnabled(this.options.dispatchErrors?.flow, outcome);
+    const flow = flowIfEnabled(
+      this.options.dispatchErrors?.flow,
+      outcome,
+      undefined,
+      envelope.header.flowId
+    );
     if (flow === undefined) return;
     flow.trace({
       outcome,

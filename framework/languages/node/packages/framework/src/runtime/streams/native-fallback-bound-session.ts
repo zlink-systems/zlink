@@ -204,10 +204,9 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
         actorPacketTarget: encodeRemoteActorPacketTarget(
           this.options.remoteActorPacketTargetProvider()
         ),
-        ...(currentOrCreateFlow(
-          'Application',
-          this.options.flowCreationEnabled?.() ?? true
-        ) ?? {})
+        ...((this.options.flowCreationEnabled?.() ?? true)
+          ? currentOrCreateFlow('Application')
+          : undefined)
       });
       const submit = this.options.routedTransport.submitInfrastructure
         ?? this.options.routedTransport.submit;

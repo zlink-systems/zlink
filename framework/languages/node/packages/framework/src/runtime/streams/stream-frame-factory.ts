@@ -74,7 +74,9 @@ export class ZLinkStreamFrameMessageFactory {
     payload: unknown,
     correlationId?: string
   ): Message {
-    const flow = currentOrCreateFlow('Application', this.options.flowCreationEnabled?.() ?? true);
+    const flow = (this.options.flowCreationEnabled?.() ?? true)
+      ? currentOrCreateFlow('Application')
+      : undefined;
     return this.createJsonFrameMessageWithHeader(
       payload,
       compressed,

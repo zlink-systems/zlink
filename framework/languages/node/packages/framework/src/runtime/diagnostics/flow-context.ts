@@ -44,7 +44,7 @@ export function createInboundFlow(
   flowOrigin?: ZLinkFlowOrigin,
   createIfAbsent = true
 ): ZLinkFlowContextValue | undefined {
-  if (flowId === undefined && !createIfAbsent) {
+  if (!createIfAbsent) {
     return undefined;
   }
   return { flowId: flowId ?? createFlowId(), flowOrigin: flowOrigin ?? 'Inbound' };

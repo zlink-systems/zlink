@@ -90,7 +90,7 @@ export function encodeChannelEnvelopeParts(
 ): readonly MessageLike[] {
   const messageName = resolveFrameworkPacketName(payload, packetName, 'Channel');
   const encoded = encodePayload(payload, codecsForFrameworkPacket(messageName, codecs), messageName, 'payload');
-  const flow = currentOrCreateFlow('Application', createFlow);
+  const flow = createFlow ? currentOrCreateFlow('Application') : undefined;
   const envelopeCorrelationId = correlationIdForOutboundKind(kind, correlationId);
   const header: ZLinkChannelEnvelopeHeader = {
     formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
@@ -132,7 +132,7 @@ export function encodeChannelEnvelopePartsAtDeadline(
   }
   const messageName = resolveFrameworkPacketName(payload, packetName, 'Channel');
   const encoded = encodePayload(payload, codecsForFrameworkPacket(messageName, codecs), messageName, 'payload');
-  const flow = currentOrCreateFlow('Application', createFlow);
+  const flow = createFlow ? currentOrCreateFlow('Application') : undefined;
   const envelopeCorrelationId = correlationIdForOutboundKind(kind, correlationId);
   const header: ZLinkChannelEnvelopeHeader = {
     formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
@@ -162,7 +162,7 @@ export function encodeChannelPublishEnvelopeParts(
 ): readonly MessageLike[] {
   const messageName = resolveFrameworkPacketName(payload, packetName, 'Channel');
   const encoded = encodePayload(payload, codecsForFrameworkPacket(messageName, codecs), messageName, 'payload');
-  const flow = currentOrCreateFlow('Application', createFlow);
+  const flow = createFlow ? currentOrCreateFlow('Application') : undefined;
   const header: ZLinkChannelEnvelopeHeader = {
     formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
     kind: ZLinkChannelMessageKind.Publish,

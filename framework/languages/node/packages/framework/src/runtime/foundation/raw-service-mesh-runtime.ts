@@ -367,19 +367,6 @@ export class RawServiceMeshRuntime {
         || peer.descriptor.lifecycleGeneration === lifecycleGeneration)
       && applicationRouteReady
       && this.liveness.isReady(nodeRoutingId, peer.connectionId);
-    debugRoute('route-ready-check', {
-      meshName: this.descriptor.meshName,
-      localNodeRoutingId: this.descriptor.nodeRoutingId,
-      remoteNodeRoutingId: nodeRoutingId,
-      connectionId: peer?.connectionId,
-      connectionDiscriminator: peer?.connectionDiscriminator,
-      livenessReady: peer === undefined
-        ? false
-        : this.liveness.isReady(nodeRoutingId, peer.connectionId),
-      monitorConnection,
-      applicationRouteReady,
-      ready
-    });
     return ready;
   }
 
@@ -426,16 +413,7 @@ export class RawServiceMeshRuntime {
       this.topology.localDescriptor()
     );
     for (const peer of this.topology.peers()) {
-      const sent = await this.send(peer.descriptor.nodeRoutingId, [update]);
-      debugRoute('descriptor-update-send', {
-        meshName: this.descriptor.meshName,
-        localNodeRoutingId: this.descriptor.nodeRoutingId,
-        remoteNodeRoutingId: peer.descriptor.nodeRoutingId,
-        descriptorRevision: next.descriptorRevision.toString(),
-        placementWeight: next.placementWeight,
-        state: next.state,
-        sent
-      });
+      await this.send(peer.descriptor.nodeRoutingId, [update]);
     }
     await this.announceExpectedPeers();
   }
@@ -512,16 +490,6 @@ export class RawServiceMeshRuntime {
       channelName,
       peer => this.isLocalOrReadyPeer(peer.descriptor.nodeRoutingId)
     );
-    debugRoute('select-channel', {
-      meshName: this.descriptor.meshName,
-      channelName,
-      targetNodeRoutingId: selected?.descriptor.nodeRoutingId,
-      targetConnectionId: selected?.connectionId,
-      targetConnectionDiscriminator: selected?.connectionDiscriminator,
-      targetRouteReady: selected === undefined
-        ? undefined
-        : this.isPeerRouteReady(selected.descriptor.nodeRoutingId)
-    });
     return selected === undefined
       ? undefined
       : this.requestToTarget(selected.descriptor.nodeRoutingId, payload, timeoutMs, channelName);
@@ -838,20 +806,12 @@ export class RawServiceMeshRuntime {
             return 'protocolError';
           }
         } else {
-          const accepted = this.liveness.acknowledge(
+          this.liveness.acknowledge(
             received.sourceRid,
             peer.connectionId,
             record.probeId,
             nowMs
           );
-          debugRoute('liveness-ack', {
-            meshName: this.descriptor.meshName,
-            localNodeRoutingId: this.descriptor.nodeRoutingId,
-            remoteNodeRoutingId: received.sourceRid,
-            connectionId: peer.connectionId,
-            accepted,
-            ready: this.liveness.isReady(received.sourceRid, peer.connectionId)
-          });
         }
         return 'infrastructure';
       }
@@ -933,20 +893,10 @@ export class RawServiceMeshRuntime {
     const result = this.liveness.tick(nowMs);
     this.requireStarted();
     for (const probe of result.probes) {
-      const sent = await this.send(probe.nodeRoutingId, [livenessCodec.encodeLivenessRecord({
+      await this.send(probe.nodeRoutingId, [livenessCodec.encodeLivenessRecord({
         command: M6aServiceWireCommand.livenessProbe,
         probeId: probe.probeId
       })]);
-      debugRoute('liveness-probe-send', {
-        meshName: this.descriptor.meshName,
-        localNodeRoutingId: this.descriptor.nodeRoutingId,
-        remoteNodeRoutingId: probe.nodeRoutingId,
-        connectionId: probe.connectionId,
-        probeId: probe.probeId.toString(),
-        sent,
-        currentConnectionId: this.topology.peer(probe.nodeRoutingId)?.connectionId,
-        currentConnectionDiscriminator: this.topology.peer(probe.nodeRoutingId)?.connectionDiscriminator
-      });
     }
     for (const nodeRoutingId of result.timedOutNodes) {
       const peer = this.topology.peer(nodeRoutingId);
@@ -1203,13 +1153,6 @@ export class RawServiceMeshRuntime {
       return pending;
     }
     const parts = [header, encodedPayload];
-    debugRoute('request-native', {
-      meshName: this.descriptor.meshName,
-      targetNodeRoutingId: selectedTargetNodeRoutingId,
-      targetConnectionId: this.topology.peer(selectedTargetNodeRoutingId)?.connectionId,
-      targetConnectionDiscriminator: this.topology.peer(selectedTargetNodeRoutingId)?.connectionDiscriminator,
-      targetRouteReady: this.isPeerRouteReady(selectedTargetNodeRoutingId)
-    });
     let router: ZLinkRawRouterPort;
     let request: Promise<readonly Uint8Array[]>;
     try {
@@ -1255,13 +1198,6 @@ export class RawServiceMeshRuntime {
         }
       },
       error => {
-        debugRoute('request-rejected', {
-          meshName: this.descriptor.meshName,
-          targetNodeRoutingId: selectedTargetNodeRoutingId,
-          targetConnectionId: this.topology.peer(selectedTargetNodeRoutingId)?.connectionId,
-          targetRouteReady: this.isPeerRouteReady(selectedTargetNodeRoutingId),
-          error: debugError(error)
-        });
         this.operations.fail(pending.id, error);
       }
     );
@@ -1300,18 +1236,6 @@ export class RawServiceMeshRuntime {
       expected,
       connection.discriminator
     );
-    debugRoute('peer-admission', {
-      meshName: this.descriptor.meshName,
-      localNodeRoutingId: this.descriptor.nodeRoutingId,
-      remoteNodeRoutingId: descriptor.nodeRoutingId,
-      descriptorRevision: descriptor.descriptorRevision.toString(),
-      placementWeight: descriptor.placementWeight,
-      state: descriptor.state,
-      connectionId: connection.connectionId,
-      connectionDiscriminator: connection.discriminator,
-      direction: connection.direction,
-      result
-    });
     if (result === 'admitted') {
       this.connectionIds.set(
         descriptor.nodeRoutingId,
@@ -1444,17 +1368,6 @@ export class RawServiceMeshRuntime {
         localAddress: '',
         remoteAddress: advertisedEndpoint
       };
-      debugRoute('candidate-created', {
-        meshName: this.descriptor.meshName,
-        localNodeRoutingId: localRid,
-        remoteNodeRoutingId: nodeRoutingId,
-        advertisedEndpoint,
-        endpointOnly,
-        expected: this.expectedPeers.has(nodeRoutingId),
-        direction,
-        initiator,
-        connectionId
-      });
       let candidates = this.connectionCandidates.get(nodeRoutingId);
       if (candidates === undefined) {
         candidates = new Map();
@@ -1711,28 +1624,6 @@ function protocolCommand(parts: readonly Uint8Array[]): { readonly command?: num
   } catch {
     return {};
   }
-}
-
-function debugRoute(event: string, fields: Record<string, unknown>): void {
-  const processValue = (globalThis as {
-    process?: { env?: Record<string, string | undefined> };
-  }).process;
-  if (processValue?.env?.ZLINK_NODE_ROUTE_DEBUG !== '1') return;
-  console.error(`[zlink-route-debug] ${event} ${JSON.stringify(fields)}`);
-}
-
-function debugError(error: unknown): Record<string, unknown> {
-  if (typeof error !== 'object' || error === null) return { value: String(error) };
-  const value = error as {
-    message?: unknown;
-    result?: unknown;
-    nativeErrno?: unknown;
-  };
-  return {
-    message: value.message,
-    result: value.result,
-    nativeErrno: value.nativeErrno
-  };
 }
 
 function isAlreadyDisconnectedError(error: unknown): boolean {

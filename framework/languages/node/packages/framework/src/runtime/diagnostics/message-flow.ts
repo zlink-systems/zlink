@@ -7,6 +7,7 @@ import { logs as openTelemetryLogs, SeverityNumber } from '@opentelemetry/api-lo
 import {
   MESSAGE_FLOW_MODE_RANK,
   type ZLinkDiagnosticsOptions,
+  type ZLinkFlowOrigin,
   type ZLinkMessageFlowLogMode
 } from '../../contracts';
 import {
@@ -110,11 +111,13 @@ function requiredMode(
 export function flowIfEnabled(
   flow: ZLinkMessageFlowTracer | undefined,
   outcome: ZLinkMessageFlowOutcome,
-  result?: ZLinkRuntimeMessageFlowResult
+  result?: ZLinkRuntimeMessageFlowResult,
+  flowId?: string,
+  sourceMeshGeneration?: bigint | string
 ): ZLinkMessageFlowTracePoint | undefined {
   if (flow === undefined) return undefined;
   return typeof flow.begin === 'function'
-    ? flow.begin(outcome, result)
+    ? flow.begin(outcome, result, flowId, sourceMeshGeneration)
     : flow.accepts(outcome) ? flow : undefined;
 }
 
@@ -135,21 +138,14 @@ export class ZLinkMessageFlowTracer {
   private tracedEvents = 0;
   private providerFailures = 0;
   private localSamplingSequence = 0n;
-  private readonly tracePoints: Readonly<Record<
-    Exclude<ZLinkMessageFlowLogMode, 'off'>,
-    ZLinkMessageFlowTracePoint
-  >>;
+  private errorsTracePoint?: ZLinkMessageFlowTracePoint;
+  private normalTracePoint?: ZLinkMessageFlowTracePoint;
+  private detailedTracePoint?: ZLinkMessageFlowTracePoint;
 
   constructor(
     private readonly ctx: ZLinkDiagnosticsContext,
     private readonly errorSink: ZLinkDispatchErrorSink
-  ) {
-    this.tracePoints = {
-      errors: { trace: flowInput => this.traceAtMode(flowInput, 'errors') },
-      normal: { trace: flowInput => this.traceAtMode(flowInput, 'normal') },
-      detailed: { trace: flowInput => this.traceAtMode(flowInput, 'detailed') }
-    };
-  }
+  ) {}
 
   enabled(outcome: ZLinkMessageFlowOutcome): boolean {
     const mode = effectiveMessageFlow(this.ctx);
@@ -162,13 +158,34 @@ export class ZLinkMessageFlowTracer {
 
   begin(
     outcome: ZLinkMessageFlowOutcome,
-    result?: ZLinkRuntimeMessageFlowResult
+    result?: ZLinkRuntimeMessageFlowResult,
+    flowId?: string,
+    sourceMeshGeneration?: bigint | string
   ): ZLinkMessageFlowTracePoint | undefined {
     const mode = effectiveMessageFlow(this.ctx);
     if (MESSAGE_FLOW_MODE_RANK[mode] < MESSAGE_FLOW_MODE_RANK[requiredMode(outcome, result)]) {
       return undefined;
     }
-    return this.tracePoints[mode as Exclude<ZLinkMessageFlowLogMode, 'off'>];
+    const samplingFlowId = flowId ?? currentFlowContext()?.flowId;
+    if (!this.acceptsSample(outcome, result, samplingFlowId, sourceMeshGeneration)) {
+      return undefined;
+    }
+    switch (mode) {
+      case 'errors':
+        return this.errorsTracePoint ??= {
+          trace: flowInput => this.traceAcceptedAtMode(flowInput, 'errors')
+        };
+      case 'normal':
+        return this.normalTracePoint ??= {
+          trace: flowInput => this.traceAcceptedAtMode(flowInput, 'normal')
+        };
+      case 'detailed':
+        return this.detailedTracePoint ??= {
+          trace: flowInput => this.traceAcceptedAtMode(flowInput, 'detailed')
+        };
+      case 'off':
+        return undefined;
+    }
   }
 
   flowCreationEnabled(): boolean {
@@ -181,21 +198,26 @@ export class ZLinkMessageFlowTracer {
       MESSAGE_FLOW_MODE_RANK[effectiveMode]
       < MESSAGE_FLOW_MODE_RANK[requiredMode(flowInput.outcome, flowInput.result)]
     ) return;
-    this.traceAtMode(flowInput, effectiveMode);
-  }
-
-  private traceAtMode(flowInput: MessageFlowInput, effectiveMode: ZLinkMessageFlowLogMode): void {
     const ambient = currentFlowContext();
     const flowId = flowInput.flowId ?? ambient?.flowId;
-    const flowOrigin = flowInput.flowOrigin ?? ambient?.flowOrigin;
-    if (
-      flowInput.outcome !== ZLinkMessageFlowOutcome.Dropped
-      && flowInput.outcome !== ZLinkMessageFlowOutcome.Backpressured
-      && flowInput.outcome !== ZLinkMessageFlowOutcome.Error
-      && (flowInput.result === undefined || flowInput.result === 'succeeded')
-      && !this.sample(flowId, flowInput.sourceMeshGeneration)
-    ) return;
+    if (!this.acceptsSample(
+      flowInput.outcome,
+      flowInput.result,
+      flowId,
+      flowInput.sourceMeshGeneration
+    )) return;
+    this.traceAcceptedAtMode(flowInput, effectiveMode, flowId, ambient?.flowOrigin);
+  }
 
+  private traceAcceptedAtMode(
+    flowInput: MessageFlowInput,
+    effectiveMode: ZLinkMessageFlowLogMode,
+    acceptedFlowId?: string,
+    acceptedFlowOrigin?: ZLinkFlowOrigin
+  ): void {
+    const ambient = acceptedFlowId === undefined ? currentFlowContext() : undefined;
+    const flowId = flowInput.flowId ?? acceptedFlowId ?? ambient?.flowId;
+    const flowOrigin = flowInput.flowOrigin ?? acceptedFlowOrigin ?? ambient?.flowOrigin;
     const flow: ZLinkRuntimeMessageFlowEvent = {
       ...flowInput,
       ...(flowId === undefined ? {} : { flowId, flowOrigin }),
@@ -208,6 +230,19 @@ export class ZLinkMessageFlowTracer {
         ? flow.messageSize
         : undefined
     ));
+  }
+
+  private acceptsSample(
+    outcome: ZLinkMessageFlowOutcome,
+    result: ZLinkRuntimeMessageFlowResult | undefined,
+    flowId: string | undefined,
+    sourceMeshGeneration: bigint | string | undefined
+  ): boolean {
+    return outcome === ZLinkMessageFlowOutcome.Dropped
+      || outcome === ZLinkMessageFlowOutcome.Backpressured
+      || outcome === ZLinkMessageFlowOutcome.Error
+      || (result !== undefined && result !== 'succeeded')
+      || this.sample(flowId, sourceMeshGeneration);
   }
 
   get tracedCount(): number {
@@ -330,7 +365,7 @@ function traceAttributes(record: ZLinkTelemetryRecord): Attributes {
 
 function structuredLogAttributes(record: ZLinkTelemetryRecord): Attributes {
   return compactAttributes({
-    event_id: record.eventId,
+    event: record.eventId,
     phase: record.phase,
     surface: record.surface,
     kind: record.messageKind,
