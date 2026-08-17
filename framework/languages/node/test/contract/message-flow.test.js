@@ -148,8 +148,8 @@ test('MFLOW-003/005 standard logger provider receives the structured record', ()
   assert.equal(telemetryRecords.length, 1);
   const record = telemetryRecords[0];
   assert.equal(record.eventName, 'zlink.message_flow');
-  assert.match(record.body, /^zlink flow: /);
-  assert.equal(record.attributes.event, 'zlink.message_flow');
+  assert.match(record.body, /^zlink flow: event_id=zlink\.message_flow /);
+  assert.equal(record.attributes.event_id, 'zlink.message_flow');
   assert.equal(record.attributes.phase, 'received');
   assert.equal(record.attributes.surface, 'channel');
   assert.equal(record.attributes.packet, 'EchoRequest');

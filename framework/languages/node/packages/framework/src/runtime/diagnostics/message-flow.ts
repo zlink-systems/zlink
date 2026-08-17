@@ -330,7 +330,7 @@ function traceAttributes(record: ZLinkTelemetryRecord): Attributes {
 
 function structuredLogAttributes(record: ZLinkTelemetryRecord): Attributes {
   return compactAttributes({
-    event: record.eventId,
+    event_id: record.eventId,
     phase: record.phase,
     surface: record.surface,
     kind: record.messageKind,
