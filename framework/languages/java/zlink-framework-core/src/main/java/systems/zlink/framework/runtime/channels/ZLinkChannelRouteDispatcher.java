@@ -57,10 +57,44 @@ final class ZLinkChannelRouteDispatcher {
         }
         //  Spec 27 §4: decode and install the inbound flow pair (or start a new
         //  flow) only while capture is enabled; at Off suppress flow state.
-        var flowScope = flow.captureEnabled()
-            ? ZLinkFlowContext.enterOrCreate(
-                ZLinkChannelFlowFrame.decode(received.parts()),
-                ZLinkFlowOrigin.INBOUND)
+        ZLinkFlowContext.State inboundFlow = null;
+        boolean captureFlow = flow.captureEnabled();
+        if (captureFlow) {
+            try {
+                inboundFlow = ZLinkChannelFlowFrame.decode(received.parts());
+            } catch (PayloadDecodeDispatchException invalidFlow) {
+                String packetName = received.parts().isEmpty()
+                    ? null : received.parts().getFirst().toUtf8String();
+                if (received.routingId().isPresent()
+                    && received.requestSeq().isPresent()) {
+                    errors.replyError(
+                        router,
+                        received.routingId().orElseThrow(),
+                        received.requestSeq().orElseThrow(),
+                        ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                        ZLinkDispatchMessageKind.REQUEST,
+                        ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED,
+                        packetName,
+                        channelName,
+                        received.routingId().orElseThrow().toString(),
+                        invalidFlow);
+                } else {
+                    errors.report(
+                        ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                        ZLinkDispatchMessageKind.SEND,
+                        ZLinkDispatchErrorReason.PAYLOAD_DECODE_FAILED,
+                        ZLinkDispatchErrorAction.DROP,
+                        packetName,
+                        channelName,
+                        null,
+                        invalidFlow);
+                }
+                received.parts().forEach(Message::close);
+                return;
+            }
+        }
+        var flowScope = captureFlow
+            ? ZLinkFlowContext.enterOrCreate(inboundFlow, ZLinkFlowOrigin.INBOUND)
             : ZLinkFlowContext.suppress();
         try {
             if (dispatchBridgePacket(channelName, received)) {

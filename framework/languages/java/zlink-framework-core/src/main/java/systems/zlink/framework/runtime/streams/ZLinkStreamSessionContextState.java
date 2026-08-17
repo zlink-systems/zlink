@@ -133,7 +133,8 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
             this,
             serializer,
             defaultCodec,
-            compressionCodec);
+            compressionCodec,
+            flow);
     }
 
     @Override

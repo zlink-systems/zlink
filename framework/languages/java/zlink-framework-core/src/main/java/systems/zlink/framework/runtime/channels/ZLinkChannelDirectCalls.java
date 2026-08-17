@@ -153,14 +153,16 @@ final class PublishCall implements ZLinkFanoutPublishCall {
         if (duplicate != null) {
             return duplicate;
         }
-        List<Message> publishParts = ZLinkChannelCallRuntime.parts(
-            packetName, payload, contentType);
-        CompletionStage<Void> result = ZLinkOneWayCalls.adaptOneWay(
-            publisher.publishAsync(
-                topic, publishParts, SendFlags.DONT_WAIT));
-        result.whenComplete((ignored, failure) ->
-            publishParts.forEach(Message::close));
-        return result;
+        try (var flowScope = runtime.enterApplicationFlow()) {
+            List<Message> publishParts = ZLinkChannelCallRuntime.parts(
+                packetName, payload, contentType);
+            CompletionStage<Void> result = ZLinkOneWayCalls.adaptOneWay(
+                publisher.publishAsync(
+                    topic, publishParts, SendFlags.DONT_WAIT));
+            result.whenComplete((ignored, failure) ->
+                publishParts.forEach(Message::close));
+            return result;
+        }
     }
 }
 
@@ -222,6 +224,7 @@ final class SendCall implements ZLinkSendCall {
         if (duplicate != null) {
             return duplicate;
         }
+        try (var flowScope = runtime.enterApplicationFlow()) {
         ZLinkMessageFlowTracer.TracePoint sent =
             runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
         if (sent != null) {
@@ -236,6 +239,7 @@ final class SendCall implements ZLinkSendCall {
         return ZLinkOneWayCalls.adaptOneWay(client.send(parts))
             .whenComplete((ignored, failure) ->
                 parts.forEach(Message::close));
+        }
     }
 }
 
@@ -314,6 +318,7 @@ final class RequestCall implements ZLinkRequestCall {
         if (duplicate != null) {
             return duplicate;
         }
+        try (var flowScope = runtime.enterApplicationFlow()) {
         CompletableFuture<TReply> result = new CompletableFuture<>();
         String reqPacket = packetName.orElse(null);
         result.whenComplete((ignored, error) -> {
@@ -380,6 +385,7 @@ final class RequestCall implements ZLinkRequestCall {
                 }
             });
         return ZLinkAsyncSerialQueue.manageCurrent(result);
+        }
     }
 
     @Override

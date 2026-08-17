@@ -175,7 +175,7 @@ final class ZLinkActorSpotAdmission {
                 ? CompletableFuture.completedFuture(null)
                 : joinEntrySpotAfterLeave(runtime, actor, entryNodeRid, timeout)
                     .thenCompose(joined -> entryJoined));
-        return ZLinkAsyncSerialQueue.manageCurrent(leaving);
+        return ZLinkAsyncSerialQueue.yieldCurrent(leaving);
     }
 
     private static CompletionStage<Void> joinEntrySpotAfterLeave(

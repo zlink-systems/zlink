@@ -151,6 +151,7 @@ final class RouteSendCall implements ZLinkSendCall {
         if (duplicate != null) {
             return duplicate;
         }
+        try (var flowScope = runtime.enterApplicationFlow()) {
         ZLinkMessageFlowTracer.TracePoint sent =
             runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
         if (sent != null) {
@@ -165,6 +166,7 @@ final class RouteSendCall implements ZLinkSendCall {
         return ZLinkOneWayCalls.adaptOneWay(router.send(target, sendParts))
             .whenComplete((ignored, failure) ->
                 sendParts.forEach(Message::close));
+        }
     }
 }
 
@@ -252,6 +254,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
         if (duplicate != null) {
             return duplicate;
         }
+        try (var flowScope = runtime.enterApplicationFlow()) {
         CompletableFuture<TReply> result = new CompletableFuture<>();
         result.whenComplete((ignored, error) -> {
             ZLinkMessageFlowTracer.TerminalTracePoint terminal =
@@ -299,6 +302,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
                     }
             });
         return ZLinkAsyncSerialQueue.manageCurrent(result);
+        }
     }
 
     @Override
@@ -388,6 +392,7 @@ final class MeshNodeRouteSendCall implements ZLinkSendCall {
         if (duplicate != null) {
             return duplicate;
         }
+        try (var flowScope = runtime.enterApplicationFlow()) {
         ZLinkMessageFlowTracer.TracePoint sent =
             runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
         if (sent != null) {
@@ -415,6 +420,7 @@ final class MeshNodeRouteSendCall implements ZLinkSendCall {
                 node.sendToNode(target, metadata.encode(), sendParts))
             .whenComplete((ignored, failure) ->
                 sendParts.forEach(Message::close));
+        }
     }
 
     private static CompletionStage<Integer> submitLocal(
@@ -512,6 +518,7 @@ final class MeshChannelRouteSendCall implements ZLinkSendCall {
         if (duplicate != null) {
             return duplicate;
         }
+        try (var flowScope = runtime.enterApplicationFlow()) {
         Optional<Integer> classified =
             node.classifyChannelTarget(channelName);
         if (classified.isPresent()) {
@@ -527,6 +534,7 @@ final class MeshChannelRouteSendCall implements ZLinkSendCall {
                 node.sendToChannel(channelName, metadata.encode(), parts))
             .whenComplete((ignored, failure) ->
                 parts.forEach(Message::close));
+        }
     }
 }
 
@@ -627,6 +635,7 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
         if (duplicate != null) {
             return duplicate;
         }
+        try (var flowScope = runtime.enterApplicationFlow()) {
         CompletableFuture<TReply> result = new CompletableFuture<>();
         result.whenComplete((ignored, error) -> {
             ZLinkMessageFlowTracer.TerminalTracePoint terminal =
@@ -678,6 +687,7 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
                 }
             });
         return ZLinkAsyncSerialQueue.manageCurrent(result);
+        }
     }
 
     @Override
@@ -793,6 +803,7 @@ final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
         if (duplicate != null) {
             return duplicate;
         }
+        try (var flowScope = runtime.enterApplicationFlow()) {
         CompletableFuture<TReply> result = new CompletableFuture<>();
         result.whenComplete((ignored, error) -> {
             ZLinkMessageFlowTracer.TerminalTracePoint terminal =
@@ -867,6 +878,7 @@ final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
             requestParts.forEach(Message::close);
         }
         return ZLinkAsyncSerialQueue.manageCurrent(result);
+        }
     }
 
     @Override

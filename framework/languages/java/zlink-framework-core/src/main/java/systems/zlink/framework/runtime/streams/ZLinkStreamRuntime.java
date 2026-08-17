@@ -1135,6 +1135,12 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         ZLinkFlowContext.State capturedFlow = null;
         if (streamHeader.kind() != ZLinkStreamMessageKind.CONTROL) {
             if (flow.captureEnabled()) {
+                if (streamHeader.flowId().isPresent()
+                    && !ZLinkFlowContext.isValidFlowId(
+                        streamHeader.flowId().orElseThrow())) {
+                    throw new IllegalArgumentException(
+                        "STREAM header flow id must be UUIDv7");
+                }
                 capturedFlow = streamHeader.flowId().isPresent()
                     ? new ZLinkFlowContext.State(streamHeader.flowId().orElseThrow(),
                         streamHeader.flowOrigin().orElseThrow())

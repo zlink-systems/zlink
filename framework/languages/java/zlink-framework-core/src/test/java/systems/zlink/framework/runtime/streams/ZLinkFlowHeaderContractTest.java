@@ -90,6 +90,46 @@ final class ZLinkFlowHeaderContractTest {
     }
 
     @Test
+    void outboundEntryPreservesAmbientCreatesApplicationAndSuppressesAtOff() {
+        try (ZLinkFlowContext.Scope ignored =
+                 ZLinkFlowContext.enterCurrentOrCreate(
+                     ZLinkFlowOrigin.APPLICATION, true)) {
+            assertEquals(
+                ZLinkFlowOrigin.APPLICATION,
+                ZLinkFlowContext.current().origin());
+            assertTrue(ZLinkFlowContext.isValidFlowId(
+                ZLinkFlowContext.current().flowId()));
+        }
+
+        ZLinkFlowContext.State inbound =
+            ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND);
+        try (ZLinkFlowContext.Scope ignored = ZLinkFlowContext.enter(inbound)) {
+            try (ZLinkFlowContext.Scope outbound =
+                     ZLinkFlowContext.enterCurrentOrCreate(
+                         ZLinkFlowOrigin.APPLICATION, true)) {
+                assertEquals(inbound, ZLinkFlowContext.current());
+            }
+            try (ZLinkFlowContext.Scope off =
+                     ZLinkFlowContext.enterCurrentOrCreate(
+                         ZLinkFlowOrigin.APPLICATION, false)) {
+                assertEquals(null, ZLinkFlowContext.current());
+            }
+            assertEquals(inbound, ZLinkFlowContext.current());
+        }
+    }
+
+    @Test
+    void flowIdValidationRequiresCanonicalUuidV7() {
+        assertTrue(ZLinkFlowContext.isValidFlowId(
+            "018f2f1d-5d52-7b70-8f08-13fecf6f6abc"));
+        assertEquals(false, ZLinkFlowContext.isValidFlowId(
+            "018f2f1d-5d52-6b70-8f08-13fecf6f6abc"));
+        assertEquals(false, ZLinkFlowContext.isValidFlowId(
+            "018F2F1D-5D52-7B70-8F08-13FECF6F6ABC"));
+        assertEquals(false, ZLinkFlowContext.isValidFlowId("not-a-flow-id"));
+    }
+
+    @Test
     void propagatedStageCompletesDependentsInsideCapturedFlowOnly() {
         ZLinkFlowContext.State first = ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND);
         CompletableFuture<String> source = new CompletableFuture<>();

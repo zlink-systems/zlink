@@ -215,21 +215,28 @@ final class RouteSpotSendCall
         if (duplicate != null) {
             return duplicate;
         }
-        ZLinkInstanceSpotCallRuntime activation = instanceSpots == null
-            ? null : instanceSpots.get();
-        return SpotCallAddresses.resolve(resolver, target).handle((address, failure) -> {
-            if (failure == null) {
-                return submitExistingOrActivate(address, activation);
-            }
-            RuntimeException error = SpotCallAddresses.unwrap(failure);
-            if (!instanceIntent || activation == null
-                || !SpotCallAddresses.isStaleRoute(error)) {
-                return CompletableFuture.<Void>failedFuture(
-                    error);
-            }
-            return activation.send(target, stableType, selectedMesh, payload,
-                packetName, contentType, metadata.values());
-        }).thenCompose(Function.identity());
+        try (var flowScope = runtime.enterApplicationFlow()) {
+            var operationFlow = systems.zlink.framework.runtime.internal.diagnostics
+                .ZLinkFlowContext.current();
+            ZLinkInstanceSpotCallRuntime activation = instanceSpots == null
+                ? null : instanceSpots.get();
+            return SpotCallAddresses.resolve(resolver, target).handle((address, failure) ->
+                systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.call(
+                    operationFlow,
+                    () -> {
+                        if (failure == null) {
+                            return submitExistingOrActivate(address, activation);
+                        }
+                        RuntimeException error = SpotCallAddresses.unwrap(failure);
+                        if (!instanceIntent || activation == null
+                            || !SpotCallAddresses.isStaleRoute(error)) {
+                            return CompletableFuture.<Void>failedFuture(error);
+                        }
+                        return activation.send(
+                            target, stableType, selectedMesh, payload,
+                            packetName, contentType, metadata.values());
+                    })).thenCompose(Function.identity());
+        }
     }
 
     private CompletionStage<Void> submitExistingOrActivate(
@@ -456,23 +463,32 @@ final class RouteSpotRequestCall
         if (duplicate != null) {
             return duplicate;
         }
-        systems.zlink.framework.runtime.internal.handlers
-            .ZLinkSuspendInvocationContext.rejectSameSpotWait(target);
-        ZLinkInstanceSpotCallRuntime activation = instanceSpots == null
-            ? null : instanceSpots.get();
-        CompletionStage<TReply> stage = SpotCallAddresses.resolve(resolver, target).handle((address, failure) -> {
-            if (failure == null) {
-                return submitExistingOrActivate(address, replyType, activation);
-            }
-            RuntimeException error = SpotCallAddresses.unwrap(failure);
-            if (!instanceIntent || activation == null
-                || !SpotCallAddresses.isStaleRoute(error)) {
-                return CompletableFuture.<TReply>failedFuture(
-                    error);
-            }
-            return activateRequest(activation, replyType);
-        }).thenCompose(Function.identity());
-        return ZLinkAsyncSerialQueue.manageCurrent(stage);
+        try (var flowScope = runtime.enterApplicationFlow()) {
+            var operationFlow = systems.zlink.framework.runtime.internal.diagnostics
+                .ZLinkFlowContext.current();
+            systems.zlink.framework.runtime.internal.handlers
+                .ZLinkSuspendInvocationContext.rejectSameSpotWait(target);
+            ZLinkInstanceSpotCallRuntime activation = instanceSpots == null
+                ? null : instanceSpots.get();
+            CompletionStage<TReply> stage = SpotCallAddresses.resolve(resolver, target)
+                .handle((address, failure) ->
+                    systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.call(
+                        operationFlow,
+                        () -> {
+                            if (failure == null) {
+                                return submitExistingOrActivate(
+                                    address, replyType, activation);
+                            }
+                            RuntimeException error = SpotCallAddresses.unwrap(failure);
+                            if (!instanceIntent || activation == null
+                                || !SpotCallAddresses.isStaleRoute(error)) {
+                                return CompletableFuture.<TReply>failedFuture(error);
+                            }
+                            return activateRequest(activation, replyType);
+                        }))
+                .thenCompose(Function.identity());
+            return ZLinkAsyncSerialQueue.manageCurrent(stage);
+        }
     }
 
     private <TReply> CompletionStage<TReply> submitExistingOrActivate(

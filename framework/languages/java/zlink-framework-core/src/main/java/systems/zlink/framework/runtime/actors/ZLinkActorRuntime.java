@@ -22,6 +22,8 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSu
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations
@@ -622,6 +624,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     public void setMessageFlowTracer(
         ZLinkMessageFlowTracer flow) {
         this.flow = flow;
+    }
+
+    ZLinkFlowContext.Scope enterApplicationFlow() {
+        return ZLinkFlowContext.enterCurrentOrCreate(
+            ZLinkFlowOrigin.APPLICATION,
+            flow != null && flow.captureEnabled());
     }
 
     public void setMetadataPolicy(

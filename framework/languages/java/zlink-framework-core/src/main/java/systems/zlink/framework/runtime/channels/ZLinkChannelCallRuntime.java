@@ -23,6 +23,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResul
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 
 final class ZLinkChannelCallRuntime {
     @FunctionalInterface
@@ -73,6 +74,12 @@ final class ZLinkChannelCallRuntime {
 
     ZLinkMessageFlowTracer flow() {
         return flow;
+    }
+
+    ZLinkFlowContext.Scope enterApplicationFlow() {
+        return ZLinkFlowContext.enterCurrentOrCreate(
+            ZLinkFlowOrigin.APPLICATION,
+            flow.captureEnabled());
     }
 
     void track(CompletableFuture<?> result, Duration timeout) {

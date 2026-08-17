@@ -33,6 +33,7 @@ final class ZLinkStreamSessionDeclaredTypeCodecTest {
             null,
             codecs.serializerWithFallback(new ZLinkJsonMessageSerializer()),
             ZLinkStreamCodec.RAW,
+            null,
             null);
         ZLinkMessage message = ZLinkMessage.of(
             new DerivedMessage(), BaseMessage.class);

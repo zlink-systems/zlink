@@ -23,6 +23,9 @@ import systems.zlink.framework.streams.ZLinkSessionSendCall;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamCompressionCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
+import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 final class ZLinkStreamSessionClient implements ZLinkSessionClient {
     private final ZLinkBackendStreamSocket stream;
@@ -31,6 +34,7 @@ final class ZLinkStreamSessionClient implements ZLinkSessionClient {
     private final ZLinkMessageSerializer serializer;
     private final ZLinkStreamCodec defaultCodec;
     private final ZLinkStreamCompressionCodec compressionCodec;
+    private final ZLinkMessageFlowTracer flow;
 
     ZLinkStreamSessionClient(
         ZLinkBackendStreamSocket stream,
@@ -38,13 +42,15 @@ final class ZLinkStreamSessionClient implements ZLinkSessionClient {
         ZLinkStreamSessionContextState context,
         ZLinkMessageSerializer serializer,
         ZLinkStreamCodec defaultCodec,
-        ZLinkStreamCompressionCodec compressionCodec) {
+        ZLinkStreamCompressionCodec compressionCodec,
+        ZLinkMessageFlowTracer flow) {
         this.stream = stream;
         this.routingId = routingId;
         this.context = context;
         this.serializer = serializer;
         this.defaultCodec = defaultCodec;
         this.compressionCodec = compressionCodec;
+        this.flow = flow;
     }
 
     @Override
@@ -61,7 +67,8 @@ final class ZLinkStreamSessionClient implements ZLinkSessionClient {
             Map.of(),
             false,
             codec,
-            compressionCodec);
+            compressionCodec,
+            flow);
     }
 
     @Override
@@ -78,7 +85,8 @@ final class ZLinkStreamSessionClient implements ZLinkSessionClient {
             encoded.packetName(),
             false,
             codec,
-            compressionCodec);
+            compressionCodec,
+            flow);
     }
 }
 
@@ -91,6 +99,7 @@ record ZLinkStreamSessionSendCall(
     boolean compressed,
     ZLinkStreamCodec codec,
     ZLinkStreamCompressionCodec compressionCodec,
+    ZLinkMessageFlowTracer flow,
     Duration timeout,
     AtomicBoolean submitGate)
     implements ZLinkSessionSendCall {
@@ -104,8 +113,22 @@ record ZLinkStreamSessionSendCall(
         ZLinkStreamCodec codec,
         ZLinkStreamCompressionCodec compressionCodec) {
         this(stream, routingId, payload, packetName, metadata, compressed, codec,
-            compressionCodec, null,
+            compressionCodec, null, null,
             new AtomicBoolean());
+    }
+
+    ZLinkStreamSessionSendCall(
+        ZLinkBackendStreamSocket stream,
+        RoutingId routingId,
+        Message payload,
+        String packetName,
+        Map<String, String> metadata,
+        boolean compressed,
+        ZLinkStreamCodec codec,
+        ZLinkStreamCompressionCodec compressionCodec,
+        ZLinkMessageFlowTracer flow) {
+        this(stream, routingId, payload, packetName, metadata, compressed, codec,
+            compressionCodec, flow, null, new AtomicBoolean());
     }
     @Override
     public ZLinkSessionSendCall metadata(String key, String value) {
@@ -120,6 +143,7 @@ record ZLinkStreamSessionSendCall(
             compressed,
             codec,
             compressionCodec,
+            flow,
             timeout,
             submitGate);
     }
@@ -137,6 +161,7 @@ record ZLinkStreamSessionSendCall(
             compressed,
             codec,
             compressionCodec,
+            flow,
             timeout,
             submitGate);
     }
@@ -152,6 +177,7 @@ record ZLinkStreamSessionSendCall(
             true,
             codec,
             compressionCodec,
+            flow,
             timeout,
             submitGate);
     }
@@ -170,6 +196,7 @@ record ZLinkStreamSessionSendCall(
             compressed,
             codec,
             compressionCodec,
+            flow,
             value,
             submitGate);
     }
@@ -181,6 +208,9 @@ record ZLinkStreamSessionSendCall(
         if (duplicate != null) {
             return duplicate;
         }
+        try (var flowScope = ZLinkFlowContext.enterCurrentOrCreate(
+            ZLinkFlowOrigin.APPLICATION,
+            flow != null && flow.captureEnabled())) {
         ZLinkStreamPayloadCodec.Encoded encoded = ZLinkStreamPayloadCodec.encode(
             payload,
             compressed,
@@ -201,6 +231,7 @@ record ZLinkStreamSessionSendCall(
             payload.close();
         });
         return result;
+        }
     }
 }
 
@@ -213,6 +244,7 @@ record ZLinkStreamSessionReplyCall(
     boolean compressed,
     ZLinkStreamCodec codec,
     ZLinkStreamCompressionCodec compressionCodec,
+    ZLinkMessageFlowTracer flow,
     AtomicBoolean submitGate)
     implements ZLinkSessionReplyCall {
     ZLinkStreamSessionReplyCall(
@@ -225,7 +257,21 @@ record ZLinkStreamSessionReplyCall(
         ZLinkStreamCodec codec,
         ZLinkStreamCompressionCodec compressionCodec) {
         this(stream, routingId, payload, context, packetName, compressed, codec, compressionCodec,
-            new AtomicBoolean());
+            null, new AtomicBoolean());
+    }
+
+    ZLinkStreamSessionReplyCall(
+        ZLinkBackendStreamSocket stream,
+        RoutingId routingId,
+        Message payload,
+        ZLinkStreamSessionContextState context,
+        String packetName,
+        boolean compressed,
+        ZLinkStreamCodec codec,
+        ZLinkStreamCompressionCodec compressionCodec,
+        ZLinkMessageFlowTracer flow) {
+        this(stream, routingId, payload, context, packetName, compressed, codec,
+            compressionCodec, flow, new AtomicBoolean());
     }
     @Override
     public ZLinkSessionReplyCall compress() {
@@ -238,6 +284,7 @@ record ZLinkStreamSessionReplyCall(
             true,
             codec,
             compressionCodec,
+            flow,
             submitGate);
     }
 
@@ -259,6 +306,9 @@ record ZLinkStreamSessionReplyCall(
         if (duplicate != null) {
             return duplicate;
         }
+        try (var flowScope = ZLinkFlowContext.enterCurrentOrCreate(
+            ZLinkFlowOrigin.APPLICATION,
+            flow != null && flow.captureEnabled())) {
         if (!context.claimReplyHeader(currentHeader.get())) {
             payload.close();
             return CompletableFuture.failedFuture(
@@ -289,5 +339,6 @@ record ZLinkStreamSessionReplyCall(
             }
         });
         return result;
+        }
     }
 }

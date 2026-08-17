@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
+import java.util.function.BooleanSupplier;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
@@ -50,6 +51,8 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 import systems.zlink.framework.runtime.internal.streams.ZLinkStreamErrorPayload;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     private static final Duration FALLBACK_ROUTE_RETRY_TIMEOUT = Duration.ofSeconds(5);
@@ -60,6 +63,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     private final ZLinkMessageSerializer serializer;
     private final Duration defaultTimeout;
     private final CompletionStage<Void> runtimeReady;
+    private final BooleanSupplier flowCaptureEnabled;
     private final AtomicInteger
         runtimeReadyWaiters = new AtomicInteger();
 
@@ -113,6 +117,27 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                 Runnable,
                 CompletionStage<Void>>> admission,
         CompletionStage<Void> runtimeReady) {
+        this(
+            spotNode,
+            locations,
+            serializer,
+            defaultTimeout,
+            admission,
+            runtimeReady,
+            () -> false);
+    }
+
+    public ZLinkActorClientRuntime(
+        Supplier<ZLinkInternalSpotNode> spotNode,
+        ZLinkStoreLocationResolvers locations,
+        ZLinkMessageSerializer serializer,
+        Duration defaultTimeout,
+        BiFunction<
+            ZLinkBackendObject,
+            ZLinkBackendAdmissionKey,
+            BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>> admission,
+        CompletionStage<Void> runtimeReady,
+        BooleanSupplier flowCaptureEnabled) {
         this.spotNode = Objects.requireNonNull(spotNode, "spotNode");
         this.locations = Objects.requireNonNull(locations, "locations");
         this.serializer = Objects.requireNonNull(serializer, "serializer");
@@ -120,6 +145,15 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         this.runtimeReady = Objects.requireNonNull(
             runtimeReady,
             "runtimeReady");
+        this.flowCaptureEnabled = Objects.requireNonNull(
+            flowCaptureEnabled,
+            "flowCaptureEnabled");
+    }
+
+    private ZLinkFlowContext.Scope enterApplicationFlow() {
+        return ZLinkFlowContext.enterCurrentOrCreate(
+            ZLinkFlowOrigin.APPLICATION,
+            flowCaptureEnabled.getAsBoolean());
     }
 
     @Override
@@ -139,9 +173,12 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         Map<String, String> metadata,
         Duration timeout,
         Class<TReply> replyType) {
+        ZLinkFlowContext.State operationFlow = ZLinkFlowContext.current();
         return resolveActorAddress(actorId, timeout)
-            .thenCompose(actor -> submitRequestWithRouteRetry(
-                actor, packetName, request, metadata, timeout, replyType))
+            .thenCompose(actor -> ZLinkFlowContext.call(
+                operationFlow,
+                () -> submitRequestWithRouteRetry(
+                    actor, packetName, request, metadata, timeout, replyType)))
             .whenComplete((ignored, error) -> {
                 if (error != null && isStaleActorError(error)) {
                     locations.invalidateActorRoute(actorId);
@@ -196,7 +233,9 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         String packetName,
         Object message,
         Map<String, String> metadata) {
-        return resolveActorAddress(actorId, defaultTimeout).thenCompose(actor -> {
+        ZLinkFlowContext.State operationFlow = ZLinkFlowContext.current();
+        return resolveActorAddress(actorId, defaultTimeout).thenCompose(actor ->
+            ZLinkFlowContext.call(operationFlow, () -> {
             List<Message> parts = createPacketParts(
                 ZLinkStreamMessageKind.SEND,
                 Optional.empty(),
@@ -218,7 +257,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                         locations.invalidateActorRoute(actorId);
                     }
                 });
-        });
+            }));
     }
 
     private CompletionStage<Void> awaitRuntimeReady(Duration timeout) {
@@ -530,7 +569,9 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
             if (duplicate != null) {
                 return duplicate;
             }
-            return submitSendResult(actorId, packetName, message, metadata);
+            try (var flowScope = enterApplicationFlow()) {
+                return submitSendResult(actorId, packetName, message, metadata);
+            }
         }
     }
 
@@ -575,12 +616,13 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
             if (duplicate != null) {
                 return duplicate;
             }
-            systems.zlink.framework.runtime.internal.handlers
-                .ZLinkSuspendInvocationContext.rejectSameActorWait(
-                    actorId);
-            return ZLinkAsyncSerialQueue.manageCurrent(
-                requestAsync(
-                    actorId, packetName, request, metadata, timeout, replyType));
+            try (var flowScope = enterApplicationFlow()) {
+                systems.zlink.framework.runtime.internal.handlers
+                    .ZLinkSuspendInvocationContext.rejectSameActorWait(actorId);
+                return ZLinkAsyncSerialQueue.manageCurrent(
+                    requestAsync(
+                        actorId, packetName, request, metadata, timeout, replyType));
+            }
         }
 
         @Override

@@ -27,6 +27,7 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 
 import systems.zlink.framework.streams.ZLinkStreamCodec;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
@@ -183,6 +184,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
             stream,
             sessionRid,
             actorId,
+            actorRuntime,
             encoded.payload(),
             options,
             metadataPolicy);
@@ -202,6 +204,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
         ZLinkBackendStreamSocket stream,
         RoutingId sessionRid,
         String actorId,
+        ZLinkActorRuntime actorRuntime,
         Message payload,
         ZLinkBoundSessionSendOptions options,
         ZLinkRelayMetadataPolicy metadataPolicy,
@@ -211,10 +214,11 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
             ZLinkBackendStreamSocket stream,
             RoutingId sessionRid,
             String actorId,
+            ZLinkActorRuntime actorRuntime,
             Message payload,
             ZLinkBoundSessionSendOptions options,
             ZLinkRelayMetadataPolicy metadataPolicy) {
-            this(stream, sessionRid, actorId, payload, options, metadataPolicy,
+            this(stream, sessionRid, actorId, actorRuntime, payload, options, metadataPolicy,
                 new AtomicBoolean());
         }
         public ZLinkBoundSessionSendCall packetName(String packetName) {
@@ -222,6 +226,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                 stream,
                 sessionRid,
                 actorId,
+                actorRuntime,
                 payload,
                 options.withPacketName(packetName),
                 metadataPolicy,
@@ -234,6 +239,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                 stream,
                 sessionRid,
                 actorId,
+                actorRuntime,
                 payload,
                 options.withMetadata(key, value),
                 metadataPolicy,
@@ -247,6 +253,9 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
             if (duplicate != null) {
                 return duplicate;
             }
+            try (ZLinkFlowContext.Scope flowScope = actorRuntime != null
+                ? actorRuntime.enterApplicationFlow()
+                : null) {
             ZLinkStreamHeader header = metadataPolicy.actorToSession(options).header();
             Message payloadPart;
             try {
@@ -266,6 +275,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
             }
             return ZLinkOneWayCalls.adaptOneWay(submission)
                 .whenComplete((ignored, failure) -> payloadPart.close());
+            }
         }
 
     }

@@ -171,6 +171,7 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
             if (duplicate != null) {
                 return duplicate;
             }
+            try (var flowScope = actorRuntime.enterApplicationFlow()) {
             ZLinkBackendActorRef currentActorRef = actorRuntime.actorRef(actor);
             byte[] frameBytes;
             try {
@@ -184,6 +185,7 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                 currentActorRef,
                 frame,
                 timeout);
+            }
         }
 
     }

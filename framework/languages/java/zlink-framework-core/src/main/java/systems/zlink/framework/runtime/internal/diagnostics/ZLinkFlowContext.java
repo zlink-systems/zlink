@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.Executor;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 
 /** Internal flow context. It is deliberately not a public context-capture API. */
@@ -49,6 +50,19 @@ public final class ZLinkFlowContext {
      */
     public static Scope enterOrCreate(State inbound, ZLinkFlowOrigin defaultOrigin) {
         return enter(inbound != null ? inbound : create(defaultOrigin));
+    }
+
+    /**
+     * Outbound entry: preserves an ambient callback flow or starts an
+     * application flow for the first outbound operation (spec 27 §4). The
+     * live capture gate is intentionally checked by every terminal entrypoint.
+     */
+    public static Scope enterCurrentOrCreate(
+        ZLinkFlowOrigin origin,
+        boolean captureEnabled) {
+        return captureEnabled
+            ? enterOrCreate(current(), origin)
+            : suppress();
     }
 
     /**
@@ -104,6 +118,43 @@ public final class ZLinkFlowContext {
         try (Scope ignored = enter(state)) {
             action.run();
         }
+    }
+
+    public static <T> T call(State state, Supplier<T> action) {
+        if (state == null) {
+            return action.get();
+        }
+        try (Scope ignored = enter(state)) {
+            return action.get();
+        }
+    }
+
+    /** Lowercase hyphenated UUIDv7 wire validation from spec 27 §3. */
+    public static boolean isValidFlowId(String value) {
+        if (value == null || value.length() != 36
+            || value.charAt(8) != '-'
+            || value.charAt(13) != '-'
+            || value.charAt(18) != '-'
+            || value.charAt(23) != '-'
+            || value.charAt(14) != '7') {
+            return false;
+        }
+        char variant = value.charAt(19);
+        if (variant != '8' && variant != '9'
+            && variant != 'a' && variant != 'b') {
+            return false;
+        }
+        for (int index = 0; index < value.length(); index++) {
+            if (index == 8 || index == 13 || index == 18 || index == 23) {
+                continue;
+            }
+            char current = value.charAt(index);
+            if (!((current >= '0' && current <= '9')
+                || (current >= 'a' && current <= 'f'))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static String uuidV7() {

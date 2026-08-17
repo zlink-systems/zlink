@@ -148,7 +148,11 @@ final class ZLinkFrameworkActorSubsystem {
                 serializer,
                 registration.defaultRequestTimeout(),
                 null,
-                runtimeReady)
+                runtimeReady,
+                () -> registration.dispatchOptions().diagnostics()
+                    .effectiveMessageFlow()
+                    != systems.zlink.framework.configuration
+                        .ZLinkMessageFlowLogMode.OFF)
             : null;
         registerActorServices(runtimeHandlers, actorClient, actorDirectory, actors);
         wireActorRuntime(

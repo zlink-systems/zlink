@@ -86,6 +86,7 @@ final class ZLinkRoutedBoundSessionRuntime implements ZLinkBoundSession {
             targetNodeRid,
             targetEntrySpotId,
             actorRef,
+            actorRuntime,
             encoded.payload(),
             timeout,
             options,
@@ -157,6 +158,7 @@ final class ZLinkRoutedBoundSessionRuntime implements ZLinkBoundSession {
         RoutingId targetNodeRid,
         String targetEntrySpotId,
         ZLinkBackendActorRef actorRef,
+        ZLinkActorRuntime actorRuntime,
         Message payload,
         Duration timeout,
         ZLinkBoundSessionSendOptions options,
@@ -170,12 +172,13 @@ final class ZLinkRoutedBoundSessionRuntime implements ZLinkBoundSession {
             RoutingId targetNodeRid,
             String targetEntrySpotId,
             ZLinkBackendActorRef actorRef,
+            ZLinkActorRuntime actorRuntime,
             Message payload,
             Duration timeout,
             ZLinkBoundSessionSendOptions options,
             ZLinkRelayMetadataPolicy metadataPolicy) {
             this(sourceEntrySpot, routedTransport, routeChannelName, targetNodeRid,
-                targetEntrySpotId, actorRef, payload, timeout, options, metadataPolicy,
+                targetEntrySpotId, actorRef, actorRuntime, payload, timeout, options, metadataPolicy,
                 new AtomicBoolean());
         }
         public ZLinkBoundSessionSendCall packetName(String packetName) {
@@ -186,6 +189,7 @@ final class ZLinkRoutedBoundSessionRuntime implements ZLinkBoundSession {
                 targetNodeRid,
                 targetEntrySpotId,
                 actorRef,
+                actorRuntime,
                 payload,
                 timeout,
                 options.withPacketName(packetName),
@@ -202,6 +206,7 @@ final class ZLinkRoutedBoundSessionRuntime implements ZLinkBoundSession {
                 targetNodeRid,
                 targetEntrySpotId,
                 actorRef,
+                actorRuntime,
                 payload,
                 timeout,
                 options.withMetadata(key, value),
@@ -216,6 +221,7 @@ final class ZLinkRoutedBoundSessionRuntime implements ZLinkBoundSession {
             if (duplicate != null) {
                 return duplicate;
             }
+            try (var flowScope = actorRuntime.enterApplicationFlow()) {
             byte[] frameBytes;
             try {
                 frameBytes = metadataPolicy.actorToSession(options).encodeFrame(payload);
@@ -236,6 +242,7 @@ final class ZLinkRoutedBoundSessionRuntime implements ZLinkBoundSession {
             } catch (RuntimeException error) {
                 frame.close();
                 throw error;
+            }
             }
         }
 
