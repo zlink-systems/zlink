@@ -10,5 +10,8 @@
   "include": [
     "src/**/*.ts"
   ],
+  "exclude": [
+    "src/runtime/backend/node/node-raw-binding-port.contract.ts"
+  ],
   "references": [{ "path": "../stream-wire" }]
 }

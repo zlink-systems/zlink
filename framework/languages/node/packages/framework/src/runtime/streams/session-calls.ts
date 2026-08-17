@@ -56,6 +56,16 @@ export interface ZLinkSessionCallContext {
     payload: unknown
   ): Message;
   claimReply(requestHeader: ZLinkStreamFrameHeader): void;
+  /**
+   * Spec 26 §2.2: the STREAM surface records session-connected sends and the
+   * request's terminal reply. The runtime wires this observer so successful
+   * writes produce exactly one `sent`/`replied` record.
+   */
+  traceFrameWritten?(
+    kind: ZLinkStreamMessageKind,
+    packetName: string,
+    correlationId: string | undefined
+  ): void;
 }
 
 export class DefaultZLinkBoundSessionSendCall implements ZLinkBoundSessionSendCall {
@@ -156,6 +166,7 @@ export class DefaultZLinkSessionSendCall implements ZLinkSessionSendCall {
         this.selectedTimeoutMs
       );
       requireOneWayCompletion(result, 'STREAM session send');
+      this.context.traceFrameWritten?.(ZLinkStreamMessageKind.Send, packetName, undefined);
     } finally {
       message.close();
     }
@@ -198,6 +209,11 @@ export class DefaultZLinkSessionReplyCall implements ZLinkSessionReplyCall {
     try {
       const result = await this.context.stream.submitRaw(message, signal);
       requireOneWayCompletion(result, 'STREAM session reply');
+      this.context.traceFrameWritten?.(
+        ZLinkStreamMessageKind.Response,
+        requestHeader.name,
+        requestHeader.correlationId
+      );
     } finally {
       message.close();
     }

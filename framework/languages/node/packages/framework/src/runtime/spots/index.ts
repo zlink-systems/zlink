@@ -2594,7 +2594,13 @@ export class DefaultZLinkSpotManager {
     kind: ZLinkStreamMessageKind.Response | ZLinkStreamMessageKind.Error,
     payload: unknown
   ): readonly Buffer[] {
-    const requestHeader = decodeStreamHeader(requestHeaderPart.data());
+    // Spec 27 §4/§7: the decode gate strips the observation-only flow pair at
+    // Off (and skips its validation); when tracing is on the reply preserves
+    // the request's flow pair alongside its correlation.
+    const requestHeader = decodeStreamHeader(
+      requestHeaderPart.data(),
+      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+    );
     const encoded = encodeFrameworkPayload(payload, this.options.messageSerializers);
     try {
       //  encodeStreamHeader returns a fresh, unaliased array; view it without
@@ -2606,7 +2612,9 @@ export class DefaultZLinkSpotManager {
         requestSeq: requestHeader.requestSeq,
         name: '',
         metadata: new Map(),
-        correlationId: requestHeader.correlationId
+        correlationId: requestHeader.correlationId,
+        flowId: requestHeader.flowId,
+        flowOrigin: requestHeader.flowOrigin
       });
       return [
         Buffer.from(replyHeader.buffer, replyHeader.byteOffset, replyHeader.byteLength),

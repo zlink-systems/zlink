@@ -11,6 +11,9 @@ const {
   ApplicationJobQueue,
   resolveApplicationJobQueueConfiguration
 } = require('../../packages/framework/dist/runtime/host/application-job-queue');
+const {
+  ZLinkDispatchErrorReporter
+} = require('../../packages/framework/dist/runtime/channels/dispatch-error-reporter');
 const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
 const streamReassembler = require(
   '../../packages/framework/dist/runtime/streams/stream-frame-reassembler'
@@ -489,6 +492,89 @@ test('stream session runtime sends heartbeat ping and consumes pong outside appl
   assert.equal(dispatches, 0);
   assert.equal(controlHeader(socket.sent.at(-1)).name, '$zlink.heartbeat.pong');
   assert.deepEqual(socket.disconnects, []);
+  await runtime.dispose();
+});
+
+test('inbound heartbeat control frames release their application job permits', async () => {
+  const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
+  const jobQueue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
+  const runtime = createStreamRuntime({
+    socket,
+    livenessClock: clock,
+    applicationJobQueue: jobQueue,
+    sessionFactory(context) {
+      return { context, async onDispatch() {} };
+    }
+  });
+
+  runtime.start();
+  runtime.markConnected('heartbeat-permit-session');
+  await clock.flush();
+
+  for (let round = 0; round < 3; round += 1) {
+    socket.emitPacket('heartbeat-permit-session', fakeHeader({
+      kind: connector.ZlinkStreamMessageKind.Control,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.None,
+      name: '$zlink.heartbeat.pong'
+    }), fakeMessage(''));
+    await clock.flush();
+    await waitForReceive(socket);
+    socket.emitPacket('heartbeat-permit-session', fakeHeader({
+      kind: connector.ZlinkStreamMessageKind.Control,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.None,
+      name: '$zlink.heartbeat.ping'
+    }), fakeMessage(''));
+    await clock.flush();
+    await waitForReceive(socket);
+  }
+
+  // Every consumed Control frame must return its ingress capacity; a leak
+  // here starves the host-wide application job queue over long connections.
+  assert.equal(jobQueue.snapshot().reservedSupplyPermits, 0n);
+  await runtime.dispose();
+});
+
+test('stream request dispatch emits exactly one replied terminal record (spec 26 §2.2)', async () => {
+  const socket = new FakeStreamSocket();
+  const dispatch = {
+    diagnostics: { messageFlow: 'normal', sampleRate: 1, includeMessageSizes: false }
+  };
+  const cell = framework.createMessageFlowModeCell(dispatch);
+  const ctx = framework.createDiagnosticsContext(dispatch, undefined, cell);
+  const reporter = new ZLinkDispatchErrorReporter(
+    undefined,
+    undefined,
+    { reportRuntimeTaskException() {} },
+    ctx
+  );
+  let repliedResolve;
+  const replied = new Promise((resolve) => { repliedResolve = resolve; });
+  const runtime = createStreamRuntime({
+    socket,
+    dispatchErrors: reporter,
+    sessionFactory(context) {
+      return {
+        context,
+        async onDispatch() {
+          await context.client.reply('done').submit();
+          repliedResolve();
+        }
+      };
+    }
+  });
+  runtime.start();
+  socket.emitPacket('replied-session', fakeHeader({
+    kind: connector.ZlinkStreamMessageKind.Request,
+    requestSeq: 1n,
+    name: 'Work'
+  }), fakeJsonMessage('payload'));
+  await replied;
+  // received + admitted + dispatched + replied: the reply write is the
+  // surface's single terminal record.
+  assert.equal(reporter.flow.tracedCount, 4);
   await runtime.dispose();
 });
 

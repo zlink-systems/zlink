@@ -136,12 +136,12 @@ export class ZLinkSpotActorPacketDispatch {
       this.reportInvalidFrame(actorId, ZLinkDispatchMessageKind.ActorSend);
       return undefined;
     }
+    //  Spec 26 §4.1: one level read per processing point — the same gate value
+    //  drives both the decode and the flow-context install.
+    const flowEnabled = this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true;
     let header: ReturnType<typeof decodeStreamHeader>;
     try {
-      header = decodeStreamHeader(
-        messageToBytes(parts[0]),
-        this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
-      );
+      header = decodeStreamHeader(messageToBytes(parts[0]), flowEnabled);
     } catch (error) {
       this.reportInvalidFrame(actorId, ZLinkDispatchMessageKind.ActorSend, error);
       throw error;
@@ -149,7 +149,7 @@ export class ZLinkSpotActorPacketDispatch {
     return runWithFlow(createInboundFlow(
       header.flowId,
       header.flowOrigin,
-      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+      flowEnabled
     ), async () => {
       const messageKind = header.kind === ZLinkStreamMessageKind.Request
         ? ZLinkDispatchMessageKind.ActorRequest

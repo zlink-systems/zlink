@@ -241,7 +241,9 @@ export class ZLinkChannelOutboundOperations {
       topic,
       this.codecs,
       undefined,
-      false,
+      // Spec 27 §5: every Classic-fanout branch carries the origin flow pair
+      // while tracing is enabled; Off suppresses envelope flow fields (§4).
+      this.dispatchServices.flowCreationEnabled(),
       metadata
     ) as readonly Message[];
     const accepted = publisher.publish(topic, parts, ZLINK_SEND_DONT_WAIT);
@@ -272,7 +274,9 @@ export class ZLinkChannelOutboundOperations {
       topic,
       this.codecs,
       undefined,
-      false,
+      // Spec 27 §5: every Classic-fanout branch carries the origin flow pair
+      // while tracing is enabled; Off suppresses envelope flow fields (§4).
+      this.dispatchServices.flowCreationEnabled(),
       metadata
     ) as readonly Message[];
     try {

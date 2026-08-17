@@ -228,7 +228,10 @@ export class ZLinkMessageFlowTracer {
       flow,
       effectiveMode === 'detailed' && this.ctx.diagnostics.includeMessageSizes
         ? flow.messageSize
-        : undefined
+        : undefined,
+      // Spec 26 §4: terminal elapsed time is a Detailed-level addition; the
+      // other languages strip it below that level.
+      effectiveMode === 'detailed' ? flow.durationSeconds : undefined
     ));
   }
 
@@ -328,7 +331,8 @@ const FLOW_ORIGIN_TELEMETRY_VALUES: Record<ZLinkFlowOrigin, string> = {
 
 function toTelemetryRecord(
   flow: ZLinkRuntimeMessageFlowEvent,
-  messageSizeBytes: number | undefined
+  messageSizeBytes: number | undefined,
+  durationSeconds: number | undefined
 ): ZLinkTelemetryRecord {
   return {
     eventId: flow.outcome === ZLinkMessageFlowOutcome.Error
@@ -360,7 +364,7 @@ function toTelemetryRecord(
     actorId: flow.actorId,
     commandId: flow.commandId,
     messageSizeBytes,
-    durationSeconds: flow.durationSeconds,
+    durationSeconds,
     errorType: flow.errorType,
     errorMessage: boundedText(flow.errorMessage),
     errorCauseType: flow.errorCauseType,

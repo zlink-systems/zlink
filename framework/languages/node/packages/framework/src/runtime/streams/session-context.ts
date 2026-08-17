@@ -114,6 +114,11 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
   private currentDispatchHeader: ZLinkStreamFrameHeader | undefined;
   private currentReplyClaimed = false;
   private actorBindingReplacementHandler?: ZLinkActorBindingReplacementHandler;
+  private frameWrittenObserver?: (
+    kind: ZLinkStreamMessageKind,
+    packetName: string,
+    correlationId: string | undefined
+  ) => void;
   private closingForActorReplacement = false;
   private readonly retiredActorBindings = new Map<string, {
     readonly actorGeneration: bigint;
@@ -159,6 +164,23 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
 
   setActorBindingReplacementHandler(handler: ZLinkActorBindingReplacementHandler): void {
     this.actorBindingReplacementHandler = handler;
+  }
+
+  /** Wired by the owning session runtime; see ZLinkSessionCallContext.traceFrameWritten. */
+  setFrameWrittenObserver(observer: (
+    kind: ZLinkStreamMessageKind,
+    packetName: string,
+    correlationId: string | undefined
+  ) => void): void {
+    this.frameWrittenObserver = observer;
+  }
+
+  traceFrameWritten(
+    kind: ZLinkStreamMessageKind,
+    packetName: string,
+    correlationId: string | undefined
+  ): void {
+    this.frameWrittenObserver?.(kind, packetName, correlationId);
   }
 
   get actorBindingReplacedHandler(): ZLinkActorBindingReplacementHandler | undefined {
@@ -263,6 +285,11 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
 
   get dispatchHeader(): ZLinkStreamFrameHeader | undefined {
     return this.currentDispatchHeader;
+  }
+
+  /** True while the current request dispatch has already submitted its reply. */
+  get replyClaimed(): boolean {
+    return this.currentReplyClaimed;
   }
 
   claimReply(requestHeader: ZLinkStreamFrameHeader): void {

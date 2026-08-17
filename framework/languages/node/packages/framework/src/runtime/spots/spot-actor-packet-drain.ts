@@ -80,7 +80,7 @@ export class ZLinkSpotActorPacketDrain {
         if (part === null) {
           if (parts.length > 0 && packetKey !== undefined) {
             this.continuations.set(packetKey, {
-              owner: continuationOwner(parts[0]),
+              owner: continuationOwner(parts[0], this.flowEnabled()),
               parts: parts.splice(0)
             });
             return;
@@ -235,7 +235,11 @@ export class ZLinkSpotActorPacketDrain {
         requestSeq: requestHeader.requestSeq,
         name: '',
         metadata: new Map(),
-        correlationId: requestHeader.correlationId
+        correlationId: requestHeader.correlationId,
+        // Spec 27 §7: preserve the request flow pair on the reply while
+        // tracing is on; the gated decode above already strips it at Off.
+        flowId: requestHeader.flowId,
+        flowOrigin: requestHeader.flowOrigin
       }, encoded.message.data());
       return RuntimeMessage.fromOwned(
         Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength)
@@ -287,9 +291,11 @@ function actorPacketKey(part: ZLinkActorDispatchPart): string {
   ].join('\u0000');
 }
 
-function continuationOwner(header: Message): string {
+function continuationOwner(header: Message, flowEnabled: boolean): string {
   try {
-    const decoded = decodeStreamHeader(messageToBytes(header));
+    // Diagnostic label only; the gate keeps this from reading or validating
+    // the observation-only flow fields at Off (spec 27 §4).
+    const decoded = decodeStreamHeader(messageToBytes(header), flowEnabled);
     return `${decoded.name}:${decoded.requestSeq?.toString() ?? decoded.flowId ?? 'send'}`;
   } catch {
     return 'invalid-header';

@@ -216,6 +216,9 @@ export class ZLinkStreamSessionRuntime {
     this.context.setActorBindingReplacementHandler((actor, retiredSession) => {
       this.enqueueActorBindingReplaced(actor, retiredSession);
     });
+    this.context.setFrameWrittenObserver((kind, packetName, correlationId) => {
+      this.traceFrameWritten(kind, packetName, correlationId);
+    });
     const sessionOrPromise = options.sessionFactory(this.context);
     this.sessionReady = isPromiseLike(sessionOrPromise)
       ? sessionOrPromise.then(
@@ -275,6 +278,7 @@ export class ZLinkStreamSessionRuntime {
       if (messageToBytes(payload).length === 0) {
         if (decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PONG) {
           this.awaitingPongSince = undefined;
+          applicationJobPermit?.releaseAfterInternalProcessing();
           payload.close();
           releaseTerminal();
           return;
@@ -283,6 +287,7 @@ export class ZLinkStreamSessionRuntime {
           decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PING
           && this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PONG)
         ) {
+          applicationJobPermit?.releaseAfterInternalProcessing();
           payload.close();
           releaseTerminal();
           return;
@@ -694,6 +699,12 @@ export class ZLinkStreamSessionRuntime {
     if (header.requestSeq === undefined) {
       return;
     }
+    if (this.context.dispatchHeader === header && this.context.replyClaimed) {
+      // The handler already submitted the request's terminal reply; a second
+      // error frame for the same requestSeq would duplicate the terminal
+      // record (spec 26 §2.2) and confuse the peer's reply matching.
+      return;
+    }
     const message = this.context.createJsonReplyFrameMessage(
       header,
       ZLinkStreamMessageKind.Error,
@@ -712,19 +723,40 @@ export class ZLinkStreamSessionRuntime {
       if (!this.context.stream.writeRaw(message, ZLINK_SEND_DONT_WAIT)) {
         throw new Error('Client stream error reply send failed.');
       }
-      flowIfEnabled(this.options.dispatchErrors?.flow, ZLinkMessageFlowOutcome.Sent)?.trace({
-        outcome: ZLinkMessageFlowOutcome.Sent,
-        surface: ZLinkDispatchErrorSurface.StreamSession,
-        messageKind: ZLinkDispatchMessageKind.Request,
-        packetName: header.name,
-        correlationId: header.correlationId,
-        sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId)
-      });
+      this.traceFrameWritten(ZLinkStreamMessageKind.Error, header.name, header.correlationId);
     } catch (replyError) {
       this.options.onError?.(replyError);
     } finally {
       message.close();
     }
+  }
+
+  /**
+   * Spec 26 §2.1/§2.2: a successful session write is the surface's terminal
+   * boundary — `replied` for a request's response or error reply, `sent` for a
+   * session-connected send. Exactly one record per write, matching the other
+   * languages' write-path trace.
+   */
+  private traceFrameWritten(
+    kind: ZLinkStreamMessageKind,
+    packetName: string,
+    correlationId: string | undefined
+  ): void {
+    const reply = kind === ZLinkStreamMessageKind.Response
+      || kind === ZLinkStreamMessageKind.Error;
+    const outcome = reply ? ZLinkMessageFlowOutcome.Replied : ZLinkMessageFlowOutcome.Sent;
+    flowIfEnabled(this.options.dispatchErrors?.flow, outcome)?.trace({
+      outcome,
+      surface: ZLinkDispatchErrorSurface.StreamSession,
+      messageKind: kind === ZLinkStreamMessageKind.Response
+        ? ZLinkDispatchMessageKind.Response
+        : kind === ZLinkStreamMessageKind.Error
+          ? ZLinkDispatchMessageKind.Error
+          : ZLinkDispatchMessageKind.Send,
+      packetName: packetName.length === 0 ? undefined : packetName,
+      correlationId,
+      sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId)
+    });
   }
 
   private async complete(error: unknown, notifyDisconnected: boolean): Promise<void> {
