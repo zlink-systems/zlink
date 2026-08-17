@@ -8,7 +8,30 @@ internal enum ZLinkMessageFlowOutcome
     Dropped = 3,
     Sent = 4,
     ReplyReceived = 5,
-    Error = 6
+    Admitted = 6,
+    Completed = 7,
+    Backpressured = 8
+}
+
+internal enum ZLinkMessageFlowResult
+{
+    Succeeded = 0,
+    Failed = 1,
+    Backpressured = 2,
+    Dropped = 3,
+    Cancelled = 4,
+    Shutdown = 5
+}
+
+internal enum ZLinkMessageFlowReason
+{
+    Backpressure = 0,
+    StaleTarget = 1,
+    TargetClosed = 2,
+    Shutdown = 3,
+    LocationUnavailable = 4,
+    ActivationRejected = 5,
+    ActivationTimeout = 6
 }
 
 internal sealed record ZLinkMessageFlowEvent(
@@ -26,10 +49,16 @@ internal sealed record ZLinkMessageFlowEvent(
     string? SpotId = null,
     string? ActorId = null,
     long? MessageSize = null,
-    ZLinkDispatchErrorReason? ErrorReason = null,
-    ZLinkDispatchErrorAction? ErrorAction = null,
-    string? ErrorType = null,
-    string? ErrorMessage = null)
+    string? MeshName = null,
+    string? ChannelRouteKind = null,
+    string? TargetRid = null,
+    string? ServerRid = null,
+    string? InstanceSpotType = null,
+    string? ActivationState = null,
+    double? DurationSeconds = null,
+    ulong? SourceMeshGeneration = null,
+    ZLinkMessageFlowResult? Result = null,
+    ZLinkMessageFlowReason? Reason = null)
 {
     public string FlowId { get; init; } = string.Empty;
 
@@ -43,7 +72,11 @@ internal enum ZLinkDispatchErrorSurface
     SpotRoute = 2,
     SpotSubscription = 3,
     SpotActor = 4,
-    StreamSession = 5
+    StreamSession = 5,
+    Node = 6,
+    InstanceSpot = 7,
+    ActorRelocation = 8,
+    ClassicFanout = 9
 }
 
 internal enum ZLinkDispatchMessageKind
@@ -54,7 +87,8 @@ internal enum ZLinkDispatchMessageKind
     Response = 3,
     Error = 4,
     ActorRequest = 5,
-    ActorSend = 6
+    ActorSend = 6,
+    Control = 7
 }
 
 internal enum ZLinkDispatchErrorReason
@@ -64,7 +98,10 @@ internal enum ZLinkDispatchErrorReason
     HandlerException = 2,
     InvalidFrame = 3,
     ReplyPathMissing = 4,
-    UnexpectedReply = 5
+    UnexpectedReply = 5,
+    Backpressure = 6,
+    StaleTarget = 7,
+    Shutdown = 8
 }
 
 internal enum ZLinkDispatchErrorAction

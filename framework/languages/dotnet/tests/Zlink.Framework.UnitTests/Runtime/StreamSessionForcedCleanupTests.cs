@@ -104,7 +104,7 @@ public sealed class StreamSessionForcedCleanupTests
                                           && line.Contains("corr=stream-corr-17", StringComparison.Ordinal));
             Assert.Contains(lines, line => line.Contains("phase=replied", StringComparison.Ordinal)
                                           && line.Contains("corr=stream-corr-17", StringComparison.Ordinal)
-                                          && line.Contains("src=stream-flow-client", StringComparison.Ordinal));
+                                          && line.Contains("source_rid=stream-flow-client", StringComparison.Ordinal));
             Assert.DoesNotContain(lines, line => line.Contains("phase=dispatched", StringComparison.Ordinal));
             Assert.Contains(ZLinkMessageFlowTracer.LoggerCategory, loggerFactory.Categories);
         }
@@ -164,7 +164,7 @@ public sealed class StreamSessionForcedCleanupTests
 
             var lines = loggerFactory.Messages.ToArray();
             Assert.Equal(2, lines.Length);
-            Assert.All(lines, line => Assert.Contains("corr=(null)", line, StringComparison.Ordinal));
+            Assert.All(lines, line => Assert.DoesNotContain("corr=", line, StringComparison.Ordinal));
             Assert.All(lines, line => Assert.DoesNotContain("corr=19", line, StringComparison.Ordinal));
         }
         finally

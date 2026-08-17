@@ -174,21 +174,7 @@ internal sealed class ZLinkSpotSubscriptionRegistry
         CancellationToken cancellationToken)
     {
         if (message.Parts.Count == 0)
-        {
-            using var invalidFlow = ZLinkFlowContext.Enter(
-                null,
-                null,
-                dispatchErrors.Flow.CaptureEnabled,
-                ZLinkFlowOrigin.Inbound);
-            CreateScope("<unknown>", message.Topic)
-                .Dropped(
-                    logger,
-                    dispatchErrors,
-                    LogLevel.Warning,
-                    ZLinkDispatchErrorReason.InvalidFrame,
-                    "invalid-frame");
             return;
-        }
 
         ZLinkEnvelopeHeader header;
         try
@@ -196,26 +182,8 @@ internal sealed class ZLinkSpotSubscriptionRegistry
             header = ZLinkEnvelopeCodec.DecodeHeader(message.Parts);
             ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
         }
-        catch (ZLinkEnvelopeProtocolException protocolError)
+        catch (ZLinkEnvelopeProtocolException)
         {
-            var validFlow = ZLinkEnvelopeCodec.ValidFlow(protocolError.Header);
-            using var invalidFlow = ZLinkFlowContext.Enter(
-                validFlow.FlowId,
-                validFlow.FlowOrigin,
-                dispatchErrors.Flow.CaptureEnabled,
-                ZLinkFlowOrigin.Inbound);
-            CreateScope(
-                    protocolError.Header.MessageName,
-                    message.Topic,
-                    protocolError.Header.ContentType,
-                    protocolError.Header.CorrelationId,
-                    protocolError.Header.Source)
-                .Dropped(
-                    logger,
-                    dispatchErrors,
-                    LogLevel.Warning,
-                    ZLinkDispatchErrorReason.InvalidFrame,
-                    "invalid-frame");
             return;
         }
         using var currentFlow = ZLinkFlowContext.Enter(
@@ -227,22 +195,9 @@ internal sealed class ZLinkSpotSubscriptionRegistry
         _descriptorsByTarget.TryGetValue(
             new ZLinkSpotSubscriptionKey(message.ChannelName, message.Topic),
             out var descriptors);
-        var scope = CreateScope(
-            header.MessageName,
-            message.Topic,
-            header.ContentType,
-            header.CorrelationId,
-            header.Source);
-
-        scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Received);
-
         if (descriptors is null)
-        {
-            scope.Dropped(logger, dispatchErrors, LogLevel.Debug);
             return;
-        }
 
-        var dispatched = false;
         var context = new ZLinkPublishMessageContext(
             meshName: null,
             message.ChannelName,
@@ -258,34 +213,6 @@ internal sealed class ZLinkSpotSubscriptionRegistry
 
             var body = ZLinkEnvelopeCodec.DecodeBody(message.Parts, descriptor.MessageType, codecs);
             await dispatchAsync(descriptor, body, context, cancellationToken).ConfigureAwait(false);
-            dispatched = true;
         }
-
-        if (dispatched)
-            scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
-
-        if (!dispatched)
-        {
-            scope.Dropped(logger, dispatchErrors, LogLevel.Debug);
-        }
-    }
-
-    private static ZLinkDispatchFlowScope CreateScope(
-        string? packetName,
-        string topic,
-        string? contentType = null,
-        string? correlationId = null,
-        string? sourceRid = null)
-    {
-        return new ZLinkDispatchFlowScope(
-            ZLinkDispatchErrorSurface.SpotSubscription,
-            "SpotSubscription",
-            ZLinkDispatchMessageKind.Publish,
-            "Publish",
-            packetName ?? "<unknown>",
-            topic: topic,
-            contentType: contentType,
-            correlationId: correlationId,
-            sourceRid: sourceRid);
     }
 }

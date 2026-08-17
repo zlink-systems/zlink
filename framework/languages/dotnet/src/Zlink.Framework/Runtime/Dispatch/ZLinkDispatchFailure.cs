@@ -12,4 +12,12 @@ internal sealed record ZLinkDispatchFailure(
     string? ActorId = null,
     string? SourceRid = null,
     string? CorrelationId = null,
-    Exception? Exception = null);
+    Exception? Exception = null,
+    string? MeshName = null,
+    string? ChannelRouteKind = null,
+    string? TargetRid = null,
+    string? ServerRid = null,
+    string? InstanceSpotType = null,
+    string? ActivationState = null,
+    string? FlowId = null,
+    ZLinkFlowOrigin? FlowOrigin = null);

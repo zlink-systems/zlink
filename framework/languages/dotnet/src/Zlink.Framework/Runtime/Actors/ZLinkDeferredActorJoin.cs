@@ -301,22 +301,16 @@ internal sealed class ZLinkDeferredActorJoin(
                 //  identity as the Join that produced it.
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"deferred_join_failed kind={kind} {exception}");
-                runtime.Flow.TraceLazy(
-                    ZLinkMessageFlowOutcome.Error,
-                    () => new ZLinkMessageFlowEvent(
-                        ZLinkMessageFlowOutcome.Error,
-                        ZLinkDispatchErrorSurface.SpotActor,
-                        ZLinkDispatchMessageKind.ActorRequest,
-                        PacketName: "JoinSpot",
-                        ActorId: actor.Context.ActorId,
-                        ErrorReason: ZLinkDispatchErrorReason.HandlerException,
-                        ErrorAction: ZLinkDispatchErrorAction.ReplyError,
-                        ErrorType: kind.ToString(),
-                        ErrorMessage: exception.ToString())
-                    {
-                        FlowId = _flow?.FlowId ?? string.Empty,
-                        FlowOrigin = _flow?.Origin
-                    });
+                runtime.Flow.TraceDispatchError(new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.SpotActor,
+                    ZLinkDispatchMessageKind.ActorRequest,
+                    ZLinkDispatchErrorReason.HandlerException,
+                    ZLinkDispatchErrorAction.ReplyError,
+                    "JoinSpot",
+                    ActorId: actor.Context.ActorId,
+                    Exception: exception,
+                    FlowId: _flow?.FlowId,
+                    FlowOrigin: _flow?.Origin));
                 completion = new ZLinkActorJoinCompletion.Failed(_operationId, kind);
             }
 

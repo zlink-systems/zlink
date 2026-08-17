@@ -4900,7 +4900,7 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public async Task Actor_Client_First_Application_Request_Creates_One_Wire_Flow_And_Emits_Sent()
+    public async Task Actor_Client_Request_Emits_Sent_And_Exactly_One_Success_Terminal()
     {
         var node = new CapturingSpotNode
         {
@@ -4942,14 +4942,26 @@ public sealed partial class EntrySpotActorDispatchTests
             var header = ZLinkStreamProtocolDefaults.DecodeHeader(sentPacket.Parts[0]);
             Assert.True(ZlinkStreamFlowId.IsValid(header.FlowId));
             Assert.Equal(ZlinkStreamFlowOrigin.Application, header.FlowOrigin);
-            var sent = await observer.WaitAsync(TimeSpan.FromSeconds(2));
-            Assert.Equal("sent", sent.Phase);
-            Assert.Equal("actor", sent.Surface);
-            Assert.Equal("request", sent.MessageKind);
-            Assert.Equal(header.FlowId, sent.FlowId);
-            Assert.Equal("application", sent.FlowOrigin);
-            Assert.Equal(header.CorrelationId, sent.CorrelationId);
-            Assert.Equal(actor.ActorId, sent.ActorId);
+            for (var attempt = 0; attempt < 100
+                                      && observer.Events.Count(flow => flow.ActorId == actor.ActorId
+                                          && flow.Phase is "sent" or "reply_received") < 2;
+                 attempt++)
+                await Task.Delay(5);
+            var events = observer.Events
+                .Where(flow => flow.ActorId == actor.ActorId
+                               && flow.Phase is "sent" or "reply_received")
+                .ToArray();
+            Assert.Equal(["sent", "reply_received"], events.Select(flow => flow.Phase));
+            Assert.All(events, observed =>
+            {
+                Assert.Equal("actor", observed.Surface);
+                Assert.Equal("request", observed.MessageKind);
+                Assert.Equal(header.FlowId, observed.FlowId);
+                Assert.Equal("application", observed.FlowOrigin);
+                Assert.Equal(header.CorrelationId, observed.CorrelationId);
+                Assert.Equal(actor.ActorId, observed.ActorId);
+                Assert.Equal("succeeded", observed.Outcome);
+            });
         }
         finally
         {
@@ -10020,7 +10032,15 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public async Task<ObservedMessageFlow> WaitAsync(TimeSpan timeout)
         {
-            return await WaitAsync("sent", timeout);
+            var deadline = DateTime.UtcNow + timeout;
+            while (DateTime.UtcNow < deadline)
+            {
+                var observed = Events.FirstOrDefault(flow => flow.Phase == "sent");
+                if (observed is not null) return observed;
+                await Task.Delay(5);
+            }
+
+            throw new TimeoutException("Timed out waiting for message-flow phase 'sent'.");
         }
 
         public async Task<ObservedMessageFlow> WaitAsync(

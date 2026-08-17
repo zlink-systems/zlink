@@ -66,7 +66,7 @@ public sealed class SpotRouteDispatcherTests
                 activity.OperationName == "zlink.message_flow"
                 && Equals(
                     activity.GetTagItem("surface")?.ToString(),
-                    "SpotRoute"))
+                    "spot"))
             .ToArray();
         Assert.NotEmpty(spotTraces);
         Assert.All(spotTraces, activity =>

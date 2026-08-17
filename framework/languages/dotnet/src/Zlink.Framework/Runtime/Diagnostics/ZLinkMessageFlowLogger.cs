@@ -21,15 +21,6 @@ internal static class ZLinkMessageFlowLogger
         bool writeLog = true)
     {
         ZLinkTelemetry.RecordHandlerMissing(surfaceName, kindName, action, reason);
-        ZLinkTelemetry.TraceFlowEvent(
-            "handler-missing",
-            flow,
-            action,
-            reason,
-            surfaceName,
-            kindName,
-            actorType);
-
         if (!writeLog || !logger.IsEnabled(level)) return;
 
         logger.Log(
@@ -63,15 +54,6 @@ internal static class ZLinkMessageFlowLogger
             ZLinkTelemetry.RecordReplyError(surfaceName, kindName, reason);
         else if (string.Equals(action, "drop", StringComparison.Ordinal))
             ZLinkTelemetry.RecordDropped(surfaceName, kindName, reason);
-        ZLinkTelemetry.TraceFlowEvent(
-            "failed",
-            flow,
-            action,
-            reason,
-            surfaceName,
-            kindName,
-            actorType);
-
         if (!writeLog || !logger.IsEnabled(LogLevel.Warning)) return;
 
         logger.LogWarning(
@@ -101,15 +83,6 @@ internal static class ZLinkMessageFlowLogger
         bool writeLog = true)
     {
         ZLinkTelemetry.RecordDropped(surfaceName, kindName, reason);
-        ZLinkTelemetry.TraceFlowEvent(
-            "dropped",
-            flow,
-            "drop",
-            reason,
-            surfaceName,
-            kindName,
-            actorType);
-
         if (!writeLog || !logger.IsEnabled(level)) return;
 
         logger.Log(
@@ -141,15 +114,6 @@ internal static class ZLinkMessageFlowLogger
     {
         if (string.Equals(reason, "no-join-handler", StringComparison.Ordinal))
             ZLinkTelemetry.RecordHandlerMissing(surfaceName, kindName, "rejected", reason);
-        ZLinkTelemetry.TraceFlowEvent(
-            "rejected",
-            flow,
-            "rejected",
-            reason,
-            surfaceName,
-            kindName,
-            actorType);
-
         if (!writeLog || !logger.IsEnabled(level)) return;
 
         logger.Log(

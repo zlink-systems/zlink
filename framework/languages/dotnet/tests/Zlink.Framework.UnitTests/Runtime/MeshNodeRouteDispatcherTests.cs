@@ -256,7 +256,9 @@ public sealed partial class EntrySpotActorDispatchTests
         await taskRunner.StopAsync();
 
         var matching = loggerFactory.Messages
-            .Where(line => line.Contains($"surface={expectedSurface}", StringComparison.Ordinal))
+            .Where(line => line.Contains(
+                $"surface={ZLinkTraceFormat.SurfaceKey(expectedSurface)}",
+                StringComparison.Ordinal))
             .ToArray();
         if (sealAdmission)
         {
@@ -265,10 +267,13 @@ public sealed partial class EntrySpotActorDispatchTests
         }
         Assert.Equal(2, matching.Length);
         Assert.Contains("phase=received", matching[0], StringComparison.Ordinal);
-        Assert.Contains(
-            expectHandlerError ? "phase=error" : "phase=replied",
-            matching[1],
-            StringComparison.Ordinal);
+        if (expectHandlerError)
+        {
+            Assert.Contains("event=zlink.dispatch_error", matching[1], StringComparison.Ordinal);
+            Assert.DoesNotContain("phase=", matching[1], StringComparison.Ordinal);
+        }
+        else
+            Assert.Contains("phase=replied", matching[1], StringComparison.Ordinal);
         Assert.All(matching, line =>
         {
             Assert.Contains($"flow={MeshFlowId}", line, StringComparison.Ordinal);

@@ -1248,8 +1248,7 @@ public sealed class ClientServerChannelRuntimeTests
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var router = context.CreateRouterSocket();
         await using var dealer = context.CreateDealerSocket();
-        var port = ReservePort();
-        var endpoint = $"tcp://127.0.0.1:{port}";
+        var endpoint = $"inproc://liveness-probe-{Guid.NewGuid():N}";
         dealer.SetRoutingId(RoutingId.From("probe-client"));
         router.Bind(endpoint);
         dealer.Connect(endpoint);

@@ -82,17 +82,6 @@ internal sealed class ZLinkFanoutPacketDispatcher
                 _dispatchErrors.Flow.CaptureEnabled,
                 ZLinkFlowOrigin.Inbound);
 
-            if (_dispatchErrors.Flow.Enabled(ZLinkMessageFlowOutcome.Received))
-                _dispatchErrors.Flow.Trace(new ZLinkMessageFlowEvent(
-                    ZLinkMessageFlowOutcome.Received,
-                    ZLinkDispatchErrorSurface.Channel,
-                    ZLinkDispatchMessageKind.Publish,
-                    header.MessageName,
-                    channelName,
-                    topicMessage.Topic,
-                    SourceRid: header.Source,
-                    CorrelationId: header.CorrelationId));
-
             await _publishPipeline.DispatchAsync(
                     channelName,
                     topicMessage,
@@ -114,8 +103,8 @@ internal sealed class ZLinkFanoutPacketDispatcher
             _dispatchErrors.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Inbound);
         _dispatchErrors.Report(new ZLinkDispatchFailure(
-            ZLinkDispatchErrorSurface.Channel,
-            ZLinkDispatchMessageKind.Publish,
+            ZLinkDispatchErrorSurface.ClassicFanout,
+            ZLinkDispatchMessageKind.Send,
             ZLinkDispatchErrorReason.InvalidFrame,
             ZLinkDispatchErrorAction.Drop,
             protocolError.Header.MessageName,

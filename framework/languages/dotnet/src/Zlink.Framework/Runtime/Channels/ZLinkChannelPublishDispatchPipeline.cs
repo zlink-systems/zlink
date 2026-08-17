@@ -38,11 +38,12 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
         ZLinkEnvelopeHeader header,
         CancellationToken cancellationToken)
     {
+        _ = unhandledLogLevel;
         var scope = new ZLinkDispatchFlowScope(
-            ZLinkDispatchErrorSurface.Channel,
-            "Channel",
-            ZLinkDispatchMessageKind.Publish,
-            "Publish",
+            ZLinkDispatchErrorSurface.ClassicFanout,
+            "ClassicFanout",
+            ZLinkDispatchMessageKind.Send,
+            "Send",
             header.MessageName,
             channelName,
             header.ContentType,
@@ -55,7 +56,16 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
             header.MessageName);
         if (endpoints.Count == 0)
         {
-            scope.Dropped(logger, dispatchErrors, unhandledLogLevel);
+            dispatchErrors.Report(new ZLinkDispatchFailure(
+                ZLinkDispatchErrorSurface.ClassicFanout,
+                ZLinkDispatchMessageKind.Send,
+                ZLinkDispatchErrorReason.HandlerMissing,
+                ZLinkDispatchErrorAction.Drop,
+                header.MessageName,
+                channelName,
+                topicMessage.Topic,
+                SourceRid: header.Source,
+                CorrelationId: header.CorrelationId));
             return;
         }
 
@@ -65,16 +75,21 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
             decodedMessages ??= new Dictionary<Type, object?>();
             if (!decodedMessages.TryGetValue(endpoint.MessageType, out var message))
             {
-                if (!scope.TryDecode(
+                try
+                {
+                    message = ZLinkEnvelopeCodec.DecodeBody(
                         topicMessage.Parts,
                         endpoint.MessageType,
                         scope.ContentType!,
-                        codecs,
-                        logger,
-                        dispatchErrors,
-                        ZLinkDispatchErrorAction.Drop,
-                        out message))
+                        codecs);
+                }
+                catch
+                {
+                    // Classic fanout has no per-subscriber result. A payload that
+                    // cannot be decoded for one endpoint must not create a flow or
+                    // prevent another compatible endpoint from receiving it.
                     continue;
+                }
 
                 decodedMessages.Add(endpoint.MessageType, message);
             }
@@ -100,8 +115,6 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
                         ZLinkHandlerDispatchKind.ClassicFanout,
                         cancellationToken)
                     .ConfigureAwait(false);
-
-                scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
             }
             catch (Exception ex)
             {

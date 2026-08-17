@@ -18,33 +18,7 @@ internal sealed class ZLinkDispatchErrorReporter(
 
     public void Report(ZLinkDispatchFailure error)
     {
-        Report(error, ZLinkMessageFlowOutcome.Error);
+        Flow.TraceDispatchError(error);
     }
 
-    internal void ReportDropped(ZLinkDispatchFailure error)
-    {
-        Report(error, ZLinkMessageFlowOutcome.Dropped);
-    }
-
-    private void Report(
-        ZLinkDispatchFailure error,
-        ZLinkMessageFlowOutcome outcome)
-    {
-        if (Flow.Enabled(outcome))
-            Flow.Trace(new ZLinkMessageFlowEvent(
-                outcome,
-                error.Surface,
-                error.MessageKind,
-                error.PacketName,
-                error.ChannelName,
-                error.Topic,
-                error.CorrelationId,
-                error.SourceRid,
-                SpotId: error.SpotId,
-                ActorId: error.ActorId,
-                ErrorReason: error.Reason,
-                ErrorAction: error.Action,
-                ErrorType: error.Exception?.GetType().Name,
-                ErrorMessage: error.Exception?.Message));
-    }
 }

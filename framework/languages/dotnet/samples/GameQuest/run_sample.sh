@@ -247,8 +247,8 @@ dotnet run --no-build --project "${SCRIPT_DIR}/Client/GameQuest.Client.csproj" -
 # Actor handler may execute on either server because Actor placement is owned
 # by the Framework, so a specific API process must not be asserted as the
 # gameplay owner.
-grep -q "surface=StreamSession kind=Request packet=JoinSessionReq" "${LOG_DIR}/api-a.log"
-grep -q "surface=StreamSession kind=Request packet=JoinSessionReq" "${LOG_DIR}/api-b.log"
+grep -q "surface=stream kind=request packet=JoinSessionReq" "${LOG_DIR}/api-a.log"
+grep -q "surface=stream kind=request packet=JoinSessionReq" "${LOG_DIR}/api-b.log"
 grep -q "gamequest api event routed" "${LOG_DIR}/api-a.log" "${LOG_DIR}/api-b.log"
 grep -q "gamequest mission processed" "${LOG_DIR}/mission-a.log"
 grep -q "gamequest mission processed" "${LOG_DIR}/mission-b.log"

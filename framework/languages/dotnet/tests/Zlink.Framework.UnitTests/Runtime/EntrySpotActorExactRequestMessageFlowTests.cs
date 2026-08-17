@@ -8,6 +8,100 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed partial class EntrySpotActorDispatchTests
 {
     [Fact]
+    public async Task Actor_Client_Request_All_Failure_Branches_Emit_One_Terminal_Each()
+    {
+        var node = new CapturingSpotNode();
+        var observer = new CapturingMessageFlowObserver();
+        var (runtime, actor) = await CreateStartedRuntimeAsync(node, observer);
+        try
+        {
+            var client = new ZLinkActorClient(runtime);
+            ValueTask<ProbeReply> Request() => client
+                .RequestToActor(actor.ActorId, new ProbeRouteMessage("request"))
+                .Async<ProbeReply>();
+
+            node.ActorRequestHandler = _ => throw new OperationCanceledException();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Request().AsTask());
+
+            node.ActorRequestHandler = _ => throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "stopping");
+            var shutdown = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => Request().AsTask());
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, shutdown.Kind);
+
+            node.ActorRequestHandler = _ => throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.CapacityExceeded,
+                "backpressured");
+            var backpressured = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => Request().AsTask());
+            Assert.Equal(ZLinkFrameworkErrorKind.CapacityExceeded, backpressured.Kind);
+
+            node.ActorRequestHandler = parts =>
+            {
+                var requestHeader = ZLinkStreamProtocolDefaults.DecodeHeader(
+                    parts[0].AsReadOnlyMemory());
+                return
+                [
+                    Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(requestHeader with
+                    {
+                        Kind = ZlinkStreamMessageKind.Response,
+                        Name = string.Empty
+                    }).Span),
+                    Message.From("{")
+                ];
+            };
+            await Assert.ThrowsAnyAsync<Exception>(() => Request().AsTask());
+
+            for (var attempt = 0; attempt < 100
+                                      && observer.Events.Count(flow =>
+                                          flow.ActorId == actor.ActorId
+                                          && flow.Phase == "reply_received") < 4;
+                 attempt++)
+                await Task.Delay(5);
+            var terminals = observer.Events.Where(flow =>
+                    flow.ActorId == actor.ActorId && flow.Phase == "reply_received")
+                .ToArray();
+            Assert.Equal(4, terminals.Length);
+            Assert.Equal(
+                ["cancelled", "shutdown", "backpressured", "failed"],
+                terminals.Select(flow => flow.Outcome));
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task Actor_Client_Request_Route_Failure_Emits_Exactly_One_Failed_Terminal()
+    {
+        var observer = new CapturingMessageFlowObserver();
+        var (runtime, _) = await CreateStartedRuntimeAsync(new CapturingSpotNode(), observer);
+        try
+        {
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                new ZLinkActorClient(runtime)
+                    .RequestToActor("missing-actor", new ProbeRouteMessage("request"))
+                    .Async<ProbeReply>()
+                    .AsTask());
+            Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
+
+            for (var attempt = 0; attempt < 100
+                                      && !observer.Events.Any(flow => flow.ActorId == "missing-actor");
+                 attempt++)
+                await Task.Delay(5);
+            var terminal = Assert.Single(observer.Events.Where(flow =>
+                flow.ActorId == "missing-actor" && flow.Phase == "reply_received"));
+            Assert.Equal("failed", terminal.Outcome);
+            Assert.Equal("actor", terminal.Surface);
+            Assert.Equal("request", terminal.MessageKind);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task Flowless_Actor_Stream_Ingress_Creates_One_Inbound_Flow_For_Join_And_Reply()
     {
         var node = new CapturingSpotNode

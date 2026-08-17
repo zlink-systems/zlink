@@ -1,8 +1,6 @@
 using System.Diagnostics;
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
-using System.Net;
-using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -83,7 +81,7 @@ public sealed partial class UnhandledDispatchPolicyTests
         await using var publisher = context.CreatePublisherSocket();
         await using var subscriberA = context.CreateSubscriberSocket();
         await using var subscriberB = context.CreateSubscriberSocket();
-        var endpoint = GetTcpEndpoint();
+        var endpoint = GetInprocEndpoint();
         publisher.Bind(endpoint);
         subscriberA.Connect(endpoint);
         subscriberB.Connect(endpoint);
@@ -287,7 +285,6 @@ public sealed partial class UnhandledDispatchPolicyTests
     [Fact]
     public async Task HandlerMissing_EmitsTrace()
     {
-        ZLinkTelemetry.SetDiagnosticsLevel(ZLinkDiagnosticsLevel.Errors);
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
@@ -297,6 +294,8 @@ public sealed partial class UnhandledDispatchPolicyTests
         listener.ActivityStopped = activities.Add;
         ActivitySource.AddActivityListener(listener);
         using var runtimeServices = CreateDispatchRuntime(out var runtime);
+        var options = new ZLinkDispatchOptionsModel();
+        options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Errors);
         var nativeSpot = new CapturingSpot();
         var dispatcher = new ZLinkSpotActorJoinDispatcher(
             runtime,
@@ -305,7 +304,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             new ZLinkSpotActorJoinRegistry(),
             new ZLinkSpotActorMembership(),
             static () => throw new InvalidOperationException("Handler invoker should not be used."),
-            new CapturingLogger<ZLinkSpotActorJoinDispatcher>());
+            new CapturingLogger<ZLinkSpotActorJoinDispatcher>(),
+            dispatchErrors: new ZLinkDispatchErrorReporter(options));
         var parts = ZLinkEnvelopeCodec.EncodeParts(
             new ZLinkEnvelopeHeader(
                 ZLinkMessageKind.Request,
@@ -339,9 +339,9 @@ public sealed partial class UnhandledDispatchPolicyTests
         }
 
         Assert.Contains(activities, activity =>
-            activity.OperationName == "zlink.actor.dispatch"
+            activity.OperationName == "zlink.dispatch_error"
             && activity.Tags.Any(tag =>
-                tag.Key == "zlink.reason" && tag.Value == "no_handler"));
+                tag.Key == "reason" && tag.Value == "no_handler"));
     }
 
     [Fact]
@@ -426,7 +426,7 @@ public sealed partial class UnhandledDispatchPolicyTests
         await using var context = backendFactory.CreateRuntimeContext();
         await using var publisher = context.CreatePublisherSocket();
         await using var subscriber = context.CreateSubscriberSocket();
-        var endpoint = GetTcpEndpoint();
+        var endpoint = GetInprocEndpoint();
         publisher.Bind(endpoint);
         subscriber.Connect(endpoint);
         subscriber.SetSubscription(string.Empty);
@@ -537,9 +537,8 @@ public sealed partial class UnhandledDispatchPolicyTests
     }
 
     [Fact]
-    public async Task SpotActorSendMissingHandler_LogsAndReportsMessageFlowDroppedEvent()
+    public async Task SpotActorSendMissingHandler_LogsOneDispatchError()
     {
-        var observer = new CapturingMessageFlowObserver();
         var options = new ZLinkDispatchOptionsModel();
         options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
         var services = new ServiceCollection().BuildServiceProvider();
@@ -566,23 +565,21 @@ public sealed partial class UnhandledDispatchPolicyTests
 
         await dispatcher.DispatchAsync(actor, runtimeState, header, body, CancellationToken.None);
 
-        var observed = await observer.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.Equal("dropped", observed.Phase);
-        Assert.Equal("actor", observed.Surface);
-        Assert.Equal("send", observed.MessageKind);
-        Assert.Equal("no_handler", observed.Reason);
-        Assert.Equal("drop", observed.Action);
-        Assert.Equal("missing-actor-send", observed.PacketName);
-        Assert.Equal("actor-1", observed.ActorId);
-        Assert.Contains(logger.Messages, message => message.Contains("phase=dropped", StringComparison.Ordinal)
-                                                    && message.Contains("errorReason=HandlerMissing", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, message =>
+            message.StartsWith("zlink flow: ", StringComparison.Ordinal)
+            && message.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
+            && message.Contains("surface=actor", StringComparison.Ordinal)
+            && message.Contains("kind=send", StringComparison.Ordinal)
+            && message.Contains("packet=missing-actor-send", StringComparison.Ordinal)
+            && message.Contains("actor=actor-1", StringComparison.Ordinal)
+            && message.Contains("outcome=failed", StringComparison.Ordinal)
+            && message.Contains("reason=no_handler", StringComparison.Ordinal));
         await runner.StopAsync();
     }
 
     [Fact]
     public async Task SpotActorSendMalformedPayload_ReportsPayloadDecodeFailureBeforeHandlerInvocation()
     {
-        var observer = new CapturingMessageFlowObserver();
         var options = new ZLinkDispatchOptionsModel();
         options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
         var probe = new TestActorSendProbe();
@@ -626,14 +623,15 @@ public sealed partial class UnhandledDispatchPolicyTests
 
         await dispatcher.DispatchAsync(actor, runtimeState, header, body, CancellationToken.None);
 
-        var observed = await observer.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.Equal("dropped", observed.Phase);
-        Assert.Equal("actor", observed.Surface);
-        Assert.Equal("send", observed.MessageKind);
-        Assert.Equal("decode_error", observed.Reason);
-        Assert.Equal("drop", observed.Action);
-        Assert.Equal("malformed-actor-send", observed.PacketName);
-        Assert.Equal("actor-1", observed.ActorId);
+        Assert.Contains(logger.Messages, message =>
+            message.StartsWith("zlink flow: ", StringComparison.Ordinal)
+            && message.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
+            && message.Contains("surface=actor", StringComparison.Ordinal)
+            && message.Contains("kind=send", StringComparison.Ordinal)
+            && message.Contains("packet=malformed-actor-send", StringComparison.Ordinal)
+            && message.Contains("actor=actor-1", StringComparison.Ordinal)
+            && message.Contains("outcome=failed", StringComparison.Ordinal)
+            && message.Contains("reason=decode_error", StringComparison.Ordinal));
         Assert.Equal(0, probe.InvocationCount);
         await runner.StopAsync();
     }
@@ -680,7 +678,7 @@ public sealed partial class UnhandledDispatchPolicyTests
         await using var context = backendFactory.CreateRuntimeContext();
         await using var publisher = context.CreatePublisherSocket();
         await using var subscriber = context.CreateSubscriberSocket();
-        var endpoint = GetTcpEndpoint();
+        var endpoint = GetInprocEndpoint();
         publisher.Bind(endpoint);
         subscriber.Connect(endpoint);
         subscriber.SetSubscription("events");
@@ -762,15 +760,8 @@ public sealed partial class UnhandledDispatchPolicyTests
         }
     }
 
-    private static string GetTcpEndpoint()
-    {
-        using var listener = new TcpListener(
-            IPAddress.Loopback,
-            0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        return $"tcp://127.0.0.1:{port}";
-    }
+    private static string GetInprocEndpoint() =>
+        $"inproc://unhandled-dispatch-{Guid.NewGuid():N}";
 
     private sealed class NeverInvokedHandler;
 

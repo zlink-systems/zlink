@@ -234,13 +234,12 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
             "handler-exception" or "join-commit-failed" => ZLinkDispatchErrorReason.HandlerException,
             _ => ZLinkDispatchErrorReason.HandlerMissing
         };
-        if (dispatchErrors is null
-            || dispatchErrors.Flow.Enabled(ZLinkMessageFlowOutcome.Error))
+        if (dispatchErrors is null)
             ZLinkMessageFlowLogger.Rejected(
                 _logger,
                 level,
                 new ZLinkMessageFlowEvent(
-                    ZLinkMessageFlowOutcome.Error,
+                    ZLinkMessageFlowOutcome.Replied,
                     ZLinkDispatchErrorSurface.SpotActor,
                     ZLinkDispatchMessageKind.Request,
                     messageName,

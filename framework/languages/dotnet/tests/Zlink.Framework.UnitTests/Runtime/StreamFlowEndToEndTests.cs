@@ -73,7 +73,7 @@ public sealed class StreamFlowEndToEndTests
             var replied = Assert.Single(lines.Where(line =>
                 line.Contains("phase=replied", StringComparison.Ordinal)));
             Assert.Contains($"packet={nameof(FlowRequest)}", received, StringComparison.Ordinal);
-            Assert.Equal(string.Empty, ReadToken(replied, "packet"));
+            Assert.Null(ReadToken(replied, "packet"));
             Assert.Contains($"flow={callback.FlowId}", received, StringComparison.Ordinal);
             Assert.Contains($"flow={callback.FlowId}", replied, StringComparison.Ordinal);
             Assert.Contains("origin=application", received, StringComparison.Ordinal);

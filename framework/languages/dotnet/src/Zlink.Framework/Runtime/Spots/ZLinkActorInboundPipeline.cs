@@ -645,15 +645,13 @@ internal sealed class ZLinkActorInboundPipeline(
                     frame.Body,
                     out var bindingToken))
             {
-                if (runtime.Flow.Enabled(ZLinkMessageFlowOutcome.Dropped))
-                    runtime.Flow.Trace(new ZLinkMessageFlowEvent(
-                        ZLinkMessageFlowOutcome.Dropped,
-                        ZLinkDispatchErrorSurface.StreamSession,
-                        ZLinkDispatchMessageKind.Send,
-                        ActorId: actor.Context.ActorId,
-                        ErrorReason: ZLinkDispatchErrorReason.InvalidFrame,
-                        ErrorAction: ZLinkDispatchErrorAction.Drop,
-                        ErrorMessage: "session disconnect did not match the current binding"));
+                runtime.Flow.TraceDispatchError(new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.StreamSession,
+                    ZLinkDispatchMessageKind.Send,
+                    ZLinkDispatchErrorReason.InvalidFrame,
+                    ZLinkDispatchErrorAction.Drop,
+                    null,
+                    ActorId: actor.Context.ActorId));
                 acknowledgeHandledFrame?.Invoke();
                 return;
             }

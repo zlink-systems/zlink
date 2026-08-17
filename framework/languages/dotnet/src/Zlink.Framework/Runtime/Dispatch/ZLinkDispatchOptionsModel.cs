@@ -38,6 +38,11 @@ internal sealed class ZLinkUnhandledDispatchOptionsModel : IZLinkUnhandledDispat
 
 internal sealed class ZLinkDiagnosticsOptionsModel : IZLinkDiagnosticsOptions
 {
+    private static long _nextSourceGeneration;
+
+    public ulong SourceMeshGeneration { get; } =
+        unchecked((ulong)Interlocked.Increment(ref _nextSourceGeneration));
+
     public ZLinkDiagnosticsLevelCell? LiveLevel { get; internal set; }
 
     public ZLinkDiagnosticsLevel ConfiguredLevel { get; private set; } =

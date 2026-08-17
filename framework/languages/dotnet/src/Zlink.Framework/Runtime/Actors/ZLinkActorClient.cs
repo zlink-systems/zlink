@@ -111,45 +111,62 @@ internal sealed class ZLinkActorClient(
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
             runtime.Flow.CaptureEnabled);
-        var route = fixedRoute
-            ?? await ResolveActorRouteAsync(actorId, cancellationToken)
-                .ConfigureAwait(false);
-        var actor = route.ActorRef;
-        var meshName = route.MeshName;
-        var targetNodeGeneration = route.TargetNodeGeneration;
-        var authorityOwnerGeneration = route.AuthorityOwnerGeneration;
-        var ownerLeaseGeneration = route.OwnerLeaseGeneration;
-        var nodeRuntime = await GetActorSpotNodeAsync(meshName, cancellationToken).ConfigureAwait(false);
-        if (authorityOwnerGeneration != 0)
-            nodeRuntime.ObserveActorAuthority(
-                actor.ToBackend(),
-                targetNodeGeneration,
-                authorityOwnerGeneration,
-                ownerLeaseGeneration);
-        EnsureRouteAvailable(nodeRuntime, actor);
-        var node = nodeRuntime.Node;
-        var remainingTimeout = RemainingTimeout(timeout, started);
-        var parts = CreatePacketParts(
-            ZlinkStreamMessageKind.Request,
-            new ZlinkStreamRequestSeq(1),
-            packetName,
-            request,
-            metadata);
-        TraceSent(actor, packetName, parts, ZLinkDispatchMessageKind.ActorRequest);
+        var terminal = runtime.Flow.CaptureEnabled
+            ? new ActorRequestTerminalTrace(runtime.Flow, actorId, packetName)
+            : null;
         try
         {
-            return await SubmitActorRequestAsync<TReply>(
+            var route = fixedRoute
+                ?? await ResolveActorRouteAsync(actorId, cancellationToken)
+                    .ConfigureAwait(false);
+            var actor = route.ActorRef;
+            var meshName = route.MeshName;
+            var targetNodeGeneration = route.TargetNodeGeneration;
+            var authorityOwnerGeneration = route.AuthorityOwnerGeneration;
+            var ownerLeaseGeneration = route.OwnerLeaseGeneration;
+            var nodeRuntime = await GetActorSpotNodeAsync(meshName, cancellationToken).ConfigureAwait(false);
+            if (authorityOwnerGeneration != 0)
+                nodeRuntime.ObserveActorAuthority(
+                    actor.ToBackend(),
+                    targetNodeGeneration,
+                    authorityOwnerGeneration,
+                    ownerLeaseGeneration);
+            EnsureRouteAvailable(nodeRuntime, actor);
+            var node = nodeRuntime.Node;
+            var remainingTimeout = RemainingTimeout(timeout, started);
+            var parts = CreatePacketParts(
+                ZlinkStreamMessageKind.Request,
+                new ZlinkStreamRequestSeq(1),
+                packetName,
+                request,
+                metadata);
+            var header = ZLinkStreamProtocolDefaults.DecodeHeader(parts[0].AsReadOnlyMemory());
+            terminal?.SetRoute(meshName, actor.NodeRid.ToString(), header.CorrelationId);
+            TraceSent(actor, packetName, parts, ZLinkDispatchMessageKind.ActorRequest);
+            var reply = await SubmitActorRequestAsync<TReply>(
                     node,
                     actor.ToBackend(),
                     parts,
                     remainingTimeout,
                     cancellationToken)
                 .ConfigureAwait(false);
+            terminal?.Succeeded();
+            return reply;
         }
         catch (ZLinkFrameworkException failure) when (IsStaleRoute(failure))
         {
             InvalidateActorRoute(actorId);
+            terminal?.Failed(failure);
             throw;
+        }
+        catch (Exception failure)
+        {
+            terminal?.Failed(failure);
+            throw;
+        }
+        finally
+        {
+            terminal?.Dispose();
         }
     }
 
@@ -368,6 +385,57 @@ internal sealed class ZLinkActorClient(
                 (RequestResult)(int)error.Result,
                 operationName)
         };
+    }
+
+    private sealed class ActorRequestTerminalTrace(
+        ZLinkMessageFlowTracer tracer,
+        string actorId,
+        string packetName) : IDisposable
+    {
+        private readonly long _started = Stopwatch.GetTimestamp();
+        private string? _meshName;
+        private string? _targetRid;
+        private string? _correlationId;
+        private ZLinkMessageFlowResult _result = ZLinkMessageFlowResult.Failed;
+        private int _emitted;
+
+        public void SetRoute(string meshName, string targetRid, string? correlationId)
+        {
+            _meshName = meshName;
+            _targetRid = targetRid;
+            _correlationId = correlationId;
+        }
+
+        public void Succeeded() => _result = ZLinkMessageFlowResult.Succeeded;
+
+        public void Failed(Exception failure)
+        {
+            _result = failure switch
+            {
+                OperationCanceledException => ZLinkMessageFlowResult.Cancelled,
+                ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.ShuttingDown } =>
+                    ZLinkMessageFlowResult.Shutdown,
+                ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.CapacityExceeded } =>
+                    ZLinkMessageFlowResult.Backpressured,
+                _ => ZLinkMessageFlowResult.Failed
+            };
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _emitted, 1) != 0) return;
+            tracer.Trace(new ZLinkMessageFlowEvent(
+                ZLinkMessageFlowOutcome.ReplyReceived,
+                ZLinkDispatchErrorSurface.SpotActor,
+                ZLinkDispatchMessageKind.ActorRequest,
+                packetName,
+                CorrelationId: _correlationId,
+                ActorId: actorId,
+                MeshName: _meshName,
+                TargetRid: _targetRid,
+                DurationSeconds: Stopwatch.GetElapsedTime(_started).TotalSeconds,
+                Result: _result));
+        }
     }
 
     //  An application terminal from an actor reply may carry a fine failure code.
