@@ -35,6 +35,10 @@ import { ZLinkRouteDisconnectedError } from './route-disconnected-error';
 
 const ZLINK_SEND_DONT_WAIT = 1 as ZLinkBackendSendFlags;
 
+//  Shared default for the dominant no-metadata call; avoids a Map allocation
+//  per outbound operation.
+const EMPTY_OUTBOUND_METADATA: ReadonlyMap<string, string> = new Map();
+
 export class ZLinkChannelOutboundOperations {
   private readonly pendingRequests = new Map<string, number>();
   constructor(
@@ -52,7 +56,7 @@ export class ZLinkChannelOutboundOperations {
     packetName: string | undefined,
     message: unknown,
     signal?: AbortSignal,
-    metadata: ReadonlyMap<string, string> = new Map()
+    metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
   ): Promise<ZLinkSubmitResult> {
     throwIfAborted(signal);
     const dealer = await this.sockets.awaitClientDealerForOutbound(channelName, signal);
@@ -224,7 +228,7 @@ export class ZLinkChannelOutboundOperations {
     topic: string,
     packetName: string | undefined,
     event: unknown,
-    metadata: ReadonlyMap<string, string> = new Map()
+    metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
   ): ZLinkSubmitResult {
     requirePublicFanoutTopic(topic);
     const publisher = this.sockets['publisher'](channelName);
@@ -254,7 +258,7 @@ export class ZLinkChannelOutboundOperations {
     packetName: string | undefined,
     event: unknown,
     signal?: AbortSignal,
-    metadata: ReadonlyMap<string, string> = new Map()
+    metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
   ): Promise<ZLinkSubmitResult> {
     throwIfAborted(signal);
     requirePublicFanoutTopic(topic);
@@ -289,7 +293,7 @@ export class ZLinkChannelOutboundOperations {
     packetName: string | undefined,
     message: unknown,
     signal?: AbortSignal,
-    metadata: ReadonlyMap<string, string> = new Map()
+    metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
   ): Promise<ZLinkSubmitResult> {
     throwIfAborted(signal);
     const router = this.sockets.routeRouter(routerChannelId);

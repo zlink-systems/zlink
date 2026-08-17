@@ -93,6 +93,11 @@ export class ZLinkChannelRequestDispatcher {
     });
   }
 
+  /** Spec 27 §4: with tracing Off, inbound flow fields are neither validated nor carried forward. */
+  flowEnabled(): boolean {
+    return this.options.dispatchErrors.flow.flowCreationEnabled();
+  }
+
   async dispatch(received: {
     parts: readonly Message[];
     routingId: unknown;
@@ -112,7 +117,7 @@ export class ZLinkChannelRequestDispatcher {
     if (received.parts.length === 0 || received.parts[0].data().length === 0) {
       return;
     }
-    const envelope = decodeChannelEnvelope(received.parts, decodedHeader);
+    const envelope = decodeChannelEnvelope(received.parts, decodedHeader, this.flowEnabled());
     const packetName = envelope.packetName;
     if (packetName === undefined) {
       throw new ZLinkConfigurationException('Channel packet is missing packetName.');
@@ -199,7 +204,7 @@ export class ZLinkChannelRequestDispatcher {
     if (record.parts.length === 0 || record.parts[0].data().length === 0) {
       return;
     }
-    const envelope = decodeChannelEnvelope(record.parts);
+    const envelope = decodeChannelEnvelope(record.parts, undefined, this.flowEnabled());
     const packetName = envelope.packetName;
     if (packetName === undefined) {
       throw new ZLinkConfigurationException('Channel packet is missing packetName.');
@@ -326,7 +331,11 @@ export class ZLinkChannelPublishDispatcher {
     if (topicMessage.parts.length === 0 || topicMessage.parts[0].data().length === 0) {
       return;
     }
-    const envelope = decodeChannelEnvelope(topicMessage.parts, decodedHeader);
+    const envelope = decodeChannelEnvelope(
+      topicMessage.parts,
+      decodedHeader,
+      this.options.dispatchErrors.flow.flowCreationEnabled()
+    );
     if (envelope.header.kind !== ZLinkChannelMessageKind.Publish) {
       return;
     }
@@ -403,6 +412,7 @@ export class ZLinkRoutePacketDispatcher {
   constructor(options: ZLinkRoutePacketDispatcherOptions) {
     this.routerChannelId = options.routerChannelId;
     this.codecs = options.codecs;
+    this.dispatchErrors = options.dispatchErrors;
     this.pipeline = new ZLinkChannelDispatchPipeline({
       dispatchErrors: options.dispatchErrors,
       surface: ZLinkDispatchErrorSurface.RouteMeshChannel,
@@ -422,6 +432,12 @@ export class ZLinkRoutePacketDispatcher {
 
   private readonly routerChannelId: string;
   private readonly spotRouteBridge?: ZLinkBackendSpotRouteBridge;
+  private readonly dispatchErrors: ZLinkDispatchErrorReporter;
+
+  /** Spec 27 §4: with tracing Off, inbound flow fields are neither validated nor carried forward. */
+  flowEnabled(): boolean {
+    return this.dispatchErrors.flow.flowCreationEnabled();
+  }
 
   dispatchInfrastructure(received: {
     parts: readonly Message[];
@@ -430,7 +446,7 @@ export class ZLinkRoutePacketDispatcher {
     requestSeq: bigint | null;
     send?: () => ZLinkMultipartOperation<ZLinkMultipartSubmitOperation>;
   }): boolean {
-    const channelHeader = tryDecodeChannelHeader(received.parts);
+    const channelHeader = tryDecodeChannelHeader(received.parts, this.flowEnabled());
     if (
       this.spotRouteBridge !== undefined
       && channelHeader === undefined
@@ -462,14 +478,14 @@ export class ZLinkRoutePacketDispatcher {
   }, router: {
     reply(routingId: unknown, requestSeq: bigint): ZLinkMultipartReplyOperation;
   }, signal?: AbortSignal, decodedHeader?: ZLinkChannelEnvelopeHeader, infrastructureChecked = false): Promise<boolean | void> {
-    const channelHeader = decodedHeader ?? tryDecodeChannelHeader(received.parts);
+    const channelHeader = decodedHeader ?? tryDecodeChannelHeader(received.parts, this.flowEnabled());
     if (!infrastructureChecked && this.dispatchInfrastructure(received)) {
       return true;
     }
     if (received.parts.length === 0 || received.parts[0].data().length === 0) {
       return;
     }
-    const envelope = decodeChannelEnvelope(received.parts, channelHeader);
+    const envelope = decodeChannelEnvelope(received.parts, channelHeader, this.flowEnabled());
     const packetName = envelope.packetName;
     if (packetName === undefined) {
       throw new ZLinkConfigurationException('Route packet is missing packetName.');
@@ -552,7 +568,7 @@ export class ZLinkRoutePacketDispatcher {
     if (record.parts.length === 0 || record.parts[0].data().length === 0) {
       return;
     }
-    const envelope = decodeChannelEnvelope(record.parts);
+    const envelope = decodeChannelEnvelope(record.parts, undefined, this.flowEnabled());
     const packetName = envelope.packetName;
     if (packetName === undefined) {
       throw new ZLinkConfigurationException('Route packet is missing packetName.');
@@ -598,7 +614,7 @@ export class ZLinkRoutePacketDispatcher {
     signal?: AbortSignal
   ): Promise<void> {
     if (parts.length === 0 || parts[0].data().length === 0) return;
-    const envelope = decodeChannelEnvelope(parts);
+    const envelope = decodeChannelEnvelope(parts, undefined, this.flowEnabled());
     if (envelope.header.kind !== ZLinkChannelMessageKind.Command) {
       throw new ZLinkConfigurationException('Local node-direct dispatch requires a command packet.');
     }

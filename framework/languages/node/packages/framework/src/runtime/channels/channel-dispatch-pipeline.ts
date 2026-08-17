@@ -219,8 +219,15 @@ export class ZLinkChannelDispatchPipeline {
     fields: ZLinkChannelDispatchFields,
     signal?: AbortSignal
   ): Promise<{ readonly handlerInvoked: boolean; readonly value?: TResult }> {
-    let value: TResult | undefined;
     releaseApplicationJobPermitBeforeHandler();
+    if (this.filters.length === 0) {
+      //  Fast path for the dominant unfiltered dispatch: skip the filter
+      //  context object and chain machinery entirely.
+      const payload = decodeChannelPayload(envelope, codecs);
+      this.trace(ZLinkMessageFlowOutcome.Dispatched, fields);
+      return { handlerInvoked: true, value: await handler.handle(payload, context) };
+    }
+    let value: TResult | undefined;
     const handlerInvoked = await invokeZLinkHandlerFilters(
       this.filters,
       this.createFilterContext(context, fields),

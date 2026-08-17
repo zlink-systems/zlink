@@ -48,6 +48,8 @@ interface ZLinkSpotRoutedActorAdmissionOptions {
   ) => Promise<readonly ZLinkActorHandoffResult[]>;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
   readonly pendingAdmissionTimeoutMs?: number;
+  /** Spec 27 §4: with tracing Off, inbound flow fields are neither validated nor carried forward. */
+  readonly flowEnabled?: () => boolean;
 }
 
 interface ZLinkPendingRoutedActorTransfer {
@@ -304,7 +306,7 @@ export class ZLinkSpotRoutedActorAdmission {
       }
     }
     try {
-      const envelope = decodeChannelEnvelope(parts);
+      const envelope = decodeChannelEnvelope(parts, undefined, this.options.flowEnabled?.() ?? true);
       if (envelope.packetName !== REMOTE_ACTOR_JOIN_PACKET) {
         return undefined;
       }

@@ -1160,12 +1160,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     actor: ZLinkBackendActorRef,
     parts: MessageLike | readonly MessageLike[]
   ): Promise<SubmitResultValue> {
-    return await this.requireStateful().sendToActor(
+    return this.requireStateful().sendToActor(
       actor,
       this.peerGeneration(String(actor.nodeRid)),
       actor.generation,
       encodeMultipart(parts)
-    ) as SubmitResultValue;
+    ) as Promise<SubmitResultValue>;
   }
 
   requestToActor(

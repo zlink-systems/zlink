@@ -113,7 +113,7 @@ export class ZLinkSpotActorPacketDispatch {
     fallbackActorRef?: ActorRef,
     requestTerminal?: ZLinkActorRequestTerminal
   ): Promise<unknown> {
-    return await this.dispatchDelivery({
+    return this.dispatchDelivery({
       actorId,
       parts,
       returnResponse,
@@ -143,7 +143,7 @@ export class ZLinkSpotActorPacketDispatch {
       this.reportInvalidFrame(actorId, ZLinkDispatchMessageKind.ActorSend, error);
       throw error;
     }
-    return await runWithFlow(createInboundFlow(
+    return runWithFlow(createInboundFlow(
       header.flowId,
       header.flowOrigin,
       this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true

@@ -66,10 +66,11 @@ export interface ZLinkRemoteActorPacketRelay {
 
 export function decodeRemoteBoundSessionSend(
   parts: readonly Message[],
-  codecs?: ZLinkChannelEnvelopeCodecRegistry
+  codecs?: ZLinkChannelEnvelopeCodecRegistry,
+  flowEnabled = true
 ): ZLinkRemoteBoundSessionSend | undefined {
   try {
-    const decoded = decodeMultipartPayload(parts, codecs);
+    const decoded = decodeMultipartPayload(parts, codecs, flowEnabled);
     if (decoded.packetName !== ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET) return undefined;
     const send = decodeRemoteBoundSessionSendPayload(decoded.payload);
     return {
@@ -128,9 +129,10 @@ function decodeActorRef(payload: {
 
 export function decodeRemoteBoundSessionResponse(
   parts: readonly Message[],
-  codecs?: ZLinkChannelEnvelopeCodecRegistry
+  codecs?: ZLinkChannelEnvelopeCodecRegistry,
+  flowEnabled = true
 ): ZLinkRemoteBoundSessionResponse | undefined {
-  const decoded = decodeRemoteBoundSessionControl(parts, ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET, codecs);
+  const decoded = decodeRemoteBoundSessionControl(parts, ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET, codecs, flowEnabled);
   if (decoded === undefined) {
     return undefined;
   }
@@ -147,9 +149,10 @@ export function decodeRemoteBoundSessionResponse(
 
 export function decodeRemoteBoundSessionError(
   parts: readonly Message[],
-  codecs?: ZLinkChannelEnvelopeCodecRegistry
+  codecs?: ZLinkChannelEnvelopeCodecRegistry,
+  flowEnabled = true
 ): ZLinkRemoteBoundSessionError | undefined {
-  const decoded = decodeRemoteBoundSessionControl(parts, ZLINK_REMOTE_BOUND_SESSION_ERROR_PACKET, codecs);
+  const decoded = decodeRemoteBoundSessionControl(parts, ZLINK_REMOTE_BOUND_SESSION_ERROR_PACKET, codecs, flowEnabled);
   if (decoded === undefined) {
     return undefined;
   }
@@ -165,10 +168,11 @@ export function decodeRemoteBoundSessionError(
 
 export function decodeRemoteActorPacketRelay(
   parts: readonly Message[],
-  codecs?: ZLinkChannelEnvelopeCodecRegistry
+  codecs?: ZLinkChannelEnvelopeCodecRegistry,
+  flowEnabled = true
 ): ZLinkRemoteActorPacketRelay | undefined {
   try {
-    const multipart = decodeMultipartPayload(parts, codecs);
+    const multipart = decodeMultipartPayload(parts, codecs, flowEnabled);
     if (multipart.packetName !== ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET) return undefined;
     const relay = decodeRemoteActorPacketRelayPayload(multipart.payload);
     return {
@@ -208,7 +212,8 @@ function decodeForwardedActorRef(payload: {
 function decodeRemoteBoundSessionControl(
   parts: readonly Message[],
   packetName: string,
-  codecs?: ZLinkChannelEnvelopeCodecRegistry
+  codecs?: ZLinkChannelEnvelopeCodecRegistry,
+  flowEnabled = true
 ): {
   readonly actorId: string;
   readonly packetName: string;
@@ -222,7 +227,7 @@ function decodeRemoteBoundSessionControl(
   readonly actorPacketTarget?: unknown;
 } | undefined {
   try {
-    const multipart = decodeMultipartPayload(parts, codecs);
+    const multipart = decodeMultipartPayload(parts, codecs, flowEnabled);
     if (multipart.packetName !== packetName) return undefined;
     const payload = multipart.payload as Record<string, unknown>;
     const decoded = packetName === ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET
@@ -243,7 +248,8 @@ function decodeRemoteBoundSessionControl(
 
 function decodeMultipartPayload(
   parts: readonly Message[],
-  codecs?: ZLinkChannelEnvelopeCodecRegistry
+  codecs?: ZLinkChannelEnvelopeCodecRegistry,
+  flowEnabled = true
 ): {
   readonly packetName?: string;
   readonly payload: unknown;
@@ -256,7 +262,7 @@ function decodeMultipartPayload(
       payload
     };
   }
-  const envelope = decodeChannelEnvelope(parts);
+  const envelope = decodeChannelEnvelope(parts, undefined, flowEnabled);
   const decodedPayload = decodeChannelPayload(envelope, codecs);
   return {
     packetName: envelope.packetName,

@@ -649,14 +649,14 @@ export async function sendToSpotHandle(
       options.spotRouterChannelIdForMesh
     );
     if (options.sourceSpot !== undefined && transport.sendFromSpotToSpot !== undefined) {
-      return await transport.sendFromSpotToSpot(options.sourceSpot, target, message, {
+      return transport.sendFromSpotToSpot(options.sourceSpot, target, message, {
         packetName,
         timeoutMs: options.timeoutMs,
         signal: options.signal,
         metadata: options.metadata
       });
     }
-    return await transport.sendToSpot(target, message, {
+    return transport.sendToSpot(target, message, {
       packetName,
       timeoutMs: options.timeoutMs,
       signal: options.signal,
@@ -664,7 +664,7 @@ export async function sendToSpotHandle(
     });
   };
 
-  return await sendResolved(await requireSpotRef(spot, options.signal));
+  return sendResolved(await requireSpotRef(spot, options.signal));
 }
 
 export async function requestToSpotHandle<TReply = unknown>(
@@ -683,14 +683,14 @@ export async function requestToSpotHandle<TReply = unknown>(
       metadata: options.metadata
     };
     if (options.sourceSpot !== undefined && transport.requestFromSpotToSpot !== undefined) {
-      return await transport.requestFromSpotToSpot<TReply>(
+      return transport.requestFromSpotToSpot<TReply>(
         options.sourceSpot,
         target,
         request,
         transportOptions
       );
     }
-    return await transport.requestToSpot<TReply>(target, request, transportOptions);
+    return transport.requestToSpot<TReply>(target, request, transportOptions);
   };
 
   const resolved = await requireSpotRef(spot, options.signal);

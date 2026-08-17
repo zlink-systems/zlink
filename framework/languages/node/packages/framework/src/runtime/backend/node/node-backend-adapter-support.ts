@@ -40,11 +40,6 @@ interface ZLinkBindingRequestSubmitOperation {
   submit(): Promise<readonly unknown[]>;
 }
 
-export function hasOperationMethod(value: unknown, method: string): value is ZLinkBindingOperation {
-  return typeof value === 'object' && value !== null &&
-    typeof (value as { [key: string]: unknown })[method] === 'function';
-}
-
 export function isBindingNotFound(error: unknown): boolean {
   return error instanceof zlink.ConfigError && error.result === zlink.ConfigResult.NotFound;
 }

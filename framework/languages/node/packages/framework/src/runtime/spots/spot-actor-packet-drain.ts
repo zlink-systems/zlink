@@ -226,7 +226,8 @@ export class ZLinkSpotActorPacketDrain {
       'payload'
     );
     try {
-      return RuntimeMessage.fromOwned(Buffer.from(encodeStreamFrame({
+      //  encodeStreamFrame returns a fresh, unaliased array; view it without re-copying.
+      const frame = encodeStreamFrame({
         kind,
         codec: streamCodecForContentType(encoded.contentType),
         flags: ZLinkStreamHeaderFlags.None,
@@ -234,7 +235,10 @@ export class ZLinkSpotActorPacketDrain {
         name: '',
         metadata: new Map(),
         correlationId: requestHeader.correlationId
-      }, encoded.message.data()))) as Message;
+      }, encoded.message.data());
+      return RuntimeMessage.fromOwned(
+        Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength)
+      ) as Message;
     } finally {
       encoded.message.close();
     }

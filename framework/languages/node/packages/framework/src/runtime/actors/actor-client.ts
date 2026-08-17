@@ -232,10 +232,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       requestSequence === 0n ? 1n : requestSequence,
       explicitPacketName,
       request,
-      new Map([
-        ...metadata,
-        ...actorRequestDeadlineMetadata(deadlineUnixMs)
-      ]),
+      mergeActorRequestMetadata(metadata, deadlineUnixMs),
       correlationId
     );
     const messageFollow = createActorMessageFollowContext(
@@ -365,7 +362,9 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
         correlationId
       });
       return [
-        RuntimeMessage.from(Buffer.from(header)) as Message,
+        //  encodeStreamHeader returns a fresh, unaliased array; wrap it
+        //  without re-copying.
+        RuntimeMessage.fromOwned(toOwnedBuffer(header)) as Message,
         encoded.message
       ];
     } catch (error) {
@@ -630,7 +629,27 @@ function toBackendActorRef(actor: ActorRef): ZLinkBackendActorRef {
 }
 
 function toMessageLikeParts(parts: readonly Message[]): readonly Buffer[] {
-  return parts.map((part) => Buffer.from(part.data()));
+  //  The caller keeps every part open until the awaited backend submit
+  //  completes and the backend consumes the parts synchronously during
+  //  multipart encoding, so borrowing the buffers avoids a payload copy.
+  return parts.map((part) => part.data());
+}
+
+/** Zero-copy Buffer view over a freshly allocated, unaliased byte array. */
+function toOwnedBuffer(bytes: Uint8Array): Buffer {
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+}
+
+function mergeActorRequestMetadata(
+  metadata: ReadonlyMap<string, string>,
+  deadlineUnixMs: number | undefined
+): ReadonlyMap<string, string> {
+  if (deadlineUnixMs === undefined) return metadata;
+  const merged = new Map(metadata);
+  for (const [key, value] of actorRequestDeadlineMetadata(deadlineUnixMs)) {
+    merged.set(key, value);
+  }
+  return merged;
 }
 
 class DefaultZLinkActorSendCall implements ZLinkActorSendCall {

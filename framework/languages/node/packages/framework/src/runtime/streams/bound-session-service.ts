@@ -304,13 +304,19 @@ export class ZLinkBoundSessionService {
     stream: ZLinkManagedStream,
     actorRef: ActorRef
   ): Promise<void> {
-    const header = ZLinkBindingMessage.fromOwned(Buffer.from(encodeStreamHeader({
+    const encodedBindHeader = encodeStreamHeader({
       kind: ZLinkStreamMessageKind.Send,
       codec: ZLinkStreamCodec.Raw,
       flags: ZLinkStreamHeaderFlags.None,
       name: 'zlink.framework.actor.bound_session.bind',
       metadata: new Map()
-    })));
+    });
+    //  encodeStreamHeader returns a fresh, unaliased array; view it without re-copying.
+    const header = ZLinkBindingMessage.fromOwned(Buffer.from(
+      encodedBindHeader.buffer,
+      encodedBindHeader.byteOffset,
+      encodedBindHeader.byteLength
+    ));
     const body = ZLinkBindingMessage.fromOwned(Buffer.alloc(0));
     try {
       if (!await stream.sendBoundActor(actorRef.actorId, [header, body], 0)) {

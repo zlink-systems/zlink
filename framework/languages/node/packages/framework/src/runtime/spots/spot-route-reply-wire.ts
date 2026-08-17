@@ -13,8 +13,3 @@ export function encodeSpotRouteBridgeReply(payload: ZLinkSpotRouteBridgeReplyPay
   return payload;
 }
 
-export function isSpotRouteBridgeReplyPayload(value: unknown): boolean {
-  return typeof value === 'object' &&
-    value !== null &&
-    ('ok' in value || 'response' in value || 'error' in value || 'actorPacketTarget' in value);
-}

@@ -6,9 +6,19 @@ export function zlinkMetadataByteLength(
 ): number {
   if (metadata === undefined) return 0;
   let bytes = 0;
-  const entries = metadata instanceof Map ? metadata.entries() : Object.entries(metadata);
-  for (const [key, value] of entries) {
-    bytes += Buffer.byteLength(key, 'utf8') + Buffer.byteLength(value, 'utf8');
+  if (metadata instanceof Map) {
+    for (const [key, value] of metadata) {
+      bytes += Buffer.byteLength(key, 'utf8') + Buffer.byteLength(value, 'utf8');
+    }
+    return bytes;
+  }
+  //  Iterate keys directly; Object.entries would allocate a pairs array per
+  //  message on the dispatch hot path.
+  const record = metadata as Readonly<Record<string, string>>;
+  for (const key in record) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) {
+      bytes += Buffer.byteLength(key, 'utf8') + Buffer.byteLength(record[key], 'utf8');
+    }
   }
   return bytes;
 }

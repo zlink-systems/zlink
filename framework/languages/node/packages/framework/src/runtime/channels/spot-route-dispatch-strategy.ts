@@ -220,7 +220,7 @@ export class ZLinkSpotRouteDispatchStrategy {
     );
   }
 
-  async routeRequestFromSpotToSpot<TReply>(
+  routeRequestFromSpotToSpot<TReply>(
     sourceSpot: ZLinkBackendSpot,
     spotRouteTarget: ZLinkSpotRouteTarget,
     packetName: string | undefined,
@@ -228,7 +228,7 @@ export class ZLinkSpotRouteDispatchStrategy {
     timeoutMs: number | undefined,
     signal?: AbortSignal
   ): Promise<TReply> {
-    return await this.sourceSpotRouter.request<TReply>(
+    return this.sourceSpotRouter.request<TReply>(
       sourceSpot,
       spotRouteTarget,
       packetName,
@@ -258,14 +258,14 @@ export class ZLinkSpotRouteDispatchStrategy {
     );
   }
 
-  async routeRequestRawFromSpotToSpot(
+  routeRequestRawFromSpotToSpot(
     sourceSpot: ZLinkBackendSpot,
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: Message,
     timeoutMs: number | undefined,
     signal?: AbortSignal
   ): Promise<readonly Message[]> {
-    return await this.sourceSpotRouter.requestRaw(sourceSpot, spotRouteTarget, request, timeoutMs, signal);
+    return this.sourceSpotRouter.requestRaw(sourceSpot, spotRouteTarget, request, timeoutMs, signal);
   }
 
   async routeRequestRawToSpot(

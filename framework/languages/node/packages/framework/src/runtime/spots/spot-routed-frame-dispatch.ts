@@ -130,7 +130,8 @@ export class ZLinkSpotRoutedFrameDispatch {
       defaultAccept: options.defaultAccept,
       routedActorTransferProvider: options.routedActorTransferProvider,
       commitTransferredActor: options.commitTransferredActor,
-      messageSerializers: options.messageSerializers
+      messageSerializers: options.messageSerializers,
+      flowEnabled: () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
     });
   }
 
@@ -219,7 +220,11 @@ export class ZLinkSpotRoutedFrameDispatch {
     if (await this.routedBoundSessionDispatch.dispatch(received)) {
       return;
     }
-    const actorPacketRelay = decodeRemoteActorPacketRelay(received.parts, this.channelCodecs());
+    const actorPacketRelay = decodeRemoteActorPacketRelay(
+      received.parts,
+      this.channelCodecs(),
+      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+    );
     if (actorPacketRelay !== undefined && await this.actorPacketRelayDispatch.dispatch(received, actorPacketRelay)) {
       return;
     }

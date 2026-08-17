@@ -34,6 +34,10 @@ import type { ZLinkJsonSchema } from '../../contracts/Handlers/JsonContract';
 
 export const ZLINK_CHANNEL_FORMAT_MARKER = 0xf2;
 
+//  Shared default for the dominant no-metadata message; avoids a Map
+//  allocation per outbound envelope.
+const EMPTY_OUTBOUND_METADATA: ReadonlyMap<string, string> = new Map();
+
 export const JSON_CONTENT_TYPE = 'application/json';
 export const BINARY_CONTENT_TYPE = 'application/octet-stream';
 
@@ -86,7 +90,7 @@ export function encodeChannelEnvelopeParts(
   codecs?: ZLinkChannelEnvelopeCodecRegistry,
   correlationId?: string,
   createFlow = true,
-  metadata: ReadonlyMap<string, string> = new Map()
+  metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
 ): readonly MessageLike[] {
   const messageName = resolveFrameworkPacketName(payload, packetName, 'Channel');
   const encoded = encodePayload(payload, codecsForFrameworkPacket(messageName, codecs), messageName, 'payload');
@@ -104,7 +108,8 @@ export function encodeChannelEnvelopeParts(
     errorCode: null,
     errorMessage: null,
     metadata: applicationMetadataRecord(metadata),
-    ...(flow ?? {})
+    flowId: flow?.flowId,
+    flowOrigin: flow?.flowOrigin
   };
   return [encodeChannelHeader(header), encoded.message];
 }
@@ -125,7 +130,7 @@ export function encodeChannelEnvelopePartsAtDeadline(
   codecs?: ZLinkChannelEnvelopeCodecRegistry,
   correlationId?: string,
   createFlow = true,
-  metadata: ReadonlyMap<string, string> = new Map()
+  metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
 ): readonly MessageLike[] {
   if (!Number.isSafeInteger(deadlineUnixMs) || deadlineUnixMs <= 0) {
     throw new RangeError('deadlineUnixMs must be a positive safe integer.');
@@ -146,7 +151,8 @@ export function encodeChannelEnvelopePartsAtDeadline(
     errorCode: null,
     errorMessage: null,
     metadata: applicationMetadataRecord(metadata),
-    ...(flow ?? {})
+    flowId: flow?.flowId,
+    flowOrigin: flow?.flowOrigin
   };
   return [encodeChannelHeader(header), encoded.message];
 }
@@ -158,7 +164,7 @@ export function encodeChannelPublishEnvelopeParts(
   payload: unknown,
   codecs?: ZLinkChannelEnvelopeCodecRegistry,
   createFlow = true,
-  metadata: ReadonlyMap<string, string> = new Map()
+  metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
 ): readonly MessageLike[] {
   const messageName = resolveFrameworkPacketName(payload, packetName, 'Channel');
   const encoded = encodePayload(payload, codecsForFrameworkPacket(messageName, codecs), messageName, 'payload');
@@ -175,7 +181,8 @@ export function encodeChannelPublishEnvelopeParts(
     errorCode: null,
     errorMessage: null,
     metadata: applicationMetadataRecord(metadata),
-    ...(flow ?? {})
+    flowId: flow?.flowId,
+    flowOrigin: flow?.flowOrigin
   };
   return [encodeChannelHeader(header), encoded.message];
 }
@@ -287,9 +294,17 @@ function decodeChannelError(header: ZLinkChannelEnvelopeHeader): Error {
 
 export function decodeChannelEnvelope(
   parts: readonly Message[],
-  decodedHeader?: ZLinkChannelEnvelopeHeader
+  decodedHeader?: ZLinkChannelEnvelopeHeader,
+  flowEnabled = true
 ): ZLinkChannelEnvelope {
-  const header = decodedHeader ?? decodeChannelHeader(parts);
+  let header = decodedHeader ?? decodeChannelHeader(parts, flowEnabled);
+  if (!flowEnabled && (header.flowId !== undefined || header.flowOrigin !== undefined)) {
+    // Spec 27 §4: with tracing Off the processing point neither reads the
+    // inbound flow fields into context nor copies them into the reply or any
+    // forwarded message. Dropping them here keeps every downstream consumer
+    // (dispatch fields, reply encoders, traces) naturally flow-free.
+    header = { ...header, flowId: undefined, flowOrigin: undefined };
+  }
   if (parts.length < 2) {
     throw new ZLinkConfigurationException('Channel envelope body part is missing.');
   }
@@ -405,8 +420,22 @@ function encodeJsonBytes(value: unknown, schema?: ZLinkJsonSchema): Buffer {
 }
 
 function encodeChannelHeader(header: ZLinkChannelEnvelopeHeader): Buffer {
+  //  Explicit construction: this runs for every outbound envelope, so avoid a
+  //  per-message spread of the whole header.
   return encodeJsonBytes({
-    ...header,
+    formatMarker: header.formatMarker,
+    kind: header.kind,
+    channelName: header.channelName,
+    messageName: header.messageName,
+    contentType: header.contentType,
+    correlationId: header.correlationId,
+    deadline: header.deadline,
+    topic: header.topic,
+    errorCode: header.errorCode,
+    errorMessage: header.errorMessage,
+    source: header.source,
+    metadata: header.metadata,
+    flowId: header.flowId,
     flowOrigin: header.flowOrigin === undefined ? undefined : encodeFlowOrigin(header.flowOrigin)
   });
 }
@@ -420,11 +449,14 @@ function encodeFlowOrigin(origin: ZLinkFlowOrigin): number {
   }
 }
 
-export function decodeChannelHeader(parts: readonly Message[]): ZLinkChannelEnvelopeHeader {
+export function decodeChannelHeader(
+  parts: readonly Message[],
+  flowEnabled = true
+): ZLinkChannelEnvelopeHeader {
   if (parts.length === 0) {
     throw new ZLinkConfigurationException('Channel envelope header part is missing.');
   }
-  return validateChannelHeader(parseWireJson(parts[0].data().toString()));
+  return validateChannelHeader(parseWireJson(parts[0].data().toString()), flowEnabled);
 }
 
 function parseWireJson(payload: string, schema?: ZLinkJsonSchema): unknown {
@@ -438,7 +470,7 @@ function schemaForInboundChannelEnvelope(header: ZLinkChannelEnvelopeHeader): ZL
   return header.kind === ZLinkChannelMessageKind.Response ? contract?.reply : contract?.payload;
 }
 
-function validateChannelHeader(value: unknown): ZLinkChannelEnvelopeHeader {
+function validateChannelHeader(value: unknown, flowEnabled = true): ZLinkChannelEnvelopeHeader {
   if (!isRecord(value)) {
     throw new ZLinkConfigurationException('Channel envelope header must be a JSON object.');
   }
@@ -451,8 +483,11 @@ function validateChannelHeader(value: unknown): ZLinkChannelEnvelopeHeader {
   if (contentType.trim().length === 0) {
     throw new ZLinkConfigurationException('Channel envelope contentType must not be empty.');
   }
-  const flowId = optionalFlowId(header.flowId);
-  const flowOrigin = optionalFlowOrigin(header.flowOrigin);
+  // Spec 27 §4: flow fields are observation-only. With tracing Off the
+  // processing point neither reads nor validates them; correlation_id below
+  // stays mandatory at every level.
+  const flowId = flowEnabled ? optionalFlowId(header.flowId) : undefined;
+  const flowOrigin = flowEnabled ? optionalFlowOrigin(header.flowOrigin) : undefined;
   if ((flowId === undefined) !== (flowOrigin === undefined)) {
     throw new ZLinkConfigurationException('Channel envelope flowId and flowOrigin must both be present or absent.');
   }

@@ -653,7 +653,9 @@ test('MFLOW-EXT channel wire and outbound trace use the same created flow', asyn
         tracer.trace(receivedEvent());
         assert.equal(telemetryRecords[0].attributes.flow, header.flowId);
         assert.equal(header.flowOrigin, 3);
-        assert.equal(telemetryRecords[0].attributes.origin, 'Application');
+        // Spec 27 §3 value set: telemetry emits lowercase origins in every
+        // language even though the wire enum stays numeric.
+        assert.equal(telemetryRecords[0].attributes.origin, 'application');
         resolve();
       } catch (error) {
         reject(error);
@@ -740,6 +742,117 @@ test('MFLOW-EXT Off host suppresses an inbound ambient flow on outbound wire', (
       channelEnvelope.closeMessages(parts);
     }
   });
+});
+
+test('MFLOW-EXT spec 27 \u00a74 Off decode neither validates nor keeps inbound channel flow fields', async () => {
+  await new Promise((resolve, reject) => {
+    setImmediate(() => {
+      const parts = channelEnvelope.encodeChannelEnvelopeParts(
+        1,
+        'api',
+        'EchoRequest',
+        { value: 'ping' }
+      );
+      try {
+        const onHeader = JSON.parse(Buffer.from(parts[0]).toString());
+        assert.equal(typeof onHeader.flowId, 'string');
+
+        // Off strips the flow pair from the decoded header, so replies and
+        // forwarded messages built from it carry no flow fields.
+        const offEnvelope = channelEnvelope.decodeChannelEnvelope(
+          [{ data: () => Buffer.from(parts[0]) }, { data: () => Buffer.from(parts[1]) }],
+          undefined,
+          false
+        );
+        assert.equal(offEnvelope.header.flowId, undefined);
+        assert.equal(offEnvelope.header.flowOrigin, undefined);
+        assert.equal(offEnvelope.header.correlationId, onHeader.correlationId);
+
+        const replyParts = channelEnvelope.encodeChannelReplyParts(offEnvelope.header, { ok: true });
+        const replyHeader = JSON.parse(Buffer.from(replyParts[0]).toString());
+        assert.equal(replyHeader.flowId, undefined);
+        assert.equal(replyHeader.flowOrigin, undefined);
+        assert.equal(replyHeader.correlationId, onHeader.correlationId);
+        channelEnvelope.closeMessages(replyParts);
+
+        // Off skips flow validation entirely: a malformed flowId no longer
+        // rejects the envelope (spec 27 \u00a74), while an enabled decode still does.
+        const malformed = JSON.parse(Buffer.from(parts[0]).toString());
+        malformed.flowId = 'not-a-uuid';
+        const malformedParts = [
+          { data: () => Buffer.from(JSON.stringify(malformed)) },
+          { data: () => Buffer.from(parts[1]) }
+        ];
+        const decodedOff = channelEnvelope.decodeChannelEnvelope(malformedParts, undefined, false);
+        assert.equal(decodedOff.header.flowId, undefined);
+        assert.throws(() => channelEnvelope.decodeChannelEnvelope(malformedParts, undefined, true), /UUIDv7/);
+        resolve();
+      } catch (error) {
+        reject(error);
+      } finally {
+        channelEnvelope.closeMessages(parts);
+      }
+    });
+  });
+});
+
+test('MFLOW-EXT spec 27 \u00a74 Off stream reply preserves correlation but not flow fields', () => {
+  const requestHeader = {
+    kind: streamProtocol.ZLinkStreamMessageKind.Request,
+    codec: streamProtocol.ZLinkStreamCodec.Json,
+    flags: streamProtocol.ZLinkStreamHeaderFlags.None,
+    requestSeq: 7n,
+    name: 'EchoRequest',
+    metadata: new Map(),
+    correlationId: 'corr-1',
+    flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
+    flowOrigin: 'Inbound'
+  };
+
+  let offFrame;
+  const offFactory = new ZLinkStreamFrameMessageFactory({
+    flowCreationEnabled: () => false,
+    messageFactory: {
+      createTextMessage() { throw new Error('binary frame expected'); },
+      createBinaryMessage(payload) {
+        offFrame = payload;
+        return {};
+      }
+    }
+  });
+  offFactory.createJsonReplyFrameMessage(
+    requestHeader,
+    streamProtocol.ZLinkStreamMessageKind.Response,
+    new Map(),
+    false,
+    { ok: true }
+  );
+  const offHeader = streamProtocol.decodeStreamHeader(streamProtocol.decodeStreamFrame(offFrame).header);
+  assert.equal(offHeader.correlationId, 'corr-1');
+  assert.equal(offHeader.flowId, undefined);
+  assert.equal(offHeader.flowOrigin, undefined);
+
+  let onFrame;
+  const onFactory = new ZLinkStreamFrameMessageFactory({
+    flowCreationEnabled: () => true,
+    messageFactory: {
+      createTextMessage() { throw new Error('binary frame expected'); },
+      createBinaryMessage(payload) {
+        onFrame = payload;
+        return {};
+      }
+    }
+  });
+  onFactory.createJsonReplyFrameMessage(
+    requestHeader,
+    streamProtocol.ZLinkStreamMessageKind.Response,
+    new Map(),
+    false,
+    { ok: true }
+  );
+  const onHeader = streamProtocol.decodeStreamHeader(streamProtocol.decodeStreamFrame(onFrame).header);
+  assert.equal(onHeader.flowId, requestHeader.flowId);
+  assert.equal(onHeader.flowOrigin, 'Inbound');
 });
 
 test('MFLOW-EXT absent disabled flow does not create an ambient context', () => {

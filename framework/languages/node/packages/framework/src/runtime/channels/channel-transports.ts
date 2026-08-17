@@ -346,7 +346,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
   ): Promise<ZLinkSubmitResult> {
     const node = this.meshNode(meshName);
     if (node === undefined) {
-      return await this.requireManager().routeSubmit(
+      return this.requireManager().routeSubmit(
         meshName,
         targetNodeRid,
         packetName,

@@ -141,7 +141,11 @@ export class ZLinkSpotSubscriptionDispatch {
       });
       return;
     }
-    const envelope = decodeChannelEnvelope(message.parts);
+    const envelope = decodeChannelEnvelope(
+      message.parts,
+      undefined,
+      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+    );
     if (envelope.header.kind !== ZLinkChannelMessageKind.Publish) {
       this.options.dispatchErrors?.report({
         surface: ZLinkDispatchErrorSurface.SpotSubscription,

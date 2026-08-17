@@ -1425,7 +1425,11 @@ export class DefaultZLinkSpotManager {
       );
       return;
     }
-    const envelope = decodeChannelEnvelope(record.parts);
+    const envelope = decodeChannelEnvelope(
+      record.parts,
+      undefined,
+      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+    );
     const packetName = envelope.packetName;
     const codecs = this.options.messageSerializers === undefined
       ? undefined
@@ -1506,7 +1510,11 @@ export class DefaultZLinkSpotManager {
         'MeshNode Instance Spot record is missing the owner Spot RID.'
       );
     }
-    const envelope = decodeChannelEnvelope(record.parts);
+    const envelope = decodeChannelEnvelope(
+      record.parts,
+      undefined,
+      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+    );
     const inboundFlow = createInboundFlow(
       envelope.header.flowId,
       envelope.header.flowOrigin,
@@ -2589,16 +2597,19 @@ export class DefaultZLinkSpotManager {
     const requestHeader = decodeStreamHeader(requestHeaderPart.data());
     const encoded = encodeFrameworkPayload(payload, this.options.messageSerializers);
     try {
+      //  encodeStreamHeader returns a fresh, unaliased array; view it without
+      //  re-copying. The payload copy stays: encoded.message closes below.
+      const replyHeader = encodeStreamHeader({
+        kind,
+        codec: streamCodecForContentType(encoded.contentType),
+        flags: ZLinkStreamHeaderFlags.None,
+        requestSeq: requestHeader.requestSeq,
+        name: '',
+        metadata: new Map(),
+        correlationId: requestHeader.correlationId
+      });
       return [
-        Buffer.from(encodeStreamHeader({
-          kind,
-          codec: streamCodecForContentType(encoded.contentType),
-          flags: ZLinkStreamHeaderFlags.None,
-          requestSeq: requestHeader.requestSeq,
-          name: '',
-          metadata: new Map(),
-          correlationId: requestHeader.correlationId
-        })),
+        Buffer.from(replyHeader.buffer, replyHeader.byteOffset, replyHeader.byteLength),
         Buffer.from(encoded.message.data())
       ];
     } finally {

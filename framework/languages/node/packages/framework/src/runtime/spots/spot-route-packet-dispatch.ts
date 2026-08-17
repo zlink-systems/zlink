@@ -83,7 +83,11 @@ export class ZLinkSpotRoutePacketDispatch {
     }
     let envelope: ReturnType<typeof decodeChannelEnvelope>;
     try {
-      envelope = decodeChannelEnvelope(received.parts);
+      envelope = decodeChannelEnvelope(
+        received.parts,
+        undefined,
+        this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+      );
     } catch {
       return false;
     }

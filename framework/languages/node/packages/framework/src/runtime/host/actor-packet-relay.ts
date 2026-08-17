@@ -537,7 +537,7 @@ export class ZLinkActorPacketRelay {
     });
     if (options?.waitForAcknowledgement === false) {
       this.retryRemoteSessionBindingSend(
-        { ...target, spotKind: target.spotKind ?? ZLinkSpotKind.Entry },
+        withDefaultSpotKind(target),
         request,
         Date.now() + REMOTE_SESSION_BIND_RETRY_DEADLINE_MS,
         REMOTE_SESSION_BIND_RETRY_INITIAL_DELAY_MS
@@ -550,7 +550,7 @@ export class ZLinkActorPacketRelay {
       readonly acknowledged?: boolean;
       readonly response?: { readonly acknowledged?: boolean };
     }>(
-      { ...target, spotKind: target.spotKind ?? ZLinkSpotKind.Entry },
+      withDefaultSpotKind(target),
       request,
       `Remote actor session binding is not available for '${actor.actorId}'.`,
       (parts) => JSON.parse(parts[0]?.getString('utf8') ?? '{}'),
@@ -622,7 +622,11 @@ export class ZLinkActorPacketRelay {
     // error through the bound-session route after its handler reaches a
     // terminal state; the source stream must not wait for that handler.
     const returnResponse = false;
-    const header = RuntimeMessage.fromOwned(Buffer.from(encodeStreamHeader(frameHeader)));
+    const encodedHeader = encodeStreamHeader(frameHeader);
+    //  encodeStreamHeader returns a fresh, unaliased array; view it without re-copying.
+    const header = RuntimeMessage.fromOwned(
+      Buffer.from(encodedHeader.buffer, encodedHeader.byteOffset, encodedHeader.byteLength)
+    );
     let request: Record<string, unknown>;
     try {
       const authority = aggregateRoute?.authorityFence;
@@ -845,9 +849,9 @@ export class ZLinkActorPacketRelay {
         }
       }
     }
-    return await requestRoutedJsonReply(
+    return requestRoutedJsonReply(
       this.options.routeTransport,
-      { ...target, spotKind: target.spotKind ?? ZLinkSpotKind.Entry },
+      withDefaultSpotKind(target),
       request,
       { timeoutMs: this.options.requestTimeoutMs, signal },
       unavailableMessage,
@@ -879,7 +883,11 @@ export class ZLinkActorPacketRelay {
       return false;
     }
     const responseTarget = this.options.streamBindingRuntime().captureBoundSessionResponseTarget(actor);
-    const header = RuntimeMessage.fromOwned(Buffer.from(encodeStreamHeader(frameHeader)));
+    const encodedHeader = encodeStreamHeader(frameHeader);
+    //  encodeStreamHeader returns a fresh, unaliased array; view it without re-copying.
+    const header = RuntimeMessage.fromOwned(
+      Buffer.from(encodedHeader.buffer, encodedHeader.byteOffset, encodedHeader.byteLength)
+    );
     const body = RuntimeMessage.fromOwned(Buffer.from(messageToBytes(payload)));
     const returnResponse = frameHeader.kind === ZLinkStreamMessageKind.Request
       && frameHeader.requestSeq !== undefined;
@@ -992,4 +1000,13 @@ function isValidMessageFollowId(value: string | undefined): value is string {
   return value !== undefined
     && /^[0-9a-f]{32}$/.test(value)
     && !/^0+$/.test(value);
+}
+
+/** Reuses the target when it already carries a spot kind instead of spreading a copy per call. */
+function withDefaultSpotKind(
+  target: ZLinkRemoteActorPacketTarget
+): ZLinkRemoteActorPacketTarget & { readonly spotKind: ZLinkSpotKind } {
+  return target.spotKind === undefined
+    ? { ...target, spotKind: ZLinkSpotKind.Entry }
+    : target as ZLinkRemoteActorPacketTarget & { readonly spotKind: ZLinkSpotKind };
 }

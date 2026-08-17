@@ -2809,7 +2809,7 @@ export class ZLinkFrameworkRuntimeHost implements
     owner: ReadyRecord,
     record: ReceiveRecord
   ): Promise<void> {
-    const envelope = decodeChannelEnvelope(record.parts);
+    const envelope = decodeChannelEnvelope(record.parts, undefined, this.flowCreationEnabled());
     if (envelope.packetName === ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET) {
       const payload = decodeChannelPayload(
         envelope,

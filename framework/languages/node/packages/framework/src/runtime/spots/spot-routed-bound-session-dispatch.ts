@@ -51,7 +51,11 @@ export class ZLinkSpotRoutedBoundSessionDispatch {
   constructor(private readonly options: ZLinkSpotRoutedBoundSessionDispatchOptions) {}
 
   async dispatch(received: BackendReceived): Promise<boolean> {
-    const boundSessionSend = decodeRemoteBoundSessionSend(received.parts, this.options.channelCodecs());
+    const boundSessionSend = decodeRemoteBoundSessionSend(
+      received.parts,
+      this.options.channelCodecs(),
+      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+    );
     if (boundSessionSend !== undefined) {
       await runWithFlow(
         createInboundFlow(
@@ -74,7 +78,11 @@ export class ZLinkSpotRoutedBoundSessionDispatch {
       return true;
     }
 
-    const boundSessionResponse = decodeRemoteBoundSessionResponse(received.parts, this.options.channelCodecs());
+    const boundSessionResponse = decodeRemoteBoundSessionResponse(
+      received.parts,
+      this.options.channelCodecs(),
+      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+    );
     if (boundSessionResponse !== undefined) {
       await this.options.routedBoundSessionResponseReceiver?.(
         boundSessionResponse.actorId,
@@ -91,7 +99,11 @@ export class ZLinkSpotRoutedBoundSessionDispatch {
       return true;
     }
 
-    const boundSessionError = decodeRemoteBoundSessionError(received.parts, this.options.channelCodecs());
+    const boundSessionError = decodeRemoteBoundSessionError(
+      received.parts,
+      this.options.channelCodecs(),
+      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+    );
     if (boundSessionError !== undefined) {
       await this.options.routedBoundSessionErrorReceiver?.(
         boundSessionError.actorId,

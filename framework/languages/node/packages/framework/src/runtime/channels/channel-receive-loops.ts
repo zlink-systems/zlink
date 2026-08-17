@@ -42,6 +42,8 @@ interface ZLinkMultipartSubmitOperation extends ZLinkMultipartOperation<ZLinkMul
 type ZLinkMultipartReplyOperation = ZLinkMultipartSubmitOperation;
 
 interface ZLinkChannelRequestDispatchLoop {
+  /** Spec 27 §4: with tracing Off, inbound flow fields are neither validated nor carried forward. */
+  flowEnabled?(): boolean;
   dispatch(
     received: {
       readonly parts: readonly Message[];
@@ -72,6 +74,8 @@ interface ZLinkSubscriberInfrastructureResult {
 }
 
 interface ZLinkRoutePacketDispatchLoop {
+  /** Spec 27 §4: with tracing Off, inbound flow fields are neither validated nor carried forward. */
+  flowEnabled?(): boolean;
   dispatchInfrastructure?(received: {
     readonly parts: readonly Message[];
     readonly routingId: unknown;
@@ -394,7 +398,7 @@ export class ZLinkChannelReceiveLoop {
     if (this.infrastructureHandler?.(received, this.router) === true) {
       return { kind: 'consumed', closeReceived: true };
     }
-    const decodedHeader = tryDecodeChannelHeader(received.parts);
+    const decodedHeader = tryDecodeChannelHeader(received.parts, this.dispatcher.flowEnabled?.() ?? true);
     if (
       decodedHeader === undefined
       && this.spotRouteBridge?.handleRouterReceived(
@@ -781,7 +785,7 @@ export class ZLinkRouteReceiveLoop {
         received,
         this.router,
         signal,
-        tryDecodeChannelHeader(received.parts),
+        tryDecodeChannelHeader(received.parts, this.dispatcher.flowEnabled?.() ?? true),
         infrastructureChecked
       );
       if (consumed === true) {

@@ -92,7 +92,8 @@ export class ZLinkStreamFrameMessageFactory {
           : packetName,
         metadata,
         correlationId,
-        ...(flow ?? {})
+        flowId: flow?.flowId,
+        flowOrigin: flow?.flowOrigin
       })
     );
   }
@@ -109,7 +110,14 @@ export class ZLinkStreamFrameMessageFactory {
       compressed,
       requestHeader.name,
       streamDirection(kind),
-      (codec, flags) => createStreamReplyHeader(requestHeader, kind, codec, flags, metadata)
+      (codec, flags) => createStreamReplyHeader(
+        requestHeader,
+        kind,
+        codec,
+        flags,
+        metadata,
+        this.options.flowCreationEnabled?.() ?? true
+      )
     );
   }
 
@@ -127,7 +135,24 @@ export class ZLinkStreamFrameMessageFactory {
     }
     const flags = compressed ? ZLinkStreamHeaderFlags.PayloadCompressed : ZLinkStreamHeaderFlags.None;
     const frame = encodeStreamFrame(createHeader(encoded.codec, flags), body);
-    return this.createBinaryMessage(frame);
+    return this.createOwnedFrameMessage(frame);
+  }
+
+  /**
+   * Wraps a freshly encoded, unaliased frame. `createBinaryMessage` must copy
+   * because callers may pass live buffers, but the frames built here are
+   * never retained by the encoder, so the default path skips that copy.
+   */
+  private createOwnedFrameMessage(frame: Uint8Array): Message {
+    const factory = this.options.messageFactory;
+    if (factory !== undefined) {
+      return factory.createBinaryMessage !== undefined
+        ? factory.createBinaryMessage(frame)
+        : factory.createTextMessage(utf8Decode(frame));
+    }
+    return ZLinkBindingMessage.fromOwned(
+      Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength)
+    );
   }
 
   private encodePayload(

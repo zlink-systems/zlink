@@ -17,6 +17,9 @@ export { utf8Decode, utf8Encode } from '@zlink-systems/stream-wire';
 
 const defaultMaxDecompressedPayloadSize = 64 * 1024;
 const actorRequestDeadlineMetadataKey = '$zlink.actor-request-deadline-unix-ms';
+//  Shared empty metadata for the dominant no-metadata frame; ReadonlyMap
+//  keeps every consumer from mutating it.
+const EMPTY_STREAM_METADATA: ReadonlyMap<string, string> = new Map();
 
 export enum ZLinkStreamCodec {
   Raw = 0,
@@ -119,7 +122,7 @@ export function encodeStreamControlFrame(name: string): Uint8Array {
     codec: ZLinkStreamCodec.Raw,
     flags: ZLinkStreamHeaderFlags.None,
     name,
-    metadata: new Map()
+    metadata: EMPTY_STREAM_METADATA
   }, new Uint8Array());
 }
 
@@ -160,7 +163,19 @@ export function encodeStreamHeader(header: ZLinkStreamFrameHeader): Uint8Array {
   if (header.kind === ZLinkStreamMessageKind.Control && (hasCorrelation || hasRequestSeq || hasMetadata || hasFlow)) {
     throw new Error('Control packet must not contain a request sequence, metadata, correlation id, or flow id.');
   }
-  return encodeStreamWireHeader({ ...header, flowOrigin: encodeFlowOrigin(header.flowOrigin) });
+  //  Explicit construction: this runs for every outbound frame, so avoid a
+  //  per-message spread of the whole header.
+  return encodeStreamWireHeader({
+    kind: header.kind,
+    codec: header.codec,
+    flags: header.flags,
+    requestSeq: header.requestSeq,
+    name: header.name,
+    metadata: header.metadata,
+    correlationId: header.correlationId,
+    flowId: header.flowId,
+    flowOrigin: encodeFlowOrigin(header.flowOrigin)
+  });
 }
 
 export function decodeStreamHeader(header: Uint8Array): ZLinkStreamFrameHeader {
@@ -192,7 +207,7 @@ export function decodeStreamHeader(header: Uint8Array): ZLinkStreamFrameHeader {
 
 export function actorRequestDeadlineMetadata(deadlineUnixMs: number | undefined): ReadonlyMap<string, string> {
   return deadlineUnixMs === undefined
-    ? new Map()
+    ? EMPTY_STREAM_METADATA
     : new Map([[actorRequestDeadlineMetadataKey, String(deadlineUnixMs)]]);
 }
 
@@ -215,7 +230,8 @@ export function createStreamReplyHeader(
   kind: ZLinkStreamReplyMessageKind,
   codec: ZLinkStreamCodec,
   flags: ZLinkStreamHeaderFlags,
-  metadata: ReadonlyMap<string, string>
+  metadata: ReadonlyMap<string, string>,
+  includeFlow = true
 ): ZLinkStreamFrameHeader {
   if (requestHeader.requestSeq === undefined) {
     throw new Error('Stream reply requires a request sequence.');
@@ -227,9 +243,13 @@ export function createStreamReplyHeader(
     requestSeq: requestHeader.requestSeq,
     name: '',
     metadata,
+    // correlation_id survives every diagnostics level; the flow pair is
+    // observation-only and is not copied into the reply when tracing is Off
+    // (spec 27 §4, §7).
     correlationId: requestHeader.correlationId,
-    flowId: requestHeader.flowId,
-    flowOrigin: requestHeader.flowOrigin
+    ...(includeFlow
+      ? { flowId: requestHeader.flowId, flowOrigin: requestHeader.flowOrigin }
+      : {})
   };
 }
 

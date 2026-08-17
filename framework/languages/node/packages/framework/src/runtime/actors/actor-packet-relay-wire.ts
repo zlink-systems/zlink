@@ -1,4 +1,4 @@
-import type { ActorRef, RoutingId, ZLinkSessionActor } from '../../contracts';
+import type { ActorRef, RoutingId } from '../../contracts';
 import { ZLinkSpotKind } from '../../contracts';
 import { decodeRoutingId, routingIdWireHex } from '../routing-id';
 import type { ZLinkRemoteActorPacketTarget } from './actor-runtime-state';
@@ -162,10 +162,6 @@ function requireSpotId(value: string): string {
     throw new Error('Actor packet target SpotId must contain 1..255 UTF-8 bytes.');
   }
   return value;
-}
-
-export function sessionActorPacketTargetKey(actor: ZLinkSessionActor): string {
-  return `${String(actor.ref.nodeRid)}:${actor.actorId}:${String(actor.ref.objectGeneration)}`;
 }
 
 export function decodeRemoteActorPacketRelayPayload(payload: unknown): {

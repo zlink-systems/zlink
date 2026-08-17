@@ -101,6 +101,10 @@ import {
 
 const ZLINK_SEND_DONT_WAIT = 1;
 
+//  Shared default for the dominant no-metadata call; avoids a Map allocation
+//  per outbound operation.
+const EMPTY_SPOT_METADATA: ReadonlyMap<string, string> = new Map();
+
 export interface ZLinkSpotNodeRuntimeManagerOptions {
   readonly registration: ZLinkFrameworkRegistration;
   readonly primaryMeshName?: string;
@@ -914,7 +918,11 @@ export class ZLinkSpotNodeRuntimeManager {
       );
       return true;
     }
-    const envelope = decodeChannelEnvelope(record.parts);
+    const envelope = decodeChannelEnvelope(
+      record.parts,
+      undefined,
+      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+    );
     const codecs = { serializers: this.options.registration.messageSerializers };
     const decodePayload = () => decodeChannelPayload(envelope, codecs);
     const context = {
@@ -1093,7 +1101,7 @@ export class ZLinkSpotNodeRuntimeManager {
     packetName: string | undefined,
     event: Message,
     signal?: AbortSignal,
-    metadata: ReadonlyMap<string, string> = new Map()
+    metadata: ReadonlyMap<string, string> = EMPTY_SPOT_METADATA
   ): Promise<ZLinkSubmitResult> {
     if (this.disposed) {
       return Promise.reject(runtimeShutdownError());
@@ -1178,7 +1186,7 @@ export class ZLinkSpotNodeRuntimeManager {
     topic: string,
     packetName: string | undefined,
     event: Message,
-    metadata: ReadonlyMap<string, string> = new Map()
+    metadata: ReadonlyMap<string, string> = EMPTY_SPOT_METADATA
   ): ZLinkSubmitResult {
     return this.publishWithFlags(meshName, channelName, topic, packetName, event, ZLINK_SEND_DONT_WAIT, metadata);
   }

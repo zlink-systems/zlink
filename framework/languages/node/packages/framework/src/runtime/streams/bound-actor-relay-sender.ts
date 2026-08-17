@@ -94,7 +94,7 @@ export class ZLinkBoundActorRelaySender {
       ).catch(() => undefined);
       return { status: ZLinkSubmitStatus.Submitted };
     }
-    return await this.routes.runAcceptedFrameWhenReady(
+    return this.routes.runAcceptedFrameWhenReady(
       actor.actorId,
       actor.bindingToken,
       () => this.relayAcceptedFrame(actor, payload, signal),

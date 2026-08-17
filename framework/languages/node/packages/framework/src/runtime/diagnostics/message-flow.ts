@@ -314,6 +314,18 @@ export class ZLinkMessageFlowTracer {
   }
 }
 
+/**
+ * Spec 27 §3 defines the flow_origin value set as lowercase
+ * (`inbound|timer|application|lifecycle`); every language emits these exact
+ * strings so records remain comparable across runtimes (spec 26 §3.1).
+ */
+const FLOW_ORIGIN_TELEMETRY_VALUES: Record<ZLinkFlowOrigin, string> = {
+  Inbound: 'inbound',
+  Timer: 'timer',
+  Application: 'application',
+  Lifecycle: 'lifecycle'
+};
+
 function toTelemetryRecord(
   flow: ZLinkRuntimeMessageFlowEvent,
   messageSizeBytes: number | undefined
@@ -339,7 +351,9 @@ function toTelemetryRecord(
     targetRid: flow.targetRid,
     serverRid: flow.serverRid,
     flowId: flow.flowId,
-    flowOrigin: flow.flowOrigin,
+    flowOrigin: flow.flowOrigin === undefined
+      ? undefined
+      : FLOW_ORIGIN_TELEMETRY_VALUES[flow.flowOrigin],
     spotId: flow.spotId,
     instanceSpotType: flow.instanceSpotType,
     activationState: flow.activationState,

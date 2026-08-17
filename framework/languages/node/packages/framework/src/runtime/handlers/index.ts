@@ -54,6 +54,12 @@ export async function invokeZLinkHandlerFilters(
   terminal: ZLinkHandlerFilterNext,
   signal?: AbortSignal
 ): Promise<boolean> {
+  if (filters.length === 0) {
+    //  Fast path for the dominant unfiltered dispatch: no chain closures and
+    //  no extra microtask hop per message.
+    await terminal();
+    return true;
+  }
   let handlerInvoked = false;
   let next: ZLinkHandlerFilterNext = async () => {
     handlerInvoked = true;
