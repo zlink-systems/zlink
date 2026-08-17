@@ -93,7 +93,7 @@ bool is_defined (codec_t codec)
     return false;
 }
 
-result_t<void> validate_header (const stream_header_t &header)
+result_t<void> validate_header (const stream_header_t &header, bool validate_flow = true)
 {
     if (!is_defined (header.kind) || !is_defined (header.codec)
         || (static_cast<std::uint8_t> (header.flags) & ~known_flags) != 0) {
@@ -139,6 +139,11 @@ result_t<void> validate_header (const stream_header_t &header)
     if (header.request_seq && *header.request_seq == 0) {
         return result_t<void>::failure (error_code_t::validation_failed,
                                         "Request sequence must not be zero.");
+    }
+    if (!validate_flow) {
+        /* Diagnostics level Off (flow-correlation §4): the structural length
+         * checks above stay, but the flow fields are not read as flow values. */
+        return result_t<void>::success ();
     }
     const auto has_flow = !header.flow_id.empty ();
     if (has_flow != header.flow_origin.has_value ()) {
@@ -239,7 +244,8 @@ result_t<std::vector<std::uint8_t>> header_codec_t::encode (const stream_header_
     return result_t<std::vector<std::uint8_t>>::success (std::move (bytes));
 }
 
-result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t> &bytes) const
+result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t> &bytes,
+                                                  bool validate_flow) const
 {
     if (bytes.size () < 5) {
         return result_t<stream_header_t>::failure (error_code_t::frame_decode_failed,
@@ -326,7 +332,7 @@ result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t
         return result_t<stream_header_t>::failure (error_code_t::frame_decode_failed,
                                                    "Helper header contains trailing bytes.");
     }
-    if (auto validation = validate_header (header); !validation) {
+    if (auto validation = validate_header (header, validate_flow); !validation) {
         return result_t<stream_header_t>::failure (validation.error_code (),
                                                    validation.error ()->message);
     }

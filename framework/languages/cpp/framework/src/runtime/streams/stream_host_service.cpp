@@ -1553,9 +1553,14 @@ class stream_host_service_t::listener_t
         return rid.to_hex ();
     }
 
-    task_t<void> send_core_frame (const zlink::routing_id_t &rid,
-                                  const stream_header_t &header,
-                                  const zlink::message_t &payload,
+    /* Coroutine invariant (session-reconnect-and-coroutine-lifetime doc):
+     * parameters are taken by value. Callers pass stack locals and
+     * temporaries (send_core_error_frame's error_header/payload) that die
+     * while this coroutine may still be suspended at the tail await; the
+     * message copy is a cheap handle copy, not a buffer copy. */
+    task_t<void> send_core_frame (zlink::routing_id_t rid,
+                                  stream_header_t header,
+                                  zlink::message_t payload,
                                   std::optional<std::chrono::milliseconds> timeout = std::nullopt)
     {
         auto encoded = _runtime.encode_frame (header, payload);

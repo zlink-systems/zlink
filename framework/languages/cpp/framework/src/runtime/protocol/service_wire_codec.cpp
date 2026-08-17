@@ -2060,7 +2060,8 @@ frozen_target_identity_t read_actor_route (
 
 application_payload_t read_application_payload_envelope (
   std::span<const std::uint8_t> bytes,
-  std::size_t &offset)
+  std::size_t &offset,
+  bool capture_flow = true)
 {
     const auto start = offset;
     if (offset >= bytes.size () || bytes[offset++] != 1)
@@ -2079,8 +2080,10 @@ application_payload_t read_application_payload_envelope (
     if (body.size () - body_offset != payload_length)
         throw service_wire_error_t (
           "application payload length does not match its body");
+    /* flow-correlation §4: forward the capture gate so an Off caller does
+     * not materialize the observation-only flow pair here. */
     return decode_application_payload (
-      bytes.subspan (start, offset - start));
+      bytes.subspan (start, offset - start), capture_flow);
 }
 
 void read_metadata_frame (std::span<const std::uint8_t> bytes,
@@ -2223,26 +2226,27 @@ struct frozen_body_validation_t
 frozen_body_validation_t read_frozen_body (
   std::span<const std::uint8_t> bytes,
   std::size_t &offset,
-  frozen_record_kind_t kind)
+  frozen_record_kind_t kind,
+  bool capture_flow = true)
 {
     frozen_body_validation_t validation;
     const auto wire_kind = static_cast<std::uint8_t> (kind);
     if (wire_kind == 1 || wire_kind == 2) {
-        read_application_payload_envelope (bytes, offset);
+        read_application_payload_envelope (bytes, offset, capture_flow);
     }
     else if (wire_kind == 3 || wire_kind == 4) {
         (void) read_text8 (bytes, offset, "channel name");
-        read_application_payload_envelope (bytes, offset);
+        read_application_payload_envelope (bytes, offset, capture_flow);
     }
     else if (wire_kind == 5 || wire_kind == 6) {
         validation.target = read_spot_route (bytes, offset);
         validation.application =
-          read_application_payload_envelope (bytes, offset);
+          read_application_payload_envelope (bytes, offset, capture_flow);
     }
     else if (wire_kind == 7) {
         (void) read_text8 (bytes, offset, "channel name");
         (void) read_text8 (bytes, offset, "topic");
-        read_application_payload_envelope (bytes, offset);
+        read_application_payload_envelope (bytes, offset, capture_flow);
     }
     else if (wire_kind == 8) {
         read_actor_control (bytes, offset);
@@ -2250,7 +2254,7 @@ frozen_body_validation_t read_frozen_body (
     else if (wire_kind == 9 || wire_kind == 10) {
         validation.target = read_actor_route (bytes, offset);
         validation.application =
-          read_application_payload_envelope (bytes, offset);
+          read_application_payload_envelope (bytes, offset, capture_flow);
     }
     else if (wire_kind == 11) {
         const auto terminal = read_u32 (bytes, offset);
@@ -2263,7 +2267,7 @@ frozen_body_validation_t read_frozen_body (
             throw service_wire_error_t (
               "completion terminal, failure, and payload do not match");
         if (has_payload)
-            read_application_payload_envelope (bytes, offset);
+            read_application_payload_envelope (bytes, offset, capture_flow);
     }
     else if (wire_kind == 12) {
         read_send_ready_destination (bytes, offset);
@@ -2290,7 +2294,7 @@ frozen_body_validation_t read_frozen_body (
             throw service_wire_error_t (
               "invalid Instance activation operation kind");
         validation.instance_operation_kind = bytes[offset++];
-        read_application_payload_envelope (bytes, offset);
+        read_application_payload_envelope (bytes, offset, capture_flow);
     }
     return validation;
 }
@@ -2461,7 +2465,7 @@ void append_frozen_actor_route (std::vector<std::uint8_t> &output,
 }
 
 frozen_record_t decode_frozen_record (
-  std::span<const std::uint8_t> bytes)
+  std::span<const std::uint8_t> bytes, bool capture_flow)
 {
     std::size_t offset = 0;
     if (offset >= bytes.size ())
@@ -2537,7 +2541,7 @@ frozen_record_t decode_frozen_record (
         result.reply_route_id = read_nonzero_u64 (
           reply, reply_offset, "reply route ID");
     require_end (reply, reply_offset, "frozen reply route");
-    const auto body = read_frozen_body (bytes, offset, result.kind);
+    const auto body = read_frozen_body (bytes, offset, result.kind, capture_flow);
     require_end (bytes, offset, "frozen record");
     validate_operation_matrix (result, body);
     result.target = body.target;
@@ -2869,7 +2873,7 @@ std::vector<std::uint8_t> encode_instance_activation_recovery (
 }
 
 instance_activation_recovery_t decode_instance_activation_recovery (
-  std::span<const std::uint8_t> bytes)
+  std::span<const std::uint8_t> bytes, bool capture_flow)
 {
     if (bytes.size () < 15 || bytes[0] != 'Z' || bytes[1] != 'L'
         || bytes[2] != 'I' || bytes[3] != 'A' || bytes[4] != 1) {
@@ -2956,8 +2960,10 @@ instance_activation_recovery_t decode_instance_activation_recovery (
     if (offset >= body_end)
         throw service_wire_error_t (
           "Instance activation recovery application payload is missing");
+    /* flow-correlation §4: forward the capture gate for the recovered
+     * payload's observation-only flow pair. */
     record.application_payload = decode_application_payload (
-      bytes.subspan (offset, body_end - offset));
+      bytes.subspan (offset, body_end - offset), capture_flow);
     activation.has_metadata = record.metadata.has_value ();
     (void) encode_instance_spot_activation_header (activation);
     return record;

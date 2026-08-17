@@ -127,44 +127,61 @@ set(ZLINK_FRAMEWORK_CPP_M6B_RUNTIME_SOURCES
 set(ZLINK_FRAMEWORK_CPP_M6C_RUNTIME_SOURCES
   framework/src/runtime/stateful/maintenance_runtime.cpp)
 
-add_library(zlink_framework_m6a_runtime STATIC
+# The M6 runtime sources are compiled exactly once, into object libraries.
+# Both the m6* stepping-stone archives and zlink_framework consume the same
+# objects, which halves the compile count for these files without changing
+# archive contents, link order, or the installed export set (zlink_framework
+# stays the only exported target).
+function(zlink_framework_cpp_configure_m6_objects target_name)
+  target_compile_features(${target_name} PUBLIC cxx_std_20)
+  target_include_directories(${target_name} PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+  target_link_libraries(${target_name} PRIVATE
+    zlink::cpp
+    Threads::Threads)
+endfunction()
+
+add_library(zlink_framework_m6a_objects OBJECT
   ${ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES})
+zlink_framework_cpp_configure_m6_objects(zlink_framework_m6a_objects)
+
+add_library(zlink_framework_m6b_objects OBJECT
+  ${ZLINK_FRAMEWORK_CPP_M6B_RUNTIME_SOURCES})
+zlink_framework_cpp_configure_m6_objects(zlink_framework_m6b_objects)
+
+add_library(zlink_framework_m6c_objects OBJECT
+  ${ZLINK_FRAMEWORK_CPP_M6C_RUNTIME_SOURCES})
+zlink_framework_cpp_configure_m6_objects(zlink_framework_m6c_objects)
+
+add_library(zlink_framework_m6a_runtime STATIC
+  $<TARGET_OBJECTS:zlink_framework_m6a_objects>)
 target_compile_features(zlink_framework_m6a_runtime PUBLIC cxx_std_20)
 target_include_directories(zlink_framework_m6a_runtime PUBLIC
   ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include)
-target_include_directories(zlink_framework_m6a_runtime PRIVATE
-  ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-  ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
 target_link_libraries(zlink_framework_m6a_runtime PUBLIC
   zlink::cpp
   Threads::Threads)
 
 add_library(zlink_framework_m6b_runtime STATIC
-  ${ZLINK_FRAMEWORK_CPP_M6B_RUNTIME_SOURCES})
+  $<TARGET_OBJECTS:zlink_framework_m6b_objects>)
 target_compile_features(zlink_framework_m6b_runtime PUBLIC cxx_std_20)
-target_include_directories(zlink_framework_m6b_runtime PRIVATE
-  ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
-  ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-  ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
 target_link_libraries(zlink_framework_m6b_runtime PUBLIC
   zlink_framework_m6a_runtime
   Threads::Threads)
 
 add_library(zlink_framework_m6c_runtime STATIC
-  ${ZLINK_FRAMEWORK_CPP_M6C_RUNTIME_SOURCES})
+  $<TARGET_OBJECTS:zlink_framework_m6c_objects>)
 target_compile_features(zlink_framework_m6c_runtime PUBLIC cxx_std_20)
-target_include_directories(zlink_framework_m6c_runtime PRIVATE
-  ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
-  ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-  ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
 target_link_libraries(zlink_framework_m6c_runtime PUBLIC
   zlink_framework_m6b_runtime
   Threads::Threads)
 
 add_library(zlink_framework STATIC
-  ${ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES}
-  ${ZLINK_FRAMEWORK_CPP_M6B_RUNTIME_SOURCES}
-  ${ZLINK_FRAMEWORK_CPP_M6C_RUNTIME_SOURCES}
+  $<TARGET_OBJECTS:zlink_framework_m6a_objects>
+  $<TARGET_OBJECTS:zlink_framework_m6b_objects>
+  $<TARGET_OBJECTS:zlink_framework_m6c_objects>
   framework/src/runtime/channels/channel_packet_dispatcher.cpp
   framework/src/runtime/channels/channel_host_service.cpp
   framework/src/runtime/channels/channel_bundle_factory.cpp
@@ -272,6 +289,11 @@ function(zlink_framework_cpp_add_asio_system_libraries target_name)
 endfunction()
 
 zlink_framework_cpp_add_boost_headers(zlink_framework)
+# The M6 objects are linked into zlink_framework, so they must see the same
+# Boost headers as the rest of its translation units.
+zlink_framework_cpp_add_boost_headers(zlink_framework_m6a_objects)
+zlink_framework_cpp_add_boost_headers(zlink_framework_m6b_objects)
+zlink_framework_cpp_add_boost_headers(zlink_framework_m6c_objects)
 zlink_framework_cpp_add_asio_system_libraries(zlink_framework)
 find_package(nlohmann_json QUIET)
 if(NOT nlohmann_json_FOUND)

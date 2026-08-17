@@ -35,6 +35,16 @@ registry가 닫힌 스트림 참조를 유지해 "송신 ok, 수신 무" 블랙�
 - push는 per-binding FIFO에 넣고 offload executor로 detach한다. `task_t`는
   eager라서 코루틴을 그대로 호출하면 ROUTER admission까지 동기로 진입해 actor
   턴을 블록한다 — actor 턴에서 push를 시작할 때는 반드시 detach 경로를 쓴다.
+- **stream 동기 dispatch는 같은 세션 lane에서의 동기 재진입을 지원하지 않는다.**
+  `stream_session_dispatcher_t::dispatch()`(`stream_runtime.cpp`)는 세션별
+  serial lane(`serial_execution_queue_t`, `serial_lane_policy_t::session`)에
+  작업을 `dispatch_async`로 넣은 뒤 `task.result ()`로 완료를 블로킹 대기한다.
+  이미 그 lane 위에서 실행 중인 세션 콜백(connected/packet/disconnected/error
+  핸들러)이 같은 stream에 대해 동기 `dispatch_serial`/`dispatch()`를 다시
+  부르면, serial lane이 caller 자신에게 점유되어 있어 새 작업이 시작될 수 없고
+  대기는 영원히 풀리지 않는다(자기-데드락). 세션 콜백 문맥에서 같은 lane에 추가
+  작업을 넣을 때는 완료 콜백을 받는 `dispatch_serial_async`/`dispatch_async`
+  경로만 사용한다. 동기 형태는 lane 밖(호스트/테스트 드라이버) 전용이다.
 
 ## 3. 코루틴 수명 규칙
 

@@ -73,6 +73,14 @@ class raw_stateful_dispatch_t
       mesh::raw_mesh_node_owner_t &transport,
       accepted_record_authority_resolver_t authority_resolver = {});
 
+    /* Flow-capture provider (flow-correlation §4): gates whether ingest
+     * validates/materializes wire flow fields as flow values. Unset keeps
+     * capture on. Set once before dispatch begins. */
+    void set_flow_capture_provider (std::function<bool ()> provider) noexcept
+    {
+        _flow_capture = std::move (provider);
+    }
+
     stateful_error_t ingest (const object_ref_t &owner);
     std::pair<stateful_error_t, std::optional<stateful_delivery_t>>
     try_claim (const object_ref_t &owner);
@@ -137,8 +145,14 @@ class raw_stateful_dispatch_t
       bool allocate_sequence,
       stateful_error_t collision_error);
 
+    bool capture_flow () const
+    {
+        return !_flow_capture || _flow_capture ();
+    }
+
     stateful_object_runtime_t *_objects;
     mesh::raw_mesh_node_owner_t *_transport;
+    std::function<bool ()> _flow_capture;
     accepted_record_authority_resolver_t _authority_resolver;
     std::mutex _mutex;
     std::map<std::pair<object_kind_t, std::string>, std::uint64_t>
@@ -216,6 +230,14 @@ class raw_relocation_replay_coordinator_t
         std::chrono::seconds (1),
       std::chrono::milliseconds terminal_tombstone_retention =
         std::chrono::hours (24));
+
+    /* Flow-capture provider (flow-correlation §4): gates whether replayed
+     * reply payloads validate/materialize wire flow fields as flow values.
+     * Unset keeps capture on. Set once before replay begins. */
+    void set_flow_capture_provider (std::function<bool ()> provider) noexcept
+    {
+        _flow_capture = std::move (provider);
+    }
 
     bool register_target (raw_relocation_target_registration_t registration);
     bool seal_target (
@@ -316,7 +338,13 @@ class raw_relocation_replay_coordinator_t
       const protocol::relocation_id_t &relocation,
       const protocol::wire_operation_id_t &operation);
 
+    bool capture_flow () const
+    {
+        return !_flow_capture || _flow_capture ();
+    }
+
     mesh::raw_mesh_node_owner_t *_transport;
+    std::function<bool ()> _flow_capture;
     mutable std::mutex _gate;
     std::condition_variable _gate_condition;
     std::map<key_t, target_state_t> _targets;

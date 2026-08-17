@@ -110,8 +110,10 @@ bool drain_bound_session_sends (
               [state, queue_key, actor_id,
                pending = std::move (pending)] () mutable {
                   try {
-                      trace_detached_bound_session_send_stage (
-                        state, actor_id, "offload_sender_begin", "started");
+                      /* One stage event per program point: the former
+                       * offload_sender_begin/send_bound_session_enter pair
+                       * described the same instant and paid the detailed-gate
+                       * assembly twice. */
                       trace_detached_bound_session_send_stage (
                         state, actor_id, "send_bound_session_enter", "entered");
                       auto task =
@@ -993,6 +995,28 @@ task_t<void> session_actor_t::relay_internal (detail::stream_header_t header,
         }
         _ref = found->second.ref;
         if (!_state->relay_dispatcher) {
+            /* Bounded parking (async-execution-policy §1.3, same 1024 bound
+             * as the session relay waiters): beyond the bound the frame is
+             * not held — the call fails immediately with DeadlineExceeded and
+             * the drop is reported. */
+            if (_state->relayed_frames.size () >= detail::relayed_frame_capacity) {
+                lock.unlock ();
+                const framework_exception_t rejected (
+                  framework_error_kind_t::deadline_exceeded,
+                  "actor relay frame capacity is exhausted");
+                detail::dispatch_error_reporter_t (_state->dispatch).report_lazy ([&] {
+                    return message_dispatch_error_event_t{
+                      .surface = dispatch_error_surface_t::spot_actor,
+                      .message_kind = dispatch_message_kind_t::actor_send,
+                      .reason = dispatch_error_reason_t::backpressure,
+                      .action = dispatch_error_action_t::drop,
+                      .packet_name = std::string (header.packet_name ()),
+                      .actor_id = std::string (_ref.actor_id ().value ()),
+                      .exception = std::make_exception_ptr (rejected)};
+                });
+                return task_t<void> (
+                  detail::result_access_t::failure<void> (rejected));
+            }
             _state->relayed_frames.push_back (detail::relayed_frame_t{_ref, header, payload});
             lock.unlock ();
             return task_t<void> (result_t<void>::success ());
@@ -1113,7 +1137,28 @@ relay_request_call_t session_actor_t::relay_request (const zlink::message_t &pay
         }
         _ref = found->second.ref;
         if (!_state->relay_dispatcher) {
-            _state->relayed_frames.push_back (detail::relayed_frame_t{_ref, *header, payload});
+            /* Bounded parking (async-execution-policy §1.3): beyond the 1024
+             * bound the frame is dropped instead of retained. The call keeps
+             * its immediate not_found failure either way; the drop event
+             * records the discarded frame. */
+            if (_state->relayed_frames.size () >= detail::relayed_frame_capacity) {
+                const framework_exception_t rejected (
+                  framework_error_kind_t::deadline_exceeded,
+                  "actor relay frame capacity is exhausted");
+                detail::dispatch_error_reporter_t (_state->dispatch).report_lazy ([&] {
+                    return message_dispatch_error_event_t{
+                      .surface = dispatch_error_surface_t::spot_actor,
+                      .message_kind = dispatch_message_kind_t::actor_request,
+                      .reason = dispatch_error_reason_t::backpressure,
+                      .action = dispatch_error_action_t::drop,
+                      .packet_name = std::string (header->packet_name ()),
+                      .actor_id = std::string (_ref.actor_id ().value ()),
+                      .exception = std::make_exception_ptr (rejected)};
+                });
+            } else {
+                _state->relayed_frames.push_back (
+                  detail::relayed_frame_t{_ref, *header, payload});
+            }
             return relay_request_call_t (result_t<zlink::message_t>::failure (
               framework_error_kind_t::not_found, "actor relay dispatcher is not configured"));
         }

@@ -569,7 +569,10 @@ stateful_error_t raw_stateful_dispatch_t::ingest (
     }
 
     try {
-        payload = protocol::decode_application_payload (record.parts[1]);
+        /* flow-correlation §4: at Off the wire flow pair is neither validated
+         * nor materialized at this ingress (structural skip only). */
+        payload = protocol::decode_application_payload (record.parts[1],
+                                                        capture_flow ());
         if (actor_header) {
             auto accepted_target = actor_header->target;
             accepted_target.object_generation = owner.object_generation;
@@ -723,7 +726,9 @@ stateful_error_t raw_stateful_dispatch_t::stage_relocated (
 {
     protocol::frozen_record_t frozen;
     try {
-        frozen = protocol::decode_frozen_record (turn.payload);
+        /* flow-correlation §4: the frozen application flow pair is
+         * observation-only — skip validation/materialization at Off. */
+        frozen = protocol::decode_frozen_record (turn.payload, capture_flow ());
         if (!frozen.application)
             return stateful_error_t::invalid;
         turn.application_payload_bytes =
@@ -1394,8 +1399,10 @@ raw_relocation_replay_coordinator_t::process_reply_relay (
     std::optional<protocol::application_payload_t> reply;
     if (record.parts.size () == 2) {
         try {
+            /* flow-correlation §4: reply flow pair is observation-only —
+             * skip validation/materialization at Off. */
             reply = protocol::decode_application_payload (
-              record.parts[1]);
+              record.parts[1], capture_flow ());
         }
         catch (const protocol::service_wire_error_t &) {
             co_return raw_relocation_replay_result_t::invalid;

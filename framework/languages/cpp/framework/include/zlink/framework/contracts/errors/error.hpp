@@ -52,6 +52,19 @@ enum class failure_origin_t
     actor_transfer_in_progress
 };
 
+/* Who produced the failure. `framework` marks errors the framework runtime
+ * generated on its own (route resolution failure, sealed admission, dispatch
+ * rejection); replies for such errors carry the `zlink.origin=framework`
+ * metadata marker. `application` marks errors decoded from a peer error reply
+ * that did not carry the marker — the remote application handler produced
+ * them, so route caches must not read them as a stale-route signal. */
+enum class error_origin_t
+{
+    unspecified = 0,
+    framework = 1,
+    application = 2
+};
+
 inline std::error_code boundary_error_code (boundary_error_t state) noexcept
 {
     switch (state) {
@@ -104,11 +117,16 @@ class framework_exception_t : public std::exception
       std::string message);
     friend detail::failure_origin_t
     detail_failure_origin (const framework_exception_t &error) noexcept;
+    friend framework_exception_t detail_with_error_origin (
+      framework_exception_t error, detail::error_origin_t origin) noexcept;
+    friend detail::error_origin_t
+    detail_error_origin (const framework_exception_t &error) noexcept;
 
     framework_error_kind_t _kind;
     std::string _message;
     detail::boundary_error_t _boundary = detail::boundary_error_t::none;
     detail::failure_origin_t _origin = detail::failure_origin_t::none;
+    detail::error_origin_t _error_origin = detail::error_origin_t::unspecified;
 };
 
 inline framework_exception_t detail_make_boundary_exception (detail::boundary_error_t state,
@@ -152,6 +170,19 @@ detail_failure_origin (const framework_exception_t &error) noexcept
     return error._origin;
 }
 
+inline framework_exception_t detail_with_error_origin (framework_exception_t error,
+                                                       detail::error_origin_t origin) noexcept
+{
+    error._error_origin = origin;
+    return error;
+}
+
+inline detail::error_origin_t
+detail_error_origin (const framework_exception_t &error) noexcept
+{
+    return error._error_origin;
+}
+
 namespace detail
 {
 
@@ -159,6 +190,26 @@ inline framework_exception_t
 make_boundary_exception (boundary_error_t state, std::string message)
 {
     return detail_make_boundary_exception (state, std::move (message));
+}
+
+inline framework_exception_t
+with_error_origin (framework_exception_t error, error_origin_t origin) noexcept
+{
+    return detail_with_error_origin (std::move (error), origin);
+}
+
+/* Framework-generated failure (route resolution, sealed admission, dispatch
+ * rejection): its error reply carries the `zlink.origin=framework` marker. */
+inline framework_exception_t
+make_framework_origin_exception (framework_error_kind_t kind, std::string message)
+{
+    return detail_with_error_origin (framework_exception_t (kind, std::move (message)),
+                                     error_origin_t::framework);
+}
+
+inline error_origin_t error_origin (const framework_exception_t &error) noexcept
+{
+    return detail_error_origin (error);
 }
 
 inline bool is_transient_error (framework_error_kind_t kind) noexcept

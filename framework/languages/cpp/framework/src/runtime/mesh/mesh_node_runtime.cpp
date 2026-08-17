@@ -8,6 +8,7 @@
 #include "runtime/locations/authority_key_codec.hpp"
 
 #include "runtime/channels/channel_runtime.hpp"
+#include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/mesh/mesh_metadata_codec.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
@@ -509,6 +510,12 @@ void mesh_node_runtime_t::start ()
       std::move (object_stable_types), _route_cache_max_age,
       _owner_lease_fencing_margin, _state->core_context,
       _session_relocation_seal_timeout});
+    /* flow-correlation §4: thread the flow-capture provider so the host's
+     * cold decode paths skip flow validation/materialization at level Off. */
+    node->set_flow_capture_provider (
+      [spot_state = _state->spot_state] {
+          return message_flow_tracer_t (spot_state->dispatch).capture_enabled ();
+      });
     if (_spot_route_fence_resolver)
         node->configure_spot_route_fence_resolver (_spot_route_fence_resolver);
     if (_user_spot_store && _user_spot_materializer) {
@@ -2710,8 +2717,10 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
         const bool targets_moving_local_source = targets_local_node && source_transfer_in_progress;
         if (targets_local_node && !source_transfer_in_progress
             && !spot_runtime.actor_route (target_actor)) {
-            spot_runtime.emit_actor_transfer_marker ("message_follow_expired", target_actor, {},
-                                                     std::nullopt, std::nullopt);
+            if (spot_runtime.actor_transfer_marker_enabled ()) {
+                spot_runtime.emit_actor_transfer_marker ("message_follow_expired", target_actor,
+                                                         {}, std::nullopt, std::nullopt);
+            }
             co_return result_t<std::optional<zlink::message_t>>::failure (
               framework_error_kind_t::unavailable, "Actor Message Follow route has expired");
         }

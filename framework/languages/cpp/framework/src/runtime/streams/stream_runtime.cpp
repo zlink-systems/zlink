@@ -720,10 +720,13 @@ stream_write_call_t stream_t::write_packet_with_header (detail::stream_header_t 
                                                         zlink::message_t payload)
 {
     /* Stream writes propagate the ambient flow (flow-correlation §3.2);
-     * control packets never carry the pair. */
+     * control packets never carry the pair. The diagnostics_mode re-check
+     * keeps a flow scope that was entered before a runtime flip to Off from
+     * materializing 36 bytes on the wire (flow-correlation §4). */
     if (!header.flow_id () && header.kind () != stream_message_kind_t::control) {
         if (const auto &flow = runtime::flow_context_t::current ();
-            flow && !flow->flow_id.empty ()) {
+            flow && !flow->flow_id.empty ()
+            && flow->diagnostics_mode != message_flow_log_mode_t::off) {
             header.with_flow (flow->flow_id, flow->origin);
         }
     }
@@ -1323,11 +1326,19 @@ stream_runtime_t::decode_header (const std::vector<std::uint8_t> &bytes) const
               framework_error_kind_t::protocol_error,
               "STREAM header flow fields are incomplete");
         }
-        flow_id = std::string (
-          bytes.begin () + static_cast<std::ptrdiff_t> (offset),
-          bytes.begin () + static_cast<std::ptrdiff_t> (offset + runtime::flow_id_t::encoded_length));
-        offset += runtime::flow_id_t::encoded_length;
-        flow_origin = static_cast<flow_origin_t> (bytes[offset++]);
+        if (detail::message_flow_tracer_t (_state->dispatch).capture_enabled ()) {
+            flow_id = std::string (
+              bytes.begin () + static_cast<std::ptrdiff_t> (offset),
+              bytes.begin ()
+                + static_cast<std::ptrdiff_t> (offset + runtime::flow_id_t::encoded_length));
+            offset += runtime::flow_id_t::encoded_length;
+            flow_origin = static_cast<flow_origin_t> (bytes[offset++]);
+        } else {
+            /* flow-correlation §4: at Off the observation-only pair is
+             * skipped structurally — the 36-byte flow id is neither
+             * materialized nor validated (length check above stays). */
+            offset += runtime::flow_id_t::encoded_length + 1;
+        }
     }
     if (offset != bytes.size ()) {
         return result_t<stream_header_t>::failure (framework_error_kind_t::protocol_error,

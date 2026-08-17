@@ -3,10 +3,12 @@
 #include <zlink/framework.hpp>
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 
 #include <gtest/gtest.h>
@@ -414,6 +416,71 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
                reply_header.value ().error_code.value_or (""));
     EXPECT_EQ ("Spot route owner is no longer registered",
                reply_header.value ().error_message.value_or (""));
+    /* Framework-generated route errors carry the zlink.origin=framework
+     * marker so callers can tell them apart from application errors. */
+    const auto &reply_metadata = reply_header.value ().metadata;
+    const auto origin = reply_metadata.find ("zlink.origin");
+    ASSERT_NE (origin, reply_metadata.end ());
+    EXPECT_EQ ("framework", origin->second);
+    EXPECT_TRUE (messaging::has_framework_origin (reply_metadata));
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation,
+      FrameworkOriginMarkerIsAttachedOnlyToFrameworkErrors)
+{
+    namespace messaging = zlink::framework::runtime::messaging;
+    using zlink::framework::framework_error_kind_t;
+    using zlink::framework::framework_exception_t;
+
+    messaging::envelope_header_t request;
+    request.kind = messaging::message_kind_t::request;
+    request.channel_name = "origin-mesh";
+    request.message_name = "origin.request";
+    request.correlation_id = "origin-request";
+
+    zlink::framework::detail::channel_reply_writer_t replies;
+
+    /* Framework-generated failure: marker attached. */
+    const auto framework_reply = replies.create_error_header (
+      "origin-mesh", request,
+      zlink::framework::detail::make_framework_origin_exception (
+        framework_error_kind_t::not_found, "spot handler is not registered"));
+    EXPECT_TRUE (messaging::has_framework_origin (framework_reply.metadata));
+
+    /* Application handler failure: no marker. */
+    const auto application_reply = replies.create_error_header (
+      "origin-mesh", request,
+      framework_exception_t (framework_error_kind_t::not_found,
+                             "application says not found"));
+    EXPECT_FALSE (messaging::has_framework_origin (application_reply.metadata));
+    EXPECT_EQ (application_reply.metadata.find ("zlink.origin"),
+               application_reply.metadata.end ());
+
+    /* The marker survives the envelope wire round trip. */
+    messaging::envelope_codec_t codec;
+    auto parts =
+      codec.encode_raw_body_parts (framework_reply, zlink::message_t::from (""));
+    const auto decoded = codec.decode_header (parts);
+    ASSERT_TRUE (decoded);
+    EXPECT_TRUE (messaging::has_framework_origin (decoded.value ().metadata));
+
+    /* Caller-side classification: unmarked remote errors are application
+     * origin and must not be read as a stale-route signal. */
+    using zlink::framework::detail::error_origin_t;
+    const auto marked = zlink::framework::detail::with_error_origin (
+      framework_exception_t (framework_error_kind_t::not_found, "remote"),
+      messaging::has_framework_origin (decoded.value ().metadata)
+        ? error_origin_t::framework
+        : error_origin_t::application);
+    EXPECT_EQ (error_origin_t::framework,
+               zlink::framework::detail::error_origin (marked));
+    const auto unmarked = zlink::framework::detail::with_error_origin (
+      framework_exception_t (framework_error_kind_t::not_found, "remote"),
+      messaging::has_framework_origin (application_reply.metadata)
+        ? error_origin_t::framework
+        : error_origin_t::application);
+    EXPECT_EQ (error_origin_t::application,
+               zlink::framework::detail::error_origin (unmarked));
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation,

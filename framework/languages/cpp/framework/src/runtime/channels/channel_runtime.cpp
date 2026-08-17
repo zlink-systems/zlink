@@ -21,6 +21,7 @@
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
@@ -2025,11 +2026,19 @@ task_t<zlink::message_t> route_client_t::submit_spot_request_reply_message_erase
         }
         if (reply_header.value ().kind == runtime::messaging::message_kind_t::error) {
             runtime::messaging::request_failure_mapper_t failure_mapper;
+            /* Stale-route contract: only framework-generated remote errors
+             * (zlink.origin=framework marker) may drive route-cache
+             * invalidation. Unmarked remote errors came from the application
+             * handler and are classified so the caller skips invalidation. */
             co_return detail::result_access_t::failure<zlink::message_t> (
-              failure_mapper.error_header_exception (
-                reply_header.value ().error_code.value_or ("request_failed"),
-                reply_header.value ().error_message.value_or ("route spot request failed"),
-                "route spot request"));
+              detail::with_error_origin (
+                failure_mapper.error_header_exception (
+                  reply_header.value ().error_code.value_or ("request_failed"),
+                  reply_header.value ().error_message.value_or ("route spot request failed"),
+                  "route spot request"),
+                runtime::messaging::has_framework_origin (reply_header.value ().metadata)
+                  ? detail::error_origin_t::framework
+                  : detail::error_origin_t::application));
         }
         auto body = envelope.decode_body (reply.value ());
         if (!body) {
@@ -2162,8 +2171,15 @@ task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_message_er
           request_type, std::move (encode_payload), timeout, std::move (metadata));
     }
     catch (const framework_exception_t &error) {
-        if (error.kind () == framework_error_kind_t::not_found
-            || error.kind () == framework_error_kind_t::unavailable) {
+        /* Stale-route judgement: a remote error reply is a stale-route signal
+         * only when the framework produced it (zlink.origin=framework marker,
+         * carried here as error_origin_t::framework). An application
+         * handler's not_found/unavailable must not invalidate the cached
+         * route. Local failures (unspecified origin) keep invalidating as
+         * before. */
+        if ((error.kind () == framework_error_kind_t::not_found
+             || error.kind () == framework_error_kind_t::unavailable)
+            && detail::error_origin (error) != detail::error_origin_t::application) {
             state->runtime->spot_resolver->invalidate_spot_address (target);
         }
         throw;

@@ -718,6 +718,171 @@ int main ()
         }
     }
 
+    /* Diagnostics level surface (message-flow-tracing §4, flow-correlation §2/§4):
+     * - the option defaults to errors and keeps flow fields on outbound frames,
+     * - one-way sends never carry a correlation_id,
+     * - requests carry a correlation_id at every level (protocol information),
+     * - off omits flow fields from outbound frames (flag 0x10 clear) and skips
+     *   inbound flow-field validation while structural length checks stay. */
+    {
+        using zlink::stream_connector::connector_options_t;
+        using zlink::stream_connector::diagnostics_level_t;
+        using zlink::stream_connector::flow_origin_t;
+        using zlink::stream_connector::packet_t;
+        using zlink::stream_connector::detail::connector_state_t;
+        using zlink::stream_connector::detail::flow_id_codec_t;
+
+        if (connector_options_t{}.diagnostics_level != diagnostics_level_t::errors) {
+            return 210;
+        }
+
+        const auto wait_for_written_frame =
+          [] (const std::shared_ptr<async_write_connection_t> &connection) {
+              for (int i = 0; i < 1000; ++i) {
+                  if (!connection->written.empty ()) {
+                      return true;
+                  }
+                  std::this_thread::sleep_for (std::chrono::milliseconds (2));
+              }
+              return false;
+          };
+        const auto decode_frame_header = [] (const std::vector<std::uint8_t> &frame)
+          -> zlink::stream_connector::result_t<stream_header_t> {
+            if (frame.size () < 6) {
+                return zlink::stream_connector::result_t<stream_header_t>::failure (
+                  zlink::stream_connector::error_code_t::frame_decode_failed, "frame is too short");
+            }
+            const auto header_size = static_cast<std::size_t> ((frame[0] << 8) | frame[1]);
+            std::vector<std::uint8_t> header_bytes (
+              frame.begin () + 6, frame.begin () + 6 + static_cast<std::ptrdiff_t> (header_size));
+            return header_codec_t{}.decode (header_bytes);
+        };
+        const auto has_header_flag = [] (const stream_header_t &header, header_flags_t flag) {
+            return (static_cast<std::uint8_t> (header.flags) & static_cast<std::uint8_t> (flag))
+                   != 0;
+        };
+
+        const auto send_frame_header =
+          [&] (diagnostics_level_t level) -> std::optional<stream_header_t> {
+            connector_options_t options;
+            options.diagnostics_level = level;
+            auto state = std::make_shared<connector_state_t> (options);
+            state->state = zlink::stream_connector::connection_state_t::connected;
+            auto connection = std::make_shared<async_write_connection_t> ();
+            state->connection = connection;
+            const auto submitted = zlink::stream_connector::detail::submit_send (
+              state, packet_t{.name = "diag.send", .payload = zlink::message_t::from ("payload")});
+            if (!submitted || !wait_for_written_frame (connection)) {
+                return std::nullopt;
+            }
+            auto decoded = decode_frame_header (connection->written.front ());
+            connection->shutdown_and_close ();
+            if (!decoded) {
+                return std::nullopt;
+            }
+            return decoded.value ();
+        };
+
+        const auto default_send = send_frame_header (diagnostics_level_t::errors);
+        if (!default_send || default_send->kind != message_kind_t::send
+            || !default_send->correlation_id.empty ()
+            || has_header_flag (*default_send, header_flags_t::has_correlation_id)
+            || !has_header_flag (*default_send, header_flags_t::has_flow_id)
+            || !flow_id_codec_t::is_valid (default_send->flow_id)
+            || default_send->flow_origin != flow_origin_t::application) {
+            return 211;
+        }
+
+        const auto off_send = send_frame_header (diagnostics_level_t::off);
+        if (!off_send || !off_send->correlation_id.empty ()
+            || has_header_flag (*off_send, header_flags_t::has_correlation_id)
+            || has_header_flag (*off_send, header_flags_t::has_flow_id)
+            || !off_send->flow_id.empty () || off_send->flow_origin.has_value ()) {
+            return 212;
+        }
+
+        const auto request_frame_header =
+          [&] (diagnostics_level_t level) -> std::optional<stream_header_t> {
+            connector_options_t options;
+            options.diagnostics_level = level;
+            auto state = std::make_shared<connector_state_t> (options);
+            state->state = zlink::stream_connector::connection_state_t::connected;
+            auto connection = std::make_shared<async_write_connection_t> ();
+            state->connection = connection;
+            zlink::stream_connector::detail::submit_request_async (
+              state, packet_t{.name = "diag.request", .payload = zlink::message_t::from ("payload")},
+              std::chrono::milliseconds (50),
+              [] (zlink::stream_connector::result_t<
+                  zlink::stream_connector::detail::request_reply_t>) {},
+              /*deliver_direct=*/true);
+            if (!wait_for_written_frame (connection)) {
+                return std::nullopt;
+            }
+            auto decoded = decode_frame_header (connection->written.front ());
+            {
+                std::lock_guard<std::mutex> lock (state->transport_mutex);
+                for (auto &[seq, pending] : state->pending_requests) {
+                    (void) seq;
+                    if (pending.timeout_timer) {
+                        try {
+                            (void) pending.timeout_timer->cancel ();
+                        } catch (const boost::system::system_error &) {
+                        }
+                    }
+                }
+                state->pending_requests.clear ();
+            }
+            connection->shutdown_and_close ();
+            if (!decoded) {
+                return std::nullopt;
+            }
+            return decoded.value ();
+        };
+
+        const auto default_request = request_frame_header (diagnostics_level_t::errors);
+        if (!default_request || default_request->kind != message_kind_t::request
+            || default_request->correlation_id.empty ()
+            || !has_header_flag (*default_request, header_flags_t::has_correlation_id)
+            || !has_header_flag (*default_request, header_flags_t::has_flow_id)
+            || !flow_id_codec_t::is_valid (default_request->flow_id)) {
+            return 213;
+        }
+
+        const auto off_request = request_frame_header (diagnostics_level_t::off);
+        if (!off_request || off_request->correlation_id.empty ()
+            || !has_header_flag (*off_request, header_flags_t::has_correlation_id)
+            || has_header_flag (*off_request, header_flags_t::has_flow_id)
+            || !off_request->flow_id.empty ()) {
+            return 214;
+        }
+
+        /* Inbound flow-field handling at level off: value validation is
+         * skipped, structural length checks stay. */
+        stream_header_t flowed;
+        flowed.kind = message_kind_t::send;
+        flowed.codec = codec_t::raw;
+        flowed.name = "diag.inbound";
+        flowed.flow_id = flow_id_codec_t::create ();
+        flowed.flow_origin = flow_origin_t::application;
+        auto flowed_bytes = header_codec_t{}.encode (flowed);
+        if (!flowed_bytes) {
+            return 215;
+        }
+        auto malformed = flowed_bytes.value ();
+        /* Corrupt one flow_id byte (flow_id is the 37-byte tail: 36 id bytes
+         * + 1 origin byte). */
+        malformed[malformed.size () - 2] = static_cast<std::uint8_t> ('Z');
+        if (header_codec_t{}.decode (malformed)
+            || !header_codec_t{}.decode (malformed, /*validate_flow=*/false)) {
+            return 216;
+        }
+        auto truncated = flowed_bytes.value ();
+        truncated.pop_back ();
+        if (header_codec_t{}.decode (truncated, /*validate_flow=*/false)) {
+            return 217;
+        }
+    }
+
     {
         zlink::stream_connector::codec_registry_t codecs;
         if (!codecs.supports (zlink::stream_connector::codec_t::raw)) {

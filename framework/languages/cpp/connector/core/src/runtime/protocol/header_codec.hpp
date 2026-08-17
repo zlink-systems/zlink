@@ -62,7 +62,11 @@ class header_codec_t
 {
   public:
     result_t<std::vector<std::uint8_t>> encode (const stream_header_t &header) const;
-    result_t<stream_header_t> decode (const std::vector<std::uint8_t> &bytes) const;
+    /* validate_flow=false (diagnostics level Off, flow-correlation §4): the
+     * flow fields keep their structural length checks but are not validated
+     * as flow values and must not be consumed as flow context. */
+    result_t<stream_header_t> decode (const std::vector<std::uint8_t> &bytes,
+                                      bool validate_flow = true) const;
 };
 
 } // namespace zlink::stream_connector::detail

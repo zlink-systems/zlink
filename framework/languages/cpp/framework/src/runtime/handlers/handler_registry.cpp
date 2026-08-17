@@ -83,21 +83,26 @@ using filter_list_t = std::vector<handler_registry_t::filter_invoker_t>;
 using filter_terminal_t = std::function<task_t<zlink::message_t> ()>;
 
 task_t<zlink::message_t>
-invoke_filter_level (const std::shared_ptr<const filter_list_t> &filters,
+invoke_filter_level (std::shared_ptr<const filter_list_t> filters,
                      std::size_t index,
                      service_provider_t *services,
                      serializer_registry_t *serializers,
                      handler_filter_context_t context,
-                     const std::shared_ptr<filter_terminal_t> &terminal);
+                     std::shared_ptr<filter_terminal_t> terminal);
 
+/* Coroutine invariant (session-reconnect-and-coroutine-lifetime doc): the
+ * shared_ptr parameters are taken by value. A filter may invoke next()
+ * without awaiting it and return; the caller's closure that owned these
+ * pointers is then destroyed while this coroutine is still suspended, so a
+ * by-reference parameter would dangle at the post-await reads below. */
 task_t<void>
-continue_filter_chain (const std::shared_ptr<filter_next_state_t> &state,
-                       const std::shared_ptr<const filter_list_t> &filters,
+continue_filter_chain (std::shared_ptr<filter_next_state_t> state,
+                       std::shared_ptr<const filter_list_t> filters,
                        std::size_t next_index,
                        service_provider_t *services,
                        serializer_registry_t *serializers,
                        handler_filter_context_t context,
-                       const std::shared_ptr<filter_terminal_t> &terminal)
+                       std::shared_ptr<filter_terminal_t> terminal)
 {
     {
         std::lock_guard lock (state->mutex);
@@ -129,12 +134,12 @@ continue_filter_chain (const std::shared_ptr<filter_next_state_t> &state,
 }
 
 task_t<zlink::message_t>
-invoke_filter_level (const std::shared_ptr<const filter_list_t> &filters,
+invoke_filter_level (std::shared_ptr<const filter_list_t> filters,
                      std::size_t index,
                      service_provider_t *services,
                      serializer_registry_t *serializers,
                      handler_filter_context_t context,
-    const std::shared_ptr<filter_terminal_t> &terminal)
+                     std::shared_ptr<filter_terminal_t> terminal)
 {
     if (index >= filters->size ()) {
         co_return co_await (*terminal) ();

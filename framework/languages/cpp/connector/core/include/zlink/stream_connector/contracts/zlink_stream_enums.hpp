@@ -34,6 +34,18 @@ enum class dispatch_mode_t
     immediate
 };
 
+/* Diagnostics recording scope (message-flow-tracing §4). `off` applies the
+ * flow-correlation §4 omission rules to connector frames: outbound frames
+ * carry no flow_id/flow_origin, inbound flow fields are not validated as flow
+ * values (structural length checks stay), and no trace-only work runs. */
+enum class diagnostics_level_t
+{
+    off,
+    errors,
+    normal,
+    detailed
+};
+
 enum class message_kind_t : std::uint8_t
 {
     send = 1,

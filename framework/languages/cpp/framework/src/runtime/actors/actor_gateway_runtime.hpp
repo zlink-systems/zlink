@@ -172,6 +172,10 @@ struct relayed_frame_t
     zlink::message_t payload;
 };
 
+/* Bound for frames parked while no relay dispatcher is configured
+ * (async-execution-policy §1.3): shares the session-relay waiter bound. */
+inline constexpr std::size_t relayed_frame_capacity = 1024;
+
 class actor_gateway_state_t
 {
   public:

@@ -827,8 +827,10 @@ frozen_record_t encode_frozen_application_record (
 // actually retained or transmitted.
 frozen_record_t summarize_frozen_application_record (
   const frozen_application_record_t &record);
+/* capture_flow=false (flow-correlation §4): embedded application payload
+ * flow pairs are skipped structurally instead of validated/materialized. */
 frozen_record_t decode_frozen_record (
-  std::span<const std::uint8_t> bytes);
+  std::span<const std::uint8_t> bytes, bool capture_flow = true);
 std::vector<std::uint8_t> encode_user_spot_create_header (
   const user_spot_create_header_t &record);
 user_spot_create_header_t decode_user_spot_create_header (
@@ -843,8 +845,10 @@ instance_spot_activation_header_t decode_instance_spot_activation_header (
   std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_instance_activation_recovery (
   const instance_activation_recovery_t &record);
+/* capture_flow=false (flow-correlation §4): the recovered application
+ * payload's flow pair is skipped structurally. */
 instance_activation_recovery_t decode_instance_activation_recovery (
-  std::span<const std::uint8_t> bytes);
+  std::span<const std::uint8_t> bytes, bool capture_flow = true);
 std::vector<std::uint8_t> encode_user_spot_close_header (
   const user_spot_close_header_t &record);
 user_spot_close_header_t decode_user_spot_close_header (

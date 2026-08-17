@@ -70,6 +70,9 @@ channel_reply_writer_t::create_error_header (std::string channel_name,
     header.error_code = error_code_name (error.kind ());
     header.error_message = error.what ();
     runtime::messaging::write_failure_origin (header, error);
+    /* zlink.origin=framework marker for framework-generated errors only
+     * (stale-route contract); application handler errors stay unmarked. */
+    runtime::messaging::write_error_origin (header, error);
     return header;
 }
 

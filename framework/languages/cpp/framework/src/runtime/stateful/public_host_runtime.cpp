@@ -470,7 +470,7 @@ std::vector<std::byte> encode_instance_ready_state (
 }
 
 std::optional<instance_ready_state_t> decode_instance_ready_state (
-  const std::vector<std::byte> &payload)
+  const std::vector<std::byte> &payload, bool capture_flow)
 {
     std::vector<std::uint8_t> bytes;
     bytes.reserve (payload.size ());
@@ -506,8 +506,11 @@ std::optional<instance_ready_state_t> decode_instance_ready_state (
             const auto size = read_u32 (bytes, offset);
             if (bytes.size () - offset < size)
                 return std::nullopt;
+            /* flow-correlation §4: at Off the persisted reply's flow pair is
+             * neither validated nor materialized (structural skip only). */
             state.reply = protocol::decode_application_payload (
-              std::span<const std::uint8_t> (bytes).subspan (offset, size));
+              std::span<const std::uint8_t> (bytes).subspan (offset, size),
+              capture_flow);
             offset += size;
         }
         if (offset != bytes.size () || state.stable_type.empty ()
@@ -784,9 +787,12 @@ task_t<zlink::submit_result_t> spot_handle_t::request_to_spot (
                   "SPOT request completion was not decoded");
               if (terminal == foundation::operation_terminal_t::completed) {
                   try {
+                      /* flow-correlation §4: reply flow pair is observation-
+                       * only — skip validation/materialization at Off. */
                       decoded = result_t<std::vector<zlink::message_t>>::success (
                         host->decode_application (
-                          protocol::decode_application_payload (payload)));
+                          protocol::decode_application_payload (
+                            payload, host->capture_flow ())));
                   }
                   catch (const protocol::service_wire_error_t &error) {
                       decoded = result_t<std::vector<zlink::message_t>>::failure (
@@ -993,6 +999,9 @@ public_host_runtime_t::public_host_runtime_t (host_options_t options) :
         throw std::invalid_argument (
           "Session relocation seal timeout must be a positive whole-millisecond duration");
     }
+    /* Thread the host's flow-capture provider (flow-correlation §4) into the
+     * relocation replay wire; the host outlives the coordinator it owns. */
+    _relocation_wire->set_flow_capture_provider ([this] { return capture_flow (); });
     const auto &descriptor = _options.mesh.descriptor;
     _objects.replace_placement_candidates (
       {stateful::placement_candidate_t{
@@ -1025,6 +1034,9 @@ void public_host_runtime_t::configure_stateful_dispatch (
     _stateful_dispatch =
       std::make_unique<stateful::raw_stateful_dispatch_t> (
         _objects, *_transport, std::move (resolver));
+    /* flow-correlation §4: the ingest path gates flow capture on the host's
+     * provider; the host outlives the dispatch it owns. */
+    _stateful_dispatch->set_flow_capture_provider ([this] { return capture_flow (); });
 }
 
 void public_host_runtime_t::configure_message_follow_handler (
@@ -1411,7 +1423,7 @@ public_host_runtime_t::begin_instance_spot_close (
              != local.lifecycle_generation ())
         return std::nullopt;
 
-    const auto ready = decode_instance_ready_state (snapshot->payload);
+    const auto ready = decode_instance_ready_state (snapshot->payload, capture_flow ());
     if (!ready || ready->stable_type != stable_type
         || ready->spot_id != spot_id
         || ready->object_generation != object_generation
@@ -1883,7 +1895,7 @@ task_t<bool> public_host_runtime_t::activate_instance_spot_remote (
     co_return co_await _transport->request_instance_spot_activation (
       target_node.to_bytes (), std::move (request), std::move (metadata),
       std::move (application_payload), timeout,
-      [completion = std::move (completion)] (
+      [completion = std::move (completion), capture = capture_flow ()] (
         foundation::operation_terminal_t terminal,
         std::vector<std::uint8_t> packed) mutable {
           protocol::reply_header_t reply{};
@@ -1895,7 +1907,8 @@ task_t<bool> public_host_runtime_t::activate_instance_spot_remote (
                   reply = protocol::decode_reply_header (parts.front ());
                   if (parts.size () == 2)
                       application_reply =
-                        protocol::decode_application_payload (parts[1]);
+                        protocol::decode_application_payload (parts[1],
+                                                              capture);
               }
               catch (const protocol::service_wire_error_t &) {
                   //  Spec 32-framework-error-model:91-92 — a reply that can't
@@ -2029,7 +2042,7 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
                 continue;
             }
             const auto state = decode_instance_ready_state (
-              entry.snapshot.payload);
+              entry.snapshot.payload, capture_flow ());
             if (!state || state->recovery_reference.empty ()
                 || entry.snapshot.allocation.object_kind
                      != placement_object_kind_t::instance_spot
@@ -2051,7 +2064,8 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
             protocol::instance_activation_recovery_t recovery;
             try {
                 recovery =
-                  protocol::decode_instance_activation_recovery (*payload);
+                  protocol::decode_instance_activation_recovery (*payload,
+                                                                 capture_flow ());
             }
             catch (const protocol::service_wire_error_t &) {
                 continue;
@@ -2132,7 +2146,7 @@ task_t<bool> public_host_runtime_t::create_user_spot_remote (
           "User Spot create completion is required");
     co_return co_await _transport->request_user_spot_create (
       target_node.to_bytes (), std::move (request), timeout,
-      [completion = std::move (completion)] (
+      [completion = std::move (completion), capture = capture_flow ()] (
         foundation::operation_terminal_t terminal,
         std::vector<std::uint8_t> packed) mutable {
           protocol::user_spot_create_reply_t reply;
@@ -2148,7 +2162,8 @@ task_t<bool> public_host_runtime_t::create_user_spot_remote (
                       parts.front ());
                   if (parts.size () == 2)
                       application_reply =
-                        protocol::decode_application_payload (parts[1]);
+                        protocol::decode_application_payload (parts[1],
+                                                              capture);
               }
               catch (const protocol::service_wire_error_t &) {
                   //  Spec 32-framework-error-model:91-92 — a reply that can't
@@ -2219,7 +2234,7 @@ task_t<bool> public_host_runtime_t::create_actor_remote (
     }
     co_return co_await _transport->request_actor_create (
       target_node.to_bytes (), std::move (request), timeout,
-      [completion = std::move (completion)] (
+      [completion = std::move (completion), capture = capture_flow ()] (
         foundation::operation_terminal_t terminal,
         std::vector<std::uint8_t> packed) mutable {
           protocol::actor_create_reply_t reply;
@@ -2235,7 +2250,7 @@ task_t<bool> public_host_runtime_t::create_actor_remote (
                   if (parts.size () == 2)
                       application_reply =
                         protocol::decode_application_payload (
-                          parts[1]);
+                          parts[1], capture);
               }
               catch (const protocol::service_wire_error_t &) {
                   //  Spec 32-framework-error-model:91-92 — a reply that can't
@@ -4305,7 +4320,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     }
                     const auto application =
                       protocol::decode_application_payload (
-                        mailbox_record.parts[application_index]);
+                        mailbox_record.parts[application_index],
+                        capture_flow ());
                     const auto reply_terminal = [&] (
                       instance_spot_activation_result_t result) {
                         (void) _transport
@@ -4358,7 +4374,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                   == placement_allocation_state_t::active) {
                                 auto ready_state =
                                   decode_instance_ready_state (
-                                    snapshot->payload);
+                                    snapshot->payload, capture_flow ());
                                 if (!ready_state) {
                                     if (const auto closing =
                                           decode_instance_closing_state (
@@ -5552,7 +5568,7 @@ bool public_host_runtime_t::dispatch_bound_session_send (
     if (!operations.capture_send && !operations.send)
         return false;
     const auto application = protocol::decode_application_payload (
-      mailbox_record.parts.back ());
+      mailbox_record.parts.back (), capture_flow ());
     auto parts = decode_application (application);
     const auto target_node = zlink::routing_id_t::from (
       record.actor.target_node_routing_id);
@@ -6033,7 +6049,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
                 }
                 const auto payload =
                   protocol::decode_application_payload (
-                    mailbox_record.parts[1]);
+                    mailbox_record.parts[1], capture_flow ());
                 auto source = std::string ("-");
                 if (!mailbox_record.source_routing_id.empty ()) {
                     source = zlink::routing_id_t::from (
@@ -6758,7 +6774,8 @@ void public_host_runtime_t::complete_operation (
         if (record.terminal_result == 0) {
             try {
                 parts = decode_application (
-                  protocol::decode_application_payload (payload));
+                  protocol::decode_application_payload (payload,
+                                                        capture_flow ()));
             }
             catch (const protocol::service_wire_error_t &) {
                 record.terminal_result = static_cast<int> (

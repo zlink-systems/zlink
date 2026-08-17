@@ -105,7 +105,11 @@ void trace_connector_write (const connector_state_t &state,
                             const char *stage,
                             std::string_view detail = {})
 {
-    if (!stream_trace_enabled ()) {
+    /* Debug-only stderr trace, opt-in via ZLINK_CPP_STREAM_TRACE. Level Off
+     * additionally suppresses it (message-flow-tracing §4.1: no trace-only
+     * work at Off). */
+    if (!stream_trace_enabled ()
+        || state.options.diagnostics_level == diagnostics_level_t::off) {
         return;
     }
     static std::mutex trace_mutex;
@@ -393,11 +397,19 @@ result_t<std::vector<std::uint8_t>> encode_packet_frame (connector_state_t &stat
     header_codec_t header_codec;
     stream_header_t header_data{kind,        packet.codec, flags,
                                 request_seq, packet.name,  packet.metadata};
-    if (kind != message_kind_t::control) {
+    if (kind == message_kind_t::request) {
+        /* correlation_id links a request to its terminal reply and is protocol
+         * information kept at every diagnostics level (flow-correlation §4).
+         * One-way sends carry no reply, so they never carry a correlation_id
+         * (flow-correlation §2). */
         header_data.correlation_id = next_correlation_id ();
+    }
+    if (kind != message_kind_t::control
+        && state.options.diagnostics_level != diagnostics_level_t::off) {
         /* Client-originated flows are created without any configuration
          * (flow-correlation §2.1): the connector is the first hop, so every
-         * outbound send/request without an id starts a new flow. */
+         * outbound send/request without an id starts a new flow. Level Off
+         * omits both flow fields from the frame (flow-correlation §4). */
         header_data.flow_id = flow_id_codec_t::create ();
         header_data.flow_origin = flow_origin_t::application;
     }
@@ -484,7 +496,9 @@ result_t<inbound_frame_t> read_inbound_frame (std::shared_ptr<connector_state_t>
                                                      : "stream connector payload read failed");
     }
     header_codec_t header_codec;
-    auto decoded = header_codec.decode (header_bytes.value ());
+    auto decoded =
+      header_codec.decode (header_bytes.value (),
+                           state->options.diagnostics_level != diagnostics_level_t::off);
     if (!decoded) {
         return result_t<inbound_frame_t>::failure (decoded.error_code (),
                                                    decoded.error ()->message);
@@ -585,7 +599,8 @@ std::optional<result_t<inbound_frame_t>> try_take_inbound_frame (connector_state
                                   + static_cast<std::ptrdiff_t> (frame_size));
 
     header_codec_t header_codec;
-    auto decoded = header_codec.decode (header_bytes);
+    auto decoded = header_codec.decode (
+      header_bytes, state.options.diagnostics_level != diagnostics_level_t::off);
     if (!decoded) {
         return result_t<inbound_frame_t>::failure (decoded.error_code (),
                                                    decoded.error ()->message);

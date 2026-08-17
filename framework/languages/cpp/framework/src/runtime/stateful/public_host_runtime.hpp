@@ -657,6 +657,21 @@ class public_host_runtime_t :
 
     void start ();
     void close () noexcept;
+
+    /* Flow-capture provider (flow-correlation §4): gates whether the host's
+     * internal decode paths validate/materialize wire flow fields as flow
+     * values. Unset keeps capture on (callers without diagnostics wiring).
+     * Set once before start(); reads race-free afterwards. */
+    void set_flow_capture_provider (std::function<bool ()> provider) noexcept
+    {
+        _flow_capture = std::move (provider);
+    }
+
+    bool capture_flow () const
+    {
+        return !_flow_capture || _flow_capture ();
+    }
+
     bool connect_peer (const std::string &endpoint,
                        std::optional<zlink::routing_id_t> expected = std::nullopt,
                        std::uint64_t expected_lifecycle_generation = 0,
@@ -955,6 +970,7 @@ class public_host_runtime_t :
     task_t<void> retry_bound_session_replacements ();
 
     host_options_t _options;
+    std::function<bool ()> _flow_capture;
     std::string _entry_spot_id;
     std::shared_ptr<mesh::raw_mesh_node_owner_t> _transport;
     std::unique_ptr<stateful::raw_relocation_replay_coordinator_t>

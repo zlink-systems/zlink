@@ -5,6 +5,7 @@
 
 #include <zlink/framework/contracts/errors/error.hpp>
 
+#include <map>
 #include <string>
 #include <string_view>
 
@@ -51,6 +52,27 @@ inline void write_failure_origin (
     if (!name.empty ())
         header.metadata.insert_or_assign (
           std::string (failure_origin_metadata_key), std::string (name));
+}
+
+/* Framework-origin error marker: attached only to error replies the
+ * framework itself produced (route resolution failure, sealed admission,
+ * dispatch rejection). Application handler errors never carry it. Stale-route
+ * judgement on the caller side requires this marker so an application error
+ * kind cannot be mistaken for a stale-route control signal. */
+inline constexpr std::string_view framework_origin_metadata_key = "zlink.origin";
+inline constexpr std::string_view framework_origin_metadata_value = "framework";
+
+inline void write_error_origin (envelope_header_t &header, const framework_exception_t &error)
+{
+    if (framework::detail::error_origin (error) == framework::detail::error_origin_t::framework)
+        header.metadata.insert_or_assign (std::string (framework_origin_metadata_key),
+                                          std::string (framework_origin_metadata_value));
+}
+
+inline bool has_framework_origin (const std::map<std::string, std::string> &metadata)
+{
+    const auto found = metadata.find (std::string (framework_origin_metadata_key));
+    return found != metadata.end () && found->second == framework_origin_metadata_value;
 }
 
 inline framework_exception_t restore_failure_origin (
