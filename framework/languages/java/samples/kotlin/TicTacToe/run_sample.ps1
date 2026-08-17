@@ -224,7 +224,7 @@ try {
         Wait-LogContains $PlayLogs "actor: LeaveGameMsg completed. actor=$ActorId"
         Wait-LogContains $PlayLogs "tictactoe actor destroy completed actor=$ActorId"
     }
-    if (-not (Select-String -Path (Join-Path $LogDir "*.log") -Pattern "message flow" -Quiet -ErrorAction SilentlyContinue)) {
+    if (-not (Select-String -Path (Join-Path $LogDir "*.log") -Pattern "zlink flow: event_id=zlink.message_flow" -SimpleMatch -Quiet -ErrorAction SilentlyContinue)) {
         throw "Message flow evidence was not found."
     }
     Write-Host "PASS TicTacToe.Kotlin"

@@ -9,7 +9,7 @@ final class ZLinkTraceFormat {
 
     static String flowLine(ZLinkMessageFlowEvent flow, Long size) {
         StringBuilder builder = new StringBuilder("zlink flow:");
-        append(builder, "event", flow.eventId().traceName());
+        append(builder, "event_id", flow.eventId().traceName());
         append(builder, "phase", token(flow.phase()));
         append(builder, "surface", flow.surface().traceName());
         append(builder, "kind", flow.messageKind().traceName());

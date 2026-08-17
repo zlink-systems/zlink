@@ -160,7 +160,7 @@ try {
     if (-not (Select-String -Path $clientLog -Pattern "stream-inbound sample=Bingo" -Quiet)) {
         throw "Client inbound stream evidence was not found."
     }
-    if (-not (Select-String -Path (Join-Path $env:BINGO_LOG_DIR "*.log") -Pattern "message flow" -Quiet)) {
+    if (-not (Select-String -Path (Join-Path $env:BINGO_LOG_DIR "*.log") -Pattern "zlink flow: event_id=zlink.message_flow" -SimpleMatch -Quiet)) {
         throw "Message flow evidence was not found."
     }
     $Status = 0

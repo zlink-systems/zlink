@@ -206,7 +206,7 @@ wait_framework_ready_logs "${log_dir}" 1
 grep -q "bingo=completed" "${log_dir}/client.log"
 grep -q "stream-inbound sample=Bingo" "${log_dir}/client.log"
 grep -Eq "stream-inbound sample=Bingo .* name=.*Notify" "${log_dir}/client.log"
-grep -Eq "zlink flow:" "${log_dir}"/{session,api,play}-*.log
+grep -Eq "zlink flow: event_id=zlink\.message_flow" "${log_dir}"/{session,api,play}-*.log
 grep -Eq "zlink metric .*name=zlink\.stream\.connections\.active" "${log_dir}"/session-*.log
 grep -Eq "zlink metric .*name=zlink\.spot\.count" "${log_dir}"/play-*.log
 

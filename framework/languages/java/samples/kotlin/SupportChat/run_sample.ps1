@@ -174,7 +174,7 @@ try {
     Wait-Log "status=Active" (Join-Path $LogDir "support.log")
     Wait-Log "status=WaitingForClose" (Join-Path $LogDir "support.log")
     Wait-Log "status=Closed" (Join-Path $LogDir "support.log")
-    if (-not (Select-String -Path (Join-Path $SampleLogDir "*.log") -Pattern "message flow" -Quiet)) {
+    if (-not (Select-String -Path (Join-Path $SampleLogDir "*.log") -Pattern "zlink flow: event_id=zlink.message_flow" -SimpleMatch -Quiet)) {
         throw "SupportChat message-flow evidence was not found."
     }
     Write-Host "supportchat-server-evidence=completed"

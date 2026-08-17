@@ -212,13 +212,13 @@ class ZLinkMessageFlowTracerTest {
             null, null, null, null, null, null, null, null, 17L);
 
         String line = ZLinkTraceFormat.flowLine(event, 42L);
-        assertTrue(line.startsWith("zlink flow: event=zlink.message_flow"));
+        assertTrue(line.startsWith("zlink flow: event_id=zlink.message_flow"));
         assertTrue(line.contains(" phase=completed"));
         assertTrue(line.contains(" surface=channel"));
         assertTrue(line.contains(" kind=send"));
         assertTrue(line.contains(" outcome=succeeded"));
         Set<String> expected = Set.of(
-            "event", "phase", "surface", "kind", "mesh", "channel",
+            "event_id", "phase", "surface", "kind", "mesh", "channel",
             "channel_route", "source_rid", "target_rid", "server_rid", "packet",
             "topic", "spot", "instance_type", "activation_state", "actor", "corr",
             "outcome", "size");
@@ -235,7 +235,7 @@ class ZLinkMessageFlowTracerTest {
             ZLinkDispatchErrorAction.DROP,
             null, null);
         String errorLine = ZLinkTraceFormat.flowLine(dispatchError, null);
-        assertTrue(errorLine.contains("event=zlink.dispatch_error"));
+        assertTrue(errorLine.contains("event_id=zlink.dispatch_error"));
         assertTrue(errorLine.contains("surface=classic_fanout"));
         assertTrue(errorLine.contains("reason=no_handler"));
         assertTrue(errorLine.contains("outcome=failed"));

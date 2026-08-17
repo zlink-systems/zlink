@@ -224,7 +224,7 @@ try {
     if (-not (Select-String -Path $clientLog -Pattern "shoppingmall=completed" -Quiet)) {
         throw "Client completion marker was not found."
     }
-    if (-not (Select-String -Path (Join-Path $FlowLogDir "*.log") -Pattern "message flow" -Quiet)) {
+    if (-not (Select-String -Path (Join-Path $FlowLogDir "*.log") -Pattern "zlink flow: event_id=zlink.message_flow" -SimpleMatch -Quiet)) {
         throw "Message flow evidence was not found."
     }
     Write-Host "shoppingmall full client/server self-check completed"

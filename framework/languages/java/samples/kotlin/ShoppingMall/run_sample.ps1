@@ -172,7 +172,7 @@ try {
     Assert-LogContains -Path (Join-Path $LogDir "workflow-a.log") -Pattern "shoppingmall order: started"
     Assert-LogContains -Path (Join-Path $LogDir "workflow-b.log") -Pattern "shoppingmall order: started"
     Assert-LogContains -Path (Join-Path $LogDir "api-a.log") -Pattern "shoppingmall evidence:"
-    if (-not (Select-String -Path (Join-Path $ShoppingMallLogDir "*.log") -Pattern "message flow" -SimpleMatch -Quiet -ErrorAction SilentlyContinue)) {
+    if (-not (Select-String -Path (Join-Path $ShoppingMallLogDir "*.log") -Pattern "zlink flow: event_id=zlink.message_flow" -SimpleMatch -Quiet -ErrorAction SilentlyContinue)) {
         throw "Expected 'message flow' in $ShoppingMallLogDir"
     }
     Write-Output "shoppingmall-server-evidence=completed"
