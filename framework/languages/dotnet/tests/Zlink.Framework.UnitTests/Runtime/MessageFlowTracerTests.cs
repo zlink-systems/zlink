@@ -124,7 +124,7 @@ public sealed class MessageFlowTracerTests
 
         Assert.StartsWith("zlink flow: ", logger.Message);
         Assert.Equal(
-            ["event", "phase", "surface", "kind", "mesh", "channel", "channel_route",
+            ["event_id", "phase", "surface", "kind", "mesh", "channel", "channel_route",
                 "source_rid", "target_rid", "packet", "outcome"],
             logger.Fields.Select(field => field.Key));
     }
