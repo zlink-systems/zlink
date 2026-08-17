@@ -382,24 +382,26 @@ int bind_or_get_completion_can_reenter_same_manager ()
       });
     const auto actor = test_actor_ref (
       "actor-node", "player", "bind-or-get-reentrant-actor", 1);
-    std::atomic_bool continuation_ran{false};
-    auto reentrant = [&] () -> task_t<void> {
+    auto continuation_ran = std::make_shared<std::atomic_bool> (false);
+    auto reentrant = [] (session_actor_manager_t manager, actor_ref_t actor,
+                         std::shared_ptr<std::atomic_bool> continuation_ran)
+      -> task_t<void> {
         (void) co_await manager.bind_or_get (actor).submit ();
         if (!manager.find ("bind-or-get-reentrant-actor")) {
             throw std::runtime_error (
               "bind_or_get continuation could not find its Actor");
         }
         (void) co_await manager.bind_or_get (actor).submit ();
-        continuation_ran.store (true, std::memory_order_release);
+        continuation_ran->store (true, std::memory_order_release);
         co_return;
-    } ();
+    } (manager, actor, continuation_ran);
 
     if (native_binds.load () != 1)
         return 1;
     native_completion->complete (result_t<void>::success ());
     const auto &terminal = reentrant.result ();
     if (!terminal
-        || !continuation_ran.load (std::memory_order_acquire)) {
+        || !continuation_ran->load (std::memory_order_acquire)) {
         return 2;
     }
     return native_binds.load () == 1 ? 0 : 3;

@@ -12,6 +12,7 @@
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/diagnostics/dispatch_error_reporter.hpp"
 
 #include <zlink/Contracts/Eventing/poller.hpp>
 #include <zlink/Contracts/Core/context.hpp>
@@ -19,7 +20,6 @@
 #include <zlink/Contracts/Eventing/events.hpp>
 #include <zlink/Contracts/Eventing/monitor.hpp>
 #include <zlink/Contracts/Eventing/poll_event.hpp>
-#include <zlink/Contracts/Eventing/poller.hpp>
 #include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/Contracts/Messaging/operation_contracts.hpp>
 #include <zlink/Contracts/Messaging/received.hpp>
@@ -32,7 +32,6 @@
 #include <algorithm>
 #include <chrono>
 #include <deque>
-#include <iostream>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -268,12 +267,24 @@ class channel_host_service_t::server_loop_t
             try {
                 reply (std::move (completed));
             }
-            catch (const std::exception &error) {
-                std::cerr << "zlink framework channel late reply ignored: " << error.what ()
-                          << '\n';
-            }
             catch (...) {
-                std::cerr << "zlink framework channel late reply ignored\n";
+                const auto error = std::current_exception ();
+                detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ())
+                  .report_lazy ([&] {
+                      return message_dispatch_error_event_t{
+                        dispatch_error_surface_t::channel,
+                        dispatch_message_kind_t::response,
+                        dispatch_error_reason_t::unexpected_reply,
+                        dispatch_error_action_t::drop,
+                        std::nullopt,
+                        _channel_name,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        error};
+                  });
             }
         }
     }

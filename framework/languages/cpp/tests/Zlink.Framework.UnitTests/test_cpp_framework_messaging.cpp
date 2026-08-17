@@ -23,11 +23,8 @@
 #include <chrono>
 #include <atomic>
 #include <condition_variable>
-#include <iostream>
 #include <mutex>
-#include <streambuf>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -66,71 +63,6 @@ class work_latch_t
     std::mutex _mutex;
     std::condition_variable _changed;
     std::size_t _remaining;
-};
-
-class synchronized_log_buffer_t final : public std::streambuf
-{
-  public:
-    bool wait_for (std::string_view expected,
-                   std::chrono::milliseconds timeout)
-    {
-        std::unique_lock lock (_mutex);
-        return _changed.wait_for (lock, timeout, [&] {
-            return _text.find (expected) != std::string::npos;
-        });
-    }
-
-  protected:
-    std::streamsize xsputn (const char *text,
-                            std::streamsize count) override
-    {
-        if (count <= 0)
-            return count;
-        {
-            std::lock_guard lock (_mutex);
-            _text.append (text, static_cast<std::size_t> (count));
-        }
-        _changed.notify_all ();
-        return count;
-    }
-
-    int_type overflow (int_type character) override
-    {
-        if (traits_type::eq_int_type (character, traits_type::eof ()))
-            return traits_type::not_eof (character);
-        const auto value = traits_type::to_char_type (character);
-        {
-            std::lock_guard lock (_mutex);
-            _text.push_back (value);
-        }
-        _changed.notify_all ();
-        return character;
-    }
-
-  private:
-    std::mutex _mutex;
-    std::condition_variable _changed;
-    std::string _text;
-};
-
-class scoped_clog_capture_t
-{
-  public:
-    scoped_clog_capture_t () : _previous (std::clog.rdbuf (&_buffer)) {}
-    ~scoped_clog_capture_t () { std::clog.rdbuf (_previous); }
-
-    bool wait_for (std::string_view expected,
-                   std::chrono::milliseconds timeout)
-    {
-        return _buffer.wait_for (expected, timeout);
-    }
-
-    scoped_clog_capture_t (const scoped_clog_capture_t &) = delete;
-    scoped_clog_capture_t &operator= (const scoped_clog_capture_t &) = delete;
-
-  private:
-    synchronized_log_buffer_t _buffer;
-    std::streambuf *_previous;
 };
 
 struct envelope_payload_t
@@ -738,22 +670,15 @@ int main ()
             return 80;
         }
 
-        {
-            scoped_clog_capture_t observed_failure;
-            zlink::framework::publish_call_t failed_after_completion (
-              [] (const zlink::framework::publish_call_t::metadata_map_t &) {
-                  return zlink::framework::result_t<void>::failure (
-                    zlink::framework::framework_error_kind_t::capacity_exceeded,
-                    "logical multicast observation probe");
-              });
-            failed_after_completion.submit ().result ().value ();
-            if (!observed_failure.wait_for (
-                  "zlink logical multicast failed after caller completion: "
-                  "logical multicast observation probe\n",
-                  std::chrono::seconds (2))) {
-                return 81;
-            }
-        }
+        zlink::framework::publish_call_t failed_after_completion (
+          [] (const zlink::framework::publish_call_t::metadata_map_t &) {
+              return zlink::framework::result_t<void>::failure (
+                zlink::framework::framework_error_kind_t::capacity_exceeded,
+                "logical multicast observation probe");
+          });
+        // Dequeue is already terminal for the caller. Application-bound paths
+        // report the later failure through their structured observer.
+        failed_after_completion.submit ().result ().value ();
 
         /* Logical Multicast uses one direct handoff after its worker slots.
          * Test-owned work latches prove that every slot is occupied before the

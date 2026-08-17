@@ -197,6 +197,7 @@ class actor_gateway_state_t
     {
         std::function<task_t<void> ()> dispatch;
         std::shared_ptr<task_completion_source_t<void>> completion;
+        std::string packet_name;
     };
 
     struct pending_bound_session_send_t

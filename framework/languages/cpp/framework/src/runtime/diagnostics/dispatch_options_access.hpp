@@ -97,6 +97,11 @@ class dispatch_options_access_t
             options._message_flow_observer (&event);
     }
 
+    static bool has_observer (const dispatch_options_t &options) noexcept
+    {
+        return static_cast<bool> (options._message_flow_observer);
+    }
+
     static void set_dispatch_error_observer_for_tests (
       dispatch_options_t &options,
       std::function<void (const message_dispatch_error_event_t &)> observer)
@@ -114,6 +119,12 @@ class dispatch_options_access_t
     {
         if (options._dispatch_error_observer)
             options._dispatch_error_observer (&event);
+    }
+
+    static bool has_dispatch_error_observer (
+      const dispatch_options_t &options) noexcept
+    {
+        return static_cast<bool> (options._dispatch_error_observer);
     }
 };
 

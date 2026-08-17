@@ -90,8 +90,8 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
 
     auto body = codec.decode_body (parts);
     if (!body) {
-        dispatch_error_reporter_t (_runtime.dispatch_options ())
-          .report (message_dispatch_error_event_t{
+        dispatch_error_reporter_t (_runtime.dispatch_options_ref ())
+          .report_lazy ([&] { return message_dispatch_error_event_t{
             dispatch_error_surface_t::channel, inbound_kind,
             dispatch_error_reason_t::payload_decode_failed,
             header.value ().kind == runtime::messaging::message_kind_t::request
@@ -99,7 +99,7 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
               : dispatch_error_action_t::drop,
             header.value ().message_name, channel_name, header.value ().topic, std::nullopt,
             std::nullopt, std::nullopt, header.value ().correlation_id,
-            body.error () ? std::make_exception_ptr (*body.error ()) : std::exception_ptr{}});
+            body.error () ? std::make_exception_ptr (*body.error ()) : std::exception_ptr{}}; });
         if (header.value ().kind == runtime::messaging::message_kind_t::request) {
             channel_reply_writer_t writer;
             framework_exception_t error (body.error_kind (), body.error ()
@@ -124,14 +124,14 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
             framework_exception_t error (reply.error_kind (), reply.error ()
                                                                 ? reply.error ()->what ()
                                                                 : "channel request failed");
-            dispatch_error_reporter_t (_runtime.dispatch_options ())
-              .report (message_dispatch_error_event_t{
+            dispatch_error_reporter_t (_runtime.dispatch_options_ref ())
+              .report_lazy ([&] { return message_dispatch_error_event_t{
                 dispatch_error_surface_t::channel, dispatch_message_kind_t::request,
                 dispatch_reason_from_error (reply.error ()),
                 dispatch_error_action_t::reply_error, header.value ().message_name, channel_name,
                 header.value ().topic, std::nullopt, std::nullopt, std::nullopt,
                 header.value ().correlation_id,
-                reply.error () ? std::make_exception_ptr (*reply.error ()) : std::exception_ptr{}});
+                reply.error () ? std::make_exception_ptr (*reply.error ()) : std::exception_ptr{}}; });
             return result_t<runtime::messaging::message_parts_t>::success (
               writer.reply_raw_envelope (
                 writer.create_error_header (std::move (channel_name), header.value (), error),
@@ -164,18 +164,16 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
           make_inbound_context (channel_name, header.value (),
                                 before_application_handler));
         if (!result) {
-            dispatch_error_reporter_t (_runtime.dispatch_options ())
-              .report (message_dispatch_error_event_t{
+            dispatch_error_reporter_t (_runtime.dispatch_options_ref ())
+              .report_lazy ([&] { return message_dispatch_error_event_t{
                 dispatch_error_surface_t::channel, inbound_kind,
                 dispatch_reason_from_error (result.error ()), dispatch_error_action_t::drop,
                 header.value ().message_name, channel_name, header.value ().topic, std::nullopt,
                 std::nullopt, std::nullopt, header.value ().correlation_id,
                 result.error () ? std::make_exception_ptr (*result.error ())
-                                : std::exception_ptr{}});
+                                : std::exception_ptr{}}; });
             return result_t<runtime::messaging::message_parts_t>::success (
               runtime::messaging::message_parts_t{});
-        }
-        if (inbound_kind == dispatch_message_kind_t::publish) {
         }
         if (inbound_kind != dispatch_message_kind_t::publish) {
             flow.trace (message_flow_outcome_t::dispatched, [&] {

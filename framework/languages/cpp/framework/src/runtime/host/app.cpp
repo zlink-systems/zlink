@@ -1036,7 +1036,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
         configure (options);
     }
     // Route message-flow records through the application's standard logging
-    // provider. With no configured sink the diagnostics runtime uses std::clog.
+    // provider. With no configured sink diagnostics remain silent.
     // Install the shared, runtime-mutable message-flow mode so set_message_flow_mode
     // can flip tracing on/off live. Seeded from the configured mode; shared across
     // all surfaces because dispatch options copy the shared_ptr.

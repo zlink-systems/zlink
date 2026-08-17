@@ -46,7 +46,7 @@ bool actor_types_compatible (const actor_ref_t &left, const actor_ref_t &right) 
 void trace_detached_bound_session_send_failure (
   const std::shared_ptr<detail::actor_gateway_state_t> &state,
   const std::string &actor_id,
-  std::string result)
+  std::string_view result)
 {
     detail::message_flow_tracer_t (state->dispatch)
       .trace (message_flow_outcome_t::dropped, [&] {
@@ -57,7 +57,7 @@ void trace_detached_bound_session_send_failure (
             std::string ("bound_session_push")};
           event.actor_id = actor_id;
           event.detail_stage = "detached_delivery";
-          event.detail_result = std::move (result);
+          event.detail_result = std::string (result);
           event.reason = message_flow_reason_t::target_closed;
           return event;
       });
@@ -66,8 +66,8 @@ void trace_detached_bound_session_send_failure (
 void trace_detached_bound_session_send_stage (
   const std::shared_ptr<detail::actor_gateway_state_t> &state,
   const std::string &actor_id,
-  std::string stage,
-  std::string result)
+  std::string_view stage,
+  std::string_view result)
 {
     const detail::message_flow_tracer_t tracer (state->dispatch);
     tracer.trace (message_flow_log_mode_t::detailed,
@@ -78,9 +78,9 @@ void trace_detached_bound_session_send_stage (
           dispatch_message_kind_t::send,
           std::string ("bound_session_push")};
         event.actor_id = actor_id;
-        event.detail_stage = std::move (stage);
+        event.detail_stage = std::string (stage);
         if (!result.empty ())
-            event.detail_result = std::move (result);
+            event.detail_result = std::string (result);
         return event;
     });
 }
@@ -196,17 +196,70 @@ void drain_session_relay (
           *dispatched,
           [state, actor_id, pending = std::move (pending), dispatched] (
             const result_t<void> &result) mutable {
+              if (!result) {
+                  detail::dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
+                      return message_dispatch_error_event_t{
+                        .surface = dispatch_error_surface_t::spot_actor,
+                        .message_kind = dispatch_message_kind_t::actor_send,
+                        .reason = detail::dispatch_reason_from_error (result.error ()),
+                        .action = dispatch_error_action_t::drop,
+                        .packet_name = pending.packet_name,
+                        .actor_id = actor_id,
+                        .exception = result.error ()
+                          ? std::make_exception_ptr (*result.error ())
+                          : std::exception_ptr{}};
+                  });
+              }
               pending.completion->complete (result);
               drain_session_relay (state, actor_id);
           });
     }
     catch (const framework_exception_t &error) {
+        detail::dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
+            return message_dispatch_error_event_t{
+              .surface = dispatch_error_surface_t::spot_actor,
+              .message_kind = dispatch_message_kind_t::actor_send,
+              .reason = detail::dispatch_reason_from_error (&error),
+              .action = dispatch_error_action_t::drop,
+              .packet_name = pending.packet_name,
+              .actor_id = actor_id,
+              .exception = std::make_exception_ptr (error)};
+        });
         pending.completion->complete (detail::result_access_t::failure<void> (error));
         drain_session_relay (state, actor_id);
     }
     catch (const std::exception &error) {
+        const framework_exception_t failure (
+          framework_error_kind_t::internal_failure, error.what ());
+        detail::dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
+            return message_dispatch_error_event_t{
+              .surface = dispatch_error_surface_t::spot_actor,
+              .message_kind = dispatch_message_kind_t::actor_send,
+              .reason = dispatch_error_reason_t::handler_exception,
+              .action = dispatch_error_action_t::drop,
+              .packet_name = pending.packet_name,
+              .actor_id = actor_id,
+              .exception = std::make_exception_ptr (failure)};
+        });
         pending.completion->complete (result_t<void>::failure (
           framework_error_kind_t::internal_failure, error.what ()));
+        drain_session_relay (state, actor_id);
+    }
+    catch (...) {
+        const auto exception = std::current_exception ();
+        detail::dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
+            return message_dispatch_error_event_t{
+              .surface = dispatch_error_surface_t::spot_actor,
+              .message_kind = dispatch_message_kind_t::actor_send,
+              .reason = dispatch_error_reason_t::handler_exception,
+              .action = dispatch_error_action_t::drop,
+              .packet_name = pending.packet_name,
+              .actor_id = actor_id,
+              .exception = exception};
+        });
+        pending.completion->complete (result_t<void>::failure (
+          framework_error_kind_t::internal_failure,
+          "actor session relay threw a non-standard exception"));
         drain_session_relay (state, actor_id);
     }
 }
@@ -214,6 +267,7 @@ void drain_session_relay (
 task_t<void> enqueue_session_relay (
   const std::shared_ptr<detail::actor_gateway_state_t> &state,
   std::string actor_id,
+  std::string packet_name,
   std::function<task_t<void> ()> dispatch)
 {
     auto completion =
@@ -223,7 +277,7 @@ task_t<void> enqueue_session_relay (
     {
         const std::lock_guard lock (state->mutex);
         state->pending_session_relays[actor_id].push_back (
-          {std::move (dispatch), completion});
+          {std::move (dispatch), completion, std::move (packet_name)});
         start_drain = state->active_session_relays.insert (actor_id).second;
     }
     if (start_drain)
@@ -248,14 +302,14 @@ task_t<zlink::message_t> complete_session_actor_relay_request (
           framework_error_kind_t::protocol_error,
           "actor relay request has no reply");
         detail::dispatch_error_reporter_t (state->dispatch)
-          .report (message_dispatch_error_event_t{
+          .report_lazy ([&] { return message_dispatch_error_event_t{
             dispatch_error_surface_t::spot_actor,
             dispatch_message_kind_t::actor_request,
             dispatch_error_reason_t::reply_path_missing,
             dispatch_error_action_t::fail_caller, {}, std::nullopt,
             std::nullopt, std::nullopt,
             std::string (actor.actor_id ().value ()), std::nullopt,
-            std::nullopt, std::make_exception_ptr (missing_reply)});
+            std::nullopt, std::make_exception_ptr (missing_reply)}; });
         throw missing_reply;
     }
     co_return std::move (*dispatched);
@@ -907,9 +961,10 @@ task_t<void> session_actor_t::relay_internal (detail::stream_header_t header,
     }
 
     const auto actor_id = std::string (_ref.actor_id ().value ());
+    const auto packet_name = std::string (relay_header.packet_name ());
     auto actor_context = std::make_shared<actor_context_t> (context ());
     return enqueue_session_relay (
-      _state, actor_id,
+      _state, actor_id, packet_name,
       [dispatcher = std::move (dispatcher), actor = _ref,
        actor_context = std::move (actor_context), relay_header = std::move (relay_header),
        payload, relay_source = std::move (relay_source)] () mutable -> task_t<void> {

@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <exception>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -21,17 +22,20 @@ namespace zlink::framework::detail
 class dispatch_error_reporter_t
 {
   public:
-    explicit dispatch_error_reporter_t (dispatch_options_t options) : _options (std::move (options))
+    explicit dispatch_error_reporter_t (const dispatch_options_t &options) : _options (&options)
     {
     }
 
     void report (message_dispatch_error_event_t event) const noexcept
     {
         const auto effective_mode =
-          dispatch_options_access_t::effective_message_flow (_options);
+          dispatch_options_access_t::effective_message_flow (*_options);
         if (effective_mode == message_flow_log_mode_t::off) {
             return;
         }
+        if (!dispatch_options_access_t::logger (*_options)
+            && !dispatch_options_access_t::has_dispatch_error_observer (*_options))
+            return;
         reported_count ().fetch_add (1, std::memory_order_relaxed);
         if (event.flow_id.has_value () != event.flow_origin.has_value ()) {
             event.flow_id.reset ();
@@ -45,9 +49,26 @@ class dispatch_error_reporter_t
                 }
             }
         }
-        log_default (event);
+        if (dispatch_options_access_t::logger (*_options))
+            log_default (event);
         try {
-            dispatch_options_access_t::observe_dispatch_error (_options, event);
+            dispatch_options_access_t::observe_dispatch_error (*_options, event);
+        }
+        catch (...) {
+            (void) observer_failures ();
+        }
+    }
+
+    template <typename Fn>
+    void report_lazy (Fn &&build_event) const noexcept
+    {
+        if (dispatch_options_access_t::effective_message_flow (*_options)
+              == message_flow_log_mode_t::off
+            || (!dispatch_options_access_t::logger (*_options)
+                && !dispatch_options_access_t::has_dispatch_error_observer (*_options)))
+            return;
+        try {
+            report (std::forward<Fn> (build_event) ());
         }
         catch (...) {
             (void) observer_failures ();
@@ -89,6 +110,30 @@ class dispatch_error_reporter_t
     }
 
   private:
+    static std::string exception_summary (const std::exception_ptr &exception)
+    {
+        if (!exception)
+            return {};
+        std::string summary;
+        try {
+            std::rethrow_exception (exception);
+        }
+        catch (const std::exception &error) {
+            summary = error.what ();
+        }
+        catch (...) {
+            summary = "non-standard exception";
+        }
+        for (auto &character : summary) {
+            if (character == '\n' || character == '\r' || character == '\t')
+                character = ' ';
+        }
+        constexpr std::size_t maximum_length = 256;
+        if (summary.size () > maximum_length)
+            summary.resize (maximum_length);
+        return summary;
+    }
+
     void log_default (const message_dispatch_error_event_t &event) const noexcept
     {
         try {
@@ -97,7 +142,7 @@ class dispatch_error_reporter_t
             auto add = [&fields] (const char *key, std::string value) {
                 diagnostic_event_sink_t::append_field (fields, key, std::move (value));
             };
-            add ("event", "zlink.dispatch_error");
+            add ("event_id", "zlink.dispatch_error");
             add ("outcome", "failed");
             add ("surface", std::string (enum_name (event.surface)));
             add ("kind", std::string (enum_name (event.message_kind)));
@@ -152,11 +197,13 @@ class dispatch_error_reporter_t
             if (event.activation_state) {
                 add ("activation_state", *event.activation_state);
             }
-            // Structured fields through the framework logger (collector-friendly);
-            // flat clog line when no logger is wired (tests, no-app usage).
-            diagnostic_event_sink_t::log_or_clog (
-              dispatch_options_access_t::logger (_options), default_log_level (event), "dispatch error",
-              "zlink flow:", std::move (fields));
+            if (event.exception) {
+                add ("exception", exception_summary (event.exception));
+            }
+            // Structured fields through the configured framework logger.
+            diagnostic_event_sink_t::log_if_configured (
+              dispatch_options_access_t::logger (*_options), default_log_level (event),
+              "dispatch error", std::move (fields));
         }
         catch (...) {
             (void) observer_failures ();
@@ -169,7 +216,7 @@ class dispatch_error_reporter_t
         return value;
     }
 
-    dispatch_options_t _options;
+    const dispatch_options_t *_options;
 };
 
 inline dispatch_error_reason_t dispatch_reason_from_error (framework_error_kind_t kind) noexcept

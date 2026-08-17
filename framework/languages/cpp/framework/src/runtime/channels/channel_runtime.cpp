@@ -1997,13 +1997,13 @@ task_t<zlink::message_t> route_client_t::submit_spot_request_reply_message_erase
         const auto reply = co_await reply_task;
         if (!reply) {
             if (reply.error_kind () == framework_error_kind_t::not_found) {
-                detail::dispatch_error_reporter_t (state->runtime->dispatch).report (
+                detail::dispatch_error_reporter_t (state->runtime->dispatch).report_lazy ([&] { return
                   message_dispatch_error_event_t{dispatch_error_surface_t::spot_route,
                     dispatch_message_kind_t::request, dispatch_error_reason_t::handler_missing,
                     dispatch_error_action_t::reply_error, packet_name, router_channel_id,
                     std::nullopt, spot_id, std::nullopt, target_node_rid.to_string (),
                     std::nullopt, reply.error () ? std::make_exception_ptr (*reply.error ())
-                                                  : std::exception_ptr {}});
+                                                  : std::exception_ptr {}}; });
             }
             co_return detail::propagate_failure<zlink::message_t> (reply, "route spot request failed");
         }

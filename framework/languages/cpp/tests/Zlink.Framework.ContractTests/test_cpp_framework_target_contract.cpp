@@ -132,6 +132,10 @@ int main ()
       read_file (root / "framework/src/runtime/diagnostics/flow_context.hpp");
     const auto message_flow_tracer =
       read_file (root / "framework/src/runtime/diagnostics/message_flow_tracer.hpp");
+    const auto diagnostic_event_sink =
+      read_file (root / "framework/src/runtime/diagnostics/diagnostic_event_sink.hpp");
+    const auto dispatch_error_reporter =
+      read_file (root / "framework/src/runtime/diagnostics/dispatch_error_reporter.hpp");
     const auto channel_reply_writer =
       read_file (root / "framework/src/runtime/channels/channel_reply_writer.cpp");
     const auto location_auto_connect =
@@ -189,6 +193,10 @@ int main ()
       read_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_monitoring.cpp");
     const auto actor_gateway_unit =
       read_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway.cpp");
+    const auto actor_gateway_runtime =
+      read_file (root / "framework/src/runtime/actors/actor_gateway_runtime.cpp");
+    const auto message_flow_unit =
+      read_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_message_flow.cpp");
     const auto execution_turn_contracts = read_file (
       e2e_root / "AutomaticTurnDispatch/Shared/automatic_turn_dispatch_contracts.hpp");
     const auto execution_turn_spot = read_file (
@@ -2032,8 +2040,7 @@ int main ()
       "one-way compatibility submission is not a single terminal attempt");
 
     /* CPP-DISP-004 — dequeue remains the public completion boundary, while
-     * every later publisher failure reaches either the Spot structured
-     * observer or the executor fallback observation. */
+     * application-bound publisher failures reach the Spot structured observer. */
     gate.require (
       m6a_sources.find (
         "framework/src/runtime/messaging/logical_multicast_runtime.cpp")
@@ -2041,12 +2048,12 @@ int main ()
         && logical_multicast_runtime.find (
         "job.completion->complete (result_t<void>::success ())")
           != std::string::npos
-        && logical_multicast_runtime.find (
-             "observe_logical_multicast_post_completion_failure")
+        && logical_multicast_runtime.find ("bool stopping = false;")
              != std::string::npos
         && logical_multicast_runtime.find (
-             "std::clog << \"zlink logical multicast failed after caller completion: \"")
+             "if (stopping) {\n            job.completion->complete")
              != std::string::npos
+        && logical_multicast_runtime.find ("std::clog") == std::string::npos
         && spot_runtime.find (
              "detail::report_logical_multicast_failure")
              != std::string::npos,
@@ -2155,6 +2162,49 @@ int main ()
              != std::string::npos,
       "CPP-OBS-002",
       "message-flow diagnostics level is not read live at each processing point");
+
+    /* CPP-OBS-003 — level and sampling gates precede lazy event construction;
+     * absence of an application logger never falls back to a process console. */
+    gate.require (
+      message_flow_tracer.find ("sample_current (") != std::string::npos
+        && message_flow_tracer.find (
+             "add (\"event_id\", \"zlink.message_flow\")")
+             != std::string::npos
+        && dispatch_error_reporter.find (
+             "add (\"event_id\", \"zlink.dispatch_error\")")
+             != std::string::npos
+        && message_flow_unit.find (
+             "built.load (std::memory_order_relaxed) != 0")
+             != std::string::npos
+        && message_flow_unit.find ("report_lazy") != std::string::npos
+        && diagnostic_event_sink.find ("log_if_configured")
+             != std::string::npos
+        && diagnostic_event_sink.find ("std::clog") == std::string::npos
+        && diagnostic_event_sink.find ("std::cerr") == std::string::npos,
+      "CPP-OBS-003",
+      "sampling or Off diagnostics build events before the gate, or use an implicit console sink");
+
+    /* CPP-ASYNC-003 — a STREAM-to-Actor relay keeps its completion and wrapper
+     * closure alive until target completion, preserving both per-Actor order and
+     * caller-visible failure across a Session replacement. */
+    gate.require (
+      actor_gateway_runtime.find (
+        "auto task = completion->task ()") != std::string::npos
+        && actor_gateway_runtime.find (
+             "pending.completion->complete (result)")
+             != std::string::npos
+        && actor_gateway_runtime.find (
+             "[state, actor_id, pending = std::move (pending), dispatched]")
+             != std::string::npos
+        && actor_gateway_runtime.find (
+             "payload, relay_source = std::move (relay_source)] () mutable -> task_t<void> {\n"
+             "          const auto dispatched = co_await dispatcher (")
+             != std::string::npos
+        && actor_gateway_unit.find (
+             "if (!first.result () || !second.result () || !independent.result ())")
+             != std::string::npos,
+      "CPP-ASYNC-003",
+      "Actor relay does not preserve target completion, order, and dispatch lifetime");
 
     /* CPP-WIRE-001 — every authority read and write uses the same canonical
      * zla1 key codec; legacy numeric keys are not compatibility aliases. */

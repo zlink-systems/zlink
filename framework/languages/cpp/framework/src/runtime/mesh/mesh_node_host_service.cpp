@@ -2267,14 +2267,14 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                     }
                     catch (const framework_exception_t &error) {
                         detail::dispatch_error_reporter_t (_dispatch_options)
-                          .report (message_dispatch_error_event_t{
+                          .report_lazy ([&] { return message_dispatch_error_event_t{
                             .surface = dispatch_error_surface_t::spot_route,
                             .message_kind = dispatch_message_kind_t::request,
                             .reason = detail::dispatch_reason_from_error (&error),
                             .action = dispatch_error_action_t::reply_error,
                             .packet_name = application.packet_name,
                             .spot_id = request.target.spot_id,
-                            .exception = std::make_exception_ptr (error)});
+                            .exception = std::make_exception_ptr (error)}; });
                         return host::instance_spot_activation_result_t{
                           105,
                           static_cast<std::uint32_t> (

@@ -105,9 +105,7 @@ task_t<void> raw_fanout_publisher_t::publish (
           "fanout application topic is empty or reserved");
     }
     auto encoded = protocol::encode_application_payload (payload);
-    std::vector<zlink::message_t> messages;
-    messages.reserve (1);
-    messages.push_back (zlink::message_t::from (std::move (encoded)));
+    auto message = zlink::message_t::from (std::move (encoded));
     std::optional<zlink::async_result_t<void>> submitted;
     {
         std::lock_guard lock (_mutex);
@@ -117,7 +115,7 @@ task_t<void> raw_fanout_publisher_t::publish (
               "fanout publisher is stopped");
         }
         auto operation =
-          std::move (_socket->publish (topic)).message (std::move (messages[0]));
+          std::move (_socket->publish (topic)).message (std::move (message));
         submitted.emplace (
           timeout.count () > 0
             ? std::move (operation).timeout (timeout).async ()
@@ -135,16 +133,14 @@ bool raw_fanout_publisher_t::tick (
             return false;
         }
     }
-    std::vector<zlink::message_t> messages;
-    messages.reserve (1);
-    messages.push_back (
-      zlink::message_t::from (std::vector<std::uint8_t> (beacon_payload ())));
+    auto message =
+      zlink::message_t::from (std::vector<std::uint8_t> (beacon_payload ()));
     std::lock_guard lock (_mutex);
     if (!_socket || now < _next_beacon) {
         return false;
     }
     const auto submitted = std::move (
-      _socket->publish (reserved_topic ())).message (messages[0])
+      _socket->publish (reserved_topic ())).message (std::move (message))
       .flags (static_cast<int> (zlink::send_flags_t::dontwait)).submit ();
     do {
         _next_beacon += fanout_beacon_interval;

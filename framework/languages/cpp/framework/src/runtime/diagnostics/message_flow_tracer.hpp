@@ -8,6 +8,7 @@
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -86,6 +87,16 @@ class message_flow_tracer_t
 
     template <typename Fn>
     void trace (message_flow_outcome_t outcome,
+                std::string_view sampling_flow_id,
+                Fn &&build_event) const noexcept
+    {
+        trace_with_sampling_key (required_mode (outcome), outcome,
+                                 sampling_flow_id,
+                                 std::forward<Fn> (build_event));
+    }
+
+    template <typename Fn>
+    void trace (message_flow_outcome_t outcome,
                 message_flow_result_t result,
                 Fn &&build_event) const noexcept
     {
@@ -94,19 +105,17 @@ class message_flow_tracer_t
         const auto required = result == message_flow_result_t::succeeded
                                 ? required_mode (outcome)
                                 : message_flow_log_mode_t::errors;
-        if (rank (effective_mode) < rank (required)) {
+        if (rank (effective_mode) < rank (required) || !has_sink ()
+            || (result == message_flow_result_t::succeeded
+                && outcome != message_flow_outcome_t::dropped
+                && outcome != message_flow_outcome_t::backpressured
+                && !sample_current (std::nullopt))) {
             return;
         }
         try {
             auto event = build_event ();
             event.result = result;
             stamp_flow (event);
-            if (outcome != message_flow_outcome_t::dropped
-                && outcome != message_flow_outcome_t::backpressured
-                && result == message_flow_result_t::succeeded
-                && !sample (_options->diagnostics.sample_rate (), event)) {
-                return;
-            }
             emit (std::move (event), effective_mode);
         }
         catch (...) {
@@ -136,7 +145,10 @@ class message_flow_tracer_t
         const auto required = rank (min_mode) > rank (required_mode (outcome))
                                 ? min_mode
                                 : required_mode (outcome);
-        if (rank (effective_mode) < rank (required)) {
+        if (rank (effective_mode) < rank (required) || !has_sink ()
+            || (outcome != message_flow_outcome_t::dropped
+                && outcome != message_flow_outcome_t::backpressured
+                && !sample_current (std::nullopt))) {
             return;
         }
         // build_event() builds the event (allocates strings); guard it so a throw
@@ -144,13 +156,32 @@ class message_flow_tracer_t
         try {
             auto event = build_event ();
             stamp_flow (event);
-            if (outcome != message_flow_outcome_t::dropped
+            emit (std::move (event), effective_mode);
+        }
+        catch (...) {
+            observer_failure_count ().fetch_add (1, std::memory_order_relaxed);
+        }
+    }
+
+    template <typename Fn>
+    void trace_with_sampling_key (message_flow_log_mode_t min_mode,
+                                  message_flow_outcome_t outcome,
+                                  std::string_view sampling_flow_id,
+                                  Fn &&build_event) const noexcept
+    {
+        const auto effective_mode =
+          dispatch_options_access_t::effective_message_flow (*_options);
+        const auto required = rank (min_mode) > rank (required_mode (outcome))
+                                ? min_mode
+                                : required_mode (outcome);
+        if (rank (effective_mode) < rank (required) || !has_sink ()
+            || (outcome != message_flow_outcome_t::dropped
                 && outcome != message_flow_outcome_t::backpressured
-                && (!event.result
-                    || *event.result == message_flow_result_t::succeeded)
-                && !sample (_options->diagnostics.sample_rate (), event)) {
-                return;
-            }
+                && !sample_current (sampling_flow_id)))
+            return;
+        try {
+            auto event = build_event ();
+            stamp_flow (event);
             emit (std::move (event), effective_mode);
         }
         catch (...) {
@@ -168,7 +199,7 @@ class message_flow_tracer_t
                                   && *event.result != message_flow_result_t::succeeded
                                 ? message_flow_log_mode_t::errors
                                 : required_mode (event.outcome);
-        if (rank (effective_mode) < rank (required)) {
+        if (rank (effective_mode) < rank (required) || !has_sink ()) {
             return;
         }
         stamp_flow (event);
@@ -183,11 +214,18 @@ class message_flow_tracer_t
     }
 
   private:
+    bool has_sink () const noexcept
+    {
+        return dispatch_options_access_t::logger (*_options).has_value ()
+               || dispatch_options_access_t::has_observer (*_options);
+    }
+
     void emit (message_flow_event_t event,
                message_flow_log_mode_t effective_mode) const noexcept
     {
         traced_count ().fetch_add (1, std::memory_order_relaxed);
-        log_default (event, effective_mode);
+        if (dispatch_options_access_t::logger (*_options))
+            log_default (event, effective_mode);
         try {
             dispatch_options_access_t::observe (*_options, event);
         }
@@ -257,17 +295,56 @@ class message_flow_tracer_t
         if (rate <= 0.0) {
             return false;
         }
-        const auto key = event.flow_id
-          ? *event.flow_id
-          : std::to_string (event.source_mesh_generation.value_or (
-              dispatch_options_access_t::source_mesh_generation (*_options)))
-              + ":"
-              + std::to_string (
-                dispatch_options_access_t::next_local_sampling_sequence (*_options));
         std::uint32_t hash = 0x811c9dc5u;
-        for (const auto byte : key) {
+        auto add = [&hash] (std::uint8_t byte) {
             hash ^= static_cast<std::uint8_t> (byte);
             hash *= 0x01000193u;
+        };
+        if (event.flow_id) {
+            for (const auto byte : *event.flow_id)
+                add (static_cast<std::uint8_t> (byte));
+        } else {
+            const std::array<std::uint64_t, 2> key{
+              event.source_mesh_generation.value_or (
+                dispatch_options_access_t::source_mesh_generation (*_options)),
+              dispatch_options_access_t::next_local_sampling_sequence (*_options)};
+            for (const auto value : key) {
+                for (unsigned int shift = 0; shift != 64; shift += 8)
+                    add (static_cast<std::uint8_t> (value >> shift));
+            }
+        }
+        return static_cast<double> (hash) / 4294967296.0 < rate;
+    }
+
+    bool sample_current (
+      std::optional<std::string_view> explicit_flow_id) const noexcept
+    {
+        const double rate = _options->diagnostics.sample_rate ();
+        if (rate >= 1.0)
+            return true;
+        if (rate <= 0.0)
+            return false;
+
+        std::uint32_t hash = 0x811c9dc5u;
+        auto add = [&hash] (std::uint8_t byte) {
+            hash ^= byte;
+            hash *= 0x01000193u;
+        };
+        if (explicit_flow_id && !explicit_flow_id->empty ()) {
+            for (const auto byte : *explicit_flow_id)
+                add (static_cast<std::uint8_t> (byte));
+        } else if (const auto &flow = runtime::flow_context_t::current ();
+                   flow && !flow->flow_id.empty ()) {
+            for (const auto byte : flow->flow_id)
+                add (static_cast<std::uint8_t> (byte));
+        } else {
+            const std::array<std::uint64_t, 2> key{
+              dispatch_options_access_t::source_mesh_generation (*_options),
+              dispatch_options_access_t::next_local_sampling_sequence (*_options)};
+            for (const auto value : key) {
+                for (unsigned int shift = 0; shift != 64; shift += 8)
+                    add (static_cast<std::uint8_t> (value >> shift));
+            }
         }
         return static_cast<double> (hash) / 4294967296.0 < rate;
     }
@@ -283,7 +360,7 @@ class message_flow_tracer_t
             auto add = [&fields] (const char *key, std::string value) {
                 diagnostic_event_sink_t::append_field (fields, key, std::move (value));
             };
-            add ("event", "zlink.message_flow");
+            add ("event_id", "zlink.message_flow");
             add ("phase", std::string (enum_name (event.outcome)));
             add ("outcome", event.result
                               ? std::string (enum_name (*event.result))
@@ -354,13 +431,11 @@ class message_flow_tracer_t
                 if (event.detail_result)
                     add ("result", *event.detail_result);
             }
-            // Prefer the framework logger with structured fields (so a file/console
-            // sink renders them and a collector callback gets record.fields); fall
-            // back to a flat clog line when no logger is wired (tests, no-app usage).
-            diagnostic_event_sink_t::log_or_clog (
-                                                  dispatch_options_access_t::logger (*_options), log_level_t::info,
-                                                  "message flow",
-                                                  "zlink flow:", std::move (fields));
+            // Emit structured fields only through an explicitly configured
+            // framework logger; observer-only and no-sink paths stay silent.
+            diagnostic_event_sink_t::log_if_configured (
+              dispatch_options_access_t::logger (*_options), log_level_t::info,
+              "message flow", std::move (fields));
         }
         catch (...) {
             observer_failure_count ().fetch_add (1, std::memory_order_relaxed);

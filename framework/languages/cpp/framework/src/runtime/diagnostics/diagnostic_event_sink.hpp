@@ -5,10 +5,8 @@
 
 #include "runtime/dispatch/offload_executor.hpp"
 
-#include <iostream>
 #include <memory>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -25,23 +23,13 @@ class diagnostic_event_sink_t
         fields.push_back (log_field_t{key, std::move (value)});
     }
 
-    static void log_or_clog (const std::optional<logger_t<>> &logger,
-                             log_level_t level,
-                             std::string_view message,
-                             std::string_view fallback_prefix,
-                             std::vector<log_field_t> fields) noexcept
+    static void log_if_configured (const std::optional<logger_t<>> &logger,
+                                   log_level_t level,
+                                   std::string_view message,
+                                   std::vector<log_field_t> fields) noexcept
     {
-        if (logger) {
+        if (logger)
             logger->log_with_fields (level, std::string (message), std::move (fields));
-            return;
-        }
-
-        std::ostringstream body;
-        body << fallback_prefix;
-        for (const auto &field : fields) {
-            body << ' ' << field.key << '=' << field.value;
-        }
-        std::clog << body.str () << '\n';
     }
 
     template <typename TObserver,

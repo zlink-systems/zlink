@@ -46,11 +46,18 @@ bool mesh_trace_enabled ()
     return value != nullptr && *value != '\0' && std::string_view (value) != "0";
 }
 
-void trace_mesh (const std::string &message)
+void trace_mesh_enabled (const std::string &message)
 {
-    if (mesh_trace_enabled ())
-        std::cerr << "zlink mesh " << message << '\n';
+    std::cerr << "zlink mesh " << message << '\n';
 }
+
+// Keep all string composition behind the opt-in gate. A function call would
+// evaluate concatenation arguments before entering the function.
+#define trace_mesh(message)                                                     \
+    do {                                                                        \
+        if (mesh_trace_enabled ())                                              \
+            trace_mesh_enabled (message);                                       \
+    } while (false)
 
 std::string trace_owner_key (const void *owner)
 {

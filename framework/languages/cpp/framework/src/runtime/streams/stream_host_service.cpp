@@ -597,14 +597,12 @@ zlink::message_t stream_error_payload (const result_t<void> &error)
     return zlink::message_t::from (payload.dump ());
 }
 
-void trace_stream_host (std::string_view stage,
-                        const stream_snapshot_t &stream,
-                        std::optional<stream_header_t> header = std::nullopt,
-                        std::string_view detail = {})
+void trace_stream_host_enabled (
+  std::string_view stage,
+  const stream_snapshot_t &stream,
+  std::optional<stream_header_t> header = std::nullopt,
+  std::string_view detail = {})
 {
-    if (!stream_trace_enabled ()) {
-        return;
-    }
     std::cerr << "zlink-cpp-stream-trace side=server stage=" << stage
               << " stream=" << stream.name << " endpoint=" << stream.bind_endpoint;
     if (header) {
@@ -618,6 +616,14 @@ void trace_stream_host (std::string_view stage,
     }
     std::cerr << std::endl;
 }
+
+// Avoid building detail strings or copying an optional header unless the
+// explicitly requested low-level diagnostic trace is enabled.
+#define trace_stream_host(...)                                                  \
+    do {                                                                        \
+        if (stream_trace_enabled ())                                            \
+            trace_stream_host_enabled (__VA_ARGS__);                            \
+    } while (false)
 
 struct stream_async_operation_state_t : std::enable_shared_from_this<stream_async_operation_state_t>
 {
@@ -1348,29 +1354,35 @@ class stream_host_service_t::listener_t
     void report_packet_dispatch_error (const detail::stream_header_t &header,
                                        const result_t<void> &dispatched) const
     {
-        message_dispatch_error_event_t event{
-          dispatch_error_surface_t::stream_session,
-          header.kind () == stream_message_kind_t::request ? dispatch_message_kind_t::request
-                                                           : dispatch_message_kind_t::send,
-          detail::dispatch_reason_from_error (dispatched.error_kind ()),
-          header.kind () == stream_message_kind_t::request
-            ? dispatch_error_action_t::reply_error
-            : dispatch_error_action_t::drop,
-          std::string (header.packet_name ()),
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          std::nullopt,
-          header.correlation_id () ? std::make_optional (std::string (*header.correlation_id ()))
-                                   : std::nullopt,
-          dispatched.error () != nullptr ? std::make_exception_ptr (*dispatched.error ())
-                                         : std::exception_ptr{}};
-        if (auto flow = header.flow_id ()) {
-            event.flow_id = std::string (*flow);
-            event.flow_origin = header.flow_origin ();
-        }
-        detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ()).report (event);
+        detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ())
+          .report_lazy ([&] {
+              message_dispatch_error_event_t event{
+                dispatch_error_surface_t::stream_session,
+                header.kind () == stream_message_kind_t::request
+                  ? dispatch_message_kind_t::request
+                  : dispatch_message_kind_t::send,
+                detail::dispatch_reason_from_error (dispatched.error_kind ()),
+                header.kind () == stream_message_kind_t::request
+                  ? dispatch_error_action_t::reply_error
+                  : dispatch_error_action_t::drop,
+                std::string (header.packet_name ()),
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                header.correlation_id ()
+                  ? std::make_optional (std::string (*header.correlation_id ()))
+                  : std::nullopt,
+                dispatched.error () != nullptr
+                  ? std::make_exception_ptr (*dispatched.error ())
+                  : std::exception_ptr{}};
+              if (auto flow = header.flow_id ()) {
+                  event.flow_id = std::string (*flow);
+                  event.flow_origin = header.flow_origin ();
+              }
+              return event;
+          });
     }
 
     void run ()

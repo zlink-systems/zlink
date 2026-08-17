@@ -101,23 +101,25 @@ void report_client_server_dispatch_error (
   dispatch_error_action_t action,
   const framework_exception_t &error) noexcept
 {
-    std::optional<std::string> correlation;
-    if (record.correlation)
-        correlation = std::to_string (*record.correlation);
     zlink::framework::detail::dispatch_error_reporter_t (options)
-      .report (message_dispatch_error_event_t{
-        dispatch_error_surface_t::channel,
-        message_kind,
-        zlink::framework::detail::dispatch_reason_from_error (&error),
-        action,
-        std::string (packet_name),
-        record.owner,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        std::nullopt,
-        correlation,
-        std::make_exception_ptr (error)});
+      .report_lazy ([&] {
+          std::optional<std::string> correlation;
+          if (record.correlation)
+              correlation = std::to_string (*record.correlation);
+          return message_dispatch_error_event_t{
+            dispatch_error_surface_t::channel,
+            message_kind,
+            zlink::framework::detail::dispatch_reason_from_error (&error),
+            action,
+            std::string (packet_name),
+            record.owner,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::move (correlation),
+            std::make_exception_ptr (error)};
+      });
 }
 
 std::string manual_connection_key (std::string_view endpoint)

@@ -915,10 +915,10 @@ void report_spot_dispatch_error (const std::shared_ptr<detail::spot_node_builder
         return;
     }
     detail::dispatch_error_reporter_t (state->dispatch)
-      .report (message_dispatch_error_event_t{
+      .report_lazy ([&] { return message_dispatch_error_event_t{
         surface, message_kind, reason, action, std::move (packet_name), std::nullopt,
         std::move (topic), std::move (spot_id), std::move (actor_id), std::nullopt,
-        std::move (correlation_id), std::move (exception), std::nullopt, std::nullopt});
+        std::move (correlation_id), std::move (exception), std::nullopt, std::nullopt}; });
 }
 
 void report_spot_dispatch_trace (const std::shared_ptr<detail::spot_node_builder_state_t> &state,
@@ -1043,18 +1043,17 @@ void report_actor_handoff_request_trace (
         return;
     }
     detail::message_flow_tracer_t (state->dispatch)
-      .trace (message_flow_outcome_t::dispatched,
-              [marker = std::move (marker), actor_ref, request_id = std::move (request_id),
-               transfer_id = std::move (transfer_id)] () mutable {
+      .trace (message_flow_outcome_t::dispatched, transfer_id,
+              [&] {
                   return message_flow_event_t{
                     .outcome = message_flow_outcome_t::dispatched,
                     .surface = dispatch_error_surface_t::spot_actor,
                     .message_kind = dispatch_message_kind_t::actor_request,
-                    .packet_name = std::move (marker),
+                    .packet_name = marker,
                     .channel_name = "request",
-                    .correlation_id = std::move (request_id),
+                    .correlation_id = request_id,
                     .actor_id = std::string (actor_ref.actor_id ().value ()),
-                    .flow_id = std::move (transfer_id),
+                    .flow_id = transfer_id,
                     .flow_origin = flow_origin_t::lifecycle};
               });
 }
@@ -3932,7 +3931,7 @@ void report_logical_multicast_failure (const std::shared_ptr<spot_node_builder_s
         return;
     try {
         dispatch_error_reporter_t (state->dispatch)
-          .report (
+          .report_lazy ([&] { return
             message_dispatch_error_event_t{.surface = dispatch_error_surface_t::route_mesh_channel,
                                            .message_kind = dispatch_message_kind_t::publish,
                                            .reason = dispatch_reason_from_error (&error),
@@ -3940,7 +3939,7 @@ void report_logical_multicast_failure (const std::shared_ptr<spot_node_builder_s
                                            .packet_name = std::string (packet_name),
                                            .channel_name = std::string (channel_name),
                                            .topic = std::string (topic),
-                                           .exception = std::make_exception_ptr (error)});
+                                           .exception = std::make_exception_ptr (error)}; });
     }
     catch (...) {
         // Diagnostics cannot change the already-completed publish result.
@@ -6419,23 +6418,22 @@ void spot_node_runtime_t::emit_actor_transfer_marker (
   std::optional<node_rid_t> target_node_rid) const
 {
     message_flow_tracer_t (_state->dispatch)
-      .trace (message_flow_outcome_t::dispatched,
-              [marker = std::move (marker), actor_ref, transfer_id = std::move (transfer_id),
-               spot_id = std::move (spot_id), target_node_rid = std::move (target_node_rid),
-               node_rid = node_rid ()] () mutable {
+      .trace (message_flow_outcome_t::dispatched, transfer_id,
+              [&] {
+                  const auto source_node_rid = node_rid ();
                   return message_flow_event_t{
                     .outcome = message_flow_outcome_t::dispatched,
                     .surface = dispatch_error_surface_t::spot_actor,
                     .message_kind = dispatch_message_kind_t::actor_request,
-                    .packet_name = std::move (marker),
+                    .packet_name = marker,
                     .channel_name = target_node_rid
                                       ? std::make_optional (std::string (target_node_rid->value ()))
                                       : std::nullopt,
                     .correlation_id = transfer_id,
-                    .source_rid = std::string (node_rid.value ()),
+                    .source_rid = std::string (source_node_rid.value ()),
                     .spot_id = spot_id,
                     .actor_id = std::string (actor_ref.actor_id ().value ()),
-                    .flow_id = std::move (transfer_id),
+                    .flow_id = transfer_id,
                     .flow_origin = flow_origin_t::lifecycle};
               });
 }
@@ -7680,32 +7678,41 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
                 //  Spec 26 Detailed-scope diagnostics: retain both fence
                 //  tuples in the Detailed-only stage/result extension without
                 //  overloading any standard address attribute.
-                std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
-                const auto current = _state->actor_authority_fences.find (key);
-                const auto &m = *admitted_message_follow_target;
-                const auto describe =
-                  [] (const runtime::protocol::actor_route_fence_t &fence) {
-                      return fence.actor_id + "/og="
-                             + std::to_string (fence.object_generation) + "/ng="
-                             + std::to_string (fence.target_node_generation)
-                             + "/ag="
-                             + std::to_string (fence.authority_owner_generation)
-                             + "/lg="
-                             + std::to_string (fence.owner_lease_generation);
-                  };
                 detail::message_flow_tracer_t (_state->dispatch)
                   .trace (message_flow_outcome_t::dropped, [&] {
+                      std::optional<runtime::protocol::actor_route_fence_t>
+                        current_fence;
+                      {
+                          std::lock_guard<std::recursive_mutex> node_lock (
+                            _state->mutex);
+                          const auto current =
+                            _state->actor_authority_fences.find (key);
+                          if (current != _state->actor_authority_fences.end ())
+                              current_fence = current->second;
+                      }
+                      const auto describe =
+                        [] (const runtime::protocol::actor_route_fence_t &fence) {
+                            return fence.actor_id + "/og="
+                                   + std::to_string (fence.object_generation) + "/ng="
+                                   + std::to_string (fence.target_node_generation)
+                                   + "/ag="
+                                   + std::to_string (fence.authority_owner_generation)
+                                   + "/lg="
+                                   + std::to_string (fence.owner_lease_generation);
+                        };
                       auto event = message_flow_event_t{
                         message_flow_outcome_t::dropped,
                         dispatch_error_surface_t::spot_actor,
                         dispatch_message_kind_t::actor_send,
                         std::string ("follow_fence")};
                       event.detail_stage = "admission";
-                      event.detail_result = current == _state->actor_authority_fences.end ()
+                      event.detail_result = !current_fence
                           ? std::string ("local=none")
-                          : "local=" + describe (current->second);
+                          : "local=" + describe (*current_fence);
                       event.detail_result = *event.detail_result
-                                            + " message=" + describe (m);
+                                            + " message="
+                                            + describe (
+                                              *admitted_message_follow_target);
                       event.actor_id =
                         std::string (actor_ref.actor_id ().value ());
                       event.reason = message_flow_reason_t::stale_target;

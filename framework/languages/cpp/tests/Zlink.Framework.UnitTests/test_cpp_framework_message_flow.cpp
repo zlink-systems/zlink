@@ -3,8 +3,8 @@
 // Verifies the message-flow tracing feature: dispatch_diagnostics_options_t::
 // message_flow now actually gates a structured, correlation-id-keyed log stream
 // (success transitions via message_flow_tracer_t) and silences the error log in
-// the off mode (dispatch_error_reporter_t). The tracer's default sink is
-// std::clog, so the tests capture that buffer and assert on the emitted lines.
+// the off mode (dispatch_error_reporter_t). Tests install an application logger;
+// a runtime without a configured logger must not write to a process console.
 
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/dispatch_diagnostics_names.hpp"
@@ -30,20 +30,34 @@ using namespace zlink::framework;
 using zlink::framework::detail::dispatch_error_reporter_t;
 using zlink::framework::detail::message_flow_tracer_t;
 
-// Redirects std::clog for the duration of a block and returns what was written.
-template <typename Fn> std::string capture_clog (Fn &&fn)
+thread_local std::string *captured_logs = nullptr;
+
+template <typename Fn> std::string capture_logs (Fn &&fn)
 {
-    std::ostringstream captured;
-    auto *previous = std::clog.rdbuf (captured.rdbuf ());
+    std::string captured;
+    auto *previous = captured_logs;
+    captured_logs = &captured;
     std::forward<Fn> (fn) ();
-    std::clog.rdbuf (previous);
-    return captured.str ();
+    captured_logs = previous;
+    return captured;
 }
 
 dispatch_options_t options_with_mode (message_flow_log_mode_t mode)
 {
     dispatch_options_t options;
     options.message_flow (mode);
+    logging_builder_t logging;
+    logging.use_provider ("message-flow-test", [] (const log_record_t &record) {
+        if (captured_logs == nullptr)
+            return;
+        *captured_logs += "zlink flow:";
+        for (const auto &field : record.fields) {
+            *captured_logs += " " + field.key + "=" + field.value;
+        }
+        captured_logs->push_back ('\n');
+    });
+    zlink::framework::detail::dispatch_options_access_t::set_logger (
+      options, logging.create_logger ("message-flow-test"));
     return options;
 }
 
@@ -110,7 +124,7 @@ int main ()
 {
     // off silences every success transition, including drops.
     {
-        const auto out = capture_clog ([] {
+        const auto out = capture_logs ([] {
             const auto opts = options_with_mode (message_flow_log_mode_t::off);
             message_flow_tracer_t tracer (opts);
             tracer.trace (flow_event (message_flow_outcome_t::received));
@@ -123,7 +137,7 @@ int main ()
 
     // errors emits the drop decision but not healthy transitions.
     {
-        const auto out = capture_clog ([] {
+        const auto out = capture_logs ([] {
             const auto opts = options_with_mode (message_flow_log_mode_t::errors);
             message_flow_tracer_t tracer (opts);
             tracer.trace (flow_event (message_flow_outcome_t::received));
@@ -139,14 +153,14 @@ int main ()
 
     // normal emits the lifecycle, keyed by correlation id; no sizes yet.
     {
-        const auto out = capture_clog ([] {
+        const auto out = capture_logs ([] {
             const auto opts = options_with_mode (message_flow_log_mode_t::normal);
             message_flow_tracer_t tracer (opts);
             tracer.trace (flow_event (message_flow_outcome_t::received));
             tracer.trace (flow_event (message_flow_outcome_t::replied));
         });
         if (!contains (out, "zlink flow:")
-            || !contains (out, "event=zlink.message_flow")) {
+            || !contains (out, "event_id=zlink.message_flow")) {
             return 4;
         }
         if (!contains (out, "phase=received")
@@ -167,7 +181,7 @@ int main ()
 
     // detailed appends the message size...
     {
-        const auto out = capture_clog ([] {
+        const auto out = capture_logs ([] {
             auto options = options_with_mode (message_flow_log_mode_t::detailed);
             options.include_message_sizes (true);
             message_flow_tracer_t (options).trace (
@@ -182,7 +196,7 @@ int main ()
     {
         auto options = options_with_mode (message_flow_log_mode_t::detailed);
         options.include_message_sizes (false);
-        const auto out = capture_clog ([&] {
+        const auto out = capture_logs ([&] {
             message_flow_tracer_t (options).trace (flow_event (message_flow_outcome_t::received));
         });
         if (contains (out, "size=")) {
@@ -196,7 +210,7 @@ int main ()
         zlink::framework::detail::actor_gateway_runtime_t gateway;
         gateway.set_dispatch (
           options_with_mode (message_flow_log_mode_t::normal));
-        const auto normal = capture_clog ([&] {
+        const auto normal = capture_logs ([&] {
             gateway.trace_bound_session_send_stage (
               "player-1", "router_admission_wait", "pending");
         });
@@ -205,7 +219,7 @@ int main ()
 
         gateway.set_dispatch (
           options_with_mode (message_flow_log_mode_t::detailed));
-        const auto detailed = capture_clog ([&] {
+        const auto detailed = capture_logs ([&] {
             gateway.trace_bound_session_send_stage (
               "player-1", "router_admission_wait", "pending");
         });
@@ -220,7 +234,7 @@ int main ()
     // off also silences the dispatch error log...
     {
         const auto reported_before = dispatch_error_reporter_t::reported ();
-        const auto out = capture_clog ([] {
+        const auto out = capture_logs ([] {
             dispatch_error_reporter_t (options_with_mode (message_flow_log_mode_t::off))
               .report (error_event ());
         });
@@ -232,14 +246,14 @@ int main ()
 
     // ...while errors (the default) keeps reporting errors.
     {
-        const auto out = capture_clog ([] {
+        const auto out = capture_logs ([] {
             dispatch_error_reporter_t (options_with_mode (message_flow_log_mode_t::errors))
               .report (error_event ());
         });
         if (!contains (out, "zlink flow:")) {
             return 12;
         }
-        if (!contains (out, "event=zlink.dispatch_error")
+        if (!contains (out, "event_id=zlink.dispatch_error")
             || !contains (out, "outcome=failed")) {
             return 13;
         }
@@ -263,7 +277,7 @@ int main ()
           options, live);
 
         // Static says off, live says off -> nothing.
-        auto out = capture_clog ([&] {
+        auto out = capture_logs ([&] {
             message_flow_tracer_t (options).trace (flow_event (message_flow_outcome_t::received));
         });
         if (!out.empty ()) {
@@ -272,7 +286,7 @@ int main ()
 
         // Flip live to normal at runtime -> now it traces, despite static off.
         live->store (message_flow_log_mode_t::normal);
-        out = capture_clog ([&] {
+        out = capture_logs ([&] {
             message_flow_tracer_t (options).trace (flow_event (message_flow_outcome_t::received));
         });
         if (!contains (out, "phase=received")) {
@@ -281,7 +295,7 @@ int main ()
 
         // Enter while normal, then turn diagnostics off before the processing
         // point: the transition is silent.
-        out = capture_clog ([&] {
+        out = capture_logs ([&] {
             auto message_scope =
               runtime::flow_context_t::enter_current_or_create (
                 flow_origin_t::application,
@@ -296,7 +310,7 @@ int main ()
 
         // The next message sees off and is silent.
         live->store (message_flow_log_mode_t::off);
-        out = capture_clog ([&] {
+        out = capture_logs ([&] {
             auto message_scope =
               runtime::flow_context_t::enter_current_or_create (
                 flow_origin_t::application,
@@ -310,7 +324,7 @@ int main ()
 
         // Enter while off, then turn diagnostics on before the processing
         // point: that transition uses the new live level.
-        out = capture_clog ([&] {
+        out = capture_logs ([&] {
             auto message_scope =
               runtime::flow_context_t::enter_current_or_create (
                 flow_origin_t::application,
@@ -322,7 +336,7 @@ int main ()
         if (!contains (out, "phase=received")) {
             return 31;
         }
-        out = capture_clog ([&] {
+        out = capture_logs ([&] {
             auto message_scope =
               runtime::flow_context_t::enter_current_or_create (
                 flow_origin_t::application,
@@ -339,12 +353,17 @@ int main ()
     {
         auto options = options_with_mode (message_flow_log_mode_t::normal);
         options.trace_sample_rate (0.0);
-        const auto out = capture_clog ([&] {
+        std::atomic_int built{0};
+        const auto out = capture_logs ([&] {
             message_flow_tracer_t tracer (options);
-            tracer.trace (flow_event (message_flow_outcome_t::received));
+            tracer.trace (message_flow_outcome_t::received, [&] {
+                built.fetch_add (1, std::memory_order_relaxed);
+                return flow_event (message_flow_outcome_t::received);
+            });
             tracer.trace (flow_event (message_flow_outcome_t::backpressured));
         });
-        if (contains (out, "phase=received")) {
+        if (contains (out, "phase=received")
+            || built.load (std::memory_order_relaxed) != 0) {
             return 18;
         }
         if (!contains (out, "phase=backpressured")
@@ -353,12 +372,29 @@ int main ()
         }
     }
 
+    // Off exits before either event kind builds an event or string field.
+    {
+        auto options = options_with_mode (message_flow_log_mode_t::off);
+        std::atomic_int built{0};
+        message_flow_tracer_t (options).trace (
+          message_flow_outcome_t::received, [&] {
+              built.fetch_add (1, std::memory_order_relaxed);
+              return flow_event (message_flow_outcome_t::received);
+          });
+        dispatch_error_reporter_t (options).report_lazy ([&] {
+            built.fetch_add (1, std::memory_order_relaxed);
+            return error_event ();
+        });
+        if (built.load (std::memory_order_relaxed) != 0)
+            return 39;
+    }
+
     // Failed/cancelled/shutdown request terminals are also never sampled,
     // even though their phase is reply_received.
     {
         auto options = options_with_mode (message_flow_log_mode_t::errors);
         options.trace_sample_rate (0.0);
-        const auto out = capture_clog ([&] {
+        const auto out = capture_logs ([&] {
             auto event = flow_event (message_flow_outcome_t::reply_received);
             event.result = message_flow_result_t::cancelled;
             message_flow_tracer_t (options).trace (
@@ -374,7 +410,7 @@ int main ()
 
     // Structured logging uses the spec projection rather than legacy keys.
     {
-        const auto out = capture_clog ([] {
+        const auto out = capture_logs ([] {
             auto event = flow_event (message_flow_outcome_t::sent);
             event.surface = dispatch_error_surface_t::route_mesh_channel;
             event.message_kind = dispatch_message_kind_t::control;
@@ -386,14 +422,14 @@ int main ()
             message_flow_tracer_t (options_with_mode (message_flow_log_mode_t::normal))
               .trace (std::move (event));
         });
-        if (!contains (out, "event=zlink.message_flow")
+        if (!contains (out, "event_id=zlink.message_flow")
             || !contains (out, "kind=control")
             || !contains (out, "mesh=game-mesh")
             || !contains (out, "channel_route=route_mesh")
             || !contains (out, "source_rid=source-1")
             || !contains (out, "target_rid=target-2")
             || !contains (out, "server_rid=server-3")
-            || contains (out, "event_id=")
+            || contains (out, " event=")
             || contains (out, " src=")) {
             return 36;
         }
@@ -411,7 +447,7 @@ int main ()
             }
             observed.fetch_add (1, std::memory_order_acq_rel);
           });
-        (void) capture_clog ([&] {
+        (void) capture_logs ([&] {
             message_flow_tracer_t (options).trace (flow_event (message_flow_outcome_t::replied));
         });
         if (!wait_until ([&] { return observed.load (std::memory_order_acquire) == 1; })) {
@@ -428,7 +464,7 @@ int main ()
         auto options = options_with_mode (message_flow_log_mode_t::normal);
         const framework_exception_t missing_handler (
           framework_error_kind_t::not_found, "handler is not registered");
-        const auto out = capture_clog ([&] {
+        const auto out = capture_logs ([&] {
             dispatch_error_reporter_t (options).report (message_dispatch_error_event_t{
               .surface = dispatch_error_surface_t::classic_fanout,
               .message_kind = dispatch_message_kind_t::send,
@@ -439,13 +475,15 @@ int main ()
               .topic = std::string ("fanout"),
               .exception = std::make_exception_ptr (missing_handler)});
         });
-        if (!contains (out, "event=zlink.dispatch_error")
+        if (!contains (out, "event_id=zlink.dispatch_error")
             || !contains (out, "surface=classic_fanout")
             || !contains (out, "kind=send")
             || !contains (out, "reason=no_handler")
+            || !contains (out, "packet=MissingEventMsg")
+            || !contains (out, "exception=handler is not registered")
             || contains (out, "channel_route=")
-            || occurrences (out, "event=zlink.dispatch_error") != 1
-            || contains (out, "event=zlink.message_flow")) {
+            || occurrences (out, "event_id=zlink.dispatch_error") != 1
+            || contains (out, "event_id=zlink.message_flow")) {
             return 28;
         }
     }

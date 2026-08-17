@@ -771,8 +771,8 @@ void fanout_location_runtime_t::pump ()
                           return;
                       }
                       zlink::framework::detail::dispatch_error_reporter_t (
-                        runtime.dispatch_options ())
-                        .report (message_dispatch_error_event_t{
+                        runtime.dispatch_options_ref ())
+                        .report_lazy ([&] { return message_dispatch_error_event_t{
                           .surface = dispatch_error_surface_t::classic_fanout,
                           .message_kind = dispatch_message_kind_t::send,
                           .reason = zlink::framework::detail::dispatch_reason_from_error (
@@ -783,7 +783,7 @@ void fanout_location_runtime_t::pump ()
                           .topic = topic,
                           .exception = result.error ()
                             ? std::make_exception_ptr (*result.error ())
-                            : std::exception_ptr{}});
+                            : std::exception_ptr{}}; });
                   });
             }
             catch (...) {

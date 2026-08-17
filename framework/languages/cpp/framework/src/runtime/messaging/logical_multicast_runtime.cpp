@@ -7,7 +7,6 @@
 #include <condition_variable>
 #include <deque>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -19,17 +18,6 @@ namespace zlink::framework::runtime::messaging
 {
 namespace
 {
-
-void observe_logical_multicast_post_completion_failure (
-  const char *message) noexcept
-{
-    try {
-        std::clog << "zlink logical multicast failed after caller completion: "
-                  << (message != nullptr ? message : "unknown failure") << '\n';
-    }
-    catch (...) {
-    }
-}
 
 result_t<void> deadline_exceeded ()
 {
@@ -118,14 +106,14 @@ class logical_multicast_executor_t
         auto task = job.completion->task ();
         job.deadline = std::chrono::steady_clock::now () + timeout;
         bool overflow = false;
+        bool stopping = false;
         std::optional<multicast_job_t> expired;
         {
             std::lock_guard lock (_mutex);
             if (_stopping) {
-                job.completion->complete (runtime_shutdown ());
-                return task;
+                stopping = true;
             }
-            if (_available != 0 && _handoff) {
+            else if (_available != 0 && _handoff) {
                 if (_handoff->deadline <= std::chrono::steady_clock::now ()) {
                     expired = std::move (_handoff);
                     _handoff.reset ();
@@ -145,6 +133,10 @@ class logical_multicast_executor_t
                 overflow = true;
             }
         }
+        if (stopping) {
+            job.completion->complete (runtime_shutdown ());
+            return task;
+        }
         if (overflow)
             job.completion->complete (deadline_exceeded ());
         if (expired)
@@ -155,8 +147,10 @@ class logical_multicast_executor_t
 
     void release_slot ()
     {
-        std::lock_guard lock (_mutex);
-        ++_available;
+        {
+            std::lock_guard lock (_mutex);
+            ++_available;
+        }
         _changed.notify_all ();
     }
 
@@ -179,33 +173,16 @@ class logical_multicast_executor_t
                 if (job.async_work) {
                     auto observed = std::make_shared<task_t<void>> (job.async_work ());
                     detail::observe_task_completion (
-                      *observed, [this, observed] (const result_t<void> &result) {
-                          if (!result) {
-                              const auto *error = result.error ();
-                              observe_logical_multicast_post_completion_failure (
-                                error != nullptr ? error->what ()
-                                                 : "publisher returned failure");
-                          }
+                      *observed, [this, observed] (const result_t<void> &) {
                           release_slot ();
                       });
                     continue;
                 }
-                const auto result = job.work ();
-                if (!result) {
-                    const auto *error = result.error ();
-                    observe_logical_multicast_post_completion_failure (
-                      error != nullptr ? error->what () : "publisher returned failure");
-                }
-            }
-            catch (const framework_exception_t &error) {
-                observe_logical_multicast_post_completion_failure (error.what ());
-            }
-            catch (const std::exception &error) {
-                observe_logical_multicast_post_completion_failure (error.what ());
+                (void) job.work ();
             }
             catch (...) {
-                observe_logical_multicast_post_completion_failure (
-                  "publisher threw a non-standard exception");
+                // Application-bound publishers install their structured
+                // post-admission observer before reaching this executor.
             }
             release_slot ();
         }

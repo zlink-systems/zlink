@@ -1125,7 +1125,7 @@ int main ()
         std::string ("local"), std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
         nullptr});
     if (zlink::framework::detail::dispatch_error_reporter_t::reported ()
-        != reported_before_no_observer + 1) {
+        != reported_before_no_observer) {
         return 102;
     }
 
