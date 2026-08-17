@@ -357,9 +357,12 @@ raw_fanout_subscriber_t::try_receive (
         }
         try {
             const auto bytes = parts.front ().bytes ();
+            /* The classic-fanout consumer never reads the flow pair —
+             * structural skip keeps Off nodes from failing on it. */
             auto payload = protocol::decode_application_payload (
               std::span<const std::uint8_t> (
-                reinterpret_cast<const std::uint8_t *> (bytes.data ()), bytes.size ()));
+                reinterpret_cast<const std::uint8_t *> (bytes.data ()), bytes.size ()),
+              false);
             connection.ready = true;
             connection.reconnecting = false;
             connection.deadline = now + fanout_receive_deadline;

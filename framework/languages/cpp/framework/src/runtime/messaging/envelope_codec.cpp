@@ -135,7 +135,8 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
     return zlink::message_t::from (json.dump ());
 }
 
-result_t<envelope_header_t> envelope_codec_t::decode_header (const zlink::message_t &message) const
+result_t<envelope_header_t> envelope_codec_t::decode_header (const zlink::message_t &message,
+                                                             bool capture_flow) const
 {
     try {
         const auto json = nlohmann::json::parse (message.to_string ());
@@ -156,9 +157,15 @@ result_t<envelope_header_t> envelope_codec_t::decode_header (const zlink::messag
         if (json.contains ("metadata") && json.at ("metadata").is_object ()) {
             header.metadata = json.at ("metadata").get<std::map<std::string, std::string>> ();
         }
-        header.flow_id = optional_json_value<std::string> (json, "flowId");
-        if (const auto origin = optional_json_value<int> (json, "flowOrigin")) {
-            header.flow_origin = static_cast<flow_origin_t> (*origin);
+        /* flow-correlation §4: the flow pair is observation-only. It is
+         * materialized and validated only when the caller can consume it
+         * (tracing on at a flow processing point); at Off the fields are
+         * ignored entirely so malformed flow data cannot reject the frame. */
+        if (capture_flow) {
+            header.flow_id = optional_json_value<std::string> (json, "flowId");
+            if (const auto origin = optional_json_value<int> (json, "flowOrigin")) {
+                header.flow_origin = static_cast<flow_origin_t> (*origin);
+            }
         }
         const auto format_marker = json.contains ("formatMarker") && !json.at ("formatMarker").is_null ()
                                      ? json.at ("formatMarker").get<int> ()
@@ -176,13 +183,14 @@ result_t<envelope_header_t> envelope_codec_t::decode_header (const zlink::messag
     }
 }
 
-result_t<envelope_header_t> envelope_codec_t::decode_header (const message_parts_t &parts) const
+result_t<envelope_header_t> envelope_codec_t::decode_header (const message_parts_t &parts,
+                                                             bool capture_flow) const
 {
     if (parts.size () == 0) {
         return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
                                                      "ZLink envelope header part is missing");
     }
-    return decode_header (parts[0]);
+    return decode_header (parts[0], capture_flow);
 }
 
 result_t<zlink::message_t> envelope_codec_t::decode_body (const message_parts_t &parts) const

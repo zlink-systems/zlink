@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <span>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -332,6 +333,36 @@ int main ()
     assert (traced_application_wire.front () == 2);
     assert (protocol::decode_application_payload (traced_application_wire)
             == traced_application);
+    /* spec 27 §4: capture_flow=false skips the observation-only flow pair
+     * structurally — no validation, no materialization — so malformed flow
+     * fields cannot reject a frame at Off or at frame-integrity guards. */
+    {
+        const auto stripped =
+          protocol::decode_application_payload (traced_application_wire, false);
+        assert (!stripped.flow_id && !stripped.flow_origin);
+        assert (stripped.packet_name == traced_application.packet_name
+                && stripped.payload == traced_application.payload);
+        auto corrupted_wire = traced_application_wire;
+        /* Corrupt the first flow-id byte (after the 1-byte text8 length). */
+        const auto flow_position = corrupted_wire.size () - 37;
+        corrupted_wire[flow_position] = static_cast<std::uint8_t> ('Z');
+        bool corrupted_rejected = false;
+        try {
+            (void) protocol::decode_application_payload (corrupted_wire);
+        }
+        catch (const protocol::service_wire_error_t &) {
+            corrupted_rejected = true;
+        }
+        assert (corrupted_rejected);
+        const auto corrupted_stripped =
+          protocol::decode_application_payload (corrupted_wire, false);
+        assert (!corrupted_stripped.flow_id
+                && corrupted_stripped.payload == traced_application.payload);
+        /* HWM accounting stays mode-independent and structural. */
+        assert (protocol::application_payload_hwm_bytes (
+                  std::span<const std::uint8_t> (corrupted_wire))
+                == traced_application.payload.size ());
+    }
     auto admission_descriptor = mesh::service_node_descriptor_t{
       "codec-mesh", std::vector<std::uint8_t>{'n', 'o', 'd', 'e'},
       1, 7, "tcp://127.0.0.1:7000",

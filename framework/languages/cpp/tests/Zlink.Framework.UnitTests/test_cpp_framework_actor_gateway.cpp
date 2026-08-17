@@ -2797,8 +2797,66 @@ int same_rid_registration_retains_retired_close_handler ()
 
 } // namespace
 
+/* async-execution-policy §1.3: the session Actor relay waiter is bounded —
+ * when the FIFO is full a new relay completes immediately with
+ * DeadlineExceeded and is never submitted later. */
+int session_relay_waiter_capacity_is_bounded ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    actor_gateway_runtime_t gateway;
+    auto manager = gateway.manager ();
+    session_actor_manager_access_t::attach (manager, stream_t{});
+    const actor_ref_t actor =
+      test_actor_ref ("actor-node-a", "player", "actor-capacity", 1);
+    auto binding = manager.bind (actor).submit ().result ().value ();
+
+    std::vector<std::shared_ptr<
+      task_completion_source_t<std::optional<zlink::message_t>>>> dispatched;
+    gateway.on_relay (
+      [&dispatched] (const actor_ref_t &, const actor_context_t &,
+                     const stream_header_t &, const zlink::message_t &,
+                     std::optional<bound_session_relay_source_t>) {
+          auto source = std::make_shared<
+            task_completion_source_t<std::optional<zlink::message_t>>> ();
+          dispatched.push_back (source);
+          return source->task ();
+      });
+
+    /* One relay occupies the drain turn; 1024 fill the bounded waiter. */
+    std::vector<task_t<void>> accepted;
+    accepted.reserve (1025);
+    for (std::size_t index = 0; index != 1025; ++index)
+        accepted.push_back (binding.relay ("packet", zlink::message_t{}));
+    auto refused = binding.relay ("packet", zlink::message_t{});
+    if (!refused.await_ready ())
+        return 1;
+    const auto refusal = refused.result ();
+    if (refusal
+        || refusal.error_kind () != framework_error_kind_t::deadline_exceeded)
+        return 2;
+
+    /* Releasing each dispatch drains the FIFO; every admitted relay
+     * completes exactly once and the refused one is never resubmitted. */
+    for (std::size_t index = 0; index != dispatched.size (); ++index)
+        dispatched[index]->complete (
+          result_t<std::optional<zlink::message_t>>::success (std::nullopt));
+    if (dispatched.size () != 1025)
+        return 3;
+    for (auto &admitted : accepted) {
+        if (!admitted.await_ready () || !admitted.result ())
+            return 4;
+    }
+    return 0;
+}
+
 int main ()
 {
+    if (const auto capacity = session_relay_waiter_capacity_is_bounded ();
+        capacity != 0) {
+        return 290 + capacity;
+    }
     if (const auto finite =
           bind_or_get_all_exit_paths_complete_within_deadline ();
         finite != 0) {

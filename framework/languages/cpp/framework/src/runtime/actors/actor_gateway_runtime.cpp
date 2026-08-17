@@ -11,6 +11,7 @@
 #include "runtime/streams/stream_runtime.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
@@ -177,90 +178,112 @@ void drain_session_relay (
   const std::shared_ptr<detail::actor_gateway_state_t> &state,
   const std::string &actor_id)
 {
-    detail::actor_gateway_state_t::pending_session_relay_t pending;
-    {
-        const std::lock_guard lock (state->mutex);
-        const auto found = state->pending_session_relays.find (actor_id);
-        if (found == state->pending_session_relays.end () || found->second.empty ()) {
-            state->pending_session_relays.erase (actor_id);
-            state->active_session_relays.erase (actor_id);
-            return;
+    /* Trampoline: a dispatch that settles synchronously continues the FIFO
+     * inside this loop instead of recursing, so a burst of immediate
+     * completions cannot grow the stack with the queue length. Only a
+     * completion that fires after this frame returned re-enters the drain. */
+    for (;;) {
+        detail::actor_gateway_state_t::pending_session_relay_t pending;
+        {
+            const std::lock_guard lock (state->mutex);
+            const auto found = state->pending_session_relays.find (actor_id);
+            if (found == state->pending_session_relays.end () || found->second.empty ()) {
+                state->pending_session_relays.erase (actor_id);
+                state->active_session_relays.erase (actor_id);
+                return;
+            }
+            pending = std::move (found->second.front ());
+            found->second.pop_front ();
         }
-        pending = std::move (found->second.front ());
-        found->second.pop_front ();
-    }
 
-    try {
-        auto dispatched = std::make_shared<task_t<void>> (pending.dispatch ());
-        detail::observe_task_completion (
-          *dispatched,
-          [state, actor_id, pending = std::move (pending), dispatched] (
-            const result_t<void> &result) mutable {
-              if (!result) {
-                  detail::dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
-                      return message_dispatch_error_event_t{
-                        .surface = dispatch_error_surface_t::spot_actor,
-                        .message_kind = dispatch_message_kind_t::actor_send,
-                        .reason = detail::dispatch_reason_from_error (result.error ()),
-                        .action = dispatch_error_action_t::drop,
-                        .packet_name = pending.packet_name,
-                        .actor_id = actor_id,
-                        .exception = result.error ()
-                          ? std::make_exception_ptr (*result.error ())
-                          : std::exception_ptr{}};
-                  });
-              }
-              pending.completion->complete (result);
-              drain_session_relay (state, actor_id);
-          });
-    }
-    catch (const framework_exception_t &error) {
-        detail::dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
-            return message_dispatch_error_event_t{
-              .surface = dispatch_error_surface_t::spot_actor,
-              .message_kind = dispatch_message_kind_t::actor_send,
-              .reason = detail::dispatch_reason_from_error (&error),
-              .action = dispatch_error_action_t::drop,
-              .packet_name = pending.packet_name,
-              .actor_id = actor_id,
-              .exception = std::make_exception_ptr (error)};
-        });
-        pending.completion->complete (detail::result_access_t::failure<void> (error));
-        drain_session_relay (state, actor_id);
-    }
-    catch (const std::exception &error) {
-        const framework_exception_t failure (
-          framework_error_kind_t::internal_failure, error.what ());
-        detail::dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
-            return message_dispatch_error_event_t{
-              .surface = dispatch_error_surface_t::spot_actor,
-              .message_kind = dispatch_message_kind_t::actor_send,
-              .reason = dispatch_error_reason_t::handler_exception,
-              .action = dispatch_error_action_t::drop,
-              .packet_name = pending.packet_name,
-              .actor_id = actor_id,
-              .exception = std::make_exception_ptr (failure)};
-        });
-        pending.completion->complete (result_t<void>::failure (
-          framework_error_kind_t::internal_failure, error.what ()));
-        drain_session_relay (state, actor_id);
-    }
-    catch (...) {
-        const auto exception = std::current_exception ();
-        detail::dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
-            return message_dispatch_error_event_t{
-              .surface = dispatch_error_surface_t::spot_actor,
-              .message_kind = dispatch_message_kind_t::actor_send,
-              .reason = dispatch_error_reason_t::handler_exception,
-              .action = dispatch_error_action_t::drop,
-              .packet_name = pending.packet_name,
-              .actor_id = actor_id,
-              .exception = exception};
-        });
-        pending.completion->complete (result_t<void>::failure (
-          framework_error_kind_t::internal_failure,
-          "actor session relay threw a non-standard exception"));
-        drain_session_relay (state, actor_id);
+        /* Frame-owned copies: the catch blocks must not read through the
+         * pending object after it moved into the completion observer. */
+        const auto completion = pending.completion;
+        const auto packet_name = pending.packet_name;
+        try {
+            /* The running coroutine frame references the closure inside
+             * pending.dispatch; the observer below keeps `pending` (and that
+             * closure's heap storage) alive until completion — do not shrink
+             * the dispatch closure below SBO size. */
+            auto dispatched = std::make_shared<task_t<void>> (pending.dispatch ());
+            /* Whoever loses the exchange race hands the next turn to the
+             * winner: a synchronous completion lets this loop continue, an
+             * asynchronous one re-enters the drain from its own frame. */
+            auto continue_gate = std::make_shared<std::atomic<bool>> (false);
+            detail::observe_task_completion (
+              *dispatched,
+              [state, actor_id, pending = std::move (pending), dispatched,
+               continue_gate] (const result_t<void> &result) mutable {
+                  if (!result) {
+                      detail::dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
+                          return message_dispatch_error_event_t{
+                            .surface = dispatch_error_surface_t::spot_actor,
+                            .message_kind = dispatch_message_kind_t::actor_send,
+                            .reason = detail::dispatch_reason_from_error (result.error ()),
+                            .action = dispatch_error_action_t::drop,
+                            .packet_name = pending.packet_name,
+                            .actor_id = actor_id,
+                            .exception = result.error ()
+                              ? std::make_exception_ptr (*result.error ())
+                              : std::exception_ptr{}};
+                      });
+                  }
+                  pending.completion->complete (result);
+                  if (continue_gate->exchange (true))
+                      drain_session_relay (state, actor_id);
+              });
+            if (!continue_gate->exchange (true)) {
+                /* Still dispatching: the completion observer owns the next
+                 * drain turn. */
+                return;
+            }
+            continue;
+        }
+        catch (const framework_exception_t &error) {
+            detail::dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
+                return message_dispatch_error_event_t{
+                  .surface = dispatch_error_surface_t::spot_actor,
+                  .message_kind = dispatch_message_kind_t::actor_send,
+                  .reason = detail::dispatch_reason_from_error (&error),
+                  .action = dispatch_error_action_t::drop,
+                  .packet_name = packet_name,
+                  .actor_id = actor_id,
+                  .exception = std::make_exception_ptr (error)};
+            });
+            completion->complete (detail::result_access_t::failure<void> (error));
+        }
+        catch (const std::exception &error) {
+            const framework_exception_t failure (
+              framework_error_kind_t::internal_failure, error.what ());
+            detail::dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
+                return message_dispatch_error_event_t{
+                  .surface = dispatch_error_surface_t::spot_actor,
+                  .message_kind = dispatch_message_kind_t::actor_send,
+                  .reason = dispatch_error_reason_t::handler_exception,
+                  .action = dispatch_error_action_t::drop,
+                  .packet_name = packet_name,
+                  .actor_id = actor_id,
+                  .exception = std::make_exception_ptr (failure)};
+            });
+            completion->complete (result_t<void>::failure (
+              framework_error_kind_t::internal_failure, error.what ()));
+        }
+        catch (...) {
+            const auto exception = std::current_exception ();
+            detail::dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
+                return message_dispatch_error_event_t{
+                  .surface = dispatch_error_surface_t::spot_actor,
+                  .message_kind = dispatch_message_kind_t::actor_send,
+                  .reason = dispatch_error_reason_t::handler_exception,
+                  .action = dispatch_error_action_t::drop,
+                  .packet_name = packet_name,
+                  .actor_id = actor_id,
+                  .exception = exception};
+            });
+            completion->complete (result_t<void>::failure (
+              framework_error_kind_t::internal_failure,
+              "actor session relay threw a non-standard exception"));
+        }
     }
 }
 
@@ -270,15 +293,43 @@ task_t<void> enqueue_session_relay (
   std::string packet_name,
   std::function<task_t<void> ()> dispatch)
 {
+    /* Session Actor relay shares the bound-session waiter bound
+     * (async-execution-policy §1.3): when the bounded waiter capacity is
+     * fully used a new payload is not held — the call completes immediately
+     * with DeadlineExceeded and the message is never submitted later. */
+    constexpr std::size_t capacity = 1024;
     auto completion =
       std::make_shared<detail::task_completion_source_t<void>> ();
     auto task = completion->task ();
     bool start_drain = false;
+    bool admitted = false;
     {
         const std::lock_guard lock (state->mutex);
-        state->pending_session_relays[actor_id].push_back (
-          {std::move (dispatch), completion, std::move (packet_name)});
-        start_drain = state->active_session_relays.insert (actor_id).second;
+        auto &queue = state->pending_session_relays[actor_id];
+        if (queue.size () < capacity) {
+            queue.push_back (
+              {std::move (dispatch), completion, std::move (packet_name)});
+            start_drain = state->active_session_relays.insert (actor_id).second;
+            admitted = true;
+        }
+    }
+    if (!admitted) {
+        const framework_exception_t rejected (
+          framework_error_kind_t::deadline_exceeded,
+          "actor session relay waiter capacity is exhausted");
+        detail::dispatch_error_reporter_t (state->dispatch).report_lazy ([&] {
+            return message_dispatch_error_event_t{
+              .surface = dispatch_error_surface_t::spot_actor,
+              .message_kind = dispatch_message_kind_t::actor_send,
+              .reason = dispatch_error_reason_t::backpressure,
+              .action = dispatch_error_action_t::drop,
+              .packet_name = packet_name,
+              .actor_id = actor_id,
+              .exception = std::make_exception_ptr (rejected)};
+        });
+        completion->complete (
+          detail::result_access_t::failure<void> (rejected));
+        return task;
     }
     if (start_drain)
         drain_session_relay (state, actor_id);

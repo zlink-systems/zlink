@@ -1210,9 +1210,14 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
             std::optional<protocol::application_payload_t> pending_reply;
             std::optional<client_server_wire_failure_t> pending_failure_reply;
             try {
+                /* flow-correlation §4: at Off the wire flow pair is neither
+                 * validated nor materialized at this ingress. */
                 const auto payload =
                   protocol::decode_application_payload (
-                    record.parts[1]);
+                    record.parts[1],
+                    detail::message_flow_tracer_t (
+                      _channel_runtime.dispatch_options_ref ())
+                      .capture_enabled ());
                 const auto message =
                   zlink::message_t::from (payload.payload);
                 detail::inbound_message_context_t
@@ -1526,8 +1531,9 @@ client_server_location_runtime_t::request (
           error);
     }
     try {
+        /* Reply flow fields are never consumed by the requester. */
         const auto decoded = protocol::decode_application_payload (
-          completion.payload);
+          completion.payload, false);
         co_return zlink::message_t::from (decoded.payload);
     }
     catch (const std::exception &error) {

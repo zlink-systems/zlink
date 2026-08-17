@@ -916,6 +916,36 @@ int main ()
                 return 160;
             }
         }
+        /* spec 27 §4: with capture_flow=false the envelope decoder neither
+         * validates nor retains the observation-only flow pair, so malformed
+         * flow data from a tracing-on sender cannot fail a frame at Off. */
+        {
+            auto stamped_message = [&] {
+                auto scope = rt::flow_context_t::enter (
+                  created, zlink::framework::flow_origin_t::inbound,
+                  zlink::framework::message_flow_log_mode_t::normal,
+                  zlink::framework::flow_origin_t::inbound);
+                return codec.encode_header (header);
+            } ();
+            const auto off_decoded = codec.decode_header (stamped_message, false);
+            if (!off_decoded || off_decoded.value ().flow_id
+                || off_decoded.value ().flow_origin) {
+                return 161;
+            }
+            auto corrupted = stamped_message.to_string ();
+            const auto position = corrupted.find (created);
+            if (position == std::string::npos) {
+                return 162;
+            }
+            corrupted.replace (position, 4, "ZZZZ");
+            const auto corrupted_message = zlink::message_t::from (corrupted);
+            if (!codec.decode_header (corrupted_message, false)) {
+                return 163;
+            }
+            if (codec.decode_header (corrupted_message)) {
+                return 164;
+            }
+        }
         {
             auto outer = rt::flow_context_t::enter (
               created, zlink::framework::flow_origin_t::application,

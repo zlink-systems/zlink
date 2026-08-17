@@ -54,7 +54,8 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
   std::function<void ()> before_application_handler) const
 {
     runtime::messaging::envelope_codec_t codec;
-    auto header = codec.decode_header (parts);
+    message_flow_tracer_t flow (_runtime.dispatch_options_ref ());
+    auto header = codec.decode_header (parts, flow.capture_enabled ());
     if (!header) {
         return detail::propagate_failure<runtime::messaging::message_parts_t> (header, "channel envelope header decode failed");
     }
@@ -68,7 +69,6 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
                 return dispatch_message_kind_t::send;
         }
     }();
-    message_flow_tracer_t flow (_runtime.dispatch_options_ref ());
     auto flow_scope = runtime::flow_context_t::enter (
       header.value ().flow_id, header.value ().flow_origin, flow.mode (),
       flow_origin_t::inbound);

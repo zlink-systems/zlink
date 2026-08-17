@@ -618,7 +618,9 @@ void reject_application_request (
         return;
     messaging::message_parts_t encoded (std::move (parts));
     messaging::envelope_codec_t codec;
-    const auto header = codec.decode_header (encoded);
+    /* Error-reply construction needs channel/correlation only; a malformed
+     * observation-only flow pair must not suppress the error reply. */
+    const auto header = codec.decode_header (encoded, false);
     if (!header)
         return;
     detail::channel_reply_writer_t replies;

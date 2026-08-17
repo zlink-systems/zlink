@@ -252,7 +252,8 @@ result_t<void> validate_channel_native_reply (const runtime::messaging::message_
           "channel native request returned an invalid reply frame count");
     }
     runtime::messaging::envelope_codec_t envelope;
-    auto header = envelope.decode_header (parts);
+    /* Reply validation only inspects the kind — flow fields are unused. */
+    auto header = envelope.decode_header (parts, false);
     if (!header) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         header.error () ? header.error ()->what ()
@@ -1758,7 +1759,7 @@ task_t<zlink::message_t> route_client_t::submit_request_reply_message_erased (
         const auto reply = co_await reply_task;
         if (!reply)
             co_return detail::propagate_failure<zlink::message_t> (reply, "route request failed");
-        auto reply_header = envelope.decode_header (reply.value ());
+        auto reply_header = envelope.decode_header (reply.value (), false);
         if (!reply_header) {
             co_return result_t<zlink::message_t>::failure (
               reply_header.error_kind (), reply_header.error () ? reply_header.error ()->what ()
@@ -1862,7 +1863,7 @@ task_t<zlink::message_t> route_client_t::submit_channel_request_reply_message_er
             co_return detail::propagate_failure<zlink::message_t> (
               reply, "RouteMesh channel request failed");
         }
-        auto reply_header = envelope.decode_header (reply.value ());
+        auto reply_header = envelope.decode_header (reply.value (), false);
         if (!reply_header) {
             co_return result_t<zlink::message_t>::failure (
               reply_header.error_kind (), reply_header.error () ? reply_header.error ()->what ()
@@ -2016,7 +2017,7 @@ task_t<zlink::message_t> route_client_t::submit_spot_request_reply_message_erase
             }
             co_return detail::propagate_failure<zlink::message_t> (reply, "route spot request failed");
         }
-        auto reply_header = envelope.decode_header (reply.value ());
+        auto reply_header = envelope.decode_header (reply.value (), false);
         if (!reply_header) {
             co_return result_t<zlink::message_t>::failure (
               reply_header.error_kind (), reply_header.error () ? reply_header.error ()->what ()

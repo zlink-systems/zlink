@@ -76,7 +76,9 @@ result_t<std::optional<route_dispatch_reply_t>>
 route_packet_dispatcher_t::dispatch (const route_received_packet_t &received) const
 {
     runtime::messaging::envelope_codec_t codec;
-    auto header = codec.decode_header (received.parts);
+    auto header = codec.decode_header (
+      received.parts,
+      message_flow_tracer_t (_dispatch_options).capture_enabled ());
     if (!header) {
         return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (header, "route envelope header decode failed");
     }

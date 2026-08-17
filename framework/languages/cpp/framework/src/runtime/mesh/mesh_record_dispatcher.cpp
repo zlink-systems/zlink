@@ -41,7 +41,9 @@ mesh_record_dispatcher_t::dispatch (
 
     runtime::messaging::message_parts_t message_parts (std::move (parts));
     runtime::messaging::envelope_codec_t codec;
-    const auto header = codec.decode_header (message_parts);
+    /* Routing-only peek (kind/channel); the flow processing point is the
+     * route packet dispatcher's own gated decode below. */
+    const auto header = codec.decode_header (message_parts, false);
     if (!header) {
         return detail::propagate_failure<void> (header, "MeshNode envelope header decode failed");
     }

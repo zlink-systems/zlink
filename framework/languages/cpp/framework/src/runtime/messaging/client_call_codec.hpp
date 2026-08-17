@@ -45,7 +45,9 @@ class client_call_codec_t
             return result_t<TReply>::failure (framework_error_kind_t::protocol_error,
                                               empty_message);
         }
-        auto header = _codec.decode_header (reply);
+        /* Reply flow fields are never consumed here (the requester keeps its
+         * ambient submit flow) — skip their validation/materialization. */
+        auto header = _codec.decode_header (reply, false);
         if (!header) {
             return result_t<TReply>::failure (
               header.error_kind (), header.error () ? header.error ()->what () : error_message);

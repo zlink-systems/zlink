@@ -1006,7 +1006,7 @@ task_t<bool> raw_mesh_node_owner_t::submit_request (
                   throw protocol::service_wire_error_t (
                     "successful request reply must carry a payload");
               }
-              (void) protocol::decode_application_payload (parts[1]);
+              (void) protocol::decode_application_payload (parts[1], false);
               (void) operations->complete (
                 request.operation, std::move (parts[1]));
           }
@@ -1600,7 +1600,7 @@ task_t<bool> raw_mesh_node_owner_t::request_user_spot_create (
               throw protocol::service_wire_error_t (
                 "failed User Spot create reply carries a payload");
           if (parts.size () == 2)
-              (void) protocol::decode_application_payload (parts[1]);
+              (void) protocol::decode_application_payload (parts[1], false);
           return pack_infrastructure_reply (parts);
       },
       timeout, std::move (callback));
@@ -1770,7 +1770,7 @@ task_t<bool> raw_mesh_node_owner_t::request_actor_create (
                   throw protocol::service_wire_error_t (
                     "failed Actor create reply carries a payload");
               if (parts.size () == 2)
-                  (void) protocol::decode_application_payload (parts[1]);
+                  (void) protocol::decode_application_payload (parts[1], false);
               return pack_infrastructure_reply (parts);
           }, timeout, std::move (callback));
     }
@@ -1824,7 +1824,7 @@ task_t<bool> raw_mesh_node_owner_t::request_actor_create (
               throw protocol::service_wire_error_t (
                 "failed Actor create reply carries a payload");
           if (parts.size () == 2)
-              (void) protocol::decode_application_payload (parts[1]);
+              (void) protocol::decode_application_payload (parts[1], false);
           return pack_infrastructure_reply (parts);
       }, deadline);
 }
@@ -1970,7 +1970,7 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
                     "failed Instance Spot activation reply carries a payload");
               if (reply_parts.size () == 2)
                   (void) protocol::decode_application_payload (
-                    reply_parts[1]);
+                    reply_parts[1], false);
               (void) operations->complete (
                 id, pack_infrastructure_reply (reply_parts));
           }
@@ -2715,7 +2715,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
             (void) protocol::decode_application_payload (
-              received->parts.back ());
+              received->parts.back (), false);
             const auto local = _topology.local_descriptor ();
             co_return enqueue_received_or_retain (
               service_mailbox_record_t{
@@ -2814,7 +2814,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
             (void) protocol::decode_application_payload (
-              received->parts.back ());
+              received->parts.back (), false);
             co_return enqueue_received_or_retain (
               service_mailbox_record_t{
                 owner_key (local.node_routing_id),
@@ -2984,7 +2984,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 }
                 if (received->parts.size () == 2) {
                     (void) protocol::decode_application_payload (
-                      received->parts.back ());
+                      received->parts.back (), false);
                 }
             } else {
                 if (received->parts.size () != 1) {
@@ -3130,7 +3130,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 + " parts=" + std::to_string (received->parts.size ()));
             co_return raw_mesh_pump_result_t::protocol_error;
         }
-        (void) protocol::decode_application_payload (received->parts[1]);
+        (void) protocol::decode_application_payload (received->parts[1], false);
         const auto local = _topology.local_descriptor ();
         std::string mailbox_owner;
         std::optional<std::uint64_t> correlation;

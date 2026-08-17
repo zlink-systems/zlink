@@ -1585,7 +1585,7 @@ request_spot_mesh_message (const std::shared_ptr<detail::spot_context_state_t> &
                   return;
               }
               runtime::messaging::envelope_codec_t envelope;
-              auto reply_header = envelope.decode_header (reply_result.value ());
+              auto reply_header = envelope.decode_header (reply_result.value (), false);
               if (!reply_header) {
                   source->complete (result_t<zlink::message_t>::failure (
                     reply_header.error_kind (), reply_header.error ()
@@ -9665,7 +9665,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
 
         runtime::messaging::message_parts_t encoded (std::move (parts));
         runtime::messaging::envelope_codec_t codec;
-        auto header = codec.decode_header (encoded);
+        auto header = codec.decode_header (
+          encoded,
+          detail::message_flow_tracer_t (_state->dispatch).capture_enabled ());
         if (!header) {
             parts = std::move (encoded).take_items ();
             return false;
@@ -9961,7 +9963,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (const service::ready_record_t &o
         }
         runtime::messaging::message_parts_t encoded (std::move (parts));
         runtime::messaging::envelope_codec_t codec;
-        auto header = codec.decode_header (encoded);
+        auto header = codec.decode_header (
+          encoded,
+          detail::message_flow_tracer_t (_state->dispatch).capture_enabled ());
         detail::channel_reply_writer_t replies;
         auto reply_error = [&] (const framework_exception_t &error) {
             if (record.kind != service::record_kind_t::actor_request || !header)
@@ -10515,6 +10519,10 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
      * parts-preserving wire, or a bare payload from a non-framework publisher
      * (dispatched without a flow pair). */
     const runtime::messaging::envelope_codec_t codec;
+    /* flow-correlation §4: at Off the publisher's flow pair is neither
+     * validated nor materialized from the fan-out envelope. */
+    const bool capture_flow =
+      detail::message_flow_tracer_t (_state->dispatch).capture_enabled ();
     zlink::message_t body = parts.front ();
     std::optional<std::string> flow_id;
     std::optional<flow_origin_t> flow_origin;
@@ -10523,7 +10531,7 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
     bool report_decode_failure = false;
     if (parts.size () >= 2) {
         const runtime::messaging::message_parts_t envelope_parts{std::vector (parts)};
-        auto header = codec.decode_header (envelope_parts);
+        auto header = codec.decode_header (envelope_parts, capture_flow);
         auto decoded_body = codec.decode_body (envelope_parts);
         if (header && decoded_body) {
             body = decoded_body.value ();
@@ -10561,7 +10569,8 @@ spot_node_runtime_t::dispatch_subscription (const spot_context_t &context,
                 auto header =
                   codec.decode_header (zlink::message_t::from (std::vector<std::uint8_t> (
                     bytes.begin () + 8,
-                    bytes.begin () + 8 + static_cast<std::ptrdiff_t> (header_size))));
+                    bytes.begin () + 8 + static_cast<std::ptrdiff_t> (header_size))),
+                    capture_flow);
                 if (header) {
                     body = zlink::message_t::from (std::vector<std::uint8_t> (
                       bytes.begin () + 8 + static_cast<std::ptrdiff_t> (header_size),

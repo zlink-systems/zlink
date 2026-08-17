@@ -116,8 +116,9 @@ spot_route_internal_dispatcher_t::dispatch_send (const route_received_packet_t &
                                                               : "actor route send body missing");
     }
     try {
+        /* Internal control packets never consume the flow pair. */
         const auto header = runtime::messaging::envelope_codec_t{}
-          .decode_header (received.parts);
+          .decode_header (received.parts, false);
         if (!header) {
             return detail::propagate_failure<void> (
               header, "SPOT route send header is invalid");

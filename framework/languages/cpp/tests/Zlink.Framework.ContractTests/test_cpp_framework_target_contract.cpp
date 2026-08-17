@@ -2186,7 +2186,9 @@ int main ()
 
     /* CPP-ASYNC-003 — a STREAM-to-Actor relay keeps its completion and wrapper
      * closure alive until target completion, preserving both per-Actor order and
-     * caller-visible failure across a Session replacement. */
+     * caller-visible failure across a Session replacement. The drain observer
+     * additionally carries the trampoline gate that decides which frame runs
+     * the next FIFO turn without recursing. */
     gate.require (
       actor_gateway_runtime.find (
         "auto task = completion->task ()") != std::string::npos
@@ -2194,7 +2196,8 @@ int main ()
              "pending.completion->complete (result)")
              != std::string::npos
         && actor_gateway_runtime.find (
-             "[state, actor_id, pending = std::move (pending), dispatched]")
+             "[state, actor_id, pending = std::move (pending), dispatched,\n"
+             "               continue_gate]")
              != std::string::npos
         && actor_gateway_runtime.find (
              "payload, relay_source = std::move (relay_source)] () mutable -> task_t<void> {\n"

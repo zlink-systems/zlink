@@ -3321,7 +3321,8 @@ encode_application_payload (const application_payload_t &payload)
 }
 
 application_payload_t
-decode_application_payload (std::span<const std::uint8_t> bytes)
+decode_application_payload (std::span<const std::uint8_t> bytes,
+                            bool capture_flow)
 {
     if (bytes.size () < 5
         || (bytes[0] != application_payload_version
@@ -3347,12 +3348,23 @@ decode_application_payload (std::span<const std::uint8_t> bytes)
                            bytes.begin () + static_cast<std::ptrdiff_t> (offset + payload_length));
     offset += payload_length;
     if (has_flow) {
-        result.flow_id = read_text8 (bytes, offset, "flow id");
-        if (!valid_flow_id (*result.flow_id) || offset >= bytes.size ()
-            || !valid_flow_origin (bytes[offset])) {
-            throw service_wire_error_t ("application payload flow context is invalid");
+        if (capture_flow) {
+            result.flow_id = read_text8 (bytes, offset, "flow id");
+            if (!valid_flow_id (*result.flow_id) || offset >= bytes.size ()
+                || !valid_flow_origin (bytes[offset])) {
+                throw service_wire_error_t ("application payload flow context is invalid");
+            }
+            result.flow_origin = static_cast<flow_origin_t> (bytes[offset++]);
+        } else {
+            /* flow-correlation §4: the pair is observation-only — skip it
+             * structurally without semantic validation or materialization. */
+            if (offset >= bytes.size ())
+                throw service_wire_error_t ("truncated flow id");
+            const std::size_t flow_length = bytes[offset++];
+            if (flow_length == 0 || bytes.size () - offset < flow_length + 1)
+                throw service_wire_error_t ("invalid flow id");
+            offset += flow_length + 1;
         }
-        result.flow_origin = static_cast<flow_origin_t> (bytes[offset++]);
     }
     if (offset != bytes.size ()) {
         throw service_wire_error_t (
@@ -3421,12 +3433,14 @@ application_payload_hwm_bytes (std::span<const std::uint8_t> bytes)
     const auto application = body.subspan (body_offset, payload_length);
     body_offset += payload_length;
     if (has_flow) {
-        const auto flow_id = read_text8 (body, body_offset, "flow id");
-        if (!valid_flow_id (flow_id) || body_offset >= body.size ()
-            || !valid_flow_origin (body[body_offset])) {
-            throw service_wire_error_t ("application payload flow context is invalid");
-        }
-        ++body_offset;
+        /* HWM accounting is mode-independent: skip the observation-only flow
+         * fields structurally, never validating their semantics here. */
+        if (body_offset >= body.size ())
+            throw service_wire_error_t ("truncated flow id");
+        const std::size_t flow_length = body[body_offset++];
+        if (flow_length == 0 || body.size () - body_offset < flow_length + 1)
+            throw service_wire_error_t ("invalid flow id");
+        body_offset += flow_length + 1;
     }
     if (body_offset != body.size ()) {
         throw service_wire_error_t (

@@ -854,8 +854,13 @@ std::string
 decode_channel_send_header (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t>
 encode_application_payload (const application_payload_t &payload);
+/* capture_flow gates the observation-only flow pair (flow-correlation §4):
+ * false skips it structurally — no semantic validation, no materialization —
+ * so malformed observation fields cannot fail a frame at Off or at pure
+ * frame-integrity guards. */
 application_payload_t
-decode_application_payload (std::span<const std::uint8_t> bytes);
+decode_application_payload (std::span<const std::uint8_t> bytes,
+                            bool capture_flow = true);
 std::size_t
 application_payload_hwm_bytes (const application_payload_t &payload);
 // Validate an encoded application envelope and calculate its HWM charge

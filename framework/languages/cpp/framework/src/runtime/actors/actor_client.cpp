@@ -1019,7 +1019,7 @@ class actor_client_impl_t final : public actor_client_t
                     + std::to_string (actor.native_ref.object_generation ()) + "'");
             }
             runtime::messaging::envelope_codec_t reply_codec;
-            auto reply_header = reply_codec.decode_header (reply.value ());
+            auto reply_header = reply_codec.decode_header (reply.value (), false);
             if (!reply_header) {
                 co_return result_t<std::optional<zlink::message_t>>::failure (
                   reply_header.error_kind (),

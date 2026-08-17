@@ -164,7 +164,8 @@ bool framework_owned_node_message (const std::vector<zlink::message_t> &parts)
 {
     try {
         runtime::messaging::message_parts_t encoded (parts);
-        const auto header = runtime::messaging::envelope_codec_t{}.decode_header (encoded);
+        const auto header =
+          runtime::messaging::envelope_codec_t{}.decode_header (encoded, false);
         return header && header.value ().message_name.starts_with ("__zlink.");
     }
     catch (...) {
@@ -2820,7 +2821,8 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
         if (kind == runtime::messaging::message_kind_t::command)
             co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
         runtime::messaging::message_parts_t reply (std::move (completed.parts));
-        auto reply_header = runtime::messaging::envelope_codec_t{}.decode_header (reply);
+        auto reply_header =
+          runtime::messaging::envelope_codec_t{}.decode_header (reply, false);
         if (!reply_header) {
             co_return result_t<std::optional<zlink::message_t>>::failure (
               reply_header.error_kind (), reply_header.error ()

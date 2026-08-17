@@ -530,7 +530,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
         if (channel != _options.descriptor.channel_name) {
             co_return client_server_pump_result_t::protocol_error;
         }
-        (void) protocol::decode_application_payload (received->parts[1]);
+        (void) protocol::decode_application_payload (received->parts[1], false);
         if (application_permit)
             application_permit->mark_queued ();
         mesh::service_mailbox_record_t record{
@@ -1187,7 +1187,7 @@ raw_client_server_client_t::request (
             throw protocol::service_wire_error_t (
               "successful ClientServer reply requires payload");
         }
-        (void) protocol::decode_application_payload (parts[1]);
+        (void) protocol::decode_application_payload (parts[1], false);
         co_return client_server_request_completion_t{
           foundation::operation_terminal_t::completed,
           reply,
