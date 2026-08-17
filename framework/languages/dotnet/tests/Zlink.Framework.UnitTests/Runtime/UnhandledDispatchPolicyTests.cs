@@ -408,10 +408,8 @@ public sealed partial class UnhandledDispatchPolicyTests
                 services.GetRequiredService<IServiceScopeFactory>(),
                 registration),
             static _ => new HashSet<string>(StringComparer.Ordinal),
-            LogLevel.Warning,
             new ZLinkDispatchErrorReporter(registration.DispatchOptions),
-            registration.Codecs,
-            new CapturingLogger<ZLinkChannelPublishDispatchPipeline>());
+            registration.Codecs);
         var header = new ZLinkEnvelopeHeader(
             ZLinkMessageKind.Publish,
             "play",
@@ -522,7 +520,6 @@ public sealed partial class UnhandledDispatchPolicyTests
             actorId: "actor-1");
 
         scope.ReplyPathMissing(
-            NullLogger.Instance,
             reporter,
             new InvalidOperationException("The handler returned no reply."));
 
@@ -548,8 +545,7 @@ public sealed partial class UnhandledDispatchPolicyTests
             static () => throw new InvalidOperationException("Handler invoker should not be used."),
             new ZLinkDispatchErrorReporter(
                 options,
-                logger),
-            logger);
+                logger));
         var actor = new TestActor("actor-1");
         var runtimeState = new ZLinkActorRuntimeState(actor.ActorId);
         runtimeState.BindActorInstance(actor);
@@ -606,8 +602,7 @@ public sealed partial class UnhandledDispatchPolicyTests
             () => invoker,
             new ZLinkDispatchErrorReporter(
                 options,
-                logger),
-            logger);
+                logger));
         var actor = new TestActor("actor-1");
         var runtimeState = new ZLinkActorRuntimeState(actor.ActorId);
         runtimeState.BindActorInstance(actor);

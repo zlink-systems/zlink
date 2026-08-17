@@ -281,8 +281,7 @@ public sealed class MessageContextContractTests
             dispatcher,
             static _ => new HashSet<string>(StringComparer.Ordinal),
             registration.Codecs,
-            new ZLinkDispatchErrorReporter(new ZLinkDispatchOptionsModel()),
-            NullLogger.Instance);
+            new ZLinkDispatchErrorReporter(new ZLinkDispatchOptionsModel()));
         var header = new ZLinkEnvelopeHeader(
             ZLinkMessageKind.Request,
             "channel-a",

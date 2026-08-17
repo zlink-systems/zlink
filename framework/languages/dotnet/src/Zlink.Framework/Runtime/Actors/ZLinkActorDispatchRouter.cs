@@ -1,6 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Actors;
@@ -14,10 +13,6 @@ internal sealed class ZLinkActorDispatchRouter(
         runtime.Registration.DispatchOptions,
         runtime.Services.GetService<ILoggerFactory>()?.CreateLogger<ZLinkActorDispatchRouter>(),
         runtime);
-
-    private readonly ILogger _logger =
-        runtime.Services.GetService<ILoggerFactory>()?.CreateLogger<ZLinkActorDispatchRouter>()
-        ?? NullLogger<ZLinkActorDispatchRouter>.Instance;
 
     public async ValueTask SubmitByIdAsync(
         string actorId,
@@ -310,9 +305,6 @@ internal sealed class ZLinkActorDispatchRouter(
         ZLinkDispatchErrorAction action,
         Exception? exception = null)
     {
-        var level = action == ZLinkDispatchErrorAction.ReplyError
-            ? LogLevel.Error
-            : LogLevel.Warning;
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.SpotActor,
             _dispatchErrors.Flow.CaptureEnabled,
@@ -322,9 +314,7 @@ internal sealed class ZLinkActorDispatchRouter(
             actorId: actor.Context.ActorId);
 
         scope.HandlerMissing(
-            _logger,
             _dispatchErrors,
-            level,
             action,
             exception);
     }
@@ -342,6 +332,6 @@ internal sealed class ZLinkActorDispatchRouter(
             correlationId: header.CorrelationId,
             actorId: actor.Context.ActorId);
 
-        scope.ReplyPathMissing(_logger, _dispatchErrors, exception);
+        scope.ReplyPathMissing(_dispatchErrors, exception);
     }
 }

@@ -18,9 +18,15 @@ internal static class ZLinkFlowContext
     public static Scope Enter(
         string? flowId,
         ZLinkFlowOrigin? origin,
-        bool createIfAbsent,
-        ZLinkFlowOrigin defaultOrigin)
+        bool captureEnabled,
+        ZLinkFlowOrigin defaultOrigin,
+        bool createIfAbsent = true)
     {
+        // Flow fields are observation-only. At Off the processing point must
+        // neither validate nor install inbound flow state, create a new flow,
+        // nor copy any flow forward onto outbound envelopes (spec 27 §4).
+        if (!captureEnabled) return SuppressAmbient();
+
         return EnterEnabled(flowId, origin, createIfAbsent, defaultOrigin);
     }
 
@@ -58,15 +64,25 @@ internal static class ZLinkFlowContext
         return new Scope(previous, state);
     }
 
-    public static Scope EnterCurrentOrCreate(ZLinkFlowOrigin origin, bool createIfAbsent)
+    public static Scope EnterCurrentOrCreate(ZLinkFlowOrigin origin, bool captureEnabled)
     {
-        // Off disables creation of a new flow, not propagation of an existing
-        // ambient flow. A no-op scope preserves that flow without allocating a
-        // replacement State.
-        if (!createIfAbsent) return default;
+        if (!captureEnabled) return SuppressAmbient();
 
         var current = Current;
         return EnterEnabled(current?.FlowId, current?.Origin, createIfAbsent: true, origin);
+    }
+
+    // Off path: no validation, no context capture, no new flow (spec 27 §4).
+    // A stale ambient flow left by a scope entered while tracing was enabled
+    // is cleared for the duration so outbound encoders do not copy it onto
+    // envelopes; steady-state Off pays only the ambient null read.
+    private static Scope SuppressAmbient()
+    {
+        var previous = Ambient.Value;
+        if (previous is not { Active: true }) return default;
+
+        Ambient.Value = null;
+        return new Scope(previous, null);
     }
 
     internal sealed class State(ZLinkFlowValue value)

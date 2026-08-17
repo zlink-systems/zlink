@@ -1,6 +1,4 @@
-using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Dispatch;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -11,12 +9,8 @@ internal sealed class ZLinkSpotRouteDispatcher(
     Func<ZLinkSpotHandlerInvoker> handlerInvoker,
     ZLinkCodecRegistryBuilder codecs,
     ZLinkDispatchErrorReporter dispatchErrors,
-    Func<ZLinkBackendRouteReceived, ZLinkEnvelopeHeader, CancellationToken, ValueTask<bool>>? internalPackets = null,
-    ILogger<ZLinkSpotRouteDispatcher>? logger = null)
+    Func<ZLinkBackendRouteReceived, ZLinkEnvelopeHeader, CancellationToken, ValueTask<bool>>? internalPackets = null)
 {
-    private readonly ILogger<ZLinkSpotRouteDispatcher> _logger =
-        logger ?? NullLogger<ZLinkSpotRouteDispatcher>.Instance;
-
     public async ValueTask DispatchAsync(
         ZLinkBackendRouteReceived received,
         CancellationToken cancellationToken)
@@ -68,9 +62,7 @@ internal sealed class ZLinkSpotRouteDispatcher(
                         ZLinkFrameworkErrorKind.NotFound,
                         $"No SPOT route request handler is registered for '{channelName}:{header.MessageName}'.");
                     scope.HandlerMissing(
-                        _logger,
                         dispatchErrors,
-                        LogLevel.Error,
                         ZLinkDispatchErrorAction.ReplyError,
                         error);
                     await ReplyErrorAsync(
@@ -80,7 +72,7 @@ internal sealed class ZLinkSpotRouteDispatcher(
                 }
                 else
                 {
-                    scope.Dropped(_logger, dispatchErrors, LogLevel.Warning);
+                    scope.Dropped(dispatchErrors);
                 }
 
                 return;
@@ -94,7 +86,6 @@ internal sealed class ZLinkSpotRouteDispatcher(
                         descriptor.MessageType,
                         header.ContentType,
                         codecs,
-                        _logger,
                         dispatchErrors,
                         ZLinkDispatchErrorAction.ReplyError,
                         "SPOT route request",
@@ -115,7 +106,6 @@ internal sealed class ZLinkSpotRouteDispatcher(
                         descriptor.MessageType,
                         header.ContentType,
                         codecs,
-                        _logger,
                         dispatchErrors,
                         ZLinkDispatchErrorAction.Drop,
                         out message))
@@ -135,9 +125,7 @@ internal sealed class ZLinkSpotRouteDispatcher(
                 catch (Exception ex)
                 {
                     scope.HandlerException(
-                        _logger,
                         dispatchErrors,
-                        LogLevel.Error,
                         ZLinkDispatchErrorAction.Drop,
                         ex);
                 }
@@ -169,9 +157,7 @@ internal sealed class ZLinkSpotRouteDispatcher(
                     header.CorrelationId,
                     ex);
                 scope.HandlerException(
-                    _logger,
                     dispatchErrors,
-                    null,
                     ZLinkDispatchErrorAction.ReplyError,
                     ex);
             }
@@ -240,12 +226,15 @@ internal sealed class ZLinkSpotRouteDispatcher(
         var canReply = isRequest && ZLinkEnvelopeCodec.CanCorrelateReply(header);
         if (dispatchErrors.Enabled)
         {
+            // Keep whatever flow the invalid frame carried in readable form,
+            // but never fabricate a fresh id for its failure record (spec 27 §7).
             var validFlow = ZLinkEnvelopeCodec.ValidFlow(header);
             using var flow = ZLinkFlowContext.Enter(
                 validFlow.FlowId,
                 validFlow.FlowOrigin,
-                createIfAbsent: true,
-                ZLinkFlowOrigin.Inbound);
+                dispatchErrors.Flow.CaptureEnabled,
+                ZLinkFlowOrigin.Inbound,
+                createIfAbsent: false);
             dispatchErrors.Report(new ZLinkDispatchFailure(
                 ZLinkDispatchErrorSurface.SpotRoute,
                 isRequest

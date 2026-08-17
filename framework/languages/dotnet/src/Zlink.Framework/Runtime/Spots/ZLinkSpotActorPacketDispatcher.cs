@@ -1,12 +1,9 @@
-using Microsoft.Extensions.Logging;
-
 namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkSpotActorPacketDispatcher(
     Func<ZLinkSpotActorHandlerRegistry?> actorHandlers,
     Func<ZLinkSpotHandlerInvoker> handlerInvoker,
-    ZLinkDispatchErrorReporter dispatchErrors,
-    ILogger logger)
+    ZLinkDispatchErrorReporter dispatchErrors)
 {
     public async ValueTask DispatchAsync(
         IZLinkActor actor,
@@ -42,7 +39,6 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
             catch (ZLinkStreamPayloadDecodeException ex)
             {
                 scope.PayloadDecodeFailed(
-                    logger,
                     dispatchErrors,
                     ZLinkDispatchErrorAction.Drop,
                     ex.DecodeException);
@@ -50,9 +46,7 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
             catch (Exception ex)
             {
                 scope.HandlerException(
-                    logger,
                     dispatchErrors,
-                    LogLevel.Error,
                     ZLinkDispatchErrorAction.Drop,
                     ex);
             }
@@ -60,7 +54,7 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
             return;
         }
 
-        scope.Dropped(logger, dispatchErrors, LogLevel.Warning);
+        scope.Dropped(dispatchErrors);
     }
 
     public async ValueTask<ZLinkActorReply?> DispatchForReplyAsync(
@@ -93,7 +87,6 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
             catch (ZLinkStreamPayloadDecodeException ex)
             {
                 scope.PayloadDecodeFailed(
-                    logger,
                     dispatchErrors,
                     ZLinkDispatchErrorAction.ReplyError,
                     ex.DecodeException);
@@ -102,9 +95,7 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
             catch (Exception ex)
             {
                 scope.HandlerException(
-                    logger,
                     dispatchErrors,
-                    LogLevel.Error,
                     ZLinkDispatchErrorAction.ReplyError,
                     ex);
                 return ZLinkActorReply.FromError(ex);
@@ -114,9 +105,7 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
             ZLinkFrameworkErrorKind.NotFound,
             $"No Spot actor request handler is registered for '{header.Name}'.");
         scope.HandlerMissing(
-            logger,
             dispatchErrors,
-            LogLevel.Error,
             ZLinkDispatchErrorAction.ReplyError,
             error);
         return ZLinkActorReply.FromError(error);

@@ -81,9 +81,7 @@ public sealed class ExactMessageFlowRuntimeTests
             "packet");
 
         scope.HandlerMissing(
-            logger,
             reporter,
-            LogLevel.Warning,
             ZLinkDispatchErrorAction.Drop);
 
         Assert.Equal(0, logger.CallCount);
@@ -114,7 +112,7 @@ public sealed class ExactMessageFlowRuntimeTests
         using (ZLinkFlowContext.Enter(
                    requestFlowId,
                    ZLinkFlowOrigin.Inbound,
-                   createIfAbsent: true,
+                   captureEnabled: true,
                    ZLinkFlowOrigin.Inbound))
         {
             scope = new ZLinkDispatchFlowScope(
@@ -130,7 +128,7 @@ public sealed class ExactMessageFlowRuntimeTests
         using (ZLinkFlowContext.Enter(
                    ZlinkStreamFlowId.Create(),
                    ZLinkFlowOrigin.Application,
-                   createIfAbsent: true,
+                   captureEnabled: true,
                    ZLinkFlowOrigin.Application))
             scope.Trace(reporter, ZLinkMessageFlowOutcome.Replied);
 

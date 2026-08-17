@@ -1,5 +1,3 @@
-using Microsoft.Extensions.Logging;
-
 namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkChannelCommandDispatchPipeline(
@@ -7,10 +5,8 @@ internal sealed class ZLinkChannelCommandDispatchPipeline(
     ZLinkHandlerRegistry handlerRegistry,
     ZLinkHandlerDispatcher dispatcher,
     Func<string, IReadOnlySet<string>> resolveMappedGroups,
-    LogLevel unhandledLogLevel,
     ZLinkDispatchErrorReporter dispatchErrors,
-    ZLinkCodecRegistryBuilder codecs,
-    ILogger logger)
+    ZLinkCodecRegistryBuilder codecs)
 {
     public async Task DispatchAsync(
         string channelName,
@@ -35,7 +31,7 @@ internal sealed class ZLinkChannelCommandDispatchPipeline(
                 out var endpoint)
             || endpoint is null)
         {
-            scope.Dropped(logger, dispatchErrors, unhandledLogLevel);
+            scope.Dropped(dispatchErrors);
             return;
         }
 
@@ -44,7 +40,6 @@ internal sealed class ZLinkChannelCommandDispatchPipeline(
                 endpoint.MessageType,
                 scope.ContentType!,
                 codecs,
-                logger,
                 dispatchErrors,
                 ZLinkDispatchErrorAction.Drop,
                 out var message))
@@ -81,9 +76,7 @@ internal sealed class ZLinkChannelCommandDispatchPipeline(
         catch (Exception ex)
         {
             scope.HandlerException(
-                logger,
                 dispatchErrors,
-                LogLevel.Error,
                 ZLinkDispatchErrorAction.Drop,
                 ex);
         }

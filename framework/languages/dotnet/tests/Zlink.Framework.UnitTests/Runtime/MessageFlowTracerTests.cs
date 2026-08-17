@@ -193,10 +193,8 @@ public sealed class MessageFlowTracerTests
                     services.GetRequiredService<IServiceScopeFactory>(),
                     registration),
                 static _ => new HashSet<string>(StringComparer.Ordinal),
-                LogLevel.Debug,
                 new ZLinkDispatchErrorReporter(registration.DispatchOptions),
-                registration.Codecs,
-                new CapturingLogger());
+                registration.Codecs);
             var header = new ZLinkEnvelopeHeader(
                 ZLinkMessageKind.Publish,
                 "channel",

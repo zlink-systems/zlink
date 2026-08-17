@@ -5096,7 +5096,7 @@ public sealed partial class EntrySpotActorDispatchTests
             using var lifecycle = ZLinkFlowContext.Enter(
                 flowId: null,
                 origin: null,
-                createIfAbsent: true,
+                captureEnabled: true,
                 ZLinkFlowOrigin.Lifecycle);
             var root = Assert.IsType<ZLinkFlowValue>(ZLinkFlowContext.Current);
 
@@ -5258,8 +5258,11 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public async Task Off_Host_Preserves_An_Inbound_Flow_On_The_Next_Actor_Outbound()
+    public async Task Off_Host_Does_Not_Copy_An_Inbound_Flow_To_The_Next_Actor_Outbound()
     {
+        // Spec 27 §4: at Off the runtime neither copies an inbound/ambient flow
+        // onto the next message nor adds the two flow fields to the outbound
+        // envelope. Only correlation_id survives Off.
         const string inboundFlowId = "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d";
         var node = new CapturingSpotNode { ActorSendAccepted = true };
         var (runtime, actor) = await CreateStartedRuntimeAsync(
@@ -5281,8 +5284,8 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.Null(ZLinkFlowContext.Current);
             var sentPacket = Assert.Single(node.ActorSends);
             var header = ZLinkStreamProtocolDefaults.DecodeHeader(sentPacket.Parts[0]);
-            Assert.Equal(inboundFlowId, header.FlowId);
-            Assert.Equal(ZlinkStreamFlowOrigin.Application, header.FlowOrigin);
+            Assert.Null(header.FlowId);
+            Assert.Null(header.FlowOrigin);
         }
         finally
         {

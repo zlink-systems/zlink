@@ -1,7 +1,5 @@
 namespace Zlink.Framework.Runtime.Spots;
 
-using Microsoft.Extensions.Logging.Abstractions;
-
 internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
 {
     private readonly ZLinkDispatchErrorReporter _dispatchErrors = new(
@@ -43,7 +41,6 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
                         header,
                         ZLinkDispatchMessageKind.ActorSend)
                     .PayloadDecodeFailed(
-                        NullLogger.Instance,
                         _dispatchErrors,
                         ZLinkDispatchErrorAction.Drop,
                         ex.DecodeException);
@@ -111,7 +108,6 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
             catch (ZLinkStreamPayloadDecodeException ex)
             {
                 flow.PayloadDecodeFailed(
-                    NullLogger.Instance,
                     _dispatchErrors,
                     ZLinkDispatchErrorAction.ReplyError,
                     ex.DecodeException);

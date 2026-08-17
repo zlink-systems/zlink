@@ -10,6 +10,10 @@ internal static class ZLinkStreamReplyHeaders
         ZlinkStreamRequestSeq requestSeq,
         ZlinkStreamMetadata metadata)
     {
+        // Spec 27 §4/§7: the reply carries the request's correlation id, but
+        // flow fields come from the ambient flow context at encode time
+        // (ZLinkStreamHeaderCodec.Encode). The context only exists while
+        // tracing is on, so an Off host adds no flow fields to the reply.
         return new ZlinkStreamHeader(
             kind,
             codec,
@@ -18,7 +22,7 @@ internal static class ZLinkStreamReplyHeaders
             string.Empty,
             metadata,
             requestHeader.CorrelationId,
-            requestHeader.FlowId,
-            requestHeader.FlowOrigin);
+            null,
+            null);
     }
 }

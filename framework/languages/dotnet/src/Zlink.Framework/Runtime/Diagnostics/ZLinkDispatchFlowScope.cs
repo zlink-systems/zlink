@@ -1,5 +1,3 @@
-using Microsoft.Extensions.Logging;
-
 namespace Zlink.Framework.Runtime.Diagnostics;
 
 internal readonly struct ZLinkDispatchFlowScope(
@@ -33,7 +31,6 @@ internal readonly struct ZLinkDispatchFlowScope(
         Type messageType,
         string contentType,
         ZLinkCodecRegistryBuilder codecs,
-        ILogger logger,
         ZLinkDispatchErrorReporter dispatchErrors,
         ZLinkDispatchErrorAction failureAction,
         out object? message) =>
@@ -42,7 +39,6 @@ internal readonly struct ZLinkDispatchFlowScope(
             messageType,
             contentType,
             codecs,
-            logger,
             dispatchErrors,
             failureAction,
             decodeErrorSubject: null,
@@ -57,7 +53,6 @@ internal readonly struct ZLinkDispatchFlowScope(
         Type messageType,
         string contentType,
         ZLinkCodecRegistryBuilder codecs,
-        ILogger logger,
         ZLinkDispatchErrorReporter dispatchErrors,
         ZLinkDispatchErrorAction failureAction,
         string? decodeErrorSubject,
@@ -85,7 +80,6 @@ internal readonly struct ZLinkDispatchFlowScope(
                     + $"for '{channelName}:{packetName}'.",
                     innerException: ex);
             PayloadDecodeFailed(
-                logger,
                 dispatchErrors,
                 failureAction,
                 ex,
@@ -95,9 +89,7 @@ internal readonly struct ZLinkDispatchFlowScope(
     }
 
     public void HandlerMissing(
-        ILogger logger,
         ZLinkDispatchErrorReporter dispatchErrors,
-        LogLevel logLevel,
         ZLinkDispatchErrorAction action,
         Exception? exception = null)
     {
@@ -109,11 +101,8 @@ internal readonly struct ZLinkDispatchFlowScope(
     }
 
     public void Dropped(
-        ILogger logger,
         ZLinkDispatchErrorReporter dispatchErrors,
-        LogLevel logLevel,
-        ZLinkDispatchErrorReason reason = ZLinkDispatchErrorReason.HandlerMissing,
-        string reasonName = "no-handler")
+        ZLinkDispatchErrorReason reason = ZLinkDispatchErrorReason.HandlerMissing)
     {
         Report(
             dispatchErrors,
@@ -122,7 +111,6 @@ internal readonly struct ZLinkDispatchFlowScope(
     }
 
     public void PayloadDecodeFailed(
-        ILogger logger,
         ZLinkDispatchErrorReporter dispatchErrors,
         ZLinkDispatchErrorAction action,
         Exception exception,
@@ -136,9 +124,7 @@ internal readonly struct ZLinkDispatchFlowScope(
     }
 
     public void HandlerException(
-        ILogger logger,
         ZLinkDispatchErrorReporter dispatchErrors,
-        LogLevel? logLevel,
         ZLinkDispatchErrorAction action,
         Exception exception)
     {
@@ -150,7 +136,6 @@ internal readonly struct ZLinkDispatchFlowScope(
     }
 
     public void ReplyPathMissing(
-        ILogger logger,
         ZLinkDispatchErrorReporter dispatchErrors,
         Exception exception)
     {

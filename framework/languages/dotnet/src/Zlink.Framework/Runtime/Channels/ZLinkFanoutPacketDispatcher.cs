@@ -20,7 +20,6 @@ internal sealed class ZLinkFanoutPacketDispatcher
         ILogger<ZLinkFanoutPacketDispatcher>? logger = null)
     {
         _runtime = runtime;
-        var resolvedLogger = logger ?? NullLogger<ZLinkFanoutPacketDispatcher>.Instance;
         _dispatchErrors = new ZLinkDispatchErrorReporter(
             registration.DispatchOptions,
             runtime is null
@@ -34,10 +33,8 @@ internal sealed class ZLinkFanoutPacketDispatcher
             handlerRegistry,
             dispatcher,
             channelName => ResolveMappedGroups(registration, channelName),
-            LogLevel.Debug,
             _dispatchErrors,
-            registration.Codecs,
-            resolvedLogger);
+            registration.Codecs);
     }
 
     public async Task DispatchEventMessageAsync(
@@ -98,12 +95,15 @@ internal sealed class ZLinkFanoutPacketDispatcher
     {
         if (!_dispatchErrors.Enabled) return;
 
+        // Keep whatever flow the invalid frame carried in readable form,
+        // but never fabricate a fresh id for its failure record (spec 27 §7).
         var validFlow = ZLinkEnvelopeCodec.ValidFlow(protocolError.Header);
         using var invalidFlow = ZLinkFlowContext.Enter(
             validFlow.FlowId,
             validFlow.FlowOrigin,
             _dispatchErrors.Flow.CaptureEnabled,
-            ZLinkFlowOrigin.Inbound);
+            ZLinkFlowOrigin.Inbound,
+            createIfAbsent: false);
         _dispatchErrors.Report(new ZLinkDispatchFailure(
             ZLinkDispatchErrorSurface.ClassicFanout,
             ZLinkDispatchMessageKind.Send,

@@ -70,7 +70,8 @@ internal static class ZLinkSpotReplyEnvelope
         ZLinkEnvelopeHeader request,
         string message)
     {
-        var validFlow = ZLinkEnvelopeCodec.ValidFlow(request);
+        // Spec 27 §4/§7: correlation only; flow fields come from the ambient
+        // flow context at encode time, so an Off host adds none.
         var replyHeader = new ZLinkEnvelopeHeader(
             ZLinkMessageKind.Error,
             channelName,
@@ -80,11 +81,7 @@ internal static class ZLinkSpotReplyEnvelope
             null,
             null,
             nameof(ZLinkFrameworkErrorKind.ProtocolError),
-            message)
-        {
-            FlowId = validFlow.FlowId,
-            FlowOrigin = validFlow.FlowOrigin
-        };
+            message);
         return ZLinkEnvelopeCodec.EncodeParts(replyHeader, null, null, null);
     }
 }

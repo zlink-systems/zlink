@@ -58,6 +58,10 @@ internal static class ZLinkChannelReplyWriter
         }
     }
 
+    // Spec 27 §4/§7: replies preserve the request's correlation id here; the
+    // two flow fields are filled from the ambient flow context at encode time
+    // (ZLinkEnvelopeCodec.EncodeHeader), which exists only while tracing is
+    // on, so an Off host adds no flow fields to reply envelopes.
     public static ZLinkEnvelopeHeader CreateReplyHeader(
         ZLinkMessageKind kind,
         string channelName,
@@ -72,11 +76,7 @@ internal static class ZLinkChannelReplyWriter
             null,
             null,
             null,
-            null)
-        {
-            FlowId = request.FlowId,
-            FlowOrigin = request.FlowOrigin
-        };
+            null);
     }
 
     public static ZLinkEnvelopeHeader CreateErrorHeader(
@@ -96,11 +96,7 @@ internal static class ZLinkChannelReplyWriter
             null,
             null,
             errorCode,
-            exception.Message)
-        {
-            FlowId = request.FlowId,
-            FlowOrigin = request.FlowOrigin
-        };
+            exception.Message);
     }
 
     public static ZLinkEnvelopeHeader CreateProtocolErrorHeader(
@@ -108,7 +104,6 @@ internal static class ZLinkChannelReplyWriter
         ZLinkEnvelopeHeader request,
         string message)
     {
-        var validFlow = ZLinkEnvelopeCodec.ValidFlow(request);
         return new ZLinkEnvelopeHeader(
             ZLinkMessageKind.Error,
             channelName,
@@ -118,10 +113,6 @@ internal static class ZLinkChannelReplyWriter
             null,
             null,
             nameof(ZLinkFrameworkErrorKind.ProtocolError),
-            message)
-        {
-            FlowId = validFlow.FlowId,
-            FlowOrigin = validFlow.FlowOrigin
-        };
+            message);
     }
 }

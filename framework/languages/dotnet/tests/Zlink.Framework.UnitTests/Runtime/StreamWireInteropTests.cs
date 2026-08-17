@@ -23,8 +23,13 @@ public sealed class StreamWireInteropTests
     }
 
     [Fact]
-    public void Reply_header_echoes_request_correlation_and_root_flow()
+    public void Reply_header_echoes_request_correlation_and_keeps_the_root_flow_only_from_context()
     {
+        // Spec 27 §7: a reply preserves the request's correlation id, and its
+        // flow fields only when tracing captured a request flow context. The
+        // reply header itself carries no flow; the encode step fills it from
+        // the ambient context (which an Off host never installs).
+        const string requestFlowId = "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d";
         var request = new ZlinkStreamHeader(
             ZlinkStreamMessageKind.Request,
             ZlinkStreamCodec.Json,
@@ -33,7 +38,7 @@ public sealed class StreamWireInteropTests
             "order.place",
             ZlinkStreamMetadata.Empty,
             "corr-request",
-            "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d",
+            requestFlowId,
             ZlinkStreamFlowOrigin.Application);
 
         var reply = ZLinkStreamReplyHeaders.CreateForRequest(
@@ -45,9 +50,21 @@ public sealed class StreamWireInteropTests
             ZlinkStreamMetadata.Empty);
 
         Assert.Equal(request.CorrelationId, reply.CorrelationId);
-        Assert.Equal(request.FlowId, reply.FlowId);
-        Assert.Equal(request.FlowOrigin, reply.FlowOrigin);
+        Assert.Null(reply.FlowId);
+        Assert.Null(reply.FlowOrigin);
         Assert.Equal(string.Empty, reply.Name);
+
+        ZlinkStreamHeader encodedWithContext;
+        using (ZLinkFlowContext.EnterExisting(
+                   requestFlowId,
+                   Zlink.Framework.Runtime.Diagnostics.ZLinkFlowOrigin.Application))
+            encodedWithContext = CoreHeaderCodec.Decode(CoreHeaderCodec.Encode(reply));
+        Assert.Equal(requestFlowId, encodedWithContext.FlowId);
+        Assert.Equal(ZlinkStreamFlowOrigin.Application, encodedWithContext.FlowOrigin);
+
+        var encodedWithoutContext = CoreHeaderCodec.Decode(CoreHeaderCodec.Encode(reply));
+        Assert.Null(encodedWithoutContext.FlowId);
+        Assert.Null(encodedWithoutContext.FlowOrigin);
     }
 
     [Fact]

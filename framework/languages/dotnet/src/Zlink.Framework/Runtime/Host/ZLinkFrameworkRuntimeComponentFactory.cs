@@ -54,18 +54,15 @@ internal static class ZLinkFrameworkRuntimeComponentFactory
                         handlerRegistry,
                         dispatcher,
                         ResolveHandlerGroups,
-                        LogLevel.Warning,
                         channelDispatchErrors,
-                        registration.Codecs,
-                        channelLogger),
+                        registration.Codecs),
                     new ZLinkChannelRequestDispatchPipeline(
                         null,
                         handlerRegistry,
                         dispatcher,
                         ResolveHandlerGroups,
                         registration.Codecs,
-                        channelDispatchErrors,
-                        channelLogger),
+                        channelDispatchErrors),
                     registration.Codecs)),
             services.GetService<ZLinkFanoutRuntimeService>()
             ?? new ZLinkFanoutRuntimeService(registration));

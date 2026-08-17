@@ -468,8 +468,11 @@ public sealed class ActorRelocationProtocolTests
         Assert.Null(ZLinkFlowContext.Current);
         ZLinkEnvelopeHeader? targetContinuation = null;
         var targetIngress = new List<(string Packet, ZLinkFlowValue Flow)>();
+        // Root-flow preservation across relocation control hops is a tracing
+        // behavior; spec 27 §4 forbids flow capture and outbound flow fields
+        // at Off, so this contract is exercised with tracing enabled.
         var options = new ZLinkDispatchOptionsModel();
-        options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Off);
+        options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
         var dispatcher = new ZLinkSpotRouteDispatcher(
             "actor-route",
             "target-spot",

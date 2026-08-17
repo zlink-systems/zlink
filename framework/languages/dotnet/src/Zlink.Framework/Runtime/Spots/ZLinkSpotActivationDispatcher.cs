@@ -52,9 +52,7 @@ internal sealed class ZLinkSpotActivationDispatcher
         _actorPacketDispatcher = new ZLinkSpotActorPacketDispatcher(
             actorHandlers,
             handlerInvoker,
-            _dispatchErrors,
-            runtime.Services.GetService<ILoggerFactory>()?.CreateLogger<ZLinkSpotActorPacketDispatcher>()
-            ?? NullLogger<ZLinkSpotActorPacketDispatcher>.Instance);
+            _dispatchErrors);
         _actorPipeline = new ZLinkActorInboundPipeline(
             runtime,
             new ZLinkUserSpotActorInboundEndpoint(runtime, actors, _actorPacketDispatcher));
@@ -76,8 +74,7 @@ internal sealed class ZLinkSpotActivationDispatcher
             handlerInvoker,
             runtime.Registration.Codecs,
             _dispatchErrors,
-            DispatchInternalRoutePacketAsync,
-            runtime.Services.GetService<ILoggerFactory>()?.CreateLogger<ZLinkSpotRouteDispatcher>());
+            DispatchInternalRoutePacketAsync);
     }
 
     public ZLinkSpotActorPacketDispatcher ActorPackets => _actorPacketDispatcher;
@@ -463,9 +460,7 @@ internal sealed class ZLinkSpotActivationDispatcher
                 descriptor.MessageName,
                 topic: descriptor.Topic);
             scope.HandlerException(
-                _logger,
                 _dispatchErrors,
-                LogLevel.Error,
                 ZLinkDispatchErrorAction.Drop,
                 ex);
         }

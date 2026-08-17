@@ -1,5 +1,3 @@
-using Microsoft.Extensions.Logging;
-
 namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkChannelRequestDispatchPipeline(
@@ -8,8 +6,7 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
     ZLinkHandlerDispatcher dispatcher,
     Func<string, IReadOnlySet<string>> resolveMappedGroups,
     ZLinkCodecRegistryBuilder codecs,
-    ZLinkDispatchErrorReporter dispatchErrors,
-    ILogger logger)
+    ZLinkDispatchErrorReporter dispatchErrors)
 {
     // Generic reply state lets callers pass cached static lambdas instead of
     // allocating two closures per request.
@@ -43,9 +40,7 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                 ZLinkFrameworkErrorKind.NotFound,
                 $"No request handler is registered for '{channelName}:{header.MessageName}'.");
             scope.HandlerMissing(
-                logger,
                 dispatchErrors,
-                LogLevel.Error,
                 ZLinkDispatchErrorAction.ReplyError,
                 error);
             await replyError(replyState, ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, error))
@@ -58,7 +53,6 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                 endpoint.MessageType,
                 scope.ContentType!,
                 codecs,
-                logger,
                 dispatchErrors,
                 ZLinkDispatchErrorAction.ReplyError,
                 "request",
@@ -115,9 +109,7 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
             await replyError(replyState, ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, ex))
                 .ConfigureAwait(false);
             scope.HandlerException(
-                logger,
                 dispatchErrors,
-                null,
                 ZLinkDispatchErrorAction.ReplyError,
                 ex);
         }

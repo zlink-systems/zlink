@@ -1,5 +1,3 @@
-using Microsoft.Extensions.Logging;
-
 namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkChannelPublishDispatchPipeline(
@@ -7,28 +5,22 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
     ZLinkHandlerRegistry handlerRegistry,
     ZLinkHandlerDispatcher dispatcher,
     Func<string, IReadOnlySet<string>> resolveMappedGroups,
-    LogLevel unhandledLogLevel,
     ZLinkDispatchErrorReporter dispatchErrors,
-    ZLinkCodecRegistryBuilder codecs,
-    ILogger logger)
+    ZLinkCodecRegistryBuilder codecs)
 {
     internal ZLinkChannelPublishDispatchPipeline(
         ZLinkHandlerRegistry handlerRegistry,
         ZLinkHandlerDispatcher dispatcher,
         Func<string, IReadOnlySet<string>> resolveMappedGroups,
-        LogLevel unhandledLogLevel,
         ZLinkDispatchErrorReporter dispatchErrors,
-        ZLinkCodecRegistryBuilder codecs,
-        ILogger logger)
+        ZLinkCodecRegistryBuilder codecs)
         : this(
             null,
             handlerRegistry,
             dispatcher,
             resolveMappedGroups,
-            unhandledLogLevel,
             dispatchErrors,
-            codecs,
-            logger)
+            codecs)
     {
     }
 
@@ -38,7 +30,6 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
         ZLinkEnvelopeHeader header,
         CancellationToken cancellationToken)
     {
-        _ = unhandledLogLevel;
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.ClassicFanout,
             dispatchErrors.Flow.CaptureEnabled,
@@ -119,9 +110,7 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
             catch (Exception ex)
             {
                 scope.HandlerException(
-                    logger,
                     dispatchErrors,
-                    LogLevel.Error,
                     ZLinkDispatchErrorAction.Drop,
                     ex);
             }

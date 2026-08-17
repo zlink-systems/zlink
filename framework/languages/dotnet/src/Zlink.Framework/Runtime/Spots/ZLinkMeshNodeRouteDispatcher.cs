@@ -43,7 +43,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     private readonly ZLinkDispatchErrorReporter _dispatchErrors;
     private readonly ZLinkFrameworkRuntime _runtime;
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
-    private readonly ILogger _logger;
     private readonly object _orderedActorRelayGate = new();
     private readonly Dictionary<ZLinkActorId, TaskCompletionSource> _orderedActorRelayTails = [];
 
@@ -56,8 +55,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         ZLinkCodecRegistryBuilder codecs,
         ZLinkDispatchErrorReporter dispatchErrors,
         ZLinkFrameworkRuntime runtime,
-        ZLinkRuntimeTaskRunner taskRunner,
-        ILogger logger)
+        ZLinkRuntimeTaskRunner taskRunner)
     {
         _meshName = meshName;
         _routeHandlers = routeHandlers;
@@ -68,7 +66,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         _dispatchErrors = dispatchErrors;
         _runtime = runtime;
         _taskRunner = taskRunner;
-        _logger = logger;
     }
 
     // Builds a dispatcher from the SpotNode's registered node-route and
@@ -167,18 +164,15 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             handlerRegistry,
             handlerDispatcher,
             static _ => EmptyGroups,
-            LogLevel.Warning,
             dispatchErrors,
-            registration.Codecs,
-            logger);
+            registration.Codecs);
         var requestPipeline = new ZLinkChannelRequestDispatchPipeline(
             spotNode.SpotNodeName,
             handlerRegistry,
             handlerDispatcher,
             static _ => EmptyGroups,
             registration.Codecs,
-            dispatchErrors,
-            logger);
+            dispatchErrors);
 
         return new ZLinkMeshNodeRouteDispatcher(
             ZLinkMeshName.FromBoundary(spotNode.SpotNodeName, nameof(spotNode)),
@@ -189,8 +183,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             registration.Codecs,
             dispatchErrors,
             runtime,
-            taskRunner,
-            logger);
+            taskRunner);
     }
 
     // Pump entry point (invoked on the single node drain loop). Dispatch runs on a
@@ -441,9 +434,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                     ZLinkFrameworkErrorKind.NotFound,
                     $"No node route request handler is registered for '{header.MessageName}'.");
                 scope.HandlerMissing(
-                    _logger,
                     _dispatchErrors,
-                    LogLevel.Error,
                     ZLinkDispatchErrorAction.ReplyError,
                     error);
                 await ReplyErrorAsync(received, header, error, cancellationToken)
@@ -451,7 +442,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             }
             else
             {
-                scope.Dropped(_logger, _dispatchErrors, LogLevel.Warning);
+                scope.Dropped(_dispatchErrors);
             }
 
             return;
@@ -475,9 +466,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             catch (Exception ex)
             {
                 scope.HandlerException(
-                    _logger,
                     _dispatchErrors,
-                    LogLevel.Error,
                     ZLinkDispatchErrorAction.Drop,
                     ex);
             }
@@ -504,9 +493,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                     received, header, ex, cancellationToken)
                 .ConfigureAwait(false);
             scope.HandlerException(
-                _logger,
                 _dispatchErrors,
-                null,
                 ZLinkDispatchErrorAction.ReplyError,
                 ex);
             return;
@@ -647,12 +634,15 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                        && ZLinkEnvelopeCodec.CanCorrelateReply(header);
         if (_dispatchErrors.Enabled)
         {
+            // Keep whatever flow the invalid frame carried in readable form,
+            // but never fabricate a fresh id for its failure record (spec 27 §7).
             var validFlow = ZLinkEnvelopeCodec.ValidFlow(header);
             using var flow = ZLinkFlowContext.Enter(
                 validFlow.FlowId,
                 validFlow.FlowOrigin,
-                createIfAbsent: true,
-                ZLinkFlowOrigin.Inbound);
+                _dispatchErrors.Flow.CaptureEnabled,
+                ZLinkFlowOrigin.Inbound,
+                createIfAbsent: false);
             _dispatchErrors.Report(new ZLinkDispatchFailure(
                 ZLinkDispatchErrorSurface.RouteMeshChannel,
                 isRequest
