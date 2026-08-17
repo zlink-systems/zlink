@@ -257,6 +257,17 @@ interface ZlinkStreamConnectorOptions {
   readonly compressionCodec?: ZlinkStreamCompressionCodec;
   readonly nameResolver?: ZlinkStreamPacketNameResolver;
   readonly meterProvider?: ZlinkStreamMeterProvider;
+  readonly diagnosticsLevel?: ZlinkStreamDiagnosticsLevel; // 기본 Errors
+}
+
+// 계약은 공통 스펙 §13이 소유한다. 기본값 Errors, 미지 값은 구성 오류.
+// Off: outbound frame flow pair 미생성(0x10 미설정), inbound flow 값 검증·전달 생략
+// (구조 길이 검사 유지, ZlinkStreamMessage.flowId/flowOrigin은 undefined).
+enum ZlinkStreamDiagnosticsLevel {
+  Off = 'off',
+  Errors = 'errors',
+  Normal = 'normal',
+  Detailed = 'detailed',
 }
 
 interface ZlinkStreamHeartbeatOptions {
@@ -311,6 +322,7 @@ interface RequiredZlinkStreamConnectorOptions {
   readonly transportFactory: ZlinkStreamTransportFactory;
   readonly codec?: ZlinkStreamPayloadCodec;
   readonly meterProvider?: ZlinkStreamMeterProvider;
+  readonly diagnosticsLevel: ZlinkStreamDiagnosticsLevel;
 }
 ```
 

@@ -157,9 +157,27 @@ public record ZLinkStreamConnectorOptions(
     ZLinkStreamCompression compression,
     ZLinkStreamCompressionCodec compressionCodec,
     ZLinkStreamPacketNameResolver nameResolver,
-    ZLinkStreamTypedCodec typedCodec) {
+    ZLinkStreamTypedCodec typedCodec,
+    ZLinkStreamDiagnosticsLevel diagnosticsLevel) { // default ERRORS (§4.1)
 }
 ```
+
+### 4.1 Diagnostics level
+
+계약은 [공통 스펙 §13](../../32-stream-connector.ko.md#13-diagnostics-level)이 소유한다.
+Java 표면은 다음과 같다.
+
+```java
+public enum ZLinkStreamDiagnosticsLevel { OFF, ERRORS, NORMAL, DETAILED }
+
+// record component. compact 생성자가 null을 ERRORS로 정규화한다.
+public ZLinkStreamDiagnosticsLevel diagnosticsLevel();
+public ZLinkStreamConnectorOptions withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
+```
+
+`OFF`이면 outbound frame에 flow pair를 만들지 않고(0x10 미설정), inbound flow 필드는 구조
+길이 검사만 유지한 채 값 검증과 handler 전달을 생략한다. Request correlation은 level과
+무관하게 유지된다.
 
 `skipServerCertificateValidation`은 테스트용 자체 서명 인증서에만 사용한다. 운영
 기본값은 `false`다. 이 값을 `true`로 바꾸면 TLS transport와 WSS transport 모두 서버

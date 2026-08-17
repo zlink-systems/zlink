@@ -295,6 +295,19 @@ property로 표현한다.
 공통 계약의 `MaxInboundObserverPayloadPreviewBytes`는 payload preview 길이를 byte 단위로 제한하며 기본값은
 0이다. `.NET`은 이 공통 option을 같은 이름의 property로 투영한다.
 
+공통 계약의 diagnostics level([공통 스펙 §13](../../32-stream-connector.ko.md#13-diagnostics-level))은
+다음 property로 투영한다. 미정의 enum 값은 검증에서 거부한다.
+
+```csharp
+public enum ZlinkStreamDiagnosticsLevel { Off = 0, Errors = 1, Normal = 2, Detailed = 3 }
+
+public ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; init; } // 기본 Errors
+```
+
+`Off`이면 outbound frame에 flow pair를 만들지 않고(0x10 미설정), inbound flow 필드는 구조
+길이 검사만 유지한 채 값 검증과 flow scope 설치를 생략한다. Request correlation은 level과
+무관하게 유지된다.
+
 **`.NET`에만 있는 option:**
 
 | option | 기본값 | 의미 |

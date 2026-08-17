@@ -447,6 +447,7 @@ the same across every language.**
 | Inbound observer queue | 1024 notifications, 0-byte payload preview (§10) |
 | Receive message queue | 1024 messages (§10.1) |
 | TLS certificate validation | On — the default of the validation-skip option is off, used only for a test's self-signed certificate |
+| Diagnostics level | `Errors` (§13) |
 
 ### 6.2 Connector Reconnect Instrument
 
@@ -710,3 +711,31 @@ test name differs, the meaning must be the same.
 | Error handling | Error meaning (§9) |
 | Inbound observer | Observation/isolation/overflow (§10) |
 | Connection lifecycle | State transition/reconnect/heartbeat (§6) |
+| Diagnostics level | `Off` outbound frames carry no flow field/flag (0x10), inbound flow value validation is skipped, the `Errors` default keeps the current wire, and one-way `Send` carries no correlation id (§13) |
+
+## 13. Diagnostics Level
+
+The connector takes a diagnostics level as a creation-time option. The values and their
+meaning are the four values `Off`/`Errors`/`Normal`/`Detailed` of
+[Message flow tracing §4](../server/26-message-flow-tracing.en.md#4-how-the-application-sets-the-recording-scope),
+and **the default is `Errors`.** Changing the level at runtime is not required.
+
+When the level is not `Off`, the connector keeps the current behavior: it creates and
+attaches `flow_id`/`flow_origin` to outbound frames (§4.2, flag `0x10`) and validates the
+inbound frame's flow fields, delivering them on the received message.
+
+When the level is `Off`, the client connector rule of
+[Flow correlation §4](../server/27-flow-correlation.en.md#4-when-a-flow-is-created) applies
+as is.
+
+- Outbound frames neither create nor attach `flow_id`/`flow_origin` (flag `0x10` is not
+  set).
+- Inbound flow fields keep **only the structural length check**; value validation
+  (UUIDv7/origin range) and delivery on the received message are skipped.
+- No observation-only work — flow creation, validation, propagation — is performed.
+
+The diagnostics level does not affect protocol information. A request's correlation id is
+created and preserved even at `Off`. Conversely, **a one-way `Send` never creates a
+correlation id at any level** — [Flow correlation §2](../server/27-flow-correlation.en.md#2-the-role-of-the-two-identifiers)'s
+"a one-way message without a reply doesn't create a `correlation_id`" applies to the
+connector as well (flag `0x08` is not set).

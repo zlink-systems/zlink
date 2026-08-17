@@ -256,7 +256,13 @@ struct connector_options_t {
     std::shared_ptr<const compression_codec_t> compression_codec;
     std::shared_ptr<const typed_codec_t> typed_codec; // 비어 있으면 기본 JSON codec
     std::shared_ptr<connector_metric_sink_t> metric_sink;
+    diagnostics_level_t diagnostics_level = diagnostics_level_t::errors;
 };
+
+// 계약은 공통 스펙 §13이 소유한다. 기본값 errors. off이면 outbound frame에 flow pair를
+// 만들지 않고(0x10 미설정), inbound flow 필드는 구조 길이 검사만 유지한 채 값 검증을
+// 생략한다. Request correlation은 level과 무관하게 유지된다.
+enum class diagnostics_level_t { off, errors, normal, detailed };
 ```
 
 `zlink.stream.reconnects`의 이름과 닫힌 attribute는

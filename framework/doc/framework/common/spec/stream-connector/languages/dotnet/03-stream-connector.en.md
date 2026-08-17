@@ -365,6 +365,20 @@ The common contract's `MaxInboundObserverPayloadPreviewBytes` bounds
 the payload preview length in bytes, defaulting to 0. `.NET` projects
 this common option as a property of the same name.
 
+The common contract's diagnostics level
+([common spec §13](../../32-stream-connector.en.md#13-diagnostics-level)) is projected as
+the following property. Undefined enum values are rejected by validation.
+
+```csharp
+public enum ZlinkStreamDiagnosticsLevel { Off = 0, Errors = 1, Normal = 2, Detailed = 3 }
+
+public ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; init; } // default Errors
+```
+
+At `Off`, outbound frames create no flow pair (0x10 not set), and inbound flow fields keep
+only the structural length check — value validation and flow scope installs are skipped.
+The request correlation is kept regardless of the level.
+
 **`.NET`-only option:**
 
 | Option | Default | Meaning |

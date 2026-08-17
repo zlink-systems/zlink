@@ -400,6 +400,7 @@ await connector.Close.Async(cancellationToken);    // callback 밖에서는 공�
 | inbound observer 큐 | notification 1024개, payload preview 0바이트(§10) |
 | 수신 메시지 큐 | message 1024개(§10.1) |
 | TLS 인증서 검증 | 켜짐 — 검증 생략 option의 기본값은 꺼짐이며 테스트의 자체 서명 인증서에만 사용한다 |
+| diagnostics level | `Errors`(§13) |
 
 ### 6.2 Connector reconnect 계기
 
@@ -618,3 +619,30 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 | error handling | 오류 의미(§9) |
 | inbound observer | 관찰·격리·overflow(§10) |
 | 연결 생명주기 | 상태 전이·재연결·heartbeat(§6) |
+| diagnostics level | `Off` outbound frame에 flow 필드·flag(0x10) 부재, inbound flow 값 검증 생략, `Errors` 기본값에서 현행 wire 유지, one-way `Send`의 correlation id 부재(§13) |
+
+## 13. Diagnostics level
+
+Connector는 생성 시점 option으로 diagnostics level을 받는다. 값과 의미는
+[Message flow tracing §4](../server/26-message-flow-tracing.ko.md#4-application은-기록-범위를-어떻게-정하는가)의
+네 값 `Off`·`Errors`·`Normal`·`Detailed`를 그대로 사용하며 **기본값은 `Errors`다.**
+실행 중 변경은 요구하지 않는다.
+
+`Off`가 아니면 connector는 기존과 같이 outbound frame에 `flow_id`·`flow_origin`을
+생성·부착하고(§4.2, flag `0x10`), inbound frame의 flow 필드를 검증해 수신 message에
+전달한다.
+
+`Off`이면 [Flow correlation §4](../server/27-flow-correlation.ko.md#4-flow를-만드는-시점)의
+client connector 규칙을 그대로 적용한다.
+
+- Outbound frame에 `flow_id`·`flow_origin`을 만들지 않고 부착하지 않는다(flag `0x10`을
+  세우지 않는다).
+- Inbound frame의 flow 필드는 **구조 길이 검사만 유지**하고 값 검증(UUIDv7·origin 범위)과
+  수신 message로의 전달을 생략한다.
+- Flow 생성·검증·전파 등 관측 전용 작업을 하지 않는다.
+
+Diagnostics level은 protocol 정보에 영향을 주지 않는다. Request의 correlation id는
+`Off`에서도 만들고 보존한다. 반대로 **one-way `Send`는 어느 level에서도 correlation id를
+만들지 않는다** — [Flow correlation §2](../server/27-flow-correlation.ko.md#2-두-식별자의-역할)의
+"reply가 없는 one-way message에는 `correlation_id`를 만들지 않는다"가 connector에도 그대로
+적용된다(flag `0x08` 미설정).

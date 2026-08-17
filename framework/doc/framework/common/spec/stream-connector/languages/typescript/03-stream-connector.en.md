@@ -276,6 +276,18 @@ interface ZlinkStreamConnectorOptions {
   readonly compressionCodec?: ZlinkStreamCompressionCodec;
   readonly nameResolver?: ZlinkStreamPacketNameResolver;
   readonly meterProvider?: ZlinkStreamMeterProvider;
+  readonly diagnosticsLevel?: ZlinkStreamDiagnosticsLevel; // default Errors
+}
+
+// The contract is owned by common spec §13. Default Errors; unknown values are a
+// configuration error. Off: outbound frames create no flow pair (0x10 not set), and
+// inbound flow value validation/delivery is skipped (structural length check kept,
+// ZlinkStreamMessage.flowId/flowOrigin are undefined).
+enum ZlinkStreamDiagnosticsLevel {
+  Off = 'off',
+  Errors = 'errors',
+  Normal = 'normal',
+  Detailed = 'detailed',
 }
 
 interface ZlinkStreamHeartbeatOptions {
@@ -330,6 +342,7 @@ interface RequiredZlinkStreamConnectorOptions {
   readonly transportFactory: ZlinkStreamTransportFactory;
   readonly codec?: ZlinkStreamPayloadCodec;
   readonly meterProvider?: ZlinkStreamMeterProvider;
+  readonly diagnosticsLevel: ZlinkStreamDiagnosticsLevel;
 }
 ```
 

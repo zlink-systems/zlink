@@ -576,6 +576,46 @@ Client는 server Framework package가 아니라 Stream Connector package를 사�
 게임 loop나 UI thread에서 callback을 실행해야 하면 `Manual`을 사용한다. `Immediate`는 connector의
 worker에서 callback을 실행하므로 thread affinity가 필요한 client에는 적합하지 않다.
 
+### 5.1 Diagnostics level
+
+Connector는 server runtime과 같은 네 값(`Off`/`Errors`/`Normal`/`Detailed`)의 diagnostics
+level 옵션을 받는다. 기본값은 `Errors`로 기존 동작과 같고, `Off`로 낮추면 connector가
+outbound frame에 flow 식별자를 만들거나 부착하지 않아 관측 전용 비용이 사라진다
+([Stream Connector 공통 스펙 §13](../../spec/stream-connector/32-stream-connector.ko.md#13-diagnostics-level)).
+Request/response 매칭에 쓰는 correlation은 protocol 정보라 `Off`에서도 그대로 동작한다.
+
+=== "C#/.NET"
+
+    ```csharp
+    new ZlinkStreamConnectorOptions
+    {
+        Endpoint = new Uri("tcp://game.example.com:9100"),
+        DiagnosticsLevel = ZlinkStreamDiagnosticsLevel.Off
+    };
+    ```
+
+=== "C++"
+
+    ```cpp
+    connector_options.diagnostics_level = zlink::stream_connector::diagnostics_level_t::off;
+    ```
+
+=== "Java"
+
+    ```java
+    ZLinkStreamConnectorOptions.createDefault(endpoint)
+        .withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF);
+    ```
+
+=== "TypeScript"
+
+    ```typescript
+    const options = {
+        endpoint: 'ws://game.example.com:9100',
+        diagnosticsLevel: ZlinkStreamDiagnosticsLevel.Off,
+    };
+    ```
+
 ## 6. Client send와 request
 
 === "C#/.NET"

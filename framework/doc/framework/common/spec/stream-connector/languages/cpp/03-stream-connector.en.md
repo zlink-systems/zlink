@@ -296,7 +296,14 @@ struct connector_options_t {
     std::shared_ptr<const compression_codec_t> compression_codec;
     std::shared_ptr<const typed_codec_t> typed_codec; // the default JSON codec if empty
     std::shared_ptr<connector_metric_sink_t> metric_sink;
+    diagnostics_level_t diagnostics_level = diagnostics_level_t::errors;
 };
+
+// The contract is owned by common spec §13. Default errors. At off, outbound frames
+// create no flow pair (0x10 not set), and inbound flow fields keep only the structural
+// length check — value validation is skipped. The request correlation is kept
+// regardless of the level.
+enum class diagnostics_level_t { off, errors, normal, detailed };
 ```
 
 `zlink.stream.reconnects`'s name and closed attribute follow

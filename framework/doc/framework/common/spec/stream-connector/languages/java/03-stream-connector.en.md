@@ -180,9 +180,27 @@ public record ZLinkStreamConnectorOptions(
     ZLinkStreamCompression compression,
     ZLinkStreamCompressionCodec compressionCodec,
     ZLinkStreamPacketNameResolver nameResolver,
-    ZLinkStreamTypedCodec typedCodec) {
+    ZLinkStreamTypedCodec typedCodec,
+    ZLinkStreamDiagnosticsLevel diagnosticsLevel) { // default ERRORS (§4.1)
 }
 ```
+
+### 4.1 Diagnostics Level
+
+The contract is owned by [Common spec §13](../../32-stream-connector.en.md#13-diagnostics-level).
+The Java surface is:
+
+```java
+public enum ZLinkStreamDiagnosticsLevel { OFF, ERRORS, NORMAL, DETAILED }
+
+// record component. The compact constructor normalizes null to ERRORS.
+public ZLinkStreamDiagnosticsLevel diagnosticsLevel();
+public ZLinkStreamConnectorOptions withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel level);
+```
+
+At `OFF`, outbound frames create no flow pair (0x10 not set), and inbound flow fields keep
+only the structural length check — value validation and handler delivery are skipped. The
+request correlation is kept regardless of the level.
 
 `skipServerCertificateValidation` is used only for a test's self-signed
 certificate. The production default is `false`. Setting this value to
