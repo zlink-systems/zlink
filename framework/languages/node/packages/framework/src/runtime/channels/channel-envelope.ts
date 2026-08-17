@@ -214,7 +214,20 @@ export function encodeChannelReplyParts(
   return [encodeChannelHeader(header), encoded.message];
 }
 
-export function encodeChannelErrorReplyParts(request: ZLinkChannelEnvelopeHeader, error: unknown): readonly MessageLike[] {
+/**
+ * Reply metadata marker for errors the framework generated itself (never for
+ * application handler failures). Lets a requester distinguish a
+ * framework-origin NOT_FOUND (e.g. stale route / missing handler) from an
+ * application error that happens to use the same kind.
+ */
+export const ZLINK_FRAMEWORK_ORIGIN_METADATA_KEY = 'zlink.origin';
+export const ZLINK_FRAMEWORK_ORIGIN_METADATA_VALUE = 'framework';
+
+export function encodeChannelErrorReplyParts(
+  request: ZLinkChannelEnvelopeHeader,
+  error: unknown,
+  metadata: Readonly<Record<string, string>> = {}
+): readonly MessageLike[] {
   const errorCode = error instanceof ZLinkFrameworkException
     ? String(error.kind)
     : error instanceof Error
@@ -232,7 +245,7 @@ export function encodeChannelErrorReplyParts(request: ZLinkChannelEnvelopeHeader
     topic: null,
     errorCode,
     errorMessage,
-    metadata: {},
+    metadata,
     flowId: request.flowId,
     flowOrigin: request.flowOrigin
   };

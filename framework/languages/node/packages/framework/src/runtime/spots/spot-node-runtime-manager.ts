@@ -58,6 +58,7 @@ import type {
 import type { ZLinkLocationOwnerToken } from '../../contracts/Locations/Writes';
 import { ZLinkMeshDispatchPump } from '../backend/mesh-dispatch-pump';
 import { requireZLinkInfrastructureExecutionArea } from '../execution';
+import { runWithOutboundFlow } from '../diagnostics/flow-context';
 import { ZLinkMeshCompletionTable } from '../backend/mesh-completion-table';
 import type { ZLinkDispatchErrorReporter } from '../channels';
 import {
@@ -1156,15 +1157,20 @@ export class ZLinkSpotNodeRuntimeManager {
   ): Promise<ZLinkSubmitResult> {
     // The slot is the source-local admission boundary. Once publishAsync takes
     // the owned frames, target processing cannot change the caller terminal.
+    // Call-scoped flow (spec 27 §4): the fanout envelope flow pair does not
+    // outlive this publish call.
     try {
-      const parts = encodeChannelPublishEnvelopeParts(
-        channelName,
-        topic,
-        packetName,
-        event,
-        undefined,
+      const parts = runWithOutboundFlow(
         this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
-        metadata
+        () => encodeChannelPublishEnvelopeParts(
+          channelName,
+          topic,
+          packetName,
+          event,
+          undefined,
+          this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
+          metadata
+        )
       );
       const processing = publisher.publishAsync(
         channelName,
@@ -1207,14 +1213,17 @@ export class ZLinkSpotNodeRuntimeManager {
     if (publisher === undefined) {
       throw new ZLinkConfigurationException(`RouteMesh '${meshName}' publisher is not started.`);
     }
-    const parts = encodeChannelPublishEnvelopeParts(
-      channelName,
-      topic,
-      packetName,
-      event,
-      undefined,
+    const parts = runWithOutboundFlow(
       this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
-      metadata
+      () => encodeChannelPublishEnvelopeParts(
+        channelName,
+        topic,
+        packetName,
+        event,
+        undefined,
+        this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
+        metadata
+      )
     );
     try {
       publisher.publish(channelName, topic, parts, { flags });

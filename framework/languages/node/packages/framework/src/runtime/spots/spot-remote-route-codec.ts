@@ -87,8 +87,10 @@ export function decodeRemoteBoundSessionSend(
         actorOwnershipGeneration: send.actorOwnershipGeneration
       }),
       envelope: decoded.envelope,
-      flowId: send.flowId,
-      flowOrigin: send.flowOrigin,
+      // Spec 27 §4: with tracing Off the relay body's flow fields are not
+      // read into the decoded record (the payload bytes stay untouched).
+      flowId: flowEnabled ? send.flowId : undefined,
+      flowOrigin: flowEnabled ? send.flowOrigin : undefined,
       actorPacketTarget: send.actorPacketTarget
     };
   } catch {

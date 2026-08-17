@@ -15,6 +15,21 @@ export enum ZlinkStreamDispatchMode {
   Immediate = 'immediate'
 }
 
+/**
+ * Connector diagnostics level (spec 26 §4). `Errors` is the default and
+ * preserves the connector's established wire behavior (outbound frames carry
+ * the flow pair). `Off` applies spec 27 §4: no flow id is generated or
+ * attached to outbound frames (header flag 0x10 stays clear), inbound flow
+ * fields are neither validated nor installed into received messages
+ * (structural length checks are kept), and no trace-only work runs.
+ */
+export enum ZlinkStreamDiagnosticsLevel {
+  Off = 'off',
+  Errors = 'errors',
+  Normal = 'normal',
+  Detailed = 'detailed'
+}
+
 export enum ZlinkStreamMessageKind {
   Send = 1,
   Request = 2,

@@ -29,7 +29,11 @@ import {
   type ZLinkChannelEnvelopeHeader
 } from './channel-envelope';
 import { ZLinkDispatchErrorReporter } from './dispatch-error-reporter';
-import { tryDecodeChannelHeader } from './channel-envelope-inspection';
+import {
+  inspectMalformedChannelHeader,
+  malformedProtocolErrorRequestHeader,
+  tryDecodeChannelHeader
+} from './channel-envelope-inspection';
 import {
   appendParts,
   type ZLinkMultipartOperation,
@@ -117,7 +121,31 @@ export class ZLinkChannelRequestDispatcher {
     if (received.parts.length === 0 || received.parts[0].data().length === 0) {
       return;
     }
-    const envelope = decodeChannelEnvelope(received.parts, decodedHeader, this.flowEnabled());
+    let envelope: ReturnType<typeof decodeChannelEnvelope>;
+    try {
+      envelope = decodeChannelEnvelope(received.parts, decodedHeader, this.flowEnabled());
+    } catch (error) {
+      const requestSeq = received.requestSeq;
+      const info = inspectMalformedChannelHeader(received.parts, this.flowEnabled());
+      await this.pipeline.dispatchMalformed({
+        info,
+        error,
+        transportRequest: requestSeq !== null,
+        writeProtocolError: requestSeq === null
+          ? undefined
+          : protocolError => this.submitReply(
+              appendParts(
+                router.reply(received.routingId, requestSeq),
+                encodeChannelErrorReplyParts(
+                  malformedProtocolErrorRequestHeader(this.options.channelName, info),
+                  protocolError
+                )
+              ),
+              signal
+            )
+      });
+      return;
+    }
     const packetName = envelope.packetName;
     if (packetName === undefined) {
       throw new ZLinkConfigurationException('Channel packet is missing packetName.');
@@ -204,7 +232,25 @@ export class ZLinkChannelRequestDispatcher {
     if (record.parts.length === 0 || record.parts[0].data().length === 0) {
       return;
     }
-    const envelope = decodeChannelEnvelope(record.parts, undefined, this.flowEnabled());
+    let envelope: ReturnType<typeof decodeChannelEnvelope>;
+    try {
+      envelope = decodeChannelEnvelope(record.parts, undefined, this.flowEnabled());
+    } catch (error) {
+      const info = inspectMalformedChannelHeader(record.parts, this.flowEnabled());
+      await this.pipeline.dispatchMalformed({
+        info,
+        error,
+        transportRequest: false,
+        sourceRid: record.sourceNodeRid == null ? undefined : String(record.sourceNodeRid),
+        writeProtocolError: async (protocolError) => {
+          requireMeshReplyAccepted(record.reply(encodeChannelErrorReplyParts(
+            malformedProtocolErrorRequestHeader(this.options.channelName, info),
+            protocolError
+          )));
+        }
+      });
+      return;
+    }
     const packetName = envelope.packetName;
     if (packetName === undefined) {
       throw new ZLinkConfigurationException('Channel packet is missing packetName.');
@@ -331,11 +377,25 @@ export class ZLinkChannelPublishDispatcher {
     if (topicMessage.parts.length === 0 || topicMessage.parts[0].data().length === 0) {
       return;
     }
-    const envelope = decodeChannelEnvelope(
-      topicMessage.parts,
-      decodedHeader,
-      this.options.dispatchErrors.flow.flowCreationEnabled()
-    );
+    let envelope: ReturnType<typeof decodeChannelEnvelope>;
+    try {
+      envelope = decodeChannelEnvelope(
+        topicMessage.parts,
+        decodedHeader,
+        this.options.dispatchErrors.flow.flowCreationEnabled()
+      );
+    } catch (error) {
+      // Malformed one-way envelope: drop with invalid_frame/drop.
+      await this.pipeline.dispatchMalformed({
+        info: inspectMalformedChannelHeader(
+          topicMessage.parts,
+          this.options.dispatchErrors.flow.flowCreationEnabled()
+        ),
+        error,
+        transportRequest: false
+      });
+      return;
+    }
     if (envelope.header.kind !== ZLinkChannelMessageKind.Publish) {
       return;
     }
@@ -485,7 +545,31 @@ export class ZLinkRoutePacketDispatcher {
     if (received.parts.length === 0 || received.parts[0].data().length === 0) {
       return;
     }
-    const envelope = decodeChannelEnvelope(received.parts, channelHeader, this.flowEnabled());
+    let envelope: ReturnType<typeof decodeChannelEnvelope>;
+    try {
+      envelope = decodeChannelEnvelope(received.parts, channelHeader, this.flowEnabled());
+    } catch (error) {
+      const requestSeq = received.requestSeq;
+      const info = inspectMalformedChannelHeader(received.parts, this.flowEnabled());
+      await this.pipeline.dispatchMalformed({
+        info,
+        error,
+        transportRequest: requestSeq !== null,
+        sourceRid: String(received.routingId),
+        writeProtocolError: requestSeq === null
+          ? undefined
+          : protocolError => this.submitReply(
+              appendParts(
+                router.reply(received.routingId, requestSeq),
+                encodeChannelErrorReplyParts(
+                  malformedProtocolErrorRequestHeader(this.routerChannelId, info),
+                  protocolError
+                )
+              )
+            )
+      });
+      return;
+    }
     const packetName = envelope.packetName;
     if (packetName === undefined) {
       throw new ZLinkConfigurationException('Route packet is missing packetName.');
@@ -568,7 +652,25 @@ export class ZLinkRoutePacketDispatcher {
     if (record.parts.length === 0 || record.parts[0].data().length === 0) {
       return;
     }
-    const envelope = decodeChannelEnvelope(record.parts, undefined, this.flowEnabled());
+    let envelope: ReturnType<typeof decodeChannelEnvelope>;
+    try {
+      envelope = decodeChannelEnvelope(record.parts, undefined, this.flowEnabled());
+    } catch (error) {
+      const info = inspectMalformedChannelHeader(record.parts, this.flowEnabled());
+      await this.pipeline.dispatchMalformed({
+        info,
+        error,
+        transportRequest: false,
+        sourceRid: record.sourceNodeRid == null ? undefined : String(record.sourceNodeRid),
+        writeProtocolError: async (protocolError) => {
+          requireMeshReplyAccepted(record.reply(encodeChannelErrorReplyParts(
+            malformedProtocolErrorRequestHeader(this.routerChannelId, info),
+            protocolError
+          )));
+        }
+      });
+      return;
+    }
     const packetName = envelope.packetName;
     if (packetName === undefined) {
       throw new ZLinkConfigurationException('Route packet is missing packetName.');
@@ -614,7 +716,19 @@ export class ZLinkRoutePacketDispatcher {
     signal?: AbortSignal
   ): Promise<void> {
     if (parts.length === 0 || parts[0].data().length === 0) return;
-    const envelope = decodeChannelEnvelope(parts, undefined, this.flowEnabled());
+    let envelope: ReturnType<typeof decodeChannelEnvelope>;
+    try {
+      envelope = decodeChannelEnvelope(parts, undefined, this.flowEnabled());
+    } catch (error) {
+      // Malformed one-way envelope: drop with invalid_frame/drop.
+      await this.pipeline.dispatchMalformed({
+        info: inspectMalformedChannelHeader(parts, this.flowEnabled()),
+        error,
+        transportRequest: false,
+        sourceRid: String(sourceNodeRid)
+      });
+      return;
+    }
     if (envelope.header.kind !== ZLinkChannelMessageKind.Command) {
       throw new ZLinkConfigurationException('Local node-direct dispatch requires a command packet.');
     }

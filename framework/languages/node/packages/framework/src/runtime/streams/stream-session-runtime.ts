@@ -307,7 +307,8 @@ export class ZLinkStreamSessionRuntime {
           applicationJobPermit?.releaseAfterInternalProcessing();
           payload.close();
           releaseTerminal();
-        }
+        },
+        () => this.traceShutdownDrop(decodedHeader)
       );
       return;
     }
@@ -327,7 +328,8 @@ export class ZLinkStreamSessionRuntime {
           applicationJobPermit?.releaseAfterInternalProcessing();
           payload.close();
           releaseTerminal();
-        }
+        },
+        () => this.traceShutdownDrop(decodedHeader)
       );
       return;
     }
@@ -350,7 +352,8 @@ export class ZLinkStreamSessionRuntime {
             this.options.onError?.(replyError);
           });
         }
-      }
+      },
+      () => this.traceShutdownDrop(decodedHeader)
     );
   }
 
@@ -808,15 +811,22 @@ export class ZLinkStreamSessionRuntime {
     this.removeSession(this.stream.sessionId, this);
   }
 
-  private enqueue(work: () => Promise<void>, onRejected?: () => void): void {
+  private enqueue(
+    work: () => Promise<void>,
+    onRejected?: () => void,
+    onShutdownRejected?: () => void
+  ): void {
     if (!this.serial.enqueue(work, 'lifecycle', {}, onRejected)) {
+      // The serial lane only refuses new work after dispose() closed it.
+      onShutdownRejected?.();
       onRejected?.();
     }
   }
 
   private enqueueApplication(
     work: () => Promise<void>,
-    onRejected?: (error?: unknown) => void
+    onRejected?: (error?: unknown) => void,
+    onShutdownRejected?: () => void
   ): void {
     let claim: ZLinkApplicationWorkClaim | undefined;
     try {
@@ -836,8 +846,46 @@ export class ZLinkStreamSessionRuntime {
       onRejected?.();
     })) {
       claim?.close();
+      // The serial lane only refuses new work after dispose() closed it.
+      onShutdownRejected?.();
       onRejected?.();
     }
+  }
+
+  /**
+   * Spec 26 §2.1/§3.1: a frame discarded because the session serial lane is
+   * closed for shutdown is recorded as `phase=dropped` with the closed
+   * reason `shutdown`. Drops are recorded from the Errors level up and are
+   * never sampled out.
+   */
+  private traceShutdownDrop(header: ZLinkStreamFrameHeader): void {
+    const flowEnabled = this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true;
+    flowIfEnabled(
+      this.options.dispatchErrors?.flow,
+      ZLinkMessageFlowOutcome.Dropped,
+      undefined,
+      flowEnabled ? header.flowId : undefined
+    )?.trace({
+      outcome: ZLinkMessageFlowOutcome.Dropped,
+      surface: ZLinkDispatchErrorSurface.StreamSession,
+      messageKind: streamShutdownDropMessageKind(header.kind),
+      packetName: header.name === '' ? undefined : header.name,
+      correlationId: header.correlationId,
+      sourceRid: this.context.routingId === undefined ? undefined : String(this.context.routingId),
+      flowId: flowEnabled ? header.flowId : undefined,
+      flowOrigin: flowEnabled ? header.flowOrigin : undefined,
+      errorReason: ZLinkDispatchErrorReason.Shutdown
+    });
+  }
+}
+
+function streamShutdownDropMessageKind(kind: ZLinkStreamMessageKind): ZLinkDispatchMessageKind {
+  switch (kind) {
+    case ZLinkStreamMessageKind.Request: return ZLinkDispatchMessageKind.Request;
+    case ZLinkStreamMessageKind.Response: return ZLinkDispatchMessageKind.Response;
+    case ZLinkStreamMessageKind.Error: return ZLinkDispatchMessageKind.Error;
+    case ZLinkStreamMessageKind.Control: return ZLinkDispatchMessageKind.Control;
+    default: return ZLinkDispatchMessageKind.Send;
   }
 }
 

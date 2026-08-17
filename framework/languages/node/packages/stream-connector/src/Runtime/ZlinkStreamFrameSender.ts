@@ -16,7 +16,8 @@ export class ZlinkStreamFrameSender {
   constructor(
     private readonly protocol: ZlinkStreamFrameProtocol,
     private readonly flowContext: ZlinkFlowContext,
-    private readonly metrics: ZlinkStreamRuntimeMetrics
+    private readonly metrics: ZlinkStreamRuntimeMetrics,
+    private readonly flowEnabled: boolean = true
   ) {}
 
   async send(
@@ -32,10 +33,12 @@ export class ZlinkStreamFrameSender {
     explicitFlow?: ZlinkStreamFlow
   ): Promise<void> {
     throwIfAborted(signal);
-    const flow = this.flowContext.currentOrCreate(explicitFlow);
+    // Spec 27 §4: with diagnostics Off no flow id is generated or attached to
+    // the outbound frame (header flag 0x10 stays clear).
+    const flow = this.flowEnabled ? this.flowContext.currentOrCreate(explicitFlow) : undefined;
     await this.write(
       connection,
-      this.protocol.encode(kind, name, payload, metadata, compress, requestSeq, correlationId, flow.flowId, flow.flowOrigin),
+      this.protocol.encode(kind, name, payload, metadata, compress, requestSeq, correlationId, flow?.flowId, flow?.flowOrigin),
       signal
     );
   }

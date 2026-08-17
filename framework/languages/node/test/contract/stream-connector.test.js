@@ -1820,6 +1820,180 @@ test('stream connector heartbeat send failure closes transport and fails pending
   assert.equal(disconnected.length, 1);
 });
 
+// D2 pin (spec 27 §2): a reply-less one-way Send never carries a correlation
+// id. Only requests generate one; this pins the connector's compliant wire.
+test('stream connector one-way send carries no correlation id on the wire', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory
+  });
+
+  await instance.connect();
+  await instance
+    .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new TextEncoder().encode('one-way') })
+    .packetName('OneWay')
+    .submit();
+
+  const frame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
+  const header = protocolCodecs.ZlinkStreamHeaderCodec.decode(frame.header);
+  assert.equal(header.kind, connector.ZlinkStreamMessageKind.Send);
+  assert.equal(header.correlationId, undefined);
+  assert.equal(header.flags & connector.ZlinkStreamHeaderFlags.HasCorrelationId, 0);
+
+  const pending = instance
+    .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('Corr')
+    .timeout(1000)
+    .submitEncoded();
+  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[1]);
+  const requestHeader = protocolCodecs.ZlinkStreamHeaderCodec.decode(requestFrame.header);
+  assert.notEqual(requestHeader.flags & connector.ZlinkStreamHeaderFlags.HasCorrelationId, 0);
+  assert.ok(typeof requestHeader.correlationId === 'string' && requestHeader.correlationId.length > 0);
+  transportFactory.connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(
+    protocolCodecs.ZlinkStreamHeaderCodec.encode({
+      kind: connector.ZlinkStreamMessageKind.Response,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq,
+      requestSeq: requestHeader.requestSeq,
+      name: 'Corr',
+      metadata: connector.ZlinkStreamMetadataMap.empty
+    }),
+    new Uint8Array()
+  ));
+  await instance.dispatch();
+  await pending;
+});
+
+// D1 (spec 26 §4): the diagnostics level defaults to Errors and preserves the
+// established wire behavior (outbound frames carry the flow pair).
+test('stream connector defaults diagnostics level to errors and attaches flow', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory
+  });
+  assert.equal(instance.options.diagnosticsLevel, connector.ZlinkStreamDiagnosticsLevel.Errors);
+
+  await instance.connect();
+  await instance
+    .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('FlowOn')
+    .submit();
+  const frame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
+  const header = protocolCodecs.ZlinkStreamHeaderCodec.decode(frame.header);
+  assert.notEqual(header.flags & connector.ZlinkStreamHeaderFlags.HasFlowId, 0);
+  assert.match(header.flowId, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.equal(header.flowOrigin, 'Application');
+});
+
+// D1 (spec 27 §4): with diagnostics Off no flow id is generated or attached
+// to outbound frames (flag 0x10 stays clear) while the mandatory correlation
+// id of a request is preserved.
+test('stream connector diagnostics off suppresses outbound flow but keeps correlation', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    diagnosticsLevel: connector.ZlinkStreamDiagnosticsLevel.Off
+  });
+
+  await instance.connect();
+  await instance
+    .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('FlowOff')
+    .submit();
+  const sendFrameBytes = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
+  const sendHeader = protocolCodecs.ZlinkStreamHeaderCodec.decode(sendFrameBytes.header);
+  assert.equal(sendHeader.flags & connector.ZlinkStreamHeaderFlags.HasFlowId, 0);
+  assert.equal(sendHeader.flowId, undefined);
+  assert.equal(sendHeader.flowOrigin, undefined);
+
+  const pending = instance
+    .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('OffReq')
+    .timeout(1000)
+    .submitEncoded();
+  const requestFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[1]);
+  const requestHeader = protocolCodecs.ZlinkStreamHeaderCodec.decode(requestFrame.header);
+  assert.equal(requestHeader.flags & connector.ZlinkStreamHeaderFlags.HasFlowId, 0);
+  // Spec 27 §4: correlation_id is protocol data and survives tracing Off.
+  assert.notEqual(requestHeader.flags & connector.ZlinkStreamHeaderFlags.HasCorrelationId, 0);
+  transportFactory.connection.pushFrame(protocolCodecs.ZlinkStreamFrameCodec.encode(
+    protocolCodecs.ZlinkStreamHeaderCodec.encode({
+      kind: connector.ZlinkStreamMessageKind.Response,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq,
+      requestSeq: requestHeader.requestSeq,
+      name: 'OffReq',
+      metadata: connector.ZlinkStreamMetadataMap.empty
+    }),
+    new Uint8Array()
+  ));
+  await instance.dispatch();
+  await pending;
+});
+
+// D1 (spec 27 §4): with diagnostics Off the inbound flow fields are neither
+// validated nor installed on delivered messages, while the structural length
+// checks of the frame are preserved.
+test('stream connector diagnostics off skips inbound flow read but keeps structural checks', async () => {
+  const flowSendFrame = (name) => protocolCodecs.ZlinkStreamFrameCodec.encode(
+    protocolCodecs.ZlinkStreamHeaderCodec.encode({
+      kind: connector.ZlinkStreamMessageKind.Send,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.HasFlowId,
+      name,
+      metadata: connector.ZlinkStreamMetadataMap.empty,
+      flowId: '01890000-0000-7000-8000-000000000001',
+      flowOrigin: 'Inbound'
+    }),
+    new TextEncoder().encode('x')
+  );
+
+  const offFactory = new MemoryTransportFactory();
+  const offInstance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: offFactory,
+    diagnosticsLevel: connector.ZlinkStreamDiagnosticsLevel.Off
+  });
+  await offInstance.connect();
+  const offMessage = offInstance.waitForMessage('FlowFrame', 1000, () => true);
+  offFactory.connection.pushFrame(flowSendFrame('FlowFrame'));
+  await offInstance.dispatch();
+  const receivedOff = await offMessage;
+  assert.equal(receivedOff.flowId, undefined);
+  assert.equal(receivedOff.flowOrigin, undefined);
+
+  const onFactory = new MemoryTransportFactory();
+  const onInstance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: onFactory
+  });
+  await onInstance.connect();
+  const onMessage = onInstance.waitForMessage('FlowFrame', 1000, () => true);
+  onFactory.connection.pushFrame(flowSendFrame('FlowFrame'));
+  await onInstance.dispatch();
+  const receivedOn = await onMessage;
+  assert.equal(receivedOn.flowId, '01890000-0000-7000-8000-000000000001');
+  assert.equal(receivedOn.flowOrigin, 'Inbound');
+
+  // Structural checks are kept at Off: a header whose flow section is
+  // truncated stays invalid even though flow values are not read.
+  const validFrame = flowSendFrame('FlowFrame');
+  const decoded = protocolCodecs.ZlinkStreamFrameCodec.decode(validFrame);
+  const truncatedHeader = decoded.header.slice(0, decoded.header.length - 1);
+  assert.throws(() => protocolCodecs.ZlinkStreamHeaderCodec.decode(truncatedHeader, false));
+
+  // Semantic flow validation is skipped at Off: a malformed flow id decodes
+  // (its value is simply not read), while the enabled decoder rejects it.
+  const corruptedHeader = decoded.header.slice();
+  corruptedHeader[corruptedHeader.length - 5] = 'z'.charCodeAt(0);
+  const offDecoded = protocolCodecs.ZlinkStreamHeaderCodec.decode(corruptedHeader, false);
+  assert.equal(offDecoded.flowId, undefined);
+  assert.throws(() => protocolCodecs.ZlinkStreamHeaderCodec.decode(corruptedHeader));
+});
+
 class MemoryTransportFactory {
   constructor() {
     this.connection = new MemoryConnection();

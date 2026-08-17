@@ -17,6 +17,7 @@ import { ZLinkSpotNodeRouteTransport } from './spot-node-route-transport';
 import { ZLinkRouterSocketSpotRouteTransport } from './router-socket-spot-route-transport';
 import { ZLinkLocalSpotRouteTransport } from './local-spot-route-transport';
 import { ZLinkSpotRouteBridgeTransport } from './spot-route-bridge-transport';
+import { runWithOutboundFlow } from '../diagnostics/flow-context';
 
 const ZLINK_SEND_DONT_WAIT = 1;
 
@@ -92,7 +93,23 @@ export class ZLinkSpotRouteDispatchStrategy {
     return this.targets.canRoutePacketChannel(routerChannelId);
   }
 
-  async routeSendToSpot(
+  routeSendToSpot(
+    spotRouteTarget: ZLinkSpotRouteTarget,
+    packetName: string | undefined,
+    message: unknown,
+    signal?: AbortSignal,
+    metadata?: ReadonlyMap<string, string>,
+    timeoutMs?: number
+  ): Promise<void> {
+    // Call-scoped flow (spec 27 §4): the envelope flow pair lives only for
+    // the duration of this outbound call, never in the caller's context.
+    return runWithOutboundFlow(
+      this.options.flowCreationEnabled?.() ?? true,
+      () => this.routeSendToSpotScoped(spotRouteTarget, packetName, message, signal, metadata, timeoutMs)
+    );
+  }
+
+  private async routeSendToSpotScoped(
     spotRouteTarget: ZLinkSpotRouteTarget,
     packetName: string | undefined,
     message: unknown,
@@ -144,7 +161,21 @@ export class ZLinkSpotRouteDispatchStrategy {
     await this.routerSocketTransport.send(spotRouteTarget, parts, ZLINK_SEND_DONT_WAIT, signal);
   }
 
-  async routeRequestToSpot<TReply>(
+  routeRequestToSpot<TReply>(
+    spotRouteTarget: ZLinkSpotRouteTarget,
+    packetName: string | undefined,
+    request: unknown,
+    timeoutMs: number | undefined,
+    signal?: AbortSignal,
+    metadata?: ReadonlyMap<string, string>
+  ): Promise<TReply> {
+    return runWithOutboundFlow(
+      this.options.flowCreationEnabled?.() ?? true,
+      () => this.routeRequestToSpotScoped<TReply>(spotRouteTarget, packetName, request, timeoutMs, signal, metadata)
+    );
+  }
+
+  private async routeRequestToSpotScoped<TReply>(
     spotRouteTarget: ZLinkSpotRouteTarget,
     packetName: string | undefined,
     request: unknown,

@@ -19,6 +19,7 @@ import {
   submitRequestOperation
 } from '../../channels/channel-multipart';
 import type { ZLinkChannelClientTransport } from '../../channels/channel-transports';
+import { runWithOutboundFlow } from '../../diagnostics/flow-context';
 
 const EMPTY_METADATA: ReadonlyMap<string, string> = new Map();
 
@@ -37,7 +38,9 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     metadata: ReadonlyMap<string, string> = EMPTY_METADATA
   ): Promise<ZLinkSubmitResult> {
     throwIfAborted(signal);
-    await appendParts(
+    // Call-scoped flow (spec 27 §4): the envelope flow pair does not outlive
+    // this outbound call.
+    await runWithOutboundFlow(true, () => appendParts(
       this.dealer.send(),
       encodeChannelEnvelopeParts(
         ZLinkChannelMessageKind.Command,
@@ -51,7 +54,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
         true,
         metadata
       )
-    ).submit();
+    ).submit());
     return { status: ZLinkSubmitStatus.Submitted };
   }
 
@@ -64,7 +67,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     metadata: ReadonlyMap<string, string> = EMPTY_METADATA
   ): Promise<TReply> {
     throwIfAborted(signal);
-    const operation = appendParts(
+    const operation = runWithOutboundFlow(true, () => appendParts(
       this.dealer.request(),
       encodeChannelEnvelopeParts(
         ZLinkChannelMessageKind.Request,
@@ -78,7 +81,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
         true,
         metadata
       )
-    );
+    ));
     if (timeoutMs !== undefined) operation.timeout(timeoutMs);
     const reply = await submitRequestOperation(operation, 'channel request');
     try {
@@ -98,8 +101,8 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     if (this.publisher === undefined) {
       throw new ZLinkConfigurationException('Channel publisher runtime is not started.');
     }
-    const accepted = appendParts(
-      this.publisher.publish(topic),
+    const accepted = runWithOutboundFlow(true, () => appendParts(
+      this.publisher!.publish(topic),
       encodeChannelEnvelopeParts(
         ZLinkChannelMessageKind.Publish,
         channelName,
@@ -112,7 +115,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
         true,
         metadata
       )
-    ).submit();
+    ).submit());
     return {
       status: accepted === false ? ZLinkSubmitStatus.Backpressured : ZLinkSubmitStatus.Submitted
     };

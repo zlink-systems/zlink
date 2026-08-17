@@ -16,6 +16,14 @@ export function currentFlowContext(): ZLinkFlowContextValue | undefined {
 export function currentOrCreateFlow(origin?: ZLinkFlowOrigin, createIfAbsent?: true): ZLinkFlowContextValue;
 export function currentOrCreateFlow(origin: ZLinkFlowOrigin, createIfAbsent: false): ZLinkFlowContextValue | undefined;
 export function currentOrCreateFlow(origin: ZLinkFlowOrigin, createIfAbsent: boolean): ZLinkFlowContextValue | undefined;
+/**
+ * Returns the ambient flow context or, when absent and `createIfAbsent`, a
+ * fresh flow value. The returned value is NOT installed into the ambient
+ * async context (spec 27 §4/§6: flow scopes are call-scoped; a top-level
+ * outbound must not leave its flow behind in unrelated application work).
+ * Outbound entry points that need an ambient scope wrap their operation in
+ * {@link runWithOutboundFlow} instead.
+ */
 export function currentOrCreateFlow(
   origin: ZLinkFlowOrigin = 'Application',
   createIfAbsent = true
@@ -27,9 +35,7 @@ export function currentOrCreateFlow(
   if (!createIfAbsent) {
     return undefined;
   }
-  const created = { flowId: createFlowId(), flowOrigin: origin };
-  flowStorage.enterWith(created);
-  return created;
+  return { flowId: createFlowId(), flowOrigin: origin };
 }
 
 export function runWithFlow<T>(flow: ZLinkFlowContextValue | undefined, callback: () => T): T {
@@ -37,6 +43,22 @@ export function runWithFlow<T>(flow: ZLinkFlowContextValue | undefined, callback
     return callback();
   }
   return flowStorage.run(flow, callback);
+}
+
+/**
+ * Call-scoped outbound flow scope shared by every outbound entry point
+ * (channel operations, mesh/route transports, spot address transport,
+ * native-fallback bound session). When tracing is enabled and no ambient
+ * flow exists, installs a fresh Application flow for the duration of
+ * `callback` only — the caller's async context is untouched afterwards
+ * (spec 27 §4). Envelope encoders and trace points inside the callback
+ * observe the same ambient flow, so the source-side hop stays coherent.
+ */
+export function runWithOutboundFlow<T>(enabled: boolean, callback: () => T): T {
+  if (!enabled || currentFlowContext() !== undefined) {
+    return callback();
+  }
+  return flowStorage.run({ flowId: createFlowId(), flowOrigin: 'Application' }, callback);
 }
 
 export function createInboundFlow(

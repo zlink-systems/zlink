@@ -35,10 +35,15 @@ export class ZlinkStreamHeaderCodec {
     }
   }
 
-  static decode(header: Uint8Array): ZlinkStreamHeader {
+  /**
+   * `includeFlow=false` (diagnostics Off, spec 27 §4) skips reading and
+   * validating the inbound flow fields while the structural length checks in
+   * the wire decoder are preserved.
+   */
+  static decode(header: Uint8Array, includeFlow = true): ZlinkStreamHeader {
     let decoded: ZlinkStreamHeader;
     try {
-      const wire = decodeStreamWireHeader(header);
+      const wire = decodeStreamWireHeader(header, undefined, includeFlow);
       const metadata = wire.metadata.size === 0
         ? ZlinkStreamMetadataMap.empty
         : ZlinkStreamMetadataMap.from(wire.metadata);

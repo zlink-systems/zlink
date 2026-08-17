@@ -5,6 +5,7 @@ import type {
 } from '../../Contracts';
 import {
   ZlinkStreamCodec,
+  ZlinkStreamDiagnosticsLevel,
   ZlinkStreamErrorCode,
   ZlinkStreamMessageKind,
   ZlinkStreamMetadataMap
@@ -57,9 +58,15 @@ export class ZlinkStreamFrameProtocol {
   decode(frameBytes: Uint8Array): { readonly header: ZlinkStreamHeader; readonly payload: Uint8Array } {
     const frame = ZlinkStreamFrameCodec.decode(frameBytes);
     return {
-      header: ZlinkStreamHeaderCodec.decode(frame.header),
+      // Spec 27 §4: with diagnostics Off the inbound flow fields are neither
+      // read nor validated (structural length checks are preserved).
+      header: ZlinkStreamHeaderCodec.decode(frame.header, this.flowEnabled()),
       payload: frame.payload
     };
+  }
+
+  flowEnabled(): boolean {
+    return this.options.diagnosticsLevel !== ZlinkStreamDiagnosticsLevel.Off;
   }
 
   decodeFrames(chunk: Uint8Array): readonly {

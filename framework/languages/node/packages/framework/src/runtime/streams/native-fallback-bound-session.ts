@@ -35,7 +35,7 @@ import type { ZLinkNativeFallbackBoundSessionPort } from './stream-binding-runti
 import { throwIfAborted } from '../abort';
 import type { ZLinkBackendActorSessionNode } from '../backend';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
-import { currentOrCreateFlow } from '../diagnostics/flow-context';
+import { currentOrCreateFlow, runWithOutboundFlow } from '../diagnostics/flow-context';
 
 export interface ZLinkNativeFallbackBoundSessionOptions {
   readonly runtime: ZLinkNativeFallbackBoundSessionPort;
@@ -140,7 +140,17 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
     );
   }
 
-  private async execute(packetName: string, signal?: AbortSignal): Promise<ZLinkSubmitResult> {
+  private execute(packetName: string, signal?: AbortSignal): Promise<ZLinkSubmitResult> {
+    // Call-scoped flow (spec 27 §4): the relay JSON flow pair and any nested
+    // routed-transport envelope share one ambient flow that does not outlive
+    // this submit call.
+    return runWithOutboundFlow(
+      this.options.flowCreationEnabled?.() ?? true,
+      () => this.executeScoped(packetName, signal)
+    );
+  }
+
+  private async executeScoped(packetName: string, signal?: AbortSignal): Promise<ZLinkSubmitResult> {
     const localActor = this.options.localActorProvider?.() === true;
     const remoteTarget = this.options.remoteBoundSessionTargetProvider();
     let nativeAttempted = false;

@@ -19,10 +19,17 @@ export interface ZlinkStreamFlow {
   readonly flowOrigin: ZlinkFlowOrigin;
 }
 
-export interface ZlinkStreamMessage<TPayload = unknown> extends ZlinkStreamFlow {
+export interface ZlinkStreamMessage<TPayload = unknown> {
   readonly name: string;
   readonly metadata: ZlinkStreamMetadata;
   readonly payload: TPayload;
+  /**
+   * Present while diagnostics are enabled (the default). With
+   * `diagnosticsLevel: Off` inbound flow fields are neither read nor
+   * installed (spec 27 §4), so delivered messages carry no flow pair.
+   */
+  readonly flowId?: string;
+  readonly flowOrigin?: ZlinkFlowOrigin;
 }
 
 export interface ZlinkStreamHeader {

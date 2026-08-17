@@ -7,6 +7,7 @@ import type {
   ZLinkFlowOrigin
 } from '../../contracts';
 import {
+  ZLinkFrameworkErrorKind,
   ZLinkFrameworkException,
   ZLinkHandlerDispatchKind,
   ZLinkUnhandledDispatchAction
@@ -21,9 +22,11 @@ import {
 import { invokeZLinkHandlerFilters } from '../handlers';
 import {
   decodeChannelPayload,
+  ZLinkChannelMessageKind,
   type ZLinkChannelEnvelope,
   type ZLinkChannelEnvelopeCodecRegistry
 } from './channel-envelope';
+import type { ZLinkMalformedChannelHeaderInfo } from './channel-envelope-inspection';
 import type { ZLinkDispatchErrorReporter } from './dispatch-error-reporter';
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
@@ -173,9 +176,11 @@ export class ZLinkChannelDispatchPipeline {
       try {
         await dispatch.writeError(error);
       } catch (replyError) {
+        // Spec 26 §3.1: a failed reply write means the reply delivery path is
+        // gone; `unexpected_reply` names a surplus/late reply instead.
         this.report(
           dispatch.fields,
-          ZLinkDispatchErrorReason.UnexpectedReply,
+          ZLinkDispatchErrorReason.ReplyPathMissing,
           ZLinkDispatchErrorAction.Drop,
           replyError
         );
@@ -194,9 +199,11 @@ export class ZLinkChannelDispatchPipeline {
       await dispatch.writeReply(reply);
       this.trace(ZLinkMessageFlowOutcome.Replied, dispatch.fields);
     } catch (error) {
+      // Spec 26 §3.1: a failed reply write means the reply delivery path is
+      // gone; `unexpected_reply` names a surplus/late reply instead.
       this.report(
         dispatch.fields,
-        ZLinkDispatchErrorReason.UnexpectedReply,
+        ZLinkDispatchErrorReason.ReplyPathMissing,
         ZLinkDispatchErrorAction.Drop,
         error
       );
@@ -209,6 +216,56 @@ export class ZLinkChannelDispatchPipeline {
       ZLinkDispatchErrorReason.ReplyPathMissing,
       ZLinkDispatchErrorAction.Drop
     );
+  }
+
+  /**
+   * Terminal handling for an envelope that failed structural decoding.
+   * Requests receive a protocol error reply plus a
+   * `zlink.dispatch_error(invalid_frame/reply_error)` record; one-way frames
+   * are dropped with `invalid_frame/drop`. Identifiers are used only when
+   * they could be read from the invalid frame (spec 27 §7 — never fabricated).
+   */
+  async dispatchMalformed(input: {
+    readonly info: ZLinkMalformedChannelHeaderInfo;
+    readonly error: unknown;
+    /** The transport exposed a reply path (e.g. a request sequence). */
+    readonly transportRequest: boolean;
+    readonly sourceRid?: string;
+    readonly writeProtocolError?: (error: ZLinkFrameworkException) => Promise<void>;
+  }): Promise<void> {
+    const { info } = input;
+    const isRequest = info.kind === ZLinkChannelMessageKind.Request
+      || (info.kind === undefined && input.transportRequest);
+    let replied = false;
+    if (
+      isRequest
+      && input.writeProtocolError !== undefined
+      && info.correlationId !== undefined
+    ) {
+      const protocolError = new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.ProtocolError,
+        `Channel '${this.options.channelName}' received a malformed envelope.`
+      );
+      try {
+        await input.writeProtocolError(protocolError);
+        replied = true;
+      } catch {
+        // The reply path failed; the record below downgrades to a drop.
+      }
+    }
+    this.options.dispatchErrors.report({
+      surface: this.options.surface,
+      messageKind: isRequest ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send,
+      reason: ZLinkDispatchErrorReason.InvalidFrame,
+      action: replied ? ZLinkDispatchErrorAction.ReplyError : ZLinkDispatchErrorAction.Drop,
+      packetName: info.messageName,
+      channelName: this.options.channelName,
+      sourceRid: input.sourceRid,
+      correlationId: info.correlationId,
+      flowId: info.flowId,
+      flowOrigin: info.flowOrigin,
+      error: input.error
+    });
   }
 
   private async invoke<TContext extends ZLinkMessageContext, TResult>(

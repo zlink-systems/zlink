@@ -2,6 +2,7 @@ import {
   RequiredZlinkStreamConnectorOptions,
   ZlinkStreamCompression,
   ZlinkStreamConnectorOptions,
+  ZlinkStreamDiagnosticsLevel,
   ZlinkStreamDispatchMode,
   ZlinkStreamErrorCode,
   ZlinkStreamHeartbeatOptions,
@@ -34,6 +35,7 @@ export function normalizeOptions(
   }
   validateHeartbeat(options.heartbeat);
   validateReconnect(options.reconnect);
+  validateDiagnosticsLevel(options.diagnosticsLevel);
 
   return {
     endpoint,
@@ -64,7 +66,10 @@ export function normalizeOptions(
     nameResolver: options.nameResolver ?? { resolve: (type) => type.name },
     transportFactory: options.transportFactory ?? defaultTransportFactory,
     codec: options.codec,
-    meterProvider: options.meterProvider
+    meterProvider: options.meterProvider,
+    // Spec 26 §4: the default diagnostics level is Errors, which preserves
+    // the connector's established wire behavior.
+    diagnosticsLevel: options.diagnosticsLevel ?? ZlinkStreamDiagnosticsLevel.Errors
   };
 }
 
@@ -79,6 +84,18 @@ function resolveCompressionCodec(options: ZlinkStreamConnectorOptions) {
   return options.compressionCodec;
 }
 
+
+function validateDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel | undefined): void {
+  if (
+    level !== undefined
+    && level !== ZlinkStreamDiagnosticsLevel.Off
+    && level !== ZlinkStreamDiagnosticsLevel.Errors
+    && level !== ZlinkStreamDiagnosticsLevel.Normal
+    && level !== ZlinkStreamDiagnosticsLevel.Detailed
+  ) {
+    throw connectorError(ZlinkStreamErrorCode.ConfigurationError, 'DiagnosticsLevel is invalid.');
+  }
+}
 
 function validatePositive(value: number, name: string): void {
   if (value <= 0) {

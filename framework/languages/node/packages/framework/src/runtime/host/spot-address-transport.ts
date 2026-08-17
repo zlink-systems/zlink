@@ -45,6 +45,7 @@ import {
 } from '../channels/channel-envelope';
 import type { ZLinkDispatchErrorReporter } from '../channels';
 import { flowIfEnabled } from '../diagnostics';
+import { runWithOutboundFlow } from '../diagnostics/flow-context';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
 import type {
   ZLinkSpotAddressCallOptions,
@@ -107,7 +108,21 @@ const PRE_ADMISSION_MISSING_INSTANCE_ERRORS = new WeakSet<ZLinkFrameworkExceptio
 export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport {
   constructor(private readonly options: ZLinkHostSpotAddressTransportOptions) {}
 
-  async sendToSpotAddress(
+  sendToSpotAddress(
+    spotId: RoutingId,
+    message: unknown,
+    call: ZLinkSpotAddressCallOptions
+  ): Promise<ZLinkSubmitResult> {
+    // Call-scoped flow (spec 27 §4): the envelope encoders and the
+    // traceInstanceAddress points share one ambient flow that does not
+    // outlive this call.
+    return runWithOutboundFlow(
+      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
+      () => this.sendToSpotAddressScoped(spotId, message, call)
+    );
+  }
+
+  private async sendToSpotAddressScoped(
     spotId: RoutingId,
     message: unknown,
     call: ZLinkSpotAddressCallOptions
@@ -255,7 +270,18 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     }
   }
 
-  async requestToSpotAddress<TReply = unknown>(
+  requestToSpotAddress<TReply = unknown>(
+    spotId: RoutingId,
+    request: unknown,
+    call: ZLinkSpotAddressCallOptions
+  ): Promise<TReply> {
+    return runWithOutboundFlow(
+      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
+      () => this.requestToSpotAddressScoped<TReply>(spotId, request, call)
+    );
+  }
+
+  private async requestToSpotAddressScoped<TReply = unknown>(
     spotId: RoutingId,
     request: unknown,
     call: ZLinkSpotAddressCallOptions

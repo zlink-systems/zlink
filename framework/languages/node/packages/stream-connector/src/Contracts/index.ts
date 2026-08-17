@@ -2,6 +2,7 @@ export {
   ZlinkStreamTransport,
   ZlinkStreamCodec,
   ZlinkStreamCompression,
+  ZlinkStreamDiagnosticsLevel,
   ZlinkStreamDispatchMode,
   ZlinkStreamMessageKind,
   ZlinkStreamHeaderFlags,

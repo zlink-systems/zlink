@@ -2494,3 +2494,44 @@ function streamHeaderReviver(key, value) {
   }
   return value;
 }
+
+test('stream session runtime records a shutdown drop for frames the closed serial lane rejects', async () => {
+  // Carry-over: a frame discarded because the session serial lane refused it
+  // at shutdown must leave a phase=dropped record with the closed reason
+  // `shutdown` (spec 26 §2.1/§3.1); Errors level records drops.
+  const dispatch = {
+    diagnostics: { messageFlow: 'errors', sampleRate: 1, includeMessageSizes: false }
+  };
+  const cell = framework.createMessageFlowModeCell(dispatch);
+  const ctx = framework.createDiagnosticsContext(dispatch, undefined, cell);
+  const reporter = new ZLinkDispatchErrorReporter(
+    undefined,
+    undefined,
+    { reportRuntimeTaskException() {} },
+    ctx
+  );
+  const runtime = new framework.ZLinkStreamSessionRuntime({
+    socket: new FakeStreamSocket(),
+    dispatchErrors: reporter,
+    sessionFactory(context) {
+      return { context, async onDisconnected() {} };
+    }
+  }, 'session-shutdown-drop');
+  await runtime.session;
+  await runtime.dispose();
+  assert.equal(reporter.flow.tracedCount, 0);
+
+  runtime.enqueuePacket(
+    fakeJsonMessage('late'),
+    streamHeader({ kind: connector.ZlinkStreamMessageKind.Send, name: 'LatePacket' })
+  );
+  assert.equal(reporter.flow.tracedCount, 1);
+
+  // Off keeps the drop unrecorded (spec 26 §4: no trace-only work at Off).
+  cell.mode = 'off';
+  runtime.enqueuePacket(
+    fakeJsonMessage('late-off'),
+    streamHeader({ kind: connector.ZlinkStreamMessageKind.Send, name: 'LatePacket' })
+  );
+  assert.equal(reporter.flow.tracedCount, 1);
+});

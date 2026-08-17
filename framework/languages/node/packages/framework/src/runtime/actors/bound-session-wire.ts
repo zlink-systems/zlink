@@ -57,8 +57,25 @@ export function encodeRemoteBoundSessionSendPayload(input: {
   return {
     packetName: ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET,
     ...input,
-    metadata: Object.fromEntries(input.metadata)
+    metadata: Object.fromEntries(input.metadata),
+    // Spec 27 §3: the wire representation of flow_origin is lowercase
+    // (`inbound|timer|application|lifecycle`); the capitalized value is the
+    // internal TypeScript union only.
+    flowOrigin: encodeWireFlowOrigin(input.flowOrigin)
   };
+}
+
+const WIRE_FLOW_ORIGIN: Record<import('../../contracts').ZLinkFlowOrigin, string> = {
+  Inbound: 'inbound',
+  Timer: 'timer',
+  Application: 'application',
+  Lifecycle: 'lifecycle'
+};
+
+function encodeWireFlowOrigin(
+  origin: import('../../contracts').ZLinkFlowOrigin | undefined
+): string | undefined {
+  return origin === undefined ? undefined : WIRE_FLOW_ORIGIN[origin];
 }
 
 export function encodeRemoteBoundSessionResponsePayload(input: {
@@ -136,10 +153,16 @@ export function decodeRemoteBoundSessionSendPayload(payload: unknown): {
 }
 
 function optionalFlowOrigin(payload: object): import('../../contracts').ZLinkFlowOrigin | undefined {
-  const value = (payload as { flowOrigin?: unknown }).flowOrigin;
-  return value === 'Inbound' || value === 'Timer' || value === 'Application' || value === 'Lifecycle'
-    ? value
-    : undefined;
+  // Spec 27 §3 wire spelling (lowercase). This relay JSON is a Node<->Node
+  // internal wire deployed atomically with this repository, so the decoder
+  // accepts only the spec spelling.
+  switch ((payload as { flowOrigin?: unknown }).flowOrigin) {
+    case 'inbound': return 'Inbound';
+    case 'timer': return 'Timer';
+    case 'application': return 'Application';
+    case 'lifecycle': return 'Lifecycle';
+    default: return undefined;
+  }
 }
 
 export function decodeRemoteBoundSessionResponsePayload(payload: unknown): {

@@ -32,6 +32,7 @@ import { codecsForFrameworkPacket } from './channel-framework-packets';
 import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
 import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts';
 import { ZLinkRouteDisconnectedError } from './route-disconnected-error';
+import { runWithOutboundFlow } from '../diagnostics/flow-context';
 
 const ZLINK_SEND_DONT_WAIT = 1 as ZLinkBackendSendFlags;
 
@@ -51,7 +52,22 @@ export class ZLinkChannelOutboundOperations {
     return this.pendingRequests.get(channelName) ?? 0;
   }
 
-  async send(
+  send(
+    channelName: string,
+    packetName: string | undefined,
+    message: unknown,
+    signal?: AbortSignal,
+    metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
+  ): Promise<ZLinkSubmitResult> {
+    // Call-scoped flow (spec 27 §4): the envelope encoder and the trace
+    // points below share one ambient flow that does not outlive this call.
+    return runWithOutboundFlow(
+      this.dispatchServices.flowCreationEnabled(),
+      () => this.sendScoped(channelName, packetName, message, signal, metadata)
+    );
+  }
+
+  private async sendScoped(
     channelName: string,
     packetName: string | undefined,
     message: unknown,
@@ -121,7 +137,21 @@ export class ZLinkChannelOutboundOperations {
     });
   }
 
-  async request<TReply>(
+  request<TReply>(
+    channelName: string,
+    packetName: string | undefined,
+    request: unknown,
+    timeoutMs: number | undefined,
+    signal?: AbortSignal,
+    metadata?: ReadonlyMap<string, string>
+  ): Promise<TReply> {
+    return runWithOutboundFlow(
+      this.dispatchServices.flowCreationEnabled(),
+      () => this.requestScoped<TReply>(channelName, packetName, request, timeoutMs, signal, metadata)
+    );
+  }
+
+  private async requestScoped<TReply>(
     channelName: string,
     packetName: string | undefined,
     request: unknown,
@@ -230,6 +260,19 @@ export class ZLinkChannelOutboundOperations {
     event: unknown,
     metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
   ): ZLinkSubmitResult {
+    return runWithOutboundFlow(
+      this.dispatchServices.flowCreationEnabled(),
+      () => this.tryPublishScoped(channelName, topic, packetName, event, metadata)
+    );
+  }
+
+  private tryPublishScoped(
+    channelName: string,
+    topic: string,
+    packetName: string | undefined,
+    event: unknown,
+    metadata: ReadonlyMap<string, string>
+  ): ZLinkSubmitResult {
     requirePublicFanoutTopic(topic);
     const publisher = this.sockets['publisher'](channelName);
     const parts = encodeChannelEnvelopeParts(
@@ -254,7 +297,21 @@ export class ZLinkChannelOutboundOperations {
     return publishResult(ZLinkSubmitStatus.Submitted);
   }
 
-  async publish(
+  publish(
+    channelName: string,
+    topic: string,
+    packetName: string | undefined,
+    event: unknown,
+    signal?: AbortSignal,
+    metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
+  ): Promise<ZLinkSubmitResult> {
+    return runWithOutboundFlow(
+      this.dispatchServices.flowCreationEnabled(),
+      () => this.publishScoped(channelName, topic, packetName, event, signal, metadata)
+    );
+  }
+
+  private async publishScoped(
     channelName: string,
     topic: string,
     packetName: string | undefined,
@@ -291,7 +348,21 @@ export class ZLinkChannelOutboundOperations {
     return publishResult(ZLinkSubmitStatus.Submitted);
   }
 
-  async routeSubmit(
+  routeSubmit(
+    routerChannelId: string,
+    targetNodeRid: string,
+    packetName: string | undefined,
+    message: unknown,
+    signal?: AbortSignal,
+    metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
+  ): Promise<ZLinkSubmitResult> {
+    return runWithOutboundFlow(
+      this.dispatchServices.flowCreationEnabled(),
+      () => this.routeSubmitScoped(routerChannelId, targetNodeRid, packetName, message, signal, metadata)
+    );
+  }
+
+  private async routeSubmitScoped(
     routerChannelId: string,
     targetNodeRid: string,
     packetName: string | undefined,
@@ -350,7 +421,30 @@ export class ZLinkChannelOutboundOperations {
     });
   }
 
-  async routeRequest<TReply>(
+  routeRequest<TReply>(
+    routerChannelId: string,
+    targetNodeRid: string,
+    packetName: string | undefined,
+    request: unknown,
+    timeoutMs: number | undefined,
+    signal?: AbortSignal,
+    metadata?: ReadonlyMap<string, string>
+  ): Promise<TReply> {
+    return runWithOutboundFlow(
+      this.dispatchServices.flowCreationEnabled(),
+      () => this.routeRequestScoped<TReply>(
+        routerChannelId,
+        targetNodeRid,
+        packetName,
+        request,
+        timeoutMs,
+        signal,
+        metadata
+      )
+    );
+  }
+
+  private async routeRequestScoped<TReply>(
     routerChannelId: string,
     targetNodeRid: string,
     packetName: string | undefined,

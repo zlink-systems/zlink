@@ -146,13 +146,17 @@ export class ZlinkStreamReceiveDispatcher {
       return;
     }
     if (header.kind === ZlinkStreamMessageKind.Send) {
-      const flow = this.flowContext.createInbound(header.flowId, header.flowOrigin);
+      // Spec 27 §4: with diagnostics Off no inbound flow context is created
+      // or installed on delivered messages.
+      const flow = this.protocol.flowEnabled()
+        ? this.flowContext.createInbound(header.flowId, header.flowOrigin)
+        : undefined;
       this.receivedMessages.enqueue({
         name: header.name,
         metadata: header.metadata,
         payload: { codec: header.codec, payload: this.protocol.decodePayload(header, payload) },
-        flowId: flow.flowId,
-        flowOrigin: flow.flowOrigin
+        flowId: flow?.flowId,
+        flowOrigin: flow?.flowOrigin
       }, signal);
     }
   }

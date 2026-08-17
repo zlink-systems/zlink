@@ -621,15 +621,27 @@ test('MFLOW-EXT flow sampling keeps or drops every event in one flow together', 
   );
 });
 
-test('MFLOW-EXT create-if-absent keeps one flow across an async continuation', async () => {
+test('MFLOW-EXT outbound flow scope is call-scoped and keeps one flow inside it', async () => {
   await new Promise((resolve, reject) => {
     setImmediate(async () => {
       try {
-        const first = flowContext.currentOrCreateFlow();
-        await Promise.resolve();
-        const second = flowContext.currentOrCreateFlow();
+        // Spec 27 §4/§6: a top-level outbound installs its flow only for the
+        // duration of the call. Inside the scope every read observes the
+        // same flow, including across async continuations.
+        let first;
+        let second;
+        await flowContext.runWithOutboundFlow(true, async () => {
+          first = flowContext.currentOrCreateFlow();
+          await Promise.resolve();
+          second = flowContext.currentOrCreateFlow();
+        });
         assert.equal(second.flowId, first.flowId);
         assert.equal(second.flowOrigin, first.flowOrigin);
+        // After the call the ambient application context is clean: the flow
+        // must not leak into unrelated work (the former enterWith install).
+        assert.equal(flowContext.currentFlowContext(), undefined);
+        const unrelated = flowContext.currentOrCreateFlow();
+        assert.notEqual(unrelated.flowId, first.flowId);
         resolve();
       } catch (error) {
         reject(error);
@@ -641,26 +653,35 @@ test('MFLOW-EXT create-if-absent keeps one flow across an async continuation', a
 test('MFLOW-EXT channel wire and outbound trace use the same created flow', async () => {
   await new Promise((resolve, reject) => {
     setImmediate(async () => {
-      const parts = channelEnvelope.encodeChannelEnvelopeParts(
-        1,
-        'api',
-        'EchoRequest',
-        { value: 'ping' }
-      );
+      let parts;
       try {
-        const header = JSON.parse(Buffer.from(parts[0]).toString());
-        const { tracer } = makeTracer(diagnostics('normal'));
-        tracer.trace(receivedEvent());
+        // The outbound entry points wrap encode + trace in one call-scoped
+        // flow (runWithOutboundFlow); wire fields and the source-side trace
+        // must agree without installing anything into the caller's context.
+        let header;
+        flowContext.runWithOutboundFlow(true, () => {
+          parts = channelEnvelope.encodeChannelEnvelopeParts(
+            1,
+            'api',
+            'EchoRequest',
+            { value: 'ping' }
+          );
+          header = JSON.parse(Buffer.from(parts[0]).toString());
+          const { tracer } = makeTracer(diagnostics('normal'));
+          tracer.trace(receivedEvent());
+        });
         assert.equal(telemetryRecords[0].attributes.flow, header.flowId);
         assert.equal(header.flowOrigin, 3);
         // Spec 27 §3 value set: telemetry emits lowercase origins in every
         // language even though the wire enum stays numeric.
         assert.equal(telemetryRecords[0].attributes.origin, 'application');
+        // The scope did not leak into the caller's ambient context.
+        assert.equal(flowContext.currentFlowContext(), undefined);
         resolve();
       } catch (error) {
         reject(error);
       } finally {
-        channelEnvelope.closeMessages(parts);
+        if (parts !== undefined) channelEnvelope.closeMessages(parts);
       }
     });
   });
@@ -1094,3 +1115,149 @@ function bindingMessage(payload) {
     close() {}
   };
 }
+
+// ---------------------------------------------------------------------------
+// Malformed channel envelope terminals (audit-r5 carryover): a malformed
+// request receives a protocol error reply plus a
+// zlink.dispatch_error(invalid_frame/reply_error) record; a malformed one-way
+// frame is dropped with invalid_frame/drop (spec 26 §2.2/§3.1, spec 27 §7).
+// ---------------------------------------------------------------------------
+
+const {
+  ZLinkChannelRequestDispatcher
+} = require('../../packages/framework/dist/runtime/channels/channel-dispatchers');
+const boundSessionWire = require('../../packages/framework/dist/runtime/actors/bound-session-wire');
+
+function makeDispatchErrorReporter() {
+  return new ZLinkDispatchErrorReporter(
+    undefined,
+    undefined,
+    silentSink(),
+    {
+      diagnostics: diagnostics('errors'),
+      liveMode: { mode: 'errors' },
+      sourceMeshGeneration: 1n
+    }
+  );
+}
+
+function malformedEnvelopeParts(headerFields) {
+  return [
+    bindingMessage(JSON.stringify({
+      formatMarker: 0xf2,
+      channelName: 'api',
+      messageName: 'EchoRequest',
+      contentType: 'application/json',
+      deadline: null,
+      topic: null,
+      ...headerFields
+    })),
+    bindingMessage('{}')
+  ];
+}
+
+test('MFLOW-MAL malformed request envelope replies protocol error and records invalid_frame/reply_error', async () => {
+  const dispatcher = new ZLinkChannelRequestDispatcher({
+    channelName: 'api',
+    dispatchErrors: makeDispatchErrorReporter(),
+    handlers: new Map()
+  });
+  const replies = [];
+  const router = {
+    reply() {
+      const operation = {
+        message(part) {
+          replies.push(part);
+          return operation;
+        },
+        submit() {}
+      };
+      return operation;
+    }
+  };
+
+  await dispatcher.dispatch({
+    // flowId without flowOrigin is a protocol error (spec 27 §3).
+    parts: malformedEnvelopeParts({
+      kind: 1,
+      correlationId: 'corr-malformed',
+      flowId: '01890000-0000-7000-8000-000000000001'
+    }),
+    routingId: 'peer-1',
+    requestSeq: 9n
+  }, router);
+
+  assert.equal(replies.length >= 1, true);
+  const replyHeader = JSON.parse(Buffer.from(replies[0]).toString());
+  assert.equal(replyHeader.kind, 5);
+  assert.equal(replyHeader.errorCode, '9'); // ProtocolError
+  assert.equal(replyHeader.correlationId, 'corr-malformed');
+
+  assert.equal(traceRecords.length, 1);
+  const attributes = traceRecords[0].attributes;
+  assert.equal(attributes.event_id, 'zlink.dispatch_error');
+  assert.equal(attributes.reason, 'invalid_frame');
+  assert.equal(attributes.action, 'reply_error');
+  assert.equal(attributes.correlation_id, 'corr-malformed');
+  // Spec 27 §7: an incomplete flow pair is not carried and no fresh flow id
+  // is fabricated for the failure record.
+  assert.equal(attributes.flow_id, undefined);
+});
+
+test('MFLOW-MAL malformed one-way envelope drops and records invalid_frame/drop', async () => {
+  const dispatcher = new ZLinkChannelRequestDispatcher({
+    channelName: 'api',
+    dispatchErrors: makeDispatchErrorReporter(),
+    handlers: new Map()
+  });
+  let replied = false;
+  const router = {
+    reply() {
+      replied = true;
+      const operation = { message() { return operation; }, submit() {} };
+      return operation;
+    }
+  };
+
+  await dispatcher.dispatch({
+    parts: malformedEnvelopeParts({
+      kind: 3,
+      correlationId: null,
+      flowId: '01890000-0000-7000-8000-000000000001'
+    }),
+    routingId: 'peer-1',
+    requestSeq: null
+  }, router);
+
+  assert.equal(replied, false);
+  assert.equal(traceRecords.length, 1);
+  const attributes = traceRecords[0].attributes;
+  assert.equal(attributes.event_id, 'zlink.dispatch_error');
+  assert.equal(attributes.reason, 'invalid_frame');
+  assert.equal(attributes.action, 'drop');
+});
+
+test('MFLOW-WIRE relay JSON writes the spec lowercase flow_origin and decodes it back', () => {
+  // Spec 27 §3: the wire spelling of flow_origin is lowercase; the
+  // capitalized value is only the internal TypeScript union.
+  const payload = boundSessionWire.encodeRemoteBoundSessionSendPayload({
+    actorId: 'actor-1',
+    message: { v: 1 },
+    metadata: new Map(),
+    flowId: '01890000-0000-7000-8000-000000000001',
+    flowOrigin: 'Application'
+  });
+  assert.equal(payload.flowOrigin, 'application');
+
+  const decoded = boundSessionWire.decodeRemoteBoundSessionSendPayload(
+    JSON.parse(JSON.stringify(payload))
+  );
+  assert.equal(decoded.flowOrigin, 'Application');
+  assert.equal(decoded.flowId, '01890000-0000-7000-8000-000000000001');
+
+  // The decoder accepts only the spec spelling (repo-internal wire, deployed
+  // atomically): a legacy capitalized value is not readable as a flow origin.
+  const legacy = JSON.parse(JSON.stringify(payload));
+  legacy.flowOrigin = 'Application';
+  assert.equal(boundSessionWire.decodeRemoteBoundSessionSendPayload(legacy).flowOrigin, undefined);
+});

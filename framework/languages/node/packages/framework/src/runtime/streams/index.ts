@@ -329,7 +329,12 @@ export class ZLinkStreamSessionRuntime extends ZLinkStreamSessionRuntimeCore {
     routingId: unknown,
     removeSession?: (sessionId: string, session: ZLinkStreamSessionRuntime) => void
   ) {
-    const bindingRuntime = options.bindingRuntime ?? new ZLinkStreamBindingRuntime();
+    // Spec 27 §4: a default-constructed binding runtime must still honor the
+    // process diagnostics level, so wire its Off gate to the runtime's
+    // dispatch-error flow tracer.
+    const bindingRuntime = options.bindingRuntime ?? new ZLinkStreamBindingRuntime({
+      flowCreationEnabled: () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+    });
     super(
       {
         ...options,
@@ -345,7 +350,11 @@ export class ZLinkStreamSessionRuntime extends ZLinkStreamSessionRuntimeCore {
 
 export class ZLinkStreamSessionNodeRuntime extends ZLinkStreamSessionNodeRuntimeCore {
   constructor(options: ZLinkStreamSessionNodeRuntimeOptions) {
-    const bindingRuntime = options.bindingRuntime ?? new ZLinkStreamBindingRuntime();
+    // Spec 27 §4: keep the default binding runtime's flow creation behind the
+    // process diagnostics Off gate (see ZLinkStreamSessionRuntime above).
+    const bindingRuntime = options.bindingRuntime ?? new ZLinkStreamBindingRuntime({
+      flowCreationEnabled: () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+    });
     super({
       ...options,
       bindingRuntime

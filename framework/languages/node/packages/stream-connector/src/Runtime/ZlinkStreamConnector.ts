@@ -6,6 +6,7 @@ import {
   ZlinkStreamConnectionStateChanged,
   ZlinkStreamConnector,
   ZlinkStreamConnectorOptions,
+  ZlinkStreamDiagnosticsLevel,
   ZlinkStreamEncodedPayload,
   ZlinkStreamError,
   ZlinkStreamErrorCode,
@@ -62,7 +63,12 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     this.options = normalizeOptions(options, new BrowserStreamTransportFactory());
     const metrics = new ZlinkStreamRuntimeMetrics(this.options);
     const protocol = new ZlinkStreamFrameProtocol(this.options);
-    this.frameSender = new ZlinkStreamFrameSender(protocol, flowContext, metrics);
+    this.frameSender = new ZlinkStreamFrameSender(
+      protocol,
+      flowContext,
+      metrics,
+      this.options.diagnosticsLevel !== ZlinkStreamDiagnosticsLevel.Off
+    );
     this.inboundObservers = new ZlinkStreamInboundObservers(
       this.options.maxInboundObserverNotifications,
       this.options.maxInboundObserverPayloadPreviewBytes,
