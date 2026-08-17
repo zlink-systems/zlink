@@ -84,8 +84,9 @@ internal static class ZLinkActorReplyDecoder
 
         if (error is null)
             return PayloadDecodeFailed("Actor request error payload is null.");
-        if (Enum.TryParse<ZLinkFrameworkErrorKind>(error.Code, out var kind)
-            && Enum.IsDefined(kind))
+        // Cross-language snake_case wire names only (C++ stream_error_code);
+        // an unknown name stays a protocol error.
+        if (ZLinkErrorWireNames.TryParse(error.Code, out var kind))
             return new ZLinkFrameworkException(kind, error.Message ?? "Actor request failed.");
 
         return ProtocolError(

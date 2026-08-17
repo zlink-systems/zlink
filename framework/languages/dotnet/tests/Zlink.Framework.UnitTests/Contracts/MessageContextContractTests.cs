@@ -326,7 +326,7 @@ public sealed class MessageContextContractTests
         Assert.False(normalReply);
         Assert.NotNull(errorReply);
         Assert.Equal(
-            nameof(ZLinkFrameworkErrorKind.Rejected),
+            "rejected",
             errorReply!.ErrorCode);
         Assert.Equal(0, probe.HandlerCalls);
     }

@@ -1853,7 +1853,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var directReply = Assert.Single(directReplies);
             var directReplyPayload = DecodeReplyFrame<ZLinkStreamWireError>(directReply);
             Assert.Equal(
-                ZLinkFrameworkErrorKind.NotFound.ToString(),
+                "not_found",
                 directReplyPayload.Payload.Code);
 
             await runtime.DispatchRemoteActorFrameAsync(
@@ -2439,7 +2439,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var reply = Assert.Single(directReplies);
             var decoded = DecodeReplyFrame<ZLinkStreamWireError>(reply);
             Assert.Equal(
-                ZLinkFrameworkErrorKind.Unavailable.ToString(),
+                "unavailable",
                 decoded.Payload.Code);
         }
         finally
@@ -3177,7 +3177,7 @@ public sealed partial class EntrySpotActorDispatchTests
         var decoded = DecodeReplyFrame<ZLinkStreamWireError>(
             Assert.Single(Assert.Single(node.NoBindReplies).Parts));
         Assert.Equal(
-            ZLinkFrameworkErrorKind.NotFound.ToString(),
+            "not_found",
             decoded.Payload.Code);
         await runner.StopAsync();
         await runtime.StopAsync(CancellationToken.None);
@@ -4514,7 +4514,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 Assert.Single(reply.Parts));
             Assert.Equal(ZlinkStreamMessageKind.Error, decoded.Header.Kind);
             Assert.Equal(
-                ZLinkFrameworkErrorKind.Unavailable.ToString(),
+                "unavailable",
                 decoded.Payload.Code);
         }
         finally
@@ -5376,7 +5376,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var decoded = DecodeReplyFrame<ZLinkStreamWireError>(Assert.Single(boundReply.Parts));
             Assert.Equal(ZlinkStreamMessageKind.Error, decoded.Header.Kind);
             Assert.Equal(
-                ZLinkFrameworkErrorKind.NotFound.ToString(),
+                "not_found",
                 decoded.Payload.Code);
             Assert.Contains("No Spot actor request handler", decoded.Payload.Message, StringComparison.Ordinal);
         }

@@ -32,6 +32,13 @@ internal sealed record ZLinkEnvelopeHeader(
     public string? FlowId { get; set; }
 
     public ZLinkFlowOrigin? FlowOrigin { get; set; }
+
+    // Cross-language envelope metadata ("metadata" in the wire JSON, matching
+    // the C++/Node codecs). Omitted from the wire when absent; peers that
+    // always emit an empty object decode identically.
+    [System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string>? Metadata { get; init; }
 }
 
 internal sealed class ZLinkEnvelopeProtocolException(
@@ -137,6 +144,7 @@ internal static class ZLinkEnvelopeCodec
             && header.ErrorCode is null
             && header.ErrorMessage is null
             && header.Source is null
+            && header.Metadata is not { Count: > 0 }
             && header.Kind is not (ZLinkMessageKind.Request
                 or ZLinkMessageKind.Response
                 or ZLinkMessageKind.Error)
@@ -283,10 +291,12 @@ internal static class ZLinkEnvelopeCodec
         // Correlated, deadline-stamped, or flow-stamped headers are byte-unique
         // per message (correlation ids come from a counter), so caching them
         // guarantees misses while evicting the repeatable command/publish
-        // entries this cache exists for.
+        // entries this cache exists for. Populated metadata is skipped so the
+        // shared cached dictionary instance never carries per-message entries.
         if (header.CorrelationId is null
             && header.Deadline is null
-            && header.FlowId is null)
+            && header.FlowId is null
+            && header.Metadata is not { Count: > 0 })
             AddDecodedHeaderCacheEntry(bytes, hash, header);
         return ValidateDecodedFlow(header, validateFlow);
     }
@@ -481,6 +491,7 @@ internal static class ZLinkEnvelopeCodec
                && header.ErrorCode is null
                && header.ErrorMessage is null
                && header.Source is null
+               && header.Metadata is not { Count: > 0 }
                && header.FlowId is null
                && header.FlowOrigin is null;
     }

@@ -18,7 +18,7 @@ public sealed class StreamWireInteropTests
                 ZLinkFrameworkErrorKind.Unavailable,
                 "session binding is changing."));
 
-        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable.ToString(), error.Code);
+        Assert.Equal("unavailable", error.Code);
         Assert.Equal("session binding is changing.", error.Message);
     }
 

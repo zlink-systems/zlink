@@ -262,19 +262,19 @@ public sealed class ChannelOutboundTerminalTests
         //  rejection reply keeps its rejection kind.
         var offReply = RejectRelocationReply(MalformedFlowId, validateFlow: false);
         Assert.Equal(ZLinkMessageKind.Error, offReply.Kind);
-        Assert.Equal(nameof(ZLinkFrameworkErrorKind.Unavailable), offReply.ErrorCode);
+        Assert.Equal("unavailable", offReply.ErrorCode);
         Assert.Equal("corr-reject", offReply.CorrelationId);
 
         //  Gate on: spec 27 §3 classifies the malformed flow pair as a protocol
         //  error and the operation completes as ProtocolError.
         var onReply = RejectRelocationReply(MalformedFlowId, validateFlow: true);
         Assert.Equal(ZLinkMessageKind.Error, onReply.Kind);
-        Assert.Equal(nameof(ZLinkFrameworkErrorKind.ProtocolError), onReply.ErrorCode);
+        Assert.Equal("protocol_error", onReply.ErrorCode);
         Assert.Equal("corr-reject", onReply.CorrelationId);
 
         //  Gate on with a well-formed flow: the rejection kind is preserved.
         var validReply = RejectRelocationReply(ValidFlowId, validateFlow: true);
-        Assert.Equal(nameof(ZLinkFrameworkErrorKind.Unavailable), validReply.ErrorCode);
+        Assert.Equal("unavailable", validReply.ErrorCode);
     }
 
     private static ZLinkEnvelopeHeader RejectRelocationReply(

@@ -143,7 +143,7 @@ public sealed partial class EntrySpotActorDispatchTests
             expectedSurface: ZLinkDispatchErrorSurface.Channel,
             sealAdmission: true);
 
-        Assert.Equal(nameof(ZLinkFrameworkErrorKind.ShuttingDown), result);
+        Assert.Equal("shutting_down", result);
     }
 
     private static async Task<string> DispatchMeshRequestAsync(

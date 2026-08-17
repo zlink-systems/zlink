@@ -36,9 +36,14 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                 out var endpoint)
             || endpoint is null)
         {
+            // Route resolution failure is framework-generated (zlink.origin
+            // marker on the resulting error reply).
             var error = new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
-                $"No request handler is registered for '{channelName}:{header.MessageName}'.");
+                $"No request handler is registered for '{channelName}:{header.MessageName}'.")
+            {
+                Origin = ZLinkErrorOrigin.Framework
+            };
             scope.HandlerMissing(
                 dispatchErrors,
                 ZLinkDispatchErrorAction.ReplyError,
@@ -91,9 +96,14 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                     cancellationToken)
                 .ConfigureAwait(false);
             if (!dispatch.HandlerInvoked)
+                // Dispatch rejection is framework-generated (zlink.origin
+                // marker on the resulting error reply).
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Rejected,
-                    $"A handler filter rejected '{channelName}:{header.MessageName}'.");
+                    $"A handler filter rejected '{channelName}:{header.MessageName}'.")
+                {
+                    Origin = ZLinkErrorOrigin.Framework
+                };
 
             await reply(
                 replyState,

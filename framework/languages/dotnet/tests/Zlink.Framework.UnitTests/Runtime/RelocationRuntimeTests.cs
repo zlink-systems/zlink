@@ -2256,7 +2256,7 @@ public sealed class RelocationRuntimeTests
 
         Assert.NotNull(replyHeader);
         Assert.Equal(
-            nameof(ZLinkFrameworkErrorKind.InvalidOperation),
+            "invalid_operation",
             replyHeader!.ErrorCode);
     }
 

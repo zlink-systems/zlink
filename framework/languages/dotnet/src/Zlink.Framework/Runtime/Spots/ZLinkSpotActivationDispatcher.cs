@@ -197,7 +197,10 @@ internal sealed class ZLinkSpotActivationDispatcher
                 header,
                 new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.ProtocolError,
-                    "Remote actor join request body part is missing."));
+                    "Remote actor join request body part is missing.")
+                {
+                    Origin = ZLinkErrorOrigin.Framework
+                });
             return true;
         }
 
@@ -296,11 +299,15 @@ internal sealed class ZLinkSpotActivationDispatcher
         ZLinkEnvelopeHeader header,
         Exception exception)
     {
+        // Internal route dispatcher failures are framework-generated
+        // (zlink.origin marker): these packets never reach an application
+        // handler.
         var replyParts = ZLinkSpotReplyEnvelope.EncodeErrorParts(
             channelName,
             header.MessageName,
             header.CorrelationId,
-            exception);
+            exception,
+            forceFrameworkOrigin: true);
         ZLinkSpotReplySubmitter.SubmitAndDispose(received, replyParts);
     }
 
@@ -372,6 +379,8 @@ internal sealed class ZLinkSpotActivationDispatcher
                         ZLinkFrameworkErrorKind.Unavailable,
                     _ => ZLinkFrameworkErrorKind.Rejected
                 };
+                //  Sealed/rejected admission is framework-generated
+                //  (zlink.origin marker on the error reply).
                 var reply = ZLinkSpotReplyEnvelope.EncodeErrorParts(
                     channelName,
                     header.MessageName,
@@ -385,7 +394,10 @@ internal sealed class ZLinkSpotActivationDispatcher
                             ZLinkAcceptedWorkAdmission.RelocationMoving =>
                                 "SPOT application admission is relocating.",
                             _ => "SPOT application admission was rejected."
-                        }));
+                        })
+                    {
+                        Origin = ZLinkErrorOrigin.Framework
+                    });
                 ZLinkSpotReplySubmitter.SubmitAndDispose(received, reply);
             }
             catch
@@ -407,6 +419,8 @@ internal sealed class ZLinkSpotActivationDispatcher
                 var header = DecodeRejectionHeader(
                     received, channelName, validateFlow);
                 if (header is null) return;
+                //  Relocation ingress refusal is framework-generated
+                //  (zlink.origin marker on the error reply).
                 var reply = ZLinkSpotReplyEnvelope.EncodeErrorParts(
                     channelName,
                     header.MessageName,
@@ -414,7 +428,10 @@ internal sealed class ZLinkSpotActivationDispatcher
                     new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.Unavailable,
                         "SPOT relocation ingress hold is full or sealed.",
-                        ZLinkRetryAdvice.RetryAfterBackoff));
+                        ZLinkRetryAdvice.RetryAfterBackoff)
+                    {
+                        Origin = ZLinkErrorOrigin.Framework
+                    });
                 ZLinkSpotReplySubmitter.SubmitAndDispose(received, reply);
             }
             catch
@@ -436,13 +453,18 @@ internal sealed class ZLinkSpotActivationDispatcher
                 var header = DecodeRejectionHeader(
                     received, channelName, validateFlow);
                 if (header is null) return;
+                //  Stale route fence refusal is framework-generated
+                //  (zlink.origin marker on the error reply).
                 var reply = ZLinkSpotReplyEnvelope.EncodeErrorParts(
                     channelName,
                     header.MessageName,
                     header.CorrelationId,
                     new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.InvalidOperation,
-                        "The Spot Message Follow route is stale."));
+                        "The Spot Message Follow route is stale.")
+                    {
+                        Origin = ZLinkErrorOrigin.Framework
+                    });
                 ZLinkSpotReplySubmitter.SubmitAndDispose(received, reply);
             }
             catch

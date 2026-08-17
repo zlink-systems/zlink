@@ -42,7 +42,7 @@ public sealed class RequestFailureMappingTests
         try
         {
             var reply = ZLinkEnvelopeCodec.DecodeHeader(parts);
-            Assert.Equal(nameof(ZLinkFrameworkErrorKind.Rejected), reply.ErrorCode);
+            Assert.Equal("rejected", reply.ErrorCode);
             var error = Assert.IsType<ZLinkFrameworkException>(
                 ZLinkEnvelopeErrorMapper.CreateException(reply, "fallback"));
             Assert.Equal(ZLinkFrameworkErrorKind.Rejected, error.Kind);
@@ -73,7 +73,7 @@ public sealed class RequestFailureMappingTests
                 ZLinkFrameworkErrorKind.Rejected,
                 "draining"));
 
-        Assert.Equal(nameof(ZLinkFrameworkErrorKind.Rejected), reply.ErrorCode);
+        Assert.Equal("rejected", reply.ErrorCode);
         var error = Assert.IsType<ZLinkFrameworkException>(
             ZLinkEnvelopeErrorMapper.CreateException(reply, "fallback"));
         Assert.Equal(ZLinkFrameworkErrorKind.Rejected, error.Kind);

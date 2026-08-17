@@ -72,13 +72,19 @@ internal readonly struct ZLinkDispatchFlowScope(
         catch (Exception ex)
         {
             message = null;
+            // Payload decode failure is framework-generated (zlink.origin
+            // marker on the resulting error reply); the application handler
+            // never ran.
             decodeError = decodeErrorSubject is null
                 ? null
                 : new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.ProtocolError,
                     $"PayloadDecodeFailed: failed to decode {decodeErrorSubject} payload "
                     + $"for '{channelName}:{packetName}'.",
-                    innerException: ex);
+                    innerException: ex)
+                {
+                    Origin = ZLinkErrorOrigin.Framework
+                };
             PayloadDecodeFailed(
                 dispatchErrors,
                 failureAction,

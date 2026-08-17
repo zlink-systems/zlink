@@ -148,9 +148,18 @@ internal static class ZLinkEnvelopeErrorMapper
         string fallbackMessage)
     {
         var message = header.ErrorMessage ?? fallbackMessage;
-        if (Enum.TryParse<ZLinkFrameworkErrorKind>(header.ErrorCode, out var frameworkErrorKind)
-            && Enum.IsDefined(frameworkErrorKind))
-            return new ZLinkFrameworkException(frameworkErrorKind, message);
+        // Stale-route contract (C++ channel_runtime route reply mapping): only
+        // framework-generated remote errors carry the zlink.origin=framework
+        // marker. Unmarked remote errors came from the application handler and
+        // are classified so the caller skips route-cache invalidation.
+        var origin = ZLinkErrorOriginWire.RemoteReplyOrigin(header.Metadata);
+        // Cross-language errorCode wire names are snake_case only; an unknown
+        // name stays a protocol error.
+        if (ZLinkErrorWireNames.TryParse(header.ErrorCode, out var frameworkErrorKind))
+            return new ZLinkFrameworkException(frameworkErrorKind, message)
+            {
+                Origin = origin
+            };
 
         return header.ErrorCode switch
         {
@@ -160,6 +169,9 @@ internal static class ZLinkEnvelopeErrorMapper
             _ => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
                 message)
+            {
+                Origin = origin
+            }
         };
     }
 }

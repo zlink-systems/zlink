@@ -60,9 +60,16 @@ internal sealed class ZLinkSpotRouteDispatcher(
             {
                 if (header.Kind == ZLinkMessageKind.Request)
                 {
+                    // Route resolution failure is framework-generated
+                    // (zlink.origin marker on the resulting error reply); it
+                    // must stay distinguishable from an application handler's
+                    // own NotFound.
                     var error = new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.NotFound,
-                        $"No SPOT route request handler is registered for '{channelName}:{header.MessageName}'.");
+                        $"No SPOT route request handler is registered for '{channelName}:{header.MessageName}'.")
+                    {
+                        Origin = ZLinkErrorOrigin.Framework
+                    };
                     scope.HandlerMissing(
                         dispatchErrors,
                         ZLinkDispatchErrorAction.ReplyError,

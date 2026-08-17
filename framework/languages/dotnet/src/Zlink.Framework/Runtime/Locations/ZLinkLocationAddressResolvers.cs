@@ -275,7 +275,14 @@ internal static class ZLinkSpotHandleRequestExecution
         }
     }
 
+    // Stale-route judgement (C++ channel_runtime route reply contract): a
+    // remote error reply is a stale-route signal only when the framework
+    // produced it (zlink.origin=framework marker, carried here as
+    // ZLinkErrorOrigin.Framework). An application handler's NotFound or
+    // Unavailable must not invalidate the cached route. Local failures
+    // (Unspecified origin: resolution, transport) keep invalidating as before.
     internal static bool IsStaleRoute(ZLinkFrameworkException error) =>
         error.Kind is ZLinkFrameworkErrorKind.NotFound
-            or ZLinkFrameworkErrorKind.Unavailable;
+            or ZLinkFrameworkErrorKind.Unavailable
+        && error.Origin != ZLinkErrorOrigin.Application;
 }

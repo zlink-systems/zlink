@@ -384,12 +384,17 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 //  `Rejected`, which is an application policy decision. The
                 //  distinction is what lets a select-one caller reselect.
                 if (header.Kind == ZLinkMessageKind.Request)
+                    // Sealed admission is framework-generated (zlink.origin
+                    // marker on the resulting error reply).
                     await ReplyErrorAsync(
                         received,
                         header,
                         new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.ShuttingDown,
-                            "MeshNode application admission is sealed for drain."), cancellationToken).ConfigureAwait(false);
+                            "MeshNode application admission is sealed for drain.")
+                        {
+                            Origin = ZLinkErrorOrigin.Framework
+                        }, cancellationToken).ConfigureAwait(false);
                 return;
             }
 
@@ -434,9 +439,14 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         {
             if (isRequest)
             {
+                // Route resolution failure is framework-generated (zlink.origin
+                // marker on the resulting error reply).
                 var error = new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.NotFound,
-                    $"No node route request handler is registered for '{header.MessageName}'.");
+                    $"No node route request handler is registered for '{header.MessageName}'.")
+                {
+                    Origin = ZLinkErrorOrigin.Framework
+                };
                 scope.HandlerMissing(
                     _dispatchErrors,
                     ZLinkDispatchErrorAction.ReplyError,

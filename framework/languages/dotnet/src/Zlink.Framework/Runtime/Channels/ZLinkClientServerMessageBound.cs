@@ -16,10 +16,15 @@ internal static class ZLinkClientServerMessageBound
         return true;
     }
 
+    // Bound enforcement is framework-generated (zlink.origin marker when it
+    // surfaces as an error reply).
     internal static ZLinkFrameworkException CreateExceededException(
         uint maximumMessageBytes) =>
         new(
             ZLinkFrameworkErrorKind.CapacityExceeded,
             $"The complete ClientServer message exceeds the admitted {maximumMessageBytes}-byte bound.",
-            ZLinkRetryAdvice.DoNotRetry);
+            ZLinkRetryAdvice.DoNotRetry)
+        {
+            Origin = ZLinkErrorOrigin.Framework
+        };
 }

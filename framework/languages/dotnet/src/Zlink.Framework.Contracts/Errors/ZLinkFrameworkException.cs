@@ -17,6 +17,18 @@ public sealed class ZLinkFrameworkException : Exception
 
     internal ZLinkRetryAdvice RetryAdvice { get; }
 
+    /// <summary>
+    /// Who produced the failure. <see cref="ZLinkErrorOrigin.Framework"/>
+    /// marks errors the framework runtime generated on its own (route
+    /// resolution failure, sealed admission, dispatch rejection); their error
+    /// replies carry the <c>zlink.origin=framework</c> metadata marker.
+    /// <see cref="ZLinkErrorOrigin.Application"/> marks errors decoded from a
+    /// peer error reply that did not carry the marker — the remote application
+    /// handler produced them, so route caches must not read them as a
+    /// stale-route signal. Mirrors the C++ <c>error_origin_t</c> contract.
+    /// </summary>
+    internal ZLinkErrorOrigin Origin { get; init; }
+
     private static ZLinkRetryAdvice DefaultRetryAdvice(
         ZLinkFrameworkErrorKind kind) =>
         kind switch
@@ -53,4 +65,11 @@ internal enum ZLinkRetryAdvice
     DoNotRetry = 0,
     RetryAfterBackoff = 1,
     RetryAfterStateChange = 2
+}
+
+internal enum ZLinkErrorOrigin
+{
+    Unspecified = 0,
+    Framework = 1,
+    Application = 2
 }
