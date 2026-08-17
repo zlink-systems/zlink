@@ -217,14 +217,37 @@ public final class ZLinkMessageFlowTracer {
         return unsignedHash / 4294967296.0d < rate;
     }
 
-    private static int fnv1a(String value) {
+    static int fnv1a(String value) {
         int hash = 0x811c9dc5;
-        byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        for (byte current : bytes) {
-            hash ^= current & 0xff;
-            hash *= 0x01000193;
+        for (int index = 0; index < value.length(); index++) {
+            char current = value.charAt(index);
+            if (current < 0x80) {
+                hash = fnv1aByte(hash, current);
+            } else if (current < 0x800) {
+                hash = fnv1aByte(hash, 0xc0 | current >>> 6);
+                hash = fnv1aByte(hash, 0x80 | current & 0x3f);
+            } else if (Character.isHighSurrogate(current)
+                && index + 1 < value.length()
+                && Character.isLowSurrogate(value.charAt(index + 1))) {
+                int codePoint = Character.toCodePoint(
+                    current, value.charAt(++index));
+                hash = fnv1aByte(hash, 0xf0 | codePoint >>> 18);
+                hash = fnv1aByte(hash, 0x80 | codePoint >>> 12 & 0x3f);
+                hash = fnv1aByte(hash, 0x80 | codePoint >>> 6 & 0x3f);
+                hash = fnv1aByte(hash, 0x80 | codePoint & 0x3f);
+            } else if (Character.isSurrogate(current)) {
+                hash = fnv1aByte(hash, '?');
+            } else {
+                hash = fnv1aByte(hash, 0xe0 | current >>> 12);
+                hash = fnv1aByte(hash, 0x80 | current >>> 6 & 0x3f);
+                hash = fnv1aByte(hash, 0x80 | current & 0x3f);
+            }
         }
         return hash;
+    }
+
+    private static int fnv1aByte(int hash, int value) {
+        return (hash ^ value) * 0x01000193;
     }
 
     private void reportProviderFailure(Throwable error) {

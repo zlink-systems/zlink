@@ -257,6 +257,19 @@ class ZLinkMessageFlowTracerTest {
     }
 
     @Test
+    void samplingHashMatchesUtf8BytesWithoutAllocatingAnEncodingBuffer() {
+        for (String value : new String[] {
+            "flow-1", "한국어-흐름", "emoji-🚀", "broken-\ud800-tail", "low-\udc00"
+        }) {
+            int expected = 0x811c9dc5;
+            for (byte current : value.getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+                expected = (expected ^ current & 0xff) * 0x01000193;
+            }
+            assertEquals(expected, ZLinkMessageFlowTracer.fnv1a(value));
+        }
+    }
+
+    @Test
     void dispatchErrorsUseContractLogLevels() {
         ZLinkMessageFlowTracer tracer = tracer(options(ZLinkMessageFlowLogMode.ERRORS));
 

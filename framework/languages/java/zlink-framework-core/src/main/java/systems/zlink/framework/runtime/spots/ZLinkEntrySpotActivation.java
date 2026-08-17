@@ -537,7 +537,7 @@ final class EntrySpotActivation
             batch.record(ZLinkReceiveBatchBudget.bytesOf(request.parts()));
             Message payloadCopy = request.parts().isEmpty()
                 ? Message.from(new byte[0])
-                : Message.from(request.parts().get(0).toByteArray());
+                : Message.from(request.parts().get(0).dataBuffer());
             try {
                 acceptEntryActorJoin(request, payloadCopy)
                     .whenComplete((response, error) -> {

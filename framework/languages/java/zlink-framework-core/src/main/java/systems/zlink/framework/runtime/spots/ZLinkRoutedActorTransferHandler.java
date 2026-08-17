@@ -59,7 +59,7 @@ final class ZLinkRoutedActorTransferHandler {
         ZLinkActorSpotRoutePackets.TransferRequest request =
             ZLinkActorSpotRoutePackets.decodeTransferRequest(packet.payload());
         Message phasePayload = transferParts.size() > 2
-            ? Message.from(transferParts.get(2).toByteArray())
+            ? Message.from(transferParts.get(2).dataBuffer())
             : Message.from(new byte[0]);
         List<ZLinkActorSpotRoutePackets.WireHandoffPacket> backlog = request.commit()
             ? ZLinkActorSpotRoutePackets.decodeHandoffPackets(

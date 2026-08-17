@@ -373,7 +373,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
         }
 
         private Message copyPayload() {
-            return Message.from(payload.toByteArray());
+            return Message.from(payload.dataBuffer());
         }
 
         private CompletionStage<Void> sendExistingOrActivate(
@@ -633,7 +633,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
         }
 
         private Message copyPayload() {
-            return Message.from(payload.toByteArray());
+            return Message.from(payload.dataBuffer());
         }
 
         @Override

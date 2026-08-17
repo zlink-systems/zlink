@@ -26,7 +26,7 @@ public interface RouterSocket extends Socket {
     RoutedSendOperation send(RoutingId rid);
     /**
      * Creates a send operation pinned to the specified physical transport
-     * pair. The pair identity must come from a monitor or receive event for
+     * pair. The pair identity must come from a monitor event for
      * this router; a stale or unknown pair is rejected by the native socket.
      */
     RoutedSendOperation send(RoutingId rid,

@@ -558,9 +558,9 @@ final class SpotActivation
         }
         if (parts.size() >= 3
             && ZLinkActorSpotRoutePackets.JOIN_SPOT_PACKET_NAME.equals(parts.get(0).toUtf8String())) {
-            return Message.from(parts.get(2).toByteArray());
+            return Message.from(parts.get(2).dataBuffer());
         }
-        return Message.from(parts.get(0).toByteArray());
+        return Message.from(parts.get(0).dataBuffer());
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -607,7 +607,7 @@ final class SpotActivation
         ZLinkActorSpotRoutePackets.TransferRequest transferRequest =
             ZLinkActorSpotRoutePackets.decodeTransferRequest(packet.payload());
         Message phasePayload = transferParts.size() > 2
-            ? Message.from(transferParts.get(2).toByteArray())
+            ? Message.from(transferParts.get(2).dataBuffer())
             : Message.from(new byte[0]);
         List<ZLinkActorSpotRoutePackets.WireHandoffPacket> backlog = transferRequest.commit()
             ? ZLinkActorSpotRoutePackets.decodeHandoffPackets(

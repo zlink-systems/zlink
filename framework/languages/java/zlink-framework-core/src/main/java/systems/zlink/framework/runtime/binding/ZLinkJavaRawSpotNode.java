@@ -637,7 +637,7 @@ final class ZLinkJavaRawSpotNode
             new ZLinkBackendActorJoinRequest(
                 actor,
                 actor,
-                List.of(Message.from(request.toByteArray())),
+                List.of(Message.from(request.dataBuffer())),
                 pending);
         target.enqueueJoin(join).whenComplete((ignored, failure) -> {
             if (failure != null) {
