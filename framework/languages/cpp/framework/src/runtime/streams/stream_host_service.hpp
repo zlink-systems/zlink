@@ -29,6 +29,16 @@ class mesh_node_runtime_t;
 namespace zlink::framework::runtime
 {
 
+/* Test-only fault injection for the Core STREAM host. Production code never
+ * sets these flags; unit tests use them to force the rare failure shapes
+ * (for example a pre-suspension throw in the Core error-frame write) that
+ * cannot be produced deterministically from the wire. */
+struct stream_host_core_test_faults_t
+{
+    std::atomic_bool fail_core_error_frame_send{false};
+};
+stream_host_core_test_faults_t &stream_host_core_test_faults () noexcept;
+
 class stream_host_service_t final : public hosted_service_t,
                                      public hosted_service_lifecycle_t
 {

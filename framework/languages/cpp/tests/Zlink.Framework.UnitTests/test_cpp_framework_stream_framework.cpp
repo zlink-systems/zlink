@@ -9,17 +9,21 @@
 #include "runtime/streams/stream_runtime.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <arpa/inet.h>
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <future>
 #include <limits>
 #include <netinet/in.h>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <poll.h>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -797,6 +801,175 @@ void send_native_bytes (int socket_fd,
 void send_native_bytes (int socket_fd, const std::vector<std::uint8_t> &bytes)
 {
     send_native_bytes (socket_fd, bytes, 0, bytes.size ());
+}
+
+/* Core error-frame close regression support: a session that only counts its
+ * lifecycle; the rejected packet never reaches on_packet. */
+class core_error_close_control_t final
+{
+  public:
+    void record_connected () { record (_connected); }
+    void record_disconnected () { record (_disconnected); }
+
+    bool wait_connected (std::size_t count) { return wait_for (_connected, count); }
+    bool wait_disconnected (std::size_t count)
+    {
+        return wait_for (_disconnected, count);
+    }
+
+    std::size_t connected () const
+    {
+        const std::lock_guard lock (_mutex);
+        return _connected;
+    }
+
+    std::size_t disconnected () const
+    {
+        const std::lock_guard lock (_mutex);
+        return _disconnected;
+    }
+
+  private:
+    void record (std::size_t &counter)
+    {
+        {
+            const std::lock_guard lock (_mutex);
+            ++counter;
+        }
+        _changed.notify_all ();
+    }
+
+    bool wait_for (const std::size_t &counter, std::size_t count)
+    {
+        std::unique_lock lock (_mutex);
+        return _changed.wait_for (lock, std::chrono::seconds (5),
+                                  [&] { return counter >= count; });
+    }
+
+    mutable std::mutex _mutex;
+    std::condition_variable _changed;
+    std::size_t _connected = 0;
+    std::size_t _disconnected = 0;
+};
+
+class core_error_close_session_t final
+  : public zlink::framework::packet_stream_session_t
+{
+  public:
+    explicit core_error_close_session_t (
+      std::shared_ptr<core_error_close_control_t> control) :
+        _control (std::move (control))
+    {
+    }
+
+    zlink::framework::task_t<void> on_connected (
+      zlink::framework::stream_t &) override
+    {
+        _control->record_connected ();
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_disconnected (
+      zlink::framework::stream_t &) override
+    {
+        _control->record_disconnected ();
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_error (
+      zlink::framework::stream_t &,
+      const zlink::framework::stream_error_t &) override
+    {
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_packet (
+      zlink::framework::stream_t &,
+      const zlink::framework::session_message_context_t &,
+      const zlink::message_t &) override
+    {
+        co_return;
+    }
+
+  private:
+    std::shared_ptr<core_error_close_control_t> _control;
+};
+
+/* Reads until the peer closes the connection. Returns std::nullopt when the
+ * deadline passes before EOF (the self-deadlock symptom: the host never
+ * disconnects the peer). */
+std::optional<std::vector<std::uint8_t>>
+read_until_peer_close (int socket_fd, std::chrono::seconds timeout)
+{
+    std::vector<std::uint8_t> collected;
+    const auto deadline = std::chrono::steady_clock::now () + timeout;
+    for (;;) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+          deadline - std::chrono::steady_clock::now ());
+        if (remaining.count () <= 0) {
+            return std::nullopt;
+        }
+        pollfd waited{socket_fd, POLLIN, 0};
+        const int ready = ::poll (&waited, 1, static_cast<int> (remaining.count ()));
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return std::nullopt;
+        }
+        if (ready == 0) {
+            return std::nullopt;
+        }
+        std::array<std::uint8_t, 4096> chunk{};
+        const auto received = ::recv (socket_fd, chunk.data (), chunk.size (), 0);
+        if (received < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return collected;
+        }
+        if (received == 0) {
+            return collected;
+        }
+        collected.insert (collected.end (), chunk.data (),
+                          chunk.data () + received);
+    }
+}
+
+/* Parses the collected raw STREAM bytes and reports whether an error frame
+ * with the given request sequence appears. Control frames (heartbeats) are
+ * skipped. */
+bool contains_error_frame (
+  const zlink::framework::detail::stream_runtime_t &runtime,
+  const std::vector<std::uint8_t> &bytes,
+  std::uint64_t request_seq)
+{
+    std::size_t offset = 0;
+    while (bytes.size () - offset >= 6) {
+        const auto header_size = (static_cast<std::size_t> (bytes[offset]) << 8)
+                                 | static_cast<std::size_t> (bytes[offset + 1]);
+        const auto payload_size =
+          (static_cast<std::size_t> (bytes[offset + 2]) << 24)
+          | (static_cast<std::size_t> (bytes[offset + 3]) << 16)
+          | (static_cast<std::size_t> (bytes[offset + 4]) << 8)
+          | static_cast<std::size_t> (bytes[offset + 5]);
+        const auto frame_size = 6 + header_size + payload_size;
+        if (bytes.size () - offset < frame_size) {
+            return false;
+        }
+        const std::vector<std::uint8_t> header_bytes (
+          bytes.begin () + static_cast<std::ptrdiff_t> (offset + 6),
+          bytes.begin () + static_cast<std::ptrdiff_t> (offset + 6 + header_size));
+        const auto decoded = runtime.decode_header (header_bytes);
+        if (decoded
+            && decoded.value ().kind ()
+                 == zlink::framework::detail::stream_message_kind_t::error
+            && decoded.value ().request_seq () == request_seq) {
+            return true;
+        }
+        offset += frame_size;
+    }
+    return false;
 }
 
 } // namespace
@@ -2041,5 +2214,171 @@ int main ()
                                     "destroyed"}) {
         return 300;
     }
+
+    /* Core error-frame close regression (stream_host_service self-deadlock
+     * removal): a synchronously rejected Core request must (a) survive a
+     * pre-suspension throw in the error-frame write without deadlocking on
+     * the session gate, (b) flush the error frame to the peer before the
+     * protocol close ends the stream, and (c) keep the session close
+     * idempotent when the deferred error_reply_failed close and the
+     * protocol_error close target the same peer. */
+    const auto error_close_mesh_port = reserve_loopback_port ();
+    const auto error_close_stream_port = reserve_loopback_port ();
+    zlink::framework::service_collection_t error_close_services;
+    zlink::framework::handler_registry_t error_close_handlers;
+    zlink::framework::serializer_registry_t error_close_serializers;
+    zlink::framework::zlink_builder_t error_close_zlink;
+    zlink::framework::detail::zlink_builder_access_t::bind_shared_core_context (
+      error_close_zlink, std::make_shared<zlink::context_t> ());
+    error_close_services.add_singleton<
+      zlink::framework::detail::actor_gateway_runtime_t> ();
+    error_close_services.add_factory<zlink::framework::session_actor_manager_t> (
+      [] (zlink::framework::service_provider_t &provider) {
+          return std::make_unique<zlink::framework::session_actor_manager_t> (
+            provider
+              .get_required<zlink::framework::detail::actor_gateway_runtime_t> ()
+              .manager ());
+      },
+      zlink::framework::service_lifetime_t::scoped);
+    zlink::framework::zlink_framework_options_t error_close_options (
+      error_close_services, error_close_handlers, error_close_serializers,
+      error_close_zlink);
+    error_close_options.add_route_mesh ("error-close-mesh")
+      .set_routing_id (zlink::routing_id_t::from ("error-close-node"))
+      .listen ("tcp://127.0.0.1:" + std::to_string (error_close_mesh_port));
+    error_close_options.add_stream_node ("error-close-stream")
+      .bind ("tcp://127.0.0.1:" + std::to_string (error_close_stream_port))
+      .register_session ("error-close-session");
+    error_close_options.apply ();
+    for (const auto &registration :
+         zlink::framework::detail::mesh_node_runtime_t::registrations (
+           error_close_zlink)) {
+        registration->core_context =
+          zlink::framework::detail::zlink_builder_access_t::shared_core_context (
+            error_close_zlink);
+    }
+    auto error_close_control = std::make_shared<core_error_close_control_t> ();
+    error_close_services.add_factory<core_error_close_session_t> (
+      [error_close_control] (zlink::framework::service_provider_t &) {
+          return std::make_unique<core_error_close_session_t> (
+            error_close_control);
+      },
+      zlink::framework::service_lifetime_t::scoped);
+    auto error_close_provider = error_close_services.build_provider ();
+    auto error_close_mesh = zlink::framework::detail::mesh_node_runtime_t::from (
+      error_close_zlink, "error-close-mesh");
+    if (!error_close_mesh) {
+        return 310;
+    }
+    error_close_mesh->bind_serializers (error_close_serializers);
+    error_close_mesh->start ();
+    auto error_close_runtime =
+      zlink::framework::detail::stream_runtime_t::from (error_close_zlink);
+    zlink::framework::runtime::stream_host_service_t error_close_host (
+      error_close_runtime, error_close_runtime.snapshots (),
+      {{"error-close-session",
+        [] (zlink::framework::service_provider_t &provider)
+          -> zlink::framework::packet_stream_session_t & {
+            return provider.get_required<core_error_close_session_t> ();
+        }}},
+      error_close_mesh);
+    error_close_host.start (error_close_provider);
+
+    const auto fail_error_close = [&] (int code) {
+        zlink::framework::runtime::stream_host_core_test_faults ()
+          .fail_core_error_frame_send.store (false, std::memory_order_release);
+        error_close_host.stop ();
+        error_close_mesh->stop ();
+        return code;
+    };
+
+    /* A compressed request whose payload is not valid LZ4 input is rejected
+     * synchronously with protocol_error while the session gate is held. */
+    const auto make_bad_compressed_frame = [&] (std::uint64_t seq) {
+        const zlink::framework::detail::stream_header_t bad_header (
+          zlink::framework::detail::stream_message_kind_t::request,
+          stream_codec_t::raw,
+          zlink::framework::detail::stream_header_flags_t::has_request_seq
+            | zlink::framework::detail::stream_header_flags_t::payload_compressed,
+          seq, "error-close-probe");
+        return make_native_stream_frame (
+          error_close_runtime, bad_header,
+          zlink::message_t::from (std::string ("this-is-not-lz4")));
+    };
+
+    /* (b) error -> close wire order: the error frame is submitted to the
+     * Core socket lane before the close, so it must reach the peer before
+     * the stream ends. */
+    const int error_order_client = connect_loopback (error_close_stream_port);
+    if (error_order_client < 0) {
+        return fail_error_close (311);
+    }
+    send_native_bytes (error_order_client, make_bad_compressed_frame (7));
+    const auto ordered_bytes =
+      read_until_peer_close (error_order_client, std::chrono::seconds (5));
+    ::close (error_order_client);
+    if (!ordered_bytes) {
+        return fail_error_close (312);
+    }
+    if (!contains_error_frame (error_close_runtime, *ordered_bytes, 7)) {
+        return fail_error_close (313);
+    }
+    if (!error_close_control->wait_disconnected (1)) {
+        return fail_error_close (314);
+    }
+
+    /* (a) pre-suspension throw in the error-frame write: the completion
+     * observation runs inline in the rejecting context; the close must still
+     * complete without self-deadlocking on the session gate. */
+    zlink::framework::runtime::stream_host_core_test_faults ()
+      .fail_core_error_frame_send.store (true, std::memory_order_release);
+    const int error_fault_client = connect_loopback (error_close_stream_port);
+    if (error_fault_client < 0) {
+        return fail_error_close (315);
+    }
+    send_native_bytes (error_fault_client, make_bad_compressed_frame (8));
+    const auto faulted_bytes =
+      read_until_peer_close (error_fault_client, std::chrono::seconds (5));
+    ::close (error_fault_client);
+    zlink::framework::runtime::stream_host_core_test_faults ()
+      .fail_core_error_frame_send.store (false, std::memory_order_release);
+    if (!faulted_bytes) {
+        /* No EOF within the deadline: the Core loop is stuck on the gate. */
+        return fail_error_close (316);
+    }
+    if (contains_error_frame (error_close_runtime, *faulted_bytes, 8)) {
+        /* The faulted write must not still deliver an error frame. */
+        return fail_error_close (317);
+    }
+    if (!error_close_control->wait_disconnected (2)) {
+        return fail_error_close (318);
+    }
+
+    /* (c) close idempotency: the deferred error_reply_failed close and the
+     * protocol_error close hit the same peer; the duplicate must be a no-op,
+     * so each connection observes exactly one disconnect. */
+    std::this_thread::sleep_for (std::chrono::milliseconds (200));
+    if (error_close_control->connected () != 2
+        || error_close_control->disconnected () != 2) {
+        return fail_error_close (319);
+    }
+
+    /* Stop must stay bounded (no deadlocked Core loop left behind). */
+    std::promise<void> error_close_stop_source;
+    auto error_close_stopped = error_close_stop_source.get_future ();
+    std::thread error_close_stop_thread ([&] {
+        error_close_host.stop ();
+        error_close_stop_source.set_value ();
+    });
+    const bool error_close_stop_finished =
+      error_close_stopped.wait_for (std::chrono::seconds (5))
+      == std::future_status::ready;
+    if (!error_close_stop_finished) {
+        error_close_stop_thread.detach ();
+        error_close_mesh->stop ();
+        return 320;
+    }
+    error_close_stop_thread.join ();
+    error_close_mesh->stop ();
     return 0;
 }

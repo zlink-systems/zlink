@@ -66,6 +66,12 @@ using detail::stream_header_flags_t;
 using detail::stream_header_t;
 using detail::stream_message_kind_t;
 
+stream_host_core_test_faults_t &stream_host_core_test_faults () noexcept
+{
+    static stream_host_core_test_faults_t faults;
+    return faults;
+}
+
 namespace
 {
 
@@ -1563,6 +1569,16 @@ class stream_host_service_t::listener_t
                                   zlink::message_t payload,
                                   std::optional<std::chrono::milliseconds> timeout = std::nullopt)
     {
+        if (header.kind () == stream_message_kind_t::error
+            && stream_host_core_test_faults ().fail_core_error_frame_send.load (
+                 std::memory_order_acquire)) {
+            /* Test-only: forces the pre-suspension throw shape (same as an
+             * encode failure or a stopped Core socket below) so tests can pin
+             * the error-observation path without a wire-level race. */
+            throw framework_exception_t (
+              framework_error_kind_t::unavailable,
+              "test fault: Core STREAM error frame send");
+        }
         auto encoded = _runtime.encode_frame (header, payload);
         if (!encoded) {
             throw framework_exception_t (
@@ -1592,12 +1608,23 @@ class stream_host_service_t::listener_t
         co_await std::move (*submitted);
     }
 
+    /* Writes the error reply for a rejected request. The optional
+     * `completed` continuation runs at the error-frame task terminal (or
+     * immediately when no error frame applies); callers use it to sequence
+     * a follow-up close behind the error write so the peer observes
+     * error -> close order. The continuation may run inline in the
+     * submitting context (pre-suspension throw), so it must only record
+     * intent (request_core_peer_disconnect), never enter a close. */
     void send_core_error_frame (const zlink::routing_id_t &rid,
                                 const stream_header_t &request_header,
-                                const result_t<void> &error) noexcept
+                                const result_t<void> &error,
+                                std::function<void ()> completed = {}) noexcept
     {
         if (request_header.kind () != stream_message_kind_t::request
             || !request_header.request_seq ()) {
+            if (completed) {
+                completed ();
+            }
             return;
         }
 
@@ -1610,9 +1637,21 @@ class stream_host_service_t::listener_t
         auto send = send_core_frame (
           rid, error_header, stream_error_payload (error));
         detail::observe_task_completion (
-          send, [this, rid] (const result_t<void> &result) {
+          send, [this, rid, completed = std::move (completed)] (
+                  const result_t<void> &result) {
               if (!result) {
-                  disconnect_core_peer (rid, "error_reply_failed");
+                  /* This observer runs inline in the submitting context when
+                   * send_core_frame throws before its first suspension (the
+                   * task completes eagerly). That context may hold a session
+                   * gate, and cpp-internals forbids completing work under a
+                   * session mutex, so only the close intent is recorded here.
+                   * The Core loop drains it with no session lock held;
+                   * begin_core_session_close is idempotent, so a duplicate
+                   * request is a no-op. */
+                  request_core_peer_disconnect (rid, "error_reply_failed");
+              }
+              if (completed) {
+                  completed ();
               }
           });
     }
@@ -1643,6 +1682,10 @@ class stream_host_service_t::listener_t
             zlink::received_t received;
             try {
                 while (!_stop->load (std::memory_order_acquire)) {
+                    /* Deferred close intents recorded by completion
+                     * observers (request_core_peer_disconnect) are executed
+                     * here, on the Core loop with no session lock held. */
+                    drain_pending_core_disconnects ();
                     receive_batch_budget_t batch;
                     // Frames retained by an earlier batch are drained before
                     // waiting for another Core receive. This prevents a peer
@@ -1727,6 +1770,7 @@ class stream_host_service_t::listener_t
         catch (const std::exception &error) {
             mark_start_failed (error.what ());
         }
+        drain_pending_core_disconnects ();
         close_core_sessions ();
         if (_core_monitor) {
             _core_monitor->close ();
@@ -2537,6 +2581,41 @@ class stream_host_service_t::listener_t
         }
     }
 
+    /* Close-intent recording for completion observers that may run in a
+     * session-gate-holding context: only the (rid, reason) pair is stored
+     * here; the actual close runs when the Core loop drains the queue with
+     * no session lock held. This removes the shape where an eagerly
+     * completed task could re-enter begin_core_session_close while
+     * current->gate (a non-recursive mutex) is still held. */
+    void request_core_peer_disconnect (const zlink::routing_id_t &rid,
+                                       const char *close_reason) noexcept
+    {
+        try {
+            {
+                const std::lock_guard lock (_core_pending_disconnects_mutex);
+                _core_pending_disconnects.emplace_back (rid, close_reason);
+            }
+            _core_wake_timer.signal ();
+        }
+        catch (...) {
+        }
+    }
+
+    void drain_pending_core_disconnects () noexcept
+    {
+        std::vector<std::pair<zlink::routing_id_t, const char *>> pending;
+        {
+            const std::lock_guard lock (_core_pending_disconnects_mutex);
+            if (_core_pending_disconnects.empty ()) {
+                return;
+            }
+            pending.swap (_core_pending_disconnects);
+        }
+        for (const auto &[rid, reason] : pending) {
+            disconnect_core_peer (rid, reason);
+        }
+    }
+
     bool dispatch_core_frame (const zlink::routing_id_t &rid,
                               raw_core_stream_frame_t frame,
                               stream_header_t header,
@@ -2575,6 +2654,7 @@ class stream_host_service_t::listener_t
 
         bool submitted = false;
         bool protocol_error = false;
+        std::optional<result_t<void>> rejected;
         try {
             std::lock_guard session_lock (current->gate);
             if (current->connected) {
@@ -2614,20 +2694,14 @@ class stream_host_service_t::listener_t
                   [this] { return _stop->load (std::memory_order_acquire); });
                 submitted = static_cast<bool> (dispatched);
                 if (!dispatched) {
-                    trace_stream_host (
-                      "core-dispatch-rejected", _stream, header,
-                      "rid=" + rid.to_hex () + " kind="
-                        + std::to_string (
-                            static_cast<int> (dispatched.error_kind ()))
-                        + " error="
-                        + (dispatched.error () ? dispatched.error ()->what ()
-                                                : "unknown"));
-                    report_packet_dispatch_error (header, dispatched);
-                    send_core_error_frame (rid, header, dispatched);
+                    /* Session-gate invariant (cpp-internals): no task may be
+                     * completed and no close may be entered while
+                     * current->gate is held. Only the rejection is recorded
+                     * here; the report, the error-frame write, and the close
+                     * all run below, after the gate is released. */
+                    rejected.emplace (dispatched);
                     if (dispatched.error_kind ()
-                          == framework_error_kind_t::protocol_error
-                        || dispatched.error_kind ()
-                             == framework_error_kind_t::protocol_error) {
+                        == framework_error_kind_t::protocol_error) {
                         protocol_error = true;
                     }
                 }
@@ -2637,9 +2711,32 @@ class stream_host_service_t::listener_t
             disconnect_core_peer (rid, "protocol_error");
             return false;
         }
-        if (protocol_error) {
-            disconnect_core_peer (rid, "protocol_error");
-            return false;
+        static_cast<void> (submitted);
+        if (rejected) {
+            trace_stream_host (
+              "core-dispatch-rejected", _stream, header,
+              "rid=" + rid.to_hex () + " kind="
+                + std::to_string (
+                    static_cast<int> (rejected->error_kind ()))
+                + " error="
+                + (rejected->error () ? rejected->error ()->what ()
+                                      : "unknown"));
+            report_packet_dispatch_error (header, *rejected);
+            /* error -> close order: the protocol close is sequenced behind
+             * the error-frame task terminal (disconnect_rid tears the
+             * connection down immediately, so submission order alone would
+             * let the close overtake the pending error write). The
+             * continuation only records the close intent; the Core loop
+             * executes it outside every session lock, and
+             * begin_core_session_close keeps the duplicate a no-op. */
+            if (protocol_error) {
+                send_core_error_frame (
+                  rid, header, *rejected, [this, rid] {
+                      request_core_peer_disconnect (rid, "protocol_error");
+                  });
+                return false;
+            }
+            send_core_error_frame (rid, header, *rejected);
         }
         return true;
     }
@@ -3805,6 +3902,9 @@ class stream_host_service_t::listener_t
     std::unique_ptr<zlink::socket_monitor_t> _core_monitor;
     eventing::runtime_wake_timer_t _core_wake_timer;
     std::unique_ptr<application_supply_slot_t> _core_application_supply;
+    std::mutex _core_pending_disconnects_mutex;
+    std::vector<std::pair<zlink::routing_id_t, const char *>>
+      _core_pending_disconnects;
     std::mutex _core_sessions_mutex;
     std::map<std::string, std::shared_ptr<core_session_t>> _core_sessions;
     std::map<std::string, std::shared_ptr<core_session_t>>
