@@ -430,14 +430,16 @@ export class ZLinkActorSessionBindingRegistry<
     return {
       beginSubmission: (submissionSignal) => {
         if (submissionStarted) return undefined;
+        // Claim before the asynchronous seal wait. A second continuation
+        // must not observe an unclaimed request while the first is waiting
+        // for command 44 to publish the route.
+        submissionStarted = true;
         if (!capturedBySeal) {
           // From here the request may already have reached the remote peer.
           // Spec 32:153-157 forbids a second logical-target submission.
-          submissionStarted = true;
           return undefined;
         }
-        return this.acceptWhenReady(actorId, bindingToken, submissionSignal)
-          .then(() => { submissionStarted = true; });
+        return this.acceptWhenReady(actorId, bindingToken, submissionSignal);
       },
       complete: () => {
         if (finished) return;
@@ -489,7 +491,7 @@ export class ZLinkActorSessionBindingRegistry<
     // A pre-seal REQUEST is captured as part of installing command 42. Its
     // Session frame no longer gates the seal; its single submission attempt
     // and terminal continue under the request admission state above.
-    for (const request of [...route.activeFrames.requests]) {
+    for (const request of route.activeFrames.requests) {
       request.captureBySeal();
     }
   }

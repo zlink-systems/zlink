@@ -402,7 +402,6 @@ export class ZLinkActorPacketRelay {
           //  a duplicate terminal for the same requestSeq.
           if (
             error instanceof ZLinkConfigurationException
-            && deferredRequestSeq !== undefined
             && this.options.actorErrorSender !== undefined
           ) {
             try {
@@ -411,7 +410,7 @@ export class ZLinkActorPacketRelay {
                 deferredPacketName,
                 deferredRequestSeq,
                 error,
-                deferredMetadata ?? new Map<string, string>(),
+                deferredMetadata,
                 remoteBoundSessionTarget,
                 fallbackActorRef
               );

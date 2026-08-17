@@ -12,7 +12,9 @@ export function encodeServiceRelocationControlRequest(request: ZLinkServiceReloc
 }
 
 export function decodeServiceRelocationControlRequest(payload: Uint8Array): ZLinkServiceRelocationControlRequest | undefined {
-  const bytes = Buffer.from(payload);
+  const bytes = Buffer.isBuffer(payload)
+    ? payload
+    : Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength);
   if (bytes.byteLength < 5 || bytes[0] !== 0x5a || bytes[1] !== 0x4d || bytes[2] !== 1) return undefined;
   return decodeMaintenanceRelocationControl(bytes);
 }

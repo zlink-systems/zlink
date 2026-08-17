@@ -129,6 +129,18 @@ test('MFLOW-002 mode ladder gates phases by severity', () => {
   assert.equal(keyTransitions.enabled(ZLinkMessageFlowOutcome.Dropped), true);
 });
 
+test('message-flow begin reuses its gated trace point instead of allocating per event', () => {
+  const { tracer, cell } = makeTracer(diagnostics('normal'));
+  const first = tracer.begin(ZLinkMessageFlowOutcome.Received);
+  const second = tracer.begin(ZLinkMessageFlowOutcome.Admitted);
+  assert.strictEqual(first, second);
+
+  cell.mode = 'detailed';
+  assert.notStrictEqual(tracer.begin(ZLinkMessageFlowOutcome.Received), first);
+  cell.mode = 'off';
+  assert.equal(tracer.begin(ZLinkMessageFlowOutcome.Received), undefined);
+});
+
 test('MFLOW-003/005 standard logger provider receives the structured record', () => {
   const { tracer } = makeTracer(diagnostics('normal'));
   tracer.trace(receivedEvent());
@@ -467,6 +479,34 @@ test('channel request completion owner records success and in-flight cancellatio
     cancelledEvents.filter((event) => event.outcome === 'replyReceived').map((event) => event.result),
     ['cancelled']
   );
+});
+
+test('route outbound tracing records the destination as target_rid', async () => {
+  const events = [];
+  const operations = new ZLinkChannelOutboundOperations(
+    {
+      routeRouter() {
+        return {
+          async send(_targetRid, parts) {
+            channelEnvelope.closeMessages(parts);
+          }
+        };
+      }
+    },
+    undefined,
+    {
+      flowCreationEnabled() { return false; },
+      beginOutbound(outcome) {
+        return { trace(event) { events.push({ outcome, ...event }); } };
+      }
+    }
+  );
+
+  await operations.routeSubmit('mesh', 'target-node', 'Push', { value: 'ping' });
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].targetRid, 'target-node');
+  assert.equal(events[0].sourceRid, undefined);
 });
 
 test('classic fanout omits normal delivery flow and reports only subscriber-local no-handler', async () => {

@@ -2214,6 +2214,35 @@ test('route replacement shares the pre-bind active-frame drain with command 42',
   assert.equal(registry.abortSeal(actorId, 'replacement-seal'), true);
 });
 
+test('captured Session REQUEST claims its submission before awaiting command 44', async () => {
+  const registry = new ZLinkActorSessionBindingRegistry(16, 16, 50);
+  const actorId = 'actor-request-synchronous-claim';
+  const bindingToken = 'binding-request-synchronous-claim';
+  const context = { routingId: 'session', bindLocal() {}, unbindLocal() {} };
+  const actor = {
+    actorId,
+    ref: { actorId, objectGeneration: 5n, nodeRid: 'source', bindingGeneration: 6n }
+  };
+  registry.bind(context, actor, bindingToken);
+
+  const admission = await registry.beginAcceptedRequestFrameWhenReady(actorId, bindingToken);
+  await registry.sealAndWait(actorId, 'request-synchronous-claim-seal', {
+    objectGeneration: 5n,
+    bindingGeneration: 6n
+  });
+  const first = admission.beginSubmission();
+  assert.ok(first instanceof Promise);
+  assert.equal(
+    admission.beginSubmission(),
+    undefined,
+    'an await boundary cannot leave the one-shot submission claim open'
+  );
+
+  registry.abortSeal(actorId, 'request-synchronous-claim-seal');
+  await first;
+  admission.complete();
+});
+
 test('seal captures an in-flight Session REQUEST frame and its detached terminal arrives after cutover once', async () => {
   const registry = new ZLinkActorSessionBindingRegistry(16, 16, 50);
   const lifecycle = new ZLinkActorSessionLifecycleCoordinator();

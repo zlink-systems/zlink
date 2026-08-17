@@ -47,6 +47,7 @@ export interface ZLinkChannelOutboundTrace {
   readonly durationSeconds?: number;
   readonly topic?: string;
   readonly sourceRid?: string;
+  readonly targetRid?: string;
 }
 
 export interface ZLinkChannelOutboundTracePoint {
@@ -202,7 +203,8 @@ export class ZLinkChannelDispatchServices {
         serverRid: event.serverRid,
         durationSeconds: event.durationSeconds,
         topic: event.topic,
-        sourceRid: event.sourceRid
+        sourceRid: event.sourceRid,
+        targetRid: event.targetRid
       })
     };
   }

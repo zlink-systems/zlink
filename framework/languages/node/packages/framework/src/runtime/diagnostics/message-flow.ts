@@ -135,11 +135,21 @@ export class ZLinkMessageFlowTracer {
   private tracedEvents = 0;
   private providerFailures = 0;
   private localSamplingSequence = 0n;
+  private readonly tracePoints: Readonly<Record<
+    Exclude<ZLinkMessageFlowLogMode, 'off'>,
+    ZLinkMessageFlowTracePoint
+  >>;
 
   constructor(
     private readonly ctx: ZLinkDiagnosticsContext,
     private readonly errorSink: ZLinkDispatchErrorSink
-  ) {}
+  ) {
+    this.tracePoints = {
+      errors: { trace: flowInput => this.traceAtMode(flowInput, 'errors') },
+      normal: { trace: flowInput => this.traceAtMode(flowInput, 'normal') },
+      detailed: { trace: flowInput => this.traceAtMode(flowInput, 'detailed') }
+    };
+  }
 
   enabled(outcome: ZLinkMessageFlowOutcome): boolean {
     const mode = effectiveMessageFlow(this.ctx);
@@ -158,7 +168,7 @@ export class ZLinkMessageFlowTracer {
     if (MESSAGE_FLOW_MODE_RANK[mode] < MESSAGE_FLOW_MODE_RANK[requiredMode(outcome, result)]) {
       return undefined;
     }
-    return { trace: (flowInput) => this.traceAtMode(flowInput, mode) };
+    return this.tracePoints[mode as Exclude<ZLinkMessageFlowLogMode, 'off'>];
   }
 
   flowCreationEnabled(): boolean {
@@ -176,22 +186,21 @@ export class ZLinkMessageFlowTracer {
 
   private traceAtMode(flowInput: MessageFlowInput, effectiveMode: ZLinkMessageFlowLogMode): void {
     const ambient = currentFlowContext();
-    const root = flowInput.flowId !== undefined && flowInput.flowOrigin !== undefined
-      ? { flowId: flowInput.flowId, flowOrigin: flowInput.flowOrigin }
-      : ambient;
-    const flow: ZLinkRuntimeMessageFlowEvent = {
-      ...flowInput,
-      ...(root === undefined ? {} : root),
-      effectiveMode
-    };
+    const flowId = flowInput.flowId ?? ambient?.flowId;
+    const flowOrigin = flowInput.flowOrigin ?? ambient?.flowOrigin;
     if (
-      flow.outcome !== ZLinkMessageFlowOutcome.Dropped
-      && flow.outcome !== ZLinkMessageFlowOutcome.Backpressured
-      && flow.outcome !== ZLinkMessageFlowOutcome.Error
-      && (flow.result === undefined || flow.result === 'succeeded')
-      && !this.sample(flow.flowId, flow.sourceMeshGeneration)
+      flowInput.outcome !== ZLinkMessageFlowOutcome.Dropped
+      && flowInput.outcome !== ZLinkMessageFlowOutcome.Backpressured
+      && flowInput.outcome !== ZLinkMessageFlowOutcome.Error
+      && (flowInput.result === undefined || flowInput.result === 'succeeded')
+      && !this.sample(flowId, flowInput.sourceMeshGeneration)
     ) return;
 
+    const flow: ZLinkRuntimeMessageFlowEvent = {
+      ...flowInput,
+      ...(flowId === undefined ? {} : { flowId, flowOrigin }),
+      effectiveMode
+    };
     this.tracedEvents += 1;
     this.publish(toTelemetryRecord(
       flow,

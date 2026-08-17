@@ -2654,8 +2654,13 @@ function validateFrozenOperationMatrix(
 
 class FrozenReader {
   private offset = 0;
+  private readonly bytes: Buffer;
 
-  constructor(private readonly bytes: Buffer | Uint8Array) {}
+  constructor(bytes: Buffer | Uint8Array) {
+    this.bytes = Buffer.isBuffer(bytes)
+      ? bytes
+      : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  }
 
   private get remaining(): number {
     return this.bytes.byteLength - this.offset;
@@ -2674,21 +2679,21 @@ class FrozenReader {
 
   u16(name: string): number {
     this.need(2, name);
-    const value = Buffer.from(this.bytes).readUInt16BE(this.offset);
+    const value = this.bytes.readUInt16BE(this.offset);
     this.offset += 2;
     return value;
   }
 
   u32(name: string): number {
     this.need(4, name);
-    const value = Buffer.from(this.bytes).readUInt32BE(this.offset);
+    const value = this.bytes.readUInt32BE(this.offset);
     this.offset += 4;
     return value;
   }
 
   u64(name: string): bigint {
     this.need(8, name);
-    const value = Buffer.from(this.bytes).readBigUInt64BE(this.offset);
+    const value = this.bytes.readBigUInt64BE(this.offset);
     this.offset += 8;
     return value;
   }

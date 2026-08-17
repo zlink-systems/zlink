@@ -316,7 +316,7 @@ export class ZLinkChannelOutboundOperations {
           channelRouteKind: 'route_mesh',
           packetName,
           correlationId: undefined,
-          sourceRid: targetNodeRid,
+          targetRid: targetNodeRid,
           result: 'backpressured'
         });
         return { status: ZLinkSubmitStatus.TimedOut };
@@ -338,7 +338,7 @@ export class ZLinkChannelOutboundOperations {
       channelName: routerChannelId,
       packetName,
       correlationId: undefined,
-      sourceRid: targetNodeRid
+      targetRid: targetNodeRid
     });
   }
 
@@ -367,7 +367,7 @@ export class ZLinkChannelOutboundOperations {
         channelRouteKind: 'route_mesh',
         packetName,
         correlationId,
-        sourceRid: targetNodeRid,
+        targetRid: targetNodeRid,
         result
       });
     };
@@ -400,7 +400,7 @@ export class ZLinkChannelOutboundOperations {
         channelRouteKind: 'route_mesh',
         packetName,
         correlationId,
-        sourceRid: targetNodeRid
+        targetRid: targetNodeRid
       });
       const reply = await this.measureRequest(routerChannelId, async () => {
         const replyParts = await awaitWithAbort(

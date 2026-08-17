@@ -755,7 +755,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   ): Promise<ServiceSessionRelocationSealed> {
     const key = sessionRelocationPendingKey(request);
     const bytes = encodeSessionRelocationSeal(request);
-    const requestFingerprint = Buffer.from(bytes).toString('base64');
+    const requestFingerprint = bytes.toString('base64');
     const expectedTarget = String(targetNodeRid);
     const terminal = this.terminalSessionRelocations.get(key);
     if (terminal !== undefined) {

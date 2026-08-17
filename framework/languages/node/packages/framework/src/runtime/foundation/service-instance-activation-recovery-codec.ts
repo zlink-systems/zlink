@@ -240,11 +240,13 @@ function writePositiveU64(target: Buffer, offset: number, value: bigint): number
 }
 
 class RecoveryReader {
-  readonly bytes: Uint8Array;
+  readonly bytes: Buffer;
   offset = 0;
 
   constructor(value: Uint8Array) {
-    this.bytes = value;
+    this.bytes = Buffer.isBuffer(value)
+      ? value
+      : Buffer.from(value.buffer, value.byteOffset, value.byteLength);
   }
 
   get done(): boolean {
@@ -253,7 +255,7 @@ class RecoveryReader {
 
   expect(expected: Uint8Array): void {
     const actual = this.take(expected.byteLength);
-    if (!Buffer.from(actual).equals(Buffer.from(expected))) {
+    if (!actual.equals(expected)) {
       throw new TypeError('Instance activation recovery envelope magic is invalid.');
     }
   }
@@ -263,15 +265,15 @@ class RecoveryReader {
   }
 
   u16(): number {
-    return Buffer.from(this.take(2)).readUInt16BE();
+    return this.take(2).readUInt16BE();
   }
 
   u32(): number {
-    return Buffer.from(this.take(4)).readUInt32BE();
+    return this.take(4).readUInt32BE();
   }
 
   u64(): bigint {
-    return Buffer.from(this.take(8)).readBigUInt64BE();
+    return this.take(8).readBigUInt64BE();
   }
 
   nonZeroU64(): bigint {
@@ -316,7 +318,7 @@ class RecoveryReader {
     return new RecoveryReader(this.take(length));
   }
 
-  private take(length: number): Uint8Array {
+  private take(length: number): Buffer {
     if (length < 0 || this.offset + length > this.bytes.byteLength) {
       throw new TypeError('Instance activation recovery envelope is truncated.');
     }

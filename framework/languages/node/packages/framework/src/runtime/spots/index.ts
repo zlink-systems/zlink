@@ -2556,13 +2556,13 @@ export class DefaultZLinkSpotManager {
     await submitSourceLeave(admission.admission.actorRef.nodeRid);
     if (outcome.deferredJoinRoot !== undefined && this.options.actorTransferRuntime !== undefined) {
       const submitMailbox = targetsEntry
-        ? async <T>(operation: () => Promise<T>): Promise<T> => await operation()
-        : async <T>(operation: () => Promise<T>): Promise<T> => {
+        ? <T>(operation: () => Promise<T>): Promise<T> => operation()
+        : <T>(operation: () => Promise<T>): Promise<T> => {
             const activation = this.activations.resolve(meshName, admission.admission.spotId);
             if (activation === undefined) {
               throw new Error(`Actor Join relocation '${relocationId}' target mailbox is missing.`);
             }
-            return await activation.executeActor(actor.context.actorId, operation);
+            return activation.executeActor(actor.context.actorId, operation);
           };
       await this.options.actorTransferRuntime.commitAndDeliverDeferredJoinAccepted(
         outcome.deferredJoinRoot,

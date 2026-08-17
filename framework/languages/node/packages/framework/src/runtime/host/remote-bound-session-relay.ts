@@ -185,7 +185,7 @@ export class ZLinkRemoteBoundSessionRelay {
       this.options.streamBindingRuntime()
     );
     const retained = owner?.retainRelocationOutbound(send.actorId, {
-      deliver: async () => await this.deliverRemoteBoundSessionSend(send),
+      deliver: () => this.deliverRemoteBoundSessionSend(send),
       fail: error => this.options.reportOwnershipRefreshError?.(send.actorId, error)
     });
     if (retained === 'retained') return { ok: true };
