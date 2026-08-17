@@ -118,6 +118,8 @@ final class ZLinkCompositeRelocationBarrierTest {
         assertTrue(barrier.trySeal(lanes(spot, actor, timer)).isEmpty());
         remote.complete(null);
         dispatch.get(3, TimeUnit.SECONDS);
+        actor.awaitQuiescence().toCompletableFuture()
+            .get(3, TimeUnit.SECONDS);
 
         var seal = barrier.trySeal(lanes(spot, actor, timer))
             .orElseThrow();

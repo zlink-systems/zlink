@@ -25,22 +25,36 @@ final class ZLinkSpotRouterNodeDispatcher {
         RoutingId targetNodeRid,
         String targetSpotId,
         long targetSpotGeneration,
+        long authorityOwnerGeneration,
+        long ownerLeaseGeneration,
         List<Message> spotParts,
         Duration timeout,
         BiConsumer<CompletableFuture<Void>, Duration> trackPendingRequest) {
         CompletableFuture<Void> result = new CompletableFuture<>();
         trackPendingRequest.accept(result, timeout);
-        node.entrySpot().sendToSpot(
+        var entrySpot = node.entrySpot();
+        rememberAuthority(
+            entrySpot,
+            targetNodeRid,
+            targetSpotId,
+            targetSpotGeneration,
+            authorityOwnerGeneration,
+            ownerLeaseGeneration);
+        ZLinkChannelRuntime.trace(
+            "spot-route node-send-submit router=" + routerChannelId
+                + " targetNode=" + targetNodeRid
+                + " targetSpot=" + targetSpotId);
+        entrySpot.sendToSpot(
                 targetNodeRid,
                 targetSpotId,
                 targetSpotGeneration,
                 spotParts)
             .whenComplete((ignored, failure) -> {
                 ZLinkChannelRuntime.trace(
-                    "spot-route node-send-submit router=" + routerChannelId
+                    "spot-route node-send-result router=" + routerChannelId
                         + " targetNode=" + targetNodeRid
                         + " targetSpot=" + targetSpotId
-                        + " result=" + (failure == null ? "accepted" : "failed"));
+                        + " result=" + traceResult(failure));
                 if (failure == null) {
                     result.complete(null);
                 } else {
@@ -56,19 +70,40 @@ final class ZLinkSpotRouterNodeDispatcher {
         RoutingId targetNodeRid,
         String targetSpotId,
         long targetSpotGeneration,
+        long authorityOwnerGeneration,
+        long ownerLeaseGeneration,
         List<Message> spotParts,
         Duration timeout,
         BiConsumer<CompletableFuture<List<Message>>, Duration> trackPendingRequest) {
         CompletableFuture<List<Message>> result = new CompletableFuture<>();
         trackPendingRequest.accept(result, timeout);
         long requestStartedNanos = System.nanoTime();
-        node.entrySpot().requestToSpot(
+        var entrySpot = node.entrySpot();
+        rememberAuthority(
+            entrySpot,
+            targetNodeRid,
+            targetSpotId,
+            targetSpotGeneration,
+            authorityOwnerGeneration,
+            ownerLeaseGeneration);
+        ZLinkChannelRuntime.trace(
+            "spot-route node-request-submit router=" + routerChannelId
+                + " targetNode=" + targetNodeRid
+                + " targetSpot=" + targetSpotId);
+        entrySpot.requestToSpot(
                 targetNodeRid,
                 targetSpotId,
                 targetSpotGeneration,
                 spotParts,
                 timeout)
             .whenComplete((reply, failure) -> {
+                ZLinkChannelRuntime.trace(
+                    "spot-route node-request-result router=" + routerChannelId
+                        + " targetNode=" + targetNodeRid
+                        + " targetSpot=" + targetSpotId
+                        + " elapsedMs="
+                        + ZLinkChannelRuntime.elapsedMillis(requestStartedNanos)
+                        + " result=" + requestTraceResult(reply, failure));
                 if (failure == null) {
                     completeReply(reply, result, requestStartedNanos);
                 } else {
@@ -76,6 +111,53 @@ final class ZLinkSpotRouterNodeDispatcher {
                 }
             });
         return result;
+    }
+
+    private static void rememberAuthority(
+        systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot entrySpot,
+        RoutingId targetNodeRid,
+        String targetSpotId,
+        long targetSpotGeneration,
+        long authorityOwnerGeneration,
+        long ownerLeaseGeneration) {
+        if (targetSpotGeneration > 0
+            && authorityOwnerGeneration > 0
+            && ownerLeaseGeneration > 0) {
+            entrySpot.rememberSpotAuthority(
+                targetNodeRid,
+                targetSpotId,
+                targetSpotGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration);
+        }
+    }
+
+    private static String traceResult(Throwable failure) {
+        if (failure == null) {
+            return "accepted";
+        }
+        Throwable current = failure;
+        while ((current instanceof java.util.concurrent.CompletionException
+                || current instanceof java.util.concurrent.ExecutionException)
+            && current.getCause() != null) {
+            current = current.getCause();
+        }
+        if (current instanceof ZlinkRequestException request) {
+            return "rejected requestResult=" + request.getResult()
+                + " nativeErrno=" + request.getNativeErrno();
+        }
+        return "failed error=" + current.getClass().getSimpleName()
+            + ":" + String.valueOf(current.getMessage());
+    }
+
+    private static String requestTraceResult(
+        ZLinkBackendReceived reply,
+        Throwable failure) {
+        if (failure != null) {
+            return traceResult(failure);
+        }
+        return "completed backendResult=" + reply.result()
+            + " failureCode=" + reply.failureCode();
     }
 
     /**

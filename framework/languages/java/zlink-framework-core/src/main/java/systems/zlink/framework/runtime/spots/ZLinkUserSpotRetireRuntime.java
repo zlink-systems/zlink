@@ -171,7 +171,7 @@ public final class ZLinkUserSpotRetireRuntime {
                 relocationReplyClient,
                 locations,
                 new ZLinkStandaloneActorRelocationStagingOwner(
-                    node.status().routingId(),
+                    node.spotNode(),
                     spots.actorSessions(),
                     adapters,
                     spots),

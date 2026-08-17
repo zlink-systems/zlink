@@ -118,9 +118,12 @@ final class ZLinkFanoutLocationRuntimeTest {
                 fixture.scheduler,
                 new ZLinkChannelReplyDecoder(
                     new ZLinkJsonMessageSerializer()),
-                (channel, node, spot, generation, parts) ->
+                (channel, node, spot, generation,
+                 authorityOwnerGeneration, ownerLeaseGeneration, parts) ->
                     CompletableFuture.completedFuture(null),
-                (channel, node, spot, generation, parts, timeout) ->
+                (channel, node, spot, generation,
+                 authorityOwnerGeneration, ownerLeaseGeneration, parts,
+                 timeout) ->
                     CompletableFuture.completedFuture(List.of()),
                 new ZLinkOneWayCalls((backend, key) ->
                     (submission, cleanup) ->

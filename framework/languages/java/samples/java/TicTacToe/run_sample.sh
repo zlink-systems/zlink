@@ -229,5 +229,5 @@ for actor_id in player-x player-o; do
     exit 1
   fi
 done
-grep -Eq "message flow" "${log_dir}"/{api,play}-*.log
+grep -Eq "zlink flow:" "${log_dir}"/{api,play}-*.log
 echo "PASS TicTacToe.Java"

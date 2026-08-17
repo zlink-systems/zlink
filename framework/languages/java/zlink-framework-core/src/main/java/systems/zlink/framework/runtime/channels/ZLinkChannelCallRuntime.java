@@ -39,6 +39,8 @@ final class ZLinkChannelCallRuntime {
             RoutingId targetNode,
             String targetSpot,
             long targetSpotGeneration,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration,
             List<Message> parts);
     }
 
@@ -49,6 +51,8 @@ final class ZLinkChannelCallRuntime {
             RoutingId targetNode,
             String targetSpot,
             long targetSpotGeneration,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration,
             List<Message> parts,
             Duration timeout);
     }
@@ -220,9 +224,17 @@ final class ZLinkChannelCallRuntime {
         RoutingId targetNode,
         String targetSpot,
         long targetSpotGeneration,
+        long authorityOwnerGeneration,
+        long ownerLeaseGeneration,
         List<Message> parts) {
         return spotSend.send(
-            channelName, targetNode, targetSpot, targetSpotGeneration, parts);
+            channelName,
+            targetNode,
+            targetSpot,
+            targetSpotGeneration,
+            authorityOwnerGeneration,
+            ownerLeaseGeneration,
+            parts);
     }
 
     CompletionStage<List<Message>> requestToSpot(
@@ -230,6 +242,8 @@ final class ZLinkChannelCallRuntime {
         RoutingId targetNode,
         String targetSpot,
         long targetSpotGeneration,
+        long authorityOwnerGeneration,
+        long ownerLeaseGeneration,
         List<Message> parts,
         Duration timeout) {
         return spotRequest.request(
@@ -237,6 +251,8 @@ final class ZLinkChannelCallRuntime {
             targetNode,
             targetSpot,
             targetSpotGeneration,
+            authorityOwnerGeneration,
+            ownerLeaseGeneration,
             parts,
             timeout);
     }

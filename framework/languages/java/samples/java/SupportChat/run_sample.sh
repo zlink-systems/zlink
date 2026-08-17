@@ -151,7 +151,7 @@ grep -q "status=WaitingForClose" "$LOG_DIR/support.log"
 grep -q "status=Closed" "$LOG_DIR/support.log"
 grep -q "supportchat-closed-typing-ignore=verified" "$LOG_DIR/client.log"
 
-grep -Eq "message flow" "$LOG_DIR"/{api,session,support}.log
+grep -Eq "zlink flow:" "$LOG_DIR"/{api,session,support}.log
 
 echo "supportchat-server-evidence=completed"
 echo "supportchat full client/server self-check completed"

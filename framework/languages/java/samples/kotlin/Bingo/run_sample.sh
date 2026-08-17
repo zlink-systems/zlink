@@ -181,7 +181,7 @@ wait_framework_peer_ready_counts "${log_dir}" \
 
 grep -q "bingo=completed" "${log_dir}/client.log"
 grep -q "stream-inbound sample=Bingo" "${log_dir}/client.log"
-grep -Eq "message flow" "${log_dir}"/{session,api,play}-*.log
+grep -Eq "zlink flow:" "${log_dir}"/{session,api,play}-*.log
 grep -Eq "zlink metric .*name=zlink\.stream\.connections\.active" "${log_dir}"/session-*.log
 grep -Eq "zlink metric .*name=zlink\.spot\.count" "${log_dir}"/play-*.log
 

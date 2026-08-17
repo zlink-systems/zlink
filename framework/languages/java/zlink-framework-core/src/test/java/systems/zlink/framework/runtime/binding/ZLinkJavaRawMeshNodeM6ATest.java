@@ -56,6 +56,63 @@ import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
 final class ZLinkJavaRawMeshNodeM6ATest {
     @Test
+    void readyPeerRequiresTheSelectedApplicationTransportPair() {
+        var selected = new ZLinkJavaRawMeshNode.TransportPair(41, 7);
+
+        assertFalse(ZLinkJavaRawMeshNode.applicationTransportPairMatches(
+            selected, null));
+        assertFalse(ZLinkJavaRawMeshNode.applicationTransportPairMatches(
+            selected, new ZLinkJavaRawMeshNode.TransportPair(42, 7)));
+        assertFalse(ZLinkJavaRawMeshNode.applicationTransportPairMatches(
+            selected, new ZLinkJavaRawMeshNode.TransportPair(41, 8)));
+        assertTrue(ZLinkJavaRawMeshNode.applicationTransportPairMatches(
+            selected, new ZLinkJavaRawMeshNode.TransportPair(41, 7)));
+        assertTrue(ZLinkJavaRawMeshNode.applicationTransportPairMatches(
+            null, null));
+        assertFalse(ZLinkJavaRawMeshNode.applicationTransportPairMatches(
+            null, selected));
+    }
+
+    @Test
+    void spotRouterNodeReadyCheckUsesTheDirectApplicationRequestPair() {
+        var topologySelected = new ZLinkJavaRawMeshNode.TransportPair(73, 11);
+        var directApplicationRequest =
+            new ZLinkJavaRawMeshNode.TransportPair(73, 11);
+
+        assertTrue(ZLinkJavaRawMeshNode.applicationTransportPairMatches(
+            topologySelected, directApplicationRequest));
+        assertFalse(ZLinkJavaRawMeshNode.applicationTransportPairMatches(
+            topologySelected,
+            new ZLinkJavaRawMeshNode.TransportPair(73, 12)));
+    }
+
+    @Test
+    void oneWayAdapterClassifiesNativeSubmitRejection() {
+        for (var rejected : List.of(
+                systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED,
+                systems.zlink.contracts.sockets.SubmitResult.NOT_ADMITTED,
+                systems.zlink.contracts.sockets.SubmitResult.NOT_CONNECTED)) {
+            var failure = assertThrows(
+                ExecutionException.class,
+                () -> ZLinkOneWayCalls.adaptOneWay(
+                    CompletableFuture.failedFuture(
+                        new systems.zlink.contracts.errors.ZlinkSubmitException(
+                            rejected)))
+                    .toCompletableFuture()
+                    .get());
+            assertTrue(failure.getCause()
+                instanceof systems.zlink.framework.errors.ZLinkFrameworkException);
+            var framework = (systems.zlink.framework.errors.ZLinkFrameworkException)
+                failure.getCause();
+            assertEquals(
+                rejected == systems.zlink.contracts.sockets.SubmitResult.NOT_CONNECTED
+                    ? systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE
+                    : systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                framework.kind());
+        }
+    }
+
+    @Test
     void monitorConnectionKeyIgnoresEventSpecificValue() {
         var ready = new MonitorEvent(
             MonitorEventType.CONNECTION_READY,

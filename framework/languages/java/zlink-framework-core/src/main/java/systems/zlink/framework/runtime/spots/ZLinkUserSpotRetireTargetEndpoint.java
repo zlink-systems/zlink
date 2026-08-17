@@ -1028,6 +1028,10 @@ final class ZLinkUserSpotRetireTargetEndpoint
                     target.staged(), root.payload());
                 actorStaging.publishDirectJoinHidden(
                     replay, targetOwnerGeneration);
+                actorStaging.prepareDirectJoinBoundSession(
+                    replay,
+                    target.requestWithSessionRoute(),
+                    targetOwnerGeneration);
                 target.published().set(true);
                 return actorJoin.notifyTargetJoined(
                         target.directAdmission(), target.staged())

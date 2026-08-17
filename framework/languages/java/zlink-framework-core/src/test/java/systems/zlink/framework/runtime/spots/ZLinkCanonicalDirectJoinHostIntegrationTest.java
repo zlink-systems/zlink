@@ -84,6 +84,10 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         new AtomicReference<>();
     private static final AtomicReference<CompletableFuture<
         ZLinkActorJoinOperationId>> ACCEPTED_STAGE = new AtomicReference<>();
+    private static final AtomicReference<CompletableFuture<Void>> PUSH_SUBMITTED =
+        new AtomicReference<>();
+    private static final AtomicReference<CompletableFuture<Void>> PUSH_TERMINAL =
+        new AtomicReference<>();
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(Scenario.class)
@@ -93,6 +97,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         EVENTS.clear();
         ACCEPTED.set(null);
         ACCEPTED_STAGE.set(new CompletableFuture<>());
+        PUSH_SUBMITTED.set(new CompletableFuture<>());
+        PUSH_TERMINAL.set(new CompletableFuture<>());
         LEAVE_GATE.set(new CompletableFuture<>());
         var locationStore = new ZLinkInMemoryLocationStore();
         var relocationStore = new InMemoryRelocationStore();
@@ -203,6 +209,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             var targetBackend = new RecordingTargetBackend(
                 TARGET_RID,
                 targetSpots.actorSessions(),
+                targetActors,
                 targetAdapters,
                 targetSpots);
             var endpoint = new ZLinkUserSpotRetireTargetEndpoint(
@@ -394,6 +401,10 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 "the source turn boundary must own capture admission");
             activeTurn.complete(null);
             blocker.toCompletableFuture().get(1, TimeUnit.SECONDS);
+            PUSH_SUBMITTED.get().get(4, TimeUnit.SECONDS);
+            assertFalse(link.targetCompletion.isDone(),
+                "target normalization must wait for the client push terminal");
+            PUSH_TERMINAL.get().complete(null);
 
             ZLinkActorJoinRelocationPort.Submission submission;
             try {
@@ -434,10 +445,12 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     .toList());
             assertBefore("target.joined", "leave.submit");
             assertBefore("leave.submit", "target.accepted");
+            assertBefore("target.accepted", "client.push.submitted");
             assertBefore("target.accepted", "target.open");
             assertBefore("target.open", "replay:B1");
             assertBefore("replay:D1", "command44");
-            assertBefore("command44", "target.normalize");
+            assertBefore("command44", "client.push.terminal");
+            assertBefore("client.push.terminal", "target.normalize");
             assertTrue(EVENTS.contains("route.duplicate.noop"));
             assertTrue(EVENTS.contains("route.changed.conflict"));
             assertEquals(2, released.get());
@@ -600,7 +613,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         var request = new ZLinkStandaloneActorRelocationStagingOwner.Request(
             relocationId, actorId, ACTOR_TYPE, 1, 1, true, TARGET_SPOT_ID);
         var owner = new ZLinkStandaloneActorRelocationStagingOwner(
-            TARGET_RID,
+            targetSpots.primaryNode(),
             targetSpots.actorSessions(),
             targetAdapters,
             targetSpots);
@@ -964,7 +977,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                 .SessionRelocationRouteAction.COMMIT,
                             route.action());
                         EVENTS.add("command44");
-                        yield CompletableFuture.completedFuture(null);
+                        yield PUSH_TERMINAL.get().thenRun(() ->
+                            EVENTS.add("client.push.terminal"));
                     }
                     case "sendActorLeft" -> {
                         EVENTS.add("leave.submit");
@@ -1010,6 +1024,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         implements ZLinkStandaloneActorRelocationStagingOwner.Backend {
         private final RoutingId targetRid;
         private final ZLinkActorSessionCoordinator actors;
+        private final ZLinkActorRuntime actorRuntime;
         private final ZLinkRelocationAdapterRegistry adapters;
         private final ZLinkSpotRuntime spots;
         private final AtomicBoolean open = new AtomicBoolean();
@@ -1017,10 +1032,12 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         private RecordingTargetBackend(
             RoutingId targetRid,
             ZLinkActorSessionCoordinator actors,
+            ZLinkActorRuntime actorRuntime,
             ZLinkRelocationAdapterRegistry adapters,
             ZLinkSpotRuntime spots) {
             this.targetRid = targetRid;
             this.actors = actors;
+            this.actorRuntime = actorRuntime;
             this.adapters = adapters;
             this.spots = spots;
         }
@@ -1081,6 +1098,22 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 targetOwnerGeneration);
         }
 
+        @Override public void prepareBoundSession(
+            Object actor,
+            ZLinkStandaloneActorRelocationStagingOwner.Request request,
+            ZLinkServiceM6BWireCodec.ActorRouteFence actorRoute,
+            ZLinkServiceM6BWireCodec.SessionOwnerFence session) {
+            var prepared = (ZLinkActorRuntime.PreparedTransferredActor) actor;
+            actorRuntime.bindNativeSession(
+                prepared.actor(),
+                pushSpotNode(),
+                actorRoute.actor(),
+                session.nodeRid(),
+                session.sessionRid(),
+                session.bindingGeneration(),
+                0);
+        }
+
         @Override public void openAdmission(Object actor) {
             EVENTS.add("target.open");
             actors.openRelocatedActorAdmission(
@@ -1101,6 +1134,27 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             return actors.discardRelocatedActor(prepared)
                 .thenRun(() -> spots.discardEntryActorTimerRelocation(
                     request.targetSpotId(), prepared.actorId()));
+        }
+
+        private static ZLinkInternalSpotNode pushSpotNode() {
+            return (ZLinkInternalSpotNode) Proxy.newProxyInstance(
+                ZLinkInternalSpotNode.class.getClassLoader(),
+                new Class<?>[] {ZLinkInternalSpotNode.class},
+                (proxy, method, arguments) -> switch (method.getName()) {
+                    case "hasRemoteActorBoundSessionRoute" -> true;
+                    case "sendRemoteActorBoundSession" -> {
+                        @SuppressWarnings("unchecked")
+                        List<Message> frames = (List<Message>) arguments[1];
+                        assertFalse(frames.isEmpty());
+                        assertTrue(frames.stream().allMatch(
+                            frame -> frame.size() > 0));
+                        EVENTS.add("client.push.submitted");
+                        PUSH_SUBMITTED.get().complete(null);
+                        yield CompletableFuture.completedFuture(null);
+                    }
+                    case "toString" -> "push-spot-node";
+                    default -> defaultValue(method.getReturnType());
+                });
         }
     }
 
@@ -1149,8 +1203,13 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             ACCEPTED.set(accepted.operationId());
             ACCEPTED_STAGE.get().complete(accepted.operationId());
             EVENTS.add("target.accepted");
-            return CompletableFuture.completedFuture(null);
+            return context.boundSession()
+                .send(new JoinGameStatePush("WaitingForPlayers"))
+                .submit();
         }
+    }
+
+    private record JoinGameStatePush(String status) {
     }
 
     public static final class TrackingActorFactory

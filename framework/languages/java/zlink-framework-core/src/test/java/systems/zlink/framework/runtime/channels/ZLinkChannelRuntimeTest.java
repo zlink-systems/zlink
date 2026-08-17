@@ -664,6 +664,52 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
+    void spotRouterNodeCallsInstallTheResolvedAuthorityBeforeSubmit() {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.setDefaultRequestTimeout(Duration.ofMillis(300));
+        FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
+        backend.spotNode.entrySpot.requestReplyParts = List.of(
+            Message.from("{\"value\":\"reply\"}".getBytes()));
+        RoutingId owner = RoutingId.from("play-node");
+        SpotTransportAddressResolver resolver = spotId ->
+            CompletableFuture.completedFuture(Optional.of(
+                new SpotTransportAddress(
+                    "play.route",
+                    owner,
+                    spotId,
+                    17L,
+                    23L,
+                    29L,
+                    31L,
+                    ZLinkSpotKind.USER)));
+        try (ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
+            backend,
+            options.registration(),
+            new ZLinkJsonMessageSerializer(),
+            handlers(resolver))) {
+            runtime.registerSpotRouterNode("play.route", backend.spotNode);
+
+            runtime.sendToSpot("room-spot", new TestRequest("send"))
+                .submit()
+                .toCompletableFuture()
+                .join();
+            runtime.requestToSpot("room-spot", new TestRequest("request"))
+                .submit(TestReply.class)
+                .toCompletableFuture()
+                .join();
+
+            assertEquals(2, backend.spotNode.entrySpot.authorityRemembers);
+            assertEquals(owner, backend.spotNode.entrySpot.authorityNodeRid);
+            assertEquals("room-spot", backend.spotNode.entrySpot.authoritySpotId);
+            assertEquals(17L, backend.spotNode.entrySpot.authoritySpotGeneration);
+            assertEquals(29L, backend.spotNode.entrySpot.authorityOwnerGeneration);
+            assertEquals(31L, backend.spotNode.entrySpot.authorityOwnerLeaseGeneration);
+            assertEquals(1, backend.spotNode.entrySpot.sendAttempts);
+            assertEquals(1, backend.spotNode.entrySpot.requestAttempts);
+        }
+    }
+
+    @Test
     void spotRouterNodeRequestCompletesUnavailableOnTransportNotConnectedReply() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofMillis(300));
@@ -2164,6 +2210,12 @@ final class ZLinkChannelRuntimeTest {
             new ArrayDeque<>();
         SendFlags lastRequestFlags;
         long lastSpotGeneration;
+        int authorityRemembers;
+        RoutingId authorityNodeRid;
+        String authoritySpotId;
+        long authoritySpotGeneration;
+        long authorityOwnerGeneration;
+        long authorityOwnerLeaseGeneration;
         List<Message> requestReplyParts = List.of();
 
         @Override public String spotId() { return "entry-spot"; }
@@ -2171,6 +2223,19 @@ final class ZLinkChannelRuntimeTest {
         @Override public void setSubscription(String topic) { }
         @Override public ZLinkBackendTopicMessage subscribe(ZLinkBackendRecvMode mode) { return null; }
         @Override public ZLinkBackendReceived recvRoute(ZLinkBackendRecvMode mode) { return null; }
+        @Override public void rememberSpotAuthority(
+            RoutingId targetNodeRid,
+            String spotId,
+            long objectGeneration,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration) {
+            authorityRemembers++;
+            authorityNodeRid = targetNodeRid;
+            authoritySpotId = spotId;
+            authoritySpotGeneration = objectGeneration;
+            this.authorityOwnerGeneration = authorityOwnerGeneration;
+            this.authorityOwnerLeaseGeneration = ownerLeaseGeneration;
+        }
         @Override public boolean publish(String channelName, String topic, List<Message> parts, SendFlags flags) { return true; }
         @Override public CompletionStage<Void> publishAsync(String channelName, String topic, List<Message> parts, SendFlags flags) { return CompletableFuture.completedFuture(null); }
         @Override public CompletionStage<Void> sendToSpot(

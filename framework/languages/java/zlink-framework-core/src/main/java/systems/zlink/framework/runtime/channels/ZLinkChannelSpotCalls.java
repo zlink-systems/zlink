@@ -298,6 +298,8 @@ final class RouteSpotSendCall
                     address.targetNodeRid(),
                     address.spotId(),
                     address.spotGeneration(),
+                    address.authorityOwnerGeneration(),
+                    address.ownerLeaseGeneration(),
                     sendParts).whenComplete((ignored, error) -> sendParts.forEach(Message::close));
             } catch (RuntimeException error) {
                 sendParts.forEach(Message::close);
@@ -552,6 +554,8 @@ final class RouteSpotRequestCall
                 address.targetNodeRid(),
                 address.spotId(),
                 address.spotGeneration(),
+                address.authorityOwnerGeneration(),
+                address.ownerLeaseGeneration(),
                 requestParts,
                 timeout)
                 .thenApply(replyParts -> {

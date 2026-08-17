@@ -59,7 +59,8 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
                 });
             }, error -> { throw new AssertionError(error); });
 
-            awaitCondition(() -> router.receiveCount.get() == 1);
+            awaitCondition(() -> queue.snapshot().capacityWaiters() == 1);
+            assertEquals(1, router.receiveCount.get());
             assertEquals(1, queue.snapshot().queuedApplicationJobs());
             assertEquals(1, queue.snapshot().capacityWaiters());
 

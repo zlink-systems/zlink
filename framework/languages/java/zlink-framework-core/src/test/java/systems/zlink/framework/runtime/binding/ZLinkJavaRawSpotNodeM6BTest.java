@@ -1730,6 +1730,62 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     }
 
     @Test
+    void command44TargetBindAcceptsPreinstalledFenceIdempotently()
+        throws Exception {
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId nodeRid = RoutingId.from("jvm-m6b-route-target");
+            RoutingId sessionOwnerRid =
+                RoutingId.from("jvm-m6b-route-session-owner");
+            RoutingId sessionRid = RoutingId.from("jvm-m6b-route-session");
+            node.setRoutingId(nodeRid);
+            node.setBind("inproc://jvm-m6b-route-" + System.nanoTime());
+            node.start();
+
+            ZLinkJavaRawSpotNode target =
+                (ZLinkJavaRawSpotNode) node.spotNode();
+            ZLinkBackendActorRef actor;
+            try (Message create = Message.from("create")) {
+                actor = target.createActor("route-actor", create);
+            }
+            target.rememberActorAuthority(actor, 41, 7);
+            var route = new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                actor,
+                node.lifecycleGeneration(),
+                41,
+                7);
+            var session = new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                sessionOwnerRid,
+                11,
+                sessionOwnerRid.toString(),
+                1,
+                sessionRid,
+                5);
+            target.installRelocatingActorBoundSession(route, session);
+
+            assertTrue(target.acceptRemoteStreamBinding(
+                sessionOwnerRid,
+                11,
+                new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                    1, route, sessionRid, true, 5)));
+            assertEquals(
+                5,
+                target.boundSessionRoute(actor).orElseThrow()
+                    .bindingGeneration());
+
+            assertTrue(target.acceptRemoteStreamBinding(
+                sessionOwnerRid,
+                11,
+                new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                    2, route, sessionRid, true, 6)));
+            assertEquals(
+                6,
+                target.boundSessionRoute(actor).orElseThrow()
+                    .bindingGeneration());
+        }
+    }
+
+    @Test
     void remoteBindingIdentityFencesOldOwnerEpochWithoutGlobalCounter()
         throws Exception {
         try (var context = Zlink.createContext();

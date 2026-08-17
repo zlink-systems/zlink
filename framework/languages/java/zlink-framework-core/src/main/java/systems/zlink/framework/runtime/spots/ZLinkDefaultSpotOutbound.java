@@ -346,7 +346,8 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                     target, stableType, selectedMesh, copyPayload(), packetName,
                     contentType, metadata.values());
             }).thenCompose(Function.identity());
-            return stage.whenComplete((ignored, failure) -> payload.close());
+            return ZLinkOneWayCalls.adaptOneWay(stage)
+                .whenComplete((ignored, failure) -> payload.close());
         }
 
         private CompletionStage<Void> sendExisting(SpotTransportAddress address) {

@@ -34,8 +34,8 @@ public final class RequestReplySupport {
       Executors.newSingleThreadScheduledExecutor(
         new NamedDaemonThreadFactory("zlink-request-timeout"));
     private static final java.util.concurrent.ExecutorService REQUEST_COMPLETIONS =
-      Executors.newSingleThreadExecutor(
-        new NamedDaemonThreadFactory("zlink-request-complete"));
+      Executors.newThreadPerTaskExecutor(
+        Thread.ofVirtual().name("zlink-request-complete-", 0).factory());
 
     private RequestReplySupport() {
     }

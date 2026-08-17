@@ -11,13 +11,15 @@ import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.relocation
     .ZLinkRelocationAdapterRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 
 /**
  * Owns one independent Actor target attempt. Factory and Restore finish while
@@ -31,12 +33,12 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
     private final Backend backend;
 
     ZLinkStandaloneActorRelocationStagingOwner(
-        RoutingId targetNodeRid,
+        ZLinkInternalSpotNode targetNode,
         ZLinkActorSessionCoordinator actors,
         ZLinkRelocationAdapterRegistry adapters,
         ZLinkSpotRuntime spots) {
         backend = new ProductionBackend(
-            Objects.requireNonNull(targetNodeRid, "targetNodeRid"),
+            Objects.requireNonNull(targetNode, "targetNode"),
             Objects.requireNonNull(actors, "actors"),
             Objects.requireNonNull(adapters, "adapters"),
             Objects.requireNonNull(spots, "spots"));
@@ -301,6 +303,49 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         backend.publish(
             staged.actor(), staged.request(), targetOwnerGeneration);
         staged.published = true;
+    }
+
+    void prepareDirectJoinBoundSession(
+        DirectJoinReplay replay,
+        ZLinkSpotRetireControl.StageRequest request,
+        long targetOwnerGeneration) {
+        Objects.requireNonNull(replay, "replay");
+        Objects.requireNonNull(request, "request");
+        if (request.sessionRoutes().isEmpty()) {
+            return;
+        }
+        Staged staged = replay.staged();
+        requireActive(staged);
+        if (!staged.published || staged.directBacklog != replay) {
+            throw new IllegalStateException(
+                "direct Join bound Session requires hidden publication");
+        }
+        ZLinkSpotRetireControl.SessionRouteFence route =
+            request.sessionRoutes().getFirst();
+        if (!route.actorId().equals(staged.request().actorId())
+            || route.actorObjectGeneration()
+                != staged.request().objectGeneration()) {
+            throw new IllegalStateException(
+                "direct Join bound Session differs from the staged Actor");
+        }
+        backend.prepareBoundSession(
+            staged.actor(),
+            staged.request(),
+            new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                new ZLinkBackendActorRef(
+                    request.targetNodeRid(),
+                    route.actorId(),
+                    route.actorObjectGeneration()),
+                request.targetNodeGeneration(),
+                targetOwnerGeneration,
+                request.targetOwnerLeaseGeneration()),
+            new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                route.sessionOwnerNodeRid(),
+                route.sessionOwnerNodeGeneration(),
+                route.sessionOwnerId(),
+                route.sessionOwnerLeaseGeneration(),
+                route.sessionRid(),
+                route.bindingGeneration()));
     }
 
     CompletionStage<Void> replayDirectJoin(
@@ -629,6 +674,13 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
             publish(actor, request);
         }
 
+        default void prepareBoundSession(
+            Object actor,
+            Request request,
+            ZLinkServiceM6BWireCodec.ActorRouteFence actorRoute,
+            ZLinkServiceM6BWireCodec.SessionOwnerFence session) {
+        }
+
         void openAdmission(Object actor);
 
         default void publishTimers(Request request) {
@@ -638,17 +690,17 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
     }
 
     private static final class ProductionBackend implements Backend {
-        private final RoutingId targetNodeRid;
+        private final ZLinkInternalSpotNode targetNode;
         private final ZLinkActorSessionCoordinator actors;
         private final ZLinkRelocationAdapterRegistry adapters;
         private final ZLinkSpotRuntime spots;
 
         private ProductionBackend(
-            RoutingId targetNodeRid,
+            ZLinkInternalSpotNode targetNode,
             ZLinkActorSessionCoordinator actors,
             ZLinkRelocationAdapterRegistry adapters,
             ZLinkSpotRuntime spots) {
-            this.targetNodeRid = targetNodeRid;
+            this.targetNode = targetNode;
             this.actors = actors;
             this.adapters = adapters;
             this.spots = spots;
@@ -667,7 +719,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                     adapters,
                     cancellation,
                     new ZLinkBackendActorRef(
-                        targetNodeRid,
+                        targetNode.routingId(),
                         request.actorId(),
                         request.objectGeneration()))
                 .thenApply(value -> value);
@@ -720,6 +772,23 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
                 (ZLinkActorRuntime.PreparedTransferredActor) actor,
                 request.targetSpotId(),
                 targetOwnerGeneration);
+        }
+
+        @Override
+        public void prepareBoundSession(
+            Object actor,
+            Request request,
+            ZLinkServiceM6BWireCodec.ActorRouteFence actorRoute,
+            ZLinkServiceM6BWireCodec.SessionOwnerFence session) {
+            var prepared = (ZLinkActorRuntime.PreparedTransferredActor) actor;
+            ZLinkActor targetActor = prepared.actor();
+            targetNode.installRelocatingActorBoundSession(actorRoute, session);
+            actors.bindNativeSession(
+                targetActor,
+                targetNode,
+                actorRoute.actor(),
+                session.nodeRid(),
+                session.sessionRid());
         }
 
         @Override

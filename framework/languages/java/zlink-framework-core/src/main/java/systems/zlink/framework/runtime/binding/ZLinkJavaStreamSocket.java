@@ -386,10 +386,32 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         ZLinkStreamHeader header,
         List<Message> parts,
         Duration timeout) {
+        return requestBoundActor(
+            sessionRid,
+            actorId,
+            allocateBoundSessionSequence(),
+            header,
+            parts,
+            timeout);
+    }
+
+    @Override public CompletionStage<List<Message>> requestBoundActor(
+        RoutingId sessionRid,
+        String actorId,
+        long sourceSessionSequence,
+        ZLinkStreamHeader header,
+        List<Message> parts,
+        Duration timeout) {
+        if (sourceSessionSequence <= 0) {
+            return CompletableFuture.failedFuture(
+                new IllegalArgumentException(
+                    "bound Session ingress sequence must be positive"));
+        }
         Message encodedHeader = null;
         try {
             SessionBinding binding = requireBinding(sessionRid, actorId);
-            long requestSequence = allocateBoundSessionRequestSequence();
+            long requestSequence = header.requestSequence().orElseGet(
+                this::allocateBoundSessionRequestSequence);
             ZLinkStreamHeader requestHeader = new ZLinkStreamHeader(
                 ZLinkStreamMessageKind.REQUEST,
                 header.codec(),
@@ -406,7 +428,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                 binding.actor(),
                 sessionRid,
                 binding.generation(),
-                allocateBoundSessionSequence(),
+                sourceSessionSequence,
                 this,
                 requestHeader,
                 prepend(encodedHeader, parts),

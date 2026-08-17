@@ -238,6 +238,18 @@ public interface ZLinkBackendStreamSocket
                 "bound Actor request is unavailable"));
     }
 
+    /** Requests through the ingress sequence already accepted by the owner. */
+    default CompletionStage<List<Message>> requestBoundActor(
+        RoutingId sessionRid,
+        String actorId,
+        long sourceSessionSequence,
+        ZLinkStreamHeader header,
+        List<Message> parts,
+        Duration timeout) {
+        return requestBoundActor(
+            sessionRid, actorId, header, parts, timeout);
+    }
+
     /** Sends an internal request to the supplied exact Actor identity. */
     default CompletionStage<List<Message>> requestExactActor(
         ZLinkBackendActorRef actor,

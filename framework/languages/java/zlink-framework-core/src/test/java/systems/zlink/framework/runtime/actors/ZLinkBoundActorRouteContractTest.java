@@ -12,6 +12,7 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
@@ -22,6 +23,7 @@ import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistra
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
+import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
@@ -116,7 +118,7 @@ final class ZLinkBoundActorRouteContractTest {
     }
 
     @Test
-    void remoteRelayKeepsTheStrictHeaderAndPayloadActorPacket() {
+    void remoteOneWayRelayKeepsTheStrictHeaderAndPayloadActorPacket() {
         AtomicReference<ZLinkStreamCodec> sentCodec = new AtomicReference<>();
         AtomicReference<Integer> sentPayloadPartCount = new AtomicReference<>();
         ZLinkBackendStreamSocket stream = (ZLinkBackendStreamSocket)
@@ -164,10 +166,10 @@ final class ZLinkBoundActorRouteContractTest {
             operation -> operation.apply(1),
             ZLinkRelayMetadataPolicy.EMPTY);
         relayHeaders.enter(new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.REQUEST,
+            ZLinkStreamMessageKind.SEND,
             ZLinkStreamCodec.PROTOBUF,
             EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-            Optional.of(2L),
+            Optional.empty(),
             "MatchBingoReq",
             Map.of()));
         try {
@@ -183,6 +185,112 @@ final class ZLinkBoundActorRouteContractTest {
 
         assertEquals(ZLinkStreamCodec.PROTOBUF, sentCodec.get());
         assertEquals(1, sentPayloadPartCount.get());
+    }
+
+    @Test
+    void remoteRelayPreservesOneWayAndRequestReplyFrameKinds() {
+        AtomicInteger relays = new AtomicInteger();
+        AtomicInteger requests = new AtomicInteger();
+        AtomicInteger replies = new AtomicInteger();
+        AtomicReference<ZLinkStreamHeader> clientReply = new AtomicReference<>();
+        ZLinkBackendStreamSocket stream = (ZLinkBackendStreamSocket)
+            Proxy.newProxyInstance(
+                ZLinkBackendStreamSocket.class.getClassLoader(),
+                new Class<?>[] {ZLinkBackendStreamSocket.class},
+                (proxy, method, arguments) -> switch (method.getName()) {
+                    case "relayBoundActorAsync" -> {
+                        ZLinkStreamHeader header =
+                            (ZLinkStreamHeader) arguments[3];
+                        assertEquals(ZLinkStreamMessageKind.SEND, header.kind());
+                        relays.incrementAndGet();
+                        yield CompletableFuture.completedFuture(null);
+                    }
+                    case "requestBoundActor" -> {
+                        ZLinkStreamHeader header =
+                            (ZLinkStreamHeader) arguments[3];
+                        assertEquals(
+                            ZLinkStreamMessageKind.REQUEST, header.kind());
+                        assertEquals(1L, arguments[2]);
+                        requests.incrementAndGet();
+                        ZLinkStreamHeader response =
+                            ZLinkStreamHeader.createResponse(
+                                header,
+                                ZLinkStreamCodec.JSON,
+                                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                                header.packetName(),
+                                Map.of());
+                        yield CompletableFuture.completedFuture(List.of(
+                            Message.from(ZLinkStreamFrameCodec.encode(
+                                response,
+                                "reply".getBytes(StandardCharsets.UTF_8)))));
+                    }
+                    case "replyAsync" -> {
+                        ZLinkStreamHeader header =
+                            (ZLinkStreamHeader) arguments[1];
+                        clientReply.set(header);
+                        replies.incrementAndGet();
+                        yield CompletableFuture.completedFuture(null);
+                    }
+                    default -> throw new UnsupportedOperationException(
+                        method.getName());
+                });
+        ZLinkSessionRelayHeaders relayHeaders = new ZLinkSessionRelayHeaders();
+        ZLinkBoundActor actor = new ZLinkBoundActor(
+            stream,
+            RoutingId.from("session"),
+            new ZLinkBackendActorRef(
+                RoutingId.from("actor-node-a"), "actor-1", 7),
+            "game",
+            Optional.empty(),
+            null,
+            new RawSerializer(),
+            0,
+            1,
+            ignored -> true,
+            null,
+            true,
+            ZLinkStreamCodec.JSON,
+            relayHeaders,
+            null,
+            () -> true,
+            operation -> operation.apply(1),
+            ZLinkRelayMetadataPolicy.EMPTY);
+
+        relayHeaders.enter(new ZLinkStreamHeader(
+            ZLinkStreamMessageKind.SEND,
+            ZLinkStreamCodec.JSON,
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            Optional.empty(),
+            "Push",
+            Map.of()));
+        try {
+            actor.relay(ZLinkMessage.of("push"))
+                .toCompletableFuture().join();
+        } finally {
+            relayHeaders.exit();
+        }
+
+        relayHeaders.enter(new ZLinkStreamHeader(
+            ZLinkStreamMessageKind.REQUEST,
+            ZLinkStreamCodec.JSON,
+            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+            Optional.of(41L),
+            "Request",
+            Map.of()));
+        try {
+            actor.relay(ZLinkMessage.of("request"))
+                .toCompletableFuture().join();
+        } finally {
+            relayHeaders.exit();
+        }
+
+        assertEquals(1, relays.get());
+        assertEquals(1, requests.get());
+        assertEquals(1, replies.get());
+        assertEquals(ZLinkStreamMessageKind.RESPONSE,
+            clientReply.get().kind());
+        assertEquals(Optional.of(41L),
+            clientReply.get().requestSequence());
     }
 
     private static ZLinkBoundActor actor(boolean currentBinding) {

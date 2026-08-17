@@ -1419,6 +1419,24 @@ public final class ZLinkChannelRuntime
         String targetSpotId,
         long targetSpotGeneration,
         List<Message> spotParts) {
+        return sendToSpotViaRouterChannel(
+            routerChannelId,
+            targetNodeRid,
+            targetSpotId,
+            targetSpotGeneration,
+            0L,
+            0L,
+            spotParts);
+    }
+
+    private CompletionStage<Void> sendToSpotViaRouterChannel(
+        String routerChannelId,
+        RoutingId targetNodeRid,
+        String targetSpotId,
+        long targetSpotGeneration,
+        long authorityOwnerGeneration,
+        long ownerLeaseGeneration,
+        List<Message> spotParts) {
         ZLinkSpotRouteTarget target = resolveSpotRouteTarget(routerChannelId, targetNodeRid);
         if (target instanceof ZLinkSpotRouterNodeTarget spotRouterNodeTarget) {
             return sendToSpotViaSpotRouterNode(
@@ -1427,6 +1445,8 @@ public final class ZLinkChannelRuntime
                 targetNodeRid,
                 targetSpotId,
                 targetSpotGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration,
                 spotParts);
         }
         Duration timeout = effectiveRouteTimeout(
@@ -1474,6 +1494,26 @@ public final class ZLinkChannelRuntime
         long targetSpotGeneration,
         List<Message> spotParts,
         Duration timeout) {
+        return requestToSpotViaRouterChannel(
+            routerChannelId,
+            targetNodeRid,
+            targetSpotId,
+            targetSpotGeneration,
+            0L,
+            0L,
+            spotParts,
+            timeout);
+    }
+
+    private CompletionStage<List<Message>> requestToSpotViaRouterChannel(
+        String routerChannelId,
+        RoutingId targetNodeRid,
+        String targetSpotId,
+        long targetSpotGeneration,
+        long authorityOwnerGeneration,
+        long ownerLeaseGeneration,
+        List<Message> spotParts,
+        Duration timeout) {
         trace("spot-route request-start router=" + routerChannelId
             + " targetNode=" + targetNodeRid
             + " targetSpot=" + targetSpotId
@@ -1489,6 +1529,8 @@ public final class ZLinkChannelRuntime
                 targetNodeRid,
                 targetSpotId,
                 targetSpotGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration,
                 spotParts,
                 timeout);
         }
@@ -1546,6 +1588,8 @@ public final class ZLinkChannelRuntime
         RoutingId targetNodeRid,
         String targetSpotId,
         long targetSpotGeneration,
+        long authorityOwnerGeneration,
+        long ownerLeaseGeneration,
         List<Message> spotParts) {
         return ZLinkSpotRouterNodeDispatcher.send(
             routerChannelId,
@@ -1553,6 +1597,8 @@ public final class ZLinkChannelRuntime
             targetNodeRid,
             targetSpotId,
             targetSpotGeneration,
+            authorityOwnerGeneration,
+            ownerLeaseGeneration,
             spotParts,
             effectiveRouteTimeout(defaultRequestTimeout(routerChannelId)),
             callRuntime::track);
@@ -1564,6 +1610,8 @@ public final class ZLinkChannelRuntime
         RoutingId targetNodeRid,
         String targetSpotId,
         long targetSpotGeneration,
+        long authorityOwnerGeneration,
+        long ownerLeaseGeneration,
         List<Message> spotParts,
         Duration timeout) {
         return ZLinkSpotRouterNodeDispatcher.request(
@@ -1572,6 +1620,8 @@ public final class ZLinkChannelRuntime
             targetNodeRid,
             targetSpotId,
             targetSpotGeneration,
+            authorityOwnerGeneration,
+            ownerLeaseGeneration,
             spotParts,
             timeout,
             callRuntime::track);
