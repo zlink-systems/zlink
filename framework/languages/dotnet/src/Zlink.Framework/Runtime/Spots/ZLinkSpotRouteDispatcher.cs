@@ -52,8 +52,7 @@ internal sealed class ZLinkSpotRouteDispatcher(
             var kind = header.Kind == ZLinkMessageKind.Request
                 ? ZLinkDispatchMessageKind.Request
                 : ZLinkDispatchMessageKind.Send;
-            var kindName = header.Kind == ZLinkMessageKind.Request ? "Request" : "Send";
-            var scope = CreateScope(header, kind, kindName);
+            var scope = CreateScope(header, kind);
 
             scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Received);
 
@@ -185,14 +184,12 @@ internal sealed class ZLinkSpotRouteDispatcher(
 
     private ZLinkDispatchFlowScope CreateScope(
         ZLinkEnvelopeHeader header,
-        ZLinkDispatchMessageKind kind,
-        string kindName)
+        ZLinkDispatchMessageKind kind)
     {
         return new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.SpotRoute,
-            "Spot",
+            dispatchErrors.Flow.CaptureEnabled,
             kind,
-            kindName,
             header.MessageName,
             channelName,
             header.ContentType,
@@ -241,26 +238,29 @@ internal sealed class ZLinkSpotRouteDispatcher(
         var header = protocolError.Header;
         var isRequest = received.RequestSeq.HasValue;
         var canReply = isRequest && ZLinkEnvelopeCodec.CanCorrelateReply(header);
-        var validFlow = ZLinkEnvelopeCodec.ValidFlow(header);
-        using var flow = ZLinkFlowContext.Enter(
-            validFlow.FlowId,
-            validFlow.FlowOrigin,
-            dispatchErrors.Flow.CaptureEnabled,
-            ZLinkFlowOrigin.Inbound);
-        dispatchErrors.Report(new ZLinkDispatchFailure(
-            ZLinkDispatchErrorSurface.SpotRoute,
-            isRequest
-                ? ZLinkDispatchMessageKind.Request
-                : ZLinkDispatchMessageKind.Send,
-            ZLinkDispatchErrorReason.InvalidFrame,
-            canReply
-                ? ZLinkDispatchErrorAction.ReplyError
-                : ZLinkDispatchErrorAction.Drop,
-            header.MessageName,
-            channelName,
-            SpotId: spotId,
-            CorrelationId: header.CorrelationId,
-            Exception: protocolError));
+        if (dispatchErrors.Enabled)
+        {
+            var validFlow = ZLinkEnvelopeCodec.ValidFlow(header);
+            using var flow = ZLinkFlowContext.Enter(
+                validFlow.FlowId,
+                validFlow.FlowOrigin,
+                createIfAbsent: true,
+                ZLinkFlowOrigin.Inbound);
+            dispatchErrors.Report(new ZLinkDispatchFailure(
+                ZLinkDispatchErrorSurface.SpotRoute,
+                isRequest
+                    ? ZLinkDispatchMessageKind.Request
+                    : ZLinkDispatchMessageKind.Send,
+                ZLinkDispatchErrorReason.InvalidFrame,
+                canReply
+                    ? ZLinkDispatchErrorAction.ReplyError
+                    : ZLinkDispatchErrorAction.Drop,
+                header.MessageName,
+                channelName,
+                SpotId: spotId,
+                CorrelationId: header.CorrelationId,
+                Exception: protocolError));
+        }
         if (!canReply) return;
 
         var replyParts = ZLinkSpotReplyEnvelope.EncodeProtocolErrorParts(

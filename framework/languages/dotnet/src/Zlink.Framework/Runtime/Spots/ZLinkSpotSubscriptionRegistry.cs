@@ -116,12 +116,16 @@ internal sealed class ZLinkSpotSubscriptionRegistry
                 descriptorsByTarget.Add(target, handlers);
             }
 
-            if (handlers.Any(existing => string.Equals(
-                    existing.MessageName,
-                    descriptor.MessageName,
-                    StringComparison.Ordinal)))
+            foreach (var existing in handlers)
+            {
+                if (!string.Equals(
+                        existing.MessageName,
+                        descriptor.MessageName,
+                        StringComparison.Ordinal))
+                    continue;
                 throw new ZLinkConfigurationException(
                     $"SPOT subscription handler for channel '{subscription.ChannelName}', topic '{subscription.Topic}' and packet '{descriptor.MessageName}' is already registered.");
+            }
             handlers.Add(descriptor);
         }
 

@@ -4,9 +4,8 @@ namespace Zlink.Framework.Runtime.Diagnostics;
 
 internal readonly struct ZLinkDispatchFlowScope(
     ZLinkDispatchErrorSurface surface,
-    string surfaceName,
+    bool captureFlow,
     ZLinkDispatchMessageKind messageKind,
-    string kindName,
     string packetName,
     string? channelName = null,
     string? contentType = null,
@@ -14,14 +13,14 @@ internal readonly struct ZLinkDispatchFlowScope(
     string? topic = null,
     string? sourceRid = null,
     string? spotId = null,
-    string? actorId = null,
-    string? actorType = null,
-    string? logSpotId = null)
+    string? actorId = null)
 {
     // The request owns the flow observed at its dispatch boundary. Application
     // awaits and nested downstream calls may change the ambient context before
     // the terminal trace is emitted.
-    private readonly ZLinkFlowValue? capturedFlow = ZLinkFlowContext.Current;
+    private readonly ZLinkFlowValue? capturedFlow = captureFlow
+        ? ZLinkFlowContext.Current
+        : null;
 
     public string? ChannelName => channelName;
 
@@ -168,7 +167,7 @@ internal readonly struct ZLinkDispatchFlowScope(
     {
         if (!dispatchErrors.Flow.Enabled(outcome)) return;
 
-        dispatchErrors.Flow.Trace(CreateEvent(outcome, forLog: false));
+        dispatchErrors.Flow.Trace(CreateEvent(outcome));
     }
 
     private void Report(
@@ -177,6 +176,8 @@ internal readonly struct ZLinkDispatchFlowScope(
         ZLinkDispatchErrorAction action,
         Exception? exception = null)
     {
+        if (!dispatchErrors.Enabled) return;
+
         dispatchErrors.Report(new ZLinkDispatchFailure(
             surface,
             messageKind,
@@ -194,9 +195,7 @@ internal readonly struct ZLinkDispatchFlowScope(
             FlowOrigin: capturedFlow?.Origin));
     }
 
-    private ZLinkMessageFlowEvent CreateEvent(
-        ZLinkMessageFlowOutcome outcome,
-        bool forLog)
+    private ZLinkMessageFlowEvent CreateEvent(ZLinkMessageFlowOutcome outcome)
     {
         return new ZLinkMessageFlowEvent(
             outcome,
@@ -207,7 +206,7 @@ internal readonly struct ZLinkDispatchFlowScope(
             topic,
             correlationId,
             sourceRid,
-            SpotId: forLog ? logSpotId ?? spotId : spotId,
+            SpotId: spotId,
             ActorId: actorId)
         {
             FlowId = capturedFlow?.FlowId ?? string.Empty,

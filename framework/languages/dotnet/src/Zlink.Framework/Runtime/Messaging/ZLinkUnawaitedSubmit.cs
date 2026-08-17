@@ -12,21 +12,17 @@ internal static class ZLinkUnawaitedSubmit
     public static void Observe(
         ValueTask task,
         string operationName,
-        IZLinkRuntimeFailureReporter errorSink,
-        string? metricSurface = null,
-        string? metricKind = null)
+        IZLinkRuntimeFailureReporter errorSink)
     {
         if (task.IsCompletedSuccessfully) return;
 
-        _ = ObserveAsync(task, operationName, errorSink, metricSurface, metricKind);
+        _ = ObserveAsync(task, operationName, errorSink);
     }
 
     private static async Task ObserveAsync(
         ValueTask task,
         string operationName,
-        IZLinkRuntimeFailureReporter errorSink,
-        string? metricSurface,
-        string? metricKind)
+        IZLinkRuntimeFailureReporter errorSink)
     {
         try
         {
@@ -37,17 +33,6 @@ internal static class ZLinkUnawaitedSubmit
         }
         catch (Exception exception)
         {
-            if (metricSurface is not null && metricKind is not null)
-            {
-                var reason = exception switch
-                {
-                    TimeoutException => "backpressure",
-                    ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.Unavailable } => "stale-route",
-                    _ => null
-                };
-                if (reason is not null)
-                    ZLinkTelemetry.RecordDropped(metricSurface, metricKind, reason);
-            }
             errorSink.ReportRuntimeTaskException(operationName, exception);
         }
     }

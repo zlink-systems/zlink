@@ -645,13 +645,14 @@ internal sealed class ZLinkActorInboundPipeline(
                     frame.Body,
                     out var bindingToken))
             {
-                runtime.Flow.TraceDispatchError(new ZLinkDispatchFailure(
-                    ZLinkDispatchErrorSurface.StreamSession,
-                    ZLinkDispatchMessageKind.Send,
-                    ZLinkDispatchErrorReason.InvalidFrame,
-                    ZLinkDispatchErrorAction.Drop,
-                    null,
-                    ActorId: actor.Context.ActorId));
+                if (runtime.Flow.CaptureEnabled)
+                    runtime.Flow.TraceDispatchError(new ZLinkDispatchFailure(
+                        ZLinkDispatchErrorSurface.StreamSession,
+                        ZLinkDispatchMessageKind.Send,
+                        ZLinkDispatchErrorReason.InvalidFrame,
+                        ZLinkDispatchErrorAction.Drop,
+                        null,
+                        ActorId: actor.Context.ActorId));
                 acknowledgeHandledFrame?.Invoke();
                 return;
             }

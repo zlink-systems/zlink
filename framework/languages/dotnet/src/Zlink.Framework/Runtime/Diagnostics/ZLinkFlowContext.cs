@@ -21,6 +21,22 @@ internal static class ZLinkFlowContext
         bool createIfAbsent,
         ZLinkFlowOrigin defaultOrigin)
     {
+        return EnterEnabled(flowId, origin, createIfAbsent, defaultOrigin);
+    }
+
+    public static Scope EnterExisting(
+        string? flowId,
+        ZLinkFlowOrigin? origin)
+    {
+        return EnterEnabled(flowId, origin, createIfAbsent: false, default);
+    }
+
+    private static Scope EnterEnabled(
+        string? flowId,
+        ZLinkFlowOrigin? origin,
+        bool createIfAbsent,
+        ZLinkFlowOrigin defaultOrigin)
+    {
         if ((flowId is null) != (origin is null))
             throw new InvalidOperationException("Flow id and origin must be present together.");
 
@@ -44,8 +60,13 @@ internal static class ZLinkFlowContext
 
     public static Scope EnterCurrentOrCreate(ZLinkFlowOrigin origin, bool createIfAbsent)
     {
+        // Off disables creation of a new flow, not propagation of an existing
+        // ambient flow. A no-op scope preserves that flow without allocating a
+        // replacement State.
+        if (!createIfAbsent) return default;
+
         var current = Current;
-        return Enter(current?.FlowId, current?.Origin, createIfAbsent, origin);
+        return EnterEnabled(current?.FlowId, current?.Origin, createIfAbsent: true, origin);
     }
 
     internal sealed class State(ZLinkFlowValue value)
@@ -55,10 +76,14 @@ internal static class ZLinkFlowContext
         public ZLinkFlowValue Value { get; } = value;
     }
 
-    internal readonly struct Scope(State? previous, State? entered) : IDisposable
+    internal readonly struct Scope(
+        State? previous,
+        State? entered,
+        bool restore = true) : IDisposable
     {
         public void Dispose()
         {
+            if (!restore) return;
             if (entered is not null) entered.Active = false;
             Ambient.Value = previous;
         }

@@ -76,9 +76,8 @@ public sealed class ExactMessageFlowRuntimeTests
         var reporter = new ZLinkDispatchErrorReporter(options);
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.Channel,
-            "Channel",
+            reporter.Flow.CaptureEnabled,
             ZLinkDispatchMessageKind.Send,
-            "Send",
             "packet");
 
         scope.HandlerMissing(
@@ -120,9 +119,8 @@ public sealed class ExactMessageFlowRuntimeTests
         {
             scope = new ZLinkDispatchFlowScope(
                 ZLinkDispatchErrorSurface.SpotRoute,
-                "Spot",
+                reporter.Flow.CaptureEnabled,
                 ZLinkDispatchMessageKind.Request,
-                "Request",
                 "request",
                 correlationId: "correlation-1",
                 spotId: "spot-1");

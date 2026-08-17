@@ -279,7 +279,7 @@ public sealed partial class UnhandledDispatchPolicyTests
         }
 
         Assert.Equal(1, nativeSpot.LastJoinResultCode);
-        Assert.Contains(logger.Messages, message => message.Contains("no-join-handler", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, message => message.Contains("no_handler", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -516,9 +516,8 @@ public sealed partial class UnhandledDispatchPolicyTests
         var reporter = new ZLinkDispatchErrorReporter(options);
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.SpotActor,
-            "SpotActor",
+            reporter.Flow.CaptureEnabled,
             ZLinkDispatchMessageKind.ActorRequest,
-            "ActorRequest",
             "MissingReply",
             actorId: "actor-1");
 

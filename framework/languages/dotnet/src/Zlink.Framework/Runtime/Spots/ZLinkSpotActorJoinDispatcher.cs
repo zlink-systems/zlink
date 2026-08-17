@@ -16,8 +16,10 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
     ZLinkDispatchErrorReporter? dispatchErrors = null,
     bool acceptActorJoinWithoutHandler = false)
 {
-    private readonly ILogger<ZLinkSpotActorJoinDispatcher> _logger =
-        logger ?? NullLogger<ZLinkSpotActorJoinDispatcher>.Instance;
+    private readonly ZLinkDispatchErrorReporter _dispatchErrors = dispatchErrors ?? new(
+        runtime.Registration.DispatchOptions,
+        logger ?? NullLogger<ZLinkSpotActorJoinDispatcher>.Instance,
+        runtime);
 
     public async ValueTask DispatchAsync(
         ZLinkBackendActorJoinRequest joinRequest,
@@ -37,7 +39,7 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                          && descriptor is not null;
         if (!hasHandler && !acceptActorJoinWithoutHandler)
         {
-            ReplyRejected(joinRequest, payload.MessageName, "no-join-handler", LogLevel.Debug);
+            ReplyRejected(joinRequest, payload.MessageName, "no-join-handler");
             return;
         }
 
@@ -51,7 +53,7 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
 
         if (actor is null)
         {
-            ReplyRejected(joinRequest, payload.MessageName, "no-target-actor", LogLevel.Debug);
+            ReplyRejected(joinRequest, payload.MessageName, "no-target-actor");
             return;
         }
 
@@ -61,9 +63,7 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                 joinRequest,
                 payload.MessageName,
                 "payload-decode-failed",
-                LogLevel.Warning,
-                payloadError,
-                descriptor?.ActorType);
+                payloadError);
             return;
         }
 
@@ -86,9 +86,7 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                 joinRequest,
                 payload.MessageName,
                 "handler-exception",
-                LogLevel.Warning,
-                ex,
-                descriptor?.ActorType);
+                ex);
             return;
         }
 
@@ -105,9 +103,7 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                     joinRequest,
                     payload.MessageName,
                     "join-commit-failed",
-                    LogLevel.Warning,
-                    ex,
-                    descriptor?.ActorType);
+                    ex);
                 return;
             }
         }
@@ -224,9 +220,7 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
         ZLinkBackendActorJoinRequest joinRequest,
         string messageName,
         string reason,
-        LogLevel level,
-        Exception? exception = null,
-        Type? actorType = null)
+        Exception? exception = null)
     {
         var errorReason = reason switch
         {
@@ -234,34 +228,17 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
             "handler-exception" or "join-commit-failed" => ZLinkDispatchErrorReason.HandlerException,
             _ => ZLinkDispatchErrorReason.HandlerMissing
         };
-        if (dispatchErrors is null)
-            ZLinkMessageFlowLogger.Rejected(
-                _logger,
-                level,
-                new ZLinkMessageFlowEvent(
-                    ZLinkMessageFlowOutcome.Replied,
-                    ZLinkDispatchErrorSurface.SpotActor,
-                    ZLinkDispatchMessageKind.Request,
-                    messageName,
-                    channelName,
-                    ActorId: joinRequest.TargetActor.ActorId,
-                    SpotId: joinRequest.TargetSpotId),
-                reason,
-                "EntrySpot",
-                "Request",
-                exception,
-                actorType?.Name,
-                writeLog: dispatchErrors is null);
-        dispatchErrors?.Report(new ZLinkDispatchFailure(
-            ZLinkDispatchErrorSurface.SpotActor,
-            ZLinkDispatchMessageKind.Request,
-            errorReason,
-            ZLinkDispatchErrorAction.ReplyError,
-            messageName,
-            channelName,
-            SpotId: joinRequest.TargetSpotId,
-            ActorId: joinRequest.TargetActor.ActorId,
-            Exception: exception));
+        if (_dispatchErrors.Enabled)
+            _dispatchErrors.Report(new ZLinkDispatchFailure(
+                ZLinkDispatchErrorSurface.SpotActor,
+                ZLinkDispatchMessageKind.Request,
+                errorReason,
+                ZLinkDispatchErrorAction.ReplyError,
+                messageName,
+                channelName,
+                SpotId: joinRequest.TargetSpotId,
+                ActorId: joinRequest.TargetActor.ActorId,
+                Exception: exception));
         using var emptyReply = Message.From(ReadOnlySpan<byte>.Empty);
         nativeSpot.ReplyActorJoin(joinRequest, 1, emptyReply);
     }

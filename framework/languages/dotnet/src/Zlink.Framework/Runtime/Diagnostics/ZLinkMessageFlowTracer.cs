@@ -1,6 +1,8 @@
 using System;
 using System.Collections;
+using System.Text;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Zlink.Framework.Runtime.Diagnostics;
 
@@ -29,11 +31,14 @@ internal sealed class ZLinkMessageFlowTracer
     {
         _options = options;
         _errorSink = errorSink ?? (runtime is null ? null : runtime.ErrorSink);
-        _logger = logger ?? ZLinkStandardErrorLogger.Instance;
+        _logger = logger ?? NullLogger.Instance;
     }
 
     public bool CaptureEnabled =>
         _options.Diagnostics.EffectiveLevel != ZLinkDiagnosticsLevel.Off;
+
+    internal bool DetailedEnabled =>
+        _options.Diagnostics.EffectiveLevel >= ZLinkDiagnosticsLevel.Detailed;
 
     // Cheap mode gate (relaxed/volatile read of the live mode). Build the event only
     // after this returns true.
@@ -42,19 +47,9 @@ internal sealed class ZLinkMessageFlowTracer
         return ShouldLog(outcome);
     }
 
-    // Traces an event built only when the outcome is enabled.
-    //
-    // Use this on failure and other rare transitions: the delegate keeps the call
-    // site free of an explicit gate and never runs when tracing is off, at the
-    // cost of one closure per call. Hot paths that trace every message must keep
-    // the `if (Enabled(outcome))` guard so no closure is allocated there either.
-    public void TraceLazy(
+    internal bool Enabled(
         ZLinkMessageFlowOutcome outcome,
-        Func<ZLinkMessageFlowEvent> flow)
-    {
-        if (!ShouldLog(outcome)) return;
-        Trace(flow());
-    }
+        ZLinkMessageFlowResult? result) => ShouldLog(outcome, result);
 
     public void Trace(ZLinkMessageFlowEvent flow)
     {
@@ -70,10 +65,12 @@ internal sealed class ZLinkMessageFlowTracer
         }
 
         var diagnostics = _options.Diagnostics;
-        if (diagnostics.EffectiveLevel < ZLinkDiagnosticsLevel.Detailed
-            || !diagnostics.MessageSizesIncluded)
+        if (flow.MessageSize is not null
+            && (diagnostics.EffectiveLevel < ZLinkDiagnosticsLevel.Detailed
+                || !diagnostics.MessageSizesIncluded))
             flow = flow with { MessageSize = null };
-        if (diagnostics.EffectiveLevel < ZLinkDiagnosticsLevel.Detailed)
+        if (flow.DurationSeconds is not null
+            && diagnostics.EffectiveLevel < ZLinkDiagnosticsLevel.Detailed)
             flow = flow with { DurationSeconds = null };
 
         // Sampling thins healthy traffic; failures, drops, and backpressure always pass through.
@@ -140,7 +137,7 @@ internal sealed class ZLinkMessageFlowTracer
             : RequiredLevel(outcome));
 
     internal static ILogger CreateLogger(ILoggerFactory? factory, ILogger? fallback = null) =>
-        factory?.CreateLogger(LoggerCategory) ?? fallback ?? ZLinkStandardErrorLogger.Instance;
+        factory?.CreateLogger(LoggerCategory) ?? fallback ?? NullLogger.Instance;
 
     private static ZLinkDiagnosticsLevel RequiredLevel(ZLinkMessageFlowOutcome outcome)
     {
@@ -156,15 +153,31 @@ internal sealed class ZLinkMessageFlowTracer
 
         if (rate <= 0.0d) return false;
 
-        var samplingKey = flowId
-                          ?? $"{sourceMeshGeneration}:{Interlocked.Increment(ref _localSamplingSequence)}";
         const uint offset = 2166136261u;
         const uint prime = 16777619u;
         var hash = offset;
-        foreach (var character in samplingKey)
+        if (flowId is not null)
         {
-            hash ^= character;
-            hash *= prime;
+            foreach (var character in flowId)
+            {
+                hash ^= character;
+                hash *= prime;
+            }
+        }
+        else
+        {
+            var sequence = unchecked((ulong)Interlocked.Increment(ref _localSamplingSequence));
+            Hash(sourceMeshGeneration);
+            Hash(sequence);
+
+            void Hash(ulong value)
+            {
+                for (var shift = 0; shift < 64; shift += 8)
+                {
+                    hash ^= (byte)(value >> shift);
+                    hash *= prime;
+                }
+            }
         }
 
         return hash / 4294967296.0d < rate;
@@ -200,30 +213,6 @@ internal sealed class ZLinkMessageFlowTracer
         var hasFlowOrigin = flow.FlowOrigin is not null;
         if (hasFlowId == hasFlowOrigin) return flow;
         return flow with { FlowId = string.Empty, FlowOrigin = null };
-    }
-}
-
-internal sealed class ZLinkStandardErrorLogger : ILogger
-{
-    public static ZLinkStandardErrorLogger Instance { get; } = new();
-
-    private ZLinkStandardErrorLogger()
-    {
-    }
-
-    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-    public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
-
-    public void Log<TState>(
-        LogLevel logLevel,
-        EventId eventId,
-        TState state,
-        Exception? exception,
-        Func<TState, Exception?, string> formatter)
-    {
-        if (!IsEnabled(logLevel)) return;
-        Console.Error.WriteLine(formatter(state, exception));
     }
 }
 
@@ -450,7 +439,12 @@ internal sealed class ZLinkStructuredLogState(
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
-    public override string ToString() =>
-        $"zlink flow: {string.Join(' ', fields.Select(field => $"{field.Key}={field.Value}"))}";
+    public override string ToString()
+    {
+        var message = new StringBuilder("zlink flow:");
+        foreach (var field in fields)
+            message.Append(' ').Append(field.Key).Append('=').Append(field.Value);
+        return message.ToString();
+    }
 
 }

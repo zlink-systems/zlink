@@ -53,38 +53,6 @@ internal static class ZLinkTelemetry
         activity.AddEvent(new ActivityEvent(eventName));
     }
 
-    public static void RecordHandlerMissing(
-        string surface,
-        string kind,
-        string action,
-        string reason)
-    {
-        _ = surface;
-        _ = kind;
-        _ = action;
-        _ = reason;
-    }
-
-    public static void RecordDropped(
-        string surface,
-        string kind,
-        string reason)
-    {
-        _ = surface;
-        _ = kind;
-        _ = reason;
-    }
-
-    public static void RecordReplyError(
-        string surface,
-        string kind,
-        string reason)
-    {
-        _ = surface;
-        _ = kind;
-        _ = reason;
-    }
-
     public static void TraceMessageFlow(ZLinkMessageFlowEvent flow)
     {
         if (!ActivitySource.HasListeners())
@@ -163,16 +131,4 @@ internal static class ZLinkTelemetry
         activity.AddEvent(new ActivityEvent("zlink.dispatch_error"));
     }
 
-    private static string ResolveSpanName(ZLinkDispatchErrorSurface surface)
-    {
-        return surface switch
-        {
-            ZLinkDispatchErrorSurface.StreamSession => "zlink.session.dispatch",
-            ZLinkDispatchErrorSurface.Channel => "zlink.channel.dispatch",
-            ZLinkDispatchErrorSurface.RouteMeshChannel => "zlink.route.dispatch",
-            ZLinkDispatchErrorSurface.SpotRoute or ZLinkDispatchErrorSurface.SpotSubscription => "zlink.spot.dispatch",
-            ZLinkDispatchErrorSurface.SpotActor => "zlink.actor.dispatch",
-            _ => "zlink.message.dispatch"
-        };
-    }
 }

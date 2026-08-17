@@ -41,9 +41,8 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
         _ = unhandledLogLevel;
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.ClassicFanout,
-            "ClassicFanout",
+            dispatchErrors.Flow.CaptureEnabled,
             ZLinkDispatchMessageKind.Send,
-            "Send",
             header.MessageName,
             channelName,
             header.ContentType,
@@ -56,20 +55,30 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
             header.MessageName);
         if (endpoints.Count == 0)
         {
-            dispatchErrors.Report(new ZLinkDispatchFailure(
-                ZLinkDispatchErrorSurface.ClassicFanout,
-                ZLinkDispatchMessageKind.Send,
-                ZLinkDispatchErrorReason.HandlerMissing,
-                ZLinkDispatchErrorAction.Drop,
-                header.MessageName,
-                channelName,
-                topicMessage.Topic,
-                SourceRid: header.Source,
-                CorrelationId: header.CorrelationId));
+            if (dispatchErrors.Enabled)
+                dispatchErrors.Report(new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.ClassicFanout,
+                    ZLinkDispatchMessageKind.Send,
+                    ZLinkDispatchErrorReason.HandlerMissing,
+                    ZLinkDispatchErrorAction.Drop,
+                    header.MessageName,
+                    channelName,
+                    topicMessage.Topic,
+                    SourceRid: header.Source,
+                    CorrelationId: header.CorrelationId));
             return;
         }
 
         Dictionary<Type, object?>? decodedMessages = null;
+        var context = new ZLinkPublishMessageContext(
+            meshName,
+            scope.ChannelName,
+            scope.PacketName!,
+            scope.ContentType,
+            metadata: null,
+            header.CorrelationId,
+            topicMessage.Topic,
+            header.Source);
         foreach (var endpoint in endpoints)
         {
             decodedMessages ??= new Dictionary<Type, object?>();
@@ -94,15 +103,6 @@ internal sealed class ZLinkChannelPublishDispatchPipeline(
                 decodedMessages.Add(endpoint.MessageType, message);
             }
 
-            var context = new ZLinkPublishMessageContext(
-                meshName,
-                scope.ChannelName,
-                scope.PacketName!,
-                scope.ContentType,
-                metadata: null,
-                header.CorrelationId,
-                topicMessage.Topic,
-                header.Source);
             try
             {
                 await ZLinkApplicationJobQueueInvocation

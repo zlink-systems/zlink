@@ -537,11 +537,10 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     {
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.Channel,
-            "Channel",
+            _dispatchErrors.Flow.CaptureEnabled,
             header.Kind == ZLinkMessageKind.Request
                 ? ZLinkDispatchMessageKind.Request
                 : ZLinkDispatchMessageKind.Send,
-            header.Kind == ZLinkMessageKind.Request ? "Request" : "Send",
             header.MessageName,
             channelName,
             header.ContentType,
@@ -646,25 +645,28 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         var canReply = isRequest
                        && received.CanReply
                        && ZLinkEnvelopeCodec.CanCorrelateReply(header);
-        var validFlow = ZLinkEnvelopeCodec.ValidFlow(header);
-        using var flow = ZLinkFlowContext.Enter(
-            validFlow.FlowId,
-            validFlow.FlowOrigin,
-            _dispatchErrors.Flow.CaptureEnabled,
-            ZLinkFlowOrigin.Inbound);
-        _dispatchErrors.Report(new ZLinkDispatchFailure(
-            ZLinkDispatchErrorSurface.RouteMeshChannel,
-            isRequest
-                ? ZLinkDispatchMessageKind.Request
-                : ZLinkDispatchMessageKind.Send,
-            ZLinkDispatchErrorReason.InvalidFrame,
-            canReply
-                ? ZLinkDispatchErrorAction.ReplyError
-                : ZLinkDispatchErrorAction.Drop,
-            header.MessageName,
-            received.ChannelName ?? string.Empty,
-            CorrelationId: header.CorrelationId,
-            Exception: protocolError));
+        if (_dispatchErrors.Enabled)
+        {
+            var validFlow = ZLinkEnvelopeCodec.ValidFlow(header);
+            using var flow = ZLinkFlowContext.Enter(
+                validFlow.FlowId,
+                validFlow.FlowOrigin,
+                createIfAbsent: true,
+                ZLinkFlowOrigin.Inbound);
+            _dispatchErrors.Report(new ZLinkDispatchFailure(
+                ZLinkDispatchErrorSurface.RouteMeshChannel,
+                isRequest
+                    ? ZLinkDispatchMessageKind.Request
+                    : ZLinkDispatchMessageKind.Send,
+                ZLinkDispatchErrorReason.InvalidFrame,
+                canReply
+                    ? ZLinkDispatchErrorAction.ReplyError
+                    : ZLinkDispatchErrorAction.Drop,
+                header.MessageName,
+                received.ChannelName ?? string.Empty,
+                CorrelationId: header.CorrelationId,
+                Exception: protocolError));
+        }
         if (!canReply) return;
 
         SubmitEnvelopeUnreserved(
@@ -681,9 +683,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     {
         return new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.RouteMeshChannel,
-            "RouteMeshChannel",
+            _dispatchErrors.Flow.CaptureEnabled,
             isRequest ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send,
-            isRequest ? "Request" : "Send",
             header.MessageName,
             header.ChannelName,
             header.ContentType,

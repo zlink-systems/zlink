@@ -1,5 +1,7 @@
 namespace Zlink.Framework.Runtime.Spots;
 
+using Microsoft.Extensions.Logging.Abstractions;
+
 internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
 {
     private readonly ZLinkDispatchErrorReporter _dispatchErrors = new(
@@ -39,10 +41,9 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
                 CreateActorFlow(
                         actor,
                         header,
-                        ZLinkDispatchMessageKind.ActorSend,
-                        "ActorSend")
+                        ZLinkDispatchMessageKind.ActorSend)
                     .PayloadDecodeFailed(
-                        ZLinkStandardErrorLogger.Instance,
+                        NullLogger.Instance,
                         _dispatchErrors,
                         ZLinkDispatchErrorAction.Drop,
                         ex.DecodeException);
@@ -75,8 +76,7 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
             var flow = CreateActorFlow(
                 actor,
                 header,
-                ZLinkDispatchMessageKind.ActorRequest,
-                "ActorRequest");
+                ZLinkDispatchMessageKind.ActorRequest);
             flow.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Received);
 
             // A caller inside the actor's dispatch turn (the dispatch
@@ -111,7 +111,7 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
             catch (ZLinkStreamPayloadDecodeException ex)
             {
                 flow.PayloadDecodeFailed(
-                    ZLinkStandardErrorLogger.Instance,
+                    NullLogger.Instance,
                     _dispatchErrors,
                     ZLinkDispatchErrorAction.ReplyError,
                     ex.DecodeException);
@@ -121,15 +121,16 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
             }
             catch (Exception ex)
             {
-                _dispatchErrors.Report(new ZLinkDispatchFailure(
-                    ZLinkDispatchErrorSurface.SpotActor,
-                    ZLinkDispatchMessageKind.ActorRequest,
-                    ZLinkDispatchErrorReason.HandlerException,
-                    ZLinkDispatchErrorAction.ReplyError,
-                    header.Name,
-                    ActorId: actor.Context.ActorId,
-                    CorrelationId: header.CorrelationId,
-                    Exception: ex));
+                if (_dispatchErrors.Enabled)
+                    _dispatchErrors.Report(new ZLinkDispatchFailure(
+                        ZLinkDispatchErrorSurface.SpotActor,
+                        ZLinkDispatchMessageKind.ActorRequest,
+                        ZLinkDispatchErrorReason.HandlerException,
+                        ZLinkDispatchErrorAction.ReplyError,
+                        header.Name,
+                        ActorId: actor.Context.ActorId,
+                        CorrelationId: header.CorrelationId,
+                        Exception: ex));
                 return new EntrySpotActorReplyDispatchResult(true, ZLinkActorReply.FromError(ex));
             }
         }
@@ -137,21 +138,18 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
         return new EntrySpotActorReplyDispatchResult(false, null);
     }
 
-    private static ZLinkDispatchFlowScope CreateActorFlow(
+    private ZLinkDispatchFlowScope CreateActorFlow(
         IZLinkActor actor,
         ZlinkStreamHeader header,
-        ZLinkDispatchMessageKind messageKind,
-        string kindName)
+        ZLinkDispatchMessageKind messageKind)
     {
         return new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.SpotActor,
-            "SpotActor",
+            _dispatchErrors.Flow.CaptureEnabled,
             messageKind,
-            kindName,
             header.Name,
             correlationId: header.CorrelationId,
-            actorId: actor.Context.ActorId,
-            actorType: actor.GetType().FullName);
+            actorId: actor.Context.ActorId);
     }
 
     public async ValueTask NotifyJoinedAsync(

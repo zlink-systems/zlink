@@ -421,11 +421,9 @@ public sealed class ActorRelocationProtocolTests
         var codecs = new ZLinkCodecRegistryBuilder();
         IReadOnlyList<Message> admissionParts;
         IReadOnlyList<Message> commitParts;
-        using (ZLinkFlowContext.Enter(
+        using (ZLinkFlowContext.EnterExisting(
                    flowId,
-                   ZLinkFlowOrigin.Application,
-                   createIfAbsent: false,
-                   ZLinkFlowOrigin.Inbound))
+                   ZLinkFlowOrigin.Application))
         {
             admissionParts = ZLinkRemoteActorJoinPackets.EncodeAdmissionRequest(
                 ZLinkClientCallCodec.CreateEnvelope(

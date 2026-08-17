@@ -93,23 +93,31 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
         ZLinkSessionContext context,
         CancellationToken cancellationToken)
     {
-        var actors = runtime.SnapshotSessionActors(context)
-            .Cast<ZLinkSessionActor>()
-            .ToArray();
+        var snapshot = runtime.SnapshotSessionActors(context);
+        if (snapshot.Count == 0) return;
+
+        var actors = new ZLinkSessionActor[snapshot.Count];
+        var actorIndex = 0;
+        foreach (var actor in snapshot)
+            actors[actorIndex++] = (ZLinkSessionActor)actor;
         //  A session that ends with no bound actors and one that never reached
         //  cleanup look the same from the outside.
 
         // The transport disconnect owns one fixed binding snapshot. Notify
         // every exact binding concurrently, but bound each callback by the
         // runtime deadline so one Actor cannot hold session cleanup.
-        await Task.WhenAll(actors
-                .DistinctBy(actor => (
+        var exactBindings = new HashSet<(string, RoutingId, ulong, string)>();
+        var notifications = new List<Task>(actors.Length);
+        foreach (var actor in actors)
+        {
+            if (exactBindings.Add((
                     actor.ActorId,
                     actor.Ref.NodeRid,
                     actor.Ref.ObjectGeneration,
-                    actor.BindingToken))
-                .Select(NotifyBestEffortAsync))
-            .ConfigureAwait(false);
+                    actor.BindingToken)))
+                notifications.Add(NotifyBestEffortAsync(actor));
+        }
+        await Task.WhenAll(notifications).ConfigureAwait(false);
 
         // Tombstones are always removed, including callback failure, timeout,
         // and a concurrent explicit notification of the same binding.
@@ -139,14 +147,15 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
                 // Settling quietly also hides a notification that never reached
                 // the Actor's owner node, which leaves a binding whose session
                 // is gone, so the drop is a traced one (spec 26 §2.1).
-                runtime.Flow.TraceDispatchError(new ZLinkDispatchFailure(
-                    ZLinkDispatchErrorSurface.StreamSession,
-                    ZLinkDispatchMessageKind.Send,
-                    ZLinkDispatchErrorReason.ReplyPathMissing,
-                    ZLinkDispatchErrorAction.Drop,
-                    null,
-                    ActorId: actor.ActorId,
-                    Exception: failure));
+                if (runtime.Flow.CaptureEnabled)
+                    runtime.Flow.TraceDispatchError(new ZLinkDispatchFailure(
+                        ZLinkDispatchErrorSurface.StreamSession,
+                        ZLinkDispatchMessageKind.Send,
+                        ZLinkDispatchErrorReason.ReplyPathMissing,
+                        ZLinkDispatchErrorAction.Drop,
+                        null,
+                        ActorId: actor.ActorId,
+                        Exception: failure));
             }
         }
     }

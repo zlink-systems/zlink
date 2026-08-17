@@ -26,9 +26,8 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
     {
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.Channel,
-            "Channel",
+            dispatchErrors.Flow.CaptureEnabled,
             ZLinkDispatchMessageKind.Request,
-            "Request",
             header.MessageName,
             channelName,
             header.ContentType,

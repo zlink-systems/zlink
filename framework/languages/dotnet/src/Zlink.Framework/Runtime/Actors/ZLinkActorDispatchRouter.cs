@@ -313,18 +313,13 @@ internal sealed class ZLinkActorDispatchRouter(
         var level = action == ZLinkDispatchErrorAction.ReplyError
             ? LogLevel.Error
             : LogLevel.Warning;
-        var kindText = kind == ZLinkDispatchMessageKind.ActorRequest
-            ? "ActorRequest"
-            : "ActorSend";
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.SpotActor,
-            "SpotActor",
+            _dispatchErrors.Flow.CaptureEnabled,
             kind,
-            kindText,
             header.Name,
             correlationId: header.CorrelationId,
-            actorId: actor.Context.ActorId,
-            actorType: actor.GetType().FullName);
+            actorId: actor.Context.ActorId);
 
         scope.HandlerMissing(
             _logger,
@@ -341,13 +336,11 @@ internal sealed class ZLinkActorDispatchRouter(
     {
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.SpotActor,
-            "SpotActor",
+            _dispatchErrors.Flow.CaptureEnabled,
             ZLinkDispatchMessageKind.ActorRequest,
-            "ActorRequest",
             header.Name,
             correlationId: header.CorrelationId,
-            actorId: actor.Context.ActorId,
-            actorType: actor.GetType().FullName);
+            actorId: actor.Context.ActorId);
 
         scope.ReplyPathMissing(_logger, _dispatchErrors, exception);
     }

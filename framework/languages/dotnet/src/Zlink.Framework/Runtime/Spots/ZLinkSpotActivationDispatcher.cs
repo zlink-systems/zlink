@@ -458,9 +458,8 @@ internal sealed class ZLinkSpotActivationDispatcher
         {
             var scope = new ZLinkDispatchFlowScope(
                 ZLinkDispatchErrorSurface.SpotSubscription,
-                "SpotSubscription",
+                _dispatchErrors.Flow.CaptureEnabled,
                 ZLinkDispatchMessageKind.Publish,
-                "Publish",
                 descriptor.MessageName,
                 topic: descriptor.Topic);
             scope.HandlerException(

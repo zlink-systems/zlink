@@ -5273,11 +5273,9 @@ public sealed partial class EntrySpotActorDispatchTests
                 actor.Generation,
                 "entry",
                 actor.NodeRid);
-            using (ZLinkFlowContext.Enter(
+            using (ZLinkFlowContext.EnterExisting(
                        inboundFlowId,
-                       ZLinkFlowOrigin.Application,
-                       createIfAbsent: false,
-                       ZLinkFlowOrigin.Inbound))
+                       ZLinkFlowOrigin.Application))
                 await client.SendToActor(publicActor.ActorId, new ProbeRouteMessage("relay")).Async();
 
             Assert.Null(ZLinkFlowContext.Current);

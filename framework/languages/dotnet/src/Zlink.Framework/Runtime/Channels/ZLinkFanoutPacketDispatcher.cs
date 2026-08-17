@@ -96,6 +96,8 @@ internal sealed class ZLinkFanoutPacketDispatcher
         TopicMessage topicMessage,
         ZLinkEnvelopeProtocolException protocolError)
     {
+        if (!_dispatchErrors.Enabled) return;
+
         var validFlow = ZLinkEnvelopeCodec.ValidFlow(protocolError.Header);
         using var invalidFlow = ZLinkFlowContext.Enter(
             validFlow.FlowId,

@@ -424,6 +424,7 @@ internal sealed class ZLinkActorClient(
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _emitted, 1) != 0) return;
+            if (!tracer.Enabled(ZLinkMessageFlowOutcome.ReplyReceived, _result)) return;
             tracer.Trace(new ZLinkMessageFlowEvent(
                 ZLinkMessageFlowOutcome.ReplyReceived,
                 ZLinkDispatchErrorSurface.SpotActor,
@@ -433,7 +434,9 @@ internal sealed class ZLinkActorClient(
                 ActorId: actorId,
                 MeshName: _meshName,
                 TargetRid: _targetRid,
-                DurationSeconds: Stopwatch.GetElapsedTime(_started).TotalSeconds,
+                DurationSeconds: tracer.DetailedEnabled
+                    ? Stopwatch.GetElapsedTime(_started).TotalSeconds
+                    : null,
                 Result: _result));
         }
     }

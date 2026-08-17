@@ -242,11 +242,9 @@ internal sealed class ZLinkDeferredActorJoin(
                 throw new InvalidOperationException(
                     "Deferred Actor Join barrier was not reserved.");
             using var turn = await reservedBarrier.ClaimAsync().ConfigureAwait(false);
-            using var flow = ZLinkFlowContext.Enter(
+            using var flow = ZLinkFlowContext.EnterExisting(
                 _flow?.FlowId,
-                _flow?.Origin,
-                createIfAbsent: false,
-                ZLinkFlowOrigin.Application);
+                _flow?.Origin);
             using var dispatch = actorState.EnterDeferredJoinExecution();
             ZLinkActorJoinCompletion? completion = null;
             try
@@ -301,16 +299,17 @@ internal sealed class ZLinkDeferredActorJoin(
                 //  identity as the Join that produced it.
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"deferred_join_failed kind={kind} {exception}");
-                runtime.Flow.TraceDispatchError(new ZLinkDispatchFailure(
-                    ZLinkDispatchErrorSurface.SpotActor,
-                    ZLinkDispatchMessageKind.ActorRequest,
-                    ZLinkDispatchErrorReason.HandlerException,
-                    ZLinkDispatchErrorAction.ReplyError,
-                    "JoinSpot",
-                    ActorId: actor.Context.ActorId,
-                    Exception: exception,
-                    FlowId: _flow?.FlowId,
-                    FlowOrigin: _flow?.Origin));
+                if (runtime.Flow.CaptureEnabled)
+                    runtime.Flow.TraceDispatchError(new ZLinkDispatchFailure(
+                        ZLinkDispatchErrorSurface.SpotActor,
+                        ZLinkDispatchMessageKind.ActorRequest,
+                        ZLinkDispatchErrorReason.HandlerException,
+                        ZLinkDispatchErrorAction.ReplyError,
+                        "JoinSpot",
+                        ActorId: actor.Context.ActorId,
+                        Exception: exception,
+                        FlowId: _flow?.FlowId,
+                        FlowOrigin: _flow?.Origin));
                 completion = new ZLinkActorJoinCompletion.Failed(_operationId, kind);
             }
 

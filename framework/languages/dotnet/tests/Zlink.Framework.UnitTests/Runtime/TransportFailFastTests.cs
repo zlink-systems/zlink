@@ -93,9 +93,7 @@ public sealed class TransportFailFastTests
         ZLinkUnawaitedSubmit.Observe(
             ValueTask.FromException(exception),
             "channel send",
-            errorSink,
-            "Channel",
-            "send");
+            errorSink);
 
         for (var attempt = 0; attempt < 100 && reasons.Count == 0; attempt++)
             await Task.Delay(10);

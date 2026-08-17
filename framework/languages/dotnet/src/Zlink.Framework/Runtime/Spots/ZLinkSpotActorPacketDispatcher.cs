@@ -24,8 +24,7 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
         var scope = CreateScope(
             actor,
             header,
-            ZLinkDispatchMessageKind.ActorSend,
-            "ActorSend");
+            ZLinkDispatchMessageKind.ActorSend);
 
         scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Received);
 
@@ -75,8 +74,7 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
         var scope = CreateScope(
             actor,
             header,
-            ZLinkDispatchMessageKind.ActorRequest,
-            "ActorRequest");
+            ZLinkDispatchMessageKind.ActorRequest);
 
         scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Received);
 
@@ -124,21 +122,18 @@ internal sealed class ZLinkSpotActorPacketDispatcher(
         return ZLinkActorReply.FromError(error);
     }
 
-    private static ZLinkDispatchFlowScope CreateScope(
+    private ZLinkDispatchFlowScope CreateScope(
         IZLinkActor actor,
         ZlinkStreamHeader header,
-        ZLinkDispatchMessageKind kind,
-        string kindName)
+        ZLinkDispatchMessageKind kind)
     {
         return new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.SpotActor,
-            "SpotActor",
+            dispatchErrors.Flow.CaptureEnabled,
             kind,
-            kindName,
             header.Name,
             correlationId: header.CorrelationId,
-            actorId: actor.Context.ActorId,
-            actorType: actor.GetType().FullName);
+            actorId: actor.Context.ActorId);
     }
 
     private bool TryResolveActorPacketDescriptor(

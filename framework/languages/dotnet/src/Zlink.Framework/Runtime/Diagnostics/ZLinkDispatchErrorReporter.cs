@@ -16,6 +16,8 @@ internal sealed class ZLinkDispatchErrorReporter(
         runtime,
         runtime is null ? null : runtime.ErrorSink);
 
+    public bool Enabled => Flow.CaptureEnabled;
+
     public void Report(ZLinkDispatchFailure error)
     {
         Flow.TraceDispatchError(error);
