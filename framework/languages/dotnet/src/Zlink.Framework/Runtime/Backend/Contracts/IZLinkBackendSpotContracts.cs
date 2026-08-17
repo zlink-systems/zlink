@@ -8,6 +8,14 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
 {
     ValueTask ForceStopAsync(CancellationToken cancellationToken) => DisposeAsync();
 
+    // Observation-only: the live diagnostics gate for spec 27 §4. Backends
+    // that re-encode relayed envelopes consult it so an Off host neither
+    // validates nor copies inbound flow fields forward. Default keeps fakes
+    // and gate-less standalone nodes on the historical always-on behavior.
+    void SetFlowCaptureGate(Func<bool> flowCaptureEnabled)
+    {
+    }
+
     RoutingId RoutingId { get; }
 
     void SetRoutingId(RoutingId routingId);

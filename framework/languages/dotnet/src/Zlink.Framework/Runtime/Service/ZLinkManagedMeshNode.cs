@@ -92,6 +92,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly HashSet<Task> _inboundOperations = [];
     private readonly ulong _lifecycleGeneration = NewNonZeroToken();
 
+    // Observation-only diagnostics gate (spec 27 §4). Wired by the framework
+    // host through the backend seam; a gate-less standalone node keeps the
+    // historical always-on behavior.
+    private volatile Func<bool>? _flowCaptureEnabled;
+
     private IRouterSocket? _socket;
     private ISocketMonitor? _socketMonitor;
     private IPoller? _poller;
@@ -185,6 +190,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (routingId.IsEmpty)
             throw new ArgumentException("Routing id is required.", nameof(routingId));
         _routingId = routingId;
+    }
+
+    internal void SetFlowCaptureGate(Func<bool> flowCaptureEnabled)
+    {
+        ArgumentNullException.ThrowIfNull(flowCaptureEnabled);
+        _flowCaptureEnabled = flowCaptureEnabled;
     }
 
     public void SetObjectRole(ZLinkMeshNodeObjectRole objectRole)
@@ -6144,7 +6155,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 terminal.Completion as UserSpotCloseCompletion);
         var replyParts = ReencodeActorCreateReply(
             terminal.ReplyParts,
-            correlation);
+            correlation,
+            _flowCaptureEnabled?.Invoke() ?? true);
         var wire = new List<ReadOnlyMemory<byte>>(replyParts.Count == 0 ? 1 : 2) { head };
         if (replyParts.Count != 0)
             wire.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(replyParts));
@@ -6154,7 +6166,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private static IReadOnlyList<ReadOnlyMemory<byte>> ReencodeActorCreateReply(
         IReadOnlyList<ReadOnlyMemory<byte>>? replyParts,
-        ulong correlation)
+        ulong correlation,
+        bool captureFlow)
     {
         if (replyParts is not { Count: > 0 })
             return Array.Empty<ReadOnlyMemory<byte>>();
@@ -6166,7 +6179,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             ZLinkEnvelopeHeader header;
             try
             {
-                header = ZLinkEnvelopeCodec.DecodeHeader(messages);
+                // Spec 27 §4/§5: when tracing is on, the relay preserves the
+                // origin's flow pair onto the re-encoded terminal reply; at
+                // Off the decode strips it so no inbound flow is copied to
+                // the next outbound message.
+                header = ZLinkEnvelopeCodec.DecodeHeader(messages, captureFlow);
             }
             catch (ZLinkEnvelopeProtocolException)
             {

@@ -20,6 +20,10 @@ internal sealed class ZLinkSpotNodeInitializer(
             var node = state.Context.CreateSpotNode(meshName);
             var nodeRoutingId = PrepareNodeRoutingId(spotNodeRegistration);
             node.SetRoutingId(nodeRoutingId);
+            // Spec 27 §4: infrastructure relays on this node follow the live
+            // diagnostics level when deciding whether to keep inbound flow
+            // fields on re-encoded envelopes.
+            node.SetFlowCaptureGate(() => runtime.Flow.CaptureEnabled);
             node.SetObjectRole(spotNodeRegistration.ObjectRole);
             node.ApplyRoleConfig(
                 spotNodeRegistration.SpotPublisherConfig,

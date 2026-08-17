@@ -345,6 +345,57 @@ public sealed class ClientServerChannelRuntimeTests
     }
 
     [Fact]
+    public async Task ClientServerRequestPreservesInboundFlowIntoHandlerContext()
+    {
+        // Spec 27 §5: the ClientServer handler context preserves the caller's
+        // flow pair, so downstream calls and the ambient-encoded reply reuse it.
+        const string flowId = "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d";
+        var port = ReservePort();
+        var services = new ServiceCollection();
+        var probe = new FlowProbe();
+        services.AddSingleton(probe);
+        services.AddZLinkFramework(options =>
+        {
+            options.AddClientServerChannel("work")
+                .Server()
+                .Listen(port)
+                .AddRequestHandler<FlowEchoHandler, FlowEchoRequest, EchoReply>();
+        });
+        await using var server = services.BuildServiceProvider();
+        await using var client = CreateClient(port);
+        var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+
+        await serverRuntime.StartAsync(CancellationToken.None);
+        await clientRuntime.StartAsync(CancellationToken.None);
+        try
+        {
+            await WaitUntilAsync(
+                () => clientRuntime.GetClientServerClientRuntime("work").ReadyCount == 1,
+                TimeSpan.FromSeconds(5));
+
+            EchoReply reply;
+            using (ZLinkFlowContext.EnterExisting(flowId, ZLinkFlowOrigin.Application))
+            {
+                reply = await client.GetRequiredService<IZLinkRouteClient>()
+                    .RequestToChannel("work", new FlowEchoRequest("flow"))
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Async<EchoReply>();
+            }
+
+            Assert.Equal("flow", reply.Value);
+            var observed = await probe.Handler.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(flowId, observed.FlowId);
+            Assert.Equal(ZLinkFlowOrigin.Application, observed.Origin);
+        }
+        finally
+        {
+            await clientRuntime.StopAsync(CancellationToken.None);
+            await serverRuntime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public void CompleteMessageBoundAcceptsExactBoundaryAndRejectsOneByteAbove()
     {
         using var first = Message.From(new byte[200]);
@@ -1762,6 +1813,29 @@ public sealed class ClientServerChannelRuntimeTests
     {
         public TaskCompletionSource<string> Received { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed record FlowEchoRequest(string Value);
+
+    private sealed class FlowProbe
+    {
+        public TaskCompletionSource<(string? FlowId, ZLinkFlowOrigin? Origin)> Handler { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class FlowEchoHandler(FlowProbe probe)
+        : IZLinkRequestHandler<FlowEchoRequest, EchoReply>
+    {
+        public ValueTask<EchoReply> HandleAsync(
+            FlowEchoRequest request,
+            IZLinkMessageContext context,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var flow = ZLinkFlowContext.Current;
+            probe.Handler.TrySetResult((flow?.FlowId, flow?.Origin));
+            return ValueTask.FromResult(new EchoReply(request.Value));
+        }
     }
 
     private sealed class BlockingRequestProbe

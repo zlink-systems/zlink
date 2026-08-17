@@ -39,6 +39,14 @@ internal sealed class ZLinkClientServerDispatcher(
             return;
         }
 
+        // Spec 27 §5: the ClientServer handler context preserves the inbound
+        // flow pair, so downstream calls reuse it and the reply encoder finds
+        // it in the ambient context. Off suppresses installation entirely (§4).
+        using var currentFlow = ZLinkFlowContext.Enter(
+            header.FlowId,
+            header.FlowOrigin,
+            flowCaptureEnabled(),
+            ZLinkFlowOrigin.Inbound);
         switch (header.Kind)
         {
             case ZLinkMessageKind.Command:

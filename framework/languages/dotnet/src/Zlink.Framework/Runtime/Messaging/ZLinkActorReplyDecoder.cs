@@ -9,7 +9,12 @@ namespace Zlink.Framework.Runtime.Messaging;
 /// </summary>
 internal static class ZLinkActorReplyDecoder
 {
-    public static TReply Decode<TReply>(IReadOnlyList<Message> reply)
+    // captureFlow threads the live diagnostics gate into the reply ingress
+    // decode (spec 27 §4): an Off host neither reads nor validates the
+    // observation-only flow fields on the terminal reply.
+    public static TReply Decode<TReply>(
+        IReadOnlyList<Message> reply,
+        bool captureFlow = true)
     {
         if (reply.Count == 0)
             throw ProtocolError("Actor request reply is empty.");
@@ -29,11 +34,14 @@ internal static class ZLinkActorReplyDecoder
                 // header bytes out first.
                 header = ZLinkStreamProtocolDefaults.DecodeHeader(
                     frameMemory.Slice(
-                        ZLinkStreamFrameCodec.PrefixSize, headerBytes.Length));
+                        ZLinkStreamFrameCodec.PrefixSize, headerBytes.Length),
+                    captureFlow);
             }
             else
             {
-                header = ZLinkStreamProtocolDefaults.DecodeHeader(reply[0].AsReadOnlyMemory());
+                header = ZLinkStreamProtocolDefaults.DecodeHeader(
+                    reply[0].AsReadOnlyMemory(),
+                    captureFlow);
                 payload = reply[1].AsReadOnlySpan();
             }
         }

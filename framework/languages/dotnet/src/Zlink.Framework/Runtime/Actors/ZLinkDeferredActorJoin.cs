@@ -242,9 +242,15 @@ internal sealed class ZLinkDeferredActorJoin(
                 throw new InvalidOperationException(
                     "Deferred Actor Join barrier was not reserved.");
             using var turn = await reservedBarrier.ClaimAsync().ConfigureAwait(false);
-            using var flow = ZLinkFlowContext.EnterExisting(
+            // Re-enter the flow captured at registration, but only while the
+            // live level still allows capture (spec 27 §4): an On→Off flip
+            // before the deferred join runs must not re-install flow context.
+            using var flow = ZLinkFlowContext.Enter(
                 _flow?.FlowId,
-                _flow?.Origin);
+                _flow?.Origin,
+                runtime.Flow.CaptureEnabled,
+                ZLinkFlowOrigin.Application,
+                createIfAbsent: false);
             using var dispatch = actorState.EnterDeferredJoinExecution();
             ZLinkActorJoinCompletion? completion = null;
             try

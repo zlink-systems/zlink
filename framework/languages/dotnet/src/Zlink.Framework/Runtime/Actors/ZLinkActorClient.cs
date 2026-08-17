@@ -284,7 +284,9 @@ internal sealed class ZLinkActorClient(
 
         try
         {
-            return ZLinkActorReplyDecoder.Decode<TReply>(reply);
+            return ZLinkActorReplyDecoder.Decode<TReply>(
+                reply,
+                runtime.Flow.CaptureEnabled);
         }
         finally
         {
