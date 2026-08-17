@@ -448,6 +448,13 @@ class channel_native_client_t
               detail::boundary_error_t::disconnected,
               "channel client has no connected server endpoint");
         }
+        /* Coroutine reference parameters must not cross a suspension point:
+         * copy the frames (and the trace identifiers used by the catch
+         * blocks) into the coroutine frame before the first co_await
+         * (session-reconnect-and-coroutine-lifetime doc). */
+        zlink::message_t send_header = parts[0];
+        zlink::message_t send_body = parts[1];
+        const std::string trace_packet_name = packet_name;
         try {
             std::shared_ptr<transport_t> transport;
             {
@@ -470,8 +477,6 @@ class channel_native_client_t
             }
             const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
               operation_deadline - now);
-            zlink::message_t send_header = parts[0];
-            zlink::message_t send_body = parts[1];
             std::optional<zlink::async_result_t<void>> pending;
             {
                 std::lock_guard transport_lock (transport->mutex);
@@ -506,7 +511,7 @@ class channel_native_client_t
             if (error.result () == zlink::submit_result_t::backpressured) {
                 trace_channel_backpressure (
                   _runtime.dispatch_options_ref (), _channel_name,
-                  packet_name, correlation_id);
+                  trace_packet_name, correlation_id);
             }
             const auto mapped = map_native_send_exception (error);
             throw mapped;
@@ -1069,17 +1074,20 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                                              std::chrono::milliseconds timeout,
                                              const channel_request_call_t::metadata_map_t &metadata)
 {
+    /* Coroutine on a caller-owned object: copy the shared state into the
+     * frame so resumes after the owner unwinds never touch `this`. */
+    const auto state = _state;
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
-      detail::message_flow_tracer_t (_state->dispatch).mode ());
-    channel_runtime_t runtime (_state);
-    const auto *client = client_capability (*_state, channel_name);
+      detail::message_flow_tracer_t (state->dispatch).mode ());
+    channel_runtime_t runtime (state);
+    const auto *client = client_capability (*state, channel_name);
     const auto call_packet_name = std::move (packet_name);
     channel_request_terminal_trace_t terminal_trace (
-      _state->dispatch, channel_name, call_packet_name);
+      state->dispatch, channel_name, call_packet_name);
     {
-        std::lock_guard lock (_state->mutex);
-        _state->outbound_calls.push_back (
+        std::lock_guard lock (state->mutex);
+        state->outbound_calls.push_back (
           {"request", channel_name, "", call_packet_name, timeout, metadata});
     }
     auto reservation = runtime.reserve_outbound_request (channel_name);
@@ -1098,8 +1106,8 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                         "channel request failed");
     }
     channel_request_metrics_guard_t request_metrics (
-      runtime::runtime_metrics_t (_state->monitoring), channel_name);
-    if (!can_wait_for_client_endpoint (_state, client)) {
+      runtime::runtime_metrics_t (state->monitoring), channel_name);
+    if (!can_wait_for_client_endpoint (state, client)) {
         (void) runtime.cancel_outbound_request (reservation.value ());
         const auto error = detail::make_boundary_exception (
           detail::boundary_error_t::disconnected,
@@ -1108,11 +1116,11 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
         co_return detail::result_access_t::failure<zlink::message_t> (
           error);
     }
-    if (_state->serializers != nullptr && client != nullptr) {
-        if (const auto requester = client_server_requester (_state, channel_name)) {
+    if (state->serializers != nullptr && client != nullptr) {
+        if (const auto requester = client_server_requester (state, channel_name)) {
             try {
                 auto payload =
-                  detail::encoded_payload_to_raw (encode_payload (*_state->serializers));
+                  detail::encoded_payload_to_raw (encode_payload (*state->serializers));
                 if (client->max_message_size
                     && client->max_message_size->bytes () > 0
                     && static_cast<std::int64_t> (payload.size ())
@@ -1123,10 +1131,10 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                         "channel message exceeds configured max message size");
                 }
                 const auto effective_timeout =
-                  resolve_channel_wait_timeout (_state, channel_name, timeout);
+                  resolve_channel_wait_timeout (state, channel_name, timeout);
                 auto reply = co_await (*requester) (
                   call_packet_name,
-                  _state->serializers->content_type (request_type),
+                  state->serializers->content_type (request_type),
                   std::move (payload),
                   effective_timeout);
                 auto completion =
@@ -1170,15 +1178,15 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
         try {
             runtime::messaging::client_call_codec_t codec;
             const auto effective_timeout =
-              resolve_channel_wait_timeout (_state, channel_name, timeout);
+              resolve_channel_wait_timeout (state, channel_name, timeout);
             auto header = codec.create_envelope (runtime::messaging::message_kind_t::request,
                                                  channel_name, call_packet_name,
                                                  effective_timeout);
             header.metadata = metadata;
-            if (detail::message_flow_tracer_t (_state->dispatch).capture_enabled ()) {
+            if (detail::message_flow_tracer_t (state->dispatch).capture_enabled ()) {
                 terminal_trace.correlation_id = header.correlation_id;
             }
-            detail::message_flow_tracer_t (_state->dispatch)
+            detail::message_flow_tracer_t (state->dispatch)
               .trace (message_flow_outcome_t::sent, [&] {
                   return message_flow_event_t{message_flow_outcome_t::sent,
                                               dispatch_error_surface_t::channel,
@@ -1194,7 +1202,7 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
               });
             runtime::messaging::envelope_codec_t envelope;
             auto parts = encode_channel_payload_parts (header, request_type, encode_payload,
-                                                       *_state->serializers);
+                                                       *state->serializers);
             if (exceeds_configured_max_message_size (parts, *client)) {
                 (void) runtime.cancel_outbound_request (reservation.value ());
                 co_return result_t<zlink::message_t>::failure (
@@ -1203,22 +1211,22 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
             }
             std::shared_ptr<channel_native_client_t> native_client;
             {
-                std::lock_guard lock (_state->mutex);
-                if (!channel_runtime_accepts_outbound_locked (*_state)) {
+                std::lock_guard lock (state->mutex);
+                if (!channel_runtime_accepts_outbound_locked (*state)) {
                     (void) runtime.cancel_outbound_request (reservation.value ());
                     co_return detail::result_access_t::failure<zlink::message_t> (
                       detail::make_boundary_exception (
-                        channel_runtime_outbound_error_state_locked (*_state),
-                        channel_runtime_outbound_error_message_locked (*_state)));
+                        channel_runtime_outbound_error_state_locked (*state),
+                        channel_runtime_outbound_error_message_locked (*state)));
                 }
-                auto &slot = _state->native_clients[channel_name];
+                auto &slot = state->native_clients[channel_name];
                 if (!slot) {
                     slot = std::make_shared<channel_native_client_t> (
-                      channel_name, *client, runtime, _state->core_context);
+                      channel_name, *client, runtime, state->core_context);
                 }
                 native_client = slot;
             }
-            auto endpoints = make_client_endpoint_provider (_state, channel_name);
+            auto endpoints = make_client_endpoint_provider (state, channel_name);
             auto native_reply = co_await native_client->request (
               parts, endpoints, effective_timeout);
             auto validation = validate_channel_native_reply (native_reply);

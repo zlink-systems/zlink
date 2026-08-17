@@ -341,7 +341,13 @@ class stream_session_dispatcher_t
   private:
     void record_operation (std::string operation) const
     {
+        /* Diagnostics-only session log: bound it so a long-lived session's
+         * per-packet entries can never grow the process without limit. */
+        constexpr std::size_t max_recorded_operations = 256;
         const std::lock_guard<std::mutex> lock (_stream.state_mutex);
+        if (_stream.serial_log.size () >= max_recorded_operations) {
+            _stream.serial_log.pop_front ();
+        }
         _stream.serial_log.push_back (std::move (operation));
     }
 

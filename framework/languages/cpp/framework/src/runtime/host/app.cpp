@@ -2150,12 +2150,15 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                   }
                   const auto local =
                     application_mesh->native_node ().status ();
-                  actor_gateway_runtime.trace_bound_session_send_stage (
-                    std::string (actor.actor_id ().value ()),
-                    "actor_owner_push_target",
-                    "session_rid=" + route->session_rid->to_hex ()
-                      + " binding_generation="
-                      + std::to_string (route->binding_generation));
+                  if (actor_gateway_runtime
+                        .trace_bound_session_send_stage_enabled ()) {
+                      actor_gateway_runtime.trace_bound_session_send_stage (
+                        std::string (actor.actor_id ().value ()),
+                        "actor_owner_push_target",
+                        "session_rid=" + route->session_rid->to_hex ()
+                          + " binding_generation="
+                          + std::to_string (route->binding_generation));
+                  }
                   const auto local_actor =
                     detail::actor_ref_access_t::make (
                       node_rid_t::from_string (
@@ -2165,6 +2168,22 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                           actor)),
                       std::string (actor.actor_id ().value ()),
                       actor.object_generation ());
+                  /* Stage traces emit at detailed only: build the callback
+                   * (and its actor-id copy) exclusively when it can emit, so
+                   * the silent send path pays neither the std::function nor
+                   * the per-stage string conversions. */
+                  detail::backend::raw_send_stage_trace_t stage_trace;
+                  if (actor_gateway_runtime
+                        .trace_bound_session_send_stage_enabled ()) {
+                      stage_trace =
+                        [actor_gateway_runtime,
+                         actor_id = std::string (actor.actor_id ().value ())] (
+                          std::string_view stage,
+                          std::string_view result) mutable {
+                            actor_gateway_runtime.trace_bound_session_send_stage (
+                              actor_id, stage, result);
+                        };
+                  }
                   const auto submitted = co_await
                     application_mesh->native_node ().send_bound_session (
                       local_actor, route->node_rid,
@@ -2173,14 +2192,7 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                       route->owner_lease_generation,
                       encode_bound_session_frame (
                         stream_runtime, header, payload),
-                      [actor_gateway_runtime,
-                       actor_id = std::string (actor.actor_id ().value ())] (
-                        std::string_view stage,
-                        std::string_view result) mutable {
-                          actor_gateway_runtime.trace_bound_session_send_stage (
-                            actor_id, std::string (stage),
-                            std::string (result));
-                      });
+                      std::move (stage_trace));
                   co_return one_way_native_submit_result (
                     submitted,
                     "Framework Actor bound Session send");
@@ -2491,10 +2503,13 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
              stream_runtime] (const runtime::protocol::bound_session_send_t &send,
                               std::vector<zlink::message_t> parts) mutable {
                 try {
-                    actor_gateway_runtime.trace_bound_session_send_stage (
-                      send.actor.actor_id, "session_node_receive",
-                      "binding_generation="
-                        + std::to_string (send.expected_binding_generation));
+                    if (actor_gateway_runtime
+                          .trace_bound_session_send_stage_enabled ()) {
+                        actor_gateway_runtime.trace_bound_session_send_stage (
+                          send.actor.actor_id, "session_node_receive",
+                          "binding_generation="
+                            + std::to_string (send.expected_binding_generation));
+                    }
                     const auto actor = detail::actor_ref_access_t::make (
                       node_rid_t::from_string (
                         zlink::routing_id_t::from (send.actor.target_node_routing_id).to_string ()),
@@ -2524,10 +2539,13 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
               const runtime::protocol::bound_session_send_t &send) mutable
               -> std::optional<runtime::host::bound_session_operations_t::
                 delivery_capability_t> {
-                actor_gateway_runtime.trace_bound_session_send_stage (
-                  send.actor.actor_id, "session_node_receive",
-                  "binding_generation="
-                    + std::to_string (send.expected_binding_generation));
+                if (actor_gateway_runtime
+                      .trace_bound_session_send_stage_enabled ()) {
+                    actor_gateway_runtime.trace_bound_session_send_stage (
+                      send.actor.actor_id, "session_node_receive",
+                      "binding_generation="
+                        + std::to_string (send.expected_binding_generation));
+                }
                 const auto actor = detail::actor_ref_access_t::make (
                   node_rid_t::from_string (
                     zlink::routing_id_t::from (

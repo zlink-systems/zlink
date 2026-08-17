@@ -2204,6 +2204,10 @@ class stream_host_service_t::listener_t
       runtime::stateful::stream_connection_t connection,
       zlink::routing_id_t session_rid)
     {
+        /* Detached coroutine (retire_actor_session_bindings_async): copy the
+         * mesh-node handle into the frame so iteration 2+ after a co_await
+         * never reads `this` (session-reconnect-and-coroutine-lifetime doc). */
+        const auto _mesh_node = this->_mesh_node;
         if (!_mesh_node)
             co_return;
         const auto local = _mesh_node->native_node ().status ();

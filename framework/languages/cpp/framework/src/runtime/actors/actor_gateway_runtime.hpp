@@ -367,10 +367,14 @@ class actor_gateway_runtime_t
     void on_disconnect (actor_gateway_state_t::disconnect_dispatcher_t dispatcher);
     void on_bound_session (actor_gateway_state_t::bound_session_registrar_t registrar);
     void on_bound_session_send (actor_gateway_state_t::bound_session_sender_t sender);
+    /* Stage traces emit only at detailed; callers building stage/result
+     * strings must gate on trace_bound_session_send_stage_enabled() so the
+     * off/errors/normal hot path pays no allocation (spec 26 §4). */
+    bool trace_bound_session_send_stage_enabled () const noexcept;
     void trace_bound_session_send_stage (
       const std::string &actor_id,
-      std::string stage,
-      std::string result = {}) const;
+      std::string_view stage,
+      std::string_view result = {}) const;
     void bind_serializers (serializer_registry_t &serializers);
     void set_dispatch (dispatch_options_t options);
 

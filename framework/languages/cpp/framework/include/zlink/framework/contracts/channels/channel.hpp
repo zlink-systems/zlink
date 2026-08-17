@@ -991,12 +991,12 @@ class route_client_t
 
     static task_t<result_t<void>>
     submit_spot_id_send_erased (const std::shared_ptr<detail::route_client_state_t> &state,
-                                    const spot_id_t &target,
-                                    const detail::spot_activation_intent_t &intent,
-                                    const std::string &packet_name,
+                                    spot_id_t target,
+                                    detail::spot_activation_intent_t intent,
+                                    std::string packet_name,
                                     std::type_index message_type,
                                     payload_encoder_t encode_payload,
-                                    const route_send_call_t::metadata_map_t &metadata);
+                                    route_send_call_t::metadata_map_t metadata);
 
     static task_t<zlink::message_t> submit_spot_id_request_reply_message_erased (
       const std::shared_ptr<detail::route_client_state_t> &state,

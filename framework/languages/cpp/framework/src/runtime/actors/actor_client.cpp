@@ -565,8 +565,11 @@ class actor_client_impl_t final : public actor_client_t
               failed.error_kind (),
               error != nullptr ? error->what () : "actor route was not found");
         }
+        /* Frame-owned metadata copy: the reference belongs to a caller-owned
+         * call object that can unwind while the send is suspended. */
         const auto submitted = co_await submit_send (
-          actor.value (), std::move (packet_name), std::move (message), metadata);
+          actor.value (), std::move (packet_name), std::move (message),
+          actor_send_call_t::metadata_map_t (metadata));
         if (!submitted) {
             const auto *error = submitted.error ();
             throw framework_exception_t (
@@ -604,6 +607,11 @@ class actor_client_impl_t final : public actor_client_t
         // re-resolves and retries. The caller's timeout keeps running across
         // retries — the move does not reset it (10.5-2).
         const auto actor_id_value = std::string (actor_id.value ());
+        /* The metadata reference belongs to a caller-owned call object that
+         * can unwind while a retry is suspended: keep a frame-owned copy so
+         * iteration 2+ never reads through the dead reference
+         * (session-reconnect-and-coroutine-lifetime doc). */
+        const actor_request_call_t::metadata_map_t metadata_frame = metadata;
         // Stable across every retry and the commit replay so the target
         // dispatches this request exactly once (§10.2-1). Scoped by the client
         // instance so ids do not collide across nodes.
@@ -648,7 +656,7 @@ class actor_client_impl_t final : public actor_client_t
                   std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now);
                 last = co_await submit_request (
                   actor.value (), packet_name, request, remaining, request_id,
-                  metadata);
+                  metadata_frame);
                 if (!is_moving_stale (last)) {
                     /* A destructive lifecycle operation can remove the
                      * authority while this client still has a positive route

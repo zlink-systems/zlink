@@ -2607,11 +2607,14 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
                   framework_error_kind_t::unavailable,
                   "Actor Message Follow target authority fence was already visited");
             }
-            spot_runtime.emit_actor_transfer_marker (
-              "message_follow_relay", actor,
-              header.correlation_id.empty () ? std::string (actor.actor_id ().value ())
-                                             : header.correlation_id,
-              follow_target.route.spot_id, follow_target.route.node_rid);
+            if (spot_runtime.actor_transfer_marker_enabled ()) {
+                spot_runtime.emit_actor_transfer_marker (
+                  "message_follow_relay", actor,
+                  header.correlation_id.empty ()
+                    ? std::string (actor.actor_id ().value ())
+                    : header.correlation_id,
+                  follow_target.route.spot_id, follow_target.route.node_rid);
+            }
             spot_inbound_message_t metadata;
             metadata.content_type = header.content_type;
             metadata.values = header.metadata;

@@ -2858,8 +2858,6 @@ send_call_t spot_context_t::publish_erased (std::string topic,
           catch (const framework_exception_t &error) {
               return detail::result_access_t::failure<void> (error);
           }
-          state->ordering_log.push_back ("publish:" + topic + ":" + submitted_packet_name + ":"
-                                         + payload.to_string ());
           auto native = state->native_spot.lock ();
           if (native) {
               try {
@@ -2997,9 +2995,6 @@ send_call_t spot_context_t::send_to_erased (node_rid_t node_rid,
               auto submitted = runtime.submit_spot_send_parts (
                 zlink::routing_id_t::from (std::string (node_rid.value ())), spot_id,
                 std::move (parts));
-              if (submitted) {
-                  state->ordering_log.push_back ("send_to:" + std::string (spot_id));
-              }
               if (!submitted) {
                   throw submitted.error ()
                           ? *submitted.error ()
@@ -3041,9 +3036,6 @@ send_call_t spot_context_t::send_to_erased (node_rid_t node_rid,
                   throw framework_exception_t (
                     runtime::messaging::map_submit_result_error_kind (submitted),
                     "SPOT mesh send was not submitted");
-              }
-              if (state) {
-                  state->ordering_log.push_back ("send_to:" + std::string (spot_id));
               }
               co_return;
           }
@@ -3089,7 +3081,6 @@ spot_context_t::erased_request_call_t spot_context_t::request_to_erased (node_ri
                   auto parts = encode_spot_route_parts (runtime::messaging::message_kind_t::request,
                                                         *route_channel_name, submitted_packet_name,
                                                         payload, effective_timeout, metadata);
-                  state->ordering_log.push_back ("request_to:" + std::string (spot_id));
                   auto reply = runtime.request_reply_spot_parts (
                     zlink::routing_id_t::from (std::string (node_rid.value ())), spot_id,
                     std::move (parts), effective_timeout);
@@ -3129,7 +3120,6 @@ spot_context_t::erased_request_call_t spot_context_t::request_to_erased (node_ri
               auto parts = encode_spot_route_parts (runtime::messaging::message_kind_t::request,
                                                     channel_name, submitted_packet_name, payload,
                                                     effective_timeout, metadata);
-              state->ordering_log.push_back ("request_to:" + std::string (spot_id));
               return request_spot_mesh_message (state, std::move (node_rid), std::move (spot_id),
                                                 std::move (parts), effective_timeout);
           }
@@ -6453,6 +6443,12 @@ spot_node_runtime_t::complete_remote_actor_transfer (
     co_return;
 }
 
+bool spot_node_runtime_t::actor_transfer_marker_enabled () const noexcept
+{
+    return message_flow_tracer_t (_state->dispatch)
+      .enabled_for (message_flow_outcome_t::dispatched);
+}
+
 void spot_node_runtime_t::emit_actor_transfer_marker (
   std::string marker,
   const actor_ref_t &actor_ref,
@@ -7780,8 +7776,11 @@ spot_node_runtime_t::relay_actor_packet (const actor_ref_t &actor_ref,
     const auto handoff_transfer_id = metadata.values.find ("__zlink.actorTransferId");
     if (handoff != metadata.values.end () && handoff->second == "true"
         && handoff_transfer_id != metadata.values.end () && !handoff_transfer_id->second.empty ()) {
-        emit_actor_transfer_marker ("backlog_enqueued", actor_ref, handoff_transfer_id->second,
-                                    actor_spot (actor_ref));
+        if (actor_transfer_marker_enabled ()) {
+            emit_actor_transfer_marker ("backlog_enqueued", actor_ref,
+                                        handoff_transfer_id->second,
+                                        actor_spot (actor_ref));
+        }
     }
     {
         // In-flight handoff (§10.2-1): actor packets that arrive while the actor
@@ -8684,9 +8683,18 @@ spot_node_runtime_t::dispatch_instance_activation (const spot_id_t &spot_id,
     report_spot_dispatch_trace (_state, message_flow_outcome_t::received,
                                 dispatch_error_surface_t::spot_route, message_kind, packet_name, {},
                                 std::string (spot_id), {}, correlation_id);
-    const auto trace_packet_name = packet_name;
-    const auto trace_spot_id = std::string (spot_id);
-    const auto trace_correlation_id = correlation_id;
+    /* Copies exist only for the completion-time trace/error report; skip them
+     * while tracing is fully off (spec 26 §4: no allocation before the gate). */
+    const bool activation_trace_enabled =
+      message_flow_tracer_t (_state->dispatch).capture_enabled ();
+    std::string trace_packet_name;
+    std::string trace_spot_id;
+    std::string trace_correlation_id;
+    if (activation_trace_enabled) {
+        trace_packet_name = packet_name;
+        trace_spot_id = std::string (spot_id);
+        trace_correlation_id = correlation_id;
+    }
     auto handler_task = spot_handler_registry_t (state).invoke_erased (
       spot_handler_kind_t::packet, packet_name, {}, std::type_index (typeid (void)),
       state->spot_instance.get (), nullptr, services, serializers, zlink::message_t::from (payload),
@@ -9129,12 +9137,6 @@ spot_node_runtime_t::current_actor_ref (const actor_ref_t &actor_ref) const
       node_rid_t::from_string (detail::effective_spot_node_rid (_state->snapshot)),
       std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
       std::string (actor_ref.actor_id ().value ()), found->second);
-}
-
-const std::vector<std::string> &
-spot_node_runtime_t::ordering_log (const spot_context_t &context) const
-{
-    return context._state->ordering_log;
 }
 
 void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node_t> node)

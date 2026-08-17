@@ -2259,8 +2259,15 @@ void mesh_node_host_service_t::start (service_provider_t &services)
                                 application.packet_name,
                                 "application/octet-stream",
                                 reply.to_bytes ()};
-                            application_reply->flow_id = application.flow_id;
-                            application_reply->flow_origin = application.flow_origin;
+                            /* flow-correlation §4: at Off the inbound flow
+                             * pair must not be copied onto the next message;
+                             * the reply carries it only while tracing is on. */
+                            if (detail::message_flow_tracer_t (_dispatch_options)
+                                  .capture_enabled ()) {
+                                application_reply->flow_id = application.flow_id;
+                                application_reply->flow_origin =
+                                  application.flow_origin;
+                            }
                         }
                         return host::instance_spot_activation_result_t{
                           0, 0, std::move (application_reply)};

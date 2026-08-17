@@ -191,7 +191,6 @@ add_library(zlink_framework STATIC
   framework/src/runtime/diagnostics/health.cpp
   framework/src/runtime/diagnostics/monitoring_runtime.cpp
   framework/src/runtime/dispatch/coroutine_executor.cpp
-  framework/src/runtime/dispatch/offload_executor.cpp
   framework/src/runtime/execution/serial_execution_queue.cpp
   framework/src/runtime/handlers/handler_registry.cpp
   framework/src/runtime/dispatch/projection.cpp

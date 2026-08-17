@@ -1663,7 +1663,7 @@ task_t<std::uint64_t> route_client_t::submit_spot_request_erased (
 }
 
 task_t<zlink::message_t> route_client_t::submit_request_reply_message_erased (
-  const std::shared_ptr<detail::route_client_state_t> &state,
+  const std::shared_ptr<detail::route_client_state_t> &state_ref,
   std::string router_channel_id,
   zlink::routing_id_t target_node_rid,
   std::string packet_name,
@@ -1672,6 +1672,9 @@ task_t<zlink::message_t> route_client_t::submit_request_reply_message_erased (
   std::chrono::milliseconds timeout,
   std::map<std::string, std::string> metadata)
 {
+    /* Frame-owned copy: the referenced shared_ptr lives in the call object's
+     * closure, which can unwind while the request is suspended. */
+    const auto state = state_ref;
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
       state && state->runtime
@@ -1794,7 +1797,7 @@ task_t<zlink::message_t> route_client_t::submit_request_reply_message_erased (
 }
 
 task_t<zlink::message_t> route_client_t::submit_channel_request_reply_message_erased (
-  const std::shared_ptr<detail::route_client_state_t> &state,
+  const std::shared_ptr<detail::route_client_state_t> &state_ref,
   std::string channel_name,
   std::string packet_name,
   std::type_index request_type,
@@ -1802,6 +1805,9 @@ task_t<zlink::message_t> route_client_t::submit_channel_request_reply_message_er
   std::chrono::milliseconds timeout,
   std::map<std::string, std::string> metadata)
 {
+    /* Frame-owned copy: the referenced shared_ptr lives in the call object's
+     * closure, which can unwind while the request is suspended. */
+    const auto state = state_ref;
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
       state && state->runtime
@@ -1897,7 +1903,7 @@ task_t<zlink::message_t> route_client_t::submit_channel_request_reply_message_er
 }
 
 task_t<zlink::message_t> route_client_t::submit_spot_request_reply_message_erased (
-  const std::shared_ptr<detail::route_client_state_t> &state,
+  const std::shared_ptr<detail::route_client_state_t> &state_ref,
   std::string router_channel_id,
   zlink::routing_id_t target_node_rid,
   spot_id_t target_spot_id,
@@ -1908,6 +1914,9 @@ task_t<zlink::message_t> route_client_t::submit_spot_request_reply_message_erase
   std::chrono::milliseconds timeout,
   std::map<std::string, std::string> metadata)
 {
+    /* Frame-owned copy: the referenced shared_ptr lives in the call object's
+     * closure, which can unwind while the request is suspended. */
+    const auto state = state_ref;
     const auto metrics_channel = router_channel_id;
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
@@ -2049,14 +2058,18 @@ task_t<zlink::message_t> route_client_t::submit_spot_request_reply_message_erase
 }
 
 task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
-  const std::shared_ptr<detail::route_client_state_t> &state,
-  const spot_id_t &target,
-  const detail::spot_activation_intent_t &intent,
-  const std::string &packet_name,
+  const std::shared_ptr<detail::route_client_state_t> &state_ref,
+  spot_id_t target,
+  detail::spot_activation_intent_t intent,
+  std::string packet_name,
   std::type_index message_type,
   payload_encoder_t encode_payload,
-  const route_send_call_t::metadata_map_t &metadata)
+  route_send_call_t::metadata_map_t metadata)
 {
+    /* The state reference belongs to the call object's closure, which can
+     * unwind while this coroutine is suspended: keep a frame-owned copy
+     * (session-reconnect-and-coroutine-lifetime doc). */
+    const auto state = state_ref;
     if (!state || !state->runtime || state->runtime->spot_resolver == nullptr) {
         co_return result_t<void>::failure (framework_error_kind_t::not_configured,
                                            "Spot location resolver is not configured");
@@ -2097,7 +2110,7 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
 }
 
 task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_message_erased (
-  const std::shared_ptr<detail::route_client_state_t> &state,
+  const std::shared_ptr<detail::route_client_state_t> &state_ref,
   spot_id_t target,
   detail::spot_activation_intent_t intent,
   std::string packet_name,
@@ -2106,6 +2119,9 @@ task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_message_er
   std::chrono::milliseconds timeout,
   std::map<std::string, std::string> metadata)
 {
+    /* Frame-owned copy: the referenced shared_ptr lives in the call object's
+     * closure, which can unwind while the request is suspended. */
+    const auto state = state_ref;
     if (!state || !state->runtime || state->runtime->spot_resolver == nullptr) {
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "Spot location resolver is not configured");

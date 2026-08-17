@@ -552,7 +552,6 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     std::vector<spot_handler_descriptor_t> handlers;
     std::vector<spot_handler_registry_t::invoker_t> handler_invokers;
     std::map<std::type_index, spot_actor_admission_callbacks_t> actor_admissions;
-    std::vector<std::string> ordering_log;
     std::weak_ptr<service::spot_t> native_spot;
     std::vector<std::shared_ptr<timer_state_t>> timers;
     std::shared_ptr<service_scope_t> activation_scope;
@@ -855,7 +854,6 @@ class spot_node_runtime_t
      * context: a live socket keeps `zlink_ctx_term()` waiting forever. */
     void release_native_handles () noexcept;
     std::optional<actor_ref_t> current_actor_ref (const actor_ref_t &actor_ref) const;
-    const std::vector<std::string> &ordering_log (const spot_context_t &context) const;
     void attach_native_node (std::shared_ptr<service::mesh_node_t> node);
     void detach_native_node ();
     void evict_idle_spots () noexcept;
@@ -1123,7 +1121,10 @@ class spot_node_runtime_t
     // Emits an internal transfer lifecycle boundary through the configured
     // public message-flow observer. The transfer id is both the correlation
     // key and lifecycle flow key so role-server evidence can join source and
-    // target events without parsing runtime logs.
+    // target events without parsing runtime logs. Hot-path callers that build
+    // marker/transfer-id strings must gate on actor_transfer_marker_enabled()
+    // so an off/errors mode pays no allocation (spec 26 §4).
+    bool actor_transfer_marker_enabled () const noexcept;
     void emit_actor_transfer_marker (std::string marker,
                                      const actor_ref_t &actor_ref,
                                      std::string transfer_id,
