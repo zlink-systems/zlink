@@ -15,12 +15,16 @@ final class ZLinkFrameworkErrorReplyTest {
     void ownsFrameworkErrorReplyEncodingAndDetection() {
         List<Message> parts = ZLinkFrameworkErrorReply.create("route failed");
         try {
+            assertEquals(2, parts.size());
             assertTrue(ZLinkFrameworkErrorReply.isReply(parts));
-            assertTrue(ZLinkFrameworkErrorReply.isPacketName(parts.get(0).toUtf8String()));
             assertEquals("route failed", ZLinkFrameworkErrorReply.message(parts));
             assertEquals(
                 ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
                 ZLinkFrameworkErrorReply.kind(parts));
+            ZLinkChannelEnvelope.Header header =
+                ZLinkChannelEnvelope.decodeHeader(parts.get(0), false);
+            assertEquals(ZLinkChannelEnvelope.KIND_ERROR, header.kind());
+            assertEquals("internal_failure", header.errorCode());
         } finally {
             parts.forEach(Message::close);
         }
@@ -58,7 +62,7 @@ final class ZLinkFrameworkErrorReplyTest {
             "route is stale",
             ZLinkFrameworkErrorOrigin.frameworkMetadata());
         try {
-            assertEquals(4, parts.size());
+            assertEquals(2, parts.size());
             assertEquals(
                 ZLinkFrameworkErrorKind.NOT_FOUND,
                 ZLinkFrameworkErrorReply.kind(parts));
@@ -77,7 +81,7 @@ final class ZLinkFrameworkErrorReplyTest {
         List<Message> withoutMetadata = ZLinkFrameworkErrorReply.create(
             ZLinkFrameworkErrorKind.NOT_FOUND, "application not found");
         try {
-            assertEquals(3, withoutMetadata.size());
+            assertEquals(2, withoutMetadata.size());
             assertTrue(ZLinkFrameworkErrorReply.metadata(withoutMetadata).isEmpty());
         } finally {
             withoutMetadata.forEach(Message::close);

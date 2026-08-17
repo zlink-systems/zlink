@@ -2,12 +2,14 @@ package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.messaging.Message;
@@ -15,9 +17,9 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
-import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 final class ZLinkSpotRouteMessagesTest {
@@ -25,15 +27,56 @@ final class ZLinkSpotRouteMessagesTest {
         new ZLinkSpotRouteMessages(new ZLinkStringMessageSerializer());
 
     @Test
-    void encodesPacketHeaderWithoutCopyingPayload() {
+    void encodesSharedEnvelopeWithoutCopyingPayload() {
         try (Message payload = message("payload")) {
-            List<Message> parts = messages.encode(Optional.of("packet"), payload);
+            List<Message> parts = messages.encodeSend(
+                "route-channel", Optional.of("packet"), payload,
+                ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE, Map.of(), null);
             try {
-                assertEquals("packet", parts.get(0).toUtf8String());
+                assertEquals(2, parts.size());
                 assertSame(payload, parts.get(1));
+                ZLinkChannelEnvelope.Header header =
+                    ZLinkChannelEnvelope.decodeHeader(parts.get(0), true);
+                assertEquals(ZLinkChannelEnvelope.KIND_COMMAND, header.kind());
+                assertEquals("route-channel", header.channelName());
+                assertEquals("packet", header.messageName());
+                assertEquals(
+                    ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                    header.contentType());
+                assertNull(header.correlationId());
+                assertNull(header.flowId());
             } finally {
                 parts.get(0).close();
             }
+        }
+    }
+
+    @Test
+    void requestEnvelopeCarriesGeneratedCorrelationId() {
+        try (Message payload = message("payload")) {
+            List<Message> parts = messages.encodeRequest(
+                "route-channel", Optional.of("packet"), payload,
+                ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE, Map.of(), null);
+            try {
+                ZLinkChannelEnvelope.Header header =
+                    ZLinkChannelEnvelope.decodeHeader(parts.get(0), true);
+                assertEquals(ZLinkChannelEnvelope.KIND_REQUEST, header.kind());
+                assertFalse(header.correlationId() == null
+                    || header.correlationId().isBlank());
+            } finally {
+                parts.get(0).close();
+            }
+        }
+    }
+
+    @Test
+    void emptyPacketNameStaysBareSinglePartPayload() {
+        try (Message payload = message("payload")) {
+            List<Message> parts = messages.encodeSend(
+                "route-channel", Optional.empty(), payload,
+                ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE, Map.of(), null);
+            assertEquals(1, parts.size());
+            assertSame(payload, parts.get(0));
         }
     }
 
@@ -46,19 +89,6 @@ final class ZLinkSpotRouteMessagesTest {
             Message.closeAll(reply);
         }
 
-        List<Message> error = List.of(
-            message("ZLinkFrameworkError"),
-            message("failed"));
-        try {
-            ZLinkFrameworkException failure = assertThrows(
-                ZLinkFrameworkException.class,
-                () -> messages.decodeReply(error, String.class));
-            assertEquals(
-                ZLinkFrameworkErrorKind.INTERNAL_FAILURE, failure.kind());
-        } finally {
-            Message.closeAll(error);
-        }
-
         List<Message> unavailable = ZLinkFrameworkErrorReply.create(
             ZLinkFrameworkErrorKind.UNAVAILABLE, "route is converging");
         try {
@@ -66,8 +96,30 @@ final class ZLinkSpotRouteMessagesTest {
                 ZLinkFrameworkException.class,
                 () -> messages.decodeReply(unavailable, String.class));
             assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, failure.kind());
+            assertEquals("route is converging", failure.getMessage());
         } finally {
             Message.closeAll(unavailable);
+        }
+    }
+
+    @Test
+    void decodesEnvelopeResponseBody() {
+        try (Message payload = message("request")) {
+            List<Message> request = messages.encodeRequest(
+                "route-channel", Optional.of("packet"), payload,
+                ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE, Map.of(), null);
+            ZLinkChannelEnvelope.Header requestHeader =
+                ZLinkChannelEnvelope.decodeHeader(request.get(0), false);
+            List<Message> reply = List.of(
+                ZLinkChannelEnvelope.encodeHeader(
+                    ZLinkChannelEnvelope.reply(requestHeader)),
+                message("reply"));
+            try {
+                assertEquals("reply", messages.decodeReply(reply, String.class));
+            } finally {
+                Message.closeAll(reply);
+                Message.closeAll(List.of(request.get(0)));
+            }
         }
     }
 
@@ -108,23 +160,25 @@ final class ZLinkSpotRouteMessagesTest {
         ZLinkFlowContext.State state =
             ZLinkFlowContext.create(ZLinkFlowOrigin.APPLICATION);
         try (Message payload = message("payload")) {
-            List<Message> withFlow = messages.encode(
-                Optional.of("packet"), payload, state);
+            List<Message> withFlow = messages.encodeSend(
+                "route-channel", Optional.of("packet"), payload,
+                ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE, Map.of(), state);
             try {
-                assertEquals(3, withFlow.size());
+                assertEquals(2, withFlow.size());
                 ZLinkFlowContext.State decoded =
                     ZLinkSpotFlowFrame.decode(withFlow);
                 assertEquals(state.flowId(), decoded.flowId());
                 assertEquals(ZLinkFlowOrigin.APPLICATION, decoded.origin());
             } finally {
                 withFlow.get(0).close();
-                withFlow.get(2).close();
             }
 
-            List<Message> withoutFlow = messages.encode(
-                Optional.of("packet"), payload, (ZLinkFlowContext.State) null);
+            List<Message> withoutFlow = messages.encodeSend(
+                "route-channel", Optional.of("packet"), payload,
+                ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE, Map.of(), null);
             try {
                 assertEquals(2, withoutFlow.size());
+                assertNull(ZLinkSpotFlowFrame.decode(withoutFlow));
             } finally {
                 withoutFlow.get(0).close();
             }
@@ -132,17 +186,18 @@ final class ZLinkSpotRouteMessagesTest {
     }
 
     @Test
-    void encodesExplicitContentTypeForRouteTransport() {
+    void encodesExplicitContentTypeAndMetadataInHeader() {
         try (Message payload = message("payload")) {
-            List<Message> parts = messages.encode(
-                Optional.of("packet"), payload, "application/example");
+            List<Message> parts = messages.encodeSend(
+                "route-channel", Optional.of("packet"), payload,
+                "application/example", Map.of("tenant", "a"), null);
             try {
-                assertEquals(
-                    "application/example",
-                    ZLinkChannelContentTypeFrame.decode(parts));
+                ZLinkChannelEnvelope.Header header =
+                    ZLinkChannelEnvelope.decodeHeader(parts.get(0), false);
+                assertEquals("application/example", header.contentType());
+                assertEquals(Map.of("tenant", "a"), header.metadata());
             } finally {
                 parts.get(0).close();
-                parts.get(2).close();
             }
         }
     }

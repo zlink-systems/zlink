@@ -6,6 +6,8 @@ import java.util.function.Consumer;
 import systems.zlink.framework.runtime.host.ZLinkTestAdmissionFactory;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology;
 import systems.zlink.framework.runtime.messaging.OneWayTestStatus;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.spots.ZLinkSpotKind;
 
 import systems.zlink.framework.spots.SpotHandles;
@@ -367,7 +369,10 @@ final class ZLinkChannelRuntimeTest {
             assertEquals("play.route", backend.bridge.lastChannelName);
             assertEquals(RoutingId.from("play-node"), backend.bridge.lastTargetNodeRid);
             assertEquals("room-spot", backend.bridge.lastTargetSpotId);
-            assertEquals("TestRequest", backend.bridge.lastParts.get(0).toUtf8String());
+            assertEquals(
+                "TestRequest",
+                ZLinkChannelEnvelope.decodeHeader(
+                    backend.bridge.lastParts.get(0), false).messageName());
         }
     }
 
@@ -391,7 +396,10 @@ final class ZLinkChannelRuntimeTest {
             assertEquals("play.route", backend.bridge.lastChannelName);
             assertEquals(RoutingId.from("play-node"), backend.bridge.lastTargetNodeRid);
             assertEquals("room-spot", backend.bridge.lastTargetSpotId);
-            assertEquals("TestRequest", backend.bridge.lastParts.get(0).toUtf8String());
+            assertEquals(
+                "TestRequest",
+                ZLinkChannelEnvelope.decodeHeader(
+                    backend.bridge.lastParts.get(0), false).messageName());
         }
     }
 
@@ -1223,9 +1231,9 @@ final class ZLinkChannelRuntimeTest {
         ZLinkLegacyTopology.addRouteMeshChannel(options, "play.route")
             .enableServer("inproc://play-route");
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
-        backend.bridge.requestReplyParts = List.of(
-            Message.from("ZLinkFrameworkError".getBytes()),
-            Message.from("missing route handler".getBytes()));
+        backend.bridge.requestReplyParts = ZLinkFrameworkErrorReply.create(
+            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.NOT_FOUND,
+            "missing route handler");
         try (ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
             backend,
             options.registration(),

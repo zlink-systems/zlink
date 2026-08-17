@@ -21,6 +21,21 @@ final class ZLinkChannelReplyDecoder {
         List<Message> replies,
         Class<TReply> replyType,
         String failurePrefix) {
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header =
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                .tryDecodeHeader(replies, false);
+        if (header != null) {
+            if (header.isError()) {
+                throw new ZLinkFrameworkException(
+                    systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                        .errorKindFromCode(header.errorCode()),
+                    header.errorMessage(),
+                    null,
+                    header.metadata());
+            }
+            return ZLinkMessagePayloads.deserialize(
+                serializer, replies.get(1), replyType);
+        }
         if (replies.isEmpty()) {
             try (Message emptyReply = Message.from(new byte[0])) {
                 return ZLinkMessagePayloads.deserialize(serializer, emptyReply, replyType);

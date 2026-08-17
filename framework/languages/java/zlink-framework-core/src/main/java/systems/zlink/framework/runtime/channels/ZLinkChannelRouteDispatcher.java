@@ -100,8 +100,40 @@ final class ZLinkChannelRouteDispatcher {
             if (dispatchBridgePacket(channelName, received)) {
                 return;
             }
-            ParsedPacket packet = parsePacket(received.parts());
-            if (ZLinkFrameworkErrorReply.isPacketName(packet.packetName())) {
+            ParsedPacket packet;
+            try {
+                packet = parsePacket(received.parts());
+            } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
+                //  A JSON-object first frame that is not a valid shared
+                //  envelope is a protocol error (C++ decode parity).
+                if (received.routingId().isPresent()
+                    && received.requestSeq().isPresent()) {
+                    errors.replyError(
+                        router,
+                        received.routingId().orElseThrow(),
+                        received.requestSeq().orElseThrow(),
+                        ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                        ZLinkDispatchMessageKind.REQUEST,
+                        ZLinkDispatchErrorReason.INVALID_FRAME,
+                        null,
+                        channelName,
+                        received.routingId().orElseThrow().toString(),
+                        invalidEnvelope);
+                } else {
+                    errors.report(
+                        ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                        ZLinkDispatchMessageKind.SEND,
+                        ZLinkDispatchErrorReason.INVALID_FRAME,
+                        ZLinkDispatchErrorAction.DROP,
+                        null,
+                        channelName,
+                        null,
+                        invalidEnvelope);
+                }
+                return;
+            }
+            if (ZLinkFrameworkErrorReply.isPacketName(packet.packetName())
+                || (packet.header() != null && packet.header().isError())) {
                 errors.report(
                     ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
                     received.requestSeq().isPresent()
@@ -127,7 +159,9 @@ final class ZLinkChannelRouteDispatcher {
                     null);
                 return;
             }
-            String contentType = ZLinkChannelContentTypeFrame.decode(received.parts());
+            String contentType = packet.header() != null
+                ? packet.header().contentType()
+                : ZLinkChannelContentTypeFrame.decode(received.parts());
             RoutingId source = received.routingId().get();
             if (received.requestSeq().isEmpty()) {
                 dispatchSend(channelName, source, packet, contentType);
@@ -150,6 +184,7 @@ final class ZLinkChannelRouteDispatcher {
                     packet.packetName(),
                     channelName,
                     source.toString(),
+                    packet.header(),
                     null);
                 return;
             }
@@ -276,7 +311,9 @@ final class ZLinkChannelRouteDispatcher {
                                     registration,
                                     source,
                                     payload,
-                                    Map.of(),
+                                    packet.header() != null
+                                        ? packet.header().metadata()
+                                        : Map.of(),
                                     contentType)))
                                 .whenComplete((reply, error) -> {
                                     try {
@@ -291,12 +328,14 @@ final class ZLinkChannelRouteDispatcher {
                                                 packet.packetName(),
                                                 channelName,
                                                 source.toString(),
+                                                packet.header(),
                                                 error);
                                         } else {
-                                            ZLinkChannelDispatchReporter.replyAndClose(
+                                            ZLinkChannelDispatchReporter.replyPayloadAndClose(
                                                 router,
                                                 source,
                                                 requestSeq,
+                                                packet.header(),
                                                 reply);
                                             traceFlow(
                                                 ZLinkMessageFlowOutcome.REPLIED,
@@ -364,7 +403,9 @@ final class ZLinkChannelRouteDispatcher {
                 .enqueue(() ->
                 invokeStarted(() -> invoker.executeHandler(() ->
                     invoker.invokeRouteSendHandler(
-                        channelName, registration, source, payload, Map.of(), contentType)))
+                        channelName, registration, source, payload,
+                        packet.header() != null ? packet.header().metadata() : Map.of(),
+                        contentType)))
                     .whenComplete((ignored, error) -> {
                         if (error != null) {
                             errors.report(
@@ -430,7 +471,17 @@ final class ZLinkChannelRouteDispatcher {
         }
     }
 
+    /**
+     * Parses an inbound route mesh message. A shared cross-language envelope
+     * yields the header's messageName and body; legacy raw parts keep the
+     * packet-name/payload frames. A JSON-object first frame that is not a
+     * valid envelope throws {@code PROTOCOL_ERROR}.
+     */
     private static ParsedPacket parsePacket(List<Message> parts) {
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header = systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.decodeDispatchHeader(parts, false);
+        if (header != null) {
+            return new ParsedPacket(header.messageName(), parts.get(1), header);
+        }
         return parts.size() >= 2
             ? new ParsedPacket(parts.get(0).toUtf8String(), parts.get(1))
             : new ParsedPacket("", parts.get(0));

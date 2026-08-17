@@ -245,15 +245,25 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
     final CompletionStage<Void> dispatchSpotRouteHandler(
         ZLinkBackendReceived received,
         ParsedPacket packet) {
+        //  Shared envelope requests carry content type and application
+        //  metadata in the JSON header (cross-language canonical form);
+        //  legacy raw parts fall back to the backend-carried values.
+        var requestHeader = packet.header();
+        String contentType = requestHeader != null
+            ? requestHeader.contentType()
+            : received.contentType();
         Map<String, String> metadata;
         try {
-            metadata = ZLinkApplicationMetadata.decode(
-                received.applicationMetadata());
+            metadata = requestHeader != null && !requestHeader.metadata().isEmpty()
+                ? requestHeader.metadata()
+                : ZLinkApplicationMetadata.decode(
+                    received.applicationMetadata());
         } catch (IllegalArgumentException error) {
             if (received.requestSeq().isPresent()) {
                 host.replySpotRouteDispatchError(
                     received,
                     packet.packetName(),
+                    requestHeader,
                     context.spotId(),
                     ZLinkDispatchErrorReason.INVALID_FRAME,
                     error);
@@ -271,6 +281,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                 host.replySpotRouteDispatchError(
                     received,
                     packet.packetName(),
+                    requestHeader,
                     context.spotId(),
                     ZLinkDispatchErrorReason.HANDLER_MISSING,
                     null);
@@ -285,6 +296,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                 host.replySpotRouteDispatchError(
                     received,
                     packet.packetName(),
+                    requestHeader,
                     context.spotId(),
                     ZLinkDispatchErrorReason.HANDLER_MISSING,
                     null);
@@ -319,10 +331,11 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                                     handler,
                                     spotSurface,
                                     payloadCopy,
-                                    received.contentType(),
+                                    contentType,
                                     metadata,
                                     context.handlerInstances()::instance))
-                                .thenAccept(reply -> received.reply(List.of(reply))));
+                                .thenAccept(reply ->
+                                    replySpotRoutePayload(received, requestHeader, reply)));
                         } catch (RuntimeException failure) {
                             return CompletableFuture.failedFuture(failure);
                         }
@@ -333,6 +346,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                             host.replySpotRouteDispatchError(
                                 received,
                                 packet.packetName(),
+                                requestHeader,
                                 context.spotId(),
                                 ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
                                 error);
@@ -380,7 +394,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                                 handler,
                                 spotSurface,
                                 payloadCopy,
-                                received.contentType(),
+                                contentType,
                                 metadata,
                                 context.handlerInstances()::instance)));
                 });
@@ -508,11 +522,29 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                     ZLinkDispatchErrorReason.INVALID_FRAME);
                 return CompletableFuture.completedFuture(null);
             }
-            ParsedPacket packet = host.parsePacket(received.parts());
+            ParsedPacket packet;
+            try {
+                packet = host.parsePacket(received.parts());
+            } catch (ZLinkFrameworkException invalidEnvelope) {
+                //  Spec 27 §3: a malformed one-way envelope is dropped as
+                //  invalid_frame.
+                host.reportSpotSubscriptionDropped(
+                    received.topic(),
+                    null,
+                    context.spotId(),
+                    ZLinkDispatchErrorReason.INVALID_FRAME);
+                return CompletableFuture.completedFuture(null);
+            }
+            var publishHeader = packet.header();
+            String contentType = publishHeader != null
+                ? publishHeader.contentType()
+                : received.contentType();
             Map<String, String> metadata;
             try {
-                metadata = ZLinkApplicationMetadata.decode(
-                    received.applicationMetadata());
+                metadata = publishHeader != null && !publishHeader.metadata().isEmpty()
+                    ? publishHeader.metadata()
+                    : ZLinkApplicationMetadata.decode(
+                        received.applicationMetadata());
             } catch (IllegalArgumentException error) {
                 host.reportSpotSubscriptionDropped(
                     received.topic(),
@@ -529,7 +561,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                     .toList();
             if (!matchingHandlers.isEmpty()) {
                 ZLinkInboundPayloadOwner payloadOwner = handlerInvoker.payloadOwner(
-                    packet.payload(), received.contentType());
+                    packet.payload(), contentType);
                 Object decoded = handlerInvoker.deserializeSubscription(
                     matchingHandlers.get(0), payloadOwner);
                 boolean reuseIngressPermit = systems.zlink.framework.runtime
@@ -553,7 +585,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                                         received.topic(),
                                         received.routingId().map(Object::toString),
                                         decoded,
-                                        received.contentType(),
+                                        contentType,
                                         metadata,
                                         context.handlerInstances()::instance))));
                     tail = reuseIngressPermit && index == 0
@@ -571,6 +603,31 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
         } finally {
             received.parts().forEach(Message::close);
             }
+    }
+
+    /**
+     * Writes a successful SPOT route request reply. An envelope request gets
+     * a kind-2 envelope reply echoing the request identifiers (shared
+     * cross-language wire); a legacy raw request keeps the raw single-part
+     * reply.
+     */
+    private static void replySpotRoutePayload(
+        ZLinkBackendReceived received,
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+        Message reply) {
+        if (requestHeader == null) {
+            received.reply(List.of(reply));
+            return;
+        }
+        Message replyHeader = systems.zlink.framework.runtime.messaging
+            .ZLinkChannelEnvelope.encodeHeader(
+                systems.zlink.framework.runtime.messaging
+                    .ZLinkChannelEnvelope.reply(requestHeader));
+        try {
+            received.reply(List.of(replyHeader, reply));
+        } finally {
+            replyHeader.close();
+        }
     }
 
     final void closeActiveRouteReceives() {

@@ -302,4 +302,52 @@ final class ZLinkChannelCallRuntime {
         }
     }
 
+    /**
+     * Shared cross-language envelope frame for SPOT route and route mesh
+     * calls: {@code [JSON header, payload]} with content type, application
+     * metadata and the ambient flow pair carried as header fields. A call
+     * without a packet name stays a bare single-part payload.
+     */
+    static List<Message> envelopeParts(
+        int kind,
+        String channelName,
+        Optional<String> packetName,
+        Message payload,
+        String contentType,
+        java.util.Map<String, String> metadata) {
+        if (packetName.isEmpty()) {
+            return List.of(payload);
+        }
+        return systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encode(
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.create(
+                kind,
+                channelName,
+                packetName.orElseThrow(),
+                contentType,
+                null,
+                metadata,
+                ZLinkFlowContext.current()),
+            payload);
+    }
+
+    static List<Message> copyEnvelopeParts(
+        int kind,
+        String channelName,
+        Optional<String> packetName,
+        Message payload,
+        String contentType,
+        java.util.Map<String, String> metadata) {
+        List<Message> source = envelopeParts(
+            kind, channelName, packetName, payload, contentType, metadata);
+        try {
+            return ZLinkChannelRuntime.copyMessages(source);
+        } finally {
+            for (Message part : source) {
+                if (part != payload) {
+                    part.close();
+                }
+            }
+        }
+    }
+
 }

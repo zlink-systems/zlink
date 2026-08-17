@@ -27,14 +27,24 @@ final class ZLinkSpotFlowFrame {
     }
 
     /**
-     * Reads the inbound flow pair from a SPOT route envelope. The frame sits
-     * behind the packet-name and payload parts, after the optional
-     * content-type frame (spec 27 §5). A frame that carries the flow prefix
-     * but not a valid UUIDv7 pair is a protocol error (spec 27 §3).
+     * Reads the inbound flow pair from a SPOT route message. A shared
+     * cross-language envelope carries the pair in its JSON header
+     * (spec 27 §4); legacy internal raw-parts packets may still carry the
+     * standalone flow frame behind the packet-name and payload parts. A
+     * malformed envelope header or a frame with the flow prefix but not a
+     * valid UUIDv7 pair is a protocol error (spec 27 §3).
      */
     static ZLinkFlowContext.State decode(List<Message> parts) {
-        //  The encoder places the flow frame at index 2, or at index 3 when a
-        //  content-type frame precedes it (ZLinkSpotRouteMessages.encode).
+        if (systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                .looksLikeEnvelope(parts)) {
+            var header = systems.zlink.framework.runtime.messaging
+                .ZLinkChannelEnvelope.decodeHeader(parts.get(0), true);
+            return header.flowId() == null
+                ? null
+                : new ZLinkFlowContext.State(header.flowId(), header.flowOrigin());
+        }
+        //  The legacy encoder placed the flow frame at index 2, or at index 3
+        //  when a content-type frame preceded it.
         int limit = Math.min(parts.size(), 4);
         for (int index = 2; index < limit; index++) {
             Message part = parts.get(index);

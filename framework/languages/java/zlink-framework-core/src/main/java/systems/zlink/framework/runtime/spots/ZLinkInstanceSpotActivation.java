@@ -195,6 +195,11 @@ final class ZLinkInstanceSpotActivation
             ParsedPacket packet;
             try {
                 packet = ZLinkSpotRuntime.parsePacket(received.parts());
+            } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
+                //  A JSON-object first frame that is not a valid shared
+                //  envelope is a protocol error (C++ decode parity).
+                failRouteInvalidFlow(received, invalidEnvelope);
+                continue;
             } catch (RuntimeException invalid) {
                 closeRouteReceived(received);
                 continue;

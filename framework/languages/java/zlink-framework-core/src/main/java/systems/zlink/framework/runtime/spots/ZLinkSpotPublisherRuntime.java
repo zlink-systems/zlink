@@ -259,8 +259,9 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
         String contentType,
         ZLinkApplicationMetadata metadata,
         ZLinkFlowContext.State flowState) {
-        List<Message> parts = messages.encode(
-            packetName, payload, contentType, flowState);
+        List<Message> parts = messages.encodePublish(
+            channelName, topic, packetName, payload, contentType,
+            metadata.values(), flowState);
         try {
             requireChannel(meshName).publish(
                 channelName,

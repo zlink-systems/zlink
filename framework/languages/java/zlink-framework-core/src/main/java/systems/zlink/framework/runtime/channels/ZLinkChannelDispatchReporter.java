@@ -32,10 +32,29 @@ final class ZLinkChannelDispatchReporter {
         String channelName,
         String sourceRid,
         Throwable error) {
+        replyError(
+            router, routingId, requestSeq, surface, kind, reason,
+            packetName, channelName, sourceRid, null, error);
+    }
+
+    void replyError(
+        ZLinkBackendRouterSocket router,
+        RoutingId routingId,
+        long requestSeq,
+        ZLinkDispatchErrorSurface surface,
+        ZLinkDispatchMessageKind kind,
+        ZLinkDispatchErrorReason reason,
+        String packetName,
+        String channelName,
+        String sourceRid,
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+        Throwable error) {
         Throwable cause = unwrap(error);
         List<Message> reply = ZLinkFrameworkErrorReply.create(
+            requestHeader,
             frameworkErrorKind(error),
-            errorText(reason, packetName, cause));
+            errorText(reason, packetName, cause),
+            java.util.Map.of());
         replyRawAndClose(router, routingId, requestSeq, reply);
         report(
             surface,
@@ -116,6 +135,33 @@ final class ZLinkChannelDispatchReporter {
         try {
             router.reply(routingId, requestSeq, List.of(reply));
         } finally {
+            reply.close();
+        }
+    }
+
+    /**
+     * Writes a successful request reply. An envelope request gets a kind-2
+     * envelope reply echoing the request identifiers (shared cross-language
+     * wire); a legacy raw request keeps the raw single-part reply.
+     */
+    static void replyPayloadAndClose(
+        ZLinkBackendRouterSocket router,
+        RoutingId routingId,
+        long requestSeq,
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+        Message reply) {
+        if (requestHeader == null) {
+            replyAndClose(router, routingId, requestSeq, reply);
+            return;
+        }
+        Message replyHeader = systems.zlink.framework.runtime.messaging
+            .ZLinkChannelEnvelope.encodeHeader(
+                systems.zlink.framework.runtime.messaging
+                    .ZLinkChannelEnvelope.reply(requestHeader));
+        try {
+            router.reply(routingId, requestSeq, List.of(replyHeader, reply));
+        } finally {
+            replyHeader.close();
             reply.close();
         }
     }

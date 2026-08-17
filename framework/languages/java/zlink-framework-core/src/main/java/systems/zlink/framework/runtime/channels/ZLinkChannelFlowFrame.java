@@ -20,6 +20,20 @@ final class ZLinkChannelFlowFrame {
     }
 
     static ZLinkFlowContext.State decode(List<Message> parts) {
+        if (systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                .looksLikeEnvelope(parts)) {
+            try {
+                var header = systems.zlink.framework.runtime.messaging
+                    .ZLinkChannelEnvelope.decodeHeader(parts.get(0), true);
+                return header.flowId() == null
+                    ? null
+                    : new ZLinkFlowContext.State(
+                        header.flowId(), header.flowOrigin());
+            } catch (ZLinkFrameworkException invalidEnvelope) {
+                throw new PayloadDecodeDispatchException(
+                    invalidEnvelope.getMessage(), invalidEnvelope);
+            }
+        }
         for (int index = 2; index < parts.size(); index++) {
             String value = parts.get(index).toUtf8String();
             if (!value.startsWith(PREFIX)) {

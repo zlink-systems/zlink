@@ -172,8 +172,9 @@ final class ZLinkSpotRoutedOutbound {
             throw new UnsupportedOperationException(
                 "legacy routed Spot transport does not support application metadata");
         }
-        List<Message> parts = messages.encode(
-            packetName, payload, contentType, captureOutboundFlow());
+        List<Message> parts = messages.encodeSend(
+            routerChannelId, packetName, payload, contentType,
+            metadata.values(), captureOutboundFlow());
         try {
             return ZLinkOneWayCalls.adaptOneWay(channels.sendToSpotViaRouterChannel(
                 routerChannelId,
@@ -228,8 +229,9 @@ final class ZLinkSpotRoutedOutbound {
             throw new UnsupportedOperationException(
                 "legacy routed Spot transport does not support application metadata");
         }
-        List<Message> parts = messages.encode(
-            packetName, payload, contentType, captureOutboundFlow());
+        List<Message> parts = messages.encodeRequest(
+            routerChannelId, packetName, payload, contentType,
+            metadata.values(), captureOutboundFlow());
         try {
                 return channels.requestToSpotViaRouterChannel(
                     routerChannelId,

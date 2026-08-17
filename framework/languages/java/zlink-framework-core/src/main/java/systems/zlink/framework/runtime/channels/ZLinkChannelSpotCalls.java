@@ -298,8 +298,10 @@ final class RouteSpotSendCall
     }
 
     private CompletionStage<Void> submitExisting(SpotTransportAddress address) {
-            List<Message> sendParts = ZLinkChannelCallRuntime.copyParts(
-                packetName, payload, contentType);
+            List<Message> sendParts = ZLinkChannelCallRuntime.copyEnvelopeParts(
+                systems.zlink.framework.runtime.messaging
+                    .ZLinkChannelEnvelope.KIND_COMMAND,
+                channelName, packetName, payload, contentType, metadata.values());
             try {
                 return runtime.sendToSpot(
                     address.routerChannelId(),
@@ -564,8 +566,10 @@ final class RouteSpotRequestCall
     private <TReply> CompletionStage<TReply> submitExisting(
         SpotTransportAddress address,
         Class<TReply> replyType) {
-            List<Message> requestParts = ZLinkChannelCallRuntime.copyParts(
-                packetName, payload, contentType);
+            List<Message> requestParts = ZLinkChannelCallRuntime.copyEnvelopeParts(
+                systems.zlink.framework.runtime.messaging
+                    .ZLinkChannelEnvelope.KIND_REQUEST,
+                channelName, packetName, payload, contentType, metadata.values());
             return runtime.requestToSpot(
                 address.routerChannelId(),
                 address.targetNodeRid(),

@@ -161,8 +161,9 @@ final class RouteSendCall implements ZLinkSendCall {
                 ZLinkDispatchMessageKind.SEND,
                 packetName.orElse(null), null, null, null, target.toString(), null, null, null));
         }
-        List<Message> sendParts = ZLinkChannelCallRuntime.parts(
-            packetName, payload, contentType);
+        List<Message> sendParts = ZLinkChannelCallRuntime.envelopeParts(
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_COMMAND,
+            "", packetName, payload, contentType, Map.of());
         return ZLinkOneWayCalls.adaptOneWay(router.send(target, sendParts))
             .whenComplete((ignored, failure) ->
                 sendParts.forEach(Message::close));
@@ -269,8 +270,9 @@ final class RouteRequestCall implements ZLinkRequestCall {
             }
         });
         runtime.track(result, timeout);
-        List<Message> requestParts = ZLinkChannelCallRuntime.parts(
-            packetName, payload, contentType);
+        List<Message> requestParts = ZLinkChannelCallRuntime.envelopeParts(
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
+            channelName, packetName, payload, contentType, Map.of());
         ZLinkMessageFlowTracer.TracePoint sent =
             runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
         if (sent != null) {
@@ -402,8 +404,9 @@ final class MeshNodeRouteSendCall implements ZLinkSendCall {
                 ZLinkDispatchMessageKind.SEND,
                 packetName.orElse(null), null, null, null, target.toString(), null, null, null));
         }
-        List<Message> sendParts = ZLinkChannelCallRuntime.parts(
-            packetName, payload, contentType);
+        List<Message> sendParts = ZLinkChannelCallRuntime.envelopeParts(
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_COMMAND,
+            "", packetName, payload, contentType, metadata.values());
         if (node.routingId().equals(target)) {
             return submitLocal(node, target, metadata.encode(), sendParts)
                 .thenCompose(ZLinkOneWayCalls::oneWayStatus)
@@ -528,8 +531,9 @@ final class MeshChannelRouteSendCall implements ZLinkSendCall {
                     + " status=" + classified.orElseThrow() : null);
             return ZLinkOneWayCalls.oneWayStatus(classified.orElseThrow());
         }
-        List<Message> parts = ZLinkChannelCallRuntime.parts(
-            packetName, payload, contentType);
+        List<Message> parts = ZLinkChannelCallRuntime.envelopeParts(
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_COMMAND,
+            channelName, packetName, payload, contentType, metadata.values());
         return ZLinkOneWayCalls.adaptOneWay(
                 node.sendToChannel(channelName, metadata.encode(), parts))
             .whenComplete((ignored, failure) ->
@@ -663,10 +667,13 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
                 .manageCurrent(result);
         }
         result.whenComplete((ignored, failure) -> payload.close());
-        List<Message> parts = ZLinkChannelCallRuntime.parts(
+        List<Message> parts = ZLinkChannelCallRuntime.envelopeParts(
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
+            channelName,
             packetName,
             Message.from(payload),
-            contentType);
+            contentType,
+            metadata.values());
         node.requestToChannel(
                 channelName,
                 metadata.encode(),
@@ -818,8 +825,9 @@ final class MeshNodeRouteRequestCall implements ZLinkRequestCall {
             }
         });
         runtime.track(result, timeout);
-        List<Message> requestParts = ZLinkChannelCallRuntime.parts(
-            packetName, payload, contentType);
+        List<Message> requestParts = ZLinkChannelCallRuntime.envelopeParts(
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
+            channelName, packetName, payload, contentType, metadata.values());
         ZLinkMessageFlowTracer.TracePoint sent =
             runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
         if (sent != null) {

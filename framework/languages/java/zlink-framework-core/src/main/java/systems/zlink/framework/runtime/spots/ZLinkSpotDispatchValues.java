@@ -15,5 +15,17 @@ record ActorMessageRead(
     int nextIndex) {
 }
 
-record ParsedPacket(String packetName, Message payload) {
+/**
+ * Parsed inbound SPOT route packet. {@code header} is the decoded shared
+ * cross-language envelope header when the message arrived as an envelope, or
+ * {@code null} for legacy internal raw-parts packets.
+ */
+record ParsedPacket(
+    String packetName,
+    Message payload,
+    systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
+
+    ParsedPacket(String packetName, Message payload) {
+        this(packetName, payload, null);
+    }
 }

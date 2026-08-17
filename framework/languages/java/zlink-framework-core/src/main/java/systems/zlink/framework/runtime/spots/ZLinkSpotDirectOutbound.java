@@ -174,8 +174,9 @@ final class ZLinkSpotDirectOutbound {
             null,
             targetNodeRid,
             spotId);
-        List<Message> parts = messages.encode(
-            packetName, payload, contentType, captureOutboundFlow());
+        List<Message> parts = messages.encodeSend(
+            "", packetName, payload, contentType,
+            metadata.values(), captureOutboundFlow());
         return ZLinkOneWayCalls.adaptOneWay(
             spot.sendToSpot(
                 targetNodeRid,
@@ -202,8 +203,9 @@ final class ZLinkSpotDirectOutbound {
         Duration timeout,
         Class<TReply> replyType) {
         CompletableFuture<TReply> result = new CompletableFuture<>();
-        List<Message> requestParts = messages.encode(
-            packetName, payload, contentType, captureOutboundFlow());
+        List<Message> requestParts = messages.encodeRequest(
+            "", packetName, payload, contentType,
+            metadata.values(), captureOutboundFlow());
         AtomicBoolean requestPartsClosed = new AtomicBoolean();
         Runnable closeRequestParts = () -> {
             if (requestPartsClosed.compareAndSet(false, true)) {
@@ -272,8 +274,9 @@ final class ZLinkSpotDirectOutbound {
         Optional<String> packetName,
         String contentType,
         ZLinkApplicationMetadata metadata) {
-        List<Message> parts = messages.encode(
-            packetName, payload, contentType, captureOutboundFlow());
+        List<Message> parts = messages.encodePublish(
+            channelName, topic, packetName, payload, contentType,
+            metadata.values(), captureOutboundFlow());
         CompletionStage<Void> result = ZLinkOneWayCalls.adaptOneWay(
             spot.publishAsync(
                 channelName,

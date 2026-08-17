@@ -349,7 +349,15 @@ final class SpotActivation
             closeRouteReceived(received);
             return CompletableFuture.completedFuture(null);
         }
-        ParsedPacket packet = ZLinkSpotRuntime.parsePacket(received.parts());
+        ParsedPacket packet;
+        try {
+            packet = ZLinkSpotRuntime.parsePacket(received.parts());
+        } catch (ZLinkFrameworkException invalidEnvelope) {
+            //  A JSON-object first frame that is not a valid shared envelope
+            //  is a protocol error (C++ decode parity).
+            failRouteInvalidFlow(received, invalidEnvelope);
+            return CompletableFuture.completedFuture(null);
+        }
         ZLinkSpotRuntime.traceSpotRouteDispatch("spot-dispatch", backendSpot, received, packet);
         host.traceSpotRouteFlow(
             ZLinkMessageFlowOutcome.RECEIVED,

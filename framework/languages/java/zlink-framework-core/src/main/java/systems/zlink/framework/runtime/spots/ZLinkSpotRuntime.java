@@ -2220,8 +2220,14 @@ public final class ZLinkSpotRuntime
                         spotId, stableType, meshName, payload, packetName,
                         metadata, timeout)
                     .thenCompose(activation -> {
-                        List<Message> parts = routeMessages.encode(
-                            packetName, payload, contentType);
+                        List<Message> parts = routeMessages.encodeSend(
+                            "",
+                            packetName,
+                            payload,
+                            contentType,
+                            metadata,
+                            systems.zlink.framework.runtime.internal.diagnostics
+                                .ZLinkFlowContext.current());
                         return activation.source()
                             .submitInstanceSpotSend(
                                 activation.route(),
@@ -2254,8 +2260,14 @@ public final class ZLinkSpotRuntime
                         spotId, stableType, meshName, payload, packetName,
                         metadata, effective)
                     .thenCompose(activation -> {
-                        List<Message> parts = routeMessages.encode(
-                            packetName, payload, contentType);
+                        List<Message> parts = routeMessages.encodeRequest(
+                            "",
+                            packetName,
+                            payload,
+                            contentType,
+                            metadata,
+                            systems.zlink.framework.runtime.internal.diagnostics
+                                .ZLinkFlowContext.current());
                         return activation.source()
                             .requestInstanceSpot(
                                 activation.route(),
@@ -4930,6 +4942,16 @@ public final class ZLinkSpotRuntime
         String spotId,
         ZLinkDispatchErrorReason reason,
         Throwable error) {
+        replySpotRouteDispatchError(received, packetName, null, spotId, reason, error);
+    }
+
+    void replySpotRouteDispatchError(
+        ZLinkBackendReceived received,
+        String packetName,
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
+        String spotId,
+        ZLinkDispatchErrorReason reason,
+        Throwable error) {
         Throwable cause = unwrapCompletion(error);
         //  The public kind the failure carries is preserved in full. That is
         //  safe because stale-route control no longer keys on a bare NOT_FOUND
@@ -4944,6 +4966,7 @@ public final class ZLinkSpotRuntime
             reason != ZLinkDispatchErrorReason.HANDLER_EXCEPTION
                 || ZLinkFrameworkErrorOrigin.isFramework(cause);
         List<Message> reply = ZLinkFrameworkErrorReply.create(
+            requestHeader,
             kind,
             errorText(reason, packetName, cause),
             frameworkOrigin
@@ -4984,7 +5007,20 @@ public final class ZLinkSpotRuntime
         return reason + " for packet '" + packetName + "'";
     }
 
+    /**
+     * Parses an inbound SPOT route message. A shared cross-language envelope
+     * ({@code [JSON header, body]}, formatMarker 0xF2) yields the header's
+     * messageName and body; legacy internal raw parts keep the
+     * packet-name/payload frames. A first frame that is a JSON object but not
+     * a valid envelope throws {@code PROTOCOL_ERROR}.
+     */
     static ParsedPacket parsePacket(List<Message> parts) {
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header =
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                .decodeDispatchHeader(parts, false);
+        if (header != null) {
+            return new ParsedPacket(header.messageName(), parts.get(1), header);
+        }
         if (parts.size() >= 2) {
             return new ParsedPacket(parts.get(0).toUtf8String(), parts.get(1));
         }

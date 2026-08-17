@@ -154,15 +154,30 @@ public final class ZLinkMeshApplicationDispatcher
             return;
         }
 
-        String packetName = record.parts().get(0).toUtf8String();
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header envelope;
+        try {
+            envelope = systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.decodeDispatchHeader(record.parts(), false);
+        } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
+            //  A JSON-object first frame that is not a valid shared envelope
+            //  is a protocol error (C++ decode parity).
+            reject(record, invalidEnvelope.getMessage(), claim);
+            return;
+        }
+        String packetName = envelope != null
+            ? envelope.messageName()
+            : record.parts().get(0).toUtf8String();
         Message payload = record.parts().get(1);
-        String contentType = record.receive().contentType() != null
-            ? record.receive().contentType()
-            : ZLinkChannelContentTypeFrame.decode(record.parts());
+        String contentType = envelope != null
+            ? envelope.contentType()
+            : record.receive().contentType() != null
+                ? record.receive().contentType()
+                : ZLinkChannelContentTypeFrame.decode(record.parts());
         Map<String, String> metadata;
         try {
-            metadata = ZLinkApplicationMetadata.decode(
-                record.receive().applicationMetadata());
+            metadata = envelope != null && !envelope.metadata().isEmpty()
+                ? envelope.metadata()
+                : ZLinkApplicationMetadata.decode(
+                    record.receive().applicationMetadata());
         } catch (IllegalArgumentException error) {
             reject(record, error.getMessage(), claim);
             return;
@@ -173,7 +188,8 @@ public final class ZLinkMeshApplicationDispatcher
                       record, namespace, packetName, payload, metadata, contentType, claim);
             case NODE_REQUEST, CHANNEL_REQUEST ->
                   dispatchRequest(
-                      record, namespace, packetName, payload, metadata, contentType, claim);
+                      record, namespace, envelope, packetName, payload, metadata,
+                      contentType, claim);
             default -> closeRecord(record, claim);
         }
     }
@@ -193,7 +209,16 @@ public final class ZLinkMeshApplicationDispatcher
             return CompletableFuture.completedFuture(
                 ZLinkOneWayCalls.TARGET_NOT_FOUND);
         }
-        String packetName = parts.get(0).toUtf8String();
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header envelope;
+        try {
+            envelope = systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.decodeDispatchHeader(parts, false);
+        } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
+            return CompletableFuture.completedFuture(
+                ZLinkOneWayCalls.TARGET_NOT_FOUND);
+        }
+        String packetName = envelope != null
+            ? envelope.messageName()
+            : parts.get(0).toUtf8String();
         ChannelRouteSendHandlerRegistration route = namespace.routeSends.get(packetName);
         if (route == null) {
             return CompletableFuture.completedFuture(
@@ -210,8 +235,13 @@ public final class ZLinkMeshApplicationDispatcher
         Message payload = null;
         try {
             payload = Message.from(parts.get(1));
-            Map<String, String> metadata = ZLinkApplicationMetadata.decode(metadataBytes);
-            String contentType = ZLinkChannelContentTypeFrame.decode(parts);
+            Map<String, String> metadata =
+                envelope != null && !envelope.metadata().isEmpty()
+                    ? envelope.metadata()
+                    : ZLinkApplicationMetadata.decode(metadataBytes);
+            String contentType = envelope != null
+                ? envelope.contentType()
+                : ZLinkChannelContentTypeFrame.decode(parts);
             Message ownedPayload = payload;
             CompletableFuture<ZLinkApplicationJobQueue.Permit> acquisition =
                 applicationJobQueue.acquire().toCompletableFuture();
@@ -380,6 +410,7 @@ public final class ZLinkMeshApplicationDispatcher
     private void dispatchRequest(
         ZLinkMeshDispatchRecord record,
         Namespace namespace,
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header envelope,
         String packetName,
         Message payload,
         Map<String, String> metadata,
@@ -426,13 +457,13 @@ public final class ZLinkMeshApplicationDispatcher
                                         contentType));
                             return invocation.<Void>handle((reply, error) -> {
                                 if (error == null) {
-                                    replyAndClose(record, token, List.of(reply));
+                                    replyAndClose(record, token, replyParts(envelope, reply));
                                     traceFlow(
                                         ZLinkMessageFlowOutcome.REPLIED,
                                         record,
                                         packetName);
                                 } else {
-                                    replyError(record, token, error);
+                                    replyError(record, token, envelope, error);
                                 }
                                 return null;
                             });
@@ -496,6 +527,7 @@ public final class ZLinkMeshApplicationDispatcher
     private void replyError(
         ZLinkMeshDispatchRecord record,
         ReplyToken token,
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header envelope,
         Throwable error) {
         Throwable cause = error;
         while ((cause instanceof CompletionException
@@ -508,7 +540,24 @@ public final class ZLinkMeshApplicationDispatcher
         replyAndClose(
             record,
             token,
-            ZLinkFrameworkErrorReply.create(kind, cause.getMessage()));
+            ZLinkFrameworkErrorReply.create(
+                envelope, kind, cause.getMessage(), Map.of()));
+    }
+
+    /**
+     * Successful request reply parts: a kind-2 envelope echoing the request
+     * identifiers when the request arrived as a shared envelope, else the
+     * legacy raw single-part reply.
+     */
+    private static List<Message> replyParts(
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header envelope,
+        Message reply) {
+        if (envelope == null) {
+            return List.of(reply);
+        }
+        return List.of(
+            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encodeHeader(systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.reply(envelope)),
+            reply);
     }
 
     private void replyAndClose(ReplyToken token, List<Message> parts) {

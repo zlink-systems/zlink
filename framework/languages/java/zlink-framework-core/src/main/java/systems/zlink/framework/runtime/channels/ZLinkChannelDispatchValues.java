@@ -11,7 +11,19 @@ import systems.zlink.framework.ZLinkHandlerFilterContext;
 import systems.zlink.framework.channels.ZLinkPublishMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 
-record ParsedPacket(String packetName, Message payload) {
+/**
+ * Parsed inbound channel packet. {@code header} is the decoded shared
+ * cross-language envelope header when the message arrived as an envelope, or
+ * {@code null} for legacy raw-parts frames.
+ */
+record ParsedPacket(
+    String packetName,
+    Message payload,
+    systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
+
+    ParsedPacket(String packetName, Message payload) {
+        this(packetName, payload, null);
+    }
 }
 
 final class DefaultHandlerFilterContext
