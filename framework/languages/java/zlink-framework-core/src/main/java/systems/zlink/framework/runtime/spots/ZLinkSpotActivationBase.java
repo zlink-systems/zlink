@@ -18,6 +18,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSu
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.internal.backend.*;
@@ -67,6 +68,32 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
 
     final void trackRouteReceived(ZLinkBackendReceived received) {
         activeRouteReceives.add(received);
+    }
+
+    /**
+     * Spec 27 §3: malformed flow information on a SPOT route envelope
+     * completes the request as ProtocolError and drops a one-way message.
+     */
+    final void failRouteInvalidFlow(
+        ZLinkBackendReceived received,
+        ZLinkFrameworkException invalidFlow) {
+        String packetName = received.parts().isEmpty()
+            ? null : received.parts().getFirst().toUtf8String();
+        if (received.requestSeq().isPresent()) {
+            host.replySpotRouteDispatchError(
+                received,
+                packetName,
+                backendSpot.spotId(),
+                ZLinkDispatchErrorReason.INVALID_FRAME,
+                invalidFlow);
+        } else {
+            host.reportSpotRouteInvalidFrameDropped(
+                received,
+                packetName,
+                backendSpot.spotId(),
+                invalidFlow);
+        }
+        closeRouteReceived(received);
     }
 
     final boolean hasActiveRouteReceives() {

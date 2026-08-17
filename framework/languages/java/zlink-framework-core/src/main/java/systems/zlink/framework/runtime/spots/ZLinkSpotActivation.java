@@ -327,15 +327,23 @@ final class SpotActivation
     }
 
     private CompletionStage<Void> dispatchRouteAsync(ZLinkBackendReceived received) {
+        trackRouteReceived(received);
         //  Spec 27 §4: decode and install the inbound flow pair (or start a new
         //  flow) only while capture is enabled; at Off suppress flow state.
-        var flowScope = host.flowCaptureEnabled()
-            ? ZLinkFlowContext.enterOrCreate(
-                ZLinkSpotFlowFrame.decode(received.parts()),
-                ZLinkFlowOrigin.INBOUND)
+        ZLinkFlowContext.State inboundFlow = null;
+        boolean captureFlow = host.flowCaptureEnabled();
+        if (captureFlow) {
+            try {
+                inboundFlow = ZLinkSpotFlowFrame.decode(received.parts());
+            } catch (ZLinkFrameworkException invalidFlow) {
+                failRouteInvalidFlow(received, invalidFlow);
+                return CompletableFuture.completedFuture(null);
+            }
+        }
+        var flowScope = captureFlow
+            ? ZLinkFlowContext.enterOrCreate(inboundFlow, ZLinkFlowOrigin.INBOUND)
             : ZLinkFlowContext.suppress();
         try {
-        trackRouteReceived(received);
         if (ZLinkSpotRuntime.isProbeFrame(received.parts())) {
             closeRouteReceived(received);
             return CompletableFuture.completedFuture(null);

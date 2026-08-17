@@ -4816,6 +4816,23 @@ public final class ZLinkSpotRuntime
             .sourceRid(received.routingId().orElse(null)));
     }
 
+    /** Spec 27 §3: a malformed one-way route envelope is dropped as invalid_frame. */
+    void reportSpotRouteInvalidFrameDropped(
+        ZLinkBackendReceived received,
+        String packetName,
+        String spotId,
+        Throwable error) {
+        reportDispatchError(DispatchFailureReport.of(
+                ZLinkDispatchErrorSurface.SPOT_ROUTE,
+                ZLinkDispatchMessageKind.SEND,
+                ZLinkDispatchErrorReason.INVALID_FRAME,
+                ZLinkDispatchErrorAction.DROP)
+            .packetName(packetName)
+            .spotId(spotId)
+            .sourceRid(received.routingId().orElse(null))
+            .error(error));
+    }
+
     void reportSpotSubscriptionDropped(
         String topic,
         String packetName,
@@ -4895,7 +4912,15 @@ public final class ZLinkSpotRuntime
         ZLinkDispatchErrorReason reason,
         Throwable error) {
         Throwable cause = unwrapCompletion(error);
-        List<Message> reply = ZLinkFrameworkErrorReply.create(errorText(reason, packetName, cause));
+        //  Spec 27 §3: a malformed envelope completes the request as
+        //  ProtocolError. Other framework kinds stay flattened here because
+        //  NOT_FOUND doubles as the stale-route control signal on callers.
+        List<Message> reply = ZLinkFrameworkErrorReply.create(
+            cause instanceof ZLinkFrameworkException frameworkCause
+                    && frameworkCause.kind() == ZLinkFrameworkErrorKind.PROTOCOL_ERROR
+                ? ZLinkFrameworkErrorKind.PROTOCOL_ERROR
+                : ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+            errorText(reason, packetName, cause));
         try {
             received.reply(reply);
         } catch (RuntimeException ignored) {

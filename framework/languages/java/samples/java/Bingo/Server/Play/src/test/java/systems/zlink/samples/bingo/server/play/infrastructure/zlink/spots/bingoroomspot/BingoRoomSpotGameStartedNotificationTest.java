@@ -30,8 +30,8 @@ final class BingoRoomSpotGameStartedNotificationTest {
     void secondJoinPushesGameStartedToBothPlayers() {
         String roomId = "bingo-room-regression";
         BingoRoomSpot room = new BingoRoomSpot(new TestSpotContext(roomId), null);
-        RecordingBoundSession playerOneSession = new RecordingBoundSession();
-        RecordingBoundSession playerTwoSession = new RecordingBoundSession();
+        CapturedBoundSession playerOneSession = new CapturedBoundSession();
+        CapturedBoundSession playerTwoSession = new CapturedBoundSession();
         PlayerActor playerOne = new PlayerActor(
             "player-1", new TestActorContext("player-1", playerOneSession));
         PlayerActor playerTwo = new PlayerActor(
@@ -72,7 +72,7 @@ final class BingoRoomSpotGameStartedNotificationTest {
             () -> assertEquals(playerOneState, playerTwoState));
     }
 
-    private static final class RecordingBoundSession implements ZLinkBoundSession {
+    private static final class CapturedBoundSession implements ZLinkBoundSession {
         private final List<Object> messages = new ArrayList<>();
 
         @Override
@@ -106,7 +106,7 @@ final class BingoRoomSpotGameStartedNotificationTest {
 
     private record TestActorContext(
         String actorId,
-        RecordingBoundSession boundSession) implements ZLinkActorContext {
+        CapturedBoundSession boundSession) implements ZLinkActorContext {
         @Override
         public long objectGeneration() {
             return 1;
