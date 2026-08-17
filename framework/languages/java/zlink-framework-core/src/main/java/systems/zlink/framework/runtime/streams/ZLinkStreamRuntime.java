@@ -1129,17 +1129,27 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         ZLinkStreamHeader streamHeader,
         Message payload) {
         ZLinkBackendStreamSocket stream = streamsByName.get(streamNode.name());
-        ZLinkFlowContext.State incomingFlow = streamHeader.flowId().isPresent()
-            ? new ZLinkFlowContext.State(streamHeader.flowId().orElseThrow(),
-                streamHeader.flowOrigin().orElseThrow())
-            : (flow.enabled(ZLinkMessageFlowOutcome.RECEIVED)
-                ? ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND)
-                : null);
-        if (streamHeader.kind() != ZLinkStreamMessageKind.CONTROL
-            && incomingFlow != null
-            && streamHeader.flowId().isEmpty()) {
-            streamHeader = streamHeader.withFlow(incomingFlow.flowId(), incomingFlow.origin());
+        //  Spec 27 §4: at Off the inbound flow pair is neither read into a flow
+        //  context nor copied forward; at every other level the ingress installs
+        //  the inbound pair or starts a new flow.
+        ZLinkFlowContext.State capturedFlow = null;
+        if (streamHeader.kind() != ZLinkStreamMessageKind.CONTROL) {
+            if (flow.captureEnabled()) {
+                capturedFlow = streamHeader.flowId().isPresent()
+                    ? new ZLinkFlowContext.State(streamHeader.flowId().orElseThrow(),
+                        streamHeader.flowOrigin().orElseThrow())
+                    : ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND);
+                if (streamHeader.flowId().isEmpty()) {
+                    streamHeader =
+                        streamHeader.withFlow(capturedFlow.flowId(), capturedFlow.origin());
+                }
+            } else if (streamHeader.flowId().isPresent()) {
+                //  Off drops the inbound pair so no downstream consumer
+                //  (dispatch state, reply headers, relays) copies it forward.
+                streamHeader = streamHeader.withFlow(null, null);
+            }
         }
+        final ZLinkFlowContext.State incomingFlow = capturedFlow;
         final ZLinkStreamHeader dispatchHeader = streamHeader;
         trace(STREAM_TRACE ? "stream-node frame-received node=" + streamNode.name()
             + " routingId=" + routingId

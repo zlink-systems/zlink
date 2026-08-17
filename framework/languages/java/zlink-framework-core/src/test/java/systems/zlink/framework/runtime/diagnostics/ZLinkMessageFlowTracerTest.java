@@ -58,6 +58,16 @@ class ZLinkMessageFlowTracerTest {
     }
 
     @Test
+    void flowCaptureIsSuppressedOnlyAtOff() {
+        //  Spec 27 §4: only Off skips flow creation/installation; Errors still
+        //  captures so failure records keep their flow identifiers.
+        assertFalse(tracer(options(ZLinkMessageFlowLogMode.OFF)).captureEnabled());
+        assertTrue(tracer(options(ZLinkMessageFlowLogMode.ERRORS)).captureEnabled());
+        assertTrue(tracer(options(ZLinkMessageFlowLogMode.NORMAL)).captureEnabled());
+        assertTrue(tracer(options(ZLinkMessageFlowLogMode.DETAILED)).captureEnabled());
+    }
+
+    @Test
     void errorsOnlyEmitsDroppedNotReceived() {
         ZLinkMessageFlowTracer tracer = tracer(options(ZLinkMessageFlowLogMode.ERRORS));
         assertFalse(tracer.enabled(ZLinkMessageFlowOutcome.RECEIVED));

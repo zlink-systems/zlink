@@ -88,14 +88,19 @@ final class ActorPacketFrames {
                         "routed Actor reply is not a STREAM frame"));
             ZLinkStreamHeader replyHeader =
                 ZLinkStreamHeaderCodec.decodeOrPlain(decoded.header());
+            //  Flow fields are observation-only (spec 27 §2/§7): a reply from
+            //  an Off peer legitimately carries none, so the fence compares
+            //  them only when both sides carry a pair.
             if (replyHeader.kind() != ZLinkStreamMessageKind.RESPONSE
                 || !replyHeader.requestSequence().equals(
                     requestHeader.requestSequence())
                 || !replyHeader.correlationId().equals(
                     requestHeader.correlationId())
-                || !replyHeader.flowId().equals(requestHeader.flowId())
-                || !replyHeader.flowOrigin().equals(
-                    requestHeader.flowOrigin())) {
+                || (replyHeader.flowId().isPresent()
+                    && requestHeader.flowId().isPresent()
+                    && (!replyHeader.flowId().equals(requestHeader.flowId())
+                        || !replyHeader.flowOrigin().equals(
+                            requestHeader.flowOrigin())))) {
                 throw new IllegalArgumentException(
                     "routed Actor reply does not match its request fence");
             }

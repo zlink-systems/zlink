@@ -266,25 +266,23 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
             }
             Message payloadCopy = Message.from(packet.payload());
             return host.admitApplicationJob(() -> {
-                host.traceMessageFlow(
+                host.traceSpotRouteFlow(
                     ZLinkMessageFlowOutcome.ADMITTED,
-                    ZLinkDispatchErrorSurface.SPOT_ROUTE,
                     ZLinkDispatchMessageKind.REQUEST,
-                    packet.packetName(), null, null,
-                    received.requestSeq().map(String::valueOf).orElse(null),
-                    null, context.spotId().toString(), null);
+                    packet.packetName(),
+                    received.requestSeq(),
+                    context.spotId());
                 return appendSpotHandler(
                     CompletableFuture.completedFuture(null),
                     payloadCopy.size(),
                     () -> {
                         try {
-                        host.traceMessageFlow(
+                        host.traceSpotRouteFlow(
                             ZLinkMessageFlowOutcome.DISPATCHED,
-                            ZLinkDispatchErrorSurface.SPOT_ROUTE,
                             ZLinkDispatchMessageKind.REQUEST,
-                            packet.packetName(), null, null,
-                            received.requestSeq().map(String::valueOf).orElse(null),
-                            null, context.spotId().toString(), null);
+                            packet.packetName(),
+                            received.requestSeq(),
+                            context.spotId());
                         systems.zlink.framework.runtime.internal.dispatch
                             .ZLinkApplicationJobContext
                             .beforeFirstApplicationInstruction();
@@ -315,17 +313,12 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                         payloadCopy.close();
                         closeRouteReceived(received);
                         if (error == null) {
-                            host.traceMessageFlow(
+                            host.traceSpotRouteFlow(
                                 ZLinkMessageFlowOutcome.REPLIED,
-                                ZLinkDispatchErrorSurface.SPOT_ROUTE,
                                 ZLinkDispatchMessageKind.REQUEST,
                                 packet.packetName(),
-                                null,
-                                null,
-                                received.requestSeq().map(String::valueOf).orElse(null),
-                                null,
-                                context.spotId().toString(),
-                                null);
+                                received.requestSeq(),
+                                context.spotId());
                         }
                       });
         }
@@ -338,22 +331,22 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
         String packetName = packet.packetName();
         releaseRouteParts(received);
         return host.admitApplicationJob(() -> {
-            host.traceMessageFlow(
+            host.traceSpotRouteFlow(
                 ZLinkMessageFlowOutcome.ADMITTED,
-                ZLinkDispatchErrorSurface.SPOT_ROUTE,
                 ZLinkDispatchMessageKind.SEND,
-                packetName, null, null, null, null,
-                context.spotId().toString(), null);
+                packetName,
+                Optional.empty(),
+                context.spotId());
             return appendSpotHandler(
                 CompletableFuture.completedFuture(null),
                 payloadCopy.size(),
                 () -> {
-                    host.traceMessageFlow(
+                    host.traceSpotRouteFlow(
                         ZLinkMessageFlowOutcome.DISPATCHED,
-                        ZLinkDispatchErrorSurface.SPOT_ROUTE,
                         ZLinkDispatchMessageKind.SEND,
-                        packetName, null, null, null, null,
-                        context.spotId().toString(), null);
+                        packetName,
+                        Optional.empty(),
+                        context.spotId());
                     return startSpotHandler(() ->
                         host.runWithOutbound(context.dispatchOutbound(), () ->
                             handlerInvoker.invokePacket(
@@ -368,17 +361,12 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> implements AutoClo
                 .whenComplete((ignored, error) -> {
                     payloadCopy.close();
                     if (error == null) {
-                        host.traceMessageFlow(
+                        host.traceSpotRouteFlow(
                             ZLinkMessageFlowOutcome.COMPLETED,
-                            ZLinkDispatchErrorSurface.SPOT_ROUTE,
                             ZLinkDispatchMessageKind.SEND,
                             packetName,
-                            null,
-                            null,
-                            null,
-                            null,
-                            context.spotId().toString(),
-                            null);
+                            Optional.empty(),
+                            context.spotId());
                     }
                 });
     }

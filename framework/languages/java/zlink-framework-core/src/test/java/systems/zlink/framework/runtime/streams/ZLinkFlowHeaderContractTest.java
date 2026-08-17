@@ -58,6 +58,38 @@ final class ZLinkFlowHeaderContractTest {
     }
 
     @Test
+    void suppressClearsAmbientFlowForOffProcessingPointsAndRestores() {
+        //  Spec 27 §4: at Off a processing point neither keeps nor copies the
+        //  ambient flow; the surrounding scope is restored afterwards.
+        ZLinkFlowContext.State state = ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND);
+        try (ZLinkFlowContext.Scope ignored = ZLinkFlowContext.enter(state)) {
+            try (ZLinkFlowContext.Scope off = ZLinkFlowContext.suppress()) {
+                assertEquals(null, ZLinkFlowContext.current());
+            }
+            assertEquals(state, ZLinkFlowContext.current());
+        }
+        try (ZLinkFlowContext.Scope noop = ZLinkFlowContext.suppress()) {
+            assertEquals(null, ZLinkFlowContext.current());
+        }
+        assertEquals(null, ZLinkFlowContext.current());
+    }
+
+    @Test
+    void enterOrCreateInstallsInboundPairOrStartsNewFlow() {
+        ZLinkFlowContext.State inbound =
+            ZLinkFlowContext.create(ZLinkFlowOrigin.APPLICATION);
+        try (ZLinkFlowContext.Scope ignored =
+                 ZLinkFlowContext.enterOrCreate(inbound, ZLinkFlowOrigin.INBOUND)) {
+            assertEquals(inbound, ZLinkFlowContext.current());
+        }
+        try (ZLinkFlowContext.Scope ignored =
+                 ZLinkFlowContext.enterOrCreate(null, ZLinkFlowOrigin.INBOUND)) {
+            assertEquals(ZLinkFlowOrigin.INBOUND, ZLinkFlowContext.current().origin());
+        }
+        assertEquals(null, ZLinkFlowContext.current());
+    }
+
+    @Test
     void propagatedStageCompletesDependentsInsideCapturedFlowOnly() {
         ZLinkFlowContext.State first = ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND);
         CompletableFuture<String> source = new CompletableFuture<>();

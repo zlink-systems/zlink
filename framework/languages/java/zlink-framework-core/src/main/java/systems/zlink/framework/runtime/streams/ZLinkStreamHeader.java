@@ -127,6 +127,10 @@ public record ZLinkStreamHeader(
         if (requestHeader == null) {
             throw new IllegalArgumentException("requestHeader is required");
         }
+        //  Spec 27 §4/§7: the reply carries the request's correlation id, but
+        //  flow fields come from the ambient flow context at encode time
+        //  (ZLinkStreamHeaderCodec.encode). The context only exists while
+        //  tracing is on, so an Off host adds no flow fields to the reply.
         return new ZLinkStreamHeader(
             ZLinkStreamMessageKind.RESPONSE,
             codec,
@@ -134,7 +138,7 @@ public record ZLinkStreamHeader(
             requestHeader.requestSequence(),
             "",
             metadata,
-            requestHeader.correlationId(), requestHeader.flowId(), requestHeader.flowOrigin());
+            requestHeader.correlationId(), Optional.empty(), Optional.empty());
     }
 
     public static ZLinkStreamHeader createErrorResponse(
@@ -150,7 +154,7 @@ public record ZLinkStreamHeader(
             requestHeader.requestSequence(),
             "",
             Map.of(),
-            requestHeader.correlationId(), requestHeader.flowId(), requestHeader.flowOrigin());
+            requestHeader.correlationId(), Optional.empty(), Optional.empty());
     }
 
     // Returns a copy of this header carrying the given correlation id (for echoing the

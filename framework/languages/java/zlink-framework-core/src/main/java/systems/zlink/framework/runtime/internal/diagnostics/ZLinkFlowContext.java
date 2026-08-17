@@ -42,6 +42,32 @@ public final class ZLinkFlowContext {
         };
     }
 
+    /**
+     * Ingress entry: installs the inbound flow pair, or starts a new flow when
+     * the message carries none (spec 27 §4). Callers must decode the inbound
+     * pair only when capture is enabled and use {@link #suppress()} otherwise.
+     */
+    public static Scope enterOrCreate(State inbound, ZLinkFlowOrigin defaultOrigin) {
+        return enter(inbound != null ? inbound : create(defaultOrigin));
+    }
+
+    /**
+     * Off path (spec 27 §4): no validation, no context capture, no new flow.
+     * A stale ambient flow left by a scope entered while tracing was enabled
+     * is cleared for the duration so outbound encoders do not copy it onto
+     * envelopes; steady-state Off pays only the ambient null read.
+     */
+    public static Scope suppress() {
+        State previous = CURRENT.get();
+        if (previous == null) {
+            return NOOP;
+        }
+        CURRENT.set(null);
+        return () -> CURRENT.set(previous);
+    }
+
+    private static final Scope NOOP = () -> { };
+
     public static Executor propagating(Executor delegate) {
         return command -> {
             State captured = current();

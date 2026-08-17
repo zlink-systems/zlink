@@ -258,7 +258,10 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
             }
         }
         if (requestHeadersByFlow.size() == 1) {
-            return requestHeadersByFlow.values().stream().findFirst();
+            var single = requestHeadersByFlow.values().iterator();
+            if (single.hasNext()) {
+                return Optional.of(single.next());
+            }
         }
         return Optional.empty();
     }

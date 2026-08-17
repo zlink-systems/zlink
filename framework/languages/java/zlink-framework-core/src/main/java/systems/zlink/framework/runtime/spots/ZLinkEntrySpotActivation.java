@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.spots;
 import java.time.Instant;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 import systems.zlink.framework.runtime.internal.backend.*;
@@ -248,9 +249,13 @@ final class EntrySpotActivation
     }
 
     private void dispatchRoute(ZLinkBackendReceived received) {
-        var incomingFlow = ZLinkSpotFlowFrame.decode(received.parts());
-        var flowScope = incomingFlow == null ? null
-            : ZLinkFlowContext.enter(incomingFlow);
+        //  Spec 27 §4: decode and install the inbound flow pair (or start a new
+        //  flow) only while capture is enabled; at Off suppress flow state.
+        var flowScope = host.flowCaptureEnabled()
+            ? ZLinkFlowContext.enterOrCreate(
+                ZLinkSpotFlowFrame.decode(received.parts()),
+                ZLinkFlowOrigin.INBOUND)
+            : ZLinkFlowContext.suppress();
         try {
         trackRouteReceived(received);
         if (ZLinkSpotRuntime.isProbeFrame(received.parts())) {
@@ -259,19 +264,14 @@ final class EntrySpotActivation
         }
         ParsedPacket packet = ZLinkSpotRuntime.parsePacket(received.parts());
         ZLinkSpotRuntime.traceSpotRouteDispatch("entry-dispatch", backendSpot, received, packet);
-        host.traceMessageFlow(
+        host.traceSpotRouteFlow(
             ZLinkMessageFlowOutcome.RECEIVED,
-            ZLinkDispatchErrorSurface.SPOT_ROUTE,
             received.requestSeq().isPresent()
                 ? ZLinkDispatchMessageKind.REQUEST
                 : ZLinkDispatchMessageKind.SEND,
             packet.packetName(),
-            null,
-            null,
-            received.requestSeq().map(String::valueOf).orElse(null),
-            null,
-            backendSpot.spotId().toString(),
-            null);
+            received.requestSeq(),
+            backendSpot.spotId());
         if (ZLinkActorSpotRoutePackets.JOIN_SPOT_PACKET_NAME.equals(packet.packetName())) {
             @SuppressWarnings({"rawtypes", "unchecked"})
             ZLinkEntrySpot rawEntrySpot = entrySpot;
@@ -358,7 +358,7 @@ final class EntrySpotActivation
         }
         dispatchSpotRouteHandler(received, packet);
         } finally {
-            if (flowScope != null) flowScope.close();
+            flowScope.close();
         }
     }
 

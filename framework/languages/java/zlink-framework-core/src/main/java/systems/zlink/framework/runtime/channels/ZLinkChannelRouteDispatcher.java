@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.channels;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 import java.util.List;
@@ -50,13 +51,18 @@ final class ZLinkChannelRouteDispatcher {
         String channelName,
         ZLinkBackendRouterSocket router,
         ZLinkBackendReceived received) {
-        var incomingFlow = ZLinkChannelFlowFrame.decode(received.parts());
-        var flowScope = incomingFlow == null ? null
-            : ZLinkFlowContext.enter(incomingFlow);
+        if (isProbeFrame(received.parts())) {
+            received.parts().forEach(Message::close);
+            return;
+        }
+        //  Spec 27 §4: decode and install the inbound flow pair (or start a new
+        //  flow) only while capture is enabled; at Off suppress flow state.
+        var flowScope = flow.captureEnabled()
+            ? ZLinkFlowContext.enterOrCreate(
+                ZLinkChannelFlowFrame.decode(received.parts()),
+                ZLinkFlowOrigin.INBOUND)
+            : ZLinkFlowContext.suppress();
         try {
-            if (isProbeFrame(received.parts())) {
-                return;
-            }
             if (dispatchBridgePacket(channelName, received)) {
                 return;
             }
@@ -118,7 +124,7 @@ final class ZLinkChannelRouteDispatcher {
                 ZLinkDispatchMessageKind.REQUEST,
                 packet.packetName(),
                 channelName,
-                String.valueOf(requestSeq),
+                requestSeq,
                 source);
             dispatchRequestHandler(
                 channelName,
@@ -129,7 +135,7 @@ final class ZLinkChannelRouteDispatcher {
                 registration,
                 contentType);
         } finally {
-            if (flowScope != null) flowScope.close();
+            flowScope.close();
             received.parts().forEach(Message::close);
         }
     }
@@ -263,7 +269,7 @@ final class ZLinkChannelRouteDispatcher {
                                                 ZLinkDispatchMessageKind.REQUEST,
                                                 packet.packetName(),
                                                 channelName,
-                                                String.valueOf(requestSeq),
+                                                requestSeq,
                                                 source);
                                         }
                                     } finally {
@@ -316,7 +322,7 @@ final class ZLinkChannelRouteDispatcher {
             ZLinkDispatchMessageKind.SEND,
             packetName,
             channelName,
-            null,
+            0L,
             source);
         Message payload = Message.from(packet.payload());
         try {
@@ -342,7 +348,7 @@ final class ZLinkChannelRouteDispatcher {
                                 ZLinkDispatchMessageKind.SEND,
                                 packetName,
                                 channelName,
-                                null,
+                                0L,
                                 source);
                         }
                     })
@@ -365,12 +371,13 @@ final class ZLinkChannelRouteDispatcher {
         return invocation.get();
     }
 
+    /** Spec 26 §4: requestSeq 0 means none; strings are built after the gate. */
     private void traceFlow(
         ZLinkMessageFlowOutcome outcome,
         ZLinkDispatchMessageKind kind,
         String packetName,
         String channelName,
-        String correlationId,
+        long requestSeq,
         RoutingId source) {
         ZLinkMessageFlowTracer.TracePoint tracePoint = flow.begin(outcome);
         if (tracePoint != null) {
@@ -381,7 +388,7 @@ final class ZLinkChannelRouteDispatcher {
                 packetName,
                 channelName,
                 null,
-                correlationId,
+                requestSeq == 0 ? null : String.valueOf(requestSeq),
                 source == null ? null : source.toString(),
                 null,
                 null,

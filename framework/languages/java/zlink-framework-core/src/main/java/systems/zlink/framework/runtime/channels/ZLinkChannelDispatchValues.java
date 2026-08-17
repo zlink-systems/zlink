@@ -3,7 +3,6 @@ import java.util.Objects;
 
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.TimeUnit;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageContext;
@@ -326,21 +325,5 @@ final class DefaultRouteSendContext
         String contentType,
         Map<String, String> metadata) {
         super(meshName, channelName, packetName, routingId, contentType, metadata);
-    }
-}
-
-final class NoDataBackoff {
-    private static final int MAX_MISSES = 6;
-    private static final long MAX_DELAY_MILLIS = 20L;
-    private int misses;
-
-    void reset() {
-        misses = 0;
-    }
-
-    long nextDelayNanos() {
-        misses = Math.min(misses + 1, MAX_MISSES);
-        long delayMillis = Math.min(1L << (misses - 1), MAX_DELAY_MILLIS);
-        return TimeUnit.MILLISECONDS.toNanos(delayMillis);
     }
 }

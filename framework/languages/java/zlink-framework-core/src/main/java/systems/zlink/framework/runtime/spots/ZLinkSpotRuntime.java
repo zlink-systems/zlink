@@ -2866,17 +2866,22 @@ public final class ZLinkSpotRuntime
         if (replyRoute == null || reply.isEmpty()) {
             return CompletableFuture.completedFuture(reply);
         }
-        traceMessageFlow(
-            ZLinkMessageFlowOutcome.REPLIED,
-            ZLinkDispatchErrorSurface.SPOT_ACTOR,
-            ZLinkDispatchMessageKind.ACTOR_REQUEST,
-            "handoff_direct_reply",
-            null,
-            null,
-            Long.toUnsignedString(replyRoute.requestId()),
-            replyRoute.sourceNodeRid().toString(),
-            null,
-            replyRoute.actorRef().actorId());
+        ZLinkMessageFlowTracer.TracePoint repliedTracePoint =
+            dispatchErrors.flow().begin(ZLinkMessageFlowOutcome.REPLIED);
+        if (repliedTracePoint != null) {
+            repliedTracePoint.trace(new ZLinkMessageFlowEvent(
+                ZLinkMessageFlowOutcome.REPLIED,
+                ZLinkDispatchErrorSurface.SPOT_ACTOR,
+                ZLinkDispatchMessageKind.ACTOR_REQUEST,
+                "handoff_direct_reply",
+                null,
+                null,
+                Long.toUnsignedString(replyRoute.requestId()),
+                replyRoute.sourceNodeRid().toString(),
+                null,
+                replyRoute.actorRef().actorId(),
+                null));
+        }
         LocalActorReply actorReply = reply.get();
         byte[] frameBytes;
         try (Message payload = actorReply.payload()) {
@@ -3069,16 +3074,11 @@ public final class ZLinkSpotRuntime
         ZLinkDispatchMessageKind actorKind = actorIsRequest
             ? ZLinkDispatchMessageKind.ACTOR_REQUEST
             : ZLinkDispatchMessageKind.ACTOR_SEND;
-        traceMessageFlow(
+        traceActorFlow(
             ZLinkMessageFlowOutcome.RECEIVED,
-            ZLinkDispatchErrorSurface.SPOT_ACTOR,
             actorKind,
             actorPacketName,
-            null,
-            null,
-            packetHeader.requestSeq().map(String::valueOf).orElse(null),
-            null,
-            null,
+            packetHeader.requestSeq(),
             actorId);
         CompletionStage<Optional<Message>> stage = withCurrentOutbound(
             outbound,
@@ -3090,27 +3090,17 @@ public final class ZLinkSpotRuntime
                     headerPart,
                     primaryNode,
                     () -> {
-                        traceMessageFlow(
+                        traceActorFlow(
                             ZLinkMessageFlowOutcome.ADMITTED,
-                            ZLinkDispatchErrorSurface.SPOT_ACTOR,
                             actorKind,
                             actorPacketName,
-                            null,
-                            null,
-                            packetHeader.requestSeq().map(String::valueOf).orElse(null),
-                            null,
-                            null,
+                            packetHeader.requestSeq(),
                             actorId);
-                        traceMessageFlow(
+                        traceActorFlow(
                             ZLinkMessageFlowOutcome.DISPATCHED,
-                            ZLinkDispatchErrorSurface.SPOT_ACTOR,
                             actorKind,
                             actorPacketName,
-                            null,
-                            null,
-                            packetHeader.requestSeq().map(String::valueOf).orElse(null),
-                            null,
-                            null,
+                            packetHeader.requestSeq(),
                             actorId);
                         return actorIsRequest
                             ? invokeActorRequestHandler(
@@ -3205,16 +3195,11 @@ public final class ZLinkSpotRuntime
                         ZLinkMessageFlowOutcome phase = actorIsRequest
                             ? ZLinkMessageFlowOutcome.REPLIED
                             : ZLinkMessageFlowOutcome.COMPLETED;
-                        traceMessageFlow(
+                        traceActorFlow(
                             phase,
-                            ZLinkDispatchErrorSurface.SPOT_ACTOR,
                             actorKind,
                             actorPacketName,
-                            null,
-                            null,
-                            packetHeader.requestSeq().map(String::valueOf).orElse(null),
-                            null,
-                            null,
+                            packetHeader.requestSeq(),
                             actorId);
                     }
                 });
@@ -3930,8 +3915,9 @@ public final class ZLinkSpotRuntime
             eventDispatcher,
             primaryNodeSourceName,
             (timerName, operation) -> dispatch.enqueue(timerName, () -> {
-                if (!dispatchErrors.flow().enabled(
-                    ZLinkMessageFlowOutcome.SENT)) {
+                //  Spec 27 §4: a timer callback starts a new flow at every
+                //  diagnostics level except Off.
+                if (!flowCaptureEnabled()) {
                     return operation.get();
                 }
                 ZLinkFlowContext.State timerFlow =
@@ -4629,15 +4615,18 @@ public final class ZLinkSpotRuntime
                 actor.context().actorId(),
                 payloadCopy.size(),
                 () -> {
-                    if (packetHeader.flowId().isEmpty()) {
-                        return dispatchActorPacketToHandler(
-                              dispatchLine.dispatchOutbound(), handler, spotSurface, actor,
-                              packetHeader, headerCopy, payloadCopy,
-                              "actor bound session reply failed");
-                    }
-                    var state = new ZLinkFlowContext.State(
-                        packetHeader.flowId().orElseThrow(), packetHeader.flowOrigin().orElseThrow());
-                    try (var ignored = ZLinkFlowContext.enter(state)) {
+                    //  Spec 27 §4: install the inbound flow pair (or start a
+                    //  new flow) only while capture is enabled; at Off suppress
+                    //  flow state instead of reading the header fields.
+                    try (var ignored = flowCaptureEnabled()
+                        ? ZLinkFlowContext.enterOrCreate(
+                            packetHeader.flowId().isEmpty()
+                                ? null
+                                : new ZLinkFlowContext.State(
+                                    packetHeader.flowId().orElseThrow(),
+                                    packetHeader.flowOrigin().orElseThrow()),
+                            ZLinkFlowOrigin.INBOUND)
+                        : ZLinkFlowContext.suppress()) {
                         return dispatchActorPacketToHandler(
                               dispatchLine.dispatchOutbound(), handler, spotSurface, actor,
                               packetHeader, headerCopy, payloadCopy,
@@ -4655,7 +4644,7 @@ public final class ZLinkSpotRuntime
         ActorPacketFrames.Header packetHeader,
         ZLinkBackendActorReceived headerPart,
         Optional<Message> reply) {
-        if ("1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"))) {
+        if (STREAM_TRACE) {
             Logger.getLogger(
                     ZLinkSpotRuntime.class.getName())
                 .warning("[zlink-java-stream-trace] captured reply"
@@ -4739,16 +4728,17 @@ public final class ZLinkSpotRuntime
         return (headerPart.flags() & ACTOR_RECV_INFO_NO_BIND) != 0;
     }
 
-    void traceMessageFlow(
+    /** Spec 27 §4 capture gate shared by the spot/actor ingress points. */
+    boolean flowCaptureEnabled() {
+        return dispatchErrors.flow().captureEnabled();
+    }
+
+    /** Spec 26 §4 spot-actor trace: strings are built only after the gate. */
+    private void traceActorFlow(
         ZLinkMessageFlowOutcome outcome,
-        ZLinkDispatchErrorSurface surface,
         ZLinkDispatchMessageKind messageKind,
         String packetName,
-        String channelName,
-        String topic,
-        String correlationId,
-        String sourceRid,
-        String spotId,
+        Optional<Long> requestSeq,
         String actorId) {
         ZLinkMessageFlowTracer.TracePoint tracePoint =
             dispatchErrors.flow().begin(outcome);
@@ -4757,15 +4747,41 @@ public final class ZLinkSpotRuntime
         }
         tracePoint.trace(new ZLinkMessageFlowEvent(
             outcome,
-            surface,
+            ZLinkDispatchErrorSurface.SPOT_ACTOR,
             messageKind,
             packetName,
-            channelName,
-            topic,
-            correlationId,
-            sourceRid,
-            spotId,
+            null,
+            null,
+            requestSeq.map(String::valueOf).orElse(null),
+            null,
+            null,
             actorId,
+            null));
+    }
+
+    /** Spec 26 §4 spot-route trace: strings are built only after the gate. */
+    void traceSpotRouteFlow(
+        ZLinkMessageFlowOutcome outcome,
+        ZLinkDispatchMessageKind messageKind,
+        String packetName,
+        Optional<Long> requestSeq,
+        Object spotId) {
+        ZLinkMessageFlowTracer.TracePoint tracePoint =
+            dispatchErrors.flow().begin(outcome);
+        if (tracePoint == null) {
+            return;
+        }
+        tracePoint.trace(new ZLinkMessageFlowEvent(
+            outcome,
+            ZLinkDispatchErrorSurface.SPOT_ROUTE,
+            messageKind,
+            packetName,
+            null,
+            null,
+            requestSeq.map(String::valueOf).orElse(null),
+            null,
+            spotId == null ? null : spotId.toString(),
+            null,
             null));
     }
 

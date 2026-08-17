@@ -54,6 +54,16 @@ public final class ZLinkMessageFlowTracer {
         return accepts(mode, defaultResult(phase));
     }
 
+    /**
+     * Spec 27 §4 capture gate: flow context is created, installed and copied
+     * forward at every level except Off. At Off the processing point must not
+     * validate, install or propagate flow state (correlation_id is unaffected).
+     */
+    public boolean captureEnabled() {
+        return options.diagnostics().effectiveMessageFlow()
+            != ZLinkMessageFlowLogMode.OFF;
+    }
+
     public TracePoint begin(ZLinkMessageFlowOutcome phase) {
         return begin(phase, defaultResult(phase));
     }
@@ -100,15 +110,6 @@ public final class ZLinkMessageFlowTracer {
             return null;
         }
         return event -> traceAtMode(event.withOutcome(result), mode);
-    }
-
-    public void traceLazy(
-        ZLinkMessageFlowOutcome phase,
-        java.util.function.Supplier<ZLinkMessageFlowEvent> flow) {
-        TracePoint point = begin(phase);
-        if (point != null) {
-            point.trace(flow.get());
-        }
     }
 
     public void trace(ZLinkMessageFlowEvent flow) {

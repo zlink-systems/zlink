@@ -412,13 +412,18 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                         "bound Actor request reply is not a STREAM frame"));
             ZLinkStreamHeader remoteHeader =
                 ZLinkStreamHeaderCodec.decodeOrPlain(decoded.header());
+            //  Flow fields are observation-only (spec 27 §2/§7): a reply from
+            //  an Off peer legitimately carries none, so the fence compares
+            //  them only when both sides carry a pair.
             if ((remoteHeader.kind() != ZLinkStreamMessageKind.RESPONSE
                     && remoteHeader.kind() != ZLinkStreamMessageKind.ERROR)
                 || !remoteHeader.correlationId().equals(
                     requestHeader.correlationId())
-                || !remoteHeader.flowId().equals(requestHeader.flowId())
-                || !remoteHeader.flowOrigin().equals(
-                    requestHeader.flowOrigin())) {
+                || (remoteHeader.flowId().isPresent()
+                    && requestHeader.flowId().isPresent()
+                    && (!remoteHeader.flowId().equals(requestHeader.flowId())
+                        || !remoteHeader.flowOrigin().equals(
+                            requestHeader.flowOrigin())))) {
                 throw new IllegalArgumentException(
                     "bound Actor request reply does not match its request");
             }

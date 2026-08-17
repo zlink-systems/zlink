@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.channels;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 import java.util.List;
@@ -41,13 +42,18 @@ final class ZLinkChannelMessageDispatcher {
         String channelName,
         ZLinkBackendRouterSocket router,
         ZLinkBackendReceived received) {
-        var incomingFlow = ZLinkChannelFlowFrame.decode(received.parts());
-        var flowScope = incomingFlow == null ? null
-            : ZLinkFlowContext.enter(incomingFlow);
+        if (isProbeFrame(received.parts())) {
+            received.parts().forEach(Message::close);
+            return;
+        }
+        //  Spec 27 §4: decode and install the inbound flow pair (or start a new
+        //  flow) only while capture is enabled; at Off suppress flow state.
+        var flowScope = flow.captureEnabled()
+            ? ZLinkFlowContext.enterOrCreate(
+                ZLinkChannelFlowFrame.decode(received.parts()),
+                ZLinkFlowOrigin.INBOUND)
+            : ZLinkFlowContext.suppress();
         try {
-            if (isProbeFrame(received.parts())) {
-                return;
-            }
             ParsedPacket packet = parsePacket(received.parts());
             if (ZLinkFrameworkErrorReply.isPacketName(packet.packetName())) {
                 errors.report(
@@ -108,15 +114,17 @@ final class ZLinkChannelMessageDispatcher {
                 registration,
                 contentType);
         } finally {
-            if (flowScope != null) flowScope.close();
+            flowScope.close();
             received.parts().forEach(Message::close);
         }
     }
 
     void dispatchPublish(String channelName, ZLinkBackendTopicMessage received) {
-        var incomingFlow = ZLinkChannelFlowFrame.decode(received.parts());
-        var flowScope = incomingFlow == null ? null
-            : ZLinkFlowContext.enter(incomingFlow);
+        var flowScope = flow.captureEnabled()
+            ? ZLinkFlowContext.enterOrCreate(
+                ZLinkChannelFlowFrame.decode(received.parts()),
+                ZLinkFlowOrigin.INBOUND)
+            : ZLinkFlowContext.suppress();
         try {
             String contentType = ZLinkChannelContentTypeFrame.decode(received.parts());
             ParsedPacket packet = parsePacket(received.parts());
@@ -171,7 +179,7 @@ final class ZLinkChannelMessageDispatcher {
                 throw error;
             }
         } finally {
-            if (flowScope != null) flowScope.close();
+            flowScope.close();
             received.parts().forEach(Message::close);
         }
     }
@@ -201,7 +209,7 @@ final class ZLinkChannelMessageDispatcher {
             packetName,
             channelName,
             null,
-            null);
+            0L);
         Message payload = Message.from(packet.payload());
         try {
             CompletionStage<Void> queued = registry.sendQueue(channelName)
@@ -212,14 +220,14 @@ final class ZLinkChannelMessageDispatcher {
                         packetName,
                         channelName,
                         null,
-                        null);
+                        0L);
                     traceFlow(
                         ZLinkMessageFlowOutcome.DISPATCHED,
                         ZLinkDispatchMessageKind.SEND,
                         packetName,
                         channelName,
                         null,
-                        null);
+                        0L);
                     return invokeStarted(() -> invoker.executeHandler(() ->
                         invoker.invokeSendHandler(
                             channelName, registration, payload, Map.of(), contentType)))
@@ -241,7 +249,7 @@ final class ZLinkChannelMessageDispatcher {
                                     packetName,
                                     channelName,
                                     null,
-                                    null);
+                                    0L);
                             }
                         })
                         .whenComplete((ignored, error) -> payload.close());
@@ -276,14 +284,14 @@ final class ZLinkChannelMessageDispatcher {
                     packetName,
                     channelName,
                     null,
-                    String.valueOf(requestSeq));
+                    requestSeq);
                 traceFlow(
                     ZLinkMessageFlowOutcome.DISPATCHED,
                     ZLinkDispatchMessageKind.REQUEST,
                     packetName,
                     channelName,
                     null,
-                    String.valueOf(requestSeq));
+                    requestSeq);
                 return CompletableFuture.completedFuture(null)
                     .thenCompose(permit -> {
                         try {
@@ -320,7 +328,7 @@ final class ZLinkChannelMessageDispatcher {
                                                 packetName,
                                                 channelName,
                                                 null,
-                                                String.valueOf(requestSeq));
+                                                requestSeq);
                                         }
                                     } finally {
 
@@ -363,16 +371,17 @@ final class ZLinkChannelMessageDispatcher {
             packetName,
             channelName,
             null,
-            String.valueOf(requestSeq));
+            requestSeq);
     }
 
+    /** Spec 26 §4: requestSeq 0 means none; strings are built after the gate. */
     private void traceFlow(
         ZLinkMessageFlowOutcome outcome,
         ZLinkDispatchMessageKind kind,
         String packetName,
         String channelName,
         String topic,
-        String correlationId) {
+        long requestSeq) {
         ZLinkMessageFlowTracer.TracePoint tracePoint = flow.begin(outcome);
         if (tracePoint == null) {
             return;
@@ -384,7 +393,7 @@ final class ZLinkChannelMessageDispatcher {
             packetName,
             channelName,
             topic,
-            correlationId,
+            requestSeq == 0 ? null : String.valueOf(requestSeq),
             null,
             null,
             null,
