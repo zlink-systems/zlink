@@ -1190,7 +1190,7 @@ test('MFLOW-MAL malformed request envelope replies protocol error and records in
   assert.equal(replies.length >= 1, true);
   const replyHeader = JSON.parse(Buffer.from(replies[0]).toString());
   assert.equal(replyHeader.kind, 5);
-  assert.equal(replyHeader.errorCode, '9'); // ProtocolError
+  assert.equal(replyHeader.errorCode, 'protocol_error'); // ProtocolError
   assert.equal(replyHeader.correlationId, 'corr-malformed');
 
   assert.equal(traceRecords.length, 1);

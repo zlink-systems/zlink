@@ -3655,10 +3655,7 @@ test('ZLinkChannelRequestDispatcher rejects filter short circuit without seriali
   assert.equal('sourceNodeRid' in filterContexts[0], false);
   const replyEnvelope = decodeDotnetEnvelope(replies);
   assert.equal(replyEnvelope.header.kind, 5);
-  assert.equal(
-    replyEnvelope.header.errorCode,
-    String(framework.ZLinkFrameworkErrorKind.Rejected)
-  );
+  assert.equal(replyEnvelope.header.errorCode, 'rejected');
   assert.notEqual(replyEnvelope.body, 'filter-reply');
 });
 

@@ -223,16 +223,57 @@ export function encodeChannelReplyParts(
 export const ZLINK_FRAMEWORK_ORIGIN_METADATA_KEY = 'zlink.origin';
 export const ZLINK_FRAMEWORK_ORIGIN_METADATA_VALUE = 'framework';
 
+/**
+ * Cross-language errorCode wire names, indexed by ZLinkFrameworkErrorKind.
+ * Canonical table: C++ channel_reply_writer.cpp error_code_name(). Every
+ * language encodes the snake_case name on the wire; numeric codes are a
+ * process-local representation and never cross the wire.
+ */
+const ERROR_KIND_WIRE_NAMES: readonly string[] = [
+  'not_found', // 0
+  'already_exists', // 1
+  'type_mismatch', // 2
+  'not_configured', // 3
+  'rejected', // 4
+  'unavailable', // 5
+  'capacity_exceeded', // 6
+  'deadline_exceeded', // 7
+  'shutting_down', // 8
+  'protocol_error', // 9
+  'invalid_operation', // 10
+  'data_lost', // 11
+  'internal_failure' // 12
+];
+
+const ERROR_KIND_BY_WIRE_NAME: ReadonlyMap<string, ZLinkFrameworkErrorKind> = new Map(
+  ERROR_KIND_WIRE_NAMES.map((name, kind) => [name, kind as ZLinkFrameworkErrorKind])
+);
+
+export function channelErrorCodeName(kind: ZLinkFrameworkErrorKind): string {
+  return ERROR_KIND_WIRE_NAMES[kind] ?? 'internal_failure';
+}
+
+/**
+ * A channel error decoded from an Error reply envelope. `origin` carries the
+ * header metadata `zlink.origin` value when the peer marked the error (for
+ * example 'framework' for framework-generated stale-route errors). It is
+ * exposed for consumers only; the transport-level stale-route decision does
+ * not read it.
+ */
+export interface ZLinkChannelDecodedError extends Error {
+  origin?: string;
+}
+
 export function encodeChannelErrorReplyParts(
   request: ZLinkChannelEnvelopeHeader,
   error: unknown,
   metadata: Readonly<Record<string, string>> = {}
 ): readonly MessageLike[] {
-  const errorCode = error instanceof ZLinkFrameworkException
-    ? String(error.kind)
-    : error instanceof Error
-      ? String(ZLinkFrameworkErrorKind.InternalFailure)
-      : String(ZLinkFrameworkErrorKind.InternalFailure);
+  const errorCode = channelErrorCodeName(
+    error instanceof ZLinkFrameworkException
+      ? error.kind
+      : ZLinkFrameworkErrorKind.InternalFailure
+  );
   const errorMessage = error instanceof Error ? error.message : String(error);
   const header: ZLinkChannelEnvelopeHeader = {
     formatMarker: ZLINK_CHANNEL_FORMAT_MARKER,
@@ -289,20 +330,28 @@ export function decodeChannelReply<TReply>(
   ) as TReply;
 }
 
-function decodeChannelError(header: ZLinkChannelEnvelopeHeader): Error {
+function decodeChannelError(header: ZLinkChannelEnvelopeHeader): ZLinkChannelDecodedError {
   const code = header.errorCode;
+  let failure: ZLinkChannelDecodedError;
   if (code === undefined || code === null || code.trim().length === 0) {
-    return new ZLinkFrameworkException(
+    failure = new ZLinkFrameworkException(
       ZLinkFrameworkErrorKind.ProtocolError,
       'Channel Error reply does not contain a non-empty errorCode.'
     );
+  } else {
+    const message = header.errorMessage ?? 'ZLink channel request failed.';
+    //  Cross-language contract: errorCode carries the snake_case wire name.
+    //  An unknown name degrades to InternalFailure, matching the C++
+    //  request_failure_mapper fallback for unrecognized codes.
+    const publicKind = ERROR_KIND_BY_WIRE_NAME.get(code)
+      ?? ZLinkFrameworkErrorKind.InternalFailure;
+    failure = new ZLinkFrameworkException(publicKind, message);
   }
-  const message = header.errorMessage ?? 'ZLink channel request failed.';
-  const publicKind = Number(code);
-  if (Number.isInteger(publicKind) && publicKind >= 0 && publicKind <= 12) {
-    return new ZLinkFrameworkException(publicKind as ZLinkFrameworkErrorKind, message);
+  const origin = header.metadata[ZLINK_FRAMEWORK_ORIGIN_METADATA_KEY];
+  if (origin !== undefined) {
+    failure.origin = origin;
   }
-  return new ZLinkFrameworkException(ZLinkFrameworkErrorKind.InternalFailure, message);
+  return failure;
 }
 
 export function decodeChannelEnvelope(

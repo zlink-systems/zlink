@@ -826,6 +826,157 @@ test('IMP-ND-03 channel Error maps a non-framework error to InternalFailure', ()
   }
 });
 
+// Canonical cross-language errorCode wire names, 1:1 with the C++ table in
+// framework/languages/cpp/framework/src/runtime/channels/channel_reply_writer.cpp.
+const ERROR_CODE_WIRE_NAMES = Object.freeze({
+  NotFound: 'not_found',
+  AlreadyExists: 'already_exists',
+  TypeMismatch: 'type_mismatch',
+  NotConfigured: 'not_configured',
+  Rejected: 'rejected',
+  Unavailable: 'unavailable',
+  CapacityExceeded: 'capacity_exceeded',
+  DeadlineExceeded: 'deadline_exceeded',
+  ShuttingDown: 'shutting_down',
+  ProtocolError: 'protocol_error',
+  InvalidOperation: 'invalid_operation',
+  DataLost: 'data_lost',
+  InternalFailure: 'internal_failure'
+});
+
+test('channel Error reply encodes every framework error kind as its snake_case wire name', () => {
+  const kindNames = Object.keys(ERROR_CODE_WIRE_NAMES);
+  assert.equal(kindNames.length, 13);
+  const requestParts = envelope.encodeChannelEnvelopeParts(1, 'api', 'Lookup', { id: 'a' });
+  const request = envelope.decodeChannelEnvelope(readable(requestParts));
+  try {
+    for (const kindName of kindNames) {
+      const kind = framework.ZLinkFrameworkErrorKind[kindName];
+      const replyParts = envelope.encodeChannelErrorReplyParts(
+        request.header,
+        new framework.ZLinkFrameworkException(kind, `${kindName} failed`)
+      );
+      try {
+        const header = JSON.parse(Buffer.from(replyParts[0]).toString('utf8'));
+        assert.equal(header.errorCode, ERROR_CODE_WIRE_NAMES[kindName], kindName);
+        assert.throws(
+          () => envelope.decodeChannelReply(readable(replyParts)),
+          (error) => error instanceof framework.ZLinkFrameworkException
+            && error.kind === kind
+            && error.message === `${kindName} failed`,
+          kindName
+        );
+      } finally {
+        envelope.closeMessages(replyParts);
+      }
+    }
+  } finally {
+    envelope.closeMessages(requestParts);
+  }
+});
+
+test('channel Error decode consumes the canonical C++ error header verbatim', () => {
+  // Golden: a fixed Error header exactly as the C++ channel_reply_writer
+  // emits it (snake_case errorCode, zlink.origin marker in metadata).
+  for (const [kindName, wireName] of Object.entries(ERROR_CODE_WIRE_NAMES)) {
+    const parts = readable([
+      Buffer.from(JSON.stringify({
+        formatMarker: envelope.ZLINK_CHANNEL_FORMAT_MARKER,
+        kind: 5,
+        channelName: 'profile',
+        messageName: 'LookupReq',
+        contentType: 'application/json',
+        correlationId: 'cross-language-error',
+        deadline: null,
+        topic: null,
+        errorCode: wireName,
+        errorMessage: 'cross-language failure',
+        metadata: { 'zlink.origin': 'framework' }
+      })),
+      Buffer.from('null')
+    ]);
+    assert.throws(
+      () => envelope.decodeChannelReply(parts),
+      (error) => error instanceof framework.ZLinkFrameworkException
+        && error.kind === framework.ZLinkFrameworkErrorKind[kindName]
+        && error.message === 'cross-language failure'
+        && error.origin === 'framework',
+      wireName
+    );
+  }
+});
+
+test('channel Error decode degrades unknown and numeric errorCode names to InternalFailure', () => {
+  // Matches the C++ request_failure_mapper fallback for unrecognized codes.
+  // Numeric codes are the retired Node-only wire form and must no longer be
+  // understood as kinds.
+  for (const errorCode of ['definitely_unknown', '3', '9', 'NotFound']) {
+    const parts = readable([
+      Buffer.from(JSON.stringify({
+        formatMarker: envelope.ZLINK_CHANNEL_FORMAT_MARKER,
+        kind: 5,
+        channelName: 'profile',
+        messageName: 'LookupReq',
+        contentType: 'application/json',
+        correlationId: 'unknown-error-code',
+        deadline: null,
+        topic: null,
+        errorCode,
+        errorMessage: 'unknown failure',
+        metadata: {}
+      })),
+      Buffer.from('null')
+    ]);
+    assert.throws(
+      () => envelope.decodeChannelReply(parts),
+      (error) => error instanceof framework.ZLinkFrameworkException
+        && error.kind === framework.ZLinkFrameworkErrorKind.InternalFailure
+        && error.message === 'unknown failure'
+        && error.origin === undefined,
+      errorCode
+    );
+  }
+});
+
+test('channel Error decode exposes the zlink.origin metadata on the decoded error', () => {
+  const requestParts = envelope.encodeChannelEnvelopeParts(1, 'api', 'Lookup', { id: 'a' });
+  const request = envelope.decodeChannelEnvelope(readable(requestParts));
+  const markedParts = envelope.encodeChannelErrorReplyParts(
+    request.header,
+    new framework.ZLinkFrameworkException(
+      framework.ZLinkFrameworkErrorKind.NotFound,
+      'stale route'
+    ),
+    { [envelope.ZLINK_FRAMEWORK_ORIGIN_METADATA_KEY]: envelope.ZLINK_FRAMEWORK_ORIGIN_METADATA_VALUE }
+  );
+  const unmarkedParts = envelope.encodeChannelErrorReplyParts(
+    request.header,
+    new framework.ZLinkFrameworkException(
+      framework.ZLinkFrameworkErrorKind.NotFound,
+      'application not found'
+    )
+  );
+  try {
+    assert.throws(
+      () => envelope.decodeChannelReply(readable(markedParts)),
+      (error) => error instanceof framework.ZLinkFrameworkException
+        && error.kind === framework.ZLinkFrameworkErrorKind.NotFound
+        && error.origin === 'framework'
+    );
+    assert.throws(
+      () => envelope.decodeChannelReply(readable(unmarkedParts)),
+      (error) => error instanceof framework.ZLinkFrameworkException
+        && error.kind === framework.ZLinkFrameworkErrorKind.NotFound
+        && error.origin === undefined
+        && !('origin' in error)
+    );
+  } finally {
+    envelope.closeMessages(requestParts);
+    envelope.closeMessages(markedParts);
+    envelope.closeMessages(unmarkedParts);
+  }
+});
+
 test('IMP-ND-03 unknown channel content type fails before handler payload delivery', () => {
   const envelopeValue = {
     header: {
