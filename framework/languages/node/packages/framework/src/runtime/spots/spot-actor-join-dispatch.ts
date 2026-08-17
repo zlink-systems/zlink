@@ -139,7 +139,8 @@ export class ZLinkSpotActorJoinDispatch {
       actorPacketHandler: options.packets?.handle,
       bindRemoteActorSession: options.packets?.bindRemoteSession,
       replyActorNoBind: options.packets?.replyNoBind,
-      waitIdle: waitSpotDispatchIdle
+      waitIdle: waitSpotDispatchIdle,
+      flowEnabled: () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
     });
     this.nativeActorJoinAdmission = new ZLinkSpotNativeActorJoinAdmission({
       nativeSpot: options.nativeSpot,

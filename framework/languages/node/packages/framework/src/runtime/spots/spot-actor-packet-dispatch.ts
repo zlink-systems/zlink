@@ -105,7 +105,7 @@ interface ZLinkSpotActorPacketDispatchOptions {
 export class ZLinkSpotActorPacketDispatch {
   constructor(private readonly options: ZLinkSpotActorPacketDispatchOptions) {}
 
-  async dispatch(
+  dispatch(
     actorId: string,
     parts: readonly Message[],
     returnResponse = false,
@@ -138,7 +138,10 @@ export class ZLinkSpotActorPacketDispatch {
     }
     let header: ReturnType<typeof decodeStreamHeader>;
     try {
-      header = decodeStreamHeader(messageToBytes(parts[0]));
+      header = decodeStreamHeader(
+        messageToBytes(parts[0]),
+        this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+      );
     } catch (error) {
       this.reportInvalidFrame(actorId, ZLinkDispatchMessageKind.ActorSend, error);
       throw error;

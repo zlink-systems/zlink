@@ -19,6 +19,7 @@ export type ZLinkStreamFrameReadResult =
 
 const STREAM_FRAME_PREFIX_BYTES = 6;
 const EMPTY_BUFFER = Buffer.alloc(0);
+const EMPTY_RETAINED_OWNERS: readonly ZLinkRetainedStreamOwnerState[] = [];
 
 class ZLinkRetainedStreamOwnerState {
   private bufferedSegments = 0;
@@ -73,6 +74,24 @@ class ZLinkRetainedStreamOwnerState {
 interface ZLinkRetainedStreamSegment {
   remainingBytes: number;
   readonly owner?: ZLinkRetainedStreamOwnerState;
+}
+
+class ZLinkAssembledStreamFrameImpl implements ZLinkAssembledStreamFrame {
+  private released = false;
+
+  constructor(
+    readonly header: Buffer,
+    readonly payload: Buffer,
+    private readonly owners: readonly ZLinkRetainedStreamOwnerState[]
+  ) {}
+
+  close(): void {
+    if (this.released) return;
+    this.released = true;
+    for (const owner of this.owners) {
+      owner.releaseFrame();
+    }
+  }
 }
 
 export class ZLinkStreamMessageSizeError extends Error {
@@ -197,7 +216,7 @@ export class ZLinkStreamFrameReassembler {
     const payloadStart = frameStart + headerSize;
     const header = storage.subarray(frameStart, payloadStart);
     const payload = storage.subarray(payloadStart, payloadStart + payloadSize);
-    const close = this.consumeRetained(totalSize);
+    const owners = this.consumeRetained(totalSize);
     const remainingStart = this.start + totalSize;
     this.directView = remainingStart < this.end
       ? storage.subarray(remainingStart, this.end)
@@ -209,7 +228,7 @@ export class ZLinkStreamFrameReassembler {
     this.storage = EMPTY_BUFFER;
     this.start = 0;
     this.end = 0;
-    return { kind: 'frame', frame: { header, payload, close } };
+    return { kind: 'frame', frame: new ZLinkAssembledStreamFrameImpl(header, payload, owners) };
   }
 
   clear(): void {
@@ -255,22 +274,26 @@ export class ZLinkStreamFrameReassembler {
     }
     const header = bytes.subarray(STREAM_FRAME_PREFIX_BYTES, STREAM_FRAME_PREFIX_BYTES + headerSize);
     const payload = bytes.subarray(STREAM_FRAME_PREFIX_BYTES + headerSize, totalSize);
-    const close = this.consumeRetained(totalSize);
+    const owners = this.consumeRetained(totalSize);
     this.directView = totalSize === bytes.length ? undefined : bytes.subarray(totalSize);
-    return { kind: 'frame', frame: { header, payload, close } };
+    return { kind: 'frame', frame: new ZLinkAssembledStreamFrameImpl(header, payload, owners) };
   }
 
-  private consumeRetained(consumedBytes: number): () => void {
+  private consumeRetained(consumedBytes: number): readonly ZLinkRetainedStreamOwnerState[] {
     let remaining = consumedBytes;
-    const owners = new Set<ZLinkRetainedStreamOwnerState>();
+    let owners: ZLinkRetainedStreamOwnerState[] | undefined;
+    let lastOwner: ZLinkRetainedStreamOwnerState | undefined;
     while (remaining > 0 && this.retainedHead < this.retainedSegments.length) {
       const segment = this.retainedSegments[this.retainedHead]!;
       const consumed = Math.min(remaining, segment.remainingBytes);
       remaining -= consumed;
       segment.remainingBytes -= consumed;
-      if (segment.owner !== undefined && !owners.has(segment.owner)) {
+      // One owner is created per appendRetained call, whose parts are appended
+      // synchronously and therefore occupy one contiguous segment run.
+      if (segment.owner !== undefined && segment.owner !== lastOwner) {
         segment.owner.claimFrame();
-        owners.add(segment.owner);
+        (owners ??= []).push(segment.owner);
+        lastOwner = segment.owner;
       }
       if (segment.remainingBytes === 0) {
         segment.owner?.removeBufferedSegment();
@@ -287,14 +310,7 @@ export class ZLinkStreamFrameReassembler {
       this.retainedSegments = this.retainedSegments.slice(this.retainedHead);
       this.retainedHead = 0;
     }
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      for (const owner of owners) {
-        owner.releaseFrame();
-      }
-    };
+    return owners ?? EMPTY_RETAINED_OWNERS;
   }
 
   private ensureCapacity(additionalBytes: number): void {

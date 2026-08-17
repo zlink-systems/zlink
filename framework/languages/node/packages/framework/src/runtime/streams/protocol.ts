@@ -178,8 +178,11 @@ export function encodeStreamHeader(header: ZLinkStreamFrameHeader): Uint8Array {
   });
 }
 
-export function decodeStreamHeader(header: Uint8Array): ZLinkStreamFrameHeader {
-  const decoded = decodeStreamWireHeader(header);
+export function decodeStreamHeader(
+  header: Uint8Array,
+  flowEnabled = true
+): ZLinkStreamFrameHeader {
+  const decoded = decodeStreamWireHeader(header, undefined, flowEnabled);
   const kind = decoded.kind as ZLinkStreamMessageKind;
   const flags = decoded.flags as ZLinkStreamHeaderFlags;
   const hasRequestSeq = (flags & ZLinkStreamHeaderFlags.HasRequestSeq) !== 0;
@@ -193,9 +196,9 @@ export function decodeStreamHeader(header: Uint8Array): ZLinkStreamFrameHeader {
   return {
     kind,
     codec: decoded.codec as ZLinkStreamCodec,
-    flags: metadata.size === 0
+    flags: (metadata.size === 0
       ? flags & ~ZLinkStreamHeaderFlags.HasMetadata
-      : flags,
+      : flags) & (flowEnabled ? ~0 : ~ZLinkStreamHeaderFlags.HasFlowId),
     requestSeq: decoded.requestSeq,
     name: decoded.name,
     metadata,

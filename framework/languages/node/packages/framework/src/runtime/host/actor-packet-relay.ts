@@ -79,6 +79,7 @@ export interface ZLinkActorPacketRelayOptions {
   readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
   readonly errorSink: () => { reportRuntimeTaskException(taskName: string, error: unknown): void };
   readonly actorLocationResolver?: () => ZLinkStoreLocationResolvers | undefined;
+  readonly flowCreationEnabled?: () => boolean;
   readonly actorErrorSender?: (
     actorId: string,
     packetName: string,
@@ -221,7 +222,10 @@ export class ZLinkActorPacketRelay {
     const body = RuntimeMessage.fromOwned(Buffer.from(relay.payload, 'base64'));
     let closeFrameMessages = true;
     try {
-      const frameHeader = decodeStreamHeader(messageToBytes(header));
+      const frameHeader = decodeStreamHeader(
+        messageToBytes(header),
+        this.options.flowCreationEnabled?.() ?? true
+      );
       const messageFollowContext = relay.messageFollowContext;
       if (messageFollowContext !== undefined) {
         if (messageFollowContext.deadlineUnixMs !== undefined

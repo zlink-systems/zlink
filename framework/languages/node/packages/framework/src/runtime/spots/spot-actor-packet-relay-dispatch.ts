@@ -37,6 +37,7 @@ interface ZLinkSpotActorPacketRelayDispatchOptions {
     sourceSessionRid: RoutingId,
     declaredTarget?: ZLinkRemoteBoundSessionTarget
   ) => void;
+  readonly flowEnabled?: () => boolean;
 }
 
 export class ZLinkSpotActorPacketRelayDispatch {
@@ -68,7 +69,10 @@ export class ZLinkSpotActorPacketRelayDispatch {
     const header = RuntimeMessage.from(Buffer.from(actorPacketRelay.header, 'base64'));
     const payload = RuntimeMessage.from(Buffer.from(actorPacketRelay.payload, 'base64'));
     try {
-      const frameHeader = decodeStreamHeader(messageToBytes(header));
+      const frameHeader = decodeStreamHeader(
+        messageToBytes(header),
+        this.options.flowEnabled?.() ?? true
+      );
       if (frameHeader.name === ZLINK_REMOTE_ACTOR_SESSION_BIND_PACKET) {
         const actorRef = actorPacketRelay.bindingActorRef;
         const sourceNodeRid = received.routingId as RoutingId | null;

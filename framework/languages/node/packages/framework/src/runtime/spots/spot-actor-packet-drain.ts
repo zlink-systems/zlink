@@ -53,6 +53,7 @@ interface ZLinkSpotActorPacketDrainOptions {
     result: RequestResult
   ) => void;
   readonly waitIdle: () => Promise<void>;
+  readonly flowEnabled?: () => boolean;
 }
 
 const ZLINK_SPOT_ACTOR_RECV_INFO_NO_BIND = 1;
@@ -92,7 +93,7 @@ export class ZLinkSpotActorPacketDrain {
           packetKey = currentPacketKey;
           const pending = this.continuations.get(currentPacketKey);
           if (pending !== undefined) {
-            if (isStreamHeaderMessage(part.message)) {
+            if (isStreamHeaderMessage(part.message, this.flowEnabled())) {
               closeMessages(pending.parts);
               this.continuations.delete(currentPacketKey);
               throw new Error(`Actor packet continuation '${pending.owner}' was replaced before completion.`);
@@ -179,7 +180,7 @@ export class ZLinkSpotActorPacketDrain {
       return false;
     }
     try {
-      const header = decodeStreamHeader(messageToBytes(parts[0]));
+      const header = decodeStreamHeader(messageToBytes(parts[0]), this.flowEnabled());
       return header.kind === ZLinkStreamMessageKind.Request && header.requestSeq !== undefined;
     } catch {
       return false;
@@ -218,7 +219,7 @@ export class ZLinkSpotActorPacketDrain {
     kind: ZLinkStreamMessageKind.Response | ZLinkStreamMessageKind.Error,
     payload: unknown
   ): Message {
-    const requestHeader = decodeStreamHeader(messageToBytes(requestHeaderPart));
+    const requestHeader = decodeStreamHeader(messageToBytes(requestHeaderPart), this.flowEnabled());
     const encoded = encodeFrameworkPayload(
       payload,
       this.options.messageSerializers,
@@ -255,7 +256,7 @@ export class ZLinkSpotActorPacketDrain {
     }
     let header: ReturnType<typeof decodeStreamHeader>;
     try {
-      header = decodeStreamHeader(messageToBytes(parts[0]));
+      header = decodeStreamHeader(messageToBytes(parts[0]), this.flowEnabled());
     } catch {
       return false;
     }
@@ -266,6 +267,10 @@ export class ZLinkSpotActorPacketDrain {
       this.options.bindRemoteActorSession?.(actor, sourceNodeRid, sourceSessionRid);
     }
     return true;
+  }
+
+  private flowEnabled(): boolean {
+    return this.options.flowEnabled?.() ?? true;
   }
 }
 
@@ -291,9 +296,9 @@ function continuationOwner(header: Message): string {
   }
 }
 
-function isStreamHeaderMessage(message: Message): boolean {
+function isStreamHeaderMessage(message: Message, flowEnabled: boolean): boolean {
   try {
-    decodeStreamHeader(messageToBytes(message));
+    decodeStreamHeader(messageToBytes(message), flowEnabled);
     return true;
   } catch {
     return false;

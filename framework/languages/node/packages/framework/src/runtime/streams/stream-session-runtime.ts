@@ -52,7 +52,10 @@ import { DefaultZLinkSessionContext } from './session-context';
 import { ZLinkStreamSessionSerialExecutor } from './session-serial-executor';
 import type { ZLinkApplicationWorkClaim } from '../admission';
 import { ownedMessage } from './stream-message-utils';
-import { ZLinkStreamFrameReassembler } from './stream-frame-reassembler';
+import {
+  ZLinkStreamFrameReassembler,
+  type ZLinkRetainedStreamOwner
+} from './stream-frame-reassembler';
 import type { ServiceActorRef } from '../foundation/service-stateful-registry';
 import type { ServiceRetiredBoundSessionRouteFence } from '../foundation/service-stateful-wire-codec';
 import type {
@@ -248,9 +251,8 @@ export class ZLinkStreamSessionRuntime {
     return this.requireProvidedContext(session);
   }
 
-  private async requireSession(): Promise<ZLinkSession> {
-    const session = await this.sessionReady;
-    return session;
+  private requireSession(): Promise<ZLinkSession> {
+    return this.sessionReady;
   }
 
   enqueueConnected(localAddr?: string, remoteAddr?: string): void {
@@ -260,14 +262,14 @@ export class ZLinkStreamSessionRuntime {
   enqueuePacket(
     payload: Message,
     decodedHeader: ZLinkStreamFrameHeader,
-    terminalRelease: () => void = () => {},
+    terminalOwner?: ZLinkRetainedStreamOwner,
     applicationJobPermit?: ApplicationJobPermitPort
   ): void {
     let terminalReleased = false;
     const releaseTerminal = (): void => {
       if (terminalReleased) return;
       terminalReleased = true;
-      terminalRelease();
+      terminalOwner?.close();
     };
     if (decodedHeader.kind === ZLinkStreamMessageKind.Control) {
       if (messageToBytes(payload).length === 0) {
@@ -1083,7 +1085,10 @@ export class ZLinkStreamSessionNodeRuntime {
       }
       let decodedHeader: ZLinkStreamFrameHeader;
       try {
-        decodedHeader = decodeStreamHeader(result.frame.header);
+        decodedHeader = decodeStreamHeader(
+          result.frame.header,
+          this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
+        );
       } catch (error) {
         result.frame.close();
         this.handleMalformedFrame(
@@ -1117,7 +1122,7 @@ export class ZLinkStreamSessionNodeRuntime {
         state.session.enqueuePacket(
           payload,
           decodedHeader,
-          result.frame.close,
+          result.frame,
           applicationJobPermit
         );
       } catch (error) {

@@ -40,36 +40,50 @@ export function ownedMessage(bytes: Uint8Array): Message {
 }
 
 function createSimpleMessage(initial: Uint8Array, releaseOnClose: boolean): unknown {
-  let current = initial;
-  return {
-    get bytes() {
-      return current;
-    },
-    toBytes() {
-      return new Uint8Array(current);
-    },
-    data() {
-      return current;
-    },
-    size() {
-      return current.byteLength;
-    },
-    isEmpty() {
-      return current.byteLength === 0;
-    },
-    copy() {
-      return createSimpleMessage(new Uint8Array(current), true);
-    },
-    getString() {
-      return utf8Decode(current);
-    },
-    value() {
-      return parseFrameworkJsonV1(utf8Decode(current));
-    },
-    close() {
-      if (releaseOnClose) {
-        current = EMPTY_MESSAGE_BYTES;
-      }
+  return new ZLinkSimpleMessage(initial, releaseOnClose);
+}
+
+class ZLinkSimpleMessage {
+  constructor(
+    private current: Uint8Array,
+    private readonly releaseOnClose: boolean
+  ) {}
+
+  get bytes(): Uint8Array {
+    return this.current;
+  }
+
+  toBytes(): Uint8Array {
+    return new Uint8Array(this.current);
+  }
+
+  data(): Uint8Array {
+    return this.current;
+  }
+
+  size(): number {
+    return this.current.byteLength;
+  }
+
+  isEmpty(): boolean {
+    return this.current.byteLength === 0;
+  }
+
+  copy(): unknown {
+    return createSimpleMessage(new Uint8Array(this.current), true);
+  }
+
+  getString(): string {
+    return utf8Decode(this.current);
+  }
+
+  value(): unknown {
+    return parseFrameworkJsonV1(utf8Decode(this.current));
+  }
+
+  close(): void {
+    if (this.releaseOnClose) {
+      this.current = EMPTY_MESSAGE_BYTES;
     }
-  };
+  }
 }

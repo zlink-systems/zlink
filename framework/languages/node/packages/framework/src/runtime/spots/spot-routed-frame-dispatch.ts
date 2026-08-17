@@ -112,7 +112,8 @@ export class ZLinkSpotRoutedFrameDispatch {
     this.actorPacketRelayDispatch = new ZLinkSpotActorPacketRelayDispatch({
       actorPacketHandler: options.actorPacketHandler,
       actorPacketTargetProvider: options.actorPacketTargetProvider,
-      bindRemoteSession: options.bindRemoteSession
+      bindRemoteSession: options.bindRemoteSession,
+      flowEnabled: () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
     });
     this.routePacketDispatch = new ZLinkSpotRoutePacketDispatch({
       packetHandlers: this.packetHandlers,

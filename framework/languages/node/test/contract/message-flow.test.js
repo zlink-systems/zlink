@@ -160,8 +160,8 @@ test('MFLOW-003/005 standard logger provider receives the structured record', ()
   assert.equal(telemetryRecords.length, 1);
   const record = telemetryRecords[0];
   assert.equal(record.eventName, 'zlink.message_flow');
-  assert.match(record.body, /^zlink flow: event=zlink\.message_flow /);
-  assert.equal(record.attributes.event, 'zlink.message_flow');
+  assert.match(record.body, /^zlink flow: event_id=zlink\.message_flow /);
+  assert.equal(record.attributes.event_id, 'zlink.message_flow');
   assert.equal(record.attributes.phase, 'received');
   assert.equal(record.attributes.surface, 'channel');
   assert.equal(record.attributes.packet, 'EchoRequest');
@@ -311,7 +311,7 @@ test('spec 26 structured log projection uses only the exact keys', () => {
   });
   const keys = Object.keys(telemetryRecords[0].attributes).sort();
   const allowed = [
-    'activation_state', 'actor', 'channel', 'channel_route', 'corr', 'event', 'flow',
+    'activation_state', 'actor', 'channel', 'channel_route', 'corr', 'event_id', 'flow',
     'instance_type', 'kind', 'mesh', 'origin', 'outcome', 'packet', 'phase', 'reason',
     'server_rid', 'size', 'source_rid', 'spot', 'surface', 'target_rid', 'topic'
   ];
@@ -853,6 +853,33 @@ test('MFLOW-EXT spec 27 \u00a74 Off stream reply preserves correlation but not f
   const onHeader = streamProtocol.decodeStreamHeader(streamProtocol.decodeStreamFrame(onFrame).header);
   assert.equal(onHeader.flowId, requestHeader.flowId);
   assert.equal(onHeader.flowOrigin, 'Inbound');
+});
+
+test('MFLOW-EXT spec 27 \u00a74 Off stream decode skips and strips malformed flow fields', () => {
+  const valid = streamProtocol.encodeStreamHeader({
+    kind: streamProtocol.ZLinkStreamMessageKind.Request,
+    codec: streamProtocol.ZLinkStreamCodec.Json,
+    flags: streamProtocol.ZLinkStreamHeaderFlags.None,
+    requestSeq: 9n,
+    name: 'EchoRequest',
+    metadata: new Map(),
+    correlationId: 'corr-9',
+    flowId: '018f2b63-9d4a-7abc-8def-0123456789ab',
+    flowOrigin: 'Inbound'
+  });
+  const malformed = Buffer.from(valid);
+  malformed.fill(0x78, malformed.length - 37, malformed.length - 1);
+  malformed[malformed.length - 1] = 0xff;
+
+  assert.throws(() => streamProtocol.decodeStreamHeader(malformed, true), /flow id|flow origin/i);
+  const decodedOff = streamProtocol.decodeStreamHeader(malformed, false);
+  assert.equal(decodedOff.correlationId, 'corr-9');
+  assert.equal(decodedOff.flowId, undefined);
+  assert.equal(decodedOff.flowOrigin, undefined);
+  assert.equal(
+    decodedOff.flags & streamProtocol.ZLinkStreamHeaderFlags.HasFlowId,
+    0
+  );
 });
 
 test('MFLOW-EXT absent disabled flow does not create an ambient context', () => {

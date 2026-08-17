@@ -34,6 +34,7 @@ export interface ZLinkBoundSessionRelayOptions {
   readonly destroyedActorRefs: ReadonlyMap<string, ActorRef>;
   readonly errorSink: () => { reportRuntimeTaskException(taskName: string, error: unknown): void };
   readonly boundSessionFactory: (actorId: string) => DefaultZLinkBoundSession;
+  readonly flowCreationEnabled?: () => boolean;
 }
 
 export class ZLinkBoundSessionRelay {
@@ -53,6 +54,7 @@ export class ZLinkBoundSessionRelay {
       detachedTaskRunner: options.detachedTaskRunner,
       errorSink: options.errorSink,
       actorLocationResolver: options.actorLocationResolver,
+      flowCreationEnabled: options.flowCreationEnabled,
       //  Lazy: boundSessions is constructed right after actorPackets and the
       //  sender only fires from detached dispatch continuations.
       actorErrorSender: (...args) => this.boundSessions.sendActorError(...args)

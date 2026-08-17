@@ -646,6 +646,7 @@ export class ZLinkFrameworkRuntimeHost implements
             );
       },
       actorLocationResolver: () => this.createActorLocationResolver(),
+      flowCreationEnabled: () => this.flowCreationEnabled(),
       destroyedActorRefs: this.destroyedActorRefs,
       errorSink: () => this.errorSink ?? this.preStartErrorSink,
       boundSessionFactory: (actorId) => {

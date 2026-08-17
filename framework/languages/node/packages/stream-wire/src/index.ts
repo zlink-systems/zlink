@@ -165,7 +165,8 @@ export function encodeStreamWireHeader(
 
 export function decodeStreamWireHeader(
   header: Uint8Array,
-  flags = defaultHeaderFlags
+  flags = defaultHeaderFlags,
+  includeFlow = true
 ): ZLinkStreamWireHeader {
   let offset = 0;
   if (header.length < 5) {
@@ -227,13 +228,16 @@ export function decodeStreamWireHeader(
     if (header.length - offset < 37) {
       throw new Error('Stream flow fields are incomplete.');
     }
-    flowId = asciiDecode(header.subarray(offset, offset + 36));
-    validateFlowId(flowId);
+    if (includeFlow) {
+      flowId = asciiDecode(header.subarray(offset, offset + 36));
+      validateFlowId(flowId);
+    }
     offset += 36;
-    flowOrigin = header[offset++];
-    if (![1, 2, 3, 4].includes(flowOrigin)) {
+    const decodedFlowOrigin = header[offset++];
+    if (includeFlow && ![1, 2, 3, 4].includes(decodedFlowOrigin)) {
       throw new Error('Stream flow origin is invalid.');
     }
+    flowOrigin = includeFlow ? decodedFlowOrigin : undefined;
   }
   if (offset !== header.length) {
     throw new Error('Stream header has trailing bytes.');
