@@ -30,19 +30,25 @@ internal sealed class ZlinkStreamFrameSender(
 
         ZlinkStreamFrameCodec.ValidateSendPayload(payloadBytes.Length, options.MaxSendPayloadSize);
 
-        // Client always stamps a correlation id on non-control packets so the server
-        // can trace/echo it regardless of either side's tracing mode.
-        var correlationId = kind == ZlinkStreamMessageKind.Control
-            ? null
-            : ZlinkStreamCorrelation.Next();
-        var flow = kind == ZlinkStreamMessageKind.Control
-            ? null
-            : ZlinkStreamFlowContext.Current;
-        var flowId = flow?.FlowId ?? (kind == ZlinkStreamMessageKind.Control ? null : ZlinkStreamFlowId.Create());
-        var flowOrigin = flow?.Origin
-                         ?? (kind == ZlinkStreamMessageKind.Control
-                             ? null
-                             : ZlinkStreamFlowOrigin.Application);
+        // Correlation ids are protocol information linking a request with its terminal
+        // reply, so requests carry one at every diagnostics level. One-way sends have
+        // no reply and therefore never carry a correlation id (flow-correlation spec §2).
+        var correlationId = kind == ZlinkStreamMessageKind.Request
+            ? ZlinkStreamCorrelation.Next()
+            : null;
+
+        // Flow fields are trace-only: at Off nothing is created or attached and the
+        // ambient flow context is not even read.
+        string? flowId = null;
+        ZlinkStreamFlowOrigin? flowOrigin = null;
+        if (kind != ZlinkStreamMessageKind.Control
+            && options.DiagnosticsLevel != ZlinkStreamDiagnosticsLevel.Off)
+        {
+            var flow = ZlinkStreamFlowContext.Current;
+            flowId = flow?.FlowId ?? ZlinkStreamFlowId.Create();
+            flowOrigin = flow?.Origin ?? ZlinkStreamFlowOrigin.Application;
+        }
+
         var header = new ZlinkStreamHeader(
             kind,
             payload.Codec,

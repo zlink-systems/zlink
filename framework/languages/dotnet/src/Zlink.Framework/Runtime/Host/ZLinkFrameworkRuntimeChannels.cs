@@ -67,9 +67,39 @@ internal sealed partial class ZLinkFrameworkRuntime
             ZLinkMessageParts.DisposeAll(parts);
             throw;
         }
-        return await nodeRuntime.EntryOutbound
+        // Capture the packet name before handoff: the transport owns and
+        // disposes the parts once submitted (spec 26 §2.1 `sent`).
+        var sentPacketName = Flow.Enabled(ZLinkMessageFlowOutcome.Sent)
+            ? TryReadEnvelopePacketName(parts)
+            : null;
+        var result = await nodeRuntime.EntryOutbound
             .SendToChannelAsync(channelName, parts, cancellationToken, metadata)
             .ConfigureAwait(false);
+        if (result.Status == ZLinkOneWaySubmitStatus.Submitted
+            && sentPacketName is not null
+            && Flow.Enabled(ZLinkMessageFlowOutcome.Sent))
+            Flow.Trace(new ZLinkMessageFlowEvent(
+                ZLinkMessageFlowOutcome.Sent,
+                ZLinkDispatchErrorSurface.RouteMeshChannel,
+                ZLinkDispatchMessageKind.Send,
+                sentPacketName,
+                channelName));
+        return result;
+    }
+
+    // Trace-only helper for the outbound `sent` boundary. Callers gate it with
+    // Flow.Enabled so an Off/Errors dispatch never decodes the header for tracing.
+    internal static string? TryReadEnvelopePacketName(IReadOnlyList<Message> parts)
+    {
+        try
+        {
+            return ZLinkEnvelopeCodec.DecodeHeader(parts, validateFlow: false).MessageName;
+        }
+        catch
+        {
+            // Malformed envelopes surface through the dispatch path, not tracing.
+            return null;
+        }
     }
 
     internal async ValueTask<IReadOnlyList<Message>> RequestToChannelAsync(
@@ -125,10 +155,44 @@ internal sealed partial class ZLinkFrameworkRuntime
             ZLinkMessageParts.DisposeAll(parts);
             throw;
         }
+        if (Flow.Enabled(ZLinkMessageFlowOutcome.Sent))
+        {
+            var header = TryReadEnvelopeHeaderForTrace(parts);
+            if (header is not null)
+                Flow.Trace(new ZLinkMessageFlowEvent(
+                    ZLinkMessageFlowOutcome.Sent,
+                    ZLinkDispatchErrorSurface.RouteMeshChannel,
+                    ZLinkDispatchMessageKind.Request,
+                    header.MessageName,
+                    channelName,
+                    CorrelationId: header.CorrelationId));
+        }
         return await nodeRuntime.EntryOutbound
             .RequestToChannelAsync(channelName, parts, timeout, cancellationToken, metadata)
             .ConfigureAwait(false);
     }
+
+    internal static ZLinkEnvelopeHeader? TryReadEnvelopeHeaderForTrace(
+        IReadOnlyList<Message> parts)
+    {
+        try
+        {
+            return ZLinkEnvelopeCodec.DecodeHeader(parts, validateFlow: false);
+        }
+        catch
+        {
+            // Malformed envelopes surface through the dispatch path, not tracing.
+            return null;
+        }
+    }
+
+    /// <summary>Trace-only route-kind probe: a channel registered for ClientServer
+    /// auto-connect records `surface=channel` (client_server); every other channel
+    /// records the RouteMesh channel surface. Never throws, unlike the dispatch-path
+    /// check that requires a local Client role.</summary>
+    internal bool IsClientServerClientChannel(string channelName) =>
+        Registration.Channels.TryGetValue(channelName, out var channel)
+        && channel.AutoConnectType == ZLinkLocationAutoConnectType.ClientServer;
 
     private bool UsesClientServerClientPath(string channelName)
     {

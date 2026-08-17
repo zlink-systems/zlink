@@ -44,7 +44,8 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         _callbacks = new ZlinkStreamConnectorCallbacks(
             _taskRunner,
             options.DispatchMode,
-            options.MaxPendingDispatchCallbacks);
+            options.MaxPendingDispatchCallbacks,
+            options.DiagnosticsLevel);
         _inboundObservers = new ZlinkStreamInboundObserverDispatcher(
             _taskRunner,
             _callbacks,
@@ -73,6 +74,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             (frame, cancellationToken) =>
                 ((IZlinkStreamConnectorInternal)this).SendFrameAsync(frame, cancellationToken));
         _receiveDispatcher = new ZlinkStreamReceiveDispatcher(
+            options,
             _headerCodec,
             _pending,
             _typedHandlers,

@@ -35,6 +35,18 @@ public sealed class ZlinkStreamConnectorOptions
     public ZlinkStreamCompression Compression { get; init; } = ZlinkStreamCompression.Lz4;
 
     /// <summary>
+    ///     Diagnostics level applied for the connector lifetime. The default,
+    ///     <see cref="ZlinkStreamDiagnosticsLevel.Errors" />, keeps the current wire
+    ///     behavior (outbound frames carry flow_id/flow_origin). At
+    ///     <see cref="ZlinkStreamDiagnosticsLevel.Off" /> the connector neither creates
+    ///     nor attaches flow fields on outbound frames, skips inbound flow validation
+    ///     and flow-context installation (structural length checks remain), and performs
+    ///     no other trace-only work. Correlation ids for requests are protocol
+    ///     information and are kept at every level.
+    /// </summary>
+    public ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; init; } = ZlinkStreamDiagnosticsLevel.Errors;
+
+    /// <summary>
     ///     Optional compression codec for frames marked with <see cref="ZlinkStreamHeaderFlags.PayloadCompressed" />.
     ///     When this value is set, it replaces the built-in compression selected by <see cref="Compression" />.
     ///     Set <see cref="Compression" /> to <see cref="ZlinkStreamCompression.None" /> only when this connector must

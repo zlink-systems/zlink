@@ -3,6 +3,7 @@ using System.Text.Json;
 namespace Systems.Zlink.Stream.Connector.Runtime;
 
 internal sealed class ZlinkStreamReceiveDispatcher(
+    ZlinkStreamConnectorOptions options,
     ZlinkStreamHeaderCodec headerCodec,
     ZlinkStreamPendingRequests pending,
     ZlinkStreamTypedHandlerRegistry typedHandlers,
@@ -16,7 +17,11 @@ internal sealed class ZlinkStreamReceiveDispatcher(
 
     public async ValueTask DispatchPacketAsync(ZlinkStreamFrame frame, CancellationToken cancellationToken)
     {
-        var header = headerCodec.Decode(frame.Header);
+        // At Off, inbound flow fields are framing only: keep the structural length
+        // checks but skip validation, allocation, and flow-context installation.
+        var header = headerCodec.Decode(
+            frame.Header,
+            options.DiagnosticsLevel != ZlinkStreamDiagnosticsLevel.Off);
         inboundObservers.Enqueue(header, frame.Payload);
 
         if (header.Kind == ZlinkStreamMessageKind.Control)
@@ -95,7 +100,9 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             await callbacks.DispatchUserCallbackAsync(
                     async dispatchedToken =>
                     {
-                        using var flow = ZlinkStreamFlowContext.Enter(header.FlowId, header.FlowOrigin);
+                        using var flow = options.DiagnosticsLevel == ZlinkStreamDiagnosticsLevel.Off
+                            ? null
+                            : ZlinkStreamFlowContext.Enter(header.FlowId, header.FlowOrigin);
                         await handler.Invoke(message, dispatchedToken).ConfigureAwait(false);
                     },
                     cancellationToken)

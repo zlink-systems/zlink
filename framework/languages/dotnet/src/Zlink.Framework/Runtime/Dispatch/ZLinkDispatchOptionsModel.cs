@@ -45,8 +45,16 @@ internal sealed class ZLinkDiagnosticsOptionsModel : IZLinkDiagnosticsOptions
 
     public ZLinkDiagnosticsLevelCell? LiveLevel { get; internal set; }
 
-    public ZLinkDiagnosticsLevel ConfiguredLevel { get; private set; } =
-        ZLinkDiagnosticsLevel.Errors;
+    //  Spec 26 §4.1: a level change is an atomic state change every processing
+    //  point observes. Before the runtime installs the live cell, EffectiveLevel
+    //  reads this seed, so it needs the same volatile visibility as the cell.
+    private int _configuredLevel = (int)ZLinkDiagnosticsLevel.Errors;
+
+    public ZLinkDiagnosticsLevel ConfiguredLevel
+    {
+        get => (ZLinkDiagnosticsLevel)Volatile.Read(ref _configuredLevel);
+        private set => Volatile.Write(ref _configuredLevel, (int)value);
+    }
 
     public double SampleRate { get; private set; } = 1.0d;
 

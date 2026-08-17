@@ -4,7 +4,8 @@ internal sealed class ZLinkClientServerDispatcher(
     ZLinkChannelCommandDispatchPipeline commandPipeline,
     ZLinkChannelRequestDispatchPipeline requestPipeline,
     ZLinkCodecRegistryBuilder codecs,
-    Func<bool> flowCaptureEnabled)
+    Func<bool> flowCaptureEnabled,
+    ZLinkDispatchErrorReporter? dispatchErrors = null)
 {
     public async ValueTask DispatchAsync(
         string channelName,
@@ -114,7 +115,35 @@ internal sealed class ZLinkClientServerDispatcher(
         string message,
         uint maximumMessageBytes)
     {
-        if (!ZLinkEnvelopeCodec.CanCorrelateReply(request))
+        var canReply = ZLinkEnvelopeCodec.CanCorrelateReply(request);
+        //  Spec 26 §3.1 closed vocabulary: a malformed channel envelope records
+        //  `zlink.dispatch_error(invalid_frame)` in addition to the protocol
+        //  error reply the peer already receives.
+        if (dispatchErrors is { Enabled: true })
+        {
+            // Keep whatever flow the invalid frame carried in readable form,
+            // but never fabricate a fresh id for its failure record (spec 27 §7).
+            var validFlow = ZLinkEnvelopeCodec.ValidFlow(request);
+            using var flow = ZLinkFlowContext.Enter(
+                validFlow.FlowId,
+                validFlow.FlowOrigin,
+                dispatchErrors.Flow.CaptureEnabled,
+                ZLinkFlowOrigin.Inbound,
+                createIfAbsent: false);
+            dispatchErrors.Report(new ZLinkDispatchFailure(
+                ZLinkDispatchErrorSurface.Channel,
+                received.RequestSeq.HasValue
+                    ? ZLinkDispatchMessageKind.Request
+                    : ZLinkDispatchMessageKind.Send,
+                ZLinkDispatchErrorReason.InvalidFrame,
+                canReply
+                    ? ZLinkDispatchErrorAction.ReplyError
+                    : ZLinkDispatchErrorAction.Drop,
+                request.MessageName,
+                channelName,
+                CorrelationId: request.CorrelationId));
+        }
+        if (!canReply)
             return;
         Reply(
             replyGate,

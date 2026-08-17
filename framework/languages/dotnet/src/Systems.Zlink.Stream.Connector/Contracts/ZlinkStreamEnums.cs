@@ -28,6 +28,19 @@ public enum ZlinkStreamDispatchMode
     Immediate
 }
 
+/// <summary>
+///     Diagnostics level of the connector. Mirrors the server-side message-flow
+///     tracing levels: <see cref="Off" /> disables every trace-only operation,
+///     including outbound flow_id/flow_origin stamping and inbound flow capture.
+/// </summary>
+public enum ZlinkStreamDiagnosticsLevel
+{
+    Off = 0,
+    Errors = 1,
+    Normal = 2,
+    Detailed = 3
+}
+
 public enum ZlinkStreamMessageKind : byte
 {
     Send = 1,

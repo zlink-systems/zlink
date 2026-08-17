@@ -104,10 +104,118 @@ public sealed partial class StreamConnectorTests
             null);
         var header = codec.Decode(frame.HeaderBytes);
 
-        Assert.False(string.IsNullOrWhiteSpace(header.CorrelationId));
+        // One-way sends have no reply, so no correlation id is created (flow-correlation spec §2).
+        Assert.Null(header.CorrelationId);
+        Assert.False(header.Flags.HasFlag(ZlinkStreamHeaderFlags.HasCorrelationId));
         Assert.True(ZlinkStreamFlowId.IsValid(header.FlowId));
         Assert.Equal(ZlinkStreamFlowOrigin.Application, header.FlowOrigin);
         Assert.Equal(codec.Encode(header).ToArray(), codec.Encode(header).ToArray());
+    }
+
+    [Fact]
+    public void OutboundRequestFrameKeepsCorrelationIdAtEveryDiagnosticsLevel()
+    {
+        var codec = new ZlinkStreamHeaderCodec();
+        foreach (var level in new[]
+                 {
+                     ZlinkStreamDiagnosticsLevel.Off,
+                     ZlinkStreamDiagnosticsLevel.Errors,
+                     ZlinkStreamDiagnosticsLevel.Normal,
+                     ZlinkStreamDiagnosticsLevel.Detailed
+                 })
+        {
+            var sender = new ZlinkStreamFrameSender(
+                new ZlinkStreamConnectorOptions
+                {
+                    Endpoint = new Uri("tcp://127.0.0.1:1"),
+                    Compression = ZlinkStreamCompression.None,
+                    DiagnosticsLevel = level
+                },
+                codec,
+                null,
+                new SemaphoreSlim(1, 1),
+                static () => null);
+
+            var frame = sender.BuildOutboundFrame(
+                ZlinkStreamMessageKind.Request,
+                "flow.request",
+                new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty),
+                ZlinkStreamMetadata.Empty,
+                false,
+                new ZlinkStreamRequestSeq(1));
+            var header = codec.Decode(frame.HeaderBytes);
+
+            // Correlation ids are protocol information: kept per request even at Off.
+            Assert.False(string.IsNullOrWhiteSpace(header.CorrelationId));
+            Assert.True(header.Flags.HasFlag(ZlinkStreamHeaderFlags.HasCorrelationId));
+        }
+    }
+
+    [Fact]
+    public void OutboundFramesAtOffCarryNoFlowFieldsAndNoSendCorrelation()
+    {
+        var codec = new ZlinkStreamHeaderCodec();
+        var sender = new ZlinkStreamFrameSender(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri("tcp://127.0.0.1:1"),
+                Compression = ZlinkStreamCompression.None,
+                DiagnosticsLevel = ZlinkStreamDiagnosticsLevel.Off
+            },
+            codec,
+            null,
+            new SemaphoreSlim(1, 1),
+            static () => null);
+
+        using var ambient = ZlinkStreamFlowContext.Enter(
+            ZlinkStreamFlowId.Create(),
+            ZlinkStreamFlowOrigin.Inbound);
+        var send = codec.Decode(sender.BuildOutboundFrame(
+            ZlinkStreamMessageKind.Send,
+            "flow.off",
+            new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty),
+            ZlinkStreamMetadata.Empty,
+            false,
+            null).HeaderBytes);
+        var request = codec.Decode(sender.BuildOutboundFrame(
+            ZlinkStreamMessageKind.Request,
+            "flow.off",
+            new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty),
+            ZlinkStreamMetadata.Empty,
+            false,
+            new ZlinkStreamRequestSeq(2)).HeaderBytes);
+
+        Assert.False(send.Flags.HasFlag(ZlinkStreamHeaderFlags.HasFlowId));
+        Assert.Null(send.FlowId);
+        Assert.Null(send.FlowOrigin);
+        Assert.Null(send.CorrelationId);
+        Assert.False(request.Flags.HasFlag(ZlinkStreamHeaderFlags.HasFlowId));
+        Assert.Null(request.FlowId);
+        Assert.Null(request.FlowOrigin);
+    }
+
+    [Fact]
+    public void HeaderDecodeWithoutFlowCaptureKeepsStructuralChecks()
+    {
+        var codec = new ZlinkStreamHeaderCodec();
+        var encoded = codec.Encode(new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Send,
+            ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            "flow.test",
+            ZlinkStreamMetadata.Empty,
+            FlowId: ZlinkStreamFlowId.Create(),
+            FlowOrigin: ZlinkStreamFlowOrigin.Inbound));
+
+        var decoded = codec.Decode(encoded, false);
+        Assert.Null(decoded.FlowId);
+        Assert.Null(decoded.FlowOrigin);
+        Assert.True(decoded.Flags.HasFlag(ZlinkStreamHeaderFlags.HasFlowId));
+
+        // The structural length check is kept: a flow flag with truncated flow bytes fails.
+        var truncated = encoded[..^1];
+        Assert.Throws<ZlinkStreamException>(() => codec.Decode(truncated, false));
     }
 
     [Fact]

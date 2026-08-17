@@ -79,7 +79,8 @@ internal sealed class ZLinkEntrySpotDispatchPump : IAsyncDisposable
                                     _activation.ChannelName,
                                     ZLinkAcceptedWorkAdmission.Closed,
                                     received.SourceNodeRid is null
-                                    || received.SourceNodeRid == _activation.NodeRid);
+                                    || received.SourceNodeRid == _activation.NodeRid,
+                                    _runtime.Flow.CaptureEnabled);
                                 continue;
                             }
 

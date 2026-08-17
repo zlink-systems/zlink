@@ -2251,7 +2251,8 @@ public sealed class RelocationRuntimeTests
 
         ZLinkSpotActivationDispatcher.RejectApplicationRouteForStaleMessageFollow(
             received,
-            "mesh");
+            "mesh",
+            validateFlow: true);
 
         Assert.NotNull(replyHeader);
         Assert.Equal(

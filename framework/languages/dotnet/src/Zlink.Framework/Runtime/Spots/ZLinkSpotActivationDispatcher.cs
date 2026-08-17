@@ -345,20 +345,25 @@ internal sealed class ZLinkSpotActivationDispatcher
         }
     }
 
+    //  The rejection replies below decode the inbound envelope with the live
+    //  spec 27 §4 capture gate: while tracing is on, a malformed flow pair is a
+    //  protocol error (§3) and the operation completes as ProtocolError instead
+    //  of the rejection kind; at Off the pair is framing only and is skipped.
     internal static void RejectApplicationRouteForDrain(
         ZLinkBackendRouteReceived received,
         string channelName,
         ZLinkAcceptedWorkAdmission admission,
-        bool localTarget)
+        bool localTarget,
+        bool validateFlow)
     {
         using (received)
         {
             if (!received.CanReply || received.Parts.Count == 0) return;
             try
             {
-                var header = ZLinkEnvelopeCodec.DecodeHeader(
-                    received.Parts,
-                    validateFlow: false);
+                var header = DecodeRejectionHeader(
+                    received, channelName, validateFlow);
+                if (header is null) return;
                 var errorKind = admission switch
                 {
                     ZLinkAcceptedWorkAdmission.Closed =>
@@ -391,16 +396,17 @@ internal sealed class ZLinkSpotActivationDispatcher
 
     internal static void RejectApplicationRouteForRelocation(
         ZLinkBackendRouteReceived received,
-        string channelName)
+        string channelName,
+        bool validateFlow)
     {
         using (received)
         {
             if (!received.CanReply || received.Parts.Count == 0) return;
             try
             {
-                var header = ZLinkEnvelopeCodec.DecodeHeader(
-                    received.Parts,
-                    validateFlow: false);
+                var header = DecodeRejectionHeader(
+                    received, channelName, validateFlow);
+                if (header is null) return;
                 var reply = ZLinkSpotReplyEnvelope.EncodeErrorParts(
                     channelName,
                     header.MessageName,
@@ -419,16 +425,17 @@ internal sealed class ZLinkSpotActivationDispatcher
 
     internal static void RejectApplicationRouteForStaleMessageFollow(
         ZLinkBackendRouteReceived received,
-        string channelName)
+        string channelName,
+        bool validateFlow)
     {
         using (received)
         {
             if (!received.CanReply || received.Parts.Count == 0) return;
             try
             {
-                var header = ZLinkEnvelopeCodec.DecodeHeader(
-                    received.Parts,
-                    validateFlow: false);
+                var header = DecodeRejectionHeader(
+                    received, channelName, validateFlow);
+                if (header is null) return;
                 var reply = ZLinkSpotReplyEnvelope.EncodeErrorParts(
                     channelName,
                     header.MessageName,
@@ -441,6 +448,30 @@ internal sealed class ZLinkSpotActivationDispatcher
             catch
             {
             }
+        }
+    }
+
+    //  Shared decode step for the rejection replies above. Returns null when the
+    //  operation was already completed (as ProtocolError) or cannot be decoded.
+    private static ZLinkEnvelopeHeader? DecodeRejectionHeader(
+        ZLinkBackendRouteReceived received,
+        string channelName,
+        bool validateFlow)
+    {
+        try
+        {
+            return ZLinkEnvelopeCodec.DecodeHeader(received.Parts, validateFlow);
+        }
+        catch (ZLinkEnvelopeProtocolException protocolError)
+        {
+            if (ZLinkEnvelopeCodec.CanCorrelateReply(protocolError.Header))
+                ZLinkSpotReplySubmitter.SubmitAndDispose(
+                    received,
+                    ZLinkSpotReplyEnvelope.EncodeProtocolErrorParts(
+                        channelName,
+                        protocolError.Header,
+                        protocolError.Message));
+            return null;
         }
     }
 

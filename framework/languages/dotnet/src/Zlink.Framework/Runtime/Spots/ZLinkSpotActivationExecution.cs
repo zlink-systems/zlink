@@ -381,13 +381,15 @@ internal abstract partial class ZLinkSpotActivation
                 ZLinkSpotActivationDispatcher
                     .RejectApplicationRouteForStaleMessageFollow(
                         received,
-                        ChannelName);
+                        ChannelName,
+                        _runtime.Flow.CaptureEnabled);
                 return;
             case ZLinkSpotMessageFollowResult.Full:
                 ZLinkSpotActivationDispatcher
                     .RejectApplicationRouteForRelocation(
                         received,
-                        ChannelName);
+                        ChannelName,
+                        _runtime.Flow.CaptureEnabled);
                 return;
             case ZLinkSpotMessageFollowResult.NotApplicable:
                 QueueApplicationRouteSerialized(received);
@@ -1007,7 +1009,8 @@ internal abstract partial class ZLinkSpotActivation
                     ChannelName,
                     admission,
                     received.SourceNodeRid is null
-                    || received.SourceNodeRid == NodeRid);
+                    || received.SourceNodeRid == NodeRid,
+                    _runtime.Flow.CaptureEnabled);
             },
             () =>
             {
@@ -1017,7 +1020,8 @@ internal abstract partial class ZLinkSpotActivation
                     ZLinkSpotActivationDispatcher
                         .RejectApplicationRouteForRelocation(
                             received,
-                            ChannelName);
+                            ChannelName,
+                            _runtime.Flow.CaptureEnabled);
             },
             received.Dispose);
     }
@@ -1037,13 +1041,15 @@ internal abstract partial class ZLinkSpotActivation
                 ZLinkSpotActivationDispatcher
                     .RejectApplicationRouteForStaleMessageFollow(
                         received,
-                        ChannelName);
+                        ChannelName,
+                        _runtime.Flow.CaptureEnabled);
                 return ValueTask.CompletedTask;
             case ZLinkSpotMessageFollowResult.Full:
                 ZLinkSpotActivationDispatcher
                     .RejectApplicationRouteForRelocation(
                         received,
-                        ChannelName);
+                        ChannelName,
+                        _runtime.Flow.CaptureEnabled);
                 return ValueTask.CompletedTask;
             case ZLinkSpotMessageFollowResult.NotApplicable:
                 return _dispatcher.DispatchRouteAsync(
@@ -1640,13 +1646,15 @@ internal abstract partial class ZLinkSpotActivation
                 ZLinkSpotActivationDispatcher
                     .RejectApplicationRouteForStaleMessageFollow(
                         received,
-                        ChannelName);
+                        ChannelName,
+                        _runtime.Flow.CaptureEnabled);
                 return true;
             case ZLinkSpotMessageFollowResult.Full:
                 ZLinkSpotActivationDispatcher
                     .RejectApplicationRouteForRelocation(
                         received,
-                        ChannelName);
+                        ChannelName,
+                        _runtime.Flow.CaptureEnabled);
                 return true;
             case ZLinkSpotMessageFollowResult.NotApplicable:
                 return false;
@@ -1672,7 +1680,8 @@ internal abstract partial class ZLinkSpotActivation
                 ZLinkSpotActivationDispatcher
                     .RejectApplicationRouteForRelocation(
                         route.Received,
-                        ChannelName);
+                        ChannelName,
+                        _runtime.Flow.CaptureEnabled);
     }
 
     private void ResumePendingMessageFollowRoutes()
@@ -1704,7 +1713,8 @@ internal abstract partial class ZLinkSpotActivation
         foreach (var route in pending)
             ZLinkSpotActivationDispatcher.RejectApplicationRouteForRelocation(
                 route.Received,
-                ChannelName);
+                ChannelName,
+                _runtime.Flow.CaptureEnabled);
     }
 
     private void DisposePendingMessageFollowRoutes()

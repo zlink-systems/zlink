@@ -206,6 +206,7 @@ public sealed partial class StreamConnectorTests
         Assert.False(options.SkipServerCertificateValidation);
         Assert.Equal(ZlinkStreamDispatchMode.Manual, options.DispatchMode);
         Assert.Equal(ZlinkStreamCompression.Lz4, options.Compression);
+        Assert.Equal(ZlinkStreamDiagnosticsLevel.Errors, options.DiagnosticsLevel);
         Assert.Null(options.CompressionCodec);
         Assert.IsType<ZlinkStreamPacketNameResolver>(options.NameResolver);
         Assert.Null(options.PayloadCodec);

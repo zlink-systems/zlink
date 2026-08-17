@@ -3,6 +3,60 @@ namespace Zlink.Framework.Runtime.Channels;
 using System.Diagnostics;
 using Zlink.Framework.Runtime.Messaging;
 
+//  Owns the single spec 26 §2.2 `reply_received` terminal for one outbound
+//  channel/node request. Mirrors Java `beginRequestTerminal` and Node
+//  `traceTerminal`: the interlocked flag keeps the emission exactly-once across
+//  reselection retries, decode failures, error replies, and wrapper layers.
+internal sealed class ZLinkChannelRequestTerminalTrace(
+    ZLinkMessageFlowTracer tracer,
+    ZLinkDispatchErrorSurface surface,
+    string packetName,
+    string? channelName = null,
+    string? meshName = null,
+    string? targetRid = null) : IDisposable
+{
+    private readonly long _started = Stopwatch.GetTimestamp();
+    private string? _correlationId;
+    private ZLinkMessageFlowResult _result = ZLinkMessageFlowResult.Failed;
+    private int _emitted;
+
+    public void SetCorrelation(string? correlationId) => _correlationId = correlationId;
+
+    public void Succeeded() => _result = ZLinkMessageFlowResult.Succeeded;
+
+    public void Failed(Exception failure)
+    {
+        _result = failure switch
+        {
+            OperationCanceledException => ZLinkMessageFlowResult.Cancelled,
+            ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.ShuttingDown } =>
+                ZLinkMessageFlowResult.Shutdown,
+            ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.CapacityExceeded } =>
+                ZLinkMessageFlowResult.Backpressured,
+            _ => ZLinkMessageFlowResult.Failed
+        };
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _emitted, 1) != 0) return;
+        if (!tracer.Enabled(ZLinkMessageFlowOutcome.ReplyReceived, _result)) return;
+        tracer.Trace(new ZLinkMessageFlowEvent(
+            ZLinkMessageFlowOutcome.ReplyReceived,
+            surface,
+            ZLinkDispatchMessageKind.Request,
+            packetName,
+            channelName,
+            CorrelationId: _correlationId,
+            MeshName: meshName,
+            TargetRid: targetRid,
+            DurationSeconds: tracer.DetailedEnabled
+                ? Stopwatch.GetElapsedTime(_started).TotalSeconds
+                : null,
+            Result: _result));
+    }
+}
+
 internal sealed class ZLinkRouteClient(ZLinkFrameworkRuntime runtime) : IZLinkRouteClient
 {
     public IZLinkSendCall SendToNode<TMessage>(
@@ -152,40 +206,66 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
         var timeout = _timeout ?? runtime.Registration.ResolveChannelRequestTimeout(channelName);
         var started = Stopwatch.GetTimestamp();
         var remaining = timeout;
-        for (var attempt = 0; ; attempt++)
-        {
-            var header = ZLinkClientCallCodec.CreateEnvelope(
-                ZLinkMessageKind.Request,
-                channelName,
+        //  One logical request owns one `reply_received` terminal, even when the
+        //  ShuttingDown reselection loop below submits more than once.
+        var terminal = runtime.Flow.CaptureEnabled
+            ? new ZLinkChannelRequestTerminalTrace(
+                runtime.Flow,
+                runtime.IsClientServerClientChannel(channelName)
+                    ? ZLinkDispatchErrorSurface.Channel
+                    : ZLinkDispatchErrorSurface.RouteMeshChannel,
                 packetName,
-                remaining);
-            var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(header, request, runtime.Registration.Codecs);
-            var reply = await runtime
-                .RequestToChannelAsync(
+                channelName)
+            : null;
+        try
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                var header = ZLinkClientCallCodec.CreateEnvelope(
+                    ZLinkMessageKind.Request,
                     channelName,
-                    parts,
-                    remaining,
-                    cancellationToken,
-                    _metadata.Encode())
-                .ConfigureAwait(false);
-            try
-            {
-                return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
-                    reply,
-                    "Channel request reply is empty.",
-                    $"Channel request failed for '{packetName}'.",
-                    runtime.Registration.Codecs,
-                    runtime.Flow.CaptureEnabled);
+                    packetName,
+                    remaining);
+                terminal?.SetCorrelation(header.CorrelationId);
+                var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(header, request, runtime.Registration.Codecs);
+                var reply = await runtime
+                    .RequestToChannelAsync(
+                        channelName,
+                        parts,
+                        remaining,
+                        cancellationToken,
+                        _metadata.Encode())
+                    .ConfigureAwait(false);
+                try
+                {
+                    var decoded = ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
+                        reply,
+                        "Channel request reply is empty.",
+                        $"Channel request failed for '{packetName}'.",
+                        runtime.Registration.Codecs,
+                        runtime.Flow.CaptureEnabled);
+                    terminal?.Succeeded();
+                    return decoded;
+                }
+                catch (ZLinkFrameworkException failure)
+                    when (failure.Kind == ZLinkFrameworkErrorKind.ShuttingDown
+                          && attempt < ShuttingDownReselectionLimit
+                          && timeout - Stopwatch.GetElapsedTime(started)
+                              >= ShuttingDownReselectionFloor)
+                {
+                    remaining = timeout - Stopwatch.GetElapsedTime(started);
+                    if (remaining < ShuttingDownReselectionFloor) throw;
+                }
             }
-            catch (ZLinkFrameworkException failure)
-                when (failure.Kind == ZLinkFrameworkErrorKind.ShuttingDown
-                      && attempt < ShuttingDownReselectionLimit
-                      && timeout - Stopwatch.GetElapsedTime(started)
-                          >= ShuttingDownReselectionFloor)
-            {
-                remaining = timeout - Stopwatch.GetElapsedTime(started);
-                if (remaining < ShuttingDownReselectionFloor) throw;
-            }
+        }
+        catch (Exception failure)
+        {
+            terminal?.Failed(failure);
+            throw;
+        }
+        finally
+        {
+            terminal?.Dispose();
         }
     }
 }
@@ -231,6 +311,14 @@ internal sealed class ZLinkRouteSendCall<TMessage>(
                 .SendToNodeAsync(targetNodeRid, parts, cancellationToken, _metadata.Encode())
                 .ConfigureAwait(false);
             ZLinkOneWaySubmitOutcome.EnsureAccepted(result, "Node send");
+            if (runtime.Flow.Enabled(ZLinkMessageFlowOutcome.Sent))
+                runtime.Flow.Trace(new ZLinkMessageFlowEvent(
+                    ZLinkMessageFlowOutcome.Sent,
+                    ZLinkDispatchErrorSurface.RouteMeshChannel,
+                    ZLinkDispatchMessageKind.Send,
+                    _messageName,
+                    MeshName: meshName,
+                    TargetRid: targetNodeRid.ToString()));
         }
         catch
         {
@@ -302,29 +390,61 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
         var timeout = _timeout ?? nodeRuntime.Registration.DefaultRequestTimeout
             ?? runtime.Registration.DefaultRequestTimeout;
         var packetName = ZLinkMessageNameResolver.ResolveFromMessage(request);
-        runtime.EnsureKnownRouteMeshPeer(meshName, targetNodeRid, $"packet '{packetName}'");
-        var header = ZLinkClientCallCodec.CreateEnvelope(
-            ZLinkMessageKind.Request,
-            meshName,
-            packetName,
-            timeout);
-        var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
-            header,
-            request,
-            runtime.Registration.Codecs);
-        var reply = await nodeRuntime.RequestToNodeAsync(
-                targetNodeRid,
-                parts,
-                timeout,
-                cancellationToken,
-                _metadata.Encode())
-            .ConfigureAwait(false);
-        return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
-            reply,
-            "Node request reply is empty.",
-            $"Node request failed for '{packetName}'.",
-            runtime.Registration.Codecs,
-            runtime.Flow.CaptureEnabled);
+        var terminal = runtime.Flow.CaptureEnabled
+            ? new ZLinkChannelRequestTerminalTrace(
+                runtime.Flow,
+                ZLinkDispatchErrorSurface.RouteMeshChannel,
+                packetName,
+                meshName: meshName,
+                targetRid: targetNodeRid.ToString())
+            : null;
+        try
+        {
+            runtime.EnsureKnownRouteMeshPeer(meshName, targetNodeRid, $"packet '{packetName}'");
+            var header = ZLinkClientCallCodec.CreateEnvelope(
+                ZLinkMessageKind.Request,
+                meshName,
+                packetName,
+                timeout);
+            terminal?.SetCorrelation(header.CorrelationId);
+            var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
+                header,
+                request,
+                runtime.Registration.Codecs);
+            if (runtime.Flow.Enabled(ZLinkMessageFlowOutcome.Sent))
+                runtime.Flow.Trace(new ZLinkMessageFlowEvent(
+                    ZLinkMessageFlowOutcome.Sent,
+                    ZLinkDispatchErrorSurface.RouteMeshChannel,
+                    ZLinkDispatchMessageKind.Request,
+                    packetName,
+                    CorrelationId: header.CorrelationId,
+                    MeshName: meshName,
+                    TargetRid: targetNodeRid.ToString()));
+            var reply = await nodeRuntime.RequestToNodeAsync(
+                    targetNodeRid,
+                    parts,
+                    timeout,
+                    cancellationToken,
+                    _metadata.Encode())
+                .ConfigureAwait(false);
+            var decoded = ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
+                reply,
+                "Node request reply is empty.",
+                $"Node request failed for '{packetName}'.",
+                runtime.Registration.Codecs,
+                runtime.Flow.CaptureEnabled);
+            terminal?.Succeeded();
+            return decoded;
+        }
+        catch (Exception failure)
+        {
+            terminal?.Failed(failure);
+            throw;
+        }
+        finally
+        {
+            terminal?.Dispose();
+        }
     }
 
 }

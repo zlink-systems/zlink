@@ -36,6 +36,8 @@ internal static class ZlinkStreamConnectorOptionsValidator
             throw Validation("MaxInboundObserverNotifications must be positive.");
         if (options.MaxInboundObserverPayloadPreviewBytes < 0)
             throw Validation("MaxInboundObserverPayloadPreviewBytes must not be negative.");
+        if (!Enum.IsDefined(options.DiagnosticsLevel))
+            throw Validation("DiagnosticsLevel is invalid.");
     }
 
     private static void ValidateHeartbeat(ZlinkStreamHeartbeatOptions heartbeat)

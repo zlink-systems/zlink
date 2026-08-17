@@ -25,6 +25,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private bool _disposed;
     private IDisposable? _manualConnectionAttachment;
     private Task? _disposeTask;
+    private readonly ZLinkMessageFlowTracer? _flow;
 
     // Monitoring subscribers use this edge notification to request a fresh
     // snapshot. The callback only signals a bounded channel; it never reads
@@ -37,7 +38,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         IZLinkBackendRuntimeContext context,
         IZLinkSocketConfig socketConfig,
         TimeSpan requestTimeout,
-        CancellationToken stopToken)
+        CancellationToken stopToken,
+        ZLinkMessageFlowTracer? flow = null)
     {
         _channelName = ZLinkChannelName.FromBoundary(
             channelName,
@@ -47,6 +49,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         _socketConfig = socketConfig;
         _requestTimeout = requestTimeout;
         _stopToken = stopToken;
+        _flow = flow;
     }
 
     internal void AddManual(string endpoint) =>
@@ -154,12 +157,26 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             throw ZLinkClientServerMessageBound.CreateExceededException(
                 target.AdmittedMaximumMessageBytes);
         }
+        // Capture the trace fields before the transport takes ownership of the
+        // parts; emit `sent` only after the local transport accepts them.
+        var sentPacketName = _flow?.Enabled(ZLinkMessageFlowOutcome.Sent) == true
+            ? ZLinkFrameworkRuntime.TryReadEnvelopePacketName(parts)
+            : null;
         try
         {
             await target.Socket.Send()
                 .Messages(parts)
                 .Async(cancellationToken)
                 .ConfigureAwait(false);
+            if (sentPacketName is not null
+                && _flow!.Enabled(ZLinkMessageFlowOutcome.Sent))
+                _flow.Trace(new ZLinkMessageFlowEvent(
+                    ZLinkMessageFlowOutcome.Sent,
+                    ZLinkDispatchErrorSurface.Channel,
+                    ZLinkDispatchMessageKind.Send,
+                    sentPacketName,
+                    _channelName.Value,
+                    ServerRid: target.SelectionServerRid?.ToString()));
             return new ZLinkOneWaySubmitResult(
                 ZLinkOneWaySubmitStatus.Submitted);
         }
@@ -230,6 +247,17 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 throw ZLinkRequestFailureMapper.CreateTimedOutRequestException(
                     $"ClientServer channel '{_channelName}' had no request time remaining after route admission.");
             }
+            if (_flow?.Enabled(ZLinkMessageFlowOutcome.Sent) == true
+                && ZLinkFrameworkRuntime.TryReadEnvelopeHeaderForTrace(parts)
+                    is { } sentHeader)
+                _flow.Trace(new ZLinkMessageFlowEvent(
+                    ZLinkMessageFlowOutcome.Sent,
+                    ZLinkDispatchErrorSurface.Channel,
+                    ZLinkDispatchMessageKind.Request,
+                    sentHeader.MessageName,
+                    _channelName.Value,
+                    CorrelationId: sentHeader.CorrelationId,
+                    ServerRid: target.SelectionServerRid?.ToString()));
             return await ZLinkRawRequestSubmitter.SubmitAsync(
                     parts,
                     (pending, nativeTimeout, token) => target.Socket.Request()

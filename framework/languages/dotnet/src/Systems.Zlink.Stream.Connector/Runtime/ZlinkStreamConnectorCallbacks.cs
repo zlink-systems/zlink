@@ -3,7 +3,8 @@ namespace Systems.Zlink.Stream.Connector.Runtime;
 internal sealed class ZlinkStreamConnectorCallbacks(
     ZlinkStreamTaskRunner taskRunner,
     ZlinkStreamDispatchMode dispatchMode,
-    int maxPendingDispatchCallbacks)
+    int maxPendingDispatchCallbacks,
+    ZlinkStreamDiagnosticsLevel diagnosticsLevel = ZlinkStreamDiagnosticsLevel.Errors)
 {
     private readonly object _dispatchGate = new();
     private readonly LinkedList<QueuedCallback> _dispatchQueue = new();
@@ -96,7 +97,7 @@ internal sealed class ZlinkStreamConnectorCallbacks(
                 handlers,
                 async (handler, dispatchedToken) =>
                 {
-                    using var flow = ZlinkStreamFlowContext.EnterNew(ZlinkStreamFlowOrigin.Lifecycle);
+                    using var flow = EnterLifecycleFlow();
                     await handler(error, dispatchedToken).ConfigureAwait(false);
                 },
                 cancellationToken,
@@ -137,7 +138,7 @@ internal sealed class ZlinkStreamConnectorCallbacks(
                 handlers,
                 async (handler, dispatchedToken) =>
                 {
-                    using var flow = ZlinkStreamFlowContext.EnterNew(ZlinkStreamFlowOrigin.Lifecycle);
+                    using var flow = EnterLifecycleFlow();
                     await handler(new ZlinkStreamDisconnected(closeReason), dispatchedToken)
                         .ConfigureAwait(false);
                 },
@@ -155,7 +156,7 @@ internal sealed class ZlinkStreamConnectorCallbacks(
                 handlers,
                 async (handler, dispatchedToken) =>
                 {
-                    using var flow = ZlinkStreamFlowContext.EnterNew(ZlinkStreamFlowOrigin.Lifecycle);
+                    using var flow = EnterLifecycleFlow();
                     await handler(change, dispatchedToken).ConfigureAwait(false);
                 },
                 cancellationToken,
@@ -216,7 +217,9 @@ internal sealed class ZlinkStreamConnectorCallbacks(
                         var reply = await request().ConfigureAwait(false);
                         completion = _ =>
                         {
-                            using var flow = ZlinkStreamFlowContext.Enter(reply.FlowId, reply.FlowOrigin);
+                            using var flow = diagnosticsLevel == ZlinkStreamDiagnosticsLevel.Off
+                                ? null
+                                : ZlinkStreamFlowContext.Enter(reply.FlowId, reply.FlowOrigin);
                             callback(reply.Error is { } error
                                 ? failure(error)
                                 : success(reply.Payload!));
@@ -252,6 +255,14 @@ internal sealed class ZlinkStreamConnectorCallbacks(
             ReleaseRequestCallbackReservation(reserved);
             throw;
         }
+    }
+
+    private IDisposable? EnterLifecycleFlow()
+    {
+        // Lifecycle flows are trace-only; at Off no flow context is created.
+        return diagnosticsLevel == ZlinkStreamDiagnosticsLevel.Off
+            ? null
+            : ZlinkStreamFlowContext.EnterNew(ZlinkStreamFlowOrigin.Lifecycle);
     }
 
     private async ValueTask InvokeUserCallbackAsync(

@@ -4,7 +4,8 @@ internal sealed class ZLinkChannelRuntimeManager(
     IZLinkBackendAdapterFactory backendAdapterFactory,
     ZLinkFrameworkRegistration registration,
     ZLinkChannelReceiveLoop receiveLoop,
-    ZLinkFanoutRuntimeService fanoutRuntime)
+    ZLinkFanoutRuntimeService fanoutRuntime,
+    Func<ZLinkMessageFlowTracer>? outboundFlow = null)
 {
     private readonly ZLinkChannelBundleFactory _bundleFactory = new(registration);
 
@@ -133,7 +134,8 @@ internal sealed class ZLinkChannelRuntimeManager(
                     channel.Client!.SocketConfig,
                     channel.Client.SocketConfig.SendTimeout
                     ?? registration.DefaultSocketSendTimeout,
-                    state.StopTokenSource.Token);
+                    state.StopTokenSource.Token,
+                    outboundFlow?.Invoke());
                 state.ClientServerClientRuntimes.Add(entry.Key, runtime);
                 runtime.OwnManualConnectionAttachment(channel.Client.ManualConnections.Attach(
                     runtime.AddManual,

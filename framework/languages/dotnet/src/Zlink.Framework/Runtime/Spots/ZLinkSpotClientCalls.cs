@@ -467,24 +467,51 @@ internal sealed class ZLinkCurrentSpotRequestCall<TMessage>(
     private async ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)
     {
         var timeout = _timeout ?? activation.DefaultRequestTimeout;
-        var header = ZLinkClientCallCodec.CreateEnvelope(
-            ZLinkMessageKind.Request,
-            channelName,
-            ZLinkMessageNameResolver.ResolveFromMessage(request),
-            timeout);
-        var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(header, request, activation.Codecs);
-        var reply = await activation.OutboundEndpoint.RequestToChannelAsync(
-            channelName,
-            parts,
-            timeout,
-            cancellationToken,
-            _metadata.Encode());
-        return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
-            reply,
-            "SPOT channel request reply is empty.",
-            "SPOT channel request failed.",
-            activation.Codecs,
-            activation.Flow.CaptureEnabled);
+        var packetName = ZLinkMessageNameResolver.ResolveFromMessage(request);
+        //  Same spec 26 §2.2 terminal ownership as ZLinkChannelRequestCall: the
+        //  spot-context channel request records its one `reply_received` here.
+        var terminal = activation.Flow.CaptureEnabled
+            ? new ZLinkChannelRequestTerminalTrace(
+                activation.Flow,
+                activation.OutboundEndpoint.IsClientServerClientChannel(channelName)
+                    ? ZLinkDispatchErrorSurface.Channel
+                    : ZLinkDispatchErrorSurface.RouteMeshChannel,
+                packetName,
+                channelName)
+            : null;
+        try
+        {
+            var header = ZLinkClientCallCodec.CreateEnvelope(
+                ZLinkMessageKind.Request,
+                channelName,
+                packetName,
+                timeout);
+            terminal?.SetCorrelation(header.CorrelationId);
+            var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(header, request, activation.Codecs);
+            var reply = await activation.OutboundEndpoint.RequestToChannelAsync(
+                channelName,
+                parts,
+                timeout,
+                cancellationToken,
+                _metadata.Encode());
+            var decoded = ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
+                reply,
+                "SPOT channel request reply is empty.",
+                "SPOT channel request failed.",
+                activation.Codecs,
+                activation.Flow.CaptureEnabled);
+            terminal?.Succeeded();
+            return decoded;
+        }
+        catch (Exception failure)
+        {
+            terminal?.Failed(failure);
+            throw;
+        }
+        finally
+        {
+            terminal?.Dispose();
+        }
     }
 
 

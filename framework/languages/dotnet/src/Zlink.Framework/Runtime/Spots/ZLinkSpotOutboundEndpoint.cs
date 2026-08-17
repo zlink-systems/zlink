@@ -35,6 +35,11 @@ internal sealed class ZLinkSpotOutboundEndpoint(
         return new ZLinkCurrentSpotRequestCall<TRequest>(activation, channelName, request);
     }
 
+    /// <summary>Trace-only route-kind probe for the spot-context channel call
+    /// builders (spec 26 §3.1 `channel_route_kind`).</summary>
+    internal bool IsClientServerClientChannel(string channelName) =>
+        runtime.IsClientServerClientChannel(channelName);
+
     public async ValueTask<IReadOnlyList<Message>> RequestToChannelAsync(
         string channelName,
         IReadOnlyList<Message> parts,
