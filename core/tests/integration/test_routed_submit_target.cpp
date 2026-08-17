@@ -662,6 +662,62 @@ void test_router_exact_target_is_invalid_after_same_rid_handover ()
     test_context_socket_close_zero_linger (router);
 }
 
+void test_router_exact_target_survives_unrelated_peer_churn ()
+{
+    void *router_a = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *router_b = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *churn_router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (router_a, "A", 1));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (router_b, "B", 1));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (churn_router, "C", 1));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router_a, "inproc://routed-submit-churn-router-a"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router_b, "inproc://routed-submit-churn-router-b"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (router_a, "inproc://routed-submit-churn-router-b"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (router_b, "inproc://routed-submit-churn-router-a"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (churn_router, "inproc://routed-submit-peer-churn"));
+
+    const zlink_routing_id_t router_b_rid = make_rid ("B");
+    const zlink_routed_submit_target_t target =
+      select_router_target_eventually (router_a, &router_b_rid);
+
+    for (int iteration = 0; iteration < 64; ++iteration) {
+        void *churn_dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_routing_id (churn_dealer, "D", 1));
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_connect (churn_dealer,
+                         "inproc://routed-submit-peer-churn"));
+
+        const std::string attached =
+          "exact-during-peer-attach-" + std::to_string (iteration);
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_SUBMIT_OK,
+          router_send_text (router_a, &target, attached.c_str ()));
+        TEST_ASSERT_TRUE (
+          recv_router_part_eventually (router_b, attached));
+
+        churn_dealer =
+          test_context_socket_close_zero_linger (churn_dealer);
+
+        const std::string detached =
+          "exact-during-peer-detach-" + std::to_string (iteration);
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_SUBMIT_OK,
+          router_send_text (router_a, &target, detached.c_str ()));
+        TEST_ASSERT_TRUE (
+          recv_router_part_eventually (router_b, detached));
+    }
+
+    test_context_socket_close_zero_linger (churn_router);
+    test_context_socket_close_zero_linger (router_b);
+    test_context_socket_close_zero_linger (router_a);
+}
+
 void test_dealer_exact_target_keeps_blocked_a_isolated_from_b ()
 {
     const uint64_t hwm = 65536u + sizeof (zlink_msg_t);
@@ -859,6 +915,8 @@ int main ()
     RUN_TEST (
       test_router_selects_exact_target_and_rejects_stale_generation);
     RUN_TEST (test_router_exact_target_is_invalid_after_same_rid_handover);
+    RUN_TEST (
+      test_router_exact_target_survives_unrelated_peer_churn);
     RUN_TEST (test_dealer_exact_target_keeps_blocked_a_isolated_from_b);
     RUN_TEST (test_dealer_exact_multipart_failure_rolls_back_only_target_a);
     RUN_TEST (
