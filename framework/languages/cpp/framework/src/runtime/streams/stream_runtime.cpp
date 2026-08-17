@@ -1524,15 +1524,17 @@ result_t<void> stream_runtime_t::dispatch_packet (packet_stream_session_t &sessi
               "STREAM decompressed payload exceeds configured receive limit");
         }
     }
+    const detail::message_flow_tracer_t flow_tracer (_state->dispatch);
+    const auto flow_mode = flow_tracer.mode ();
     std::optional<std::string> inbound_flow_id;
-    if (auto id = header.flow_id ()) {
-        inbound_flow_id = std::string (*id);
+    if (flow_mode != message_flow_log_mode_t::off) {
+        if (auto id = header.flow_id ())
+            inbound_flow_id = std::string (*id);
     }
     auto flow_scope = runtime::flow_context_t::enter (
-      std::move (inbound_flow_id), header.flow_origin (),
-      detail::message_flow_tracer_t (_state->dispatch).mode (),
+      std::move (inbound_flow_id), header.flow_origin (), flow_mode,
       flow_origin_t::inbound);
-    detail::message_flow_tracer_t (_state->dispatch).trace (message_flow_outcome_t::received, [&] {
+    flow_tracer.trace (message_flow_outcome_t::received, [&] {
         std::optional<std::string> correlation;
         if (auto id = header.correlation_id ()) {
             correlation = std::string (*id);
@@ -1606,15 +1608,17 @@ result_t<void> stream_runtime_t::dispatch_packet_async (
               "STREAM decompressed payload exceeds configured receive limit");
         }
     }
+    const detail::message_flow_tracer_t flow_tracer (_state->dispatch);
+    const auto flow_mode = flow_tracer.mode ();
     std::optional<std::string> inbound_flow_id;
-    if (auto id = header.flow_id ()) {
-        inbound_flow_id = std::string (*id);
+    if (flow_mode != message_flow_log_mode_t::off) {
+        if (auto id = header.flow_id ())
+            inbound_flow_id = std::string (*id);
     }
     auto flow_scope = runtime::flow_context_t::enter (
-      std::move (inbound_flow_id), header.flow_origin (),
-      detail::message_flow_tracer_t (_state->dispatch).mode (),
+      std::move (inbound_flow_id), header.flow_origin (), flow_mode,
       flow_origin_t::inbound);
-    detail::message_flow_tracer_t (_state->dispatch).trace (
+    flow_tracer.trace (
       message_flow_outcome_t::received, [&] {
           std::optional<std::string> correlation;
           if (auto id = header.correlation_id ()) {

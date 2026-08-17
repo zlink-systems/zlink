@@ -71,7 +71,7 @@ class message_flow_tracer_t
     }
 
     /* flow-correlation §2.2: host entry points create new flow ids only when
-     * tracing is not fully off; propagation of inbound ids is unconditional. */
+     * tracing is not fully off. */
     bool capture_enabled () const noexcept
     {
         return enabled (message_flow_log_mode_t::errors);

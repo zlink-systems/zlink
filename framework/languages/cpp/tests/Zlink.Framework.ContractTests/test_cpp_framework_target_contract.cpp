@@ -2152,7 +2152,7 @@ int main ()
     gate.require (
       flow_context.find ("diagnostics_mode") != std::string::npos
         && flow_context.find (
-             "{}, default_origin, diagnostics_mode")
+             "scope_t (std::nullopt)")
              != std::string::npos
         && message_flow_tracer.find (
              "current->diagnostics_mode")

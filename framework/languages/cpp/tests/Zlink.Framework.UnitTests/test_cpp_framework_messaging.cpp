@@ -863,7 +863,7 @@ int main ()
 
         {
             auto scope = rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::inbound,
-                                                    zlink::framework::message_flow_log_mode_t::off,
+                                                    zlink::framework::message_flow_log_mode_t::normal,
                                                     zlink::framework::flow_origin_t::inbound);
             const auto stamped = codec.decode_header (codec.encode_header (header));
             if (!stamped || stamped.value ().flow_id != created
@@ -875,9 +875,8 @@ int main ()
             return 45;
         }
 
-        /* create-if-absent: no inbound id + capture on → new id; inbound id
-         * present → reused even when capture is off (propagation is
-         * unconditional). */
+        /* create-if-absent: no inbound id + capture on → new id. Off skips
+         * inbound propagation and does not install even an empty context. */
         {
             auto scope =
               rt::flow_context_t::enter (
@@ -893,10 +892,7 @@ int main ()
             auto scope = rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::timer,
                                                     zlink::framework::message_flow_log_mode_t::off,
                                                     zlink::framework::flow_origin_t::inbound);
-            if (!rt::flow_context_t::current ()
-                || rt::flow_context_t::current ()->flow_id != created
-                || rt::flow_context_t::current ()->origin
-                     != zlink::framework::flow_origin_t::timer) {
+            if (rt::flow_context_t::current ()) {
                 return 47;
             }
         }
@@ -906,11 +902,36 @@ int main ()
                 std::nullopt, std::nullopt,
                 zlink::framework::message_flow_log_mode_t::off,
                                          zlink::framework::flow_origin_t::inbound);
-            if (!rt::flow_context_t::current ()
-                || !rt::flow_context_t::current ()->flow_id.empty ()
-                || rt::flow_context_t::current ()->diagnostics_mode
-                     != zlink::framework::message_flow_log_mode_t::off) {
+            if (rt::flow_context_t::current ()) {
                 return 48;
+            }
+        }
+        {
+            const std::optional<std::string> malformed_flow{"not-a-uuid"};
+            auto scope = rt::flow_context_t::enter (
+              malformed_flow, std::nullopt,
+              zlink::framework::message_flow_log_mode_t::off,
+              zlink::framework::flow_origin_t::inbound);
+            if (rt::flow_context_t::current ()) {
+                return 160;
+            }
+        }
+        {
+            auto outer = rt::flow_context_t::enter (
+              created, zlink::framework::flow_origin_t::application,
+              zlink::framework::message_flow_log_mode_t::normal,
+              zlink::framework::flow_origin_t::application);
+            {
+                auto off = rt::flow_context_t::enter_current_or_create (
+                  zlink::framework::flow_origin_t::application,
+                  zlink::framework::message_flow_log_mode_t::off);
+                if (rt::flow_context_t::current ()) {
+                    return 161;
+                }
+            }
+            if (!rt::flow_context_t::current ()
+                || rt::flow_context_t::current ()->flow_id != created) {
+                return 162;
             }
         }
 
@@ -941,7 +962,7 @@ int main ()
             {
                 auto scope =
                   rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::inbound,
-                                             zlink::framework::message_flow_log_mode_t::off,
+                                             zlink::framework::message_flow_log_mode_t::normal,
                                              zlink::framework::flow_origin_t::inbound);
                 auto task = source.task ();
                 zlink::framework::detail::observe_task_completion (
