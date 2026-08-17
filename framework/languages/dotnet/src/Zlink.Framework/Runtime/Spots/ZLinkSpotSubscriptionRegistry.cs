@@ -183,7 +183,9 @@ internal sealed class ZLinkSpotSubscriptionRegistry
         ZLinkEnvelopeHeader header;
         try
         {
-            header = ZLinkEnvelopeCodec.DecodeHeader(message.Parts);
+            header = ZLinkEnvelopeCodec.DecodeHeader(
+                message.Parts,
+                dispatchErrors.Flow.CaptureEnabled);
             ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
         }
         catch (ZLinkEnvelopeProtocolException)

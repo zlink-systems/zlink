@@ -393,7 +393,9 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
                     replyParts[0],
                     registration.Codecs);
 
-            var header = ZLinkEnvelopeCodec.DecodeHeader(replyParts);
+            var header = ZLinkEnvelopeCodec.DecodeHeader(
+                replyParts,
+                flow.CaptureEnabled);
             return ZLinkMessage.FromEnvelopePayload(header.ContentType, replyParts[1], registration.Codecs);
         }
         finally

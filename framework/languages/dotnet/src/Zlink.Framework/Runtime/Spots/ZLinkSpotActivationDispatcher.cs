@@ -330,7 +330,9 @@ internal sealed class ZLinkSpotActivationDispatcher
         if (received.Parts.Count == 0) return false;
         try
         {
-            var header = ZLinkEnvelopeCodec.DecodeHeader(received.Parts);
+            var header = ZLinkEnvelopeCodec.DecodeHeader(
+                received.Parts,
+                validateFlow: false);
             return header.MessageName is ZLinkRemoteActorJoinPackets.RequestPacketName
                 or ZLinkRemoteActorJoinPackets.AdmissionPacketName
                 or ZLinkRemoteActorJoinPackets.AdmissionAbortPacketName
@@ -354,7 +356,9 @@ internal sealed class ZLinkSpotActivationDispatcher
             if (!received.CanReply || received.Parts.Count == 0) return;
             try
             {
-                var header = ZLinkEnvelopeCodec.DecodeHeader(received.Parts);
+                var header = ZLinkEnvelopeCodec.DecodeHeader(
+                    received.Parts,
+                    validateFlow: false);
                 var errorKind = admission switch
                 {
                     ZLinkAcceptedWorkAdmission.Closed =>
@@ -394,7 +398,9 @@ internal sealed class ZLinkSpotActivationDispatcher
             if (!received.CanReply || received.Parts.Count == 0) return;
             try
             {
-                var header = ZLinkEnvelopeCodec.DecodeHeader(received.Parts);
+                var header = ZLinkEnvelopeCodec.DecodeHeader(
+                    received.Parts,
+                    validateFlow: false);
                 var reply = ZLinkSpotReplyEnvelope.EncodeErrorParts(
                     channelName,
                     header.MessageName,
@@ -420,7 +426,9 @@ internal sealed class ZLinkSpotActivationDispatcher
             if (!received.CanReply || received.Parts.Count == 0) return;
             try
             {
-                var header = ZLinkEnvelopeCodec.DecodeHeader(received.Parts);
+                var header = ZLinkEnvelopeCodec.DecodeHeader(
+                    received.Parts,
+                    validateFlow: false);
                 var reply = ZLinkSpotReplyEnvelope.EncodeErrorParts(
                     channelName,
                     header.MessageName,

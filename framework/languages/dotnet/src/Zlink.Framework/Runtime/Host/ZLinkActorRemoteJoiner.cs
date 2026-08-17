@@ -1415,7 +1415,9 @@ internal sealed class ZLinkActorRemoteJoiner(
                     ZLinkFrameworkErrorKind.ProtocolError,
                     "Actor join reply was empty.");
 
-            var header = ZLinkEnvelopeCodec.DecodeHeader(replyParts);
+            var header = ZLinkEnvelopeCodec.DecodeHeader(
+                replyParts,
+                runtime.Flow.CaptureEnabled);
             var reply = (Message)ZLinkEnvelopeCodec.DecodeBody(replyParts, typeof(Message))!;
             using var ownedReply = Message.From(reply);
             return ZLinkMessage.FromEnvelopePayload(header.ContentType, ownedReply, registration.Codecs);

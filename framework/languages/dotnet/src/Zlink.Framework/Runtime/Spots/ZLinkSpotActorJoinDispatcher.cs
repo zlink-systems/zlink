@@ -186,7 +186,9 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
         ZLinkEnvelopeHeader? header = null;
         try
         {
-            header = ZLinkEnvelopeCodec.DecodeHeader(joinRequest.Parts);
+            header = ZLinkEnvelopeCodec.DecodeHeader(
+                joinRequest.Parts,
+                runtime.Flow.CaptureEnabled);
             if (joinRequest.Parts.Count <= 1)
                 throw new InvalidOperationException("Actor join request body part is missing.");
 

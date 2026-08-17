@@ -176,4 +176,18 @@ public sealed class StreamWireInteropTests
             "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d",
             ZlinkStreamFlowOrigin.Application);
     }
+
+    [Fact]
+    public void Off_decode_skips_stream_flow_materialization_and_validation()
+    {
+        var encoded = ZLinkStreamProtocolDefaults.EncodeHeader(CreateHeader()).ToArray();
+        encoded[^2] = (byte)'x';
+
+        Assert.ThrowsAny<Exception>(() => ZLinkStreamProtocolDefaults.DecodeHeader(encoded));
+
+        var decoded = ZLinkStreamProtocolDefaults.DecodeHeader(encoded, captureFlow: false);
+        Assert.Null(decoded.FlowId);
+        Assert.Null(decoded.FlowOrigin);
+        Assert.Equal("corr-1", decoded.CorrelationId);
+    }
 }

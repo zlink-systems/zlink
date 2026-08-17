@@ -403,7 +403,9 @@ internal sealed class ZLinkSpotRuntimeManager(
         {
             if (result.Reply.Count > 1)
             {
-                var header = ZLinkEnvelopeCodec.DecodeHeader(result.Reply);
+                var header = ZLinkEnvelopeCodec.DecodeHeader(
+                    result.Reply,
+                    runtime.Flow.CaptureEnabled);
                 reply = ZLinkMessage.FromEnvelopePayload(
                     header.ContentType,
                     result.Reply[1],

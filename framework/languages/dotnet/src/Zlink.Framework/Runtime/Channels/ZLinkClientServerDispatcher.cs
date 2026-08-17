@@ -3,7 +3,8 @@ namespace Zlink.Framework.Runtime.Channels;
 internal sealed class ZLinkClientServerDispatcher(
     ZLinkChannelCommandDispatchPipeline commandPipeline,
     ZLinkChannelRequestDispatchPipeline requestPipeline,
-    ZLinkCodecRegistryBuilder codecs)
+    ZLinkCodecRegistryBuilder codecs,
+    Func<bool> flowCaptureEnabled)
 {
     public async ValueTask DispatchAsync(
         string channelName,
@@ -16,7 +17,9 @@ internal sealed class ZLinkClientServerDispatcher(
         ZLinkEnvelopeHeader header;
         try
         {
-            header = ZLinkEnvelopeCodec.DecodeHeader(received.Parts);
+            header = ZLinkEnvelopeCodec.DecodeHeader(
+                received.Parts,
+                flowCaptureEnabled());
             if (!StringComparer.Ordinal.Equals(header.ChannelName, channelName))
                 throw new ZLinkEnvelopeProtocolException(
                     header,
@@ -128,7 +131,9 @@ internal sealed class ZLinkClientServerDispatcher(
     {
         try
         {
-            var request = ZLinkEnvelopeCodec.DecodeHeader(received.Parts);
+            var request = ZLinkEnvelopeCodec.DecodeHeader(
+                received.Parts,
+                flowCaptureEnabled());
             if (request.Kind != ZLinkMessageKind.Request
                 || !StringComparer.Ordinal.Equals(request.ChannelName, channelName))
                 return;

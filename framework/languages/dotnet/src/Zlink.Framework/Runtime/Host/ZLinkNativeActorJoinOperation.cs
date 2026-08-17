@@ -130,7 +130,9 @@ internal sealed class ZLinkNativeActorJoinOperation(
                     ZLinkFrameworkErrorKind.ProtocolError,
                     "Actor join reply was empty.");
 
-            var header = ZLinkEnvelopeCodec.DecodeHeader(replyParts);
+            var header = ZLinkEnvelopeCodec.DecodeHeader(
+                replyParts,
+                runtime.Flow.CaptureEnabled);
             var reply = (Message)ZLinkEnvelopeCodec.DecodeBody(
                 replyParts,
                 typeof(Message))!;

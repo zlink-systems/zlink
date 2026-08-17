@@ -494,7 +494,7 @@ internal sealed class ZLinkChannelReceiveLoop(
     {
         try
         {
-            var header = ZLinkEnvelopeCodec.DecodeHeader(parts);
+            var header = ZLinkEnvelopeCodec.DecodeHeader(parts, validateFlow: false);
             return StringComparer.Ordinal.Equals(header.ChannelName, channelName)
                    && header.Kind is ZLinkMessageKind.Command
                        or ZLinkMessageKind.Request;
@@ -510,7 +510,7 @@ internal sealed class ZLinkChannelReceiveLoop(
     {
         try
         {
-            var header = ZLinkEnvelopeCodec.DecodeHeader(parts);
+            var header = ZLinkEnvelopeCodec.DecodeHeader(parts, validateFlow: false);
             ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
             return true;
         }

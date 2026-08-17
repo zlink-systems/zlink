@@ -4862,7 +4862,7 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public async Task Diagnostics_Off_Actor_Send_Creates_Wire_Flow_Without_Activity()
+    public async Task Diagnostics_Off_Actor_Send_Creates_Neither_Wire_Flow_Nor_Activity()
     {
         var node = new CapturingSpotNode { ActorSendAccepted = true };
         var observer = new CapturingMessageFlowObserver();
@@ -4888,7 +4888,7 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.Null(ZLinkFlowContext.Current);
             var sentPacket = Assert.Single(node.ActorSends);
             var header = ZLinkStreamProtocolDefaults.DecodeHeader(sentPacket.Parts[0]);
-            Assert.True(string.IsNullOrEmpty(header.FlowId));
+            Assert.Null(header.FlowId);
             Assert.Null(header.FlowOrigin);
             await Task.Yield();
             Assert.Empty(observer.Events);

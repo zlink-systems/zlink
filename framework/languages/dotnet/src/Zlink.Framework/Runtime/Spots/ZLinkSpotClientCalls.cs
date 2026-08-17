@@ -345,7 +345,8 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
             reply,
             "Instance Spot request reply is empty.",
             "Instance Spot request failed.",
-            runtime.Registration.Codecs);
+            runtime.Registration.Codecs,
+            runtime.Flow.CaptureEnabled);
     }
 
     private async ValueTask<TReply> RequestExistingAsync<TReply>(
@@ -482,7 +483,8 @@ internal sealed class ZLinkCurrentSpotRequestCall<TMessage>(
             reply,
             "SPOT channel request reply is empty.",
             "SPOT channel request failed.",
-            activation.Codecs);
+            activation.Codecs,
+            activation.Flow.CaptureEnabled);
     }
 
 

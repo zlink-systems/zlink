@@ -174,7 +174,8 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
                     reply,
                     "Channel request reply is empty.",
                     $"Channel request failed for '{packetName}'.",
-                    runtime.Registration.Codecs);
+                    runtime.Registration.Codecs,
+                    runtime.Flow.CaptureEnabled);
             }
             catch (ZLinkFrameworkException failure)
                 when (failure.Kind == ZLinkFrameworkErrorKind.ShuttingDown
@@ -322,7 +323,8 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
             reply,
             "Node request reply is empty.",
             $"Node request failed for '{packetName}'.",
-            runtime.Registration.Codecs);
+            runtime.Registration.Codecs,
+            runtime.Flow.CaptureEnabled);
     }
 
 }
@@ -482,7 +484,8 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
             reply,
             "SPOT route request reply is empty.",
             $"SPOT route request failed for '{packetName}'.",
-            runtime.Registration.Codecs);
+            runtime.Registration.Codecs,
+            runtime.Flow.CaptureEnabled);
     }
 
 }

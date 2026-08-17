@@ -500,7 +500,9 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 ZlinkStreamHeader decoded;
                 try
                 {
-                    decoded = ZLinkStreamProtocolDefaults.DecodeHeader(header.AsReadOnlyMemory());
+                    decoded = ZLinkStreamProtocolDefaults.DecodeHeader(
+                        header.AsReadOnlyMemory(),
+                        _flow.CaptureEnabled);
                     if (decoded.Kind == ZlinkStreamMessageKind.Control)
                     {
                         ZLinkStreamControlFrames.Dispatch(Stream, decoded, payload.AsReadOnlyMemory());

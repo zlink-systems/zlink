@@ -30,7 +30,9 @@ internal sealed class ZLinkSpotRouteDispatcher(
             ZLinkEnvelopeHeader header;
             try
             {
-            header = ZLinkEnvelopeCodec.DecodeHeader(received.Parts);
+            header = ZLinkEnvelopeCodec.DecodeHeader(
+                received.Parts,
+                dispatchErrors.Flow.CaptureEnabled);
             ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
             }
             catch (ZLinkEnvelopeProtocolException protocolError)

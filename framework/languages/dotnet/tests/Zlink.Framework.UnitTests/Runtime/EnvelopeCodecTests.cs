@@ -63,6 +63,22 @@ public sealed class EnvelopeCodecTests
         Assert.Throws<ZLinkEnvelopeProtocolException>(() => ZLinkEnvelopeCodec.DecodeHeader(missingMarker));
     }
 
+    [Fact]
+    public void Off_decode_strips_flow_without_validating_observation_fields()
+    {
+        using var encoded = Message.From(
+            "{\"FormatMarker\":242,\"Kind\":3,\"ChannelName\":\"play\","
+            + "\"MessageName\":\"Move\",\"ContentType\":\"application/json\","
+            + "\"FlowId\":\"not-a-uuid\",\"FlowOrigin\":3}");
+
+        Assert.Throws<ZLinkEnvelopeProtocolException>(() =>
+            ZLinkEnvelopeCodec.DecodeHeader(encoded));
+
+        var decoded = ZLinkEnvelopeCodec.DecodeHeader(encoded, validateFlow: false);
+        Assert.Null(decoded.FlowId);
+        Assert.Null(decoded.FlowOrigin);
+    }
+
     [Theory]
     [InlineData(1, null, null, null)]
     [InlineData(2, null, null, null)]

@@ -29,9 +29,9 @@ internal sealed record ZLinkEnvelopeHeader(
     [System.Text.Json.Serialization.JsonPropertyOrder(-100)]
     public byte FormatMarker { get; init; }
 
-    public string? FlowId { get; init; }
+    public string? FlowId { get; set; }
 
-    public ZLinkFlowOrigin? FlowOrigin { get; init; }
+    public ZLinkFlowOrigin? FlowOrigin { get; set; }
 }
 
 internal sealed class ZLinkEnvelopeProtocolException(
@@ -252,7 +252,9 @@ internal static class ZLinkEnvelopeCodec
         return EncodeProtocolPart(value);
     }
 
-    public static ZLinkEnvelopeHeader DecodeHeader(Message message)
+    public static ZLinkEnvelopeHeader DecodeHeader(
+        Message message,
+        bool validateFlow = true)
     {
         var bytes = message.AsReadOnlySpan();
         var hash = HashBytes(bytes);
@@ -260,7 +262,7 @@ internal static class ZLinkEnvelopeCodec
         foreach (var entry in cache)
         {
             if (entry.Hash == hash && entry.Bytes.AsSpan().SequenceEqual(bytes))
-                return entry.Header;
+                return ValidateDecodedFlow(entry.Header, validateFlow);
         }
 
         ZLinkEnvelopeHeader header;
@@ -277,7 +279,7 @@ internal static class ZLinkEnvelopeCodec
                 InvalidProtocolHeader(),
                 $"ZLink envelope header is invalid: {error.Message}");
         }
-        ValidateProtocolHeader(header);
+        ValidateProtocolHeader(header, validateFlow);
         // Correlated, deadline-stamped, or flow-stamped headers are byte-unique
         // per message (correlation ids come from a counter), so caching them
         // guarantees misses while evicting the repeatable command/publish
@@ -286,13 +288,15 @@ internal static class ZLinkEnvelopeCodec
             && header.Deadline is null
             && header.FlowId is null)
             AddDecodedHeaderCacheEntry(bytes, hash, header);
-        return header;
+        return ValidateDecodedFlow(header, validateFlow);
     }
 
-    public static ZLinkEnvelopeHeader DecodeHeader(IReadOnlyList<Message> parts)
+    public static ZLinkEnvelopeHeader DecodeHeader(
+        IReadOnlyList<Message> parts,
+        bool validateFlow = true)
     {
         EnsurePart(parts, 0, "header");
-        return DecodeHeader(parts[0]);
+        return DecodeHeader(parts[0], validateFlow);
     }
 
     internal static ulong MeasureApplicationPayloadBytes(
@@ -481,7 +485,9 @@ internal static class ZLinkEnvelopeCodec
                && header.FlowOrigin is null;
     }
 
-    private static void ValidateProtocolHeader(ZLinkEnvelopeHeader header)
+    private static void ValidateProtocolHeader(
+        ZLinkEnvelopeHeader header,
+        bool validateFlow = true)
     {
         if (!Enum.IsDefined(header.Kind))
             throw new ZLinkEnvelopeProtocolException(
@@ -493,22 +499,25 @@ internal static class ZLinkEnvelopeCodec
                 header,
                 "ZLink envelope format marker is invalid.");
 
-        var hasFlowId = header.FlowId is not null;
-        var hasFlowOrigin = header.FlowOrigin is not null;
-        if (hasFlowId != hasFlowOrigin)
-            throw new ZLinkEnvelopeProtocolException(
-                header,
-                "ZLink envelope flow id and origin must be present together.");
+        if (validateFlow)
+        {
+            var hasFlowId = header.FlowId is not null;
+            var hasFlowOrigin = header.FlowOrigin is not null;
+            if (hasFlowId != hasFlowOrigin)
+                throw new ZLinkEnvelopeProtocolException(
+                    header,
+                    "ZLink envelope flow id and origin must be present together.");
 
-        if (hasFlowId && !ZlinkStreamFlowId.IsValid(header.FlowId))
-            throw new ZLinkEnvelopeProtocolException(
-                header,
-                "ZLink envelope flow id must be UUIDv7.");
+            if (hasFlowId && !ZlinkStreamFlowId.IsValid(header.FlowId))
+                throw new ZLinkEnvelopeProtocolException(
+                    header,
+                    "ZLink envelope flow id must be UUIDv7.");
 
-        if (header.FlowOrigin is { } origin && !Enum.IsDefined(origin))
-            throw new ZLinkEnvelopeProtocolException(
-                header,
-                "ZLink envelope flow origin is invalid.");
+            if (header.FlowOrigin is { } origin && !Enum.IsDefined(origin))
+                throw new ZLinkEnvelopeProtocolException(
+                    header,
+                    "ZLink envelope flow origin is invalid.");
+        }
 
         var isReplyCorrelated = header.Kind is ZLinkMessageKind.Request
             or ZLinkMessageKind.Response
@@ -531,6 +540,19 @@ internal static class ZLinkEnvelopeCodec
                 header,
                 "ZLink envelope error fields are valid only for Error messages.");
         }
+    }
+
+    private static ZLinkEnvelopeHeader ValidateDecodedFlow(
+        ZLinkEnvelopeHeader header,
+        bool validateFlow)
+    {
+        if (validateFlow) return header;
+
+        // Spec 27 section 4: Off ingress does not retain observation-only
+        // fields where a later forwarder or reply encoder could copy them.
+        header.FlowId = null;
+        header.FlowOrigin = null;
+        return header;
     }
 
     private static ZLinkEnvelopeHeader InvalidProtocolHeader() => new(

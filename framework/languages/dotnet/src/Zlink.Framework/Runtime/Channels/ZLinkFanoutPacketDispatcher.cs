@@ -54,7 +54,9 @@ internal sealed class ZLinkFanoutPacketDispatcher
         ZLinkEnvelopeHeader header;
         try
         {
-            header = ZLinkEnvelopeCodec.DecodeHeader(topicMessage.Parts);
+            header = ZLinkEnvelopeCodec.DecodeHeader(
+                topicMessage.Parts,
+                _dispatchErrors.Flow.CaptureEnabled);
             ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
         }
         catch (ZLinkEnvelopeProtocolException protocolError)

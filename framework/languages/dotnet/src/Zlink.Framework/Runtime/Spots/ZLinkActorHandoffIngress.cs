@@ -55,6 +55,7 @@ internal static class ZLinkActorHandoffIngress
                 parts,
                 ref index,
                 headerPart,
+                runtime.Flow.CaptureEnabled,
                 out var frame))
             return true;
         var frameTransferred = false;
@@ -124,7 +125,12 @@ internal static class ZLinkActorHandoffIngress
         while (index < parts.Count)
         {
             var headerPart = parts[index++];
-            if (!ZLinkSpotActorFrameReader.TryRead(parts, ref index, headerPart, out var frame))
+            if (!ZLinkSpotActorFrameReader.TryRead(
+                    parts,
+                    ref index,
+                    headerPart,
+                    runtime.Flow.CaptureEnabled,
+                    out var frame))
             {
                 continue;
             }

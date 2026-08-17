@@ -14,9 +14,11 @@ internal static class ZLinkStreamProtocolDefaults
         return ZLinkStreamHeaderCodec.Encode(header);
     }
 
-    public static ZlinkStreamHeader DecodeHeader(ReadOnlyMemory<byte> header)
+    public static ZlinkStreamHeader DecodeHeader(
+        ReadOnlyMemory<byte> header,
+        bool captureFlow = true)
     {
-        return ZLinkStreamHeaderCodec.Decode(header);
+        return ZLinkStreamHeaderCodec.Decode(header, captureFlow);
     }
 
     public static IZlinkStreamCompressionCodec CreateLz4CompressionCodec()

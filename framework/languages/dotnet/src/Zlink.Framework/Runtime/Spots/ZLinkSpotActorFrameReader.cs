@@ -142,12 +142,15 @@ internal static class ZLinkSpotActorFrameReader
         IReadOnlyList<ZLinkBackendActorPart> parts,
         ref int index,
         ZLinkBackendActorPart headerPart,
+        bool captureFlow,
         out ZLinkSpotActorFrame frame)
     {
         ZlinkStreamHeader header;
         try
         {
-            header = ZLinkStreamProtocolDefaults.DecodeHeader(headerPart.Message.AsReadOnlyMemory());
+            header = ZLinkStreamProtocolDefaults.DecodeHeader(
+                headerPart.Message.AsReadOnlyMemory(),
+                captureFlow);
         }
         catch
         {

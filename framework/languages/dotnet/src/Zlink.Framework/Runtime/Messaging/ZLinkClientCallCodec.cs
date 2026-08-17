@@ -55,11 +55,17 @@ internal static class ZLinkClientCallCodec
         IReadOnlyList<Message> reply,
         string emptyMessage,
         string errorMessage,
-        ZLinkCodecRegistryBuilder? codecs)
+        ZLinkCodecRegistryBuilder? codecs,
+        bool validateFlow = true)
     {
         try
         {
-            return ZLinkEnvelopeReplyDecoder.Decode<TReply>(reply, emptyMessage, errorMessage, codecs);
+            return ZLinkEnvelopeReplyDecoder.Decode<TReply>(
+                reply,
+                emptyMessage,
+                errorMessage,
+                codecs,
+                validateFlow);
         }
         finally
         {
@@ -75,7 +81,8 @@ internal static class ZLinkEnvelopeReplyDecoder
         IReadOnlyList<Message> reply,
         string emptyMessage,
         string errorMessage,
-        ZLinkCodecRegistryBuilder? codecs)
+        ZLinkCodecRegistryBuilder? codecs,
+        bool validateFlow = true)
     {
         if (reply.Count == 0)
             throw new ZLinkFrameworkException(
@@ -85,7 +92,7 @@ internal static class ZLinkEnvelopeReplyDecoder
         ZLinkEnvelopeHeader replyHeader;
         try
         {
-            replyHeader = ZLinkEnvelopeCodec.DecodeHeader(reply);
+            replyHeader = ZLinkEnvelopeCodec.DecodeHeader(reply, validateFlow);
         }
         catch (ZLinkFrameworkException)
         {

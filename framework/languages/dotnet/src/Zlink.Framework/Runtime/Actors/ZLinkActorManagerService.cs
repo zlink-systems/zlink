@@ -677,7 +677,9 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         {
             if (replyParts.Count > 1)
             {
-                var header = ZLinkEnvelopeCodec.DecodeHeader(replyParts);
+                var header = ZLinkEnvelopeCodec.DecodeHeader(
+                    replyParts,
+                    runtime.Flow.CaptureEnabled);
                 reply = ZLinkMessage.FromEnvelopePayload(
                     header.ContentType,
                     replyParts[1],

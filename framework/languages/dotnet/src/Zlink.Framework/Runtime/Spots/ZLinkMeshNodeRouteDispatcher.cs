@@ -205,7 +205,9 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         {
             try
             {
-                header = ZLinkEnvelopeCodec.DecodeHeader(received.Parts);
+                header = ZLinkEnvelopeCodec.DecodeHeader(
+                    received.Parts,
+                    _dispatchErrors.Flow.CaptureEnabled);
             }
             catch
             {
@@ -345,7 +347,9 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             try
             {
                 header = decodedHeader
-                         ?? ZLinkEnvelopeCodec.DecodeHeader(received.Parts);
+                         ?? ZLinkEnvelopeCodec.DecodeHeader(
+                             received.Parts,
+                             _dispatchErrors.Flow.CaptureEnabled);
                 ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
             }
             catch (ZLinkEnvelopeProtocolException protocolError)

@@ -108,7 +108,9 @@ internal sealed class ZlinkStreamHeaderCodec
         return buffer;
     }
 
-    public ZlinkStreamHeader Decode(ReadOnlyMemory<byte> header)
+    public ZlinkStreamHeader Decode(
+        ReadOnlyMemory<byte> header,
+        bool captureFlow = true)
     {
         var span = header.Span;
         if (span.Length < 5)
@@ -192,13 +194,22 @@ internal sealed class ZlinkStreamHeaderCodec
                     ZlinkStreamErrorCode.FrameDecodeFailed,
                     "Helper header flow fields are incomplete.");
 
-            flowId = Encoding.ASCII.GetString(span.Slice(offset, ZlinkStreamFlowId.EncodedLength));
-            offset += ZlinkStreamFlowId.EncodedLength;
-            flowOrigin = (ZlinkStreamFlowOrigin)span[offset++];
-            if (!ZlinkStreamFlowId.IsValid(flowId) || !Enum.IsDefined(flowOrigin.Value))
-                throw ZlinkStreamConnector.Error(
-                    ZlinkStreamErrorCode.FrameDecodeFailed,
-                    "Helper header flow fields are invalid.");
+            if (captureFlow)
+            {
+                flowId = Encoding.ASCII.GetString(span.Slice(offset, ZlinkStreamFlowId.EncodedLength));
+                offset += ZlinkStreamFlowId.EncodedLength;
+                flowOrigin = (ZlinkStreamFlowOrigin)span[offset++];
+                if (!ZlinkStreamFlowId.IsValid(flowId) || !Enum.IsDefined(flowOrigin.Value))
+                    throw ZlinkStreamConnector.Error(
+                        ZlinkStreamErrorCode.FrameDecodeFailed,
+                        "Helper header flow fields are invalid.");
+            }
+            else
+            {
+                // At Off the pair is framing only: advance over it without
+                // allocating, validating, or retaining observation state.
+                offset += ZlinkStreamFlowId.EncodedLength + 1;
+            }
         }
 
         if (offset != span.Length)
@@ -212,7 +223,8 @@ internal sealed class ZlinkStreamHeaderCodec
                 ZlinkStreamErrorCode.FrameDecodeFailed);
         ValidateHeaderSemantics(
             kind, codec, flags, requestSeq is not null, metadata.Count > 0,
-            correlationId is not null, flowId is not null);
+            correlationId is not null,
+            flags.HasFlag(ZlinkStreamHeaderFlags.HasFlowId));
         return new ZlinkStreamHeader(
             kind, codec, flags, requestSeq, name, metadata, correlationId, flowId, flowOrigin);
     }

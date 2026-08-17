@@ -23,6 +23,8 @@ internal static class ZLinkStreamHeaderCodec
         return WireCodec.Encode(header);
     }
 
-    public static ZlinkStreamHeader Decode(ReadOnlyMemory<byte> header) =>
-        WireCodec.Decode(header);
+    public static ZlinkStreamHeader Decode(
+        ReadOnlyMemory<byte> header,
+        bool captureFlow = true) =>
+        WireCodec.Decode(header, captureFlow);
 }
