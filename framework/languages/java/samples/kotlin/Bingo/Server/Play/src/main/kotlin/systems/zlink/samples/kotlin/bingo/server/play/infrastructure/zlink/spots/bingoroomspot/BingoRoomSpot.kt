@@ -161,10 +161,7 @@ class BingoRoomSpot(
         }
         val change = requireGame().join(actor.actorId(), request.displayName, wins, losses)
         actors[actor.actorId()] = actor
-        publishEvents(
-            change.events,
-            { actorId -> if (actorId == actor.actorId()) null else actors[actorId] },
-        )
+        publishEvents(change.events, actors::get)
         return BingoRoomJoinRes(change.state)
     }
 
