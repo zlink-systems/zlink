@@ -73,6 +73,7 @@ import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
@@ -607,7 +608,7 @@ final class SpotCallAddresses {
         return resolver.resolve(target).thenCompose(address -> address
             .map(CompletableFuture::completedFuture)
             .orElseGet(() -> CompletableFuture.failedFuture(
-                new ZLinkFrameworkException(
+                ZLinkFrameworkErrorOrigin.framework(
                     ZLinkFrameworkErrorKind.NOT_FOUND,
                     "SpotHandle route is stale or unavailable"))));
     }
@@ -621,8 +622,12 @@ final class SpotCallAddresses {
     }
 
     static boolean isStaleRoute(Throwable failure) {
+        //  A stale route is signalled only by a framework-generated NotFound
+        //  (zlink.origin=framework). An application handler's preserved
+        //  NotFound kind must not re-trigger route refresh or activation.
         return failure instanceof ZLinkFrameworkException error
-            && error.kind() == ZLinkFrameworkErrorKind.NOT_FOUND;
+            && error.kind() == ZLinkFrameworkErrorKind.NOT_FOUND
+            && ZLinkFrameworkErrorOrigin.isFramework(error);
     }
 
     static String requireText(String value) {

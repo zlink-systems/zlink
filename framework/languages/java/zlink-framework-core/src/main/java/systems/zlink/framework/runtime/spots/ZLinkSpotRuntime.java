@@ -134,6 +134,7 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationA
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
@@ -476,7 +477,8 @@ public final class ZLinkSpotRuntime
             routeMessages,
             Math.max(2, Runtime.getRuntime().availableProcessors()),
             backendFactory.admissionTimeout(),
-            registration.codecs()::contentTypeFor);
+            registration.codecs()::contentTypeFor,
+            dispatchErrors.flow());
         this.suspendHandlerInvokers = registration.suspendHandlerInvokers();
         this.spotHandlerInvoker = new ZLinkSpotHandlerInvoker(
             serializer,
@@ -4601,6 +4603,27 @@ public final class ZLinkSpotRuntime
         return queued;
     }
 
+    /**
+     * Reads the inbound actor packet header flow pair for context install.
+     * Observation-only guard (spec 27 §3 format): a pair whose flow id is not
+     * a canonical UUIDv7 — or that carries only one of the two fields — would
+     * pollute downstream traces, so it is discarded and a fresh flow starts
+     * instead. The frame itself is never rejected for this.
+     */
+    private static ZLinkFlowContext.State actorPacketHeaderFlowPair(
+        ActorPacketFrames.Header packetHeader) {
+        if (packetHeader.flowId().isEmpty()
+            || packetHeader.flowOrigin().isEmpty()) {
+            return null;
+        }
+        String flowId = packetHeader.flowId().orElseThrow();
+        if (!ZLinkFlowContext.isValidFlowId(flowId)) {
+            return null;
+        }
+        return new ZLinkFlowContext.State(
+            flowId, packetHeader.flowOrigin().orElseThrow());
+    }
+
     private CompletionStage<Void> enqueueLocalActorPacket(
         SpotDispatchLine dispatchLine,
         Object spotSurface,
@@ -4620,11 +4643,7 @@ public final class ZLinkSpotRuntime
                     //  flow state instead of reading the header fields.
                     try (var ignored = flowCaptureEnabled()
                         ? ZLinkFlowContext.enterOrCreate(
-                            packetHeader.flowId().isEmpty()
-                                ? null
-                                : new ZLinkFlowContext.State(
-                                    packetHeader.flowId().orElseThrow(),
-                                    packetHeader.flowOrigin().orElseThrow()),
+                            actorPacketHeaderFlowPair(packetHeader),
                             ZLinkFlowOrigin.INBOUND)
                         : ZLinkFlowContext.suppress()) {
                         return dispatchActorPacketToHandler(
@@ -4912,15 +4931,24 @@ public final class ZLinkSpotRuntime
         ZLinkDispatchErrorReason reason,
         Throwable error) {
         Throwable cause = unwrapCompletion(error);
-        //  Spec 27 §3: a malformed envelope completes the request as
-        //  ProtocolError. Other framework kinds stay flattened here because
-        //  NOT_FOUND doubles as the stale-route control signal on callers.
-        List<Message> reply = ZLinkFrameworkErrorReply.create(
+        //  The public kind the failure carries is preserved in full. That is
+        //  safe because stale-route control no longer keys on a bare NOT_FOUND
+        //  kind: only framework-generated errors (never application handler
+        //  errors) carry the reply metadata marker zlink.origin=framework, and
+        //  callers require kind + marker before treating a reply as stale.
+        ZLinkFrameworkErrorKind kind =
             cause instanceof ZLinkFrameworkException frameworkCause
-                    && frameworkCause.kind() == ZLinkFrameworkErrorKind.PROTOCOL_ERROR
-                ? ZLinkFrameworkErrorKind.PROTOCOL_ERROR
-                : ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-            errorText(reason, packetName, cause));
+                ? frameworkCause.kind()
+                : ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+        boolean frameworkOrigin =
+            reason != ZLinkDispatchErrorReason.HANDLER_EXCEPTION
+                || ZLinkFrameworkErrorOrigin.isFramework(cause);
+        List<Message> reply = ZLinkFrameworkErrorReply.create(
+            kind,
+            errorText(reason, packetName, cause),
+            frameworkOrigin
+                ? ZLinkFrameworkErrorOrigin.frameworkMetadata()
+                : Map.of());
         try {
             received.reply(reply);
         } catch (RuntimeException ignored) {

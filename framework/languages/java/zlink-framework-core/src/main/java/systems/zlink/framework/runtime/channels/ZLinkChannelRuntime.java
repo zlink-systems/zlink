@@ -1905,6 +1905,11 @@ public final class ZLinkChannelRuntime
         return ZLinkFrameworkErrorReply.kind(parts);
     }
 
+    static java.util.Map<String, String> frameworkErrorReplyMetadata(
+        List<Message> parts) {
+        return ZLinkFrameworkErrorReply.metadata(parts);
+    }
+
     private void startRouteLoop(String channelName, ZLinkBackendRouterSocket router) {
         receiveLoops.startRoute(
             router,

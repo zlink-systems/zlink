@@ -77,6 +77,7 @@ private fun ZLinkStreamConnectorOptions.copyStreamCompression(
         codec,
         nameResolver(),
         typedCodec(),
+        diagnosticsLevel(),
     )
 
 class ZLinkKotlinStreamConnector(

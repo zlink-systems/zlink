@@ -21,8 +21,10 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 
 
@@ -44,6 +46,22 @@ final class ZLinkSpotRoutedOutbound {
         this.directOutbound = directOutbound;
         this.flow = flow;
         this.localRouterNode = localRouterNode;
+    }
+
+    /**
+     * R1 value-passing (spec 27 §4): capture the ambient callback flow — or
+     * start an APPLICATION flow for a first outbound outside framework
+     * callbacks — as a value for the encoder. No scope install, no wrapper on
+     * the returned stage; at Off nothing is captured or allocated.
+     */
+    private ZLinkFlowContext.State captureOutboundFlow() {
+        if (!flow.captureEnabled()) {
+            return null;
+        }
+        ZLinkFlowContext.State current = ZLinkFlowContext.current();
+        return current != null
+            ? current
+            : ZLinkFlowContext.create(ZLinkFlowOrigin.APPLICATION);
     }
 
     ZLinkSendCall send(
@@ -154,7 +172,8 @@ final class ZLinkSpotRoutedOutbound {
             throw new UnsupportedOperationException(
                 "legacy routed Spot transport does not support application metadata");
         }
-        List<Message> parts = messages.encode(packetName, payload, contentType);
+        List<Message> parts = messages.encode(
+            packetName, payload, contentType, captureOutboundFlow());
         try {
             return ZLinkOneWayCalls.adaptOneWay(channels.sendToSpotViaRouterChannel(
                 routerChannelId,
@@ -209,7 +228,8 @@ final class ZLinkSpotRoutedOutbound {
             throw new UnsupportedOperationException(
                 "legacy routed Spot transport does not support application metadata");
         }
-        List<Message> parts = messages.encode(packetName, payload, contentType);
+        List<Message> parts = messages.encode(
+            packetName, payload, contentType, captureOutboundFlow());
         try {
                 return channels.requestToSpotViaRouterChannel(
                     routerChannelId,

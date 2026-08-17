@@ -13,11 +13,13 @@ final class ZLinkStreamConnectorConfiguration {
     private final Heartbeat heartbeat;
     private final Reconnect reconnect;
     private final Transport transport;
+    private final ZLinkStreamDiagnosticsLevel diagnosticsLevel;
 
     private ZLinkStreamConnectorConfiguration(ZLinkStreamConnectorOptions options) {
         this.publicOptions = options;
         this.endpoint = options.endpoint();
         this.dispatchMode = options.dispatchMode();
+        this.diagnosticsLevel = options.diagnosticsLevel();
         this.timeouts = new Timeouts(
             options.connectTimeout(), options.requestTimeout(), options.waitTimeout());
         this.limits = new Limits(
@@ -82,6 +84,7 @@ final class ZLinkStreamConnectorConfiguration {
                 "maxInboundObserverPayloadPreviewBytes must not be negative");
         }
         Objects.requireNonNull(options.compression(), "compression");
+        Objects.requireNonNull(options.diagnosticsLevel(), "diagnosticsLevel");
         return new ZLinkStreamConnectorConfiguration(options);
     }
 
@@ -93,6 +96,12 @@ final class ZLinkStreamConnectorConfiguration {
     Heartbeat heartbeat() { return heartbeat; }
     Reconnect reconnect() { return reconnect; }
     Transport transport() { return transport; }
+    ZLinkStreamDiagnosticsLevel diagnosticsLevel() { return diagnosticsLevel; }
+
+    /** Spec 27 §4 gate: trace-only flow work is skipped entirely at Off. */
+    boolean flowCaptureEnabled() {
+        return diagnosticsLevel != ZLinkStreamDiagnosticsLevel.OFF;
+    }
 
     record Timeouts(Duration connect, Duration request, Duration waitForMessage) { }
     record Limits(

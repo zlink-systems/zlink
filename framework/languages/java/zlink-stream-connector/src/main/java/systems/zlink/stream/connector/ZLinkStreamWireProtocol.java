@@ -96,6 +96,16 @@ final class ZLinkStreamWireProtocol {
     }
 
     static Header decodeHeader(byte[] header) {
+        return decodeHeader(header, true);
+    }
+
+    /**
+     * Decodes a stream header. With {@code validateFlow} false (diagnostics
+     * level Off, spec 27 §4) the trace-only flow field validation (UUIDv7
+     * shape, origin range) is skipped while every structural length check —
+     * including the fixed 37-byte flow trailer — still applies.
+     */
+    static Header decodeHeader(byte[] header, boolean validateFlow) {
         if (header.length < 5) {
             throw new IllegalArgumentException("stream header is too short");
         }
@@ -162,7 +172,7 @@ final class ZLinkStreamWireProtocol {
             correlationId,
             flowId,
             flowOrigin);
-        validateHeader(decoded);
+        validateHeader(decoded, decoded.name(), validateFlow);
         return decoded;
     }
 
@@ -286,11 +296,14 @@ final class ZLinkStreamWireProtocol {
         return Collections.unmodifiableMap(values);
     }
 
-    private static void validateHeader(Header header) {
-        validateHeader(header, header.name());
+    private static void validateHeader(Header header, String packetName) {
+        validateHeader(header, packetName, true);
     }
 
-    private static void validateHeader(Header header, String packetName) {
+    private static void validateHeader(
+        Header header,
+        String packetName,
+        boolean validateFlow) {
         validateEnum(header.kind(), header.codec(), header.flags());
         byte[] name = packetName.getBytes(StandardCharsets.UTF_8);
         if ((isReply(header.kind()) && name.length != 0)
@@ -315,10 +328,12 @@ final class ZLinkStreamWireProtocol {
             header.correlationId() != null && !header.correlationId().isEmpty();
         boolean hasFlow = header.flowId() != null;
         if (hasFlow) {
-            if (!header.flowId().matches("[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")) {
+            if (validateFlow
+                && !header.flowId().matches("[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")) {
                 throw new IllegalArgumentException("flow id must be a canonical UUIDv7");
             }
-            if (header.flowOrigin() < 1 || header.flowOrigin() > 4) {
+            if (validateFlow
+                && (header.flowOrigin() < 1 || header.flowOrigin() > 4)) {
                 throw new IllegalArgumentException("flow origin is invalid");
             }
         } else if (header.flowOrigin() != 0) {

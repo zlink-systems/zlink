@@ -76,6 +76,7 @@ import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
@@ -378,7 +379,9 @@ final class SpotActivation
                     packet.packetName(),
                     backendSpot.spotId(),
                     ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
-                    new ZLinkFrameworkException(
+                    //  Sealed admission is a framework-generated rejection, so
+                    //  the reply carries the framework-origin marker.
+                    ZLinkFrameworkErrorOrigin.framework(
                         ZLinkFrameworkErrorKind.REJECTED,
                         "Actor application admission is sealed"));
             }
@@ -409,7 +412,9 @@ final class SpotActivation
                     packet.packetName(),
                     backendSpot.spotId(),
                     ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
-                    new ZLinkFrameworkException(
+                    //  Sealed admission is a framework-generated rejection, so
+                    //  the reply carries the framework-origin marker.
+                    ZLinkFrameworkErrorOrigin.framework(
                         ZLinkFrameworkErrorKind.REJECTED,
                         "SPOT application admission is sealed"));
             }

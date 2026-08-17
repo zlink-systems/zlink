@@ -27,7 +27,10 @@ import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.channels.ZLinkPublishCall;
 
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
+import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
@@ -43,6 +46,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
     private final Function<ZLinkBackendObject,
         Duration> admissionTimeout;
     private final Function<Class<?>, String> contentTypeResolver;
+    private final ZLinkMessageFlowTracer flow;
     private final Map<String, ZLinkInternalSpotNode> nodesByChannel = new HashMap<>();
     private final Map<String, ZLinkBackendSpot> spotsByChannel = new HashMap<>();
     private volatile boolean closed;
@@ -87,8 +91,26 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
         Function<ZLinkBackendObject,
             Duration> admissionTimeout,
         Function<Class<?>, String> contentTypeResolver) {
+        this(
+            serializer,
+            messages,
+            parallelism,
+            admissionTimeout,
+            contentTypeResolver,
+            null);
+    }
+
+    ZLinkSpotPublisherRuntime(
+        ZLinkMessageSerializer serializer,
+        ZLinkSpotRouteMessages messages,
+        int parallelism,
+        Function<ZLinkBackendObject,
+            Duration> admissionTimeout,
+        Function<Class<?>, String> contentTypeResolver,
+        ZLinkMessageFlowTracer flow) {
         this.serializer = serializer;
         this.messages = messages;
+        this.flow = flow;
         this.admissionTimeout = Objects.requireNonNull(
             admissionTimeout, "admissionTimeout");
         this.contentTypeResolver = Objects.requireNonNull(
@@ -189,6 +211,26 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
             this, meshName, channelName, topic, payload, packetName, contentType);
     }
 
+    /**
+     * R1 value-passing (spec 27 §4): the publish flow — the ambient callback
+     * flow or a new APPLICATION flow for a first outbound started outside
+     * framework callbacks — is captured as a value on the submitting thread
+     * and handed to the encoder explicitly. The multicast executor hop
+     * receives the value; no scope is installed and the admission future the
+     * publish turn returns stays bare, so the spot dispatch lane's
+     * release/drain chain gains no completion hop that can be lost during
+     * teardown. At Off nothing is captured or allocated.
+     */
+    private ZLinkFlowContext.State captureOutboundFlow() {
+        if (flow == null || !flow.captureEnabled()) {
+            return null;
+        }
+        ZLinkFlowContext.State current = ZLinkFlowContext.current();
+        return current != null
+            ? current
+            : ZLinkFlowContext.create(ZLinkFlowOrigin.APPLICATION);
+    }
+
     void submitNow(
         String meshName,
         String channelName,
@@ -197,7 +239,28 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
         Optional<String> packetName,
         String contentType,
         ZLinkApplicationMetadata metadata) {
-        List<Message> parts = messages.encode(packetName, payload, contentType);
+        submitNow(
+            meshName,
+            channelName,
+            topic,
+            payload,
+            packetName,
+            contentType,
+            metadata,
+            captureOutboundFlow());
+    }
+
+    private void submitNow(
+        String meshName,
+        String channelName,
+        String topic,
+        Message payload,
+        Optional<String> packetName,
+        String contentType,
+        ZLinkApplicationMetadata metadata,
+        ZLinkFlowContext.State flowState) {
+        List<Message> parts = messages.encode(
+            packetName, payload, contentType, flowState);
         try {
             requireChannel(meshName).publish(
                 channelName,
@@ -238,6 +301,9 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
                 ZLinkOneWayCalls.SHUTDOWN));
             return result;
         }
+        //  Captured on the submitting thread; the executor hop below would
+        //  otherwise lose the ambient flow (R1 value-passing).
+        ZLinkFlowContext.State flowState = captureOutboundFlow();
         Runnable operation = () -> {
                 if (!result.beginCommit()) {
                     result.closePayloadOnce();
@@ -253,7 +319,8 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
                         payload,
                         packetName,
                         contentType,
-                        metadata);
+                        metadata,
+                        flowState);
                 } catch (RuntimeException error) {
                     LOGGER.log(
                         Level.WARNING,

@@ -14,6 +14,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
 final class ZLinkSpotRouterNodeDispatcher {
     private ZLinkSpotRouterNodeDispatcher() {
@@ -177,11 +178,11 @@ final class ZLinkSpotRouterNodeDispatcher {
             }
             if (current instanceof ZlinkRequestException request) {
                 return switch (request.getResult()) {
-                    case NOT_CONNECTED, CONFLICT -> new ZLinkFrameworkException(
+                    case NOT_CONNECTED, CONFLICT -> ZLinkFrameworkErrorOrigin.framework(
                         ZLinkFrameworkErrorKind.UNAVAILABLE,
                         "SPOT route request failed because the target route is not available.",
                         request);
-                    case NOT_FOUND -> new ZLinkFrameworkException(
+                    case NOT_FOUND -> ZLinkFrameworkErrorOrigin.framework(
                         ZLinkFrameworkErrorKind.NOT_FOUND,
                         "SPOT route request failed because the target route was not found.",
                         request);
@@ -207,7 +208,10 @@ final class ZLinkSpotRouterNodeDispatcher {
                 + " requestSeq=" + reply.requestSeq().map(Object::toString).orElse(null)
                 + " parts=" + ZLinkChannelRuntime.describeTraceParts(reply.parts()) : null);
             if (reply.result() != ZLinkBackendRequestResult.OK) {
-                result.completeExceptionally(new ZLinkFrameworkException(
+                //  A backend request terminal is framework-generated; carry
+                //  the origin marker so a NotFound terminal stays usable as
+                //  the stale-route control signal.
+                result.completeExceptionally(ZLinkFrameworkErrorOrigin.framework(
                     reply.result().toFrameworkErrorKind(reply.failureCode()),
                     "SPOT route request failed: " + reply.result()));
                 return;
@@ -215,13 +219,16 @@ final class ZLinkSpotRouterNodeDispatcher {
             List<Message> replyParts = ZLinkChannelRuntime.copyMessages(reply.parts());
             if (ZLinkChannelRuntime.isFrameworkErrorReply(replyParts)) {
                 //  Preserve the public kind the framework-error reply carries
-                //  rather than collapsing every error reply to InternalFailure.
+                //  rather than collapsing every error reply to InternalFailure,
+                //  and keep the reply metadata (framework-origin marker).
                 ZLinkFrameworkErrorKind errorKind =
                     ZLinkChannelRuntime.frameworkErrorReplyKind(reply.parts());
                 replyParts.forEach(Message::close);
                 result.completeExceptionally(new ZLinkFrameworkException(
                     errorKind,
-                    ZLinkChannelRuntime.frameworkErrorReplyMessage(reply.parts())));
+                    ZLinkChannelRuntime.frameworkErrorReplyMessage(reply.parts()),
+                    null,
+                    ZLinkChannelRuntime.frameworkErrorReplyMetadata(reply.parts())));
                 return;
             }
             if (!result.complete(replyParts)) {

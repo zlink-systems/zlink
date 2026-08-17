@@ -26,7 +26,8 @@ public record ZLinkStreamConnectorOptions(
     ZLinkStreamCompression compression,
     ZLinkStreamCompressionCodec compressionCodec,
     ZLinkStreamPacketNameResolver nameResolver,
-    ZLinkStreamTypedCodec typedCodec) {
+    ZLinkStreamTypedCodec typedCodec,
+    ZLinkStreamDiagnosticsLevel diagnosticsLevel) {
     public static final int UNLIMITED_RECONNECT_ATTEMPTS = -1;
 
     public static ZLinkStreamConnectorOptions createDefault(URI endpoint) {
@@ -68,6 +69,92 @@ public record ZLinkStreamConnectorOptions(
         if (typedCodec == null) {
             typedCodec = ZLinkStreamJson.codec();
         }
+        if (diagnosticsLevel == null) {
+            //  Spec 26 §4 default: Errors. Preserves the connector's flow wire
+            //  behavior for callers that do not choose a level explicitly.
+            diagnosticsLevel = ZLinkStreamDiagnosticsLevel.ERRORS;
+        }
+    }
+
+    public ZLinkStreamConnectorOptions(
+        URI endpoint,
+        ZLinkStreamDispatchMode dispatchMode,
+        Duration requestTimeout,
+        Duration waitTimeout,
+        int maxReconnectAttempts,
+        Duration connectTimeout,
+        int maxSendPayloadSize,
+        int maxReceivePayloadSize,
+        int maxReceivedMessages,
+        int maxInboundObserverNotifications,
+        int maxInboundObserverPayloadPreviewBytes,
+        boolean heartbeatEnabled,
+        Duration heartbeatInterval,
+        Duration heartbeatTimeout,
+        boolean reconnectEnabled,
+        Duration reconnectInitialDelay,
+        Duration reconnectMaxDelay,
+        double reconnectBackoffFactor,
+        boolean skipServerCertificateValidation,
+        ZLinkStreamCompression compression,
+        ZLinkStreamCompressionCodec compressionCodec,
+        ZLinkStreamPacketNameResolver nameResolver,
+        ZLinkStreamTypedCodec typedCodec) {
+        this(
+            endpoint,
+            dispatchMode,
+            requestTimeout,
+            waitTimeout,
+            maxReconnectAttempts,
+            connectTimeout,
+            maxSendPayloadSize,
+            maxReceivePayloadSize,
+            maxReceivedMessages,
+            maxInboundObserverNotifications,
+            maxInboundObserverPayloadPreviewBytes,
+            heartbeatEnabled,
+            heartbeatInterval,
+            heartbeatTimeout,
+            reconnectEnabled,
+            reconnectInitialDelay,
+            reconnectMaxDelay,
+            reconnectBackoffFactor,
+            skipServerCertificateValidation,
+            compression,
+            compressionCodec,
+            nameResolver,
+            typedCodec,
+            null);
+    }
+
+    /** Returns a copy of these options with the given diagnostics level. */
+    public ZLinkStreamConnectorOptions withDiagnosticsLevel(
+        ZLinkStreamDiagnosticsLevel level) {
+        return new ZLinkStreamConnectorOptions(
+            endpoint,
+            dispatchMode,
+            requestTimeout,
+            waitTimeout,
+            maxReconnectAttempts,
+            connectTimeout,
+            maxSendPayloadSize,
+            maxReceivePayloadSize,
+            maxReceivedMessages,
+            maxInboundObserverNotifications,
+            maxInboundObserverPayloadPreviewBytes,
+            heartbeatEnabled,
+            heartbeatInterval,
+            heartbeatTimeout,
+            reconnectEnabled,
+            reconnectInitialDelay,
+            reconnectMaxDelay,
+            reconnectBackoffFactor,
+            skipServerCertificateValidation,
+            compression,
+            compressionCodec,
+            nameResolver,
+            typedCodec,
+            level);
     }
 
     public ZLinkStreamConnectorOptions(

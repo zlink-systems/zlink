@@ -23,10 +23,11 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEven
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
 
 final class ZLinkSpotDirectOutbound {
@@ -138,6 +139,25 @@ final class ZLinkSpotDirectOutbound {
             this, spot, channelName, topic, payload, packetName, contentType);
     }
 
+    /**
+     * R1 value-passing (spec 27 §4): the ambient callback flow — or a new
+     * APPLICATION flow for a first outbound started outside framework
+     * callbacks — is captured as a value at submit time and passed to the
+     * encoder explicitly. No scope is installed and no completion hop is added
+     * to the returned stage, so the spot dispatch lane's turn stage stays the
+     * bare admission future teardown relies on. At Off nothing is captured or
+     * allocated.
+     */
+    private ZLinkFlowContext.State captureOutboundFlow() {
+        if (!flow.captureEnabled()) {
+            return null;
+        }
+        ZLinkFlowContext.State current = ZLinkFlowContext.current();
+        return current != null
+            ? current
+            : ZLinkFlowContext.create(ZLinkFlowOrigin.APPLICATION);
+    }
+
     CompletionStage<Void> submitSend(
         ZLinkBackendSpot spot,
         RoutingId targetNodeRid,
@@ -154,7 +174,8 @@ final class ZLinkSpotDirectOutbound {
             null,
             targetNodeRid,
             spotId);
-        List<Message> parts = messages.encode(packetName, payload, contentType);
+        List<Message> parts = messages.encode(
+            packetName, payload, contentType, captureOutboundFlow());
         return ZLinkOneWayCalls.adaptOneWay(
             spot.sendToSpot(
                 targetNodeRid,
@@ -181,7 +202,8 @@ final class ZLinkSpotDirectOutbound {
         Duration timeout,
         Class<TReply> replyType) {
         CompletableFuture<TReply> result = new CompletableFuture<>();
-        List<Message> requestParts = messages.encode(packetName, payload, contentType);
+        List<Message> requestParts = messages.encode(
+            packetName, payload, contentType, captureOutboundFlow());
         AtomicBoolean requestPartsClosed = new AtomicBoolean();
         Runnable closeRequestParts = () -> {
             if (requestPartsClosed.compareAndSet(false, true)) {
@@ -218,9 +240,13 @@ final class ZLinkSpotDirectOutbound {
                     spotId);
                 try {
                     if (reply.result() != ZLinkBackendRequestResult.OK) {
-                        result.completeExceptionally(new ZLinkFrameworkException(
-                            reply.result().toFrameworkErrorKind(reply.failureCode()),
-                            "SPOT direct request failed: " + reply.result()));
+                        //  A backend request terminal is framework-generated;
+                        //  carry the origin marker so a NotFound terminal
+                        //  stays usable as the stale-route control signal.
+                        result.completeExceptionally(
+                            ZLinkFrameworkErrorOrigin.framework(
+                                reply.result().toFrameworkErrorKind(reply.failureCode()),
+                                "SPOT direct request failed: " + reply.result()));
                         return;
                     }
                     result.complete(messages.decodeReply(reply.parts(), replyType));
@@ -246,7 +272,8 @@ final class ZLinkSpotDirectOutbound {
         Optional<String> packetName,
         String contentType,
         ZLinkApplicationMetadata metadata) {
-        List<Message> parts = messages.encode(packetName, payload, contentType);
+        List<Message> parts = messages.encode(
+            packetName, payload, contentType, captureOutboundFlow());
         CompletionStage<Void> result = ZLinkOneWayCalls.adaptOneWay(
             spot.publishAsync(
                 channelName,

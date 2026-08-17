@@ -74,10 +74,15 @@ final class ZLinkSpotRouteBridgeDispatcher {
                                 + " parts="
                                 + ZLinkChannelRuntime.describeTraceParts(reply) : null);
                         if (ZLinkChannelRuntime.isFrameworkErrorReply(reply)) {
+                            //  Keep the reply metadata: the framework-origin
+                            //  marker distinguishes a framework NotFound
+                            //  (stale route) from an application NotFound.
                             result.completeExceptionally(
                                 new ZLinkFrameworkException(
                                     ZLinkChannelRuntime.frameworkErrorReplyKind(reply),
-                                    ZLinkChannelRuntime.frameworkErrorReplyMessage(reply)));
+                                    ZLinkChannelRuntime.frameworkErrorReplyMessage(reply),
+                                    null,
+                                    ZLinkChannelRuntime.frameworkErrorReplyMetadata(reply)));
                             return;
                         }
                         List<Message> normalizedReply = copyReplyMessages(reply);

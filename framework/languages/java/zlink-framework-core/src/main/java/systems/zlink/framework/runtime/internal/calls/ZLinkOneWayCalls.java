@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
 /** Shared one-way admission and error mapping for all runtime families. */
 public final class ZLinkOneWayCalls {
@@ -45,7 +46,10 @@ public final class ZLinkOneWayCalls {
             case ROUTE_NOT_CONNECTED -> new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.UNAVAILABLE,
                 "one-way route is not connected");
-            case TARGET_NOT_FOUND -> new ZLinkFrameworkException(
+            //  Framework-generated admission terminal: the marker keeps
+            //  NotFound usable as the stale-route control signal now that
+            //  stale detection requires kind + framework origin.
+            case TARGET_NOT_FOUND -> ZLinkFrameworkErrorOrigin.framework(
                 ZLinkFrameworkErrorKind.NOT_FOUND,
                 "one-way target was not found");
             case SHUTDOWN -> new ZLinkFrameworkException(

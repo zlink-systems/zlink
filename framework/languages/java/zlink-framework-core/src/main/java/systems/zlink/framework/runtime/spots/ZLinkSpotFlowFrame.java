@@ -16,8 +16,12 @@ final class ZLinkSpotFlowFrame {
 
     private ZLinkSpotFlowFrame() { }
 
-    static Message current() {
-        ZLinkFlowContext.State state = ZLinkFlowContext.current();
+    /**
+     * Encodes an explicitly passed flow state (R1 value-passing): outbound
+     * entry points capture the state as a value and hand it to the encoder
+     * instead of installing a scope, so the stages they return stay bare.
+     */
+    static Message encode(ZLinkFlowContext.State state) {
         return state == null ? null : Message.from((PREFIX + state.flowId() + "\n" + state.origin().name())
             .getBytes(StandardCharsets.UTF_8));
     }

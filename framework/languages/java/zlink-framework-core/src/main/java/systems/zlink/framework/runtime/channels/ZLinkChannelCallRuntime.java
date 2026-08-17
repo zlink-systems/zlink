@@ -23,6 +23,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResul
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 
 final class ZLinkChannelCallRuntime {
@@ -169,7 +170,9 @@ final class ZLinkChannelCallRuntime {
         Class<TReply> replyType,
         CompletableFuture<TReply> result) {
         if (reply.result() != ZLinkBackendRequestResult.OK) {
-            result.completeExceptionally(new ZLinkFrameworkException(
+            //  A backend request terminal is framework-generated; carry the
+            //  origin marker (zlink.origin=framework).
+            result.completeExceptionally(ZLinkFrameworkErrorOrigin.framework(
                 reply.result().toFrameworkErrorKind(reply.failureCode()),
                 "channel request failed: " + reply.result()));
             return;
@@ -177,7 +180,9 @@ final class ZLinkChannelCallRuntime {
         if (ZLinkChannelRuntime.isFrameworkErrorReply(reply.parts())) {
             result.completeExceptionally(new ZLinkFrameworkException(
                 ZLinkChannelRuntime.frameworkErrorReplyKind(reply.parts()),
-                ZLinkChannelRuntime.frameworkErrorReplyMessage(reply.parts())));
+                ZLinkChannelRuntime.frameworkErrorReplyMessage(reply.parts()),
+                null,
+                ZLinkChannelRuntime.frameworkErrorReplyMetadata(reply.parts())));
             return;
         }
         result.complete(replyDecoder.decode(

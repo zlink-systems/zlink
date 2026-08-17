@@ -40,8 +40,9 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private final ZLinkStreamDispatchQueue dispatchQueue;
     private final ZLinkStreamConnectorPayloadCodec payloadCodec;
     private final AtomicLong nextRequestSeq = new AtomicLong();
-    // Process-global monotonic correlation id (hex), stamped on every non-control
-    // outbound packet so the server can trace/echo it regardless of tracing mode.
+    //  Process-global monotonic correlation id (hex), stamped on outbound
+    //  request packets only. Spec 27 §2: a one-way message that has no reply
+    //  never creates a correlation_id.
     private final AtomicLong correlationCounter = new AtomicLong();
     private final ZLinkStreamPendingRequests pendingRequests = new ZLinkStreamPendingRequests();
     private final ZLinkStreamInboundObserverDispatcher inboundObservers;
@@ -202,8 +203,10 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
 
     CompletionStage<Void> submit(ZLinkStreamEncodedPayload payload, boolean compress) {
         ensureConnected();
-        ZLinkConnectorFlowContext.State flow = ZLinkConnectorFlowContext.currentOrApplication();
+        ZLinkConnectorFlowContext.State flow = outboundFlow();
         byte[] body = payloadCodec.encode(payload, compress);
+        //  Spec 27 §2: a one-way Send has no reply, so no correlation_id is
+        //  created and header flag 0x08 stays clear.
         ZLinkStreamWireProtocol.Header header = new ZLinkStreamWireProtocol.Header(
             ZLinkStreamWireProtocol.KIND_SEND,
             ZLinkStreamConnectorPayloadCodec.toWireCodec(payload.codec()),
@@ -212,10 +215,21 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             null,
             payload.packetName(),
             payload.metadata(),
-            nextCorrelationId(),
-            flow.flowId(),
-            flow.flowOrigin());
+            null,
+            flow == null ? null : flow.flowId(),
+            flow == null ? 0 : flow.flowOrigin());
         return sendFrame(header, body);
+    }
+
+    /**
+     * Spec 27 §4: at Off no flow pair is created or copied onto outbound
+     * envelopes (flag 0x10 stays clear); otherwise the ambient flow is
+     * preserved or a new application flow starts on the first outbound call.
+     */
+    private ZLinkConnectorFlowContext.State outboundFlow() {
+        return configuration.flowCaptureEnabled()
+            ? ZLinkConnectorFlowContext.currentOrApplication()
+            : null;
     }
 
     CompletionStage<ZLinkStreamEncodedPayload> submitRequest(
@@ -223,7 +237,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         Duration timeout,
         boolean compress) {
         ensureConnected();
-        ZLinkConnectorFlowContext.State flow = ZLinkConnectorFlowContext.currentOrApplication();
+        ZLinkConnectorFlowContext.State flow = outboundFlow();
         long requestSeq = nextRequestSeq();
         CompletableFuture<ZLinkStreamEncodedPayload> pending =
             pendingRequests.add(requestSeq, payload.packetName(), timeout, timeouts);
@@ -239,8 +253,8 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             payload.packetName(),
             payload.metadata(),
             nextCorrelationId(),
-            flow.flowId(),
-            flow.flowOrigin());
+            flow == null ? null : flow.flowId(),
+            flow == null ? 0 : flow.flowOrigin());
 
         sendFrame(header, body).whenComplete((ignored, ex) -> {
             if (ex != null) {
