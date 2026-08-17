@@ -223,7 +223,9 @@ class infrastructure_request_retry_state_t final :
           + " result="
           + std::to_string (static_cast<int> (completion.result)));
         if (completion.result
-            == detail::backend::raw_request_result_t::not_connected) {
+              == detail::backend::raw_request_result_t::not_connected
+            || completion.result
+                 == detail::backend::raw_request_result_t::route_unavailable) {
             schedule_retry ();
             return;
         }
@@ -1775,7 +1777,8 @@ task_t<bool> raw_mesh_node_owner_t::request_actor_create (
 
     // The ROUTER route can become available after the location reservation.
     // Submit first because topology admission is not required in every
-    // deployment. Only a not_connected submit is retried asynchronously.
+    // deployment. Transient route absence (including host/network unreachable)
+    // is retried asynchronously within the original request deadline.
     const auto deadline = foundation::operation_registry_t::clock_t::now ()
                           + timeout;
     const auto operations = _operations;

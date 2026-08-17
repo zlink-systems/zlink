@@ -212,45 +212,20 @@ class stream_session_dispatcher_t
 
     result_t<void> dispatch (std::string operation, dispatch_callback_t callback) const
     {
-        const std::lock_guard<std::mutex> dispatch_lock (_stream.dispatch_mutex);
-        record_operation (std::move (operation));
         task_completion_source_t<void> completion;
         auto task = completion.task ();
-        auto executor = stream_dispatch_executor ();
-        if (!executor) {
-            return detail::boundary_failure<void> (detail::boundary_error_t::shutdown,
-                                            "stream dispatch executor is not running");
-        }
         auto shared_completion =
           std::make_shared<detail::task_completion_source_t<void>> (std::move (completion));
-        try {
-            executor->submit ([callback = std::move (callback), shared_completion] () mutable {
-                try {
-                    auto callback_task = callback ();
-                    detail::observe_task_completion (
-                      callback_task,
-                      [shared_completion] (const result_t<void> &result) mutable {
-                          shared_completion->complete (result);
-                      });
-                }
-                catch (const framework_exception_t &error) {
-                    shared_completion->complete (detail::result_access_t::failure<void> (error));
-                }
-                catch (...) {
-                    shared_completion->complete (result_t<void>::failure (
-                      framework_error_kind_t::internal_failure,
-                      "stream session callback threw an exception"));
-                }
-            });
-        }
-        catch (const std::exception &error) {
-            shared_completion->complete (
-              result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ()));
-        }
-        catch (...) {
-            shared_completion->complete (result_t<void>::failure (
-                framework_error_kind_t::internal_failure, "stream dispatch executor rejected work"));
-        }
+        const auto submitted = dispatch_async (
+          std::move (operation), std::move (callback),
+          [shared_completion] (const result_t<void> &result) mutable {
+              shared_completion->complete (result);
+          }, {}, {});
+        if (!submitted)
+            return submitted;
+        /* dispatch_async only holds dispatch_mutex while obtaining/creating
+         * the per-session serial queue. Waiting here therefore cannot block a
+         * callback that re-enters session state through that mutex. */
         return task.result ();
     }
 

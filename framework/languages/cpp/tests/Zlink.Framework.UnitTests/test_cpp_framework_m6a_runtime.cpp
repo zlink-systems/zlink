@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/locations/service_descriptor_registry.hpp"
 #include "runtime/fanout/raw_fanout_owner.hpp"
@@ -12,6 +13,7 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cerrno>
 #include <cstdint>
 #include <future>
 #include <map>
@@ -2120,6 +2122,11 @@ void verify_raw_owner_node_send_and_liveness ()
 
 int main ()
 {
+    using zlink::framework::detail::backend::transient_route_errno;
+    assert (transient_route_errno (EHOSTUNREACH));
+    assert (transient_route_errno (ENETUNREACH));
+    assert (transient_route_errno (ENOTCONN));
+    assert (!transient_route_errno (EINVAL));
     verify_actor_create_command_49_roundtrip ();
     verify_bound_session_bind_retries_until_route_is_admitted ();
     verify_bound_session_bind_permanent_absence_is_bounded ();

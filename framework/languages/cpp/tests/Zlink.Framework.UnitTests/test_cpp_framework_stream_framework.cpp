@@ -76,6 +76,57 @@ class sample_session_t final : public zlink::framework::packet_stream_session_t
     zlink::framework::message_metadata_t last_metadata;
 };
 
+class reentrant_session_t final : public zlink::framework::packet_stream_session_t
+{
+  public:
+    explicit reentrant_session_t (
+      zlink::framework::detail::stream_runtime_t &runtime) : _runtime (&runtime)
+    {
+    }
+
+    zlink::framework::task_t<void> on_connected (
+      zlink::framework::stream_t &stream) override
+    {
+        events.push_back ("connected");
+        nested_submission = _runtime->dispatch_disconnected_async (
+          *this, stream,
+          [this] (const zlink::framework::result_t<void> &result) {
+              nested_completion.set_value (static_cast<bool> (result));
+          });
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_disconnected (
+      zlink::framework::stream_t &) override
+    {
+        events.push_back ("disconnected");
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_error (
+      zlink::framework::stream_t &,
+      const zlink::framework::stream_error_t &) override
+    {
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_packet (
+      zlink::framework::stream_t &,
+      const zlink::framework::session_message_context_t &,
+      const zlink::message_t &) override
+    {
+        co_return;
+    }
+
+    zlink::framework::detail::stream_runtime_t *_runtime;
+    zlink::framework::result_t<void> nested_submission =
+      zlink::framework::result_t<void>::failure (
+        zlink::framework::framework_error_kind_t::internal_failure,
+        "nested dispatch was not submitted");
+    std::promise<bool> nested_completion;
+    std::vector<std::string> events;
+};
+
 class duplicate_reply_session_t final : public zlink::framework::packet_stream_session_t
 {
   public:
@@ -1082,6 +1133,19 @@ int main ()
     if (session.events.size () != 3 || session.events[1] != "packet:move:payload"
         || runtime.written_headers (stream).size () != 1) {
         return 11;
+    }
+
+    auto reentrant_stream = runtime.open_session ("client-stream");
+    reentrant_session_t reentrant_session (runtime);
+    auto nested_completed = reentrant_session.nested_completion.get_future ();
+    if (!runtime.dispatch_connected (reentrant_session, reentrant_stream)
+        || !reentrant_session.nested_submission
+        || nested_completed.wait_for (std::chrono::seconds (2))
+             != std::future_status::ready
+        || !nested_completed.get ()
+        || reentrant_session.events
+             != std::vector<std::string>{"connected", "disconnected"}) {
+        return 285;
     }
     /* stream connector §5.2: Response는 request의 packet name을 그대로 되돌린다. */
     if (runtime.written_headers (stream)[0].kind () != stream_message_kind_t::response

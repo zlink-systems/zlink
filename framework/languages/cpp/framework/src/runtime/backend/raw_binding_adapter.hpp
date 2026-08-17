@@ -6,6 +6,7 @@
 #include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/Contracts/Messaging/request_result.hpp>
 
+#include <cerrno>
 #include <vector>
 
 namespace zlink::framework::detail::backend
@@ -90,6 +91,13 @@ inline raw_request_result_t map_binding_request_result (
         default:
             return raw_request_result_t::failed;
     }
+}
+
+inline bool transient_route_errno (int error) noexcept
+{
+    return error == ENOTCONN || error == EHOSTUNREACH || error == ENETUNREACH
+           || error == ECONNREFUSED || error == ECONNRESET
+           || error == ECONNABORTED;
 }
 
 } // namespace zlink::framework::detail::backend

@@ -43,6 +43,7 @@ enum class raw_request_result_t
     ok,
     timed_out,
     not_connected,
+    route_unavailable,
     terminated,
     failed
 };

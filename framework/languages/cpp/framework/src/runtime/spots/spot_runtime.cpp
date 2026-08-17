@@ -5984,35 +5984,41 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
 
     actor_join_completion_callback_t callback;
     std::shared_ptr<void> actor;
+    std::optional<result_t<void>> immediate;
     {
         std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
         if (_state->delivered_join_completions.contains (operation)
             || _state->delivering_join_completions.contains (operation)) {
-            completed (result_t<void>::success ());
-            return;
+            immediate.emplace (result_t<void>::success ());
+        } else {
+            const auto key = actor_key (actor_ref);
+            const auto generation = _state->actor_generations.find (key);
+            if (generation != _state->actor_generations.end ()
+                && generation->second != actor_ref.object_generation ()) {
+                immediate.emplace (result_t<void>::failure (
+                  framework_error_kind_t::invalid_operation,
+                  "Actor Join completion generation is stale"));
+            } else {
+                const auto factory = _state->actor_factories.find (
+                  std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (
+                    actor_ref)));
+                const auto instance = _state->actor_instances.find (key);
+                if (factory == _state->actor_factories.end ()
+                    || instance == _state->actor_instances.end () || !instance->second) {
+                    immediate.emplace (result_t<void>::failure (
+                      framework_error_kind_t::not_found,
+                      "Actor Join completion Actor is not registered"));
+                } else {
+                    callback = factory->second.on_join_completed;
+                    actor = instance->second;
+                    _state->delivering_join_completions.insert (operation);
+                }
+            }
         }
-        const auto key = actor_key (actor_ref);
-        const auto generation = _state->actor_generations.find (key);
-        if (generation != _state->actor_generations.end ()
-            && generation->second != actor_ref.object_generation ()) {
-            completed (result_t<void>::failure (
-              framework_error_kind_t::invalid_operation,
-              "Actor Join completion generation is stale"));
-            return;
-        }
-        const auto factory = _state->actor_factories.find (
-          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)));
-        const auto instance = _state->actor_instances.find (key);
-        if (factory == _state->actor_factories.end ()
-            || instance == _state->actor_instances.end () || !instance->second) {
-            completed (result_t<void>::failure (
-              framework_error_kind_t::not_found,
-              "Actor Join completion Actor is not registered"));
-            return;
-        }
-        callback = factory->second.on_join_completed;
-        actor = instance->second;
-        _state->delivering_join_completions.insert (operation);
+    }
+    if (immediate) {
+        completed (std::move (*immediate));
+        return;
     }
 
     auto settle = [node = _state, operation,
@@ -7208,6 +7214,7 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
                   false, kind, std::move (error)});
             };
           try {
+              bool owner_fence_changed = false;
               {
                   std::lock_guard<std::recursive_mutex> node_lock (node->mutex);
                   const auto exact_pending =
@@ -7227,11 +7234,16 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
                       || generation->second != committed.object_generation ()
                       || queue == node->actor_execution_queues.end ()
                       || queue->second.get () != actor_queue_identity) {
-                      fail_precommit (
-                        framework_error_kind_t::invalid_operation,
-                        "remote Actor handoff owner fence changed before activation");
-                      return;
+                      node->actor_transfer_coordinator.fail_commit (
+                        transfer_id, true);
+                      owner_fence_changed = true;
                   }
+              }
+              if (owner_fence_changed) {
+                  settle_turn (remote_actor_commit_turn_state_t::outcome_t{
+                    false, framework_error_kind_t::invalid_operation,
+                    "remote Actor handoff owner fence changed before activation"});
+                  return;
               }
               // This transition decides the deadline race before any Join
               // completion or location publication. Once it succeeds, the
@@ -7303,6 +7315,8 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
                           }
 
                           std::optional<std::vector<handoff_packet_t>> replay;
+                          std::optional<remote_actor_commit_turn_state_t::outcome_t>
+                            commit_failure;
                           {
                               std::lock_guard<std::recursive_mutex> node_lock (node->mutex);
                               const auto exact_pending =
@@ -7326,53 +7340,55 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
                                   || queue->second.get () != actor_queue_identity) {
                                   node->actor_transfer_coordinator.fail_commit (
                                     transfer_id, true);
-                                  settle_turn (remote_actor_commit_turn_state_t::outcome_t{
+                                  commit_failure.emplace (
                                     false, framework_error_kind_t::invalid_operation,
-                                    "remote Actor handoff owner fence changed during completion"});
-                                  return;
-                              }
-
-                              const auto location_updated =
-                                update_actor_location_after_move (
-                                  *node, committed, *target_state, false);
-                              if (!location_updated) {
-                                  node->actor_transfer_coordinator.fail_commit (
-                                    transfer_id, true);
-                                  settle_turn (remote_actor_commit_turn_state_t::outcome_t{
-                                    false, location_updated.error_kind (),
-                                    location_updated.error () != nullptr
-                                      ? location_updated.error ()->what ()
-                                      : "actor committed location update failed"});
-                                  return;
-                              }
-                              if (node->update_actor_registry_ref) {
-                                  const auto updated =
-                                    node->update_actor_registry_ref (committed);
-                                  if (!updated) {
+                                    "remote Actor handoff owner fence changed during completion");
+                              } else {
+                                  const auto location_updated =
+                                    update_actor_location_after_move (
+                                      *node, committed, *target_state, false);
+                                  if (!location_updated) {
                                       node->actor_transfer_coordinator.fail_commit (
                                         transfer_id, true);
-                                      settle_turn (remote_actor_commit_turn_state_t::outcome_t{
-                                        false, updated.error_kind (),
-                                        updated.error () != nullptr
-                                          ? updated.error ()->what ()
-                                          : "actor ref update failed"});
-                                      return;
+                                      commit_failure.emplace (
+                                        false, location_updated.error_kind (),
+                                        location_updated.error () != nullptr
+                                          ? location_updated.error ()->what ()
+                                          : "actor committed location update failed");
+                                  } else if (node->update_actor_registry_ref) {
+                                      const auto updated =
+                                        node->update_actor_registry_ref (committed);
+                                      if (!updated) {
+                                          node->actor_transfer_coordinator.fail_commit (
+                                            transfer_id, true);
+                                          commit_failure.emplace (
+                                            false, updated.error_kind (),
+                                            updated.error () != nullptr
+                                              ? updated.error ()->what ()
+                                              : "actor ref update failed");
+                                      }
+                                  }
+                                  if (!commit_failure) {
+                                      replay = node->actor_transfer_coordinator
+                                                 .complete_commit_and_take_backlog (
+                                                   transfer_id, actor_ref,
+                                                   target_spot_id);
                                   }
                               }
-                              replay = node->actor_transfer_coordinator
-                                         .complete_commit_and_take_backlog (
-                                           transfer_id, actor_ref,
-                                           target_spot_id);
                           }
-                            if (!replay) {
+                          if (commit_failure) {
+                              settle_turn (std::move (*commit_failure));
+                              return;
+                          }
+                          if (!replay) {
                               node->actor_transfer_coordinator.fail_commit (
                                 transfer_id, true);
                               settle_turn (remote_actor_commit_turn_state_t::outcome_t{
                                 false, framework_error_kind_t::invalid_operation,
                                 "remote Actor commit fence changed before replay publication"});
-                                return;
-                            }
-                            commit_state->mark_committed ();
+                              return;
+                          }
+                          commit_state->mark_committed ();
                           auto replay_owner =
                             std::make_shared<spot_node_runtime_t> (node);
                           auto replay_task = replay_owner->replay_actor_handoff_batch (
