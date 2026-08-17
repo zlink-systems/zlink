@@ -254,7 +254,7 @@ class raw_mesh_node_owner_t
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback);
     task_t<bool> request_actor_create (
-      const std::vector<std::uint8_t> &target_routing_id,
+      std::vector<std::uint8_t> target_routing_id,
       protocol::actor_create_header_t request,
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback);

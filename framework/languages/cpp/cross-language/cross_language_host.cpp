@@ -290,10 +290,14 @@ int run_message_follow_host ()
 
         const auto peer = owner.topology ().peer (peer_rid);
         if (!sent && received && peer) {
-            sent = owner.send_message_follow (
-              peer_rid,
-              make_message_follow_notice (
-                owner.topology ().local_descriptor (), peer->descriptor, 101));
+            sent = owner
+                     .send_message_follow (
+                       peer_rid,
+                       make_message_follow_notice (
+                         owner.topology ().local_descriptor (),
+                         peer->descriptor, 101))
+                     .result ()
+                     .value ();
         }
         if (sent && received) {
             std::this_thread::sleep_for (std::chrono::seconds (2));

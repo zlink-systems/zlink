@@ -2864,6 +2864,25 @@ mesh_node_runtime_t::resolve_application_actor_route (const actor_ref_t &actor) 
 }
 
 std::optional<runtime::spot_address_t>
+mesh_node_runtime_t::refresh_application_actor_route (
+  const actor_ref_t &actor,
+  const runtime::spot_address_t &stale_route) const
+{
+    if (_actor_route_invalidator) {
+        _actor_route_invalidator (
+          runtime::protocol::actor_route_fence_t{
+            std::string (actor.actor_id ().value ()),
+            stale_route.object_generation,
+            stale_route.node_rid.to_bytes (),
+            stale_route.node_generation,
+            stale_route.authority_owner_generation,
+            static_cast<std::uint64_t> (
+              stale_route.owner.lease_generation)});
+    }
+    return resolve_application_actor_route (actor);
+}
+
+std::optional<runtime::spot_address_t>
 mesh_node_runtime_t::wait_for_application_actor_route_change (
   const actor_ref_t &actor,
   const runtime::spot_address_t &stale_route,
@@ -2913,11 +2932,6 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
               framework_error_kind_t::invalid_operation,
               "Remote Actor session binding fence is invalid");
         }
-        if (!wait_for_peer_ready (actor_route.node_rid, timeout)) {
-            co_return result_t<application_actor_session_bind_outcome_t>::failure (
-              framework_error_kind_t::unavailable,
-              "Remote Actor session binding target RouteMesh peer is not ready");
-        }
         auto completion = std::make_shared<
           detail::task_completion_source_t<runtime::protocol::reply_header_t>> ();
         auto output = completion->task ();
@@ -2937,8 +2951,13 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
           [completion] (runtime::foundation::operation_terminal_t terminal,
                         std::vector<std::uint8_t> payload) {
               if (terminal != runtime::foundation::operation_terminal_t::completed) {
+                  const auto kind =
+                    terminal
+                        == runtime::foundation::operation_terminal_t::timed_out
+                      ? framework_error_kind_t::deadline_exceeded
+                      : framework_error_kind_t::unavailable;
                   completion->complete (result_t<runtime::protocol::reply_header_t>::failure (
-                    framework_error_kind_t::unavailable,
+                    kind,
                     "Remote Actor session binding did not complete successfully"));
                   return;
               }
@@ -2999,8 +3018,8 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
 }
 
 task_t<void> mesh_node_runtime_t::retire_application_actor_session (
-  const runtime::stateful::stream_binding_t &binding,
-  const zlink::routing_id_t &session_rid,
+  runtime::stateful::stream_binding_t binding,
+  zlink::routing_id_t session_rid,
   std::chrono::milliseconds timeout)
 {
     if (binding.binding_generation == 0

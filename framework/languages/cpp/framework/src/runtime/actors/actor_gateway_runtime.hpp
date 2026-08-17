@@ -115,7 +115,7 @@ struct session_relay_completion_fence_t
 using bound_session_sink_t =
   std::function<task_t<void> (std::string, stream_codec_t, const zlink::message_t &)>;
 using bound_session_replacement_handler_t =
-  std::function<void (const runtime::protocol::bound_session_replaced_t &)>;
+  std::function<bool (const runtime::protocol::bound_session_replaced_t &)>;
 
 struct actor_record_t
 {
@@ -144,10 +144,14 @@ class session_actor_binding_context_t
   public:
     std::mutex mutex;
     std::optional<stream_t> stream;
+    std::shared_ptr<stream_state_t> stream_state;
     std::string session_id;
     stream_codec_t codec = stream_codec_t::message_pack;
     std::map<std::string, std::uint64_t> actor_tokens;
-    std::function<task_t<void> (const actor_ref_t &)> native_binder;
+    std::set<std::string> ready_actors;
+    std::map<std::string, std::weak_ptr<stream_state_t>> actor_streams;
+    std::function<task_t<void> (actor_ref_t, std::uint64_t)>
+      native_binder;
 };
 
 class session_actor_manager_access_t
@@ -156,7 +160,8 @@ class session_actor_manager_access_t
     static void attach (session_actor_manager_t &manager, stream_t stream);
     static void set_codec (session_actor_manager_t &manager, stream_codec_t codec);
     static void bind_native (session_actor_manager_t &manager,
-                             std::function<task_t<void> (const actor_ref_t &)> binder);
+                             std::function<task_t<void> (
+                               actor_ref_t, std::uint64_t)> binder);
     static void disconnect (session_actor_manager_t &manager) noexcept;
 };
 
@@ -201,7 +206,8 @@ class actor_gateway_state_t
 
     std::map<std::string, actor_record_t> actors_by_id;
     std::map<std::string, std::shared_ptr<bound_session_sink_t>> bound_session_sinks;
-    std::map<std::string, std::shared_ptr<bound_session_replacement_handler_t>>
+    std::map<std::string,
+             std::vector<std::shared_ptr<bound_session_replacement_handler_t>>>
       bound_session_replacement_handlers;
     std::vector<relayed_frame_t> relayed_frames;
     std::vector<relayed_frame_t> bound_session_pushes;

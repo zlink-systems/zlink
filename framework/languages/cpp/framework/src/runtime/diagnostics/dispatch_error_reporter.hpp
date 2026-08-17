@@ -46,6 +46,12 @@ class dispatch_error_reporter_t
             }
         }
         log_default (event);
+        try {
+            dispatch_options_access_t::observe_dispatch_error (_options, event);
+        }
+        catch (...) {
+            (void) observer_failures ();
+        }
     }
 
     static std::uint64_t reported () noexcept

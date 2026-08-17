@@ -4384,18 +4384,17 @@ int main ()
           zlink::framework::detail::spot_node_builder_state_t> (
           "logical-multicast-observation");
         std::atomic_bool observed{false};
-        zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
-          state->dispatch,
-          [&] (const zlink::framework::message_flow_event_t &event) {
-              if (event.outcome
-                    == zlink::framework::message_flow_outcome_t::error
-                  && event.surface
+        zlink::framework::detail::dispatch_options_access_t::
+          set_dispatch_error_observer_for_tests (
+            state->dispatch,
+            [&] (const zlink::framework::message_dispatch_error_event_t &event) {
+              if (event.surface
                     == zlink::framework::dispatch_error_surface_t::route_mesh_channel
                   && event.message_kind
                     == zlink::framework::dispatch_message_kind_t::publish
-                  && event.error_reason
-                    == zlink::framework::dispatch_error_reason_t::handler_exception
-                  && event.error_action
+                  && event.reason
+                    == zlink::framework::dispatch_error_reason_t::backpressure
+                  && event.action
                     == zlink::framework::dispatch_error_action_t::drop
                   && event.packet_name
                   && *event.packet_name == "PlayerMoved"
@@ -4932,8 +4931,7 @@ int main ()
             [&completion_failure_events] (
               const zlink::framework::message_flow_event_t &event) {
                 if (event.packet_name == "JoinSpot"
-                    && event.outcome
-                         == zlink::framework::message_flow_outcome_t::error) {
+                    && event.error_reason.has_value ()) {
                     completion_failure_events.push_back (event);
                 }
             });

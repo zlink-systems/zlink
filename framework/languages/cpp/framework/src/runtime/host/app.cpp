@@ -2460,6 +2460,19 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                     + " binding_generation="
                     + std::to_string (bind.binding.generation)
                     + " replaced=" + (change.changed ? "true" : "false"));
+                if (change.current
+                    && change.current->binding_generation
+                         != bind.binding.generation) {
+                    actor_gateway_runtime.trace_bound_session_send_stage (
+                      bind.actor.actor_id,
+                      "actor_owner_route_publish_stale_ignored",
+                      "session_rid=" + session_rid.to_hex ()
+                        + " binding_generation="
+                        + std::to_string (bind.binding.generation)
+                        + " current_binding_generation="
+                        + std::to_string (
+                          change.current->binding_generation));
+                }
                 if (change.changed && change.previous && change.previous->session_rid
                     && change.previous->node_generation != 0
                     && change.previous->binding_generation != 0) {

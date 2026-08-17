@@ -16,6 +16,9 @@
 #include <zlink/Contracts/Sockets/results.hpp>
 #include <zlink/Contracts/Sockets/routed_socket_contracts.hpp>
 
+#include <boost/asio/steady_timer.hpp>
+#include <boost/asio/system_executor.hpp>
+
 #include <algorithm>
 #include <cstdlib>
 #include <iomanip>
@@ -29,11 +32,14 @@
 
 namespace zlink::framework::runtime::mesh
 {
+
 namespace
 {
 
 constexpr std::size_t max_pending_admissions = 64;
 constexpr std::size_t max_pending_admission_bytes = 64u * 1024u;
+constexpr auto infrastructure_not_connected_retry_interval =
+  std::chrono::milliseconds (75);
 bool mesh_trace_enabled ()
 {
     const char *value = std::getenv ("ZLINK_CPP_MESH_TRACE");
@@ -136,6 +142,261 @@ std::vector<std::uint8_t> pack_infrastructure_reply (
         packed.insert (packed.end (), part.begin (), part.end ());
     }
     return packed;
+}
+
+class infrastructure_request_retry_state_t final :
+    public std::enable_shared_from_this<infrastructure_request_retry_state_t>
+{
+  public:
+    using clock_t = foundation::operation_registry_t::clock_t;
+
+    infrastructure_request_retry_state_t (
+      std::shared_ptr<detail::backend::raw_route_port_t> port,
+      std::shared_ptr<foundation::operation_registry_t> operations,
+      foundation::call_id_t operation,
+      std::uint64_t correlation,
+      std::vector<std::uint8_t> target_routing_id,
+      detail::backend::raw_message_t request_parts,
+      std::function<std::vector<std::uint8_t> (
+        const detail::backend::raw_message_t &)> decode_reply,
+      clock_t::time_point deadline,
+      foundation::operation_terminal_t deadline_terminal =
+        foundation::operation_terminal_t::transport_failed) :
+        _port (std::move (port)),
+        _operations (std::move (operations)),
+        _operation (operation),
+        _correlation (correlation),
+        _target_routing_id (std::move (target_routing_id)),
+        _request_parts (std::move (request_parts)),
+        _decode_reply (std::move (decode_reply)),
+        _deadline (deadline),
+        _deadline_terminal (deadline_terminal),
+        _retry_timer (boost::asio::system_executor ())
+    {
+    }
+
+    void start ()
+    {
+        submit ();
+    }
+
+  private:
+    void submit ()
+    {
+        const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
+          _deadline - clock_t::now ());
+        if (remaining <= std::chrono::milliseconds::zero ()) {
+            fail (_deadline_terminal);
+            return;
+        }
+        auto running = std::make_shared<
+          task_t<detail::backend::raw_request_completion_t>> (
+            _port->request (
+              _target_routing_id, _request_parts, remaining));
+        detail::observe_task_completion (
+          *running,
+          [self = shared_from_this (), running] (
+            const result_t<detail::backend::raw_request_completion_t>
+              &settled) {
+              self->settle (settled);
+          });
+    }
+
+    void settle (
+      const result_t<detail::backend::raw_request_completion_t> &settled)
+    {
+        if (!settled) {
+            fail (foundation::operation_terminal_t::transport_failed);
+            return;
+        }
+        auto completion = settled.value ();
+        trace_mesh (
+          "infrastructure-request-result correlation="
+          + std::to_string (_correlation)
+          + " result="
+          + std::to_string (static_cast<int> (completion.result)));
+        if (completion.result
+            == detail::backend::raw_request_result_t::not_connected) {
+            schedule_retry ();
+            return;
+        }
+        if (completion.result
+            != detail::backend::raw_request_result_t::ok) {
+            const auto terminal =
+              completion.result
+                  == detail::backend::raw_request_result_t::timed_out
+                ? foundation::operation_terminal_t::timed_out
+              : completion.result
+                    == detail::backend::raw_request_result_t::terminated
+                ? foundation::operation_terminal_t::shutdown
+                : foundation::operation_terminal_t::transport_failed;
+            fail (terminal);
+            return;
+        }
+        try {
+            const auto &parts = completion.parts;
+            if (parts.empty ()) {
+                throw protocol::service_wire_error_t (
+                  "infrastructure reply has no header");
+            }
+            const auto prefix = protocol::decode_reply_header (
+              std::span<const std::uint8_t> (
+                parts.front ().data (),
+                std::min<std::size_t> (parts.front ().size (), 21)));
+            if (prefix.correlation != _correlation) {
+                throw protocol::service_wire_error_t (
+                  "infrastructure reply correlation does not match");
+            }
+            auto payload = _decode_reply (parts);
+            (void) _operations->complete (
+              _operation, std::move (payload));
+        }
+        catch (const protocol::service_wire_error_t &) {
+            fail (foundation::operation_terminal_t::transport_failed);
+        }
+    }
+
+    void schedule_retry ()
+    {
+        const auto now = clock_t::now ();
+        if (now >= _deadline) {
+            fail (_deadline_terminal);
+            return;
+        }
+        _retry_timer.expires_at (std::min (
+          _deadline, now + infrastructure_not_connected_retry_interval));
+        _retry_timer.async_wait (
+          [self = shared_from_this ()] (
+            const boost::system::error_code &error) {
+              if (error) {
+                  self->fail (
+                    foundation::operation_terminal_t::transport_failed);
+                  return;
+              }
+              self->submit ();
+          });
+    }
+
+    void fail (foundation::operation_terminal_t terminal)
+    {
+        (void) _operations->fail (_operation, terminal);
+    }
+
+    std::shared_ptr<detail::backend::raw_route_port_t> _port;
+    std::shared_ptr<foundation::operation_registry_t> _operations;
+    foundation::call_id_t _operation;
+    std::uint64_t _correlation;
+    std::vector<std::uint8_t> _target_routing_id;
+    detail::backend::raw_message_t _request_parts;
+    std::function<std::vector<std::uint8_t> (
+      const detail::backend::raw_message_t &)> _decode_reply;
+    clock_t::time_point _deadline;
+    foundation::operation_terminal_t _deadline_terminal;
+    boost::asio::steady_timer _retry_timer;
+};
+
+task_t<bool> submit_registered_infrastructure_request_with_retry (
+  std::shared_ptr<detail::backend::raw_route_port_t> port,
+  std::shared_ptr<foundation::operation_registry_t> operations,
+  foundation::call_id_t operation,
+  std::uint64_t correlation,
+  std::vector<std::uint8_t> target_routing_id,
+  detail::backend::raw_message_t request_parts,
+  std::function<std::vector<std::uint8_t> (
+    const detail::backend::raw_message_t &)> decode_reply,
+  foundation::operation_registry_t::clock_t::time_point deadline,
+  foundation::operation_terminal_t deadline_terminal =
+    foundation::operation_terminal_t::transport_failed)
+{
+    if (!port
+        || deadline <= foundation::operation_registry_t::clock_t::now ()) {
+        (void) operations->fail (
+          operation, deadline_terminal);
+        co_return false;
+    }
+    auto retry = std::make_shared<infrastructure_request_retry_state_t> (
+      std::move (port), std::move (operations), operation, correlation,
+      std::move (target_routing_id), std::move (request_parts),
+      std::move (decode_reply), deadline, deadline_terminal);
+    retry->start ();
+    co_return true;
+}
+
+task_t<bool> submit_registered_infrastructure_request (
+  std::shared_ptr<detail::backend::raw_route_port_t> port,
+  std::shared_ptr<foundation::operation_registry_t> operations,
+  foundation::call_id_t operation,
+  std::uint64_t correlation,
+  std::vector<std::uint8_t> target_routing_id,
+  detail::backend::raw_message_t request_parts,
+  std::function<std::vector<std::uint8_t> (
+    const detail::backend::raw_message_t &)> decode_reply,
+  std::chrono::milliseconds timeout)
+{
+    if (!port || timeout <= std::chrono::milliseconds::zero ()) {
+        (void) operations->fail (
+          operation, foundation::operation_terminal_t::transport_failed);
+        co_return false;
+    }
+    auto running = std::make_shared<
+      task_t<detail::backend::raw_request_completion_t>> (
+        port->request (
+          target_routing_id, std::move (request_parts), timeout));
+    detail::observe_task_completion (
+      *running,
+      [operations = std::move (operations), operation, correlation,
+       decode_reply = std::move (decode_reply), running] (
+        const result_t<detail::backend::raw_request_completion_t> &settled) {
+          if (!settled) {
+              (void) operations->fail (
+                operation,
+                foundation::operation_terminal_t::transport_failed);
+              return;
+          }
+          auto completion = settled.value ();
+          trace_mesh (
+            "infrastructure-request-result correlation="
+            + std::to_string (correlation)
+            + " result="
+            + std::to_string (static_cast<int> (completion.result)));
+          if (completion.result
+              != detail::backend::raw_request_result_t::ok) {
+              const auto terminal =
+                completion.result
+                    == detail::backend::raw_request_result_t::timed_out
+                  ? foundation::operation_terminal_t::timed_out
+                : completion.result
+                      == detail::backend::raw_request_result_t::terminated
+                  ? foundation::operation_terminal_t::shutdown
+                  : foundation::operation_terminal_t::transport_failed;
+              (void) operations->fail (operation, terminal);
+              return;
+          }
+          try {
+              const auto &parts = completion.parts;
+              if (parts.empty ()) {
+                  throw protocol::service_wire_error_t (
+                    "infrastructure reply has no header");
+              }
+              const auto prefix = protocol::decode_reply_header (
+                std::span<const std::uint8_t> (
+                  parts.front ().data (),
+                  std::min<std::size_t> (parts.front ().size (), 21)));
+              if (prefix.correlation != correlation) {
+                  throw protocol::service_wire_error_t (
+                    "infrastructure reply correlation does not match");
+              }
+              auto payload = decode_reply (parts);
+              (void) operations->complete (
+                operation, std::move (payload));
+          }
+          catch (const protocol::service_wire_error_t &) {
+              (void) operations->fail (
+                operation,
+                foundation::operation_terminal_t::transport_failed);
+          }
+      });
+    co_return true;
 }
 
 } // namespace
@@ -577,20 +838,22 @@ peer_admission_result_t raw_mesh_node_owner_t::admit_peer (
   std::vector<std::uint8_t> connection_id,
   service_liveness_registry_t::clock_t::time_point now)
 {
-    std::lock_guard lifecycle_lock (_lifecycle_mutex);
-    if (!_router) {
-        return peer_admission_result_t::invalid_descriptor;
+    peer_admission_result_t admitted;
+    {
+        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+        if (!_router) {
+            return peer_admission_result_t::invalid_descriptor;
+        }
+        auto node_routing_id = descriptor.node_routing_id;
+        auto liveness_connection_id = connection_id;
+        admitted =
+          _topology.admit (std::move (descriptor), std::move (connection_id));
+        if (admitted != peer_admission_result_t::admitted) {
+            return admitted;
+        }
+        _liveness.admit (std::move (node_routing_id),
+                         std::move (liveness_connection_id), now);
     }
-    auto node_routing_id = descriptor.node_routing_id;
-    const auto lifecycle_generation = descriptor.lifecycle_generation;
-    auto liveness_connection_id = connection_id;
-    const auto admitted =
-      _topology.admit (std::move (descriptor), std::move (connection_id));
-    if (admitted != peer_admission_result_t::admitted) {
-        return admitted;
-    }
-    _liveness.admit (std::move (node_routing_id),
-                     std::move (liveness_connection_id), now);
     return admitted;
 }
 
@@ -1374,13 +1637,43 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
         throw std::invalid_argument (
           "bound Session bind Actor authority target is inconsistent");
     }
-    co_return co_await request_infrastructure (
-      actor_owner_routing_id,
-      [record = std::move (record)] (
-        std::uint64_t correlation) mutable {
-          record.correlation = correlation;
-          return protocol::encode_bound_session_bind (record);
-      },
+    if (timeout <= std::chrono::milliseconds::zero ()) {
+        throw std::invalid_argument (
+          "bound Session bind request timeout must be positive");
+    }
+
+    const auto deadline = foundation::operation_registry_t::clock_t::now ()
+                          + timeout;
+    const auto local = _topology.local_descriptor ();
+    const auto operations = _operations;
+    std::shared_ptr<detail::backend::raw_route_port_t> port;
+    std::uint64_t correlation = 0;
+    foundation::call_id_t id{};
+    bool registered = false;
+    {
+        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+        port = _port;
+        if (port) {
+            correlation = take_reply_route_id_locked ();
+            id = operation_id (local.lifecycle_generation, correlation);
+            registered = operations->register_operation (
+              id, deadline + infrastructure_not_connected_retry_interval,
+              std::move (callback));
+        }
+    }
+    if (!port) {
+        callback (foundation::operation_terminal_t::shutdown, {});
+        co_return true;
+    }
+    if (!registered)
+        co_return false;
+
+    record.correlation = correlation;
+    detail::backend::raw_message_t request_parts{
+      protocol::encode_bound_session_bind (record)};
+    co_return co_await submit_registered_infrastructure_request_with_retry (
+      std::move (port), operations, id, correlation,
+      actor_owner_routing_id, std::move (request_parts),
       [] (const detail::backend::raw_message_t &parts) {
           if (parts.size () != 1)
               throw protocol::service_wire_error_t (
@@ -1395,8 +1688,7 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
                 "bound Session bind reply terminal is inconsistent");
           }
           return parts.front ();
-      },
-      timeout, std::move (callback));
+      }, deadline, foundation::operation_terminal_t::timed_out);
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_bound_session_replaced (
@@ -1433,11 +1725,15 @@ bool raw_mesh_node_owner_t::reply_bound_session_bind (
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_actor_create (
-  const std::vector<std::uint8_t> &target_routing_id,
+  std::vector<std::uint8_t> target_routing_id,
   protocol::actor_create_header_t request,
   std::chrono::milliseconds timeout,
   foundation::operation_registry_t::callback_t callback)
 {
+    if (timeout <= std::chrono::milliseconds::zero ()) {
+        throw std::invalid_argument (
+          "Actor create request timeout must be positive");
+    }
     const auto local = _topology.local_descriptor ();
     if (request.source_node_routing_id != local.node_routing_id
         || request.source_node_generation != local.lifecycle_generation
@@ -1445,13 +1741,68 @@ task_t<bool> raw_mesh_node_owner_t::request_actor_create (
              != target_routing_id)
         throw std::invalid_argument (
           "Actor create source or target fence is inconsistent");
-    co_return co_await request_infrastructure (
-      target_routing_id,
+
+    if (target_routing_id == local.node_routing_id) {
+        co_return co_await request_infrastructure (
+          target_routing_id,
+          [request = std::move (request)] (
+            std::uint64_t correlation) mutable {
+              request.correlation = correlation;
+              return protocol::encode_actor_create_header (request);
+          },
+          [] (const detail::backend::raw_message_t &parts) {
+              if (parts.empty () || parts.size () > 2)
+                  throw protocol::service_wire_error_t (
+                    "Actor create reply has an invalid part count");
+              const auto reply =
+                protocol::decode_actor_create_reply (parts.front ());
+              if (reply.header.terminal_result != 0
+                  && parts.size () != 1)
+                  throw protocol::service_wire_error_t (
+                    "failed Actor create reply carries a payload");
+              if (parts.size () == 2)
+                  (void) protocol::decode_application_payload (parts[1]);
+              return pack_infrastructure_reply (parts);
+          }, timeout, std::move (callback));
+    }
+
+    // The ROUTER route can become available after the location reservation.
+    // Submit first because topology admission is not required in every
+    // deployment. Only a not_connected submit is retried asynchronously.
+    const auto deadline = foundation::operation_registry_t::clock_t::now ()
+                          + timeout;
+    const auto operations = _operations;
+    std::shared_ptr<detail::backend::raw_route_port_t> port;
+    std::uint64_t correlation = 0;
+    foundation::call_id_t id{};
+    bool registered = false;
+    {
+        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+        port = _port;
+        if (port) {
+            correlation = take_reply_route_id_locked ();
+            id = operation_id (local.lifecycle_generation, correlation);
+            registered = operations->register_operation (
+              id, deadline + infrastructure_not_connected_retry_interval,
+              std::move (callback));
+        }
+    }
+    if (!port) {
+        callback (foundation::operation_terminal_t::shutdown, {});
+        co_return true;
+    }
+    if (!registered)
+        co_return false;
+
+    detail::backend::raw_message_t request_parts{
       [request = std::move (request)] (
         std::uint64_t correlation) mutable {
           request.correlation = correlation;
           return protocol::encode_actor_create_header (request);
-      },
+      } (correlation)};
+    co_return co_await submit_registered_infrastructure_request_with_retry (
+      std::move (port), operations, id, correlation,
+      std::move (target_routing_id), std::move (request_parts),
       [] (const detail::backend::raw_message_t &parts) {
           if (parts.empty () || parts.size () > 2)
               throw protocol::service_wire_error_t (
@@ -1465,7 +1816,7 @@ task_t<bool> raw_mesh_node_owner_t::request_actor_create (
           if (parts.size () == 2)
               (void) protocol::decode_application_payload (parts[1]);
           return pack_infrastructure_reply (parts);
-      }, timeout, std::move (callback));
+      }, deadline);
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_instance_spot_activation (
@@ -1706,61 +2057,9 @@ task_t<bool> raw_mesh_node_owner_t::request_infrastructure (
     }
     const auto operations = _operations;
     detail::backend::raw_message_t request_parts{header (correlation)};
-    auto running = std::make_shared<
-      task_t<detail::backend::raw_request_completion_t>> (
-        port->request (
-          target_routing_id, std::move (request_parts), timeout));
-    detail::observe_task_completion (
-      *running, [operations, id, correlation, decode_reply, running] (
-                  const result_t<detail::backend::raw_request_completion_t> &
-                    settled) {
-          if (!settled) {
-              (void) operations->fail (
-                id, foundation::operation_terminal_t::transport_failed);
-              return;
-          }
-          auto completion = settled.value ();
-          trace_mesh (
-            "infrastructure-request-result correlation="
-              + std::to_string (correlation)
-              + " result="
-              + std::to_string (static_cast<int> (completion.result)));
-          if (completion.result
-              != detail::backend::raw_request_result_t::ok) {
-              const auto terminal =
-                completion.result
-                    == detail::backend::raw_request_result_t::timed_out
-                  ? foundation::operation_terminal_t::timed_out
-                : completion.result
-                      == detail::backend::raw_request_result_t::terminated
-                  ? foundation::operation_terminal_t::shutdown
-                  : foundation::operation_terminal_t::transport_failed;
-              (void) operations->fail (id, terminal);
-              return;
-          }
-          try {
-              const auto &parts = completion.parts;
-              if (parts.empty ()) {
-                  throw protocol::service_wire_error_t (
-                    "infrastructure reply has no header");
-              }
-              const auto prefix = protocol::decode_reply_header (
-                std::span<const std::uint8_t> (
-                  parts.front ().data (),
-                  std::min<std::size_t> (parts.front ().size (), 21)));
-              if (prefix.correlation != correlation) {
-                  throw protocol::service_wire_error_t (
-                    "infrastructure reply correlation does not match");
-              }
-              auto payload = decode_reply (parts);
-              (void) operations->complete (id, std::move (payload));
-          }
-          catch (const protocol::service_wire_error_t &) {
-              (void) operations->fail (
-                id, foundation::operation_terminal_t::transport_failed);
-          }
-      });
-    co_return true;
+    co_return co_await submit_registered_infrastructure_request (
+      std::move (port), std::move (operations), id, correlation,
+      target_routing_id, std::move (request_parts), decode_reply, timeout);
 }
 
 bool raw_mesh_node_owner_t::reply_infrastructure (

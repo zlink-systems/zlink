@@ -139,7 +139,7 @@ stream_session_registry_t::bind (
 
     return bind_verified (
       connection, actor, target_node_generation,
-      owner_lease_generation, false);
+      owner_lease_generation, false, 0);
 }
 
 std::pair<stateful_error_t, stream_binding_t>
@@ -148,7 +148,8 @@ stream_session_registry_t::bind_remote (
   const object_ref_t &verified_actor,
   std::uint64_t target_node_generation,
   std::uint64_t owner_lease_generation,
-  bool route_publish_pending)
+  bool route_publish_pending,
+  std::uint64_t binding_generation)
 {
     if (verified_actor.kind != object_kind_t::actor
         || verified_actor.key.empty ()
@@ -161,7 +162,8 @@ stream_session_registry_t::bind_remote (
     }
     return bind_verified (
       connection, verified_actor, target_node_generation,
-      owner_lease_generation, route_publish_pending);
+      owner_lease_generation, route_publish_pending,
+      binding_generation);
 }
 
 std::pair<stateful_error_t, stream_binding_t>
@@ -170,7 +172,8 @@ stream_session_registry_t::bind_verified (
   const object_ref_t &actor,
   std::uint64_t target_node_generation,
   std::uint64_t owner_lease_generation,
-  bool route_publish_pending)
+  bool route_publish_pending,
+  std::uint64_t binding_generation)
 {
 
     std::unique_lock lock (_mutex);
@@ -188,16 +191,31 @@ stream_session_registry_t::bind_verified (
         existing != state.bindings.end ()
         && existing->second.barrier_token)
         return {stateful_error_t::moving, {}};
-    if (_next_binding_generation == 0
-        || _next_binding_generation
-             == std::numeric_limits<std::uint64_t>::max ()) {
+    if (binding_generation != 0) {
+        const auto *current_binding = current_aggregate_unlocked (actor_id);
+        if (current_binding != nullptr
+            && binding_generation
+                 < current_binding->binding.binding_generation) {
+            return {stateful_error_t::conflict, {}};
+        }
+    }
+    if (binding_generation == std::numeric_limits<std::uint64_t>::max ()
+        || (binding_generation == 0
+            && (_next_binding_generation == 0
+                || _next_binding_generation
+                     == std::numeric_limits<std::uint64_t>::max ()))) {
         return {stateful_error_t::conflict, {}};
     }
     // Binding generation is owner-lifecycle local, not connection local.
     // A reconnect therefore cannot alias the previous physical Session just
     // because both connections would otherwise start at generation one.
+    const auto issued_generation = binding_generation != 0
+      ? binding_generation
+      : _next_binding_generation++;
+    if (_next_binding_generation <= issued_generation)
+        _next_binding_generation = issued_generation + 1;
     stream_binding_t binding{
-      connection, _next_binding_generation++, actor,
+      connection, issued_generation, actor,
       target_node_generation, owner_lease_generation};
     // Spec 20 section 7 makes route replacement, held submission, and release
     // one serial span. The drain therefore belongs to that span, not to one
@@ -987,6 +1005,30 @@ bool stream_session_registry_t::is_current (
            && current->second.bindings.contains (binding.actor.key)
            && current->second.bindings.at (binding.actor.key).binding
                 == binding;
+}
+
+bool stream_session_registry_t::is_current_for_connection (
+  const stream_connection_t &connection,
+  const stream_binding_t &binding) const
+{
+    std::lock_guard lock (_mutex);
+    if (binding.connection != connection)
+        return false;
+    const auto owner = _connections.find (connection.connection_id);
+    if (owner == _connections.end ()
+        || owner->second.connection != connection) {
+        return false;
+    }
+    const auto owned = owner->second.bindings.find (binding.actor.key);
+    if (owned == owner->second.bindings.end ()
+        || owned->second.binding != binding) {
+        return false;
+    }
+    const auto indexed = _actor_bindings.find (binding.actor.key);
+    return indexed != _actor_bindings.end ()
+           && indexed->second.connection == connection
+           && indexed->second.binding_generation
+                == binding.binding_generation;
 }
 
 stream_session_registry_t::session_binding_aggregate_t *

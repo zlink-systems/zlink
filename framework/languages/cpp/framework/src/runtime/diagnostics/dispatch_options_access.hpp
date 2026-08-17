@@ -96,6 +96,25 @@ class dispatch_options_access_t
         if (options._message_flow_observer)
             options._message_flow_observer (&event);
     }
+
+    static void set_dispatch_error_observer_for_tests (
+      dispatch_options_t &options,
+      std::function<void (const message_dispatch_error_event_t &)> observer)
+    {
+        options._dispatch_error_observer =
+          [observer = std::move (observer)] (const void *event) {
+              observer (
+                *static_cast<const message_dispatch_error_event_t *> (event));
+          };
+    }
+
+    static void observe_dispatch_error (
+      const dispatch_options_t &options,
+      const message_dispatch_error_event_t &event)
+    {
+        if (options._dispatch_error_observer)
+            options._dispatch_error_observer (&event);
+    }
 };
 
 } // namespace zlink::framework::detail

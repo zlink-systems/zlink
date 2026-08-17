@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/locations/service_descriptor_registry.hpp"
 #include "runtime/fanout/raw_fanout_owner.hpp"
 #include "runtime/client_server/raw_client_server_owner.hpp"
@@ -8,6 +9,7 @@
 #include "runtime/protocol/service_wire_codec.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -91,6 +93,348 @@ mesh::service_node_descriptor_t descriptor (
       "m6a-mesh", bytes (std::move (rid)), 1, 1, std::move (endpoint),
       {{"alpha", 100}, {"beta", 50}},
       mesh::service_node_state_t::preparing};
+}
+
+protocol::actor_create_header_t actor_create_request (
+  const mesh::service_node_descriptor_t &source,
+  const mesh::service_node_descriptor_t &target,
+  std::string actor_id)
+{
+    return protocol::actor_create_header_t{
+      0,
+      {source.lifecycle_generation, 1},
+      source.node_routing_id,
+      source.lifecycle_generation,
+      std::move (actor_id),
+      "player",
+      {"startup-reservation", "startup-store", 1, 1,
+       target.node_routing_id, target.lifecycle_generation,
+       "startup-owner", 1, 1},
+      static_cast<std::uint64_t> (
+        std::chrono::duration_cast<std::chrono::milliseconds> (
+          std::chrono::system_clock::now ().time_since_epoch () + 2s)
+          .count ())};
+}
+
+protocol::bound_session_bind_t bound_session_bind_request (
+  const mesh::service_node_descriptor_t &target,
+  std::string actor_id)
+{
+    return protocol::bound_session_bind_t{
+      0,
+      {std::move (actor_id), 1, target.node_routing_id,
+       target.lifecycle_generation, 1, 1},
+      bytes ("session-owner"),
+      {protocol::bound_session_binding_state_t::active, 1}};
+}
+
+void admit_pair (mesh::raw_mesh_node_owner_t &source,
+                 mesh::raw_mesh_node_owner_t &target,
+                 const mesh::service_node_descriptor_t &target_descriptor)
+{
+    source.expect_peer (target_descriptor);
+    assert (source.connect_peer (target.endpoint (), target_descriptor));
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    while (!source.topology ().peer (target_descriptor.node_routing_id)
+           && std::chrono::steady_clock::now () < deadline) {
+        const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+        (void) source.drain_monitor_events (now);
+        (void) target.drain_monitor_events (now);
+        (void) await_task (source.pump_one (now));
+        (void) await_task (target.pump_one (now));
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (source.topology ().peer (target_descriptor.node_routing_id));
+}
+
+void complete_bound_session_bind (
+  mesh::raw_mesh_node_owner_t &source,
+  mesh::raw_mesh_node_owner_t &target,
+  std::future<std::pair<foundation::operation_terminal_t,
+                        std::vector<std::uint8_t>>> &completion,
+  std::string_view expected_actor)
+{
+    std::optional<mesh::service_mailbox_claim_t> claim;
+    const auto receive_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!claim && std::chrono::steady_clock::now () < receive_deadline) {
+        claim = target.mailbox ().try_claim (
+          mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+        if (!claim) {
+            const auto pumped = await_task (target.pump_one (
+              mesh::service_liveness_registry_t::clock_t::now ()));
+            assert (pumped != mesh::raw_mesh_pump_result_t::protocol_error);
+        }
+    }
+    assert (claim && claim->records.size () == 1);
+    const auto &record = claim->records.front ();
+    const auto decoded = protocol::decode_bound_session_bind (
+      record.parts.front ());
+    assert (decoded.actor.actor_id == expected_actor);
+    assert (record.correlation && decoded.correlation == *record.correlation);
+    assert (target.reply_bound_session_bind (record, 0, 0));
+    assert (target.mailbox ().release (*claim));
+
+    const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
+    while (completion.wait_for (0ms) != std::future_status::ready
+           && std::chrono::steady_clock::now () < completion_deadline) {
+        const auto pumped = await_task (source.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
+        assert (pumped != mesh::raw_mesh_pump_result_t::protocol_error);
+    }
+    assert (completion.wait_for (0ms) == std::future_status::ready);
+    const auto settled = completion.get ();
+    assert (settled.first == foundation::operation_terminal_t::completed);
+    const auto reply = protocol::decode_reply_header (settled.second);
+    assert (reply.terminal_result == 0 && reply.failure_code == 0);
+}
+
+void verify_bound_session_bind_retries_until_route_is_admitted ()
+{
+    using completion_t =
+      std::pair<foundation::operation_terminal_t,
+                std::vector<std::uint8_t>>;
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{descriptor ("bind-delay-source")});
+    mesh::raw_mesh_node_owner_t target (
+      mesh::raw_mesh_node_options_t{descriptor ("bind-delay-target")});
+    source.start ();
+    target.start ();
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    std::promise<completion_t> completion_promise;
+    auto completion = completion_promise.get_future ();
+    assert (await_task (source.request_bound_session_bind (
+      target_descriptor.node_routing_id,
+      bound_session_bind_request (target_descriptor, "delayed-bind-actor"),
+      2s,
+      [&completion_promise] (
+        foundation::operation_terminal_t terminal,
+        std::vector<std::uint8_t> payload) mutable {
+          completion_promise.set_value ({terminal, std::move (payload)});
+      })));
+    assert (completion.wait_for (0ms) == std::future_status::timeout);
+
+    admit_pair (source, target, target_descriptor);
+    complete_bound_session_bind (
+      source, target, completion, "delayed-bind-actor");
+    source.close ();
+    target.close ();
+}
+
+void verify_bound_session_bind_permanent_absence_is_bounded ()
+{
+    using completion_t =
+      std::pair<foundation::operation_terminal_t,
+                std::vector<std::uint8_t>>;
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{descriptor ("bind-timeout-source")});
+    source.start ();
+    auto target_descriptor = descriptor (
+      "bind-timeout-target", "tcp://127.0.0.1:1");
+    target_descriptor.state = mesh::service_node_state_t::serving;
+    std::promise<completion_t> completion_promise;
+    auto completion = completion_promise.get_future ();
+    const auto started = std::chrono::steady_clock::now ();
+    assert (await_task (source.request_bound_session_bind (
+      target_descriptor.node_routing_id,
+      bound_session_bind_request (target_descriptor, "missing-bind-actor"),
+      50ms,
+      [&completion_promise] (
+        foundation::operation_terminal_t terminal,
+        std::vector<std::uint8_t> payload) mutable {
+          completion_promise.set_value ({terminal, std::move (payload)});
+      })));
+    assert (completion.wait_for (500ms) == std::future_status::ready);
+    assert (std::chrono::steady_clock::now () - started >= 40ms);
+    assert (completion.get ().first
+            == foundation::operation_terminal_t::timed_out);
+    source.close ();
+}
+
+void verify_bound_session_bind_reply_completes_registered_operation ()
+{
+    using completion_t =
+      std::pair<foundation::operation_terminal_t,
+                std::vector<std::uint8_t>>;
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{descriptor ("bind-reply-source")});
+    mesh::raw_mesh_node_owner_t target (
+      mesh::raw_mesh_node_options_t{descriptor ("bind-reply-target")});
+    source.start ();
+    target.start ();
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    admit_pair (source, target, target_descriptor);
+
+    std::promise<completion_t> completion_promise;
+    auto completion = completion_promise.get_future ();
+    assert (await_task (source.request_bound_session_bind (
+      target_descriptor.node_routing_id,
+      bound_session_bind_request (target_descriptor, "reply-bind-actor"),
+      2s,
+      [&completion_promise] (
+        foundation::operation_terminal_t terminal,
+        std::vector<std::uint8_t> payload) mutable {
+          completion_promise.set_value ({terminal, std::move (payload)});
+      })));
+    complete_bound_session_bind (
+      source, target, completion, "reply-bind-actor");
+    source.close ();
+    target.close ();
+}
+
+void verify_actor_create_retries_until_route_is_admitted ()
+{
+    using completion_t =
+      std::pair<foundation::operation_terminal_t,
+                std::vector<std::uint8_t>>;
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{descriptor ("startup-source")});
+    mesh::raw_mesh_node_owner_t target (
+      mesh::raw_mesh_node_options_t{descriptor ("startup-target")});
+    source.start ();
+    target.start ();
+    const auto source_descriptor = source.topology ().local_descriptor ();
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    auto request = actor_create_request (
+      source_descriptor, target_descriptor, "startup-actor");
+    std::promise<completion_t> completion_promise;
+    auto completion = completion_promise.get_future ();
+    auto submitted = source.request_actor_create (
+      target_descriptor.node_routing_id, std::move (request), 2s,
+      [&completion_promise] (
+        foundation::operation_terminal_t terminal,
+        std::vector<std::uint8_t> payload) mutable {
+          completion_promise.set_value ({terminal, std::move (payload)});
+      });
+    assert (await_task (std::move (submitted)));
+    assert (completion.wait_for (0ms) == std::future_status::timeout);
+
+    source.expect_peer (target_descriptor);
+    assert (source.connect_peer (target.endpoint (), target_descriptor));
+    const auto admission_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!source.topology ().peer (target_descriptor.node_routing_id)
+           && std::chrono::steady_clock::now () < admission_deadline) {
+        const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+        (void) source.drain_monitor_events (now);
+        (void) target.drain_monitor_events (now);
+        (void) await_task (source.pump_one (now));
+        (void) await_task (target.pump_one (now));
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (source.topology ().peer (target_descriptor.node_routing_id));
+
+    std::optional<mesh::service_mailbox_claim_t> claim;
+    const auto receive_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!claim && std::chrono::steady_clock::now () < receive_deadline) {
+        claim = target.mailbox ().try_claim (
+          mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+        if (claim)
+            break;
+        const auto received = await_task (target.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
+        assert (received != mesh::raw_mesh_pump_result_t::protocol_error);
+    }
+    assert (claim && claim->records.size () == 1);
+    const auto &record = claim->records.front ();
+    const auto decoded = protocol::decode_actor_create_header (
+      record.parts.front ());
+    assert (decoded.actor_id == "startup-actor");
+    assert (target.reply_actor_create (
+      record,
+      protocol::actor_create_reply_t{
+        {*record.correlation, 0, 0},
+        protocol::actor_create_result_t::created,
+        target_descriptor.node_routing_id,
+        decoded.actor_id,
+        1}));
+    assert (target.mailbox ().release (*claim));
+    const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
+    while (completion.wait_for (0ms) != std::future_status::ready
+           && std::chrono::steady_clock::now () < completion_deadline) {
+        (void) await_task (source.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
+    }
+    assert (completion.wait_for (0ms) == std::future_status::ready);
+    assert (completion.get ().first
+            == foundation::operation_terminal_t::completed);
+    source.close ();
+    target.close ();
+}
+
+void verify_actor_create_retry_timeout_is_unavailable ()
+{
+    using completion_t =
+      std::pair<foundation::operation_terminal_t,
+                std::vector<std::uint8_t>>;
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{descriptor ("timeout-source")});
+    source.start ();
+    const auto source_descriptor = source.topology ().local_descriptor ();
+    auto target_descriptor = descriptor (
+      "timeout-target", "tcp://127.0.0.1:1");
+    target_descriptor.state = mesh::service_node_state_t::serving;
+    auto request = actor_create_request (
+      source_descriptor, target_descriptor, "timeout-actor");
+    std::promise<completion_t> completion_promise;
+    auto completion = completion_promise.get_future ();
+    const auto submitted_at = std::chrono::steady_clock::now ();
+    auto submitted = source.request_actor_create (
+      target_descriptor.node_routing_id, std::move (request), 50ms,
+      [&completion_promise] (
+        foundation::operation_terminal_t terminal,
+        std::vector<std::uint8_t> payload) mutable {
+          completion_promise.set_value ({terminal, std::move (payload)});
+      });
+    assert (std::chrono::steady_clock::now () - submitted_at < 20ms);
+    assert (await_task (std::move (submitted)));
+    assert (std::chrono::steady_clock::now () - submitted_at < 20ms);
+    assert (completion.wait_for (500ms) == std::future_status::ready);
+    assert (std::chrono::steady_clock::now () - submitted_at >= 40ms);
+    const auto terminal = completion.get ().first;
+    assert (terminal == foundation::operation_terminal_t::transport_failed);
+    assert (
+      runtime::user_spot_terminal::map_user_spot_operation_failure (
+        terminal, {}, true)
+      == zlink::framework::framework_error_kind_t::unavailable);
+    source.close ();
+}
+
+void verify_actor_create_from_dispatch_thread_does_not_block ()
+{
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{descriptor ("dispatch-source")});
+    source.start ();
+    const auto source_descriptor = source.topology ().local_descriptor ();
+    auto target_descriptor = descriptor (
+      "dispatch-target", "tcp://127.0.0.1:1");
+    target_descriptor.state = mesh::service_node_state_t::serving;
+    source.expect_peer (target_descriptor);
+    auto request = actor_create_request (
+      source_descriptor, target_descriptor, "dispatch-actor");
+    std::atomic<bool> callback_called{false};
+    std::atomic<foundation::operation_terminal_t> callback_terminal{
+      foundation::operation_terminal_t::transport_failed};
+
+    const auto submitted_at = std::chrono::steady_clock::now ();
+    auto submitted = source.request_actor_create (
+      target_descriptor.node_routing_id, std::move (request), 500ms,
+      [&callback_called, &callback_terminal] (
+        foundation::operation_terminal_t terminal,
+        std::vector<std::uint8_t>) {
+          callback_terminal.store (terminal, std::memory_order_release);
+          callback_called.store (true, std::memory_order_release);
+      });
+    assert (await_task (std::move (submitted)));
+    assert (std::chrono::steady_clock::now () - submitted_at < 20ms);
+    assert (!callback_called.load (std::memory_order_acquire));
+    source.close ();
+    const auto callback_deadline = std::chrono::steady_clock::now () + 500ms;
+    while (!callback_called.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < callback_deadline) {
+        std::this_thread::yield ();
+    }
+    assert (callback_called.load (std::memory_order_acquire));
+    assert (callback_terminal.load (std::memory_order_acquire)
+            == foundation::operation_terminal_t::shutdown);
 }
 
 void verify_topology_snapshot_and_connection_fence ()
@@ -1777,6 +2121,12 @@ void verify_raw_owner_node_send_and_liveness ()
 int main ()
 {
     verify_actor_create_command_49_roundtrip ();
+    verify_bound_session_bind_retries_until_route_is_admitted ();
+    verify_bound_session_bind_permanent_absence_is_bounded ();
+    verify_bound_session_bind_reply_completes_registered_operation ();
+    verify_actor_create_retries_until_route_is_admitted ();
+    verify_actor_create_retry_timeout_is_unavailable ();
+    verify_actor_create_from_dispatch_thread_does_not_block ();
     verify_topology_snapshot_and_connection_fence ();
     verify_duplicate_connection_survivor_is_symmetric ();
     verify_lifecycle_token_requires_current_discovery_expectation ();

@@ -136,7 +136,8 @@ class stream_session_registry_t
       const object_ref_t &verified_actor,
       std::uint64_t target_node_generation,
       std::uint64_t owner_lease_generation,
-      bool route_publish_pending = false);
+      bool route_publish_pending = false,
+      std::uint64_t binding_generation = 0);
     std::optional<std::vector<stream_retained_outbound_t>>
     complete_route_publish (const stream_binding_t &binding);
     stateful_error_t unbind (const stream_binding_t &binding);
@@ -216,6 +217,9 @@ class stream_session_registry_t
     void release_all () noexcept;
     void force_close_all () noexcept;
     bool is_current (const stream_binding_t &binding) const;
+    bool is_current_for_connection (
+      const stream_connection_t &connection,
+      const stream_binding_t &binding) const;
     std::optional<stream_binding_t> current_binding (
       const std::string &actor_id) const;
 
@@ -259,7 +263,8 @@ class stream_session_registry_t
       const object_ref_t &actor,
       std::uint64_t target_node_generation,
       std::uint64_t owner_lease_generation,
-      bool route_publish_pending = false);
+      bool route_publish_pending = false,
+      std::uint64_t binding_generation = 0);
     session_binding_aggregate_t *current_aggregate_unlocked (
       const std::string &actor_id);
     const session_binding_aggregate_t *current_aggregate_unlocked (

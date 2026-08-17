@@ -2138,8 +2138,10 @@ int main ()
       "CPP-OBS-001",
       "Instance Spot activation tracing is not gated before event allocation");
 
-    /* CPP-OBS-002 — diagnostics mode is part of the ambient message context,
-     * including the off case where no flow id is allocated. */
+    /* CPP-OBS-002 — the flow context records the diagnostics mode at entry so
+     * the off case allocates no flow id, while every processing point re-reads
+     * the live shared level; an entry snapshot never overrides a later runtime
+     * change (server spec 26). */
     gate.require (
       flow_context.find ("diagnostics_mode") != std::string::npos
         && flow_context.find (
@@ -2147,12 +2149,12 @@ int main ()
              != std::string::npos
         && message_flow_tracer.find (
              "current->diagnostics_mode")
-             != std::string::npos
+             == std::string::npos
         && message_flow_tracer.find (
              "effective_message_flow (")
              != std::string::npos,
       "CPP-OBS-002",
-      "message-flow diagnostics level is not snapshotted at message entry");
+      "message-flow diagnostics level is not read live at each processing point");
 
     /* CPP-WIRE-001 — every authority read and write uses the same canonical
      * zla1 key codec; legacy numeric keys are not compatibility aliases. */
@@ -2410,7 +2412,7 @@ int main ()
      * with an asynchronous timer. Sleeping in the callback would hold the
      * session serial lane and prevent unrelated sessions from progressing. */
     const auto replacement_begin = stream_host.find (
-      "void begin_actor_binding_replacement");
+      "bool begin_actor_binding_replacement");
     const auto replacement_end = replacement_begin == std::string::npos
       ? std::string::npos
       : stream_host.find (

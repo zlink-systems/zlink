@@ -937,7 +937,8 @@ class session_actor_manager_t
                                                     std::string actor_id,
                                                     std::optional<zlink::message_t> request);
     zlink::message_t serialize_request (std::type_index request_type, const void *request) const;
-    task_t<std::uint64_t> bind_current_session (const actor_ref_t &actor_ref);
+    task_t<session_actor_t> bind_current_session (actor_ref_t actor_ref,
+                                                  bool reuse_current);
 
     std::shared_ptr<detail::actor_gateway_state_t> _state;
     std::shared_ptr<detail::session_actor_binding_context_t> _binding_context;
