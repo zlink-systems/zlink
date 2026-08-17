@@ -31,7 +31,6 @@ final class ZLinkStreamSessionClient implements ZLinkSessionClient {
     private final ZLinkMessageSerializer serializer;
     private final ZLinkStreamCodec defaultCodec;
     private final ZLinkStreamCompressionCodec compressionCodec;
-    private final ZLinkOneWayCalls oneWayCalls;
 
     ZLinkStreamSessionClient(
         ZLinkBackendStreamSocket stream,
@@ -39,15 +38,13 @@ final class ZLinkStreamSessionClient implements ZLinkSessionClient {
         ZLinkStreamSessionContextState context,
         ZLinkMessageSerializer serializer,
         ZLinkStreamCodec defaultCodec,
-        ZLinkStreamCompressionCodec compressionCodec,
-        ZLinkOneWayCalls oneWayCalls) {
+        ZLinkStreamCompressionCodec compressionCodec) {
         this.stream = stream;
         this.routingId = routingId;
         this.context = context;
         this.serializer = serializer;
         this.defaultCodec = defaultCodec;
         this.compressionCodec = compressionCodec;
-        this.oneWayCalls = oneWayCalls;
     }
 
     @Override
@@ -64,8 +61,7 @@ final class ZLinkStreamSessionClient implements ZLinkSessionClient {
             Map.of(),
             false,
             codec,
-            compressionCodec,
-            oneWayCalls);
+            compressionCodec);
     }
 
     @Override
@@ -95,7 +91,6 @@ record ZLinkStreamSessionSendCall(
     boolean compressed,
     ZLinkStreamCodec codec,
     ZLinkStreamCompressionCodec compressionCodec,
-    ZLinkOneWayCalls oneWayCalls,
     Duration timeout,
     AtomicBoolean submitGate)
     implements ZLinkSessionSendCall {
@@ -107,10 +102,9 @@ record ZLinkStreamSessionSendCall(
         Map<String, String> metadata,
         boolean compressed,
         ZLinkStreamCodec codec,
-        ZLinkStreamCompressionCodec compressionCodec,
-        ZLinkOneWayCalls oneWayCalls) {
+        ZLinkStreamCompressionCodec compressionCodec) {
         this(stream, routingId, payload, packetName, metadata, compressed, codec,
-            compressionCodec, oneWayCalls, null,
+            compressionCodec, null,
             new AtomicBoolean());
     }
     @Override
@@ -126,7 +120,6 @@ record ZLinkStreamSessionSendCall(
             compressed,
             codec,
             compressionCodec,
-            oneWayCalls,
             timeout,
             submitGate);
     }
@@ -144,7 +137,6 @@ record ZLinkStreamSessionSendCall(
             compressed,
             codec,
             compressionCodec,
-            oneWayCalls,
             timeout,
             submitGate);
     }
@@ -160,7 +152,6 @@ record ZLinkStreamSessionSendCall(
             true,
             codec,
             compressionCodec,
-            oneWayCalls,
             timeout,
             submitGate);
     }
@@ -179,7 +170,6 @@ record ZLinkStreamSessionSendCall(
             compressed,
             codec,
             compressionCodec,
-            oneWayCalls,
             value,
             submitGate);
     }

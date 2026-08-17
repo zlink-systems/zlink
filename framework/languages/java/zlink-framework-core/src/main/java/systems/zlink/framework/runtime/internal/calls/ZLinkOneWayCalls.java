@@ -1,17 +1,12 @@
 package systems.zlink.framework.runtime.internal.calls;
 
-import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.BiFunction;
-import java.util.function.Supplier;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 
 /** Shared one-way admission and error mapping for all runtime families. */
 public final class ZLinkOneWayCalls {
@@ -22,18 +17,7 @@ public final class ZLinkOneWayCalls {
     public static final int TARGET_NOT_FOUND = 4;
     public static final int SHUTDOWN = 5;
 
-    public ZLinkOneWayCalls() {
-    }
-
-    /**
-     * Retained as an internal source-compatible constructor while callers
-     * migrate away from Framework-owned admission. The binding owns retries.
-     */
-    public ZLinkOneWayCalls(BiFunction<
-        ZLinkBackendObject,
-        ZLinkBackendAdmissionKey,
-        BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>> ignored) {
-        this();
+    private ZLinkOneWayCalls() {
     }
 
     public static <T> CompletionStage<T> beginOneWay(AtomicBoolean submitted) {

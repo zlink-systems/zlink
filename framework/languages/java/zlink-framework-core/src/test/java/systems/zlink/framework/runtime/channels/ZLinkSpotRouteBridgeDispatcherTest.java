@@ -57,7 +57,6 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
             deadlines,
             null,
             null,
-            null,
             null);
         DirectBridge bridge = new DirectBridge();
         CompletableFuture<Void> result = new CompletableFuture<>();

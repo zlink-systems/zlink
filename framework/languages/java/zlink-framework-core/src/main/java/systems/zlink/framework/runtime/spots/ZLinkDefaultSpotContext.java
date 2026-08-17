@@ -601,16 +601,16 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     public CompletionStage<Void> enqueueDispatch(
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation) {
-        streamTrace("dispatch-enqueue spot=" + spotId());
+        streamTrace(STREAM_TRACE ? "dispatch-enqueue spot=" + spotId() : null);
         return dispatchQueue.enqueueWithPayloadBytes(payloadBytes, () -> {
-            streamTrace("dispatch-start spot=" + spotId());
+            streamTrace(STREAM_TRACE ? "dispatch-start spot=" + spotId() : null);
             CompletionStage<Void> stage = runApplicationExecution(
                 null,
                 sharedSpotGate(),
                 operation);
-            stage.whenComplete((ignored, error) -> streamTrace(
+            stage.whenComplete((ignored, error) -> streamTrace(STREAM_TRACE ?
                 "dispatch-complete spot=" + spotId()
-                    + " error=" + (error == null ? "none" : error)));
+                    + " error=" + (error == null ? "none" : error) : null));
             return stage;
         });
     }
@@ -637,8 +637,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         long payloadBytes,
         Supplier<CompletionStage<Void>> operation) {
         Objects.requireNonNull(actorId, "actorId");
-        streamTrace("actor-enqueue spot=" + spotId() + " actor=" + actorId
-            + " shared=" + sharedSpotGate());
+        streamTrace(STREAM_TRACE ? "actor-enqueue spot=" + spotId() + " actor=" + actorId
+            + " shared=" + sharedSpotGate() : null);
         CompletionStage<Void> queued = host.enqueueActorDispatch(
             actorId,
             payloadBytes,
@@ -662,8 +662,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         String actorId,
         boolean yieldAllowed,
         Supplier<CompletionStage<Void>> operation) {
-        streamTrace("actor-start spot=" + spotId()
-            + " actor=" + actorId);
+        streamTrace(STREAM_TRACE ? "actor-start spot=" + spotId()
+            + " actor=" + actorId : null);
         CompletionStage<Void> stage;
         try (var ignored = systems.zlink.framework.runtime.internal.handlers
                  .ZLinkSuspendInvocationContext.enterActorDispatch(actorId)) {
@@ -671,10 +671,10 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         } catch (RuntimeException failure) {
             stage = CompletableFuture.failedFuture(failure);
         }
-        stage.whenComplete((ignored, error) -> streamTrace(
+        stage.whenComplete((ignored, error) -> streamTrace(STREAM_TRACE ?
             "actor-complete spot=" + spotId()
                 + " actor=" + actorId
-                + " error=" + (error == null ? "none" : error)));
+                + " error=" + (error == null ? "none" : error) : null));
         return stage;
     }
 
@@ -781,12 +781,12 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 candidate -> host.isActorMember(spotId(), candidate));
         try (var ignored = systems.zlink.framework.runtime.internal.handlers
                  .ZLinkSuspendInvocationContext.enterApplicationExecution(execution)) {
-            streamTrace("lifecycle-start spot=" + spotId());
+            streamTrace(STREAM_TRACE ? "lifecycle-start spot=" + spotId() : null);
             CompletionStage<T> stage = Objects.requireNonNull(
                 operation.get(), "operation result");
-            stage.whenComplete((ignoredValue, error) -> streamTrace(
+            stage.whenComplete((ignoredValue, error) -> streamTrace(STREAM_TRACE ?
                 "lifecycle-complete spot=" + spotId()
-                    + " error=" + (error == null ? "none" : error)));
+                    + " error=" + (error == null ? "none" : error) : null));
             return stage;
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
@@ -1004,12 +1004,12 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             throw invalidRelocationReady(
                 "relocationReady().defer() can be called once per Spot turn");
         }
-        streamTrace("relocation-ready-deferred spot=" + spotId());
+        streamTrace(STREAM_TRACE ? "relocation-ready-deferred spot=" + spotId() : null);
         dispatchQueue.enqueueBarrierNext(this::reachRelocationReadyBoundary);
     }
 
     private CompletionStage<Void> reachRelocationReadyBoundary() {
-        streamTrace("relocation-ready-boundary-start spot=" + spotId());
+        streamTrace(STREAM_TRACE ? "relocation-ready-boundary-start spot=" + spotId() : null);
         RelocationReadyWaiter waiter;
         synchronized (relocationReadyLock) {
             waiter = relocationReadyWaiter;
@@ -1021,9 +1021,9 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             }
             CompletionStage<Void> continued = runRelocationReadyCompletion(
                 ZLinkSpotRelocationReadyOutcome.CONTINUED);
-            continued.whenComplete((ignored, error) -> streamTrace(
+            continued.whenComplete((ignored, error) -> streamTrace(STREAM_TRACE ?
                 "relocation-ready-boundary-complete spot=" + spotId()
-                    + " error=" + (error == null ? "none" : error)));
+                    + " error=" + (error == null ? "none" : error) : null));
             return continued;
         }
         Optional<ZLinkUserSpotRelocationBarrier.Seal> claimed;
@@ -1039,10 +1039,10 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             ? CompletableFuture.completedFuture(null)
             : runRelocationReadyCompletion(
                 ZLinkSpotRelocationReadyOutcome.CONTINUED);
-        completed.whenComplete((ignored, error) -> streamTrace(
+        completed.whenComplete((ignored, error) -> streamTrace(STREAM_TRACE ?
             "relocation-ready-boundary-complete spot=" + spotId()
                 + " claimed=" + claimed.isPresent()
-                + " error=" + (error == null ? "none" : error)));
+                + " error=" + (error == null ? "none" : error) : null));
         return completed;
     }
 

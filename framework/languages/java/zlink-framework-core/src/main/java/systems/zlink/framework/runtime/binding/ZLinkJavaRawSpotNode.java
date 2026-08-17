@@ -729,11 +729,11 @@ final class ZLinkJavaRawSpotNode
         }
         boolean accepted = binding.stream().sendBoundSessionPush(
             binding.sessionRid(), parts, flags);
-        streamTrace("bound session local "
+        streamTrace(STREAM_TRACE ? "bound session local "
             + (accepted ? "accepted" : "rejected")
             + " actor=" + actorSummary(actor)
             + " session=" + binding.sessionRid()
-            + " binding=" + binding.bindingGeneration());
+            + " binding=" + binding.bindingGeneration() : null);
         return accepted;
     }
 
@@ -773,12 +773,12 @@ final class ZLinkJavaRawSpotNode
         CompletionStage<Void> submitted =
             binding.stream().sendBoundSessionPushAsync(
                 binding.sessionRid(), parts, timeout);
-        submitted.whenComplete((ignored, failure) -> streamTrace(
+        submitted.whenComplete((ignored, failure) -> streamTrace(STREAM_TRACE ?
             "bound session local async "
                 + (failure == null ? "accepted" : "rejected")
                 + " actor=" + actorSummary(actor)
                 + " session=" + binding.sessionRid()
-                + " binding=" + binding.bindingGeneration()));
+                + " binding=" + binding.bindingGeneration() : null));
         return submitted;
     }
 
@@ -948,52 +948,52 @@ final class ZLinkJavaRawSpotNode
         synchronized (this) {
             binding = streamBindings.get(actor.actorId());
             if (binding == null) {
-                streamTrace("forward reject actor=" + actorSummary(actor)
+                streamTrace(STREAM_TRACE ? "forward reject actor=" + actorSummary(actor)
                     + " session=" + sourceSessionRid
                     + " binding=" + sourceBindingGeneration
                     + " sequence=" + sourceSessionSequence
-                    + " reason=missing-local-binding");
+                    + " reason=missing-local-binding" : null);
                 return false;
             }
             if (!binding.actor().equals(actor)) {
-                streamTrace("forward reject actor=" + actorSummary(actor)
+                streamTrace(STREAM_TRACE ? "forward reject actor=" + actorSummary(actor)
                     + " reason=actor-mismatch bindingActor="
-                    + actorSummary(binding.actor()));
+                    + actorSummary(binding.actor()) : null);
                 return false;
             }
             if (!binding.sessionRid().equals(sourceSessionRid)) {
-                streamTrace("forward reject actor=" + actorSummary(actor)
+                streamTrace(STREAM_TRACE ? "forward reject actor=" + actorSummary(actor)
                     + " reason=session-mismatch expected="
-                    + binding.sessionRid() + " actual=" + sourceSessionRid);
+                    + binding.sessionRid() + " actual=" + sourceSessionRid : null);
                 return false;
             }
             if (binding.bindingGeneration() != sourceBindingGeneration) {
-                streamTrace("forward reject actor=" + actorSummary(actor)
+                streamTrace(STREAM_TRACE ? "forward reject actor=" + actorSummary(actor)
                     + " reason=binding-generation-mismatch expected="
                     + binding.bindingGeneration() + " actual="
-                    + sourceBindingGeneration);
+                    + sourceBindingGeneration : null);
                 return false;
             }
             if (binding.stream() != stream) {
-                streamTrace("forward reject actor=" + actorSummary(actor)
-                    + " reason=stream-mismatch");
+                streamTrace(STREAM_TRACE ? "forward reject actor=" + actorSummary(actor)
+                    + " reason=stream-mismatch" : null);
                 return false;
             }
             if (!acceptStreamBindingSequence(
                     actor.actorId(), sourceSessionSequence)) {
-                streamTrace("forward reject actor=" + actorSummary(actor)
+                streamTrace(STREAM_TRACE ? "forward reject actor=" + actorSummary(actor)
                     + " reason=local-sequence sequence="
-                    + sourceSessionSequence);
+                    + sourceSessionSequence : null);
                 return false;
             }
         }
-        streamTrace("forward accepted actor=" + actorSummary(actor)
+        streamTrace(STREAM_TRACE ? "forward accepted actor=" + actorSummary(actor)
             + " session=" + sourceSessionRid
             + " binding=" + sourceBindingGeneration
             + " sequence=" + sourceSessionSequence
             + " request=" + (streamHeader != null
                 && streamHeader.requestSequence().isPresent())
-            + " local=" + routingId().equals(actor.nodeRid()));
+            + " local=" + routingId().equals(actor.nodeRid()) : null);
         if (!routingId().equals(actor.nodeRid())) {
             if (streamHeader != null
                 && streamHeader.requestSequence().isPresent()) {
@@ -1029,9 +1029,9 @@ final class ZLinkJavaRawSpotNode
                     sourceSessionSequence,
                     parts)
                 .exceptionally(failure -> {
-                    streamTrace("forward bound Actor send failed actor="
+                    streamTrace(STREAM_TRACE ? "forward bound Actor send failed actor="
                         + actorSummary(actor)
-                        + " error=" + failure.getClass().getSimpleName());
+                        + " error=" + failure.getClass().getSimpleName() : null);
                     return null;
                 });
             return true;
@@ -1090,25 +1090,25 @@ final class ZLinkJavaRawSpotNode
                 || !binding.sessionRid().equals(sourceSessionRid)
                 || binding.bindingGeneration() != sourceBindingGeneration
                 || binding.stream() != stream) {
-                streamTrace("async forward reject actor=" + actorSummary(actor)
-                    + " reason=bound-session-route-mismatch");
+                streamTrace(STREAM_TRACE ? "async forward reject actor=" + actorSummary(actor)
+                    + " reason=bound-session-route-mismatch" : null);
                 return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_FOUND));
             }
             if (!acceptStreamBindingSequence(
                     actor.actorId(), sourceSessionSequence)) {
-                streamTrace("async forward reject actor=" + actorSummary(actor)
+                streamTrace(STREAM_TRACE ? "async forward reject actor=" + actorSummary(actor)
                     + " reason=local-sequence sequence="
-                    + sourceSessionSequence);
+                    + sourceSessionSequence : null);
                 return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_ADMITTED));
             }
         }
-        streamTrace("async forward accepted actor=" + actorSummary(actor)
+        streamTrace(STREAM_TRACE ? "async forward accepted actor=" + actorSummary(actor)
             + " session=" + sourceSessionRid
             + " binding=" + sourceBindingGeneration
             + " sequence=" + sourceSessionSequence
-            + " local=" + routingId().equals(actor.nodeRid()));
+            + " local=" + routingId().equals(actor.nodeRid()) : null);
         if (!routingId().equals(actor.nodeRid())) {
             return owner.sendBoundActor(
                     actor,
@@ -1116,10 +1116,10 @@ final class ZLinkJavaRawSpotNode
                     sourceBindingGeneration,
                     sourceSessionSequence,
                     parts)
-                .whenComplete((ignored, failure) -> streamTrace(
+                .whenComplete((ignored, failure) -> streamTrace(STREAM_TRACE ?
                     "async forward bound Actor send "
                         + (failure == null ? "accepted" : "failed")
-                        + " actor=" + actorSummary(actor)));
+                        + " actor=" + actorSummary(actor) : null));
         }
         return dispatchLocalActor(
                 actor,
@@ -1152,8 +1152,8 @@ final class ZLinkJavaRawSpotNode
                 || !binding.sessionRid().equals(sourceSessionRid)
                 || binding.bindingGeneration() != sourceBindingGeneration
                 || binding.stream() != stream) {
-                streamTrace("request reject actor=" + actorSummary(actor)
-                    + " reason=bound-session-route-mismatch");
+                streamTrace(STREAM_TRACE ? "request reject actor=" + actorSummary(actor)
+                    + " reason=bound-session-route-mismatch" : null);
                 return CompletableFuture.failedFuture(
                     new IllegalStateException(
                         "STREAM session binding is no longer current"));
@@ -1166,9 +1166,9 @@ final class ZLinkJavaRawSpotNode
             }
             if (!acceptStreamBindingSequence(
                     actor.actorId(), sourceSessionSequence)) {
-                streamTrace("request reject actor=" + actorSummary(actor)
+                streamTrace(STREAM_TRACE ? "request reject actor=" + actorSummary(actor)
                     + " reason=local-sequence sequence="
-                    + sourceSessionSequence);
+                    + sourceSessionSequence : null);
                 return CompletableFuture.failedFuture(
                     new IllegalStateException(
                         "STREAM bound-session sequence is stale"));
@@ -1197,12 +1197,12 @@ final class ZLinkJavaRawSpotNode
         ZLinkStreamHeader requestHeader,
         List<Message> reply) {
         try {
-            streamTrace("bound Session reply received parts="
+            streamTrace(STREAM_TRACE ? "bound Session reply received parts="
                 + (reply == null ? "null" : reply.size())
                 + " requestSequence="
                 + (requestHeader == null
                     ? "null"
-                    : requestHeader.requestSequence().orElse(null)));
+                    : requestHeader.requestSequence().orElse(null)) : null);
             if (reply == null || reply.size() != 1) {
                 replyBoundStreamError(
                     stream,
@@ -1217,10 +1217,10 @@ final class ZLinkJavaRawSpotNode
                 reply,
                 stream.admissionTimeout()).whenComplete((ignored, failure) -> {
                     if (failure == null) {
-                        streamTrace("bound Session reply accepted");
+                        streamTrace(STREAM_TRACE ? "bound Session reply accepted" : null);
                     } else {
-                        streamTrace("bound Session reply rejected after retry: "
-                            + failure.getMessage());
+                        streamTrace(STREAM_TRACE ? "bound Session reply rejected after retry: "
+                            + failure.getMessage() : null);
                         replyBoundStreamError(
                             stream,
                             sessionRid,
@@ -1250,10 +1250,10 @@ final class ZLinkJavaRawSpotNode
             || requestHeader.requestSequence().isEmpty()) {
             return;
         }
-        streamTrace("bound Session error reply scheduled requestSequence="
+        streamTrace(STREAM_TRACE ? "bound Session error reply scheduled requestSequence="
             + requestHeader.requestSequence().orElseThrow()
             + " failure="
-            + (failure == null ? "null" : failure.getClass().getSimpleName()));
+            + (failure == null ? "null" : failure.getClass().getSimpleName()) : null);
         try {
             byte[] errorFrame = ZLinkStreamFrameCodec.encode(
                 ZLinkStreamHeaderCodec.encode(
@@ -1268,18 +1268,18 @@ final class ZLinkJavaRawSpotNode
                     stream.admissionTimeout()).whenComplete(
                         (ignored, sendFailure) -> {
                             if (sendFailure == null) {
-                                streamTrace(
-                                    "bound Session error reply accepted");
+                                streamTrace(STREAM_TRACE ?
+                                    "bound Session error reply accepted" : null);
                             } else {
-                                streamTrace(
+                                streamTrace(STREAM_TRACE ?
                                     "bound Session error rejected: "
-                                        + sendFailure.getMessage());
+                                        + sendFailure.getMessage() : null);
                             }
                         });
             }
         } catch (RuntimeException encodingFailure) {
-            streamTrace("bound Session error encoding failed: "
-                + encodingFailure.getMessage());
+            streamTrace(STREAM_TRACE ? "bound Session error encoding failed: "
+                + encodingFailure.getMessage() : null);
         }
     }
 
@@ -1852,17 +1852,17 @@ final class ZLinkJavaRawSpotNode
                     return true;
                 }
             } catch (RuntimeException relayFailure) {
-                streamTrace("remote enqueue relay failed actor="
+                streamTrace(STREAM_TRACE ? "remote enqueue relay failed actor="
                     + actorSummary(actor)
                     + " source=" + sourceNodeRid
-                    + " error=" + relayFailure.getClass().getSimpleName());
+                    + " error=" + relayFailure.getClass().getSimpleName() : null);
             }
         }
         if (!isCurrentActor(actor)) {
-            streamTrace("remote enqueue reject actor=" + actorSummary(actor)
+            streamTrace(STREAM_TRACE ? "remote enqueue reject actor=" + actorSummary(actor)
                 + " source=" + sourceNodeRid
                 + " reason=not-current-actor current="
-                + actorSummary(actors.get(actor == null ? "" : actor.actorId())));
+                + actorSummary(actors.get(actor == null ? "" : actor.actorId())) : null);
             return false;
         }
         long currentAuthority = actorAuthorityOwnerGeneration(actor);
@@ -1870,21 +1870,21 @@ final class ZLinkJavaRawSpotNode
         if (currentAuthority != header.target().authorityOwnerGeneration()
             || currentOwnerLease
                 != header.target().ownerLeaseGeneration()) {
-            streamTrace("remote enqueue reject actor=" + actorSummary(actor)
+            streamTrace(STREAM_TRACE ? "remote enqueue reject actor=" + actorSummary(actor)
                 + " source=" + sourceNodeRid
                 + " reason=authority-fence expected=" + currentAuthority
                 + "/" + currentOwnerLease
                 + " actual=" + header.target().authorityOwnerGeneration()
-                + "/" + header.target().ownerLeaseGeneration());
+                + "/" + header.target().ownerLeaseGeneration() : null);
             return false;
         }
         if (header.boundSession() != null) {
             RemoteStreamBinding binding =
                 remoteStreamBindings.get(actor.actorId());
             if (binding == null) {
-                streamTrace("remote enqueue reject actor="
+                streamTrace(STREAM_TRACE ? "remote enqueue reject actor="
                     + actorSummary(actor) + " source=" + sourceNodeRid
-                    + " reason=missing-remote-binding");
+                    + " reason=missing-remote-binding" : null);
                 return false;
             }
             if (!binding.actor().equals(actor)
@@ -1895,41 +1895,41 @@ final class ZLinkJavaRawSpotNode
                     header.boundSession().sourceSessionRid())
                 || binding.bindingGeneration()
                     != header.boundSession().sourceBindingGeneration()) {
-                streamTrace("remote enqueue reject actor="
+                streamTrace(STREAM_TRACE ? "remote enqueue reject actor="
                     + actorSummary(actor) + " source=" + sourceNodeRid
                     + " reason=remote-binding-mismatch binding="
                     + remoteBindingSummary(binding)
                     + " tailSession="
                     + header.boundSession().sourceSessionRid()
                     + " tailGeneration="
-                    + header.boundSession().sourceBindingGeneration());
+                    + header.boundSession().sourceBindingGeneration() : null);
                 return false;
             }
             if (!acceptRemoteStreamSequence(
                     actor.actorId(),
                     header.boundSession().sourceSessionSequence())) {
-                streamTrace("remote enqueue reject actor="
+                streamTrace(STREAM_TRACE ? "remote enqueue reject actor="
                     + actorSummary(actor) + " source=" + sourceNodeRid
                     + " reason=remote-sequence sequence="
-                    + header.boundSession().sourceSessionSequence());
+                    + header.boundSession().sourceSessionSequence() : null);
                 return false;
             }
         }
         String targetSpotId = actorSpots.get(actor.actorId());
         ZLinkJavaRawSpot target = spots.get(targetSpotId);
         if (target == null) {
-            streamTrace("remote enqueue reject actor=" + actorSummary(actor)
+            streamTrace(STREAM_TRACE ? "remote enqueue reject actor=" + actorSummary(actor)
                 + " source=" + sourceNodeRid
-                + " reason=missing-target-spot spot=" + targetSpotId);
+                + " reason=missing-target-spot spot=" + targetSpotId : null);
             return false;
         }
-        streamTrace("remote enqueue accepted actor=" + actorSummary(actor)
+        streamTrace(STREAM_TRACE ? "remote enqueue accepted actor=" + actorSummary(actor)
             + " source=" + sourceNodeRid
             + " request=" + header.request()
             + " sequence=" + (header.boundSession() == null
                 ? 0
                 : header.boundSession().sourceSessionSequence())
-            + " spot=" + targetSpotId);
+            + " spot=" + targetSpotId : null);
         long requestId = header.request()
             ? nextActorRequestSequence.getAndIncrement()
             : 0;
@@ -2137,10 +2137,10 @@ final class ZLinkJavaRawSpotNode
         RemoteStreamBinding replaced = null;
         synchronized (this) {
             if (!routingId().equals(actor.nodeRid())) {
-                streamTrace("remote bind reject actor=" + actorSummary(actor)
+                streamTrace(STREAM_TRACE ? "remote bind reject actor=" + actorSummary(actor)
                     + " source=" + sourceNodeRid
                     + " active=" + command.active()
-                    + " reason=actor-node-mismatch local=" + routingId());
+                    + " reason=actor-node-mismatch local=" + routingId() : null);
                 return false;
             }
             RemoteStreamBinding current =
@@ -2149,12 +2149,12 @@ final class ZLinkJavaRawSpotNode
                 return true;
             }
             if (route.targetNodeGeneration() != owner.lifecycleGeneration()) {
-                streamTrace("remote bind reject actor=" + actorSummary(actor)
+                streamTrace(STREAM_TRACE ? "remote bind reject actor=" + actorSummary(actor)
                     + " source=" + sourceNodeRid
                     + " active=" + command.active()
                     + " reason=node-generation expected="
                     + owner.lifecycleGeneration() + " actual="
-                    + route.targetNodeGeneration());
+                    + route.targetNodeGeneration() : null);
                 return false;
             }
             if (!command.active()) {
@@ -2162,35 +2162,35 @@ final class ZLinkJavaRawSpotNode
                         actor.actorId(), candidate)) {
                     remoteStreamSequences.remove(actor.actorId());
                 }
-                streamTrace("remote bind removed actor=" + actorSummary(actor)
+                streamTrace(STREAM_TRACE ? "remote bind removed actor=" + actorSummary(actor)
                     + " source=" + sourceNodeRid
-                    + " binding=" + command.bindingGeneration());
+                    + " binding=" + command.bindingGeneration() : null);
                 return true;
             }
             if (!isCurrentActor(actor)) {
-                streamTrace("remote bind reject actor=" + actorSummary(actor)
+                streamTrace(STREAM_TRACE ? "remote bind reject actor=" + actorSummary(actor)
                     + " source=" + sourceNodeRid
-                    + " active=true reason=not-current-actor");
+                    + " active=true reason=not-current-actor" : null);
                 return false;
             }
             if (actorAuthorityOwnerGeneration(actor)
                     != route.authorityOwnerGeneration()) {
-                streamTrace("remote bind reject actor=" + actorSummary(actor)
+                streamTrace(STREAM_TRACE ? "remote bind reject actor=" + actorSummary(actor)
                     + " source=" + sourceNodeRid
                     + " active=true reason=authority-generation expected="
                     + actorAuthorityOwnerGeneration(actor) + " actual="
-                    + route.authorityOwnerGeneration());
+                    + route.authorityOwnerGeneration() : null);
                 return false;
             }
             if (current != null
                 && current.sameSessionOwnerEpoch(candidate)
                 && current.bindingGeneration()
                     >= candidate.bindingGeneration()) {
-                streamTrace("remote bind reject actor=" + actorSummary(actor)
+                streamTrace(STREAM_TRACE ? "remote bind reject actor=" + actorSummary(actor)
                     + " source=" + sourceNodeRid
                     + " reason=stale-binding current="
                     + remoteBindingSummary(current) + " candidate="
-                    + remoteBindingSummary(candidate));
+                    + remoteBindingSummary(candidate) : null);
                 return false;
             }
             remoteStreamBindings.put(actor.actorId(), candidate);
@@ -2198,9 +2198,9 @@ final class ZLinkJavaRawSpotNode
             streamBindings.remove(actor.actorId());
             replaced = current;
         }
-        streamTrace("remote bind installed actor=" + actorSummary(actor)
+        streamTrace(STREAM_TRACE ? "remote bind installed actor=" + actorSummary(actor)
             + " source=" + sourceNodeRid
-            + " binding=" + command.bindingGeneration());
+            + " binding=" + command.bindingGeneration() : null);
         if (replaced != null) {
             notifyBoundSessionReplaced(replaced);
         }
@@ -2212,6 +2212,10 @@ final class ZLinkJavaRawSpotNode
             LOGGER.warning("[zlink-java-stream-trace] spot=" + name()
                 + " rid=" + routingId() + " " + message);
         }
+    }
+
+    boolean streamTraceEnabled() {
+        return STREAM_TRACE;
     }
 
     private static String actorSummary(ZLinkBackendActorRef actor) {
@@ -2293,13 +2297,13 @@ final class ZLinkJavaRawSpotNode
                 == sourceNodeGeneration
             && binding.stream().sendBoundSessionPush(
                 binding.sessionRid(), parts, SendFlags.DONT_WAIT);
-        streamTrace("bound session push "
+        streamTrace(STREAM_TRACE ? "bound session push "
             + (accepted ? "accepted" : "rejected")
             + " actor=" + actorSummary(command.actor().actor())
             + " source=" + sourceNodeRid
             + " binding=" + command.expectedBindingGeneration()
             + " hasBinding=" + (binding != null)
-            + " packet=" + packetName);
+            + " packet=" + packetName : null);
         return accepted;
     }
 
@@ -2403,8 +2407,8 @@ final class ZLinkJavaRawSpotNode
 
     boolean closeInstanceSpot(String spotId, long generation) {
         boolean closed = instanceSpots.close(spotId, generation);
-        streamTrace("instance-close spot=" + spotId
-            + " generation=" + generation + " closed=" + closed);
+        streamTrace(STREAM_TRACE ? "instance-close spot=" + spotId
+            + " generation=" + generation + " closed=" + closed : null);
         return closed;
     }
 
@@ -2584,11 +2588,11 @@ final class ZLinkJavaRawSpotNode
                 }
                 return candidate;
             });
-        streamTrace("instance-authority-select spot="
+        streamTrace(STREAM_TRACE ? "instance-authority-select spot="
             + route.targetSpotId()
             + " candidate-object=" + route.objectGeneration()
             + " selected-object=" + selected.route().objectGeneration()
-            + " accepted=" + selected.route().equals(route));
+            + " accepted=" + selected.route().equals(route) : null);
         return selected;
     }
 
@@ -2820,14 +2824,14 @@ final class ZLinkJavaRawSpotNode
         byte[] metadata,
         String contentType,
         List<Message> parts) {
-        streamTrace("logical-multicast-enqueue channel=" + channelName
+        streamTrace(STREAM_TRACE ? "logical-multicast-enqueue channel=" + channelName
             + " topic=" + topic
             + " sourceSpot=" + sourceSpotId
             + " targets=" + spots.values().stream()
                 .filter(target -> target.accepts(topic))
                 .map(ZLinkJavaRawSpot::spotId)
                 .sorted()
-                .toList());
+                .toList() : null);
         for (ZLinkJavaRawSpot target : spots.values()) {
             if (!target.accepts(topic)) {
                 continue;

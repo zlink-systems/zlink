@@ -94,8 +94,6 @@ import java.util.concurrent.TimeUnit;
 public final class ZLinkFrameworkRuntime
     implements AutoCloseable,
         ZLinkMessageFlowControl {
-    private static final boolean RUNTIME_TRACE =
-        "1".equals(System.getenv("ZLINK_JAVA_RUNTIME_TRACE"));
     public static final Duration DEFAULT_TERMINATION_DEADLINE =
         Duration.ofSeconds(30);
     private final ZLinkChannelRuntime channels;
@@ -1467,7 +1465,6 @@ public final class ZLinkFrameworkRuntime
         Duration deadline,
         ZLinkTerminationReason forcedReason) {
         drain(deadline).whenComplete((result, failure) -> {
-            runtimeTrace("termination-complete result=" + result, failure);
             if (completion.isDone()) {
                 return;
             }
@@ -2047,7 +2044,6 @@ public final class ZLinkFrameworkRuntime
             : locationAutoConnectHost.markDraining();
         markerPublished.whenComplete((ignored, publishFailure) -> {
             if (publishFailure != null) {
-                runtimeTrace("drain-state-publish-failed", publishFailure);
                 forceStop(InternalDrainForceReason.DRAINING_STATE_PUBLISH_FAILED);
                 return;
             }
@@ -2067,28 +2063,9 @@ public final class ZLinkFrameworkRuntime
                     .thenCompose(barrierStep -> spotBarrier)
                     .thenCompose(barrierStep -> actorBarrier)
                     .thenCompose(barrierStep -> initialStreamBarrier);
-            if (RUNTIME_TRACE) {
-                CompletableFuture.delayedExecutor(
-                    5, TimeUnit.SECONDS)
-                    .execute(() -> runtimeTrace(
-                        "drain-barriers mesh=" + isDone(meshBarrier)
-                            + " spots=" + isDone(spotBarrier)
-                            + " actors=" + isDone(actorBarrier)
-                            + " streams=" + isDone(initialStreamBarrier),
-                        null));
-                CompletableFuture.delayedExecutor(
-                    20, TimeUnit.SECONDS)
-                    .execute(() -> runtimeTrace(
-                        "drain-barriers mesh=" + isDone(meshBarrier)
-                            + " spots=" + isDone(spotBarrier)
-                            + " actors=" + isDone(actorBarrier)
-                            + " streams=" + isDone(initialStreamBarrier),
-                        null));
-            }
                 applicationBarrier
                 .whenComplete((barrierIgnored, barrierFailure) -> {
                 if (barrierFailure != null) {
-                    runtimeTrace("drain-application-barrier-failed", barrierFailure);
                     forceStop(
                         InternalDrainForceReason.TEARDOWN_FAILED);
                     return;
@@ -2115,7 +2092,6 @@ public final class ZLinkFrameworkRuntime
                 spotDrain.thenCompose(spotIgnored -> awaitWorkloadsDrained())
                     .whenComplete((workloadsIgnored, workloadFailure) -> {
                 if (workloadFailure != null) {
-                    runtimeTrace("drain-workload-barrier-failed", workloadFailure);
                     forceStop(InternalDrainForceReason.TEARDOWN_FAILED);
                     return;
                 }
@@ -2219,7 +2195,6 @@ public final class ZLinkFrameworkRuntime
                 if (failure == null) {
                     drained.complete(new InternalDrained());
                 } else {
-                    runtimeTrace("drain-close-failed", failure);
                     completeForcedStop(
                         InternalDrainForceReason.OWNER_CLEANUP_FAILED);
                 }
@@ -2248,7 +2223,6 @@ public final class ZLinkFrameworkRuntime
         notification.handle((ignored, failure) -> null)
             .thenCompose(ignored -> closeAsync())
             .whenComplete((ignored, failure) -> {
-                runtimeTrace("force-stop-close-complete", failure);
                 completeForcedStop(failure == null
                     ? requestedReason
                     : InternalDrainForceReason.TEARDOWN_FAILED);
@@ -2320,21 +2294,6 @@ public final class ZLinkFrameworkRuntime
             throw new ZLinkConfigurationException(
                 "failed to close serial executor", ex);
         }
-    }
-
-    private static void runtimeTrace(String message, Throwable failure) {
-        if (!RUNTIME_TRACE) {
-            return;
-        }
-        System.err.println("[zlink-runtime-trace] " + message);
-        if (failure != null) {
-            failure.printStackTrace(System.err);
-        }
-    }
-
-    private static boolean isDone(
-        CompletionStage<?> stage) {
-        return stage.toCompletableFuture().isDone();
     }
 
     private sealed interface InternalDrainResult

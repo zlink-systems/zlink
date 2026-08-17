@@ -59,7 +59,6 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     private final ZLinkStoreLocationResolvers locations;
     private final ZLinkMessageSerializer serializer;
     private final Duration defaultTimeout;
-    private final ZLinkOneWayCalls oneWayCalls;
     private final CompletionStage<Void> runtimeReady;
     private final AtomicInteger
         runtimeReadyWaiters = new AtomicInteger();
@@ -118,7 +117,6 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         this.locations = Objects.requireNonNull(locations, "locations");
         this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.defaultTimeout = defaultTimeout == null ? Duration.ZERO : defaultTimeout;
-        this.oneWayCalls = new ZLinkOneWayCalls();
         this.runtimeReady = Objects.requireNonNull(
             runtimeReady,
             "runtimeReady");

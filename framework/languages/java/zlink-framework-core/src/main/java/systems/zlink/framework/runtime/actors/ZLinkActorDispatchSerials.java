@@ -119,11 +119,11 @@ final class ZLinkActorDispatchSerials {
             synchronized (this) {
                 activeActorIds.add(turn.actorId);
             }
-            streamTrace("turn-start actor=" + turn.actorId);
+            streamTrace(STREAM_TRACE ? "turn-start actor=" + turn.actorId : null);
             return runTurn(turn.actorId, operation)
                 .whenComplete((ignored, error) -> {
-                    streamTrace("turn-complete actor=" + turn.actorId
-                        + " error=" + (error == null ? "none" : error));
+                    streamTrace(STREAM_TRACE ? "turn-complete actor=" + turn.actorId
+                        + " error=" + (error == null ? "none" : error) : null);
                     synchronized (this) {
                         activeActorIds.remove(turn.actorId);
                     }
@@ -162,11 +162,11 @@ final class ZLinkActorDispatchSerials {
             synchronized (this) {
                 activeActorIds.add(turn.actorId);
             }
-            streamTrace("turn-start actor=" + turn.actorId);
+            streamTrace(STREAM_TRACE ? "turn-start actor=" + turn.actorId : null);
             return runTurn(turn.actorId, operation)
                 .whenComplete((ignored, error) -> {
-                    streamTrace("turn-complete actor=" + turn.actorId
-                        + " error=" + (error == null ? "none" : error));
+                    streamTrace(STREAM_TRACE ? "turn-complete actor=" + turn.actorId
+                        + " error=" + (error == null ? "none" : error) : null);
                     synchronized (this) {
                         activeActorIds.remove(turn.actorId);
                     }
@@ -369,7 +369,7 @@ final class ZLinkActorDispatchSerials {
     <T> CompletionStage<T> runTurn(
         String actorId,
         Supplier<CompletionStage<T>> operation) {
-        streamTrace("run-turn-enter actor=" + actorId);
+        streamTrace(STREAM_TRACE ? "run-turn-enter actor=" + actorId : null);
         try (systems.zlink.framework.runtime.internal.handlers
                  .ZLinkSuspendInvocationContext.Scope ignored =
                  systems.zlink.framework.runtime.internal.handlers
@@ -382,20 +382,20 @@ final class ZLinkActorDispatchSerials {
                          "actor incarnation"),
                      actorId)) {
             CompletionStage<T> handler = operation.get();
-            streamTrace("run-turn-operation-return actor=" + actorId
-                + " done=" + handler.toCompletableFuture().isDone());
+            streamTrace(STREAM_TRACE ? "run-turn-operation-return actor=" + actorId
+                + " done=" + handler.toCompletableFuture().isDone() : null);
             CompletableFuture<T> completed = new CompletableFuture<>();
             joins.finish(handler, null).whenComplete((nothing, error) -> {
-                streamTrace("run-turn-join-finish actor=" + actorId
-                    + " error=" + (error == null ? "none" : error));
+                streamTrace(STREAM_TRACE ? "run-turn-join-finish actor=" + actorId
+                    + " error=" + (error == null ? "none" : error) : null);
                 if (error != null) {
                     completed.completeExceptionally(error);
                     return;
                 }
                 handler.whenComplete((value, handlerError) -> {
-                    streamTrace("run-turn-handler-finish actor=" + actorId
+                    streamTrace(STREAM_TRACE ? "run-turn-handler-finish actor=" + actorId
                         + " error=" + (handlerError == null
-                            ? "none" : handlerError));
+                            ? "none" : handlerError) : null);
                     if (handlerError != null) {
                         completed.completeExceptionally(handlerError);
                     } else {

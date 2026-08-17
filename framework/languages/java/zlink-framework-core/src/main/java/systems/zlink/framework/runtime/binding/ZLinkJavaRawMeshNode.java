@@ -27,7 +27,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -251,7 +253,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private volatile ZLinkInternalMeshNode.BoundSessionReplacedHandler
         boundSessionReplacedHandler;
     private final Map<UserSpotOperationKey, UserSpotTerminalSlot>
-        userSpotTerminals = new ConcurrentHashMap<>();
+        userSpotTerminals = new HashMap<>();
 
     ZLinkJavaRawMeshNode(Context context, String meshName) {
         this(
@@ -514,9 +516,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 new DataOutputStream(bytes);
             output.writeByte(1);
             output.writeByte(metadata.size());
-            for (var entry : metadata.entrySet().stream()
-                .sorted(Map.Entry.comparingByKey())
-                .toList()) {
+            ArrayList<Map.Entry<String, String>> entries =
+                new ArrayList<>(metadata.entrySet());
+            entries.sort(Map.Entry.comparingByKey());
+            for (var entry : entries) {
                 byte[] key = entry.getKey().getBytes(
                     StandardCharsets.UTF_8);
                 byte[] value = entry.getValue().getBytes(
@@ -1368,10 +1371,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         String selectedChannel = requireChannel(channelName);
         ZLinkJavaRawSpotNode currentSpots =
             (ZLinkJavaRawSpotNode) spotNode();
-        streamTrace("logical-multicast-publish channel=" + selectedChannel
+        streamTrace(STREAM_TRACE ? "logical-multicast-publish channel=" + selectedChannel
             + " topic=" + topic
             + " sourceSpot=" + (source == null ? "none" : source.spotId())
-            + " peerCount=" + (topology == null ? 0 : topology.peers().size()));
+            + " peerCount=" + (topology == null ? 0 : topology.peers().size()) : null);
         currentSpots.enqueueLogicalMulticast(
             selectedChannel,
             topic,
@@ -1387,11 +1390,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     .filter(peer ->
                         peer.descriptor().serves(selectedChannel))
                     .toList();
-        streamTrace("logical-multicast-targets channel=" + selectedChannel
+        streamTrace(STREAM_TRACE ? "logical-multicast-targets channel=" + selectedChannel
             + " targets=" + targets.stream()
                 .map(peer -> peer.descriptor().nodeRoutingId().toString())
                 .sorted()
-                .toList());
+                .toList() : null);
         int flags = metadata == null || metadata.length == 0
             ? 0
             : ServiceWireConstants.FLAG_METADATA;
@@ -1411,11 +1414,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     target.descriptor().nodeRoutingId(),
                     frames)
                 .whenComplete((ignored, failure) ->
-                    streamTrace("logical-multicast-send target="
+                    streamTrace(STREAM_TRACE ? "logical-multicast-send target="
                         + target.descriptor().nodeRoutingId()
                         + " result=" + (failure == null ? "accepted" : "failed")
                         + " channel=" + selectedChannel
-                        + " topic=" + topic))
+                        + " topic=" + topic : null))
                 .toCompletableFuture())
             .toArray(CompletableFuture[]::new);
         return CompletableFuture.allOf(submissions);
@@ -1443,17 +1446,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         Optional<RoutingId> target = topology.selectChannel(
                 selectedChannel, this::isReadyPeer)
             .map(peer -> peer.descriptor().nodeRoutingId());
-        streamTrace("request-channel-select channel=" + selectedChannel
+        streamTrace(STREAM_TRACE ? "request-channel-select channel=" + selectedChannel
             + " target=" + target.map(RoutingId::toString).orElse("none")
-            + " peerCount=" + (topology == null ? 0 : topology.peers().size()));
+            + " peerCount=" + (topology == null ? 0 : topology.peers().size()) : null);
         if (target.isPresent()
             && transportPairFor(target.orElseThrow()) == null) {
             // Liveness admission may complete before the Application lane is
             // available. Do not submit through the unscoped RID route, which
             // can select a stale or Completion transport during reconnect.
-            streamTrace("request-channel-deferred channel=" + selectedChannel
+            streamTrace(STREAM_TRACE ? "request-channel-deferred channel=" + selectedChannel
                 + " target=" + target.orElseThrow()
-                + " reason=application-pair-not-ready");
+                + " reason=application-pair-not-ready" : null);
             return CompletableFuture.failedFuture(
                 new ZlinkRequestException(RequestResult.NOT_CONNECTED));
         }
@@ -1468,17 +1471,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     parts,
                     timeout,
                     selectedChannel)
-                .whenComplete((reply, failure) -> streamTrace(
+                .whenComplete((reply, failure) -> streamTrace(STREAM_TRACE ?
                     "request-channel-submit channel=" + selectedChannel
                         + " target=" + target.orElseThrow()
                         + " result="
-                        + (failure == null ? "accepted" : "failed")));
+                        + (failure == null ? "accepted" : "failed") : null));
         } catch (RuntimeException failure) {
-            streamTrace("request-channel-submit-failed channel="
+            streamTrace(STREAM_TRACE ? "request-channel-submit-failed channel="
                 + selectedChannel
                 + " target=" + target.map(RoutingId::toString).orElse("none")
                 + " error=" + failure.getClass().getSimpleName()
-                + ":" + String.valueOf(failure.getMessage()));
+                + ":" + String.valueOf(failure.getMessage()) : null);
             throw failure;
         }
     }
@@ -1519,12 +1522,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             || targetSpotGeneration <= 0
             || authorityOwnerGeneration <= 0
             || ownerLeaseGeneration <= 0) {
-            streamTrace("send spot reject source=" + sourceSpotId
+            streamTrace(STREAM_TRACE ? "send spot reject source=" + sourceSpotId
                 + " targetNode=" + targetNodeRid
                 + " targetSpot=" + targetSpotId
                 + " reason=" + spotRouteRejectReason(
                     peer, targetSpotGeneration,
-                    authorityOwnerGeneration, ownerLeaseGeneration));
+                    authorityOwnerGeneration, ownerLeaseGeneration) : null);
             return CompletableFuture.failedFuture(
                 new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -1577,12 +1580,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             || targetSpotGeneration <= 0
             || authorityOwnerGeneration <= 0
             || ownerLeaseGeneration <= 0) {
-            streamTrace("request spot reject source=" + sourceSpotId
+            streamTrace(STREAM_TRACE ? "request spot reject source=" + sourceSpotId
                 + " targetNode=" + targetNodeRid
                 + " targetSpot=" + targetSpotId
                 + " reason=" + spotRouteRejectReason(
                     peer, targetSpotGeneration,
-                    authorityOwnerGeneration, ownerLeaseGeneration));
+                    authorityOwnerGeneration, ownerLeaseGeneration) : null);
             return CompletableFuture.failedFuture(
                 new ZlinkRequestException(RequestResult.NOT_CONNECTED));
         }
@@ -1723,15 +1726,15 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             || actor.generation() <= 0
             || authorityOwnerGeneration <= 0
             || ownerLeaseGeneration <= 0) {
-            streamTrace("send actor reject actor=" + actorSummary(actor)
+            streamTrace(STREAM_TRACE ? "send actor reject actor=" + actorSummary(actor)
                 + " reason=missing-peer-or-authority peer=" + peer.isPresent()
-                + " authority=" + authorityOwnerGeneration);
+                + " authority=" + authorityOwnerGeneration : null);
             return CompletableFuture.failedFuture(
                 new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
         if (!isReadyPeer(peer.orElseThrow())) {
-            streamTrace("send actor reject actor=" + actorSummary(actor)
-                + " reason=peer-not-ready");
+            streamTrace(STREAM_TRACE ? "send actor reject actor=" + actorSummary(actor)
+                + " reason=peer-not-ready" : null);
             return CompletableFuture.failedFuture(
                 new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -1752,9 +1755,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     ownerLeaseGeneration)),
             wire.encodeApplicationPayload(applicationPayload(parts)));
         return port.send(requireStarted(), actor.nodeRid(), frames)
-            .whenComplete((ignored, failure) -> streamTrace(
+            .whenComplete((ignored, failure) -> streamTrace(STREAM_TRACE ?
                 "send actor " + (failure == null ? "accepted" : "failed")
-                    + " actor=" + actorSummary(actor)));
+                    + " actor=" + actorSummary(actor) : null));
     }
 
     boolean forwardRelocationSpot(
@@ -1997,12 +2000,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             || actor.generation() <= 0
             || authorityOwnerGeneration <= 0
             || ownerLeaseGeneration <= 0) {
-            streamTrace("send bound actor reject actor="
+            streamTrace(STREAM_TRACE ? "send bound actor reject actor="
                 + actorSummary(actor) + " sourceSession=" + sourceSessionRid
                 + " binding=" + sourceBindingGeneration
                 + " sequence=" + sourceSessionSequence
                 + " reason=missing-peer-or-authority peer=" + peer.isPresent()
-                + " authority=" + authorityOwnerGeneration);
+                + " authority=" + authorityOwnerGeneration : null);
             return CompletableFuture.failedFuture(
                 new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -2031,13 +2034,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     sourceSessionSequence)),
             wire.encodeApplicationPayload(applicationPayload(parts)));
         return port.send(requireStarted(), actor.nodeRid(), frames)
-            .whenComplete((ignored, failure) -> streamTrace(
+            .whenComplete((ignored, failure) -> streamTrace(STREAM_TRACE ?
                 "send bound actor "
                     + (failure == null ? "accepted" : "failed")
                     + " actor=" + actorSummary(actor)
                     + " sourceSession=" + sourceSessionRid
                     + " binding=" + sourceBindingGeneration
-                    + " sequence=" + sourceSessionSequence));
+                    + " sequence=" + sourceSessionSequence : null));
     }
 
     CompletionStage<List<Message>> requestBoundActorAsync(
@@ -2064,13 +2067,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             || actor.generation() <= 0
             || authorityOwnerGeneration <= 0
             || ownerLeaseGeneration <= 0) {
-            streamTrace("request bound actor reject actor="
+            streamTrace(STREAM_TRACE ? "request bound actor reject actor="
                 + actorSummary(actor) + " sourceSession=" + sourceSessionRid
                 + " binding=" + sourceBindingGeneration
                 + " sequence=" + sourceSessionSequence
                 + " requestSequence=" + streamRequestSequence
                 + " reason=missing-peer-or-authority peer=" + peer.isPresent()
-                + " authority=" + authorityOwnerGeneration);
+                + " authority=" + authorityOwnerGeneration : null);
             return CompletableFuture.failedFuture(
                 new ZlinkRequestException(RequestResult.NOT_CONNECTED));
         }
@@ -2158,14 +2161,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         failure);
                 }
             })
-            .whenComplete((ignored, failure) -> streamTrace(
+            .whenComplete((ignored, failure) -> streamTrace(STREAM_TRACE ?
                 "request bound actor "
                     + (failure == null ? "accepted" : "failed")
                     + " actor=" + actorSummary(actor)
                     + " sourceSession=" + sourceSessionRid
                     + " binding=" + sourceBindingGeneration
                     + " sequence=" + sourceSessionSequence
-                    + " requestSequence=" + streamRequestSequence));
+                    + " requestSequence=" + streamRequestSequence : null));
     }
 
     private void streamTrace(String message) {
@@ -2221,12 +2224,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
         frames.add(wire.encodeApplicationPayload(applicationPayload(parts)));
         return sendApplication(route.targetNodeRid(), frames)
-            .whenComplete((ignored, failure) -> streamTrace(
+            .whenComplete((ignored, failure) -> streamTrace(STREAM_TRACE ?
                 "instance-send-submit target=" + route.targetSpotId()
                     + " targetNode=" + route.targetNodeRid()
                     + " pair=" + transportPairSummary(
                         transportPairFor(route.targetNodeRid()))
-                    + " result=" + submitFailureSummary(failure)));
+                    + " result=" + submitFailureSummary(failure) : null));
     }
 
     @Override
@@ -2388,14 +2391,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 }
                 if (result != RequestResult.OK
                     || replies.isEmpty()) {
-                    streamTrace("instance request reply failed target="
+                    streamTrace(STREAM_TRACE ? "instance request reply failed target="
                         + route.targetSpotId()
                         + " targetNode=" + route.targetNodeRid()
                         + " objectGeneration=" + route.objectGeneration()
                         + " ownerGeneration="
                         + route.authorityOwnerGeneration()
                         + " result=" + result
-                        + " frames=" + replies.size());
+                        + " frames=" + replies.size() : null);
                     operations.completeExceptionally(
                         operation.id(),
                         new IllegalStateException(
@@ -2404,7 +2407,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 }
                 try {
                     var header = wire.decodeReplyHeader(replies.getFirst());
-                    streamTrace("instance request reply target="
+                    streamTrace(STREAM_TRACE ? "instance request reply target="
                         + route.targetSpotId()
                         + " targetNode=" + route.targetNodeRid()
                         + " objectGeneration=" + route.objectGeneration()
@@ -2413,7 +2416,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         + " correlation=" + correlation
                         + " replyCorrelation=" + header.correlation()
                         + " terminal=" + header.terminalResult()
-                        + " frames=" + replies.size());
+                        + " frames=" + replies.size() : null);
                     if (header.correlation() != correlation) {
                         throw new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
@@ -2879,8 +2882,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         Objects.requireNonNull(expectedSource, "expectedSource");
         byte[] command = Objects.requireNonNull(
             command33, "command33").clone();
-        List<byte[]> application = Objects.requireNonNull(
-            payload, "payload").stream().map(byte[]::clone).toList();
+        List<byte[]> application = cloneFrames(
+            Objects.requireNonNull(payload, "payload"), 0);
         Objects.requireNonNull(timeout, "timeout");
         var relocationWire = new ZLinkServiceRelocationWireCodec();
         var relay = relocationWire.decodeReplyRelay(command);
@@ -2989,9 +2992,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             command42, "command42").clone();
         Objects.requireNonNull(timeout, "timeout");
         statefulWire.decodeSessionRelocationSeal(record);
-        streamTrace("request session seal target=" + sessionOwnerNodeRid
+        streamTrace(STREAM_TRACE ? "request session seal target=" + sessionOwnerNodeRid
             + " local=" + sessionOwnerNodeRid.equals(routingId)
-            + " timeout=" + timeout);
+            + " timeout=" + timeout : null);
         if (sessionOwnerNodeRid.equals(routingId)) {
             var handler = sessionRelocationSealHandler;
             if (handler == null) {
@@ -3001,8 +3004,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             }
             return handler.handle(routingId, record).thenApply(reply -> {
                 statefulWire.decodeSessionRelocationSealed(reply);
-                streamTrace("request session seal local ACK target="
-                    + sessionOwnerNodeRid);
+                streamTrace(STREAM_TRACE ? "request session seal local ACK target="
+                    + sessionOwnerNodeRid : null);
                 return reply.clone();
             });
         }
@@ -3012,9 +3015,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 List.of(record),
                 timeout)
             .thenApply(reply -> {
-                streamTrace("request session seal result target="
+                streamTrace(STREAM_TRACE ? "request session seal result target="
                     + sessionOwnerNodeRid + " result=" + RequestResult.OK
-                    + " replyFrames=" + reply.size());
+                    + " replyFrames=" + reply.size() : null);
                 if (reply.size() != 1) {
                     throw new IllegalArgumentException(
                         "Session relocation seal reply frame count");
@@ -3033,8 +3036,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         byte[] record = Objects.requireNonNull(
             command44, "command44").clone();
         statefulWire.decodeSessionRelocationRoute(record);
-        streamTrace("send session route target=" + sessionOwnerNodeRid
-            + " local=" + sessionOwnerNodeRid.equals(routingId));
+        streamTrace(STREAM_TRACE ? "send session route target=" + sessionOwnerNodeRid
+            + " local=" + sessionOwnerNodeRid.equals(routingId) : null);
         if (sessionOwnerNodeRid.equals(routingId)) {
             var handler = sessionRelocationRouteHandler;
             if (handler == null) {
@@ -3636,7 +3639,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             || peer.orElseThrow().descriptor().lifecycleGeneration()
                 != binding.sessionOwnerNodeGeneration()
             || !isReadyPeer(binding.sessionOwnerNodeRid())) {
-            streamTrace("send bound session rejected actor="
+            streamTrace(STREAM_TRACE ? "send bound session rejected actor="
                 + actorSummary(binding.actor())
                 + " session=" + binding.sessionRid()
                 + " binding=" + binding.bindingGeneration()
@@ -3646,7 +3649,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     value.descriptor().lifecycleGeneration()).orElse(-1L)
                 + " expectedOwnerGeneration="
                 + binding.sessionOwnerNodeGeneration()
-                + " ready=" + isReadyPeer(binding.sessionOwnerNodeRid()));
+                + " ready=" + isReadyPeer(binding.sessionOwnerNodeRid()) : null);
             return CompletableFuture.failedFuture(
                 new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -3663,12 +3666,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 requireStarted(),
                 binding.sessionOwnerNodeRid(),
                 frames)
-            .whenComplete((ignored, failure) -> streamTrace(
+            .whenComplete((ignored, failure) -> streamTrace(STREAM_TRACE ?
                 "send bound session "
                     + (failure == null ? "accepted" : "failed")
                     + " actor=" + actorSummary(binding.actor())
                     + " session=" + binding.sessionRid()
-                    + " binding=" + binding.bindingGeneration()));
+                    + " binding=" + binding.bindingGeneration() : null));
     }
 
     private void completeActorRequest(
@@ -3749,20 +3752,20 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             operations.register(timeout);
         operation.completion().whenComplete((reply, failure) -> {
             if (channelName != null) {
-                streamTrace("request-channel-complete channel="
+                streamTrace(STREAM_TRACE ? "request-channel-complete channel="
                     + channelName + " target=" + target
                     + " result=" + (failure == null
                         ? reply.result()
-                        : requestResult(failure)));
+                        : requestResult(failure)) : null);
             }
         });
         TransportPair pair = transportPairFor(target);
         if (channelName != null) {
-            streamTrace("request-channel-pair channel=" + channelName
+            streamTrace(STREAM_TRACE ? "request-channel-pair channel=" + channelName
                 + " target=" + target
                 + " pair=" + (pair == null
                     ? "none"
-                    : pair.id() + "/" + pair.generation()));
+                    : pair.id() + "/" + pair.generation()) : null);
         }
         CompletionStage<List<byte[]>> submitted = pair == null
             ? port.request(
@@ -4080,10 +4083,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
         int command = header.command();
         int flags = header.flags();
-        streamTrace("service-received command=" + command
+        streamTrace(STREAM_TRACE ? "service-received command=" + command
             + " source=" + inbound.source()
             + " requestSequence=" + inbound.requestSequence()
-            + " frameCount=" + frames.size());
+            + " frameCount=" + frames.size() : null);
         if (command == ServiceWireConstants.COMMAND_HELLO
             || command == ServiceWireConstants.COMMAND_ADMIT
             || command == ServiceWireConstants.COMMAND_UPDATE) {
@@ -4094,8 +4097,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             if (frames.size() == 1) {
                 try {
                     int reason = wire.decodeReject(head);
-                    streamTrace("reject-received source=" + inbound.source()
-                        + " reason=" + reason);
+                    streamTrace(STREAM_TRACE ? "reject-received source=" + inbound.source()
+                        + " reason=" + reason : null);
                     TransportPair rejectedPair = transportPair(inbound);
                     if (rejectedPair != null && reason == 3) {
                         // The reply is pinned to the admission pair, so it is
@@ -4244,11 +4247,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
         if (kind == RecordKind.CHANNEL_REQUEST
             || kind == RecordKind.CHANNEL_SEND) {
-            streamTrace("channel-application-received kind=" + kind
+            streamTrace(STREAM_TRACE ? "channel-application-received kind=" + kind
                 + " channel=" + channelName
                 + " source=" + inbound.source()
                 + " requestSequence=" + inbound.requestSequence()
-                + " correlation=" + correlation);
+                + " correlation=" + correlation : null);
         }
         int payloadOffset = (flags & ServiceWireConstants.FLAG_METADATA) == 0
             ? 1
@@ -4363,17 +4366,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 null,
                 envelopeId));
         if (!enqueued) {
-            streamTrace("channel-application-mailbox-rejected channel="
+            streamTrace(STREAM_TRACE ? "channel-application-mailbox-rejected channel="
                 + channelName + " source=" + inbound.source()
                 + " correlation=" + correlation
-                + " mailbox=" + (currentMailbox != null));
+                + " mailbox=" + (currentMailbox != null) : null);
             dispatch.close();
             return;
         }
         dispatchEnvelopes.put(envelopeId, dispatch);
-        streamTrace("channel-application-mailbox-enqueued channel="
+        streamTrace(STREAM_TRACE ? "channel-application-mailbox-enqueued channel="
             + channelName + " source=" + inbound.source()
-            + " correlation=" + correlation + " envelope=" + envelopeId);
+            + " correlation=" + correlation + " envelope=" + envelopeId : null);
         drainApplicationMailbox();
         } finally {
             if (!handedOff) {
@@ -4545,10 +4548,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         } catch (RuntimeException invalid) {
             return;
         }
-        List<byte[]> payload = inbound.frames().stream()
-            .skip(1)
-            .map(byte[]::clone)
-            .toList();
+        List<byte[]> payload = cloneFrames(inbound.frames(), 1);
         CompletionStage<byte[]> completion;
         try {
             completion = Objects.requireNonNull(
@@ -4567,7 +4567,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         : cause.getClass().getSimpleName() + ": "
                             + String.valueOf(cause.getMessage()));
                 LOGGER.warning(diagnostic);
-                streamTrace(diagnostic);
+                streamTrace(STREAM_TRACE ? diagnostic : null);
                 return;
             }
             try {
@@ -4675,7 +4675,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     + " error=" + cause.getClass().getSimpleName() + ": "
                     + String.valueOf(cause.getMessage());
                 LOGGER.warning(diagnostic);
-                streamTrace(diagnostic);
+                streamTrace(STREAM_TRACE ? diagnostic : null);
             }
         });
     }
@@ -4691,20 +4691,20 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             //  A malformed command 42 (seal request) is a transport-boundary
             //  violation; drop it before the handler but record a bounded
             //  diagnostic (a conforming sender never reaches this branch).
-            streamTrace("session-seal-command42-malformed-shape source="
+            streamTrace(STREAM_TRACE ? "session-seal-command42-malformed-shape source="
                 + inbound.source()
                 + " requestSequence=" + inbound.requestSequence()
-                + " frames=" + inbound.frames().size());
+                + " frames=" + inbound.frames().size() : null);
             return;
         }
         byte[] command42 = inbound.frames().getFirst();
         try {
             statefulWire.decodeSessionRelocationSeal(command42);
         } catch (RuntimeException invalid) {
-            streamTrace("session-seal-command42-decode-failed source="
+            streamTrace(STREAM_TRACE ? "session-seal-command42-decode-failed source="
                 + inbound.source()
                 + " error=" + invalid.getClass().getSimpleName()
-                + ": " + String.valueOf(invalid.getMessage()));
+                + ": " + String.valueOf(invalid.getMessage()) : null);
             return;
         }
         CompletionStage<byte[]> completion;
@@ -4726,7 +4726,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         : cause.getClass().getSimpleName() + ": "
                             + String.valueOf(cause.getMessage()));
                 LOGGER.warning(diagnostic);
-                streamTrace(diagnostic);
+                streamTrace(STREAM_TRACE ? diagnostic : null);
                 return;
             }
             try {
@@ -4738,8 +4738,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     List.of(ack));
             } catch (RuntimeException invalid) {
                 // Invalid ACKs never cross the infrastructure boundary.
-                streamTrace("session-seal-ack-invalid source="
-                    + inbound.source() + " error=" + invalid.getMessage());
+                streamTrace(STREAM_TRACE ? "session-seal-ack-invalid source="
+                    + inbound.source() + " error=" + invalid.getMessage() : null);
             }
         });
     }
@@ -4760,11 +4760,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         } catch (RuntimeException invalid) {
             return false;
         }
-        streamTrace("spot-received request=" + header.request()
+        streamTrace(STREAM_TRACE ? "spot-received request=" + header.request()
             + " source=" + inbound.source()
             + " target=" + header.target().targetNodeRid()
             + " spot=" + header.target().spotId()
-            + " generation=" + header.target().spotGeneration());
+            + " generation=" + header.target().spotGeneration() : null);
         ZLinkServiceM6AWireCodec.ApplicationPayload payload;
         try {
             payload = wire.decodeApplicationPayload(frames.get(payloadOffset));
@@ -4784,13 +4784,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             ? frames.get(1).clone()
             : new byte[0];
         resolveAcceptedAuthorities(inbound).whenComplete((authorities, failure) -> {
-            streamTrace("spot-authorities request=" + header.request()
+            streamTrace(STREAM_TRACE ? "spot-authorities request=" + header.request()
                 + " target=" + header.target().targetNodeRid()
                 + " spot=" + header.target().spotId()
                 + " present=" + (authorities != null && authorities.isPresent())
                 + " failure=" + (failure == null
                     ? "none"
-                    : failure.getClass().getSimpleName()));
+                    : failure.getClass().getSimpleName()) : null);
             if (failure != null || authorities.isEmpty()) {
                 replySpotFailure(inbound, header, 107, 33);
                 inbound.close();
@@ -4862,9 +4862,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     },
                     inbound::close);
             if (!accepted) {
-                streamTrace("spot-enqueue-rejected target="
+                streamTrace(STREAM_TRACE ? "spot-enqueue-rejected target="
                     + header.target().targetNodeRid()
-                    + " spot=" + header.target().spotId());
+                    + " spot=" + header.target().spotId() : null);
                 messages.forEach(Message::close);
                 replySpotFailure(inbound, header, 102, 1);
                 inbound.close();
@@ -4908,11 +4908,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             boolean admitted = admittedPeerChannels
                 .getOrDefault(inbound.source(), Map.of())
                 .containsKey(header.channelName());
-            streamTrace("logical-multicast-receive channel="
+            streamTrace(STREAM_TRACE ? "logical-multicast-receive channel="
                 + header.channelName()
                 + " topic=" + header.topic()
                 + " source=" + inbound.source()
-                + " admitted=" + admitted);
+                + " admitted=" + admitted : null);
             if (!admitted) {
                 return;
             }
@@ -4977,7 +4977,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             && header.route().targetNodeGeneration()
                 == localDescriptor.lifecycleGeneration();
         if (!validFence) {
-            streamTrace("instance dispatch rejected source=" + inbound.source()
+            streamTrace(STREAM_TRACE ? "instance dispatch rejected source=" + inbound.source()
                 + " sourceGeneration=" + header.sourceNodeGeneration()
                 + " sourcePeerGeneration=" + (source.isPresent()
                     ? source.orElseThrow().descriptor().lifecycleGeneration() : -1)
@@ -4987,7 +4987,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 + " localGeneration=" + (localDescriptor == null
                     ? -1 : localDescriptor.lifecycleGeneration())
                 + " request=" + header.request()
-                + " inboundRequest=" + (inbound.requestSequence() != null));
+                + " inboundRequest=" + (inbound.requestSequence() != null) : null);
             replyInstanceFailure(inbound, header, 102, 1);
             return;
         }
@@ -5045,9 +5045,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     }
                 });
         if (!accepted) {
-            streamTrace("instance dispatch rejected by mailbox source="
+            streamTrace(STREAM_TRACE ? "instance dispatch rejected by mailbox source="
                 + inbound.source() + " target=" + header.route().targetSpotId()
-                + " request=" + header.request());
+                + " request=" + header.request() : null);
             messages.forEach(Message::close);
             if (terminal.tryWin(systems.zlink.framework.runtime.internal
                     .completion.ZLinkTerminalWinner.Cause.FAILURE)) {
@@ -5815,11 +5815,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     .lifecycleGeneration(),
                 send,
                 payload);
-            streamTrace("bound session receive "
+            streamTrace(STREAM_TRACE ? "bound session receive "
                 + (accepted ? "accepted" : "rejected")
                 + " actor=" + actorSummary(send.actor().actor())
                 + " source=" + inbound.source()
-                + " binding=" + send.expectedBindingGeneration());
+                + " binding=" + send.expectedBindingGeneration() : null);
         } catch (RuntimeException invalid) {
             // A malformed or stale one-way record has no terminal route.
         }
@@ -5855,9 +5855,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             // legacy RID-addressed surface (spec 07 duplicate confirmation
             // is a no-op when only one physical connection can exist).
             TransportPair inboundPair = transportPair(inbound);
-            streamTrace("admission-stage stage=entered command=" + command
+            streamTrace(STREAM_TRACE ? "admission-stage stage=entered command=" + command
                 + " source=" + inbound.source()
-                + " inboundPair=" + transportPairSummary(inboundPair));
+                + " inboundPair=" + transportPairSummary(inboundPair) : null);
             ZLinkServiceNodeDescriptor descriptor =
                 wire.decodeAdmission(
                     inbound.frames().getFirst(),
@@ -5982,12 +5982,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             if (admitted
                 == ZLinkServiceTopologyRegistry.AdmissionResult
                     .DUPLICATE_REJECTED) {
-                streamTrace("duplicate-admission-reject source="
+                streamTrace(STREAM_TRACE ? "duplicate-admission-reject source="
                     + inbound.source()
                     + " connection=" + connectionId
                     + " pair=" + (inboundPair == null
                         ? "none" : inboundPair.id()
-                            + "/" + inboundPair.generation()));
+                            + "/" + inboundPair.generation()) : null);
                 trySendAdmissionControl(
                     inbound.source(),
                     inboundPair,
@@ -6015,7 +6015,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             connectionIds.put(inbound.source(), connectionId);
             selectApplicationTransportPair(
                 inbound.source(), connectionId);
-            streamTrace("admission-stage stage=application-pair-installed"
+            streamTrace(STREAM_TRACE ? "admission-stage stage=application-pair-installed"
                 + " command=" + command
                 + " source=" + inbound.source()
                 + " connection=" + connectionId
@@ -6023,7 +6023,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 + " selectedPair=" + transportPairSummary(
                     transportPairs.get(connectionId))
                 + " applicationPair=" + transportPairSummary(
-                    applicationTransportPairs.get(inbound.source())));
+                    applicationTransportPairs.get(inbound.source())) : null);
             admitPeerChannels(
                 inbound.source(),
                 descriptor.channels().stream().collect(
@@ -6076,10 +6076,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         TransportPair pair,
         List<byte[]> frames,
         String reason) {
-        streamTrace("admission-control-send target=" + target
+        streamTrace(STREAM_TRACE ? "admission-control-send target=" + target
             + " reason=" + reason
             + " pair=" + (pair == null
-                ? "none" : pair.id() + "/" + pair.generation()));
+                ? "none" : pair.id() + "/" + pair.generation()) : null);
         if (pair == null) {
             // The transport did not identify a physical pair for this
             // exchange (single-connection lanes report no pair identity).
@@ -6103,11 +6103,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             target, connectionId, command);
                         return;
                     }
-                    streamTrace("admission-control-send-failed target="
+                    streamTrace(STREAM_TRACE ? "admission-control-send-failed target="
                         + target
                         + " reason=" + reason
                         + " error=" + failure.getClass().getSimpleName()
-                        + ":" + String.valueOf(failure.getMessage()));
+                        + ":" + String.valueOf(failure.getMessage()) : null);
                     if (isAdmissionStateBroadcast(command)) {
                         // ADMIT/UPDATE publish current admission state, so a
                         // stale exact pair may retry on the current RID route.
@@ -6118,12 +6118,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 });
             return true;
         } catch (RuntimeException failure) {
-            streamTrace("admission-control-send-failed target="
+            streamTrace(STREAM_TRACE ? "admission-control-send-failed target="
                 + target
                 + " reason=" + reason
                 + " result=PERMANENT_FAILURE"
                 + " error=" + failure.getClass().getSimpleName()
-                + ":" + String.valueOf(failure.getMessage()));
+                + ":" + String.valueOf(failure.getMessage()) : null);
             return isAdmissionStateBroadcast(command)
                 && trySendAdmissionControl(target, frames, reason);
         }
@@ -6138,8 +6138,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         RoutingId target,
         List<byte[]> frames,
         String reason) {
-        streamTrace("admission-control-send-rid target=" + target
-            + " reason=" + reason);
+        streamTrace(STREAM_TRACE ? "admission-control-send-rid target=" + target
+            + " reason=" + reason : null);
         int command = wire.decodeHeader(frames.getFirst()).command();
         String connectionId = connectionIds.getOrDefault(target, "");
         try {
@@ -6153,20 +6153,20 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             target, connectionId, command);
                         return;
                     }
-                    streamTrace("admission-control-send-failed target="
+                    streamTrace(STREAM_TRACE ? "admission-control-send-failed target="
                         + target
                         + " reason=" + reason
                         + " error=" + failure.getClass().getSimpleName()
-                        + ":" + String.valueOf(failure.getMessage()));
+                        + ":" + String.valueOf(failure.getMessage()) : null);
                 });
             return true;
         } catch (RuntimeException failure) {
-            streamTrace("admission-control-send-failed target="
+            streamTrace(STREAM_TRACE ? "admission-control-send-failed target="
                 + target
                 + " reason=" + reason
                 + " result=PERMANENT_FAILURE"
                 + " error=" + failure.getClass().getSimpleName()
-                + ":" + String.valueOf(failure.getMessage()));
+                + ":" + String.valueOf(failure.getMessage()) : null);
             return false;
         }
     }
@@ -6211,18 +6211,18 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     .findFirst()
                     .orElse(null);
                 if (owning != null && !owning.equals(peer.connectionId())) {
-                    streamTrace("liveness-ignored-foreign-pair source="
+                    streamTrace(STREAM_TRACE ? "liveness-ignored-foreign-pair source="
                         + inbound.source()
                         + " connection=" + peer.connectionId()
                         + " owning=" + owning
                         + " pair=" + inboundPair.id()
-                        + "/" + inboundPair.generation());
+                        + "/" + inboundPair.generation() : null);
                     return;
                 }
             }
             if (command == ServiceWireConstants.COMMAND_LIVENESS_PROBE) {
-                streamTrace("liveness-probe source=" + inbound.source()
-                    + " connection=" + peer.connectionId());
+                streamTrace(STREAM_TRACE ? "liveness-probe source=" + inbound.source()
+                    + " connection=" + peer.connectionId() : null);
                 if (liveness.acknowledgeProbe(
                     inbound.source(),
                     peer.connectionId(),
@@ -6244,10 +6244,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     LOGGER.info("ZLINK_FRAMEWORK_PEER_READY mesh=" + meshName
                         + " peer=" + inbound.source());
                 }
-                streamTrace("liveness-ack source=" + inbound.source()
+                streamTrace(STREAM_TRACE ? "liveness-ack source=" + inbound.source()
                     + " connection=" + peer.connectionId()
                     + " probe=" + probeId
-                    + " accepted=" + acknowledged);
+                    + " accepted=" + acknowledged : null);
             }
         } catch (RuntimeException ignored) {
         }
@@ -6333,8 +6333,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         .map(ZLinkServiceTopologyRegistry.Peer::connectionId)
                         .orElse(null);
                     if (disconnectedId != null) {
-                        streamTrace("monitor-disconnect-evicts-current peer="
-                            + peerRid + " connection=" + disconnectedId);
+                        streamTrace(STREAM_TRACE ? "monitor-disconnect-evicts-current peer="
+                            + peerRid + " connection=" + disconnectedId : null);
                     }
                 }
                 discardPendingConnectionId(disconnectedId);
@@ -6519,18 +6519,18 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         encodeLiveness(
                             ServiceWireConstants.COMMAND_LIVENESS_PROBE,
                             probe.probeId()))
-                    .whenComplete((ignored, failure) -> streamTrace(
+                    .whenComplete((ignored, failure) -> streamTrace(STREAM_TRACE ?
                         "liveness-send target=" + probe.nodeRoutingId()
                             + " connection=" + probe.connectionId()
                             + " probe=" + probe.probeId()
                             + " result="
-                            + (failure == null ? "accepted" : "failed")));
+                            + (failure == null ? "accepted" : "failed") : null));
             } catch (RuntimeException ignored) {
-                streamTrace("liveness-send-failed target="
+                streamTrace(STREAM_TRACE ? "liveness-send-failed target="
                     + probe.nodeRoutingId()
                     + " connection=" + probe.connectionId()
                     + " error=" + ignored.getClass().getSimpleName()
-                    + ":" + String.valueOf(ignored.getMessage()));
+                    + ":" + String.valueOf(ignored.getMessage()) : null);
                 // The liveness timeout owns peer eviction. A transient send
                 // failure must not stop the service receive pump.
             }
@@ -6778,8 +6778,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         RoutingId target,
         List<byte[]> frames) {
         TransportPair pair = transportPairFor(target);
-        streamTrace("application-send target=" + target
-            + " pair=" + transportPairSummary(pair));
+        streamTrace(STREAM_TRACE ? "application-send target=" + target
+            + " pair=" + transportPairSummary(pair) : null);
         return pair == null
             ? port.send(requireStarted(), target, frames)
             : port.send(
@@ -6791,17 +6791,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         List<byte[]> frames,
         Duration timeout) {
         TransportPair pair = transportPairFor(target);
-        streamTrace("application-request target=" + target
-            + " pair=" + transportPairSummary(pair));
+        streamTrace(STREAM_TRACE ? "application-request target=" + target
+            + " pair=" + transportPairSummary(pair) : null);
         CompletionStage<List<byte[]>> submission = pair == null
             ? port.request(requireStarted(), target, frames, timeout)
             : port.request(
                 requireStarted(), target, pair.id(), pair.generation(),
                 frames, timeout);
-        return submission.whenComplete((ignored, failure) -> streamTrace(
+        return submission.whenComplete((ignored, failure) -> streamTrace(STREAM_TRACE ?
             "application-request-submit target=" + target
                 + " pair=" + transportPairSummary(pair)
-                + " result=" + requestFailureSummary(failure)));
+                + " result=" + requestFailureSummary(failure) : null));
     }
 
     private Optional<TransportPair> selectedTransportPair(RoutingId peer) {
@@ -6828,8 +6828,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (current == null || pair == null) {
             return;
         }
-        streamTrace("disconnect-transport-pair id=" + pair.id()
-            + " generation=" + pair.generation());
+        streamTrace(STREAM_TRACE ? "disconnect-transport-pair id=" + pair.id()
+            + " generation=" + pair.generation() : null);
         try {
             current.disconnectTransportPair(pair.id(), pair.generation());
         } catch (RuntimeException ignored) {
@@ -7252,6 +7252,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         } catch (NoSuchAlgorithmException impossible) {
             throw new AssertionError(impossible);
         }
+    }
+
+    private static List<byte[]> cloneFrames(List<byte[]> frames, int start) {
+        ArrayList<byte[]> copies = new ArrayList<>(frames.size() - start);
+        for (int index = start; index < frames.size(); index++) {
+            copies.add(frames.get(index).clone());
+        }
+        return Collections.unmodifiableList(copies);
     }
 
     private static Throwable unwrap(Throwable failure) {

@@ -42,6 +42,11 @@ import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 final class ZLinkBoundActor implements ZLinkSessionActor {
+    private static final Logger LOGGER =
+        Logger.getLogger(ZLinkBoundActor.class.getName());
+    private static final boolean STREAM_TRACE =
+        "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
+
     private final ZLinkBackendStreamSocket stream;
     private final RoutingId sessionRid;
     private volatile ZLinkBackendActorRef ref;
@@ -196,13 +201,11 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     private static void relocationTrace(
         String stage,
         ZLinkBackendActorRef targetActor) {
-        if ("1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"))) {
-            Logger.getLogger(
-                    ZLinkBoundActor.class.getName())
-                .warning("[zlink-java-stream-trace] relocation " + stage
-                    + " actor=" + targetActor.actorId()
-                    + " target=" + targetActor.nodeRid()
-                    + " generation=" + targetActor.generation());
+        if (STREAM_TRACE) {
+            LOGGER.warning("[zlink-java-stream-trace] relocation " + stage
+                + " actor=" + targetActor.actorId()
+                + " target=" + targetActor.nodeRid()
+                + " generation=" + targetActor.generation());
         }
     }
 

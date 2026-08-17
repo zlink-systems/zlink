@@ -9,8 +9,6 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 
-import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
-
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
@@ -122,7 +120,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final Set<ZLinkStreamSessionContextState> sessionContexts =
         ConcurrentHashMap.newKeySet();
     private volatile boolean draining;
-    private final ZLinkOneWayCalls oneWayCalls;
 
     public ZLinkStreamRuntime(
         ZLinkBackendAdapterProvider backendFactory,
@@ -254,7 +251,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             sessionRelayRouteReady == null ? ignored -> true : sessionRelayRouteReady;
         this.localActorDispatcher = spots == null ? null : spots::dispatchLocalSessionActor;
         this.metadataPolicy = registration.metadataPolicy();
-        this.oneWayCalls = new ZLinkOneWayCalls();
         this.livenessExecutor = Executors.newSingleThreadScheduledExecutor(task -> {
             Thread thread = new Thread(task, "zlink-stream-liveness");
             thread.setDaemon(true);
@@ -296,7 +292,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             // ingress below uses recv mode and never registers onPacket.
             stream.enableNotifications();
             for (String bindEndpoint : streamNode.bindEndpoints()) {
-                trace("stream-node bind node=" + streamNode.name() + " endpoint=" + bindEndpoint);
+                trace(STREAM_TRACE ? "stream-node bind node=" + streamNode.name() + " endpoint=" + bindEndpoint : null);
                 stream.bind(bindEndpoint);
             }
             stream.onTransportError((routingId, nativeCode, message) ->
@@ -876,8 +872,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 && parts.getFirst().size() == 0
                 && !parts.getFirst().more()) {
                 if (ignoredPeers.remove(routingId)) {
-                    trace("stream-node ignored quarantined peer notification node="
-                        + streamNode.name() + " routingId=" + routingId);
+                    trace(STREAM_TRACE ? "stream-node ignored quarantined peer notification node="
+                        + streamNode.name() + " routingId=" + routingId : null);
                     return false;
                 }
                 try {
@@ -987,8 +983,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 state.close();
             }
             ZLinkBackendStreamSocket currentStream = stream;
-            trace("stream-node notification node=" + streamNode.name()
-                + " routingId=" + routingId);
+            trace(STREAM_TRACE ? "stream-node notification node=" + streamNode.name()
+                + " routingId=" + routingId : null);
             dispatchStreamNotification(streamNode, currentStream, routingId);
         }
 
@@ -1145,13 +1141,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             streamHeader = streamHeader.withFlow(incomingFlow.flowId(), incomingFlow.origin());
         }
         final ZLinkStreamHeader dispatchHeader = streamHeader;
-        trace("stream-node frame-received node=" + streamNode.name()
+        trace(STREAM_TRACE ? "stream-node frame-received node=" + streamNode.name()
             + " routingId=" + routingId
             + " kind=" + streamHeader.kind()
             + " name=" + streamHeader.packetName()
             + " requestSeq=" + streamHeader.requestSequence().orElse(null)
             + " correlation=" + streamHeader.correlationId().orElse(null)
-            + " payloadBytes=" + payload.size());
+            + " payloadBytes=" + payload.size() : null);
         if (streamHeader.kind() == ZLinkStreamMessageKind.CONTROL) {
             dispatchControl(streamNode, stream, routingId, streamHeader, payload);
             return CompletableFuture.completedFuture(null);
@@ -1190,11 +1186,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             ZLinkCodecRegistration.serializerForReceivedStreamCodec(
                 serializer, dispatchHeader.codec()));
         payloadCopy.close();
-        trace("stream-node dispatch-enqueue node=" + streamNode.name()
+        trace(STREAM_TRACE ? "stream-node dispatch-enqueue node=" + streamNode.name()
             + " routingId=" + routingId
             + " name=" + dispatchHeader.packetName()
             + " requestSeq=" + dispatchHeader.requestSequence().orElse(null)
-            + " correlation=" + dispatchHeader.correlationId().orElse(null));
+            + " correlation=" + dispatchHeader.correlationId().orElse(null) : null);
         CompletionStage<Void> completion = state.queue().enqueue(
             () -> {
             traceStreamPhase(
@@ -1402,7 +1398,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 sendSessionClosing(stream, routingId);
                 return CompletableFuture.completedFuture(null);
             },
-            oneWayCalls,
             replyRetryExecutor);
         sessionContexts.add(context);
         ZLinkSessionPacketDispatcher<ZLinkSessionContext> dispatcher =
@@ -1799,5 +1794,9 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         if (STREAM_TRACE) {
             LOGGER.fine("[zlink-java-stream-trace] " + message);
         }
+    }
+
+    static boolean traceEnabled() {
+        return STREAM_TRACE;
     }
 }

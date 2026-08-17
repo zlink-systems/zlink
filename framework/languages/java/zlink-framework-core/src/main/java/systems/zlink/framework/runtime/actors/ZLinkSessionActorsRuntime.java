@@ -423,10 +423,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private CompletionStage<ZLinkSessionActor> bindBackendRef(
         ZLinkBackendActorRef ref,
         String meshName) {
-        trace("session-actor bind-start sessionRid=" + sessionRid
+        trace(STREAM_TRACE ? "session-actor bind-start sessionRid=" + sessionRid
             + " actorNode=" + ref.nodeRid()
             + " actorId=" + ref.actorId()
-            + " generation=" + ref.generation());
+            + " generation=" + ref.generation() : null);
         if (actors != null) {
             Optional<ZLinkActor> localActor = actors.localActor(ref.actorId());
             if (localActor.isPresent()) {
@@ -434,10 +434,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 if (localRef.nodeRid().equals(ref.nodeRid())
                     && localRef.actorId().equals(ref.actorId())
                     && localRef.generation() == ref.generation()) {
-                    trace("session-actor bind-local sessionRid=" + sessionRid
+                    trace(STREAM_TRACE ? "session-actor bind-local sessionRid=" + sessionRid
                         + " actorNode=" + ref.nodeRid()
                         + " actorId=" + ref.actorId()
-                        + " generation=" + ref.generation());
+                        + " generation=" + ref.generation() : null);
                     return bindManagedAsync(localActor.get());
                 }
             }
@@ -448,18 +448,18 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         return authorityReady.thenCompose(ignored -> replaceBinding(
             ref.actorId(),
             () -> awaitRouteReady(ref).thenCompose(routeReadyIgnored -> {
-                trace("session-actor bind-native-submit sessionRid=" + sessionRid
+                trace(STREAM_TRACE ? "session-actor bind-native-submit sessionRid=" + sessionRid
                     + " actorNode=" + ref.nodeRid()
                     + " actorId=" + ref.actorId()
-                    + " generation=" + ref.generation());
+                    + " generation=" + ref.generation() : null);
                 return ZLinkBoundSessionRuntime.bindActorWithRetry(
                     stream, sessionRid, ref, RELAY_SUBMIT_TIMEOUT);
             })
             .thenApply(bindIgnored -> {
-                trace("session-actor bind-native-ok sessionRid=" + sessionRid
+                trace(STREAM_TRACE ? "session-actor bind-native-ok sessionRid=" + sessionRid
                     + " actorNode=" + ref.nodeRid()
                     + " actorId=" + ref.actorId()
-                    + " generation=" + ref.generation());
+                    + " generation=" + ref.generation() : null);
                 AtomicReference<ZLinkBoundActor> binding = new AtomicReference<>();
                 long bindingGeneration = currentBindingGeneration(ref.actorId());
                 ZLinkBoundActor actor = new ZLinkBoundActor(
@@ -492,11 +492,11 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     removeBinding(actor);
                 }
                 if (error != null) {
-                    trace("session-actor bind-native-error sessionRid=" + sessionRid
+                    trace(STREAM_TRACE ? "session-actor bind-native-error sessionRid=" + sessionRid
                         + " actorNode=" + ref.nodeRid()
                         + " actorId=" + ref.actorId()
                         + " generation=" + ref.generation()
-                        + " error=" + errorSummary(error));
+                        + " error=" + errorSummary(error) : null);
                 }
             })
             .thenApply(actor -> (ZLinkSessionActor) actor);
@@ -2269,10 +2269,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         return ZLinkActorRetryScheduler.waitUntilRelay(
             RELAY_SUBMIT_TIMEOUT,
             () -> routeReady.test(ref.nodeRid()),
-            () -> trace("session-actor route-ready sessionRid=" + sessionRid
+            () -> trace(STREAM_TRACE ? "session-actor route-ready sessionRid=" + sessionRid
                 + " actorNode=" + ref.nodeRid()
                 + " actorId=" + ref.actorId()
-                + " generation=" + ref.generation()),
+                + " generation=" + ref.generation() : null),
             () -> new TimeoutException(
                 "session relay route was not ready before timeout: "
                     + ref.actorId()));

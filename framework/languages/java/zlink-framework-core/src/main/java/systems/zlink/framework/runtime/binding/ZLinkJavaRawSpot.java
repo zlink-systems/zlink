@@ -91,8 +91,8 @@ final class ZLinkJavaRawSpot
             throw new IllegalArgumentException("topic is required");
         }
         topics.add(topic);
-        owner.streamTrace("spot-subscription-bind spot=" + spotId
-            + " topic=" + topic);
+        owner.streamTrace(owner.streamTraceEnabled() ? "spot-subscription-bind spot=" + spotId
+            + " topic=" + topic : null);
     }
 
     @Override
@@ -301,10 +301,10 @@ final class ZLinkJavaRawSpot
 
     CompletionStage<Void> enqueueActor(
         List<ZLinkBackendActorReceived> messages) {
-        owner.streamTrace("mailbox actor enqueue spot=" + spotId
+        owner.streamTrace(owner.streamTraceEnabled() ? "mailbox actor enqueue spot=" + spotId
             + " closed=" + closed.get()
             + " handler=" + (dispatchHandler != null)
-            + " messages=" + messages.size());
+            + " messages=" + messages.size() : null);
         if (closed.get()) {
             messages.forEach(ZLinkBackendActorReceived::close);
             return CompletableFuture.failedFuture(
@@ -312,9 +312,9 @@ final class ZLinkJavaRawSpot
         }
         CompletionStage<Void> raised = raise(
             ZLinkBackendSpotDispatchEvent.ACTOR_READABLE, messages);
-        raised.whenComplete((ignored, error) -> owner.streamTrace(
+        raised.whenComplete((ignored, error) -> owner.streamTrace(owner.streamTraceEnabled() ?
             "mailbox actor dispatch-complete spot=" + spotId
-                + " error=" + (error == null ? "none" : error)));
+                + " error=" + (error == null ? "none" : error) : null));
         return raised;
     }
 

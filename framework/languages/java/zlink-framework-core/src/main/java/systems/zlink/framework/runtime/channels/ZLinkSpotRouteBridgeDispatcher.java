@@ -67,12 +67,12 @@ final class ZLinkSpotRouteBridgeDispatcher {
                         return;
                     }
                     try {
-                        ZLinkChannelRuntime.trace(
+                        ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ?
                             "spot-route bridge-reply router=" + routerChannelId
                                 + " targetNode=" + targetNodeRid
                                 + " targetSpot=" + targetSpotId
                                 + " parts="
-                                + ZLinkChannelRuntime.describeTraceParts(reply));
+                                + ZLinkChannelRuntime.describeTraceParts(reply) : null);
                         if (ZLinkChannelRuntime.isFrameworkErrorReply(reply)) {
                             result.completeExceptionally(
                                 new ZLinkFrameworkException(

@@ -366,10 +366,10 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         String outcomeDetails = completion instanceof ZLinkActorJoinCompletion.Failed failed
             ? " kind=" + failed.kind()
             : "";
-        streamTrace("join completion callback-start actor="
+        streamTrace(STREAM_TRACE ? "join completion callback-start actor="
             + context.actorRef().actorId()
             + " outcome=" + completion.getClass().getSimpleName()
-            + outcomeDetails);
+            + outcomeDetails : null);
         try {
             CompletionStage<Void> stage =
                 context.actor().onJoinCompleted(completion);
@@ -377,15 +377,15 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 ? CompletableFuture.completedFuture(null)
                 : stage;
             return normalized.whenComplete((ignored, error) ->
-                streamTrace("join completion callback-complete actor="
+                streamTrace(STREAM_TRACE ? "join completion callback-complete actor="
                     + context.actorRef().actorId()
                     + " outcome=" + completion.getClass().getSimpleName()
-                    + " error=" + (error == null ? "none" : error)));
+                    + " error=" + (error == null ? "none" : error) : null));
         } catch (RuntimeException error) {
-            streamTrace("join completion callback-throw actor="
+            streamTrace(STREAM_TRACE ? "join completion callback-throw actor="
                 + context.actorRef().actorId()
                 + " outcome=" + completion.getClass().getSimpleName()
-                + " error=" + error);
+                + " error=" + error : null);
             return CompletableFuture.failedFuture(error);
         }
     }

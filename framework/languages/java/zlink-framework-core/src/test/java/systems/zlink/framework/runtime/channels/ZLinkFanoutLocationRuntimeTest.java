@@ -50,7 +50,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSubscriberSo
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
-import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 
 final class ZLinkFanoutLocationRuntimeTest {
@@ -124,10 +123,7 @@ final class ZLinkFanoutLocationRuntimeTest {
                 (channel, node, spot, generation,
                  authorityOwnerGeneration, ownerLeaseGeneration, parts,
                  timeout) ->
-                    CompletableFuture.completedFuture(List.of()),
-                new ZLinkOneWayCalls((backend, key) ->
-                    (submission, cleanup) ->
-                        CompletableFuture.completedFuture(null)));
+                    CompletableFuture.completedFuture(List.of()));
             CompletableFuture<Void> request = new CompletableFuture<>();
             try {
                 long startedNanos = System.nanoTime();

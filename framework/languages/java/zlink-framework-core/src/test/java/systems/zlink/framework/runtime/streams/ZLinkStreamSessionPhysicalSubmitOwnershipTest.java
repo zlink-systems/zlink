@@ -19,7 +19,6 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
-import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionContext;
@@ -35,7 +34,6 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
         CompletableFuture<Void> physicalTerminal = new CompletableFuture<>();
         AtomicInteger asyncSubmits = new AtomicInteger();
         AtomicInteger syncSubmits = new AtomicInteger();
-        AtomicInteger frameworkAdmissions = new AtomicInteger();
         ZLinkBackendStreamSocket stream = stream((method, arguments) -> {
             if (method.getName().equals("sendAsync")) {
                 asyncSubmits.incrementAndGet();
@@ -56,14 +54,12 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
             Map.of(),
             false,
             ZLinkStreamCodec.JSON,
-            null,
-            oneWayCalls(frameworkAdmissions));
+            null);
 
         CompletionStage<Void> submission = call.submit();
 
         assertEquals(1, asyncSubmits.get());
         assertEquals(0, syncSubmits.get());
-        assertEquals(0, frameworkAdmissions.get());
         assertFalse(submission.toCompletableFuture().isDone());
         assertEquals("payload".length(), payload.size());
         physicalTerminal.complete(null);
@@ -74,7 +70,6 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
     @Test
     void cancellingSendCancelsBackendPhysicalTerminalAndCleansUp() {
         CompletableFuture<Void> physicalTerminal = new CompletableFuture<>();
-        AtomicInteger frameworkAdmissions = new AtomicInteger();
         ZLinkBackendStreamSocket stream = stream((method, arguments) -> {
             if (method.getName().equals("sendAsync")) {
                 return physicalTerminal;
@@ -93,14 +88,12 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
             Map.of(),
             false,
             ZLinkStreamCodec.JSON,
-            null,
-            oneWayCalls(frameworkAdmissions));
+            null);
 
         CompletableFuture<Void> submission = call.submit().toCompletableFuture();
 
         assertTrue(submission.cancel(false));
         assertTrue(physicalTerminal.isCancelled());
-        assertEquals(0, frameworkAdmissions.get());
         assertEquals(0, payload.size());
     }
 
@@ -109,7 +102,6 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
         CompletableFuture<Void> physicalTerminal = new CompletableFuture<>();
         AtomicInteger asyncSubmits = new AtomicInteger();
         AtomicInteger syncSubmits = new AtomicInteger();
-        AtomicInteger frameworkAdmissions = new AtomicInteger();
         ZLinkBackendStreamSocket stream = stream((method, arguments) -> {
             if (method.getName().equals("replyAsync")) {
                 asyncSubmits.incrementAndGet();
@@ -121,8 +113,7 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
             }
             return defaultValue(method.getReturnType());
         });
-        ZLinkStreamSessionContextState context = context(
-            stream, frameworkAdmissions);
+        ZLinkStreamSessionContextState context = context(stream);
         Message replyPayload = Message.from("reply");
         ZLinkStreamSessionReplyCall reply = new ZLinkStreamSessionReplyCall(
             stream,
@@ -143,7 +134,6 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
 
         assertEquals(1, asyncSubmits.get());
         assertEquals(0, syncSubmits.get());
-        assertEquals(0, frameworkAdmissions.get());
         assertFalse(dispatch.toCompletableFuture().isDone());
         assertEquals("reply".length(), replyPayload.size());
         physicalTerminal.complete(null);
@@ -152,8 +142,7 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
     }
 
     private static ZLinkStreamSessionContextState context(
-        ZLinkBackendStreamSocket stream,
-        AtomicInteger frameworkAdmissions) {
+        ZLinkBackendStreamSocket stream) {
         return new ZLinkStreamSessionContextState(
             "stream-node",
             stream,
@@ -164,22 +153,7 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
             null,
             flow(),
             () -> CompletableFuture.completedFuture(null),
-            oneWayCalls(frameworkAdmissions),
             null);
-    }
-
-    private static ZLinkOneWayCalls oneWayCalls(AtomicInteger admissions) {
-        return new ZLinkOneWayCalls((backend, key) -> (submission, cleanup) -> {
-            admissions.incrementAndGet();
-            try {
-                return submission.get()
-                    ? CompletableFuture.completedFuture(null)
-                    : CompletableFuture.failedFuture(
-                        new IllegalStateException("sync submission rejected"));
-            } finally {
-                cleanup.run();
-            }
-        });
     }
 
     private static ZLinkMessageFlowTracer flow() {

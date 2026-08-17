@@ -1271,14 +1271,14 @@ public final class ZLinkSpotRuntime
                     UserSpotPlacementVerdict verdict = userSpotPlacementVerdict(
                         page.items(), stableType, source, excludedTargets);
                     if (STREAM_TRACE) {
-                        tracePlacement(
+                        tracePlacement(STREAM_TRACE ?
                             "user-spot-create stableType=" + stableType
                             + " verdict=" + verdict
                             + " attempt=" + refreshAttempt
                             + " nodes=" + page.items().stream()
                                 .map(node -> node.rid() + "/" + node.state()
                                     + "/w" + node.placementWeight())
-                                .toList());
+                                .toList() : null);
                     }
                     if (verdict == UserSpotPlacementVerdict.TERMINAL) {
                         throw new ZLinkFrameworkException(
@@ -2369,11 +2369,11 @@ public final class ZLinkSpotRuntime
                     .ZLinkMeshNodeDescriptor> readyCandidates =
                     preferConnectedInstanceTargets(candidates, connectedTargets);
                 if (readyCandidates.size() != candidates.size()) {
-                    traceInstanceLifecycle(
+                    traceInstanceLifecycle(STREAM_TRACE ?
                         "target-selection mesh=" + meshName
                             + " stableType=" + stableType
                             + " candidates=" + candidates.size()
-                            + " connected=" + readyCandidates.size());
+                            + " connected=" + readyCandidates.size() : null);
                     candidates = readyCandidates;
                 }
                 long total = candidates.stream()
@@ -3055,14 +3055,14 @@ public final class ZLinkSpotRuntime
                         noBindRequest,
                         parts),
                     () -> { });
-        traceActorSession("dispatch-actor-packet"
+        traceActorSession(STREAM_TRACE ? "dispatch-actor-packet"
             + " actor=" + actor.context().actorId()
             + " packet=" + packetHeader.packetName()
             + " requestSeq=" + packetHeader.requestSeq().map(Object::toString).orElse(null)
             + " sourceNode=" + headerPart.sourceNodeRid()
             + " sourceSession=" + headerPart.sourceSessionRid()
             + " noBind=" + noBindRequest
-            + " hasBound=" + actorSessions.hasBoundSession(actor));
+            + " hasBound=" + actorSessions.hasBoundSession(actor) : null);
         boolean actorIsRequest = handler.kind() == ZLinkScannedHandlerKind.ACTOR_REQUEST;
         String actorPacketName = packetHeader.packetName();
         String actorId = actor.context().actorId();
@@ -4017,10 +4017,10 @@ public final class ZLinkSpotRuntime
         long objectGeneration) {
         ZLinkInstanceSpotActivation activation =
             instanceSpotActivations.get(spotId);
-        traceInstanceLifecycle(
+        traceInstanceLifecycle(STREAM_TRACE ?
             "close-request spot=" + spotId
                 + " generation=" + objectGeneration
-                + " activation=" + (activation != null));
+                + " activation=" + (activation != null) : null);
         if (activation == null
             || activation.context.objectGeneration() != objectGeneration) {
             return CompletableFuture.completedFuture(false);
@@ -4107,12 +4107,12 @@ public final class ZLinkSpotRuntime
     CompletionStage<Boolean> completeInstanceSpotClose(
         ZLinkInstanceSpotActivation activation) {
         String spotId = activation.context.spotId();
-        traceInstanceLifecycle("close-authority-start spot=" + spotId);
+        traceInstanceLifecycle(STREAM_TRACE ? "close-authority-start spot=" + spotId : null);
         return releaseInstanceSpotAuthority(activation)
             .thenApply(closed -> {
-                traceInstanceLifecycle(
+                traceInstanceLifecycle(STREAM_TRACE ?
                     "close-authority-result spot=" + spotId
-                        + " closed=" + closed);
+                        + " closed=" + closed : null);
                 instanceSpotActivations.remove(spotId, activation);
                 activation.closeResources();
                 ZLinkInternalMeshNode routeNode = routeMeshNodesByName.get(
@@ -4144,9 +4144,9 @@ public final class ZLinkSpotRuntime
         String key = systems.zlink.framework.runtime.locations
             .ZLinkAuthorityKeyCodec.spot(activation.context.spotId());
         return store.read(key, () -> false).thenCompose(read -> {
-            traceInstanceLifecycle(
+            traceInstanceLifecycle(STREAM_TRACE ?
                 "close-authority-read spot=" + activation.context.spotId()
-                    + " result=" + read.getClass().getSimpleName());
+                    + " result=" + read.getClass().getSimpleName() : null);
             if (read instanceof systems.zlink.framework.runtime.internal.locations
                     .ZLinkAuthorityMissing) {
                 return CompletableFuture.completedFuture(true);
@@ -4193,10 +4193,10 @@ public final class ZLinkSpotRuntime
                         .ZLinkAuthorityDelete(),
                     () -> false)
                 .thenApply(result -> {
-                    traceInstanceLifecycle(
+                    traceInstanceLifecycle(STREAM_TRACE ?
                         "close-authority-cas spot="
                             + activation.context.spotId()
-                            + " result=" + result.getClass().getSimpleName());
+                            + " result=" + result.getClass().getSimpleName() : null);
                     return result instanceof
                         systems.zlink.framework.runtime.internal.locations
                             .ZLinkAuthorityDeleted;
@@ -4488,12 +4488,12 @@ public final class ZLinkSpotRuntime
         ZLinkBackendActorReceived headerPart,
         ZLinkBackendActorReceived bodyPart,
         boolean pendingHeader) {
-        traceActorSession("resolve-actor-packet"
+        traceActorSession(STREAM_TRACE ? "resolve-actor-packet"
             + " actor=" + actor.context().actorId()
             + " spot=" + dispatchLine.spotId()
             + " packet=" + packetHeader.packetName()
             + " request=" + packetHeader.requestSeq().isPresent()
-            + " moving=" + actorSessions.isMoving(actor));
+            + " moving=" + actorSessions.isMoving(actor) : null);
         SpotActorPacketHandlerRegistration handler =
             resolveActorPacketHandler(
                 packetHeader.packetName(),
@@ -4501,13 +4501,13 @@ public final class ZLinkSpotRuntime
                 packetHeader.requestSeq().isPresent()
                     ? ZLinkScannedHandlerKind.ACTOR_REQUEST
                     : ZLinkScannedHandlerKind.ACTOR_SEND);
-        traceActorSession("resolve-result"
+        traceActorSession(STREAM_TRACE ? "resolve-result"
             + " actor=" + actor.context().actorId()
             + " packet=" + packetHeader.packetName()
             + " spotSurface=" + (spotSurface == null
                 ? "null" : spotSurface.getClass().getName())
             + " selected=" + handlerSummary(handler)
-            + " candidates=" + handlerCandidates(packetHeader.packetName()));
+            + " candidates=" + handlerCandidates(packetHeader.packetName()) : null);
         if (handler == null) {
             boolean request = packetHeader.requestSeq().isPresent();
             reportSpotActorHandlerMissing(

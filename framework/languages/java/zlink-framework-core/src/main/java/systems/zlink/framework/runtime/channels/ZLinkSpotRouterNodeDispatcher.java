@@ -40,21 +40,21 @@ final class ZLinkSpotRouterNodeDispatcher {
             targetSpotGeneration,
             authorityOwnerGeneration,
             ownerLeaseGeneration);
-        ZLinkChannelRuntime.trace(
+        ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ?
             "spot-route node-send-submit router=" + routerChannelId
                 + " targetNode=" + targetNodeRid
-                + " targetSpot=" + targetSpotId);
+                + " targetSpot=" + targetSpotId : null);
         entrySpot.sendToSpot(
                 targetNodeRid,
                 targetSpotId,
                 targetSpotGeneration,
                 spotParts)
             .whenComplete((ignored, failure) -> {
-                ZLinkChannelRuntime.trace(
+                ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ?
                     "spot-route node-send-result router=" + routerChannelId
                         + " targetNode=" + targetNodeRid
                         + " targetSpot=" + targetSpotId
-                        + " result=" + traceResult(failure));
+                        + " result=" + traceResult(failure) : null);
                 if (failure == null) {
                     result.complete(null);
                 } else {
@@ -77,7 +77,9 @@ final class ZLinkSpotRouterNodeDispatcher {
         BiConsumer<CompletableFuture<List<Message>>, Duration> trackPendingRequest) {
         CompletableFuture<List<Message>> result = new CompletableFuture<>();
         trackPendingRequest.accept(result, timeout);
-        long requestStartedNanos = System.nanoTime();
+        long requestStartedNanos = ZLinkChannelRuntime.traceEnabled()
+            ? System.nanoTime()
+            : 0L;
         var entrySpot = node.entrySpot();
         rememberAuthority(
             entrySpot,
@@ -86,10 +88,10 @@ final class ZLinkSpotRouterNodeDispatcher {
             targetSpotGeneration,
             authorityOwnerGeneration,
             ownerLeaseGeneration);
-        ZLinkChannelRuntime.trace(
+        ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ?
             "spot-route node-request-submit router=" + routerChannelId
                 + " targetNode=" + targetNodeRid
-                + " targetSpot=" + targetSpotId);
+                + " targetSpot=" + targetSpotId : null);
         entrySpot.requestToSpot(
                 targetNodeRid,
                 targetSpotId,
@@ -97,13 +99,13 @@ final class ZLinkSpotRouterNodeDispatcher {
                 spotParts,
                 timeout)
             .whenComplete((reply, failure) -> {
-                ZLinkChannelRuntime.trace(
+                ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ?
                     "spot-route node-request-result router=" + routerChannelId
                         + " targetNode=" + targetNodeRid
                         + " targetSpot=" + targetSpotId
                         + " elapsedMs="
                         + ZLinkChannelRuntime.elapsedMillis(requestStartedNanos)
-                        + " result=" + requestTraceResult(reply, failure));
+                        + " result=" + requestTraceResult(reply, failure) : null);
                 if (failure == null) {
                     completeReply(reply, result, requestStartedNanos);
                 } else {
@@ -196,14 +198,14 @@ final class ZLinkSpotRouterNodeDispatcher {
         CompletableFuture<List<Message>> result,
         long requestStartedNanos) {
         try {
-            ZLinkChannelRuntime.trace("spot-route node-reply"
+            ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ? "spot-route node-reply"
                 + " elapsedMs=" + ZLinkChannelRuntime.elapsedMillis(requestStartedNanos)
                 + " result=" + reply.result()
                 + " origin=spot-node-callback"
                 + " sourceRid=" + reply.routingId().map(Object::toString).orElse(null)
                 + " sourceSpot=" + reply.spotId().map(Object::toString).orElse(null)
                 + " requestSeq=" + reply.requestSeq().map(Object::toString).orElse(null)
-                + " parts=" + ZLinkChannelRuntime.describeTraceParts(reply.parts()));
+                + " parts=" + ZLinkChannelRuntime.describeTraceParts(reply.parts()) : null);
             if (reply.result() != ZLinkBackendRequestResult.OK) {
                 result.completeExceptionally(new ZLinkFrameworkException(
                     reply.result().toFrameworkErrorKind(reply.failureCode()),

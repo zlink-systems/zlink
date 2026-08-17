@@ -1,7 +1,5 @@
 package systems.zlink.framework.runtime.channels;
 
-import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
-
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
@@ -14,11 +12,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -31,7 +25,6 @@ import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 final class ZLinkChannelCallRuntime {
-    private static final Logger LOGGER = Logger.getLogger(ZLinkChannelCallRuntime.class.getName());
     @FunctionalInterface
     interface SpotSend {
         CompletionStage<Void> send(
@@ -62,50 +55,24 @@ final class ZLinkChannelCallRuntime {
     private final ZLinkChannelReplyDecoder replyDecoder;
     private final SpotSend spotSend;
     private final SpotRequest spotRequest;
-    private final ZLinkOneWayCalls oneWayCalls;
     private final Set<CompletableFuture<?>> pendingRequests = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean closing = new AtomicBoolean();
-    private final ExecutorService oneWayExecutor = Executors.newSingleThreadExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "zlink-java-channel-one-way-submit");
-        thread.setDaemon(true);
-        return thread;
-    });
 
     ZLinkChannelCallRuntime(
         ZLinkMessageFlowTracer flow,
         ScheduledExecutorService timeoutExecutor,
         ZLinkChannelReplyDecoder replyDecoder,
         SpotSend spotSend,
-        SpotRequest spotRequest,
-        ZLinkOneWayCalls oneWayCalls) {
+        SpotRequest spotRequest) {
         this.flow = flow;
         this.timeoutExecutor = timeoutExecutor;
         this.replyDecoder = replyDecoder;
         this.spotSend = spotSend;
         this.spotRequest = spotRequest;
-        this.oneWayCalls = oneWayCalls;
-    }
-
-    ZLinkOneWayCalls oneWayCalls() {
-        return oneWayCalls;
     }
 
     ZLinkMessageFlowTracer flow() {
         return flow;
-    }
-
-    void settleOneWay(CompletableFuture<Void> submission) {
-        pendingRequests.add(submission);
-        submission.whenComplete((ignored, error) -> {
-            pendingRequests.remove(submission);
-            if (error != null) {
-                LOGGER.log(Level.SEVERE, "one-way channel submission failed", error);
-            }
-        });
-    }
-
-    void submitOneWay(Runnable submission) {
-        settleOneWay(CompletableFuture.runAsync(submission, oneWayExecutor));
     }
 
     void track(CompletableFuture<?> result, Duration timeout) {
@@ -259,7 +226,6 @@ final class ZLinkChannelCallRuntime {
 
     void beginClose() {
         closing.set(true);
-        oneWayExecutor.shutdown();
         for (CompletableFuture<?> pending : pendingRequests) {
             pending.completeExceptionally(closedFailure());
         }
@@ -316,9 +282,11 @@ final class ZLinkChannelCallRuntime {
         try {
             return ZLinkChannelRuntime.copyMessages(source);
         } finally {
-            source.stream()
-                .filter(part -> part != payload)
-                .forEach(Message::close);
+            for (Message part : source) {
+                if (part != payload) {
+                    part.close();
+                }
+            }
         }
     }
 

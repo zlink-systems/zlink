@@ -10,8 +10,6 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutc
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 
 import java.time.Duration;
-import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
-
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -54,7 +52,6 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
     private final ZLinkStreamCompressionCodec compressionCodec;
     private final ZLinkMessageFlowTracer flow;
     private final Supplier<CompletionStage<Void>> closeAction;
-    private final ZLinkOneWayCalls oneWayCalls;
     private final ConcurrentHashMap<String, ZLinkStreamHeader> requestHeadersByFlow =
         new ConcurrentHashMap<>();
     private final ConcurrentHashMap<ZLinkStreamHeader, Boolean> claimedReplyHeaders =
@@ -83,7 +80,6 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
             compressionCodec,
             flow,
             closeAction,
-            new ZLinkOneWayCalls(),
             null);
     }
 
@@ -97,32 +93,6 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         ZLinkStreamCompressionCodec compressionCodec,
         ZLinkMessageFlowTracer flow,
         Supplier<CompletionStage<Void>> closeAction,
-        ZLinkOneWayCalls oneWayCalls) {
-        this(
-            streamNodeName,
-            stream,
-            routingId,
-            actors,
-            serializer,
-            defaultCodec,
-            compressionCodec,
-            flow,
-            closeAction,
-            oneWayCalls,
-            null);
-    }
-
-    ZLinkStreamSessionContextState(
-        String streamNodeName,
-        ZLinkBackendStreamSocket stream,
-        RoutingId routingId,
-        ZLinkSessionActors actors,
-        ZLinkMessageSerializer serializer,
-        ZLinkStreamCodec defaultCodec,
-        ZLinkStreamCompressionCodec compressionCodec,
-        ZLinkMessageFlowTracer flow,
-        Supplier<CompletionStage<Void>> closeAction,
-        ZLinkOneWayCalls oneWayCalls,
         ScheduledExecutorService replyRetryExecutor) {
         this.streamNodeName = streamNodeName;
         this.stream = stream;
@@ -133,7 +103,6 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         this.compressionCodec = compressionCodec;
         this.flow = flow;
         this.closeAction = Objects.requireNonNull(closeAction, "closeAction");
-        this.oneWayCalls = Objects.requireNonNull(oneWayCalls, "oneWayCalls");
     }
 
     @Override
@@ -164,12 +133,7 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
             this,
             serializer,
             defaultCodec,
-            compressionCodec,
-            oneWayCalls);
-    }
-
-    ZLinkOneWayCalls oneWayCalls() {
-        return oneWayCalls;
+            compressionCodec);
     }
 
     @Override
@@ -233,11 +197,11 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
                 : dispatchFlow.flowId();
             requestHeadersByFlow.put(dispatchKey, header);
         }
-        ZLinkStreamRuntime.trace("stream-node dispatch-start node=" + streamNodeName
+        ZLinkStreamRuntime.trace(ZLinkStreamRuntime.traceEnabled() ? "stream-node dispatch-start node=" + streamNodeName
             + " routingId=" + routingId
             + " name=" + header.packetName()
             + " requestSeq=" + header.requestSequence().orElse(null)
-            + " correlation=" + header.correlationId().orElse(null));
+            + " correlation=" + header.correlationId().orElse(null) : null);
         ZLinkSessionDispatchContext dispatch = new ZLinkSessionDispatchContext(
             header.name(),
             header.metadata(),

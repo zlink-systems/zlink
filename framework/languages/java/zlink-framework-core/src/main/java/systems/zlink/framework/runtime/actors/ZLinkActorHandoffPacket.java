@@ -9,6 +9,11 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 
 final class ZLinkActorHandoffPacket implements AutoCloseable {
+    private static final Logger LOGGER =
+        Logger.getLogger(ZLinkActorHandoffPacket.class.getName());
+    private static final boolean STREAM_TRACE =
+        "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
+
     private final long arrivalIndex;
     private final ZLinkStreamHeader header;
     private final Message payload;
@@ -60,13 +65,14 @@ final class ZLinkActorHandoffPacket implements AutoCloseable {
     }
 
     CompletionStage<Optional<Message>> reply() {
-        trace("reply-observed");
+        trace(STREAM_TRACE ? "reply-observed" : null);
         return reply;
     }
 
     void complete(Optional<Message> response) {
-        trace("reply-complete present=" + response.isPresent()
-            + " completed=" + reply.complete(response));
+        boolean completed = reply.complete(response);
+        trace(STREAM_TRACE ? "reply-complete present=" + response.isPresent()
+            + " completed=" + completed : null);
     }
 
     boolean fail(Throwable error) {
@@ -79,11 +85,9 @@ final class ZLinkActorHandoffPacket implements AutoCloseable {
     }
 
     private void trace(String detail) {
-        if ("1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"))) {
-            Logger.getLogger(
-                    ZLinkActorHandoffPacket.class.getName())
-                .warning("[zlink-java-stream-trace] handoff packet "
-                    + arrivalIndex + " " + detail);
+        if (STREAM_TRACE) {
+            LOGGER.warning("[zlink-java-stream-trace] handoff packet "
+                + arrivalIndex + " " + detail);
         }
     }
 }

@@ -10,8 +10,6 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.spots.ZLinkSpotRequestCall;
 import systems.zlink.framework.spots.ZLinkSpotSendCall;
 
-import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
-
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
@@ -480,8 +478,7 @@ public final class ZLinkChannelRuntime
             timeoutExecutor,
             replyDecoder,
             this::sendToSpotViaRouterChannel,
-            this::requestToSpotViaRouterChannel,
-            new ZLinkOneWayCalls());
+            this::requestToSpotViaRouterChannel);
         this.dispatchReporter = new ZLinkChannelDispatchReporter(dispatchErrors);
         this.messageDispatcher = new ZLinkChannelMessageDispatcher(
             dispatchRegistry,
@@ -1514,15 +1511,15 @@ public final class ZLinkChannelRuntime
         long ownerLeaseGeneration,
         List<Message> spotParts,
         Duration timeout) {
-        trace("spot-route request-start router=" + routerChannelId
+        trace(STREAM_TRACE ? "spot-route request-start router=" + routerChannelId
             + " targetNode=" + targetNodeRid
             + " targetSpot=" + targetSpotId
-            + " parts=" + describeTraceParts(spotParts));
+            + " parts=" + describeTraceParts(spotParts) : null);
         ZLinkSpotRouteTarget target = resolveSpotRouteTarget(routerChannelId, targetNodeRid);
         if (target instanceof ZLinkSpotRouterNodeTarget spotRouterNodeTarget) {
-            trace("spot-route request-path=spot-router-node router=" + routerChannelId
+            trace(STREAM_TRACE ? "spot-route request-path=spot-router-node router=" + routerChannelId
                 + " targetNode=" + targetNodeRid
-                + " targetSpot=" + targetSpotId);
+                + " targetSpot=" + targetSpotId : null);
             return requestToSpotViaSpotRouterNode(
                 routerChannelId,
                 spotRouterNodeTarget.node(),
@@ -1538,9 +1535,9 @@ public final class ZLinkChannelRuntime
         callRuntime.track(result, timeout);
         try {
             ZLinkBackendSpotRouteBridge bridge = requireSpotRouteBridge(routerChannelId);
-            trace("spot-route request-path=route-bridge router=" + routerChannelId
+            trace(STREAM_TRACE ? "spot-route request-path=route-bridge router=" + routerChannelId
                 + " targetNode=" + targetNodeRid
-                + " targetSpot=" + targetSpotId);
+                + " targetSpot=" + targetSpotId : null);
             ZLinkSpotRouteBridgeDispatcher.submitRequest(
                 bridge,
                 routerChannelId,
@@ -1551,10 +1548,10 @@ public final class ZLinkChannelRuntime
                 result);
             return result;
         } catch (RuntimeException ex) {
-            trace("spot-route request-exception router=" + routerChannelId
+            trace(STREAM_TRACE ? "spot-route request-exception router=" + routerChannelId
                 + " targetNode=" + targetNodeRid
                 + " targetSpot=" + targetSpotId
-                + " error=" + ex);
+                + " error=" + ex : null);
             result.completeExceptionally(ex);
             return result;
         }
@@ -1577,7 +1574,7 @@ public final class ZLinkChannelRuntime
         if (spotRouterNode != null) {
             return new ZLinkSpotRouterNodeTarget(spotRouterNode);
         }
-        trace("spot-route missing-router router=" + routerChannelId);
+        trace(STREAM_TRACE ? "spot-route missing-router router=" + routerChannelId : null);
         throw new ZLinkConfigurationException(
             "route mesh channel is not configured: " + routerChannelId);
     }
@@ -1631,6 +1628,10 @@ public final class ZLinkChannelRuntime
         if (STREAM_TRACE) {
             LOGGER.warning("[zlink-java-stream-trace] " + message);
         }
+    }
+
+    static boolean traceEnabled() {
+        return STREAM_TRACE;
     }
 
     static String describeTraceParts(List<Message> parts) {

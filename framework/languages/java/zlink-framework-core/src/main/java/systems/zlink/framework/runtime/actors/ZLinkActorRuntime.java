@@ -32,8 +32,6 @@ import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.spots.SpotRef;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
-import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
-
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 
 import systems.zlink.framework.runtime.internal.backend.*;
@@ -259,7 +257,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             CompletableFuture.failedFuture(new ZLinkConfigurationException(
                 "eligible Entry Spot selection is unavailable"));
     private ZLinkRelayMetadataPolicy metadataPolicy = ZLinkRelayMetadataPolicy.EMPTY;
-    private final ZLinkOneWayCalls oneWayCalls;
     //  Command 42 loss policy is `retransmit-until-sealed-or-deadline`
     //  (service-wire-v1.schema.json, relocationStateMachine.commandRules).
     //  The Actor lane is already sealed when this runs. If the Session owner
@@ -761,7 +758,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             handlerFactory);
         this.defaultStreamCodec =
             defaultStreamCodec == null ? ZLinkStreamCodec.JSON : defaultStreamCodec;
-        this.oneWayCalls = new ZLinkOneWayCalls();
     }
 
     public ZLinkActorRuntime(
@@ -785,10 +781,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             (ignoredBackend, ignoredKey) -> (ignoredSubmission, ignoredCleanup) ->
                 CompletableFuture.failedFuture(new IllegalStateException(
                     "one-way admission factory is required")));
-    }
-
-    ZLinkOneWayCalls oneWayCalls() {
-        return oneWayCalls;
     }
 
     public void setMeshName(String meshName) {
@@ -815,11 +807,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         boolean getOrCreate,
         String selectedMesh,
         Duration timeout) {
-        streamTrace("actor-create submit actor=" + actorId
+        streamTrace(STREAM_TRACE ? "actor-create submit actor=" + actorId
             + " type=" + actorType
             + " getOrCreate=" + getOrCreate
             + " mesh=" + selectedMesh
-            + " timeout=" + timeout);
+            + " timeout=" + timeout : null);
         requireActorId(actorId);
         if (draining || relocating) {
             return CompletableFuture.failedFuture(new ZLinkFrameworkException(
@@ -833,11 +825,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
         CreationSubmitter submitter = creationSubmitter;
         if (submitter != null) {
-            streamTrace("actor-create submit-remote actor=" + actorId);
+            streamTrace(STREAM_TRACE ? "actor-create submit-remote actor=" + actorId : null);
             return submitter.submit(
                 actorId, actorType, createRequest, getOrCreate, timeout);
         }
-        streamTrace("actor-create submit-local actor=" + actorId);
+        streamTrace(STREAM_TRACE ? "actor-create submit-local actor=" + actorId : null);
         CompletionStage<ZLinkActorCreateResult> operation = serializeActorCreation(
             actorId,
             () -> getOrCreate
@@ -936,11 +928,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         boolean notifyCreated,
         ZLinkLocationWriteIntent intent,
         Consumer<ZLinkActorCreateResponse> responseSink) {
-        streamTrace("actor-create local-start actor=" + actorId
+        streamTrace(STREAM_TRACE ? "actor-create local-start actor=" + actorId
             + " type=" + actorType
             + " failIfExists=" + failIfExists
             + " notifyCreated=" + notifyCreated
-            + " intent=" + intent);
+            + " intent=" + intent : null);
         requireActorId(actorId);
         if ((draining || relocating)
             && intent != ZLinkLocationWriteIntent.TAKEOVER) {
@@ -957,12 +949,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             if (failIfExists) {
                 throw new ZLinkConfigurationException("duplicate actor id: " + actorId);
             }
-            streamTrace("actor-create local-existing actor=" + actorId);
+            streamTrace(STREAM_TRACE ? "actor-create local-existing actor=" + actorId : null);
             return CompletableFuture.completedFuture(existing);
         }
         Object createContext = actorCreateContextSupplier.get();
         if (locations.claimsActors(intent)) {
-            streamTrace("actor-create location-claim-start actor=" + actorId);
+            streamTrace(STREAM_TRACE ? "actor-create location-claim-start actor=" + actorId : null);
             return locations
                 .claimActor(
                     actorType,
@@ -971,7 +963,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     intent,
                     () -> deactivateActorOnOwnershipLoss(actorId))
                 .thenCompose(ignored -> {
-                    streamTrace("actor-create location-claim-complete actor=" + actorId);
+                    streamTrace(STREAM_TRACE ? "actor-create location-claim-complete actor=" + actorId : null);
                     return activateLocalActor(
                         actorId,
                         actorType,
@@ -992,8 +984,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     ;
                 })
                     .whenComplete((actor, error) -> {
-                        streamTrace("actor-create local-complete actor=" + actorId
-                            + " error=" + (error == null ? "none" : error));
+                        streamTrace(STREAM_TRACE ? "actor-create local-complete actor=" + actorId
+                            + " error=" + (error == null ? "none" : error) : null);
                         if (error != null) {
                             locations.releaseActor(actorType, actorId);
                         }
@@ -1039,9 +1031,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         Consumer<ZLinkActorCreateResponse> responseSink,
         boolean releaseLocationOnReject,
         long reservedObjectGeneration) {
-        streamTrace("actor-create activate-start actor=" + actorId
+        streamTrace(STREAM_TRACE ? "actor-create activate-start actor=" + actorId
             + " type=" + actorType
-            + " reservedGeneration=" + reservedObjectGeneration);
+            + " reservedGeneration=" + reservedObjectGeneration : null);
         Message nativeCreateRequest = messageFromRequest(createRequest);
         ZLinkBackendActorRef actorRef;
         try {
@@ -1065,15 +1057,15 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             .thenApply(actor -> {
                 context.setActor(actor);
                 actorRegistry.register(actorId, actorType, actor, context);
-                streamTrace("actor-create factory-complete actor=" + actorId);
+                streamTrace(STREAM_TRACE ? "actor-create factory-complete actor=" + actorId : null);
                 return actor;
             })
             .thenCompose(actor -> {
                 if (!notifyCreated) {
-                    streamTrace("actor-create notify-skipped actor=" + actorId);
+                    streamTrace(STREAM_TRACE ? "actor-create notify-skipped actor=" + actorId : null);
                     return CompletableFuture.completedFuture(actor);
                 }
-                streamTrace("actor-create notify-start actor=" + actorId);
+                streamTrace(STREAM_TRACE ? "actor-create notify-start actor=" + actorId : null);
                 CompletableFuture<ZLinkActorCreateResponse> responseStage =
                     new CompletableFuture<>();
                 return submitActorDispatch(
@@ -1088,8 +1080,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     .thenApply(response -> {
                         ZLinkActorCreateResponse effective =
                             response == null ? ZLinkActorCreateResponse.reject() : response;
-                        streamTrace("actor-create notify-complete actor=" + actorId
-                            + " accepted=" + effective.accepted());
+                        streamTrace(STREAM_TRACE ? "actor-create notify-complete actor=" + actorId
+                            + " accepted=" + effective.accepted() : null);
                         responseSink.accept(effective);
                         if (!effective.accepted()) {
                             discardLocalActor(
@@ -1101,8 +1093,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     });
             })
             .whenComplete((actor, error) -> {
-                streamTrace("actor-create activate-complete actor=" + actorId
-                    + " error=" + (error == null ? "none" : error));
+                streamTrace(STREAM_TRACE ? "actor-create activate-complete actor=" + actorId
+                    + " error=" + (error == null ? "none" : error) : null);
                 if (error != null) {
                     context.closeHandlerInstances();
                 }
@@ -2500,11 +2492,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         String actorId,
         String actorType,
         ZLinkMessage createRequest) {
-        streamTrace("actor-create get-or-create-start actor=" + actorId
-            + " type=" + actorType);
+        streamTrace(STREAM_TRACE ? "actor-create get-or-create-start actor=" + actorId
+            + " type=" + actorType : null);
         ZLinkActor actor = actorRegistry.actor(actorId);
         if (actor != null) {
-            streamTrace("actor-create get-or-create-existing actor=" + actorId);
+            streamTrace(STREAM_TRACE ? "actor-create get-or-create-existing actor=" + actorId : null);
             return CompletableFuture.completedFuture(
                 new ZLinkActorCreateResult.Existing(publicRefFor(actor)));
         }

@@ -1,5 +1,4 @@
 package systems.zlink.framework.runtime.streams;
-import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -157,17 +156,6 @@ final class ZLinkStreamSessionContextStateTest {
                 closes.incrementAndGet();
                 return CompletableFuture.completedFuture(null);
             },
-            new ZLinkOneWayCalls(
-                (backend, key) -> (submission, cleanup) -> {
-                    try {
-                        return submission.get()
-                            ? CompletableFuture.completedFuture(null)
-                            : CompletableFuture.failedFuture(
-                                new IllegalStateException("submission rejected"));
-                    } finally {
-                        cleanup.run();
-                    }
-                }),
             null);
     }
 

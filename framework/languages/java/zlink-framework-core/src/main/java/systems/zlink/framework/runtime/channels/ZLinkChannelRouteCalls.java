@@ -516,9 +516,9 @@ final class MeshChannelRouteSendCall implements ZLinkSendCall {
             node.classifyChannelTarget(channelName);
         if (classified.isPresent()) {
             payload.close();
-            ZLinkChannelRuntime.trace(
+            ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ?
                 "route-channel target=none channel=" + channelName
-                    + " status=" + classified.orElseThrow());
+                    + " status=" + classified.orElseThrow() : null);
             return ZLinkOneWayCalls.oneWayStatus(classified.orElseThrow());
         }
         List<Message> parts = ZLinkChannelCallRuntime.parts(
@@ -645,9 +645,9 @@ final class MeshChannelRouteRequestCall implements ZLinkRequestCall {
             node.classifyChannelTarget(channelName);
         if (classified.isPresent()) {
             payload.close();
-            ZLinkChannelRuntime.trace(
+            ZLinkChannelRuntime.trace(ZLinkChannelRuntime.traceEnabled() ?
                 "route-channel target=none channel=" + channelName
-                    + " status=" + classified.orElseThrow());
+                    + " status=" + classified.orElseThrow() : null);
             result.completeExceptionally(
                 ZLinkOneWayCalls.failureForStatus(classified.orElseThrow()));
             return ZLinkAsyncSerialQueue
