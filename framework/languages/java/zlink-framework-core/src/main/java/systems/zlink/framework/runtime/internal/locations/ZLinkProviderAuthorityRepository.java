@@ -6,6 +6,10 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -15,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.HexFormat;
 import java.util.HashMap;
 import java.util.List;
@@ -34,10 +39,10 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
  */
 final class ZLinkProviderAuthorityRepository {
     private static final String PREFIX = "zlink:v11:authority:";
+    private static final ObjectMapper CANONICAL_JSON = new ObjectMapper();
     private static final String CAPACITY_PREFIX = "zlink:v11:capacity:";
     private static final String COUNTER_PREFIX = "zlink:v11:counter:";
     private static final String AGGREGATE_PREFIX = "zlink:v11:aggregate:";
-    private static final int CODEC_VERSION = 2;
     private static final byte AGGREGATE_STAGING = 0;
     private static final byte AGGREGATE_PREPARED = 1;
     private static final byte AGGREGATE_COMMITTED = 2;
@@ -1922,64 +1927,186 @@ final class ZLinkProviderAuthorityRepository {
             value.capacityBundle());
     }
 
+    // --- Authority record canonical JSON (21-location-runtime.md#2.4) ---
+    //
+    // Top-level: {recordVersion:1, payload(base64), objectGeneration,
+    // authorityOwnerGeneration, ownerId, ownerLeaseGeneration, allocation,
+    // pendingCreation}. Except for `payload`, integer fields are JSON
+    // strings (64-bit values). `providerExtension` is a java-private,
+    // non-normative addition (permitted -- the spec's field table is "at
+    // least" the listed fields) that carries the aggregate-transaction
+    // marker and visible-store-version bookkeeping; it is present only
+    // while an aggregate transaction is in flight, so a plain reserve/
+    // commit record matches the golden fixture's field set exactly.
+
     private static byte[] encode(AuthorityRecord value) {
-        try {
-            var bytes = new ByteArrayOutputStream();
-            var out = new DataOutputStream(bytes);
-            out.writeInt(CODEC_VERSION);
-            writeBytes(out, value.payload());
-            out.writeLong(value.objectGeneration());
-            out.writeLong(value.authorityOwnerGeneration());
-            out.writeUTF(value.ownerId());
-            out.writeLong(value.ownerLeaseGeneration());
-            ZLinkPlacementAllocation allocation = value.allocation();
-            out.writeInt(allocation.state().ordinal());
-            out.writeInt(allocation.objectKind().ordinal());
-            out.writeUTF(allocation.stableType());
-            out.writeUTF(allocation.descriptor().meshName());
-            out.writeUTF(allocation.descriptor().rid().toHex());
-            out.writeLong(allocation.descriptorLifecycleGeneration());
-            out.writeInt(allocation.capacityBundle().actorSlots());
-            out.writeInt(allocation.capacityBundle().spotSlots());
-            out.writeBoolean(allocation.capacityBundle().spotType().isPresent());
-            if (allocation.capacityBundle().spotType().isPresent()) {
-                ZLinkSpotTypeCapacityDelta delta =
-                    allocation.capacityBundle().spotType().orElseThrow();
-                out.writeInt(delta.objectKind().ordinal());
-                out.writeUTF(delta.stableType());
-                out.writeInt(delta.slots());
-            }
-            out.writeBoolean(value.pendingCreation().isPresent());
-            if (value.pendingCreation().isPresent()) {
-                ZLinkPendingObjectCreation pending =
-                    value.pendingCreation().orElseThrow();
-                out.writeUTF(pending.reservationId());
-                out.writeUTF(pending.requestContentReference());
-                writeBytes(out, pending.requestSha256());
-                out.writeInt(pending.requestEncodedSize());
-            }
-            out.writeBoolean(value.aggregate() != null);
-            if (value.aggregate() != null) {
-                AggregateParticipantMarker marker = value.aggregate();
-                out.writeLong(marker.aggregateId().getMostSignificantBits());
-                out.writeLong(marker.aggregateId().getLeastSignificantBits());
-                out.writeLong(marker.aggregateGeneration());
-                out.writeInt(marker.index());
-                out.writeUTF(marker.expectedStoreVersion());
-                out.writeInt(marker.ownerTransition().ordinal());
-                out.writeLong(marker.targetAuthorityOwnerGeneration());
-                writeBytes(out, marker.authorityPayloadSha256());
-                writeBytes(out, marker.membershipMutationSha256());
-            }
-            out.writeBoolean(value.visibleStoreVersion() != null);
-            if (value.visibleStoreVersion() != null) {
-                out.writeUTF(value.visibleStoreVersion());
-            }
-            out.flush();
-            return bytes.toByteArray();
-        } catch (IOException failure) {
-            throw new IllegalStateException(failure);
+        ObjectNode root = CANONICAL_JSON.createObjectNode();
+        root.put("recordVersion", 1);
+        root.put(
+            "payload",
+            Base64.getEncoder().encodeToString(value.payload()));
+        root.put(
+            "objectGeneration", Long.toString(value.objectGeneration()));
+        root.put(
+            "authorityOwnerGeneration",
+            Long.toString(value.authorityOwnerGeneration()));
+        root.put("ownerId", value.ownerId());
+        root.put(
+            "ownerLeaseGeneration",
+            Long.toString(value.ownerLeaseGeneration()));
+        root.set("allocation", encodeAllocation(value.allocation()));
+        if (value.pendingCreation().isPresent()) {
+            root.set(
+                "pendingCreation",
+                encodePendingCreation(value.pendingCreation().orElseThrow()));
+        } else {
+            root.putNull("pendingCreation");
         }
+        if (value.aggregate() != null || value.visibleStoreVersion() != null) {
+            root.set(
+                "providerExtension",
+                encodeExtension(value.aggregate(), value.visibleStoreVersion()));
+        }
+        try {
+            return CANONICAL_JSON.writeValueAsBytes(root);
+        } catch (JsonProcessingException error) {
+            throw new IllegalStateException(
+                "Failed to encode authority record", error);
+        }
+    }
+
+    private static ObjectNode encodeAllocation(
+        ZLinkPlacementAllocation allocation) {
+        ObjectNode node = CANONICAL_JSON.createObjectNode();
+        node.put(
+            "state", allocationStateWire(allocation.state()));
+        node.put(
+            "objectKind", authorityObjectKindWire(allocation.objectKind()));
+        node.put("stableType", allocation.stableType());
+        ObjectNode descriptor = CANONICAL_JSON.createObjectNode();
+        descriptor.put("meshName", allocation.descriptor().meshName());
+        descriptor.put(
+            "routingIdHex", allocation.descriptor().rid().toHex());
+        node.set("descriptor", descriptor);
+        node.put(
+            "descriptorLifecycleGeneration",
+            Long.toString(allocation.descriptorLifecycleGeneration()));
+        node.set(
+            "capacity", encodeCapacityBundle(allocation.capacityBundle()));
+        return node;
+    }
+
+    private static ObjectNode encodeCapacityBundle(
+        ZLinkPlacementCapacityBundle bundle) {
+        ObjectNode node = CANONICAL_JSON.createObjectNode();
+        node.put("actors", bundle.actorSlots());
+        node.put("spots", bundle.spotSlots());
+        if (bundle.spotType().isPresent()) {
+            ZLinkSpotTypeCapacityDelta delta = bundle.spotType().orElseThrow();
+            ObjectNode spotType = CANONICAL_JSON.createObjectNode();
+            spotType.put(
+                "objectKind", authorityObjectKindWire(delta.objectKind()));
+            spotType.put("stableType", delta.stableType());
+            spotType.put("count", delta.slots());
+            node.set("spotType", spotType);
+        } else {
+            node.putNull("spotType");
+        }
+        return node;
+    }
+
+    private static ObjectNode encodePendingCreation(
+        ZLinkPendingObjectCreation pending) {
+        ObjectNode node = CANONICAL_JSON.createObjectNode();
+        node.put("reservationId", pending.reservationId());
+        node.put(
+            "requestContentReference", pending.requestContentReference());
+        node.put(
+            "requestSha256",
+            HexFormat.of().formatHex(pending.requestSha256()));
+        node.put("requestEncodedSize", pending.requestEncodedSize());
+        return node;
+    }
+
+    private static ObjectNode encodeExtension(
+        AggregateParticipantMarker aggregate,
+        String visibleStoreVersion) {
+        ObjectNode node = CANONICAL_JSON.createObjectNode();
+        if (aggregate != null) {
+            ObjectNode marker = CANONICAL_JSON.createObjectNode();
+            marker.put(
+                "aggregateIdMostSigBits",
+                aggregate.aggregateId().getMostSignificantBits());
+            marker.put(
+                "aggregateIdLeastSigBits",
+                aggregate.aggregateId().getLeastSignificantBits());
+            marker.put(
+                "aggregateGeneration",
+                Long.toString(aggregate.aggregateGeneration()));
+            marker.put("index", aggregate.index());
+            marker.put(
+                "expectedStoreVersion", aggregate.expectedStoreVersion());
+            marker.put(
+                "ownerTransition", aggregate.ownerTransition().name());
+            marker.put(
+                "targetAuthorityOwnerGeneration",
+                Long.toString(aggregate.targetAuthorityOwnerGeneration()));
+            marker.put(
+                "authorityPayloadSha256",
+                HexFormat.of().formatHex(
+                    aggregate.authorityPayloadSha256()));
+            marker.put(
+                "membershipMutationSha256",
+                HexFormat.of().formatHex(
+                    aggregate.membershipMutationSha256()));
+            node.set("aggregate", marker);
+        } else {
+            node.putNull("aggregate");
+        }
+        if (visibleStoreVersion != null) {
+            node.put("visibleStoreVersion", visibleStoreVersion);
+        } else {
+            node.putNull("visibleStoreVersion");
+        }
+        return node;
+    }
+
+    private static String allocationStateWire(
+        ZLinkPlacementAllocationState state) {
+        return switch (state) {
+            case PENDING -> "reserved";
+            case ACTIVE -> "active";
+        };
+    }
+
+    private static ZLinkPlacementAllocationState allocationStateFromWire(
+        String value) {
+        return switch (value) {
+            case "reserved" -> ZLinkPlacementAllocationState.PENDING;
+            case "active" -> ZLinkPlacementAllocationState.ACTIVE;
+            default -> throw new IllegalStateException(
+                "Unrecognized allocation state: " + value);
+        };
+    }
+
+    private static String authorityObjectKindWire(
+        ZLinkPlacementObjectKind kind) {
+        return switch (kind) {
+            case ACTOR -> "actor";
+            case USER_SPOT -> "userSpot";
+            case INSTANCE_SPOT -> "instanceSpot";
+        };
+    }
+
+    private static ZLinkPlacementObjectKind authorityObjectKindFromWire(
+        String value) {
+        return switch (value) {
+            case "actor" -> ZLinkPlacementObjectKind.ACTOR;
+            case "userSpot" -> ZLinkPlacementObjectKind.USER_SPOT;
+            case "instanceSpot" -> ZLinkPlacementObjectKind.INSTANCE_SPOT;
+            default -> throw new IllegalStateException(
+                "Unrecognized objectKind: " + value);
+        };
     }
 
     private static byte[] encodeCapacity(CapacityRecord value) {
@@ -2046,60 +2173,42 @@ final class ZLinkProviderAuthorityRepository {
 
     private static AuthorityRecord decode(byte[] bytes) {
         try {
-            var in = new DataInputStream(new ByteArrayInputStream(bytes));
-            int version = in.readInt();
-            if (version != 1 && version != CODEC_VERSION) {
-                throw new IOException("unsupported version");
+            JsonNode root = CANONICAL_JSON.readTree(bytes);
+            if (root.path("recordVersion").asInt(-1) != 1) {
+                throw new IllegalStateException(
+                    "Location Store authority record has an unrecognized"
+                        + " recordVersion");
             }
-            byte[] payload = readBytes(in);
-            long objectGeneration = in.readLong();
-            long ownerGeneration = in.readLong();
-            String ownerId = in.readUTF();
-            long ownerLeaseGeneration = in.readLong();
-            var state = ZLinkPlacementAllocationState.values()[in.readInt()];
-            var kind = ZLinkPlacementObjectKind.values()[in.readInt()];
-            String stableType = in.readUTF();
-            var descriptor = new ZLinkMeshNodeDescriptorKey(
-                in.readUTF(), RoutingId.fromHex(in.readUTF()));
-            long descriptorGeneration = in.readLong();
-            int actorSlots = in.readInt();
-            int spotSlots = in.readInt();
-            Optional<ZLinkSpotTypeCapacityDelta> spotType =
-                in.readBoolean()
-                    ? Optional.of(new ZLinkSpotTypeCapacityDelta(
-                        ZLinkPlacementObjectKind.values()[in.readInt()],
-                        in.readUTF(),
-                        in.readInt()))
-                    : Optional.empty();
+            byte[] payload = Base64.getDecoder().decode(
+                root.path("payload").asText());
+            long objectGeneration = Long.parseLong(
+                root.path("objectGeneration").asText());
+            long ownerGeneration = Long.parseLong(
+                root.path("authorityOwnerGeneration").asText());
+            String ownerId = root.path("ownerId").asText();
+            long ownerLeaseGeneration = Long.parseLong(
+                root.path("ownerLeaseGeneration").asText());
+            ZLinkPlacementAllocation allocation =
+                decodeAllocation(root.path("allocation"));
+            JsonNode pendingNode = root.path("pendingCreation");
             Optional<ZLinkPendingObjectCreation> pending =
-                in.readBoolean()
-                    ? Optional.of(new ZLinkPendingObjectCreation(
-                        in.readUTF(),
-                        in.readUTF(),
-                        readBytes(in),
-                        in.readInt()))
-                    : Optional.empty();
+                pendingNode.isMissingNode() || pendingNode.isNull()
+                    ? Optional.empty()
+                    : Optional.of(decodePendingCreation(pendingNode));
             AggregateParticipantMarker aggregate = null;
             String visibleStoreVersion = null;
-            if (version >= 2) {
-                aggregate = in.readBoolean()
-                    ? new AggregateParticipantMarker(
-                        new UUID(in.readLong(), in.readLong()),
-                        in.readLong(),
-                        in.readInt(),
-                        in.readUTF(),
-                        ZLinkAuthorityGenerationTransition.values()[
-                            in.readInt()],
-                        in.readLong(),
-                        readBytes(in),
-                        readBytes(in))
-                    : null;
-                visibleStoreVersion = in.readBoolean()
-                    ? in.readUTF()
-                    : null;
-            }
-            if (in.available() != 0) {
-                throw new IOException("trailing bytes");
+            JsonNode extension = root.path("providerExtension");
+            if (!extension.isMissingNode() && !extension.isNull()) {
+                JsonNode markerNode = extension.path("aggregate");
+                aggregate = markerNode.isMissingNode()
+                        || markerNode.isNull()
+                    ? null
+                    : decodeAggregateMarker(markerNode);
+                JsonNode visible = extension.path("visibleStoreVersion");
+                visibleStoreVersion = visible.isMissingNode()
+                        || visible.isNull()
+                    ? null
+                    : visible.asText();
             }
             return new AuthorityRecord(
                 payload,
@@ -2107,14 +2216,7 @@ final class ZLinkProviderAuthorityRepository {
                 ownerGeneration,
                 ownerId,
                 ownerLeaseGeneration,
-                    new ZLinkPlacementAllocation(
-                    state,
-                    kind,
-                    stableType,
-                    descriptor,
-                    descriptorGeneration,
-                        new ZLinkPlacementCapacityBundle(
-                            actorSlots, spotSlots, spotType)),
+                allocation,
                 pending,
                 aggregate,
                 visibleStoreVersion);
@@ -2123,6 +2225,67 @@ final class ZLinkProviderAuthorityRepository {
                 "Location Store authority record is invalid",
                 failure);
         }
+    }
+
+    private static ZLinkPlacementAllocation decodeAllocation(JsonNode node) {
+        JsonNode descriptor = node.path("descriptor");
+        return new ZLinkPlacementAllocation(
+            allocationStateFromWire(node.path("state").asText()),
+            authorityObjectKindFromWire(node.path("objectKind").asText()),
+            node.path("stableType").asText(),
+            new ZLinkMeshNodeDescriptorKey(
+                descriptor.path("meshName").asText(),
+                RoutingId.fromHex(
+                    descriptor.path("routingIdHex").asText())),
+            Long.parseLong(
+                node.path("descriptorLifecycleGeneration").asText()),
+            decodeCapacityBundle(node.path("capacity")));
+    }
+
+    private static ZLinkPlacementCapacityBundle decodeCapacityBundle(
+        JsonNode node) {
+        JsonNode spotTypeNode = node.path("spotType");
+        Optional<ZLinkSpotTypeCapacityDelta> spotType =
+            spotTypeNode.isMissingNode() || spotTypeNode.isNull()
+                ? Optional.empty()
+                : Optional.of(new ZLinkSpotTypeCapacityDelta(
+                    authorityObjectKindFromWire(
+                        spotTypeNode.path("objectKind").asText()),
+                    spotTypeNode.path("stableType").asText(),
+                    spotTypeNode.path("count").asInt()));
+        return new ZLinkPlacementCapacityBundle(
+            node.path("actors").asInt(),
+            node.path("spots").asInt(),
+            spotType);
+    }
+
+    private static ZLinkPendingObjectCreation decodePendingCreation(
+        JsonNode node) {
+        return new ZLinkPendingObjectCreation(
+            node.path("reservationId").asText(),
+            node.path("requestContentReference").asText(),
+            HexFormat.of().parseHex(
+                node.path("requestSha256").asText()),
+            node.path("requestEncodedSize").asInt());
+    }
+
+    private static AggregateParticipantMarker decodeAggregateMarker(
+        JsonNode node) {
+        return new AggregateParticipantMarker(
+            new UUID(
+                node.path("aggregateIdMostSigBits").asLong(),
+                node.path("aggregateIdLeastSigBits").asLong()),
+            Long.parseLong(node.path("aggregateGeneration").asText()),
+            node.path("index").asInt(),
+            node.path("expectedStoreVersion").asText(),
+            ZLinkAuthorityGenerationTransition.valueOf(
+                node.path("ownerTransition").asText()),
+            Long.parseLong(
+                node.path("targetAuthorityOwnerGeneration").asText()),
+            HexFormat.of().parseHex(
+                node.path("authorityPayloadSha256").asText()),
+            HexFormat.of().parseHex(
+                node.path("membershipMutationSha256").asText()));
     }
 
     private static byte[] encodeAggregate(
