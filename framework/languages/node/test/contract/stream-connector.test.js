@@ -1994,6 +1994,274 @@ test('stream connector diagnostics off skips inbound flow read but keeps structu
   assert.throws(() => protocolCodecs.ZlinkStreamHeaderCodec.decode(corruptedHeader));
 });
 
+// D2 (spec 26 §4.1 / spec stream-connector 32 §13): the application can read
+// and change the diagnostics level at runtime without recreating the
+// connector, and unknown values are rejected the same way construction-time
+// options are rejected.
+test('stream connector rejects unknown diagnostics level at construction and at runtime', () => {
+  assert.throws(
+    () => createStreamConnector({ endpoint: 'ws://127.0.0.1:19000', diagnosticsLevel: 'bogus' }),
+    /DiagnosticsLevel is invalid/
+  );
+
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: new MemoryTransportFactory()
+  });
+  assert.throws(
+    () => instance.setDiagnosticsLevel('bogus'),
+    /DiagnosticsLevel is invalid/
+  );
+  // Rejecting an unknown value leaves the previous level untouched.
+  assert.equal(instance.diagnosticsLevel, connector.ZlinkStreamDiagnosticsLevel.Errors);
+  assert.equal(instance.options.diagnosticsLevel, connector.ZlinkStreamDiagnosticsLevel.Errors);
+});
+
+// D2 (spec 26 §4.1 / spec stream-connector 32 §13): switching the level from
+// on to off at runtime stops flow attachment on the *next* outbound frame
+// without retroactively touching the frame already sent, and
+// `options.diagnosticsLevel` always reports the live level.
+test('stream connector applies a runtime on-to-off diagnostics level change to the next outbound frame only', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory
+  });
+  assert.equal(instance.diagnosticsLevel, connector.ZlinkStreamDiagnosticsLevel.Errors);
+
+  await instance.connect();
+  await instance
+    .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('BeforeOff')
+    .submit();
+  const beforeFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
+  const beforeHeader = protocolCodecs.ZlinkStreamHeaderCodec.decode(beforeFrame.header);
+  assert.notEqual(beforeHeader.flags & connector.ZlinkStreamHeaderFlags.HasFlowId, 0);
+
+  instance.setDiagnosticsLevel(connector.ZlinkStreamDiagnosticsLevel.Off);
+  assert.equal(instance.diagnosticsLevel, connector.ZlinkStreamDiagnosticsLevel.Off);
+  assert.equal(instance.options.diagnosticsLevel, connector.ZlinkStreamDiagnosticsLevel.Off);
+
+  // The already-sent frame is untouched by the later level change.
+  const beforeHeaderAgain = protocolCodecs.ZlinkStreamHeaderCodec.decode(beforeFrame.header);
+  assert.notEqual(beforeHeaderAgain.flags & connector.ZlinkStreamHeaderFlags.HasFlowId, 0);
+
+  await instance
+    .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('AfterOff')
+    .submit();
+  const afterFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[1]);
+  const afterHeader = protocolCodecs.ZlinkStreamHeaderCodec.decode(afterFrame.header);
+  assert.equal(afterHeader.flags & connector.ZlinkStreamHeaderFlags.HasFlowId, 0);
+  assert.equal(afterHeader.flowId, undefined);
+});
+
+// D2 (spec 26 §4.1 / spec stream-connector 32 §13): switching the level from
+// off back to on re-enables flow attachment starting with the next outbound
+// frame.
+test('stream connector applies a runtime off-to-on diagnostics level change to the next outbound frame', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    diagnosticsLevel: connector.ZlinkStreamDiagnosticsLevel.Off
+  });
+
+  await instance.connect();
+  await instance
+    .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('WhileOff')
+    .submit();
+  const offFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[0]);
+  const offHeader = protocolCodecs.ZlinkStreamHeaderCodec.decode(offFrame.header);
+  assert.equal(offHeader.flags & connector.ZlinkStreamHeaderFlags.HasFlowId, 0);
+
+  instance.setDiagnosticsLevel(connector.ZlinkStreamDiagnosticsLevel.Normal);
+  assert.equal(instance.diagnosticsLevel, connector.ZlinkStreamDiagnosticsLevel.Normal);
+
+  await instance
+    .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+    .packetName('WhileOn')
+    .submit();
+  const onFrame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[1]);
+  const onHeader = protocolCodecs.ZlinkStreamHeaderCodec.decode(onFrame.header);
+  assert.notEqual(onHeader.flags & connector.ZlinkStreamHeaderFlags.HasFlowId, 0);
+  assert.match(onHeader.flowId, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+});
+
+// D2 (spec 26 §4.1 / spec stream-connector 32 §13): a level change between
+// two separate sends is fully visible on the next send — every observed
+// frame is either fully on or fully off, never a mix (e.g. flag set but no
+// flow id).
+test('stream connector never produces an internally inconsistent frame while the level changes between sends', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory
+  });
+  await instance.connect();
+
+  const levels = [
+    connector.ZlinkStreamDiagnosticsLevel.Errors,
+    connector.ZlinkStreamDiagnosticsLevel.Off,
+    connector.ZlinkStreamDiagnosticsLevel.Detailed,
+    connector.ZlinkStreamDiagnosticsLevel.Off,
+    connector.ZlinkStreamDiagnosticsLevel.Normal
+  ];
+  for (const level of levels) {
+    instance.setDiagnosticsLevel(level);
+    await instance
+      .send({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
+      .packetName('Toggle')
+      .submit();
+  }
+
+  for (let i = 0; i < levels.length; i += 1) {
+    const frame = protocolCodecs.ZlinkStreamFrameCodec.decode(transportFactory.connection.frames[i]);
+    const header = protocolCodecs.ZlinkStreamHeaderCodec.decode(frame.header);
+    const hasFlag = (header.flags & connector.ZlinkStreamHeaderFlags.HasFlowId) !== 0;
+    if (levels[i] === connector.ZlinkStreamDiagnosticsLevel.Off) {
+      assert.equal(hasFlag, false);
+      assert.equal(header.flowId, undefined);
+      assert.equal(header.flowOrigin, undefined);
+    } else {
+      assert.equal(hasFlag, true);
+      assert.match(header.flowId, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      assert.equal(header.flowOrigin, 'Application');
+    }
+  }
+});
+
+// D2 (spec 26 §4.1 / spec stream-connector 32 §13): unknown values are
+// rejected the same way at construction and at runtime; `undefined`/`null`
+// (reachable from plain JS even though the TS signature requires a value)
+// must not silently overwrite the current level.
+test('stream connector rejects undefined and null diagnostics level at runtime', () => {
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: new MemoryTransportFactory()
+  });
+  assert.throws(() => instance.setDiagnosticsLevel(undefined), /DiagnosticsLevel is invalid/);
+  assert.throws(() => instance.setDiagnosticsLevel(null), /DiagnosticsLevel is invalid/);
+  assert.equal(instance.diagnosticsLevel, connector.ZlinkStreamDiagnosticsLevel.Errors);
+});
+
+// D2 (spec 26 §4.1 / spec stream-connector 32 §13): a runtime level change
+// applies to inbound processing too — the next dispatched frame reflects it,
+// while a frame already dispatched under the old level is untouched.
+test('stream connector applies a runtime diagnostics level change to inbound flow installation', async () => {
+  const flowSendFrame = (name) => protocolCodecs.ZlinkStreamFrameCodec.encode(
+    protocolCodecs.ZlinkStreamHeaderCodec.encode({
+      kind: connector.ZlinkStreamMessageKind.Send,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.HasFlowId,
+      name,
+      metadata: connector.ZlinkStreamMetadataMap.empty,
+      flowId: '01890000-0000-7000-8000-000000000001',
+      flowOrigin: 'Inbound'
+    }),
+    new TextEncoder().encode('x')
+  );
+
+  const factory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory
+  });
+  await instance.connect();
+
+  const beforeOff = instance.waitForMessage('FlowFrame', 1000, () => true);
+  factory.connection.pushFrame(flowSendFrame('FlowFrame'));
+  await instance.dispatch();
+  const receivedBeforeOff = await beforeOff;
+  assert.equal(receivedBeforeOff.flowId, '01890000-0000-7000-8000-000000000001');
+  assert.equal(receivedBeforeOff.flowOrigin, 'Inbound');
+
+  instance.setDiagnosticsLevel(connector.ZlinkStreamDiagnosticsLevel.Off);
+  const whileOff = instance.waitForMessage('FlowFrame', 1000, () => true);
+  factory.connection.pushFrame(flowSendFrame('FlowFrame'));
+  await instance.dispatch();
+  const receivedWhileOff = await whileOff;
+  assert.equal(receivedWhileOff.flowId, undefined);
+  assert.equal(receivedWhileOff.flowOrigin, undefined);
+
+  instance.setDiagnosticsLevel(connector.ZlinkStreamDiagnosticsLevel.Normal);
+  const afterOn = instance.waitForMessage('FlowFrame', 1000, () => true);
+  factory.connection.pushFrame(flowSendFrame('FlowFrame'));
+  await instance.dispatch();
+  const receivedAfterOn = await afterOn;
+  assert.equal(receivedAfterOn.flowId, '01890000-0000-7000-8000-000000000001');
+  assert.equal(receivedAfterOn.flowOrigin, 'Inbound');
+});
+
+// D2 (spec 26 §4.1 / spec stream-connector 32 §13): "each processing point
+// reads the level exactly once" — a batch of frames delivered by a single
+// transport read is one processing point (ZlinkStreamReceiveDispatcher
+// snapshots the level once for the whole batch). A level change made by a
+// handler invoked mid-batch must not retroactively affect frames from that
+// same batch: it takes effect starting with the next inbound read.
+test('stream connector holds one diagnostics level snapshot across an inbound batch even if a handler changes it mid-batch', async () => {
+  const flowSendFrame = (name) => protocolCodecs.ZlinkStreamFrameCodec.encode(
+    protocolCodecs.ZlinkStreamHeaderCodec.encode({
+      kind: connector.ZlinkStreamMessageKind.Send,
+      codec: connector.ZlinkStreamCodec.Raw,
+      flags: connector.ZlinkStreamHeaderFlags.HasFlowId,
+      name,
+      metadata: connector.ZlinkStreamMetadataMap.empty,
+      flowId: '01890000-0000-7000-8000-000000000002',
+      flowOrigin: 'Inbound'
+    }),
+    new TextEncoder().encode('x')
+  );
+
+  const factory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory
+  });
+  await instance.connect();
+
+  const received = [];
+  instance.on('BatchFrame', (message) => {
+    received.push(message);
+    if (received.length === 1) {
+      // Flip the level while the batch this frame belongs to is still being
+      // dispatched. If the dispatcher re-read the level per frame instead of
+      // snapshotting it once, frame 2 below would lose its flow.
+      instance.setDiagnosticsLevel(connector.ZlinkStreamDiagnosticsLevel.Off);
+    }
+  });
+
+  // Two frames concatenated into a single chunk are delivered by a single
+  // MemoryConnection.read() and therefore split into one batch by
+  // ZlinkStreamFrameProtocol.decodeFrames / splitZlinkStreamFrames.
+  const frameOne = flowSendFrame('BatchFrame');
+  const frameTwo = flowSendFrame('BatchFrame');
+  const batchedChunk = new Uint8Array(frameOne.length + frameTwo.length);
+  batchedChunk.set(frameOne, 0);
+  batchedChunk.set(frameTwo, frameOne.length);
+  factory.connection.pushFrame(batchedChunk);
+  await instance.dispatch();
+  await waitFor(() => received.length === 2, 1000);
+
+  assert.equal(received[0].flowId, '01890000-0000-7000-8000-000000000002');
+  assert.equal(received[0].flowOrigin, 'Inbound');
+  // Same batch as frame 1 — the mid-batch setDiagnosticsLevel(Off) must not
+  // apply to it.
+  assert.equal(received[1].flowId, '01890000-0000-7000-8000-000000000002');
+  assert.equal(received[1].flowOrigin, 'Inbound');
+  assert.equal(instance.diagnosticsLevel, connector.ZlinkStreamDiagnosticsLevel.Off);
+
+  // The next inbound read is a new processing point: it observes the level
+  // change.
+  const nextMessage = instance.waitForMessage('BatchFrame', 1000, () => true);
+  factory.connection.pushFrame(flowSendFrame('BatchFrame'));
+  await instance.dispatch();
+  const nextReceived = await nextMessage;
+  assert.equal(nextReceived.flowId, undefined);
+  assert.equal(nextReceived.flowOrigin, undefined);
+});
+
 class MemoryTransportFactory {
   constructor() {
     this.connection = new MemoryConnection();

@@ -31,6 +31,7 @@ import {
 } from './Protocol/ZlinkStreamFrameProtocol';
 import { validateName } from './Protocol/ZlinkStreamPacketNameValidator';
 import { normalizeOptions } from './ZlinkStreamConnectorOptions';
+import { ZlinkStreamDiagnosticsLevelCell } from './ZlinkStreamDiagnosticsLevelCell';
 import { connectorError, throwIfAborted } from './ZlinkStreamSupport';
 import { ZlinkStreamPendingRequests } from './ZlinkStreamPendingRequests';
 import { ZlinkStreamReceivedMessages } from './ZlinkStreamReceivedMessages';
@@ -55,20 +56,27 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
   private readonly frameSender: ZlinkStreamFrameSender;
   private readonly receiveDispatcher: ZlinkStreamReceiveDispatcher;
   private readonly inboundObservers: ZlinkStreamInboundObservers;
+  private readonly diagnosticsLevelCell: ZlinkStreamDiagnosticsLevelCell;
 
   readonly options: RequiredZlinkStreamConnectorOptions;
 
   constructor(options: ZlinkStreamConnectorOptions) {
     const flowContext: ZlinkFlowContext = new BrowserZlinkFlowContext();
     this.options = normalizeOptions(options, new BrowserStreamTransportFactory());
+    // Spec 26 §4.1 / spec stream-connector 32 §13: the level is a runtime
+    // control, not a construction-time constant. `options.diagnosticsLevel`
+    // is redefined as a live getter over the cell so every reader of
+    // `this.options` (protocol, metrics, application code) observes the
+    // current level instead of the value captured at connector creation.
+    this.diagnosticsLevelCell = new ZlinkStreamDiagnosticsLevelCell(this.options.diagnosticsLevel);
+    Object.defineProperty(this.options, 'diagnosticsLevel', {
+      enumerable: true,
+      configurable: true,
+      get: () => this.diagnosticsLevelCell.level
+    });
     const metrics = new ZlinkStreamRuntimeMetrics(this.options);
     const protocol = new ZlinkStreamFrameProtocol(this.options);
-    this.frameSender = new ZlinkStreamFrameSender(
-      protocol,
-      flowContext,
-      metrics,
-      this.options.diagnosticsLevel !== ZlinkStreamDiagnosticsLevel.Off
-    );
+    this.frameSender = new ZlinkStreamFrameSender(protocol, flowContext, metrics);
     this.inboundObservers = new ZlinkStreamInboundObservers(
       this.options.maxInboundObserverNotifications,
       this.options.maxInboundObserverPayloadPreviewBytes,
@@ -113,6 +121,27 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
 
   get pendingDispatchCount(): number {
     return this.pendingRequests.count;
+  }
+
+  /**
+   * Current diagnostics level (spec 26 §4.1, spec stream-connector 32 §13).
+   * Reflects the level set by the most recent {@link setDiagnosticsLevel}
+   * call, or the construction-time option (default
+   * {@link ZlinkStreamDiagnosticsLevel.Errors}) if it was never changed.
+   */
+  get diagnosticsLevel(): ZlinkStreamDiagnosticsLevel {
+    return this.diagnosticsLevelCell.level;
+  }
+
+  /**
+   * Changes the diagnostics level in place without recreating the connector
+   * (spec 26 §4.1, spec stream-connector 32 §13). The change is an atomic
+   * state update: it applies to processing points that read the level after
+   * this call returns and is never applied retroactively to frames already
+   * built. Rejects unknown values with {@link ZlinkStreamErrorCode.ConfigurationError}.
+   */
+  setDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel): void {
+    this.diagnosticsLevelCell.set(level);
   }
 
   onErrorReceived(handler: (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void): Disposable {

@@ -89,10 +89,12 @@ interface ZlinkStreamConnector {
   readonly closeReason?: ZlinkStreamCloseReason;
   readonly options: RequiredZlinkStreamConnectorOptions;
   readonly pendingDispatchCount: number;
+  readonly diagnosticsLevel: ZlinkStreamDiagnosticsLevel;
 
   connect(signal?: AbortSignal): Promise<void>;
   close(signal?: AbortSignal): Promise<void>;
   dispatch(signal?: AbortSignal): Promise<void>;
+  setDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel): void;
 
   send(payload: unknown, messageType?: Function): ZlinkStreamSendCall;
   request(payload: unknown, messageType?: Function): ZlinkStreamRequestCall;
@@ -276,13 +278,20 @@ interface ZlinkStreamConnectorOptions {
   readonly compressionCodec?: ZlinkStreamCompressionCodec;
   readonly nameResolver?: ZlinkStreamPacketNameResolver;
   readonly meterProvider?: ZlinkStreamMeterProvider;
-  readonly diagnosticsLevel?: ZlinkStreamDiagnosticsLevel; // default Errors
+  readonly diagnosticsLevel?: ZlinkStreamDiagnosticsLevel; // initial value at construction, default Errors
 }
 
 // The contract is owned by common spec §13. Default Errors; unknown values are a
 // configuration error. Off: outbound frames create no flow pair (0x10 not set), and
 // inbound flow value validation/delivery is skipped (structural length check kept,
 // ZlinkStreamMessage.flowId/flowOrigin are undefined).
+// Runtime read/write is provided by the connector's `diagnosticsLevel` getter and
+// `setDiagnosticsLevel(level)` (common spec §13, server spec 26 §4.1). Unknown values
+// passed to `setDiagnosticsLevel` are rejected with the same ConfigurationError as at
+// construction, leaving the previous value in place. A change applies starting with
+// processing points that read the level afterward and is never applied retroactively
+// to frames already built. `options.diagnosticsLevel` always matches the current
+// effective level.
 enum ZlinkStreamDiagnosticsLevel {
   Off = 'off',
   Errors = 'errors',

@@ -16,8 +16,7 @@ export class ZlinkStreamFrameSender {
   constructor(
     private readonly protocol: ZlinkStreamFrameProtocol,
     private readonly flowContext: ZlinkFlowContext,
-    private readonly metrics: ZlinkStreamRuntimeMetrics,
-    private readonly flowEnabled: boolean = true
+    private readonly metrics: ZlinkStreamRuntimeMetrics
   ) {}
 
   async send(
@@ -33,9 +32,11 @@ export class ZlinkStreamFrameSender {
     explicitFlow?: ZlinkStreamFlow
   ): Promise<void> {
     throwIfAborted(signal);
-    // Spec 27 §4: with diagnostics Off no flow id is generated or attached to
-    // the outbound frame (header flag 0x10 stays clear).
-    const flow = this.flowEnabled ? this.flowContext.currentOrCreate(explicitFlow) : undefined;
+    // Spec 27 §4 / spec stream-connector 32 §13: the diagnostics level is read
+    // exactly once per send, at the point the frame is built, so a level
+    // change never rewrites a frame already in flight and never splits a
+    // single send across two levels.
+    const flow = this.protocol.flowEnabled() ? this.flowContext.currentOrCreate(explicitFlow) : undefined;
     await this.write(
       connection,
       this.protocol.encode(kind, name, payload, metadata, compress, requestSeq, correlationId, flow?.flowId, flow?.flowOrigin),

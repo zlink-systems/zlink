@@ -85,7 +85,7 @@ function resolveCompressionCodec(options: ZlinkStreamConnectorOptions) {
 }
 
 
-function validateDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel | undefined): void {
+export function validateDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel | undefined): void {
   if (
     level !== undefined
     && level !== ZlinkStreamDiagnosticsLevel.Off

@@ -14,7 +14,7 @@ import type {
   ZlinkStreamInboundObservation,
   ZlinkStreamMessage
 } from './ZlinkStreamModels';
-import type { ZlinkStreamCloseReason, ZlinkStreamConnectionState } from './ZlinkStreamEnums';
+import type { ZlinkStreamCloseReason, ZlinkStreamConnectionState, ZlinkStreamDiagnosticsLevel } from './ZlinkStreamEnums';
 
 export interface ZlinkStreamConnector {
   readonly isConnected: boolean;
@@ -22,6 +22,19 @@ export interface ZlinkStreamConnector {
   readonly closeReason?: ZlinkStreamCloseReason;
   readonly options: RequiredZlinkStreamConnectorOptions;
   readonly pendingDispatchCount: number;
+  /**
+   * Current diagnostics level (spec 26 §4.1, spec stream-connector 32 §13).
+   * Always equal to `options.diagnosticsLevel`.
+   */
+  readonly diagnosticsLevel: ZlinkStreamDiagnosticsLevel;
+  /**
+   * Changes the diagnostics level at runtime without recreating the
+   * connector (spec 26 §4.1, spec stream-connector 32 §13). Applies to
+   * processing points that read the level after this call returns; never
+   * applied retroactively to frames already built. Rejects unknown values
+   * with {@link import('./ZlinkStreamEnums').ZlinkStreamErrorCode.ConfigurationError}.
+   */
+  setDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel): void;
   onErrorReceived(handler: (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void): Disposable;
   onDisconnected(handler: (signal?: AbortSignal) => Promise<void> | void): Disposable;
   onConnectionStateChanged(handler: (change: ZlinkStreamConnectionStateChanged, signal?: AbortSignal) => Promise<void> | void): Disposable;

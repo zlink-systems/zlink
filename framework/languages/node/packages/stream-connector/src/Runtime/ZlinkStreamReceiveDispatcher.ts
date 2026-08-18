@@ -54,9 +54,15 @@ export class ZlinkStreamReceiveDispatcher {
       return { available: false, inbound: false };
     }
     this.metrics.inbound(frameBytes.byteLength);
+    // Spec 26 §4.1 / spec stream-connector 32 §13: this inbound read is one
+    // processing point. The level is read exactly once here and threaded
+    // through header decode and dispatch for every frame in the batch, so a
+    // level change observed mid-batch by a handler can never split header
+    // parsing and flow installation across two levels for the same frame.
+    const flowEnabled = this.protocol.flowEnabled();
     let frames: ReturnType<ZlinkStreamFrameProtocol['decodeFrames']>;
     try {
-      frames = this.protocol.decodeFrames(frameBytes);
+      frames = this.protocol.decodeFrames(frameBytes, flowEnabled);
     } catch (cause) {
       await this.events.publishError(
         toStreamError(cause, ZlinkStreamErrorCode.FrameDecodeFailed, 'Frame decode failed.'),
@@ -66,7 +72,7 @@ export class ZlinkStreamReceiveDispatcher {
     }
     for (const frame of frames) {
       try {
-        await this.dispatch(connection, frame.header, frame.payload, signal);
+        await this.dispatch(connection, frame.header, frame.payload, signal, flowEnabled);
       } catch (cause) {
         if (
           frame.header.kind === ZlinkStreamMessageKind.Control &&
@@ -87,7 +93,8 @@ export class ZlinkStreamReceiveDispatcher {
     connection: ZlinkStreamConnection,
     header: ZlinkStreamHeader,
     payload: Uint8Array,
-    signal?: AbortSignal
+    signal: AbortSignal | undefined,
+    flowEnabled: boolean
   ): Promise<void> {
     this.inboundObservers.enqueue(header, payload, signal);
     if (header.kind === ZlinkStreamMessageKind.Response && header.requestSeq !== undefined) {
@@ -147,8 +154,10 @@ export class ZlinkStreamReceiveDispatcher {
     }
     if (header.kind === ZlinkStreamMessageKind.Send) {
       // Spec 27 §4: with diagnostics Off no inbound flow context is created
-      // or installed on delivered messages.
-      const flow = this.protocol.flowEnabled()
+      // or installed on delivered messages. Uses the level snapshot taken
+      // once for this whole inbound batch (see readAndDispatch), not a fresh
+      // read, so it always agrees with how the header was just decoded.
+      const flow = flowEnabled
         ? this.flowContext.createInbound(header.flowId, header.flowOrigin)
         : undefined;
       this.receivedMessages.enqueue({

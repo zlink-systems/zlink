@@ -72,10 +72,12 @@ interface ZlinkStreamConnector {
   readonly closeReason?: ZlinkStreamCloseReason;
   readonly options: RequiredZlinkStreamConnectorOptions;
   readonly pendingDispatchCount: number;
+  readonly diagnosticsLevel: ZlinkStreamDiagnosticsLevel;
 
   connect(signal?: AbortSignal): Promise<void>;
   close(signal?: AbortSignal): Promise<void>;
   dispatch(signal?: AbortSignal): Promise<void>;
+  setDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel): void;
 
   send(payload: unknown, messageType?: Function): ZlinkStreamSendCall;
   request(payload: unknown, messageType?: Function): ZlinkStreamRequestCall;
@@ -257,12 +259,17 @@ interface ZlinkStreamConnectorOptions {
   readonly compressionCodec?: ZlinkStreamCompressionCodec;
   readonly nameResolver?: ZlinkStreamPacketNameResolver;
   readonly meterProvider?: ZlinkStreamMeterProvider;
-  readonly diagnosticsLevel?: ZlinkStreamDiagnosticsLevel; // 기본 Errors
+  readonly diagnosticsLevel?: ZlinkStreamDiagnosticsLevel; // 생성 시점 초기값, 기본 Errors
 }
 
 // 계약은 공통 스펙 §13이 소유한다. 기본값 Errors, 미지 값은 구성 오류.
 // Off: outbound frame flow pair 미생성(0x10 미설정), inbound flow 값 검증·전달 생략
 // (구조 길이 검사 유지, ZlinkStreamMessage.flowId/flowOrigin은 undefined).
+// 실행 중 read/write는 connector의 `diagnosticsLevel` getter와
+// `setDiagnosticsLevel(level)`가 제공한다(공통 스펙 §13, 서버 스펙 26 §4.1). 미지 값은
+// `setDiagnosticsLevel`도 생성 시점과 같은 ConfigurationError로 거부하며, 이전 값을
+// 그대로 유지한다. 변경은 그 뒤의 처리 지점부터 적용되고 이미 만들어진 frame에는
+// 소급 적용하지 않는다. `options.diagnosticsLevel`은 항상 현재 유효 level과 일치한다.
 enum ZlinkStreamDiagnosticsLevel {
   Off = 'off',
   Errors = 'errors',
