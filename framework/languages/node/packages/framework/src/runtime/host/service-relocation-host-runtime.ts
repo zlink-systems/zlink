@@ -69,10 +69,10 @@ import {
 } from './relocation-direct-transfer';
 import {
   captureRelocationAdapterState,
-  decodeRelocationBaseBundle,
-  encodeRelocationBaseBundle,
+  encodeRelocationBaseBundleFramed,
   encodeRelocationBaseDeltaState,
   restoreRelocationAdapterState,
+  ZLinkRelocationBaseStageBuffer,
   type ZLinkRelocationStateAdapterLike
 } from './relocation-state-adapter';
 import {
@@ -283,13 +283,6 @@ interface TargetRelocationOffer {
   readonly basePayloads?: ReadonlyMap<string, Buffer>;
 }
 
-interface TargetBaseBuffer {
-  readonly chunks: Buffer[];
-  nextOrdinal: number;
-  readonly sourceNodeRid: string;
-  fingerprint?: string;
-}
-
 interface TargetPrepareOperation {
   readonly fingerprint: string;
   readonly promise: Promise<ServiceMaintenanceRelocationReady>;
@@ -365,7 +358,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   private readonly sourceRelocationIds = new Set<string>();
   private readonly targetAssemblies = new Map<string, TargetPayloadAssembly>();
   /** Pre-seal base-stage chunks accumulated before their manifest (relocationPrepare) arrives. */
-  private readonly targetBaseBuffers = new Map<string, TargetBaseBuffer>();
+  private readonly targetBaseBuffers = new Map<string, ZLinkRelocationBaseStageBuffer>();
   /**
    * Terminal restore failures (assembly/checksum/factory/restore error): the
    * target already sent relocationFailed (command 53) once. An exact-identity
@@ -942,30 +935,19 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       coordinator: request.coordinator,
       object: request.object
     });
+    const sourceNodeRidKey = String(sourceNodeRid);
     let pending = this.targetBaseBuffers.get(operationKey);
     if (pending === undefined) {
       if (request.chunkOrdinal !== 0) {
         console.warn('[zlink.runtime.relocation.stale_base_chunk]', operationKey);
         return;
       }
-      pending = {
-        chunks: [],
-        nextOrdinal: 0,
-        sourceNodeRid: String(sourceNodeRid),
-        fingerprint: identityFingerprint
-      };
+      pending = new ZLinkRelocationBaseStageBuffer(sourceNodeRidKey, identityFingerprint);
       this.targetBaseBuffers.set(operationKey, pending);
     }
-    if (
-      pending.sourceNodeRid !== String(sourceNodeRid)
-      || pending.fingerprint !== identityFingerprint
-      || request.chunkOrdinal !== pending.nextOrdinal
-    ) {
+    if (!pending.accept(request.chunkOrdinal, request.chunkData, sourceNodeRidKey, identityFingerprint)) {
       console.warn('[zlink.runtime.relocation.stale_base_chunk]', operationKey);
-      return;
     }
-    pending.chunks.push(Buffer.from(request.chunkData));
-    pending.nextOrdinal += 1;
   }
 
   private registerTargetAssembly(
@@ -2068,10 +2050,11 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     // this already-transmitted buffer on the target (spec 15 §5). The
     // manifest above (payloadTotalLength/ChunkCount/ChecksumCrc32c) only
     // describes the delta that follows the Restore request.
-    const baseBlob = preSealBases.size === 0
+    const baseFrame = preSealBases.size === 0
       ? undefined
-      : encodeRelocationBaseBundle(preSealBases);
-    const baseChecksumCrc32c = baseBlob === undefined ? 0 : crc32c(baseBlob);
+      : encodeRelocationBaseBundleFramed(preSealBases);
+    const baseBlob = baseFrame?.blob;
+    const baseChecksumCrc32c = baseFrame?.checksumCrc32c ?? 0;
     let readyReceived = false;
     let sourceCommitted = false;
     try {
@@ -2480,27 +2463,21 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const pending = this.targetBaseBuffers.get(stagingId);
     this.targetBaseBuffers.delete(stagingId);
     if (request.baseChecksumCrc32c === 0) return undefined;
-    if (pending === undefined || pending.chunks.length === 0) {
+    if (pending === undefined) {
       throw new ServiceRelocationDataLostError(
         `Relocation '${stagingId}' declared a base checksum but no base chunks arrived.`
       );
     }
-    const expectedFingerprint = stringifyWire({
-      coordinator: request.coordinator,
-      object: request.object
-    });
-    if (pending.fingerprint !== expectedFingerprint) {
+    try {
+      return pending.resolve(
+        stringifyWire({ coordinator: request.coordinator, object: request.object }),
+        request.baseChecksumCrc32c
+      );
+    } catch (error) {
       throw new ServiceRelocationDataLostError(
-        `Relocation '${stagingId}' base chunks do not match the Prepare identity.`
+        `Relocation '${stagingId}' ${(error as Error).message}`
       );
     }
-    const blob = Buffer.concat(pending.chunks);
-    if (crc32c(blob) !== request.baseChecksumCrc32c) {
-      throw new ServiceRelocationDataLostError(
-        `Relocation '${stagingId}' base snapshot failed its checksum.`
-      );
-    }
-    return decodeRelocationBaseBundle(blob);
   }
 
   private async handlePrepareControl(

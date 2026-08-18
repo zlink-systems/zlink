@@ -12,8 +12,6 @@ export interface ZLinkRelocationStateAdapterLike<TInstance> {
   applyDelta?(instance: TInstance, payload: Uint8Array, signal: AbortSignal): Promise<void>;
 }
 
-export { zlinkRelocationAdapterHasBaseDelta as relocationAdapterHasBaseDelta };
-
 const BASE_DELTA_MAGIC = Buffer.from([0x5a, 0x4c, 0x42, 0x44]); // 'ZLBD'
 const BASE_DELTA_VERSION = 1;
 
@@ -91,6 +89,75 @@ export function encodeRelocationBaseBundle(
     parts.push(header, keyBytes, Buffer.from(data));
   }
   return Buffer.concat(parts);
+}
+
+export interface ZLinkRelocationBaseBundleFrame {
+  readonly blob: Buffer;
+  readonly checksumCrc32c: number;
+}
+
+/**
+ * Encodes the base bundle and computes its baseChecksumCrc32c together — the
+ * source's relocationPrepare manifest and the target's
+ * {@link ZLinkRelocationBaseStageBuffer.resolve} agree on exactly one
+ * checksum definition (the framed blob's CRC-32C), so callers never
+ * recompute it themselves.
+ */
+export function encodeRelocationBaseBundleFramed(
+  bases: ReadonlyMap<string, Uint8Array>
+): ZLinkRelocationBaseBundleFrame {
+  const blob = encodeRelocationBaseBundle(bases);
+  return { blob, checksumCrc32c: crc32c(blob) };
+}
+
+/**
+ * Owns one target's pre-seal base-stage chunk buffer end to end: ordered
+ * accumulation under a fixed source+identity fence, then checksum
+ * verification and bundle decode once its relocationPrepare manifest
+ * resolves it (spec 15 §5). Base-stage chunks travel ahead of that manifest,
+ * so this buffer is the sole place that knows how an in-flight base stage is
+ * assembled — callers only fence identity per chunk and read back the
+ * decoded per-authority snapshot map.
+ */
+export class ZLinkRelocationBaseStageBuffer {
+  private readonly chunks: Buffer[] = [];
+  private nextOrdinal = 0;
+
+  constructor(
+    private readonly sourceNodeRid: string,
+    private readonly fingerprint: string
+  ) {}
+
+  /**
+   * Appends one in-order chunk under the given identity fence. Returns false
+   * (chunk discarded, buffer unchanged) when the fence or ordinal does not
+   * continue this buffer — a chunk from a superseded or unrelated attempt.
+   */
+  accept(ordinal: number, data: Uint8Array, sourceNodeRid: string, fingerprint: string): boolean {
+    if (this.sourceNodeRid !== sourceNodeRid
+      || this.fingerprint !== fingerprint
+      || ordinal !== this.nextOrdinal) {
+      return false;
+    }
+    this.chunks.push(Buffer.from(data));
+    this.nextOrdinal += 1;
+    return true;
+  }
+
+  /**
+   * Verifies the assembled blob against the Prepare manifest's identity and
+   * checksum, then decodes it into the per-authority base snapshot map.
+   */
+  resolve(expectedFingerprint: string, baseChecksumCrc32c: number): ReadonlyMap<string, Buffer> {
+    if (this.fingerprint !== expectedFingerprint) {
+      throw new Error('base chunks do not match the Prepare identity.');
+    }
+    const blob = Buffer.concat(this.chunks);
+    if (crc32c(blob) !== baseChecksumCrc32c) {
+      throw new Error('base snapshot failed its checksum.');
+    }
+    return decodeRelocationBaseBundle(blob);
+  }
 }
 
 /** Inverse of {@link encodeRelocationBaseBundle}. Throws on a malformed blob. */
