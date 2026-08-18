@@ -149,9 +149,11 @@ public sealed class CanonicalAuthorityAggregateGenerationTests
             "target-node",
             CoordinatorNodeGeneration: 13,
             Phase: 4,
-            RelocationReference: "root-reference",
-            RelocationChecksumCrc32c: 17,
-            ApplicationVersion: 3);
+            ApplicationVersion: 3)
+        {
+            RelocationReference = "root-reference",
+            RelocationChecksumCrc32c = 17
+        };
     }
 
     private static byte[] RemoveAggregateGenerationExtension(

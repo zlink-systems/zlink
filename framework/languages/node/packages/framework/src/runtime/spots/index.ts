@@ -2768,10 +2768,6 @@ function decodeFormalRemoteTransferRequestBytes(
       || payload.phase === REMOTE_ACTOR_JOIN_ABORT
       || (
       typeof payload.transferState === 'string'
-      || (
-        typeof payload.transferStateReference === 'string'
-        && typeof payload.transferStateChecksumCrc32c === 'number'
-      )
       )
     )
     || typeof payload.request !== 'string'
@@ -2792,12 +2788,6 @@ function decodeFormalRemoteTransferRequestBytes(
       : undefined,
     transferState: typeof payload.transferState === 'string'
       ? payload.transferState
-      : undefined,
-    transferStateReference: typeof payload.transferStateReference === 'string'
-      ? payload.transferStateReference
-      : undefined,
-    transferStateChecksumCrc32c: typeof payload.transferStateChecksumCrc32c === 'number'
-      ? payload.transferStateChecksumCrc32c
       : undefined,
     request: payload.request,
     requestContentType: typeof payload.requestContentType === 'string'

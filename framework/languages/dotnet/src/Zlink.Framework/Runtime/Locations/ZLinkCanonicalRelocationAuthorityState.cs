@@ -22,6 +22,49 @@ internal sealed record ZLinkCanonicalRelocationAuthorityState(
     byte Phase,
     long ApplicationVersion)
 {
+    internal ZLinkCanonicalRelocationAuthorityState(
+        ulong relocationHigh,
+        ulong relocationLow,
+        ulong targetAttemptGeneration,
+        string sourceNodeRid,
+        ulong sourceNodeGeneration,
+        string sourceOwnerId,
+        ulong sourceOwnerLeaseGeneration,
+        string targetNodeRid,
+        ulong targetNodeGeneration,
+        string targetOwnerId,
+        ulong targetOwnerLeaseGeneration,
+        string coordinatorOwnerId,
+        ulong coordinatorLeaseGeneration,
+        string coordinatorNodeRid,
+        ulong coordinatorNodeGeneration,
+        byte phase,
+        string relocationReference,
+        uint relocationChecksumCrc32c,
+        long applicationVersion)
+        : this(
+            relocationHigh,
+            relocationLow,
+            targetAttemptGeneration,
+            sourceNodeRid,
+            sourceNodeGeneration,
+            sourceOwnerId,
+            sourceOwnerLeaseGeneration,
+            targetNodeRid,
+            targetNodeGeneration,
+            targetOwnerId,
+            targetOwnerLeaseGeneration,
+            coordinatorOwnerId,
+            coordinatorLeaseGeneration,
+            coordinatorNodeRid,
+            coordinatorNodeGeneration,
+            phase,
+            applicationVersion)
+    {
+        RelocationReference = relocationReference;
+        RelocationChecksumCrc32c = relocationChecksumCrc32c;
+    }
+
     internal ulong AggregateGeneration { get; init; }
     internal string CoordinatorExpectedAuthorityStoreVersion { get; init; } = "";
 
@@ -47,6 +90,33 @@ internal sealed record ZLinkCanonicalRelocationAuthorityProjection(
     ReadOnlyMemory<byte> SteadyAuthorityPayload,
     ZLinkCanonicalRelocationAuthorityState State)
 {
+    internal ZLinkCanonicalRelocationAuthorityProjection(
+        ulong relocationHigh,
+        ulong relocationLow,
+        ulong targetAttemptGeneration,
+        string targetOwnerId,
+        ulong targetOwnerLeaseGeneration,
+        byte phase,
+        string relocationReference,
+        uint relocationChecksumCrc32c,
+        long applicationVersion,
+        ReadOnlyMemory<byte> steadyAuthorityPayload,
+        ZLinkCanonicalRelocationAuthorityState state)
+        : this(
+            relocationHigh,
+            relocationLow,
+            targetAttemptGeneration,
+            targetOwnerId,
+            targetOwnerLeaseGeneration,
+            phase,
+            applicationVersion,
+            relocationReference,
+            relocationChecksumCrc32c,
+            steadyAuthorityPayload,
+            state)
+    {
+    }
+
     internal ulong AggregateGeneration { get; init; }
 }
 

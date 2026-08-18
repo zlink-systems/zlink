@@ -1776,6 +1776,7 @@ internal sealed class CanonicalRelocationTransportProbe
     private RoutingId _prepareTargetNodeRid;
     private RoutingId _prepareSourceNodeRid;
     private ZLinkServiceWireCodec.RelocationPrepareRecord? _prepare;
+    private ZLinkRelocationTransferPayload? _preparePayload;
     private TimeSpan _prepareTimeout;
     private IZLinkBackendCanonicalRelocation? _transport;
     private RoutingId _targetNodeRid;
@@ -1855,6 +1856,9 @@ internal sealed class CanonicalRelocationTransportProbe
         .PrepareAsync(
             _prepare ?? throw new InvalidOperationException(
                 "No canonical prepare was captured."),
+            ZLinkRelocationEnvelopeCodec.Decode(
+                (_preparePayload ?? throw new InvalidOperationException(
+                    "No canonical prepare payload was captured.")).Encoded.Span),
             _prepareSourceNodeRid,
             new ZLinkCanonicalRelocationPreparationLease(),
             cancellationToken);
@@ -1870,6 +1874,9 @@ internal sealed class CanonicalRelocationTransportProbe
                 TargetAttemptGeneration = checked(
                     _prepare.TargetAttemptGeneration + 1)
             },
+            ZLinkRelocationEnvelopeCodec.Decode(
+                (_preparePayload ?? throw new InvalidOperationException(
+                    "No canonical prepare payload was captured.")).Encoded.Span),
             _prepareSourceNodeRid,
             new ZLinkCanonicalRelocationPreparationLease(),
             cancellationToken);
@@ -1895,18 +1902,21 @@ internal sealed class CanonicalRelocationTransportProbe
             IZLinkBackendCanonicalRelocation transport,
             RoutingId targetNodeRid,
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+            ZLinkRelocationTransferPayload payload,
             TimeSpan timeout,
             CancellationToken cancellationToken)
     {
         _prepareTransport = transport;
         _prepareTargetNodeRid = targetNodeRid;
         _prepare = prepare;
+        _preparePayload = payload;
         _prepareTimeout = timeout;
         PrepareCallStarted.TrySetResult();
         await ReleasePrepareCall.Task.WaitAsync(cancellationToken);
         var ready = await transport.PrepareCanonicalRelocationAsync(
                 targetNodeRid,
                 prepare,
+                payload,
                 timeout,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -1923,6 +1933,8 @@ internal sealed class CanonicalRelocationTransportProbe
             _prepareTargetNodeRid,
             _prepare ?? throw new InvalidOperationException(
                 "No canonical prepare was captured."),
+            _preparePayload ?? throw new InvalidOperationException(
+                "No canonical prepare payload was captured."),
             timeout ?? _prepareTimeout,
             cancellationToken)
         ?? throw new InvalidOperationException(
@@ -2242,8 +2254,9 @@ internal class ProbedBackendSpotNode : DispatchProxy
                 canonical,
                 (RoutingId)args[0]!,
                 (ZLinkServiceWireCodec.RelocationPrepareRecord)args[1]!,
-                (TimeSpan)args[2]!,
-                (CancellationToken)args[3]!);
+                (ZLinkRelocationTransferPayload)args[2]!,
+                (TimeSpan)args[3]!,
+                (CancellationToken)args[4]!);
         if (targetMethod.Name == nameof(
                 IZLinkBackendCanonicalRelocation.SendCanonicalRelocationDataAsync))
             return _probe.SendDataAsync(

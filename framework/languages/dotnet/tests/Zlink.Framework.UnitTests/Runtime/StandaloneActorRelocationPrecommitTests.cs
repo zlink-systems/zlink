@@ -96,20 +96,14 @@ public sealed class StandaloneActorRelocationPrecommitTests
                 [],
                 default),
             applicationVersion: 1);
-        var stored = new ZLinkRelocationStored(
-            "precommit-root",
-            0x12345678,
-            DateTimeOffset.UtcNow + TimeSpan.FromHours(24),
-            DateTimeOffset.UtcNow);
         lossyStore.LoseNextResponse();
         var captured = await coordinator.CaptureAsync(
             preparing,
             envelope,
-            stored,
             CancellationToken.None);
         var capturedState = Projection(captured);
         Assert.Equal(2, capturedState.Phase);
-        Assert.Equal(stored.Reference, capturedState.RelocationReference);
+        Assert.Equal(string.Empty, capturedState.RelocationReference);
         Assert.Equal(0UL, capturedState.TargetAttemptGeneration);
 
         var prepare = ZLinkStandaloneActorRelocationRuntime.CreatePrepare(
@@ -117,7 +111,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
             sourceAuthority,
             target,
             envelope,
-            stored,
+            ZLinkRelocationTransferPayload.Create(envelope, 1024),
             applicationVersion: 1);
 
         var targetAuthority = Authority(actorId, target, targetOwner);
