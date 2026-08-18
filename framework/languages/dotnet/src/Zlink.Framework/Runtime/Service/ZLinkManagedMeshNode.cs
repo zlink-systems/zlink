@@ -7361,7 +7361,22 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Peer? peer;
         lock (_gate)
             _peersByRid.TryGetValue(targetRid, out peer);
-        if (peer is null || !peer.Admitted)
+        if (peer is null)
+        {
+            // Spec 32-framework-error-model:76-77 -- a target this runtime
+            // has never admitted (absent from _peersByRid) does not exist
+            // from the requester's perspective and must complete NotFound,
+            // not Unavailable. _peersByRid.Remove() on disconnect erases the
+            // peer entry outright (no retained "known but currently
+            // unreachable" state), so a missing entry is, by this runtime's
+            // own model, simply a target that does not exist. Matches
+            // Java's ZLinkJavaRawSpotNode.classifyNodeSendTarget (peerState
+            // absent -> TARGET_NOT_FOUND) and Node's
+            // raw-service-mesh-runtime.ts knownTarget gate (unknown RID ->
+            // RequestResult.NotFound).
+            return SubmitResult.NotFound;
+        }
+        if (!peer.Admitted)
             return SubmitResult.NotConnected;
         var wire = new List<ReadOnlyMemory<byte>>(metadata.IsEmpty ? 2 : 3);
         try
