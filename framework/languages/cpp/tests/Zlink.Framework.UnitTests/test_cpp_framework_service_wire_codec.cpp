@@ -1577,19 +1577,52 @@ int main ()
         }
         assert (rejected);
     }
-    for (const auto &malformed_request :
-         {protocol::encode_node_request_header (correlation),
-          protocol::encode_reply_header (correlation, 0, 0)}) {
-        auto trailing = malformed_request;
+    {
+        // node_request_header has no schema tail: any trailing byte is
+        // protocol error.
+        auto trailing = protocol::encode_node_request_header (correlation);
         trailing.push_back (0);
         bool rejected = false;
         try {
-            if (malformed_request.size () == 13) {
-                static_cast<void> (
-                  protocol::decode_node_request_header (trailing));
-            } else {
-                static_cast<void> (protocol::decode_reply_header (trailing));
-            }
+            static_cast<void> (
+              protocol::decode_node_request_header (trailing));
+        } catch (const protocol::service_wire_error_t &) {
+            rejected = true;
+        }
+        assert (rejected);
+    }
+
+    // GOLDEN - reply(20).tail is an inline `request-specific-tail`
+    // conditional-union with no bodyLengthType (service-wire-v1.schema.json).
+    // decode_reply_header cannot know the original operation kind, so it
+    // MUST accept trailing tail bytes rather than rejecting them; the
+    // operation-specific decoder is responsible for validating the tail's
+    // structure. This mirrors Node's decodeReplyHeader (`frame.byteLength <
+    // 21` bound, no exact-length check) and .NET's equivalent.
+    {
+        auto no_tail = protocol::encode_reply_header (correlation, 0, 0);
+        const auto decoded_no_tail = protocol::decode_reply_header (no_tail);
+        assert (decoded_no_tail.correlation == correlation);
+        assert (decoded_no_tail.terminal_result == 0);
+        assert (decoded_no_tail.failure_code == 0);
+
+        auto with_tail = protocol::encode_reply_header (correlation, 0, 0);
+        // Simulate an inline actorLookup-ok tail (arbitrary extra bytes);
+        // decode_reply_header must not throw merely because a tail follows.
+        with_tail.insert (
+          with_tail.end (), {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08});
+        const auto decoded_with_tail =
+          protocol::decode_reply_header (with_tail);
+        assert (decoded_with_tail.correlation == correlation);
+        assert (decoded_with_tail.terminal_result == 0);
+        assert (decoded_with_tail.failure_code == 0);
+
+        // A frame truncated below the fixed 16-byte body is still rejected.
+        auto truncated = no_tail;
+        truncated.pop_back ();
+        bool rejected = false;
+        try {
+            static_cast<void> (protocol::decode_reply_header (truncated));
         } catch (const protocol::service_wire_error_t &) {
             rejected = true;
         }

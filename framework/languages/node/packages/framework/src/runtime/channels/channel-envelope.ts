@@ -347,10 +347,20 @@ function decodeChannelError(header: ZLinkChannelEnvelopeHeader): ZLinkChannelDec
       ?? ZLinkFrameworkErrorKind.InternalFailure;
     failure = new ZLinkFrameworkException(publicKind, message);
   }
-  const origin = header.metadata[ZLINK_FRAMEWORK_ORIGIN_METADATA_KEY];
-  if (origin !== undefined) {
-    failure.origin = origin;
-  }
+  //  Cross-language contract (.NET ZLinkErrorOriginWire.RemoteReplyOrigin /
+  //  ZLinkEnvelopeErrorMapper): every error DECODED FROM A REMOTE REPLY is
+  //  classified, never left unmarked. The zlink.origin=framework marker
+  //  means the framework itself produced the error (stale route, sealed
+  //  admission, dispatch rejection); its absence means a remote application
+  //  handler produced it. Local/transport failures that never round-trip a
+  //  reply (this function's only caller, decodeChannelReply, is only
+  //  reached for bytes that DID come back over the wire) are unaffected and
+  //  stay unclassified (`origin: undefined`, i.e. "unspecified") because
+  //  they never call this function at all.
+  failure.origin = header.metadata[ZLINK_FRAMEWORK_ORIGIN_METADATA_KEY]
+    === ZLINK_FRAMEWORK_ORIGIN_METADATA_VALUE
+    ? ZLINK_FRAMEWORK_ORIGIN_METADATA_VALUE
+    : 'application';
   return failure;
 }
 

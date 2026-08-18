@@ -250,11 +250,20 @@ public final class ZLinkServiceM6AWireCodec {
             || header.flags() != 0) {
             throw protocol("invalid reply header");
         }
+        //  service-wire-v1.schema.json: reply(20).tail -> `request-specific-tail`,
+        //  a conditional-union with NO `bodyLengthType`, so any inline tail
+        //  bytes for the selected case (keyed on the original operation kind,
+        //  which is not recoverable from this generic header) follow
+        //  immediately after failureCode. This generic decoder therefore only
+        //  requires the fixed 16-byte body to be present; trailing bytes
+        //  belong to the tail and are validated by the operation-specific
+        //  reply decoder, matching Node/.NET's decodeReplyHeader semantics.
+        //  Do not call reader.end() here: it would reject a reply that
+        //  carries a non-empty tail.
         Reader reader = new Reader(frame, PREFIX_BYTES);
         long correlation = reader.nonzeroU64("correlation");
         int terminal = reader.intU32("terminalResult");
         int failure = reader.intU32("failureCode");
-        reader.end();
         validateReply(correlation, terminal, failure);
         return new Reply(correlation, terminal, failure);
     }

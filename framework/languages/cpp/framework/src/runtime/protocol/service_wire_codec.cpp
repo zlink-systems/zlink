@@ -3924,9 +3924,17 @@ reply_header_t decode_reply_header (std::span<const std::uint8_t> bytes)
 {
     const auto header = decode_header (bytes);
     if (header.kind != command::reply || header.flags != 0
-        || bytes.size () != prefix_size + 16) {
+        || bytes.size () < prefix_size + 16) {
         throw service_wire_error_t ("invalid reply header");
     }
+    //  service-wire-v1.schema.json: reply(20).tail -> `request-specific-tail`,
+    //  a conditional-union with NO `bodyLengthType`, so any inline tail bytes
+    //  for the selected case (keyed on the original operation kind, which is
+    //  not recoverable from this generic header) follow immediately after
+    //  failureCode. This generic decoder therefore only requires AT LEAST
+    //  the fixed 16-byte body; trailing bytes belong to the tail and are
+    //  validated by the operation-specific reply decoder, matching
+    //  Node/.NET's decodeReplyHeader semantics.
     std::size_t offset = prefix_size;
     const auto correlation = read_u64 (bytes, offset);
     const auto terminal = read_u32 (bytes, offset);

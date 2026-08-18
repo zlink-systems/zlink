@@ -932,7 +932,11 @@ test('channel Error decode degrades unknown and numeric errorCode names to Inter
       (error) => error instanceof framework.ZLinkFrameworkException
         && error.kind === framework.ZLinkFrameworkErrorKind.InternalFailure
         && error.message === 'unknown failure'
-        && error.origin === undefined,
+        //  Cross-language contract (.NET ZLinkErrorOriginWire.RemoteReplyOrigin):
+        //  every error decoded from a remote reply is classified -- no
+        //  zlink.origin marker means the remote application handler
+        //  produced it, never "unspecified".
+        && error.origin === 'application',
       errorCode
     );
   }
@@ -965,10 +969,13 @@ test('channel Error decode exposes the zlink.origin metadata on the decoded erro
     );
     assert.throws(
       () => envelope.decodeChannelReply(readable(unmarkedParts)),
+      //  No zlink.origin marker: the remote application handler produced
+      //  this error, so it is classified 'application' (never left
+      //  unspecified for a decoded remote reply -- matches .NET
+      //  ZLinkErrorOriginWire.RemoteReplyOrigin).
       (error) => error instanceof framework.ZLinkFrameworkException
         && error.kind === framework.ZLinkFrameworkErrorKind.NotFound
-        && error.origin === undefined
-        && !('origin' in error)
+        && error.origin === 'application'
     );
   } finally {
     envelope.closeMessages(requestParts);

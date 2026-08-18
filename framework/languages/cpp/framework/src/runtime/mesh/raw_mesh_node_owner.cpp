@@ -987,6 +987,22 @@ task_t<bool> raw_mesh_node_owner_t::submit_request (
                     "request reply has an invalid part count");
               }
               const auto reply = protocol::decode_reply_header (parts.front ());
+              //  This is a generic application request reply (requestToNode
+              //  / spotRequest): its originalOperationKind is not one of
+              //  request-specific-tail's tail-bearing cases
+              //  (service-wire-v1.schema.json), so the schema's "otherwise"
+              //  branch applies and the tail MUST be empty. decode_reply_header
+              //  itself now permissively accepts tail-bearing frames (fix for
+              //  the residual-convergence tail rejection bug), so this generic
+              //  caller enforces the empty-tail contract explicitly, matching
+              //  Node's raw-service-mesh-runtime.ts generic reply guard
+              //  ("Generic node/channel reply carries an operation-specific
+              //  tail.").
+              if (parts.front ().size () != 21) {
+                  throw protocol::service_wire_error_t (
+                    "generic request reply carries an operation-specific "
+                    "tail");
+              }
               if (reply.correlation != request.correlation) {
                   throw protocol::service_wire_error_t (
                     "request reply correlation does not match");

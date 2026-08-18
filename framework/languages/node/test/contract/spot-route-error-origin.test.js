@@ -147,3 +147,40 @@ test('D5 successful spot route reply carries no origin marker', async () => {
   assert.equal(header.kind, 2); // Response
   assert.equal(Object.prototype.hasOwnProperty.call(header.metadata ?? {}, ORIGIN_KEY), false);
 });
+
+// D5 (client side of the same contract): the route requester's completion
+// path decodes the server-written reply above via decodeChannelReply, which
+// must surface `.origin` classified as 'framework' (marker present) or
+// 'application' (marker absent) -- never leave it undefined/'none' for a
+// reply that genuinely round-tripped a remote peer. Residual-convergence fix:
+// Node previously left `.origin` unset whenever the marker was absent,
+// unlike .NET's ZLinkErrorOriginWire.RemoteReplyOrigin, which always
+// classifies a decoded remote reply as framework or application.
+test('D5 route requester decode classifies a framework-marked error reply as origin=framework', () => {
+  const framed = channelEnvelope.encodeChannelErrorReplyParts(
+    { channelName: 'mesh', messageName: 'RoutePing', correlationId: 'corr-origin-2' },
+    new (require('../../packages/framework/dist').ZLinkFrameworkException)(
+      0 /* NotFound */,
+      'no route handler registered'
+    ),
+    { [ORIGIN_KEY]: 'framework' }
+  );
+  assert.throws(
+    () => channelEnvelope.decodeChannelReply(framed.map((part) => fakePart(part))),
+    (error) => error.origin === 'framework'
+  );
+});
+
+test('D5 route requester decode classifies an unmarked (application) error reply as origin=application, never none/unspecified', () => {
+  const framed = channelEnvelope.encodeChannelErrorReplyParts(
+    { channelName: 'mesh', messageName: 'RoutePing', correlationId: 'corr-origin-3' },
+    new (require('../../packages/framework/dist').ZLinkFrameworkException)(
+      4 /* Rejected */,
+      'application spot route failure'
+    )
+  );
+  assert.throws(
+    () => channelEnvelope.decodeChannelReply(framed.map((part) => fakePart(part))),
+    (error) => error.origin === 'application'
+  );
+});

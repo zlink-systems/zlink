@@ -2798,8 +2798,27 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_node (
             operation, operation_kind_t::none, terminal,
           std::move (payload));
       });
-    if (!accepted)
+    if (!accepted) {
         release_completion (operation);
+        //  Spec 32-framework-error-model:76-77 -- a target this runtime has
+        //  never admitted (absent from the live peer table) does not exist
+        //  from the requester's perspective and must complete NotFound, not
+        //  Unavailable. `submitted(false)` below collapses every rejected
+        //  request_to_node into `not_connected` (-> Unavailable via
+        //  boundary_error_t::disconnected, see call_facade_runtime.cpp), but
+        //  that is only correct for a target that WAS reachable and merely
+        //  is not right now. service_topology_registry_t has no "known but
+        //  currently unreachable" state distinct from "not a peer" --
+        //  disconnect() erases the peer entry outright -- so any target
+        //  absent from the live peer table is, by this runtime's own model,
+        //  simply a target that does not exist. Matches Java's
+        //  ZLinkJavaRawSpotNode.classifyNodeSendTarget (peerState absent ->
+        //  TARGET_NOT_FOUND, i.e. NotFound) and Node's
+        //  raw-service-mesh-runtime.ts knownTarget gate (unknown RID ->
+        //  RequestResult.NotFound).
+        if (!_transport->topology ().peer (target.to_bytes ()))
+            co_return zlink::submit_result_t::not_found;
+    }
     co_return submitted (accepted);
 }
 

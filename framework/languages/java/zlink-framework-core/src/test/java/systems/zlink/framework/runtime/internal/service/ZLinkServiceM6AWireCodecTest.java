@@ -98,6 +98,36 @@ final class ZLinkServiceM6AWireCodecTest {
             codec.encodeReplyHeader(8, 102, 14));
     }
 
+    //  GOLDEN - reply(20).tail is an inline `request-specific-tail`
+    //  conditional-union with no bodyLengthType. decodeReplyHeader cannot
+    //  know the original operation kind (it is external correlation
+    //  context), so it MUST accept trailing tail bytes instead of rejecting
+    //  them -- the operation-specific decoder validates the tail's
+    //  structure. This mirrors Node's decodeReplyHeader (`frame.byteLength <
+    //  21` bound, no exact-length check) and .NET's equivalent.
+    @Test
+    void decodeReplyHeaderAcceptsFramesWithAndWithoutInlineTail() {
+        byte[] noTail = codec.encodeReplyHeader(43, 0, 0);
+        ZLinkServiceM6AWireCodec.Reply decodedNoTail =
+            codec.decodeReplyHeader(noTail);
+        assertEquals(43, decodedNoTail.correlation());
+        assertEquals(0, decodedNoTail.terminalResult());
+        assertEquals(0, decodedNoTail.failureCode());
+
+        byte[] withTail = Arrays.copyOf(noTail, noTail.length + 8);
+        System.arraycopy(
+            hex("0102030405060708"), 0, withTail, noTail.length, 8);
+        ZLinkServiceM6AWireCodec.Reply decodedWithTail =
+            codec.decodeReplyHeader(withTail);
+        assertEquals(43, decodedWithTail.correlation());
+        assertEquals(0, decodedWithTail.terminalResult());
+        assertEquals(0, decodedWithTail.failureCode());
+
+        assertThrows(
+            ZLinkServiceWireException.class,
+            () -> codec.decodeReplyHeader(truncated(noTail)));
+    }
+
     @Test
     void frameworkMultipartMatchesCanonicalProfileFixture() {
         try (Message first = Message.from(new byte[] {1, 2});

@@ -837,6 +837,62 @@ void verify_direct_target_falls_through_absent_location_store_entry ()
     service.stop ();
 }
 
+// Residual-convergence pin (spec 32-framework-error-model.ko.md:76-77): a
+// `Request` to a target this runtime has NEVER admitted (absent from
+// service_topology_registry_t's live peer table, distinct from the `Send`
+// case above whose target routing id merely never appears in the Location
+// Store page) must complete NotFound, not Unavailable/not_connected.
+// public_host_runtime_t::request_to_node used to fall back to
+// `submitted(false)` unconditionally, which collapses every rejected
+// request into `not_connected` regardless of whether the target was ever
+// seen; that violates the spec's split between "target does not exist"
+// (NotFound, line 76) and "target exists but is unreachable" (Unavailable,
+// line 77). Matches Java's ZLinkJavaRawSpotNode.classifyNodeSendTarget
+// (peerState absent -> TARGET_NOT_FOUND) and Node's
+// raw-service-mesh-runtime.ts knownTarget gate.
+void verify_request_to_never_admitted_target_reports_not_found ()
+{
+    auto registration = make_node ("tcp://127.0.0.1:0", "never-admitted-request-node");
+
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::service_collection_t services;
+    auto owned_store =
+      std::make_unique<zlink::framework::runtime::in_memory_location_repository_t> ();
+    auto &location_store = *owned_store;
+    services.add_singleton<zlink::framework::location_repository_t> (
+      std::unique_ptr<zlink::framework::location_repository_t> (owned_store.release ()));
+    services.add_singleton<zlink::framework::runtime::location_runtime_t> (
+      std::make_unique<zlink::framework::runtime::location_runtime_t> (location_store));
+    register_mesh_location_resolvers (services);
+    auto provider = services.build_provider ();
+    provider.get_required<zlink::framework::runtime::location_runtime_t> ().start (
+      *registration->routing_id);
+    auto application_jobs = std::make_shared<
+      zlink::framework::runtime::application_job_queue_t> (
+        zlink::framework::runtime::application_job_queue_configuration_t{
+          zlink::framework::application_job_queue_profile_t::balanced,
+          std::uint32_t{1}, 1, 1});
+    zlink::framework::runtime::mesh_node_host_service_t service (
+      {registration}, serializers, {}, {}, application_jobs);
+    service.start (provider);
+    const auto node = service.nodes ().front ();
+
+    const std::vector<zlink::message_t> parts{
+      zlink::message_t::from (std::string ("request"))};
+    const auto target =
+      zlink::routing_id_t::from (std::string ("never-admitted-request-target"));
+    zlink::framework::runtime::host::call_id_t operation_id;
+    const auto result =
+      std::move (node->request_to_node (
+                    target, parts, operation_id, std::chrono::milliseconds (25),
+                    std::vector<std::uint8_t>{}))
+        .result ()
+        .value ();
+    assert (result == zlink::submit_result_t::not_found);
+
+    service.stop ();
+}
+
 void verify_public_runtime_surface ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "runtime-a");
@@ -1818,6 +1874,7 @@ int main ()
     verify_descriptor_retire_order_and_pre_seal_rollback ();
     verify_local_node_submit_bridge ();
     verify_direct_target_falls_through_absent_location_store_entry ();
+    verify_request_to_never_admitted_target_reports_not_found ();
 #if defined(__unix__)
     return run_cross_process_delivery ();
 #else
