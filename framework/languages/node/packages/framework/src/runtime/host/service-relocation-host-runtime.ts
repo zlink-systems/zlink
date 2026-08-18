@@ -69,15 +69,9 @@ import {
 } from './relocation-direct-transfer';
 import {
   captureRelocationAdapterState,
-  encodeRelocationBaseBundleFramed,
-  encodeRelocationBaseDeltaState,
   restoreRelocationAdapterState,
-  ZLinkRelocationBaseStageBuffer,
   type ZLinkRelocationStateAdapterLike
 } from './relocation-state-adapter';
-import {
-  zlinkRelocationAdapterHasBaseDelta
-} from '../../contracts/Configuration/ObjectRoles';
 import {
   ServiceRelocationPostCommitError
 } from '../foundation/service-relocation-coordinator';
@@ -156,7 +150,6 @@ import {
   type ServiceMaintenanceRelocationReady,
   type ServiceMaintenanceRelocationPrepare,
   type ServiceMaintenanceRelocationState,
-  type ServiceWireRelocationPayloadStage,
   type ServiceSessionRelocationRoute,
   type ServiceSessionRelocationSeal,
   type ServiceSessionRelocationSealed,
@@ -224,10 +217,8 @@ interface RelocationTargetRequirement {
 
 interface LocalHidden extends ServiceRelocationHiddenObject {
   readonly participant: ServiceRelocationParticipant;
-  // Mutable: recreateInstance() swaps in a fresh instance in place on an
-  // applyDelta retry (spec 15 §5) while this wrapper's identity is unchanged.
-  actor?: ZLinkActor;
-  activation?: ZLinkSpotActivation;
+  readonly actor?: ZLinkActor;
+  readonly activation?: ZLinkSpotActivation;
   initialized: boolean;
   readonly restoredTimers: ServiceRelocationTimer[];
   readonly replayResults: ZLinkActorHandoffResult[];
@@ -279,8 +270,6 @@ interface TargetRelocationOffer {
   readonly envelope: ServiceRelocationEnvelope;
   readonly restoreDeadlineAtMs: number;
   readonly reservation: TargetRelocationReservation;
-  /** Verified pre-seal base snapshots keyed by participant authority key. */
-  readonly basePayloads?: ReadonlyMap<string, Buffer>;
 }
 
 interface TargetPrepareOperation {
@@ -357,8 +346,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     );
   private readonly sourceRelocationIds = new Set<string>();
   private readonly targetAssemblies = new Map<string, TargetPayloadAssembly>();
-  /** Pre-seal base-stage chunks accumulated before their manifest (relocationPrepare) arrives. */
-  private readonly targetBaseBuffers = new Map<string, ZLinkRelocationBaseStageBuffer>();
   /**
    * Terminal restore failures (assembly/checksum/factory/restore error): the
    * target already sent relocationFailed (command 53) once. An exact-identity
@@ -482,7 +469,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       pending.assembly.fail('Relocation runtime stopped.');
     }
     this.targetAssemblies.clear();
-    this.targetBaseBuffers.clear();
     this.targetReadyFailures.clear();
     this.targetReadyResponses.clear();
     for (const window of this.sourceCutoverWindows.values()) {
@@ -894,10 +880,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     request: ServiceMaintenanceRelocationState,
     sourceNodeRid: RoutingId | null
   ): void {
-    if (request.payloadStage === 'base') {
-      this.acceptBaseStageChunk(request, sourceNodeRid);
-      return;
-    }
     const operationKey = relocationStagingId(request);
     const pending = this.targetAssemblies.get(operationKey);
     if (
@@ -914,73 +896,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       return;
     }
     pending.assembly.accept(request.chunkOrdinal, request.chunkData);
-  }
-
-  /**
-   * Buffers one base-stage chunk ahead of its manifest. Base chunks travel on
-   * the same ordered connection before the relocationPrepare that declares
-   * baseChecksumCrc32c and finalizes (checksum-verifies) this buffer (spec 15
-   * §5). Chunks for an identity that already has a final assembly, a target
-   * stage or a terminal outcome are late — from a superseded attempt — and
-   * are discarded rather than attached.
-   */
-  private acceptBaseStageChunk(
-    request: ServiceMaintenanceRelocationState,
-    sourceNodeRid: RoutingId | null
-  ): void {
-    const operationKey = relocationStagingId(request);
-    if (sourceNodeRid === null || request.senderRole !== 'source') return;
-    if (
-      this.targetAssemblies.has(operationKey)
-      || this.targetStages.has(operationKey)
-      || this.terminalTargets.get(operationKey) !== undefined
-    ) {
-      console.warn('[zlink.runtime.relocation.stale_base_chunk]', operationKey);
-      return;
-    }
-    const identityFingerprint = stringifyWire({
-      coordinator: request.coordinator,
-      object: request.object
-    });
-    const sourceNodeRidKey = String(sourceNodeRid);
-    let pending = this.targetBaseBuffers.get(operationKey);
-    if (pending === undefined) {
-      if (request.chunkOrdinal !== 0) {
-        console.warn('[zlink.runtime.relocation.stale_base_chunk]', operationKey);
-        return;
-      }
-      pending = new ZLinkRelocationBaseStageBuffer(sourceNodeRidKey, identityFingerprint);
-      this.targetBaseBuffers.set(operationKey, pending);
-      // A source that crashes (or never sends) its relocationPrepare after
-      // base-stage chunks leaves this buffer orphaned — nothing else touches
-      // it without further traffic. Bound its retention the same way an
-      // undelivered Ready is bounded (spec 28 §9, finding F3): reuse the
-      // Restore validity window as a one-shot deadline. A resolved buffer is
-      // deleted by resolveTargetBasePayloads before this fires, and the
-      // reference check below leaves a newer buffer under the same key
-      // (a superseding attempt) untouched.
-      const armedBuffer = pending;
-      const baseBufferExpiry = setTimeout(() => {
-        this.expireTargetBaseBuffer(operationKey, armedBuffer);
-      }, RELOCATION_OPERATION_RETENTION_MS);
-      baseBufferExpiry.unref?.();
-    }
-    if (!pending.accept(request.chunkOrdinal, request.chunkData, sourceNodeRidKey, identityFingerprint)) {
-      console.warn('[zlink.runtime.relocation.stale_base_chunk]', operationKey);
-    }
-  }
-
-  /**
-   * Reclaims one orphaned pre-Prepare base buffer that never resolved within
-   * the Restore validity window. Only the exact instance this timer was
-   * armed for is removed — a buffer already consumed by
-   * resolveTargetBasePayloads, or replaced by a newer attempt reusing the
-   * same key, is left alone.
-   */
-  private expireTargetBaseBuffer(operationKey: string, armedBuffer: ZLinkRelocationBaseStageBuffer): void {
-    if (this.targetBaseBuffers.get(operationKey) === armedBuffer) {
-      this.targetBaseBuffers.delete(operationKey);
-    }
   }
 
   private registerTargetAssembly(
@@ -1449,13 +1364,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       signal
     );
     const aggregateId = this.reserveRelocationId();
-    let spotPreSealState: Awaited<
-      ReturnType<ZLinkHostServiceRelocationRuntime['captureApplicationBase']>
-    >;
-    const actorPreSealStates = new Map<
-      string,
-      Awaited<ReturnType<ZLinkHostServiceRelocationRuntime['captureApplicationBase']>>
-    >();
     const spotUnit: ServiceRelocationCaptureUnit = {
       authorityKey: spotKey.value,
       objectKind: kind,
@@ -1497,8 +1405,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         this.captureApplication(
           spotRegistration.relocation,
           activation.spot,
-          captureSignal,
-          spotPreSealState
+          captureSignal
         ),
       commitSeal: async () => {
         if (!spotSealCommitted) {
@@ -1586,8 +1493,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       undefined,
       undefined,
       undefined,
-      false,
-      () => actorPreSealStates.get(state.actorId)
+      false
     ));
     const memberships = actorStates.map(state => ({
       actorKey: encodeAuthorityKey('actor', state.actorId).value,
@@ -1608,24 +1514,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       // A full in-flight payload budget delays this unit before its seal, so
       // the Spot and its Actors keep processing messages while waiting.
       await this.waitForRelocationBudgetHeadroom(String(target.rid), signal);
-      // Base snapshots (optional base/delta capability) are captured before
-      // the admission seal while the source keeps processing.
-      spotPreSealState = await this.captureApplicationBase(
-        spotRegistration.relocation,
-        activation.spot,
-        signal
-      );
-      for (const state of actorStates) {
-        const actorAuthority = actorAuthorities.get(state.actorId)!;
-        actorPreSealStates.set(state.actorId, await this.captureApplicationBase(
-          this.actorRegistration(
-            state.meshName ?? meshName,
-            state.actorType ?? actorAuthority.allocation.stableType
-          ).relocation,
-          state.actor!,
-          signal
-        ));
-      }
       const captureOwner = new ServiceRelocationObjectCaptureOwner();
       const captured = kind === 'user_spot'
         ? await captureOwner.captureUserSpotAggregate(
@@ -1642,15 +1530,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           actorAuthorities.get(state.actorId)!
         ] as const)]),
         signal,
-        sessions,
-        preSealBaseMap(
-          spotKey.value,
-          spotPreSealState,
-          actorStates.map(state => [
-            encodeAuthorityKey('actor', state.actorId).value,
-            actorPreSealStates.get(state.actorId)
-          ])
-        )
+        sessions
       );
     } catch (error) {
       outcome = 'failed';
@@ -1717,9 +1597,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const membershipSpotId = targetMembership?.spotId
       ?? ((target.entrySpotId ?? String(target.rid)) as RoutingId);
     const aggregateId = aggregateIdOverride ?? this.reserveRelocationId();
-    let actorPreSealState: Awaited<
-      ReturnType<ZLinkHostServiceRelocationRuntime['captureApplicationBase']>
-    >;
     const unit = this.actorCaptureUnit(
       state,
       authority,
@@ -1732,8 +1609,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         spotKind: targetMembership?.spotKind ?? ZLinkSpotKind.Entry
       },
       relocationWireId(aggregateId),
-      retainSourceForActorJoin,
-      () => actorPreSealState
+      retainSourceForActorJoin
     );
     const membership: ServiceRelocationMembership = {
       actorKey: encodeAuthorityKey('actor', state.actorId).value,
@@ -1753,14 +1629,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     let outcome = 'completed';
     try {
       await this.waitForRelocationBudgetHeadroom(String(target.rid), signal);
-      actorPreSealState = await this.captureApplicationBase(
-        this.actorRegistration(
-          state.meshName ?? meshName,
-          state.actorType ?? authority.allocation.stableType
-        ).relocation,
-        state.actor!,
-        signal
-      );
       const captured = await new ServiceRelocationObjectCaptureOwner().captureStandaloneActor(
         aggregateId, 1n, measuredUnit, membership, signal);
       await this.runCoordinator(
@@ -1771,7 +1639,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         new Map([[measuredUnit.authorityKey, authority]]),
         signal,
         sessions,
-        preSealBaseMap(undefined, undefined, [[measuredUnit.authorityKey, actorPreSealState]]),
         advertisedReceiveChunkLimitBytes
       );
     } catch (error) {
@@ -1930,10 +1797,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       readonly spotKind: ZLinkSpotKind.Entry | ZLinkSpotKind.User;
     },
     sessionRelocation?: ServiceWireOperationId,
-    retainSourceForActorJoin = false,
-    preSealState?: () => Awaited<
-      ReturnType<ZLinkHostServiceRelocationRuntime['captureApplicationBase']>
-    >
+    retainSourceForActorJoin = false
   ): ServiceRelocationCaptureUnit {
     const registration = this.actorRegistration(state.meshName ?? meshName ?? '', state.actorType ?? authority.allocation.stableType);
     let ownSession: SourceActorSession | undefined;
@@ -1964,8 +1828,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         this.captureApplication(
           registration.relocation,
           state.actor!,
-          signal,
-          preSealState?.()
+          signal
         ),
       commitSeal: async () => {
         if (!standalone || ownSession === undefined || target === undefined || meshName === undefined) return;
@@ -2031,8 +1894,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     _authorities: ReadonlyMap<string, ZLinkAuthoritySnapshot>,
     signal?: AbortSignal,
     sessions: readonly SourceActorSession[] = [],
-    /** Pre-seal base snapshots keyed by participant authority key, when captured. */
-    preSealBases: ReadonlyMap<string, Uint8Array> = new Map(),
     /** Target's advertised relocation state chunk cap (Actor Join only; spec 15 §4.2). */
     advertisedReceiveChunkLimitBytes?: number
   ): Promise<void> {
@@ -2077,32 +1938,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const convergenceDeadlineAtMs = signal === undefined
       ? Date.now() + RELOCATION_OPERATION_RETENTION_MS
       : controlDeadlineAtMs;
-    // Pre-seal base snapshots travel as their own base-stage chunk stream,
-    // strictly before the Restore request, on the same ordered connection —
-    // relocationPrepare's baseChecksumCrc32c finalizes and checksum-verifies
-    // this already-transmitted buffer on the target (spec 15 §5). The
-    // manifest above (payloadTotalLength/ChunkCount/ChecksumCrc32c) only
-    // describes the delta that follows the Restore request.
-    const baseFrame = preSealBases.size === 0
-      ? undefined
-      : encodeRelocationBaseBundleFramed(preSealBases);
-    const baseBlob = baseFrame?.blob;
-    const baseChecksumCrc32c = baseFrame?.checksumCrc32c ?? 0;
+    // TODO(schema-atomic): baseChecksumCrc32c retained for the atomic schema commit; always 0 —
+    // base/delta capture is removed from the node product.
+    const baseChecksumCrc32c = 0;
     let readyReceived = false;
     let sourceCommitted = false;
     try {
-      if (baseBlob !== undefined) {
-        const basePlan = planRelocationChunks(baseBlob, chunkLimitBytes);
-        await this.sendRelocationStateChunks(
-          meshName,
-          target,
-          { relocation, targetAttemptGeneration: 1n, coordinator, object },
-          'base',
-          baseBlob,
-          basePlan,
-          signal
-        );
-      }
       const prepare = {
         kind: 'prepare',
         relocation,
@@ -2135,7 +1976,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           meshName,
           target,
           prepare,
-          'final',
           encoded,
           plan,
           signal
@@ -2285,7 +2125,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       readonly coordinator: ServiceWireRelocationCoordinatorFence;
       readonly object: ServiceWireRelocationObject;
     },
-    stage: ServiceWireRelocationPayloadStage,
     encoded: Buffer,
     plan: ReturnType<typeof planRelocationChunks>,
     signal?: AbortSignal
@@ -2305,7 +2144,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           coordinator: identity.coordinator,
           senderRole: 'source',
           object: identity.object,
-          payloadStage: stage,
+          // TODO(schema-atomic): payloadStage retained for the atomic schema commit; always 'final'.
+          payloadStage: 'final',
           chunkOrdinal: ordinal,
           chunkData
         });
@@ -2481,38 +2321,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   }
 
   /** Restores the hidden object and its saved-work prefix before Ready. */
-  /**
-   * Finalizes the pre-prepare base buffer for one exact identity against the
-   * manifest's baseChecksumCrc32c and splits it back into per-participant
-   * base snapshots. A declared base with no buffered chunks, a mismatched
-   * identity or a checksum mismatch is data loss — the caller turns it into
-   * a target-side relocationFailed (command 53) reply with failureCode 35
-   * (spec 15 §5).
-   */
-  private resolveTargetBasePayloads(
-    stagingId: string,
-    request: ServiceMaintenanceRelocationPrepare
-  ): ReadonlyMap<string, Buffer> | undefined {
-    const pending = this.targetBaseBuffers.get(stagingId);
-    this.targetBaseBuffers.delete(stagingId);
-    if (request.baseChecksumCrc32c === 0) return undefined;
-    if (pending === undefined) {
-      throw new ServiceRelocationDataLostError(
-        `Relocation '${stagingId}' declared a base checksum but no base chunks arrived.`
-      );
-    }
-    try {
-      return pending.resolve(
-        stringifyWire({ coordinator: request.coordinator, object: request.object }),
-        request.baseChecksumCrc32c
-      );
-    } catch (error) {
-      throw new ServiceRelocationDataLostError(
-        `Relocation '${stagingId}' ${(error as Error).message}`
-      );
-    }
-  }
-
   private async handlePrepareControl(
     meshName: string,
     stagingId: string,
@@ -2573,7 +2381,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
     const envelope = decodeServiceRelocationEnvelope(payload);
     validatePrepareEnvelope(request, envelope);
-    const basePayloads = this.resolveTargetBasePayloads(stagingId, request);
     const reservation = await this.reserveTargetForPrepare(meshName, request, envelope, signal);
     const offer: TargetRelocationOffer = {
       prepare: request,
@@ -2581,8 +2388,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       authenticatedSourceNodeRid: String(sourceNodeRid),
       envelope,
       restoreDeadlineAtMs: Date.now() + RELOCATION_OPERATION_RETENTION_MS,
-      reservation,
-      ...(basePayloads === undefined ? {} : { basePayloads })
+      reservation
     };
     let stage: LocalStage | undefined;
     try {
@@ -3646,7 +3452,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       target,
       value => ({ value } as ZLinkAuthorityKey)
     );
-    const staging = await owner.prepare(offer.envelope, signal, offer.basePayloads);
+    const staging = await owner.prepare(offer.envelope, signal);
     if (staging.id !== `${offer.envelope.aggregateId}:${offer.envelope.aggregateGeneration}`) {
       throw new Error('Relocation materialization returned a different staging identity.');
     }
@@ -3697,66 +3503,21 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     return value;
   }
 
-  /**
-   * Captures a base snapshot before the admission seal when the adapter
-   * registers the base/delta capability, so the seal window only pays for
-   * captureDelta (spec 15 §5). Returns undefined for policies or adapters
-   * without the capability.
-   */
-  private async captureApplicationBase<T>(
-    policy: { readonly kind: 'disabled' | 'recreate' | 'snapshot'; readonly adapterType?: Type },
-    value: T,
-    signal?: AbortSignal
-  ): Promise<
-    | {
-        readonly adapter: ZLinkRelocationStateAdapterLike<never>;
-        readonly base: Uint8Array;
-      }
-    | undefined
-  > {
-    if (policy.kind !== 'snapshot') return undefined;
-    const adapter = await this.createRelocationAdapter(policy.adapterType!);
-    if (!zlinkRelocationAdapterHasBaseDelta(adapter)) return undefined;
-    return {
-      adapter,
-      base: await adapter.captureBase!(
-        value as never,
-        signal ?? new AbortController().signal
-      )
-    };
-  }
-
   private async captureApplication<T>(
     policy: { readonly kind: 'disabled' | 'recreate' | 'snapshot'; readonly adapterType?: Type },
     value: T,
-    signal?: AbortSignal,
-    preSeal?: {
-      readonly adapter: ZLinkRelocationStateAdapterLike<never>;
-      readonly base: Uint8Array;
-    }
+    signal?: AbortSignal
   ): Promise<Uint8Array> {
     if (policy.kind === 'disabled') {
       throw new Error(`Relocation is disabled for '${(value as { constructor?: { name?: string } }).constructor?.name ?? 'object'}'.`);
     }
     if (policy.kind === 'recreate') return Buffer.alloc(0);
-    const adapter = preSeal?.adapter
-      ?? await this.createRelocationAdapter(policy.adapterType!);
-    // When a pre-seal base was already captured, its bytes travel separately
-    // as wire base-stage chunks (spec 15 §5): only the delta is captured
-    // here and placed in the envelope's applicationState. Without a pre-seal
-    // base, the adapter's whole capture (which self-bundles base/delta when
-    // it has that capability) is used, unchanged.
-    const captured = preSeal !== undefined
-      ? Buffer.from(await (adapter as ZLinkRelocationStateAdapterLike<T>).captureDelta!(
-          value,
-          signal ?? new AbortController().signal
-        ))
-      : await captureRelocationAdapterState(
-          adapter as ZLinkRelocationStateAdapterLike<T>,
-          value,
-          undefined,
-          signal ?? new AbortController().signal
-        );
+    const adapter = await this.createRelocationAdapter(policy.adapterType!);
+    const captured = await captureRelocationAdapterState(
+      adapter as ZLinkRelocationStateAdapterLike<T>,
+      value,
+      signal ?? new AbortController().signal
+    );
     if (captured.byteLength > RELOCATION_PARTICIPANT_STATE_LIMIT_BYTES) {
       throw new ZLinkRelocationStateIncompatibleError(
         'Relocation application state exceeds the 64 MiB participant limit.'
@@ -3983,8 +3744,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
   async restoreApplicationState(
     hidden: LocalHidden,
     payload: Uint8Array,
-    signal?: AbortSignal,
-    basePayload?: Uint8Array
+    signal?: AbortSignal
   ): Promise<void> {
     const registration = this.registration(hidden.participant.objectKind, hidden.participant.stableType);
     if (registration.relocation.kind === 'recreate') {
@@ -3999,46 +3759,12 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       this.options.providerResolver
     ) as ZLinkActorRelocationAdapter<ZLinkActor> | ZLinkSpotRelocationAdapter<ZLinkSpot | ZLinkInstanceSpot>;
     const instance = (hidden.actor ?? hidden.activation?.spot) as never;
-    // A wire-verified base snapshot arrives separately from the delta
-    // manifest; re-frame the two into the same base/delta envelope the
-    // adapter understands before restoring (spec 15 §5).
-    const framedPayload = basePayload === undefined
-      ? payload
-      : encodeRelocationBaseDeltaState(basePayload, payload);
-    // Base/delta payloads restore with restoreBase then applyDelta. An
-    // applyDelta failure discards the partially applied instance and retries
-    // once from restoreBase on a fresh instance before propagating an
-    // explicit failure, which the stage abort turns into command 53
-    // relocationFailed — a partially applied instance is never published.
     await restoreRelocationAdapterState(
       adapter as ZLinkRelocationStateAdapterLike<unknown>,
       instance,
-      framedPayload,
-      signal ?? new AbortController().signal,
-      async () => {
-        await this.recreateInstance(hidden, signal);
-        return (hidden.actor ?? hidden.activation?.spot) as never;
-      }
+      payload,
+      signal ?? new AbortController().signal
     );
-  }
-
-  /**
-   * Discards the currently staged Actor or Spot instance and installs a
-   * fresh one from the same factory path createHidden used, mutating
-   * `hidden` in place. Used by an applyDelta retry so the retried
-   * restoreBase/applyDelta never runs against a partially applied instance
-   * (spec 15 §5).
-   */
-  async recreateInstance(hidden: LocalHidden, signal?: AbortSignal): Promise<void> {
-    if (hidden.actor !== undefined) {
-      await this.requireActorManager().abortRelocationActor(hidden.actor.context.actorId);
-      const fresh = await this.createHidden(hidden.participant, signal);
-      hidden.actor = fresh.actor;
-    } else if (hidden.activation !== undefined) {
-      await this.requireSpotManager().abortRelocationSpot(hidden.activation);
-      const fresh = await this.createHidden(hidden.participant, signal);
-      hidden.activation = fresh.activation;
-    }
   }
 
   async restoreMemberships(
@@ -4601,20 +4327,6 @@ function handoffResultFromRelay(relay: ServiceMaintenanceReplyRelay): ZLinkActor
 
 function wireIdText(value: { readonly high: bigint; readonly low: bigint }): string {
   return `${value.high}:${value.low}`;
-}
-
-/** Collects the pre-seal base snapshots that were actually captured, keyed by authority key. */
-function preSealBaseMap(
-  spotKey: string | undefined,
-  spotPreSeal: { readonly base: Uint8Array } | undefined,
-  actorPreSeals: ReadonlyArray<readonly [string, { readonly base: Uint8Array } | undefined]>
-): ReadonlyMap<string, Uint8Array> {
-  const map = new Map<string, Uint8Array>();
-  if (spotKey !== undefined && spotPreSeal !== undefined) map.set(spotKey, spotPreSeal.base);
-  for (const [key, preSeal] of actorPreSeals) {
-    if (preSeal !== undefined) map.set(key, preSeal.base);
-  }
-  return map;
 }
 
 /** Wire failureCode for a chunk-assembly or checksum-verification failure (spec 15 §4). */

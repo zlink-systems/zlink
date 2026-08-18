@@ -18,10 +18,6 @@ import {
   type ServiceSessionRelocationSealed
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
 import {
-  decodeRelocationBaseBundle,
-  encodeRelocationBaseBundle,
-  encodeRelocationBaseDeltaState,
-  decodeRelocationBaseDeltaState,
   restoreRelocationAdapterState,
   type ZLinkRelocationStateAdapterLike
 } from '../../packages/framework/src/runtime/host/relocation-state-adapter';
@@ -506,37 +502,6 @@ test('actorJoin accepted reply tail round-trips receiveChunkLimitBytes and ' +
   }));
 });
 
-test('relocation base bundle round-trips multiple participant snapshots by authority key', () => {
-  const bases = new Map<string, Uint8Array>([
-    ['spot:spot-1', Buffer.from('spot-base-bytes')],
-    ['actor:actor-1', Buffer.from('actor-base-bytes')],
-    ['actor:actor-2', Buffer.from([])]
-  ]);
-  const blob = encodeRelocationBaseBundle(bases);
-  const decoded = decodeRelocationBaseBundle(blob);
-  assert.equal(decoded.size, 3);
-  for (const [key, value] of bases) {
-    assert.deepEqual(decoded.get(key), Buffer.from(value));
-  }
-  assert.throws(() => decodeRelocationBaseBundle(blob.subarray(0, -1)));
-  assert.deepEqual([...decodeRelocationBaseBundle(encodeRelocationBaseBundle(new Map())).entries()], []);
-});
-
-test('relocation base/delta frame round-trips and rejects a mismatched base checksum', () => {
-  const base = Buffer.from('base-snapshot');
-  const delta = Buffer.from('delta-bytes');
-  const frame = encodeRelocationBaseDeltaState(base, delta);
-  const decoded = decodeRelocationBaseDeltaState(frame);
-  assert.deepEqual(decoded?.base, base);
-  assert.deepEqual(decoded?.delta, delta);
-  // Byte 25 is the first base byte (header is 25 bytes) — corrupting it
-  // invalidates the stored base checksum without touching the delta.
-  const corrupted = Buffer.from(frame);
-  corrupted[25] ^= 0xff;
-  assert.throws(() => decodeRelocationBaseDeltaState(corrupted), /checksum/);
-  assert.equal(decodeRelocationBaseDeltaState(Buffer.from('not-a-frame')), undefined);
-});
-
 test('effectiveActorJoinChunkLimitBytes takes the minimum of configured, advertised and the conservative floor', () => {
   // 0 from the target means "not advertised" and must not participate in the min.
   assert.equal(effectiveActorJoinChunkLimitBytes(1024 * 1024, 0), 32 * 1024);
@@ -545,62 +510,21 @@ test('effectiveActorJoinChunkLimitBytes takes the minimum of configured, adverti
   assert.equal(effectiveActorJoinChunkLimitBytes(1024, 4096), 1024);
 });
 
-test('restoreRelocationAdapterState retries once from restoreBase on a recreated instance ' +
-  'after applyDelta fails, and never reuses the discarded instance', async () => {
+test('restoreRelocationAdapterState restores through the adapter and returns the same instance', async () => {
   const events: string[] = [];
-  let nextInstanceId = 0;
-  const makeInstance = () => ({ id: nextInstanceId++ });
-  let applyDeltaCalls = 0;
   const adapter: ZLinkRelocationStateAdapterLike<{ readonly id: number }> = {
     async capture() { return Buffer.alloc(0); },
-    async restore() { /* not exercised for base/delta payloads */ },
-    async captureBase() { return Buffer.alloc(0); },
-    async captureDelta() { return Buffer.alloc(0); },
-    async restoreBase(instance) {
-      events.push(`restoreBase:${instance.id}`);
-    },
-    async applyDelta(instance) {
-      applyDeltaCalls += 1;
-      events.push(`applyDelta:${instance.id}`);
-      if (applyDeltaCalls === 1) throw new Error('applyDelta transient failure');
+    async restore(instance, payload) {
+      events.push(`restore:${instance.id}:${Buffer.from(payload).toString()}`);
     }
   };
-  const frame = encodeRelocationBaseDeltaState(Buffer.from('base'), Buffer.from('delta'));
-  const initial = makeInstance();
-  const recreated: Array<{ readonly id: number }> = [];
+  const instance = { id: 7 };
   const resolved = await restoreRelocationAdapterState(
     adapter,
-    initial,
-    frame,
-    new AbortController().signal,
-    async () => {
-      const fresh = makeInstance();
-      recreated.push(fresh);
-      return fresh;
-    }
+    instance,
+    Buffer.from('payload-bytes'),
+    new AbortController().signal
   );
-  assert.equal(recreated.length, 1, 'recreateInstance must be called exactly once, not per attempt');
-  assert.equal(resolved, recreated[0], 'the resolved instance must be the freshly created one, not the discarded original');
-  assert.deepEqual(events, [
-    `restoreBase:${initial.id}`,
-    `applyDelta:${initial.id}`,
-    `restoreBase:${recreated[0]!.id}`,
-    `applyDelta:${recreated[0]!.id}`
-  ]);
-});
-
-test('restoreRelocationAdapterState propagates the applyDelta failure without a recreateInstance callback', async () => {
-  const adapter: ZLinkRelocationStateAdapterLike<{ readonly id: number }> = {
-    async capture() { return Buffer.alloc(0); },
-    async restore() {},
-    async captureBase() { return Buffer.alloc(0); },
-    async captureDelta() { return Buffer.alloc(0); },
-    async restoreBase() {},
-    async applyDelta() { throw new Error('applyDelta permanent failure'); }
-  };
-  const frame = encodeRelocationBaseDeltaState(Buffer.from('base'), Buffer.from('delta'));
-  await assert.rejects(
-    () => restoreRelocationAdapterState(adapter, { id: 0 }, frame, new AbortController().signal),
-    /applyDelta permanent failure/
-  );
+  assert.equal(resolved, instance);
+  assert.deepEqual(events, ['restore:7:payload-bytes']);
 });

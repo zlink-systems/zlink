@@ -18,7 +18,6 @@ import {
   isRouteTransportDeclared
 } from './RouteChannelInternalState';
 import { validateTimerRegistration } from './TimerRegistrationValidator';
-import { zlinkValidateRelocationAdapterBaseDelta } from './ObjectRoles';
 import { zlinkDefaultLocationOptions } from '../Locations';
 import { requireValidSendTimeoutMs } from './SendTimeoutValidation';
 
@@ -324,7 +323,6 @@ function validateSpotNodes(registration: ZLinkFrameworkRegistration): void {
       spotNode.publisherConfig?.sendTimeoutMs
     );
     validateSpotNodeFactories(spotNodeName, spotNode);
-    validateRelocationAdapterRegistrations(spotNodeName, spotNode);
     validateSpotNodeTimers(spotNode);
     if (
       spotNode.objectRole === 'client'
@@ -401,33 +399,6 @@ function validateSpotNodeFactories(spotNodeName: string, spotNode: ZLinkSpotNode
       );
     }
     seen.add(factory);
-  }
-}
-
-function validateRelocationAdapterRegistrations(
-  spotNodeName: string,
-  spotNode: ZLinkSpotNodeOptions
-): void {
-  const groups = [
-    ['Actor', spotNode.actorFactoryRegistrations],
-    ['User Spot', spotNode.spotFactoryRegistrations],
-    ['Instance Spot', spotNode.instanceSpotFactoryRegistrations]
-  ] as const;
-  for (const [label, registrations] of groups) {
-    for (const [stableType, registration] of Object.entries(registrations ?? {})) {
-      const relocation = registration.relocation;
-      if (relocation.kind !== 'snapshot') continue;
-      try {
-        zlinkValidateRelocationAdapterBaseDelta(
-          relocation.adapterType,
-          `SpotNode '${spotNodeName}' ${label} '${stableType}'`
-        );
-      } catch (error) {
-        throw new ZLinkConfigurationException(
-          error instanceof Error ? error.message : String(error)
-        );
-      }
-    }
   }
 }
 

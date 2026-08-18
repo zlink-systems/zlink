@@ -126,7 +126,8 @@ export interface ServiceMaintenanceRelocationPrepare extends ServiceWireRelocati
   readonly payloadChunkCount: number;
   /** CRC-32C (Castagnoli) over the fully assembled payload bytes. */
   readonly payloadChecksumCrc32c: number;
-  /** CRC-32C over the pre-seal base snapshot already sent as base-stage chunks. 0 = no base. */
+  // TODO(schema-atomic): payloadStage/baseChecksumCrc32c retained for the atomic schema commit.
+  // Base/delta capture is removed from the node product; this field is now always sent as 0.
   readonly baseChecksumCrc32c: number;
   readonly applicationVersion: bigint;
 }
@@ -201,6 +202,8 @@ export interface ServiceMaintenanceRelocationCutover extends ServiceWireRelocati
   readonly boundaryChecksumCrc32c: number;
 }
 
+// TODO(schema-atomic): payloadStage/baseChecksumCrc32c retained for the atomic schema commit.
+// Base/delta capture is removed from the node product; the source now only ever sends 'final'.
 export type ServiceWireRelocationPayloadStage = 'base' | 'final';
 
 /** One relocation payload chunk (command 52), sent one-way on the ordered connection. */
@@ -208,7 +211,7 @@ export interface ServiceMaintenanceRelocationState extends ServiceWireRelocation
   readonly kind: 'state';
   readonly senderRole: ServiceWireRelocationRole;
   readonly object: ServiceWireRelocationObject;
-  /** Independent ordinal space per stage: base (pre-seal snapshot) or final (delta/full payload). */
+  // TODO(schema-atomic): payloadStage/baseChecksumCrc32c retained for the atomic schema commit.
   readonly payloadStage: ServiceWireRelocationPayloadStage;
   readonly chunkOrdinal: number;
   readonly chunkData: Uint8Array;
@@ -1462,6 +1465,7 @@ export function encodeMaintenanceRelocationControl(
         payloadTotalLength(value.payloadTotalLength),
         payloadChunkCount(value.payloadChunkCount),
         u32(value.payloadChecksumCrc32c, 'payloadChecksumCrc32c'),
+        // TODO(schema-atomic): baseChecksumCrc32c retained for the atomic schema commit; always 0.
         u32(value.baseChecksumCrc32c, 'baseChecksumCrc32c'),
         applicationVersion(value.applicationVersion)
       );
@@ -1509,6 +1513,7 @@ export function encodeMaintenanceRelocationControl(
         base,
         Buffer.of(relocationRole(value.senderRole)),
         relocationObject(value.object),
+        // TODO(schema-atomic): payloadStage retained for the atomic schema commit; always 'final'.
         Buffer.of(payloadStage(value.payloadStage)),
         u32(value.chunkOrdinal, 'chunkOrdinal'),
         relocationChunkData(value.chunkData)
@@ -1536,6 +1541,7 @@ export function decodeMaintenanceRelocationControl(
       const payloadTotalLength = reader.payloadTotalLength();
       const payloadChunkCount = reader.payloadChunkCount();
       const payloadChecksumCrc32c = reader.u32('payloadChecksumCrc32c');
+      // TODO(schema-atomic): baseChecksumCrc32c decoded and carried but unused; always 0 in.
       const baseChecksumCrc32c = reader.u32('baseChecksumCrc32c');
       const applicationVersion = reader.applicationVersion();
       reader.end();
@@ -1596,6 +1602,7 @@ export function decodeMaintenanceRelocationControl(
       const base = reader.relocationBase();
       const senderRole = reader.relocationRole();
       const object = reader.relocationObject();
+      // TODO(schema-atomic): payloadStage decoded but unused; the target never receives 'base'.
       const stage = reader.payloadStage();
       const chunkOrdinal = reader.u32('chunkOrdinal');
       const chunkData = reader.relocationChunkData();
