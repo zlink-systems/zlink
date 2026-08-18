@@ -15,6 +15,8 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -63,16 +65,12 @@ final class ZLinkUserSpotAggregateStagingOwner {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(cancellation, "cancellation");
         List<Object> preparedActors = new ArrayList<>();
-        return backend.prepareSpot(request)
-            .thenCompose(preparedSpot -> backend.restoreSpot(
-                    preparedSpot,
-                    request,
-                    cancellation)
-                .thenCompose(ignored -> prepareActors(
+        return prepareAndRestoreSpot(request, cancellation, true)
+            .thenCompose(preparedSpot -> prepareActors(
                     preparedSpot,
                     request,
                     cancellation,
-                    preparedActors))
+                    preparedActors)
                 .thenApply(ignored -> new Staged(
                         this,
                         request,
@@ -84,6 +82,54 @@ final class ZLinkUserSpotAggregateStagingOwner {
                     preparedActors)
                     .thenCompose(ignored -> CompletableFuture.failedFuture(
                         unwrap(failure)))));
+    }
+
+    /**
+     * Prepares a fresh Spot instance and restores it. When the request
+     * carries a pre-seal base (spec 15 §5), a restore failure discards the
+     * partially-restored instance and repeats the whole
+     * restoreBase→applyDelta sequence exactly once on a brand-new instance
+     * — mirroring the Actor runtime's retry-once contract. Exhausting the
+     * retry (or any restore failure on the legacy, non-base path, which
+     * never retries) fails explicitly; a base/delta restore failure that
+     * survives the retry is reported as an explicit
+     * {@link ZLinkFrameworkErrorKind#DATA_LOST}, never a generic failure.
+     */
+    private CompletionStage<Object> prepareAndRestoreSpot(
+        Request request,
+        ZLinkRelocationCancellation cancellation,
+        boolean allowRetry) {
+        return backend.prepareSpot(request)
+            .thenCompose(preparedSpot -> backend.restoreSpot(
+                    preparedSpot,
+                    request,
+                    cancellation)
+                .thenApply(ignored -> preparedSpot)
+                .exceptionallyCompose(failure -> {
+                    backend.discardSpot(preparedSpot);
+                    if (request.hasBaseApplicationState() && allowRetry) {
+                        return prepareAndRestoreSpot(
+                            request, cancellation, false);
+                    }
+                    Throwable cause = unwrap(failure);
+                    return CompletableFuture.failedFuture(
+                        request.hasBaseApplicationState()
+                            ? relocationDataLost(cause)
+                            : cause);
+                }));
+    }
+
+    private static ZLinkFrameworkException relocationDataLost(
+        Throwable cause) {
+        if (cause instanceof ZLinkFrameworkException framework
+            && framework.kind() == ZLinkFrameworkErrorKind.DATA_LOST) {
+            return framework;
+        }
+        return new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.DATA_LOST,
+            "User Spot base/delta relocation restore failed twice; "
+                + "the target instance is discarded, not partially reused",
+            cause);
     }
 
     private CompletionStage<Void> prepareActors(

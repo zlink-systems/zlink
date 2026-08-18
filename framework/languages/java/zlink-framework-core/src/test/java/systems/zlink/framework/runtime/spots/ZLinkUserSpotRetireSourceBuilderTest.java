@@ -1,6 +1,4 @@
 package systems.zlink.framework.runtime.spots;
-import java.lang.reflect.Proxy;
-import java.lang.reflect.InvocationTargetException;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -40,7 +38,6 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.locations
     .ZLinkAggregateRelocationCoordinator;
 import systems.zlink.framework.runtime.internal.relocation
@@ -49,6 +46,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
+import systems.zlink.framework.spots.ZLinkSpotBaseDeltaRelocationAdapter;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.spots.ZLinkSpotRelocationAdapter;
 import systems.zlink.framework.spots.ZLinkSpotRelocationReadyCompletion;
@@ -271,6 +269,169 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
     }
 
     @Test
+    void baseDeltaCapableAdapterStreamsBaseBeforeSealAndDeltaAfter()
+        throws Exception {
+        BaseDeltaAdapter.captureBaseCalls.set(0);
+        BaseDeltaAdapter.captureDeltaCalls.set(0);
+        ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
+        ZLinkLocationRepository repository =
+            new ZLinkProviderLocationRepository(locations);
+        InMemoryRelocationStore relocations = new InMemoryRelocationStore();
+        DefaultZLinkFrameworkOptions options =
+            baseDeltaOptions(locations, relocations);
+        var registration = options.registration();
+        var nodeRegistration = registration.meshNodes().getFirst();
+        try (ZLinkFrameworkRuntime host =
+                ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            ZLinkSpotRuntime runtime = (ZLinkSpotRuntime) host.spotManager();
+            ZLinkMeshNodeDescriptor source = repository.listMeshNodes(
+                    MESH,
+                    ZLinkPageRequest.firstPage())
+                .toCompletableFuture().get().items().stream()
+                .filter(value -> value.rid().equals(nodeRegistration.routingId()))
+                .findFirst().orElseThrow();
+            ZLinkLocationOwnerToken targetOwner = assertInstanceOf(
+                ZLinkOwnerLeaseClaimed.class,
+                repository.claimOwnerLease(
+                    "target-owner", Duration.ofSeconds(30))
+                    .toCompletableFuture().get()).token();
+            host.spotManager().getOrCreate(SPOT_ID, STABLE_TYPE)
+                .submit().toCompletableFuture().get();
+            repository.updateMeshNode(
+                    descriptor(TARGET_RID, 9, targetOwner,
+                        "inproc://retire-target"),
+                    ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get();
+
+            ZLinkAggregateRelocationCoordinator coordinator =
+                new ZLinkAggregateRelocationCoordinator(repository);
+            ZLinkUserSpotRetireSourceBuilder builder =
+                new ZLinkUserSpotRetireSourceBuilder(
+                    MESH,
+                    nodeRegistration.routingId(),
+                    source.lifecycleGeneration(),
+                    repository,
+                    coordinator,
+                    runtime.spotLifecycle(),
+                    runtime.actorSessions(),
+                    new ZLinkRelocationAdapterRegistry(
+                        registration,
+                        ZLinkHandlerActivator.reflection()),
+                    nodeRegistration.relocatableSpotFactories(),
+                    nodeRegistration.relocatableActorFactories());
+
+            List<byte[]> sentBase = new CopyOnWriteArrayList<>();
+            ZLinkUserSpotRetireSourceBuilder.PreparedSource prepared =
+                builder.prepare(
+                    SPOT_ID,
+                    rollingToVersionOne(),
+                    baseCapableClient(sentBase),
+                    NEVER).toCompletableFuture().get();
+
+            assertEquals(1, BaseDeltaAdapter.captureBaseCalls.get(),
+                "captureBase must run exactly once, pre-seal");
+            assertEquals(1, BaseDeltaAdapter.captureDeltaCalls.get(),
+                "captureDelta must run exactly once, post-seal");
+            assertEquals(1, sentBase.size(),
+                "the base must stream exactly once, ahead of PREPARE");
+            assertArrayEquals(new byte[] {9}, sentBase.get(0),
+                "the streamed base must be captureBase()'s result");
+            assertArrayEquals(new byte[] {9},
+                prepared.stageRequest().baseApplicationState(),
+                "the stage request must carry the same base bytes");
+
+            var envelope = ZLinkCanonicalUserSpotRelocationEnvelope.decode(
+                prepared.stageRequest().relocationPayload(),
+                TARGET_RID,
+                ignored -> LiveSpot.class,
+                prepared.stageRequest());
+            assertArrayEquals(new byte[] {5}, envelope.spotState(),
+                "the transmitted state must be the post-seal delta, "
+                    + "not the base and not a full snapshot");
+
+            prepared.abortPrecommit().toCompletableFuture().get();
+        }
+    }
+
+    @Test
+    void nonDeltaAdapterNeverStreamsBaseEvenWithABaseCapableClient()
+        throws Exception {
+        SnapshotAdapter.captured.set(null);
+        ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
+        ZLinkLocationRepository repository =
+            new ZLinkProviderLocationRepository(locations);
+        InMemoryRelocationStore relocations = new InMemoryRelocationStore();
+        DefaultZLinkFrameworkOptions options = options(locations, relocations);
+        var registration = options.registration();
+        var nodeRegistration = registration.meshNodes().getFirst();
+        try (ZLinkFrameworkRuntime host =
+                ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            ZLinkSpotRuntime runtime = (ZLinkSpotRuntime) host.spotManager();
+            ZLinkMeshNodeDescriptor source = repository.listMeshNodes(
+                    MESH,
+                    ZLinkPageRequest.firstPage())
+                .toCompletableFuture().get().items().stream()
+                .filter(value -> value.rid().equals(nodeRegistration.routingId()))
+                .findFirst().orElseThrow();
+            ZLinkLocationOwnerToken targetOwner = assertInstanceOf(
+                ZLinkOwnerLeaseClaimed.class,
+                repository.claimOwnerLease(
+                    "target-owner", Duration.ofSeconds(30))
+                    .toCompletableFuture().get()).token();
+            host.spotManager().getOrCreate(SPOT_ID, STABLE_TYPE)
+                .submit().toCompletableFuture().get();
+            repository.updateMeshNode(
+                    descriptor(TARGET_RID, 9, targetOwner,
+                        "inproc://retire-target"),
+                    ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get();
+
+            ZLinkAggregateRelocationCoordinator coordinator =
+                new ZLinkAggregateRelocationCoordinator(repository);
+            ZLinkUserSpotRetireSourceBuilder builder =
+                new ZLinkUserSpotRetireSourceBuilder(
+                    MESH,
+                    nodeRegistration.routingId(),
+                    source.lifecycleGeneration(),
+                    repository,
+                    coordinator,
+                    runtime.spotLifecycle(),
+                    runtime.actorSessions(),
+                    new ZLinkRelocationAdapterRegistry(
+                        registration,
+                        ZLinkHandlerActivator.reflection()),
+                    nodeRegistration.relocatableSpotFactories(),
+                    nodeRegistration.relocatableActorFactories());
+
+            List<byte[]> sentBase = new CopyOnWriteArrayList<>();
+            ZLinkUserSpotRetireSourceBuilder.PreparedSource prepared =
+                builder.prepare(
+                    SPOT_ID,
+                    rollingToVersionOne(),
+                    baseCapableClient(sentBase),
+                    NEVER).toCompletableFuture().get();
+
+            assertTrue(sentBase.isEmpty(),
+                "a non-delta adapter must never stream a base, even when "
+                    + "the transition client supports it");
+            assertEquals(0,
+                prepared.stageRequest().baseApplicationState().length,
+                "a non-delta adapter's stage request must carry no base");
+
+            var envelope = ZLinkCanonicalUserSpotRelocationEnvelope.decode(
+                prepared.stageRequest().relocationPayload(),
+                TARGET_RID,
+                ignored -> LiveSpot.class,
+                prepared.stageRequest());
+            assertArrayEquals(new byte[] {7, 4, 1}, envelope.spotState(),
+                "the legacy path must stay byte-identical: full "
+                    + "Capture(), not a delta");
+
+            prepared.abortPrecommit().toCompletableFuture().get();
+        }
+    }
+
+    @Test
     void abortPrecommitRestoresQueueOrderAndResumesLanesLast()
         throws Exception {
         ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
@@ -380,42 +541,6 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
         }
     }
 
-    private static ZLinkRelocationTransitionClient relayClient(
-        AtomicInteger relayed) {
-        return new ZLinkRelocationTransitionClient() {
-            @Override public CompletionStage<Void> stage(
-                RoutingId targetNodeRid,
-                ZLinkSpotRetireControl.StageRequest request,
-                Duration timeout) {
-                return CompletableFuture.completedFuture(null);
-            }
-
-            @Override public CompletionStage<Void> relay(
-                RoutingId targetNodeRid,
-                ZLinkSpotRetireControl.Fence fence,
-                byte[] frozenRecord,
-                Duration timeout) {
-                relayed.incrementAndGet();
-                return CompletableFuture.completedFuture(null);
-            }
-
-            @Override public CompletionStage<Void> publish(
-                RoutingId targetNodeRid,
-                ZLinkSpotRetireControl.Fence fence,
-                Duration timeout) {
-                return CompletableFuture.completedFuture(null);
-            }
-
-            @Override public CompletionStage<Void> abort(
-                RoutingId targetNodeRid,
-                ZLinkSpotRetireControl.Fence fence,
-                Duration timeout) {
-                return CompletableFuture.completedFuture(null);
-            }
-
-        };
-    }
-
     @Test
     void directPayloadPreparationDoesNotStageLocationStoreRoot()
         throws Exception {
@@ -493,58 +618,6 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
         }
     }
 
-    private static ZLinkRelocationStore trackingStore(
-        InMemoryRelocationStore delegate,
-        List<String> events,
-        List<String> putReferences,
-        List<String> deleteReferences,
-        Runnable afterRead) {
-        return new ZLinkRelocationStore() {
-            @Override public CompletionStage<ZLinkRelocationStored> put(
-                byte[] payload,
-                Duration retention,
-                ZLinkStoreCancellation cancellation) {
-                return delegate.put(payload, retention, cancellation)
-                    .thenApply(stored -> {
-                        if (putReferences != null) {
-                            putReferences.add(stored.reference());
-                        }
-                        return stored;
-                    });
-            }
-
-            @Override public CompletionStage<ZLinkRelocationReadResult> get(
-                String reference,
-                ZLinkStoreCancellation cancellation) {
-                return delegate.get(reference, cancellation)
-                    .thenApply(read -> {
-                        if (afterRead != null) {
-                            afterRead.run();
-                        }
-                        return read;
-                    });
-            }
-
-            @Override public CompletionStage<ZLinkRelocationRenewResult> renew(
-                String reference,
-                Duration retention,
-                ZLinkStoreCancellation cancellation) {
-                return delegate.renew(reference, retention, cancellation);
-            }
-
-            @Override public CompletionStage<ZLinkRelocationDeleteResult>
-                delete(
-                    String reference,
-                    ZLinkStoreCancellation cancellation) {
-                events.add("staged-root-discard");
-                if (deleteReferences != null) {
-                    deleteReferences.add(reference);
-                }
-                return delegate.delete(reference, cancellation);
-            }
-        };
-    }
-
     private static DefaultZLinkFrameworkOptions options(
         systems.zlink.framework.runtime.locations
             .ZLinkInMemoryLocationStore locations,
@@ -585,54 +658,78 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
         return options;
     }
 
-    private static ZLinkInternalSpotNode inertSpotNode() {
-        return (ZLinkInternalSpotNode) Proxy.newProxyInstance(
-            ZLinkUserSpotRetireSourceBuilderTest.class.getClassLoader(),
-            new Class<?>[] {ZLinkInternalSpotNode.class},
-            (proxy, method, arguments) -> {
-                if (method.getName().equals("toString")) {
-                    return "session-owner";
-                }
-                throw new UnsupportedOperationException(method.getName());
-            });
+    private static DefaultZLinkFrameworkOptions baseDeltaOptions(
+        systems.zlink.framework.runtime.locations
+            .ZLinkInMemoryLocationStore locations,
+        systems.zlink.framework.locationprovider.ZLinkRelocationStore relocations) {
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(locations);
+        options.addRelocationStore(relocations);
+        var mesh = options.addRouteMesh(MESH)
+            .setRoutingIdPrefix(SOURCE_RID.toString())
+            .listen("inproc://retire-source");
+        mesh.channelName(MESH).server();
+        mesh.objects().server().addSpotFactory(
+            STABLE_TYPE,
+            LiveSpot.class,
+            factory -> factory.preserveStateWith(BaseDeltaAdapter.class));
+        mesh.objects().server().addActorFactory(
+            ACTOR_TYPE,
+            TestActor.class,
+            TestActorFactory.class,
+            factory -> factory.recreateOnRelocation());
+        options.validate();
+        return options;
     }
 
-    private static ZLinkLocationRepository uncertainPreparationRepository(
-        ZLinkLocationRepository delegate,
-        AtomicInteger abortAttempts) {
-        return (ZLinkLocationRepository) Proxy.newProxyInstance(
-            ZLinkUserSpotRetireSourceBuilderTest.class.getClassLoader(),
-            new Class<?>[] {ZLinkLocationRepository.class},
-            (proxy, method, arguments) -> {
-                if (method.getName().equals("prepareAggregate")) {
-                    @SuppressWarnings("unchecked")
-                    CompletionStage<Object> prepared =
-                        (CompletionStage<Object>) invoke(
-                            delegate, method, arguments);
-                    return prepared.thenCompose(ignored ->
-                        CompletableFuture.failedFuture(
-                            new IllegalStateException(
-                                "aggregate prepare response was lost")));
-                }
-                if (method.getName().equals("abortAggregate")
-                    && abortAttempts.incrementAndGet() == 1) {
-                    return CompletableFuture.failedFuture(
-                        new IllegalStateException(
-                            "first abort response was unavailable"));
-                }
-                return invoke(delegate, method, arguments);
-            });
-    }
+    private static ZLinkRelocationTransitionClient baseCapableClient(
+        List<byte[]> sentBase) {
+        return new ZLinkRelocationTransitionClient() {
+            @Override public CompletionStage<Void> stage(
+                RoutingId targetNodeRid,
+                ZLinkSpotRetireControl.StageRequest request,
+                Duration timeout) {
+                return CompletableFuture.completedFuture(null);
+            }
 
-    private static Object invoke(
-        Object target,
-        java.lang.reflect.Method method,
-        Object[] arguments) throws Throwable {
-        try {
-            return method.invoke(target, arguments);
-        } catch (InvocationTargetException failure) {
-            throw failure.getCause();
-        }
+            @Override public CompletionStage<Void> relay(
+                RoutingId targetNodeRid,
+                ZLinkSpotRetireControl.Fence fence,
+                byte[] frozenRecord,
+                Duration timeout) {
+                return CompletableFuture.completedFuture(null);
+            }
+
+            @Override public CompletionStage<Void> publish(
+                RoutingId targetNodeRid,
+                ZLinkSpotRetireControl.Fence fence,
+                Duration timeout) {
+                return CompletableFuture.completedFuture(null);
+            }
+
+            @Override public CompletionStage<Void> abort(
+                RoutingId targetNodeRid,
+                ZLinkSpotRetireControl.Fence fence,
+                Duration timeout) {
+                return CompletableFuture.completedFuture(null);
+            }
+
+            @Override public boolean supportsBaseTransfer() {
+                return true;
+            }
+
+            @Override public CompletionStage<Void> sendBase(
+                RoutingId targetNodeRid,
+                ZLinkSpotRetireControl.Fence fence,
+                ZLinkCanonicalRelocationProtocol.Coordinator coordinator,
+                ZLinkCanonicalRelocationProtocol.ObjectFence object,
+                byte[] base,
+                long advertisedReceiveChunkLimitBytes,
+                Duration timeout) {
+                sentBase.add(base.clone());
+                return CompletableFuture.completedFuture(null);
+            }
+        };
     }
 
     private static ZLinkMeshNodeDescriptor descriptor(
@@ -768,6 +865,63 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
         public CompletionStage<Void> restore(
             LiveSpot spot,
             byte[] state,
+            ZLinkRelocationCancellation cancellation) {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    /**
+     * Distinguishes the pre-seal base ({@code {9}}) from the post-seal delta
+     * ({@code {5}}) so a test can prove both captures actually ran.
+     */
+    public static final class BaseDeltaAdapter
+        implements ZLinkSpotBaseDeltaRelocationAdapter<LiveSpot> {
+        static final AtomicInteger captureBaseCalls = new AtomicInteger();
+        static final AtomicInteger captureDeltaCalls = new AtomicInteger();
+
+        @Override
+        public CompletionStage<byte[]> capture(
+            LiveSpot spot,
+            ZLinkRelocationCancellation cancellation) {
+            return CompletableFuture.completedFuture(new byte[] {0});
+        }
+
+        @Override
+        public CompletionStage<Void> restore(
+            LiveSpot spot,
+            byte[] state,
+            ZLinkRelocationCancellation cancellation) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<byte[]> captureBase(
+            LiveSpot spot,
+            ZLinkRelocationCancellation cancellation) {
+            captureBaseCalls.incrementAndGet();
+            return CompletableFuture.completedFuture(new byte[] {9});
+        }
+
+        @Override
+        public CompletionStage<byte[]> captureDelta(
+            LiveSpot spot,
+            ZLinkRelocationCancellation cancellation) {
+            captureDeltaCalls.incrementAndGet();
+            return CompletableFuture.completedFuture(new byte[] {5});
+        }
+
+        @Override
+        public CompletionStage<Void> restoreBase(
+            LiveSpot spot,
+            byte[] base,
+            ZLinkRelocationCancellation cancellation) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> applyDelta(
+            LiveSpot spot,
+            byte[] delta,
             ZLinkRelocationCancellation cancellation) {
             return CompletableFuture.completedFuture(null);
         }

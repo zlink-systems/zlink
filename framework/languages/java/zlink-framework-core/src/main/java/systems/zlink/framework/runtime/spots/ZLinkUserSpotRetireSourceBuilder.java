@@ -18,7 +18,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
@@ -38,7 +37,6 @@ import systems.zlink.framework.runtime.internal.relocation
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations
     .ZLinkServiceAuthorityPayloadCodec;
-import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.runtime.internal.configuration
     .ZLinkObjectFactoryRegistration.RelocatableActorFactory;
 import systems.zlink.framework.runtime.internal.configuration
@@ -209,6 +207,14 @@ final class ZLinkUserSpotRetireSourceBuilder {
         String spotId,
         ZLinkRelocationTargetPolicy targetPolicy,
         ZLinkStoreCancellation cancellation) {
+        return prepare(spotId, targetPolicy, null, cancellation);
+    }
+
+    CompletionStage<PreparedSource> prepare(
+        String spotId,
+        ZLinkRelocationTargetPolicy targetPolicy,
+        ZLinkRelocationTransitionClient client,
+        ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(targetPolicy, "targetPolicy");
         Objects.requireNonNull(cancellation, "cancellation");
         return reconcileUnresolvedPreparations().thenCompose(ignored -> {
@@ -223,6 +229,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 .thenCompose(admission -> sealAndCapture(
                     spot,
                     admission,
+                    client,
                     cancellation));
         });
     }
@@ -316,6 +323,43 @@ final class ZLinkUserSpotRetireSourceBuilder {
     private CompletionStage<PreparedSource> sealAndCapture(
         ZLinkSpot<?> spot,
         Admission admission,
+        ZLinkRelocationTransitionClient client,
+        ZLinkStoreCancellation cancellation) {
+        //  Identity generation and the base/delta capability check happen
+        //  before the seal so a capable adapter can capture the base
+        //  snapshot off the still-running User Spot and stream it ahead of
+        //  PREPARE (spec 15 §5). The base is a snapshot of a moving target;
+        //  correctness rests entirely on the delta the post-seal capture
+        //  produces, never on the base itself reflecting the seal point.
+        UUID aggregateId = UUID.randomUUID();
+        boolean baseDeltaCapable = client != null
+            && client.supportsBaseTransfer()
+            && isSnapshot(admission.inventory().spot().policy())
+            && adapters.hasSpotBaseDeltaAdapter(
+                admission.inventory().spot().stableType());
+        ZLinkRelocationCancellation relocationCancellation =
+            cancellation::isCancellationRequested;
+        CompletionStage<byte[]> preSealBase = baseDeltaCapable
+            ? adapters.captureSpotBase(
+                admission.inventory().spot().stableType(),
+                spot,
+                relocationCancellation)
+            : CompletableFuture.completedFuture(null);
+        return preSealBase.thenCompose(base -> sealAndCaptureAfterBase(
+            spot,
+            admission,
+            client,
+            aggregateId,
+            baseDeltaCapable ? base : null,
+            cancellation));
+    }
+
+    private CompletionStage<PreparedSource> sealAndCaptureAfterBase(
+        ZLinkSpot<?> spot,
+        Admission admission,
+        ZLinkRelocationTransitionClient client,
+        UUID aggregateId,
+        byte[] base,
         ZLinkStoreCancellation cancellation) {
         ZLinkUserSpotRelocationBarrier barrier = spots.relocationBarrier(
             admission.inventory().spot().id(), actors);
@@ -345,7 +389,10 @@ final class ZLinkUserSpotRetireSourceBuilder {
                     admission,
                     cancellation,
                     barrier,
-                    sealed.orElseThrow());
+                    sealed.orElseThrow(),
+                    client,
+                    aggregateId,
+                    base);
             });
     }
 
@@ -354,7 +401,10 @@ final class ZLinkUserSpotRetireSourceBuilder {
         Admission admission,
         ZLinkStoreCancellation cancellation,
         ZLinkUserSpotRelocationBarrier barrier,
-        ZLinkUserSpotRelocationBarrier.Seal seal) {
+        ZLinkUserSpotRelocationBarrier.Seal seal,
+        ZLinkRelocationTransitionClient client,
+        UUID aggregateId,
+        byte[] base) {
         AtomicReference<List<SealedSessionRoute>> sealedSessions =
             new AtomicReference<>(List.of());
         return readInventory(
@@ -374,10 +424,10 @@ final class ZLinkUserSpotRetireSourceBuilder {
                         seal,
                         admission.target(),
                         admission.descriptors(),
-                        cancellation));
+                        cancellation,
+                        base));
             })
             .thenCompose(captured -> {
-                UUID aggregateId = UUID.randomUUID();
                 return sealSessionRoutes(
                         captured,
                         aggregateId,
@@ -402,8 +452,13 @@ final class ZLinkUserSpotRetireSourceBuilder {
                         if (cancellation.isCancellationRequested()) {
                             return cancelled();
                         }
-                        return CompletableFuture.completedFuture(
-                            new PreparedSource(
+                        return sendBaseIfCaptured(
+                                client,
+                                exact.inventory().spot(),
+                                admission.target(),
+                                aggregateId,
+                                base)
+                            .thenApply(ignored -> new PreparedSource(
                                 barrier,
                                 seal,
                                 exact,
@@ -417,7 +472,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                     exact,
                                     aggregateId,
                                     root,
-                                    admission.target())));
+                                    admission.target(),
+                                    base)));
                     });
             })
             .exceptionallyCompose(failure -> {
@@ -472,16 +528,26 @@ final class ZLinkUserSpotRetireSourceBuilder {
         ZLinkUserSpotRelocationBarrier.Seal seal,
         ZLinkMeshNodeDescriptor target,
         List<ZLinkMeshNodeDescriptor> descriptors,
-        ZLinkStoreCancellation cancellation) {
+        ZLinkStoreCancellation cancellation,
+        byte[] base) {
         ZLinkRelocationCancellation relocationCancellation =
             cancellation::isCancellationRequested;
+        //  A pre-seal base was captured off the still-running Spot; the
+        //  post-seal capture here produces only the delta on top of it
+        //  (spec 15 §5). Actor participants are unaffected — the aggregate
+        //  data model carries exactly one base slot, owned by the Spot.
         CompletionStage<byte[]> spotState = captureState(
             inventory.spot().stableType(),
             inventory.spot().policy(),
-            () -> adapters.captureSpot(
-                inventory.spot().stableType(),
-                spot,
-                relocationCancellation));
+            base != null
+                ? () -> adapters.captureSpotDelta(
+                    inventory.spot().stableType(),
+                    spot,
+                    relocationCancellation)
+                : () -> adapters.captureSpot(
+                    inventory.spot().stableType(),
+                    spot,
+                    relocationCancellation));
         return spotState.thenCompose(state -> {
             List<ZLinkUserSpotAggregateStagingOwner.ActorParticipant>
                 participants = new ArrayList<>();
@@ -1063,7 +1129,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
         Captured captured,
         UUID aggregateId,
         byte[] relocationPayload,
-        ZLinkMeshNodeDescriptor target) {
+        ZLinkMeshNodeDescriptor target,
+        byte[] base) {
         ZLinkAuthoritySnapshot source =
             captured.inventory().spot().snapshot();
         return new ZLinkSpotRetireControl.StageRequest(
@@ -1083,7 +1150,44 @@ final class ZLinkUserSpotRetireSourceBuilder {
             captured.staging().restoreSpotSnapshot(),
             relocationPayload,
             participantFences(captured),
-            captured.sessionRoutes());
+            captured.sessionRoutes(),
+            base == null ? new byte[0] : base);
+    }
+
+    /**
+     * Streams the base snapshot ahead of PREPARE (spec 15 §5, spec 28 §4.2).
+     * Sent after the seal completes and the exact stage request is fully
+     * determined, but the bytes themselves were captured pre-seal above.
+     */
+    private CompletionStage<Void> sendBaseIfCaptured(
+        ZLinkRelocationTransitionClient client,
+        Owned spot,
+        ZLinkMeshNodeDescriptor target,
+        UUID aggregateId,
+        byte[] base) {
+        if (base == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        var coordinator = new ZLinkCanonicalRelocationProtocol.Coordinator(
+            spot.snapshot().ownerId(),
+            spot.snapshot().ownerLeaseGeneration(),
+            localNodeRid,
+            localNodeGeneration,
+            spot.snapshot().storeVersion());
+        var object = new ZLinkCanonicalRelocationProtocol.ObjectFence(
+            2,
+            spot.id(),
+            "",
+            spot.snapshot().objectGeneration(),
+            spot.snapshot().authorityOwnerGeneration());
+        return client.sendBase(
+            target.rid(),
+            new ZLinkSpotRetireControl.Fence(aggregateId, 1),
+            coordinator,
+            object,
+            base,
+            0L,
+            sessionRelocationSealTimeout);
     }
 
     static final class PreparedSource {
@@ -1475,16 +1579,6 @@ final class ZLinkUserSpotRetireSourceBuilder {
         ZLinkUserSpotRelocationBarrier.Seal seal) {
         synchronized (unresolved) {
             unresolved.removeIf(candidate -> candidate.seal().equals(seal));
-        }
-    }
-
-    private static void close(AutoCloseable closeable) {
-        if (closeable == null) {
-            return;
-        }
-        try {
-            closeable.close();
-        } catch (Exception ignored) {
         }
     }
 

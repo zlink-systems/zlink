@@ -181,6 +181,94 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
             "publish-target:actor-b:room-a:12"));
     }
 
+    @Test
+    void applyDeltaFailureDiscardsTheInstanceAndRetriesOnceOnAFreshInstance() {
+        RetryBackend backend = new RetryBackend();
+        backend.restoreSpotFailuresRemaining = 1;
+        ZLinkUserSpotAggregateStagingOwner owner =
+            new ZLinkUserSpotAggregateStagingOwner(backend);
+
+        owner.stage(baseRequest(), () -> false).toCompletableFuture().join();
+
+        assertEquals(2, backend.restoreSpotCalls);
+        assertEquals(2, backend.preparedSpotInstances.size());
+        assertNotSame(
+            backend.preparedSpotInstances.get(0),
+            backend.preparedSpotInstances.get(1),
+            "the retry must restore a fresh instance, not the partial one");
+        assertEquals(
+            List.of(
+                backend.preparedSpotInstances.get(0)),
+            backend.discardedSpotInstances,
+            "only the partially-restored first instance is discarded");
+    }
+
+    @Test
+    void applyDeltaFailureTwiceIsAnExplicitRelocationDataLost() {
+        RetryBackend backend = new RetryBackend();
+        backend.restoreSpotFailuresRemaining = 2;
+        ZLinkUserSpotAggregateStagingOwner owner =
+            new ZLinkUserSpotAggregateStagingOwner(backend);
+
+        CompletionException outcome = assertThrows(
+            CompletionException.class,
+            () -> owner.stage(baseRequest(), () -> false)
+                .toCompletableFuture().join());
+
+        assertEquals(2, backend.restoreSpotCalls,
+            "exactly one retry before an explicit failure");
+        assertEquals(2, backend.preparedSpotInstances.size());
+        assertNotSame(
+            backend.preparedSpotInstances.get(0),
+            backend.preparedSpotInstances.get(1));
+        assertEquals(2, backend.discardedSpotInstances.size(),
+            "both attempts must discard their instance, no partial reuse");
+        var cause = assertInstanceOf(
+            systems.zlink.framework.errors.ZLinkFrameworkException.class,
+            outcome.getCause());
+        assertEquals(
+            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DATA_LOST,
+            cause.kind(),
+            "an exhausted base/delta retry must be an explicit DataLost, "
+                + "not a generic failure");
+    }
+
+    @Test
+    void legacyNonBaseRestoreFailureNeverRetries() {
+        RetryBackend backend = new RetryBackend();
+        backend.restoreSpotFailuresRemaining = 1;
+        ZLinkUserSpotAggregateStagingOwner owner =
+            new ZLinkUserSpotAggregateStagingOwner(backend);
+
+        CompletionException outcome = assertThrows(
+            CompletionException.class,
+            () -> owner.stage(request(), () -> false)
+                .toCompletableFuture().join());
+
+        assertEquals(1, backend.restoreSpotCalls,
+            "the legacy, non-base path must not retry");
+        assertEquals(1, backend.preparedSpotInstances.size());
+        assertEquals(1, backend.discardedSpotInstances.size());
+        assertInstanceOf(IllegalStateException.class, outcome.getCause(),
+            "the legacy path must propagate the original failure unwrapped, "
+                + "not translate it into DataLost");
+    }
+
+    private static ZLinkUserSpotAggregateStagingOwner.Request baseRequest() {
+        ZLinkUserSpotAggregateStagingOwner.Request legacy = request();
+        return new ZLinkUserSpotAggregateStagingOwner.Request(
+            legacy.spotType(),
+            legacy.spotStableType(),
+            legacy.spotId(),
+            legacy.objectGeneration(),
+            legacy.spotState(),
+            legacy.restoreSpotSnapshot(),
+            legacy.timerEnvelope(),
+            legacy.actors(),
+            legacy.acceptedJournal(),
+            new byte[] {42});
+    }
+
     private static ZLinkUserSpotAggregateStagingOwner.Request request() {
         LinkedHashMap<String, List<ZLinkAsyncSerialQueue.QueuedRecord>> journal =
             new LinkedHashMap<>();
@@ -298,6 +386,66 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
 
         @Override public void discardSpot(Object value) {
             operations.add("discard:spot");
+        }
+    }
+
+    /**
+     * Backend for the retry-once/DataLost tests (Task 2): unlike
+     * {@link FakeBackend}, {@code prepareSpot} returns a fresh, distinct
+     * instance each call so a test can assert the retry never reuses a
+     * partially-restored instance.
+     */
+    private static final class RetryBackend
+        implements ZLinkUserSpotAggregateStagingOwner.StagingBackend {
+        private final List<Object> preparedSpotInstances = new ArrayList<>();
+        private final List<Object> discardedSpotInstances = new ArrayList<>();
+        private int restoreSpotCalls;
+        private int restoreSpotFailuresRemaining;
+
+        @Override
+        public CompletionStage<Object> prepareSpot(
+            ZLinkUserSpotAggregateStagingOwner.Request request) {
+            Object instance = new Object();
+            preparedSpotInstances.add(instance);
+            return CompletableFuture.completedFuture(instance);
+        }
+
+        @Override
+        public CompletionStage<Void> restoreSpot(
+            Object preparedSpot,
+            ZLinkUserSpotAggregateStagingOwner.Request request,
+            ZLinkRelocationCancellation cancellation) {
+            restoreSpotCalls++;
+            if (restoreSpotFailuresRemaining > 0) {
+                restoreSpotFailuresRemaining--;
+                return CompletableFuture.failedFuture(
+                    new IllegalStateException("applyDelta failed"));
+            }
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Object> prepareActor(
+            ZLinkUserSpotAggregateStagingOwner.ActorParticipant participant,
+            ZLinkRelocationCancellation cancellation) {
+            return CompletableFuture.completedFuture(participant.actorId());
+        }
+
+        @Override public void publishSpot(Object value) { }
+
+        @Override public void publishActor(Object value) { }
+
+        @Override public void completeActor(Object value) { }
+
+        @Override public void publishTimers(Object value) { }
+
+        @Override
+        public CompletionStage<Void> discardActor(Object value) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override public void discardSpot(Object value) {
+            discardedSpotInstances.add(value);
         }
     }
 
