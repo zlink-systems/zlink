@@ -151,7 +151,7 @@ auto-issued by the Framework as a prefix plus a UUID; no fixed RID is configured
 |---|---|---|
 | Find the current zone owner by ZoneId. | Global Spot message | The Framework resolves the global SpotId authority. [Interaction Model §2](../../spec/server/03-interaction-model.en.md#2-common-model) |
 | Find an actor by PlayerId. | Global Actor message | Doesn't expose the Actor location or current owner as an application route. [Actor model](../../spec/server/14-actor-model.en.md) |
-| Use zone join as a cross-node move. | Actor Join + relocation | When the target owner differs, the Framework relocation unit moves the actor. [Graceful drain §8](../../spec/server/30-host-relocation-flow.en.md#8-the-order-for-relocating-one-unit) |
+| Use zone join as a cross-node move. | Actor Join + relocation | When the target owner differs, the Framework relocation unit moves the actor. [Spot and Actor membership §4.2](../../spec/server/15-spot-actor.en.md#42-the-order-for-joining-an-actor-to-a-spot-on-a-different-node) |
 | Deliver a message to the previous owner during a move. | Message Follow | Uses the committed target route and doesn't automatically resubmit a failed operation to a different owner. [Object routing §2.4](../../spec/server/18-object-routing.en.md#24-a-message-arriving-at-a-previous-owner-route) |
 | Deliver a snapshot to an adjacent zone. | Logical Multicast | Expresses the boundary via topic and target subscription. [Interaction Model §5](../../spec/server/03-interaction-model.en.md#5-spot-logical-multicast) |
 | Send all-node announcements/maintenance. | Classic fanout | The publisher doesn't manage the node list. [Interaction Model §6](../../spec/server/03-interaction-model.en.md#6-classic-fanout) |
@@ -161,8 +161,9 @@ auto-issued by the Framework as a prefix plus a UUID; no fixed RID is configured
 
 The Player Actor factory registers a `PreserveStateWith` relocation adapter. Its Capture/Restore
 payload preserves only Application-owned state such as coordinates, ZoneId, bot direction, and the
-last applied movement ID. It doesn't include the queue, accepted journal, logical timer,
-membership, or owner fence preserved by the Framework. Zone Spot factories that don't move select
+last applied movement ID. It doesn't include the queue, accepted journal, logical timer, and
+membership preserved by the Framework, nor the owner fence the Framework advances on every owner
+change. Zone Spot factories that don't move select
 `DisableRelocation`.
 
 ## 6. Message Contract
@@ -478,7 +479,12 @@ rejected, the direction reverses. The initial coordinates and directions are fix
 ### 7.4 Ops Observation, Announce, And Maintenance
 
 Ops converts runtime events and explicit reports from ZoneNode into `NodeStatusNotify` and
-`NodeAlertNotify`. `WatchNodesRes`'s Registered and Connected are different observations.
+`NodeAlertNotify`. Here, a runtime event means the current-status query and change-observation
+surface of [Runtime monitoring](../../spec/server/24-runtime-monitoring.en.md), where each item is
+a complete status, not a partial event. `WatchNodesRes`'s Registered and Connected are different
+observations: Connected comes from the peer state of the runtime status observation, and
+Registered comes from ZoneNode's explicit report, since the Framework topology status doesn't
+expose a registration signal.
 
 ```mermaid
 sequenceDiagram
@@ -510,8 +516,8 @@ maintenance state for the same NodeId is restored after a ZoneNode restart.
 
 If the Ready ZoneNode owner process terminates, the current Actor/Spot operation ends as
 Unavailable. The Framework doesn't automatically create a new Actor incarnation on a different
-ZoneNode. Planned relocation is a separate operation following the source/target commit rules, and
-is not crash failover.
+ZoneNode. Planned relocation is a separate operation following the target-only Location Store CAS commit
+rule, and is not crash failover.
 
 ## 8. Implementation Structure
 
@@ -645,8 +651,8 @@ registration method and doesn't change the message or processing responsibility.
 
 ### 9.3 Routing ID Gate
 
-- The MeshNode RID has the form `zn-<uuid-v4>`, with no fixed RID configuration or `SetRoutingId`
-  call.
+- The MeshNode RID has the form `zn-<lowercase-canonical-uuid-v4>`, with no fixed RID
+  configuration or `SetRoutingId` call.
 - ChannelName, Spot, and Actor don't create separate transport RIDs.
 - Global ZoneId routing operates independently of NodeId across process start order, graceful
   replacement, and crash replacement.

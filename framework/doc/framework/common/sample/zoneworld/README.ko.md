@@ -145,7 +145,7 @@ Framework가 자동 발급하며 고정 RID를 설정하지 않는다.
 |---|---|---|
 | ZoneId로 현재 zone owner를 찾는다. | global Spot message | global SpotId authority를 Framework가 resolve한다. [상호작용 모델 §2](../../spec/server/03-interaction-model.ko.md#2-공통-모델) |
 | PlayerId로 actor를 찾는다. | global Actor message | Actor location과 current owner를 application route로 노출하지 않는다. [Actor model](../../spec/server/14-actor-model.ko.md) |
-| zone join을 cross-node 이동으로 사용한다. | Actor Join + relocation | target owner가 다르면 Framework relocation unit이 actor를 이동시킨다. [Graceful drain §8](../../spec/server/30-host-relocation-flow.ko.md#8-unit-하나를-이전하는-순서) |
+| zone join을 cross-node 이동으로 사용한다. | Actor Join + relocation | target owner가 다르면 Framework relocation unit이 actor를 이동시킨다. [Spot·Actor membership §4.2](../../spec/server/15-spot-actor.ko.md#42-다른-node의-spot으로-actor를-join하는-순서) |
 | 이동 중 이전 owner message를 전달한다. | Message Follow | committed target route를 사용하며 실패한 operation을 다른 owner에 재제출하지 않는다. [Object routing §2.4](../../spec/server/18-object-routing.ko.md#24-이전-owner-route에-도착한-message) |
 | 인접 zone에 snapshot을 전달한다. | Logical Multicast | topic과 target subscription으로 경계를 표현한다. [상호작용 모델 §5](../../spec/server/03-interaction-model.ko.md#5-spot-logical-multicast) |
 | 전 node 공지·점검을 보낸다. | classic fanout | publisher가 node 목록을 관리하지 않는다. [상호작용 모델 §6](../../spec/server/03-interaction-model.ko.md#6-classic-fanout) |
@@ -155,7 +155,7 @@ Framework가 자동 발급하며 고정 RID를 설정하지 않는다.
 
 Player Actor factory는 `PreserveStateWith` relocation adapter를 등록한다. Capture/Restore payload는
 좌표, ZoneId, bot 방향과 마지막 적용 movement ID처럼 Application이 소유하는 state만 보존한다.
-Framework가 보존하는 queue, accepted journal, logical timer, membership과 owner fence는 포함하지 않는다.
+Framework가 보존하는 queue, accepted journal, logical timer, membership과, owner가 바뀔 때마다 Framework가 전진시키는 owner fence는 포함하지 않는다.
 이동하지 않는 Zone Spot factory는 `DisableRelocation`을 선택한다.
 
 ## 6. Message 계약
@@ -468,7 +468,11 @@ Y 방향 bot 하나를 두고, 500ms BotTickMsg마다 3칸 이동한다. 이동�
 ### 7.4 Ops 관찰, announce와 maintenance
 
 Ops는 runtime event와 ZoneNode의 explicit report를 NodeStatusNotify와 NodeAlertNotify로
-변환한다. WatchNodesRes의 Registered와 Connected는 서로 다른 관측값이다.
+변환한다. 여기서 runtime event는 [Runtime monitoring](../../spec/server/24-runtime-monitoring.ko.md)의
+현재 상태 조회·변화 관찰 surface를 뜻하며, 각 항목은 부분 event가 아니라 완전한 status다.
+WatchNodesRes의 Registered와 Connected는 서로 다른 관측값이다. Connected는 runtime status
+관찰의 peer state에서 얻고, Registered는 Framework topology status가 등록 신호를 노출하지
+않으므로 ZoneNode의 explicit report에서 얻는다.
 
 ```mermaid
 sequenceDiagram
@@ -500,7 +504,8 @@ Target zone owner가 maintenance=true이면 OnActorJoin admission이 ZoneMainten
 
 Ready ZoneNode owner process가 종료되면 현재 Actor·Spot operation은 Unavailable로 끝난다.
 Framework는 다른 ZoneNode에서 새 Actor incarnation을 자동으로 만들지 않는다. planned
-relocation은 source·target commit 규칙을 따르는 별도 operation이며 crash failover가 아니다.
+relocation은 target-only Location Store CAS commit 규칙을 따르는 별도 operation이며 crash
+failover가 아니다.
 
 ## 8. 구현 구조
 
@@ -630,7 +635,7 @@ builder로 같은 handler 집합을 명시 등록한다. 이 차이는 등록 �
 
 ### 9.3 routing ID gate
 
-- MeshNode RID는 zn-<uuid-v4> 형식이며 고정 RID 설정과 SetRoutingId 호출이 없다.
+- MeshNode RID는 zn-<lowercase-canonical-uuid-v4> 형식이며 고정 RID 설정과 SetRoutingId 호출이 없다.
 - ChannelName, Spot과 Actor가 별도 transport RID를 만들지 않는다.
 - process 시작 순서, 정상 교체와 crash 교체에서 global ZoneId routing은 NodeId와 독립적으로
   동작한다.
