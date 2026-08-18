@@ -161,8 +161,11 @@
       canonical-JSON-over-opaque) + ZLinkRedisAuthorityClient(3029줄) counter/CAS
       감사·수렴 — **상호 운용에 필수**(전용 경로가 남는 한 java descriptor를 타
       언어가 못 읽음), 전담 세션 규모로 분리 [java 1차에서 이월]
-- [ ] C-5 cpp actorJoin 발신 연산 신설 — 전문 에이전트의 spots/mesh 작업 랜딩 후
-      terra 투입 예정(파일 충돌 회피) (service-wire cross-node join 요청/응답,
+- [ ] C-5 cpp actorJoin 연산 — 요청 codec `134f22282c` 랜딩. **계약 판정(2026-08-19):
+      schema 무변경(옵션 b)** — actorJoin(28) body가 곧 계약(node 원생 상호운용),
+      transferId는 JSON 프로토콜 사설 부기, prewarm은 actor-정체성 키잉(node
+      레지스트리 방식). 수신측=erased join 경로+정체성 키 파킹/newest-wins, 발신측
+      =fence 게이트(기본 JSON 유지). sonnet 통합 진행 중 (service-wire cross-node join 요청/응답,
       binary tail 탑재 — codec은 `7ed3992ccd`로 기구현, node 발신 경로 참조)
 - [ ] C-6 dotnet actorJoin 발신 연산 — **terra 구현 완료(actorJoin(28) originate +
       tail completion, spot fence·peer 세대 일치 시 wire 선택, JSON 경로 무변경;
