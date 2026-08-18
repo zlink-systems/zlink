@@ -778,6 +778,65 @@ void verify_local_node_submit_bridge ()
     service.stop ();
 }
 
+// Regression pin for mesh_node_runtime_t::classify_node_direct_target's
+// Location-Store gate. A route-only MeshNode's direct-target send/request
+// must consult the real transport-level admission state
+// (raw_mesh_node_owner_t::request_with_header's `_topology.peer(...)` gate),
+// not fail with a blanket not_found merely because the target routing id is
+// absent from this node's own Location Store page. Route-only
+// (object_role=none) MeshNode peers are never published to the Location
+// Store, so classify_node_direct_target used to misclassify EVERY
+// direct-target send/request as not_found before the network call was ever
+// attempted, regardless of whether the target was actually admitted. This
+// node never admits any peer at all, so the correct (post-fix) outcome for
+// an unknown target is not_connected -- the real topology-backed answer.
+// Before the fix, classify_node_direct_target returned not_found here
+// unconditionally without ever consulting the transport layer, so this
+// assertion would have failed pre-fix and pins the fix now.
+void verify_direct_target_falls_through_absent_location_store_entry ()
+{
+    auto registration = make_node ("tcp://127.0.0.1:0", "location-gate-node");
+
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::service_collection_t services;
+    // v11: the MeshNode host resolves the Location store from the provider,
+    // so this check registers a real (but empty) in-memory store like any
+    // application would. The store never gets a "target" entry for the
+    // routing id used below.
+    auto owned_store =
+      std::make_unique<zlink::framework::runtime::in_memory_location_repository_t> ();
+    auto &location_store = *owned_store;
+    services.add_singleton<zlink::framework::location_repository_t> (
+      std::unique_ptr<zlink::framework::location_repository_t> (owned_store.release ()));
+    services.add_singleton<zlink::framework::runtime::location_runtime_t> (
+      std::make_unique<zlink::framework::runtime::location_runtime_t> (location_store));
+    register_mesh_location_resolvers (services);
+    auto provider = services.build_provider ();
+    provider.get_required<zlink::framework::runtime::location_runtime_t> ().start (
+      *registration->routing_id);
+    auto application_jobs = std::make_shared<
+      zlink::framework::runtime::application_job_queue_t> (
+        zlink::framework::runtime::application_job_queue_configuration_t{
+          zlink::framework::application_job_queue_profile_t::balanced,
+          std::uint32_t{1}, 1, 1});
+    zlink::framework::runtime::mesh_node_host_service_t service (
+      {registration}, serializers, {}, {}, application_jobs);
+    service.start (provider);
+    const auto node = service.nodes ().front ();
+
+    const std::vector<zlink::message_t> parts{
+      zlink::message_t::from (std::string ("direct"))};
+    const auto target =
+      zlink::routing_id_t::from (std::string ("never-admitted-target"));
+    const auto result =
+      std::move (node->send_to_node (target, parts, std::vector<std::uint8_t>{}))
+        .result ()
+        .value ();
+    assert (result == zlink::submit_result_t::not_connected);
+
+    service.stop ();
+}
+
 void verify_public_runtime_surface ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "runtime-a");
@@ -1758,6 +1817,7 @@ int main ()
     verify_deferred_application_terminal_ownership ();
     verify_descriptor_retire_order_and_pre_seal_rollback ();
     verify_local_node_submit_bridge ();
+    verify_direct_target_falls_through_absent_location_store_entry ();
 #if defined(__unix__)
     return run_cross_process_delivery ();
 #else

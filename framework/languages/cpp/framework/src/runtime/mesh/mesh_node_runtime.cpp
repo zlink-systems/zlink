@@ -3279,8 +3279,22 @@ mesh_node_runtime_t::classify_node_direct_target (const zlink::routing_id_t &tar
                          ? std::optional<zlink::submit_result_t> (zlink::submit_result_t::not_found)
                          : std::nullopt;
             }
-            if (!listed.continuation_token)
-                return zlink::submit_result_t::not_found;
+            if (!listed.continuation_token) {
+                /* The target being absent from this page of the Location
+                 * Store is not proof it does not exist as a live direct-send
+                 * peer: route-only mesh members (object_role=none, e.g. a
+                 * RouteMesh client with no spot hosting) are never published
+                 * to the Location Store, so an admitted transport-level peer
+                 * legitimately never appears here. Returning not_found
+                 * unconditionally in this branch used to short-circuit
+                 * every direct requestToNode/sendToNode before the real
+                 * admission check (raw_mesh_node_owner_t's
+                 * _topology.peer() gate) ever ran, permanently classifying
+                 * such peers as not found regardless of admission state.
+                 * Falling through with nullopt lets the caller consult the
+                 * actual transport-level topology instead. */
+                return std::nullopt;
+            }
             page.continuation_token = listed.continuation_token;
         }
     }
