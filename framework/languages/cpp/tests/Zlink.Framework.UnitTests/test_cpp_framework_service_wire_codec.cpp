@@ -1742,5 +1742,87 @@ int main ()
         }
         assert (rejected);
     }
+
+    // GOLDEN - service-wire-v1.schema.json: actor-join-reply-tail (reply(20)
+    // tail for originalOperationKind actorJoin). Read the shared
+    // cross-language fixture directly rather than copying hex vectors —
+    // see the golden file's "notes" block for the receiveChunkLimitBytes
+    // bound (relocationChunkBytes) and nonzero-u64 conventions.
+    {
+        std::ifstream fixture (ZLINK_ACTOR_JOIN_REPLY_GOLDEN_PATH);
+        assert (fixture.good ());
+        const auto vectors = nlohmann::json::parse (fixture);
+
+        for (const auto &vector : vectors.at ("canonical")) {
+            const auto bytes =
+              from_hex (vector.at ("hex").template get<std::string> ());
+            const auto decoded = protocol::decode_actor_join_reply (bytes);
+            const auto &expected = vector.at ("decoded");
+            assert (decoded.header.correlation
+                    == std::stoull (
+                      vector.at ("correlation").get<std::string> ()));
+            assert (decoded.header.terminal_result == 0);
+            assert (decoded.header.failure_code == 0);
+            std::optional<protocol::actor_join_reply_spot_ref_t> spot;
+            if (expected.contains ("spot")) {
+                spot = protocol::actor_join_reply_spot_ref_t{
+                  expected.at ("spot").at ("spotId").get<std::string> (),
+                  std::stoull (expected.at ("spot")
+                                 .at ("generation")
+                                 .get<std::string> ())};
+            }
+            const auto join_result_name =
+              expected.at ("joinResult").get<std::string> ();
+            if (join_result_name == "accepted") {
+                assert (decoded.join_result
+                        == protocol::actor_join_result_t::accepted);
+                assert (spot.has_value ());
+                assert (decoded.spot.has_value ());
+                assert (decoded.spot->spot_id == spot->spot_id);
+                assert (decoded.spot->object_generation
+                        == spot->object_generation);
+                assert (decoded.membership_epoch
+                        == std::stoull (expected.at ("membershipEpoch")
+                                          .get<std::string> ()));
+                assert (decoded.receive_chunk_limit_bytes
+                        == expected.at ("receiveChunkLimitBytes")
+                             .get<std::uint32_t> ());
+                const auto reencoded = protocol::encode_actor_join_reply (
+                  decoded.header.correlation, 0, 0,
+                  protocol::actor_join_result_t::accepted, decoded.spot,
+                  decoded.membership_epoch,
+                  decoded.receive_chunk_limit_bytes);
+                assert (reencoded == bytes);
+            } else {
+                assert (join_result_name == "rejected");
+                assert (decoded.join_result
+                        == protocol::actor_join_result_t::rejected);
+                assert (decoded.spot.has_value () == spot.has_value ());
+                if (spot) {
+                    assert (decoded.spot->spot_id == spot->spot_id);
+                    assert (decoded.spot->object_generation
+                            == spot->object_generation);
+                }
+                const auto reencoded = protocol::encode_actor_join_reply (
+                  decoded.header.correlation, 0, 0,
+                  protocol::actor_join_result_t::rejected, decoded.spot, 0,
+                  0);
+                assert (reencoded == bytes);
+            }
+        }
+
+        for (const auto &malformed : vectors.at ("malformed")) {
+            const auto bytes =
+              from_hex (malformed.at ("hex").template get<std::string> ());
+            bool rejected = false;
+            try {
+                static_cast<void> (protocol::decode_actor_join_reply (bytes));
+            }
+            catch (const protocol::service_wire_error_t &) {
+                rejected = true;
+            }
+            assert (rejected);
+        }
+    }
     return 0;
 }

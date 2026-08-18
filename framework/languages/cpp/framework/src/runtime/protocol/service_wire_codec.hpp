@@ -753,6 +753,41 @@ struct user_spot_close_reply_t
     bool closed = false;
 };
 
+/* service-wire-v1.schema.json: actor-join-result enum
+ * (accepted=0, rejected=1). */
+enum class actor_join_result_t : std::uint32_t
+{
+    accepted = 0,
+    rejected = 1
+};
+
+/* service-wire-v1.schema.json: spot-ref (spotId text8 + objectGeneration
+ * nonzero-u64). Named distinctly from
+ * zlink::framework::detail::actor_join_reply_t (contracts/actors/actor.hpp),
+ * an unrelated local actor-admission type this struct must not be confused
+ * with. */
+struct actor_join_reply_spot_ref_t
+{
+    std::string spot_id;
+    std::uint64_t object_generation = 0;
+
+    friend bool operator== (const actor_join_reply_spot_ref_t &,
+                            const actor_join_reply_spot_ref_t &) = default;
+};
+
+/* service-wire-v1.schema.json: actor-join-reply-tail (reply(20) tail for
+ * originalOperationKind actorJoin). Accepted case requires spot,
+ * membership_epoch (nonzero) and receive_chunk_limit_bytes (bounded by
+ * relocationChunkBytes); rejected case carries an optional spot. */
+struct actor_join_reply_tail_t
+{
+    reply_header_t header;
+    actor_join_result_t join_result = actor_join_result_t::rejected;
+    std::optional<actor_join_reply_spot_ref_t> spot;
+    std::uint64_t membership_epoch = 0;
+    std::uint32_t receive_chunk_limit_bytes = 0;
+};
+
 struct client_server_client_admission_t
 {
     std::string channel_name;
@@ -967,6 +1002,16 @@ std::vector<std::uint8_t> encode_user_spot_close_reply (
   std::uint32_t failure_code,
   bool closed);
 user_spot_close_reply_t decode_user_spot_close_reply (
+  std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t> encode_actor_join_reply (
+  std::uint64_t correlation,
+  std::uint32_t terminal_result,
+  std::uint32_t failure_code,
+  actor_join_result_t join_result,
+  const std::optional<actor_join_reply_spot_ref_t> &spot,
+  std::uint64_t membership_epoch,
+  std::uint32_t receive_chunk_limit_bytes);
+actor_join_reply_tail_t decode_actor_join_reply (
   std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_liveness (command kind, std::uint64_t probe_id);
 liveness_record_t decode_liveness (std::span<const std::uint8_t> bytes);

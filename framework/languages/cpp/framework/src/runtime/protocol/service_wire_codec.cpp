@@ -4217,6 +4217,177 @@ user_spot_close_reply_t decode_user_spot_close_reply (
     return reply;
 }
 
+std::vector<std::uint8_t> encode_actor_join_reply (
+  std::uint64_t correlation,
+  std::uint32_t terminal_result,
+  std::uint32_t failure_code,
+  actor_join_result_t join_result,
+  const std::optional<actor_join_reply_spot_ref_t> &spot,
+  std::uint64_t membership_epoch,
+  std::uint32_t receive_chunk_limit_bytes)
+{
+    auto bytes =
+      encode_reply_header (correlation, terminal_result, failure_code);
+    if (terminal_result != 0) {
+        return bytes;
+    }
+    if (join_result == actor_join_result_t::accepted) {
+        if (!spot || spot->object_generation == 0) {
+            throw service_wire_error_t (
+              "accepted Actor join reply requires a Spot ref");
+        }
+        if (membership_epoch == 0) {
+            throw service_wire_error_t (
+              "accepted Actor join reply requires a nonzero membership "
+              "epoch");
+        }
+        if (receive_chunk_limit_bytes > relocationChunkBytes) {
+            throw service_wire_error_t (
+              "Actor join receiveChunkLimitBytes exceeds the relocation "
+              "chunk bound");
+        }
+        std::vector<std::uint8_t> body;
+        append_text8 (body, spot->spot_id, "Actor join Spot ID");
+        append_u64 (body, spot->object_generation);
+        append_u64 (body, membership_epoch);
+        append_u32 (body, receive_chunk_limit_bytes);
+        append_u32 (bytes, 0);
+        append_u16 (bytes, static_cast<std::uint16_t> (body.size ()));
+        bytes.insert (bytes.end (), body.begin (), body.end ());
+    } else if (join_result == actor_join_result_t::rejected) {
+        std::vector<std::uint8_t> optional_body;
+        if (spot) {
+            if (spot->object_generation == 0) {
+                throw service_wire_error_t (
+                  "Actor join Spot ref requires a nonzero generation");
+            }
+            std::vector<std::uint8_t> spot_body;
+            append_text8 (spot_body, spot->spot_id, "Actor join Spot ID");
+            append_u64 (spot_body, spot->object_generation);
+            optional_body.push_back (1);
+            append_u16 (
+              optional_body, static_cast<std::uint16_t> (spot_body.size ()));
+            optional_body.insert (
+              optional_body.end (), spot_body.begin (), spot_body.end ());
+        } else {
+            optional_body.push_back (0);
+            append_u16 (optional_body, 0);
+        }
+        append_u32 (bytes, 1);
+        append_u16 (
+          bytes, static_cast<std::uint16_t> (optional_body.size ()));
+        bytes.insert (
+          bytes.end (), optional_body.begin (), optional_body.end ());
+    } else {
+        throw service_wire_error_t ("invalid Actor join result");
+    }
+    return bytes;
+}
+
+actor_join_reply_tail_t decode_actor_join_reply (
+  std::span<const std::uint8_t> bytes)
+{
+    if (bytes.size () < prefix_size + 16) {
+        throw service_wire_error_t ("truncated Actor join reply");
+    }
+    actor_join_reply_tail_t reply;
+    reply.header = decode_reply_header (bytes.first (prefix_size + 16));
+    if (reply.header.terminal_result != 0) {
+        if (bytes.size () != prefix_size + 16) {
+            throw service_wire_error_t (
+              "failed Actor join reply has a tail");
+        }
+        return reply;
+    }
+    std::size_t offset = prefix_size + 16;
+    if (bytes.size () - offset < 6) {
+        throw service_wire_error_t ("truncated Actor join reply tail");
+    }
+    const auto join_result_value = read_u32 (bytes, offset);
+    const auto body_length = read_u16 (bytes, offset);
+    if (bytes.size () - offset < body_length) {
+        throw service_wire_error_t ("truncated Actor join reply body");
+    }
+    const auto body_end = offset + body_length;
+    if (join_result_value == 0) {
+        reply.join_result = actor_join_result_t::accepted;
+        actor_join_reply_spot_ref_t spot;
+        spot.spot_id = read_text8 (bytes, offset, "Actor join Spot ID");
+        spot.object_generation = read_u64 (bytes, offset);
+        if (spot.object_generation == 0) {
+            throw service_wire_error_t (
+              "invalid Actor join Spot generation");
+        }
+        if (offset > body_end || body_end - offset < 8) {
+            throw service_wire_error_t (
+              "truncated Actor join membership epoch");
+        }
+        reply.membership_epoch = read_u64 (bytes, offset);
+        if (reply.membership_epoch == 0) {
+            throw service_wire_error_t (
+              "invalid Actor join membership epoch");
+        }
+        if (body_end - offset != 4) {
+            throw service_wire_error_t (
+              "invalid Actor join reply body length");
+        }
+        reply.receive_chunk_limit_bytes = read_u32 (bytes, offset);
+        if (reply.receive_chunk_limit_bytes > relocationChunkBytes) {
+            throw service_wire_error_t (
+              "Actor join receiveChunkLimitBytes exceeds the relocation "
+              "chunk bound");
+        }
+        reply.spot = spot;
+    } else if (join_result_value == 1) {
+        reply.join_result = actor_join_result_t::rejected;
+        if (body_end - offset < 1) {
+            throw service_wire_error_t (
+              "truncated Actor join optional Spot discriminant");
+        }
+        const auto has_spot = bytes[offset++];
+        if (has_spot != 0 && has_spot != 1) {
+            throw service_wire_error_t (
+              "invalid Actor join optional Spot discriminant");
+        }
+        if (body_end - offset < 2) {
+            throw service_wire_error_t (
+              "truncated Actor join optional Spot length");
+        }
+        const auto optional_length = read_u16 (bytes, offset);
+        const auto optional_end = offset + optional_length;
+        if (optional_end > body_end) {
+            throw service_wire_error_t (
+              "truncated Actor join optional Spot body");
+        }
+        if (has_spot == 1) {
+            actor_join_reply_spot_ref_t spot;
+            spot.spot_id = read_text8 (bytes, offset, "Actor join Spot ID");
+            spot.object_generation = read_u64 (bytes, offset);
+            if (spot.object_generation == 0) {
+                throw service_wire_error_t (
+                  "invalid Actor join Spot generation");
+            }
+            reply.spot = spot;
+        }
+        if (offset != optional_end) {
+            throw service_wire_error_t (
+              "invalid Actor join optional Spot body length");
+        }
+        if (optional_end != body_end) {
+            throw service_wire_error_t (
+              "invalid Actor join reply body length");
+        }
+    } else {
+        throw service_wire_error_t (
+          "invalid Actor join result discriminant");
+    }
+    if (offset != bytes.size ()) {
+        throw service_wire_error_t (
+          "Actor join reply has trailing bytes");
+    }
+    return reply;
+}
+
 std::vector<std::uint8_t> encode_liveness (command kind, std::uint64_t probe_id)
 {
     validate_kind (kind);

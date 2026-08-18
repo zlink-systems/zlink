@@ -322,6 +322,215 @@ async function spotRouteClient() {
   await new Promise(() => {});
 }
 
+/* Entry-spot actor relocation: two nodes (one of them this Node peer, the
+ * other a peer-language host) share a Redis-backed Location/Relocation
+ * Store, both register the SAME entry spot + actor factory, the source
+ * creates an actor (entering the entry spot the same way JoinEntrySpot
+ * does -- no admission roundtrip, spec 15:489), then triggers a whole-node
+ * relocate() drain. With exactly one other eligible peer in the mesh the
+ * destination is deterministic. A post-relocation probe request confirms
+ * the actor answers on the target node (owner transition). */
+async function entrySpotRelocate() {
+  const role = require_('role');
+  if (role !== 'source' && role !== 'target') {
+    throw new Error(`--role must be 'source' or 'target', got '${role}'`);
+  }
+  const meshName = require_('mesh-name');
+  const nodeRid = require_('node-rid');
+  const peerRid = require_('peer-rid');
+  const actorId = args['actor-id'] ?? 'cross-lang-relocation-actor';
+  const actorType = 'cross-lang-relocation-actor-type';
+  const payloadBytes = Number(args['payload-bytes'] ?? 100000);
+  const keyPrefix = args['redis-key-prefix'] ?? 'zlink-cross-relocation';
+
+  /* Same RouteMesh keep-alive gotcha as spotRouteServer()/spotRouteClient(). */
+  setInterval(() => {}, 1000);
+
+  const locations = require(path.join(nodeRoot, 'packages/framework-locations-redis/dist'));
+
+  function deterministicState(byteLength) {
+    const state = new Uint8Array(byteLength);
+    for (let index = 0; index < byteLength; index += 1) {
+      state[index] = index % 251;
+    }
+    return state;
+  }
+
+  class RelocationActor {
+    constructor(actorId, context) {
+      this.actorId = actorId;
+      this.context = context;
+      this.applicationState = new Uint8Array();
+      this.stateVersion = 0;
+    }
+  }
+
+  class RelocationActorFactory {
+    async create(context) {
+      return new RelocationActor(context.actorId, context);
+    }
+  }
+  Injectable()(RelocationActorFactory);
+
+  class RelocationActorAdapter {
+    async capture(actor, signal) {
+      signal.throwIfAborted();
+      const header = new TextEncoder().encode(JSON.stringify({
+        stateVersion: actor.stateVersion,
+        applicationStateBytes: actor.applicationState.byteLength
+      }) + '\n');
+      const encoded = new Uint8Array(header.byteLength + actor.applicationState.byteLength);
+      encoded.set(header);
+      encoded.set(actor.applicationState, header.byteLength);
+      return encoded;
+    }
+
+    async restore(actor, payload, signal) {
+      signal.throwIfAborted();
+      const separator = payload.indexOf(10);
+      if (separator < 0) throw new Error('relocation payload header is missing');
+      const header = JSON.parse(new TextDecoder().decode(payload.subarray(0, separator)));
+      actor.stateVersion = header.stateVersion;
+      actor.applicationState = payload.slice(separator + 1);
+      if (actor.applicationState.byteLength !== header.applicationStateBytes) {
+        throw new Error('relocation application state size changed during restore');
+      }
+    }
+  }
+  Injectable()(RelocationActorAdapter);
+
+  class RelocationEntrySpot {
+    async onCreateActor(actor, request) {
+      const create = request.toEncodedPayload().isEmpty() ? {} : request.decode();
+      actor.stateVersion = create.stateVersion ?? 1;
+      actor.applicationState = deterministicState(create.applicationStateBytes ?? 0);
+      return { accepted: true };
+    }
+
+    async onJoinedActor() {}
+
+    async onLeaveActor() {}
+
+    async onDisconnectActor() {}
+  }
+  Injectable()(RelocationEntrySpot);
+
+  class CrossLangProbeReq {
+    constructor(marker) { this.marker = marker; }
+  }
+
+  class EntryProbeHandler {
+    async handle(spot, actor, context, request) {
+      appendEvent(`entry-spot-probe-served|node=${nodeRid}|actor=${actor.actorId}`);
+      return {
+        nodeRid,
+        stateVersion: actor.stateVersion,
+        applicationStateBytes: actor.applicationState.byteLength,
+        marker: request.marker
+      };
+    }
+  }
+  nestjs.zlinkEntrySpotActorRequestHandler({
+    actor: () => RelocationActor,
+    entrySpot: () => RelocationEntrySpot,
+    packetName: 'CrossLangProbeReq'
+  })(EntryProbeHandler);
+
+  class EntrySpotRelocationModule {}
+  Module({
+    imports: [nestjs.ZLinkModule.forRootFactory({
+      useFactory: () => {
+        const builder = nestjs.zlinkFramework();
+        const store = new locations.ZLinkRedisLocationStore({
+          url: `redis://${require_('redis-endpoint')}`,
+          keyPrefix: `${keyPrefix}:location`
+        });
+        const relocationStore = new locations.ZLinkRedisRelocationStore({
+          url: `redis://${require_('redis-endpoint')}`,
+          keyPrefix: `${keyPrefix}:relocation`
+        });
+        builder.addLocationStore(store);
+        builder.addRelocationStore(relocationStore);
+        const mesh = builder.addRouteMesh(meshName)
+          .listen(require_('bind-endpoint'))
+          .routingId(nodeRid);
+        /* Only the source dials out (mirrors spot-route-client/-server):
+         * once the ZMTP handshake completes the connection is bidirectional,
+         * so the target only needs to listen. */
+        if (role === 'source') {
+          mesh.peerConnections().connect(peerRid, require_('peer-endpoint'));
+        }
+        mesh.channel(meshName).server();
+        const objects = mesh.objects().server();
+        objects.addEntrySpot(RelocationEntrySpot);
+        objects.addActorFactory(actorType, RelocationActorFactory,
+          (factory) => factory.preserveStateWith(RelocationActorAdapter));
+        return builder.build();
+      }
+    })],
+    providers: [RelocationActorFactory, RelocationActorAdapter, RelocationEntrySpot, EntryProbeHandler]
+  })(EntrySpotRelocationModule);
+
+  const app = await NestFactory.createApplicationContext(EntrySpotRelocationModule, { logger: false });
+  if (role === 'source') {
+    /* Only the dialer tracks outbound peer readiness; the target (listener)
+     * has no configured peer connection to wait on. */
+    const routeMeshRuntime = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
+    const readyDeadline = Date.now() + 30_000;
+    while (routeMeshRuntime.snapshot(meshName).readyPeerCount === 0) {
+      if (Date.now() >= readyDeadline) throw new Error('entry-spot-relocate peer readiness timed out');
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  writeReady();
+
+  if (role === 'source') {
+    const actorManager = app.get(nestjs.ZLINK_ACTOR_MANAGER, { strict: false });
+    const createResult = await actorManager
+      .getOrCreate(actorId, actorType)
+      .inMesh(meshName)
+      .request({ stateVersion: 1, applicationStateBytes: payloadBytes })
+      .timeout(15000)
+      .submit();
+    appendEvent(`entry-spot-create|status=${createResult.status}`);
+
+    const frameworkRuntime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false });
+    const relocateResult = await frameworkRuntime.relocate({
+      mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
+      deadlineMs: 30000
+    });
+    appendEvent(
+      `relocate-result|outcome=${framework.ZLinkFrameworkRelocationOutcome[relocateResult.outcome]}`
+      + `|reason=${framework.ZLinkFrameworkRelocationReason[relocateResult.reason]}`
+    );
+  } else {
+    const actorClient = app.get(nestjs.ZLINK_ACTOR_CLIENT, { strict: false });
+    const probeDeadline = Date.now() + 60_000;
+    let lastReply;
+    for (;;) {
+      try {
+        lastReply = await actorClient
+          .requestToActor(actorId, new CrossLangProbeReq('post-relocate-probe'))
+          .timeout(5000)
+          .submit();
+        if (lastReply.nodeRid === nodeRid) break;
+      } catch {
+        /* Actor may still be mid-relocation or not yet created; keep polling. */
+      }
+      if (Date.now() >= probeDeadline) {
+        throw new Error(`entry-spot-relocate target probe deadline exceeded, last reply=${JSON.stringify(lastReply)}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    appendEvent(
+      `entry-spot-probe|nodeRid=${lastReply.nodeRid}|stateVersion=${lastReply.stateVersion}`
+      + `|applicationStateBytes=${lastReply.applicationStateBytes}`
+    );
+  }
+
+  await new Promise(() => {});
+}
+
 async function streamConnector() {
   const driverModule = await import(pathToFileURL(
     path.join(nodeRoot, 'scripts/browser-e2e/connector-driver.mjs')
@@ -446,6 +655,7 @@ async function main() {
     case 'spot-route-client': return spotRouteClient();
     case 'browser-stream-connector': return streamConnector();
     case 'message-follow': return messageFollow();
+    case 'entry-spot-relocate': return entrySpotRelocate();
     default: throw new Error(`unsupported mode '${mode}'`);
   }
 }
