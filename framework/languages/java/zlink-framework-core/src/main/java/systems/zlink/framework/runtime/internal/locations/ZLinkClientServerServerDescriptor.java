@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.Objects;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 
 /**
  * Store-backed discovery identity of one ClientServer server lifecycle.
@@ -23,7 +24,9 @@ public record ZLinkClientServerServerDescriptor(
     public ZLinkClientServerServerDescriptor {
         channelName = requireText(channelName, "channelName");
         Objects.requireNonNull(serverRid, "serverRid");
-        endpoint = requireText(endpoint, "endpoint");
+        //  Write-time normalization (endpoint notation policy §2.3): see
+        //  ZLinkMeshNodeDescriptor.
+        endpoint = ZLinkEndpointNotation.normalize(requireText(endpoint, "endpoint"));
         securityIdentity = requireText(
             securityIdentity,
             "securityIdentity");

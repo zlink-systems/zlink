@@ -14,8 +14,77 @@ import systems.zlink.framework.locations.ZLinkLocationRole;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeer;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
+import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 
 final class ZLinkAutoConnectPlannerTest {
+    @Test
+    void tieBreakIsUnaffectedByEndpointNotationDifferences() {
+        // Endpoint notation policy §4: with no routing id to break the tie,
+        // localIsInitiator falls back to a lexicographic endpoint compare.
+        // That compare must be driven by the normalized string, not by
+        // whichever casing/leading-zero/whitespace variant happened to be
+        // configured -- otherwise both sides (or neither) could decide
+        // they are the initiator depending on incidental notation.
+        RoutingId emptyRid = RoutingId.from(new byte[0]);
+
+        var lowerCanonical = new ZLinkAutoConnectPlanner.Local(
+            ZLinkAutoConnectType.ROUTE_MESH,
+            "mesh",
+            ZLinkLocationRole.ROUTER,
+            emptyRid,
+            "tcp://host-a:80");
+        var higherPeerCanonical = new ZLinkAutoConnectPeer(
+            ZLinkAutoConnectType.ROUTE_MESH,
+            "mesh",
+            emptyRid,
+            ZLinkLocationRole.ROUTER,
+            "tcp://host-b:80",
+            100,
+            false,
+            1,
+            Map.of(),
+            List.of(),
+            "owner",
+            1,
+            Instant.EPOCH);
+        assertEquals(
+            1,
+            ZLinkAutoConnectPlanner.computeDesired(
+                lowerCanonical, List.of(higherPeerCanonical)).size());
+
+        // Same pair, but each endpoint arrives in a different notation and
+        // is normalized exactly as production acceptance points do
+        // (ChannelRegistration.requireEndpointValue / descriptor
+        // construction) before reaching the planner.
+        var lowerRaw = new ZLinkAutoConnectPlanner.Local(
+            ZLinkAutoConnectType.ROUTE_MESH,
+            "mesh",
+            ZLinkLocationRole.ROUTER,
+            emptyRid,
+            ZLinkEndpointNotation.normalize("  TCP://Host-A:080  "));
+        var higherPeerRaw = new ZLinkAutoConnectPeer(
+            ZLinkAutoConnectType.ROUTE_MESH,
+            "mesh",
+            emptyRid,
+            ZLinkLocationRole.ROUTER,
+            ZLinkEndpointNotation.normalize("TCP://HOST-B:0080"),
+            100,
+            false,
+            1,
+            Map.of(),
+            List.of(),
+            "owner",
+            1,
+            Instant.EPOCH);
+
+        assertEquals(lowerCanonical.endpoint(), lowerRaw.endpoint());
+        assertEquals(higherPeerCanonical.endpoint(), higherPeerRaw.endpoint());
+        assertEquals(
+            1,
+            ZLinkAutoConnectPlanner.computeDesired(
+                lowerRaw, List.of(higherPeerRaw)).size());
+    }
+
     @Test
     void actorCapabilitiesUseExactConfiguredActorTypes() {
         assertEquals(

@@ -191,6 +191,55 @@ class ZLinkInMemoryLocationStoreTest {
     }
 
     @Test
+    void descriptorEndpointsAreNormalizedAtConstructionRegardlessOfOrigin()
+        throws Exception {
+        // Endpoint notation policy §2.3: normalization happens once, at the
+        // point a descriptor is constructed (peer descriptor decode, local
+        // assembly, or a Location Store row), not at every comparison site.
+        // ZLinkFanoutPublisherDescriptor/ZLinkMeshNodeDescriptor normalize
+        // in their compact constructors, so this holds independent of the
+        // in-memory store.
+        ZLinkInMemoryLocationStore store = new ZLinkInMemoryLocationStore(
+            Clock.fixed(NOW, ZoneOffset.UTC));
+        ZLinkLocationOwnerToken owner = assertInstanceOf(
+            ZLinkOwnerLeaseClaimed.class,
+            store.claimOwnerLease("normalization-owner", Duration.ofSeconds(30))
+                .toCompletableFuture().get()).token();
+        ZLinkFanoutPublisherDescriptor fanout =
+            fanoutPublisher(owner, 7, 1, "TCP://Host:0080/");
+        assertEquals("tcp://host:80", fanout.endpoint());
+
+        ZLinkMeshNodeDescriptor meshNode = meshNodeDescriptor(
+            owner,
+            NODE_A,
+            7,
+            1,
+            "TCP://[FE80::1%Eth0]:0080",
+            "mesh-entry-00000000-0000-4000-8000-000000000001");
+        assertEquals("tcp://[fe80::1%Eth0]:80", meshNode.endpoint());
+
+        // Write-time normalization also means a RENEW whose incoming
+        // descriptor only differs by notation from the stored (already
+        // normalized) descriptor compares equal, rather than being
+        // spuriously rejected as a conflicting revision.
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            store.updateMeshNode(
+                    meshNodeDescriptor(owner, NODE_A, 7, 1, "tcp://[fe80::1%eth0]:80",
+                        "mesh-entry-00000000-0000-4000-8000-000000000001"),
+                    ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            store.updateMeshNode(
+                    meshNodeDescriptor(owner, NODE_A, 7, 2, "TCP://[FE80::1%eth0]:0080",
+                        "mesh-entry-00000000-0000-4000-8000-000000000001"),
+                    ZLinkLocationWriteIntent.RENEW)
+                .toCompletableFuture().get().status());
+        assertEquals("tcp://[fe80::1%eth0]:80", onlyMeshNode(store).endpoint());
+    }
+
+    @Test
     void ownerLeaseUsesExactTokenForReadRenewAndRelease() throws Exception {
         ZLinkInMemoryLocationStore store = new ZLinkInMemoryLocationStore(
             Clock.fixed(NOW, ZoneOffset.UTC));

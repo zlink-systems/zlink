@@ -1489,6 +1489,25 @@ final class ZLinkStreamConnectorTest {
     }
 
     @Test
+    void configurationAcceptsUppercaseEndpointScheme() {
+        // Endpoint notation policy §2.6 / common connector spec §3.1:
+        // scheme resolution is case-insensitive. transportFor() used to
+        // switch on the raw (unlowered) scheme string, so "TCP://" threw
+        // IllegalArgumentException instead of resolving to TCP.
+        ZLinkStreamConnectorOptions uppercase = ZLinkStreamConnectorOptions.createDefault(
+            URI.create("TCP://127.0.0.1:7000"));
+        ZLinkStreamConnectorConfiguration configuration =
+            ZLinkStreamConnectorConfiguration.from(uppercase);
+        assertEquals(ZLinkStreamTransport.TCP, configuration.transport().kind());
+
+        ZLinkStreamConnectorOptions mixedCaseWss = ZLinkStreamConnectorOptions.createDefault(
+            URI.create("Wss://127.0.0.1:7443"));
+        assertEquals(
+            ZLinkStreamTransport.WEB_SOCKET_SECURE,
+            ZLinkStreamConnectorConfiguration.from(mixedCaseWss).transport().kind());
+    }
+
+    @Test
     void receivePayloadLimitMustBePositive() {
         assertThrows(IllegalArgumentException.class, () ->
             createConnector(options(

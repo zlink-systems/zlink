@@ -1,6 +1,5 @@
 package systems.zlink.framework.runtime.channels;
-import java.net.URI;
-import java.net.URISyntaxException;
+import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -1287,23 +1286,16 @@ final class ZLinkChannelSocketRegistry {
                 ? configuredEndpoint
                 : boundEndpoint;
         }
-        if (advertiseHost == null || advertiseHost.isBlank()) {
-            return endpoint;
+        //  Write-time normalization (endpoint notation policy §2.3): built
+        //  with an IPv6-safe host substitution (never lastIndexOf(':')),
+        //  then normalized once here rather than at every comparison site.
+        //  The former java.net.URI 7-arg reconstruction threw for
+        //  otherwise-legal hosts (e.g. underscore-bearing Docker service
+        //  names) it treated as illegal reg-names.
+        if (advertiseHost != null && !advertiseHost.isBlank()) {
+            endpoint = ZLinkEndpointNotation.withHost(endpoint, advertiseHost);
         }
-        URI value = URI.create(endpoint);
-        try {
-            return new URI(
-                value.getScheme(),
-                value.getUserInfo(),
-                advertiseHost,
-                value.getPort(),
-                value.getPath(),
-                value.getQuery(),
-                value.getFragment()).toString();
-        } catch (URISyntaxException invalid) {
-            throw new IllegalArgumentException(
-                "Invalid ClientServer advertise host.", invalid);
-        }
+        return ZLinkEndpointNotation.normalize(endpoint);
     }
 
     private static String advertisedEndpoint(
@@ -1325,19 +1317,12 @@ final class ZLinkChannelSocketRegistry {
                 ? configuredEndpoint
                 : boundEndpoint;
         }
-        if (advertiseHost == null || advertiseHost.isBlank()) {
-            return endpoint;
+        //  Write-time normalization (endpoint notation policy §2.3): see
+        //  the ClientServer advertisedEndpoint overload above.
+        if (advertiseHost != null && !advertiseHost.isBlank()) {
+            endpoint = ZLinkEndpointNotation.withHost(endpoint, advertiseHost);
         }
-        URI value = URI.create(endpoint);
-        try {
-            return new URI(
-                value.getScheme(), value.getUserInfo(), advertiseHost,
-                value.getPort(), value.getPath(), value.getQuery(), value.getFragment())
-                .toString();
-        } catch (URISyntaxException invalid) {
-            throw new IllegalArgumentException(
-                "Invalid Fanout advertise host.", invalid);
-        }
+        return ZLinkEndpointNotation.normalize(endpoint);
     }
 
     private static void closeAll(

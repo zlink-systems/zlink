@@ -11,6 +11,7 @@ import systems.zlink.framework.configuration.ZLinkClientServerChannelServerBuild
 import systems.zlink.framework.configuration.ZLinkEndpointConnections;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
 import systems.zlink.framework.channels.ZLinkSendHandler;
+import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 
 public final class ChannelBuilders {
     private ChannelBuilders() {
@@ -158,7 +159,8 @@ public final class ChannelBuilders {
         private void applyListen() {
             if (listenPort != null) {
                 registration.replaceClientServerBind(
-                    "tcp://" + bindHost + ":" + listenPort);
+                    "tcp://" + ZLinkEndpointNotation.bracketIpv6Host(bindHost)
+                        + ":" + listenPort);
             }
         }
 
@@ -230,7 +232,8 @@ public final class ChannelBuilders {
         private void applyListen() {
             if (listenPort != null) {
                 registration.replacePublisherBind(
-                    "tcp://" + bindHost + ":" + listenPort);
+                    "tcp://" + ZLinkEndpointNotation.bracketIpv6Host(bindHost)
+                        + ":" + listenPort);
             }
         }
 

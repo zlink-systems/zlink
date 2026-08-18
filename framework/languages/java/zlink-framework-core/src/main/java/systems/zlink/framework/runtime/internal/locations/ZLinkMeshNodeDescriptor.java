@@ -14,6 +14,7 @@ import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.locations.ZLinkObjectCapability;
 import systems.zlink.framework.locations.ZLinkPlacementCapacity;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 
 /**
  * Store-backed identity and placement capability of one physical MeshNode
@@ -42,7 +43,12 @@ public record ZLinkMeshNodeDescriptor(
     public ZLinkMeshNodeDescriptor {
         meshName = requireText(meshName, "meshName");
         Objects.requireNonNull(rid, "rid");
-        endpoint = requireText(endpoint, "endpoint");
+        //  Write-time normalization (endpoint notation policy §2.3): every
+        //  construction site -- Location Store rows, peer descriptors
+        //  decoded off the wire, local descriptor assembly -- funnels
+        //  through this canonical constructor, so comparisons elsewhere
+        //  stay plain `equals`.
+        endpoint = ZLinkEndpointNotation.normalize(requireText(endpoint, "endpoint"));
         securityIdentity = requireText(
             securityIdentity,
             "securityIdentity");

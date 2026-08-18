@@ -2,6 +2,7 @@ package systems.zlink.stream.connector;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -174,7 +175,9 @@ final class ZLinkStreamConnectorConfiguration {
         if (scheme == null || scheme.isBlank()) {
             throw new IllegalArgumentException("endpoint URI scheme is required");
         }
-        return switch (scheme) {
+        //  Endpoint notation policy §2.6: scheme is case-insensitive
+        //  ("TCP://" must resolve the same as "tcp://").
+        return switch (scheme.toLowerCase(Locale.ROOT)) {
             case "tcp" -> ZLinkStreamTransport.TCP;
             case "tls" -> ZLinkStreamTransport.TLS;
             case "ws" -> ZLinkStreamTransport.WEB_SOCKET;

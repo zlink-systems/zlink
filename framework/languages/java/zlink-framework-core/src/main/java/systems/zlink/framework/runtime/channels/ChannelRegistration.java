@@ -12,6 +12,7 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerSurface;
+import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 
 public final class ChannelRegistration {
@@ -550,7 +551,13 @@ public final class ChannelRegistration {
         if (endpoint == null || endpoint.isBlank()) {
             throw new ZLinkConfigurationException("endpoint is required");
         }
-        return endpoint;
+        //  Write-time normalization (endpoint notation policy §2.3): the
+        //  single chokepoint for every application-supplied bind and
+        //  manual-connect endpoint (server/publisher/route binds via
+        //  addServerBind/replaceClientServerBind/addPublisherBind/
+        //  replacePublisherBind/addRouteBind, and client/subscriber/route
+        //  manual connect+disconnect via RuntimeEndpointConnections).
+        return ZLinkEndpointNotation.normalize(endpoint);
     }
 
     private static String requireEndpoint(String endpoint) {

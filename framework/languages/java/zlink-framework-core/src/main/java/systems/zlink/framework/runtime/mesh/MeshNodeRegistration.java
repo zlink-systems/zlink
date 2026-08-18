@@ -30,6 +30,7 @@ import systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder;
 import systems.zlink.framework.configuration.ZLinkMeshNodeSocketConfig;
 import systems.zlink.framework.configuration.ZLinkActorFactoryBuilder;
 import systems.zlink.framework.configuration.ZLinkInstanceSpotFactoryBuilder;
+import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationReadinessMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder;
@@ -657,6 +658,12 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     }
 
     public record Peer(String endpoint, RoutingId expectedRoutingId) {
+        public Peer {
+            //  Write-time normalization (endpoint notation policy §2.3):
+            //  the acceptance point for manually configured RouteMesh/
+            //  DealerMesh peer endpoints.
+            endpoint = ZLinkEndpointNotation.normalize(endpoint);
+        }
     }
 
     public record DispatchHandler(
@@ -861,7 +868,8 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
 
         @Override
         public void disconnect(String endpoint) {
-            String target = requireText(endpoint, "peer endpoint");
+            String target = ZLinkEndpointNotation.normalize(
+                requireText(endpoint, "peer endpoint"));
             peers.removeIf(peer -> peer.endpoint().equals(target));
         }
 

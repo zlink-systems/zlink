@@ -4,6 +4,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 
 /** Immutable descriptor owned by the Framework RouteMesh runtime. */
 public record ZLinkServiceNodeDescriptor(
@@ -39,7 +40,14 @@ public record ZLinkServiceNodeDescriptor(
     public ZLinkServiceNodeDescriptor {
         meshName = requireText(meshName, "meshName");
         Objects.requireNonNull(nodeRoutingId, "nodeRoutingId");
-        advertisedEndpoint = requireText(advertisedEndpoint, "advertisedEndpoint");
+        //  Write-time normalization (endpoint notation policy §2.3): both
+        //  the local RouteMesh descriptor and every peer descriptor
+        //  decoded off the wire (ZLinkServiceM6AWireCodec) construct this
+        //  record, so normalizing here keeps admission/dedup comparisons
+        //  (e.g. ZLinkJavaRawMeshNode's peerIntents endpoint matching)
+        //  notation-insensitive without touching each comparison site.
+        advertisedEndpoint = ZLinkEndpointNotation.normalize(
+            requireText(advertisedEndpoint, "advertisedEndpoint"));
         securityIdentity = requireText(securityIdentity, "securityIdentity");
         Objects.requireNonNull(state, "state");
         Objects.requireNonNull(objectRole, "objectRole");

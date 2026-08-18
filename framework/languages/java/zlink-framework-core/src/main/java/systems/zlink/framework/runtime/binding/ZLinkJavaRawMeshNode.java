@@ -19,6 +19,7 @@ import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
@@ -809,6 +810,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (endpoint == null || endpoint.isBlank()) {
             throw new IllegalArgumentException("peer endpoint is required");
         }
+        //  Write-time normalization (endpoint notation policy §2.3): the
+        //  acceptance point for a manually connected peer endpoint.
+        endpoint = ZLinkEndpointNotation.normalize(endpoint);
         //  0 means "no lifecycle constraint"; every other 64-bit pattern is
         //  a valid opaque CSPRNG generation token, including the ~50% that
         //  read back as a negative long (spec 13 §7.1 -- the token is never
@@ -859,10 +863,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (endpoint == null || endpoint.isBlank()) {
             throw new IllegalArgumentException("peer endpoint is required");
         }
+        //  Write-time normalization (endpoint notation policy §2.3): keep
+        //  the staleIntentIds lookup below and the connectPeer() call it
+        //  delegates to comparing on the same normalized form.
+        String normalizedEndpoint = ZLinkEndpointNotation.normalize(endpoint);
         //  See the opaque-token note on connectPeer above: 0 is "no
         //  constraint", any other 64-bit pattern is a valid generation.
         List<Long> staleIntentIds = peerIntents.entrySet().stream()
-            .filter(entry -> endpoint.equals(entry.getValue().endpoint()))
+            .filter(entry -> normalizedEndpoint.equals(entry.getValue().endpoint()))
             .map(Map.Entry::getKey)
             .toList();
         for (long staleIntentId : staleIntentIds) {
@@ -878,7 +886,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         staleIntentIds.forEach(intentId ->
             removePeerConnection(intentId, false));
         return connectPeer(
-            endpoint,
+            normalizedEndpoint,
             expectedRoutingId,
             expectedLifecycleGeneration,
             expectedSecurityIdentity);
@@ -7225,14 +7233,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private String advertisedEndpoint(String actualEndpoint) {
-        if (advertiseHost == null || actualEndpoint == null
-            || !actualEndpoint.startsWith("tcp://")) {
+        if (advertiseHost == null || actualEndpoint == null) {
             return actualEndpoint;
         }
-        int colon = actualEndpoint.lastIndexOf(':');
-        return colon < "tcp://".length()
-            ? actualEndpoint
-            : "tcp://" + advertiseHost + actualEndpoint.substring(colon);
+        //  Write-time normalization (endpoint notation policy §2.3/§2.4):
+        //  IPv6-safe host substitution. The former lastIndexOf(':') split
+        //  broke on IPv6 literals, which carry more than one colon.
+        return ZLinkEndpointNotation.normalize(
+            ZLinkEndpointNotation.withHost(actualEndpoint, advertiseHost));
     }
 
     private static boolean routeMeshConnectionNotRequired(
