@@ -74,6 +74,25 @@ struct actor_message_follow_target_t
     runtime::protocol::actor_route_fence_t target_fence;
 };
 
+// Captured at mark_reconcile time (the FINALIZE call site already holds all
+// of this -- no Location Store re-derivation needed later) so a reconcile
+// deadline can reconcile against the Location Store's authority instead of
+// blindly replaying locally. See reconcile_keys_expired.
+struct reconcile_target_context_t
+{
+    spot_route_t target_route;
+    actor_ref_t target_actor;
+    runtime::protocol::actor_route_fence_t source_fence;
+    runtime::protocol::actor_route_fence_t target_fence;
+    std::string transfer_id;
+};
+
+struct expired_reconcile_t
+{
+    std::string actor_key;
+    std::optional<reconcile_target_context_t> context;
+};
+
 // One in-flight actor packet preserved while its actor is moving (spot-actor
 // spec §10). Sends are preserved and replayed transparently; a request is also
 // preserved (§10.2-1) so it still reaches the committed target's handler even
@@ -142,12 +161,15 @@ class actor_transfer_coordinator_t
     bool try_begin_source_remote (const std::string &actor_key, std::string transfer_id = {});
     void cancel_move (const std::string &actor_key);
     void mark_reconcile (const std::string &actor_key,
-                        std::chrono::steady_clock::duration bound);
-    // Returns the actor_key of every reconcile-phase move whose bound has
-    // passed. The caller closes each one (finish_move_replay) to drain any
-    // parked backlog and restore local servability -- see move_state_t's
-    // reconcile_deadline comment.
-    std::vector<std::string>
+                        std::chrono::steady_clock::duration bound,
+                        std::optional<reconcile_target_context_t> context = std::nullopt);
+    // Returns every reconcile-phase move whose bound has passed, together
+    // with the target identity captured when it entered reconcile (if any).
+    // The caller reconciles against the Location Store's authority (spec 28
+    // relay-ready irreversibility: never blind-replay locally once FINALIZE
+    // may have reached the target) -- see move_state_t's reconcile_deadline
+    // comment.
+    std::vector<expired_reconcile_t>
     reconcile_keys_expired (std::chrono::steady_clock::time_point now) const;
     // Returns the out→commit-ack elapsed time when the completed move was a
     // source-remote transfer (runtime-metrics §4.3 duration window); local
@@ -292,9 +314,13 @@ class actor_transfer_coordinator_t
         // tell whether the target ever received it) where nothing today
         // reconciles against authority truth. Bound it so a stuck reconcile
         // cannot park requests in the backlog forever (spec 28: never
-        // unbounded queueing) -- resolve_expired_reconciles closes it and
-        // returns the Actor to local service once this passes.
+        // unbounded queueing) -- reconcile_keys_expired reports it once this
+        // passes so the caller can reconcile against the Location Store.
         std::optional<std::chrono::steady_clock::time_point> reconcile_deadline;
+        // Target identity captured at mark_reconcile time so the deadline
+        // handler can adopt the target route (spec 28) without a second
+        // Location Store resolver lookup for the target's spot address.
+        std::optional<reconcile_target_context_t> reconcile_context;
     };
 
     struct message_follow_route_t

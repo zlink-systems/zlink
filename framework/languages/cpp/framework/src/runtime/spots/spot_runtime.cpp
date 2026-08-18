@@ -5121,14 +5121,19 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
         }
     }
     // A reconcile-phase move (genuinely ambiguous FINALIZE outcome, spec 28)
-    // has no authority-truth reconciliation today; bounded by
-    // reconcile_deadline (move_state_t) so it cannot park requests in the
-    // backlog forever. Close each expired one exactly like an explicit,
-    // non-ambiguous failure would: drain any parked backlog and restore
-    // local servability.
+    // is bounded by reconcile_deadline (move_state_t) so it cannot park
+    // requests in the backlog forever. Once past relay-ready, FINALIZE may
+    // already have reached the target, so a stuck reconcile must never
+    // blindly replay locally on timer expiry (spec 28 relay-ready
+    // irreversibility) -- reconcile each expired one against the Location
+    // Store's actual authority instead: adopt the target route if it
+    // committed, restore locally only if the store still shows the source
+    // as owner, and otherwise fast-fail whatever is parked and remain
+    // unavailable (never silent parking).
     const auto expired_reconciles =
       _state->actor_transfer_coordinator.reconcile_keys_expired (now);
-    for (const auto &key : expired_reconciles) {
+    for (const auto &expired : expired_reconciles) {
+        const auto &key = expired.actor_key;
         const auto separator = key.find (':');
         if (separator == std::string::npos)
             continue;
@@ -5142,10 +5147,95 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
         }
         const auto actor_ref = ::zlink::framework::detail::actor_ref_access_t::make (
           node_rid (), key.substr (0, separator), key.substr (separator + 1), generation);
-        if (actor_transfer_marker_enabled ()) {
-            emit_actor_transfer_marker ("reconcile_deadline_expired", actor_ref, key);
+
+        if (!expired.context) {
+            // No target identity was captured for this reconcile (a call
+            // site outside spec 28's relay-ready-ambiguous FINALIZE case,
+            // e.g. a target-local post-authority-commit failure): unchanged
+            // prior behavior, not the Location-Store-reconciled outcomes
+            // below, which require the captured identity to compare against.
+            replay_actor_handoff_until_move_closed (actor_ref, key);
+            ++removed;
+            continue;
         }
-        replay_actor_handoff_until_move_closed (actor_ref, key);
+
+        enum class reconcile_outcome_t
+        {
+            target_committed,
+            source_owns,
+            indeterminate
+        };
+        auto outcome = reconcile_outcome_t::indeterminate;
+        {
+            if (!_state->relocation_authority) {
+                outcome = reconcile_outcome_t::indeterminate;
+            } else {
+                try {
+                    const auto current = _state->relocation_authority->read (
+                      runtime::stateful::object_kind_t::actor, key.substr (separator + 1));
+                    if (!current) {
+                        outcome = reconcile_outcome_t::source_owns;
+                    } else if (current->target.key == expired.context->target_fence.actor_id
+                               && current->target.object_generation
+                                    == expired.context->target_fence.object_generation
+                               && current->target.node_id
+                                    == std::string (
+                                         expired.context->target_actor.node_rid ().value ())
+                               && current->target.authority_owner_generation
+                                    == expired.context->target_fence.authority_owner_generation) {
+                        outcome = reconcile_outcome_t::target_committed;
+                    } else if (current->source.key == expired.context->source_fence.actor_id
+                               && current->source.object_generation
+                                    == expired.context->source_fence.object_generation
+                               && current->source.authority_owner_generation
+                                    == expired.context->source_fence.authority_owner_generation) {
+                        outcome = reconcile_outcome_t::source_owns;
+                    } else {
+                        outcome = reconcile_outcome_t::indeterminate;
+                    }
+                }
+                catch (...) {
+                    outcome = reconcile_outcome_t::indeterminate;
+                }
+            }
+        }
+        if (actor_transfer_marker_enabled ()) {
+            emit_actor_transfer_marker (
+              outcome == reconcile_outcome_t::target_committed
+                ? "reconcile_deadline_adopted_target"
+                : outcome == reconcile_outcome_t::source_owns
+                    ? "reconcile_deadline_restored_local"
+                    : "reconcile_deadline_fast_failed",
+              actor_ref, key);
+        }
+        if (outcome == reconcile_outcome_t::target_committed) {
+            const auto state = _state;
+            const auto ctx = *expired.context;
+            const auto transfer_id = ctx.transfer_id.empty () ? key : ctx.transfer_id;
+            bool submitted = false;
+            if (_state->root_services) {
+                submitted = framework_worker_executor (_state)->try_submit_internal (
+                  [state, actor_ref, ctx, transfer_id] {
+                      auto owner = std::make_shared<spot_node_runtime_t> (state);
+                      auto task = owner->complete_remote_actor_transfer (
+                        actor_ref, ctx.target_actor, ctx.target_route, ctx.source_fence,
+                        ctx.target_fence, transfer_id);
+                      detail::observe_task_completion (task, [owner] (const result_t<void> &) {});
+                  });
+            }
+            if (!submitted) {
+                // Executor unavailable: cannot safely adopt the target route
+                // without a place to drain the backlog through, so fall back
+                // to the same fast-fail as the indeterminate case.
+                auto task = fast_fail_reconcile_backlog (actor_ref, key);
+                detail::observe_task_completion (task, [] (const result_t<void> &) {});
+            }
+        } else if (outcome == reconcile_outcome_t::source_owns) {
+            replay_actor_handoff_until_move_closed (actor_ref, key);
+        } else {
+            auto task = fast_fail_reconcile_backlog (actor_ref, key);
+            detail::observe_task_completion (task, [] (const result_t<void> &) {});
+        }
         ++removed;
     }
     return removed;
@@ -6437,20 +6527,53 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
     return result_t<void>::success ();
 }
 
-void spot_node_runtime_t::fail_remote_actor_transfer (const actor_ref_t &actor_ref, bool reconcile)
+void spot_node_runtime_t::fail_remote_actor_transfer (
+  const actor_ref_t &actor_ref, bool reconcile,
+  std::optional<reconcile_target_context_t> reconcile_context)
 {
     const auto key = actor_key (actor_ref);
     if (reconcile) {
         // Genuinely ambiguous outcome (e.g. the cutover submission itself
         // failed, so whether the target received it is unknown): retain the
         // reconcile phase, but only up to message_follow_duration -- see
-        // move_state_t::reconcile_deadline. Nothing today reconciles against
-        // authority truth, so this bound is what keeps the Actor from
-        // parking requests forever.
-        _state->actor_transfer_coordinator.mark_reconcile (key, _state->message_follow_duration);
+        // move_state_t::reconcile_deadline. The captured target identity
+        // lets the deadline handler reconcile against Location Store
+        // authority truth instead of blindly replaying locally (spec 28
+        // relay-ready irreversibility).
+        _state->actor_transfer_coordinator.mark_reconcile (
+          key, _state->message_follow_duration, std::move (reconcile_context));
     } else {
         replay_actor_handoff_until_move_closed (actor_ref, key);
     }
+}
+
+task_t<void> spot_node_runtime_t::fast_fail_reconcile_backlog (
+  actor_ref_t actor_ref, std::string key)
+{
+    auto backlog = _state->actor_transfer_coordinator.take_backlog (key);
+    for (auto &packet : backlog) {
+        if (!packet.is_request)
+            continue;
+        spot_inbound_message_t metadata;
+        metadata.content_type = std::move (packet.content_type);
+        metadata.values = std::move (packet.metadata);
+        const auto terminal_route = handoff_terminal_route (metadata.values);
+        if (!terminal_route)
+            continue;
+        const auto failure = result_t<zlink::message_t>::failure (
+          framework_error_kind_t::unavailable,
+          "actor relocation outcome could not be reconciled against the Location "
+          "Store; actor remains unavailable");
+        try {
+            (void) co_await send_handoff_terminal (_state, terminal_route, failure);
+        }
+        catch (...) {
+        }
+        if (actor_transfer_marker_enabled ()) {
+            emit_actor_transfer_marker ("reconcile_deadline_fast_failed", actor_ref, key);
+        }
+    }
+    co_return;
 }
 
 task_t<void>

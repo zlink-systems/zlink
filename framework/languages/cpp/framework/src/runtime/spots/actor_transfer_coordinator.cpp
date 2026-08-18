@@ -77,8 +77,10 @@ void actor_transfer_coordinator_t::cancel_move (const std::string &actor_key)
     _backlogs.erase (actor_key);
 }
 
-void actor_transfer_coordinator_t::mark_reconcile (const std::string &actor_key,
-                                                   std::chrono::steady_clock::duration bound)
+void actor_transfer_coordinator_t::mark_reconcile (
+  const std::string &actor_key,
+  std::chrono::steady_clock::duration bound,
+  std::optional<reconcile_target_context_t> context)
 {
     std::lock_guard lock (_mutex);
     const auto deadline = std::chrono::steady_clock::now () + bound;
@@ -86,22 +88,24 @@ void actor_transfer_coordinator_t::mark_reconcile (const std::string &actor_key,
     if (found == _moves.end ()) {
         auto move = move_state_t{actor_move_phase_t::reconcile, std::string{}};
         move.reconcile_deadline = deadline;
+        move.reconcile_context = std::move (context);
         _moves.emplace (actor_key, std::move (move));
         return;
     }
     found->second.phase = actor_move_phase_t::reconcile;
     found->second.reconcile_deadline = deadline;
+    found->second.reconcile_context = std::move (context);
 }
 
-std::vector<std::string> actor_transfer_coordinator_t::reconcile_keys_expired (
+std::vector<expired_reconcile_t> actor_transfer_coordinator_t::reconcile_keys_expired (
   std::chrono::steady_clock::time_point now) const
 {
     std::lock_guard lock (_mutex);
-    std::vector<std::string> expired;
+    std::vector<expired_reconcile_t> expired;
     for (const auto &[key, move] : _moves) {
         if (move.phase == actor_move_phase_t::reconcile && move.reconcile_deadline
             && *move.reconcile_deadline <= now) {
-            expired.push_back (key);
+            expired.push_back ({key, move.reconcile_context});
         }
     }
     return expired;

@@ -1144,7 +1144,15 @@ class spot_node_runtime_t
       std::uint64_t source_spot_generation,
       const spot_id_t &target_spot_id,
       const runtime::protocol::actor_route_fence_t &target_fence);
-    void fail_remote_actor_transfer (const actor_ref_t &actor_ref, bool reconcile);
+    void fail_remote_actor_transfer (
+      const actor_ref_t &actor_ref, bool reconcile,
+      std::optional<reconcile_target_context_t> reconcile_context = std::nullopt);
+    // Fast-fails whatever backlog is currently parked for actor_key without
+    // closing the move (the actor stays blocked from local dispatch) --
+    // spec 28: an indeterminate reconcile deadline must remain unavailable
+    // with an explicit failure, never silently parked and never reopened
+    // for blind local replay.
+    task_t<void> fast_fail_reconcile_backlog (actor_ref_t actor_ref, std::string actor_key);
     task_t<void>
     complete_remote_actor_transfer (const actor_ref_t &source_actor,
                                     const actor_ref_t &target_actor,

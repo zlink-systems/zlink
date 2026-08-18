@@ -2441,7 +2441,29 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::finalize_remote_application_acto
       *s->source_spot,s->target.node_rid,s->target.spot_id,
       s->target.object_generation,encoded.items());
     if(submitted!=zlink::submit_result_t::ok) {
-      spot.fail_remote_actor_transfer(s->actor,true);
+      // Ambiguous outcome: the transport send itself failed, so whether the
+      // target ever received FINALIZE is unknown. Capture the target
+      // identity now -- the deadline handler reconciles against the
+      // Location Store instead of blindly replaying locally (spec 28).
+      const auto reconcile_source_fence=runtime::protocol::actor_route_fence_t{
+        std::string(s->actor.actor_id().value()),s->actor.object_generation(),
+        s->source_node_rid,s->source_node_generation,
+        s->actor_authority_owner_generation,s->source_owner_lease_generation};
+      const auto reconcile_target_fence=runtime::protocol::actor_route_fence_t{
+        std::string(s->actor.actor_id().value()),s->actor.object_generation(),
+        s->target.node_rid.to_bytes(),s->target.node_generation,
+        s->actor_authority_owner_generation+1,
+        static_cast<std::uint64_t>(s->target.owner.lease_generation)};
+      const auto reconcile_target_actor=::zlink::framework::detail::actor_ref_access_t::make(
+        node_rid_t::from_string(s->target.node_rid.to_string()),
+        std::string(::zlink::framework::detail::actor_ref_access_t::actor_type(s->actor)),
+        std::string(s->actor.actor_id().value()),s->actor.object_generation());
+      spot.fail_remote_actor_transfer(s->actor,true,
+        reconcile_target_context_t{
+          spot_route_t{node_rid_t::from_string(s->target.node_rid.to_string()),
+                       spot_id_t(s->target.spot_id),{}},
+          reconcile_target_actor,reconcile_source_fence,reconcile_target_fence,
+          s->transfer_id});
       (void)co_await abort_remote_actor_join_seal(s);
       co_return fail_remote_actor_join(
         *s,result_t<actor_join_reply_t>::failure(
