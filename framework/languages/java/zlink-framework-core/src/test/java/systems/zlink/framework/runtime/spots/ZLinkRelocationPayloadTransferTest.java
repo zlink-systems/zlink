@@ -23,7 +23,7 @@ final class ZLinkRelocationPayloadTransferTest {
 
         var chunks = ZLinkRelocationPayloadTransfer.chunks(payload, 5);
         assertEquals(List.of(5, 5, 5, 2),
-            chunks.stream().map(byte[]::length).toList());
+            chunks.stream().map(chunk -> chunk.length).toList());
         var assembly = new ZLinkRelocationPayloadTransfer.Assembler(manifest);
         for (int index = 0; index < chunks.size(); index++) {
             assembly.accept(index, chunks.get(index));
