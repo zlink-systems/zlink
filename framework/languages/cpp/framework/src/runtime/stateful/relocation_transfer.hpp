@@ -31,7 +31,6 @@ struct relocation_payload_manifest_t
     std::uint64_t total_length = 0;
     std::uint32_t chunk_count = 0;
     std::uint32_t checksum_crc32c = 0;
-    std::uint32_t base_checksum_crc32c = 0;
 
     friend bool operator== (const relocation_payload_manifest_t &,
                             const relocation_payload_manifest_t &) = default;
@@ -94,9 +93,7 @@ inline protocol::relocation_state_t make_relocation_state_chunk (
   const protocol::relocation_object_t &object,
   std::span<const std::uint8_t> payload,
   std::uint32_t chunk_ordinal,
-  std::uint64_t chunk_limit,
-  protocol::relocation_payload_stage_t stage =
-    protocol::relocation_payload_stage_t::final)
+  std::uint64_t chunk_limit)
 {
     protocol::relocation_state_t chunk;
     chunk.relocation = relocation;
@@ -104,7 +101,8 @@ inline protocol::relocation_state_t make_relocation_state_chunk (
     chunk.coordinator = coordinator;
     chunk.sender_role = protocol::relocation_role_t::source;
     chunk.object = object;
-    chunk.payload_stage = stage;
+    // TODO(schema-atomic): payload_stage is encoded as its default (final)
+    // until the wire field is removed in the atomic schema commit.
     chunk.chunk_ordinal = chunk_ordinal;
     const auto offset =
       static_cast<std::uint64_t> (chunk_ordinal) * chunk_limit;

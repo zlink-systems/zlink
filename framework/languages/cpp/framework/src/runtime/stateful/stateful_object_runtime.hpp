@@ -161,10 +161,6 @@ struct frozen_object_state_t
     object_ref_t owner;
     std::string stable_type;
     std::vector<std::uint8_t> application_state;
-    /* Target-only, pre-seal base snapshot. It is deliberately not part of
-     * the final relocation envelope; public_host attaches it after the
-     * separately staged base stream has passed its CRC check. */
-    std::vector<std::uint8_t> base_application_state;
     std::vector<turn_record_t> pending_application;
     std::vector<logical_timer_t> timers;
 
@@ -203,7 +199,6 @@ struct aggregate_relocation_seal_t
 {
     std::uint64_t token = 0;
     std::vector<frozen_object_state_t> participants;
-    std::vector<frozen_object_state_t> base_participants;
 };
 
 struct relocation_seal_attempt_t
@@ -246,7 +241,6 @@ class stateful_object_runtime_t
     using relocation_state_capture_t = std::function<
       std::vector<std::uint8_t> (
         const object_ref_t &, const std::string &, std::stop_token)>;
-    using relocation_state_base_capture_t = relocation_state_capture_t;
     using relocation_state_restore_t = std::function<
       bool (
         const frozen_object_state_t &, const object_ref_t &,
@@ -276,11 +270,6 @@ class stateful_object_runtime_t
     void configure_relocation_state (
       relocation_state_capture_t capture,
       relocation_state_restore_t restore);
-    void configure_relocation_base_capture (
-      relocation_state_base_capture_t capture);
-    std::vector<std::uint8_t> capture_relocation_base (
-      const object_ref_t &source, const std::string &stable_type,
-      std::stop_token cancellation);
     void configure_relocation_materialization (
       relocation_state_materialize_t materialize,
       relocation_state_commit_t commit,
@@ -496,7 +485,6 @@ class stateful_object_runtime_t
     std::map<object_key_t, std::uint64_t>
       _relocation_restore_reservations;
     relocation_state_capture_t _relocation_state_capture;
-    relocation_state_base_capture_t _relocation_state_base_capture;
     relocation_state_restore_t _relocation_state_restore;
     relocation_state_materialize_t _relocation_state_materialize;
     relocation_state_commit_t _relocation_state_commit;

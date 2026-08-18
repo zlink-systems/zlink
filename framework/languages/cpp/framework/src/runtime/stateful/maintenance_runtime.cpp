@@ -439,8 +439,6 @@ struct maintenance_runtime_t::relocation_terminal_state_t
     std::shared_ptr<permit_t> permit;
     aggregate_relocation_seal_attempt_t seal_attempt;
     std::vector<std::uint8_t> payload;
-    std::vector<std::uint8_t> base_payload;
-    relocation_payload_manifest_t base_manifest;
     relocation_payload_manifest_t manifest;
     std::uint64_t effective_chunk_limit = 0;
     /* Target-advertised inbound chunk-size cap (bytes); 0 = not
@@ -766,29 +764,6 @@ task_t<bool> maintenance_runtime_t::relocate_send_state_chunks (
     co_return true;
 }
 
-task_t<bool> maintenance_runtime_t::relocate_send_base_state_chunks (
-  std::shared_ptr<relocation_terminal_state_t> state)
-{
-    if (state->base_payload.empty ())
-        co_return true;
-    const auto &participants = state->seal_attempt.seal.participants;
-    const auto principal = std::find_if (participants.begin (), participants.end (),
-      [] (const auto &candidate) { return candidate.owner.kind == object_kind_t::user_spot; });
-    const auto &root = principal != participants.end () ? *principal : participants.front ();
-    const protocol::relocation_object_t object{to_wire_object_kind (root.owner.kind),
-      root.stable_type, root.owner.key, root.owner.object_generation,
-      root.owner.authority_owner_generation};
-    for (std::uint32_t ordinal = 0; ordinal != state->base_manifest.chunk_count; ++ordinal) {
-        const auto chunk = make_relocation_state_chunk (
-          state->context.relocation, state->context.target_attempt_generation,
-          state->context.coordinator, object, state->base_payload, ordinal,
-          state->effective_chunk_limit, protocol::relocation_payload_stage_t::base);
-        if (!co_await state->context.send_state_chunk (chunk))
-            co_return false;
-    }
-    co_return true;
-}
-
 task_t<bool> maintenance_runtime_t::send_boundary_records (
   const eligible_relocation_unit_t::canonical_wire_context_t &context,
   const std::vector<protocol::relocation_data_t> &records,
@@ -1037,14 +1012,6 @@ task_t<relocation_result_t> maintenance_runtime_t::relocate_terminal (
         release_reservation ();
         co_return std::move (*state->result);
     }
-    if (!state->seal_attempt.seal.base_participants.empty ()) {
-        state->base_payload = state->seal_attempt.seal.participants.size () == 1
-          ? encode (state->seal_attempt.seal.base_participants.front (), state->inventory_digest)
-          : encode_aggregate (state->seal_attempt.seal.base_participants, state->inventory_digest);
-        state->base_manifest = plan_relocation_payload (
-          state->base_payload, state->effective_chunk_limit);
-        state->manifest.base_checksum_crc32c = state->base_manifest.checksum_crc32c;
-    }
     if (!relocate_encode (state)) {
         release_reservation ();
         co_return std::move (*state->result);
@@ -1054,12 +1021,6 @@ task_t<relocation_result_t> maintenance_runtime_t::relocate_terminal (
      * relocationState chunks sent next arrive after it. The relay-ready
      * reply arrives only after the target assembled and restored every
      * chunk, so the reply is awaited after the chunk sends complete. */
-    if (!co_await relocate_send_base_state_chunks (state)) {
-        release_reservation ();
-        (void) _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
-        co_return finish ({relocation_terminal_t::blocked, relocation_reason_t::restore_failed,
-                           std::nullopt});
-    }
     auto prepared = relocate_prepare_target (state);
     const auto chunks_sent = co_await relocate_send_state_chunks (state);
     release_reservation ();
@@ -1142,8 +1103,10 @@ bool maintenance_runtime_t::relocate_encode (
         }
         state->manifest = plan_relocation_payload (
           state->payload, state->effective_chunk_limit);
-        state->manifest.base_checksum_crc32c =
-          state->base_payload.empty () ? 0u : state->base_manifest.checksum_crc32c;
+        // TODO(schema-atomic): the wire's baseChecksumCrc32c is hardcoded 0
+        // at its construction site (mesh_node_runtime.cpp
+        // relocate_application_actor/unit) until the field is removed in the
+        // atomic schema commit; this manifest carries no base counterpart.
     }
     catch (...) {
         (void) _objects.abort_relocation (state->seal_attempt.seal.token);
@@ -1445,12 +1408,10 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
           std::move (state->payload), persisted_context, {});
         state->manifest = plan_relocation_payload (
           state->payload, state->effective_chunk_limit);
-        if (!seal.base_participants.empty ()) {
-            state->base_payload = encode_aggregate (seal.base_participants, inventory_digest);
-            state->base_manifest = plan_relocation_payload (
-              state->base_payload, state->effective_chunk_limit);
-            state->manifest.base_checksum_crc32c = state->base_manifest.checksum_crc32c;
-        }
+        // TODO(schema-atomic): the wire's baseChecksumCrc32c is hardcoded 0
+        // at its construction site (mesh_node_runtime.cpp
+        // relocate_application_actor/unit) until the field is removed in the
+        // atomic schema commit; this manifest carries no base counterpart.
     }
     catch (...) {
     }
@@ -1464,12 +1425,6 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     state->budget_reserved =
       std::min (state->effective_chunk_limit, effective_in_flight_budget ());
     co_await acquire_transfer_budget (state->budget_reserved);
-    if (!co_await relocate_send_base_state_chunks (state)) {
-        release_transfer_budget (state->budget_reserved);
-        (void) _objects.abort_relocation_before_cutover (seal.token);
-        co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
-          relocation_reason_t::restore_failed, {}};
-    }
     auto prepared = std::make_shared<task_t<bool>> (prepare_target (
       persisted_context, seal.participants, state->manifest));
     const auto chunks_sent =

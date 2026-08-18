@@ -510,8 +510,6 @@ class maintenance_runtime_t
       std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_send_state_chunks (
       std::shared_ptr<relocation_terminal_state_t> state);
-    task_t<bool> relocate_send_base_state_chunks (
-      std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_boundary_and_send (
       std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_cutover (

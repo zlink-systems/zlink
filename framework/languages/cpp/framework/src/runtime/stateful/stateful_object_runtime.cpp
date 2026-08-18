@@ -102,26 +102,6 @@ void stateful_object_runtime_t::configure_relocation_state (
     _relocation_state_restore = std::move (restore);
 }
 
-std::vector<std::uint8_t> stateful_object_runtime_t::capture_relocation_base (
-  const object_ref_t &source, const std::string &stable_type,
-  std::stop_token cancellation)
-{
-    relocation_state_capture_t capture;
-    {
-        std::lock_guard lock (_mutex);
-        capture = _relocation_state_base_capture;
-    }
-    return capture ? capture (source, stable_type, cancellation)
-                   : std::vector<std::uint8_t>{};
-}
-
-void stateful_object_runtime_t::configure_relocation_base_capture (
-  relocation_state_base_capture_t capture)
-{
-    std::lock_guard lock (_mutex);
-    _relocation_state_base_capture = std::move (capture);
-}
-
 void stateful_object_runtime_t::configure_relocation_materialization (
   relocation_state_materialize_t materialize,
   relocation_state_commit_t commit,
@@ -1200,7 +1180,6 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
     }
     std::vector<object_ref_t> sources;
     std::vector<frozen_object_state_t> frozen_participants;
-    std::vector<frozen_object_state_t> base_participants;
     try {
         sources.reserve (records.size ());
         for (auto *object : records) {
@@ -1253,23 +1232,6 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
               .application_state = {},
               .pending_application = {},
               .timers = {}};
-            if (_relocation_state_base_capture) {
-                lock->unlock ();
-                try {
-                    const auto base = _relocation_state_base_capture (
-                      frozen.owner, frozen.stable_type, cancellation);
-                    if (!base.empty ()) {
-                        auto base_frozen = frozen;
-                        base_frozen.application_state = base;
-                        base_participants.push_back (std::move (base_frozen));
-                    }
-                }
-                catch (...) {
-                    lock->lock ();
-                    throw;
-                }
-                lock->lock ();
-            }
             if (_relocation_state_capture) {
                 lock->unlock ();
                 try {
@@ -1334,8 +1296,7 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
     }
     co_return result_t<aggregate_relocation_seal_attempt_t>::success (
       {stateful_error_t::none,
-       aggregate_relocation_seal_t{token, std::move (frozen_participants),
-                                   std::move (base_participants)}});
+       aggregate_relocation_seal_t{token, std::move (frozen_participants)}});
 }
 
 stateful_error_t stateful_object_runtime_t::abort_relocation (

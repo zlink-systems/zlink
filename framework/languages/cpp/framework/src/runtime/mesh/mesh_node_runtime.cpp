@@ -1043,7 +1043,10 @@ mesh_node_runtime_t::relocate_application_actor (const actor_ref_t &actor,
                 manifest.total_length,
                 manifest.chunk_count,
                 manifest.checksum_crc32c,
-                manifest.base_checksum_crc32c,
+                /* TODO(schema-atomic): baseChecksumCrc32c is encoded as 0
+                 * (whole-payload transfer) until the wire field is removed
+                 * in the atomic schema commit. */
+                0u,
                 static_cast<std::uint64_t> (
                   std::max<std::int64_t> (0, target.application_version))},
               std::chrono::seconds (5));
@@ -1290,7 +1293,10 @@ mesh_node_runtime_t::relocate_application_unit (
                 manifest.total_length,
                 manifest.chunk_count,
                 manifest.checksum_crc32c,
-                manifest.base_checksum_crc32c,
+                /* TODO(schema-atomic): baseChecksumCrc32c is encoded as 0
+                 * (whole-payload transfer) until the wire field is removed
+                 * in the atomic schema commit. */
+                0u,
                 static_cast<std::uint64_t> (
                   std::max<std::int64_t> (0, target.application_version))},
               std::chrono::seconds (5));

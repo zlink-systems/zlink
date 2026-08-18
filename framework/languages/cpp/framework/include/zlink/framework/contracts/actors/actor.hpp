@@ -215,29 +215,6 @@ template <typename TActor> class actor_relocation_adapter_t
                                   std::stop_token operation_cancellation) = 0;
 };
 
-/* Registers the delta capture capability in addition to whole-state
- * capture/restore. The base snapshot travels ahead of the seal; after the
- * seal only the capture_delta(...) result is transferred. A failed
- * apply_delta(...) discards the instance and repeats from restore_base(...)
- * on a fresh instance. */
-template <typename TActor>
-class actor_relocation_delta_adapter_t : public actor_relocation_adapter_t<TActor>
-{
-  public:
-    virtual task_t<std::vector<std::byte>>
-    capture_base (TActor &actor, std::stop_token operation_cancellation) = 0;
-    virtual task_t<std::vector<std::byte>>
-    capture_delta (TActor &actor, std::stop_token operation_cancellation) = 0;
-    virtual task_t<void>
-    restore_base (TActor &actor,
-                  std::vector<std::byte> payload,
-                  std::stop_token operation_cancellation) = 0;
-    virtual task_t<void>
-    apply_delta (TActor &actor,
-                 std::vector<std::byte> payload,
-                 std::stop_token operation_cancellation) = 0;
-};
-
 template <typename TActor> class actor_factory_builder_t
 {
   public:
@@ -276,10 +253,6 @@ template <typename TActor> class actor_factory_builder_t
         };
         _relocation.capture = _capture;
         _relocation.restore = _restore;
-        if constexpr (std::derived_from<
-                        TAdapter, actor_relocation_delta_adapter_t<TActor>>) {
-            detail::register_delta_capability<TActor, TAdapter> (_relocation);
-        }
     }
 
   private:
