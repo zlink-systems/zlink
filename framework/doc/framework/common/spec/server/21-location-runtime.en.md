@@ -136,10 +136,22 @@ For example, the Location Store provider doesn't need to know whether the bytes 
 are an Actor owner or capacity. The framework builds the needed record and only asks the
 provider for reads and "all-or-nothing" writes.
 
-A Redis provider can internally use Redis key construction, Lua scripts, or change
+Items that runtimes in different languages must read and write as the same logical record —
+a MeshNode descriptor, owner lease, ClientServer descriptor, and fanout publisher
+descriptor — must produce the same Redis key and the same byte representation even though a
+different provider implementation stores them per language; that's what makes interop
+possible. The Redis key/value format these items use isn't a provider's free internal
+choice — it's the public contract defined by the
+[Location Store provider's official Redis implementation](22-location-store-redis.en.md#7-registration-lifetime-and-the-official-redis-provider),
+summarized in §2.4. The Redis key/storage format for payloads the Relocation Store holds is
+also a separately versioned public contract, defined by the
+[Relocation Store's official Redis implementation](23-relocation-store-redis.en.md#8-the-official-redis-provider).
+Language-private secondary indexes a provider adds aren't part of this public contract.
+
+Beyond that public contract, a Redis provider can internally use Lua scripts or change
 detection features. The framework doesn't convert to a Redis implementation and call these
 features directly. So a different database provider can also implement the same two Store
-interfaces.
+interfaces and the record format §2.4 summarizes.
 
 The location-lookup and readiness APIs an application uses aren't Store implementation
 APIs. The application uses framework runtime APIs and doesn't call the Store provider
@@ -372,6 +384,55 @@ owner lease ends. Only a framework task responsible for recovery replaces the ow
 deletes the record, conditioned on the first-read `StoreVersion`. If the record doesn't
 exist, only the time the Store read is returned. A temporary `StoreVersion` or generation
 isn't created for a nonexistent record.
+
+### 2.4 How Different Languages Read And Write The Same Redis Record
+
+A MeshNode descriptor, owner lease, ClientServer server descriptor, and fanout publisher
+descriptor (§3) must be written to Redis through the same storage scheme regardless of
+language, so a runtime in one language can read a record another language wrote. This
+storage scheme is defined by the
+[Location Store provider's official Redis implementation](22-location-store-redis.en.md#7-registration-lifetime-and-the-official-redis-provider),
+which the framework calls an "opaque record." For each record, the framework builds a
+byte-exact fixed string (the "logical key preimage") and uses the lowercase hex
+representation of its SHA-256 hash as the last segment of the Redis key.
+
+| Record | Logical key preimage (UTF-8, values separated by `\0`) |
+|---|---|
+| MeshNode descriptor | `mesh-node\0{MeshName}\0{hex(RoutingId)}` |
+| Owner lease | `owner-lease\0{OwnerId}` |
+| ClientServer server descriptor | `client-server\0{ChannelName}\0{hex(RoutingId)}` |
+| Fanout publisher descriptor | `fanout-publisher\0{ChannelName}\0{hex(RoutingId)}` |
+
+`{hex(RoutingId)}` is the lowercase hex representation of the RoutingId's raw bytes.
+`{MeshName}`, `{ChannelName}`, and `{OwnerId}` are UTF-8 bytes concatenated as-is, without a
+length prefix — only the `\0` bytes in the preimage fix the boundary between values, so
+`MeshName` and `ChannelName` themselves must not contain a `\0` byte.
+
+Each record's value is a canonical JSON value the provider stores and compares only as
+bytes, without interpreting its meaning. It includes at least the following fields.
+
+| Field | Meaning |
+|---|---|
+| `recordVersion` | The JSON structure version of this record. The current value is `1`. The framework, not the provider, checks this value; on an unrecognized value it fails explicitly instead of guessing how to read it. |
+| `ownerId`, `leaseGeneration` | The `(OwnerId, LeaseGeneration)` (§2.1) of the host that published this record. |
+| `descriptorRevision` | The Revision from §3. Absent from the owner lease record. |
+| `descriptor` | The MeshNode/ClientServer/fanout publisher descriptor content (§3). Absent from the owner lease record. |
+
+Putting the authority record (§2.2, §2.3) on the same opaque record is also the goal, but as
+of this document's revision the per-language implementations haven't converged on one
+logical key yet — cpp and java each store the whole authority as one record, while dotnet
+splits it into separate meta, payload, and generation-counter keys. Until this difference
+converges to one logical-key shape, this document doesn't fix the authority's logical key
+preimage or canonical JSON schema. Until convergence, the authority record's Redis
+representation remains a provider-specific implementation detail.
+
+Payloads the Relocation Store holds (the cold-activation envelope, completion records)
+don't use this opaque record. A separately versioned key space and raw-bytes storage format
+is defined by the
+[Relocation Store's official Redis implementation](23-relocation-store-redis.en.md#8-the-official-redis-provider).
+
+Each language implementation must run a conformance test against the shared golden fixture
+that verifies the opaque record's key derivation and value byte representation (§10).
 
 ## 3. Finding Running Nodes And Their Capabilities
 
@@ -1227,6 +1288,7 @@ framework owns.
 | Data loss | If a payload stored in the Relocation Store is permanently missing or its checksum differs, it's `DataLost`. A checksum mismatch on a directly transmitted handoff payload is an explicit failure before restore, and a partially assembled payload is never restored. An already-changed owner isn't rolled back to the source. |
 | Move cancellation | On explicit cancellation before relay-ready is accepted, changes no Location Store value and discards the target temporary queue. If a bound Session seal exists, sends command 44 abort one-way before reopening the source queue and waits for no reply. Afterward, source queue doesn't reopen regardless of cutover-submit result. |
 | Store failure | During the grace period, only new discovery connections are blocked — the owner deadline isn't extended. Relocation CAS retries with the same key, version, and fence until Restore validity expires. On expiry, target removes the object and queue and sends no Session update. |
+| Store record interop (§2.4) | Per-language implementations of the MeshNode descriptor, owner lease, ClientServer server descriptor, and fanout publisher descriptor build the same Redis key from the same logical key preimage, and the same canonical JSON value. Each language runs a conformance test that consumes the key-derivation vectors and value byte vectors the store record golden fixture defines, and fails explicitly on an unrecognized `recordVersion`. |
 
 Permit, queue, timer, Session handoff, and host final-result verification are defined by
 [Host Relocation contract test](30-host-relocation-flow.en.md#14-contract-test-verification-requirements).

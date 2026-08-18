@@ -130,9 +130,21 @@ Framework의 Actor·Spot 규칙을 provider가 직접 구현하지 않는다.
 필요가 없다. Framework가 필요한 record를 만들고 provider에는 읽기와 “전부
 성공하거나 전혀 변경하지 않는 쓰기”만 요청한다.
 
-Redis provider는 내부에서 Redis key 구성, Lua script나 변경 감지 기능을 사용할 수
-있다. Framework는 Redis 구현체로 변환하여 이런 기능을 직접 호출하지 않는다.
-따라서 다른 database provider도 같은 두 Store interface를 구현할 수 있다.
+MeshNode descriptor, owner lease, ClientServer descriptor와 fanout publisher
+descriptor처럼 서로 다른 언어의 runtime이 같은 논리 record를 읽고 써야 하는 항목은,
+언어마다 다른 provider 구현이 저장해도 같은 Redis key와 같은 byte 표현을 만들어야
+상호 운용이 성립한다. 이 항목이 사용하는 Redis key·value 형식은 provider가 자유롭게
+고르는 내부 구현이 아니라 [Location Store provider의 공식 Redis
+구현](22-location-store-redis.ko.md#7-등록-수명과-공식-redis-provider)이 정하는 공개
+계약이며 §2.4가 요약한다. Relocation Store가 보관하는 payload의 Redis key·저장
+형식도 별도로 버전을 매긴 공개 계약이며 [Relocation Store의 공식 Redis
+구현](23-relocation-store-redis.ko.md#8-공식-redis-provider)이 정한다. Provider가
+언어 전용으로 추가하는 보조 색인은 이 공개 계약에 포함되지 않는다.
+
+Redis provider는 위 공개 계약을 넘어서는 범위에서 Lua script나 변경 감지 기능을
+내부적으로 사용할 수 있다. Framework는 Redis 구현체로 변환하여 이런 기능을 직접
+호출하지 않는다. 따라서 다른 database provider도 같은 두 Store interface와 §2.4가
+요약하는 record 형식을 구현할 수 있다.
 
 Application이 사용하는 위치 조회와 readiness API는 Store 구현 API가 아니다.
 Application은 Framework runtime API를 사용하며 Store provider를 직접 호출하지 않는다.
@@ -359,6 +371,54 @@ record를 유지한다. 복구를 담당하는 Framework 작업만 처음 읽은
 조건으로 owner를 교체하거나 record를 삭제한다. Record가 없으면 Store가 읽은
 시각만 반환한다. 없는 record를 위해 임시 `StoreVersion`이나 generation을 만들지
 않는다.
+
+### 2.4 여러 언어가 같은 Redis record를 읽고 쓰는 방법
+
+MeshNode descriptor, owner lease, ClientServer server descriptor와 fanout publisher
+descriptor(§3)는 언어가 달라도 같은 저장 방식을 통해 Redis에 기록해야 다른 언어의
+runtime이 그 record를 읽을 수 있다. 이 저장 방식을
+[Location Store provider의 공식 Redis 구현](22-location-store-redis.ko.md#7-등록-수명과-공식-redis-provider)이
+정의하며, Framework는 이를 "opaque record"라고 부른다. 각 record마다 byte 그대로
+고정한 문자열("logical key preimage")을 만들고, 이 preimage의 SHA-256 hash를 소문자
+16진수로 표기한 값을 Redis key의 마지막 segment로 사용한다.
+
+| Record | Logical key preimage(UTF-8, `\0`으로 값을 구분) |
+|---|---|
+| MeshNode descriptor | `mesh-node\0{MeshName}\0{hex(RoutingId)}` |
+| Owner lease | `owner-lease\0{OwnerId}` |
+| ClientServer server descriptor | `client-server\0{ChannelName}\0{hex(RoutingId)}` |
+| Fanout publisher descriptor | `fanout-publisher\0{ChannelName}\0{hex(RoutingId)}` |
+
+`{hex(RoutingId)}`는 RoutingId의 raw bytes를 소문자 16진수로 표기한 값이다.
+`{MeshName}`, `{ChannelName}`과 `{OwnerId}`는 UTF-8 bytes를 그대로 이어 붙이며 길이
+접두사를 붙이지 않는다 — preimage 안의 `\0` byte만으로 값의 경계를 고정하므로,
+`MeshName`이나 `ChannelName` 자체에는 `\0` byte를 허용하지 않는다.
+
+각 record의 value는 provider가 의미를 해석하지 않고 bytes로만 저장·비교하는 canonical
+JSON 값이다. 최소한 다음 field를 포함한다.
+
+| Field | 의미 |
+|---|---|
+| `recordVersion` | 이 record의 JSON 구조 버전이다. 현재 값은 `1`이다. Provider가 아니라 Framework가 이 값을 확인하며, 인식하지 못하는 값을 만나면 명시적으로 실패시키고 추측해서 읽지 않는다. |
+| `ownerId`, `leaseGeneration` | 이 record를 게시한 host의 `(OwnerId, LeaseGeneration)`(§2.1)이다. |
+| `descriptorRevision` | §3의 Revision이다. Owner lease record에는 없다. |
+| `descriptor` | MeshNode·ClientServer·fanout publisher 각각의 descriptor 내용(§3)이다. Owner lease record에는 없다. |
+
+Authority record(§2.2, §2.3)도 같은 opaque record 위에 올리는 것이 목표이지만, 이
+문서를 개정하는 시점 기준으로 언어별 구현이 아직 하나의 logical key로 수렴하지
+않았다 — cpp와 java는 authority 전체를 record 하나로 저장하지만 dotnet은
+meta·payload·generation counter를 서로 다른 key로 나눠 저장한다. 이 차이가
+해소되어 하나의 logical key 구조로 수렴할 때까지 authority의 logical key preimage와
+canonical JSON 스키마는 이 문서가 정하지 않는다. 수렴 전까지 authority record의 Redis
+표현은 계속 provider별 구현 세부로 남는다.
+
+Relocation Store가 보관하는 payload(cold activation envelope, 완료 기록)는 이
+opaque record를 사용하지 않는다. 별도로 버전을 매긴 key 공간과 raw bytes 저장 형식을
+[Relocation Store의 공식 Redis 구현](23-relocation-store-redis.ko.md#8-공식-redis-provider)이
+정한다.
+
+각 언어 구현은 opaque record의 key 파생과 value byte 표현을 확인하는 공용 golden
+fixture 대상 conformance test를 실행해야 한다(§10).
 
 ## 3. 실행 중인 node와 제공 기능을 찾는다
 
@@ -1157,6 +1217,7 @@ Deadline을 넘으면 `ForceStopped` 결과를 한 번만 완료한다. Timer, S
 | 데이터 손실 | Relocation Store에 저장한 payload가 영구적으로 없거나 checksum이 다르면 `DataLost`다. 직접 전송한 handoff payload의 checksum 불일치는 복원 전 명시적 실패이며 부분 조립 payload로 복원하지 않는다. 이미 변경한 owner를 source로 되돌리지 않는다. |
 | 이동 취소 | Relay-ready reply가 accepted 상태가 되기 전 명시적 취소에서 Location Store를 변경하지 않고 target temporary queue를 폐기한다. Bound Session seal이 있으면 command 44 abort를 one-way로 보낸 뒤 source queue를 다시 열며 적용 reply는 기다리지 않는다. 그 뒤에는 cutover submit 결과와 관계없이 source queue를 다시 열지 않는다. |
 | Store 장애 | 유예 시간에는 새 discovery connection만 막으며 owner deadline은 연장하지 않는다. Relocation CAS는 같은 key·version·fence로 Restore 유효시간까지 retry한다. 만료되면 target object와 queue를 제거하고 Session update를 보내지 않는다. |
+| Store record 상호 운용(§2.4) | MeshNode descriptor, owner lease, ClientServer server descriptor와 fanout publisher descriptor는 언어별 구현이 같은 logical key preimage로 같은 Redis key를 만들고, 같은 canonical JSON value를 만든다. 각 언어는 store record golden fixture가 정하는 key 파생 벡터와 value byte 벡터를 그대로 소비하는 conformance test를 실행하며, 인식하지 못하는 `recordVersion`은 명시적으로 실패시킨다. |
 
 Permit, queue, timer, Session handoff와 host 최종 결과 검증은
 [Host relocation contract test](30-host-relocation-flow.ko.md#14-contract-test-검증-요구)가

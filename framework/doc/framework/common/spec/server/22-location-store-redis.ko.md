@@ -152,17 +152,40 @@ dispose한다. 여러 Store가 물리 connection을 공유할 때 중복 dispose
 공식 Redis extension package는 언어별 naming convention에 맞는 `RedisLocationStore` 구현을 제공한다.
 공개 options는 instance 생성에 필요한 connection, key namespace와 operation timeout으로 제한한다.
 
-다음 항목은 Redis provider implementation detail이며 public contract가 아니다.
+MeshNode descriptor, owner lease, ClientServer server descriptor와 fanout publisher
+descriptor는 언어가 달라도 같은 opaque record 표현을 사용해야 한다 — 그래야 한 언어가
+쓴 record를 다른 언어가 읽을 수 있다. 이 네 record는 다음 저장 방식을 **반드시**
+따른다. Redis key는 `{prefix}:zlink-location-v3:opaque:{sha256hex(preimage)}`이며,
+`{prefix}`는 provider가 등록 시 지정하는 key namespace, `preimage`는
+[Location runtime §2.4](21-location-runtime.ko.md#24-여러-언어가-같은-redis-record를-읽고-쓰는-방법)가
+정하는 record별 logical key preimage다. 자료구조는 Redis `ZSET`이며, `Put`마다 provider
+쪽 단조 증가 `INCR` counter를 score로 붙여 append-log로 기록한다 — 가장 큰 score의
+member가 현재 값이다. Member value는 `{originalKey, rawBytes(value), version,
+expiresAtMs, tombstone}`를 담은 cmsgpack array 앞에 1-byte format tag `0x01`을 붙인
+값이다. `rawBytes`는 base64로 다시 인코딩하지 않은 원본 bytes를 그대로 담는다.
+Provider는 인식하지 못하는 format tag를 만나면 명시적으로 실패시키며, 값을 추측해서
+읽지 않는다. Authority record는 아직 이 opaque record로 수렴하지 않았다 — 수렴 전까지
+authority의 저장 방식은 이 절 나머지가 정의하는 implementation detail로 남는다
+([Location runtime §2.4](21-location-runtime.ko.md#24-여러-언어가-같은-redis-record를-읽고-쓰는-방법)의
+authority 관련 문단 참고).
 
-- Redis key와 hash tag layout
-- HASH·SET·ZSET 선택
+위 네 record와 그 opaque record 표현을 제외하면, 다음 항목은 Redis provider
+implementation detail이며 public contract가 아니다.
+
+- Authority record가 사용하는 Redis key와 hash tag layout
+- HASH·SET·ZSET 중 authority record에 적용하는 선택
 - Lua script와 transaction 분할 방식
-- Private record encoding과 schema marker
+- Authority record의 private encoding과 언어 전용 보조 색인(예: owner·stamp·kind 색인)
 - Connection lease, retry와 snapshot cursor 구현
 - Change stamp와 polling 최적화
 
-Redis provider도 §4의 generic atomic batch와 §5의 snapshot scan을 그대로 지원해야 한다. Domain별 Redis
-method, descriptor·authority DTO와 change-stamp capability interface를 공개하지 않는다.
+Redis provider도 §4의 generic atomic batch와 §5의 snapshot scan을 그대로 지원해야 한다. Authority
+DTO와 change-stamp capability interface는 공개하지 않는다.
+
+Redis에 이미 저장된 상태를 옛 key·value 형식에서 읽어 새 opaque record로 변환하는 하위
+호환 경로는 두지 않는다. 이 형식으로 올라가는 배포는 **clean break**다 — 기존 Redis
+상태는 draining하거나 유실을 감수해야 하며, format tag와 `recordVersion`이 다른
+버전이 섞여 있으면 조용히 하나를 골라 읽지 않고 명시적으로 실패한다.
 
 Location Store와 Relocation Store는 같은 Redis deployment에서 서로 다른 key namespace를 사용할 수도 있고
 물리적으로 분리할 수도 있다. Correctness는 connection 공유나 cross-store Redis transaction에 의존하지 않는다.
@@ -178,3 +201,9 @@ Location Store와 Relocation Store는 같은 Redis deployment에서 서로 다�
 - Cancellation이나 결과 유실 뒤 exact read와 version으로 commit 여부를 재구성할 수 있다.
 - Redis provider public declaration에 authority·reservation·aggregate DTO, script와 key layout type이 없다.
 - 같은 Redis와 분리 Redis 구성에서 Location Store와 Relocation Store를 각각 등록해 사용할 수 있다.
+- MeshNode descriptor, owner lease, ClientServer server descriptor와 fanout publisher
+  descriptor는 store record golden fixture(`framework/runtime/protocol/golden/store-record-v1.json`)의
+  key 파생 벡터(preimage → SHA-256 → 전체 key 문자열)와 value byte 벡터(tombstone·만료
+  variant 포함)를 그대로 소비하는 conformance test로 검증한다.
+- 인식하지 못하는 format tag나 `recordVersion`은 명시적으로 실패하며, 옛 key·value
+  형식을 읽어 새 opaque record로 변환하는 하위 호환 경로가 없다.

@@ -78,9 +78,13 @@ A separate public method or DTO isn't added per relocation phase,
 manifest, participant, replay cursor, or completion. No operation for
 querying Actor/Spot move history is added either — move observation is
 handled by [Runtime Metrics](25-runtime-metrics.en.md) and
-[Message Flow Tracing](26-message-flow-tracing.en.md). Redis key layout,
-chunk storage structure, scripts, and cleanup index aren't exposed in the
-public SPI either.
+[Message Flow Tracing](26-message-flow-tracing.en.md). This SPI's operation
+types and DTOs are exactly as abstract as defined here — chunk storage
+structure and scripts aren't exposed in the SPI. The Redis key layout and
+data type the official Redis provider uses are now a public contract §8
+fixes at the MUST level, because official Redis providers in different
+languages must be able to read a payload another language's provider stored
+under the same reference.
 
 The following .NET excerpt shows the minimal shape of the common SPI. The
 formal declaration is in the
@@ -287,16 +291,33 @@ implementation matching each language's naming convention. Its public
 options are limited to the connection, key namespace, and operation
 timeout needed to create an instance.
 
-The following items are internal to the Redis provider's implementation
+The payload is stored as a Redis raw-bytes `STRING`. The Redis key is
+`{prefix}:zlink-relocation-v1:blob:{reference}`, where `{prefix}` is the key
+namespace the provider specifies at registration and `{reference}` is the §3
+reference the framework issues before `Put`. This key format uses a
+separately versioned domain tag (`zlink-relocation-v1`), independent of
+[the Location Store's opaque record](22-location-store-redis.en.md#7-registration-lifetime-and-the-official-redis-provider) —
+so the two Stores' key spaces don't overlap even when they share the same
+Redis deployment. `retention` is applied via Redis's `PSETEX` or `SET`'s `PX`
+option; the provider implements the §3 retention contract using this native
+Redis expiry feature. `Renew` re-sets a new `PX` on the same key.
+
+The following items remain internal to the Redis provider's implementation
 and aren't the public contract.
 
-- Redis key layout and chunk storage data structure
+- Additional data structures used for chunk storage (for example, an
+  auxiliary key pointing at the leading index)
 - Scripts and private serialization records
 - Connection lease and cleanup index
 - The internal method that runs retry and cleanup
 
 A Redis-specific Framework registration helper, or a combined class that
 implements Location Store and Relocation Store together, isn't provided.
+
+There's no backward-compatible path that reads a payload already stored in
+Redis under the old key format and converts it to the new
+`zlink-relocation-v1` format. A deployment upgrading to this format is a
+**clean break** — existing Redis state must be drained or its loss accepted.
 
 Location Store and Relocation Store can use different key namespaces on
 the same Redis deployment, or they can be placed on different
@@ -334,3 +355,12 @@ following results.
 - The Redis provider's public declarations don't include relocation
   phase/manifest DTOs, or script and key layout types.
 - The SPI has no operation for querying Actor/Spot move history.
+- A payload's Redis key follows the
+  `{prefix}:zlink-relocation-v1:blob:{reference}` format and is stored as a
+  raw-bytes `STRING` using `PSETEX` or `SET`'s `PX` option — the store
+  record golden fixture
+  (`framework/runtime/protocol/golden/store-record-v1.json`) provides these
+  vectors.
+- An unrecognized payload format fails explicitly, and there's no
+  backward-compatible path that reads the old key format and converts it to
+  the new `zlink-relocation-v1` format.

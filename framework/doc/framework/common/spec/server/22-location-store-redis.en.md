@@ -185,19 +185,48 @@ implementation matching each language's naming convention. Public options are
 limited to the connection, key namespace, and operation timeout needed to
 build the instance.
 
-The following items are Redis provider implementation details, not part of
-the public contract.
+A MeshNode descriptor, owner lease, ClientServer server descriptor, and
+fanout publisher descriptor must use the same opaque record representation
+regardless of language — otherwise a record one language writes can't be read
+by another. These four records **must** follow this storage scheme. The
+Redis key is `{prefix}:zlink-location-v3:opaque:{sha256hex(preimage)}`, where
+`{prefix}` is the key namespace the provider specifies at registration and
+`preimage` is the per-record logical key preimage defined by
+[Location Runtime §2.4](21-location-runtime.en.md#24-how-different-languages-read-and-write-the-same-redis-record).
+The data structure is a Redis `ZSET`; each `Put` appends to the log with the
+provider's monotonically increasing `INCR` counter as the score — the member
+with the highest score is the current value. The member value is a cmsgpack
+array holding `{originalKey, rawBytes(value), version, expiresAtMs,
+tombstone}`, prefixed with a 1-byte format tag `0x01`. `rawBytes` carries the
+original bytes as-is, without re-encoding to base64. The provider fails
+explicitly on an unrecognized format tag rather than guessing how to read the
+value. The authority record hasn't converged onto this opaque record yet —
+until it does, the authority's storage scheme remains an implementation
+detail defined by the rest of this section (see the authority paragraph in
+[Location Runtime §2.4](21-location-runtime.en.md#24-how-different-languages-read-and-write-the-same-redis-record)).
 
-- Redis key and hash-tag layout
-- Choice of HASH/SET/ZSET
+Outside these four records and their opaque record representation, the
+following items are Redis provider implementation details, not part of the
+public contract.
+
+- The Redis key and hash-tag layout the authority record uses
+- The choice among HASH/SET/ZSET applied to the authority record
 - Lua script and transaction-splitting method
-- Private record encoding and schema markers
+- The authority record's private encoding and language-private secondary
+  indexes (for example, owner/stamp/kind indexes)
 - Connection lease, retry, and snapshot cursor implementation
 - Change stamp and polling optimization
 
 The Redis provider must also support §4's generic atomic batch and §5's
-snapshot scan as-is. It doesn't expose a domain-specific Redis method,
-descriptor/authority DTO, or change-stamp capability interface.
+snapshot scan as-is. It doesn't expose an authority DTO or change-stamp
+capability interface.
+
+There's no backward-compatible path that reads state already stored in Redis
+under the old key/value format and converts it to the new opaque record. A
+deployment upgrading to this format is a **clean break** — existing Redis
+state must be drained or its loss accepted, and a mix of format tags or
+`recordVersion` values fails explicitly instead of silently picking one to
+read.
 
 The Location Store and Relocation Store can use different key namespaces on
 the same Redis deployment, or be physically separated. Correctness doesn't
@@ -222,3 +251,12 @@ depend on connection sharing or a cross-store Redis transaction.
   aggregate DTO, script, or key-layout type.
 - The Location Store and Relocation Store can each be registered and used on
   the same Redis or on separate Redis configurations.
+- The MeshNode descriptor, owner lease, ClientServer server descriptor, and
+  fanout publisher descriptor are verified by a conformance test that
+  consumes the store record golden fixture's
+  (`framework/runtime/protocol/golden/store-record-v1.json`) key-derivation
+  vectors (preimage → SHA-256 → full key string) and value byte vectors
+  (including tombstone and expired variants) as-is.
+- An unrecognized format tag or `recordVersion` fails explicitly, and there's
+  no backward-compatible path that reads the old key/value format and
+  converts it to the new opaque record.

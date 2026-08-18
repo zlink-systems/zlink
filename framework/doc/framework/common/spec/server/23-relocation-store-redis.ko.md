@@ -60,8 +60,11 @@ SPI type과 interface는 기본 Framework API와 분리된 provider abstraction 
 Relocation 단계, manifest, participant, replay cursor와 completion마다 별도 public method나 DTO를
 추가하지 않는다. Actor·Spot 이동 이력을 조회하는 operation도 추가하지 않는다 — 이동 관찰은
 [Runtime metrics](25-runtime-metrics.ko.md)의 지표와
-[Message flow tracing](26-message-flow-tracing.ko.md)이 담당한다. Redis key 배치, chunk 저장 구조,
-script와 cleanup index도 공개 SPI에 노출하지 않는다.
+[Message flow tracing](26-message-flow-tracing.ko.md)이 담당한다. 이 SPI의 operation type과
+DTO는 여기서 정의한 그대로 추상적이다 — chunk 저장 구조와 script는 SPI에 노출하지 않는다.
+공식 Redis provider가 사용하는 Redis key 배치와 data type 자체는 이제 §8이 MUST-level로
+고정하는 공개 계약이다. 서로 다른 언어의 공식 Redis provider가 같은 reference로 저장한
+payload를 서로 읽을 수 있어야 하기 때문이다.
 
 다음 .NET 발췌는 공통 SPI의 최소 형태를 보여준다. 정식 선언은
 [.NET exact interface](languages/dotnet/interfaces/08-authority-relocation.ko.md)에 있다.
@@ -224,15 +227,28 @@ instance 수명을 소유하는 구성에서는 Store를 사용하는 runtime과
 공식 Redis extension package는 언어별 naming convention에 맞는 `RedisRelocationStore` 구현을 제공한다.
 공개 options는 instance 생성에 필요한 connection, key namespace와 operation timeout으로 제한한다.
 
-다음 항목은 Redis provider 내부 구현이며 public contract가 아니다.
+Payload는 Redis raw-bytes `STRING`으로 저장한다. Redis key는
+`{prefix}:zlink-relocation-v1:blob:{reference}`이며, `{prefix}`는 provider가 등록 시
+지정하는 key namespace, `{reference}`는 Framework가 `Put` 전에 발급한 §3의 reference다.
+이 key 형식은 [Location Store의 opaque record](22-location-store-redis.ko.md#7-등록-수명과-공식-redis-provider)와
+독립적으로 버전을 매긴 별도 domain tag(`zlink-relocation-v1`)를 사용한다 — 두 Store가
+같은 Redis deployment를 공유해도 key 공간이 겹치지 않는다. `retention`은 Redis
+`PSETEX` 또는 `SET`의 `PX` option으로 적용하며, provider는 이 Redis 자체 만료 기능으로
+§3의 retention 계약을 구현한다. `Renew`는 같은 key에 새 `PX`를 다시 설정한다.
 
-- Redis key 배치와 chunk 저장 자료구조
+다음 항목은 여전히 Redis provider 내부 구현이며 public contract가 아니다.
+
+- Chunk 저장에 사용하는 추가 자료구조(맨 앞 목록을 가리키는 보조 key 등)
 - Script와 private serialization record
 - Connection lease와 cleanup index
 - Retry와 cleanup을 실행하는 내부 방식
 
 Redis 전용 Framework 등록 helper나 Location Store와 Relocation Store를 함께 구현하는 결합 class는
 제공하지 않는다.
+
+Redis에 이미 저장된 payload를 옛 key 형식에서 읽어 새 `zlink-relocation-v1` 형식으로
+변환하는 하위 호환 경로는 두지 않는다. 이 형식으로 올라가는 배포는 **clean break**다 —
+기존 Redis 상태는 draining하거나 유실을 감수해야 한다.
 
 Location Store와 Relocation Store는 같은 Redis deployment에서 서로 다른 key namespace를 사용할 수도
 있고, 서로 다른 deployment에 둘 수도 있다. 공개 계약의 correctness는 connection 공유나 두 Store를
@@ -257,3 +273,9 @@ Location Store와 Relocation Store는 같은 Redis deployment에서 서로 다�
 - Location Store와 Relocation Store를 같은 Redis와 서로 다른 Redis 구성에 각각 등록할 수 있다.
 - Redis provider의 public declaration에는 relocation 단계·manifest DTO, script와 key 배치 type이 없다.
 - SPI에 Actor·Spot 이동 이력을 조회하는 operation이 없다.
+- Payload의 Redis key가 `{prefix}:zlink-relocation-v1:blob:{reference}` 형식을 따르고,
+  raw-bytes `STRING`으로 `PSETEX` 또는 `SET`의 `PX` option을 사용해 저장된다 — 이 벡터는
+  store record golden fixture(`framework/runtime/protocol/golden/store-record-v1.json`)가
+  제공한다.
+- 인식하지 못하는 payload 형식을 만나면 명시적으로 실패하며, 옛 key 형식을 읽어 새
+  `zlink-relocation-v1` 형식으로 변환하는 하위 호환 경로가 없다.
