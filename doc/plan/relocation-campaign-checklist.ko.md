@@ -33,8 +33,9 @@
 - [ ] cpp e2e Track F 신설: SF-F2·F3·F7·F11을 DiscoveryRegistryHa에 구현
       (relocation-capable 노드 역할 추가, SpotActorTransfer fail-injection 패턴 이식;
       SF-F3는 별도 relocation store 컨테이너 다운, SF-F7은 chunk/budget 옵션 축소)
-- [ ] Bingo 재검증: node·kotlin에서 base/delta 제거 랜딩 후 재실행 — relocation 인접
-      동일 지문(observe timeout / READY stage unavailable) 재현 시 terra 심층 조사
+- [x] Bingo 재검증 (2026-08-19): node·kotlin 각 3회 클린 실행 6/6 첫 시도 그린,
+      relocation 실행 확인(대체·route-ready·target_resume), 지문 재현 없음 —
+      당시 미커밋 편집 트리가 원인으로 종결 (로그 scratchpad/sample-gates/*-recheck-*)
 - [ ] dotnet 샘플 6종 실행 (Bingo, DeliveryDispatch, GameQuest, ShoppingMall,
       SupportChat, TicTacToe — 종료 코드 로그)
 - [ ] java/kotlin 샘플 집계 게이트: SampleReleaseGateContractTest,
@@ -47,8 +48,12 @@
       사전 실패 주장 포함 확인)
 - [ ] cpp bind-session 재시도 소진 분류(deadline_exceeded로 갱신됨, `46ef4b0f03`)의
       교차 언어 parity 확인 — java/node/dotnet의 동일 시나리오 분류 대조
-- [ ] cpp standalone actor 직접 relocation 복원 갭 parity 판정·해소 (materialize의
-      target_spot 강제 — 타 언어가 지원하면 cpp 결함으로 수정) [D에서 승격 2026-08-19]
+- [ ] cpp standalone actor 직접 relocation 복원 갭 — **판정 완료(2026-08-19): cpp
+      실결함.** 4언어·스펙 모두 "타깃의 기존 Entry Spot으로 이동"이 계약인데 cpp만
+      restore에 target_spot=nullopt 하드코딩(stateful_object_runtime.cpp:1584),
+      드레인 경로(app.cpp:3575)가 실패, 기존 m6c:3010 테스트는 materialization
+      미배선으로 거짓 그린. **수정 에이전트 진행 중**(Entry Spot 로컬 해석 배선 +
+      실배선 통합 테스트 + 부정 테스트) [D에서 승격 2026-08-19]
 - [ ] m6b M-c mismatched-identity rejection 테스트 (aggregate identity-fencing 조사
       포함) [D에서 승격 2026-08-19]
 - [ ] **sol 전 문서 spec-gap 리뷰**: 스펙·guide·e2e·언어 interface 전체 vs 구현 대조,
@@ -66,8 +71,11 @@
       마이그레이션 = **clean break**(형식 판별자 0x01+recordVersion, 미인식 버전
       명시 실패; 기존 Redis 상태 drain 필요 — 최종 보고 명기). 검증 조건 2건:
       java Lettuce 8-bit ARGV 실증(Phase B), authority 행 opaque 경로 byte 검증(C-2 전).
-- [ ] C-2 스펙 개정: 21-location-runtime·23-relocation-store-redis의 "provider 내부"
-      조항을 규범 계약으로 개정 (28:589-591 수용 기준은 수정 없이 유지)
+- [x] C-2 스펙 개정 — `a3e6144ea3`: 21 §1.2/§2.4 신설, 실제 경계 문구가 있던
+      22 §7을 MUST 수준으로 재작성, 23 §8 relocation blob 규범화 (28은 무수정 유지)
+- [ ] C-2b authority 레코드 논리키 형태 통일 판정: cpp/java 단일 행 vs dotnet 3키
+      (meta/payload/generation) 발산 — 사실 조사(3키 분할의 CAS 근거 유무) 후 판정,
+      §2.4 authority 절 확장 (C-4 착수 전 선행)
 - [ ] C-3 store 레코드 golden fixture 신설 (키 문자열·값 byte 벡터) + 4언어 소비 테스트
 - [ ] C-4 4언어 store 구현 수렴 (기준 후보: dotnet/java 공유 {zlink-location-v3}+SHA256;
       cpp = 키공간+인코딩 전면 이동, node = 키공간 이동, dotnet↔java = 값 인코딩 통일)
@@ -97,3 +105,15 @@
 
 - e2e_inventory 기존 backlog 168건: relocation과 무관한 14개 문서 전반의
   교차참조·feature-map 부채. 규모가 크고 주제가 달라 분리 (사용자 재확인 대기)
+
+## G. 최종 완료 게이트 (사용자 지시 2026-08-19 — 모든 섹션 완료 후 마지막에 일괄 실행)
+
+- [ ] G-1 전체 unittest 4언어 일괄 그린: cpp ctest(framework-unit|contract 전체,
+      알려진 환경 제외만 허용·사유 명기), dotnet 전체(conformance 처분 결과 반영),
+      java gradle 전체, node npm 전체 — 각 언어 최종 HEAD에서 연속 실행, 결과 로그 보존
+- [ ] G-2 전체 샘플 실행 성공(zoneworld 제외): 6샘플(Bingo, DeliveryDispatch,
+      GameQuest, ShoppingMall, SupportChat, TicTacToe) × 4언어+kotlin 전부
+      최종 HEAD에서 재실행, 종료 코드 0 확인·로그 보존 (중간 검증과 별개로
+      마지막에 반드시 1회 전체 재실행)
+- [ ] G-3 java/kotlin 샘플 집계 게이트·doc 게이트·harness all 스테이지 최종 확인
+- [ ] G-4 G-1~G-3 결과를 최종 보고에 매트릭스로 첨부
