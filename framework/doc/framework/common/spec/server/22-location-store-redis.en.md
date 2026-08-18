@@ -190,11 +190,16 @@ publisher descriptor, and authority record must use the same opaque record
 representation regardless of language — otherwise a record one language
 writes can't be read by another. These five records **must** follow this
 storage scheme. The Redis key is
-`{prefix}:zlink-location-v3:opaque:{sha256hex(preimage)}`, where `{prefix}`
+`{prefix}:{zlink-location-v3}:opaque:{sha256hex(preimage)}`, where `{prefix}`
 is the key namespace the provider specifies at registration and `preimage`
 is the per-record logical key preimage defined by
 [Location Runtime §2.4](21-location-runtime.en.md#24-how-different-languages-read-and-write-the-same-redis-record).
-The data structure is a Redis `ZSET`; each `Put` appends to the log with the
+The braces around `{zlink-location-v3}` are a Redis Cluster hashtag —
+because `Put` changes the record, sequence counter, and index together in
+one script (§4), the whole domain must be pinned to a single hash slot for
+that multi-key `EVAL` to stay atomic under Cluster; without the braces,
+Cluster could scatter the keys across different slots and break that
+atomicity. The data structure is a Redis `ZSET`; each `Put` appends to the log with the
 provider's monotonically increasing `INCR` counter as the score — the member
 with the highest score is the current value. The member value is a cmsgpack
 array holding `{originalKey, rawBytes(value), version, expiresAtMs,

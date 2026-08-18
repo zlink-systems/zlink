@@ -228,11 +228,16 @@ instance 수명을 소유하는 구성에서는 Store를 사용하는 runtime과
 공개 options는 instance 생성에 필요한 connection, key namespace와 operation timeout으로 제한한다.
 
 Payload는 Redis raw-bytes `STRING`으로 저장한다. Redis key는
-`{prefix}:zlink-relocation-v1:blob:{reference}`이며, `{prefix}`는 provider가 등록 시
+`{prefix}:{zlink-relocation-v1}:blob:{reference}`이며, `{prefix}`는 provider가 등록 시
 지정하는 key namespace, `{reference}`는 Framework가 `Put` 전에 발급한 §3의 reference다.
 이 key 형식은 [Location Store의 opaque record](22-location-store-redis.ko.md#7-등록-수명과-공식-redis-provider)와
 독립적으로 버전을 매긴 별도 domain tag(`zlink-relocation-v1`)를 사용한다 — 두 Store가
-같은 Redis deployment를 공유해도 key 공간이 겹치지 않는다. `retention`은 Redis
+같은 Redis deployment를 공유해도 key 공간이 겹치지 않는다. `{zlink-relocation-v1}`을
+감싼 중괄호도 Location Store의 `{zlink-location-v3}`와 같은 이유의 Redis Cluster
+hashtag다 — Location Store의 opaque record가 record·sequence counter·index를 하나의
+multi-key script로 함께 바꾸는 것과 같은 설계로, relocation blob domain 전체를 하나의
+hash slot에 고정해 Cluster에서도 이 domain 안의 어떤 다중 key 연산이든 원자적으로
+남게 한다. `retention`은 Redis
 `PSETEX` 또는 `SET`의 `PX` option으로 적용하며, provider는 이 Redis 자체 만료 기능으로
 §3의 retention 계약을 구현한다. `Renew`는 같은 key에 새 `PX`를 다시 설정한다.
 
@@ -273,7 +278,7 @@ Location Store와 Relocation Store는 같은 Redis deployment에서 서로 다�
 - Location Store와 Relocation Store를 같은 Redis와 서로 다른 Redis 구성에 각각 등록할 수 있다.
 - Redis provider의 public declaration에는 relocation 단계·manifest DTO, script와 key 배치 type이 없다.
 - SPI에 Actor·Spot 이동 이력을 조회하는 operation이 없다.
-- Payload의 Redis key가 `{prefix}:zlink-relocation-v1:blob:{reference}` 형식을 따르고,
+- Payload의 Redis key가 `{prefix}:{zlink-relocation-v1}:blob:{reference}` 형식을 따르고,
   raw-bytes `STRING`으로 `PSETEX` 또는 `SET`의 `PX` option을 사용해 저장된다 — 이 벡터는
   store record golden fixture(`framework/runtime/protocol/golden/store-record-v1.json`)가
   제공한다.

@@ -257,10 +257,16 @@ int main ()
         assert (expected_key == key.at ("redisKey").get<std::string> ());
     }
 
+    // zlink-location-v3 and zlink-relocation-v1 are Redis Cluster hashtags
+    // ({...}) so a multi-key EVAL script (record + sequence counter + index,
+    // 22-location-store-redis.md#7) stays same-slot atomic under Cluster; a
+    // brace-less key would let Cluster route the keys to different slots.
+    assert (namespace_tag == "{zlink-location-v3}:opaque");
+
     const auto &relocation_blob = root.at ("relocationBlob");
     const auto relocation_bytes = from_hex (relocation_blob.at ("rawBytesHex").get<std::string> ());
     assert (!relocation_bytes.empty ());
-    const auto expected_relocation_key = prefix + ":zlink-relocation-v1:blob:"
+    const auto expected_relocation_key = prefix + ":{zlink-relocation-v1}:blob:"
       + relocation_blob.at ("reference").get<std::string> ();
     assert (expected_relocation_key == relocation_blob.at ("redisKey").get<std::string> ());
 

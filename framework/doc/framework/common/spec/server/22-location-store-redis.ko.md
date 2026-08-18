@@ -156,10 +156,14 @@ MeshNode descriptor, owner lease, ClientServer server descriptor, fanout publish
 descriptor와 authority record는 언어가 달라도 같은 opaque record 표현을 사용해야 한다 —
 그래야 한 언어가 쓴 record를 다른 언어가 읽을 수 있다. 이 다섯 record는 다음 저장
 방식을 **반드시** 따른다. Redis key는
-`{prefix}:zlink-location-v3:opaque:{sha256hex(preimage)}`이며, `{prefix}`는 provider가
+`{prefix}:{zlink-location-v3}:opaque:{sha256hex(preimage)}`이며, `{prefix}`는 provider가
 등록 시 지정하는 key namespace, `preimage`는
 [Location runtime §2.4](21-location-runtime.ko.md#24-여러-언어가-같은-redis-record를-읽고-쓰는-방법)가
-정하는 record별 logical key preimage다. 자료구조는 Redis `ZSET`이며, `Put`마다 provider
+정하는 record별 logical key preimage다. `{zlink-location-v3}`을 감싼 중괄호는 Redis
+Cluster hashtag다 — `Put`이 record·sequence counter·index를 같은 script 안에서 함께
+바꾸므로(§4), 이 domain 전체를 하나의 hash slot에 고정해야 그 multi-key `EVAL`이
+Cluster에서도 원자적으로 남는다. 중괄호를 빼면 Cluster가 각 key를 다른 slot으로 흩어
+놓을 수 있어 원자성이 깨진다. 자료구조는 Redis `ZSET`이며, `Put`마다 provider
 쪽 단조 증가 `INCR` counter를 score로 붙여 append-log로 기록한다 — 가장 큰 score의
 member가 현재 값이다. Member value는 `{originalKey, rawBytes(value), version,
 expiresAtMs, tombstone}`를 담은 cmsgpack array 앞에 1-byte format tag `0x01`을 붙인

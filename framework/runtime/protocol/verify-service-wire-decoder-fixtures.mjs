@@ -562,15 +562,25 @@ function decodeCmsgpackMember(bytes) {
   };
 }
 
+// The zlink-location-v3 domain tag is wrapped in Redis Cluster hashtag
+// braces ({...}) so a multi-key EVAL script (record + sequence counter +
+// index, 22-location-store-redis.md#7) stays same-slot atomic under Redis
+// Cluster -- a brace-less key would let Cluster route the keys to different
+// slots. This is checked explicitly (not just via string interpolation
+// against the fixture's own namespace field) so a regression to a
+// brace-less key is caught even if that field is edited carelessly.
 for (const key of storeRecordFixture.keyDerivation) {
   const preimageBytes = Buffer.from(key.preimageHex, "hex");
   const sha256Hex = crypto.createHash("sha256").update(preimageBytes).digest("hex");
   if (sha256Hex !== key.sha256Hex) {
     throw new Error(`store record key derivation sha256 mismatch: ${key.record}`);
   }
-  const expectedKey = `${storeRecordFixture.prefixExample}:${storeRecordFixture.namespace}:${sha256Hex}`;
+  const expectedKey = `${storeRecordFixture.prefixExample}:{zlink-location-v3}:opaque:${sha256Hex}`;
   if (expectedKey !== key.redisKey) {
     throw new Error(`store record redis key assembly mismatch: ${key.record}`);
+  }
+  if (storeRecordFixture.namespace !== "{zlink-location-v3}:opaque") {
+    throw new Error("store record namespace tag is missing its Cluster hashtag braces");
   }
 }
 
@@ -606,8 +616,8 @@ for (const vector of storeRecordFixture.valueVectors.genericOpaqueRecord) {
 const relocationBlobBytes = Buffer.from(storeRecordFixture.relocationBlob.rawBytesHex, "hex");
 if (relocationBlobBytes.length === 0
     || storeRecordFixture.relocationBlob.redisKey
-      !== `${storeRecordFixture.prefixExample}:zlink-relocation-v1:blob:${storeRecordFixture.relocationBlob.reference}`) {
-  throw new Error("store record relocation blob key mismatch");
+      !== `${storeRecordFixture.prefixExample}:{zlink-relocation-v1}:blob:${storeRecordFixture.relocationBlob.reference}`) {
+  throw new Error("store record relocation blob key mismatch (zlink-relocation-v1 must be hashtag-braced)");
 }
 
 console.log(

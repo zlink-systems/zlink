@@ -12,49 +12,49 @@
     "23-relocation-store-redis.md#8"
   ],
   "prefixExample": "app1",
-  "namespace": "zlink-location-v3:opaque",
+  "namespace": "{zlink-location-v3}:opaque",
   "keyDerivation": [
     {
       "record": "mesh-node-descriptor",
       "preimagePrintable": "mesh-node\\u0000main\\u000001020304",
       "preimageHex": "6d6573682d6e6f6465006d61696e003031303230333034",
       "sha256Hex": "aac806d675ecd83db362198ca6460d35232ef282da1058bf60dc4bf30999fd56",
-      "redisKey": "app1:zlink-location-v3:opaque:aac806d675ecd83db362198ca6460d35232ef282da1058bf60dc4bf30999fd56"
+      "redisKey": "app1:{zlink-location-v3}:opaque:aac806d675ecd83db362198ca6460d35232ef282da1058bf60dc4bf30999fd56"
     },
     {
       "record": "owner-lease",
       "preimagePrintable": "owner-lease\\u0000owner-a",
       "preimageHex": "6f776e65722d6c65617365006f776e65722d61",
       "sha256Hex": "2103785f1d2cf83bf4dcf0cca11bd6bdf72ae24838410fd9fbc72d1767a6545e",
-      "redisKey": "app1:zlink-location-v3:opaque:2103785f1d2cf83bf4dcf0cca11bd6bdf72ae24838410fd9fbc72d1767a6545e"
+      "redisKey": "app1:{zlink-location-v3}:opaque:2103785f1d2cf83bf4dcf0cca11bd6bdf72ae24838410fd9fbc72d1767a6545e"
     },
     {
       "record": "client-server-descriptor",
       "preimagePrintable": "client-server\\u0000chat-channel\\u000001020304",
       "preimageHex": "636c69656e742d73657276657200636861742d6368616e6e656c003031303230333034",
       "sha256Hex": "848378eee73ea88c7fd035ab6891bdfdc2438d59c0c940c4ce5a17266587bc39",
-      "redisKey": "app1:zlink-location-v3:opaque:848378eee73ea88c7fd035ab6891bdfdc2438d59c0c940c4ce5a17266587bc39"
+      "redisKey": "app1:{zlink-location-v3}:opaque:848378eee73ea88c7fd035ab6891bdfdc2438d59c0c940c4ce5a17266587bc39"
     },
     {
       "record": "fanout-publisher-descriptor",
       "preimagePrintable": "fanout-publisher\\u0000chat-channel\\u000001020304",
       "preimageHex": "66616e6f75742d7075626c697368657200636861742d6368616e6e656c003031303230333034",
       "sha256Hex": "07279af82edf18ad56bd98fa926d25c1b3dde9f32d179906d1dd520d5a7030e5",
-      "redisKey": "app1:zlink-location-v3:opaque:07279af82edf18ad56bd98fa926d25c1b3dde9f32d179906d1dd520d5a7030e5"
+      "redisKey": "app1:{zlink-location-v3}:opaque:07279af82edf18ad56bd98fa926d25c1b3dde9f32d179906d1dd520d5a7030e5"
     },
     {
       "record": "authority-actor",
       "preimagePrintable": "authority\\u0000actor\\u0000user:42",
       "preimageHex": "617574686f72697479006163746f7200757365723a3432",
       "sha256Hex": "644fc59a0a9bebe3ccd4de43ad6c17d06a3b5df1b5585471f014d6a6091ec750",
-      "redisKey": "app1:zlink-location-v3:opaque:644fc59a0a9bebe3ccd4de43ad6c17d06a3b5df1b5585471f014d6a6091ec750"
+      "redisKey": "app1:{zlink-location-v3}:opaque:644fc59a0a9bebe3ccd4de43ad6c17d06a3b5df1b5585471f014d6a6091ec750"
     },
     {
       "record": "authority-spot",
       "preimagePrintable": "authority\\u0000spot\\u0000room:1",
       "preimageHex": "617574686f726974790073706f7400726f6f6d3a31",
       "sha256Hex": "85883711be9358294d4b878df17330df09f34e5706b926a4b56b6ba5db23c51a",
-      "redisKey": "app1:zlink-location-v3:opaque:85883711be9358294d4b878df17330df09f34e5706b926a4b56b6ba5db23c51a"
+      "redisKey": "app1:{zlink-location-v3}:opaque:85883711be9358294d4b878df17330df09f34e5706b926a4b56b6ba5db23c51a"
     }
   ],
   "valueVectors": {
@@ -191,7 +191,7 @@
   },
   "relocationBlob": {
     "reference": "reloc-ref-0001",
-    "redisKey": "app1:zlink-relocation-v1:blob:reloc-ref-0001",
+    "redisKey": "app1:{zlink-relocation-v1}:blob:reloc-ref-0001",
     "rawBytesHex": "cafebabe00112233445566778899aabbccddeeff"
   },
   "notes": {
@@ -199,6 +199,7 @@
     "jsonByteLayering": "jsonBytesHex is the exact canonical JSON encoded as UTF-8 bytes; it is the rawBytes input consumed verbatim by the cmsgpack layer. Consumers field-compare \"decoded\" against their own JSON encoder output, then take jsonBytesHex verbatim and cmsgpack-encode it to byte-compare against cmsgpackMemberHex/fullValueHex. JSON field order is not significant for the field-compare step even though the byte-compare step pins one exact serialization.",
     "payloadEncoding": "The authority record's payload field is base64 inside JSON, per 21-location-runtime.md#2.4. As of the spec revision that added this fixture, the cpp provider still encodes this field as hex internally; that is a C-4 conversion item, not part of this fixture.",
     "objectGeneration": "authorityActorJson/authoritySpotJson.objectGeneration is issued from a Store-wide monotonic sequence, not a per-identity counter (checklist C-2b).",
-    "capacityBundle": "capacityBundle.spotType is null for actor allocations. For spot allocations it carries {objectKind, stableType, count} per 21-location-runtime.md#2.3 (\"Spot slot 1과 해당 Spot 종류·stable type slot 1\") -- a flat slot counter cannot express which (spotKind, stableType) pair was reserved."
+    "capacityBundle": "capacityBundle.spotType is null for actor allocations. For spot allocations it carries {objectKind, stableType, count} per 21-location-runtime.md#2.3 (\"Spot slot 1\uacfc \ud574\ub2f9 Spot \uc885\ub958\u00b7stable type slot 1\") -- a flat slot counter cannot express which (spotKind, stableType) pair was reserved.",
+    "hashtagRationale": "The zlink-location-v3 and zlink-relocation-v1 domain tags are wrapped in Redis Cluster hashtag braces ({...}) in every assembled key. This forces the whole opaque-record domain (and the whole relocation-blob domain) onto one hash slot by design, so a multi-key EVAL script (record + sequence counter + index, per 22-location-store-redis.md#7) stays same-slot atomic under Redis Cluster; a brace-less key would let Cluster route the keys to different slots and break that atomicity."
   }
 }

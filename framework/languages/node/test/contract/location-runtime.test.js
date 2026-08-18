@@ -25,22 +25,27 @@ test('store record golden fixture: key derivation and value byte vectors decode 
     '../../../../runtime/protocol/golden/store-record-v1.json'
   ), 'utf8'));
 
+  // zlink-location-v3 and zlink-relocation-v1 are Redis Cluster hashtags
+  // ({...}) so a multi-key EVAL script (record + sequence counter + index,
+  // 22-location-store-redis.md#7) stays same-slot atomic under Cluster; a
+  // brace-less key would let Cluster route the keys to different slots.
   for (const key of fixture.keyDerivation) {
     const preimageBytes = Buffer.from(key.preimageHex, 'hex');
     const sha256Hex = crypto.createHash('sha256').update(preimageBytes).digest('hex');
     assert.equal(sha256Hex, key.sha256Hex, `sha256 mismatch: ${key.record}`);
     assert.equal(
       key.redisKey,
-      `${fixture.prefixExample}:${fixture.namespace}:${sha256Hex}`,
+      `${fixture.prefixExample}:{zlink-location-v3}:opaque:${sha256Hex}`,
       `redis key assembly mismatch: ${key.record}`
     );
   }
+  assert.equal(fixture.namespace, '{zlink-location-v3}:opaque');
 
   const relocationBlobBytes = Buffer.from(fixture.relocationBlob.rawBytesHex, 'hex');
   assert.ok(relocationBlobBytes.length > 0);
   assert.equal(
     fixture.relocationBlob.redisKey,
-    `${fixture.prefixExample}:zlink-relocation-v1:blob:${fixture.relocationBlob.reference}`
+    `${fixture.prefixExample}:{zlink-relocation-v1}:blob:${fixture.relocationBlob.reference}`
   );
 
   for (const vector of fixture.valueVectors.genericOpaqueRecord) {

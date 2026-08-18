@@ -292,13 +292,18 @@ options are limited to the connection, key namespace, and operation
 timeout needed to create an instance.
 
 The payload is stored as a Redis raw-bytes `STRING`. The Redis key is
-`{prefix}:zlink-relocation-v1:blob:{reference}`, where `{prefix}` is the key
+`{prefix}:{zlink-relocation-v1}:blob:{reference}`, where `{prefix}` is the key
 namespace the provider specifies at registration and `{reference}` is the §3
 reference the framework issues before `Put`. This key format uses a
 separately versioned domain tag (`zlink-relocation-v1`), independent of
 [the Location Store's opaque record](22-location-store-redis.en.md#7-registration-lifetime-and-the-official-redis-provider) —
 so the two Stores' key spaces don't overlap even when they share the same
-Redis deployment. `retention` is applied via Redis's `PSETEX` or `SET`'s `PX`
+Redis deployment. The braces around `{zlink-relocation-v1}` are the same kind
+of Redis Cluster hashtag as the Location Store's `{zlink-location-v3}` — the
+same design that pins the opaque record's record/sequence-counter/index
+multi-key script to one slot also pins the whole relocation blob domain to
+one hash slot, so any multi-key operation within this domain stays atomic
+under Cluster. `retention` is applied via Redis's `PSETEX` or `SET`'s `PX`
 option; the provider implements the §3 retention contract using this native
 Redis expiry feature. `Renew` re-sets a new `PX` on the same key.
 
@@ -356,7 +361,7 @@ following results.
   phase/manifest DTOs, or script and key layout types.
 - The SPI has no operation for querying Actor/Spot move history.
 - A payload's Redis key follows the
-  `{prefix}:zlink-relocation-v1:blob:{reference}` format and is stored as a
+  `{prefix}:{zlink-relocation-v1}:blob:{reference}` format and is stored as a
   raw-bytes `STRING` using `PSETEX` or `SET`'s `PX` option — the store
   record golden fixture
   (`framework/runtime/protocol/golden/store-record-v1.json`) provides these
