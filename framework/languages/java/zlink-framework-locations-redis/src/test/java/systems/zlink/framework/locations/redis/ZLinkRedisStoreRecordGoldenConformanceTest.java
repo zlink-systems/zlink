@@ -20,6 +20,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -48,11 +49,18 @@ import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectCommitResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservationRequest;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 
 /**
  * Drives the PRODUCTION Redis write/read path (not a from-scratch decoder)
@@ -518,6 +526,253 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
         }
     }
 
+    /**
+     * Drives {@code ZLinkProviderLocationRepository.reserve}/{@code commit}
+     * -- the real production authority writer, not a from-scratch encoder
+     * -- against the full-field {@code authority-actor-normal} vector
+     * (21-location-runtime.md#2.4): reserve then commit transitions
+     * {@code allocation.state} from {@code reserved} to {@code active} and
+     * clears {@code pendingCreation}, matching the fixture. {@code
+     * objectGeneration}/{@code authorityOwnerGeneration} are issued from
+     * the live Store-wide sequence, so their exact values can't be pinned
+     * ahead of time -- only their shape (positive integer strings) is
+     * asserted, mirroring how {@code leaseGeneration} is handled in the
+     * descriptor conformance tests above.
+     */
+    @Test
+    void productionAuthorityActorReserveCommitMatchesFullFieldVector()
+        throws Exception {
+        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
+        assumeTrue(endpoint != null && !endpoint.isBlank(),
+            "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+
+        JsonNode fixture = readTree(sharedFixturePath());
+        JsonNode keyVector = keyDerivationVector(fixture, "authority-actor");
+        JsonNode expectedRecord =
+            valueVector(fixture, "authority-actor-normal").path("decoded");
+        JsonNode allocationNode = expectedRecord.path("allocation");
+        JsonNode descriptorNode = allocationNode.path("descriptor");
+        JsonNode capacityNode = allocationNode.path("capacity");
+
+        String storePrefix =
+            "goldenconf-authority-actor:" + UUID.randomUUID();
+        try (var store = new ZLinkRedisLocationStore(
+            new ZLinkRedisLocationOptions()
+                .setConnectionString(endpoint)
+                .setKeyPrefix(storePrefix))) {
+            var repository = new ZLinkProviderLocationRepository(store);
+            var owner = assertInstanceOf(
+                ZLinkOwnerLeaseClaimed.class,
+                repository.claimOwnerLease(
+                        expectedRecord.path("ownerId").asText(),
+                        Duration.ofMinutes(5))
+                    .toCompletableFuture().get());
+
+            var targetDescriptorKey = new ZLinkMeshNodeDescriptorKey(
+                descriptorNode.path("meshName").asText(),
+                RoutingId.fromHex(
+                    descriptorNode.path("routingIdHex").asText()));
+            long descriptorLifecycleGeneration = Long.parseLong(
+                allocationNode.path("descriptorLifecycleGeneration")
+                    .asText());
+            String stableType = allocationNode.path("stableType").asText();
+
+            assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                repository.updateMeshNode(
+                        unlimitedMeshDescriptor(
+                            targetDescriptorKey,
+                            descriptorLifecycleGeneration,
+                            ZLinkPlacementObjectKind.ACTOR,
+                            stableType,
+                            owner.token()),
+                        ZLinkLocationWriteIntent.NEW_CLAIM)
+                    .toCompletableFuture().get().status());
+
+            String authorityContractKey =
+                ZLinkAuthorityKeyCodec.actor("user:42");
+            var request = new ZLinkObjectReservationRequest(
+                ZLinkPlacementObjectKind.ACTOR,
+                authorityContractKey,
+                stableType,
+                "creation-root",
+                new byte[32],
+                32,
+                targetDescriptorKey,
+                descriptorLifecycleGeneration,
+                owner.token(),
+                new byte[] {9},
+                ZLinkPlacementCapacityBundle.actor(
+                    capacityNode.path("actors").asInt()));
+            var reserved = assertInstanceOf(
+                ZLinkObjectReserved.class,
+                repository.reserve(request, () -> false)
+                    .toCompletableFuture().get());
+
+            byte[] payload = Base64.getDecoder().decode(
+                expectedRecord.path("payload").asText());
+            assertEquals(
+                ZLinkObjectCommitResult.COMMITTED,
+                repository.commit(
+                        reserved.reservation(), payload, () -> false)
+                    .toCompletableFuture().get());
+
+            String preimage = keyVector.path("preimagePrintable").asText()
+                .replace("\\u0000", "\0");
+            var raw = assertInstanceOf(
+                ZLinkStoreReadFound.class,
+                store.read(new ZLinkStoreKey(preimage), () -> false)
+                    .toCompletableFuture().get());
+            JsonNode actual =
+                new ObjectMapper().readTree(raw.value().bytes());
+
+            assertGenerationShape(actual, "objectGeneration");
+            assertGenerationShape(actual, "authorityOwnerGeneration");
+            ObjectNode expected = expectedRecord.deepCopy();
+            expected.put(
+                "objectGeneration",
+                actual.path("objectGeneration").asText());
+            expected.put(
+                "authorityOwnerGeneration",
+                actual.path("authorityOwnerGeneration").asText());
+            expected.put(
+                "ownerLeaseGeneration",
+                Long.toString(owner.token().leaseGeneration()));
+
+            assertEquals(
+                expected,
+                actual,
+                "canonical JSON field mismatch against the golden vector");
+        }
+    }
+
+    /**
+     * Drives {@code ZLinkProviderLocationRepository.reserve} -- without a
+     * commit -- against the full-field {@code authority-spot-normal}
+     * vector: a reservation left pending matches the fixture's {@code
+     * allocation.state == "reserved"} and populated {@code
+     * pendingCreation}. {@code pendingCreation.reservationId} is a
+     * UUID minted by the live reserve() call, so it's substituted the
+     * same way the dynamic generation fields are above.
+     */
+    @Test
+    void productionAuthoritySpotReserveMatchesFullFieldVector()
+        throws Exception {
+        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
+        assumeTrue(endpoint != null && !endpoint.isBlank(),
+            "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+
+        JsonNode fixture = readTree(sharedFixturePath());
+        JsonNode keyVector = keyDerivationVector(fixture, "authority-spot");
+        JsonNode expectedRecord =
+            valueVector(fixture, "authority-spot-normal").path("decoded");
+        JsonNode allocationNode = expectedRecord.path("allocation");
+        JsonNode descriptorNode = allocationNode.path("descriptor");
+        JsonNode capacityNode = allocationNode.path("capacity");
+        JsonNode pendingNode = expectedRecord.path("pendingCreation");
+
+        String storePrefix =
+            "goldenconf-authority-spot:" + UUID.randomUUID();
+        try (var store = new ZLinkRedisLocationStore(
+            new ZLinkRedisLocationOptions()
+                .setConnectionString(endpoint)
+                .setKeyPrefix(storePrefix))) {
+            var repository = new ZLinkProviderLocationRepository(store);
+            var owner = assertInstanceOf(
+                ZLinkOwnerLeaseClaimed.class,
+                repository.claimOwnerLease(
+                        expectedRecord.path("ownerId").asText(),
+                        Duration.ofMinutes(5))
+                    .toCompletableFuture().get());
+
+            var targetDescriptorKey = new ZLinkMeshNodeDescriptorKey(
+                descriptorNode.path("meshName").asText(),
+                RoutingId.fromHex(
+                    descriptorNode.path("routingIdHex").asText()));
+            long descriptorLifecycleGeneration = Long.parseLong(
+                allocationNode.path("descriptorLifecycleGeneration")
+                    .asText());
+            String stableType = allocationNode.path("stableType").asText();
+
+            assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                repository.updateMeshNode(
+                        unlimitedMeshDescriptor(
+                            targetDescriptorKey,
+                            descriptorLifecycleGeneration,
+                            ZLinkPlacementObjectKind.USER_SPOT,
+                            stableType,
+                            owner.token()),
+                        ZLinkLocationWriteIntent.NEW_CLAIM)
+                    .toCompletableFuture().get().status());
+
+            String authorityContractKey =
+                ZLinkAuthorityKeyCodec.spot("room:1");
+            var request = new ZLinkObjectReservationRequest(
+                ZLinkPlacementObjectKind.USER_SPOT,
+                authorityContractKey,
+                stableType,
+                pendingNode.path("requestContentReference").asText(),
+                HexFormat.of().parseHex(
+                    pendingNode.path("requestSha256").asText()),
+                pendingNode.path("requestEncodedSize").asInt(),
+                targetDescriptorKey,
+                descriptorLifecycleGeneration,
+                owner.token(),
+                Base64.getDecoder().decode(
+                    expectedRecord.path("payload").asText()),
+                ZLinkPlacementCapacityBundle.spot(
+                    ZLinkPlacementObjectKind.USER_SPOT,
+                    stableType,
+                    capacityNode.path("spots").asInt()));
+            var reserved = assertInstanceOf(
+                ZLinkObjectReserved.class,
+                repository.reserve(request, () -> false)
+                    .toCompletableFuture().get());
+
+            String preimage = keyVector.path("preimagePrintable").asText()
+                .replace("\\u0000", "\0");
+            var raw = assertInstanceOf(
+                ZLinkStoreReadFound.class,
+                store.read(new ZLinkStoreKey(preimage), () -> false)
+                    .toCompletableFuture().get());
+            JsonNode actual =
+                new ObjectMapper().readTree(raw.value().bytes());
+
+            assertGenerationShape(actual, "objectGeneration");
+            assertGenerationShape(actual, "authorityOwnerGeneration");
+            ObjectNode expected = expectedRecord.deepCopy();
+            expected.put(
+                "objectGeneration",
+                actual.path("objectGeneration").asText());
+            expected.put(
+                "authorityOwnerGeneration",
+                actual.path("authorityOwnerGeneration").asText());
+            expected.put(
+                "ownerLeaseGeneration",
+                Long.toString(owner.token().leaseGeneration()));
+            ((ObjectNode) expected.path("pendingCreation")).put(
+                "reservationId", reserved.reservation().reservationVersion());
+            // The fixture's authority-spot-normal vector pairs
+            // allocation.state == "active" with a populated
+            // pendingCreation to exercise the wire codec's field
+            // combinations broadly -- production reserve()/commit()
+            // cannot reach that exact combination in one write (commit()
+            // clears pendingCreation when it activates the allocation), so
+            // this real, reserve()-only call is compared against the
+            // fixture's other fields with allocation.state overridden to
+            // "reserved" (the state a real pending reservation actually
+            // has).
+            ((ObjectNode) expected.path("allocation"))
+                .put("state", "reserved");
+
+            assertEquals(
+                expected,
+                actual,
+                "canonical JSON field mismatch against the golden vector");
+        }
+    }
+
     @Test
     void unrecognizedFormatTagFailsExplicitlyInsteadOfSilentlyMissing()
         throws IOException {
@@ -763,6 +1018,56 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
             default -> throw new IllegalStateException(
                 "unrecognized policy: " + value);
         };
+    }
+
+    // A MeshNode descriptor with unlimited (limit == 0) actor/spot capacity
+    // and one matching object capability, so an authority reserve() against
+    // it never hits ZLinkPlacementCapacityExhausted regardless of the
+    // bundle size the golden vector asks for.
+    private static ZLinkMeshNodeDescriptor unlimitedMeshDescriptor(
+        ZLinkMeshNodeDescriptorKey key,
+        long lifecycleGeneration,
+        ZLinkPlacementObjectKind objectKind,
+        String stableType,
+        ZLinkLocationOwnerToken owner) {
+        return new ZLinkMeshNodeDescriptor(
+            key.meshName(),
+            key.rid(),
+            lifecycleGeneration,
+            1,
+            "tcp://127.0.0.1:7000",
+            Map.of(),
+            1,
+            List.of(new ZLinkObjectCapability(
+                objectKind,
+                stableType,
+                ZLinkObjectMaintenancePolicyKind.SNAPSHOT,
+                true,
+                0)),
+            ZLinkMeshNodeObjectRole.SERVER,
+            Optional.of("entry-" + key.rid()),
+            100,
+            new ZLinkPlacementCapacity(
+                new ZLinkCapacityUsage(0, 0, 0),
+                new ZLinkCapacityUsage(0, 0, 0),
+                List.of()),
+            new ZLinkActivationConcurrency(0, 128),
+            Optional.empty(),
+            ZLinkFrameworkRuntimeState.SERVING,
+            "security",
+            owner.ownerId(),
+            owner.leaseGeneration(),
+            Instant.now());
+    }
+
+    private static void assertGenerationShape(JsonNode record, String field) {
+        String value = record.path(field).asText();
+        assertTrue(
+            record.path(field).isTextual(),
+            field + " must be a JSON string");
+        assertTrue(
+            Long.parseLong(value) > 0,
+            field + " must be a positive integer string");
     }
 
     private static Path sharedFixturePath() {

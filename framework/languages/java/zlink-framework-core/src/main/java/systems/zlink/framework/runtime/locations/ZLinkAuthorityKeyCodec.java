@@ -47,6 +47,28 @@ public final class ZLinkAuthorityKeyCodec {
         return encoded.toString();
     }
 
+    /**
+     * The canonical cross-language logical key preimage
+     * (21-location-runtime.md#2.4) collapses every Spot kind
+     * (Entry | User | Instance) onto one {@code "spot"} segment -- one Id
+     * has exactly one authority row regardless of Spot kind. {@code kind}
+     * is either {@code "actor"} or {@code "spot"}; {@code id} is the raw
+     * UTF-8 identity (the global ActorId or SpotId), not the {@code
+     * "zla1:..."} wire form.
+     */
+    public record AuthorityIdentity(String kind, String id) {
+    }
+
+    public static AuthorityIdentity decode(String key) {
+        if (key != null && key.startsWith(actorPrefix())) {
+            return new AuthorityIdentity("actor", actorId(key));
+        }
+        if (key != null && key.startsWith(spotPrefix())) {
+            return new AuthorityIdentity("spot", spotId(key));
+        }
+        throw new IllegalArgumentException("invalid authority key");
+    }
+
     static String spotPrefix() {
         return "zla1:s:";
     }

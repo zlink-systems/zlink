@@ -44,6 +44,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewed
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityExhausted;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 
 /**
  * Live-Redis behavioral oracle for the production Location Store path
@@ -198,7 +199,7 @@ final class ZLinkRedisProviderLocationRepositoryLiveTest {
                         mutableUpdate, ZLinkLocationWriteIntent.RENEW)
                     .toCompletableFuture().get().status());
 
-            String firstKey = "zla1:a:descriptor-capacity-live-1";
+            String firstKey = ZLinkAuthorityKeyCodec.actor("descriptor-capacity-live-1");
             var first = assertInstanceOf(
                 ZLinkObjectReserved.class,
                 store.reserve(
@@ -210,7 +211,7 @@ final class ZLinkRedisProviderLocationRepositoryLiveTest {
                 ZLinkObjectReserved.class,
                 store.reserve(
                         reservationRequest(
-                            "zla1:a:descriptor-capacity-live-2",
+                            ZLinkAuthorityKeyCodec.actor("descriptor-capacity-live-2"),
                             mutableUpdate, owner, "player"),
                         () -> false)
                     .toCompletableFuture().get());
@@ -218,7 +219,7 @@ final class ZLinkRedisProviderLocationRepositoryLiveTest {
                 ZLinkPlacementCapacityExhausted.class,
                 store.reserve(
                         reservationRequest(
-                            "zla1:a:descriptor-capacity-live-3",
+                            ZLinkAuthorityKeyCodec.actor("descriptor-capacity-live-3"),
                             mutableUpdate, owner, "player"),
                         () -> false)
                     .toCompletableFuture().get());
@@ -230,7 +231,7 @@ final class ZLinkRedisProviderLocationRepositoryLiveTest {
                 ZLinkObjectConflict.class,
                 store.reserve(
                         reservationRequest(
-                            "zla1:a:descriptor-unsupported-type-live",
+                            ZLinkAuthorityKeyCodec.actor("descriptor-unsupported-type-live"),
                             mutableUpdate, owner, "unsupported"),
                         () -> false)
                     .toCompletableFuture().get());
@@ -306,9 +307,9 @@ final class ZLinkRedisProviderLocationRepositoryLiveTest {
                     .toCompletableFuture().get().status());
 
             var first = reservationRequest(
-                "zla1:a:authority-cas-live-1", descriptor, owner, "player");
+                ZLinkAuthorityKeyCodec.actor("authority-cas-live-1"), descriptor, owner, "player");
             var second = reservationRequest(
-                "zla1:a:authority-cas-live-2", descriptor, owner, "player");
+                ZLinkAuthorityKeyCodec.actor("authority-cas-live-2"), descriptor, owner, "player");
 
             var reservation = assertInstanceOf(
                 ZLinkObjectReserved.class,

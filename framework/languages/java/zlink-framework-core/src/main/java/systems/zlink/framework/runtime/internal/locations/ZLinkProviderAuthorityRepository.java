@@ -33,12 +33,12 @@ import systems.zlink.framework.locationprovider.*;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 
 /**
  * Implements Framework-owned authority records over the opaque provider SPI.
  */
 final class ZLinkProviderAuthorityRepository {
-    private static final String PREFIX = "zlink:v11:authority:";
     private static final ObjectMapper CANONICAL_JSON = new ObjectMapper();
     private static final String CAPACITY_PREFIX = "zlink:v11:capacity:";
     private static final String COUNTER_PREFIX = "zlink:v11:counter:";
@@ -346,7 +346,7 @@ final class ZLinkProviderAuthorityRepository {
             .orElse(null);
         return provider.scan(
                 new ZLinkStoreScanRequest(
-                    PREFIX,
+                    AUTHORITY_PREIMAGE_PREFIX,
                     providerCursor,
                     limit),
                 adapt(cancellation))
@@ -1108,7 +1108,7 @@ final class ZLinkProviderAuthorityRepository {
         long removed,
         int restartCount) {
         return provider.scan(
-                new ZLinkStoreScanRequest(PREFIX, cursor, 1000),
+                new ZLinkStoreScanRequest(AUTHORITY_PREIMAGE_PREFIX, cursor, 1000),
                 () -> false)
             .thenCompose(result -> {
                 if (result instanceof ZLinkStoreScanExpired) {
@@ -1580,7 +1580,7 @@ final class ZLinkProviderAuthorityRepository {
             cancellation,
         int restartCount) {
         return provider.scan(
-                new ZLinkStoreScanRequest(PREFIX, cursor, 1000),
+                new ZLinkStoreScanRequest(AUTHORITY_PREIMAGE_PREFIX, cursor, 1000),
                 cancellation)
             .thenCompose(result -> {
                 if (result instanceof ZLinkStoreScanExpired) {
@@ -2398,10 +2398,20 @@ final class ZLinkProviderAuthorityRepository {
         return bytes;
     }
 
+    // Canonical cross-language logical key preimage
+    // (21-location-runtime.md#2.4): "authority\0{actor|spot}\0{Id}". The
+    // second segment collapses every Spot kind onto one "spot" string --
+    // one Id has exactly one authority row regardless of Spot kind -- and
+    // {Id} is the raw ActorId/SpotId, not the "zla1:..." wire form the rest
+    // of this class carries as its authority-key contract value.
+    private static final String AUTHORITY_PREIMAGE_PREFIX = "authority\0";
+
     private static ZLinkStoreKey authorityKey(String key) {
+        ZLinkAuthorityKeyCodec.AuthorityIdentity identity =
+            ZLinkAuthorityKeyCodec.decode(key);
         return new ZLinkStoreKey(
-            PREFIX + HexFormat.of().formatHex(
-                key.getBytes(StandardCharsets.UTF_8)));
+            AUTHORITY_PREIMAGE_PREFIX + identity.kind() + "\0"
+                + identity.id());
     }
 
     private static ZLinkStoreKey capacityKey(
@@ -2415,10 +2425,28 @@ final class ZLinkProviderAuthorityRepository {
                 identity.getBytes(StandardCharsets.UTF_8)));
     }
 
+    // Reverses authorityKey(): recovers the "zla1:..." authority-key
+    // contract value from a scanned opaque record's logical key preimage.
     private static String decodeAuthorityKey(ZLinkStoreKey key) {
-        return new String(
-            HexFormat.of().parseHex(key.value().substring(PREFIX.length())),
-            StandardCharsets.UTF_8);
+        String preimage = key.value();
+        if (!preimage.startsWith(AUTHORITY_PREIMAGE_PREFIX)) {
+            throw new IllegalStateException(
+                "authority scan returned a non-authority logical key");
+        }
+        String rest = preimage.substring(AUTHORITY_PREIMAGE_PREFIX.length());
+        int separator = rest.indexOf('\0');
+        if (separator < 0) {
+            throw new IllegalStateException(
+                "authority logical key preimage is malformed");
+        }
+        String kind = rest.substring(0, separator);
+        String id = rest.substring(separator + 1);
+        return switch (kind) {
+            case "actor" -> ZLinkAuthorityKeyCodec.actor(id);
+            case "spot" -> ZLinkAuthorityKeyCodec.spot(id);
+            default -> throw new IllegalStateException(
+                "unrecognized authority key kind: " + kind);
+        };
     }
 
     // Canonical cross-language logical key preimage

@@ -12,7 +12,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -47,6 +46,7 @@ import systems.zlink.framework.locations.ZLinkObjectCapability;
 import systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind;
 import systems.zlink.framework.locations.ZLinkPlacementCapacity;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 
@@ -68,8 +68,10 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 .toCompletableFuture().get().status());
         var repository = new ZLinkProviderAuthorityRepository(
             provider, descriptors);
-        var first = capacityRequest("spot-a", descriptor, owner);
-        var second = capacityRequest("spot-b", descriptor, owner);
+        var first = capacityRequest(
+            ZLinkAuthorityKeyCodec.spot("spot-a"), descriptor, owner);
+        var second = capacityRequest(
+            ZLinkAuthorityKeyCodec.spot("spot-b"), descriptor, owner);
 
         var reservation = assertInstanceOf(
             ZLinkObjectReserved.class,
@@ -90,12 +92,13 @@ final class ZLinkProviderAuthorityRepositoryTest {
 
         var current = assertInstanceOf(
             ZLinkAuthoritySnapshot.class,
-            repository.read("spot-a", () -> false)
+            repository.read(
+                    ZLinkAuthorityKeyCodec.spot("spot-a"), () -> false)
                 .toCompletableFuture().get());
         assertInstanceOf(
             ZLinkAuthorityDeleted.class,
             repository.compareExchange(
-                    "spot-a",
+                    ZLinkAuthorityKeyCodec.spot("spot-a"),
                     new ZLinkAuthorityExpectFound(current.storeVersion()),
                     new ZLinkAuthorityDelete(),
                     () -> false)
@@ -189,9 +192,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
         var mutations = new ArrayList<systems.zlink.framework.locationprovider
             .ZLinkStoreMutation>();
         for (int index = 0; index < 1_001; index++) {
-            String authorityKey = "zlink:v11:authority:"
-                + HexFormat.of().formatHex(
-                    ("authority-" + index).getBytes(StandardCharsets.UTF_8));
+            String authorityKey = "authority\0actor\0authority-" + index;
             mutations.add(new ZLinkStorePut(
                 new ZLinkStoreKey(authorityKey),
                 encodedAuthority,
@@ -212,7 +213,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
         assertEquals(1_001L, removed);
         var remaining = (ZLinkStoreScanPageResult) store.scan(
                 new ZLinkStoreScanRequest(
-                    "zlink:v11:authority:", null, 1_000),
+                    "authority\0", null, 1_000),
                 () -> false)
             .toCompletableFuture()
             .join();
@@ -222,15 +223,20 @@ final class ZLinkProviderAuthorityRepositoryTest {
     @Test
     void rollbackDoesNotRemoveAnExistingParticipantMarker()
         throws ReflectiveOperationException {
+        String authorityAContractKey = ZLinkAuthorityKeyCodec.actor(
+            "authority-a");
+        String authorityBContractKey = ZLinkAuthorityKeyCodec.actor(
+            "authority-b");
         var delegate = new ZLinkInMemoryProviderLocationStore();
-        var store = new FailingParticipantStore(delegate, "authority-b");
+        var store = new FailingParticipantStore(
+            delegate, authorityBContractKey);
         var ownerLeases = new ZLinkProviderOwnerLeaseRepository(store);
         var owner = (ZLinkOwnerLeaseClaimed) ownerLeases.claim(
                 "owner-a", Duration.ofHours(1))
             .toCompletableFuture()
             .join();
-        var authorityA = authorityKey("authority-a");
-        var authorityB = authorityKey("authority-b");
+        var authorityA = authorityKey(authorityAContractKey);
+        var authorityB = authorityKey(authorityBContractKey);
         var seed = encodedAuthorityRecord();
         var seeded = (systems.zlink.framework.locationprovider
                 .ZLinkStoreWriteApplied) delegate.write(
@@ -245,9 +251,9 @@ final class ZLinkProviderAuthorityRepositoryTest {
         String versionA = seeded.putVersions().get(authorityA).value();
         String versionB = seeded.putVersions().get(authorityB).value();
         var participantA = participant(
-            "authority-a", versionA, new byte[] {11}, new byte[] {12});
+            authorityAContractKey, versionA, new byte[] {11}, new byte[] {12});
         var participantB = participant(
-            "authority-b", versionB, new byte[] {21}, new byte[] {22});
+            authorityBContractKey, versionB, new byte[] {21}, new byte[] {22});
         var request = new ZLinkAggregatePrepareRequest(
             new UUID(0, 11),
             1,
@@ -313,7 +319,9 @@ final class ZLinkProviderAuthorityRepositoryTest {
             .claim("owner-a", Duration.ofHours(1))
             .toCompletableFuture()
             .join();
-        var authorityKey = authorityKey("authority-a");
+        String authorityAContractKey = ZLinkAuthorityKeyCodec.actor(
+            "authority-a");
+        var authorityKey = authorityKey(authorityAContractKey);
         var basePayload = new ZLinkActorAuthorityPayloadCodec().encode(
             ZLinkActorAuthorityPayloadCodec.State.READY,
             "Actor",
@@ -342,7 +350,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
             new UUID(0, 9),
             1,
             List.of(new ZLinkAggregateRelocationCoordinator.Participant(
-                "authority-a",
+                authorityAContractKey,
                 ZLinkPlacementObjectKind.ACTOR,
                 1,
                 1,
@@ -361,7 +369,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 relocationRequest,
                 ZLinkAuthorityGenerationTransition.PRESERVE);
         var participant = new ZLinkAggregateParticipant(
-            "authority-a",
+            authorityAContractKey,
             1,
             1,
             version,
@@ -632,11 +640,13 @@ final class ZLinkProviderAuthorityRepositoryTest {
         return (byte) state.invoke(aggregate);
     }
 
+    // Mirrors the production ZLinkProviderAuthorityRepository.authorityKey()
+    // canonical preimage (21-location-runtime.md#2.4) so direct-seeded rows
+    // land where the aggregate/reserve/commit code paths actually look.
     private static ZLinkStoreKey authorityKey(String key) {
+        var identity = ZLinkAuthorityKeyCodec.decode(key);
         return new ZLinkStoreKey(
-            "zlink:v11:authority:"
-                + HexFormat.of().formatHex(
-                    key.getBytes(StandardCharsets.UTF_8)));
+            "authority\0" + identity.kind() + "\0" + identity.id());
     }
 
     private static ZLinkStoreKey aggregateKey(
