@@ -47,14 +47,25 @@
       사전 실패 주장 포함 확인)
 - [ ] cpp bind-session 재시도 소진 분류(deadline_exceeded로 갱신됨, `46ef4b0f03`)의
       교차 언어 parity 확인 — java/node/dotnet의 동일 시나리오 분류 대조
+- [ ] cpp standalone actor 직접 relocation 복원 갭 parity 판정·해소 (materialize의
+      target_spot 강제 — 타 언어가 지원하면 cpp 결함으로 수정) [D에서 승격 2026-08-19]
+- [ ] m6b M-c mismatched-identity rejection 테스트 (aggregate identity-fencing 조사
+      포함) [D에서 승격 2026-08-19]
 - [ ] **sol 전 문서 spec-gap 리뷰**: 스펙·guide·e2e·언어 interface 전체 vs 구현 대조,
       gap 0 확인 (완료 조건)
 - [ ] 최종 게이트 일괄: 4언어 unittest + 6샘플×언어 + doc 게이트 + 최종 보고
 
 ## C. 상호 운용 확장 (M10, 사용자 확정 2026-08-19 — 근간·양보 불가)
 
-- [ ] C-1 store 규범 계약 설계 비준: 레코드별 canonical 키공간·redis 자료형·값 인코딩,
-      버전 판별자, 마이그레이션 방식 (설계 제안 에이전트 진행 중 → 코디네이터 비준)
+- [x] C-1 store 규범 계약 설계 비준 (2026-08-19): generic opaque = dotnet/java 공유
+      ZSET+cmsgpack log 채택(값은 raw bytes — java의 내부 base64 제거), 키 =
+      `{prefix}:{zlink-location-v3}:opaque:{sha256hex(논리키)}`; descriptor·lease·
+      client-server·fanout·authority = "canonical JSON over opaque record" 단일 규칙
+      (논리키 preimage 규범화, java 전용 Lua 경로는 붕괴·인덱스는 private 보조);
+      relocation blob = raw STRING PSETEX, `{zlink-relocation-v1}` 독립 버전 태그;
+      마이그레이션 = **clean break**(형식 판별자 0x01+recordVersion, 미인식 버전
+      명시 실패; 기존 Redis 상태 drain 필요 — 최종 보고 명기). 검증 조건 2건:
+      java Lettuce 8-bit ARGV 실증(Phase B), authority 행 opaque 경로 byte 검증(C-2 전).
 - [ ] C-2 스펙 개정: 21-location-runtime·23-relocation-store-redis의 "provider 내부"
       조항을 규범 계약으로 개정 (28:589-591 수용 기준은 수정 없이 유지)
 - [ ] C-3 store 레코드 golden fixture 신설 (키 문자열·값 byte 벡터) + 4언어 소비 테스트
@@ -68,18 +79,21 @@
       C-5·C-6 후 일반 join 경로 — 기존 opt-in 스테이지 `2907df293f`/`c43758fc05` 기반)
 - [ ] C-8 교차 언어 스테이지를 harness 기본 `all` 게이트에 편입 (회귀 구조 차단)
 - [ ] C-9 상호 운용 신규 코드 sol 리뷰 + POSDDD 패스
+- [ ] C-10 node relocationFailed row-collapse 세분화: NotFound/Rejected/InvalidOp 등을
+      wire 후보(15/33/34)로 구분 인코딩 — 4언어 기준 매핑(97fc074058)과 정렬
+      [D에서 편입 2026-08-19; 전용 wire 어휘 확장(ShuttingDown 등)은 이때 재판정]
 
-## D. 이월·후속 (완료 조건 아님, 기록)
+## E. 확정 후속 단계 (사용자 승격 2026-08-19 — 완료 조건 포함, C 완료 후 착수)
 
-- [ ] dotnet 성능 후속(문서화됨, `062c0bbd1e` 메시지): message-follow 중복 lock 수동
-      해체, ToHex 정렬 comparer, HeldRecords O(N²), 중복 participant 스캔, codec
-      삼중 복사, LINQ 재해석 캐시
-- [ ] cpp complete_relocation_assembly 구조 분해 (등가성 테스트 동반 전용 패스)
-- [ ] cpp aggregate 오케스트레이션 reason 전파 (task_t<bool> 고정 인터페이스)
-- [ ] cpp StageInboundSpotAggregateAsync급 대형 메서드(dotnet) participant-restore 추출
-- [ ] node relocationFailed row-collapse 세분화 (wire 후보 15/33/34 선택) — 전용 wire
-      어휘 확장(ShuttingDown 등)과 함께, 필요 실증 시
-- [ ] cpp standalone actor 직접 relocation 복원 갭 parity 판정 (materialize의
-      target_spot 강제 — 타 언어 동작과 대조)
-- [ ] m6b M-c mismatched-identity rejection 테스트 (aggregate identity-fencing 조사)
-- [ ] e2e_inventory 기존 backlog 168건 (캠페인 외 문서 부채 — 별도 계획)
+- [ ] E-1 dotnet 성능 패스(`062c0bbd1e`에 문서화된 6건): message-follow 중복 lock
+      수동 해체, ToHex 정렬 comparer, HeldRecords O(N²), 중복 participant 스캔,
+      codec 삼중 복사, LINQ 재해석 캐시
+- [ ] E-2 cpp complete_relocation_assembly 구조 분해 (등가성 테스트 선행 작성 후 분해)
+- [ ] E-3 dotnet StageInboundSpotAggregateAsync participant-restore 추출
+- [ ] E-4 cpp aggregate 오케스트레이션 reason 전파 (task_t<bool> → 분류 전달)
+- [ ] E-5 E 단계 전체 sol 리뷰 + 전 게이트 재확인
+
+## F. 별도 캠페인 (이 캠페인 범위 외 — 착수 시 별도 계획 문서)
+
+- e2e_inventory 기존 backlog 168건: relocation과 무관한 14개 문서 전반의
+  교차참조·feature-map 부채. 규모가 크고 주제가 달라 분리 (사용자 재확인 대기)
