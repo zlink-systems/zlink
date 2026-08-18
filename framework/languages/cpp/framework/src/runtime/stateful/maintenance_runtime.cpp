@@ -507,6 +507,11 @@ struct maintenance_runtime_t::relocation_terminal_state_t
     std::uint64_t effective_chunk_limit = 0;
     std::uint64_t budget_reserved = 0;
     std::chrono::steady_clock::time_point sealed_at{};
+    /* SafeToShutdown pending-unit accounting: set once the unit is sealed
+     * (begin_pending_relocation_unit), released explicitly at S4+window
+     * close in retain_retransmission_copies, or implicitly by destruction
+     * of this state on any earlier failure return. */
+    std::shared_ptr<void> pending_unit_token;
     std::optional<target_only_cas_t> handoff;
     relocation_ingress_batch_t batch;
     relocation_reason_t failure = relocation_reason_t::restore_failed;
@@ -955,6 +960,21 @@ std::uint32_t boundary_batch_checksum (
 }
 } // namespace
 
+std::shared_ptr<void> maintenance_runtime_t::begin_pending_relocation_unit ()
+  noexcept
+{
+    auto tracking = _shutdown_tracking;
+    tracking->pending_units.fetch_add (1, std::memory_order_acq_rel);
+    /* The deleter (not `this`) owns the decrement, so it runs correctly
+     * even if this maintenance_runtime_t is torn down while the token is
+     * still held (retransmission window outliving the runtime). */
+    return std::shared_ptr<void> (
+      static_cast<void *> (nullptr),
+      [tracking] (void *) {
+          tracking->pending_units.fetch_sub (1, std::memory_order_acq_rel);
+      });
+}
+
 void maintenance_runtime_t::retain_retransmission_copies (
   std::shared_ptr<relocation_terminal_state_t> state)
 {
@@ -965,14 +985,24 @@ void maintenance_runtime_t::retain_retransmission_copies (
      * reach the wire, the window is also used to retry the one-way cutover
      * on the (possibly re-established) connection. */
     const auto window = _limits.cutover_wait_timeout;
+    /* 18 §2.4 / 28 §-: S4 is the point the Message Follow route becomes
+     * removable, i.e. MessageFollowDuration after this source's cutover
+     * terminal — not the (much shorter) retransmission window. The
+     * retransmission window still bounds the payload/records retention and
+     * the cutover retry attempts below; the S4 wait is layered on top of
+     * it, on the same clock (cutover_terminal_at), so it always dominates
+     * with the default settings (30s follow duration vs. 1s cutover wait)
+     * while still degrading correctly if a deployment configures them the
+     * other way around. */
+    const auto follow_duration = _limits.message_follow_duration;
     /* Captured by value (not `this`): this coroutine is detached and
      * self-keeping, so it can outlive the maintenance_runtime_t that
      * started it. */
     auto tracking = _shutdown_tracking;
-    tracking->pending_units.fetch_add (1, std::memory_order_acq_rel);
     auto retention = std::make_shared<task_t<void>> (
       [] (std::shared_ptr<relocation_terminal_state_t> retained,
-          std::chrono::milliseconds duration) -> task_t<void> {
+          std::chrono::milliseconds duration,
+          std::chrono::milliseconds follow) -> task_t<void> {
           const auto deadline = std::chrono::steady_clock::now () + duration;
           constexpr auto retry_interval = std::chrono::milliseconds (100);
           while (std::chrono::steady_clock::now () < deadline) {
@@ -988,6 +1018,18 @@ void maintenance_runtime_t::retain_retransmission_copies (
                 std::min (retry_interval,
                           std::max (remaining, std::chrono::milliseconds (1))));
               try {
+                  /* 28 §4.4/§9: the cutover submit reaching the wire does
+                   * not by itself prove the target still has every
+                   * boundary record staged — a reconnect on either side
+                   * can have dropped mid-batch state. Resend the whole
+                   * retained boundary batch ahead of each cutover retry
+                   * (not just the cutover itself), on the same connection,
+                   * so a target that lost partial staging gets the full
+                   * batch again before the cutover comparison runs. */
+                  if (retained->records
+                      && !co_await retained->context.send_relocation_data (
+                           *retained->records, retained->batch))
+                      continue;
                   const auto retried = co_await retained->context.send_cutover (
                     *retained->cutover_record);
                   if (retried
@@ -1002,18 +1044,46 @@ void maintenance_runtime_t::retain_retransmission_copies (
           retained->payload.shrink_to_fit ();
           retained->records.reset ();
           retained->cutover_record.reset ();
-      } (state, window));
-    detail::observe_task_completion (
-      *retention, [retention, tracking, state] (const result_t<void> &) {
-          /* Fires on any completion (normal or exceptional), so this is
-           * the one place both the route_convergence metric and the
-           * SafeToShutdown obligation resolve exactly once. Retransmission
-           * window closed: this unit's route_convergence and
-           * SafeToShutdown obligation both resolve here (no separate
-           * Message Follow expiry timer exists in this runtime to measure
-           * that condition independently). */
-          if (state->cutover_terminal_at
+          /* S4 (Message Follow route removable): wait out whatever remains
+           * of the follow duration measured from the cutover terminal, on
+           * top of the retransmission window handled above. A unit that
+           * never reached a cutover terminal (never sealed / no handoff)
+           * has nothing to converge, so it skips this wait. */
+          if (retained->cutover_terminal_at
               != std::chrono::steady_clock::time_point{}) {
+              const auto follow_deadline =
+                retained->cutover_terminal_at + follow;
+              const auto now = std::chrono::steady_clock::now ();
+              if (follow_deadline > now) {
+                  co_await ::zlink::framework::detail::delay (
+                    std::chrono::duration_cast<std::chrono::milliseconds> (
+                      follow_deadline - now));
+              }
+          }
+      } (state, window, follow_duration));
+    /* route_convergence (25 §"zlink.relocation") measures S1 (cutover
+     * submit terminal) to S4 (follow duration elapsed) specifically. It is
+     * timed by its own wait, independent of the SafeToShutdown release
+     * below: the coroutine above waits out max(retransmission window,
+     * follow duration) serially, so when the window is configured longer
+     * than the follow duration (an unusual, but legal, deployment), taking
+     * the metric timestamp from that coroutine's completion would inflate
+     * it by the extra window wait past S4. This wait only ever needs to
+     * cover the follow duration itself. */
+    if (state->cutover_terminal_at != std::chrono::steady_clock::time_point{}) {
+        auto metric_wait = std::make_shared<task_t<void>> (
+          [] (std::shared_ptr<relocation_terminal_state_t> retained,
+              std::chrono::milliseconds follow) -> task_t<void> {
+              const auto deadline = retained->cutover_terminal_at + follow;
+              const auto now = std::chrono::steady_clock::now ();
+              if (deadline > now) {
+                  co_await ::zlink::framework::detail::delay (
+                    std::chrono::duration_cast<std::chrono::milliseconds> (
+                      deadline - now));
+              }
+          } (state, follow_duration));
+        detail::observe_task_completion (
+          *metric_wait, [metric_wait, tracking, state] (const result_t<void> &) {
               std::lock_guard lock (tracking->metric_mutex);
               if (tracking->route_convergence_metric) {
                   const auto elapsed = std::chrono::duration<double> (
@@ -1021,8 +1091,18 @@ void maintenance_runtime_t::retain_retransmission_copies (
                     - state->cutover_terminal_at);
                   tracking->route_convergence_metric (elapsed.count ());
               }
-          }
-          tracking->pending_units.fetch_sub (1, std::memory_order_acq_rel);
+          });
+    }
+    detail::observe_task_completion (
+      *retention, [retention, state] (const result_t<void> &) {
+          /* Fires on any completion (normal or exceptional): this is the
+           * SafeToShutdown obligation, which is "S4 reached AND the
+           * retransmission window is closed" — satisfied by the time this
+           * observer runs, since the coroutine above waits out the window
+           * first and then the remainder of the follow duration. Releases
+           * the pending-unit token acquired at seal time
+           * (begin_pending_relocation_unit). */
+          state->pending_unit_token.reset ();
       });
 }
 
@@ -1147,6 +1227,7 @@ task_t<bool> maintenance_runtime_t::relocate_seal (
         co_return false;
     }
     state->sealed_at = std::chrono::steady_clock::now ();
+    state->pending_unit_token = begin_pending_relocation_unit ();
     co_return true;
 }
 
@@ -1459,6 +1540,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
                                protocol::relocationChunkBytes);
     state->seal_attempt = seal_attempt;
     state->sealed_at = std::chrono::steady_clock::now ();
+    state->pending_unit_token = begin_pending_relocation_unit ();
     try {
         state->payload = encode_aggregate (seal.participants, inventory_digest);
         state->payload = encode_recoverable_payload (
@@ -1511,65 +1593,18 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
         co_return aggregate_relocation_result_t{relocation_terminal_t::recovery_required, failure, {},
                 records.value_or (std::vector<protocol::relocation_data_t>{}), handoff};
     }
-    /* The multi-object location update is not a per-object CAS the public
-     * host layer can drive from a single target_handoff (28 aggregate
-     * §-: the N Location Store rows must move atomically). The aggregate
-     * authority port stays the 2-phase mechanism for that, sequenced
-     * before cutover so the target never observes a committed authority
-     * ahead of the source's own decision. */
-    const auto relocation_reference =
-      std::string ("direct:")
-      + std::to_string (canonical_wire->relocation.high) + ":"
-      + std::to_string (canonical_wire->relocation.low) + ":"
-      + std::to_string (canonical_wire->target_attempt_generation);
-    aggregate_publish_result_t authority_prepared;
-    try {
-        authority_prepared = _aggregate_authority->prepare (
-          sources, target_node_id, target_owner, relocation_reference,
-          state->manifest.checksum_crc32c, inventory_digest);
-    }
-    catch (...) {
-        if (abort_target_before_cutover (*canonical_wire))
-            (void) _objects.abort_relocation_before_cutover (seal.token);
-        co_return aggregate_relocation_result_t{relocation_terminal_t::store_failed,
-                relocation_reason_t::authority_publish_failed, {}, *records, handoff};
-    }
-    if (authority_prepared.status != aggregate_publish_status_t::prepared
-        || authority_prepared.fence.value == 0) {
-        if (abort_target_before_cutover (*canonical_wire))
-            (void) _objects.abort_relocation_before_cutover (seal.token);
-        co_return aggregate_relocation_result_t{
-                authority_prepared.status == aggregate_publish_status_t::conflict
-                  ? relocation_terminal_t::conflict
-                  : relocation_terminal_t::store_failed,
-                authority_prepared.status == aggregate_publish_status_t::conflict
-                  ? relocation_reason_t::authority_conflict
-                  : relocation_reason_t::authority_publish_failed,
-                {}, *records, handoff};
-    }
-    aggregate_publish_result_t authority_committed;
-    try {
-        authority_committed = _aggregate_authority->commit (authority_prepared.fence);
-    }
-    catch (...) {
-        co_return aggregate_relocation_result_t{relocation_terminal_t::recovery_required,
-                relocation_reason_t::authority_publish_failed, {}, *records, handoff};
-    }
-    if (authority_committed.status != aggregate_publish_status_t::committed) {
-        if (authority_committed.status == aggregate_publish_status_t::conflict) {
-            try {
-                _aggregate_authority->abort (authority_prepared.fence);
-            }
-            catch (...) {
-            }
-            if (abort_target_before_cutover (*canonical_wire))
-                (void) _objects.abort_relocation_before_cutover (seal.token);
-            co_return aggregate_relocation_result_t{relocation_terminal_t::conflict,
-                    relocation_reason_t::authority_conflict, {}, *records, handoff};
-        }
-        co_return aggregate_relocation_result_t{relocation_terminal_t::recovery_required,
-                relocation_reason_t::authority_publish_failed, {}, *records, handoff};
-    }
+    /* 28 §6 (target-only owner CAS): the multi-object location update's
+     * atomic authority CAS is the target's decision, driven by
+     * commit_relocation_target_authority /
+     * _aggregate_relocation_authority on the public host layer (after
+     * cutover is observed there, or on the ready-fallback timeout) — same
+     * as the single-object path, which never runs a source-side
+     * prepare/commit at all. Running a second 2-phase prepare+commit here,
+     * on the source, ahead of cutover, would let the source (and any peer
+     * observing its store) see a committed authority before the target
+     * has verified anything, which is exactly the ordering 28 §6
+     * forbids. The source's only remaining job is to hand the boundary
+     * records to the wire and send cutover; the target owns the CAS. */
     /* Cutover carries the same principal object identity as the Restore
      * request so the target binds it to the prepared attempt. */
     const auto principal = std::find_if (

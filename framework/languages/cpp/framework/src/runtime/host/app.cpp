@@ -1497,6 +1497,8 @@ app_t &app_t::add_zlink_framework (std::function<void (zlink_framework_options_t
                   location_options.relocation_node_in_flight_payload_budget_bytes;
                 relocation_limits.cutover_wait_timeout =
                   location_options.relocation_cutover_wait_timeout;
+                relocation_limits.message_follow_duration =
+                  location_options.message_follow_duration;
                 mesh_node->configure_relocation_runtime (
                   relocation_authority, relocation_store,
                   aggregate_relocation_authority, relocation_limits);

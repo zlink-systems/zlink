@@ -1507,6 +1507,28 @@ void append_role (std::vector<std::uint8_t> &bytes,
     bytes.push_back (static_cast<std::uint8_t> (role));
 }
 
+void append_payload_stage (std::vector<std::uint8_t> &bytes,
+                           relocation_payload_stage_t stage)
+{
+    if (stage != relocation_payload_stage_t::base
+        && stage != relocation_payload_stage_t::final)
+        throw service_wire_error_t ("invalid relocation payload stage");
+    bytes.push_back (static_cast<std::uint8_t> (stage));
+}
+
+relocation_payload_stage_t read_payload_stage (
+  std::span<const std::uint8_t> bytes, std::size_t &offset)
+{
+    if (offset >= bytes.size ())
+        throw service_wire_error_t ("relocation payload stage is truncated");
+    const auto stage =
+      static_cast<relocation_payload_stage_t> (bytes[offset++]);
+    if (stage != relocation_payload_stage_t::base
+        && stage != relocation_payload_stage_t::final)
+        throw service_wire_error_t ("invalid relocation payload stage");
+    return stage;
+}
+
 relocation_role_t read_role (std::span<const std::uint8_t> bytes,
                              std::size_t &offset)
 {
@@ -1629,6 +1651,7 @@ void append_payload_manifest (std::vector<std::uint8_t> &bytes,
     append_u64 (bytes, record.payload_total_length);
     append_u32 (bytes, record.payload_chunk_count);
     append_u32 (bytes, record.payload_checksum_crc32c);
+    append_u32 (bytes, record.base_checksum_crc32c);
 }
 
 void read_payload_manifest (std::span<const std::uint8_t> bytes,
@@ -1644,6 +1667,7 @@ void read_payload_manifest (std::span<const std::uint8_t> bytes,
         throw service_wire_error_t (
           "relocation payload chunk count exceeds the chunk bound");
     record.payload_checksum_crc32c = read_u32 (bytes, offset);
+    record.base_checksum_crc32c = read_u32 (bytes, offset);
 }
 
 template <typename Record>
@@ -1898,6 +1922,7 @@ std::vector<std::uint8_t> encode_relocation_control (
             append_relocation_base (bytes, value);
             append_role (bytes, value.sender_role);
             append_object (bytes, value.object);
+            append_payload_stage (bytes, value.payload_stage);
             append_u32 (bytes, value.chunk_ordinal);
             if (value.chunk_data.size () > relocationChunkBytes)
                 throw service_wire_error_t (
@@ -2008,6 +2033,7 @@ relocation_control_t decode_relocation_control (
             read_relocation_base (bytes, offset, result);
             result.sender_role = read_role (bytes, offset);
             result.object = read_object (bytes, offset);
+            result.payload_stage = read_payload_stage (bytes, offset);
             result.chunk_ordinal = read_u32 (bytes, offset);
             const auto chunk_length = read_u32 (bytes, offset);
             if (chunk_length > relocationChunkBytes)

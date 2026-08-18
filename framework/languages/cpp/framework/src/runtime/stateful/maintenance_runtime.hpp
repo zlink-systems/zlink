@@ -346,6 +346,11 @@ struct relocation_limits_t
     std::uint64_t in_flight_payload_budget_bytes = 16777216;
     std::uint64_t node_in_flight_payload_budget_bytes = 0;
     std::chrono::milliseconds cutover_wait_timeout{1000};
+    /* 18 §2.4: the Message Follow route stays installed on the source for
+     * this long after cutover before it becomes removable. S4 (route_
+     * convergence end / SafeToShutdown's per-unit condition) is anchored
+     * on this deadline, not on the retransmission window. */
+    std::chrono::milliseconds message_follow_duration{30000};
 };
 
 /* Phase 1 conservative in-flight cap. Until the Core exposes per-pipe
@@ -551,6 +556,17 @@ class maintenance_runtime_t
     void release_transfer_budget (std::uint64_t bytes) noexcept;
     void retain_retransmission_copies (
       std::shared_ptr<relocation_terminal_state_t> state);
+    /* SafeToShutdown must observe a relocation unit as pending from the
+     * moment it is sealed (registered), not only once it reaches S1
+     * (cutover submit terminal, where retain_retransmission_copies used
+     * to be the sole increment site) — otherwise a shutdown query racing
+     * the seal-to-S1 window can see relocation_units_settled() report
+     * true while a unit is still actively transferring. The returned
+     * token increments pending_units immediately and decrements it again
+     * on destruction (whether that is an early failure return dropping
+     * the owning relocation_terminal_state_t, or the S4+window observer
+     * in retain_retransmission_copies explicitly releasing it). */
+    std::shared_ptr<void> begin_pending_relocation_unit () noexcept;
     void release () noexcept;
     relocation_result_t finish (relocation_result_t result);
     std::optional<std::vector<protocol::relocation_data_t>>

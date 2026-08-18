@@ -17,6 +17,7 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -3635,25 +3636,8 @@ bool public_host_runtime_t::register_relocation_target_queue (
           prepare.source_node_generation, wire_object,
           [this, target, attempt_key] (
             const protocol::relocation_data_t &data) {
-              /* Pre-boundary relay verification (28 §4.4/§12): count and
-               * checksum every relocationData record the target stages for
-               * this attempt, in receive order, so the cutover comparison
-               * can detect a defect before CAS runs. This mirrors the
-               * source's boundary_batch_checksum computation exactly. */
-              {
-                  std::lock_guard lock (_mutex);
-                  const auto found =
-                    _relocation_target_attempts.find (attempt_key);
-                  if (found != _relocation_target_attempts.end ()
-                      && !found->second.cutover_received
-                      && !found->second.target_finalized) {
-                      ++found->second.boundary_records_received;
-                      found->second.boundary_accumulator.update (
-                        protocol::encode_relocation_control (data));
-                  }
-              }
               const auto frozen_record = data.record;
-              return _stateful_dispatch
+              const auto staged = _stateful_dispatch
                      && _stateful_dispatch->stage_relocated (
                        target,
                        {0, protocol::encode_frozen_record (frozen_record)},
@@ -3680,6 +3664,51 @@ bool public_host_runtime_t::register_relocation_target_queue (
                              }, [] { return true; },
                              data.coordinator.node_routing_id});
                        }) == stateful::stateful_error_t::none;
+              /* Pre-boundary relay verification (28 §4.4/§12): count and
+               * checksum every relocationData record the target actually
+               * staged for this attempt, in receive order, so the cutover
+               * comparison can detect a defect before CAS runs. Only
+               * records that were accepted into staging are counted here
+               * — accumulating a record that failed to stage (invalid or
+               * backpressured) would let the boundary count/checksum match
+               * the source's manifest even though the record itself is
+               * missing, which would let cutover CAS open with data
+               * silently lost. This mirrors the source's
+               * boundary_batch_checksum computation exactly.
+               *
+               * 28's "duplicatePayload: may-be-accepted-twice" means
+               * stage_relocated legitimately reports success again for a
+               * record the source resent (retransmission-window retry
+               * resends the whole boundary batch ahead of each cutover
+               * retry, see retain_retransmission_copies) — commit_
+               * accepted_ingress allocates a fresh sequence per call and
+               * does not itself detect the duplicate. Without a dedup
+               * here, a resent record would inflate boundary_records_
+               * received and the accumulator past the source's one-time
+               * manifest, and the cutover comparison would then fail on
+               * every retried unit. Dedup by content hash (relocationData
+               * carries no explicit per-record ordinal) so a re-staged
+               * duplicate is not re-counted. */
+              if (staged) {
+                  const auto encoded = protocol::encode_relocation_control (data);
+                  const auto digest =
+                    std::hash<std::string_view>{} (std::string_view (
+                      reinterpret_cast<const char *> (encoded.data ()),
+                      encoded.size ()));
+                  std::lock_guard lock (_mutex);
+                  const auto found =
+                    _relocation_target_attempts.find (attempt_key);
+                  if (found != _relocation_target_attempts.end ()
+                      && !found->second.cutover_received
+                      && !found->second.target_finalized
+                      && found->second.boundary_record_digests_seen
+                           .insert (digest)
+                           .second) {
+                      ++found->second.boundary_records_received;
+                      found->second.boundary_accumulator.update (encoded);
+                  }
+              }
+              return staged;
           }, [] (const protocol::relocation_data_t &) {}});
     }
     catch (...) {

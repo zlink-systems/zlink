@@ -37,6 +37,7 @@
 #include <string_view>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -1103,6 +1104,17 @@ class public_host_runtime_t :
         stateful::relocation_crc32c_accumulator_t boundary_accumulator;
         std::uint64_t boundary_expected_count = 0;
         std::uint32_t boundary_expected_checksum = 0;
+        /* 28's "duplicatePayload: may-be-accepted-twice-no-hidden-
+         * delivery-deduplication" means stage_relocated legitimately
+         * succeeds again for a resent relocationData record (e.g. the
+         * source's retransmission-window retry resends the whole boundary
+         * batch ahead of a cutover retry) — staging itself is idempotent
+         * at the ingress layer, but the boundary count/checksum above must
+         * still match the source's one-time manifest exactly, so a
+         * successfully-restaged duplicate must not be counted twice here.
+         * Tracked by content hash since relocationData carries no explicit
+         * per-record ordinal. */
+        std::unordered_set<std::size_t> boundary_record_digests_seen;
         /* S2 (owner CAS confirmed) for the target-resume interval. */
         std::chrono::steady_clock::time_point authority_committed_at{};
     };
