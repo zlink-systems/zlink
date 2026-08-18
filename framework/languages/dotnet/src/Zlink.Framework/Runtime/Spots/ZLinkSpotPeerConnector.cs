@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Service;
 
@@ -9,9 +10,15 @@ internal sealed class ZLinkSpotPeerConnector(
 {
     private readonly object _gate = new();
 
+    // Manual entry points accept an endpoint straight from the caller (an
+    // external boundary per the endpoint notation policy); normalize once
+    // here so a differently-notated Disconnect still matches an earlier
+    // Connect and set membership stays consistent with the reconciler's
+    // already-normalized automatic targets.
     public ValueTask<bool> ConnectPeerAsync(string endpoint, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        endpoint = ZLinkEndpointNotation.Normalize(endpoint);
         lock (_gate)
         {
             if (!connections.TryAddPeerManual(endpoint)) return ValueTask.FromResult(false);
@@ -27,6 +34,7 @@ internal sealed class ZLinkSpotPeerConnector(
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        endpoint = ZLinkEndpointNotation.Normalize(endpoint);
         lock (_gate)
         {
             if (!connections.TryAddPeerManual(endpoint)) return ValueTask.FromResult(false);
@@ -43,6 +51,7 @@ internal sealed class ZLinkSpotPeerConnector(
 
     public void DisconnectPeerManual(string endpoint)
     {
+        endpoint = ZLinkEndpointNotation.Normalize(endpoint);
         lock (_gate)
         {
             if (!connections.RemovePeerManual(endpoint)) return;

@@ -1294,6 +1294,217 @@ public sealed class ClientServerChannelRuntimeTests
     }
 
     [Fact]
+    public void ClientServerControlProtocol_AdmissionDecode_NormalizesAdvertisedEndpoint()
+    {
+        // The advertised endpoint is accepted from the wire (a peer,
+        // potentially another language or an older build). Per
+        // doc/plan/endpoint-notation-policy.ko.md §2.3, notation is
+        // normalized once at the point it is accepted so downstream Ordinal
+        // comparisons (e.g. against the client's expected endpoint from the
+        // location store) cannot fail on notation alone.
+        using var admit = ZLinkClientServerControlProtocol.EncodeAdmission(
+            new ZLinkClientServerControlProtocol.Admission(
+                "work",
+                RoutingId.From("server-notation"),
+                1,
+                1,
+                100,
+                ZLinkFrameworkRuntimeState.Serving,
+                "plaintext",
+                4096,
+                "TCP://Host.Example.com:0443/"));
+
+        Assert.True(
+            ZLinkClientServerControlProtocol.TryDecodeAdmission(
+                [admit],
+                out var decoded));
+        Assert.Equal(
+            "tcp://host.example.com:443",
+            decoded!.AdvertisedEndpoint);
+    }
+
+    [Fact]
+    public async Task AutomaticClient_AdmitsDespiteAdvertisedEndpointNotationDifferingFromExpected()
+    {
+        // Pin for ZLinkClientServerClientRuntime.ApplyAdmission's hard-reject
+        // branch: it does a raw Ordinal compare between admission
+        // .AdvertisedEndpoint (decoded off the wire) and expected.Endpoint
+        // (the automatic descriptor, e.g. sourced from the location store).
+        // Drive the wire directly with a raw router so the two values can be
+        // given different (but equivalent) notation while every other
+        // admission field matches exactly -- isolating endpoint notation as
+        // the only variable. Before ZLinkClientServerControlProtocol's
+        // decode-side normalization existed, this made the client set
+        // _rejected = true forever (a hard connection failure, not a silent
+        // no-op).
+        var port = ReservePort();
+        var endpoint = $"tcp://127.0.0.1:{port}";
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var router = context.CreateRouterSocket();
+        router.Bind(endpoint);
+
+        var locationProvider = new ZLinkInMemoryProviderLocationStore();
+        await using var client = CreateAutomaticClient(locationProvider);
+        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        await clientRuntime.StartAsync(CancellationToken.None);
+        try
+        {
+            var transport = clientRuntime.GetClientServerClientRuntime("work");
+            var serverRid = RoutingId.From("notation-server");
+            var expected = new ZLinkClientServerServerDescriptor(
+                "work",
+                serverRid,
+                LifecycleGeneration: 1,
+                DescriptorRevision: 1,
+                endpoint, // canonical, dialable -- what the client connects to
+                Weight: 100,
+                ZLinkFrameworkRuntimeState.Serving,
+                SecurityIdentity: "plaintext",
+                OwnerId: "test-owner",
+                LeaseGeneration: 1,
+                UpdatedAt: default);
+            transport.ReplaceAutomatic([expected]);
+
+            using var hello = await PollReceivedAsync(
+                storage => TryReceive(router, storage),
+                TimeSpan.FromSeconds(5));
+            Assert.True(
+                ZLinkClientServerControlProtocol.TryDecodeHello(
+                    hello.Parts,
+                    out _));
+
+            // Same physical target as `endpoint`, but different (equivalent)
+            // notation: uppercase scheme, leading-zero port, trailing slash.
+            var mismatchedNotation = $"TCP://127.0.0.1:0{port}/";
+            var admission = ZLinkClientServerControlProtocol.EncodeAdmission(
+                new ZLinkClientServerControlProtocol.Admission(
+                    "work",
+                    serverRid,
+                    1,
+                    1,
+                    100,
+                    ZLinkFrameworkRuntimeState.Serving,
+                    "plaintext",
+                    1024 * 1024,
+                    mismatchedNotation));
+            router.Reply(
+                    hello.RoutingId
+                        ?? throw new InvalidOperationException(
+                            "missing client routing id"),
+                    hello.RequestSeq
+                        ?? throw new InvalidOperationException(
+                            "missing request sequence"))
+                .Message(admission)
+                .Submit();
+
+            try
+            {
+                await WaitUntilAsync(
+                    () => transport.ReadyCount == 1,
+                    TimeSpan.FromSeconds(5));
+            }
+            catch (TimeoutException exception)
+            {
+                throw new TimeoutException(
+                    transport.AdmissionDiagnostics,
+                    exception);
+            }
+            Assert.Equal(1, transport.ReadyCount);
+        }
+        finally
+        {
+            await clientRuntime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task AutomaticClient_AdmitsDespiteLocationStoreEndpointNotationDifference()
+    {
+        // Pin for doc/plan/endpoint-notation-policy.ko.md §2.3 row-intake
+        // normalization (ZLinkClientServerDiscovery.ClientLoop.ListAllAsync):
+        // a Location Store row written with different (but equivalent)
+        // endpoint notation than the server's own canonical value must still
+        // be usable as a dial target and match the server's live wire
+        // admission once normalized on read.
+        var locationProvider = new ZLinkInMemoryProviderLocationStore();
+        var store = new ZLinkProviderLocationRepository(locationProvider);
+        await using var server = CreateAutomaticServer(locationProvider, "notation");
+        await using var client = CreateAutomaticClient(locationProvider);
+        var serverLocations = server.GetRequiredService<ZLinkLocationRuntime>();
+        var clientLocations = client.GetRequiredService<ZLinkLocationRuntime>();
+        var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        var serverDiscovery = server.GetRequiredService<ZLinkLocationAutoConnectHost>();
+        var clientDiscovery = client.GetRequiredService<ZLinkLocationAutoConnectHost>();
+
+        await serverLocations.StartAsync(RoutingId.From("notation-owner"));
+        await clientLocations.StartAsync(RoutingId.From("notation-client"));
+        await serverRuntime.StartAsync(CancellationToken.None);
+        await clientRuntime.StartAsync(CancellationToken.None);
+        try
+        {
+            await serverDiscovery.StartAsync(
+                await serverRuntime.EnsureStartedStateAsync(CancellationToken.None));
+            var actual = Assert.Single(
+                (await store.ListClientServersAsync(
+                    "work",
+                    new ZLinkPageRequest(16))).Items);
+            Assert.Equal(
+                ZLinkLocationWriteStatus.Stored,
+                await store.RemoveClientServerAsync(
+                    new ZLinkClientServerServerDescriptorKey(
+                        actual.ChannelName,
+                        actual.ServerRid),
+                    serverLocations.OwnerToken));
+
+            // Same physical target, different (but equivalent) notation:
+            // uppercase scheme, leading-zero port, trailing slash. The
+            // server still binds and admits using its own canonical value.
+            var mismatchedNotation =
+                "TCP://" + new Uri(actual.Endpoint, UriKind.Absolute).Host
+                + ":0" + new Uri(actual.Endpoint, UriKind.Absolute).Port + "/";
+            var forged = actual with { Endpoint = mismatchedNotation };
+            Assert.Equal(
+                ZLinkLocationWriteStatus.Stored,
+                (await store.UpdateClientServerAsync(
+                    forged,
+                    ZLinkLocationWriteIntent.NewClaim)).Status);
+
+            await clientDiscovery.StartAsync(
+                await clientRuntime.EnsureStartedStateAsync(CancellationToken.None));
+            var transport = clientRuntime.GetClientServerClientRuntime("work");
+            try
+            {
+                await WaitUntilAsync(
+                    () => transport.ReadyCount == 1,
+                    TimeSpan.FromSeconds(5));
+            }
+            catch (TimeoutException exception)
+            {
+                throw new TimeoutException(
+                    $"forged={forged.Endpoint} {transport.AdmissionDiagnostics}",
+                    exception);
+            }
+            Assert.Equal(1, transport.ReadyCount);
+
+            var reply = await client.GetRequiredService<IZLinkRouteClient>()
+                .RequestToChannel("work", new EchoRequest("notation"))
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Async<EchoReply>();
+            Assert.Equal("notation:notation", reply.Value);
+        }
+        finally
+        {
+            await clientDiscovery.StopAsync();
+            await serverDiscovery.StopAsync();
+            await clientRuntime.StopAsync(CancellationToken.None);
+            await serverRuntime.StopAsync(CancellationToken.None);
+            await clientLocations.StopAsync();
+            await serverLocations.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task BindingSockets_DeliverUnsolicitedLivenessProbe()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();

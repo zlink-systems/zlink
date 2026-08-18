@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -309,7 +310,11 @@ internal sealed class ZLinkFanoutDiscovery : IAsyncDisposable
                         new ZLinkPageRequest(256, continuation),
                         cancellationToken)
                     .ConfigureAwait(false);
-                result.AddRange(page.Items);
+                // Location Store rows are accepted from outside the process;
+                // normalize here so downstream Ordinal comparisons cannot
+                // fail on notation alone.
+                result.AddRange(page.Items.Select(static row =>
+                    row with { Endpoint = ZLinkEndpointNotation.Normalize(row.Endpoint) }));
                 continuation = page.ContinuationToken;
             } while (continuation is not null);
             return result;

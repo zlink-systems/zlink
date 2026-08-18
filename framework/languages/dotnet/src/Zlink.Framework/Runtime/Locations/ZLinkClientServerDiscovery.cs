@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -217,10 +218,10 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
         string? advertiseHost)
     {
         if (string.IsNullOrWhiteSpace(advertiseHost))
-            return boundEndpoint;
+            return ZLinkEndpointNotation.Normalize(boundEndpoint);
         var endpoint = new Uri(boundEndpoint, UriKind.Absolute);
-        return new UriBuilder(endpoint) { Host = advertiseHost }.Uri
-            .GetComponents(UriComponents.SchemeAndServer, UriFormat.Unescaped);
+        var builder = new UriBuilder(endpoint) { Host = advertiseHost };
+        return ZLinkEndpointNotation.Normalize(builder.Uri.ToString());
     }
 
     private sealed class LocalServer(
@@ -328,7 +329,18 @@ internal sealed class ZLinkClientServerDiscovery : IAsyncDisposable
                         new ZLinkPageRequest(256, continuation),
                         cancellationToken)
                     .ConfigureAwait(false);
-                result.AddRange(page.Items);
+                // Location Store rows are accepted from outside the process
+                // (another node's own write path, potentially another
+                // language or an older build); normalize here so downstream
+                // Ordinal comparisons against the admission wire value
+                // cannot fail on notation alone.
+                // Location Store rows are accepted from outside the process
+                // (another node's own write path, potentially another
+                // language or an older build); normalize here so downstream
+                // Ordinal comparisons against the admission wire value
+                // cannot fail on notation alone.
+                result.AddRange(page.Items.Select(static row =>
+                    row with { Endpoint = ZLinkEndpointNotation.Normalize(row.Endpoint) }));
                 continuation = page.ContinuationToken;
             } while (continuation is not null);
             return result;

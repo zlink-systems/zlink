@@ -73,6 +73,26 @@ public sealed class EndpointConnectionsTests
     }
 
     [Fact]
+    public void Connect_And_Disconnect_Normalize_So_Different_Notation_Still_Matches()
+    {
+        var connections = new ZLinkEndpointConnections();
+        var connected = new List<string>();
+        var disconnected = new List<string>();
+        connections.Attach(connected.Add, disconnected.Add);
+
+        connections.Connect("TCP://Host:0080");
+        Assert.Equal(["tcp://host:80"], connections.ListConnections());
+        Assert.Equal(["tcp://host:80"], connected);
+
+        // Disconnect with a different (but equivalent) notation must still
+        // remove the same endpoint, per doc/plan/endpoint-notation-policy.
+        connections.Disconnect("tcp://Host:80/");
+
+        Assert.Empty(connections.ListConnections());
+        Assert.Equal(["tcp://host:80"], disconnected);
+    }
+
+    [Fact]
     public void Runtime_Handle_Does_Not_Expose_Mutable_List_Operations()
     {
         IZLinkEndpointConnections connections = new ZLinkEndpointConnections();

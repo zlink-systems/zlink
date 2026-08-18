@@ -89,6 +89,8 @@
         <Compile Include="Runtime/EnvelopeCodecTests.cs"/>
         <Compile Include="Runtime/ErrorReplyWireConvergenceTests.cs"/>
         <Compile Include="Runtime/EndpointConnectionsTests.cs"/>
+        <Compile Include="Runtime/EndpointNotationTests.cs"/>
+        <Compile Include="Runtime/NetworkEndpointResolverTests.cs"/>
         <Compile Include="Runtime/ExactMessageFlowRuntimeTests.cs"/>
         <Compile Include="Runtime/FlowCorrelationTests.cs"/>
         <Compile Include="Runtime/GeneratedNodeIdentityTests.cs"/>

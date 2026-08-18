@@ -48,6 +48,10 @@ endpoint 문자열은 리포 전역에서 **동등 비교·map 키·set 멤버�
 둔다. 경로는 대소문자를 구분할 수 있고 후행 슬래시가 의미를 가질 수 있어, host 규칙을 적용하면
 가리키는 대상이 바뀐다.
 
+같은 이유로 **advertised endpoint를 만들 때의 host 치환도 authority scheme에서만 한다.**
+`inproc://`처럼 host 자리가 사실은 불투명 식별자인 scheme에 `AdvertiseHost`를 대입하면 identity가
+훼손된다.
+
 ### 2.3 쓰기 시점에 정규화한다
 
 비교 시점마다 정규화하지 않고, **endpoint를 만들거나 외부에서 받아들이는 지점에서 한 번 정규화해

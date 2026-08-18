@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Configuration;
 
 namespace Zlink.Framework.Runtime.Service;
 
@@ -1655,7 +1656,11 @@ internal static partial class ZLinkServiceWireCodec
         admission = new AdmissionRecord(
             meshName,
             securityIdentity,
-            endpoint,
+            // Accepted from the wire (a peer, potentially another language or
+            // an older build); normalize once here so downstream Ordinal
+            // endpoint comparisons in ZLinkMeshPeerAdmission and
+            // ZLinkManagedMeshNode cannot fail on notation alone.
+            ZLinkEndpointNotation.Normalize(endpoint),
             lifecycleGeneration,
             descriptorRevision,
             channels,

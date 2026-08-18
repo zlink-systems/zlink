@@ -9,26 +9,33 @@ internal sealed class ZLinkEndpointConnections : IZLinkEndpointConnections, IRea
     public void Connect(string endpoint)
     {
         Validate(endpoint);
+        // A caller may write the same target in a different (but equivalent)
+        // notation than an earlier Connect or than the transport's own
+        // canonical form; normalize once here so the set membership check
+        // below and the attachment callback agree with every other write
+        // point.
+        var normalized = ZLinkEndpointNotation.Normalize(endpoint);
         Action<string>? connect;
         lock (_endpoints)
         {
             EnsureManualMutationAllowed();
-            if (_endpoints.Contains(endpoint, StringComparer.Ordinal)) return;
+            if (_endpoints.Contains(normalized, StringComparer.Ordinal)) return;
             connect = _attachment?.Connect;
-            connect?.Invoke(endpoint);
-            _endpoints.Add(endpoint);
+            connect?.Invoke(normalized);
+            _endpoints.Add(normalized);
         }
     }
 
     public void Disconnect(string endpoint)
     {
         Validate(endpoint);
+        var normalized = ZLinkEndpointNotation.Normalize(endpoint);
         lock (_endpoints)
         {
             EnsureManualMutationAllowed();
-            var index = _endpoints.FindIndex(value => string.Equals(value, endpoint, StringComparison.Ordinal));
+            var index = _endpoints.FindIndex(value => string.Equals(value, normalized, StringComparison.Ordinal));
             if (index < 0) return;
-            _attachment?.Disconnect(endpoint);
+            _attachment?.Disconnect(normalized);
             _endpoints.RemoveAt(index);
         }
     }

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Zlink.Framework.Runtime.Configuration;
 
 namespace Zlink.Framework.Runtime.Channels;
 
@@ -181,7 +182,11 @@ internal static class ZLinkClientServerControlProtocol
             state,
             securityIdentity,
             maximum,
-            endpoint);
+            // The advertised endpoint is accepted from the wire (a peer,
+            // potentially another language or an older build); normalize it
+            // once here so downstream Ordinal comparisons against the
+            // client's own expectation cannot fail on notation alone.
+            ZLinkEndpointNotation.Normalize(endpoint));
         return true;
     }
 

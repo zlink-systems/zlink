@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Identifiers;
 
@@ -361,8 +362,16 @@ internal sealed class ZLinkAutoConnectReconciler
             deadline.CancelAfter(_options.OwnerLeaseRenewTimeout);
             await PublishLocalAsync(deadline.Token).ConfigureAwait(false);
             if (Volatile.Read(ref _ownerCleanupStarted) != 0) return;
-            rows = await _peers.ListLiveMeshNodesAsync(_local.MeshName.Value, deadline.Token)
-                .ConfigureAwait(false);
+            rows = (await _peers.ListLiveMeshNodesAsync(_local.MeshName.Value, deadline.Token)
+                    .ConfigureAwait(false))
+                // Location Store rows are accepted from outside the process;
+                // normalize here so IsSelf and the initiator tie-break in
+                // ZLinkAutoConnectPlanner cannot diverge on notation alone.
+                .Select(static row => row with
+                {
+                    Endpoint = ZLinkEndpointNotation.Normalize(row.Endpoint)
+                })
+                .ToArray();
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"autoconnect_snapshot local={_local.NodeRid?.ToString() ?? "<unknown>"} "
                 + $"mesh={_local.MeshName} rows={rows.Count} "
