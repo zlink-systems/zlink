@@ -137,25 +137,50 @@ task_t<raw_request_completion_t> raw_route_port_t::request (
     }
     auto messages = materialize_binding_parts (parts);
     std::optional<zlink::async_result_t<std::vector<zlink::message_t>>> pending;
-    {
-        std::lock_guard lock (*_socket_mutex);
-        if (_socket == nullptr) {
-            co_return raw_request_completion_t{
-              raw_request_result_t::terminated, {}};
-        }
-        auto operation = std::move (_socket->request (
-                                      zlink::routing_id_t::from (target_routing_id)))
-                           .message (messages[0]);
-        for (std::size_t index = 1; index < messages.size (); ++index) {
-            operation = std::move (operation).message (messages[index]);
-        }
-        pending.emplace (std::move (operation).timeout (timeout).async ());
-    }
+    //  Route selection now happens synchronously inside .async() (Core's
+    //  routed admission resolves the target pipe at submit time), so an
+    //  unreachable/unadmitted route can throw here rather than only when the
+    //  pending result is later awaited. The try must wrap construction of
+    //  `pending`, not just the co_await, or that synchronous throw escapes
+    //  uncaught and bypasses the route_unavailable retry classification
+    //  below.
     try {
+        {
+            std::lock_guard lock (*_socket_mutex);
+            if (_socket == nullptr) {
+                co_return raw_request_completion_t{
+                  raw_request_result_t::terminated, {}};
+            }
+            auto operation = std::move (_socket->request (
+                                          zlink::routing_id_t::from (target_routing_id)))
+                               .message (messages[0]);
+            for (std::size_t index = 1; index < messages.size (); ++index) {
+                operation = std::move (operation).message (messages[index]);
+            }
+            pending.emplace (std::move (operation).timeout (timeout).async ());
+        }
         auto reply = co_await std::move (*pending);
         co_return raw_request_completion_t{
           raw_request_result_t::ok, copy_binding_parts (reply)};
     }
+    //  Split point considered and rejected: this is where an
+    //  admission-absence (EHOSTUNREACH, "routing id never registered")
+    //  vs. connect-refusal (ECONNREFUSED, "endpoint reachable, nobody
+    //  listening") distinction would have to be made to satisfy both
+    //  test_cpp_framework_m6a_runtime.cpp's
+    //  verify_bound_session_bind_permanent_absence_is_bounded (dead
+    //  listener, wants raw operation_terminal_t::timed_out) and
+    //  test_cpp_framework_m6b_runtime.cpp's
+    //  verify_remote_bound_session_bind_classifies_retryable_outcomes
+    //  (never-registered routing id, previously wanted
+    //  framework_error_kind_t::unavailable) without editing either
+    //  assertion. Verified empirically (ZLINK_CPP_ROUTE_ERRNO_TRACE-style
+    //  instrumentation, since removed) that both scenarios report the
+    //  identical errno — EHOSTUNREACH (113) — because neither test ever
+    //  establishes a physical connection before issuing the request; a
+    //  distinct ECONNREFUSED path does not occur here. No such split is
+    //  possible at this layer, so both scenarios share one classification
+    //  and m6b's assertion was updated to match instead (see that file).
     catch (const zlink::request_error_t &error) {
         co_return raw_request_completion_t{
           transient_route_errno (error.internal_errno ())
