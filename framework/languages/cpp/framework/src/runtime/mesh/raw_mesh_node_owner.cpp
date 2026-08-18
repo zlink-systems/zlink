@@ -1323,7 +1323,7 @@ task_t<bool> raw_mesh_node_owner_t::send_relocation_control (
       target_routing_id, protocol::encode_relocation_control (control));
 }
 
-task_t<std::optional<protocol::relocation_ready_t>>
+task_t<relocation_prepare_response_t>
 raw_mesh_node_owner_t::request_relocation_prepare (
   const std::vector<std::uint8_t> &target_routing_id,
   const protocol::relocation_prepare_t &prepare,
@@ -1335,7 +1335,7 @@ raw_mesh_node_owner_t::request_relocation_prepare (
         port = _port;
     }
     if (!port || timeout <= std::chrono::milliseconds::zero ())
-        co_return std::nullopt;
+        co_return relocation_prepare_response_t{};
     detail::backend::raw_message_t parts;
     parts.emplace_back (
       protocol::encode_relocation_control (prepare));
@@ -1343,18 +1343,49 @@ raw_mesh_node_owner_t::request_relocation_prepare (
     const auto completed = co_await pending;
     if (completed.result != detail::backend::raw_request_result_t::ok
         || completed.parts.size () != 1)
-        co_return std::nullopt;
-    std::optional<protocol::relocation_ready_t> result;
+        co_return relocation_prepare_response_t{};
+    // Exact-identity fencing (spec 15 §4.2 / spec 28): a reply whose
+    // identity fields do not match the prepare this call sent is a stale
+    // or wrong-attempt reply and must not resolve this call either way —
+    // neither as ready nor as an explicit failure.
+    const auto identity_matches =
+      [&prepare] (const auto &relocation,
+                  std::uint64_t target_attempt_generation,
+                  const auto &coordinator, const auto &target,
+                  const auto &object) {
+          return relocation == prepare.relocation
+                 && target_attempt_generation
+                      == prepare.target_attempt_generation
+                 && coordinator == prepare.coordinator
+                 && target == prepare.target && object == prepare.object;
+      };
+    relocation_prepare_response_t response;
     try {
         const auto control =
           protocol::decode_relocation_control (completed.parts.front ());
         if (const auto *ready =
-              std::get_if<protocol::relocation_ready_t> (&control))
-            result = *ready;
+              std::get_if<protocol::relocation_ready_t> (&control)) {
+            if (identity_matches (
+                  ready->relocation, ready->target_attempt_generation,
+                  ready->coordinator, ready->target, ready->object))
+                response.ready = *ready;
+        } else if (const auto *failed =
+                     std::get_if<protocol::relocation_failed_t> (&control)) {
+            // The bug this closes: previously only relocation_ready_t was
+            // ever extracted here — an explicit, identity-matched
+            // relocationFailed(53) reply fell through to the same "no
+            // result" the caller also observes on a genuine timeout,
+            // discarding both the fast, explicit rejection and its
+            // failure_code.
+            if (identity_matches (
+                  failed->relocation, failed->target_attempt_generation,
+                  failed->coordinator, failed->target, failed->object))
+                response.failed = *failed;
+        }
     }
     catch (const protocol::service_wire_error_t &) {
     }
-    co_return result;
+    co_return response;
 }
 
 bool raw_mesh_node_owner_t::reply_relocation_ready (

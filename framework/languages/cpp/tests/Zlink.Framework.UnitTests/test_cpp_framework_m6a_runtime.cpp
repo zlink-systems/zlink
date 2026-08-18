@@ -2118,6 +2118,196 @@ void verify_raw_owner_node_send_and_liveness ()
     second.close ();
 }
 
+protocol::relocation_prepare_t relocation_prepare_request (
+  const mesh::service_node_descriptor_t &source_descriptor,
+  const mesh::service_node_descriptor_t &target_descriptor)
+{
+    return protocol::relocation_prepare_t{
+      protocol::relocation_id_t{555, 777},
+      3,
+      protocol::relocation_coordinator_fence_t{
+        "coord-owner", 1, bytes ("coord-node"), 1, "store-v1"},
+      protocol::relocation_target_fence_t{
+        target_descriptor.node_routing_id,
+        target_descriptor.lifecycle_generation, "target-owner", 9},
+      protocol::relocation_role_t::source,
+      protocol::relocation_object_t{
+        protocol::relocation_object_kind_t::actor, "player", "actor-1", 4, 6},
+      source_descriptor.node_routing_id,
+      source_descriptor.lifecycle_generation,
+      1024, 1, 0xdeadbeefu, 0, 1};
+}
+
+// Spec 15/28 + node's own cross-language audit: an explicit, identity-
+// matched relocationFailed(53) reply must resolve request_relocation_prepare
+// promptly with its own outcome, not be silently dropped into the same "no
+// result" a genuine timeout produces. Before this fix, request_relocation_
+// prepare only ever extracted relocation_ready_t from the decoded reply —
+// a relocation_failed_t reply fell through untouched, discarding both the
+// fast explicit rejection and its wire failure_code.
+void verify_relocation_prepare_failed_reply_resolves_promptly_with_identity_fencing ()
+{
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{
+        descriptor ("relocation-fence-source")});
+    mesh::raw_mesh_node_owner_t target (
+      mesh::raw_mesh_node_options_t{
+        descriptor ("relocation-fence-target")});
+    source.start ();
+    target.start ();
+    const auto source_descriptor = source.topology ().local_descriptor ();
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    admit_pair (source, target, target_descriptor);
+
+    const auto prepare =
+      relocation_prepare_request (source_descriptor, target_descriptor);
+
+    mesh::relocation_prepare_response_t response;
+    std::atomic_bool source_settled{false};
+    const auto started = std::chrono::steady_clock::now ();
+    std::thread prepare_thread ([&] {
+        response = await_task (source.request_relocation_prepare (
+          target_descriptor.node_routing_id, prepare, 5s));
+        source_settled.store (true, std::memory_order_release);
+    });
+
+    std::optional<mesh::service_mailbox_claim_t> claim;
+    const auto receive_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!claim && std::chrono::steady_clock::now () < receive_deadline) {
+        claim = target.mailbox ().try_claim (
+          mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+        if (!claim) {
+            (void) await_task (target.pump_one (
+              mesh::service_liveness_registry_t::clock_t::now ()));
+            (void) await_task (source.pump_one (
+              mesh::service_liveness_registry_t::clock_t::now ()));
+        }
+    }
+    assert (claim && claim->records.size () == 1);
+    const auto &record = claim->records.front ();
+    const auto control =
+      protocol::decode_relocation_control (record.parts.front ());
+    const auto *decoded_prepare =
+      std::get_if<protocol::relocation_prepare_t> (&control);
+    assert (decoded_prepare && *decoded_prepare == prepare);
+
+    assert (target.reply_relocation_failed (
+      record,
+      protocol::relocation_failed_t{
+        prepare.relocation, prepare.target_attempt_generation,
+        prepare.coordinator, prepare.target, prepare.object,
+        protocol::relocation_role_t::target,
+        static_cast<std::uint32_t> (
+          protocol::framework_error_code::relocationDataLost)}));
+    assert (target.mailbox ().release (*claim));
+
+    const auto settle_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!source_settled.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < settle_deadline) {
+        (void) await_task (source.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
+        std::this_thread::sleep_for (1ms);
+    }
+    prepare_thread.join ();
+    const auto elapsed = std::chrono::steady_clock::now () - started;
+
+    assert (source_settled.load (std::memory_order_acquire));
+    assert (!response.ready);
+    assert (response.failed);
+    assert (response.failed->relocation == prepare.relocation);
+    assert (response.failed->target_attempt_generation
+            == prepare.target_attempt_generation);
+    assert (response.failed->coordinator == prepare.coordinator);
+    assert (response.failed->target == prepare.target);
+    assert (response.failed->object == prepare.object);
+    assert (response.failed->failure_code
+            == static_cast<std::uint32_t> (
+                 protocol::framework_error_code::relocationDataLost));
+    // Resolved by the explicit reply well inside the 5s request timeout —
+    // proves this is its own prompt outcome, not the same "no result" a
+    // timeout would also produce.
+    assert (elapsed < 2s);
+
+    source.close ();
+    target.close ();
+}
+
+// The same exact-identity fencing that already protects relocation_ready_t
+// must also protect relocation_failed_t: a reply whose identity does not
+// match the sent prepare (a stale or wrong-attempt reply) must resolve
+// neither ready nor failed.
+void verify_relocation_prepare_failed_reply_with_mismatched_identity_is_fenced ()
+{
+    mesh::raw_mesh_node_owner_t source (
+      mesh::raw_mesh_node_options_t{
+        descriptor ("relocation-mismatch-source")});
+    mesh::raw_mesh_node_owner_t target (
+      mesh::raw_mesh_node_options_t{
+        descriptor ("relocation-mismatch-target")});
+    source.start ();
+    target.start ();
+    const auto source_descriptor = source.topology ().local_descriptor ();
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    admit_pair (source, target, target_descriptor);
+
+    const auto prepare =
+      relocation_prepare_request (source_descriptor, target_descriptor);
+
+    mesh::relocation_prepare_response_t response;
+    std::atomic_bool source_settled{false};
+    std::thread prepare_thread ([&] {
+        response = await_task (source.request_relocation_prepare (
+          target_descriptor.node_routing_id, prepare, 300ms));
+        source_settled.store (true, std::memory_order_release);
+    });
+
+    std::optional<mesh::service_mailbox_claim_t> claim;
+    const auto receive_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!claim && std::chrono::steady_clock::now () < receive_deadline) {
+        claim = target.mailbox ().try_claim (
+          mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+        if (!claim) {
+            (void) await_task (target.pump_one (
+              mesh::service_liveness_registry_t::clock_t::now ()));
+            (void) await_task (source.pump_one (
+              mesh::service_liveness_registry_t::clock_t::now ()));
+        }
+    }
+    assert (claim && claim->records.size () == 1);
+    const auto &record = claim->records.front ();
+
+    // A different exact identity (target_attempt_generation) than the one
+    // this prepare sent — the framework's own "newest attempt wins /
+    // stale identity discarded" rule (spec 15 §4.2) applies here too.
+    auto mismatched = prepare;
+    ++mismatched.target_attempt_generation;
+    assert (target.reply_relocation_failed (
+      record,
+      protocol::relocation_failed_t{
+        mismatched.relocation, mismatched.target_attempt_generation,
+        mismatched.coordinator, mismatched.target, mismatched.object,
+        protocol::relocation_role_t::target,
+        static_cast<std::uint32_t> (
+          protocol::framework_error_code::relocationDataLost)}));
+    assert (target.mailbox ().release (*claim));
+
+    const auto settle_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!source_settled.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < settle_deadline) {
+        (void) await_task (source.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ()));
+        std::this_thread::sleep_for (1ms);
+    }
+    prepare_thread.join ();
+
+    assert (source_settled.load (std::memory_order_acquire));
+    assert (!response.ready);
+    assert (!response.failed);
+
+    source.close ();
+    target.close ();
+}
+
 } // namespace
 
 int main ()
@@ -2151,5 +2341,7 @@ int main ()
     verify_client_server_admits_before_monitor_drain ();
     verify_client_server_weighted_selection ();
     verify_raw_owner_node_send_and_liveness ();
+    verify_relocation_prepare_failed_reply_resolves_promptly_with_identity_fencing ();
+    verify_relocation_prepare_failed_reply_with_mismatched_identity_is_fenced ();
     return 0;
 }

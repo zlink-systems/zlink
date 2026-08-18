@@ -66,6 +66,63 @@ void trace_mesh_host (std::string_view stage, std::string_view detail)
         std::cerr << "zlink mesh-host stage=" << stage << " " << detail << '\n';
 }
 
+/* Full-vocabulary 1:1 decode of an explicit relocationFailed(53) wire
+ * failure_code into cpp's typed classification, so a source that receives
+ * one can act on the actual reason instead of the code being ignored.
+ * relocationDataLost(35) decodes to data_lost — the target's own encode
+ * side (complete_relocation_assembly / dispatch_user_spot_operations)
+ * reserves 35 for a verified checksum/assembly/digest/conflict integrity
+ * failure; every other wire code here maps to the kind that already
+ * carries that meaning elsewhere in the framework (e.g. requestFailed(17)
+ * -> internal_failure, the same target-side restore/factory/staging
+ * failure class). An unrecognized code is internal_failure, not silently
+ * dropped. */
+framework_error_kind_t map_relocation_failure_code (
+  std::uint32_t wire_code) noexcept
+{
+    switch (static_cast<protocol::framework_error_code> (wire_code)) {
+        case protocol::framework_error_code::relocationDataLost:
+            return framework_error_kind_t::data_lost;
+        case protocol::framework_error_code::requestRejected:
+            return framework_error_kind_t::rejected;
+        case protocol::framework_error_code::requestProtocolError:
+        case protocol::framework_error_code::payloadDecodeFailed:
+            return framework_error_kind_t::protocol_error;
+        case protocol::framework_error_code::workerQueueFull:
+            return framework_error_kind_t::capacity_exceeded;
+        case protocol::framework_error_code::workerTimedOut:
+            return framework_error_kind_t::deadline_exceeded;
+        case protocol::framework_error_code::actorTypeMismatch:
+        case protocol::framework_error_code::spotTypeMismatch:
+            return framework_error_kind_t::type_mismatch;
+        case protocol::framework_error_code::handlerNotFound:
+            return framework_error_kind_t::not_configured;
+        case protocol::framework_error_code::routeNotConnected:
+        case protocol::framework_error_code::spotMoving:
+            return framework_error_kind_t::unavailable;
+        case protocol::framework_error_code::actorRouteNotFound:
+        case protocol::framework_error_code::spotRouteNotFound:
+        case protocol::framework_error_code::requestTargetNotFound:
+        case protocol::framework_error_code::routeHandlerNotFound:
+        case protocol::framework_error_code::actorDispatchHandlerNotFound:
+            return framework_error_kind_t::not_found;
+        case protocol::framework_error_code::actorAlreadyExists:
+        case protocol::framework_error_code::actorCreateRejected:
+            return framework_error_kind_t::already_exists;
+        case protocol::framework_error_code::actorSessionNotBound:
+        case protocol::framework_error_code::actorLocationStale:
+        case protocol::framework_error_code::spotGenerationStale:
+            return framework_error_kind_t::invalid_operation;
+        case protocol::framework_error_code::actorCreateFailed:
+        case protocol::framework_error_code::spotCreateFailed:
+        case protocol::framework_error_code::requestFailed:
+        case protocol::framework_error_code::workerFailed:
+        case protocol::framework_error_code::none:
+        default:
+            return framework_error_kind_t::internal_failure;
+    }
+}
+
 const char *pump_result_name (mesh::raw_mesh_pump_result_t result) noexcept
 {
     switch (result) {
@@ -1949,25 +2006,53 @@ task_t<bool> public_host_runtime_t::send_instance_spot_activation_remote (
       std::move (application_payload));
 }
 
+// Test-visible forwarder for the anonymous-namespace classifier above (kept
+// out of the class API surface — this is not part of the framework's public
+// contract, only a seam so the cross-language failure-code mapping can be
+// pinned directly without standing up a full relocation round trip).
+framework_error_kind_t classify_relocation_failure_code (
+  std::uint32_t wire_code) noexcept
+{
+    return map_relocation_failure_code (wire_code);
+}
+
 task_t<bool> public_host_runtime_t::prepare_relocation_remote (
   const zlink::routing_id_t &target_node,
   protocol::relocation_prepare_t prepare,
-  std::chrono::milliseconds timeout)
+  std::chrono::milliseconds timeout,
+  framework_error_kind_t *failure_kind)
 {
     if (timeout <= std::chrono::milliseconds::zero ())
         co_return false;
-    const auto ready =
+    const auto response =
       co_await _transport->request_relocation_prepare (
         target_node.to_bytes (), prepare, timeout);
-    if (!ready)
+    if (response.failed) {
+        // Exact-identity fencing already ran in request_relocation_prepare
+        // — this is not a timeout, it is the target's own explicit,
+        // matching-identity rejection. Map and surface its failure_code
+        // instead of letting it collapse into the same "no result" a
+        // timeout produces.
+        const auto kind =
+          map_relocation_failure_code (response.failed->failure_code);
+        trace_mesh_host (
+          "relocation-prepare-failed",
+          "wire_failure_code=" + std::to_string (response.failed->failure_code)
+            + " kind=" + std::to_string (static_cast<int> (kind)));
+        if (failure_kind)
+            *failure_kind = kind;
         co_return false;
-    if (ready->relocation != prepare.relocation
-        || ready->target_attempt_generation
+    }
+    if (!response.ready)
+        co_return false;
+    const auto &ready = *response.ready;
+    if (ready.relocation != prepare.relocation
+        || ready.target_attempt_generation
              != prepare.target_attempt_generation
-        || ready->coordinator != prepare.coordinator
-        || ready->target != prepare.target
-        || ready->object != prepare.object
-        || ready->sender_role != protocol::relocation_role_t::target)
+        || ready.coordinator != prepare.coordinator
+        || ready.target != prepare.target
+        || ready.object != prepare.object
+        || ready.sender_role != protocol::relocation_role_t::target)
         co_return false;
     co_return true;
 }
@@ -3386,7 +3471,19 @@ task_t<void> public_host_runtime_t::retry_bound_session_replacements ()
 void public_host_runtime_t::complete_relocation_assembly (
   const relocation_attempt_key_t &key, pending_relocation_assembly_t pending)
 {
-    const auto reply_failure = [&] {
+    // relocationDataLost(35) is reserved for a verified checksum/assembly/
+    // digest/conflict integrity failure — the assembled payload itself, or
+    // its identity against the negotiated Prepare, is provably wrong.
+    // A restore/factory/staging failure below (target queue registration,
+    // the factory/restore path throwing, a retried restore still failing,
+    // or a duplicate attempt-key conflict) is not a payload integrity
+    // failure and must not encode 35; it maps to requestFailed(17), same
+    // as maintenance_runtime.cpp's aggregate path already does for the
+    // equivalent restore_failed case (relocation_terminal_t::blocked, not
+    // data_lost).
+    const auto reply_failure = [&] (
+      protocol::framework_error_code code =
+        protocol::framework_error_code::relocationDataLost) {
         (void) _transport->reply_relocation_failed (
           pending.request,
           protocol::relocation_failed_t{
@@ -3396,8 +3493,7 @@ void public_host_runtime_t::complete_relocation_assembly (
             pending.prepare.target,
             pending.prepare.object,
             protocol::relocation_role_t::target,
-            static_cast<std::uint32_t> (
-              protocol::framework_error_code::relocationDataLost)});
+            static_cast<std::uint32_t> (code)});
     };
     auto payload = pending.assembly.take_payload ();
     std::vector<stateful::frozen_object_state_t> frozen;
@@ -3543,7 +3639,10 @@ void public_host_runtime_t::complete_relocation_assembly (
             catch (...) {
             }
         }
-        reply_failure ();
+        // Target relocation-wire registration failed (e.g. an existing
+        // registration for this object) — a staging conflict, not a
+        // payload integrity failure.
+        reply_failure (protocol::framework_error_code::requestFailed);
         return;
     }
     stateful::stateful_error_t restored = stateful::stateful_error_t::conflict;
@@ -3569,20 +3668,26 @@ void public_host_runtime_t::complete_relocation_assembly (
             restore_once ();
         }
     } catch (...) {
+        // The factory/restore path threw — an internal restore failure,
+        // not a verified payload integrity failure.
         for (std::size_t index = 0; index != registered_count; ++index)
             (void) _relocation_wire->unregister_target (
               pending.prepare.relocation,
               pending.prepare.target_attempt_generation, wire_objects[index]);
-        reply_failure ();
+        reply_failure (protocol::framework_error_code::requestFailed);
         return;
     }
     if (restored != stateful::stateful_error_t::none
         && restored != stateful::stateful_error_t::already_exists) {
+        // Same class as maintenance_runtime.cpp's aggregate restore-failed
+        // path (relocation_terminal_t::blocked, not data_lost): the retried
+        // restore is still rejected (conflict/type_mismatch/generation_stale
+        // etc.) — an internal restore failure, not a payload integrity one.
         for (std::size_t index = 0; index != registered_count; ++index)
             (void) _relocation_wire->unregister_target (
               pending.prepare.relocation,
               pending.prepare.target_attempt_generation, wire_objects[index]);
-        reply_failure ();
+        reply_failure (protocol::framework_error_code::requestFailed);
         return;
     }
 
@@ -3602,7 +3707,9 @@ void public_host_runtime_t::complete_relocation_assembly (
     {
         std::lock_guard lock (_mutex);
         if (!_relocation_target_attempts.emplace (key, std::move (attempt)).second) {
-            reply_failure ();
+            // A duplicate attempt-key registration is a bookkeeping
+            // conflict, not a payload integrity failure.
+            reply_failure (protocol::framework_error_code::requestFailed);
             return;
         }
     }

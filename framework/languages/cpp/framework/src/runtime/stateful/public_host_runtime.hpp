@@ -275,6 +275,13 @@ bound_session_bind_admission_t classify_bound_session_bind_admission (
   const std::optional<route_fence_t> &authoritative,
   bool local_actor_matches) noexcept;
 
+// Full-vocabulary 1:1 classification of an explicit relocationFailed(53)
+// wire failure_code (see public_host_runtime.cpp for the mapping table).
+// Not part of the class API — exposed only so the cross-language
+// failure-code mapping can be pinned directly by a test.
+framework_error_kind_t classify_relocation_failure_code (
+  std::uint32_t wire_code) noexcept;
+
 struct actor_join_completion_t
 {
     join_admission_t join_result = join_admission_t::rejected;
@@ -802,10 +809,17 @@ class public_host_runtime_t :
       protocol::instance_spot_activation_header_t request,
       std::optional<std::vector<std::uint8_t>> metadata,
       protocol::application_payload_t application_payload);
+    // failure_kind, when non-null, is set only for an exact-identity-fenced
+    // explicit relocationFailed(53) reply (mapped from its wire failure_code
+    // via the framework's typed classification) — left untouched for a
+    // timeout, transport failure, or malformed/mismatched reply, so a
+    // caller that wants to distinguish "target explicitly rejected this"
+    // from "no usable reply arrived" can.
     task_t<bool> prepare_relocation_remote (
       const zlink::routing_id_t &target_node,
       protocol::relocation_prepare_t prepare,
-      std::chrono::milliseconds timeout);
+      std::chrono::milliseconds timeout,
+      framework_error_kind_t *failure_kind = nullptr);
     task_t<bool> cutover_relocation_remote (
       const zlink::routing_id_t &target_node,
       protocol::relocation_cutover_t cutover);

@@ -6365,6 +6365,74 @@ void verify_relocation_id_generation_retries_collisions ()
     assert (next == candidates.size ());
 }
 
+// Cross-language failure-code alignment: relocationDataLost(35) is
+// reserved for a verified checksum/assembly/digest/conflict integrity
+// failure and must classify distinctly from requestFailed(17), which the
+// encode side now uses for restore/factory/staging internal failures
+// (complete_relocation_assembly's register_relocation_target_queue
+// conflict, factory/restore exception, retried-restore-still-failing, and
+// duplicate attempt-key branches — public_host_runtime.cpp). Also pins
+// that a shutdown-shaped code (requestFailed) never classifies as
+// data_lost, and that an unrecognized code falls back to internal_failure
+// rather than being silently ignored.
+void verify_relocation_failure_code_classification_is_distinct ()
+{
+    assert (host::classify_relocation_failure_code (
+              static_cast<std::uint32_t> (
+                protocol::framework_error_code::relocationDataLost))
+            == zlink::framework::framework_error_kind_t::data_lost);
+    assert (host::classify_relocation_failure_code (
+              static_cast<std::uint32_t> (
+                protocol::framework_error_code::requestFailed))
+            == zlink::framework::framework_error_kind_t::internal_failure);
+    assert (host::classify_relocation_failure_code (
+              static_cast<std::uint32_t> (
+                protocol::framework_error_code::relocationDataLost))
+            != host::classify_relocation_failure_code (
+                 static_cast<std::uint32_t> (
+                   protocol::framework_error_code::requestFailed)));
+    // The rest of the reference table (spec 15 rows), pinned 1:1.
+    assert (host::classify_relocation_failure_code (
+              static_cast<std::uint32_t> (
+                protocol::framework_error_code::requestRejected))
+            == zlink::framework::framework_error_kind_t::rejected);
+    assert (host::classify_relocation_failure_code (
+              static_cast<std::uint32_t> (
+                protocol::framework_error_code::requestProtocolError))
+            == zlink::framework::framework_error_kind_t::protocol_error);
+    assert (host::classify_relocation_failure_code (
+              static_cast<std::uint32_t> (
+                protocol::framework_error_code::workerQueueFull))
+            == zlink::framework::framework_error_kind_t::capacity_exceeded);
+    assert (host::classify_relocation_failure_code (
+              static_cast<std::uint32_t> (
+                protocol::framework_error_code::workerTimedOut))
+            == zlink::framework::framework_error_kind_t::deadline_exceeded);
+    assert (host::classify_relocation_failure_code (
+              static_cast<std::uint32_t> (
+                protocol::framework_error_code::actorTypeMismatch))
+            == zlink::framework::framework_error_kind_t::type_mismatch);
+    assert (host::classify_relocation_failure_code (
+              static_cast<std::uint32_t> (
+                protocol::framework_error_code::spotTypeMismatch))
+            == zlink::framework::framework_error_kind_t::type_mismatch);
+    assert (host::classify_relocation_failure_code (
+              static_cast<std::uint32_t> (
+                protocol::framework_error_code::handlerNotFound))
+            == zlink::framework::framework_error_kind_t::not_configured);
+    assert (host::classify_relocation_failure_code (
+              static_cast<std::uint32_t> (
+                protocol::framework_error_code::routeNotConnected))
+            == zlink::framework::framework_error_kind_t::unavailable);
+    assert (host::classify_relocation_failure_code (
+              static_cast<std::uint32_t> (
+                protocol::framework_error_code::requestTargetNotFound))
+            == zlink::framework::framework_error_kind_t::not_found);
+    // An unrecognized wire code is internal_failure, not ignored/dropped.
+    assert (host::classify_relocation_failure_code (999999u)
+            == zlink::framework::framework_error_kind_t::internal_failure);
+}
+
 } // namespace
 
 int main ()
@@ -6422,5 +6490,6 @@ int main ()
     verify_public_host_dispatches_durable_reply_relay ();
     verify_remote_user_spot_create_close_terminal_once ();
     verify_relocation_id_generation_retries_collisions ();
+    verify_relocation_failure_code_classification_is_distinct ();
     return 0;
 }

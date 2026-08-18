@@ -116,6 +116,24 @@ class raw_mesh_connection_candidates_t
     std::uint64_t _next_ready_sequence = 1;
 };
 
+/* Outcome of an exact-identity-fenced relocationPrepare(40) round trip
+ * (spec 15 §4.2 / spec 28). Exactly one of ready/failed is set for a usable
+ * reply whose identity fields (relocation, target_attempt_generation,
+ * coordinator, target, object) match the sent prepare; both are unset for
+ * no reply, a transport failure, a malformed decode, or a reply whose
+ * identity does not match — a stale/wrong-attempt reply must not resolve
+ * this call (spec 15 §4.2 "이전 identity의 늦은 chunk와 Restore는 조립에
+ * 연결하지 않고 폐기한다"). Both unset is deliberately the same shape a
+ * caller already treats as "no result" so this stays a source-compatible
+ * refinement, not a new failure mode to handle — the point is that an
+ * identity-matched relocationFailed(53) is no longer silently collapsed
+ * into that same "no result" bucket the way a genuine timeout is. */
+struct relocation_prepare_response_t
+{
+    std::optional<protocol::relocation_ready_t> ready;
+    std::optional<protocol::relocation_failed_t> failed;
+};
+
 class raw_mesh_node_owner_t
 {
   public:
@@ -322,7 +340,7 @@ class raw_mesh_node_owner_t
     task_t<bool> send_relocation_control (
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::relocation_control_t &control);
-    task_t<std::optional<protocol::relocation_ready_t>>
+    task_t<relocation_prepare_response_t>
     request_relocation_prepare (
       const std::vector<std::uint8_t> &target_routing_id,
       const protocol::relocation_prepare_t &prepare,
