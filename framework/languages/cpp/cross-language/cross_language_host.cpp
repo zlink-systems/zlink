@@ -86,6 +86,33 @@ struct test_host_published_event_t
     std::string value;
 };
 
+/* Cross-language spot route wire scenario DTOs: (a) echo request/reply,
+ * (b) a packet no host registers (framework NOT_FOUND), (c) a request whose
+ * handler fails with a typed application error kind. */
+struct test_host_spot_route_request_t
+{
+    static constexpr const char *packet_name = "TestHostSpotRouteRequest";
+    std::string value;
+};
+
+struct test_host_spot_route_reply_t
+{
+    static constexpr const char *packet_name = "TestHostSpotRouteReply";
+    std::string value;
+};
+
+struct test_host_spot_route_fail_request_t
+{
+    static constexpr const char *packet_name = "TestHostSpotRouteFailRequest";
+    std::string value;
+};
+
+struct test_host_spot_route_missing_request_t
+{
+    static constexpr const char *packet_name = "TestHostSpotRouteMissingRequest";
+    std::string value;
+};
+
 inline void to_json (nlohmann::json &json, const test_host_profile_request_t &value)
 {
     json = nlohmann::json{{"value", value.value}};
@@ -130,6 +157,86 @@ inline void to_json (nlohmann::json &json, const test_host_published_event_t &va
 inline void from_json (const nlohmann::json &json, test_host_published_event_t &value)
 {
     value.value = read_value_field (json);
+}
+inline void to_json (nlohmann::json &json, const test_host_spot_route_request_t &value)
+{
+    json = nlohmann::json{{"value", value.value}};
+}
+inline void from_json (const nlohmann::json &json, test_host_spot_route_request_t &value)
+{
+    value.value = read_value_field (json);
+}
+inline void to_json (nlohmann::json &json, const test_host_spot_route_reply_t &value)
+{
+    json = nlohmann::json{{"value", value.value}};
+}
+inline void from_json (const nlohmann::json &json, test_host_spot_route_reply_t &value)
+{
+    value.value = read_value_field (json);
+}
+inline void to_json (nlohmann::json &json, const test_host_spot_route_fail_request_t &value)
+{
+    json = nlohmann::json{{"value", value.value}};
+}
+inline void from_json (const nlohmann::json &json, test_host_spot_route_fail_request_t &value)
+{
+    value.value = read_value_field (json);
+}
+inline void to_json (nlohmann::json &json, const test_host_spot_route_missing_request_t &value)
+{
+    json = nlohmann::json{{"value", value.value}};
+}
+inline void from_json (const nlohmann::json &json, test_host_spot_route_missing_request_t &value)
+{
+    value.value = read_value_field (json);
+}
+
+/* Snake_case error-code table (mirrors channel_reply_writer.cpp
+ * error_code_name) so the recorded client markers use the wire names. */
+std::string error_kind_wire_name (fw::framework_error_kind_t kind)
+{
+    switch (kind) {
+        case fw::framework_error_kind_t::not_found:
+            return "not_found";
+        case fw::framework_error_kind_t::already_exists:
+            return "already_exists";
+        case fw::framework_error_kind_t::type_mismatch:
+            return "type_mismatch";
+        case fw::framework_error_kind_t::not_configured:
+            return "not_configured";
+        case fw::framework_error_kind_t::rejected:
+            return "rejected";
+        case fw::framework_error_kind_t::unavailable:
+            return "unavailable";
+        case fw::framework_error_kind_t::capacity_exceeded:
+            return "capacity_exceeded";
+        case fw::framework_error_kind_t::deadline_exceeded:
+            return "deadline_exceeded";
+        case fw::framework_error_kind_t::shutting_down:
+            return "shutting_down";
+        case fw::framework_error_kind_t::protocol_error:
+            return "protocol_error";
+        case fw::framework_error_kind_t::invalid_operation:
+            return "invalid_operation";
+        case fw::framework_error_kind_t::data_lost:
+            return "data_lost";
+        case fw::framework_error_kind_t::internal_failure:
+            return "internal_failure";
+    }
+    return "internal_failure";
+}
+
+std::string error_origin_wire_name (const fw::framework_exception_t &error)
+{
+    switch (fw::detail::error_origin (error)) {
+        case fw::detail::error_origin_t::framework:
+            return "framework";
+        case fw::detail::error_origin_t::application:
+            return "application";
+        case fw::detail::error_origin_t::unspecified:
+            break;
+    }
+    return "unspecified";
 }
 
 class event_sink_t
@@ -370,6 +477,135 @@ class published_event_handler_t
     event_sink_t &_sink;
 };
 
+/* Spot route wire host handlers: (a) echo with the host language tag and
+ * (c) an application failure with a typed framework kind. (b) needs no
+ * handler — the missing packet is the scenario. */
+class spot_route_request_handler_t
+{
+  public:
+    using dependency_types = fw::dependency_list_t<event_sink_t>;
+    using request_type = test_host_spot_route_request_t;
+    using reply_type = test_host_spot_route_reply_t;
+
+    explicit spot_route_request_handler_t (event_sink_t &sink) : _sink (sink) {}
+
+    test_host_spot_route_reply_t handle (const test_host_spot_route_request_t &request,
+                                         const fw::route_message_context_t &context)
+    {
+        _sink.append ("spot-route-server|" + request.value + "|"
+                      + context.source_node_rid.to_string ());
+        return test_host_spot_route_reply_t{request.value + "|cpp"};
+    }
+
+  private:
+    event_sink_t &_sink;
+};
+
+class spot_route_fail_handler_t
+{
+  public:
+    using request_type = test_host_spot_route_fail_request_t;
+    using reply_type = test_host_spot_route_reply_t;
+
+    test_host_spot_route_reply_t handle (const test_host_spot_route_fail_request_t &request,
+                                         const fw::route_message_context_t &context)
+    {
+        (void) request;
+        (void) context;
+        /* Application-origin failure with a typed kind: the wire must
+         * preserve "rejected" and must NOT carry zlink.origin=framework. */
+        throw fw::framework_exception_t (fw::framework_error_kind_t::rejected,
+                                         "application spot route failure");
+    }
+};
+
+/* Spot route wire client: runs the common (a)/(b)/(c) scenario against a peer
+ * host and records the observed wire kind/origin markers for the runner. */
+class spot_route_client_service_t final : public fw::hosted_service_t
+{
+  public:
+    spot_route_client_service_t (std::string channel, std::string peer_rid, std::string value) :
+        _channel (std::move (channel)),
+        _peer_rid (std::move (peer_rid)),
+        _value (std::move (value))
+    {
+    }
+
+    void start (fw::service_provider_t &services) override
+    {
+        auto &routes = services.get_required<fw::route_client_t> ();
+        auto &sink = services.get_required<event_sink_t> ();
+        const auto target = zlink::routing_id_t::from (_peer_rid);
+
+        /* (a) round trip; the peer handshake is asynchronous, so transient
+         * unavailability is retried until the deadline. */
+        const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (15);
+        while (true) {
+            auto reply = routes
+                           .request_to_node (_channel, target,
+                                             test_host_spot_route_request_t{_value})
+                           .timeout (std::chrono::seconds (5))
+                           .submit<test_host_spot_route_reply_t> ()
+                           .result ();
+            if (reply) {
+                sink.append ("spot-route-reply|" + reply.value ().value);
+                break;
+            }
+            const auto kind = reply.error_kind ();
+            /* not_found before the first success is the local "target peer is
+             * not in the route table yet" state while the handshake settles;
+             * (b) below observes the remote handler-missing not_found only
+             * after (a) proved the link. */
+            if ((kind == fw::framework_error_kind_t::unavailable
+                 || kind == fw::framework_error_kind_t::deadline_exceeded
+                 || kind == fw::framework_error_kind_t::not_found)
+                && std::chrono::steady_clock::now () < deadline) {
+                std::this_thread::sleep_for (std::chrono::milliseconds (50));
+                continue;
+            }
+            sink.append (std::string ("spot-route-error|") + error_kind_wire_name (kind) + "|"
+                         + (reply.error () ? reply.error ()->what () : "request failed"));
+            return;
+        }
+
+        /* (b) framework error: no host registers this packet. */
+        record_failure (sink, routes, target, "spot-route-missing",
+                        test_host_spot_route_missing_request_t{_value});
+        /* (c) application handler failure with a typed kind. */
+        record_failure (sink, routes, target, "spot-route-app-error",
+                        test_host_spot_route_fail_request_t{_value});
+        write_ready ();
+    }
+
+    void stop () noexcept override {}
+
+  private:
+    template <typename TRequest>
+    void record_failure (event_sink_t &sink,
+                         fw::route_client_t &routes,
+                         const zlink::routing_id_t &target,
+                         const std::string &marker,
+                         TRequest request)
+    {
+        auto reply = routes.request_to_node (_channel, target, std::move (request))
+                       .timeout (std::chrono::seconds (5))
+                       .template submit<test_host_spot_route_reply_t> ()
+                       .result ();
+        if (reply) {
+            sink.append (marker + "|unexpected-success");
+            return;
+        }
+        sink.append (marker + "|kind=" + error_kind_wire_name (reply.error_kind ())
+                     + "|origin="
+                     + (reply.error () ? error_origin_wire_name (*reply.error ())
+                                       : std::string ("unspecified")));
+    }
+
+    std::string _channel;
+    std::string _peer_rid;
+    std::string _value;
+};
+
 /* STREAM raw session: records the payload and replies with the request packet
  * name, as required by the request/reply wire contract. */
 class raw_stream_session_t final : public fw::packet_stream_session_t
@@ -602,6 +838,40 @@ int main (int argc, char **argv)
                   .register_session<raw_stream_session_t> ();
                 return;
             }
+            if (mode == "spot-route-server") {
+                const auto channel = require ("channel-name");
+                auto mesh = options.add_route_mesh (channel);
+                /* Route-only mesh: no spot hosting, so no object role and no
+                 * Location Store requirement. */
+                mesh.set_object_role (fw::object_role_t::none);
+                mesh.listen (require ("server-endpoint"));
+                mesh.set_routing_id (
+                  zlink::routing_id_t::from (option ("node-rid", "cpp-spot-route")));
+                mesh.channel_name (channel).server ();
+                mesh.add_route_request_handler<spot_route_request_handler_t,
+                                               test_host_spot_route_request_t,
+                                               test_host_spot_route_reply_t> (
+                  test_host_spot_route_request_t::packet_name);
+                mesh.add_route_request_handler<spot_route_fail_handler_t,
+                                               test_host_spot_route_fail_request_t,
+                                               test_host_spot_route_reply_t> (
+                  test_host_spot_route_fail_request_t::packet_name);
+                return;
+            }
+            if (mode == "spot-route-client") {
+                const auto channel = require ("channel-name");
+                auto mesh = options.add_route_mesh (channel);
+                mesh.set_object_role (fw::object_role_t::none);
+                mesh.listen (require ("bind-endpoint"));
+                mesh.set_routing_id (
+                  zlink::routing_id_t::from (option ("node-rid", "cpp-spot-route-client")));
+                /* RegistryMessaging e2e convention: every route mesh member
+                 * exposes the channel server role, and peers connect by
+                 * endpoint; the routing id is learned from admission. */
+                mesh.channel_name (channel).server ();
+                mesh.peer_connections ().connect (require ("server-endpoint"));
+                return;
+            }
             if (mode == "channel-subscriber") {
                 auto channel = options.add_fanout_channel (require ("channel-name"));
                 channel.connect (require ("publisher-endpoint"));
@@ -622,8 +892,13 @@ int main (int argc, char **argv)
             app.add_hosted_service (std::make_unique<fanout_publish_service_t> (
               require ("channel-name"), require ("topic"), option ("value", "cpp-publish")));
         }
+        if (mode == "spot-route-client") {
+            app.add_hosted_service (std::make_unique<spot_route_client_service_t> (
+              require ("channel-name"), require ("peer-rid"),
+              option ("value", "cpp-spot-route")));
+        }
         if (mode == "channel-server" || mode == "channel-subscriber"
-            || mode == "stream-server") {
+            || mode == "stream-server" || mode == "spot-route-server") {
             write_ready ();
         }
         return app.run (argc, argv);

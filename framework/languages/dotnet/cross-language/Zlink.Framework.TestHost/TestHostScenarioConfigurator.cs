@@ -30,6 +30,9 @@ internal static class TestHostScenarioConfigurator
             case "route-client":
                 ConfigureRouteClient(services, options);
                 return;
+            case "spot-route-client":
+                ConfigureSpotRouteClient(services, options);
+                return;
             case "spot-node":
                 ConfigureSpotNode(services, options);
                 return;
@@ -141,7 +144,40 @@ internal static class TestHostScenarioConfigurator
                 .SetRoutingId(RoutingId.From("dotnet-route"));
             mesh.Channel(meshName).Client();
             mesh.AddRouteRequestHandler<TestHostRouteRequestHandler, TestHostRouteRequest, TestHostRouteReply>();
+            // Cross-language spot route wire scenarios (a)/(c): echo handler and
+            // an application handler that fails with a typed framework kind.
+            mesh.AddRouteRequestHandler<TestHostSpotRouteRequestHandler, TestHostSpotRouteRequest, TestHostSpotRouteReply>();
+            mesh.AddRouteRequestHandler<TestHostSpotRouteFailRequestHandler, TestHostSpotRouteFailRequest, TestHostSpotRouteReply>();
         });
+    }
+
+    private static void ConfigureSpotRouteClient(IServiceCollection services, TestHostOptions options)
+    {
+        services.AddSingleton(new TestHostEventSink(options.EventFilePath));
+        services.AddZLinkFramework(framework =>
+        {
+            var meshName = options.ChannelName
+                           ?? throw new InvalidOperationException(
+                               "Spot route client mode requires --channel-name.");
+            var mesh = framework.AddRouteMesh(meshName)
+                .Listen(0)
+                .SetRoutingId(RoutingId.From("dotnet-spot-route-client"));
+            mesh.Channel(meshName).Client();
+            mesh.PeerConnections.Connect(
+                RoutingId.From(options.PeerRid
+                               ?? throw new InvalidOperationException(
+                                   "Spot route client mode requires --peer-rid.")),
+                options.ServerEndpoint
+                ?? throw new InvalidOperationException(
+                    "Spot route client mode requires --server-endpoint."));
+        });
+        services.AddHostedService(provider =>
+            new SpotRouteClientScenarioHostedService(
+                provider.GetRequiredService<IZLinkRouteClient>(),
+                provider.GetRequiredService<TestHostEventSink>(),
+                options.ChannelName!,
+                options.PeerRid!,
+                options.PublishValue ?? "dotnet-spot-route"));
     }
 
     private static void ConfigureRouteClient(IServiceCollection services, TestHostOptions options)

@@ -18,7 +18,7 @@ const { ZLinkRedisLocationStore } = require('../packages/framework-locations-red
 const repoRoot = path.resolve(__dirname, '../../../..');
 const dotnetTestHostProject = path.join(
   repoRoot,
-  'framework/languages/dotnet/testapps/Zlink.Framework.TestHost/Zlink.Framework.TestHost.csproj'
+  'framework/languages/dotnet/cross-language/Zlink.Framework.TestHost/Zlink.Framework.TestHost.csproj'
 );
 const dotnetRedisTestsProject = path.join(
   repoRoot,
@@ -27,19 +27,31 @@ const dotnetRedisTestsProject = path.join(
 
 async function main() {
   console.log(await crossLanguageManifest());
+  /* ZLINK_NODE_CROSS_STAGE=<substring> runs only the stages whose label
+   * contains the substring (for stage-scoped debugging and CI sharding). */
+  const stageFilter = process.env.ZLINK_NODE_CROSS_STAGE ?? '';
+  const stages = [
+    ['Node client -> dotnet channel server', nodeClientToDotnetChannelServer],
+    ['Node publisher -> dotnet fanout subscriber', nodePublisherToDotnetFanoutSubscriber],
+    ['dotnet publisher -> Node fanout subscriber', dotnetPublisherToNodeFanoutSubscriber],
+    ['dotnet client -> Node channel server', dotnetClientToNodeChannelServer],
+    ['Node route client -> dotnet route server', nodeRouteClientToDotnetRouteServer],
+    ['dotnet route client -> Node route server', dotnetRouteClientToNodeRouteServer],
+    ['Node spot-route client -> dotnet spot-route host', nodeSpotRouteClientToDotnetHost],
+    ['dotnet spot-route client -> Node spot-route host', dotnetSpotRouteClientToNodeHost],
+    ['Browser TypeScript connector -> dotnet stream server', nodeConnectorToDotnetStreamServer],
+    ['dotnet connector -> Node stream server', dotnetConnectorToNodeStreamServer],
+    ['dotnet stream drain -> Browser TypeScript connector', nodeConnectorObservesDotnetSessionClosing],
+    ['Node stream drain -> dotnet connector', dotnetConnectorObservesNodeSessionClosing],
+    ['Node/dotnet Redis rows', nodeDotnetRedisLocationRows]
+  ];
   const results = [];
   await runInTempDir(async (tempDir) => {
-    results.push(...await runStage('Node client -> dotnet channel server', () => nodeClientToDotnetChannelServer(tempDir)));
-    results.push(await runStage('Node publisher -> dotnet fanout subscriber', () => nodePublisherToDotnetFanoutSubscriber(tempDir)));
-    results.push(await runStage('dotnet publisher -> Node fanout subscriber', () => dotnetPublisherToNodeFanoutSubscriber(tempDir)));
-    results.push(await runStage('dotnet client -> Node channel server', () => dotnetClientToNodeChannelServer(tempDir)));
-    results.push(await runStage('Node route client -> dotnet route server', () => nodeRouteClientToDotnetRouteServer(tempDir)));
-    results.push(await runStage('dotnet route client -> Node route server', () => dotnetRouteClientToNodeRouteServer(tempDir)));
-    results.push(await runStage('Browser TypeScript connector -> dotnet stream server', () => nodeConnectorToDotnetStreamServer(tempDir)));
-    results.push(await runStage('dotnet connector -> Node stream server', () => dotnetConnectorToNodeStreamServer(tempDir)));
-    results.push(await runStage('dotnet stream drain -> Browser TypeScript connector', () => nodeConnectorObservesDotnetSessionClosing(tempDir)));
-    results.push(await runStage('Node stream drain -> dotnet connector', () => dotnetConnectorObservesNodeSessionClosing(tempDir)));
-    results.push(...await runStage('Node/dotnet Redis rows', () => nodeDotnetRedisLocationRows(tempDir)));
+    for (const [label, stage] of stages) {
+      if (stageFilter && !label.includes(stageFilter)) continue;
+      const outcome = await runStage(label, () => stage(tempDir));
+      results.push(...(Array.isArray(outcome) ? outcome : [outcome]));
+    }
   });
 
   for (const result of results) {
@@ -60,8 +72,8 @@ async function crossLanguageManifest() {
     `node-framework=${nodeFrameworkPackage.version}`,
     `node-binding=${nodeBindingPackage.version}`,
     `dotnet-framework=${dotnetVersion}`,
-    'topology=direct-channel,fanout,route-mesh,stream,redis-store',
-    'payload=TestHostProfileRequest,TestHostPublishedEvent,TestHostRouteRequest,RawPing',
+    'topology=direct-channel,fanout,route-mesh,spot-route,stream,redis-store',
+    'payload=TestHostProfileRequest,TestHostPublishedEvent,TestHostRouteRequest,TestHostSpotRouteRequest,RawPing',
     'codec=typed-json,stream-json,opaque-store-golden',
     'store-key=per-run-zlink:cross:node:<pid>:<timestamp>'
   ].join(' ');
@@ -445,6 +457,169 @@ async function dotnetRouteClientToNodeRouteServer(tempDir) {
     await host?.stop();
     await app?.close();
   }
+}
+
+/*
+ * Common cross-language spot route wire scenario, Node as the client:
+ * (a) request/reply round trip over the shared JSON envelope,
+ * (b) framework error (no handler registered) — the snake_case kind must
+ *     survive the boundary and the zlink.origin=framework marker must be
+ *     visible to the Node decoder,
+ * (c) application handler failure — typed kind preserved, marker absent.
+ */
+async function nodeSpotRouteClientToDotnetHost(tempDir) {
+  const port = await reservePort();
+  const endpoint = `tcp://127.0.0.1:${port}`;
+  const eventFile = path.join(tempDir, 'node-spotroute-dotnet.events');
+  class TestHostSpotRouteRequest {
+    constructor(value) { this.value = value; }
+  }
+  class TestHostSpotRouteMissingRequest {
+    constructor(value) { this.value = value; }
+  }
+  class TestHostSpotRouteFailRequest {
+    constructor(value) { this.value = value; }
+  }
+  class SpotRouteClientModule {}
+  Module({
+    imports: [nestjs.ZLinkModule.forRootFactory({
+      useFactory: () => {
+        const builder = nestjs.zlinkFramework();
+        const mesh = builder.addRouteMesh('cross.spotroute')
+          .listen('inproc://cross-spotroute-node-client')
+          .routingId('node-spot-route-client');
+        mesh.channel('cross.spotroute').server();
+        mesh.peerConnections().connect(rid('dotnet-route'), endpoint);
+        return builder.build();
+      }
+    })]
+  })(SpotRouteClientModule);
+  let app;
+  let host;
+  try {
+    host = startDotnetHost(tempDir, 'node-spotroute-dotnet', [
+      'route-server', '--channel-name', 'cross.spotroute', '--server-endpoint', endpoint,
+      '--event-file', eventFile
+    ]);
+    await host.ready;
+    app = await NestFactory.createApplicationContext(SpotRouteClientModule, { logger: false, abortOnError: false });
+    const routeMeshRuntime = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
+    await waitForCondition(
+      () => routeMeshRuntime.snapshot('cross.spotroute').readyPeerCount > 0,
+      7000,
+      'Node RouteMesh cross.spotroute peer readiness'
+    );
+    const client = app.get(nestjs.ZLINK_ROUTE_CLIENT, { strict: false });
+
+    const reply = await client
+      .requestToNode('cross.spotroute', 'dotnet-route', new TestHostSpotRouteRequest('node-spot-route'))
+      .timeout(5000).submit();
+    assert.deepEqual(reply, { value: 'node-spot-route|dotnet' });
+
+    const missing = await captureSpotRouteError(() => client
+      .requestToNode('cross.spotroute', 'dotnet-route', new TestHostSpotRouteMissingRequest('node-spot-route'))
+      .timeout(5000).submit());
+    assert.equal(missing.name, 'ZLinkFrameworkException');
+    assert.equal(
+      missing.kind, framework.ZLinkFrameworkErrorKind.NotFound,
+      `missing-handler kind must cross as not_found; got kind=${missing.kind} message=${missing.message}`);
+    assert.equal(
+      missing.origin, 'framework',
+      'the zlink.origin=framework marker must be visible to the Node decoder');
+
+    const applicationError = await captureSpotRouteError(() => client
+      .requestToNode('cross.spotroute', 'dotnet-route', new TestHostSpotRouteFailRequest('node-spot-route'))
+      .timeout(5000).submit());
+    assert.equal(
+      applicationError.kind, framework.ZLinkFrameworkErrorKind.Rejected,
+      `application kind must cross as rejected; got kind=${applicationError.kind} message=${applicationError.message}`);
+    assert.equal(
+      'origin' in applicationError, false,
+      'an application handler failure must not carry the framework origin marker');
+    assert.match(applicationError.message, /application spot route failure/);
+    return [
+      'Node spot-route client -> dotnet host request/reply',
+      'Node spot-route client -> dotnet host framework not_found with origin marker',
+      'Node spot-route client -> dotnet host application rejected without marker'
+    ];
+  } finally {
+    await app?.close();
+    await host?.stop();
+  }
+}
+
+/*
+ * Same scenario with .NET as the client; the TestHost records the observed
+ * wire kind/origin in its event file. Note: a Node host does not attach the
+ * zlink.origin=framework marker on the route-mesh handler-missing reply
+ * (channel-dispatchers.ts writeError passes no metadata), so the .NET decoder
+ * classifies (b) as application origin. Pinned here as the current wire
+ * behavior; see the harness convergence report.
+ */
+async function dotnetSpotRouteClientToNodeHost(tempDir) {
+  const port = await reservePort();
+  const endpoint = `tcp://127.0.0.1:${port}`;
+  const eventFile = path.join(tempDir, 'dotnet-spotroute-node.events');
+  class TestHostSpotRouteRequestHandler {
+    async handle(payload) {
+      return { value: `${payload?.value}|node` };
+    }
+  }
+  Injectable()(TestHostSpotRouteRequestHandler);
+  class TestHostSpotRouteFailRequestHandler {
+    async handle() {
+      throw new framework.ZLinkFrameworkException(
+        framework.ZLinkFrameworkErrorKind.Rejected, 'application spot route failure');
+    }
+  }
+  Injectable()(TestHostSpotRouteFailRequestHandler);
+  class SpotRouteServerModule {}
+  Module({
+    imports: [nestjs.ZLinkModule.forRootFactory({
+      useFactory: () => {
+        const builder = nestjs.zlinkFramework();
+        builder.addRouteMesh('cross.spotroute')
+          .listen(endpoint)
+          .routingId('node-spot-route')
+          .addRequestHandler('TestHostSpotRouteRequest', TestHostSpotRouteRequestHandler)
+          .addRequestHandler('TestHostSpotRouteFailRequest', TestHostSpotRouteFailRequestHandler)
+          .channel('cross.spotroute').server();
+        return builder.build();
+      }
+    })],
+    providers: [TestHostSpotRouteRequestHandler, TestHostSpotRouteFailRequestHandler]
+  })(SpotRouteServerModule);
+  let app;
+  let host;
+  try {
+    app = await NestFactory.createApplicationContext(SpotRouteServerModule, { logger: false, abortOnError: false });
+    host = startDotnetHost(tempDir, 'dotnet-spotroute-node', [
+      'spot-route-client', '--channel-name', 'cross.spotroute', '--server-endpoint', endpoint,
+      '--peer-rid', 'node-spot-route', '--event-file', eventFile,
+      '--publish-value', 'dotnet-spot-route'
+    ]);
+    await host.ready;
+    await waitForFileText(eventFile, (text) => text.includes('spot-route-reply|dotnet-spot-route|node'), 10000);
+    await waitForFileText(eventFile, (text) => text.includes('spot-route-missing|kind=not_found|origin=application'), 7000);
+    await waitForFileText(eventFile, (text) => text.includes('spot-route-app-error|kind=rejected|origin=application'), 7000);
+    return [
+      'dotnet spot-route client -> Node host request/reply',
+      'dotnet spot-route client -> Node host framework not_found (Node emits no origin marker on route surface)',
+      'dotnet spot-route client -> Node host application rejected without marker'
+    ];
+  } finally {
+    await host?.stop();
+    await app?.close();
+  }
+}
+
+async function captureSpotRouteError(operation) {
+  try {
+    await operation();
+  } catch (error) {
+    return error;
+  }
+  throw new Error('expected the spot route request to fail');
 }
 
 async function nodeConnectorToDotnetStreamServer(tempDir) {

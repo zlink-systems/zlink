@@ -13,8 +13,10 @@ REPO_ROOT="$(cd "${CPP_ROOT}/../../.." && pwd)"
 
 BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-${CPP_ROOT}/build-redis-vcpkg}"
 CPP_HOST="${BUILD_DIR}/zlink_cpp_cross_language_host"
-DOTNET_TEST_HOST="${REPO_ROOT}/framework/languages/dotnet/testapps/Zlink.Framework.TestHost/Zlink.Framework.TestHost.csproj"
+DOTNET_TEST_HOST="${REPO_ROOT}/framework/languages/dotnet/cross-language/Zlink.Framework.TestHost/Zlink.Framework.TestHost.csproj"
 NODE_PEER_HOST="${SCRIPT_DIR}/node_peer_host.js"
+JAVA_CROSS_LANGUAGE_ROOT="${REPO_ROOT}/framework/languages/java/cross-language"
+JAVA_HOST="${JAVA_CROSS_LANGUAGE_ROOT}/Host/build/install/zlink-cross-language-host/bin/zlink-cross-language-host"
 
 RUN_DIR="$(mktemp -d)"
 PIDS=()
@@ -77,6 +79,16 @@ start_node() {
   shift
   node "${NODE_PEER_HOST}" "$@" \
     --ready-file "${RUN_DIR}/${name}.ready" \
+    >"${RUN_DIR}/${name}.log" 2>&1 &
+  PIDS+=("$!")
+}
+
+start_java() {
+  local name="$1"
+  shift
+  "${JAVA_HOST}" "$@" \
+    --ready-file "${RUN_DIR}/${name}.ready" \
+    --stop-file "${RUN_DIR}/${name}.stop" \
     >"${RUN_DIR}/${name}.log" 2>&1 &
   PIDS+=("$!")
 }
@@ -384,11 +396,236 @@ stage_cpp_node_message_follow() {
   RESULTS+=("message-follow: C++ and Node raw owners (command 50 + route fence)")
 }
 
-if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" == "message-follow" ]]; then
-  stage_cpp_node_message_follow
-  echo "cross-language smoke stage=message-follow result=passed"
-  exit 0
-fi
+# --- spot-route wire: documented divergences (C++/Java <-> Node/.NET) ---------
+# The mesh service wire (spec 51, service-wire-v1.schema.json command 20
+# "reply") is implemented in two incompatible dialects today:
+#   * C++ (service_wire_codec.cpp encode/decode_reply_header) and Java
+#     (ZLinkServiceM6AWireCodec) emit/require a 21-byte reply header with NO
+#     tail-length field;
+#   * Node (service-wire-m6a-codec.ts) and .NET (ZLinkServiceWireCodec.cs)
+#     emit/require a mandatory u16 tail length (>= 23 bytes).
+# Any cross-dialect requestToNode therefore fails when the reply is decoded
+# (ProtocolError).
+#
+# Separately (verified same-language, C++ client -> C++ host — independent of
+# peer language and of the tail-dialect divergence above): the C++
+# route_client_t::request_to_node path never reaches the wire at all here.
+# raw_mesh_node_owner_t::request_with_header (raw_mesh_node_owner.cpp) bails
+# out on `!_topology.peer(target_routing_id)` before submitting anything,
+# even though the SAME owner's own admission trace
+# (ZLINK_CPP_MESH_TRACE=1 raw_mesh_node_owner.cpp trace_admission_phase)
+# reports "peer=present" for that exact routing id moments earlier in the
+# same process. mesh_node_runtime.cpp's classify_node_direct_target (the
+# Location-Store-gated pre-check) is NOT the cause: it returns std::nullopt
+# (falls through to the real network call) whenever no location_store_t is
+# registered, which is the case here. This looks like a genuine C++-side gap
+# in how a route-only (object_role=none) MeshNode's outbound requestToNode
+# resolves an admitted peer; it was not fixed here per the harness's
+# report-don't-fix mandate. Repro: run this stage's two processes directly
+# (spot-route-server / spot-route-client, any two C++ hosts) with
+# ZLINK_CPP_MESH_TRACE=1 and observe the client retry loop exhaust its
+# deadline on not_found despite "peer=present" in its own trace.
+# These stages PIN the current behavior: they go red the moment either side
+# converges, prompting promotion to real (a)/(b)/(c) assertions.
+stage_cpp_spot_route_client_dotnet_host() {
+  local port bind_port endpoint events
+  port="$(free_port)"
+  bind_port="$(free_port)"
+  endpoint="tcp://127.0.0.1:${port}"
+  events="${RUN_DIR}/cpp-spotroute-client-dotnet.events"
+  start_dotnet dotnet-spotroute-host route-server \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --event-file "${RUN_DIR}/dotnet-spotroute-host.events"
+  wait_for_ready "${RUN_DIR}/dotnet-spotroute-host.ready" 180
+  start_cpp cpp-spotroute-client spot-route-client \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --bind-endpoint "tcp://127.0.0.1:${bind_port}" \
+    --peer-rid dotnet-route \
+    --event-file "${events}" \
+    --value cpp-to-dotnet-spot
+  wait_for_line "${events}" "spot-route-error|not_found|MeshNode request target was not found" 90
+  stop_all
+  RESULTS+=("spot-route divergence pinned: C++ client -> .NET host (C++ requestToNode target-classification bug, peer-language-agnostic)")
+}
+
+# --- spot-route wire: .NET client -> C++ route host ---------------------------
+stage_dotnet_spot_route_client_cpp_host() {
+  local port endpoint events
+  port="$(free_port)"
+  endpoint="tcp://127.0.0.1:${port}"
+  events="${RUN_DIR}/dotnet-spotroute-client.events"
+  start_cpp cpp-spotroute-host spot-route-server \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --event-file "${RUN_DIR}/cpp-spotroute-host.events" \
+    --ready-file "${RUN_DIR}/cpp-spotroute-host.ready"
+  wait_for_ready "${RUN_DIR}/cpp-spotroute-host.ready" 60
+  start_dotnet dotnet-spotroute-client spot-route-client \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --peer-rid cpp-spot-route \
+    --event-file "${events}" \
+    --publish-value dotnet-to-cpp-spot
+  # The request reaches the C++ handler (the host records it), but the C++
+  # 21-byte reply header is rejected by the .NET decoder (mandatory u16 tail).
+  wait_for_line "${RUN_DIR}/cpp-spotroute-host.events" "spot-route-server|dotnet-to-cpp-spot|" 180
+  wait_for_line "${events}" "spot-route-error|kind=protocol_error|origin=unspecified" 60
+  stop_all
+  RESULTS+=("spot-route divergence pinned: .NET client -> C++ host (C++ tail-less reply header rejected as protocol_error)")
+}
+
+# --- spot-route wire: C++ client -> Node route host ---------------------------
+stage_cpp_spot_route_client_node_host() {
+  local port bind_port endpoint events
+  port="$(free_port)"
+  bind_port="$(free_port)"
+  endpoint="tcp://127.0.0.1:${port}"
+  events="${RUN_DIR}/cpp-spotroute-client-node.events"
+  start_node node-spotroute-host spot-route-server \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --event-file "${RUN_DIR}/node-spotroute-host.events"
+  wait_for_ready "${RUN_DIR}/node-spotroute-host.ready" 90
+  start_cpp cpp-spotroute-client-node spot-route-client \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --bind-endpoint "tcp://127.0.0.1:${bind_port}" \
+    --peer-rid node-spot-route \
+    --event-file "${events}" \
+    --value cpp-to-node-spot
+  wait_for_line "${events}" "spot-route-error|not_found|MeshNode request target was not found" 90
+  stop_all
+  RESULTS+=("spot-route divergence pinned: C++ client -> Node host (C++ requestToNode target-classification bug, peer-language-agnostic)")
+}
+
+# --- spot-route wire: Node client -> C++ route host ---------------------------
+stage_node_spot_route_client_cpp_host() {
+  local port bind_port endpoint events
+  port="$(free_port)"
+  bind_port="$(free_port)"
+  endpoint="tcp://127.0.0.1:${port}"
+  events="${RUN_DIR}/node-spotroute-client.events"
+  start_cpp cpp-spotroute-host-node spot-route-server \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --event-file "${RUN_DIR}/cpp-spotroute-host-node.events" \
+    --ready-file "${RUN_DIR}/cpp-spotroute-host-node.ready"
+  wait_for_ready "${RUN_DIR}/cpp-spotroute-host-node.ready" 60
+  start_node node-spotroute-client spot-route-client \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --bind-endpoint "tcp://127.0.0.1:${bind_port}" \
+    --peer-rid cpp-spot-route \
+    --event-file "${events}" \
+    --value node-to-cpp-spot
+  # The request reaches the C++ handler (the host records it), but the C++
+  # 21-byte reply header is rejected by the Node decoder (mandatory u16 tail).
+  wait_for_line "${RUN_DIR}/cpp-spotroute-host-node.events" "spot-route-server|node-to-cpp-spot|" 90
+  wait_for_line "${events}" "spot-route-error|kind=protocol_error|origin=none" 60
+  stop_all
+  RESULTS+=("spot-route divergence pinned: Node client -> C++ host (C++ tail-less reply header rejected as protocol_error)")
+}
+
+# --- spot-route wire: Java client -> C++ route host ---------------------------
+# Java and C++ share the tail-less 21-byte service-wire reply dialect
+# (ZLinkServiceM6AWireCodec vs service_wire_codec.cpp) and Java's client-side
+# node-target classification (ZLinkJavaRawSpotNode.classifyNodeSendTarget)
+# tracks real peer admission state, so this direction runs the full common
+# scenario for real: (a) reply round trip, (b) framework not_found (C++'s
+# route-mesh handler-missing reply carries no zlink.origin marker, so the
+# Java decoder classifies it "application" — same as the dotnet/Node decoders
+# facing the same C++ reply), (c) application rejected without the marker.
+stage_java_spot_route_client_cpp_host() {
+  local port bind_port endpoint events
+  port="$(free_port)"
+  bind_port="$(free_port)"
+  endpoint="tcp://127.0.0.1:${port}"
+  events="${RUN_DIR}/java-spotroute-client.events"
+  start_cpp cpp-spotroute-host-java spot-route-server \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --event-file "${RUN_DIR}/cpp-spotroute-host-java.events" \
+    --ready-file "${RUN_DIR}/cpp-spotroute-host-java.ready" \
+    --node-rid cpp-spot-route-java
+  wait_for_ready "${RUN_DIR}/cpp-spotroute-host-java.ready" 60
+  start_java java-spotroute-client spot-route-client \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --peer-rid cpp-spot-route-java \
+    --node-rid java-spot-route-client \
+    --event-file "${events}" \
+    --value java-to-cpp-spot
+  wait_for_line "${events}" "spot-route-reply|java-to-cpp-spot|cpp" 60
+  wait_for_line "${events}" "spot-route-missing|kind=not_found|origin=application" 30
+  wait_for_line "${events}" "spot-route-app-error|kind=rejected|origin=application" 30
+  stop_all
+  RESULTS+=("spot-route: Java client -> C++ host (reply + framework not_found + application rejected)")
+}
+
+# --- spot-route wire: C++ client -> Java route host ----------------------------
+# Reproduces the SAME "MeshNode request target was not found" the C++ client
+# hits against .NET and Node hosts (see stage_cpp_spot_route_client_dotnet_host
+# / stage_cpp_spot_route_client_node_host): request_with_header's
+# `!_topology.peer(target_routing_id)` check never sees the peer as present
+# from the requesting side even after the admission handshake completes
+# (verified same-language, C++ client -> C++ host, independent of peer
+# language and independent of the tail-dialect divergence — see report).
+stage_cpp_spot_route_client_java_host() {
+  local port bind_port endpoint events
+  port="$(free_port)"
+  bind_port="$(free_port)"
+  endpoint="tcp://127.0.0.1:${port}"
+  events="${RUN_DIR}/cpp-spotroute-client-java.events"
+  start_java java-spotroute-host spot-route-server \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --event-file "${RUN_DIR}/java-spotroute-host.events" \
+    --node-rid java-spot-route-host
+  wait_for_ready "${RUN_DIR}/java-spotroute-host.ready" 90
+  start_cpp cpp-spotroute-client-java spot-route-client \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --bind-endpoint "tcp://127.0.0.1:${bind_port}" \
+    --peer-rid java-spot-route-host \
+    --event-file "${events}" \
+    --value cpp-to-java-spot
+  wait_for_line "${events}" "spot-route-error|not_found|MeshNode request target was not found" 30
+  stop_all
+  RESULTS+=("spot-route divergence pinned: C++ client -> Java host (C++ requestToNode target-classification bug, peer-language-agnostic)")
+}
+
+run_spot_route_stages() {
+  stage_cpp_spot_route_client_dotnet_host
+  stage_dotnet_spot_route_client_cpp_host
+  stage_cpp_spot_route_client_node_host
+  stage_node_spot_route_client_cpp_host
+  stage_java_spot_route_client_cpp_host
+  stage_cpp_spot_route_client_java_host
+}
+
+case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
+  message-follow)
+    stage_cpp_node_message_follow
+    echo "cross-language smoke stage=message-follow result=passed"
+    exit 0
+    ;;
+  spot-route)
+    run_spot_route_stages
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=spot-route result=passed"
+    exit 0
+    ;;
+  all)
+    ;;
+  *)
+    echo "unknown ZLINK_CPP_CROSS_LANGUAGE_STAGE '${ZLINK_CPP_CROSS_LANGUAGE_STAGE}'" >&2
+    exit 2
+    ;;
+esac
 
 stage_cpp_client_dotnet_channel_server
 stage_dotnet_client_cpp_channel_server
@@ -402,6 +639,7 @@ stage_cpp_publisher_node_subscriber
 stage_node_publisher_cpp_subscriber
 stage_node_connector_cpp_stream_server
 stage_cpp_node_message_follow
+run_spot_route_stages
 
 for result in "${RESULTS[@]}"; do
   echo "ok - ${result}"

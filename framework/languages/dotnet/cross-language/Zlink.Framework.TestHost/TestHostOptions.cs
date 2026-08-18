@@ -15,6 +15,7 @@ internal sealed record TestHostOptions(
     string? PublisherEndpoint,
     string? SpotNodeName,
     string? SpotBindEndpoint,
+    string? PeerRid,
     bool EnablePubSub,
     bool EnableSpotFactory,
     bool CreateSpot,
@@ -67,6 +68,7 @@ internal sealed record TestHostOptions(
         public string? PublisherEndpoint { get; set; }
         public string? SpotNodeName { get; set; }
         public string? SpotBindEndpoint { get; set; }
+        public string? PeerRid { get; set; }
         public bool EnablePubSub { get; set; }
         public bool EnableSpotFactory { get; set; }
         public bool CreateSpot { get; set; }
@@ -118,6 +120,9 @@ internal sealed record TestHostOptions(
                 case "--spot-bind-endpoint":
                     SpotBindEndpoint = readValue();
                     break;
+                case "--peer-rid":
+                    PeerRid = readValue();
+                    break;
                 case "--enable-pubsub":
                     EnablePubSub = true;
                     break;
@@ -161,6 +166,7 @@ internal sealed record TestHostOptions(
                 PublisherEndpoint,
                 SpotNodeName,
                 SpotBindEndpoint,
+                PeerRid,
                 EnablePubSub,
                 EnableSpotFactory,
                 CreateSpot,

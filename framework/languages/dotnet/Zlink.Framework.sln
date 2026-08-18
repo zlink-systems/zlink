@@ -19,7 +19,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{F3E5F8A1
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "testapps", "testapps", "{24582C8A-3FB9-4856-BA31-F72F4EE9CDE5}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Zlink.Framework.TestHost", "testapps\Zlink.Framework.TestHost\Zlink.Framework.TestHost.csproj", "{FF1A6329-0D5F-4849-B66C-C947AEB74AFE}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Zlink.Framework.TestHost", "cross-language\Zlink.Framework.TestHost\Zlink.Framework.TestHost.csproj", "{FF1A6329-0D5F-4849-B66C-C947AEB74AFE}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Zlink.Framework.DocFixtures", "testapps\Zlink.Framework.DocFixtures\Zlink.Framework.DocFixtures.csproj", "{8729447A-72E9-4FD6-A83F-E00658A109F3}"
 EndProject

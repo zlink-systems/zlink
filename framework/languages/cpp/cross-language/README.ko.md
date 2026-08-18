@@ -12,7 +12,7 @@ ZLINK_CPP_BUILD_DIR=../build-redis-vcpkg ./run_cross_language_smoke.sh
 ```
 
 - C++ 호스트 타깃: `cmake --build <build-dir> --target zlink_cpp_cross_language_host`
-- .NET 피어: `framework/languages/dotnet/testapps/Zlink.Framework.TestHost` (`dotnet run`)
+- .NET 피어: `framework/languages/dotnet/cross-language/Zlink.Framework.TestHost` (`dotnet run`)
 - Node 피어: `node_peer_host.js` (Node workspace의 배포된 `packages/*/dist` 사용)
 - 실행 로그를 남기려면 `ZLINK_CPP_CROSS_KEEP_RUN_DIR=1`
 

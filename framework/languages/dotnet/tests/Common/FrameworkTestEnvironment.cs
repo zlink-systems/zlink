@@ -53,7 +53,7 @@ internal static class FrameworkTestEnvironment
     {
         return Path.Combine(
             GetFrameworkRoot(),
-            "testapps",
+            "cross-language",
             "Zlink.Framework.TestHost",
             "Zlink.Framework.TestHost.csproj");
     }
@@ -62,7 +62,7 @@ internal static class FrameworkTestEnvironment
     {
         return Path.Combine(
             GetFrameworkRoot(),
-            "testapps",
+            "cross-language",
             "Zlink.Framework.TestHost",
             "bin",
             GetBuildConfiguration(),
@@ -74,7 +74,7 @@ internal static class FrameworkTestEnvironment
     {
         return Path.Combine(
             GetFrameworkRoot(),
-            "testapps",
+            "cross-language",
             "Zlink.Framework.TestHost",
             "bin",
             GetBuildConfiguration(),

@@ -12,7 +12,7 @@ on:
       - "framework/doc/framework/common/guide/**"
       - "framework/doc/plan/node-framework-spec-gap-ledger/**"
       - "bindings/node/**"
-      - "framework/languages/dotnet/testapps/**"
+      - "framework/languages/dotnet/cross-language/**"
   pull_request:
     branches:
       - main
@@ -24,7 +24,7 @@ on:
       - "framework/doc/framework/common/guide/**"
       - "framework/doc/plan/node-framework-spec-gap-ledger/**"
       - "bindings/node/**"
-      - "framework/languages/dotnet/testapps/**"
+      - "framework/languages/dotnet/cross-language/**"
   workflow_dispatch:
 
 jobs:

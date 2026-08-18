@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -234,6 +235,173 @@ internal sealed class RouteClientStartupRequestHostedService(
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+internal sealed record TestHostSpotRouteRequest(string Value);
+
+internal sealed record TestHostSpotRouteReply(string Value);
+
+internal sealed record TestHostSpotRouteFailRequest(string Value);
+
+internal sealed record TestHostSpotRouteMissingRequest(string Value);
+
+/// <summary>
+/// Test-host-side view of the shared error wire. The snake_case table mirrors
+/// the canonical C++ channel_reply_writer.cpp error_code_name(); the reflection
+/// helpers exist because ZLinkFrameworkException's constructor and Origin
+/// property are internal to the framework assemblies, and this harness must
+/// observe/produce them without touching runtime sources.
+/// </summary>
+internal static class TestHostErrorWire
+{
+    public static string Name(ZLinkFrameworkErrorKind kind) => kind switch
+    {
+        ZLinkFrameworkErrorKind.NotFound => "not_found",
+        ZLinkFrameworkErrorKind.AlreadyExists => "already_exists",
+        ZLinkFrameworkErrorKind.TypeMismatch => "type_mismatch",
+        ZLinkFrameworkErrorKind.NotConfigured => "not_configured",
+        ZLinkFrameworkErrorKind.Rejected => "rejected",
+        ZLinkFrameworkErrorKind.Unavailable => "unavailable",
+        ZLinkFrameworkErrorKind.CapacityExceeded => "capacity_exceeded",
+        ZLinkFrameworkErrorKind.DeadlineExceeded => "deadline_exceeded",
+        ZLinkFrameworkErrorKind.ShuttingDown => "shutting_down",
+        ZLinkFrameworkErrorKind.ProtocolError => "protocol_error",
+        ZLinkFrameworkErrorKind.InvalidOperation => "invalid_operation",
+        ZLinkFrameworkErrorKind.DataLost => "data_lost",
+        _ => "internal_failure"
+    };
+
+    public static Exception CreateFrameworkException(ZLinkFrameworkErrorKind kind, string message)
+    {
+        var constructor = typeof(ZLinkFrameworkException)
+            .GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)
+            .Single();
+        var arguments = constructor.GetParameters()
+            .Select(parameter => parameter.Position switch
+            {
+                0 => (object?)kind,
+                1 => message,
+                _ => null
+            })
+            .ToArray();
+        return (Exception)constructor.Invoke(arguments);
+    }
+
+    public static string Origin(ZLinkFrameworkException exception)
+    {
+        var property = typeof(ZLinkFrameworkException)
+            .GetProperty("Origin", BindingFlags.Instance | BindingFlags.NonPublic);
+        return property?.GetValue(exception)?.ToString()?.ToLowerInvariant() ?? "unspecified";
+    }
+}
+
+internal sealed class TestHostSpotRouteRequestHandler(TestHostEventSink sink)
+    : IZLinkRouteRequestHandler<TestHostSpotRouteRequest, TestHostSpotRouteReply>
+{
+    public ValueTask<TestHostSpotRouteReply> HandleAsync(
+        TestHostSpotRouteRequest request,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        sink.Append($"spot-route-server|{request.Value}|{context.SourceNodeRid}");
+        return ValueTask.FromResult(new TestHostSpotRouteReply($"{request.Value}|dotnet"));
+    }
+}
+
+internal sealed class TestHostSpotRouteFailRequestHandler
+    : IZLinkRouteRequestHandler<TestHostSpotRouteFailRequest, TestHostSpotRouteReply>
+{
+    public ValueTask<TestHostSpotRouteReply> HandleAsync(
+        TestHostSpotRouteFailRequest request,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken)
+    {
+        _ = context;
+        cancellationToken.ThrowIfCancellationRequested();
+        // Application-origin failure with a typed kind: the wire must preserve
+        // "rejected" and must NOT carry the zlink.origin=framework marker.
+        throw TestHostErrorWire.CreateFrameworkException(
+            ZLinkFrameworkErrorKind.Rejected,
+            "application spot route failure");
+    }
+}
+
+/// <summary>
+/// Runs the common cross-language spot route scenario as the .NET client:
+/// (a) request/reply round trip, (b) framework error (missing handler),
+/// (c) application handler failure. Records observed wire kind/origin so the
+/// runner can assert them per host language.
+/// </summary>
+internal sealed class SpotRouteClientScenarioHostedService(
+    IZLinkRouteClient client,
+    TestHostEventSink sink,
+    string channelName,
+    string peerRid,
+    string value) : IHostedService
+{
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        var target = RoutingId.From(peerRid);
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
+        TestHostSpotRouteReply reply;
+        while (true)
+        {
+            try
+            {
+                reply = await client
+                    .RequestToNode(channelName, target, new TestHostSpotRouteRequest(value))
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Async<TestHostSpotRouteReply>(cancellationToken);
+                break;
+            }
+            catch (ZLinkFrameworkException exception)
+                when (exception.Kind is ZLinkFrameworkErrorKind.Unavailable
+                          or ZLinkFrameworkErrorKind.DeadlineExceeded
+                      && DateTimeOffset.UtcNow < deadline)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+            }
+            catch (ZLinkFrameworkException exception)
+            {
+                // Terminal (a)-failure: recorded so the runner can pin
+                // known cross-language divergences (e.g. the C++/Java
+                // service-wire reply header without the u16 tail field is
+                // rejected here as ProtocolError).
+                sink.Append(
+                    $"spot-route-error|kind={TestHostErrorWire.Name(exception.Kind)}|origin={TestHostErrorWire.Origin(exception)}");
+                return;
+            }
+        }
+        sink.Append($"spot-route-reply|{reply.Value}");
+
+        await RecordFailureAsync(
+            "spot-route-missing", new TestHostSpotRouteMissingRequest(value), cancellationToken);
+        await RecordFailureAsync(
+            "spot-route-app-error", new TestHostSpotRouteFailRequest(value), cancellationToken);
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    private async Task RecordFailureAsync<TRequest>(
+        string marker,
+        TRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            _ = await client
+                .RequestToNode(channelName, RoutingId.From(peerRid), request)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Async<TestHostSpotRouteReply>(cancellationToken);
+            sink.Append($"{marker}|unexpected-success");
+        }
+        catch (ZLinkFrameworkException exception)
+        {
+            sink.Append(
+                $"{marker}|kind={TestHostErrorWire.Name(exception.Kind)}|origin={TestHostErrorWire.Origin(exception)}");
+        }
+    }
 }
 
 internal sealed class TestHostProfileRequestHandler
