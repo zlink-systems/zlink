@@ -111,6 +111,11 @@
       도 제거됨. dotnet 수렴 시 검증 필수: "현재+1" 산술 가정 CAS 전수 확인,
       PayloadSha256(분할 읽기 보정용)도 함께 제거. §2.4 authority 절 확장은 C-3에
       포함(golden에 authority 스키마 필요).
+- [ ] **C-3b descriptor payload 전-필드 규범 스키마 고정(2026-08-19 신설, 3언어
+      차단 해소)**: golden의 descriptor는 예시 최소형 — node/dotnet/java가 각자 형태
+      발명 중이던 것을 java 정찰이 적발. 스펙 21 §2.3 논리 계약+4언어 실제 타입에서
+      규범 필드 도출→§2.4 JSON 스키마 명문화→golden 전-필드 벡터→4언어 골든 갱신.
+      진행 중(최우선)
 - [x] C-3 store 레코드 golden fixture — `bdc3e8a8c5`: 6키/5값 벡터(redis Lua cmsgpack 실검증), 21 §2.4 authority 스키마·22 §7 확장, 4언어 소비 테스트 즉시 그린. C-4 명시 이월: cpp authority payload hex→base64, encode측 스탠딩 테스트
 - [ ] C-4 4언어 store 구현 수렴 — 진행: **키 브레이스 판정(2026-08-19): Cluster
       hashtag 리터럴 유지** — golden이 오독으로 brace-less 고정했던 것 정정
