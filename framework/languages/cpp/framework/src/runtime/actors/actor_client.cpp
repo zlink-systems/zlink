@@ -12,6 +12,7 @@
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
+#include "runtime/timers/async_delay.hpp"
 
 #include <zlink/framework/contracts/locations/stores.hpp>
 #include <zlink/framework/contracts/monitoring/route_mesh_runtime.hpp>
@@ -25,7 +26,6 @@
 #include <mutex>
 #include <string>
 #include <system_error>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -693,7 +693,12 @@ class actor_client_impl_t final : public actor_client_t
             if (std::chrono::steady_clock::now () + std::chrono::milliseconds (50) >= deadline) {
                 co_return on_deadline ();
             }
-            std::this_thread::sleep_for (std::chrono::milliseconds (50));
+            // A stale-move retry only needs to wait out the admission
+            // window; the coroutine suspends here instead of blocking the
+            // thread it runs on, so a serial lane or worker stays free for
+            // other work in the meantime (session-actor-dispatch.en.md
+            // 187,193).
+            co_await detail::delay (std::chrono::milliseconds (50));
         }
     }
 

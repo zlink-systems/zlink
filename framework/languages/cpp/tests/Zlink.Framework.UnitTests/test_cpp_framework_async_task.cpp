@@ -4,6 +4,8 @@
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #include <zlink/Contracts/Messaging/operation_contracts.hpp>
 
+#include "runtime/timers/async_delay.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -175,6 +177,13 @@ zlink::framework::task_t<int> await_timeout ()
 {
     auto task = timeout_task ();
     co_return co_await task;
+}
+
+zlink::framework::task_t<int> await_async_delay (
+  std::chrono::milliseconds duration, int value)
+{
+    co_await zlink::framework::detail::delay (duration);
+    co_return value;
 }
 
 } // namespace
@@ -389,6 +398,28 @@ int main ()
     }
     zlink::framework::detail::ambient_context_hooks.store (
       nullptr, std::memory_order_release);
+
+    /* Regression pin for the request_erased retry loop
+     * (actor_client.cpp): the admission-retry delay used to
+     * std::this_thread::sleep_for on the coroutine's own thread. It now
+     * co_awaits detail::delay, which must (a) return control to the caller
+     * without blocking anywhere near the requested duration, since the
+     * suspend happens inside the coroutine machinery rather than the
+     * executing thread, and (b) still resume the coroutine, with the
+     * correct value, once the duration has actually elapsed. */
+    const auto delay_call_start = std::chrono::steady_clock::now ();
+    auto delayed_retry = await_async_delay (std::chrono::milliseconds (150), 77);
+    const auto delay_call_returned = std::chrono::steady_clock::now ();
+    if (delay_call_returned - delay_call_start >= std::chrono::milliseconds (100)) {
+        return 18;
+    }
+    if (delayed_retry.result ().value () != 77) {
+        return 19;
+    }
+    if (std::chrono::steady_clock::now () - delay_call_start
+        < std::chrono::milliseconds (140)) {
+        return 20;
+    }
 
     return 0;
 }

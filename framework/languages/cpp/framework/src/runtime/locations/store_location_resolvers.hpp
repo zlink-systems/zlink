@@ -184,24 +184,6 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         ++_store_recovery_generation;
     }
 
-    void observe_spot_authority_version (std::string_view spot_id,
-                                         std::string_view store_version,
-                                         std::uint64_t object_generation,
-                                         std::uint64_t authority_owner_generation)
-    {
-        invalidate_on_newer_authority (_spot_routes, spot_id, store_version,
-                                       object_generation, authority_owner_generation);
-    }
-
-    void observe_actor_authority_version (std::string_view actor_id,
-                                          std::string_view store_version,
-                                          std::uint64_t object_generation,
-                                          std::uint64_t authority_owner_generation)
-    {
-        invalidate_on_newer_authority (_actor_routes, actor_id, store_version,
-                                       object_generation, authority_owner_generation);
-    }
-
     task_t<std::optional<spot_address_t>>
     resolve_actor_address (std::string actor_id) override
     {
@@ -330,31 +312,6 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         routes.insert_or_assign (
           std::move (key), cached_address_t{address, measured_at + lifetime,
                                             _store_recovery_generation});
-    }
-
-    void invalidate_on_newer_authority (
-      std::map<std::string, cached_address_t> &routes,
-      std::string_view key,
-      std::string_view store_version,
-      std::uint64_t object_generation,
-      std::uint64_t authority_owner_generation)
-    {
-        std::lock_guard lock (_route_cache_gate);
-        const auto found = routes.find (std::string (key));
-        if (found == routes.end ()) {
-            return;
-        }
-        const auto &cached = found->second.address;
-        const auto newer_fence = object_generation > cached.object_generation
-                                 || (object_generation == cached.object_generation
-                                     && authority_owner_generation
-                                          > cached.authority_owner_generation);
-        if (newer_fence
-            || (store_version != cached.store_version
-                && object_generation >= cached.object_generation
-                && authority_owner_generation >= cached.authority_owner_generation)) {
-            routes.erase (found);
-        }
     }
 
     struct authority_projection_t

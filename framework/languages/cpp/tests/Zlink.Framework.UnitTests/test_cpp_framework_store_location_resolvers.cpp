@@ -1594,7 +1594,6 @@ TEST (ZLinkFrameworkStoreLocationResolvers, DirectReadyRouteUsesPositiveCacheOnl
     authority.store_version = "11";
     authority.authority_owner_generation = 2;
     store.set_authority ("zla1:s:10:spot-cache", authority);
-    resolvers.observe_spot_authority_version ("spot-cache", "11", 1, 2);
     ASSERT_TRUE (resolvers.resolve_spot_address ({}, "spot-cache").result ().value ());
     EXPECT_EQ (0u, store.resolve_spot_count.load ());
 
