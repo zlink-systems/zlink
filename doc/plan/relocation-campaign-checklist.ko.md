@@ -126,7 +126,9 @@
 - [ ] C-4c dotnet Lua byte 정합 확인: 기준 Lua의 expiresAtMs -1 센티널·정수 tombstone이
       golden(0·bool)과 상이할 가능성 — dotnet encode conformance에서 검증·수정
       [node 발견 2026-08-19]
-- [ ] C-4a java 전용 Lua 경로 붕괴 (terra 투입 2026-08-19, 병렬)(descriptor:mesh:*, owner-lease:* 등 →
+- [ ] C-4a java 전용 Lua 경로 붕괴 — terra 1차는 정직 중단(부분 전환이 reader 즉파,
+      전량 롤백 + 완전 감사표 전달). **레코드 타입별 단계 이관 전략으로 sonnet 재투입**
+      (mesh→lease→client-server→fanout→authority 순, 타입마다 게이트·커밋)(descriptor:mesh:*, owner-lease:* 등 →
       canonical-JSON-over-opaque) + ZLinkRedisAuthorityClient(3029줄) counter/CAS
       감사·수렴 — **상호 운용에 필수**(전용 경로가 남는 한 java descriptor를 타
       언어가 못 읽음), 전담 세션 규모로 분리 [java 1차에서 이월]
@@ -137,8 +139,15 @@
 - [ ] C-7 harness 교차 언어 relocation stage 전 쌍 그린 (JoinEntrySpot 경로 우선,
       C-5·C-6 후 일반 join 경로 — 기존 opt-in 스테이지 `2907df293f`/`c43758fc05` 기반)
 - [ ] C-8 교차 언어 스테이지를 harness 기본 `all` 게이트에 편입 (회귀 구조 차단)
-- [ ] C-9 상호 운용 신규 코드 sol 리뷰 + POSDDD 패스 — 1차 sol 배치 리뷰(최근 커밋
-      11건: cpp 결함 수정 3·store 수렴 3·golden 2·wire 원자 1·제거 2) 진행 중
+- [ ] C-9 상호 운용 신규 코드 sol 리뷰 + POSDDD 패스 — **1차 sol 배치 리뷰 완료
+      (2026-08-19), 발견 5건 전부 배정**: [C] reconcile 기한 스윕의 relay-ready
+      비가역성 위반(→판정 정정: 기한 도달 시 Location Store authority 조회로 확정
+      타깃 추종/소스 복원/명시 unavailable 3분기 — 전문 에이전트), [H] authority
+      실제 producer가 4언어 모두 golden 비호환(cpp 여분 storeVersion·node 구
+      envelope·java 구 hash·dotnet 3키 — 각 슬라이스에 배정), [H] cold-probe 합성
+      follow가 op identity/deadline/source/reply-route 4값 미보존(전문 에이전트),
+      [M] cpp Lua point-read 0x01 미검증(cpp store 에이전트), [M] golden 테스트가
+      실제 producer 미구동+dotnet brace-less 잔재(각 언어 마감에 편입)
 - [ ] C-10 node relocationFailed row-collapse 세분화: NotFound/Rejected/InvalidOp 등을
       wire 후보(15/33/34)로 구분 인코딩 — 4언어 기준 매핑(97fc074058)과 정렬
       [D에서 편입 2026-08-19; 전용 wire 어휘 확장(ShuttingDown 등)은 이때 재판정]
