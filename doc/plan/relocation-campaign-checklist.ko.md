@@ -140,6 +140,13 @@
 - [ ] C-4c dotnet Lua byte 정합 확인: 기준 Lua의 expiresAtMs -1 센티널·정수 tombstone이
       golden(0·bool)과 상이할 가능성 — dotnet encode conformance에서 검증·수정
       [node 발견 2026-08-19]
+- [ ] C-4d cpp store 마감 유닛(2026-08-19 신설 — 앞선 'cpp 완료' 판정 정정):
+      cpp의 mesh/authority 실제 writer가 golden 비정합(여분 storeVersion이
+      public_host_runtime의 wire-echo 펜스로 load-bearing, target/bundle/mesh
+      필드명 다수 발산). 수정 유닛: envelope 필드 정렬 + storeVersion 펜싱을
+      reservation_id 기반으로 재설계(public_host_runtime 소비자 동반 수정) +
+      mesh/authority 실제-writer 골든 conformance. F2(Lua 태그) F3(lease writer)은
+      b20d2011fe로 선랜딩. (JSON 키 순서는 규약상 field-compare라 비결함)
 - [ ] C-4a java 수렴 — **재정찰로 지형 재정의(2026-08-19)**: terra 감사의 Lua-HASH
       스택은 실은 **죽은 코드**(프로덕션 미도달, 자기참조+테스트 1개뿐). 라이브
       경로는 core의 ZLinkProviderDescriptorRepository/ZLinkProviderLocationRepository
