@@ -102,7 +102,7 @@
       도 제거됨. dotnet 수렴 시 검증 필수: "현재+1" 산술 가정 CAS 전수 확인,
       PayloadSha256(분할 읽기 보정용)도 함께 제거. §2.4 authority 절 확장은 C-3에
       포함(golden에 authority 스키마 필요).
-- [ ] C-3 store 레코드 golden fixture 신설 (키 문자열·값 byte 벡터) + 4언어 소비 테스트
+- [x] C-3 store 레코드 golden fixture — `bdc3e8a8c5`: 6키/5값 벡터(redis Lua cmsgpack 실검증), 21 §2.4 authority 스키마·22 §7 확장, 4언어 소비 테스트 즉시 그린. C-4 명시 이월: cpp authority payload hex→base64, encode측 스탠딩 테스트
 - [ ] C-4 4언어 store 구현 수렴 (기준 후보: dotnet/java 공유 {zlink-location-v3}+SHA256;
       cpp = 키공간+인코딩 전면 이동, node = 키공간 이동, dotnet↔java = 값 인코딩 통일)
 - [ ] C-5 cpp actorJoin 발신 연산 신설 (service-wire cross-node join 요청/응답,
