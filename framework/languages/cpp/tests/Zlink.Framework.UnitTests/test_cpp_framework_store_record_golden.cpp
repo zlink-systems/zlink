@@ -17,12 +17,26 @@
 
 #include <array>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <stdexcept>
 #include <string>
 #include <vector>
+
+// Checklist C-4 (cpp store-record convergence): reuse the production
+// SHA-256 and base64 codecs here (POSDDD) instead of hand-rolling a fourth
+// copy of either. Both headers are self-contained (no OpenSSL/framework
+// runtime linkage), matching this test target's existing no-link-library
+// design. zlink/locations/redis.hpp's format-tag/cmsgpack decode helpers
+// (zlink::framework::redis::detail::*) are likewise header-only outside the
+// ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT guard, so they link here
+// with no redis++ dependency either.
+#include "runtime/locations/base64.hpp"
+#include "runtime/locations/sha256.hpp"
+#include <zlink/locations/redis.hpp>
 
 namespace
 {
@@ -295,6 +309,87 @@ int main ()
         } else {
             assert (decoded.raw_bytes.empty ());
         }
+
+        // Production redis.hpp cross-check: the real provider's value
+        // decoder (zlink::framework::redis::detail::decode_opaque_value),
+        // not just this file's from-scratch one, must decode every vector
+        // identically.
+        const auto full_bytes = from_hex (vector.at ("fullValueHex").get<std::string> ());
+        const std::string full_string (
+          reinterpret_cast<const char *> (full_bytes.data ()), full_bytes.size ());
+        const auto production_decoded =
+          zlink::framework::redis::detail::decode_opaque_value (full_string);
+        assert (production_decoded.original_key
+                == unescape_nul (vector.at ("originalKey").get<std::string> ()));
+        assert (production_decoded.version == vector.at ("version").get<std::string> ());
+        assert (production_decoded.expires_at_ms
+                == std::stoull (vector.at ("expiresAtMs").get<std::string> ()));
+        assert (production_decoded.tombstone == vector.at ("tombstone").get<bool> ());
+        assert (production_decoded.raw_bytes.size () == decoded.raw_bytes.size ());
+        assert (std::memcmp (production_decoded.raw_bytes.data (), decoded.raw_bytes.data (),
+                             decoded.raw_bytes.size ())
+                == 0);
+    }
+
+    // Checklist C-4: the authority record's `payload` field converts from
+    // hex to base64 (21-location-runtime.md#2.4, 22-location-store-redis.md
+    // #7). Round-trip every authority payload vector in the fixture through
+    // the production base64 codec, and confirm it's the standard ('+'/'/')
+    // alphabet, not URL-safe -- both authority vectors' payloads contain
+    // '+', which a URL-safe decoder would reject.
+    bool checked_base64_payload = false;
+    for (const auto &vector : root.at ("valueVectors").at ("genericOpaqueRecord")) {
+        if (vector.at ("tombstone").get<bool> () || !vector.at ("decoded").contains ("payload"))
+            continue;
+        const auto payload_b64 = vector.at ("decoded").at ("payload").get<std::string> ();
+        const auto decoded_payload = zlink::framework::runtime::base64_decode (payload_b64);
+        const auto reencoded = zlink::framework::runtime::base64_encode (decoded_payload);
+        assert (reencoded == payload_b64);
+        checked_base64_payload = true;
+    }
+    assert (checked_base64_payload);
+
+    // Production sha256.hpp cross-check, independent of this file's
+    // from-scratch sha256() above: every key-derivation vector must also
+    // hash correctly through the real header the production store uses.
+    for (const auto &key : root.at ("keyDerivation")) {
+        const auto preimage_hex = key.at ("preimageHex").get<std::string> ();
+        const auto raw = from_hex (preimage_hex);
+        std::vector<std::byte> preimage_bytes;
+        preimage_bytes.reserve (raw.size ());
+        for (const auto byte : raw)
+            preimage_bytes.push_back (static_cast<std::byte> (byte));
+        const auto digest = zlink::framework::runtime::sha256 (preimage_bytes);
+        std::string digest_hex;
+        static const char digits[] = "0123456789abcdef";
+        for (const auto byte : digest) {
+            const auto value = std::to_integer<unsigned char> (byte);
+            digest_hex.push_back (digits[value >> 4]);
+            digest_hex.push_back (digits[value & 0x0f]);
+        }
+        assert (digest_hex == key.at ("sha256Hex").get<std::string> ());
+    }
+
+    // Clean break (22-location-store-redis.md#7): an unrecognized format tag
+    // must fail explicitly against the real production decoder, never be
+    // guessed at. Byte 0 is the format tag; flip 0x01 to 0x02 on a real
+    // vector and confirm zlink::framework::redis::detail::decode_opaque_value
+    // throws instead of silently reading it as a tag-0x01 record.
+    {
+        const auto &vector = root.at ("valueVectors").at ("genericOpaqueRecord").at (0);
+        auto tampered = from_hex (vector.at ("fullValueHex").get<std::string> ());
+        assert (tampered[0] == 0x01);
+        tampered[0] = 0x02;
+        const std::string tampered_string (
+          reinterpret_cast<const char *> (tampered.data ()), tampered.size ());
+        bool threw = false;
+        try {
+            (void) zlink::framework::redis::detail::decode_opaque_value (tampered_string);
+        }
+        catch (const std::invalid_argument &) {
+            threw = true;
+        }
+        assert (threw && "unrecognized format tag must fail explicitly, not be guessed at");
     }
 
     return 0;

@@ -4,6 +4,7 @@
 #include <zlink/framework/contracts/locations/stores.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -28,6 +29,17 @@
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
 #include <sw/redis++/redis++.h>
 #endif
+
+// This header is the official Redis Location/Relocation Store provider
+// (21-location-runtime.md#2.4, 22-location-store-redis.md#7,
+// 23-relocation-store-redis.md#8). The Location Store's opaque record is a
+// cross-language public contract: the Redis key derivation
+// (SHA-256(logical-key preimage), Cluster-hashtagged namespace) and the
+// stored value's cmsgpack wire shape must match dotnet/java byte-for-byte so
+// any language can read a record another language wrote. Everything else
+// here (the write/scan Lua scripts, the scan snapshot/cursor bookkeeping,
+// the secondary index used to answer prefix scans) is this provider's
+// private implementation, per the same spec sections.
 
 namespace zlink::framework::redis
 {
@@ -62,6 +74,196 @@ inline std::uint64_t next_scan_epoch ()
         return high ^ static_cast<std::uint64_t> (source ());
     } ();
     return next.fetch_add (1, std::memory_order_relaxed);
+}
+
+// -- SHA-256 (FIPS 180-4), self-contained -----------------------------------
+// This extension is a header-only package that links no OpenSSL/hashing
+// library, and it cannot reach the framework-internal
+// runtime/locations/sha256.hpp across the package boundary (that header is
+// private to the zlink_framework target). This is the same minimal,
+// from-scratch implementation used by the store-record golden test and by
+// the framework-internal sha256.hpp -- verified against real Redis Lua
+// cmsgpack output via the golden fixture.
+inline std::array<std::uint8_t, 32> sha256_bytes (std::string_view input)
+{
+    static constexpr std::array<std::uint32_t, 64> k{
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+      0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+      0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+      0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+      0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+      0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+      0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+      0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+      0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+    std::array<std::uint32_t, 8> h{0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                                   0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+
+    std::vector<std::uint8_t> bytes (input.begin (), input.end ());
+    const auto bit_length = static_cast<std::uint64_t> (input.size ()) * 8;
+    bytes.push_back (0x80);
+    while (bytes.size () % 64 != 56)
+        bytes.push_back (0x00);
+    for (int shift = 56; shift >= 0; shift -= 8)
+        bytes.push_back (static_cast<std::uint8_t> (bit_length >> shift));
+
+    const auto rotr = [] (std::uint32_t value, int bits) -> std::uint32_t {
+        return (value >> bits) | (value << (32 - bits));
+    };
+
+    for (std::size_t block = 0; block < bytes.size (); block += 64) {
+        std::array<std::uint32_t, 64> w{};
+        for (std::size_t index = 0; index < 16; ++index) {
+            const auto p = block + index * 4;
+            w[index] = (static_cast<std::uint32_t> (bytes[p]) << 24)
+              | (static_cast<std::uint32_t> (bytes[p + 1]) << 16)
+              | (static_cast<std::uint32_t> (bytes[p + 2]) << 8)
+              | static_cast<std::uint32_t> (bytes[p + 3]);
+        }
+        for (std::size_t index = 16; index < 64; ++index) {
+            const auto s0 = rotr (w[index - 15], 7) ^ rotr (w[index - 15], 18)
+              ^ (w[index - 15] >> 3);
+            const auto s1 = rotr (w[index - 2], 17) ^ rotr (w[index - 2], 19)
+              ^ (w[index - 2] >> 10);
+            w[index] = w[index - 16] + s0 + w[index - 7] + s1;
+        }
+        auto a = h[0], b = h[1], c = h[2], d = h[3];
+        auto e = h[4], f = h[5], g = h[6], hh = h[7];
+        for (std::size_t index = 0; index < 64; ++index) {
+            const auto s1 = rotr (e, 6) ^ rotr (e, 11) ^ rotr (e, 25);
+            const auto ch = (e & f) ^ (~e & g);
+            const auto temp1 = hh + s1 + ch + k[index] + w[index];
+            const auto s0 = rotr (a, 2) ^ rotr (a, 13) ^ rotr (a, 22);
+            const auto maj = (a & b) ^ (a & c) ^ (b & c);
+            const auto temp2 = s0 + maj;
+            hh = g; g = f; f = e; e = d + temp1;
+            d = c; c = b; b = a; a = temp1 + temp2;
+        }
+        h[0] += a; h[1] += b; h[2] += c; h[3] += d;
+        h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+    }
+
+    std::array<std::uint8_t, 32> digest{};
+    for (int index = 0; index < 8; ++index) {
+        digest[index * 4] = static_cast<std::uint8_t> (h[index] >> 24);
+        digest[index * 4 + 1] = static_cast<std::uint8_t> (h[index] >> 16);
+        digest[index * 4 + 2] = static_cast<std::uint8_t> (h[index] >> 8);
+        digest[index * 4 + 3] = static_cast<std::uint8_t> (h[index]);
+    }
+    return digest;
+}
+
+inline std::string sha256_hex (std::string_view input)
+{
+    static constexpr char digits[] = "0123456789abcdef";
+    const auto digest = sha256_bytes (input);
+    std::string result;
+    result.reserve (64);
+    for (const auto byte : digest) {
+        result.push_back (digits[byte >> 4]);
+        result.push_back (digits[byte & 0x0f]);
+    }
+    return result;
+}
+
+// -- cmsgpack decode (read path only; writes go through the Lua script,
+// which uses Redis's own cmsgpack.pack so cpp never needs a client-side
+// msgpack encoder) -----------------------------------------------------
+struct opaque_member_t
+{
+    std::string original_key;
+    std::string raw_bytes;
+    std::string version;
+    std::uint64_t expires_at_ms = 0;
+    bool tombstone = false;
+};
+
+inline std::uint8_t msgpack_next (const std::string &bytes, std::size_t &offset)
+{
+    if (offset >= bytes.size ())
+        throw std::invalid_argument ("opaque record value is truncated");
+    return static_cast<std::uint8_t> (bytes[offset++]);
+}
+
+inline std::string msgpack_read_str (const std::string &bytes, std::size_t &offset)
+{
+    const auto tag = msgpack_next (bytes, offset);
+    std::size_t length = 0;
+    if ((tag & 0xe0) == 0xa0) {
+        length = tag & 0x1f;
+    }
+    else if (tag == 0xd9) {
+        length = msgpack_next (bytes, offset);
+    }
+    else if (tag == 0xda) {
+        length = (static_cast<std::size_t> (msgpack_next (bytes, offset)) << 8)
+          | msgpack_next (bytes, offset);
+    }
+    else if (tag == 0xdb) {
+        for (int shift = 0; shift < 4; ++shift)
+            length = (length << 8) | msgpack_next (bytes, offset);
+    }
+    else {
+        throw std::invalid_argument ("opaque record value has an unrecognized str tag");
+    }
+    if (offset + length > bytes.size ())
+        throw std::invalid_argument ("opaque record value is truncated");
+    auto result = bytes.substr (offset, length);
+    offset += length;
+    return result;
+}
+
+inline std::uint64_t msgpack_read_uint (const std::string &bytes, std::size_t &offset)
+{
+    const auto tag = msgpack_next (bytes, offset);
+    if ((tag & 0x80) == 0)
+        return tag;
+    if (tag == 0xcc)
+        return msgpack_next (bytes, offset);
+    if (tag == 0xcd)
+        return (static_cast<std::uint64_t> (msgpack_next (bytes, offset)) << 8)
+          | msgpack_next (bytes, offset);
+    if (tag == 0xce) {
+        std::uint64_t value = 0;
+        for (int shift = 0; shift < 4; ++shift) value = (value << 8) | msgpack_next (bytes, offset);
+        return value;
+    }
+    if (tag == 0xcf) {
+        std::uint64_t value = 0;
+        for (int shift = 0; shift < 8; ++shift) value = (value << 8) | msgpack_next (bytes, offset);
+        return value;
+    }
+    throw std::invalid_argument ("opaque record value has an unrecognized int tag");
+}
+
+inline bool msgpack_read_bool (const std::string &bytes, std::size_t &offset)
+{
+    const auto tag = msgpack_next (bytes, offset);
+    if (tag == 0xc2) return false;
+    if (tag == 0xc3) return true;
+    throw std::invalid_argument ("opaque record value has an unrecognized bool tag");
+}
+
+// `raw` is the full stored value: a 1-byte format tag (0x01) followed by the
+// cmsgpack-encoded 5-element array. 22-location-store-redis.md#7 requires an
+// unrecognized tag to fail explicitly rather than be guessed at.
+inline opaque_member_t decode_opaque_value (const std::string &raw)
+{
+    if (raw.empty () || static_cast<std::uint8_t> (raw[0]) != 0x01)
+        throw std::invalid_argument ("unrecognized opaque record format tag");
+    std::size_t offset = 1;
+    const auto array_tag = msgpack_next (raw, offset);
+    if ((array_tag & 0xf0) != 0x90 || (array_tag & 0x0f) != 5)
+        throw std::invalid_argument ("opaque record value is not a 5-element array");
+    opaque_member_t member;
+    member.original_key = msgpack_read_str (raw, offset);
+    member.raw_bytes = msgpack_read_str (raw, offset);
+    member.version = msgpack_read_str (raw, offset);
+    member.expires_at_ms = msgpack_read_uint (raw, offset);
+    member.tombstone = msgpack_read_bool (raw, offset);
+    return member;
 }
 
 } // namespace detail
@@ -191,6 +393,10 @@ class redis_location_store_t final : public location_store_t
             || _options.key_prefix.empty ())
             throw std::invalid_argument (
               "Redis location connection and key prefix are required");
+        if (_options.key_prefix.find ('{') != std::string::npos
+            || _options.key_prefix.find ('}') != std::string::npos)
+            throw std::invalid_argument (
+              "Redis location key prefix must not contain '{' or '}'");
         if (_options.operation_timeout
             <= std::chrono::milliseconds::zero ())
             throw std::invalid_argument (
@@ -212,28 +418,28 @@ class redis_location_store_t final : public location_store_t
         return _worker.submit<store_read_result_t> (
           [this, key = std::move (key)] {
               auto &redis = *_redis;
-              const auto redis_key =
-                value_key (key.value);
-              const auto payload = redis.hget (
-                redis_key, "bytes");
-              const auto now = redis_now (redis);
-              if (!payload)
-                  return store_read_result_t{
-                    store_missing_t{now}};
-              const auto version = redis.hget (
-                redis_key, "version");
-              if (!version)
-                  throw sw::redis::Error (
-                    "opaque location row has no version");
-              const auto ttl = redis.pttl (redis_key);
+              const std::vector<std::string> keys{record_key (key.value)};
+              const std::vector<std::string> args{};
+              const auto result =
+                redis.eval<std::vector<std::string>> (
+                  std::string (read_script),
+                  keys.begin (), keys.end (),
+                  args.begin (), args.end ());
+              if (result.size () < 2)
+                  throw sw::redis::Error ("invalid opaque location read result");
+              const auto now = from_unix_ms (std::stoll (result[1]));
+              if (result[0] == "missing")
+                  return store_read_result_t{store_missing_t{now}};
+              if (result[0] != "found" || result.size () != 5)
+                  throw sw::redis::Error ("unknown opaque location read result");
+              const auto expires_at_ms = std::stoll (result[4]);
               return store_read_result_t{
                 store_found_t{
                   store_value_t{
-                    string_to_bytes (*payload),
-                    store_version_t{*version},
-                    ttl > 0
-                      ? std::optional{
-                          now + std::chrono::milliseconds{ttl}}
+                    string_to_bytes (result[2]),
+                    store_version_t{result[3]},
+                    expires_at_ms > 0
+                      ? std::optional{from_unix_ms (expires_at_ms)}
                       : std::nullopt,
                     now}}};
           });
@@ -273,10 +479,12 @@ class redis_location_store_t final : public location_store_t
                     mutation);
 
               std::vector<std::string> keys;
-              keys.reserve (logical_keys.size () + 1);
+              keys.reserve (logical_keys.size () + 3);
               for (const auto &key : logical_keys)
-                  keys.push_back (value_key (key));
-              keys.push_back (version_key ());
+                  keys.push_back (record_key (key));
+              keys.push_back (index_key ());
+              keys.push_back (map_key ());
+              keys.push_back (sequence_key ());
 
               std::vector<std::string> args;
               args.push_back (
@@ -312,6 +520,7 @@ class redis_location_store_t final : public location_store_t
                           key_indexes.at (value.key.value)));
                         using value_t =
                           std::decay_t<decltype (value)>;
+                        args.push_back (value.key.value);
                         if constexpr (
                           std::is_same_v<value_t, store_put_t>) {
                             args.push_back ("put");
@@ -324,9 +533,9 @@ class redis_location_store_t final : public location_store_t
                                 : std::string{"-1"});
                         }
                         else {
-                            args.push_back ("erase");
+                            args.push_back ("delete");
                             args.push_back ({});
-                            args.push_back ({});
+                            args.push_back ({"-1"});
                         }
                     },
                     mutation);
@@ -443,26 +652,45 @@ class redis_location_store_t final : public location_store_t
                   snapshot.expires_at =
                     steady_now + scan_snapshot_retention;
                   auto &redis = *_redis;
-                  const auto pattern =
-                    value_key (request.prefix) + "*";
-                  const auto keys =
+                  // The physical opaque key is sha256(logical key), so it
+                  // carries no prefix relationship to the logical key
+                  // (22-location-store-redis.md#7's clean-break scheme).
+                  // The index ZSET below is this provider's private
+                  // secondary index -- it exists purely to answer prefix
+                  // scans and is not part of the cross-language contract.
+                  const auto original_keys =
                     redis.command<std::vector<std::string>> (
-                      "KEYS", pattern);
-                  for (const auto &redis_key : keys) {
-                      const auto payload =
-                        redis.hget (redis_key, "bytes");
-                      const auto version =
-                        redis.hget (redis_key, "version");
-                      if (!payload || !version)
+                      "ZRANGE", index_key (), 0, -1);
+                  for (const auto &original_key : original_keys) {
+                      if (!original_key.starts_with (request.prefix))
                           continue;
-                      const auto ttl = redis.pttl (redis_key);
+                      const auto mapped =
+                        redis.hget (map_key (), original_key);
+                      if (!mapped)
+                          continue;
+                      const auto members =
+                        redis.command<std::vector<std::string>> (
+                          "ZREVRANGE", *mapped, 0, 0);
+                      if (members.empty ())
+                          continue;
+                      const auto decoded =
+                        detail::decode_opaque_value (members[0]);
+                      if (decoded.original_key != original_key)
+                          continue;
+                      if (decoded.tombstone
+                          || (decoded.expires_at_ms > 0
+                              && decoded.expires_at_ms
+                                   <= static_cast<std::uint64_t> (
+                                     unix_ms (now))))
+                          continue;
                       snapshot.items.push_back (
-                        {{decode_value_key (redis_key)},
-                         {string_to_bytes (*payload),
-                          store_version_t{*version},
-                          ttl > 0
+                        {{decoded.original_key},
+                         {string_to_bytes (decoded.raw_bytes),
+                          store_version_t{decoded.version},
+                          decoded.expires_at_ms > 0
                             ? std::optional{
-                                now + std::chrono::milliseconds{ttl}}
+                                from_unix_ms (static_cast<std::int64_t> (
+                                  decoded.expires_at_ms))}
                             : std::nullopt,
                           now}});
                   }
@@ -520,11 +748,43 @@ class redis_location_store_t final : public location_store_t
     }
 
   private:
+    // KEYS = { record_key } ; ARGV = {} (none needed: the record key alone
+    // identifies the ZSET append-log).
+    static constexpr std::string_view read_script = R"(
+if redis.replicate_commands then redis.replicate_commands() end
+local time = redis.call('TIME')
+local nowMs = tonumber(time[1]) * 1000
+  + math.floor(tonumber(time[2]) / 1000)
+local members = redis.call('ZREVRANGE', KEYS[1], 0, 0)
+if #members == 0 then return {'missing', tostring(nowMs)} end
+local record = cmsgpack.unpack(string.sub(members[1], 2))
+local expiresAt = tonumber(record[4])
+if record[5] == true or (expiresAt > 0 and expiresAt <= nowMs) then
+  return {'missing', tostring(nowMs)}
+end
+return {'found', tostring(nowMs), record[2], record[3], tostring(expiresAt)}
+)";
+
+    // KEYS = { record_key_1..N, index_key, map_key, sequence_key }
+    // ARGV = conditionCount, {keyIndex, kind, expected}*,
+    //        mutationCount, {keyIndex, originalKey, kind, bytes, retentionMs}*
     static constexpr std::string_view write_script = R"(
 if redis.replicate_commands then redis.replicate_commands() end
 local time = redis.call('TIME')
 local nowMs = tonumber(time[1]) * 1000
   + math.floor(tonumber(time[2]) / 1000)
+
+local function currentVersion(keyIndex)
+  local members = redis.call('ZREVRANGE', KEYS[keyIndex], 0, 0)
+  if #members == 0 then return nil end
+  local record = cmsgpack.unpack(string.sub(members[1], 2))
+  local expiresAt = tonumber(record[4])
+  if record[5] == true or (expiresAt > 0 and expiresAt <= nowMs) then
+    return nil
+  end
+  return record[3]
+end
+
 local offset = 1
 local conditionCount = tonumber(ARGV[offset])
 offset = offset + 1
@@ -533,37 +793,41 @@ for i = 1, conditionCount do
   local kind = ARGV[offset + 1]
   local expected = ARGV[offset + 2]
   offset = offset + 3
-  local exists = redis.call('EXISTS', KEYS[keyIndex]) == 1
+  local current = currentVersion(keyIndex)
   if kind == 'missing' then
-    if exists then return {'conflict', tostring(nowMs)} end
-  elseif not exists
-      or redis.call('HGET', KEYS[keyIndex], 'version') ~= expected then
+    if current ~= nil then return {'conflict', tostring(nowMs)} end
+  elseif current ~= expected then
     return {'conflict', tostring(nowMs)}
   end
 end
+
 local mutationCount = tonumber(ARGV[offset])
 offset = offset + 1
+local indexKey = KEYS[#KEYS - 2]
+local mapKey = KEYS[#KEYS - 1]
+local sequenceKey = KEYS[#KEYS]
 local result = {'applied', tostring(nowMs)}
 for i = 1, mutationCount do
   local keyIndex = tonumber(ARGV[offset])
-  local kind = ARGV[offset + 1]
-  local bytes = ARGV[offset + 2]
-  local retentionMs = tonumber(ARGV[offset + 3])
-  offset = offset + 4
-  if kind == 'put' then
-    local version = tostring(redis.call('INCR', KEYS[#KEYS]))
-    redis.call('HSET', KEYS[keyIndex],
-      'bytes', bytes, 'version', version)
-    if retentionMs >= 0 then
-      redis.call('PEXPIRE', KEYS[keyIndex], retentionMs)
-    else
-      redis.call('PERSIST', KEYS[keyIndex])
-    end
-    table.insert(result, tostring(keyIndex))
-    table.insert(result, version)
-  else
-    redis.call('DEL', KEYS[keyIndex])
-  end
+  local originalKey = ARGV[offset + 1]
+  local kind = ARGV[offset + 2]
+  local bytes = ARGV[offset + 3]
+  local retentionMs = tonumber(ARGV[offset + 4])
+  offset = offset + 5
+  local recordKey = KEYS[keyIndex]
+  local tombstone = kind ~= 'put'
+  local version = tostring(redis.call('INCR', sequenceKey))
+  local expiresAt = 0
+  if retentionMs >= 0 then expiresAt = nowMs + retentionMs end
+  local member = '\1' .. cmsgpack.pack({
+    originalKey, tombstone and '' or bytes, version, expiresAt, tombstone
+  })
+  redis.call('ZADD', recordKey, tonumber(version), member)
+  redis.call('ZREMRANGEBYRANK', recordKey, 0, -2)
+  redis.call('ZADD', indexKey, 0, originalKey)
+  redis.call('HSET', mapKey, originalKey, recordKey)
+  table.insert(result, tostring(keyIndex))
+  table.insert(result, version)
 end
 return result
 )";
@@ -681,65 +945,25 @@ return result
                + item.value.bytes.size ();
     }
 
-    static std::string hex (std::string_view value)
+    // 22-location-store-redis.md#7: the public opaque-record key. The
+    // `{zlink-location-v3}` segment is a Redis Cluster hashtag: everything
+    // inside the braces (and only that) is hashed to a slot, so the record
+    // key, the secondary-index key, the original-key map, and the sequence
+    // counter below all land on the same slot -- required for the write
+    // script's multi-key EVAL to be valid under Cluster.
+    std::string hash_base () const
     {
-        static constexpr char digits[] =
-          "0123456789abcdef";
-        std::string result;
-        result.reserve (value.size () * 2);
-        for (const auto character : value) {
-            const auto byte =
-              static_cast<unsigned char> (character);
-            result.push_back (digits[byte >> 4]);
-            result.push_back (digits[byte & 0x0f]);
-        }
-        return result;
+        return _options.key_prefix + ":{zlink-location-v3}";
     }
 
-    static std::string unhex (std::string_view value)
+    std::string record_key (std::string_view logical_key) const
     {
-        const auto nibble = [] (char character) {
-            if (character >= '0' && character <= '9')
-                return character - '0';
-            if (character >= 'a' && character <= 'f')
-                return character - 'a' + 10;
-            throw std::invalid_argument (
-              "invalid opaque Redis key");
-        };
-        if (value.size () % 2 != 0)
-            throw std::invalid_argument (
-              "invalid opaque Redis key");
-        std::string result;
-        result.reserve (value.size () / 2);
-        for (std::size_t index = 0;
-             index < value.size (); index += 2)
-            result.push_back (static_cast<char> (
-              (nibble (value[index]) << 4)
-              | nibble (value[index + 1])));
-        return result;
+        return hash_base () + ":opaque:" + detail::sha256_hex (logical_key);
     }
 
-    std::string value_key (std::string_view key) const
-    {
-        return _options.key_prefix + ":opaque:" + hex (key);
-    }
-
-    std::string decode_value_key (
-      const std::string &key) const
-    {
-        const auto prefix =
-          _options.key_prefix + ":opaque:";
-        if (!key.starts_with (prefix))
-            throw std::invalid_argument (
-              "Redis key is outside the location namespace");
-        return unhex (std::string_view (key).substr (
-          prefix.size ()));
-    }
-
-    std::string version_key () const
-    {
-        return _options.key_prefix + ":opaque:version";
-    }
+    std::string index_key () const { return hash_base () + ":opaque:index"; }
+    std::string map_key () const { return hash_base () + ":opaque:map"; }
+    std::string sequence_key () const { return hash_base () + ":opaque:sequence"; }
 
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
     static std::chrono::system_clock::time_point redis_now (
@@ -762,6 +986,13 @@ return result
     {
         return std::chrono::system_clock::time_point{
           std::chrono::milliseconds (value)};
+    }
+
+    static std::int64_t unix_ms (std::chrono::system_clock::time_point value)
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds> (
+          value.time_since_epoch ())
+          .count ();
     }
 
     redis_location_options_t _options;
@@ -799,6 +1030,10 @@ class redis_relocation_store_t final : public relocation_store_t
             || _options.key_prefix.empty ())
             throw std::invalid_argument (
               "Redis relocation connection and key prefix are required");
+        if (_options.key_prefix.find ('{') != std::string::npos
+            || _options.key_prefix.find ('}') != std::string::npos)
+            throw std::invalid_argument (
+              "Redis relocation key prefix must not contain '{' or '}'");
         if (_options.operation_timeout
             <= std::chrono::milliseconds::zero ())
             throw std::invalid_argument (
@@ -992,10 +1227,14 @@ return {'stored', tostring(nowMs),
               "relocation retention must be positive");
     }
 
+    // 23-relocation-store-redis.md#8: `{prefix}:{zlink-relocation-v1}:blob:
+    // {reference}`, a separately versioned domain tag independent of the
+    // Location Store's `{zlink-location-v3}` opaque record namespace, even
+    // when both Stores share one Redis deployment.
     std::string payload_key (
       std::string_view reference) const
     {
-        return _options.key_prefix + ":blob:"
+        return _options.key_prefix + ":{zlink-relocation-v1}:blob:"
                + std::string (reference);
     }
 

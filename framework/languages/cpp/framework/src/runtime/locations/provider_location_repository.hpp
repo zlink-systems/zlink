@@ -7,11 +7,13 @@
 #include "runtime/transport/endpoint_notation.hpp"
 #include <zlink/framework/contracts/locations/stores.hpp>
 
+#include "base64.hpp"
 #include "sha256.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -59,7 +61,10 @@ class provider_location_repository_t final : public location_repository_t
                 return completed (owner_lease_claim_result_t{owner_lease_generation_exhausted_t{}});
 
             const auto payload = to_bytes (
-              nlohmann::json{{"ownerId", owner_id}, {"leaseGeneration", generation}}.dump ());
+              nlohmann::json{{"recordVersion", 1},
+                            {"ownerId", owner_id},
+                            {"leaseGeneration", std::to_string (generation)}}
+                .dump ());
             store_write_request_t request;
             request.conditions.push_back (missing_condition (owner_key));
             request.conditions.push_back (condition_for (counter_key, counter));
@@ -86,7 +91,7 @@ class provider_location_repository_t final : public location_repository_t
         const auto record = parse_json (found->value.bytes);
         return completed (owner_lease_read_result_t{
           owner_lease_found_t{{record.at ("ownerId").get<std::string> (),
-                               record.at ("leaseGeneration").get<std::int64_t> ()},
+                               parse_i64_field (record.at ("leaseGeneration"))},
                               *found->value.expires_at,
                               found->value.store_now}});
     }
@@ -444,7 +449,7 @@ class provider_location_repository_t final : public location_repository_t
         if (limit == 0 || limit > 1000)
             throw std::invalid_argument ("authority scan limit must be between 1 and 1000");
         auto result = _store
-                        ->scan ({std::string (authority_prefix),
+                        ->scan ({prefix_authority (),
                                  cursor ? std::optional<store_scan_cursor_t>{store_scan_cursor_t{
                                             std::string (cursor->encoded ())}}
                                         : std::nullopt,
@@ -457,16 +462,27 @@ class provider_location_repository_t final : public location_repository_t
         authority_page_t output;
         output.items.reserve (page->items.size ());
         for (const auto &item : page->items) {
-            const auto encoded = item.key.value.substr (authority_prefix.size ());
-            const auto separator = encoded.find (':');
-            if (separator == std::string::npos)
+            // item.key.value is the §2.4 preimage "authority\0{actor|spot}\0{Id}".
+            const auto &preimage = item.key.value;
+            const auto domain_end = authority_domain.size ();
+            if (preimage.size () <= domain_end + 1 || preimage.compare (0, domain_end, authority_domain) != 0
+                || preimage[domain_end] != '\0')
                 continue;
-            const auto length =
-              static_cast<std::size_t> (std::stoull (encoded.substr (0, separator)));
-            const auto start = separator + 1;
-            if (start + length > encoded.size ())
+            const auto kind_start = domain_end + 1;
+            const auto kind_end = preimage.find ('\0', kind_start);
+            if (kind_end == std::string::npos)
                 continue;
-            const auto logical_key = encoded.substr (start, length);
+            const auto kind_word = preimage.substr (kind_start, kind_end - kind_start);
+            const auto object_id = preimage.substr (kind_end + 1);
+            char kind = 0;
+            if (kind_word == "actor")
+                kind = 'a';
+            else if (kind_word == "spot")
+                kind = 's';
+            else
+                continue;
+            const auto logical_key =
+              (kind == 'a' ? actor_authority_key (object_id) : spot_authority_key (object_id)).value;
             if (!logical_key.starts_with (key_prefix))
                 continue;
             auto snapshot = effective_authority (logical_key, item.value.bytes, item.value.version,
@@ -1669,19 +1685,24 @@ class provider_location_repository_t final : public location_repository_t
     task_t<std::int64_t> remove_all_by_owner (location_owner_token_t owner) override
     {
         std::int64_t removed = 0;
-        removed += remove_owned (std::string (prefix) + "mesh:", owner);
-        removed += remove_owned (std::string (prefix) + "client-server:", owner);
-        removed += remove_owned (std::string (prefix) + "fanout:", owner);
+        removed += remove_owned (std::string ("mesh-node") + '\0', owner);
+        removed += remove_owned (std::string ("client-server") + '\0', owner);
+        removed += remove_owned (std::string ("fanout-publisher") + '\0', owner);
         return completed (removed);
     }
 
   private:
     using json_t = nlohmann::json;
     static constexpr std::string_view prefix = "zlink:v11:";
-    static constexpr std::string_view authority_prefix = "zlink:v11:authority:";
     static constexpr std::uint64_t max_generation =
       static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ());
     inline static const store_key_t counter_key{std::string (prefix) + "owner-counter"};
+    // The 21-location-runtime.md#2.4 Store-wide monotonic sequence that
+    // issues `objectGeneration` (and, alongside it, AuthorityOwnerGeneration
+    // -- kept in the same record so both counters advance in the same
+    // atomic batch as the authority row they gate). The key name itself is
+    // provider-private; only the "one sequence, Store-wide" semantics and
+    // the exhaustion/non-zero rules below are the cross-language contract.
     inline static const store_key_t generation_counter_key{std::string (prefix)
                                                            + "authority-generations"};
 
@@ -2038,7 +2059,7 @@ class provider_location_repository_t final : public location_repository_t
 
     static std::int64_t owner_generation (const std::vector<std::byte> &value)
     {
-        return parse_json (value).at ("leaseGeneration").get<std::int64_t> ();
+        return parse_i64_field (parse_json (value).at ("leaseGeneration"));
     }
 
     static std::string segment (std::string_view value)
@@ -2046,14 +2067,52 @@ class provider_location_repository_t final : public location_repository_t
         return std::to_string (value.size ()) + ":" + std::string (value) + ":";
     }
 
+    // NUL-delimited logical-key preimages, 21-location-runtime.md#2.4. These
+    // preimages -- not the internal "zlink:v11:..." scheme below -- are the
+    // cross-language public contract for the five opaque records (MeshNode,
+    // owner lease, ClientServer, fanout publisher, authority). The Redis
+    // provider hashes whatever store_key_t it receives with SHA-256, so
+    // provider-private keys (reservation, aggregate, lock, terminal, ...)
+    // keep the existing "zlink:v11:" scheme unchanged -- only these five
+    // need a byte-exact, cross-language preimage.
+    static std::string preimage2 (std::string_view a, std::string_view b)
+    {
+        std::string result;
+        result.reserve (a.size () + b.size () + 1);
+        result.append (a);
+        result.push_back ('\0');
+        result.append (b);
+        return result;
+    }
+
     static store_key_t key_owner (std::string_view owner_id)
     {
-        return {std::string (prefix) + "owner:" + segment (owner_id)};
+        return {preimage2 ("owner-lease", owner_id)};
+    }
+
+    static constexpr std::string_view authority_domain = "authority";
+
+    static std::string preimage_authority (char kind, std::string_view object_id)
+    {
+        std::string result (authority_domain);
+        result.push_back ('\0');
+        result.append (kind == 'a' ? "actor" : "spot");
+        result.push_back ('\0');
+        result.append (object_id);
+        return result;
+    }
+
+    static std::string prefix_authority ()
+    {
+        return std::string (authority_domain) + '\0';
     }
 
     static store_key_t key_authority (std::string_view value)
     {
-        return {std::string (authority_prefix) + segment (value)};
+        const auto decoded = authority_key_codec_detail::decode_authority_key (value);
+        if (!decoded)
+            throw std::invalid_argument ("authority store key requires a valid identity");
+        return {preimage_authority (decoded->kind, decoded->object_id)};
     }
 
     static store_key_t key_reservation (const object_creation_key_t &key)
@@ -2175,33 +2234,33 @@ class provider_location_repository_t final : public location_repository_t
 
     static std::string prefix_mesh (std::string_view mesh_name)
     {
-        return std::string (prefix) + "mesh:" + segment (mesh_name);
+        return preimage2 ("mesh-node", mesh_name) + '\0';
     }
 
     static store_key_t key_mesh (std::string_view mesh_name, const zlink::routing_id_t &rid)
     {
-        return {prefix_mesh (mesh_name) + segment (rid.to_hex ())};
+        return {prefix_mesh (mesh_name) + rid.to_hex ()};
     }
 
     static std::string prefix_client_server (std::string_view channel_name)
     {
-        return std::string (prefix) + "client-server:" + segment (channel_name);
+        return preimage2 ("client-server", channel_name) + '\0';
     }
 
     static store_key_t key_client_server (std::string_view channel_name,
                                           const zlink::routing_id_t &rid)
     {
-        return {prefix_client_server (channel_name) + segment (rid.to_hex ())};
+        return {prefix_client_server (channel_name) + rid.to_hex ()};
     }
 
     static std::string prefix_fanout (std::string_view channel_name)
     {
-        return std::string (prefix) + "fanout:" + segment (channel_name);
+        return preimage2 ("fanout-publisher", channel_name) + '\0';
     }
 
     static store_key_t key_fanout (std::string_view channel_name, const zlink::routing_id_t &rid)
     {
-        return {prefix_fanout (channel_name) + segment (rid.to_hex ())};
+        return {prefix_fanout (channel_name) + rid.to_hex ()};
     }
 
     template <typename TImmutable>
@@ -2333,6 +2392,20 @@ class provider_location_repository_t final : public location_repository_t
         return removed;
     }
 
+    // §2.4 generation fields are JSON strings; the descriptor sub-object's
+    // own copies of these fields (kept for `same_mesh_immutable`/decode
+    // round-tripping) still use plain JSON numbers, so this accepts both.
+    static std::int64_t parse_i64_field (const json_t &value)
+    {
+        return value.is_string () ? std::stoll (value.get<std::string> ()) : value.get<std::int64_t> ();
+    }
+
+    static std::uint64_t parse_u64_field (const json_t &value)
+    {
+        return value.is_string () ? std::stoull (value.get<std::string> ())
+                                  : value.get<std::uint64_t> ();
+    }
+
     static std::string record_owner_id (const json_t &record)
     {
         if (record.contains ("ownerId"))
@@ -2343,22 +2416,22 @@ class provider_location_repository_t final : public location_repository_t
     static std::int64_t record_lease_generation (const json_t &record)
     {
         if (record.contains ("leaseGeneration"))
-            return record.at ("leaseGeneration").get<std::int64_t> ();
-        return record.at ("descriptor").at ("leaseGeneration").get<std::int64_t> ();
+            return parse_i64_field (record.at ("leaseGeneration"));
+        return parse_i64_field (record.at ("descriptor").at ("leaseGeneration"));
     }
 
     static std::uint64_t record_lifecycle_generation (const json_t &record)
     {
         if (record.contains ("lifecycleGeneration"))
-            return record.at ("lifecycleGeneration").get<std::uint64_t> ();
-        return record.at ("descriptor").at ("lifecycleGeneration").get<std::uint64_t> ();
+            return parse_u64_field (record.at ("lifecycleGeneration"));
+        return parse_u64_field (record.at ("descriptor").at ("lifecycleGeneration"));
     }
 
     static std::uint64_t record_descriptor_revision (const json_t &record)
     {
         if (record.contains ("descriptorRevision"))
-            return record.at ("descriptorRevision").get<std::uint64_t> ();
-        return record.at ("descriptor").at ("descriptorRevision").get<std::uint64_t> ();
+            return parse_u64_field (record.at ("descriptorRevision"));
+        return parse_u64_field (record.at ("descriptor").at ("descriptorRevision"));
     }
 
     static std::int64_t unix_ms (std::chrono::system_clock::time_point value)
@@ -2380,7 +2453,7 @@ class provider_location_repository_t final : public location_repository_t
     static location_owner_token_t decode_owner (const json_t &value)
     {
         return {value.at ("ownerId").get<std::string> (),
-                value.at ("leaseGeneration").get<std::int64_t> ()};
+                parse_i64_field (value.at ("leaseGeneration"))};
     }
 
     static bool same_owner (const location_owner_token_t &left, const location_owner_token_t &right)
@@ -2413,9 +2486,12 @@ class provider_location_repository_t final : public location_repository_t
 
     static json_t encode_target (const object_creation_target_t &value)
     {
+        // nodeGeneration is the 21-location-runtime.md#2.4 canonical alias
+        // for nodeLifecycleGeneration (kept for decode_target/same_target).
         return {{"meshName", value.mesh_name},
                 {"nodeRid", value.node_rid.value ()},
                 {"nodeLifecycleGeneration", value.node_lifecycle_generation},
+                {"nodeGeneration", generation_string (value.node_lifecycle_generation)},
                 {"owner", encode_owner (value.owner)}};
     }
 
@@ -2423,7 +2499,9 @@ class provider_location_repository_t final : public location_repository_t
     {
         return {value.at ("meshName").get<std::string> (),
                 node_rid_t::from_string (value.at ("nodeRid").get<std::string> ()),
-                value.at ("nodeLifecycleGeneration").get<std::uint64_t> (),
+                value.contains ("nodeLifecycleGeneration")
+                  ? value.at ("nodeLifecycleGeneration").get<std::uint64_t> ()
+                  : parse_u64_field (value.at ("nodeGeneration")),
                 decode_owner (value.at ("owner"))};
     }
 
@@ -2453,19 +2531,64 @@ class provider_location_repository_t final : public location_repository_t
         return result;
     }
 
+    static const char *allocation_state_name (placement_allocation_state_t value)
+    {
+        return value == placement_allocation_state_t::active ? "active" : "reserved";
+    }
+
+    static placement_allocation_state_t parse_allocation_state (const json_t &value)
+    {
+        if (value.is_string ())
+            return value.get<std::string> () == "active" ? placement_allocation_state_t::active
+                                                          : placement_allocation_state_t::reserved;
+        return static_cast<placement_allocation_state_t> (value.get<int> ());
+    }
+
+    static const char *object_kind_name (placement_object_kind_t value)
+    {
+        return value == placement_object_kind_t::actor ? "actor" : "spot";
+    }
+
+    static const char *spot_kind_name (placement_object_kind_t value)
+    {
+        return value == placement_object_kind_t::instance_spot ? "instance" : "user";
+    }
+
+    static placement_object_kind_t parse_object_kind (const json_t &record)
+    {
+        if (const auto &value = record.at ("objectKind"); value.is_string ()) {
+            if (value.get<std::string> () == "actor")
+                return placement_object_kind_t::actor;
+            // "spot": disambiguated by the additive spotKind field
+            // (21-location-runtime.md#2.3's Entry|User|Instance kinds).
+            if (record.contains ("spotKind")
+                && record.at ("spotKind").get<std::string> () == "instance")
+                return placement_object_kind_t::instance_spot;
+            return placement_object_kind_t::user_spot;
+        }
+        return static_cast<placement_object_kind_t> (record.at ("objectKind").get<int> ());
+    }
+
+    // §2.4's canonical allocation shape uses `state`/`objectKind` as strings
+    // and adds `spotKind` for spot allocations; the original numeric
+    // `objectKind`/`state` fields are kept as additional fields (decode
+    // accepts either shape defensively, though this store only ever writes
+    // the canonical string shape now).
     static json_t encode_allocation (const placement_allocation_t &value)
     {
-        return {{"state", static_cast<int> (value.state)},
-                {"objectKind", static_cast<int> (value.object_kind)},
-                {"stableType", value.stable_type},
-                {"target", encode_target (value.target)},
-                {"capacityBundle", encode_bundle (value.capacity_bundle)}};
+        json_t encoded{{"state", allocation_state_name (value.state)},
+                       {"objectKind", object_kind_name (value.object_kind)},
+                       {"stableType", value.stable_type},
+                       {"target", encode_target (value.target)},
+                       {"capacityBundle", encode_bundle (value.capacity_bundle)}};
+        if (value.object_kind != placement_object_kind_t::actor)
+            encoded["spotKind"] = spot_kind_name (value.object_kind);
+        return encoded;
     }
 
     static placement_allocation_t decode_allocation (const json_t &value)
     {
-        return {static_cast<placement_allocation_state_t> (value.at ("state").get<int> ()),
-                static_cast<placement_object_kind_t> (value.at ("objectKind").get<int> ()),
+        return {parse_allocation_state (value.at ("state")), parse_object_kind (value),
                 value.at ("stableType").get<std::string> (), decode_target (value.at ("target")),
                 decode_bundle (value.at ("capacityBundle"))};
     }
@@ -2477,7 +2600,8 @@ class provider_location_repository_t final : public location_repository_t
         return {{"reservationId", value->reservation_id},
                 {"requestContentReference", value->request_content_reference},
                 {"requestSha256", hex (value->request_sha256)},
-                {"requestEncodedSize", value->request_encoded_size}};
+                {"requestEncodedSize", generation_string (
+                                        static_cast<std::uint64_t> (value->request_encoded_size))}};
     }
 
     static std::optional<pending_object_creation_t> decode_pending (const json_t &value)
@@ -2488,16 +2612,28 @@ class provider_location_repository_t final : public location_repository_t
           value.at ("reservationId").get<std::string> (),
           value.at ("requestContentReference").get<std::string> (),
           unhex_array<32> (value.at ("requestSha256").get<std::string> ()),
-          value.at ("requestEncodedSize").get<std::uint32_t> ()};
+          static_cast<std::uint32_t> (parse_u64_field (value.at ("requestEncodedSize")))};
     }
 
+    // 21-location-runtime.md#2.4's canonical authority envelope. `payload`
+    // is base64 (was hex -- checklist C-4's explicitly named cpp
+    // conversion); `objectGeneration`/`authorityOwnerGeneration` and the
+    // flat `ownerId`/`ownerLeaseGeneration` (not a nested `owner` object,
+    // unlike the generic record) are JSON strings. `storeVersion` is kept as
+    // an additional field: it is this store's own app-level CAS marker
+    // embedded in the record body, independent of the provider's opaque
+    // `StoreVersion` (returned separately via store_found_t.value.version).
     static std::vector<std::byte> encode_authority (const authority_snapshot_t &value)
     {
-        return to_bytes (json_t{{"storeVersion", value.store_version},
-                                {"payload", hex (value.payload)},
-                                {"objectGeneration", value.object_generation},
-                                {"authorityOwnerGeneration", value.authority_owner_generation},
-                                {"owner", encode_owner (value.owner)},
+        return to_bytes (json_t{{"recordVersion", 1},
+                                {"storeVersion", value.store_version},
+                                {"payload", base64_encode (value.payload)},
+                                {"objectGeneration", generation_string (value.object_generation)},
+                                {"authorityOwnerGeneration",
+                                 generation_string (value.authority_owner_generation)},
+                                {"ownerId", value.owner.owner_id},
+                                {"ownerLeaseGeneration",
+                                 generation_string (value.owner.lease_generation)},
                                 {"allocation", encode_allocation (value.allocation)},
                                 {"pendingCreation", encode_pending (value.pending_creation)}}
                            .dump ());
@@ -2509,11 +2645,22 @@ class provider_location_repository_t final : public location_repository_t
     {
         (void) provider_version;
         const auto value = parse_json (bytes);
+        if (value.contains ("recordVersion") && value.at ("recordVersion").get<int> () != 1)
+            throw std::invalid_argument ("unrecognized authority recordVersion");
+        const auto owner = value.contains ("owner")
+                             ? decode_owner (value.at ("owner"))
+                             : location_owner_token_t{value.at ("ownerId").get<std::string> (),
+                                                      parse_i64_field (
+                                                        value.at ("ownerLeaseGeneration"))};
+        // Clean break (checklist C-4): payload was hex, now base64. There is
+        // no dual-read fallback -- the whole opaque-record key/value scheme
+        // changed in the same conversion, so no pre-conversion record can be
+        // found under these keys to begin with.
         return {value.at ("storeVersion").get<std::string> (),
-                unhex (value.at ("payload").get<std::string> ()),
-                value.at ("objectGeneration").get<std::uint64_t> (),
-                value.at ("authorityOwnerGeneration").get<std::uint64_t> (),
-                decode_owner (value.at ("owner")),
+                base64_decode (value.at ("payload").get<std::string> ()),
+                parse_u64_field (value.at ("objectGeneration")),
+                parse_u64_field (value.at ("authorityOwnerGeneration")),
+                owner,
                 store_now,
                 decode_allocation (value.at ("allocation")),
                 decode_pending (value.at ("pendingCreation"))};
@@ -2673,10 +2820,17 @@ class provider_location_repository_t final : public location_repository_t
             spot_types.push_back ({{"objectKind", static_cast<int> (item.object_kind)},
                                    {"stableType", item.stable_type},
                                    {"usage", encode (item.usage)}});
+        // routingIdHex/nodeGeneration/role are the 21-location-runtime.md#2.4
+        // canonical aliases for rid/lifecycleGeneration/objectRole; the
+        // originals are kept so decode_mesh_descriptor and
+        // same_mesh_immutable stay unchanged.
+        static constexpr std::array<const char *, 3> role_names{"none", "client", "server"};
         return {
           {"meshName", value.mesh_name},
           {"rid", value.rid.to_hex ()},
+          {"routingIdHex", value.rid.to_hex ()},
           {"lifecycleGeneration", value.lifecycle_generation},
+          {"nodeGeneration", generation_string (value.lifecycle_generation)},
           {"descriptorRevision", value.descriptor_revision},
           {"endpoint", value.endpoint},
           {"entrySpotId", value.entry_spot_id ? json_t (*value.entry_spot_id) : json_t (nullptr)},
@@ -2684,6 +2838,7 @@ class provider_location_repository_t final : public location_repository_t
           {"applicationVersion", value.application_version},
           {"objectCapabilities", std::move (capabilities)},
           {"objectRole", static_cast<int> (value.object_role)},
+          {"role", role_names.at (static_cast<std::size_t> (value.object_role))},
           {"placementWeight", value.placement_weight},
           {"capacity",
            {{"actors", encode (value.capacity.actors)},
@@ -3030,10 +3185,26 @@ class provider_location_repository_t final : public location_repository_t
         return result;
     }
 
+    // §2.4 requires generation-typed fields as JSON strings (64-bit values
+    // can exceed JSON number precision), while `recordVersion` and plain
+    // counters like `placementWeight`/capacity slots stay JSON numbers.
+    static std::string generation_string (std::uint64_t value) { return std::to_string (value); }
+    static std::string generation_string (std::int64_t value) { return std::to_string (value); }
+
+    // §2.4's canonical envelope for the generic opaque record (MeshNode,
+    // ClientServer, fanout publisher). `generation` is kept as an additional
+    // field beyond the spec's "at least" set: it is this store's own
+    // internal write-generation counter (distinct from the host-issued
+    // `descriptorRevision`), used to gate `renew` intent and exhaustion.
     static json_t encode_mesh_record (std::uint64_t generation,
                                       const mesh_node_descriptor_t &descriptor)
     {
-        return {{"generation", generation}, {"descriptor", encode (descriptor)}};
+        return {{"recordVersion", 1},
+                {"generation", generation},
+                {"ownerId", descriptor.owner_id},
+                {"leaseGeneration", generation_string (descriptor.lease_generation)},
+                {"descriptorRevision", generation_string (descriptor.descriptor_revision)},
+                {"descriptor", encode (descriptor)}};
     }
 
     static json_t encode_descriptor_record (std::uint64_t generation,
@@ -3043,11 +3214,12 @@ class provider_location_repository_t final : public location_repository_t
                                             std::uint64_t descriptor_revision,
                                             json_t descriptor)
     {
-        return {{"generation", generation},
+        return {{"recordVersion", 1},
+                {"generation", generation},
                 {"ownerId", std::move (owner_id)},
-                {"leaseGeneration", lease_generation},
+                {"leaseGeneration", generation_string (lease_generation)},
                 {"lifecycleGeneration", lifecycle_generation},
-                {"descriptorRevision", descriptor_revision},
+                {"descriptorRevision", generation_string (descriptor_revision)},
                 {"descriptor", std::move (descriptor)}};
     }
 

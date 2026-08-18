@@ -989,7 +989,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_features(test_cpp_framework_store_record_golden PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_store_record_golden PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_DIR}/extensions/framework-locations-redis/include
+    ${ZLINK_FRAMEWORK_CPP_DIR}/connector/core/include)
   target_compile_definitions(test_cpp_framework_store_record_golden PRIVATE
     ZLINK_STORE_RECORD_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/store-record-v1.json")
   target_link_libraries(test_cpp_framework_store_record_golden PRIVATE
