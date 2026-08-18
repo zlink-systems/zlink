@@ -2258,10 +2258,10 @@ final class ZLinkProviderAuthorityRepository {
             StandardCharsets.UTF_8);
     }
 
+    // Canonical cross-language logical key preimage
+    // (21-location-runtime.md#2.4): "owner-lease\0{OwnerId}".
     private static ZLinkStoreKey ownerKey(String ownerId) {
-        byte[] bytes = ownerId.getBytes(StandardCharsets.UTF_8);
-        return new ZLinkStoreKey(
-            "zlink:v11:owner:" + bytes.length + ":" + ownerId + ":");
+        return ZLinkOwnerLeaseRecordCodec.key(ownerId);
     }
 
     private static ZLinkStoreKey aggregateKey(ZLinkAggregateFence fence) {
@@ -2271,18 +2271,7 @@ final class ZLinkProviderAuthorityRepository {
     }
 
     private static long ownerGeneration(byte[] bytes) {
-        try {
-            var in = new DataInputStream(new ByteArrayInputStream(bytes));
-            int length = in.readInt();
-            if (length < 1 || length > bytes.length - 12) {
-                throw new IOException();
-            }
-            in.skipNBytes(length);
-            return in.readLong();
-        } catch (IOException failure) {
-            throw new IllegalStateException(
-                "Location Store owner record is invalid", failure);
-        }
+        return ZLinkOwnerLeaseRecordCodec.decode(bytes).leaseGeneration();
     }
 
     private static byte[] encodeLong(long value) {

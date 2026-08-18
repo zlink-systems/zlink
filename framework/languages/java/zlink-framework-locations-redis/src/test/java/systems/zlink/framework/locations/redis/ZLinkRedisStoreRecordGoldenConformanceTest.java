@@ -288,6 +288,63 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
         }
     }
 
+    /**
+     * Drives {@code ZLinkProviderLocationRepository.claimOwnerLease} -- the
+     * real production owner-lease writer -- against the {@code
+     * ownerLease-expired} vector (21-location-runtime.md#2.4), then reads
+     * the raw stored bytes back and structurally compares them to the
+     * fixture's {@code decoded} JSON. {@code leaseGeneration} is issued by
+     * the live Store-wide sequence, so it's substituted with the real
+     * claimed value on both sides before the comparison, mirroring the
+     * MeshNode descriptor conformance test above.
+     */
+    @Test
+    void productionOwnerLeaseClaimMatchesFullFieldVector() throws Exception {
+        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
+        assumeTrue(endpoint != null && !endpoint.isBlank(),
+            "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+
+        JsonNode fixture = readTree(sharedFixturePath());
+        JsonNode keyVector = keyDerivationVector(fixture, "owner-lease");
+        JsonNode expected = valueVector(fixture, "ownerLease-expired")
+            .path("decoded").deepCopy();
+        String ownerId = expected.path("ownerId").asText();
+
+        String storePrefix = "goldenconf-owner:" + UUID.randomUUID();
+        try (var store = new ZLinkRedisLocationStore(
+            new ZLinkRedisLocationOptions()
+                .setConnectionString(endpoint)
+                .setKeyPrefix(storePrefix))) {
+            var repository = new ZLinkProviderLocationRepository(store);
+            var claimed = assertInstanceOf(
+                ZLinkOwnerLeaseClaimed.class,
+                repository.claimOwnerLease(ownerId, Duration.ofMinutes(5))
+                    .toCompletableFuture().get());
+
+            String preimage = "owner-lease\0" + ownerId;
+            assertEquals(
+                keyVector.path("preimagePrintable").asText()
+                    .replace("\\u0000", "\0"),
+                preimage,
+                "owner-lease preimage does not match the golden vector");
+
+            var raw = assertInstanceOf(
+                ZLinkStoreReadFound.class,
+                store.read(new ZLinkStoreKey(preimage), () -> false)
+                    .toCompletableFuture().get());
+            JsonNode actual = new ObjectMapper().readTree(raw.value().bytes());
+
+            ((ObjectNode) expected).put(
+                "leaseGeneration",
+                Long.toString(claimed.token().leaseGeneration()));
+
+            assertEquals(
+                expected,
+                actual,
+                "canonical JSON field mismatch against the golden vector");
+        }
+    }
+
     @Test
     void unrecognizedFormatTagFailsExplicitlyInsteadOfSilentlyMissing()
         throws IOException {

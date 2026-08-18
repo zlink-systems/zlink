@@ -927,44 +927,17 @@ final class ZLinkProviderDescriptorRepository {
     }
 
     private static long decodeOwnerGeneration(byte[] bytes) {
-        ByteBuffer input = ownerRecord(bytes);
-        int length = input.getInt();
-        input.position(input.position() + length);
-        return input.getLong();
+        return ZLinkOwnerLeaseRecordCodec.decode(bytes).leaseGeneration();
     }
 
     private static String decodeOwnerId(byte[] bytes) {
-        ByteBuffer input = ownerRecord(bytes);
-        int length = input.getInt();
-        byte[] owner = new byte[length];
-        input.get(owner);
-        return new String(owner, StandardCharsets.UTF_8);
+        return ZLinkOwnerLeaseRecordCodec.decode(bytes).ownerId();
     }
 
-    private static ByteBuffer ownerRecord(byte[] bytes) {
-        try {
-            ByteBuffer input = ByteBuffer.wrap(bytes);
-            int length = input.getInt(0);
-            if (length < 1
-                || length != bytes.length - Integer.BYTES - Long.BYTES) {
-                throw new IllegalStateException();
-            }
-            long generation = input.getLong(
-                Integer.BYTES + length);
-            if (generation <= 0) {
-                throw new IllegalStateException();
-            }
-            return input;
-        } catch (RuntimeException error) {
-            throw new IllegalStateException(
-                "Location Store owner lease record is invalid",
-                error);
-        }
-    }
-
+    // Canonical cross-language logical key preimage
+    // (21-location-runtime.md#2.4): "owner-lease\0{OwnerId}".
     private static ZLinkStoreKey ownerKey(String ownerId) {
-        return new ZLinkStoreKey(
-            PREFIX + "owner:" + segment(ownerId));
+        return ZLinkOwnerLeaseRecordCodec.key(ownerId);
     }
 
     // Canonical cross-language logical key preimage

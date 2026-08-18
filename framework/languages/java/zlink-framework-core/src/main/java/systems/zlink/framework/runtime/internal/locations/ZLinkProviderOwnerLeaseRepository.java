@@ -2,7 +2,6 @@ package systems.zlink.framework.runtime.internal.locations;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
@@ -46,7 +45,8 @@ final class ZLinkProviderOwnerLeaseRepository {
                 }
                 ZLinkStoreValue value =
                     ((ZLinkStoreReadFound) result).value();
-                OwnerRecord record = decodeOwner(value.bytes());
+                ZLinkOwnerLeaseRecordCodec.Record record =
+                    ZLinkOwnerLeaseRecordCodec.decode(value.bytes());
                 if (!ownerId.equals(record.ownerId())
                     || value.expiresAt() == null) {
                     throw new IllegalStateException(
@@ -55,7 +55,7 @@ final class ZLinkProviderOwnerLeaseRepository {
                 return new ZLinkOwnerLeaseFound(
                     new ZLinkLocationOwnerToken(
                         record.ownerId(),
-                        record.generation()),
+                        record.leaseGeneration()),
                     value.expiresAt(),
                     value.storeNow());
             });
@@ -69,7 +69,8 @@ final class ZLinkProviderOwnerLeaseRepository {
         ZLinkStoreKey key = ownerKey(token.ownerId());
         return provider.read(key, active()).thenCompose(current -> {
             if (!(current instanceof ZLinkStoreReadFound found)
-                || decodeOwner(found.value().bytes()).generation()
+                || ZLinkOwnerLeaseRecordCodec.decode(found.value().bytes())
+                        .leaseGeneration()
                     != token.leaseGeneration()) {
                 return completed(new ZLinkOwnerLeaseRenewStale());
             }
@@ -98,7 +99,8 @@ final class ZLinkProviderOwnerLeaseRepository {
         ZLinkStoreKey key = ownerKey(token.ownerId());
         return provider.read(key, active()).thenCompose(current -> {
             if (!(current instanceof ZLinkStoreReadFound found)
-                || decodeOwner(found.value().bytes()).generation()
+                || ZLinkOwnerLeaseRecordCodec.decode(found.value().bytes())
+                        .leaseGeneration()
                     != token.leaseGeneration()) {
                 return completed(ZLinkOwnerLeaseReleaseResult.STALE);
             }
@@ -148,7 +150,8 @@ final class ZLinkProviderOwnerLeaseRepository {
                         List.of(
                             new ZLinkStorePut(
                                 ownerKey,
-                                encodeOwner(ownerId, generation),
+                                ZLinkOwnerLeaseRecordCodec.encode(
+                                    ownerId, generation),
                                 leaseTtl),
                             new ZLinkStorePut(
                                 OWNER_COUNTER,
@@ -198,10 +201,11 @@ final class ZLinkProviderOwnerLeaseRepository {
             .handle((result, failure) -> {
                 if (failure == null
                     && result instanceof ZLinkStoreReadFound found) {
-                    OwnerRecord record = decodeOwner(
-                        found.value().bytes());
+                    ZLinkOwnerLeaseRecordCodec.Record record =
+                        ZLinkOwnerLeaseRecordCodec.decode(
+                            found.value().bytes());
                     if (record.ownerId().equals(expected.ownerId())
-                        && record.generation()
+                        && record.leaseGeneration()
                             == expected.leaseGeneration()
                         && found.value().expiresAt() != null) {
                         return (ZLinkOwnerLeaseClaimResult)
@@ -213,38 +217,6 @@ final class ZLinkProviderOwnerLeaseRepository {
                 }
                 throw new CompletionException(originalFailure);
             });
-    }
-
-    private static byte[] encodeOwner(String ownerId, long generation) {
-        byte[] owner = ownerId.getBytes(StandardCharsets.UTF_8);
-        return ByteBuffer.allocate(4 + owner.length + Long.BYTES)
-            .putInt(owner.length)
-            .put(owner)
-            .putLong(generation)
-            .array();
-    }
-
-    private static OwnerRecord decodeOwner(byte[] bytes) {
-        try {
-            ByteBuffer input = ByteBuffer.wrap(bytes);
-            int length = input.getInt();
-            if (length < 1 || length > input.remaining() - Long.BYTES) {
-                throw new IllegalStateException();
-            }
-            byte[] owner = new byte[length];
-            input.get(owner);
-            long generation = input.getLong();
-            if (input.hasRemaining() || generation <= 0) {
-                throw new IllegalStateException();
-            }
-            return new OwnerRecord(
-                new String(owner, StandardCharsets.UTF_8),
-                generation);
-        } catch (RuntimeException failure) {
-            throw new IllegalStateException(
-                "Location Store owner lease record is invalid",
-                failure);
-        }
     }
 
     private static byte[] encodeCounter(long value) {
@@ -264,10 +236,10 @@ final class ZLinkProviderOwnerLeaseRepository {
         return value;
     }
 
+    // Canonical cross-language logical key preimage
+    // (21-location-runtime.md#2.4): "owner-lease\0{OwnerId}".
     private static ZLinkStoreKey ownerKey(String ownerId) {
-        byte[] bytes = ownerId.getBytes(StandardCharsets.UTF_8);
-        return new ZLinkStoreKey(
-            PREFIX + "owner:" + bytes.length + ":" + ownerId + ":");
+        return ZLinkOwnerLeaseRecordCodec.key(ownerId);
     }
 
     private static void requireOwner(String ownerId) {
@@ -299,7 +271,5 @@ final class ZLinkProviderOwnerLeaseRepository {
     private static <T> CompletionStage<T> completed(T value) {
         return CompletableFuture.completedFuture(value);
     }
-
-    private record OwnerRecord(String ownerId, long generation) {}
 
 }
