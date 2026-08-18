@@ -6,7 +6,6 @@ import io.lettuce.core.ScriptOutputType;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.async.RedisAsyncCommands;
 import io.lettuce.core.codec.RedisCodec;
-import io.lettuce.core.codec.StringCodec;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.function.Function;
@@ -16,12 +15,10 @@ import java.util.concurrent.CompletionStage;
 /**
  * Redis connection wrapper shared by the Location Store providers.
  *
- * <p>Parameterized over the value type {@code V} so callers that only ever
- * exchange text (the dedicated Lua paths in {@link ZLinkRedisLocationRepository})
- * can keep a plain {@link StringCodec}, while callers that must carry
+ * <p>Parameterized over the value type {@code V}: callers must carry
  * 8-bit-clean opaque bytes through {@code EVAL} ARGV without a base64
- * sub-layer (the opaque record store, the relocation blob store) use a
- * byte[] value codec. See {@link #forStrings} and {@link #forBytes}.</p>
+ * sub-layer (the opaque record store, the relocation blob store), so they
+ * use a byte[] value codec. See {@link #forBytes}.</p>
  */
 final class ZLinkRedisLocationConnection<V> {
     private final RedisURI redisUri;
@@ -44,23 +41,6 @@ final class ZLinkRedisLocationConnection<V> {
         this.codec = codec;
         this.literal = literal;
         this.client = RedisClient.create(redisUri);
-    }
-
-    static ZLinkRedisLocationConnection<String> forStrings(
-        ZLinkRedisLocationOptions options,
-        String schemaKey) {
-        return forStrings(options.redisUri(), schemaKey);
-    }
-
-    static ZLinkRedisLocationConnection<String> forStrings(RedisURI redisUri) {
-        return forStrings(redisUri, null);
-    }
-
-    static ZLinkRedisLocationConnection<String> forStrings(
-        RedisURI redisUri,
-        String schemaKey) {
-        return new ZLinkRedisLocationConnection<>(
-            redisUri, schemaKey, StringCodec.UTF8, value -> value);
     }
 
     static ZLinkRedisLocationConnection<byte[]> forBytes(
