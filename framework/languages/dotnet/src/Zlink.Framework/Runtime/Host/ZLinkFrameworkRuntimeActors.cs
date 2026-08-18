@@ -789,8 +789,18 @@ internal sealed partial class ZLinkFrameworkRuntime
         //  Spec 15 §4.2: install the real per-actor import and migrate
         //  every arrival parked since Accepted into it, atomically with
         //  removing the prewarm attempt — only the party that owns this
-        //  Import call performs the one-time migration.
-        CompleteActorJoinPrewarmMigration(request.HandoffId, actorState);
+        //  Import call performs the one-time migration. A newer exact
+        //  identity may have already evicted this attempt (late PREPARE
+        //  for a dead identity) — abort the just-owned import instead of
+        //  continuing into lifecycle/CAS work with a stale stage.
+        if (!CompleteActorJoinPrewarmMigration(request.HandoffId, actorState))
+        {
+            actorState.Handoff.AbortImport(request.HandoffId);
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{request.ActorId}' relocation admission was superseded "
+                + "by a newer identity before PREPARE.");
+        }
         var actor = actorState.Actor
                     ?? throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.NotFound,

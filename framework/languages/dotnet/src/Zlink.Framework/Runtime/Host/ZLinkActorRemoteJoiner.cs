@@ -653,12 +653,13 @@ internal sealed class ZLinkActorRemoteJoiner(
         // node"); the join commit crosses nodes, so the target must receiver
         // the concrete session node rid — the actor's current owner node — or
         // its pushes can never route back to the session.
-        actorState.Handoff.SealCapture();
         //  Spec 30 §11: the SafeToShutdown obligation starts at seal, not
         //  at cutover — waiting until CommitMessageFollow would let a
-        //  shutdown query race the seal-to-cutover window.
-        actorState.Handoff.PendingShutdownToken =
-            runtime.BeginPendingRelocationUnit();
+        //  shutdown query race the seal-to-cutover window. Attaching the
+        //  token in the same locked call as the seal itself closes the
+        //  window where a status read could observe the seal without the
+        //  obligation counted, or an abort could race the attach.
+        actorState.Handoff.SealCapture(runtime.BeginPendingRelocationUnit());
         var committedFrames = actorState.Handoff.SnapshotFrames();
         var relocationStore = registration.Locations.ResolveRelocationStore()
                               ?? throw new ZLinkConfigurationException(

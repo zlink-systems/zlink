@@ -83,6 +83,65 @@ internal sealed class ZLinkSpotRelocationAdapterInvoker<TSpot>(Type adapterType)
     }
 }
 
+/// <summary>
+/// Base/delta-capable Spot relocation adapter invoker (spec 15 §5): the
+/// registered adapter implements <see cref="IZLinkSpotBaseDeltaRelocationAdapter{TSpot}"/>.
+/// </summary>
+internal sealed class ZLinkSpotBaseDeltaRelocationAdapterInvoker<TSpot>(
+    Type adapterType)
+    : IZLinkBaseDeltaRelocationAdapterInvoker
+    where TSpot : class
+{
+    public ValueTask<byte[]> CaptureAsync(
+        IServiceProvider services,
+        object instance,
+        CancellationToken cancellationToken) =>
+        Resolve(services).CaptureAsync((TSpot)instance, cancellationToken);
+
+    public ValueTask RestoreAsync(
+        IServiceProvider services,
+        object instance,
+        ReadOnlyMemory<byte> payload,
+        CancellationToken cancellationToken) =>
+        Resolve(services).RestoreAsync(
+            (TSpot)instance, payload, cancellationToken);
+
+    public ValueTask<byte[]> CaptureBaseAsync(
+        IServiceProvider services,
+        object instance,
+        CancellationToken cancellationToken) =>
+        Resolve(services).CaptureBaseAsync(
+            (TSpot)instance, cancellationToken);
+
+    public ValueTask<byte[]> CaptureDeltaAsync(
+        IServiceProvider services,
+        object instance,
+        CancellationToken cancellationToken) =>
+        Resolve(services).CaptureDeltaAsync(
+            (TSpot)instance, cancellationToken);
+
+    public ValueTask RestoreBaseAsync(
+        IServiceProvider services,
+        object instance,
+        ReadOnlyMemory<byte> basePayload,
+        CancellationToken cancellationToken) =>
+        Resolve(services).RestoreBaseAsync(
+            (TSpot)instance, basePayload, cancellationToken);
+
+    public ValueTask ApplyDeltaAsync(
+        IServiceProvider services,
+        object instance,
+        ReadOnlyMemory<byte> deltaPayload,
+        CancellationToken cancellationToken) =>
+        Resolve(services).ApplyDeltaAsync(
+            (TSpot)instance, deltaPayload, cancellationToken);
+
+    private IZLinkSpotBaseDeltaRelocationAdapter<TSpot> Resolve(
+        IServiceProvider services) =>
+        (IZLinkSpotBaseDeltaRelocationAdapter<TSpot>)
+            services.GetRequiredService(adapterType);
+}
+
 internal sealed class ZLinkActorRelocationAdapterInvoker<TActor>(Type adapterType)
     : IZLinkRelocationAdapterInvoker
     where TActor : class, IZLinkActor

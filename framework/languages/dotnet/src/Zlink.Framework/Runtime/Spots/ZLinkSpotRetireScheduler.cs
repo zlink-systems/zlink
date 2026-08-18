@@ -137,7 +137,8 @@ internal sealed record ZLinkSpotRetireReservation(
 
 internal sealed record ZLinkPreparedSpotRetireStaging(
     ZLinkPreparedRelocation Root,
-    IReadOnlyList<ZLinkAggregateRelocationParticipant> Participants)
+    IReadOnlyList<ZLinkAggregateRelocationParticipant> Participants,
+    ReadOnlyMemory<byte> SpotBaseState = default)
 {
     internal ZLinkRelocationStored Relocation => Root.Relocation;
 
@@ -318,6 +319,15 @@ internal sealed class ZLinkSpotRetireScheduler(
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"relocation_reserved spot={activation.SpotId} target={reservation.TargetDescriptor.Rid}");
 
+        //  Spec 15 §5: CaptureBase runs pre-seal, once the exact relocation
+        //  identity (SpotId/StableType/ObjectGeneration — already fixed by
+        //  the reservation above) is known, but before the seal freezes
+        //  the turn boundary CaptureDelta later captures against. Empty
+        //  for non-base/delta-capable adapters (legacy path unaffected).
+        var spotBaseState = await activation
+            .CaptureSpotInstanceBaseAsync(cancellationToken)
+            .ConfigureAwait(false);
+
         ZLinkSpotRelocationSeal admittedSeal;
         try
         {
@@ -465,15 +475,27 @@ internal sealed class ZLinkSpotRetireScheduler(
                         actorIds.ToHashSet(StringComparer.Ordinal),
                         cancellationToken)
                     .ConfigureAwait(false);
+                //  Spec 24:110-115, 25:211-214: one obligation per
+                //  relocation unit, which includes the User/Instance Spot
+                //  root itself — not only its member actors. A zero-actor
+                //  Spot must still contribute an obligation. Scoped to this
+                //  try block (which spans the rest of this unit's work, up
+                //  to its terminal return) so it releases exactly once
+                //  whether the unit finishes or this attempt fails into the
+                //  surrounding catch blocks below.
+                using var spotUnitShutdownToken = runtime.BeginPendingRelocationUnit();
                 foreach (var capture in actorCaptures.Values)
                 {
-                    capture.State.Handoff.SealCapture();
                     //  Spec 30 §11: the SafeToShutdown obligation starts at
                     //  seal, not at cutover — waiting until
                     //  CommitMessageFollow would let a shutdown query race
-                    //  the seal-to-cutover window.
-                    capture.State.Handoff.PendingShutdownToken =
-                        runtime.BeginPendingRelocationUnit();
+                    //  the seal-to-cutover window. Attaching the token in
+                    //  the same locked call as the seal closes the window
+                    //  where a status read could observe the seal without
+                    //  the obligation counted, or an abort could race the
+                    //  attach.
+                    capture.State.Handoff.SealCapture(
+                        runtime.BeginPendingRelocationUnit());
                     capture.CommitBoundary = capture.State.Handoff
                         .FreezeCaptureCommitBoundary();
                 }
@@ -532,7 +554,8 @@ internal sealed class ZLinkSpotRetireScheduler(
                     .ConfigureAwait(false);
                 staging = new ZLinkPreparedSpotRetireStaging(
                     stagingRoot,
-                    participants);
+                    participants,
+                    spotBaseState);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"relocation_stage_begin spot={activation.SpotId} aggregate={aggregateId:N}");
                 published = new ZLinkAggregateRelocationPublished(

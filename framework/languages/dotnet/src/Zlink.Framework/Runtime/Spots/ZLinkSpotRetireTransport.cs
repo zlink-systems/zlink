@@ -253,6 +253,18 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             var transferPayload = ZLinkRelocationTransferPayload.Create(
                 relocation.Envelope,
                 registration.Locations.Options.RelocationPayloadChunkLimit);
+            //  Spec 15 §5: a non-empty SpotBaseState means the Spot's own
+            //  adapter is base/delta-capable and CaptureBase returned
+            //  bytes — send them as payloadStage=base chunks ahead of
+            //  Prepare, with the checksum on the manifest. Empty means the
+            //  legacy path (adapter not capable, or an empty base):
+            //  checksum stays 0 and no base chunks are sent.
+            var hasSpotBase = relocation.SpotBaseState.Length > 0;
+            var basePayload = hasSpotBase
+                ? ZLinkRelocationTransferPayload.CreateRaw(
+                    relocation.SpotBaseState.ToArray(),
+                    registration.Locations.Options.RelocationPayloadChunkLimit)
+                : null;
             var prepare = new ZLinkServiceWireCodec.RelocationPrepareRecord(
                 relocationId,
                 targetAttemptGeneration,
@@ -280,14 +292,15 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 checked((ulong)transferPayload.TotalLength),
                 checked((uint)transferPayload.ChunkCount),
                 transferPayload.ChecksumCrc32c,
-                0,
+                hasSpotBase ? ZLinkCrc32C.Compute(relocation.SpotBaseState.Span) : 0,
                 checked((ulong)registration.ApplicationVersion));
             _ = await canonical.PrepareCanonicalRelocationAsync(
                     reservation.TargetDescriptor.Rid,
                     prepare,
                     transferPayload,
                     registration.DefaultRequestTimeout,
-                    cancellationToken)
+                    cancellationToken,
+                    basePayload)
                 .ConfigureAwait(false);
             var sourceFence = new ZLinkAggregateFence(
                 relocation.Envelope.AggregateId,
@@ -832,7 +845,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         ZLinkRelocationEnvelope envelope,
         RoutingId sourceNodeRid,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> basePayload = default)
     {
         if (prepare.Object.Kind == 1)
             throw new InvalidOperationException(
@@ -887,7 +901,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 context,
                 envelope,
                 sourceNodeRid,
-                cancellationToken)
+                cancellationToken,
+                basePayload,
+                hasBase: prepare.BaseChecksumCrc32c != 0)
             .ConfigureAwait(false);
         if (!staged)
             throw new ZLinkFrameworkException(
@@ -1251,7 +1267,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         ZLinkCanonicalSpotStageContext request,
         ZLinkRelocationEnvelope transferredEnvelope,
         RoutingId sourceNodeRid,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> basePayload = default,
+        bool hasBase = false)
     {
         await CleanupExpiredAsync().ConfigureAwait(false);
         if (sourceNodeRid.ToHex() != request.SourceNodeRid)
@@ -1311,7 +1329,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     envelope,
                     reservedTargetAuthorityOwnerGeneration: 0,
                     cancellationToken,
-                    stagedBeforeCutover: true)
+                    stagedBeforeCutover: true,
+                    basePayload,
+                    hasBase)
                 .ConfigureAwait(false);
         }
         catch

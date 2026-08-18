@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Identifiers;
+using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -2143,11 +2144,23 @@ internal abstract partial class ZLinkSpotActivation
                 {
                     var spotRegistration =
                         activation.ResolveSpotRelocationRegistration();
-                    var spotState = await activation.CaptureInstanceAsync(
-                            spotRegistration,
-                            activation.Spot,
-                            ct)
-                        .ConfigureAwait(false);
+                    //  Spec 15 §5: a base/delta-capable Spot adapter only
+                    //  captures the post-seal delta here — its base was
+                    //  already captured pre-seal by
+                    //  CaptureSpotInstanceBaseAsync. Non-capable adapters
+                    //  keep the byte-identical legacy single-capture path.
+                    var spotState = ZLinkActorRelocationRegistry
+                        .IsBaseDeltaCapable(spotRegistration)
+                        ? await activation.CaptureInstanceDeltaAsync(
+                                spotRegistration,
+                                activation.Spot,
+                                ct)
+                            .ConfigureAwait(false)
+                        : await activation.CaptureInstanceAsync(
+                                spotRegistration,
+                                activation.Spot,
+                                ct)
+                            .ConfigureAwait(false);
                     var actorStates = await activation.CaptureActorStatesAsync(
                             activation._actors.Snapshot(),
                             includedActorIds,
@@ -2162,6 +2175,37 @@ internal abstract partial class ZLinkSpotActivation
         return captured
                ?? throw new InvalidOperationException(
                    "SPOT relocation capture did not complete.");
+    }
+
+    /// <summary>
+    /// Pre-seal base capture for the Spot's own instance (spec 15 §5).
+    /// Called after the Spot's exact relocation identity is fixed but
+    /// before the relocation seal, so the base reflects state as of that
+    /// turn boundary. Returns an empty payload for non-base/delta-capable
+    /// adapters (no chunk-stage split, checksum stays 0 — legacy path
+    /// unaffected).
+    /// </summary>
+    internal async ValueTask<byte[]> CaptureSpotInstanceBaseAsync(
+        CancellationToken cancellationToken)
+    {
+        byte[]? captured = null;
+        await _serial.ExecuteLifecycleAsync(
+                async (activation, ct) =>
+                {
+                    var spotRegistration =
+                        activation.ResolveSpotRelocationRegistration();
+                    captured = ZLinkActorRelocationRegistry
+                        .IsBaseDeltaCapable(spotRegistration)
+                        ? await activation.CaptureInstanceBaseAsync(
+                                spotRegistration,
+                                activation.Spot,
+                                ct)
+                            .ConfigureAwait(false)
+                        : [];
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+        return captured ?? [];
     }
 
     private async ValueTask<IReadOnlyDictionary<ZLinkActorId, ReadOnlyMemory<byte>>>
@@ -2204,12 +2248,67 @@ internal abstract partial class ZLinkSpotActivation
     internal ValueTask RestoreSpotRelocationStateAsync(
         ReadOnlyMemory<byte> state,
         CancellationToken cancellationToken) =>
+        RestoreSpotRelocationStateAsync(
+            state,
+            basePayload: default,
+            hasBase: false,
+            cancellationToken);
+
+    /// <summary>
+    /// Restores the Spot's own instance state. When <paramref name="hasBase"/>
+    /// is set (spec 15 §5), does RestoreBase→ApplyDelta; a failure discards
+    /// the partially-applied instance instead of reusing it. Unlike the
+    /// Actor path (<see cref="ZLinkActorCreationCoordinator"/>), this cannot
+    /// retry from RestoreBase on a fresh instance: the dotnet Spot
+    /// activation factory always constructs its POCO instance eagerly when
+    /// staging a relocation target (<c>invokeCreate</c> only gates the
+    /// app-level create callback), and exposes no hook to rebind a fresh
+    /// instance onto an already-staged activation short of redoing the
+    /// whole reservation/staging pipeline — so an apply failure here goes
+    /// straight to an explicit relocationDataLost.
+    /// </summary>
+    internal ValueTask RestoreSpotRelocationStateAsync(
+        ReadOnlyMemory<byte> state,
+        ReadOnlyMemory<byte> basePayload,
+        bool hasBase,
+        CancellationToken cancellationToken) =>
         _serial.ExecuteLifecycleAsync(
-            (activation, ct) => activation.RestoreInstanceAsync(
-                activation.ResolveSpotRelocationRegistration(),
-                activation.Spot,
-                state,
-                ct),
+            async (activation, ct) =>
+            {
+                var registration = activation.ResolveSpotRelocationRegistration();
+                if (!hasBase)
+                {
+                    await activation.RestoreInstanceAsync(
+                            registration,
+                            activation.Spot,
+                            state,
+                            ct)
+                        .ConfigureAwait(false);
+                    return;
+                }
+                try
+                {
+                    await activation.RestoreInstanceBaseAsync(
+                            registration,
+                            activation.Spot,
+                            basePayload,
+                            ct)
+                        .ConfigureAwait(false);
+                    await activation.ApplyInstanceDeltaAsync(
+                            registration,
+                            activation.Spot,
+                            state,
+                            ct)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception applyFailure)
+                {
+                    throw new ZLinkRelocationDataLostException(
+                        $"SPOT '{activation.SpotId}' base/delta relocation "
+                        + "apply failed: "
+                        + applyFailure.Message);
+                }
+            },
             cancellationToken);
 
     private ZLinkObjectRelocationRegistration ResolveSpotRelocationRegistration()
@@ -2393,6 +2492,46 @@ internal abstract partial class ZLinkSpotActivation
                     $"Relocation adapter for '{registration.InstanceType}' is not registered.");
         }
     }
+
+    private IZLinkBaseDeltaRelocationAdapterInvoker RequireBaseDeltaInvoker(
+        ZLinkObjectRelocationRegistration registration) =>
+        registration.AdapterInvoker as IZLinkBaseDeltaRelocationAdapterInvoker
+        ?? throw new ZLinkConfigurationException(
+            $"Relocation adapter for '{registration.InstanceType}' is not base/delta-capable.");
+
+    private async ValueTask<byte[]> CaptureInstanceBaseAsync(
+        ZLinkObjectRelocationRegistration registration,
+        object instance,
+        CancellationToken cancellationToken) =>
+        await RequireBaseDeltaInvoker(registration)
+            .CaptureBaseAsync(_scope.ServiceProvider, instance, cancellationToken)
+            .ConfigureAwait(false);
+
+    private async ValueTask<byte[]> CaptureInstanceDeltaAsync(
+        ZLinkObjectRelocationRegistration registration,
+        object instance,
+        CancellationToken cancellationToken) =>
+        await RequireBaseDeltaInvoker(registration)
+            .CaptureDeltaAsync(_scope.ServiceProvider, instance, cancellationToken)
+            .ConfigureAwait(false);
+
+    private async ValueTask RestoreInstanceBaseAsync(
+        ZLinkObjectRelocationRegistration registration,
+        object instance,
+        ReadOnlyMemory<byte> basePayload,
+        CancellationToken cancellationToken) =>
+        await RequireBaseDeltaInvoker(registration)
+            .RestoreBaseAsync(_scope.ServiceProvider, instance, basePayload, cancellationToken)
+            .ConfigureAwait(false);
+
+    private async ValueTask ApplyInstanceDeltaAsync(
+        ZLinkObjectRelocationRegistration registration,
+        object instance,
+        ReadOnlyMemory<byte> deltaPayload,
+        CancellationToken cancellationToken) =>
+        await RequireBaseDeltaInvoker(registration)
+            .ApplyDeltaAsync(_scope.ServiceProvider, instance, deltaPayload, cancellationToken)
+            .ConfigureAwait(false);
 
     private ValueTask PublishTimerFailureAsync(
         ZLinkSpotTimerDescriptor descriptor,

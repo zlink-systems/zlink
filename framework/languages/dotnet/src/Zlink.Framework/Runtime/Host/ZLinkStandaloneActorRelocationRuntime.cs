@@ -190,13 +190,14 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 // after the source fences in the initial journal are verified.
                 var sourceNode = runtime.GetSpotNodeRuntime(
                     sourceRef.Value.NodeRid);
-                actorState.Handoff.SealCapture();
                 //  Spec 30 §11: the SafeToShutdown obligation starts at
                 //  seal, not at cutover — waiting until CommitMessageFollow
                 //  would let a shutdown query race the seal-to-cutover
-                //  window.
-                actorState.Handoff.PendingShutdownToken =
-                    runtime.BeginPendingRelocationUnit();
+                //  window. Attaching the token in the same locked call as
+                //  the seal closes the window where a status read could
+                //  observe the seal without the obligation counted, or an
+                //  abort could race the attach.
+                actorState.Handoff.SealCapture(runtime.BeginPendingRelocationUnit());
                 if (baseDeltaCapable)
                 {
                     applicationState = await ZLinkActorRelocationRegistry.CaptureDeltaAsync(

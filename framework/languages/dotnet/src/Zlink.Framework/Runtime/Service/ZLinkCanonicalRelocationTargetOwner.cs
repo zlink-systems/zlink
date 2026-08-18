@@ -57,7 +57,8 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
                         prepare,
                         envelope,
                         authenticatedSourceNodeRid,
-                        cancellationToken)
+                        cancellationToken,
+                        basePayload)
                     .ConfigureAwait(false);
                 break;
             default:

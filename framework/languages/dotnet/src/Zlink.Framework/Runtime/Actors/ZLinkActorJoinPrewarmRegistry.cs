@@ -115,10 +115,10 @@ internal sealed class ZLinkActorJoinPrewarmRegistry
     internal IngressRoute ParkOrDeliver(
         string actorId,
         ulong actorGeneration,
-        ZLinkActorHandoffFrame frame,
+        Func<ZLinkActorHandoffFrame> captureFrame,
         Action onFailed)
     {
-        ArgumentNullException.ThrowIfNull(frame);
+        ArgumentNullException.ThrowIfNull(captureFrame);
         ArgumentNullException.ThrowIfNull(onFailed);
         lock (_gate)
         {
@@ -128,7 +128,7 @@ internal sealed class ZLinkActorJoinPrewarmRegistry
                 || !_byHandoff.TryGetValue(handoffId, out var attempt))
                 return IngressRoute.NotFound;
             attempt.Parked.Add(new ParkedMessage(
-                frame with { ArrivalIndex = attempt.Parked.Count },
+                captureFrame() with { ArrivalIndex = attempt.Parked.Count },
                 onFailed));
             return IngressRoute.Parked;
         }
@@ -153,7 +153,14 @@ internal sealed class ZLinkActorJoinPrewarmRegistry
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(handoffId);
         ArgumentNullException.ThrowIfNull(deliver);
-        List<ParkedMessage> parked;
+        // Deliver under the same lock that removes the attempt. Delivering
+        // after releasing the lock leaves a window where a concurrent
+        // ParkOrDeliver sees the attempt gone (so it reports NotFound
+        // instead of parking) while the real per-actor import has not yet
+        // received the migrated frames — the arrival is then neither
+        // parkable nor resolvable and is dropped. Running deliver here
+        // keeps the transition atomic: no arrival can observe an
+        // in-between state.
         lock (_gate)
         {
             if (!_byHandoff.Remove(handoffId, out var attempt))
@@ -163,11 +170,9 @@ internal sealed class ZLinkActorJoinPrewarmRegistry
             if (_byObject.TryGetValue(attempt.ObjectKey, out var owner)
                 && string.Equals(owner, handoffId, StringComparison.Ordinal))
                 _byObject.Remove(attempt.ObjectKey);
-            parked = attempt.Parked;
+            if (attempt.Parked.Count != 0)
+                deliver([.. attempt.Parked.Select(static message => message.Frame)]);
         }
-
-        if (parked.Count != 0)
-            deliver([.. parked.Select(static message => message.Frame)]);
     }
 
     /// <summary>

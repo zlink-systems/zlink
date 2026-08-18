@@ -561,10 +561,17 @@ internal sealed class ZLinkUserSpotFactoryBuilder<TSpot>
     public IZLinkUserSpotFactoryBuilder<TSpot> PreserveStateWith<TAdapter>()
         where TAdapter : class, IZLinkSpotRelocationAdapter<TSpot>
     {
-        SelectRelocation(
-            2,
-            typeof(TAdapter),
-            new ZLinkSpotRelocationAdapterInvoker<TSpot>(typeof(TAdapter)));
+        //  Base/delta capability (spec 15 §5) is detected once here, from the
+        //  compile-time adapter type, rather than by reflecting on every
+        //  relocation attempt.
+        IZLinkRelocationAdapterInvoker invoker =
+            typeof(TAdapter).IsAssignableTo(
+                typeof(IZLinkSpotBaseDeltaRelocationAdapter<TSpot>))
+                ? new ZLinkSpotBaseDeltaRelocationAdapterInvoker<TSpot>(
+                    typeof(TAdapter))
+                : new ZLinkSpotRelocationAdapterInvoker<TSpot>(
+                    typeof(TAdapter));
+        SelectRelocation(2, typeof(TAdapter), invoker);
         return this;
     }
 }
@@ -603,10 +610,17 @@ internal sealed class ZLinkInstanceSpotFactoryBuilder<TSpot>
     public IZLinkInstanceSpotFactoryBuilder<TSpot> PreserveStateWith<TAdapter>()
         where TAdapter : class, IZLinkSpotRelocationAdapter<TSpot>
     {
-        SelectRelocation(
-            2,
-            typeof(TAdapter),
-            new ZLinkSpotRelocationAdapterInvoker<TSpot>(typeof(TAdapter)));
+        //  Base/delta capability (spec 15 §5) is detected once here, from the
+        //  compile-time adapter type, rather than by reflecting on every
+        //  relocation attempt.
+        IZLinkRelocationAdapterInvoker invoker =
+            typeof(TAdapter).IsAssignableTo(
+                typeof(IZLinkSpotBaseDeltaRelocationAdapter<TSpot>))
+                ? new ZLinkSpotBaseDeltaRelocationAdapterInvoker<TSpot>(
+                    typeof(TAdapter))
+                : new ZLinkSpotRelocationAdapterInvoker<TSpot>(
+                    typeof(TAdapter));
+        SelectRelocation(2, typeof(TAdapter), invoker);
         return this;
     }
 }

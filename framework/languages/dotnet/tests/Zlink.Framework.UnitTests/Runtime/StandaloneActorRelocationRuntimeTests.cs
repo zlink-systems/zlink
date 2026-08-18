@@ -2200,6 +2200,122 @@ public sealed class StandaloneActorRelocationRuntimeTests
         Assert.False((bool)containsKey.Invoke(dictionary, [staleKey])!);
     }
 
+    //  The mesh node's own poll-loop housekeeping tick (ReceiveLoop ->
+    //  ProcessInfrastructure) now calls SweepExpiredRelocationBaseChunks
+    //  unconditionally on every tick, independent of relocation traffic —
+    //  this bounds an orphaned base buffer (source crashed after sending
+    //  base chunks but before Prepare) even when no further base-stage
+    //  chunk for any relocation ever arrives to trigger the on-arrival
+    //  sweep. These two tests exercise that same sweep entry point
+    //  directly (it is the one the periodic tick calls).
+    [Fact]
+    public async Task SweepExpiredRelocationBaseChunks_PeriodicTick_EvictsAnOrphanWithNoPrepare()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var node = new ZLinkManagedMeshNode(context, "base-chunk-periodic-sweep-mesh");
+        var (dictionaryType, dictionary, keyType) = ReflectBaseChunkDictionary(node);
+        var orphanKey = Activator.CreateInstance(
+            keyType,
+            RoutingId.From("periodic-orphan-source"),
+            new ZLinkServiceWireCodec.RelocationWireId(3, 3),
+            1UL,
+            new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+                "owner", 1, RoutingId.From("periodic-orphan-source"), 1, "1"))!;
+        var start = DateTimeOffset.UtcNow;
+        var orphanBuffer = new ZLinkRelocationBaseChunkBuffer(start);
+        var tryAdd = dictionaryType.GetMethod("TryAdd")
+            ?? throw new InvalidOperationException("TryAdd not found.");
+        Assert.True((bool)tryAdd.Invoke(dictionary, [orphanKey, orphanBuffer])!);
+
+        //  No Prepare ever arrives for this identity. Advance past the
+        //  TTL and simulate the periodic tick by invoking the same sweep
+        //  entry point ProcessInfrastructure calls.
+        node.SweepExpiredRelocationBaseChunks(start + TimeSpan.FromMinutes(6));
+
+        var containsKey = dictionaryType.GetMethod("ContainsKey")
+            ?? throw new InvalidOperationException("ContainsKey not found.");
+        Assert.False((bool)containsKey.Invoke(dictionary, [orphanKey])!);
+    }
+
+    [Fact]
+    public async Task SweepExpiredRelocationBaseChunks_PrepareArrivingJustBeforeTtl_StillConsumesExactlyOnce()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var node = new ZLinkManagedMeshNode(context, "base-chunk-late-prepare-mesh");
+        var (dictionaryType, dictionary, keyType) = ReflectBaseChunkDictionary(node);
+        var sourceNodeRid = RoutingId.From("late-prepare-source");
+        var relocationId = new ZLinkServiceWireCodec.RelocationWireId(4, 4);
+        var coordinator = new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+            "owner", 1, sourceNodeRid, 1, "1");
+        var key = Activator.CreateInstance(
+            keyType,
+            sourceNodeRid,
+            relocationId,
+            1UL,
+            coordinator)!;
+        var start = DateTimeOffset.UtcNow;
+        var baseBytes = new byte[] { 7, 8, 9 };
+        var buffer = new ZLinkRelocationBaseChunkBuffer(start);
+        Assert.True(buffer.Append(0, baseBytes));
+        var tryAdd = dictionaryType.GetMethod("TryAdd")
+            ?? throw new InvalidOperationException("TryAdd not found.");
+        Assert.True((bool)tryAdd.Invoke(dictionary, [key, buffer])!);
+
+        var prepare = new ZLinkServiceWireCodec.RelocationPrepareRecord(
+            relocationId,
+            TargetAttemptGeneration: 1UL,
+            coordinator,
+            Target: new ZLinkServiceWireCodec.RelocationTargetRecord(
+                RoutingId.From("late-prepare-target"), 1UL, "owner", 1UL),
+            InitiatorRole: 0,
+            Object: new ZLinkServiceWireCodec.RelocationObjectRecord(
+                0, "TestSpot", "spot-1", 1UL, 1UL),
+            SourceNodeRid: sourceNodeRid,
+            SourceNodeGeneration: 1UL,
+            PayloadTotalLength: 0,
+            PayloadChunkCount: 0,
+            PayloadChecksumCrc32c: 0,
+            BaseChecksumCrc32c: ZLinkCrc32C.Compute(baseBytes),
+            ApplicationVersion: 1);
+
+        //  Arrives just before the TTL would have expired the buffer.
+        var resolve = typeof(ZLinkManagedMeshNode).GetMethod(
+            "ResolvePendingRelocationBase",
+            System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException(
+                "ResolvePendingRelocationBase not found.");
+        var resolved = (ReadOnlyMemory<byte>)resolve.Invoke(
+            node, [sourceNodeRid, prepare])!;
+        Assert.Equal(baseBytes, resolved.ToArray());
+
+        var containsKey = dictionaryType.GetMethod("ContainsKey")
+            ?? throw new InvalidOperationException("ContainsKey not found.");
+        //  Consumed exactly once: gone from the buffer immediately, and a
+        //  subsequent periodic sweep past the TTL is a no-op rather than
+        //  double-releasing anything.
+        Assert.False((bool)containsKey.Invoke(dictionary, [key])!);
+        node.SweepExpiredRelocationBaseChunks(start + TimeSpan.FromMinutes(6));
+        Assert.False((bool)containsKey.Invoke(dictionary, [key])!);
+    }
+
+    private static (Type DictionaryType, object Dictionary, Type KeyType)
+        ReflectBaseChunkDictionary(ZLinkManagedMeshNode node)
+    {
+        var field = typeof(ZLinkManagedMeshNode).GetField(
+            "_pendingRelocationBaseChunks",
+            System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException(
+                "_pendingRelocationBaseChunks field not found.");
+        var dictionaryType = field.FieldType;
+        var dictionary = field.GetValue(node)
+            ?? throw new InvalidOperationException(
+                "_pendingRelocationBaseChunks was not initialized.");
+        var keyType = dictionaryType.GetGenericArguments()[0];
+        return (dictionaryType, dictionary, keyType);
+    }
+
     private static ZLinkObjectRelocationRegistration CreateRelocation<TAdapter>(
         bool baseDeltaCapable)
         where TAdapter : class, IZLinkActorRelocationAdapter<TestActor> =>

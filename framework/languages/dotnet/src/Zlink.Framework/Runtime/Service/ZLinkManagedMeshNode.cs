@@ -7489,6 +7489,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         DrainSocketMonitorEvents();
         DrainTransportDisconnects(now);
+        //  Bounded reclamation for a base-chunk buffer whose source
+        //  crashed after sending base chunks but before Prepare arrived:
+        //  the on-arrival sweep in the relocation-state chunk handler only
+        //  fires when a NEW base-stage chunk lands, so an orphan with no
+        //  further base traffic would otherwise sit until an unrelated
+        //  relocation happened to sweep it. This mesh node's own poll-loop
+        //  housekeeping tick (ReceiveLoop, ~PollInterval) already runs
+        //  unconditionally regardless of message traffic, so it bounds the
+        //  buffer's lifetime independently of any relocation activity.
+        SweepExpiredRelocationBaseChunks(TimeProvider.System.GetUtcNow());
         Peer[] peers;
         lock (_gate)
             peers = _peersByIntent.Values.ToArray();

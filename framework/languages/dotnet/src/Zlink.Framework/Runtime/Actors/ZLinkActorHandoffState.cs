@@ -44,7 +44,7 @@ internal sealed class ZLinkActorHandoffState(
     /// <summary>
     /// The SafeToShutdown obligation token for the relocation unit currently
     /// sealed on this Actor (spec 30 §11). The owning source runtime sets
-    /// this right after <see cref="SealCapture"/>; this class releases it
+    /// this atomically with <see cref="SealCapture(IDisposable)"/>; this class releases it
     /// exactly once, in <see cref="ClearMessageFollowRouteLocked"/>, which
     /// every source exit path — commit-then-S4, abort and reset — already
     /// funnels through. A fresh <see cref="BeginCapture"/> can start before
@@ -926,6 +926,31 @@ internal sealed class ZLinkActorHandoffState(
         }
     }
 
+    /// <summary>
+    /// Seals capture and attaches the relocation unit's SafeToShutdown
+    /// obligation token (spec 30 §11) in the same locked transition, so no
+    /// window exists between "sealed" and "counted" where a status read
+    /// could observe SafeToShutdown=true for an obligation the seal just
+    /// created, and no abort/reset racing the attach can leak the token —
+    /// a seal that throws disposes it immediately instead of orphaning it.
+    /// </summary>
+    internal void SealCapture(IDisposable shutdownToken)
+    {
+        ArgumentNullException.ThrowIfNull(shutdownToken);
+        lock (_gate)
+        {
+            if (_sourcePhase != ZLinkActorSourceHandoffPhase.Capturing
+                || _sourceCaptureSealed)
+            {
+                shutdownToken.Dispose();
+                throw new InvalidOperationException(
+                    $"Actor '{actorId}' source handoff capture cannot be sealed.");
+            }
+            _sourceCaptureSealed = true;
+            PendingShutdownToken = shutdownToken;
+        }
+    }
+
     internal ZLinkActorHandoffCommitBoundary FreezeCaptureCommitBoundary()
     {
         lock (_gate)
@@ -1660,7 +1685,16 @@ internal sealed class ZLinkActorHandoffState(
         {
             if (!messageFollowRoute.Lease.IsActive)
             {
-                ClearMessageFollowRouteLocked();
+                //  Spec 30 §11: S4 route removal and the retransmission
+                //  window are independent source-local deadlines. The
+                //  lease going inactive only means S4 (the route is no
+                //  longer usable for follow-routing) — it does not mean
+                //  the retransmission window has also elapsed. Stop
+                //  routing through it here, but leave the SafeToShutdown
+                //  obligation to RemoveMessageFollowRouteAfterDelayAsync,
+                //  which releases it only after both deadlines pass.
+                _messageFollowRoute = null;
+                messageFollowRoute.Lease.Cancel();
             }
             else if (messageFollowRoute.SourceActor.NodeRid == frameActor.NodeRid
                      && messageFollowRoute.SourceActor.Generation == frameActor.Generation)

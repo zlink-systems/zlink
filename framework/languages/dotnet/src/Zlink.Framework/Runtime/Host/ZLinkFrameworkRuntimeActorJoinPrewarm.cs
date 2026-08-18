@@ -18,7 +18,6 @@ internal sealed partial class ZLinkFrameworkRuntime
     /// </summary>
     internal bool TryParkActorJoinPrewarmIngress(ZLinkSpotActorFrame frame)
     {
-        var durable = ZLinkActorHandoffFrames.Capture(frame, arrivalIndex: 0);
         var actorRef = frame.Actor;
         var sourceNodeRid = frame.SourceNodeRid;
         var sourceSessionRid = frame.SourceSessionRid;
@@ -27,10 +26,16 @@ internal sealed partial class ZLinkFrameworkRuntime
         var replyCapability = frame.RouteContext.ReplyCapability;
         var header = frame.Header;
         var directReply = frame.DirectReply;
+        //  The durable clone (RID/header/body/metadata) is only allocated
+        //  once the registry confirms an attempt exists for this exact
+        //  object, under the same lock that claims the park slot — a
+        //  pre-check-then-clone-then-park sequence would leave a window
+        //  where the attempt could be evicted between the check and the
+        //  park, silently discarding the clone or racing eviction.
         var route = _actorJoinPrewarm.ParkOrDeliver(
             actorRef.ActorId,
             actorRef.Generation,
-            durable,
+            captureFrame: () => ZLinkActorHandoffFrames.Capture(frame, arrivalIndex: 0),
             onFailed: () => RunDetached(
                 "actor-join-prewarm-fail-parked",
                 ct => ZLinkActorBoundSessionRelay.ReplyStaleActorAsync(
@@ -68,8 +73,20 @@ internal sealed partial class ZLinkFrameworkRuntime
             handoffId,
             actorId,
             actorGeneration,
-            onEvicted: evictedHandoffId => ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"actor_join_prewarm_evicted handoff={evictedHandoffId}"));
+            onEvicted: evictedHandoffId =>
+            {
+                //  Spec 15 §4.2: newest attempt wins — the displaced
+                //  identity never reached PREPARE (that path already
+                //  removes the attempt before Register could evict it), so
+                //  its admission reservation is still pending. Release it
+                //  idempotently here instead of leaving it to expire on its
+                //  own deadline; no staged transferred instance exists yet
+                //  at Accepted time for this flow, so there is no separate
+                //  installed-stage to abort.
+                _ = _actorHandoffAdmissions.AbortAsync(evictedHandoffId);
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"actor_join_prewarm_evicted handoff={evictedHandoffId}");
+            });
         RunDetached(
             "actor-join-prewarm-expiry",
             async ct =>
@@ -103,11 +120,13 @@ internal sealed partial class ZLinkFrameworkRuntime
     /// <summary>
     /// PREPARE (Restore) hook (spec 15 §4.2): installs the real per-actor
     /// import and migrates every arrival parked since Accepted into it,
-    /// atomically, then the attempt no longer exists. A late PREPARE for
-    /// an identity a newer exact identity already evicted is discarded —
-    /// logged, not thrown into the caller's own PREPARE flow.
+    /// atomically, then the attempt no longer exists. Returns false for a
+    /// late PREPARE whose identity a newer exact identity already
+    /// evicted — the caller must abort its own staged import/instance and
+    /// stop instead of publishing a stale relocation (spec 15 §4.2 "이전
+    /// identity의 늦은 chunk와 Restore는 조립에 연결하지 않고 폐기한다").
     /// </summary>
-    internal void CompleteActorJoinPrewarmMigration(
+    internal bool CompleteActorJoinPrewarmMigration(
         string handoffId,
         ZLinkActorRuntimeState actorState)
     {
@@ -118,11 +137,13 @@ internal sealed partial class ZLinkFrameworkRuntime
                 frames => actorState.Handoff.AppendPreparedImport(
                     handoffId,
                     frames));
+            return true;
         }
         catch (InvalidOperationException)
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"actor_join_prewarm_migration_discarded handoff={handoffId}");
+            return false;
         }
     }
 }

@@ -44,7 +44,9 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkRelocationEnvelope envelope,
         ulong reservedTargetAuthorityOwnerGeneration,
         CancellationToken cancellationToken,
-        bool stagedBeforeCutover = false)
+        bool stagedBeforeCutover = false,
+        ReadOnlyMemory<byte> basePayload = default,
+        bool hasBase = false)
     {
         var targetRid = RoutingId.FromHex(request.TargetNodeRid);
         var node = GetSpotNodeRuntime(targetRid);
@@ -108,6 +110,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         {
             await preparedSpot.Activation.RestoreSpotRelocationStateAsync(
                     spotParticipant.ApplicationState,
+                    basePayload,
+                    hasBase,
                     cancellationToken)
                 .ConfigureAwait(false);
 
