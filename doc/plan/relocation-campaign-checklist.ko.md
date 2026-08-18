@@ -129,9 +129,14 @@
 - [ ] C-4c dotnet Lua byte 정합 확인: 기준 Lua의 expiresAtMs -1 센티널·정수 tombstone이
       golden(0·bool)과 상이할 가능성 — dotnet encode conformance에서 검증·수정
       [node 발견 2026-08-19]
-- [ ] C-4a java 전용 Lua 경로 붕괴 — terra 1차는 정직 중단(부분 전환이 reader 즉파,
-      전량 롤백 + 완전 감사표 전달). **레코드 타입별 단계 이관 전략으로 sonnet 재투입**
-      (mesh→lease→client-server→fanout→authority 순, 타입마다 게이트·커밋)(descriptor:mesh:*, owner-lease:* 등 →
+- [ ] C-4a java 수렴 — **재정찰로 지형 재정의(2026-08-19)**: terra 감사의 Lua-HASH
+      스택은 실은 **죽은 코드**(프로덕션 미도달, 자기참조+테스트 1개뿐). 라이브
+      경로는 core의 ZLinkProviderDescriptorRepository/ZLinkProviderLocationRepository
+      — 자체 비규범 스킴(zlink:v11: 프리픽스, PascalCase JSON, 이진 generation 접두,
+      recordVersion 부재). **재범위**: ① provider 저장소를 §2.4로 포팅(node 참조
+      구현, 타입별 단계·게이트·커밋), ② 죽은 Lua 스택은 oracle 커버리지 확인 후
+      일괄 삭제(POSDDD), ③ 골든은 실제 writer 구동. sonnet 진행 중(커버리지 확인→
+      mesh 포팅 순)(descriptor:mesh:*, owner-lease:* 등 →
       canonical-JSON-over-opaque) + ZLinkRedisAuthorityClient(3029줄) counter/CAS
       감사·수렴 — **상호 운용에 필수**(전용 경로가 남는 한 java descriptor를 타
       언어가 못 읽음), 전담 세션 규모로 분리 [java 1차에서 이월]
