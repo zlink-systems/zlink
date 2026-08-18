@@ -73,9 +73,13 @@
       java Lettuce 8-bit ARGV 실증(Phase B), authority 행 opaque 경로 byte 검증(C-2 전).
 - [x] C-2 스펙 개정 — `a3e6144ea3`: 21 §1.2/§2.4 신설, 실제 경계 문구가 있던
       22 §7을 MUST 수준으로 재작성, 23 §8 relocation blob 규범화 (28은 무수정 유지)
-- [ ] C-2b authority 레코드 논리키 형태 통일 판정: cpp/java 단일 행 vs dotnet 3키
-      (meta/payload/generation) 발산 — 사실 조사(3키 분할의 CAS 근거 유무) 후 판정,
-      §2.4 authority 절 확장 (C-4 착수 전 선행)
+- [x] C-2b authority 판정 (2026-08-19): node도 단일 행(4언어 중 3)이며 진짜 발산은
+      objectGeneration 의미(전역 시퀀스 3/4 vs dotnet identity별 영속). **판정:
+      단일 행 + 전역 시퀀스 표준화** — 전역 단조 카운터가 identity별 단조성을 자동
+      보장하므로 dotnet GenerationKey는 중복, meta/payload 분할의 read-verify-retry
+      도 제거됨. dotnet 수렴 시 검증 필수: "현재+1" 산술 가정 CAS 전수 확인,
+      PayloadSha256(분할 읽기 보정용)도 함께 제거. §2.4 authority 절 확장은 C-3에
+      포함(golden에 authority 스키마 필요).
 - [ ] C-3 store 레코드 golden fixture 신설 (키 문자열·값 byte 벡터) + 4언어 소비 테스트
 - [ ] C-4 4언어 store 구현 수렴 (기준 후보: dotnet/java 공유 {zlink-location-v3}+SHA256;
       cpp = 키공간+인코딩 전면 이동, node = 키공간 이동, dotnet↔java = 값 인코딩 통일)
