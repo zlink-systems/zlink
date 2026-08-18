@@ -69,11 +69,9 @@
       Aug-12/15 커밋 기원, Entry Spot 수정으로 노출). 릴레이 합성 + current_actor_ref
       라우트 기반 보고 + disabled-fallback 증명 테스트. ST-B1 3/3·ST-A1 그린
       [발견·해소 2026-08-19]
-- [ ] **[신규 결함 후보] 명시적 relocation 실패 후 source actor 영구 hang**:
-      target restore() 실패(join_completion_failed|12·transfer_in_failed) 직후 같은
-      actor로의 source 경유 요청이 무한 대기(24분+, timeout 미발화) — 스펙 28
-      명시적 실패 계약(소스 복원·서빙 지속) 위반 후보. SF-F2 variant 2가 재현기;
-      테스트 우회 금지 판정, 전문 에이전트 조사 중 [발견 2026-08-19]
+- [x] 명시적 실패 후 source actor 영구 hang — **수정 `b55ebf12d9`**: 탈출 불가
+      reconcile phase 함정. PREPARE 실패는 drain-replay 종결, FINALIZE 모호 케이스만
+      reconcile+기한+스윕(무한 대기 구조적 불가). 단위 테스트 고정 [해소 2026-08-19]
 - [ ] **ST-A3 결정적 실패**(기존 — ST-B1 수정 전후 동일 재현): 별도 timing/gate
       이슈, 원인 조사 필요 [발견 2026-08-19]
 - [ ] **ST-B1 후속: 소스 Entry Spot on_leave_actor 미발화** — 동일 HEAD·동일 머신
@@ -81,8 +79,10 @@
       부재(sha256 d3f1f8b3ab…, 로그 20260819-062437-2768634). 환경 가설 기각 —
       **순서 경합 의심**(source_cleanup이 leave 명령 dispatch보다 먼저 정리하는
       fire-and-forget 창; 스케줄링 프로파일에 따라 항상 이기거나 항상 짐).
-      바이너리 해시·빌드 구성·런타임 env 3축 비교 + 순서 보장 수정 진행 중
-      [발견 2026-08-19]
+      **근본 원인 확정: OnLeave 전송이 source Entry Spot을 mesh spot 라우팅으로
+      해석→not_found(3번째 entry-spot 주소성 갭). 판정: node 레벨 알림(send_to_node
+      패턴)으로 수정 — 진행 중. 완료 순서 race는 b55ebf12d9로 선랜딩(정직 표기:
+      전송 수정 전엔 ST-B1 미검증)** [발견 2026-08-19]
 - [ ] **sol 전 문서 spec-gap 리뷰**: 스펙·guide·e2e·언어 interface 전체 vs 구현 대조,
       gap 0 확인 (완료 조건)
 - [ ] 최종 게이트 일괄: 4언어 unittest + 6샘플×언어 + doc 게이트 + 최종 보고
