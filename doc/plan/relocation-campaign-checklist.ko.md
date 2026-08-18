@@ -119,7 +119,10 @@
       **node 1차 `eb3d74f6cc`**(키·opaque 로그·blob; envelope·시퀀스는 C-4b),
       **cpp 완료 `e14bce0297`**(전면 재작성+hex→base64+encode 검증, location 7/7,
       live redis 실키 확인). dotnet 슬라이스 게이트 대기 중.
-- [ ] C-4b node 마감 (terra 투입 2026-08-19, 병렬): ① canonical JSON envelope 전환(값이 아직 구 필드 형태 —
+- [ ] C-4b node 마감 — terra 1차 완료(canonical envelope 5종+전역 시퀀스+strict
+      recordVersion, typecheck/build/m6c 그린). 코디네이터 redis 검증: 54/55 —
+      **aggregate prepare 교차 인스턴스 수렴 1건 실패(양쪽 conflict)** → terra 재투입
+      수정 중. 원 항목: ① canonical JSON envelope 전환(값이 아직 구 필드 형태 —
       키는 맞으나 타 언어가 파싱 불가, location-store-repository.ts 3591줄 CAS 재작성),
       ② objectGeneration을 identity별 카운터→store 전역 시퀀스로(reserve() ~:965 —
       기존 감사의 "node는 이미 전역" 기록은 오류였음) [node 1차 eb3d74f6cc에서 이월]
