@@ -46,6 +46,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreReadMissing;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
@@ -337,6 +338,91 @@ final class ZLinkRedisStoreRecordGoldenConformanceTest {
             ((ObjectNode) expected).put(
                 "leaseGeneration",
                 Long.toString(claimed.token().leaseGeneration()));
+
+            assertEquals(
+                expected,
+                actual,
+                "canonical JSON field mismatch against the golden vector");
+        }
+    }
+
+    /**
+     * Drives {@code ZLinkProviderLocationRepository.updateClientServer} --
+     * the real production ClientServer server descriptor writer -- against
+     * the full-field {@code clientServerDescriptor-normal} vector
+     * (21-location-runtime.md#2.4), same pattern as the MeshNode
+     * descriptor and owner-lease conformance tests above.
+     */
+    @Test
+    void productionClientServerDescriptorWriteMatchesFullFieldVector()
+        throws Exception {
+        String endpoint = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
+        assumeTrue(endpoint != null && !endpoint.isBlank(),
+            "ZLINK_REDIS_LOCATION_ENDPOINT is not set");
+
+        JsonNode fixture = readTree(sharedFixturePath());
+        JsonNode keyVector =
+            keyDerivationVector(fixture, "client-server-descriptor");
+        JsonNode expectedRecord =
+            valueVector(fixture, "clientServerDescriptor-normal")
+                .path("decoded");
+        JsonNode expectedDescriptor = expectedRecord.path("descriptor");
+
+        String storePrefix = "goldenconf-clientserver:" + UUID.randomUUID();
+        try (var store = new ZLinkRedisLocationStore(
+            new ZLinkRedisLocationOptions()
+                .setConnectionString(endpoint)
+                .setKeyPrefix(storePrefix))) {
+            var repository = new ZLinkProviderLocationRepository(store);
+            var owner = assertInstanceOf(
+                ZLinkOwnerLeaseClaimed.class,
+                repository.claimOwnerLease(
+                        expectedRecord.path("ownerId").asText(),
+                        Duration.ofMinutes(5))
+                    .toCompletableFuture().get());
+
+            var descriptor = new ZLinkClientServerServerDescriptor(
+                expectedDescriptor.path("channelName").asText(),
+                RoutingId.fromHex(
+                    expectedDescriptor.path("serverRoutingIdHex").asText()),
+                Long.parseLong(
+                    expectedDescriptor.path("lifecycleGeneration").asText()),
+                Long.parseLong(
+                    expectedDescriptor.path("descriptorRevision").asText()),
+                expectedDescriptor.path("endpoint").asText(),
+                expectedDescriptor.path("weight").asInt(),
+                ZLinkFrameworkRuntimeState.SERVING,
+                expectedDescriptor.path("securityIdentity").asText(),
+                owner.token().ownerId(),
+                owner.token().leaseGeneration(),
+                Instant.ofEpochMilli(Long.parseLong(
+                    expectedDescriptor.path("updatedAtEpochMs").asText())));
+
+            var written = repository.updateClientServer(
+                    descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get();
+            assertEquals(ZLinkLocationWriteStatus.STORED, written.status());
+
+            String preimage = "client-server\0" + descriptor.channelName()
+                + "\0" + descriptor.serverRid().toHex();
+            assertEquals(
+                keyVector.path("preimagePrintable").asText()
+                    .replace("\\u0000", "\0"),
+                preimage,
+                "client-server preimage does not match the golden vector");
+
+            var raw = assertInstanceOf(
+                ZLinkStoreReadFound.class,
+                store.read(new ZLinkStoreKey(preimage), () -> false)
+                    .toCompletableFuture().get());
+            JsonNode actual = new ObjectMapper().readTree(raw.value().bytes());
+
+            String leaseGeneration =
+                Long.toString(owner.token().leaseGeneration());
+            ObjectNode expected = expectedRecord.deepCopy();
+            expected.put("leaseGeneration", leaseGeneration);
+            ((ObjectNode) expected.path("descriptor"))
+                .put("leaseGeneration", leaseGeneration);
 
             assertEquals(
                 expected,

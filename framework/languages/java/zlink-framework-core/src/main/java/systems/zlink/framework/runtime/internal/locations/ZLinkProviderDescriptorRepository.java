@@ -148,19 +148,8 @@ final class ZLinkProviderDescriptorRepository {
             descriptor.descriptorRevision(),
             descriptor,
             intent,
-            value -> encode(
-                value.generation(),
-                ZLinkLocationDescriptorCodec.serializeClientServer(
-                    value.descriptor())),
-            bytes -> {
-                Envelope envelope = decodeEnvelope(bytes);
-                return new StoredDescriptor<>(
-                    envelope.generation(),
-                    ZLinkLocationDescriptorCodec.deserializeClientServer(
-                        envelope.json(),
-                        0,
-                        extractUpdatedAt(envelope.json())));
-            },
+            value -> encodeClientServerRecord(value.descriptor()),
+            ZLinkProviderDescriptorRepository::decodeClientServer,
             (current, next) ->
                 current.endpoint().equals(next.endpoint())
                     && current.securityIdentity().equals(
@@ -798,15 +787,85 @@ final class ZLinkProviderDescriptorRepository {
         return new StoredDescriptor<>(0, decodeMeshNodeRecord(bytes));
     }
 
+    // --- ClientServer server descriptor canonical JSON
+    // (21-location-runtime.md#2.4) ---
+
+    private static byte[] encodeClientServerRecord(
+        ZLinkClientServerServerDescriptor descriptor) {
+        ObjectNode root = CANONICAL_JSON.createObjectNode();
+        root.put("recordVersion", 1);
+        root.put("ownerId", descriptor.ownerId());
+        root.put(
+            "leaseGeneration",
+            Long.toString(descriptor.leaseGeneration()));
+        root.put(
+            "descriptorRevision",
+            Long.toString(descriptor.descriptorRevision()));
+        ObjectNode payload = CANONICAL_JSON.createObjectNode();
+        payload.put("channelName", descriptor.channelName());
+        payload.put("serverRoutingIdHex", descriptor.serverRid().toHex());
+        payload.put(
+            "lifecycleGeneration",
+            Long.toString(descriptor.lifecycleGeneration()));
+        payload.put(
+            "descriptorRevision",
+            Long.toString(descriptor.descriptorRevision()));
+        payload.put("endpoint", descriptor.endpoint());
+        payload.put("weight", descriptor.weight());
+        payload.put("state", stateWire(descriptor.state()));
+        payload.put("securityIdentity", descriptor.securityIdentity());
+        payload.put("ownerId", descriptor.ownerId());
+        payload.put(
+            "leaseGeneration",
+            Long.toString(descriptor.leaseGeneration()));
+        payload.put(
+            "updatedAtEpochMs",
+            Long.toString(descriptor.updatedAt().toEpochMilli()));
+        root.set("descriptor", payload);
+        try {
+            return CANONICAL_JSON.writeValueAsBytes(root);
+        } catch (JsonProcessingException error) {
+            throw new IllegalStateException(
+                "Failed to encode ClientServer server descriptor record",
+                error);
+        }
+    }
+
     private static StoredDescriptor<ZLinkClientServerServerDescriptor>
         decodeClientServer(byte[] bytes) {
-        Envelope envelope = decodeEnvelope(bytes);
+        JsonNode root;
+        try {
+            root = CANONICAL_JSON.readTree(bytes);
+        } catch (IOException error) {
+            throw new IllegalStateException(
+                "Location descriptor record is invalid", error);
+        }
+        if (root.path("recordVersion").asInt(-1) != 1) {
+            throw new IllegalStateException(
+                "Location descriptor record has an unrecognized"
+                    + " recordVersion");
+        }
+        JsonNode descriptor = root.path("descriptor");
         return new StoredDescriptor<>(
-            envelope.generation(),
-            ZLinkLocationDescriptorCodec.deserializeClientServer(
-                envelope.json(),
-                0,
-                extractUpdatedAt(envelope.json())));
+            0,
+            new ZLinkClientServerServerDescriptor(
+                descriptor.path("channelName").asText(),
+                RoutingId.fromHex(
+                    descriptor.path("serverRoutingIdHex").asText()),
+                Long.parseLong(
+                    descriptor.path("lifecycleGeneration").asText()),
+                Long.parseLong(
+                    descriptor.path("descriptorRevision").asText()),
+                descriptor.path("endpoint").asText(),
+                descriptor.path("weight").asInt(),
+                stateFromWire(descriptor.path("state").asText()),
+                descriptor.path("securityIdentity").asText(),
+                descriptor.path("ownerId").asText(),
+                Long.parseLong(
+                    descriptor.path("leaseGeneration").asText()),
+                Instant.ofEpochMilli(
+                    Long.parseLong(
+                        descriptor.path("updatedAtEpochMs").asText()))));
     }
 
     private static StoredDescriptor<ZLinkFanoutPublisherDescriptor>
@@ -955,16 +1014,19 @@ final class ZLinkProviderDescriptorRepository {
         return "mesh-node\0" + requireNoNul(meshName, "meshName") + "\0";
     }
 
+    // Canonical cross-language logical key preimage
+    // (21-location-runtime.md#2.4):
+    // "client-server\0{ChannelName}\0{hex(RoutingId)}".
     private static ZLinkStoreKey clientServerKey(
         String channelName,
         RoutingId rid) {
         return new ZLinkStoreKey(
-            clientServerPrefix(channelName)
-                + segment(rid.toHex()));
+            clientServerPrefix(channelName) + rid.toHex());
     }
 
     private static String clientServerPrefix(String channelName) {
-        return PREFIX + "client-server:" + segment(channelName);
+        return "client-server\0"
+            + requireNoNul(channelName, "channelName") + "\0";
     }
 
     private static ZLinkStoreKey fanoutKey(
