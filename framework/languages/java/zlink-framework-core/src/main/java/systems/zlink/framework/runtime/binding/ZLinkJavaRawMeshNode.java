@@ -6682,6 +6682,55 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         RoutingId peer,
         ZLinkServiceAdmissionGuard.ConnectionDirection direction,
         TransportPair pair) {
+        if (pair != null) {
+            // Pair identity is the authoritative physical connection
+            // identity: HELLO and ADMIT describe opposite local directions
+            // while completing the SAME pair's handshake (direction here is
+            // inferred from the *command*, not the physical edge), so a
+            // connectionId already assigned to this pair -- by an earlier
+            // admission message on it, or by the CONNECTION_READY monitor
+            // edge that first registered it -- must be reused before the
+            // command-direction-bucketed pending queue below is even
+            // consulted. Consulting that queue first can strand the
+            // monitor's own pending candidate under the wrong direction
+            // bucket; a later admission message on the exact same physical
+            // pair then "discovers" that stranded candidate and mints a
+            // SECOND connectionId for one physical connection, which
+            // collides with the first as a false duplicate and gets
+            // rejected -- corrupting the peer's admission for the whole
+            // session (spec 07 admission is a per-peer, not per-message,
+            // state machine).
+            //
+            // An already-ADMITTED peer's own connectionId is the single
+            // authoritative source once one exists, so it is checked first:
+            // transportPairs can (rarely) hold more than one id for the same
+            // physical pair -- a second CONNECTION_READY edge on an
+            // already-registered pair, or a stale id a DISCONNECTED edge has
+            // not pruned yet -- and scanning it by value alone is unordered
+            // over a ConcurrentHashMap. Only fall back to that scan for the
+            // pre-admission case, where no single id is yet authoritative.
+            String reuse = topology.peer(peer)
+                .filter(current -> pair.equals(
+                    transportPairs.get(current.connectionId())))
+                .map(ZLinkServiceTopologyRegistry.Peer::connectionId)
+                .orElseGet(() -> transportPairs.entrySet().stream()
+                    .filter(entry -> pair.equals(entry.getValue()))
+                    .map(Map.Entry::getKey)
+                    .findFirst()
+                    .orElse(null));
+            if (reuse != null) {
+                ConnectionCandidate owner =
+                    new ConnectionCandidate(peer, direction);
+                var strandedPending = pendingConnectionIds.get(owner);
+                if (strandedPending != null) {
+                    strandedPending.remove(reuse);
+                    if (strandedPending.isEmpty()) {
+                        pendingConnectionIds.remove(owner, strandedPending);
+                    }
+                }
+                return reuse;
+            }
+        }
         ConnectionCandidate candidate =
             new ConnectionCandidate(peer, direction);
         var pending = pendingConnectionIds.get(candidate);

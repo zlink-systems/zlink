@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -130,6 +131,113 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         assertEquals(
             ZLinkJavaRawMeshNode.transportEventKey(ready),
             ZLinkJavaRawMeshNode.transportEventKey(disconnected));
+    }
+
+    @Test
+    void connectionIdForAdmissionReusesExistingPairAcrossDirectionBuckets()
+        throws Exception {
+        // Regression for the spot-route Java-client/C++-host cross-language
+        // flake: HELLO and ADMIT infer OPPOSITE local "directions" purely
+        // from the command (see connectionIdForAdmission), but both can
+        // arrive on the exact SAME physical transport pair when a peer we
+        // blind-connect to speaks first (sends HELLO) and then separately
+        // confirms with its own ADMIT on that same connection. The first
+        // (HELLO) admission message mints a connectionId for that pair; if
+        // the second (ADMIT) message -- inferring the opposite direction --
+        // is allowed to mint a SECOND connectionId for the SAME physical
+        // pair, the already-admitted peer collides with itself as a false
+        // duplicate and gets rejected (DUPLICATE_REJECTED), corrupting
+        // admission for the rest of the session and producing a persistent
+        // "peer-not-admitted" / NOT_CONNECTED on the peer's side.
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setRoutingId(RoutingId.from(
+                "connection-id-reuse-local-" + System.nanoTime()));
+            node.setBind(
+                "inproc://jvm-connection-id-reuse-" + System.nanoTime());
+            node.start();
+            RoutingId peer = RoutingId.from("connection-id-reuse-peer");
+            var pair = new ZLinkJavaRawMeshNode.TransportPair(1, 1);
+
+            Method connectionIdForAdmission = ZLinkJavaRawMeshNode.class
+                .getDeclaredMethod(
+                    "connectionIdForAdmission",
+                    RoutingId.class,
+                    ZLinkServiceAdmissionGuard.ConnectionDirection.class,
+                    ZLinkJavaRawMeshNode.TransportPair.class);
+            connectionIdForAdmission.setAccessible(true);
+
+            // First admission message on this pair (HELLO): direction
+            // inferred as INBOUND, nothing assigned to the pair yet -- mints
+            // a fresh connectionId.
+            String first = (String) connectionIdForAdmission.invoke(
+                node,
+                peer,
+                ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND,
+                pair);
+            assertNotNull(first);
+
+            // Second admission message on the EXACT SAME physical pair
+            // (ADMIT): direction inferred as OUTBOUND -- must reuse the
+            // SAME connectionId already assigned to this pair, not mint a
+            // second one for one physical connection.
+            String second = (String) connectionIdForAdmission.invoke(
+                node,
+                peer,
+                ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND,
+                pair);
+            assertEquals(first, second);
+        }
+    }
+
+    @Test
+    void connectionIdForAdmissionReusesTheMonitorRegisteredIdOnFirstMessage()
+        throws Exception {
+        // Same regression, but covers the actual production ordering: the
+        // CONNECTION_READY monitor edge registers a connectionId for a pair
+        // (see registerTransportConnection) BEFORE any admission message is
+        // ever processed for it. The very first admission message on that
+        // pair must reuse that monitor-registered id rather than minting a
+        // fresh one -- otherwise the monitor's id is immediately orphaned in
+        // pendingConnectionIds and can resurface later (consumed by a
+        // subsequent message inferring a different direction), which is the
+        // exact stranding this fix closes.
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setRoutingId(RoutingId.from(
+                "connection-id-reuse-local-" + System.nanoTime()));
+            node.setBind(
+                "inproc://jvm-connection-id-reuse-monitor-"
+                    + System.nanoTime());
+            node.start();
+            RoutingId peer = RoutingId.from(
+                "connection-id-reuse-monitor-peer");
+            var pair = new ZLinkJavaRawMeshNode.TransportPair(2, 1);
+            String monitorRegisteredId = "monitor-registered-id";
+
+            var transportPairsField = ZLinkJavaRawMeshNode.class
+                .getDeclaredField("transportPairs");
+            transportPairsField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            var transportPairs = (java.util.Map<String, ZLinkJavaRawMeshNode.TransportPair>)
+                transportPairsField.get(node);
+            transportPairs.put(monitorRegisteredId, pair);
+
+            Method connectionIdForAdmission = ZLinkJavaRawMeshNode.class
+                .getDeclaredMethod(
+                    "connectionIdForAdmission",
+                    RoutingId.class,
+                    ZLinkServiceAdmissionGuard.ConnectionDirection.class,
+                    ZLinkJavaRawMeshNode.TransportPair.class);
+            connectionIdForAdmission.setAccessible(true);
+
+            String result = (String) connectionIdForAdmission.invoke(
+                node,
+                peer,
+                ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND,
+                pair);
+            assertEquals(monitorRegisteredId, result);
+        }
     }
 
     @Test
