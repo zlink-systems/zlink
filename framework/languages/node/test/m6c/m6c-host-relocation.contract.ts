@@ -20,6 +20,7 @@ import {
   type ServiceMaintenanceRelocationControl,
   type ServiceMaintenanceRelocationCutover,
   type ServiceMaintenanceRelocationData,
+  type ServiceMaintenanceRelocationFailed,
   type ServiceMaintenanceRelocationPrepare,
   type ServiceMaintenanceRelocationReady,
   type ServiceMaintenanceRelocationState,
@@ -37,6 +38,10 @@ import { ReceiveKind } from '../../packages/framework/src/runtime/foundation/ser
 import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
 import { ZLinkFormalRemoteActorAdmissionRegistry } from '../../packages/framework/src/runtime/spots/formal-remote-actor-admission-registry';
 import { encodeRelocationBaseBundleFramed } from '../../packages/framework/src/runtime/host/relocation-state-adapter';
+import {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException
+} from '../../packages/framework/src/contracts/Errors/ZLinkFrameworkException';
 
 const coordinator = {
   ownerId: 'source-owner',
@@ -524,6 +529,113 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
     assert.equal(sent.length, 2, 'commands 31 and 34 must not send responses');
   } finally {
     await runtime.dispose();
+  }
+});
+
+test('an explicit Failed(53) rejects the pending Prepare ACK promptly with its classified failure, ' +
+  'and never resolves a different relocation identity\'s ACK', async () => {
+  // Spec 28 §9: an explicit Failed reply restores source memory promptly —
+  // the source must not learn the outcome only from its own resend-loop
+  // deadline. Node's wire failureCode vocabulary distinguishes DataLost(35)
+  // from the generic InternalFailure code requestFailed(17); the source-side
+  // classification must track whichever one the target actually sent.
+  const buildPrepare = (relocation: { high: bigint; low: bigint }): ServiceMaintenanceRelocationPrepare => ({
+    kind: 'prepare',
+    relocation,
+    targetAttemptGeneration: 1n,
+    coordinator,
+    target,
+    initiatorRole: 'source',
+    object,
+    sourceNodeRid: 'source',
+    sourceNodeGeneration: 2n,
+    payloadTotalLength: 24n,
+    payloadChunkCount: 1,
+    payloadChecksumCrc32c: 123,
+    baseChecksumCrc32c: 0,
+    applicationVersion: 4n
+  });
+  const deliverFailed = async (
+    runtime: ZLinkHostServiceRelocationRuntime,
+    failed: ServiceMaintenanceRelocationFailed
+  ) => {
+    const part = Message.from(encodeServiceRelocationControlRequest(failed));
+    try {
+      await runtime.tryHandleControl('mesh-a', {
+        sourceNodeRid: 'target',
+        parts: [part]
+      } as never);
+    } finally {
+      part.close();
+    }
+  };
+  const pendingCount = (runtime: ZLinkHostServiceRelocationRuntime) =>
+    (runtime as unknown as { pendingControls: Map<string, unknown> }).pendingControls.size;
+
+  for (const [failureCode, expectedKind] of [
+    [35, ZLinkFrameworkErrorKind.DataLost],
+    [17, ZLinkFrameworkErrorKind.InternalFailure]
+  ] as const) {
+    const runtime = new ZLinkHostServiceRelocationRuntime({
+      meshNode: () => ({ sendToNode: () => SubmitResult.Ok })
+    } as never);
+    const internals = runtime as unknown as {
+      sendControl: (
+        meshName: string,
+        targetNodeRid: string,
+        request: ServiceMaintenanceRelocationPrepare,
+        signal: AbortSignal | undefined,
+        deadlineAtMs: number
+      ) => Promise<unknown>;
+    };
+    const prepare = buildPrepare({ high: 71n, low: BigInt(failureCode) });
+    try {
+      // A one-minute deadline: a prompt rejection proves it came from the
+      // Failed reply, not the resend-loop timeout.
+      const ack = internals.sendControl('mesh-a', 'target', prepare, undefined, Date.now() + 60_000);
+      ack.catch(() => undefined);
+      assert.equal(pendingCount(runtime), 1, 'the Prepare ACK must be pending');
+
+      // A Failed for an unrelated relocation identity must never resolve it.
+      await deliverFailed(runtime, {
+        kind: 'failed',
+        relocation: { high: 999n, low: 999n },
+        targetAttemptGeneration: 1n,
+        coordinator,
+        target,
+        object,
+        senderRole: 'target',
+        failureCode
+      });
+      assert.equal(
+        pendingCount(runtime), 1,
+        'a Failed for a different relocation identity must not resolve the pending ACK'
+      );
+
+      const started = Date.now();
+      await deliverFailed(runtime, {
+        kind: 'failed',
+        relocation: prepare.relocation,
+        targetAttemptGeneration: prepare.targetAttemptGeneration,
+        coordinator,
+        target,
+        object,
+        senderRole: 'target',
+        failureCode
+      });
+      await assert.rejects(ack, (error: unknown) => {
+        assert.ok(error instanceof ZLinkFrameworkException, 'must reject with a typed framework exception');
+        assert.equal(error.kind, expectedKind, `failureCode ${failureCode} must classify as ${expectedKind}`);
+        return true;
+      });
+      assert.ok(
+        Date.now() - started < 1_000,
+        'the explicit Failed must resolve the ACK promptly, not via the 60s deadline'
+      );
+      assert.equal(pendingCount(runtime), 0, 'the resolved ACK must be removed from the pending map');
+    } finally {
+      await runtime.dispose();
+    }
   }
 });
 
@@ -1226,6 +1338,42 @@ test('a Prepare that resolves a base buffer consumes it exactly once and a later
   } finally {
     globalThis.setTimeout = originalSetTimeout;
     await runtime.dispose();
+  }
+});
+
+test('a target-side restore failure delivers Failed(53) end to end and restores source memory ' +
+  'before any deadline', async () => {
+  // Spec 28 §9: an explicit Failed must be consumed promptly by the source's
+  // pending Prepare ACK (not discovered only via timeout), and because Ready
+  // never arrived, runCoordinator's finally must restore (abort) the source
+  // authority from the retained in-memory payload.
+  const harness = createActorJoinHostHarness({});
+  harness.targetActorManager.prepareRelocationActor = async () => {
+    throw new Error('Target factory failed for this test.');
+  };
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  console.warn = () => {};
+  console.error = () => {};
+  try {
+    const started = Date.now();
+    await assert.rejects(harness.relocate(), (error: unknown) => {
+      assert.ok(error instanceof ZLinkFrameworkException, 'must reject with a typed framework exception');
+      assert.equal(
+        error.kind, ZLinkFrameworkErrorKind.InternalFailure,
+        'a factory failure classifies as requestFailed(17) -> InternalFailure'
+      );
+      return true;
+    });
+    assert.ok(
+      Date.now() - started < 5_000,
+      'the explicit Failed must resolve the relocation well before the 30s control deadline'
+    );
+    assert.equal(harness.location.aborts, 1, 'the source authority must be restored from memory');
+  } finally {
+    console.warn = originalWarn;
+    console.error = originalError;
+    await harness.dispose();
   }
 });
 

@@ -382,6 +382,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   private readonly terminalActorJoinSourceLeaves =
     new BoundedReplayMap<string, string>(SERVICE_CONTROL_TERMINAL_CAPACITY);
   private readonly codec = new ServiceRelocationAuthorityPayloadCodec();
+  /**
+   * Set once dispose() starts tearing assemblies down. A payload() rejection
+   * observed after this point is the shutdown itself, not a chunk-assembly or
+   * checksum integrity failure — it must not be reported as DataLost(35).
+   */
+  private disposed = false;
 
   constructor(private readonly options: ZLinkHostRelocationOptions) {}
 
@@ -456,6 +462,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
     const errors: unknown[] = [];
     for (const stage of this.targetStages.values()) {
       if (stage.fallback !== undefined) clearTimeout(stage.fallback);
@@ -2556,6 +2563,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     try {
       payload = await pendingAssembly.assembly.payload();
     } catch (error) {
+      // A rejection observed after dispose() started is the runtime shutting
+      // down, not a chunk-assembly or checksum integrity failure — it must
+      // not be reported as DataLost(35). There is no dedicated ShuttingDown
+      // wire code in the vocabulary yet, so it falls through unwrapped to
+      // the generic InternalFailure code (spec 15 §4).
+      if (this.disposed) throw error;
       throw new ServiceRelocationDataLostError(String((error as Error)?.message ?? error));
     }
     const envelope = decodeServiceRelocationEnvelope(payload);
@@ -3298,7 +3311,15 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           return;
         }
         if (Date.now() >= deadlineAtMs) {
-          finish(() => reject(new Error(`Relocation control ACK '${key}' timed out.`)));
+          // Spec 15 §"Failed.Kind" — a Prepare that never reaches a Ready or
+          // an explicit Failed within the control deadline is DeadlineExceeded,
+          // the same classification the session-seal control path uses for
+          // its own resend-loop deadline.
+          finish(() => reject(createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+            `Relocation control ACK '${key}' timed out.`,
+            true
+          )));
           return;
         }
         try {
@@ -3339,6 +3360,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     }
     try {
       const response = packet as ZLinkServiceRelocationControlResponse;
+      if (response.kind === 'failed') {
+        // An explicit Failed(53) answers the pending Prepare ACK immediately
+        // with the target's classified failure — the caller no longer waits
+        // out its own deadline to learn the outcome (spec 28 §9).
+        validateControlFailureResponse(pending.request, response);
+        pending.reject(relocationFailureException(response));
+        return true;
+      }
       validateControlResponse(pending.request, response);
       pending.resolve(response);
     } catch (error) {
@@ -3376,7 +3405,16 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         && relocationTargetSupports(descriptor, requirements))
       .sort((left, right) => String(left.rid).localeCompare(String(right.rid)));
     const target = selectWeightedRelocationTarget(candidates);
-    if (target === undefined) throw new Error(`RouteMesh '${meshName}' has no relocation target.`);
+    if (target === undefined) {
+      // Spec 15 §"Failed.Kind": no compatible target node is Unavailable, the
+      // same classification the session-seal control path uses for a target
+      // it cannot reach.
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RelocationTargetUnavailable,
+        `RouteMesh '${meshName}' has no relocation target.`,
+        true
+      );
+    }
     return target;
   }
 
@@ -4849,6 +4887,78 @@ function validateControlResponse(
   }
 }
 
+/**
+ * Same exact-identity fence as {@link validateControlResponse}, for an
+ * explicit Failed(53) reply. A Failed for a different relocation identity
+ * (exact ordinal/coordinator/target/object) must never resolve a different
+ * pending Prepare's ACK.
+ */
+function validateControlFailureResponse(
+  request: ZLinkServiceRelocationControlRequest,
+  response: ZLinkServiceRelocationControlResponse
+): asserts response is ServiceMaintenanceRelocationFailed {
+  if (request.kind !== 'prepare'
+    || response.kind !== 'failed'
+    || !sameWireId(response.relocation, request.relocation)
+    || response.targetAttemptGeneration !== request.targetAttemptGeneration
+    || !sameCoordinator(response.coordinator, request.coordinator)
+    || stringifyWire(response.target) !== stringifyWire(request.target)
+    || stringifyWire(response.object) !== stringifyWire(request.object)
+    || response.senderRole !== 'target') {
+    throw new Error('Relocation control response does not match the request fence.');
+  }
+}
+
+/**
+ * Maps a relocationFailed(53) wire failureCode (the generated
+ * ServiceWireFrameworkErrorCode vocabulary) to its internal error kind, so a
+ * source-side reject carries the same classification the target chose
+ * instead of a generic Error. Direct 1:1 correspondence with the generated
+ * names; an unrecognised or absent code falls back to RequestFailed
+ * (InternalFailure) — the closest existing kind (spec 15 §"Failed.Kind").
+ */
+function relocationFailureCodeKind(failureCode: number): ZLinkFrameworkInternalErrorKind {
+  switch (failureCode) {
+    case 1: return ZLinkFrameworkInternalErrorKind.ActorRouteNotFound;
+    case 2: return ZLinkFrameworkInternalErrorKind.ActorCreateFailed;
+    case 3: return ZLinkFrameworkInternalErrorKind.ActorAlreadyExists;
+    case 4: return ZLinkFrameworkInternalErrorKind.ActorTypeMismatch;
+    case 5: return ZLinkFrameworkInternalErrorKind.SpotCreateFailed;
+    case 6: return ZLinkFrameworkInternalErrorKind.SpotRouteNotFound;
+    case 7: return ZLinkFrameworkInternalErrorKind.SpotTypeMismatch;
+    case 8: return ZLinkFrameworkInternalErrorKind.ActorSessionNotBound;
+    case 9: return ZLinkFrameworkInternalErrorKind.HandlerNotFound;
+    case 10: return ZLinkFrameworkInternalErrorKind.RouteHandlerNotFound;
+    case 11: return ZLinkFrameworkInternalErrorKind.ActorDispatchHandlerNotFound;
+    case 12: return ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed;
+    case 13: return ZLinkFrameworkInternalErrorKind.RouteNotConnected;
+    case 14: return ZLinkFrameworkInternalErrorKind.RequestTargetNotFound;
+    case 15: return ZLinkFrameworkInternalErrorKind.RequestRejected;
+    case 16: return ZLinkFrameworkInternalErrorKind.RequestProtocolError;
+    case 18: return ZLinkFrameworkInternalErrorKind.WorkerQueueFull;
+    case 19: return ZLinkFrameworkInternalErrorKind.WorkerTimedOut;
+    case 20: return ZLinkFrameworkInternalErrorKind.WorkerFailed;
+    case 21: return ZLinkFrameworkInternalErrorKind.ActorLocationStale;
+    case 22: return ZLinkFrameworkInternalErrorKind.ActorCreateRejected;
+    case 33: return ZLinkFrameworkInternalErrorKind.SpotGenerationStale;
+    case 34: return ZLinkFrameworkInternalErrorKind.SpotMoving;
+    case 35: return ZLinkFrameworkInternalErrorKind.RelocationDataLost;
+    case 17:
+    default:
+      return ZLinkFrameworkInternalErrorKind.RequestFailed;
+  }
+}
+
+/** Builds the typed exception a Prepare waiter rejects with on an explicit Failed(53). */
+function relocationFailureException(response: ServiceMaintenanceRelocationFailed) {
+  return createInternalFrameworkException(
+    relocationFailureCodeKind(response.failureCode),
+    `Relocation '${response.relocation.high}:${response.relocation.low}:`
+      + `${response.targetAttemptGeneration}' failed with wire failureCode ${response.failureCode}.`,
+    true
+  );
+}
+
 function controlAckKey(request: ZLinkServiceRelocationControlRequest): string {
   if (request.kind !== 'prepare') {
     throw new Error(`Relocation ${request.kind} is one-way and has no response key.`);
@@ -4858,7 +4968,10 @@ function controlAckKey(request: ZLinkServiceRelocationControlRequest): string {
 }
 
 function controlResponseKey(packet: ZLinkServiceRelocationControlRequest): string | undefined {
-  if (packet.kind === 'ready' && packet.senderRole === 'target') {
+  // Both a Ready and an explicit Failed(53) answer the same pending Prepare
+  // ACK (spec 28 §9): a target that sent a classified failure must resolve
+  // (reject) it promptly, not leave it to the caller's own timeout.
+  if ((packet.kind === 'ready' || packet.kind === 'failed') && packet.senderRole === 'target') {
     return `relocation:${packet.relocation.high}:${packet.relocation.low}:${packet.targetAttemptGeneration}:ready`;
   }
   return undefined;
