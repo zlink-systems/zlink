@@ -134,7 +134,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
                     }
                 });
         var coordinator = new ZLinkAggregateRelocationCoordinator(
-            observedLocations, new InMemoryRelocationStore());
+            observedLocations);
         UUID relocationId = UUID.randomUUID();
         byte[] root = ZLinkCanonicalActorRelocationEnvelope.encode(
             relocationId,
@@ -144,33 +144,12 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
             true,
             new byte[] {1},
             List.of());
-        var stagedRoot = coordinator.stageRoot(
-                new ZLinkAggregateRelocationCoordinator.Request(
-                    relocationId,
-                    1,
-                    List.of(new ZLinkAggregateRelocationCoordinator.Participant(
-                        authorityKey,
-                        ZLinkPlacementObjectKind.ACTOR,
-                        sourceSnapshot.objectGeneration(),
-                        sourceSnapshot.authorityOwnerGeneration(),
-                        sourceSnapshot.storeVersion(),
-                        ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                        targetAuthority,
-                        new byte[0])),
-                    root,
-                    new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
-                    12,
-                    ZLinkPlacementCapacityBundle.actor(1),
-                    targetOwner),
-                OPEN)
-            .toCompletableFuture().join();
         var request = new ZLinkSpotRetireControl.StageRequest(
             new ZLinkSpotRetireControl.Fence(relocationId, 1),
             sourceRid, 11, sourceOwner.ownerId(), sourceOwner.leaseGeneration(),
             targetRid, 12, targetOwner.ownerId(), targetOwner.leaseGeneration(),
             "mesh", "target-entry", "actor-type", false, true,
-            stagedRoot.stored().reference(),
-            stagedRoot.stored().checksumCrc32c(),
+            root,
             List.of(new ZLinkSpotRetireControl.ParticipantFence(
                 authorityKey,
                 ZLinkPlacementObjectKind.ACTOR.value(),
@@ -232,30 +211,33 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
             .toCompletableFuture().join();
         assertEquals(0, attemptCount(overlappingSource, "sources"));
 
-        AtomicReference<ZLinkCanonicalRelocationStateMachine> failedSource =
-            new AtomicReference<>();
-        AtomicReference<ZLinkCanonicalRelocationStateMachine> failedTarget =
-            new AtomicReference<>();
-        AtomicBoolean acceptReady = new AtomicBoolean(false);
-        failedSource.set(new ZLinkCanonicalRelocationStateMachine(
-            node(sourceRid, 11, failedTarget, acceptReady,
-                new AtomicBoolean(), new AtomicReference<>(),
-                new AtomicReference<>(),
-                new AtomicLong()),
+        AtomicReference<byte[]> failedPrepare = new AtomicReference<>();
+        var failedSource = new ZLinkCanonicalRelocationStateMachine(
+            droppingNode(sourceRid, 11, failedPrepare),
             "mesh", "source-entry", observedLocations, coordinator,
-            new CountingEndpoint()));
-        failedTarget.set(new ZLinkCanonicalRelocationStateMachine(
-            node(targetRid, 12, failedSource, acceptReady,
-                new AtomicBoolean(), new AtomicReference<>(),
-                new AtomicReference<>(),
-                new AtomicLong()),
-            "mesh", "target-entry", observedLocations, coordinator,
-            new CountingEndpoint(true)));
+            new CountingEndpoint());
+        CompletableFuture<Void> failedStage = failedSource.stage(
+            targetRid, request, Duration.ofMillis(500)).toCompletableFuture();
+        var failed = ZLinkCanonicalRelocationProtocol.decodePrepare(
+            failedPrepare.get());
+        failedSource.apply(
+                targetRid,
+                ServiceWireConstants.COMMAND_RELOCATION_FAILED,
+                ZLinkCanonicalRelocationProtocol.encodeFailed(
+                    new ZLinkCanonicalRelocationProtocol.Failed(
+                        failed.id(),
+                        failed.targetAttemptGeneration(),
+                        failed.coordinator(),
+                        failed.target(),
+                        failed.object(),
+                        ZLinkCanonicalRelocationProtocol.TARGET,
+                        ServiceWireConstants.FRAMEWORK_ERROR_RELOCATION_DATA_LOST)))
+            .toCompletableFuture().join();
+        assertTrue(failedStage.isCompletedExceptionally(),
+            "an exact target failure reply must complete the source waiter");
         ExecutionException stageFailure = assertThrows(
             ExecutionException.class,
-            () -> failedSource.get().stage(
-                    targetRid, request, Duration.ofMillis(100))
-                .toCompletableFuture().get(500, TimeUnit.MILLISECONDS),
+            () -> failedStage.get(500, TimeUnit.MILLISECONDS),
             "a pre-prepare target stage failure must terminate at the source");
         assertInstanceOf(IllegalStateException.class, stageFailure.getCause());
 
@@ -315,8 +297,7 @@ final class ZLinkCanonicalRelocationReadySubmissionTest {
             request.stableType(),
             request.instanceSpot(),
             request.restoreSpotSnapshot(),
-            request.relocationReference(),
-            request.relocationChecksum(),
+            request.relocationPayload(),
             request.participants(),
             request.sessionRoutes());
         assertThrows(CompletionException.class, () -> source.get().stage(

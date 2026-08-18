@@ -85,7 +85,8 @@ function assertGoldenRoundTrip<T>(
   assert.throws(() => decode(forbiddenFlag));
 }
 
-test('commands 30, 31, 34, 40, and 52 match the shared golden vectors', () => {
+test('commands 30, 31, 34, 40, 52, and 53 match the shared golden vectors, ' +
+  'including base/delta staging', () => {
   const golden = relocationGolden();
   const entries = golden.canonical;
   const dataEntry = entries.find(entry => entry.name === 'relocationDataPostCaptureIngress');
@@ -97,6 +98,14 @@ test('commands 30, 31, 34, 40, and 52 match the shared golden vectors', () => {
   } as const;
   const values: readonly ServiceMaintenanceRelocationControl[] = [
     { kind: 'ready', ...base, target, object: relocationObject, senderRole: 'target' },
+    {
+      kind: 'failed',
+      ...base,
+      target,
+      object: relocationObject,
+      senderRole: 'target',
+      failureCode: 35
+    },
     decodeMaintenanceRelocationControl(Buffer.from(dataEntry.hex, 'hex')),
     {
       kind: 'cutover',
@@ -117,6 +126,21 @@ test('commands 30, 31, 34, 40, and 52 match the shared golden vectors', () => {
       payloadTotalLength: 24n,
       payloadChunkCount: 2,
       payloadChecksumCrc32c: 0x29bc8795,
+      baseChecksumCrc32c: 0,
+      applicationVersion: 1n
+    },
+    {
+      kind: 'prepare',
+      ...base,
+      target,
+      initiatorRole: 'source',
+      object: relocationObject,
+      sourceNodeRid: 'node-a',
+      sourceNodeGeneration: 11n,
+      payloadTotalLength: 24n,
+      payloadChunkCount: 2,
+      payloadChecksumCrc32c: 0x29bc8795,
+      baseChecksumCrc32c: 1849572196,
       applicationVersion: 1n
     },
     {
@@ -124,6 +148,16 @@ test('commands 30, 31, 34, 40, and 52 match the shared golden vectors', () => {
       ...base,
       senderRole: 'source',
       object: relocationObject,
+      payloadStage: 'base',
+      chunkOrdinal: 0,
+      chunkData: Buffer.from('62617365736e617073686f74', 'hex')
+    },
+    {
+      kind: 'state',
+      ...base,
+      senderRole: 'source',
+      object: relocationObject,
+      payloadStage: 'final',
       chunkOrdinal: 0,
       chunkData: Buffer.from('000102030405060708090a0b0c0d0e0f', 'hex')
     },
@@ -132,12 +166,24 @@ test('commands 30, 31, 34, 40, and 52 match the shared golden vectors', () => {
       ...base,
       senderRole: 'source',
       object: relocationObject,
+      payloadStage: 'final',
       chunkOrdinal: 1,
       chunkData: Buffer.from('1011121314151617', 'hex')
     }
   ];
 
-  assert.deepEqual(entries.map(entry => entry.command), [30, 31, 34, 40, 52, 52]);
+  assert.deepEqual(entries.map(entry => entry.command), [30, 53, 31, 34, 40, 40, 52, 52, 52]);
+  assert.deepEqual(entries.map(entry => entry.name), [
+    'relocationReady',
+    'relocationFailed',
+    'relocationDataPostCaptureIngress',
+    'relocationCutover',
+    'relocationPrepareRestore',
+    'relocationPrepareRestoreWithBase',
+    'relocationStateBaseChunk',
+    'relocationStateChunk',
+    'relocationStateFinalChunk'
+  ]);
   for (const [index, entry] of entries.entries()) {
     const encoded = Buffer.from(entry.hex, 'hex');
     const decoded = decodeMaintenanceRelocationControl(encoded);
@@ -150,7 +196,7 @@ test('commands 30, 31, 34, 40, and 52 match the shared golden vectors', () => {
     assert.throws(() => decodeMaintenanceRelocationControl(forbiddenFlag));
   }
 
-  const data = values[1];
+  const data = values[2];
   assert.equal(data?.kind, 'data');
   if (data?.kind === 'data') {
     assert.equal(data.senderRole, 'source');

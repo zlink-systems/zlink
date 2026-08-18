@@ -84,7 +84,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 .toCompletableFuture().get();
 
             var coordinator = new ZLinkAggregateRelocationCoordinator(
-                repository, relocations);
+                repository);
             var builder = new ZLinkStandaloneActorRelocationSourceBuilder(
                 MESH,
                 nodeRegistration.routingId(),
@@ -108,13 +108,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             assertNotNull(SnapshotAdapter.captured.get());
             assertTrue(runtime.actorSessions()
                 .localActor("actor-a").isPresent());
-            var root = coordinator.readRoot(
-                    prepared.initialRoot().stored().reference(),
-                    prepared.initialRoot().stored().checksumCrc32c(),
-                    NEVER)
-                .toCompletableFuture().get();
             var decoded = ZLinkCanonicalActorRelocationEnvelope.decode(
-                root.payload(),
+                prepared.stageRequest().relocationPayload(),
                 prepared.targetRequest().relocationId(),
                 "actor-a",
                 true);
@@ -164,7 +159,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 .toCompletableFuture().get();
 
             var coordinator = new ZLinkAggregateRelocationCoordinator(
-                repository, relocations);
+                repository);
             var adapters = new ZLinkRelocationAdapterRegistry(
                 registration,
                 ZLinkHandlerActivator.reflection());

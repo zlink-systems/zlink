@@ -390,6 +390,8 @@ final class ZLinkActorSpotAdmission {
                             UUID.fromString(request.transferId()),
                             operationId.orElseThrow(),
                             request.actorId(),
+                            request.actorType(),
+                            request.actorGeneration(),
                             targetSpotId,
                             targetSpot,
                             joinedCallback,
@@ -404,6 +406,15 @@ final class ZLinkActorSpotAdmission {
                 }
                 requireActors().traceActorTransferMarker(
                     "target_admission_accepted", request.actorId(), request.transferId());
+                //  Extension point (spec 15 §4.2): a follow-up wire schema
+                //  change attaches this advertised relocation state chunk
+                //  receive limit to the Join Accepted reply tail. Computed
+                //  now so only the wire plumbing remains.
+                requireActors().traceActorTransferMarker(
+                    "advertised_receive_chunk_limit_bytes",
+                    request.actorId(),
+                    Long.toString(ZLinkActorJoinAdvertisedChunkLimit
+                        .conservativeReceiveChunkLimitBytes()));
                 return response;
             });
     }

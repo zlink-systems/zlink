@@ -97,8 +97,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         AuthorityState authority = new AuthorityState();
         ZLinkLocationRepository authorityStore = authority.proxy();
         var coordinator = new ZLinkAggregateRelocationCoordinator(
-            authorityStore,
-            new InMemoryRelocationStore());
+            authorityStore);
         var envelope = new ZLinkUserSpotAggregateStagingOwner.Request(
             TestSpot.class,
             "room",
@@ -214,8 +213,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             "room",
             false,
             true,
-            prepared.stored().reference(),
-            prepared.stored().checksumCrc32c(),
+            prepared.request().root(),
             participants,
             List.of(new ZLinkSpotRetireControl.SessionRouteFence(
                 actorId,
@@ -347,8 +345,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         AuthorityState authority = new AuthorityState();
         ZLinkLocationRepository authorityStore = authority.proxy();
         var coordinator = new ZLinkAggregateRelocationCoordinator(
-            authorityStore,
-            new InMemoryRelocationStore());
+            authorityStore);
         UUID aggregateId = UUID.randomUUID();
         var participants = List.of(
             new ZLinkSpotRetireControl.ParticipantFence(
@@ -407,8 +404,6 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                     "room",
                     1))),
             new ZLinkLocationOwnerToken("target-owner", 23));
-        var staged = coordinator.stageRoot(storeRequest, OPEN)
-            .toCompletableFuture().join();
         var finalPrepared = coordinator.prepare(storeRequest, OPEN)
             .toCompletableFuture().join();
         coordinator.commit(finalPrepared, OPEN)
@@ -461,8 +456,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             "room",
             false,
             true,
-            staged.stored().reference(),
-            staged.stored().checksumCrc32c(),
+            storeRequest.root(),
             participants);
 
         endpoint.stage(request).toCompletableFuture().join();
@@ -584,7 +578,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         private final Map<String, ZLinkAuthoritySnapshot> rows =
             new ConcurrentHashMap<>();
         private ZLinkAggregatePrepareRequest prepared;
-        private ZLinkAggregateProgress progress;
+        private boolean progress;
         private String progressStoreVersion;
 
         ZLinkLocationRepository proxy() {
@@ -657,8 +651,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                         prepared.capacityBundle()),
                     Instant.now()));
             }
-            progress = ZLinkCanonicalRelocationAuthorityStateCodec.progress(
-                prepared.participants().getFirst().authorityPayload());
+            progress = true;
             progressStoreVersion = "aggregate-commit";
             return CompletableFuture.completedFuture(
                 ZLinkAggregateCommitResult.COMMITTED);
@@ -667,7 +660,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         private CompletionStage<Optional<ZLinkAggregateProgressSnapshot>>
             readAggregateProgress(ZLinkAggregateFence fence) {
             return CompletableFuture.completedFuture(
-                progress == null
+                !progress
                     ? Optional.empty()
                     : Optional.of(progressSnapshot(fence)));
         }
@@ -675,11 +668,11 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         private CompletionStage<Boolean> removeAggregateProgress(
             ZLinkAggregateFence fence,
             String expectedStoreVersion) {
-            if (progress == null
+            if (!progress
                 || !progressStoreVersion.equals(expectedStoreVersion)) {
                 return CompletableFuture.completedFuture(false);
             }
-            progress = null;
+            progress = false;
             progressStoreVersion = null;
             return CompletableFuture.completedFuture(true);
         }
@@ -689,8 +682,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             return new ZLinkAggregateProgressSnapshot(
                 fence,
                 progressStoreVersion,
-                prepared,
-                progress);
+                prepared);
         }
 
         private CompletionStage<ZLinkAuthorityWriteResult> compareExchange(

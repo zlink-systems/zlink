@@ -330,6 +330,9 @@ class raw_mesh_node_owner_t
     bool reply_relocation_ready (
       const service_mailbox_record_t &request,
       const protocol::relocation_ready_t &ready);
+    bool reply_relocation_failed (
+      const service_mailbox_record_t &request,
+      const protocol::relocation_failed_t &failure);
     task_t<raw_mesh_pump_result_t>
     pump_one (service_liveness_registry_t::clock_t::time_point now,
               bool accept_application_receive = true);

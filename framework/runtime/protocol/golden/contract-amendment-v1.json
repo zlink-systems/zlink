@@ -66,7 +66,7 @@
       "terminalReply": 20,
       "messageFollow": 50,
       "boundSessionReplaced": 51,
-      "reservedFirst": 53
+      "reservedFirst": 54
     },
     "replyEnvelopeFields": ["correlation", "terminalResult", "failureCode", "tail"],
     "createRequestFields": [

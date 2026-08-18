@@ -126,6 +126,8 @@ export interface ServiceMaintenanceRelocationPrepare extends ServiceWireRelocati
   readonly payloadChunkCount: number;
   /** CRC-32C (Castagnoli) over the fully assembled payload bytes. */
   readonly payloadChecksumCrc32c: number;
+  /** CRC-32C over the pre-seal base snapshot already sent as base-stage chunks. 0 = no base. */
+  readonly baseChecksumCrc32c: number;
   readonly applicationVersion: bigint;
 }
 
@@ -134,6 +136,15 @@ export interface ServiceMaintenanceRelocationReady extends ServiceWireRelocation
   readonly target: ServiceWireRelocationTarget;
   readonly object: ServiceWireRelocationObject;
   readonly senderRole: ServiceWireRelocationRole;
+}
+
+/** Explicit target-side pre-cutover relocation failure (command 53). */
+export interface ServiceMaintenanceRelocationFailed extends ServiceWireRelocationBase {
+  readonly kind: 'failed';
+  readonly target: ServiceWireRelocationTarget;
+  readonly object: ServiceWireRelocationObject;
+  readonly senderRole: ServiceWireRelocationRole;
+  readonly failureCode: number;
 }
 
 export interface ServiceWireFrozenRecord {
@@ -190,11 +201,15 @@ export interface ServiceMaintenanceRelocationCutover extends ServiceWireRelocati
   readonly boundaryChecksumCrc32c: number;
 }
 
+export type ServiceWireRelocationPayloadStage = 'base' | 'final';
+
 /** One relocation payload chunk (command 52), sent one-way on the ordered connection. */
 export interface ServiceMaintenanceRelocationState extends ServiceWireRelocationBase {
   readonly kind: 'state';
   readonly senderRole: ServiceWireRelocationRole;
   readonly object: ServiceWireRelocationObject;
+  /** Independent ordinal space per stage: base (pre-seal snapshot) or final (delta/full payload). */
+  readonly payloadStage: ServiceWireRelocationPayloadStage;
   readonly chunkOrdinal: number;
   readonly chunkData: Uint8Array;
 }
@@ -202,6 +217,7 @@ export interface ServiceMaintenanceRelocationState extends ServiceWireRelocation
 export type ServiceMaintenanceRelocationControl =
   | ServiceMaintenanceRelocationPrepare
   | ServiceMaintenanceRelocationReady
+  | ServiceMaintenanceRelocationFailed
   | ServiceMaintenanceRelocationData
   | ServiceMaintenanceRelocationCutover
   | ServiceMaintenanceRelocationState;
@@ -506,6 +522,8 @@ export type ServiceStatefulReplyTail =
       readonly joinResult: 0 | 1;
       readonly spot?: ServiceSpotRef;
       readonly membershipEpoch?: bigint;
+      /** Target's advertised valid receive chunk cap. 0 = not advertised (accepted only). */
+      readonly receiveChunkLimitBytes?: number;
     }
   | {
       readonly kind: 'streamBind';
@@ -1444,6 +1462,7 @@ export function encodeMaintenanceRelocationControl(
         payloadTotalLength(value.payloadTotalLength),
         payloadChunkCount(value.payloadChunkCount),
         u32(value.payloadChecksumCrc32c, 'payloadChecksumCrc32c'),
+        u32(value.baseChecksumCrc32c, 'baseChecksumCrc32c'),
         applicationVersion(value.applicationVersion)
       );
     case 'ready':
@@ -1455,6 +1474,17 @@ export function encodeMaintenanceRelocationControl(
         relocationTarget(value.target),
         relocationObject(value.object),
         Buffer.of(relocationRole(value.senderRole))
+      );
+    case 'failed':
+      return concat(
+        prefix(M6bServiceWireCommand.relocationFailed),
+        wireId(value.relocation, 'relocation'),
+        u64(value.targetAttemptGeneration),
+        coordinatorFence(value.coordinator),
+        relocationTarget(value.target),
+        relocationObject(value.object),
+        Buffer.of(relocationRole(value.senderRole)),
+        u32(requiredNonzeroU32(value.failureCode, 'failureCode'), 'failureCode')
       );
     case 'data':
       return concat(
@@ -1479,6 +1509,7 @@ export function encodeMaintenanceRelocationControl(
         base,
         Buffer.of(relocationRole(value.senderRole)),
         relocationObject(value.object),
+        Buffer.of(payloadStage(value.payloadStage)),
         u32(value.chunkOrdinal, 'chunkOrdinal'),
         relocationChunkData(value.chunkData)
       );
@@ -1505,12 +1536,13 @@ export function decodeMaintenanceRelocationControl(
       const payloadTotalLength = reader.payloadTotalLength();
       const payloadChunkCount = reader.payloadChunkCount();
       const payloadChecksumCrc32c = reader.u32('payloadChecksumCrc32c');
+      const baseChecksumCrc32c = reader.u32('baseChecksumCrc32c');
       const applicationVersion = reader.applicationVersion();
       reader.end();
       return { kind: 'prepare', relocation, targetAttemptGeneration, coordinator,
         target, initiatorRole, object, sourceNodeRid, sourceNodeGeneration,
         payloadTotalLength, payloadChunkCount, payloadChecksumCrc32c,
-        applicationVersion };
+        baseChecksumCrc32c, applicationVersion };
     }
     case M6bServiceWireCommand.relocationReady: {
       requireFlags(prefixValue.flags, 0);
@@ -1523,6 +1555,20 @@ export function decodeMaintenanceRelocationControl(
       reader.end();
       return { kind: 'ready', relocation, targetAttemptGeneration, coordinator,
         target, object, senderRole };
+    }
+    case M6bServiceWireCommand.relocationFailed: {
+      requireFlags(prefixValue.flags, 0);
+      const relocation = reader.operationId('relocation');
+      const targetAttemptGeneration = reader.nonZeroU64('targetAttemptGeneration');
+      const coordinator = reader.coordinatorFence();
+      const target = reader.relocationTarget();
+      const object = reader.relocationObject();
+      const senderRole = reader.relocationRole();
+      const failureCode = requiredNonzeroU32(
+        reader.u32('failureCode'), 'failureCode');
+      reader.end();
+      return { kind: 'failed', relocation, targetAttemptGeneration, coordinator,
+        target, object, senderRole, failureCode };
     }
     case M6bServiceWireCommand.relocationData: {
       requireFlags(prefixValue.flags, 0);
@@ -1550,10 +1596,12 @@ export function decodeMaintenanceRelocationControl(
       const base = reader.relocationBase();
       const senderRole = reader.relocationRole();
       const object = reader.relocationObject();
+      const stage = reader.payloadStage();
       const chunkOrdinal = reader.u32('chunkOrdinal');
       const chunkData = reader.relocationChunkData();
       reader.end();
-      return { kind: 'state', ...base, senderRole, object, chunkOrdinal, chunkData };
+      return { kind: 'state', ...base, senderRole, object, payloadStage: stage,
+        chunkOrdinal, chunkData };
     }
     default:
       fail(`Unsupported maintenance relocation command '${prefixValue.command}'.`);
@@ -1699,8 +1747,19 @@ export function decodeStatefulReply(
       if (joinResult === 0) {
         spot = reader.spotRef();
         const membershipEpoch = reader.nonZeroU64('membershipEpoch');
+        // Tolerant of frames from an unpatched encoder that stops after
+        // membershipEpoch: 0 means "not advertised".
+        const receiveChunkLimitBytes = reader.offset === bodyEnd
+          ? 0
+          : (() => {
+              const value = reader.u32('receiveChunkLimitBytes');
+              if (value > RELOCATION_STATE_CHUNK_DATA_MAX_BYTES) {
+                fail('receiveChunkLimitBytes exceeds the relocation state chunk data bound.');
+              }
+              return value;
+            })();
         if (reader.offset !== bodyEnd) fail('Invalid actor join body length.');
-        tail = { kind: 'actorJoin', joinResult, spot, membershipEpoch };
+        tail = { kind: 'actorJoin', joinResult, spot, membershipEpoch, receiveChunkLimitBytes };
       } else {
         const hasSpot = reader.bool8('hasSpot');
         const optionalLength = reader.u16('optionalSpotLength');
@@ -1799,7 +1858,16 @@ function encodeReplyTail(tail: ServiceStatefulReplyTail): Buffer {
         if (tail.membershipEpoch === undefined) {
           fail('Accepted actor join requires a membership epoch.');
         }
-        const body = concat(spotRef(tail.spot), u64(tail.membershipEpoch));
+        const receiveChunkLimitBytes = tail.receiveChunkLimitBytes ?? 0;
+        if (receiveChunkLimitBytes < 0
+          || receiveChunkLimitBytes > RELOCATION_STATE_CHUNK_DATA_MAX_BYTES) {
+          fail('receiveChunkLimitBytes exceeds the relocation state chunk data bound.');
+        }
+        const body = concat(
+          spotRef(tail.spot),
+          u64(tail.membershipEpoch),
+          u32(receiveChunkLimitBytes, 'receiveChunkLimitBytes')
+        );
         return concat(u32(0, 'joinResult'), u16(body.byteLength), body);
       }
       const optional = tail.spot === undefined
@@ -1871,6 +1939,10 @@ function relocationRole(value: ServiceWireRelocationRole): number {
   return value === 'source' ? 1 : value === 'target' ? 2 : 3;
 }
 
+function payloadStage(value: ServiceWireRelocationPayloadStage): number {
+  return value === 'base' ? 0 : 1;
+}
+
 function applicationVersion(value: bigint): Buffer {
   if (value < 0n || value > 0x7fff_ffff_ffff_ffffn) {
     throw new RangeError('applicationVersion must be a non-negative i64.');
@@ -1922,6 +1994,13 @@ function payloadChunkCount(value: number): Buffer {
     throw new RangeError('payloadChunkCount exceeds the relocation chunk count bound.');
   }
   return u32(value, 'payloadChunkCount');
+}
+
+function requiredNonzeroU32(value: number, name: string): number {
+  if (!Number.isInteger(value) || value <= 0 || value > 0xffff_ffff) {
+    throw new RangeError(`${name} must be a non-zero u32.`);
+  }
+  return value;
 }
 
 function ordinalOrZero(value: bigint, name: string): Buffer {
@@ -2338,6 +2417,12 @@ class Reader {
       fail('payloadChunkCount exceeds the relocation chunk count bound.');
     }
     return value;
+  }
+
+  payloadStage(): ServiceWireRelocationPayloadStage {
+    const value = this.u8('payloadStage');
+    if (value !== 0 && value !== 1) fail('Invalid relocation payloadStage.');
+    return value === 0 ? 'base' : 'final';
   }
 
   relocationChunkData(): Buffer {

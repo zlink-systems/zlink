@@ -297,6 +297,20 @@ struct relocation_ready_t
                             const relocation_ready_t &) = default;
 };
 
+/* Explicit target-side pre-cutover failure for a relocation PREPARE. */
+struct relocation_failed_t
+{
+    relocation_id_t relocation;
+    std::uint64_t target_attempt_generation = 0;
+    relocation_coordinator_fence_t coordinator;
+    relocation_target_fence_t target;
+    relocation_object_t object;
+    relocation_role_t sender_role = relocation_role_t::target;
+    std::uint32_t failure_code = 0;
+    friend bool operator== (const relocation_failed_t &,
+                            const relocation_failed_t &) = default;
+};
+
 struct relocation_cutover_t
 {
     relocation_id_t relocation;
@@ -446,7 +460,7 @@ struct relocation_state_t
 };
 
 using relocation_control_t = std::variant<
-  relocation_prepare_t, relocation_ready_t, relocation_data_t,
+  relocation_prepare_t, relocation_ready_t, relocation_failed_t, relocation_data_t,
   relocation_cutover_t, relocation_state_t>;
 
 struct reply_relay_t

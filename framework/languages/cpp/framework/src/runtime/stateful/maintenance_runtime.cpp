@@ -514,6 +514,10 @@ struct maintenance_runtime_t::relocation_terminal_state_t
     std::optional<relocation_result_t> result;
     std::optional<protocol::relocation_cutover_t> cutover_record;
     bool cutover_enqueued = false;
+    /* S1 (cutover submit terminal), on the source clock. Used as the start
+     * of the route_convergence window (25 §"zlink.relocation"), which ends
+     * when the retransmission-window copies are released. */
+    std::chrono::steady_clock::time_point cutover_terminal_at{};
 };
 
 durable_join_completion_store_t::durable_join_completion_store_t (
@@ -694,6 +698,19 @@ void maintenance_runtime_t::attach_relocation_wire (
   raw_relocation_replay_coordinator_t &wire) noexcept
 {
     _relocation_wire = &wire;
+}
+
+void maintenance_runtime_t::configure_route_convergence_metric (
+  std::function<void (double)> metric) noexcept
+{
+    std::lock_guard lock (_shutdown_tracking->metric_mutex);
+    _shutdown_tracking->route_convergence_metric = std::move (metric);
+}
+
+bool maintenance_runtime_t::relocation_units_settled () const noexcept
+{
+    return _shutdown_tracking->pending_units.load (std::memory_order_acquire)
+        <= 0;
 }
 
 std::optional<std::vector<protocol::relocation_data_t>>
@@ -948,9 +965,13 @@ void maintenance_runtime_t::retain_retransmission_copies (
      * reach the wire, the window is also used to retry the one-way cutover
      * on the (possibly re-established) connection. */
     const auto window = _limits.cutover_wait_timeout;
+    /* Captured by value (not `this`): this coroutine is detached and
+     * self-keeping, so it can outlive the maintenance_runtime_t that
+     * started it. */
+    auto tracking = _shutdown_tracking;
+    tracking->pending_units.fetch_add (1, std::memory_order_acq_rel);
     auto retention = std::make_shared<task_t<void>> (
-      [] (maintenance_runtime_t *owner,
-          std::shared_ptr<relocation_terminal_state_t> retained,
+      [] (std::shared_ptr<relocation_terminal_state_t> retained,
           std::chrono::milliseconds duration) -> task_t<void> {
           const auto deadline = std::chrono::steady_clock::now () + duration;
           constexpr auto retry_interval = std::chrono::milliseconds (100);
@@ -977,14 +998,32 @@ void maintenance_runtime_t::retain_retransmission_copies (
               catch (...) {
               }
           }
-          (void) owner;
           retained->payload.clear ();
           retained->payload.shrink_to_fit ();
           retained->records.reset ();
           retained->cutover_record.reset ();
-      } (this, state, window));
+      } (state, window));
     detail::observe_task_completion (
-      *retention, [retention] (const result_t<void> &) {});
+      *retention, [retention, tracking, state] (const result_t<void> &) {
+          /* Fires on any completion (normal or exceptional), so this is
+           * the one place both the route_convergence metric and the
+           * SafeToShutdown obligation resolve exactly once. Retransmission
+           * window closed: this unit's route_convergence and
+           * SafeToShutdown obligation both resolve here (no separate
+           * Message Follow expiry timer exists in this runtime to measure
+           * that condition independently). */
+          if (state->cutover_terminal_at
+              != std::chrono::steady_clock::time_point{}) {
+              std::lock_guard lock (tracking->metric_mutex);
+              if (tracking->route_convergence_metric) {
+                  const auto elapsed = std::chrono::duration<double> (
+                    std::chrono::steady_clock::now ()
+                    - state->cutover_terminal_at);
+                  tracking->route_convergence_metric (elapsed.count ());
+              }
+          }
+          tracking->pending_units.fetch_sub (1, std::memory_order_acq_rel);
+      });
 }
 
 task_t<relocation_result_t> maintenance_runtime_t::relocate (
@@ -1234,9 +1273,11 @@ task_t<bool> maintenance_runtime_t::relocate_cutover (
     cutover.boundary_checksum_crc32c =
       boundary_batch_checksum (*state->records);
     const auto outcome = co_await state->context.send_cutover (cutover);
+    const auto terminal_now = std::chrono::steady_clock::now ();
+    state->cutover_terminal_at = terminal_now;
     const auto stall = state->sealed_at
                            != std::chrono::steady_clock::time_point{}
-                         ? std::chrono::steady_clock::now () - state->sealed_at
+                         ? terminal_now - state->sealed_at
                          : std::chrono::steady_clock::duration::zero ();
     /* The target's relay-ready reply was already accepted: source dispatch
      * never reopens from here, whatever the submit outcome (28 §4.4/§9). */
@@ -1387,7 +1428,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     &canonical_wire,
   std::stop_token cancellation)
 {
-    if (sources.size () < 2 || !canonical_wire) {
+    if (sources.size () < 2 || !canonical_wire || !_aggregate_authority) {
         co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
                 relocation_reason_t::restore_failed, {}};
     }
@@ -1470,6 +1511,65 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
         co_return aggregate_relocation_result_t{relocation_terminal_t::recovery_required, failure, {},
                 records.value_or (std::vector<protocol::relocation_data_t>{}), handoff};
     }
+    /* The multi-object location update is not a per-object CAS the public
+     * host layer can drive from a single target_handoff (28 aggregate
+     * §-: the N Location Store rows must move atomically). The aggregate
+     * authority port stays the 2-phase mechanism for that, sequenced
+     * before cutover so the target never observes a committed authority
+     * ahead of the source's own decision. */
+    const auto relocation_reference =
+      std::string ("direct:")
+      + std::to_string (canonical_wire->relocation.high) + ":"
+      + std::to_string (canonical_wire->relocation.low) + ":"
+      + std::to_string (canonical_wire->target_attempt_generation);
+    aggregate_publish_result_t authority_prepared;
+    try {
+        authority_prepared = _aggregate_authority->prepare (
+          sources, target_node_id, target_owner, relocation_reference,
+          state->manifest.checksum_crc32c, inventory_digest);
+    }
+    catch (...) {
+        if (abort_target_before_cutover (*canonical_wire))
+            (void) _objects.abort_relocation_before_cutover (seal.token);
+        co_return aggregate_relocation_result_t{relocation_terminal_t::store_failed,
+                relocation_reason_t::authority_publish_failed, {}, *records, handoff};
+    }
+    if (authority_prepared.status != aggregate_publish_status_t::prepared
+        || authority_prepared.fence.value == 0) {
+        if (abort_target_before_cutover (*canonical_wire))
+            (void) _objects.abort_relocation_before_cutover (seal.token);
+        co_return aggregate_relocation_result_t{
+                authority_prepared.status == aggregate_publish_status_t::conflict
+                  ? relocation_terminal_t::conflict
+                  : relocation_terminal_t::store_failed,
+                authority_prepared.status == aggregate_publish_status_t::conflict
+                  ? relocation_reason_t::authority_conflict
+                  : relocation_reason_t::authority_publish_failed,
+                {}, *records, handoff};
+    }
+    aggregate_publish_result_t authority_committed;
+    try {
+        authority_committed = _aggregate_authority->commit (authority_prepared.fence);
+    }
+    catch (...) {
+        co_return aggregate_relocation_result_t{relocation_terminal_t::recovery_required,
+                relocation_reason_t::authority_publish_failed, {}, *records, handoff};
+    }
+    if (authority_committed.status != aggregate_publish_status_t::committed) {
+        if (authority_committed.status == aggregate_publish_status_t::conflict) {
+            try {
+                _aggregate_authority->abort (authority_prepared.fence);
+            }
+            catch (...) {
+            }
+            if (abort_target_before_cutover (*canonical_wire))
+                (void) _objects.abort_relocation_before_cutover (seal.token);
+            co_return aggregate_relocation_result_t{relocation_terminal_t::conflict,
+                    relocation_reason_t::authority_conflict, {}, *records, handoff};
+        }
+        co_return aggregate_relocation_result_t{relocation_terminal_t::recovery_required,
+                relocation_reason_t::authority_publish_failed, {}, *records, handoff};
+    }
     /* Cutover carries the same principal object identity as the Restore
      * request so the target binds it to the prepared attempt. */
     const auto principal = std::find_if (
@@ -1489,6 +1589,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     cutover.boundary_record_count = records->size ();
     cutover.boundary_checksum_crc32c = boundary_batch_checksum (*records);
     const auto outcome = co_await canonical_wire->send_cutover (cutover);
+    state->cutover_terminal_at = std::chrono::steady_clock::now ();
     /* The relay-ready reply was already accepted: source dispatch never
      * reopens from here, whatever the submit outcome (28 §4.4/§9). */
     const auto finalized =
@@ -2420,6 +2521,19 @@ void public_host_runtime_t::configure_relocation_target_metrics (
 {
     std::lock_guard lock (_mutex);
     _relocation_target_metrics = std::move (metrics);
+}
+
+void public_host_runtime_t::configure_relocation_source_metrics (
+  std::function<void (double)> route_convergence_metric)
+{
+    stateful::maintenance_runtime_t *maintenance_ptr;
+    {
+        std::lock_guard lock (_mutex);
+        maintenance_ptr = _maintenance.get ();
+    }
+    if (maintenance_ptr)
+        maintenance_ptr->configure_route_convergence_metric (
+          std::move (route_convergence_metric));
 }
 
 void public_host_runtime_t::configure_maintenance (

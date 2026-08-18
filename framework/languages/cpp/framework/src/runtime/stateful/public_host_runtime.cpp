@@ -1212,10 +1212,20 @@ node_status_t public_host_runtime_t::status () const
         default:
             break;
     }
+    /* _maintenance is set at most once, during configure_relocation /
+     * configure_maintenance, both of which reject the call once the host
+     * has started; it is never reassigned afterward. status() is called
+     * from many contexts, some of which already hold _mutex (a plain,
+     * non-recursive mutex), so this reads the pointer without locking
+     * rather than risk a self-deadlock. */
+    const auto *maintenance_ptr = _maintenance.get ();
+    const bool safe_to_shutdown = !maintenance_ptr
+      || maintenance_ptr->relocation_units_settled ();
     return {state,
             zlink::routing_id_t::from (descriptor.node_routing_id),
             descriptor.advertised_endpoint,
-            descriptor.lifecycle_generation};
+            descriptor.lifecycle_generation,
+            safe_to_shutdown};
 }
 
 std::size_t public_host_runtime_t::pending_operation_count () const noexcept
@@ -3253,6 +3263,21 @@ bool public_host_runtime_t::try_finalize_relocation_target (
     if (!commit_relocation_target_authority (attempt))
         return false;
 
+    /* S2 (owner CAS confirmed): stamp once, on the first tick that
+     * observes the authority commit, so a retried finalize does not push
+     * the target_resume window forward. */
+    {
+        std::lock_guard lock (_mutex);
+        const auto found = _relocation_target_attempts.find (key);
+        if (found == _relocation_target_attempts.end ())
+            return false;
+        if (found->second.authority_committed_at
+            == std::chrono::steady_clock::time_point{})
+            found->second.authority_committed_at =
+              std::chrono::steady_clock::now ();
+        attempt.authority_committed_at = found->second.authority_committed_at;
+    }
+
     const auto committed =
       attempt.targets.size () == 1
         ? _objects.commit_relocation_restore (
@@ -3277,6 +3302,20 @@ bool public_host_runtime_t::try_finalize_relocation_target (
             return false;
         found->second.target_finalized = true;
         found->second.attempt_expires_at = {};
+    }
+    /* Metrics 25 §"zlink.relocation": cutover_timeout counts a fallback CAS
+     * (target proceeded without a verified cutover); target_resume is the
+     * target-local S2 (owner CAS confirmed) -> dispatch-open duration.
+     * Both are emitted exactly once per attempt, on the same tick that
+     * flips target_finalized. */
+    if (!attempt.cutover_received && _relocation_target_metrics.cutover_timeout)
+        _relocation_target_metrics.cutover_timeout ();
+    if (_relocation_target_metrics.target_resume_seconds
+        && attempt.authority_committed_at
+             != std::chrono::steady_clock::time_point{}) {
+        const auto elapsed = std::chrono::duration<double> (
+          std::chrono::steady_clock::now () - attempt.authority_committed_at);
+        _relocation_target_metrics.target_resume_seconds (elapsed.count ());
     }
     retry_relocation_session_routes (key);
     return true;
@@ -3346,6 +3385,19 @@ task_t<void> public_host_runtime_t::retry_bound_session_replacements ()
 void public_host_runtime_t::complete_relocation_assembly (
   const relocation_attempt_key_t &key, pending_relocation_assembly_t pending)
 {
+    const auto reply_failure = [&] {
+        (void) _transport->reply_relocation_failed (
+          pending.request,
+          protocol::relocation_failed_t{
+            pending.prepare.relocation,
+            pending.prepare.target_attempt_generation,
+            pending.prepare.coordinator,
+            pending.prepare.target,
+            pending.prepare.object,
+            protocol::relocation_role_t::target,
+            static_cast<std::uint32_t> (
+              protocol::framework_error_code::relocationDataLost)});
+    };
     auto payload = pending.assembly.take_payload ();
     std::vector<stateful::frozen_object_state_t> frozen;
     stateful::inventory_digest_t inventory_digest{};
@@ -3358,12 +3410,16 @@ void public_host_runtime_t::complete_relocation_assembly (
         frozen = aggregate->first;
         inventory_digest = aggregate->second;
     }
-    if (frozen.empty ())
+    if (frozen.empty ()) {
+        reply_failure ();
         return;
+    }
     const auto stored_session_routes =
       stateful::maintenance_runtime_t::decode_session_routes (payload);
-    if (!stored_session_routes)
+    if (!stored_session_routes) {
+        reply_failure ();
         return;
+    }
 
     const auto local = status ();
     std::vector<stateful::object_ref_t> sources;
@@ -3383,11 +3439,14 @@ void public_host_runtime_t::complete_relocation_assembly (
             kind = protocol::relocation_object_kind_t::instance_spot;
             break;
         default:
+            reply_failure ();
             return;
         }
         if (saved.owner.authority_owner_generation
-            == std::numeric_limits<std::uint64_t>::max ())
+            == std::numeric_limits<std::uint64_t>::max ()) {
+            reply_failure ();
             return;
+        }
         protocol::relocation_object_t wire_object{
           kind, saved.stable_type, saved.owner.key,
           saved.owner.object_generation,
@@ -3401,8 +3460,10 @@ void public_host_runtime_t::complete_relocation_assembly (
         targets.push_back (std::move (target));
         wire_objects.push_back (std::move (wire_object));
     }
-    if (!principal_found)
+    if (!principal_found) {
+        reply_failure ();
         return;
+    }
     for (std::size_t index = 0; index != stored_session_routes->size ();
          ++index) {
         const auto &route = (*stored_session_routes)[index];
@@ -3434,8 +3495,10 @@ void public_host_runtime_t::complete_relocation_assembly (
                  != saved->owner.authority_owner_generation + 1
             || route.route.target_node_routing_id != local.routing_id ().to_bytes ()
             || route.route.target_node_generation
-                 != local.lifecycle_generation ())
+                 != local.lifecycle_generation ()) {
+            reply_failure ();
             return;
+        }
     }
 
     const stateful::relocation_restore_identity_t restore_identity{
@@ -3459,6 +3522,7 @@ void public_host_runtime_t::complete_relocation_assembly (
             catch (...) {
             }
         }
+        reply_failure ();
         return;
     }
     stateful::stateful_error_t restored = stateful::stateful_error_t::conflict;
@@ -3475,6 +3539,7 @@ void public_host_runtime_t::complete_relocation_assembly (
             (void) _relocation_wire->unregister_target (
               pending.prepare.relocation,
               pending.prepare.target_attempt_generation, wire_objects[index]);
+        reply_failure ();
         return;
     }
     if (restored != stateful::stateful_error_t::none
@@ -3483,6 +3548,7 @@ void public_host_runtime_t::complete_relocation_assembly (
             (void) _relocation_wire->unregister_target (
               pending.prepare.relocation,
               pending.prepare.target_attempt_generation, wire_objects[index]);
+        reply_failure ();
         return;
     }
 
@@ -3501,8 +3567,10 @@ void public_host_runtime_t::complete_relocation_assembly (
                                  + relocation_attempt_retention;
     {
         std::lock_guard lock (_mutex);
-        if (!_relocation_target_attempts.emplace (key, std::move (attempt)).second)
+        if (!_relocation_target_attempts.emplace (key, std::move (attempt)).second) {
+            reply_failure ();
             return;
+        }
     }
     const auto ready_sent = _transport->reply_relocation_ready (
       pending.request,
@@ -3558,11 +3626,32 @@ bool public_host_runtime_t::register_relocation_target_queue (
   const protocol::relocation_object_t &wire_object)
 {
     try {
+        const relocation_attempt_key_t attempt_key{
+          prepare.relocation.high, prepare.relocation.low,
+          prepare.target_attempt_generation};
         return _relocation_wire->register_target ({
           prepare.relocation, prepare.target_attempt_generation,
           prepare.coordinator, prepare.source_node_routing_id,
           prepare.source_node_generation, wire_object,
-          [this, target] (const protocol::relocation_data_t &data) {
+          [this, target, attempt_key] (
+            const protocol::relocation_data_t &data) {
+              /* Pre-boundary relay verification (28 §4.4/§12): count and
+               * checksum every relocationData record the target stages for
+               * this attempt, in receive order, so the cutover comparison
+               * can detect a defect before CAS runs. This mirrors the
+               * source's boundary_batch_checksum computation exactly. */
+              {
+                  std::lock_guard lock (_mutex);
+                  const auto found =
+                    _relocation_target_attempts.find (attempt_key);
+                  if (found != _relocation_target_attempts.end ()
+                      && !found->second.cutover_received
+                      && !found->second.target_finalized) {
+                      ++found->second.boundary_records_received;
+                      found->second.boundary_accumulator.update (
+                        protocol::encode_relocation_control (data));
+                  }
+              }
               const auto frozen_record = data.record;
               return _stateful_dispatch
                      && _stateful_dispatch->stage_relocated (
@@ -3631,6 +3720,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
         bound_session_operations = _bound_session_operations;
     }
     expire_relocation_target_attempts ();
+    std::vector<pending_relocation_assembly_t> expired_relocation_assemblies;
     {
         const auto now = std::chrono::steady_clock::now ();
         std::lock_guard lock (_mutex);
@@ -3640,8 +3730,22 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                 ++pending;
                 continue;
             }
+            expired_relocation_assemblies.push_back (std::move (pending->second));
             pending = _relocation_assemblies.erase (pending);
         }
+    }
+    for (const auto &expired : expired_relocation_assemblies) {
+        (void) _transport->reply_relocation_failed (
+          expired.request,
+          protocol::relocation_failed_t{
+            expired.prepare.relocation,
+            expired.prepare.target_attempt_generation,
+            expired.prepare.coordinator,
+            expired.prepare.target,
+            expired.prepare.object,
+            protocol::relocation_role_t::target,
+            static_cast<std::uint32_t> (
+              protocol::framework_error_code::relocationDataLost)});
     }
     poll_relocation_target_attempts ();
     flush_pending_session_relocation_seals ();
@@ -3905,6 +4009,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       state->relocation.high, state->relocation.low,
                       state->target_attempt_generation};
                     std::optional<pending_relocation_assembly_t> completed;
+                    std::optional<pending_relocation_assembly_t> failed;
                     {
                         std::lock_guard lock (_mutex);
                         const auto found = _relocation_assemblies.find (key);
@@ -3920,16 +4025,31 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         const auto accepted = found->second.assembly.accept (*state);
                         if (accepted
                             == stateful::relocation_assembly_result_t::conflict) {
+                            failed.emplace (std::move (found->second));
                             _relocation_assemblies.erase (found);
-                            continue;
                         }
-                        if (accepted
-                            != stateful::relocation_assembly_result_t::completed)
-                            continue;
-                        completed.emplace (std::move (found->second));
-                        _relocation_assemblies.erase (found);
+                        else if (accepted
+                                 == stateful::relocation_assembly_result_t::completed) {
+                            completed.emplace (std::move (found->second));
+                            _relocation_assemblies.erase (found);
+                        }
                     }
-                    complete_relocation_assembly (key, std::move (*completed));
+                    if (failed) {
+                        (void) _transport->reply_relocation_failed (
+                          failed->request,
+                          protocol::relocation_failed_t{
+                            failed->prepare.relocation,
+                            failed->prepare.target_attempt_generation,
+                            failed->prepare.coordinator,
+                            failed->prepare.target,
+                            failed->prepare.object,
+                            protocol::relocation_role_t::target,
+                            static_cast<std::uint32_t> (
+                              protocol::framework_error_code::relocationDataLost)});
+                    }
+                    if (completed)
+                        complete_relocation_assembly (
+                          key, std::move (*completed));
                     continue;
                 }
                 if (wire.kind
@@ -3951,6 +4071,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       cutover->relocation.low,
                       cutover->target_attempt_generation};
                     bool accepted = false;
+                    std::optional<relocation_target_attempt_t> mismatched;
                     {
                         std::lock_guard lock (_mutex);
                         const auto found =
@@ -3966,12 +4087,53 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                             && found->second.prepare
                                  .source_node_generation
                                  == mailbox_record.source_node_generation) {
-                            found->second.cutover_received = true;
-                            accepted = true;
+                            if (found->second.cutover_received
+                                || found->second.target_finalized) {
+                                /* Late or duplicate cutover (28 §4.4): the
+                                 * boundary already resolved — matched,
+                                 * mismatched, or the target already moved
+                                 * on via the cutover-timeout fallback.
+                                 * State is never re-verified or changed. */
+                            }
+                            else if (found->second.boundary_records_received
+                                       == cutover->boundary_record_count
+                                     && found->second.boundary_accumulator
+                                          .value ()
+                                          == cutover
+                                               ->boundary_checksum_crc32c) {
+                                found->second.cutover_received = true;
+                                accepted = true;
+                            }
+                            else {
+                                /* Ordered connection: the boundary record
+                                 * count/checksum the source declares must
+                                 * match what the target staged. A mismatch
+                                 * here is an implementation defect, not a
+                                 * retryable condition (28 §4.4/§12) — do
+                                 * not run CAS on a payload that may be
+                                 * incomplete; discard the prepared target
+                                 * state instead (partial-state cleanup,
+                                 * same path as an expired attempt). Cutover
+                                 * is one-way and carries no request
+                                 * sequence, so there is no reply route back
+                                 * to source for this failure; source never
+                                 * waits on a target completion reply
+                                 * (28 §4.7) and its own submit/cutover-wait
+                                 * timers unwind independently. */
+                                mismatched.emplace (
+                                  std::move (found->second));
+                                _relocation_target_attempts.erase (found);
+                            }
                         }
                     }
                     if (accepted) {
                         (void) try_finalize_relocation_target (key);
+                    }
+                    else if (mismatched) {
+                        std::vector<relocation_target_attempt_t> cleanup;
+                        cleanup.push_back (std::move (*mismatched));
+                        cleanup_expired_relocation_target_attempts (
+                          std::move (cleanup));
                     }
                     continue;
                 }

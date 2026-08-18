@@ -17,7 +17,7 @@ final class ZLinkCanonicalRelocationControlCodecTest {
     void sharedCanonicalControlsRoundTripByteForByte() throws Exception {
         var fixture = new ObjectMapper().readTree(Files.readString(fixture()));
         var codec = new ZLinkCanonicalRelocationControlCodec();
-        assertEquals(6, fixture.path("canonical").size());
+        assertEquals(9, fixture.path("canonical").size());
         for (JsonNode entry : fixture.path("canonical")) {
             byte[] bytes = HexFormat.of().parseHex(entry.path("hex").asText());
             ZLinkCanonicalRelocationControlCodec.Control decoded;
@@ -39,7 +39,7 @@ final class ZLinkCanonicalRelocationControlCodecTest {
     void sharedMalformedVectorsAreRejected() throws Exception {
         var fixture = new ObjectMapper().readTree(Files.readString(fixture()));
         var codec = new ZLinkCanonicalRelocationControlCodec();
-        assertEquals(3, fixture.path("malformed").size());
+        assertEquals(4, fixture.path("malformed").size());
         for (JsonNode entry : fixture.path("malformed")) {
             byte[] bytes = HexFormat.of().parseHex(entry.path("hex").asText());
             IllegalArgumentException failure = assertThrows(
@@ -55,12 +55,12 @@ final class ZLinkCanonicalRelocationControlCodecTest {
         var fixture = new ObjectMapper().readTree(Files.readString(fixture()));
         var codec = new ZLinkCanonicalRelocationControlCodec();
         byte[] unknown = HexFormat.of().parseHex(
-            fixture.path("canonical").get(2).path("hex").asText());
+            byName(fixture, "relocationCutover").path("hex").asText());
         unknown[3] = 39;
         assertThrows(IllegalArgumentException.class, () -> codec.decode(unknown));
 
         byte[] cutover = HexFormat.of().parseHex(
-            fixture.path("canonical").get(2).path("hex").asText());
+            byName(fixture, "relocationCutover").path("hex").asText());
         for (int reserved : new int[]{32, 35, 41}) {
             byte[] frame = cutover.clone();
             frame[3] = (byte) reserved;
@@ -72,6 +72,13 @@ final class ZLinkCanonicalRelocationControlCodecTest {
             fixture.path("canonical").get(0).path("hex").asText());
         ready[ready.length - 1] = 1;
         assertThrows(IllegalArgumentException.class, () -> codec.decode(ready));
+    }
+
+    private static JsonNode byName(JsonNode fixture, String name) {
+        for (JsonNode entry : fixture.path("canonical")) {
+            if (name.equals(entry.path("name").asText())) return entry;
+        }
+        throw new IllegalStateException("no canonical vector named " + name);
     }
 
     private static Path fixture() {

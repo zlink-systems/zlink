@@ -82,6 +82,33 @@ final class ZLinkCanonicalRelocationProtocol {
         return value;
     }
 
+    static byte[] encodeFailed(Failed value) {
+        Objects.requireNonNull(value, "value");
+        Writer writer = body(ServiceWireConstants.COMMAND_RELOCATION_FAILED);
+        relocation(writer, value.id(), value.targetAttemptGeneration());
+        coordinator(writer, value.coordinator());
+        target(writer, value.target());
+        object(writer, value.object());
+        writer.u8(value.senderRole());
+        writer.u32(value.failureCode());
+        return writer.bytes();
+    }
+
+    static Failed decodeFailed(byte[] encoded) {
+        Reader reader = body(encoded,
+            ServiceWireConstants.COMMAND_RELOCATION_FAILED);
+        Failed value = new Failed(
+            reader.uuid(),
+            reader.nonzero(),
+            coordinator(reader),
+            target(reader),
+            object(reader),
+            reader.role(),
+            reader.u32Unsigned());
+        reader.end();
+        return value;
+    }
+
     static byte[] encodeData(Data value) {
         Objects.requireNonNull(value, "value");
         Writer writer = body(ServiceWireConstants.COMMAND_RELOCATION_DATA);
@@ -141,6 +168,7 @@ final class ZLinkCanonicalRelocationProtocol {
         coordinator(writer, value.coordinator());
         writer.u8(value.senderRole());
         object(writer, value.object());
+        writer.u8(value.payloadStage());
         writer.u32(value.chunkOrdinal());
         byte[] chunk = value.chunkData();
         writer.u32(chunk.length);
@@ -157,10 +185,19 @@ final class ZLinkCanonicalRelocationProtocol {
             coordinator(reader),
             reader.role(),
             object(reader),
+            payloadStage(reader),
             reader.u32Unsigned(),
             reader.bytes(chunkLength(reader)));
         reader.end();
         return value;
+    }
+
+    private static int payloadStage(Reader reader) {
+        int stage = reader.u8();
+        if (stage != PAYLOAD_STAGE_BASE && stage != PAYLOAD_STAGE_FINAL) {
+            throw invalid("payload stage");
+        }
+        return stage;
     }
 
     private static int chunkLength(Reader reader) {
@@ -280,12 +317,14 @@ final class ZLinkCanonicalRelocationProtocol {
         writer.u64(value.totalLength());
         writer.u32(value.chunkCount());
         writer.u32(value.checksumCrc32c());
+        writer.u32(value.baseChecksumCrc32c());
     }
 
     private static Manifest manifest(Reader reader) {
         return new Manifest(
             reader.u64(),
             (int) reader.u32Unsigned(),
+            reader.u32Unsigned(),
             reader.u32Unsigned());
     }
 
@@ -351,8 +390,20 @@ final class ZLinkCanonicalRelocationProtocol {
         }
     }
 
-    /** Direct-transfer payload manifest carried by PREPARE (spec 28 §4.2). */
-    record Manifest(long totalLength, int chunkCount, long checksumCrc32c) {
+    /**
+     * Direct-transfer payload manifest carried by PREPARE (spec 28 §4.2).
+     * {@code baseChecksumCrc32c} is 0 when no base snapshot precedes the
+     * delta (spec 15 §5) — an ordinary full Capture/Restore relocation.
+     */
+    record Manifest(
+        long totalLength,
+        int chunkCount,
+        long checksumCrc32c,
+        long baseChecksumCrc32c) {
+        Manifest(long totalLength, int chunkCount, long checksumCrc32c) {
+            this(totalLength, chunkCount, checksumCrc32c, 0);
+        }
+
         Manifest {
             if (totalLength < 0 || totalLength > PAYLOAD_TOTAL_LENGTH_BOUND) {
                 throw invalid("payload total length");
@@ -362,6 +413,10 @@ final class ZLinkCanonicalRelocationProtocol {
             }
             if (checksumCrc32c < 0 || checksumCrc32c > 0xffff_ffffL) {
                 throw invalid("payload checksum");
+            }
+            if (baseChecksumCrc32c < 0
+                || baseChecksumCrc32c > 0xffff_ffffL) {
+                throw invalid("base payload checksum");
             }
         }
     }
@@ -405,6 +460,29 @@ final class ZLinkCanonicalRelocationProtocol {
             Objects.requireNonNull(object, "object");
             if (senderRole != ROLE_TARGET) {
                 throw invalid("ready sender role");
+            }
+        }
+    }
+
+    /** Explicit pre-cutover target failure (spec 28 §3.4). */
+    record Failed(
+        UUID id,
+        long targetAttemptGeneration,
+        Coordinator coordinator,
+        Target target,
+        ObjectFence object,
+        int senderRole,
+        long failureCode) {
+        Failed {
+            requireIdentity(id, targetAttemptGeneration);
+            Objects.requireNonNull(coordinator, "coordinator");
+            Objects.requireNonNull(target, "target");
+            Objects.requireNonNull(object, "object");
+            if (senderRole != ROLE_TARGET) {
+                throw invalid("failure sender role");
+            }
+            if (failureCode <= 0 || failureCode > 0xffff_ffffL) {
+                throw invalid("failure code");
             }
         }
     }
@@ -461,15 +539,33 @@ final class ZLinkCanonicalRelocationProtocol {
         }
     }
 
-    /** One direct-transfer state chunk (spec 28 §4.2, command 52). */
+    /**
+     * One direct-transfer state chunk (spec 28 §4.2, command 52).
+     * {@code payloadStage} distinguishes the base snapshot stream (spec 15
+     * §5, sent pre-seal) from the final/delta stream — each stage has its
+     * own independent chunk ordinal space.
+     */
     record State(
         UUID id,
         long targetAttemptGeneration,
         Coordinator coordinator,
         int senderRole,
         ObjectFence object,
+        int payloadStage,
         long chunkOrdinal,
         byte[] chunkData) {
+        State(
+            UUID id,
+            long targetAttemptGeneration,
+            Coordinator coordinator,
+            int senderRole,
+            ObjectFence object,
+            long chunkOrdinal,
+            byte[] chunkData) {
+            this(id, targetAttemptGeneration, coordinator, senderRole,
+                object, PAYLOAD_STAGE_FINAL, chunkOrdinal, chunkData);
+        }
+
         State {
             requireIdentity(id, targetAttemptGeneration);
             Objects.requireNonNull(coordinator, "coordinator");
@@ -477,6 +573,10 @@ final class ZLinkCanonicalRelocationProtocol {
                 throw invalid("state sender role");
             }
             Objects.requireNonNull(object, "object");
+            if (payloadStage != PAYLOAD_STAGE_BASE
+                && payloadStage != PAYLOAD_STAGE_FINAL) {
+                throw invalid("payload stage");
+            }
             if (chunkOrdinal < 0 || chunkOrdinal > 0xffff_ffffL) {
                 throw invalid("chunk ordinal");
             }
@@ -495,6 +595,8 @@ final class ZLinkCanonicalRelocationProtocol {
 
     static final int SOURCE = ROLE_SOURCE;
     static final int TARGET = ROLE_TARGET;
+    static final int PAYLOAD_STAGE_BASE = 0;
+    static final int PAYLOAD_STAGE_FINAL = 1;
 
     private static void requireIdentity(UUID id, long attempt) {
         Objects.requireNonNull(id, "id");

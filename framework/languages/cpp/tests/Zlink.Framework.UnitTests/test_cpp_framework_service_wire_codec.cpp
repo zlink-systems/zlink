@@ -1130,6 +1130,19 @@ int main ()
     const auto &state_final_chunk = std::get<protocol::relocation_state_t> (
       decoded_controls[5]);
     assert (ready.sender_role == protocol::relocation_role_t::target);
+    {
+        const protocol::relocation_failed_t failure{
+          ready.relocation, ready.target_attempt_generation,
+          ready.coordinator, ready.target, ready.object,
+          protocol::relocation_role_t::target,
+          static_cast<std::uint32_t> (
+            protocol::framework_error_code::relocationDataLost)};
+        const auto encoded = protocol::encode_relocation_control (failure);
+        assert (encoded[3] == static_cast<std::uint8_t> (
+          protocol::command::relocationFailed));
+        const auto decoded = protocol::decode_relocation_control (encoded);
+        assert (std::get<protocol::relocation_failed_t> (decoded) == failure);
+    }
     assert (data.sender_role == protocol::relocation_role_t::source);
     assert (data.record.kind
             == protocol::frozen_record_kind_t::spot_request);

@@ -1836,6 +1836,8 @@ std::vector<std::uint8_t> encode_relocation_control (
             kind = command::relocationPrepare;
         else if constexpr (std::is_same_v<record_t, relocation_ready_t>)
             kind = command::relocationReady;
+        else if constexpr (std::is_same_v<record_t, relocation_failed_t>)
+            kind = command::relocationFailed;
         else if constexpr (std::is_same_v<record_t, relocation_data_t>)
             kind = command::relocationData;
         else if constexpr (std::is_same_v<record_t, relocation_state_t>)
@@ -1871,6 +1873,19 @@ std::vector<std::uint8_t> encode_relocation_control (
             append_target (bytes, value.target);
             append_object (bytes, value.object);
             append_role (bytes, value.sender_role);
+        }
+        else if constexpr (std::is_same_v<record_t, relocation_failed_t>) {
+            if (value.failure_code == 0)
+                throw service_wire_error_t (
+                  "relocation failure code must be non-zero");
+            append_relocation_id (bytes, value.relocation);
+            append_nonzero_u64 (bytes, value.target_attempt_generation,
+                                "target attempt generation");
+            append_coordinator (bytes, value.coordinator);
+            append_target (bytes, value.target);
+            append_object (bytes, value.object);
+            append_role (bytes, value.sender_role);
+            append_u32 (bytes, value.failure_code);
         }
         else if constexpr (std::is_same_v<record_t, relocation_data_t>) {
             append_relocation_base (bytes, value);
@@ -1944,6 +1959,24 @@ relocation_control_t decode_relocation_control (
             result.sender_role = read_role (bytes, offset);
             if (offset != bytes.size ())
                 throw service_wire_error_t ("relocation ready has trailing bytes");
+            return result;
+        }
+        case command::relocationFailed: {
+            relocation_failed_t result;
+            result.relocation = read_relocation_id (bytes, offset);
+            result.target_attempt_generation = read_nonzero_u64 (
+              bytes, offset, "target attempt generation");
+            result.coordinator = read_coordinator (bytes, offset);
+            result.target = read_target (bytes, offset);
+            result.object = read_object (bytes, offset);
+            result.sender_role = read_role (bytes, offset);
+            result.failure_code = read_u32 (bytes, offset);
+            if (result.failure_code == 0)
+                throw service_wire_error_t (
+                  "relocation failure code must be non-zero");
+            if (offset != bytes.size ())
+                throw service_wire_error_t (
+                  "relocation failure has trailing bytes");
             return result;
         }
         case command::relocationData: {

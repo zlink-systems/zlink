@@ -1496,11 +1496,13 @@ function validateSemanticConstraints(constraints, contexts, fail) {
         "exact-source-and-target-owner-lease-fences",
       ],
       sequence: [
+        "source-optional-relocationState-base-stage-chunks-before-seal-in-preparing-phase-referencing-a-pre-capture-snapshot",
         "source-captures-existing-work-and-timers-into-source-memory-payload",
-        "source-relocationPrepare-request-with-payload-length-chunk-count-and-checksum",
-        "source-relocationState-chunks-on-the-same-ordered-connection",
+        "source-relocationPrepare-request-with-final-payload-length-chunk-count-checksum-and-optional-base-checksum",
+        "source-relocationState-final-stage-chunks-on-the-same-ordered-connection",
         "target-installs-temporary-queue-assembles-verifies-and-restores-payload-and-keeps-dispatch-closed",
         "target-relocationReady-reply",
+        "target-relocationFailed-reply-after-partial-chunk-and-prepared-resource-cleanup",
         "source-relocationData-for-post-capture-ingress-only",
         "source-relocationCutover-one-way-with-boundary-record-count-and-checksum-after-current-relay-prefix",
         "target-only-owner-membership-cas-after-cutover-or-1000ms-ready-fallback",
@@ -1508,7 +1510,7 @@ function validateSemanticConstraints(constraints, contexts, fail) {
         "target-switches-regular-route-finishes-lifecycle-and-opens-dispatch",
       ],
       savedPrefixOwner: "source-memory-payload-only-never-relocationData",
-      relocationState: "saved-work-chunk-only-exact-identity-in-ordinal-order-conflicting-length-or-checksum-is-explicit-failure",
+      relocationState: "saved-work-chunk-only-exact-identity-per-payloadStage-independent-ordinal-space-per-stage-conflicting-length-or-checksum-is-explicit-failure",
       relocationData: "post-capture-ingress-hold-record-only-same-ordered-connection-as-cutover-no-ack-no-numeric-high-water",
       cutover: "one-way-no-reply-late-or-duplicate-only-warning-and-no-state-change",
       capacity: "normal-host-admission-and-core-backpressure-only-no-relocation-message-byte-or-participant-reservation",
@@ -3741,7 +3743,11 @@ function validateRelocationStateMachine(machine, commands, types, fail) {
     ["relocationState", {
       command: "relocationState",
       senderRoles: ["source"],
-      phases: ["captured", "prepared"],
+      phases: ["preparing", "captured", "prepared"],
+      stageRules: {
+        base: { phases: ["preparing"] },
+        final: { phases: ["captured", "prepared"] },
+      },
       duplicate: "identical-chunk-reassembly-idempotent-different-length-or-checksum-conflict-failure",
       reorder: "same-ordered-connection-after-matching-relocationPrepare-in-chunk-ordinal-order",
       loss: "no-per-chunk-ack-restore-deadline-fails-the-relocation",
@@ -3752,6 +3758,14 @@ function validateRelocationStateMachine(machine, commands, types, fail) {
       phases: ["prepared"],
       duplicate: "idempotent-if-identical-else-protocol-error",
       reorder: "reply-only-to-matching-relocationPrepare",
+      loss: "request-reply-transport-semantics-until-deadline",
+    }],
+    ["relocationFailed", {
+      command: "relocationFailed",
+      senderRoles: ["target"],
+      phases: ["captured", "prepared"],
+      duplicate: "idempotent-if-identical-else-protocol-error",
+      reorder: "reply-only-to-matching-relocationPrepare-after-target-cleanup",
       loss: "request-reply-transport-semantics-until-deadline",
     }],
     ["relocationData", {
@@ -3818,7 +3832,7 @@ function validateRelocationStateMachine(machine, commands, types, fail) {
   });
   for (const command of [
     "sessionRelocationSeal", "sessionRelocationSealed", "sessionRelocationRoute",
-    "relocationPrepare", "relocationState", "relocationReady", "relocationData",
+    "relocationPrepare", "relocationState", "relocationReady", "relocationFailed", "relocationData",
     "relocationCutover", "replyRelay", "replyRelayAck",
   ]) {
     if (!ruleCommands.has(command)) {
@@ -3847,6 +3861,7 @@ function validateServiceInvariants(schema, types, fail) {
     ["relocationCutover", 34],
     ["relocationPrepare", 40],
     ["relocationState", 52],
+    ["relocationFailed", 53],
     ["sessionRelocationSeal", 42],
     ["sessionRelocationSealed", 43],
     ["sessionRelocationRoute", 44],
@@ -3941,7 +3956,7 @@ function validateServiceInvariants(schema, types, fail) {
   ])) {
     fail("$.types", "reply relay acknowledgement status must use the closed two-value terminal table");
   }
-  for (const name of ["relocationReady", "relocationData", "relocationCutover", "relocationPrepare", "relocationState"]) {
+  for (const name of ["relocationReady", "relocationFailed", "relocationData", "relocationCutover", "relocationPrepare", "relocationState"]) {
     const body = commands.get(name)?.body ?? [];
     if (body[0]?.name !== "relocation" || body[1]?.name !== "targetAttemptGeneration"
         || body[1]?.$ref !== "nonzero-u64") {
@@ -3949,7 +3964,7 @@ function validateServiceInvariants(schema, types, fail) {
     }
   }
   for (const name of [
-    "relocationReady", "relocationData", "relocationCutover", "relocationPrepare", "relocationState",
+    "relocationReady", "relocationFailed", "relocationData", "relocationCutover", "relocationPrepare", "relocationState",
     "sessionRelocationSeal", "sessionRelocationSealed", "sessionRelocationRoute", "replyRelayAck",
   ]) {
     const coordinator = commands.get(name)?.body?.find((field) => field.name === "coordinator");
@@ -3958,7 +3973,7 @@ function validateServiceInvariants(schema, types, fail) {
     }
   }
   for (const name of [
-    "relocationReady", "relocationData", "relocationCutover", "relocationState",
+    "relocationReady", "relocationFailed", "relocationData", "relocationCutover", "relocationState",
     "sessionRelocationSeal", "sessionRelocationRoute",
   ]) {
     const senderRole = commands.get(name)?.body?.find((field) => field.name === "senderRole");
@@ -3989,9 +4004,10 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "coordinator", $ref: "relocation-coordinator-fence" },
     { name: "senderRole", $ref: "relocation-role" },
     { name: "object", $ref: "relocation-object-identity" },
+    { name: "payloadStage", $ref: "relocation-payload-stage" },
     { name: "chunkOrdinal", $ref: "u32" },
     { name: "chunkData", $ref: "durable-blob" },
-  ], "$.commands", "relocationState must carry one exact-identity saved-work chunk with its zero-based ordinal and bounded bytes");
+  ], "$.commands", "relocationState must carry one exact-identity saved-work chunk with its stage, zero-based ordinal and bounded bytes");
   const relocationStateCommand = commands.get("relocationState");
   if (relocationStateCommand?.id !== 52
       || relocationStateCommand?.domain !== "infrastructure"
@@ -4625,6 +4641,7 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "payloadTotalLength", $ref: "relocation-logical-length" },
     { name: "payloadChunkCount", $ref: "relocation-chunk-count" },
     { name: "payloadChecksumCrc32c", $ref: "u32" },
+    { name: "baseChecksumCrc32c", $ref: "u32" },
     { name: "applicationVersion", $ref: "application-version" },
   ], "$.commands", "relocationPrepare must carry the exact target, object and direct-transfer payload manifest without capacity negotiation");
   requireFields(commands.get("relocationReady")?.body, [
@@ -4635,6 +4652,25 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "object", $ref: "relocation-object-identity" },
     { name: "senderRole", $ref: "relocation-role" },
   ], "$.commands", "relocationReady must be the exact target reply after restore and temporary-queue installation");
+  requireFields(commands.get("relocationFailed")?.body, [
+    { name: "relocation", $ref: "relocation-id" },
+    { name: "targetAttemptGeneration", $ref: "nonzero-u64" },
+    { name: "coordinator", $ref: "relocation-coordinator-fence" },
+    { name: "target", $ref: "relocation-target-fence" },
+    { name: "object", $ref: "relocation-object-identity" },
+    { name: "senderRole", $ref: "relocation-role" },
+    { name: "failureCode", $ref: "framework-error-code" },
+  ], "$.commands", "relocationFailed must be the exact target failure reply after cleanup");
+  const actorJoinReplyTail = types.get("actor-join-reply-tail");
+  requireFields(
+    actorJoinReplyTail?.cases?.find((entry) => entry.when?.joinResult === "accepted")?.fields,
+    [
+      { name: "spot", $ref: "spot-ref" },
+      { name: "receiveChunkLimitBytes", $ref: "u32" },
+    ],
+    "$.types",
+    "actor-join-reply-tail accepted case must carry the target spot and the receive chunk limit as its last field",
+  );
   const sessionCommandFields = {
     sessionRelocationSeal: [
       { name: "relocation", $ref: "relocation-id" },
@@ -5634,6 +5670,7 @@ function validateRelocationTransferChecksumProfile(profile, fail) {
     checkValue: 0xe3069283,
     coverage: [
       "relocationPrepare.payloadChecksumCrc32c",
+      "relocationPrepare.baseChecksumCrc32c",
       "relocationCutover.boundaryChecksumCrc32c",
       "relocation-manifest-v1.totalChecksumCrc32c",
       "relocation-chunk-entry-v1.checksumCrc32c",
@@ -6670,6 +6707,38 @@ function runSelfTests(schema) {
       );
       rule.actionRules.commit.phases = ["prepared"];
     }],
+    ["relocationState base stage window widened past preparing", (candidate) => {
+      const rule = candidate.relocationStateMachine.commandRules.find(
+        (entry) => entry.command === "relocationState",
+      );
+      rule.stageRules.base.phases.push("captured");
+    }],
+    ["relocationState payloadStage field removed", (candidate) => {
+      const relocationState = candidate.commands.find((command) => command.name === "relocationState");
+      relocationState.body = relocationState.body.filter((field) => field.name !== "payloadStage");
+    }],
+    ["relocationState payloadStage moved after chunkOrdinal", (candidate) => {
+      const relocationState = candidate.commands.find((command) => command.name === "relocationState");
+      const stage = relocationState.body.find((field) => field.name === "payloadStage");
+      relocationState.body = relocationState.body.filter((field) => field.name !== "payloadStage");
+      const chunkOrdinalIndex = relocationState.body.findIndex((field) => field.name === "chunkOrdinal");
+      relocationState.body.splice(chunkOrdinalIndex + 1, 0, stage);
+    }],
+    ["relocationPrepare baseChecksumCrc32c field removed", (candidate) => {
+      const relocationPrepare = candidate.commands.find((command) => command.name === "relocationPrepare");
+      relocationPrepare.body = relocationPrepare.body.filter((field) => field.name !== "baseChecksumCrc32c");
+    }],
+    ["relocationPrepare baseChecksumCrc32c not covered by checksum profile", (candidate) => {
+      candidate.relocationTransferChecksumProfile.coverage =
+        candidate.relocationTransferChecksumProfile.coverage.filter(
+          (entry) => entry !== "relocationPrepare.baseChecksumCrc32c",
+        );
+    }],
+    ["actor-join-reply-tail receiveChunkLimitBytes field removed", (candidate) => {
+      const tail = candidate.types.find((type) => type.name === "actor-join-reply-tail");
+      const accepted = tail.cases.find((entry) => entry.when.joinResult === "accepted");
+      accepted.fields = accepted.fields.filter((field) => field.name !== "receiveChunkLimitBytes");
+    }],
     ["liveness permits two outstanding probes", (candidate) => {
       candidate.livenessProfile.outstandingProbeMaximum = 2;
     }],
@@ -6938,7 +7007,7 @@ function validateContractAmendmentFixtureData(fixture, location, fail) {
         terminalReply: 20,
         messageFollow: 50,
         boundSessionReplaced: 51,
-        reservedFirst: 53,
+        reservedFirst: 54,
       },
       replyEnvelopeFields: ["correlation", "terminalResult", "failureCode", "tail"],
       createRequestFields: [

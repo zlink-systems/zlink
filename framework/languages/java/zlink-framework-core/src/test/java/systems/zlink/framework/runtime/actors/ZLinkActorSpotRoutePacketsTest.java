@@ -37,7 +37,7 @@ final class ZLinkActorSpotRoutePacketsTest {
                 new ZLinkActorSpotRoutePackets.CoreTransfer(
                     true, 31L, 41L, 7L, 3L, 5L, 1024L),
                 new ZLinkDirectJoinRelocation.Manifest(
-                    "relocation-root-41",
+                    new byte[] {4, 1},
                     91L,
                     31L,
                     41L,
@@ -62,9 +62,9 @@ final class ZLinkActorSpotRoutePacketsTest {
                 assertEquals(3L, decoded.coreFinalSequence());
                 assertEquals(5L, decoded.coreReserveMessageCount());
                 assertEquals(1024L, decoded.coreReserveByteCount());
-                assertEquals(
-                    "relocation-root-41",
-                    decoded.relocationManifest().reference());
+                assertArrayEquals(
+                    new byte[] {4, 1},
+                    decoded.relocationManifest().root());
                 assertEquals(91L, decoded.relocationManifest().checksumCrc32c());
                 assertArrayEquals(
                     new byte[] {7, 8},

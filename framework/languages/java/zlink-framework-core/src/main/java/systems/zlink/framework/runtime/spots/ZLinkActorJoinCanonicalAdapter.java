@@ -43,6 +43,8 @@ final class ZLinkActorJoinCanonicalAdapter
         new ConcurrentHashMap<>();
     private final ConcurrentMap<String, SourceAttempt> sources =
         new ConcurrentHashMap<>();
+    private final ZLinkActorJoinPrewarmRegistry prewarm =
+        new ZLinkActorJoinPrewarmRegistry();
 
     ZLinkActorJoinCanonicalAdapter(
         ZLinkActorRuntime actors,
@@ -208,11 +210,58 @@ final class ZLinkActorJoinCanonicalAdapter
                 "canonical Actor Join admission fence conflicts");
         }
         if (previous == null) {
+            //  Register the relocation temporary queue and validate the
+            //  factory for this object before Accepted returns to the
+            //  source (spec 15 §4.2). A different RelocationId already
+            //  prewarmed for the same object is aborted first — newest
+            //  attempt wins (spec 15 §4.2 "같은 object의 relocation
+            //  temporary queue는 하나만 존재한다").
+            prewarm.register(
+                admission.relocationId(),
+                admission.actorId(),
+                admission.objectGeneration(),
+                admission.actorType(),
+                actors.resolveActorFactoryType(admission.actorType()),
+                evicted -> {
+                    admissions.remove(evicted.relocationId());
+                    LOGGER.info("Actor Join prewarm for "
+                        + evicted.objectKey().actorId()
+                        + " evicted by a newer RelocationId: "
+                        + admission.relocationId());
+                });
+            //  Same validity-window timer covers both the admission
+            //  record and its prewarm so an accepted-but-never-started
+            //  move (DisableRelocation, capacity, compat failure) cleans
+            //  both up together (spec 15 §4.2).
             spots.scheduleRelocationCleanup(
                 Instant.now().plus(admission.timeout()),
-                () -> admissions.remove(
-                    admission.relocationId(), admission));
+                () -> {
+                    admissions.remove(
+                        admission.relocationId(), admission);
+                    prewarm.release(admission.relocationId());
+                });
         }
+    }
+
+    /**
+     * Looks up the prewarm registered at admission time so PREPARE
+     * (Restore) can reuse it instead of repeating registration (spec 15
+     * §4.2). Callers must still verify the object identity
+     * (ActorId + ObjectGeneration) matches before reuse.
+     */
+    Optional<ZLinkActorJoinPrewarmRegistry.Prewarm> findPrewarm(
+        UUID relocationId) {
+        return prewarm.find(relocationId);
+    }
+
+    /**
+     * Releases the prewarm reserved at admission time. Callers use this
+     * once the prewarm has been consumed into the real staged Actor
+     * (normal PREPARE handling) or when the move is aborted for any
+     * other reason.
+     */
+    void releasePrewarm(UUID relocationId) {
+        prewarm.release(relocationId);
     }
 
     Optional<Admission> findAdmission(
@@ -337,6 +386,7 @@ final class ZLinkActorJoinCanonicalAdapter
 
     void completeTarget(Admission admission) {
         admissions.remove(admission.relocationId(), admission);
+        prewarm.release(admission.relocationId());
     }
 
     private CompletionStage<Void> handleActorLeft(

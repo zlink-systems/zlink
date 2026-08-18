@@ -50,6 +50,7 @@ enum class command : std::uint8_t {
     messageFollow = 50,
     boundSessionReplaced = 51,
     relocationState = 52,
+    relocationFailed = 53,
 };
 enum class flag : std::uint8_t {
     metadata = 1,

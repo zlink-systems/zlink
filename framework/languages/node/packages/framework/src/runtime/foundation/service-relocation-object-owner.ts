@@ -205,7 +205,9 @@ export interface ServiceRelocationTargetObjectPort<
   restoreApplicationState(
     hidden: THidden,
     payload: Uint8Array,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    /** Pre-seal base snapshot for this participant, when the manifest declared one. */
+    basePayload?: Uint8Array
   ): Promise<void>;
   restoreMemberships(
     hidden: ReadonlyMap<string, THidden>,
@@ -263,7 +265,9 @@ export class ServiceRelocationObjectRestoreOwner<
 
   async prepare(
     envelope: ServiceRelocationEnvelope,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    /** Verified pre-seal base snapshots keyed by participant authority key. */
+    basePayloads?: ReadonlyMap<string, Uint8Array>
   ): Promise<ServiceObjectRelocationStaging<THidden>> {
     validateRelocationShape(envelope);
     const hidden = new Map<string, THidden>();
@@ -288,7 +292,8 @@ export class ServiceRelocationObjectRestoreOwner<
         participant => this.target.restoreApplicationState(
           hidden.get(participant.key)!,
           participant.applicationState,
-          signal
+          signal,
+          basePayloads?.get(participant.key)
         ),
         signal
       );

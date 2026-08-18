@@ -60,6 +60,12 @@ final class ZLinkCanonicalRelocationStateMachine
     private static final String ACTOR_AUTHORITY_PREFIX = "zla1:a:";
     private static final int SCAN_PAGE_SIZE = 1000;
     private static final Duration STORE_RETRY_DELAY = Duration.ofMillis(25);
+    //  Same restore-validity bound the coordinator uses for a prepared but
+    //  unpublished target (ZLinkAggregateRelocationCoordinator.
+    //  RESTORE_VALIDITY) — a base snapshot buffered ahead of a PREPARE that
+    //  never arrives is evicted on the same policy as other identity-keyed
+    //  target state (spec 15 §5).
+    private static final Duration PENDING_BASE_VALIDITY = Duration.ofHours(24);
 
     private final ZLinkInternalMeshNode node;
     private final String meshName;
@@ -81,6 +87,8 @@ final class ZLinkCanonicalRelocationStateMachine
     private final ConcurrentHashMap<Fence, TerminalTarget> terminalTargets =
         new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Fence, RetainedSource> retainedSources =
+        new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Fence, PendingBase> pendingBaseChunks =
         new ConcurrentHashMap<>();
     private final AtomicInteger openSourceQuiescenceWindows =
         new AtomicInteger();
@@ -207,6 +215,49 @@ final class ZLinkCanonicalRelocationStateMachine
                     }
                 });
         });
+    }
+
+    @Override
+    public boolean supportsBaseTransfer() {
+        return true;
+    }
+
+    @Override
+    public CompletionStage<Void> sendBase(
+        RoutingId targetNodeRid,
+        ZLinkSpotRetireControl.Fence fence,
+        ZLinkCanonicalRelocationProtocol.Coordinator coordinator,
+        ZLinkCanonicalRelocationProtocol.ObjectFence object,
+        byte[] base,
+        Duration timeout) {
+        Objects.requireNonNull(targetNodeRid, "targetNodeRid");
+        Objects.requireNonNull(base, "base");
+        requireTimeout(timeout);
+        List<byte[]> chunks = ZLinkRelocationPayloadTransfer.chunks(
+            base, budget.effectiveChunkBytes());
+        CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
+        for (int index = 0; index < chunks.size(); index++) {
+            byte[] chunk = chunks.get(index);
+            long ordinal = index;
+            chain = chain.thenCompose(ignored ->
+                budget.acquire(targetNodeRid, chunk.length)
+                    .thenCompose(admitted -> send(
+                            targetNodeRid,
+                            ZLinkCanonicalRelocationProtocol.encodeState(
+                                new ZLinkCanonicalRelocationProtocol.State(
+                                    fence.aggregateId(),
+                                    fence.aggregateGeneration(),
+                                    coordinator,
+                                    ZLinkCanonicalRelocationProtocol.SOURCE,
+                                    object,
+                                    ZLinkCanonicalRelocationProtocol
+                                        .PAYLOAD_STAGE_BASE,
+                                    ordinal,
+                                    chunk)))
+                        .whenComplete((result, failure) ->
+                            budget.release(targetNodeRid, chunk.length))));
+        }
+        return chain;
     }
 
     @Override
@@ -352,6 +403,9 @@ final class ZLinkCanonicalRelocationStateMachine
                 case ServiceWireConstants.COMMAND_RELOCATION_READY ->
                     onReady(transportSource,
                         ZLinkCanonicalRelocationProtocol.decodeReady(encoded));
+                case ServiceWireConstants.COMMAND_RELOCATION_FAILED ->
+                    onFailed(transportSource,
+                        ZLinkCanonicalRelocationProtocol.decodeFailed(encoded));
                 case ServiceWireConstants.COMMAND_RELOCATION_DATA ->
                     onData(transportSource,
                         ZLinkCanonicalRelocationProtocol.decodeData(encoded));
@@ -420,7 +474,13 @@ final class ZLinkCanonicalRelocationStateMachine
                 "duplicate canonical relocation prepare differs"));
         }
         if (current != null) {
-            return publishReady(fence, attempt, transportSource);
+            publishReady(fence, attempt, transportSource)
+                .exceptionally(failure -> {
+                    LOGGER.warning("Canonical relocation READY publication "
+                        + "failed: " + unwrap(failure));
+                    return null;
+                });
+            return CompletableFuture.completedFuture(null);
         }
 
         attempt.assembler().assembled()
@@ -438,10 +498,28 @@ final class ZLinkCanonicalRelocationStateMachine
                     attempt.ready().complete(null);
                 } else {
                     targets.remove(fence, attempt);
-                    attempt.ready().completeExceptionally(unwrap(failure));
+                    Throwable cause = unwrap(failure);
+                    attempt.ready().completeExceptionally(cause);
+                    publishFailure(fence, attempt, transportSource, cause)
+                        .exceptionally(publicationFailure -> {
+                            LOGGER.warning("Canonical relocation failure reply "
+                                + "could not be sent: "
+                                + unwrap(publicationFailure));
+                            return null;
+                        });
                 }
             });
-        return publishReady(fence, attempt, transportSource);
+        // PREPARE is only the ordered registration point.  It must return
+        // before relay-ready so command 52 chunks can follow on this same
+        // connection; READY or FAILED is published asynchronously after the
+        // target finishes assembly and restore.
+        publishReady(fence, attempt, transportSource)
+            .exceptionally(failure -> {
+                LOGGER.warning("Canonical relocation READY publication failed: "
+                    + unwrap(failure));
+                return null;
+            });
+        return CompletableFuture.completedFuture(null);
     }
 
     private CompletionStage<Void> publishReady(
@@ -533,6 +611,33 @@ final class ZLinkCanonicalRelocationStateMachine
                 ZLinkCanonicalRelocationProtocol.TARGET)));
     }
 
+    private CompletionStage<Void> publishFailure(
+        Fence fence,
+        TargetAttempt attempt,
+        RoutingId source,
+        Throwable failure) {
+        ZLinkSpotRetireControl.StageRequest request =
+            completedValue(attempt.request());
+        CompletionStage<Void> cleanup = request == null
+            ? CompletableFuture.completedFuture(null)
+            : target.abort(request);
+        return cleanup.handle((ignored, cleanupFailure) -> {
+            if (cleanupFailure != null) {
+                failure.addSuppressed(unwrap(cleanupFailure));
+            }
+            return null;
+        }).thenCompose(ignored -> send(source,
+            ZLinkCanonicalRelocationProtocol.encodeFailed(
+                new ZLinkCanonicalRelocationProtocol.Failed(
+                    attempt.prepare().id(),
+                    attempt.prepare().targetAttemptGeneration(),
+                    attempt.prepare().coordinator(),
+                    attempt.prepare().target(),
+                    attempt.prepare().object(),
+                    ZLinkCanonicalRelocationProtocol.TARGET,
+                    ServiceWireConstants.FRAMEWORK_ERROR_RELOCATION_DATA_LOST))));
+    }
+
     private CompletionStage<Void> onReady(
         RoutingId transportSource,
         ZLinkCanonicalRelocationProtocol.Ready ready) {
@@ -555,10 +660,54 @@ final class ZLinkCanonicalRelocationStateMachine
         return CompletableFuture.completedFuture(null);
     }
 
+    private CompletionStage<Void> onFailed(
+        RoutingId transportSource,
+        ZLinkCanonicalRelocationProtocol.Failed failure) {
+        Fence fence = new Fence(
+            failure.id(), failure.targetAttemptGeneration());
+        SourceAttempt attempt = sources.get(fence);
+        if (attempt == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        var prepare = attempt.prepare();
+        if (!transportSource.equals(prepare.target().nodeRid())
+            || !failure.coordinator().equals(prepare.coordinator())
+            || !failure.target().equals(prepare.target())
+            || !failure.object().equals(prepare.object())
+            || failure.senderRole() != ZLinkCanonicalRelocationProtocol.TARGET) {
+            return failed(new IllegalArgumentException(
+                "canonical relocation failure fence differs"));
+        }
+        attempt.ready().completeExceptionally(new IllegalStateException(
+            "target rejected canonical relocation: " + failure.failureCode()));
+        return CompletableFuture.completedFuture(null);
+    }
+
     private CompletionStage<Void> onState(
         RoutingId transportSource,
         ZLinkCanonicalRelocationProtocol.State state) {
         Fence fence = new Fence(state.id(), state.targetAttemptGeneration());
+        if (state.payloadStage()
+                == ZLinkCanonicalRelocationProtocol.PAYLOAD_STAGE_BASE) {
+            //  The base snapshot streams ahead of PREPARE, pre-seal (spec 15
+            //  §5). Nothing to fence it against yet — buffer by exact
+            //  relocation identity alone and reconcile the running CRC-32C
+            //  against the manifest once PREPARE registers the TargetAttempt
+            //  (spec 28 §4.2-§4.3).
+            PendingBase[] created = new PendingBase[1];
+            PendingBase pending = pendingBaseChunks.computeIfAbsent(
+                fence, ignored -> created[0] = new PendingBase(transportSource));
+            if (created[0] == pending) {
+                retentionScheduler.schedule(
+                    Instant.now().plus(PENDING_BASE_VALIDITY),
+                    () -> pendingBaseChunks.remove(fence, pending));
+            }
+            if (!pending.source().equals(transportSource)
+                || !pending.accept(state.chunkOrdinal(), state.chunkData())) {
+                pendingBaseChunks.remove(fence, pending);
+            }
+            return CompletableFuture.completedFuture(null);
+        }
         TargetAttempt attempt = targets.get(fence);
         if (attempt == null
             || !attempt.prepare().sourceNodeRid().equals(transportSource)

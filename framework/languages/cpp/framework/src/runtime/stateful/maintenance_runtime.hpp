@@ -10,6 +10,7 @@
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -476,6 +477,21 @@ class maintenance_runtime_t
 
     relocation_gate_snapshot_t gate_snapshot () const;
 
+    /* Optional source-local metric (25 §"zlink.relocation.route_convergence"):
+     * one unit's cutover submit terminal to its retransmission window
+     * closing. */
+    void configure_route_convergence_metric (
+      std::function<void (double)> metric) noexcept;
+
+    /* SafeToShutdown (24 §"State"): true only while no relocation unit this
+     * source started still has an open retransmission window. A unit opens
+     * its window at cutover submit terminal and closes it when the
+     * retained payload/boundary copies are released (28 §4.4), which this
+     * runtime also treats as the point the unit's Message Follow route
+     * becomes removable — no separate Message Follow expiry timer exists
+     * in this runtime to measure that condition independently. */
+    bool relocation_units_settled () const noexcept;
+
     static std::uint32_t crc32c (
       const std::vector<std::uint8_t> &payload) noexcept;
     static std::vector<std::uint8_t> encode (
@@ -563,6 +579,23 @@ class maintenance_runtime_t
     mutable std::mutex _gate_mutex;
     relocation_gate_snapshot_t _gate;
     raw_relocation_replay_coordinator_t *_relocation_wire = nullptr;
+    /* route_convergence metric + SafeToShutdown obligation count, held
+     * separately from `this` in a shared_ptr: the retention coroutine in
+     * retain_retransmission_copies is detached (self-keeping via
+     * observe_task_completion) and outlives an owning maintenance_runtime_t
+     * that is torn down while a retransmission window is still open. The
+     * coroutine and its completion callback capture this shared_ptr by
+     * value instead of `this`, so they never dereference a dead runtime;
+     * the pending counter only ever reflects windows that were still open
+     * when the runtime itself was destroyed. */
+    struct shutdown_tracking_state_t
+    {
+        std::atomic<std::int64_t> pending_units{0};
+        std::mutex metric_mutex;
+        std::function<void (double)> route_convergence_metric;
+    };
+    std::shared_ptr<shutdown_tracking_state_t> _shutdown_tracking =
+      std::make_shared<shutdown_tracking_state_t> ();
     /* Phase 1 in-flight transfer budget: accounted bytes of relocation
      * chunks between submit and send terminal, node-wide. Waiters queue
      * FIFO; a new unit acquires headroom before its source admission seal. */

@@ -120,25 +120,22 @@ final class ZLinkProviderAuthorityRepositoryTest {
             4,
             ZLinkPlacementCapacityBundle.actor(1),
             new ZLinkLocationOwnerToken("owner-b", 12));
-        var expected = new ZLinkAggregateProgress("root-reference", 17);
-
         Method encode = ZLinkProviderAuthorityRepository.class
             .getDeclaredMethod(
                 "encodeAggregate",
                 byte.class,
-                ZLinkAggregatePrepareRequest.class,
-                ZLinkAggregateProgress.class);
+                ZLinkAggregatePrepareRequest.class);
         encode.setAccessible(true);
-        byte[] encoded = (byte[]) encode.invoke(null, (byte) 2, request, expected);
+        byte[] encoded = (byte[]) encode.invoke(null, (byte) 2, request);
 
         Method decode = ZLinkProviderAuthorityRepository.class
             .getDeclaredMethod("decodeAggregate", byte[].class);
         decode.setAccessible(true);
         Object decoded = decode.invoke(null, encoded);
-        Method progress = decoded.getClass().getDeclaredMethod("progress");
-        progress.setAccessible(true);
+        Method decodedId = decoded.getClass().getDeclaredMethod("aggregateId");
+        decodedId.setAccessible(true);
 
-        assertEquals(expected, progress.invoke(decoded));
+        assertEquals(request.aggregateId(), decodedId.invoke(decoded));
     }
 
     @Test
@@ -358,17 +355,11 @@ final class ZLinkProviderAuthorityRepositoryTest {
             1,
             ZLinkPlacementCapacityBundle.actor(1),
             owner.token());
-        var stored = new ZLinkRelocationStored(
-            "root-reference",
-            17,
-            Instant.now().plus(Duration.ofHours(1)),
-            Instant.now());
         byte[] canonicalPayload =
             ZLinkCanonicalRelocationAuthorityStateCodec.publish(
                 basePayload,
                 relocationRequest,
-                ZLinkAuthorityGenerationTransition.PRESERVE,
-                stored);
+                ZLinkAuthorityGenerationTransition.PRESERVE);
         var participant = new ZLinkAggregateParticipant(
             "authority-a",
             1,
@@ -609,14 +600,12 @@ final class ZLinkProviderAuthorityRepositoryTest {
             .getDeclaredMethod(
                 "encodeAggregate",
                 byte.class,
-                ZLinkAggregatePrepareRequest.class,
-                ZLinkAggregateProgress.class);
+                ZLinkAggregatePrepareRequest.class);
         encode.setAccessible(true);
         return (byte[]) encode.invoke(
             null,
             (byte) 2,
-            request,
-            new ZLinkAggregateProgress("committed-root", 1));
+            request);
     }
 
     private static Object decodeAuthority(byte[] bytes)

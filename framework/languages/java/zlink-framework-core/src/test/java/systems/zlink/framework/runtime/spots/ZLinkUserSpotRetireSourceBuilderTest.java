@@ -210,8 +210,7 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                 .toCompletableFuture().get();
 
             ZLinkAggregateRelocationCoordinator coordinator =
-                new ZLinkAggregateRelocationCoordinator(
-                    repository, relocations);
+                new ZLinkAggregateRelocationCoordinator(repository);
             ZLinkUserSpotRetireSourceBuilder builder =
                 new ZLinkUserSpotRetireSourceBuilder(
                     MESH,
@@ -235,13 +234,8 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
 
             assertSame(LiveSpot.last.get(), SnapshotAdapter.captured.get());
             assertSame(LiveSpot.last.get(), runtime.spotFor(SPOT_ID));
-            var root = coordinator.readRoot(
-                    prepared.stagedRoot().stored().reference(),
-                    prepared.stagedRoot().stored().checksumCrc32c(),
-                    NEVER)
-                .toCompletableFuture().get();
             var envelope = ZLinkCanonicalUserSpotRelocationEnvelope.decode(
-                root.payload(),
+                prepared.stageRequest().relocationPayload(),
                 TARGET_RID,
                 ignored -> LiveSpot.class,
                 prepared.stageRequest());
@@ -312,9 +306,7 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
             List<String> events =
                 new CopyOnWriteArrayList<>();
             ZLinkAggregateRelocationCoordinator coordinator =
-                new ZLinkAggregateRelocationCoordinator(
-                    repository,
-                    trackingStore(relocations, events, null, null, null));
+                new ZLinkAggregateRelocationCoordinator(repository);
             ZLinkUserSpotRetireSourceBuilder builder =
                 new ZLinkUserSpotRetireSourceBuilder(
                     MESH,
@@ -371,14 +363,12 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                 fourth.toCompletableFuture()).get();
 
             List<String> observed = List.copyOf(events);
-            int discard = observed.lastIndexOf("staged-root-discard");
             int resumed = observed.indexOf("resumed:second");
-            assertTrue(discard >= 0,
-                "abort must discard the staged root: " + observed);
             assertTrue(resumed >= 0,
                 "the held lanes must resume: " + observed);
-            assertTrue(discard < resumed,
-                "staged root discard must precede lane resume: " + observed);
+            assertTrue(observed.stream().noneMatch(
+                event -> event.startsWith("staged-root")),
+                "direct payload relocation must not stage a Store root: " + observed);
             assertEquals(
                 List.of(
                     "resumed:second",
@@ -427,7 +417,7 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
     }
 
     @Test
-    void captureFailureAfterStagedRootDiscardsTheStagedRoot()
+    void directPayloadPreparationDoesNotStageLocationStoreRoot()
         throws Exception {
         ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
         ZLinkLocationRepository repository =
@@ -471,14 +461,7 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
             AtomicBoolean lateCancel =
                 new AtomicBoolean();
             ZLinkAggregateRelocationCoordinator coordinator =
-                new ZLinkAggregateRelocationCoordinator(
-                    repository,
-                    trackingStore(
-                        relocations,
-                        events,
-                        putReferences,
-                        deleteReferences,
-                        () -> lateCancel.set(true)));
+                new ZLinkAggregateRelocationCoordinator(repository);
             ZLinkUserSpotRetireSourceBuilder builder =
                 new ZLinkUserSpotRetireSourceBuilder(
                     MESH,
@@ -494,29 +477,17 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                     nodeRegistration.relocatableSpotFactories(),
                     nodeRegistration.relocatableActorFactories());
 
-            var prepare = builder.prepare(
+            var prepared = builder.prepare(
                     SPOT_ID,
                     rollingToVersionOne(),
-                    lateCancel::get)
-                .toCompletableFuture();
-            Throwable failure = assertThrows(
-                Exception.class,
-                () -> prepare.get(
-                    30, TimeUnit.SECONDS));
-            while (failure.getCause() != null
-                && !(failure
-                    instanceof CancellationException)) {
-                failure = failure.getCause();
-            }
-            assertInstanceOf(
-                CancellationException.class, failure);
+                    NEVER)
+                .toCompletableFuture().get(30, TimeUnit.SECONDS);
 
-            assertFalse(putReferences.isEmpty(),
-                "the relocation root must have been staged before failing");
-            assertTrue(
-                deleteReferences.contains(putReferences.getLast()),
-                "the staged root manifest must be discarded: puts="
-                    + putReferences + " deletes=" + deleteReferences);
+            assertTrue(putReferences.isEmpty(),
+                "direct relocation payload must not create a Store root");
+            assertTrue(deleteReferences.isEmpty(),
+                "direct relocation payload has no Store root to delete");
+            prepared.abortPrecommit().toCompletableFuture().get();
             assertEquals(0, builder.unresolvedPreparationCount());
             assertSame(LiveSpot.last.get(), runtime.spotFor(SPOT_ID));
         }

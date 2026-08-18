@@ -139,7 +139,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             ZLinkLocationRepository observed = observed(
                 repository, targetCommits, firstCommitNanos);
             var coordinator = new ZLinkAggregateRelocationCoordinator(
-                observed, relocationStore);
+                observed);
             ZLinkMeshNodeDescriptor sourceDescriptor = descriptor(
                 repository, SOURCE_RID);
             ZLinkMeshNodeDescriptor targetDescriptor = descriptor(
@@ -362,6 +362,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 relocationId,
                 operationId,
                 ACTOR_ID,
+                ACTOR_TYPE,
+                sourceRef.generation(),
                 TARGET_SPOT_ID,
                 targetSpot,
                 actor -> ((TrackingSpot) targetSpot).onJoinedActor(actor),

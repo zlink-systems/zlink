@@ -1379,6 +1379,28 @@ bool raw_mesh_node_owner_t::reply_relocation_ready (
       parts);
 }
 
+bool raw_mesh_node_owner_t::reply_relocation_failed (
+  const service_mailbox_record_t &request,
+  const protocol::relocation_failed_t &failure)
+{
+    if (request.source_routing_id.empty () || !request.request_sequence)
+        return false;
+    std::shared_ptr<detail::backend::raw_route_port_t> port;
+    {
+        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+        port = _port;
+    }
+    if (!port)
+        return false;
+    detail::backend::raw_message_t parts{
+      protocol::encode_relocation_control (failure)};
+    return port->reply (
+      detail::backend::raw_received_t{
+        request.source_routing_id, request.request_sequence, {},
+        request.retained},
+      parts);
+}
+
 bool raw_mesh_node_owner_t::reply (
   const service_mailbox_record_t &request,
   const protocol::application_payload_t &application_payload)
@@ -2920,7 +2942,8 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
         }
         if (header.kind == protocol::command::relocationPrepare
             || header.kind == protocol::command::relocationData
-            || header.kind == protocol::command::relocationCutover) {
+            || header.kind == protocol::command::relocationCutover
+            || header.kind == protocol::command::relocationState) {
             if (received->parts.size () != 1
                 || (received->request_sequence
                     && header.kind

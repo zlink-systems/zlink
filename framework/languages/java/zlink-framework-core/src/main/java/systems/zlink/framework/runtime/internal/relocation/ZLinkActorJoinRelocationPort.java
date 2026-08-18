@@ -62,6 +62,13 @@ public interface ZLinkActorJoinRelocationPort {
         UUID relocationId,
         ZLinkActorJoinOperationId operationId,
         String actorId,
+        //  actorType and objectGeneration identify the object the
+        //  relocation temporary queue prewarm is registered for (spec 15
+        //  §4.2, spec 28 §3 exact identity == relocationId here since
+        //  targetAttemptGeneration/coordinator fence are not known yet at
+        //  admission time).
+        String actorType,
+        long objectGeneration,
         String targetSpotId,
         Object targetSpot,
         Function<ZLinkActor, CompletionStage<Void>> joined,
@@ -71,10 +78,15 @@ public interface ZLinkActorJoinRelocationPort {
             Objects.requireNonNull(relocationId, "relocationId");
             Objects.requireNonNull(operationId, "operationId");
             Objects.requireNonNull(actorId, "actorId");
+            Objects.requireNonNull(actorType, "actorType");
             Objects.requireNonNull(targetSpotId, "targetSpotId");
             Objects.requireNonNull(targetSpot, "targetSpot");
             Objects.requireNonNull(joined, "joined");
             Objects.requireNonNull(reply, "reply");
+            if (objectGeneration <= 0) {
+                throw new IllegalArgumentException(
+                    "direct Join admission object generation must be positive");
+            }
             if (timeout == null || timeout.isZero() || timeout.isNegative()) {
                 throw new IllegalArgumentException(
                     "direct Join admission timeout must be positive");

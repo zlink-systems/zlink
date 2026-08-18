@@ -2553,6 +2553,18 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return result;
     }
 
+    /**
+     * Resolves the registered factory type for {@code actorType} without
+     * reserving the Actor's registry slot. Used to validate a cross-node
+     * Actor Join target admission up front (spec 15 §4.2 "factory 실행
+     * 준비") before the payload and application state exist to actually
+     * instantiate the Actor.
+     */
+    public Class<? extends ZLinkActorFactory> resolveActorFactoryType(
+        String actorType) {
+        return requireFactory(actorType);
+    }
+
     private Class<? extends ZLinkActorFactory> requireFactory(String actorType) {
         if (actorType == null || actorType.isBlank()) {
             throw new ZLinkConfigurationException("actorType is required");

@@ -8,7 +8,6 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
@@ -21,13 +20,6 @@ import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
 
 final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
-    private static final ZLinkRelocationStored STORED =
-        new ZLinkRelocationStored(
-            "sha256:relocation-test",
-            17,
-            Instant.MAX,
-            Instant.now());
-
     @Test
     void preserveRequiresTheApplicationPayloadToMatchTheTargetFence() {
         var request = request(
@@ -42,8 +34,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
             () -> ZLinkCanonicalRelocationAuthorityStateCodec.publish(
                 authorityPayload(),
                 request,
-                ZLinkAuthorityGenerationTransition.PRESERVE,
-                STORED));
+                ZLinkAuthorityGenerationTransition.PRESERVE));
     }
 
     @Test
@@ -57,8 +48,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
         byte[] canonical = ZLinkCanonicalRelocationAuthorityStateCodec.publish(
             authorityPayload(),
             initial,
-            ZLinkAuthorityGenerationTransition.NEW_OWNER,
-            STORED);
+            ZLinkAuthorityGenerationTransition.NEW_OWNER);
         byte[] application =
             ZLinkCanonicalRelocationAuthorityStateCodec
                 .applicationPayloadOrOriginal(canonical);
@@ -72,8 +62,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
         byte[] next = ZLinkCanonicalRelocationAuthorityStateCodec.publish(
             canonical,
             successor,
-            ZLinkAuthorityGenerationTransition.PRESERVE,
-            STORED);
+            ZLinkAuthorityGenerationTransition.PRESERVE);
 
         assertArrayEquals(
             application,
@@ -92,8 +81,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
         byte[] canonical = ZLinkCanonicalRelocationAuthorityStateCodec.publish(
             authorityPayload(),
             initial,
-            ZLinkAuthorityGenerationTransition.NEW_OWNER,
-            STORED);
+            ZLinkAuthorityGenerationTransition.NEW_OWNER);
 
         UUID differentAggregate = new UUID(0, 10);
         var successor = request(
@@ -109,8 +97,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
             () -> ZLinkCanonicalRelocationAuthorityStateCodec.publish(
                 canonical,
                 successor,
-                ZLinkAuthorityGenerationTransition.PRESERVE,
-                STORED));
+                ZLinkAuthorityGenerationTransition.PRESERVE));
     }
 
     @Test
@@ -124,8 +111,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
         byte[] canonical = ZLinkCanonicalRelocationAuthorityStateCodec.publish(
             authorityPayload(),
             request,
-            ZLinkAuthorityGenerationTransition.NEW_OWNER,
-            STORED);
+            ZLinkAuthorityGenerationTransition.NEW_OWNER);
         byte[] malformed = canonical.clone();
         malformed[relocationSlotOffset(malformed)] = 2;
         rewriteChecksum(malformed);
@@ -135,8 +121,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
             () -> ZLinkCanonicalRelocationAuthorityStateCodec.publish(
                 malformed,
                 request,
-                ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                STORED));
+                ZLinkAuthorityGenerationTransition.NEW_OWNER));
     }
 
     @Test
@@ -157,8 +142,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
             () -> ZLinkCanonicalRelocationAuthorityStateCodec.publish(
                 malformed,
                 request,
-                ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                STORED));
+                ZLinkAuthorityGenerationTransition.NEW_OWNER));
     }
 
     private static ZLinkAggregateRelocationCoordinator.Request request(

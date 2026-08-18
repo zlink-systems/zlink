@@ -3140,7 +3140,7 @@ void test_application_relocation_remote_production_path (
              == target.status ().routing_id ().to_string ()
         && restored_target
              == std::optional<object_ref_t>{expected_target}
-        && roots->roots.size () == 2
+        && roots->roots.size () == 1
         && route_owner_observed_target_ready.load (
           std::memory_order_acquire)
         && committed_binding

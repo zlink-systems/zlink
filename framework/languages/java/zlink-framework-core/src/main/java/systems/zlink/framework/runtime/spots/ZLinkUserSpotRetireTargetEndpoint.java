@@ -939,6 +939,24 @@ final class ZLinkUserSpotRetireTargetEndpoint
             actorJoin == null
                 ? null
                 : actorJoin.findAdmission(request).orElse(null);
+        if (directAdmission != null) {
+            //  Reuse the prewarm registered at admission time instead of
+            //  repeating registration (spec 15 §4.2). The real Staged
+            //  temporary queue this PREPARE builds below takes over from
+            //  here, so the placeholder prewarm is consumed exactly once.
+            actorJoin.findPrewarm(request.fence().aggregateId())
+                .ifPresent(prewarmed -> {
+                    if (!prewarmed.objectKey().actorId().equals(
+                            participant.objectId())
+                        || prewarmed.objectKey().objectGeneration()
+                            != participant.objectGeneration()) {
+                        throw new IllegalStateException(
+                            "canonical Actor Join prewarm object identity "
+                                + "conflicts");
+                    }
+                });
+            actorJoin.releasePrewarm(request.fence().aggregateId());
+        }
         CompletionStage<ZLinkActorJoinCanonicalAdapter.PreviousMembership>
             previous = directAdmission == null
                 ? CompletableFuture.completedFuture(null)

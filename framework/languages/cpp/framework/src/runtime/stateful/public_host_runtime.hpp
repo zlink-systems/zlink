@@ -378,6 +378,10 @@ struct node_status_t
       zlink::routing_id_t::from (std::uint32_t{0});
     std::string endpoint;
     std::uint64_t generation = 0;
+    /* SafeToShutdown (24 §"State"): true only while no relocation unit
+     * this source started still has an open retransmission window. True
+     * when no relocation has been initiated. */
+    bool safe_to_shutdown = true;
 
     zlink::routing_id_t routing_id () const;
     std::string local_endpoint () const;
@@ -722,6 +726,12 @@ class public_host_runtime_t :
     };
     void configure_relocation_target_metrics (
       relocation_target_metrics_t metrics);
+    /* Source-local relocation instrument (25 §"zlink.relocation.
+     * route_convergence"). Optional; forwards to the maintenance runtime,
+     * which must already be configured (configure_relocation /
+     * configure_maintenance). */
+    void configure_relocation_source_metrics (
+      std::function<void (double)> route_convergence_metric);
     stateful::raw_relocation_replay_coordinator_t &
     relocation_wire () noexcept;
     void configure_user_spot_operations (

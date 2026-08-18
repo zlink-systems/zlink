@@ -18,12 +18,15 @@ import {
   encodeSessionRelocationRoute,
   encodeSessionRelocationSeal,
   type ServiceMaintenanceRelocationControl,
+  type ServiceMaintenanceRelocationCutover,
+  type ServiceMaintenanceRelocationData,
   type ServiceMaintenanceRelocationPrepare,
   type ServiceMaintenanceRelocationReady,
   type ServiceSessionRelocationRoute,
   type ServiceSessionRelocationSeal,
   type ServiceSessionRelocationSealed
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
+import { crc32c } from '../../packages/framework/src/runtime/foundation/service-relocation-runtime';
 import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locations/authority-key-codec';
 import { ZLinkActorTransferRuntime } from '../../packages/framework/src/runtime/host/actor-transfer-runtime';
 import { ZLinkActorSessionBindingRegistry } from '../../packages/framework/src/runtime/streams/actor-session-binding-registry';
@@ -409,6 +412,7 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
     payloadTotalLength: 24n,
     payloadChunkCount: 1,
     payloadChecksumCrc32c: 123,
+    baseChecksumCrc32c: 0,
     applicationVersion: 4n
   };
   const ready: ServiceMaintenanceRelocationReady = {
@@ -521,6 +525,97 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
   }
 });
 
+test('cutover boundary reconciliation replaces a stale pre-reconnect span with the retransmitted whole batch', async () => {
+  // Spec 28 §4.4: a retransmission after reconnect always resends the entire
+  // boundary batch. If the target already buffered a partially received span
+  // from before the disconnect, the retransmitted batch (declared by the
+  // cutover's boundaryRecordCount/boundaryChecksumCrc32c) must replace it as
+  // a whole rather than being appended after it.
+  const runtime = new ZLinkHostServiceRelocationRuntime({} as never);
+  const internals = runtime as unknown as {
+    reconcileBoundaryRelay: (
+      stage: { boundaryRelay: ServiceMaintenanceRelocationData[] },
+      request: ServiceMaintenanceRelocationCutover,
+      stagingId: string
+    ) => void;
+  };
+  const record = (label: string): ServiceMaintenanceRelocationData => ({
+    kind: 'data',
+    relocation: { high: 0n, low: 1n },
+    targetAttemptGeneration: 1n,
+    coordinator,
+    senderRole: 'source',
+    object,
+    frozenRecord: { canonicalBytes: Buffer.from(label) }
+  } as unknown as ServiceMaintenanceRelocationData);
+
+  try {
+    const stale = [record('stale-0'), record('stale-1')];
+    const retransmitted = [record('whole-0'), record('whole-1'), record('whole-2')];
+    const stage = { boundaryRelay: [...stale, ...retransmitted] };
+    const boundaryChecksumCrc32c = crc32c(
+      Buffer.concat(retransmitted.map(value => value.frozenRecord.canonicalBytes))
+    );
+    const cutover: ServiceMaintenanceRelocationCutover = {
+      kind: 'cutover',
+      relocation: { high: 0n, low: 1n },
+      targetAttemptGeneration: 1n,
+      coordinator,
+      senderRole: 'source',
+      object,
+      boundaryRecordCount: BigInt(retransmitted.length),
+      boundaryChecksumCrc32c
+    };
+
+    internals.reconcileBoundaryRelay(stage, cutover, 'stage-retransmit');
+
+    assert.deepEqual(stage.boundaryRelay, retransmitted);
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test('cutover boundary reconciliation throws on an unordered-connection defect that no retransmission can explain', async () => {
+  const runtime = new ZLinkHostServiceRelocationRuntime({} as never);
+  const internals = runtime as unknown as {
+    reconcileBoundaryRelay: (
+      stage: { boundaryRelay: ServiceMaintenanceRelocationData[] },
+      request: ServiceMaintenanceRelocationCutover,
+      stagingId: string
+    ) => void;
+  };
+  const record = (label: string): ServiceMaintenanceRelocationData => ({
+    kind: 'data',
+    relocation: { high: 0n, low: 1n },
+    targetAttemptGeneration: 1n,
+    coordinator,
+    senderRole: 'source',
+    object,
+    frozenRecord: { canonicalBytes: Buffer.from(label) }
+  } as unknown as ServiceMaintenanceRelocationData);
+
+  try {
+    const stage = { boundaryRelay: [record('only-0')] };
+    const cutover: ServiceMaintenanceRelocationCutover = {
+      kind: 'cutover',
+      relocation: { high: 0n, low: 1n },
+      targetAttemptGeneration: 1n,
+      coordinator,
+      senderRole: 'source',
+      object,
+      boundaryRecordCount: 2n,
+      boundaryChecksumCrc32c: 0
+    };
+
+    assert.throws(
+      () => internals.reconcileBoundaryRelay(stage, cutover, 'stage-mismatch'),
+      /boundary confirmation mismatch/
+    );
+  } finally {
+    await runtime.dispose();
+  }
+});
+
 test('target-only CAS reconciles an unknown response to the exact committed owner', async () => {
   const actorKey = encodeAuthorityKey('actor', object.actorId);
   const envelope = {
@@ -575,6 +670,7 @@ test('target-only CAS reconciles an unknown response to the exact committed owne
     payloadTotalLength: 24n,
     payloadChunkCount: 1,
     payloadChecksumCrc32c: 1,
+    baseChecksumCrc32c: 0,
     applicationVersion: 4n
   };
   let current = expected;
@@ -877,15 +973,27 @@ test('ActorJoin Host owner arms the exact 1000ms target fallback after READY', a
   }
 });
 
-test('ActorJoin READY submit failure rolls back the Host target attempt before fallback', async () => {
+test('ActorJoin READY submit failure re-submits Ready against the retained staging on every Prepare resend', async () => {
+  //  Spec 28: a READY reply that fails to submit is not a restore failure —
+  //  the restored staging is retained, and an exact-identity Prepare resend
+  //  re-submits READY against it instead of rolling back or terminating.
+  //  Permanent non-delivery is bounded by the existing Restore validity
+  //  window, not by this delivery path.
   const harness = createActorJoinHostHarness({ readyResult: SubmitResult.NotConnected });
+  const relocatePromise = harness.relocate();
+  relocatePromise.catch(() => undefined);
   try {
-    await assert.rejects(harness.relocate(), /not accepted|NotConnected|aborted/i);
-    await new Promise<void>(resolve => setTimeout(resolve, 1_050));
-    assert.equal(harness.location.commits, 0, 'failed READY submission must never arm CAS fallback');
-    assert.equal(harness.targetStageCount(), 0, 'failed target attempt must be erased');
-    assert.equal(harness.location.aborts, 1, 'target aggregate reservation must roll back');
-    assert.equal(harness.targetActorManager.aborted, 1, 'hidden target restore must roll back');
+    await new Promise<void>(resolve => setTimeout(resolve, 900));
+    assert.ok(
+      harness.events.filter(value => value === 'ready:submit').length >= 2,
+      'a Prepare resend must re-submit Ready against the retained staging'
+    );
+    assert.equal(harness.location.commits, 0, 'an undelivered Ready must never arm CAS fallback');
+    assert.equal(harness.targetStageCount(), 1, 'the restored staging must be retained, not erased');
+    assert.equal(harness.location.aborts, 0, 'a delivery retry must not roll back the restored staging');
+    assert.equal(
+      harness.targetActorManager.aborted, 0, 'hidden target restore must not roll back on a delivery retry'
+    );
   } finally {
     await harness.dispose();
   }
@@ -905,7 +1013,9 @@ test('exact ActorJoin Prepare can restore again and arm fallback only after READ
       1,
       'every Prepare retry must preserve the exact frozen bytes'
     );
-    assert.equal(harness.targetActorManager.aborted, 1);
+    assert.equal(
+      harness.targetActorManager.aborted, 0, 'a Ready-delivery retry reuses staging, never rolling it back'
+    );
     assert.equal(harness.targetActorManager.published, 1);
     assert.equal(harness.location.commits, 1);
   } finally {

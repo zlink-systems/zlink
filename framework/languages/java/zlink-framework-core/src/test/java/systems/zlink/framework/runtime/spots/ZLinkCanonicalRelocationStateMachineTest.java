@@ -26,7 +26,6 @@ import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.locations.ZLinkObjectCapability;
 import systems.zlink.framework.locations.ZLinkObjectMaintenancePolicyKind;
 import systems.zlink.framework.locations.ZLinkPlacementCapacity;
-import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
@@ -130,7 +129,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                     }
                 });
         var coordinator = new ZLinkAggregateRelocationCoordinator(
-            retryingLocations, new InMemoryRelocationStore());
+            retryingLocations);
         UUID relocationId = UUID.randomUUID();
         byte[] root = ZLinkCanonicalActorRelocationEnvelope.encode(
             relocationId,
@@ -140,28 +139,6 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             true,
             new byte[] {1},
             List.of());
-        var stagedRoot = coordinator.stageRoot(
-                new ZLinkAggregateRelocationCoordinator.Request(
-                    relocationId,
-                    1,
-                    List.of(new ZLinkAggregateRelocationCoordinator.Participant(
-                        authorityKey,
-                        ZLinkPlacementObjectKind.ACTOR,
-                        sourceSnapshot.objectGeneration(),
-                        sourceSnapshot.authorityOwnerGeneration(),
-                        sourceSnapshot.storeVersion(),
-                        systems.zlink.framework.runtime.internal.locations
-                            .ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                        targetAuthority,
-                        new byte[0])),
-                    root,
-                    new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
-                    12,
-                    ZLinkPlacementCapacityBundle.actor(1),
-                    targetOwner),
-                OPEN)
-            .toCompletableFuture().join();
-
         AtomicReference<ZLinkCanonicalRelocationStateMachine> source =
             new AtomicReference<>();
         AtomicReference<ZLinkCanonicalRelocationStateMachine> target =
@@ -181,8 +158,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             sourceRid, 11, sourceOwner.ownerId(), sourceOwner.leaseGeneration(),
             targetRid, 12, targetOwner.ownerId(), targetOwner.leaseGeneration(),
             "mesh", "target-entry", "actor-type", false, true,
-            stagedRoot.stored().reference(),
-            stagedRoot.stored().checksumCrc32c(),
+            root,
             List.of(new ZLinkSpotRetireControl.ParticipantFence(
                 authorityKey,
                 1,
@@ -206,6 +182,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
 
         assertEquals(List.of(
             ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
+            ServiceWireConstants.COMMAND_RELOCATION_STATE,
             ServiceWireConstants.COMMAND_RELOCATION_DATA,
             ServiceWireConstants.COMMAND_RELOCATION_CUTOVER), sourceCommands);
         assertEquals(List.of(

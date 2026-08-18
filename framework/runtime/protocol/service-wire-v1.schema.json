@@ -753,11 +753,13 @@
         "exact-source-and-target-owner-lease-fences"
       ],
       "sequence": [
+        "source-optional-relocationState-base-stage-chunks-before-seal-in-preparing-phase-referencing-a-pre-capture-snapshot",
         "source-captures-existing-work-and-timers-into-source-memory-payload",
-        "source-relocationPrepare-request-with-payload-length-chunk-count-and-checksum",
-        "source-relocationState-chunks-on-the-same-ordered-connection",
+        "source-relocationPrepare-request-with-final-payload-length-chunk-count-checksum-and-optional-base-checksum",
+        "source-relocationState-final-stage-chunks-on-the-same-ordered-connection",
         "target-installs-temporary-queue-assembles-verifies-and-restores-payload-and-keeps-dispatch-closed",
         "target-relocationReady-reply",
+        "target-relocationFailed-reply-after-partial-chunk-and-prepared-resource-cleanup",
         "source-relocationData-for-post-capture-ingress-only",
         "source-relocationCutover-one-way-with-boundary-record-count-and-checksum-after-current-relay-prefix",
         "target-only-owner-membership-cas-after-cutover-or-1000ms-ready-fallback",
@@ -765,7 +767,7 @@
         "target-switches-regular-route-finishes-lifecycle-and-opens-dispatch"
       ],
       "savedPrefixOwner": "source-memory-payload-only-never-relocationData",
-      "relocationState": "saved-work-chunk-only-exact-identity-in-ordinal-order-conflicting-length-or-checksum-is-explicit-failure",
+      "relocationState": "saved-work-chunk-only-exact-identity-per-payloadStage-independent-ordinal-space-per-stage-conflicting-length-or-checksum-is-explicit-failure",
       "relocationData": "post-capture-ingress-hold-record-only-same-ordered-connection-as-cutover-no-ack-no-numeric-high-water",
       "cutover": "one-way-no-reply-late-or-duplicate-only-warning-and-no-state-change",
       "capacity": "normal-host-admission-and-core-backpressure-only-no-relocation-message-byte-or-participant-reservation",
@@ -1367,6 +1369,7 @@
     "checkValue": 3808858755,
     "coverage": [
       "relocationPrepare.payloadChecksumCrc32c",
+      "relocationPrepare.baseChecksumCrc32c",
       "relocationCutover.boundaryChecksumCrc32c",
       "relocation-manifest-v1.totalChecksumCrc32c",
       "relocation-chunk-entry-v1.checksumCrc32c",
@@ -2215,6 +2218,21 @@
       ]
     },
     {
+      "name": "relocation-payload-stage",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        {
+          "name": "base",
+          "value": 0
+        },
+        {
+          "name": "final",
+          "value": 1
+        }
+      ]
+    },
+    {
       "name": "actor-join-result",
       "kind": "enum",
       "encoding": "u32",
@@ -2252,6 +2270,10 @@
             {
               "name": "spot",
               "$ref": "spot-ref"
+            },
+            {
+              "name": "receiveChunkLimitBytes",
+              "$ref": "u32"
             }
           ]
         },
@@ -7590,9 +7612,19 @@
           "$ref": "u32"
         },
         {
+          "name": "baseChecksumCrc32c",
+          "$ref": "u32"
+        },
+        {
           "name": "applicationVersion",
           "$ref": "application-version"
         }
+      ],
+      "semanticConstraints": [
+        "baseChecksumCrc32c-zero-means-no-base-stage",
+        "baseChecksumCrc32c-nonzero-means-delta-payload-references-base-snapshot-with-this-crc32c",
+        "target-must-have-assembled-base-with-matching-checksum-or-reply-relocationFailed",
+        "payloadTotalLength-payloadChunkCount-payloadChecksumCrc32c-describe-final-stage-only"
       ],
       "payload": "forbidden"
     },
@@ -7972,6 +8004,10 @@
           "$ref": "relocation-object-identity"
         },
         {
+          "name": "payloadStage",
+          "$ref": "relocation-payload-stage"
+        },
+        {
           "name": "chunkOrdinal",
           "$ref": "u32"
         },
@@ -7979,6 +8015,53 @@
           "name": "chunkData",
           "$ref": "durable-blob"
         }
+      ],
+      "semanticConstraints": [
+        "chunkOrdinal-space-is-independent-per-payloadStage"
+      ],
+      "payload": "forbidden"
+    },
+    {
+      "id": 53,
+      "name": "relocationFailed",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        {
+          "name": "relocation",
+          "$ref": "relocation-id"
+        },
+        {
+          "name": "targetAttemptGeneration",
+          "$ref": "nonzero-u64"
+        },
+        {
+          "name": "coordinator",
+          "$ref": "relocation-coordinator-fence"
+        },
+        {
+          "name": "target",
+          "$ref": "relocation-target-fence"
+        },
+        {
+          "name": "object",
+          "$ref": "relocation-object-identity"
+        },
+        {
+          "name": "senderRole",
+          "$ref": "relocation-role"
+        },
+        {
+          "name": "failureCode",
+          "$ref": "framework-error-code"
+        }
+      ],
+      "semanticConstraints": [
+        "reply-only-to-matching-relocationPrepare",
+        "failureCode-must-be-nonzero",
+        "target-cleans-partial-chunks-and-prepared-resources-before-send",
+        "source-restores-captured-payload-and-finishes-operation-failure"
       ],
       "payload": "forbidden"
     }
@@ -8134,9 +8217,23 @@
           "source"
         ],
         "phases": [
+          "preparing",
           "captured",
           "prepared"
         ],
+        "stageRules": {
+          "base": {
+            "phases": [
+              "preparing"
+            ]
+          },
+          "final": {
+            "phases": [
+              "captured",
+              "prepared"
+            ]
+          }
+        },
         "duplicate": "identical-chunk-reassembly-idempotent-different-length-or-checksum-conflict-failure",
         "reorder": "same-ordered-connection-after-matching-relocationPrepare-in-chunk-ordinal-order",
         "loss": "no-per-chunk-ack-restore-deadline-fails-the-relocation"
@@ -8151,6 +8248,19 @@
         ],
         "duplicate": "idempotent-if-identical-else-protocol-error",
         "reorder": "reply-only-to-matching-relocationPrepare",
+        "loss": "request-reply-transport-semantics-until-deadline"
+      },
+      {
+        "command": "relocationFailed",
+        "senderRoles": [
+          "target"
+        ],
+        "phases": [
+          "captured",
+          "prepared"
+        ],
+        "duplicate": "idempotent-if-identical-else-protocol-error",
+        "reorder": "reply-only-to-matching-relocationPrepare-after-target-cleanup",
         "loss": "request-reply-transport-semantics-until-deadline"
       },
       {
@@ -8257,7 +8367,7 @@
       "last": 45
     },
     {
-      "first": 53,
+      "first": 54,
       "last": 255
     }
   ]

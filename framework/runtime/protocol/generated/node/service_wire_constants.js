@@ -47,6 +47,7 @@ exports.ServiceWireCommand = {
     messageFollow: 50,
     boundSessionReplaced: 51,
     relocationState: 52,
+    relocationFailed: 53,
 };
 exports.ServiceWireFlag = {
     metadata: 1,

@@ -69,6 +69,56 @@ export function decodeRelocationBaseDeltaState(
 }
 
 /**
+ * Frames the pre-seal base snapshots of every base/delta-capable participant
+ * of one relocation attempt into a single combined blob, keyed by authority
+ * key. This is the payload transmitted as payloadStage=base chunks — the
+ * relocationPrepare manifest (payloadTotalLength/ChunkCount/ChecksumCrc32c)
+ * only describes the final (delta) stage that follows (spec 15 §5).
+ */
+export function encodeRelocationBaseBundle(
+  bases: ReadonlyMap<string, Uint8Array>
+): Buffer {
+  const parts: Buffer[] = [Buffer.alloc(4)];
+  parts[0]!.writeUInt32BE(bases.size, 0);
+  for (const [key, data] of bases) {
+    const keyBytes = Buffer.from(key, 'utf8');
+    if (keyBytes.byteLength > 0xffff) {
+      throw new RangeError('Relocation base bundle authority key exceeds the length bound.');
+    }
+    const header = Buffer.alloc(2 + 4);
+    header.writeUInt16BE(keyBytes.byteLength, 0);
+    header.writeUInt32BE(data.byteLength, 2);
+    parts.push(header, keyBytes, Buffer.from(data));
+  }
+  return Buffer.concat(parts);
+}
+
+/** Inverse of {@link encodeRelocationBaseBundle}. Throws on a malformed blob. */
+export function decodeRelocationBaseBundle(blob: Uint8Array): ReadonlyMap<string, Buffer> {
+  const bytes = Buffer.isBuffer(blob) ? blob : Buffer.from(blob);
+  if (bytes.byteLength < 4) throw new Error('Relocation base bundle is malformed.');
+  const count = bytes.readUInt32BE(0);
+  const result = new Map<string, Buffer>();
+  let offset = 4;
+  for (let index = 0; index < count; index += 1) {
+    if (offset + 6 > bytes.byteLength) throw new Error('Relocation base bundle is truncated.');
+    const keyLength = bytes.readUInt16BE(offset);
+    const dataLength = bytes.readUInt32BE(offset + 2);
+    offset += 6;
+    if (offset + keyLength + dataLength > bytes.byteLength) {
+      throw new Error('Relocation base bundle entry exceeds the blob bounds.');
+    }
+    const key = bytes.toString('utf8', offset, offset + keyLength);
+    offset += keyLength;
+    const data = Buffer.from(bytes.subarray(offset, offset + dataLength));
+    offset += dataLength;
+    result.set(key, data);
+  }
+  if (offset !== bytes.byteLength) throw new Error('Relocation base bundle has trailing bytes.');
+  return result;
+}
+
+/**
  * Captures the application state through the adapter. When the adapter
  * registers base/delta, `preSealBase` (captured before the admission seal)
  * pairs with the post-seal delta so the seal window only pays for
