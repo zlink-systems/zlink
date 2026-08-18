@@ -418,6 +418,17 @@ final class ZLinkRedisLocationKeys {
         return domainBase() + ":scans:watermark";
     }
 
+    /**
+     * The opaque record key: {@code {prefix}:{zlink-location-v3}:opaque:
+     * {sha256hex(preimage)}} exactly, per 21-location-runtime.md#2.4 /
+     * 22-location-store-redis.md#7 and the store-record-v1 golden fixture
+     * (owner ruling: the Redis Cluster hashtag braces are canonical and win
+     * over an earlier brace-less reading; the spec/golden text is being
+     * corrected to match). Shares {@link #domainBase()} with the dedicated
+     * Lua paths so the opaque store's multi-key EVAL scripts (record + index
+     * + map + cleanup + sequence + snapshot keys) keep Cluster same-slot
+     * atomicity.
+     */
     String opaqueRecordKey(String key) {
         return domainBase() + ":opaque:" + sha256Hex(key);
     }

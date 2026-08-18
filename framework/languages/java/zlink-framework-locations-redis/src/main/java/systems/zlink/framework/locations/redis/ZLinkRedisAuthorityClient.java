@@ -1451,11 +1451,11 @@ final class ZLinkRedisAuthorityClient {
             nextOffset, out}
         """;
 
-    private final ZLinkRedisLocationConnection connection;
+    private final ZLinkRedisLocationConnection<String> connection;
     private final ZLinkRedisLocationKeys keys;
 
     ZLinkRedisAuthorityClient(
-        ZLinkRedisLocationConnection connection,
+        ZLinkRedisLocationConnection<String> connection,
         ZLinkRedisLocationKeys keys) {
         this.connection = connection;
         this.keys = keys;

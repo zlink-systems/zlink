@@ -54,7 +54,7 @@ final class ZLinkRedisLocationRepository implements
     ZLinkLocationRepository,
     AutoCloseable {
 
-    private final ZLinkRedisLocationConnection connection;
+    private final ZLinkRedisLocationConnection<String> connection;
     private final ZLinkRedisLocationScriptsClient scripts;
     private final ZLinkRedisLocationRows rows;
     private final ZLinkRedisAuthorityClient authority;
@@ -63,7 +63,7 @@ final class ZLinkRedisLocationRepository implements
         ZLinkRedisLocationOptions validated = Objects.requireNonNull(options, "options");
         validated.validate();
         ZLinkRedisLocationKeys keys = new ZLinkRedisLocationKeys(validated.keyPrefix());
-        this.connection = new ZLinkRedisLocationConnection(
+        this.connection = ZLinkRedisLocationConnection.forStrings(
             validated,
             keys.schemaKey());
         this.scripts = new ZLinkRedisLocationScriptsClient(connection, keys);

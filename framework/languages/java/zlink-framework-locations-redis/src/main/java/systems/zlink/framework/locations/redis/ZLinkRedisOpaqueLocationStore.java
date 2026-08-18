@@ -9,7 +9,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
@@ -55,6 +54,19 @@ import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
  *
  * <p>The version history retained by each key lets a scan keep one revision
  * boundary instead of copying every matching value into a snapshot.</p>
+ *
+ * <p>Values are carried end to end as 8-bit-clean bytes: the connection uses
+ * a byte[] Redis value codec (see {@link ZLinkRedisStringByteArrayCodec}),
+ * so caller-supplied record bytes reach {@code cmsgpack.pack} through
+ * {@code EVAL} ARGV with no base64 sub-layer. Every stored ZSET member is
+ * tagged with a leading {@code 0x01} format byte followed by a 5-element
+ * cmsgpack array {@code [originalKey, value, version, expiresAtMs,
+ * tombstone]} per 21-location-runtime.md#2.4 / 22-location-store-redis.md#7
+ * and the store-record-v1 golden fixture. {@code expiresAtMs == 0} is the
+ * "never expires" sentinel (a real epoch millisecond timestamp is never
+ * zero); {@code tombstone} is a genuine msgpack boolean, not an integer
+ * flag. An unrecognized leading tag byte is a hard failure (clean break,
+ * no read-old).</p>
  */
 final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
     private static final int MAXIMUM_KEY_BYTES = 1024;
@@ -63,16 +75,28 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
     private static final int MAXIMUM_BATCH_KEYS = 2048;
     private static final int MAXIMUM_ENCODED_BATCH_BYTES = 4 * 1024 * 1024;
 
-    private static final String READ_SCRIPT = """
+    private static final String UNPACK_TAGGED_HELPER = """
+        local function unpackTagged(raw)
+            if string.byte(raw, 1) ~= 1 then
+                error(
+                    'zlink-opaque-record-tag: unsupported store record '
+                        .. 'format tag')
+            end
+            return cmsgpack.unpack(string.sub(raw, 2))
+        end
+        """;
+
+    private static final String READ_SCRIPT = UNPACK_TAGGED_HELPER + """
         if redis.replicate_commands then redis.replicate_commands() end
         local time = redis.call('TIME')
         local nowMs = tonumber(time[1]) * 1000
             + math.floor(tonumber(time[2]) / 1000)
         local members = redis.call('ZREVRANGE', KEYS[1], 0, 0)
         if #members == 0 then return { 'missing', nowMs } end
-        local record = cmsgpack.unpack(members[1])
+        local record = unpackTagged(members[1])
         local expiresAt = tonumber(record[4])
-        if record[5] == 1 or (expiresAt >= 0 and expiresAt <= nowMs) then
+        if record[5] == true
+            or (expiresAt > 0 and expiresAt <= nowMs) then
             return { 'missing', nowMs }
         end
         return {
@@ -80,7 +104,7 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         }
         """;
 
-    private static final String WRITE_SCRIPT = """
+    private static final String WRITE_SCRIPT = UNPACK_TAGGED_HELPER + """
         if redis.replicate_commands then redis.replicate_commands() end
         local conditionCount = tonumber(ARGV[1])
         local mutationCount = tonumber(ARGV[2])
@@ -134,17 +158,17 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                 end
                 redis.call('ZADD', cleanupKey, nowMs + 1000, original)
             else
-                local record = cmsgpack.unpack(members[1])
+                local record = unpackTagged(members[1])
                 local expiresAt = tonumber(record[4])
-                if record[5] == 1
-                    or (expiresAt >= 0 and expiresAt + 60000 <= nowMs) then
+                if record[5] == true
+                    or (expiresAt > 0 and expiresAt + 60000 <= nowMs) then
                     redis.call('DEL', recordKey)
                     redis.call('ZREM', indexKey, original)
                     redis.call('HDEL', mapKey, original)
                     redis.call('ZREM', cleanupKey, original)
                 else
                     redis.call('ZREMRANGEBYRANK', recordKey, 0, -2)
-                    if expiresAt >= 0 then
+                    if expiresAt > 0 then
                         redis.call(
                             'ZADD', cleanupKey,
                             math.max(nowMs + 1000, expiresAt + 60000),
@@ -163,10 +187,10 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
             local members = redis.call('ZREVRANGE', KEYS[i], 0, 0)
             local current = nil
             if #members > 0 then
-                local record = cmsgpack.unpack(members[1])
+                local record = unpackTagged(members[1])
                 local expiresAt = tonumber(record[4])
-                if record[5] ~= 1
-                    and (expiresAt < 0 or expiresAt > nowMs) then
+                if record[5] ~= true
+                    and (expiresAt == 0 or expiresAt > nowMs) then
                     current = record[3]
                 end
             end
@@ -197,12 +221,12 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
             local retention = tonumber(ARGV[arg + 5])
             local redisKey = KEYS[keyIndex]
             if kind == 'put' then
-                local expiresAt = -1
+                local expiresAt = 0
                 if retention >= 0 then expiresAt = nowMs + retention end
                 redis.call(
                     'ZADD', redisKey, sequence,
-                    cmsgpack.pack({
-                        originalKey, value, version, expiresAt, 0
+                    '\\1' .. cmsgpack.pack({
+                        originalKey, value, version, expiresAt, false
                     }))
                 redis.call('ZADD', indexKey, 0, originalKey)
                 redis.call('HSET', mapKey, originalKey, redisKey)
@@ -211,8 +235,8 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
             else
                 redis.call(
                     'ZADD', redisKey, sequence,
-                    cmsgpack.pack({
-                        originalKey, '', '', -1, 1
+                    '\\1' .. cmsgpack.pack({
+                        originalKey, '', '', 0, true
                     }))
                 redis.call('ZADD', indexKey, 0, originalKey)
                 redis.call('HSET', mapKey, originalKey, redisKey)
@@ -232,7 +256,7 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         return result
         """;
 
-    private static final String SCAN_SCRIPT = """
+    private static final String SCAN_SCRIPT = UNPACK_TAGGED_HELPER + """
         if redis.replicate_commands then redis.replicate_commands() end
         local prefix = ARGV[1]
         local lastKey = ARGV[2]
@@ -288,17 +312,17 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                 end
                 redis.call('ZADD', cleanupKey, nowMs + 1000, original)
             else
-                local record = cmsgpack.unpack(members[1])
+                local record = unpackTagged(members[1])
                 local expiresAt = tonumber(record[4])
-                if record[5] == 1
-                    or (expiresAt >= 0 and expiresAt + 60000 <= nowMs) then
+                if record[5] == true
+                    or (expiresAt > 0 and expiresAt + 60000 <= nowMs) then
                     redis.call('DEL', recordKey)
                     redis.call('ZREM', KEYS[1], original)
                     redis.call('HDEL', KEYS[2], original)
                     redis.call('ZREM', cleanupKey, original)
                 else
                     redis.call('ZREMRANGEBYRANK', recordKey, 0, -2)
-                    if expiresAt >= 0 then
+                    if expiresAt > 0 then
                         redis.call(
                             'ZADD', cleanupKey,
                             math.max(nowMs + 1000, expiresAt + 60000),
@@ -364,11 +388,11 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                         recordKey, boundary, '-inf',
                         'LIMIT', 0, 1)
                     if #members > 0 then
-                        local record = cmsgpack.unpack(members[1])
+                        local record = unpackTagged(members[1])
                         local expiresAt = tonumber(record[4])
                         if record[1] == original
-                            and record[5] ~= 1
-                            and (expiresAt < 0 or expiresAt > snapshotNow) then
+                            and record[5] ~= true
+                            and (expiresAt == 0 or expiresAt > snapshotNow) then
                             local itemBytes = string.len(original)
                                 + string.len(record[2])
                                 + string.len(record[3]) + 128
@@ -402,11 +426,11 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         return result
         """;
 
-    private final ZLinkRedisLocationConnection connection;
+    private final ZLinkRedisLocationConnection<byte[]> connection;
     private final ZLinkRedisLocationKeys keys;
 
     ZLinkRedisOpaqueLocationStore(
-        ZLinkRedisLocationConnection connection,
+        ZLinkRedisLocationConnection<byte[]> connection,
         ZLinkRedisLocationKeys keys) {
         this.connection = Objects.requireNonNull(connection, "connection");
         this.keys = Objects.requireNonNull(keys, "keys");
@@ -470,11 +494,11 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                     keys.opaqueSnapshotExpiryKey(),
                     keys.opaqueSnapshotBoundaryKey()
                 },
-                validated.prefix(),
-                validated.lastKey(),
-                Integer.toString(validated.limit()),
-                validated.create() ? "1" : "0",
-                validated.scanId()))
+                bytes(validated.prefix()),
+                bytes(validated.lastKey()),
+                bytes(Integer.toString(validated.limit())),
+                bytes(validated.create() ? "1" : "0"),
+                bytes(validated.scanId())))
             .thenApply(result -> decodeScan(validated.scanId(), result));
     }
 
@@ -494,9 +518,9 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         long expiresAt = number(result.get(5));
         return new ZLinkStoreReadFound(
             new ZLinkStoreValue(
-                Base64.getDecoder().decode(text(result.get(3))),
+                rawBytes(result.get(3)),
                 new ZLinkStoreVersion(text(result.get(4))),
-                expiresAt >= 0 ? Instant.ofEpochMilli(expiresAt) : null,
+                expiresAt > 0 ? Instant.ofEpochMilli(expiresAt) : null,
                 storeNow));
     }
 
@@ -541,9 +565,9 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
             items.add(new ZLinkStoreScanItem(
                 new ZLinkStoreKey(text(result.get(index))),
                 new ZLinkStoreValue(
-                    Base64.getDecoder().decode(text(result.get(index + 1))),
+                    rawBytes(result.get(index + 1)),
                     new ZLinkStoreVersion(text(result.get(index + 2))),
-                    expiresAt >= 0
+                    expiresAt > 0
                         ? Instant.ofEpochMilli(expiresAt)
                         : null,
                     storeNow)));
@@ -644,45 +668,44 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         redisKeys[tail + 4] = keys.opaqueSnapshotExpiryKey();
         redisKeys[tail + 5] = keys.opaqueSnapshotBoundaryKey();
 
-        List<String> arguments = new ArrayList<>();
-        arguments.add(Integer.toString(conditions.size()));
-        arguments.add(Integer.toString(mutations.size()));
+        List<byte[]> arguments = new ArrayList<>();
+        arguments.add(bytes(Integer.toString(conditions.size())));
+        arguments.add(bytes(Integer.toString(mutations.size())));
         for (ZLinkStoreCondition condition : conditions) {
             if (condition instanceof ZLinkStoreMissingCondition) {
-                arguments.add("missing");
-                arguments.add("");
+                arguments.add(bytes("missing"));
+                arguments.add(bytes(""));
             } else {
                 ZLinkStoreVersionCondition version =
                     (ZLinkStoreVersionCondition) condition;
-                arguments.add("version");
-                arguments.add(version.expected().value());
+                arguments.add(bytes("version"));
+                arguments.add(bytes(version.expected().value()));
             }
         }
-        Base64.Encoder encoder = Base64.getEncoder();
         for (ZLinkStoreMutation mutation : mutations) {
             ZLinkStoreKey key = mutation instanceof ZLinkStorePut put
                 ? put.key()
                 : ((ZLinkStoreDelete) mutation).key();
-            arguments.add(Integer.toString(keyIndexes.get(key)));
+            arguments.add(bytes(Integer.toString(keyIndexes.get(key))));
             if (mutation instanceof ZLinkStorePut put) {
-                arguments.add("put");
-                arguments.add(key.value());
-                arguments.add(encoder.encodeToString(put.bytes()));
-                arguments.add(uuidHex());
-                arguments.add(put.retention() == null
+                arguments.add(bytes("put"));
+                arguments.add(bytes(key.value()));
+                arguments.add(put.bytes());
+                arguments.add(bytes(uuidHex()));
+                arguments.add(bytes(put.retention() == null
                     ? "-1"
-                    : Long.toString(ceilMillis(put.retention())));
+                    : Long.toString(ceilMillis(put.retention()))));
             } else {
-                arguments.add("delete");
-                arguments.add(key.value());
-                arguments.add("");
-                arguments.add("");
-                arguments.add("-1");
+                arguments.add(bytes("delete"));
+                arguments.add(bytes(key.value()));
+                arguments.add(bytes(""));
+                arguments.add(bytes(""));
+                arguments.add(bytes("-1"));
             }
         }
         return new ValidatedWrite(
             redisKeys,
-            arguments.toArray(String[]::new));
+            arguments.toArray(byte[][]::new));
     }
 
     private static ValidatedScan validateScan(
@@ -804,11 +827,31 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                 "Location Store operation was cancelled."));
     }
 
+    private static byte[] bytes(String value) {
+        return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] rawBytes(Object value) {
+        if (value instanceof byte[] raw) {
+            return raw;
+        }
+        if (value == null) {
+            return new byte[0];
+        }
+        return bytes(String.valueOf(value));
+    }
+
     private static String text(Object value) {
+        if (value instanceof byte[] raw) {
+            return new String(raw, StandardCharsets.UTF_8);
+        }
         return String.valueOf(value);
     }
 
     private static long number(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
         return Long.parseLong(text(value));
     }
 
@@ -834,7 +877,7 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
 
     private record ValidatedWrite(
         String[] redisKeys,
-        String[] arguments) {}
+        byte[][] arguments) {}
 
     private record ValidatedScan(
         String prefix,

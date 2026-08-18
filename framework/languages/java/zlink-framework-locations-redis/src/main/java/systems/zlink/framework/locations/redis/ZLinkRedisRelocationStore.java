@@ -5,7 +5,6 @@ import io.lettuce.core.ScriptOutputType;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Base64;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -38,7 +37,7 @@ public final class ZLinkRedisRelocationStore
         elseif current then
             return {'collision', nowMs}
         end
-        redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+        redis.call('PSETEX', KEYS[1], ARGV[2], ARGV[1])
         return {'stored', nowMs, tonumber(ARGV[2])}
         """;
     private static final String READ = """
@@ -59,14 +58,14 @@ public final class ZLinkRedisRelocationStore
         return {'renewed', nowMs}
         """;
 
-    private final ZLinkRedisLocationConnection connection;
+    private final ZLinkRedisLocationConnection<byte[]> connection;
     private final String keyPrefix;
 
     public ZLinkRedisRelocationStore(ZLinkRedisRelocationOptions options) {
         ZLinkRedisRelocationOptions validated = Objects.requireNonNull(options, "options");
         validated.validate();
-        connection = new ZLinkRedisLocationConnection(validated.redisUri());
-        keyPrefix = validated.keyPrefix() + ":{relocation}:root:";
+        connection = ZLinkRedisLocationConnection.forBytes(validated.redisUri());
+        keyPrefix = validated.keyPrefix() + ":{zlink-relocation-v1}:blob:";
     }
 
     @Override
@@ -81,14 +80,13 @@ public final class ZLinkRedisRelocationStore
         if (cancelled(cancellation)) {
             return cancelledStage();
         }
-        String encoded = Base64.getEncoder().encodeToString(snapshot);
         return connection.commands()
             .thenCompose(redis -> redis.<List<Object>>eval(
                 PUT,
                 ScriptOutputType.MULTI,
                 new String[] {key(normalized)},
-                encoded,
-                Long.toString(retentionMs)))
+                snapshot,
+                bytes(Long.toString(retentionMs))))
             .thenApply(raw -> {
                 String status = string(raw.getFirst());
                 Instant storeNow = Instant.ofEpochMilli(number(raw.get(1)));
@@ -122,7 +120,7 @@ public final class ZLinkRedisRelocationStore
                     return new ZLinkBlobMissing(now);
                 }
                 return new ZLinkBlobFound(
-                    Base64.getDecoder().decode(string(raw.get(3))),
+                    rawBytes(raw.get(3)),
                     now.plusMillis(number(raw.get(2))),
                     now);
             });
@@ -143,7 +141,7 @@ public final class ZLinkRedisRelocationStore
                 RENEW,
                 ScriptOutputType.MULTI,
                 new String[] {key(normalized)},
-                Long.toString(retentionMs)))
+                bytes(Long.toString(retentionMs))))
             .thenApply(raw -> {
                 Instant storeNow = Instant.ofEpochMilli(number(raw.get(1)));
                 return "missing".equals(string(raw.getFirst()))
@@ -231,5 +229,16 @@ public final class ZLinkRedisRelocationStore
             return new String(bytes, StandardCharsets.UTF_8);
         }
         return value == null ? "" : value.toString();
+    }
+
+    private static byte[] bytes(String value) {
+        return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] rawBytes(Object value) {
+        if (value instanceof byte[] raw) {
+            return raw;
+        }
+        return value == null ? new byte[0] : bytes(value.toString());
     }
 }

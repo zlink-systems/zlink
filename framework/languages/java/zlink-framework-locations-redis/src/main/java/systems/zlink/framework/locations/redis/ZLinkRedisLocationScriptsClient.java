@@ -50,11 +50,11 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRelease
 
 final class ZLinkRedisLocationScriptsClient {
     private static final ObjectMapper JSON = new ObjectMapper();
-    private final ZLinkRedisLocationConnection connection;
+    private final ZLinkRedisLocationConnection<String> connection;
     private final ZLinkRedisLocationKeys keys;
 
     ZLinkRedisLocationScriptsClient(
-        ZLinkRedisLocationConnection connection,
+        ZLinkRedisLocationConnection<String> connection,
         ZLinkRedisLocationKeys keys) {
         this.connection = connection;
         this.keys = keys;

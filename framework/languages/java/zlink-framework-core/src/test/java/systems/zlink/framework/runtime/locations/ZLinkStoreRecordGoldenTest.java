@@ -53,7 +53,7 @@ final class ZLinkStoreRecordGoldenTest {
         byte[] relocationBytes = HexFormat.of().parseHex(relocationBlob.path("rawBytesHex").asText());
         assertTrue(relocationBytes.length > 0);
         assertEquals(
-            prefix + ":zlink-relocation-v1:blob:" + relocationBlob.path("reference").asText(),
+            prefix + ":{zlink-relocation-v1}:blob:" + relocationBlob.path("reference").asText(),
             relocationBlob.path("redisKey").asText());
 
         Iterator<JsonNode> vectors = fixture.path("valueVectors").path("genericOpaqueRecord").elements();

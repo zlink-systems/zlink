@@ -30,11 +30,11 @@ final class ZLinkRedisLocationRows {
     private static final int DESCRIPTOR_PAGE_MAX_BYTES =
         4 * 1024 * 1024;
 
-    private final ZLinkRedisLocationConnection connection;
+    private final ZLinkRedisLocationConnection<String> connection;
     private final ZLinkRedisLocationKeys keys;
 
     ZLinkRedisLocationRows(
-        ZLinkRedisLocationConnection connection,
+        ZLinkRedisLocationConnection<String> connection,
         ZLinkRedisLocationKeys keys) {
         this.connection = connection;
         this.keys = keys;

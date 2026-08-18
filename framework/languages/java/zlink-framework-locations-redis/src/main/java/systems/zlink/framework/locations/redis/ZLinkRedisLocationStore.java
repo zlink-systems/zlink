@@ -16,7 +16,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
  */
 public final class ZLinkRedisLocationStore
     implements ZLinkLocationStore, AutoCloseable {
-    private final ZLinkRedisLocationConnection connection;
+    private final ZLinkRedisLocationConnection<byte[]> connection;
     private final ZLinkRedisOpaqueLocationStore store;
 
     public ZLinkRedisLocationStore(ZLinkRedisLocationOptions options) {
@@ -25,7 +25,7 @@ public final class ZLinkRedisLocationStore
         validated.validate();
         ZLinkRedisLocationKeys keys =
             new ZLinkRedisLocationKeys(validated.keyPrefix());
-        this.connection = new ZLinkRedisLocationConnection(
+        this.connection = ZLinkRedisLocationConnection.forBytes(
             validated,
             keys.schemaKey());
         this.store = new ZLinkRedisOpaqueLocationStore(connection, keys);
