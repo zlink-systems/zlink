@@ -15,6 +15,8 @@ import java.util.concurrent.ThreadLocalRandom;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkAsyncSerialQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
@@ -469,11 +471,27 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                     "Actor authority payload is invalid"));
             String stableType = actors.actorType(actorId);
             var factory = factories.get(stableType);
-            if (factory == null
-                || factory.relocationPolicy()
+            if (factory == null) {
+                return failed(new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.NOT_CONFIGURED,
+                    "Actor relocation factory is not registered: "
+                        + stableType));
+            }
+            if (factory.relocationPolicy()
                     instanceof RelocationPolicy.Disabled) {
-                return failed(new IllegalStateException(
-                    "Actor relocation policy is unavailable: " + stableType));
+                //  Spec 15 failure table: the Actor's relocation policy
+                //  forbids cross-node movement — Rejected, not a generic
+                //  failure. This is the sole, exhaustive gate for this
+                //  condition in this builder: both prepare() (via
+                //  selectTarget/hasCapability) and prepareDirectJoin() (via
+                //  directTarget/hasCapabilityForType) always run this check
+                //  first through readOwned(), so neither candidacy filter
+                //  can ever see a Disabled-policy Actor to dissolve this
+                //  fact into a generic Unavailable.
+                return failed(new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.REJECTED,
+                    "Actor relocation policy forbids cross-node "
+                        + "relocation: " + stableType));
             }
             if (authority.state() != ZLinkActorAuthorityPayloadCodec.State.READY
                 || requireEntryMembership && authority.currentSpotKind() != 1

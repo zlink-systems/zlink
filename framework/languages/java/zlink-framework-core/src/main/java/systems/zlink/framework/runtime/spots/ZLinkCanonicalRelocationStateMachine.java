@@ -20,6 +20,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
@@ -654,6 +655,8 @@ final class ZLinkCanonicalRelocationStateMachine
         CompletionStage<Void> cleanup = request == null
             ? CompletableFuture.completedFuture(null)
             : target.abort(request);
+        long wireFailureCode = wireFailureCode(
+            unwrap(failure), attempt.prepare().object().kind());
         return cleanup.handle((ignored, cleanupFailure) -> {
             if (cleanupFailure != null) {
                 failure.addSuppressed(unwrap(cleanupFailure));
@@ -668,7 +671,75 @@ final class ZLinkCanonicalRelocationStateMachine
                     attempt.prepare().target(),
                     attempt.prepare().object(),
                     ZLinkCanonicalRelocationProtocol.TARGET,
-                    ServiceWireConstants.FRAMEWORK_ERROR_RELOCATION_DATA_LOST))));
+                    wireFailureCode))));
+    }
+
+    /**
+     * Maps a target-side relocation failure's classified
+     * {@code ZLinkFrameworkErrorKind} to the closest wire framework-error
+     * code the generated schema ({@link ServiceWireConstants}) actually
+     * defines. The wire vocabulary predates the framework's typed error
+     * kinds and has no one-to-one code for every kind, so several kinds
+     * share the nearest fit — documented per case below; unresolvable
+     * vocabulary gaps belong at the schema level, not invented here.
+     * {@code objectKind} (1 = Actor, else Spot/Instance — spec 28 §4.2's
+     * {@code ObjectFence.kind}) picks between an Actor- and Spot-specific
+     * code where the schema splits by object kind.
+     */
+    static long wireFailureCode(Throwable cause, int objectKind) {
+        if (!(cause instanceof ZLinkFrameworkException framework)) {
+            //  An unclassified throwable carries no evidence of integrity
+            //  loss, so it takes the generic opaque request-failure code —
+            //  DataLost stays reserved for verified checksum/assembly/digest
+            //  failures (spec 15 failure table).
+            return ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED;
+        }
+        return switch (framework.kind()) {
+            case DATA_LOST ->
+                ServiceWireConstants.FRAMEWORK_ERROR_RELOCATION_DATA_LOST;
+            case REJECTED ->
+                ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_REJECTED;
+            case PROTOCOL_ERROR ->
+                ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_PROTOCOL_ERROR;
+            //  No dedicated "capacity exceeded" wire code exists; a full
+            //  queue is the closest capacity-shaped signal.
+            case CAPACITY_EXCEEDED ->
+                ServiceWireConstants.FRAMEWORK_ERROR_WORKER_QUEUE_FULL;
+            //  No dedicated "deadline exceeded" wire code exists; a worker
+            //  timeout is the closest timeout-shaped signal.
+            case DEADLINE_EXCEEDED ->
+                ServiceWireConstants.FRAMEWORK_ERROR_WORKER_TIMED_OUT;
+            //  A stale generation/fence is the concrete cause of
+            //  InvalidOperation along this path (spec 15 failure table);
+            //  pick the object-kind-specific stale code.
+            case INVALID_OPERATION -> objectKind == 1
+                ? ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_LOCATION_STALE
+                : ServiceWireConstants.FRAMEWORK_ERROR_SPOT_GENERATION_STALE;
+            //  No dedicated generic "unavailable" wire code exists; a
+            //  disconnected route is the closest "cannot reach/use the
+            //  target" signal.
+            case UNAVAILABLE ->
+                ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED;
+            case NOT_FOUND ->
+                ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_TARGET_NOT_FOUND;
+            //  The only "already exists" wire code is Actor-specific; not
+            //  expected along this target-failure path, mapped for
+            //  completeness.
+            case ALREADY_EXISTS ->
+                ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_ALREADY_EXISTS;
+            case TYPE_MISMATCH -> objectKind == 1
+                ? ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_TYPE_MISMATCH
+                : ServiceWireConstants.FRAMEWORK_ERROR_SPOT_TYPE_MISMATCH;
+            //  No dedicated "not configured" wire code exists; a missing
+            //  configured handler is the closest analog.
+            case NOT_CONFIGURED ->
+                ServiceWireConstants.FRAMEWORK_ERROR_HANDLER_NOT_FOUND;
+            //  No dedicated generic "internal failure" or "shutting down"
+            //  wire code exists; the generic opaque request-failure code is
+            //  the closest fit for both.
+            case INTERNAL_FAILURE, SHUTTING_DOWN ->
+                ServiceWireConstants.FRAMEWORK_ERROR_REQUEST_FAILED;
+        };
     }
 
     private CompletionStage<Void> onReady(
