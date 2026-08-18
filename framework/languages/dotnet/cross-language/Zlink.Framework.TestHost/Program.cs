@@ -276,13 +276,28 @@ internal sealed class EntryRelocationSourceHostedService(
         };
         sink.Append($"entry-spot-owner-before|node={ownerBefore}");
 
-        var relocation = await runtime.RelocateAsync(
-            new ZLinkFrameworkRelocationOptions
-            {
-                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
-                Deadline = TimeSpan.FromSeconds(30)
-            },
-            cancellationToken);
+        // No manual PeerConnections.Connect anywhere in this mode means no
+        // readiness signal to wait on before relocating -- give automatic
+        // discovery (Location Store polling on both ends) time to converge,
+        // retrying relocate() itself since an early attempt can observe zero
+        // eligible peers yet (matches node_peer_host.js's entrySpotRelocate()
+        // and Program.java's runEntryRelocationSource()).
+        ZLinkFrameworkRelocationResult relocation;
+        var attempt = 0;
+        while (true)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+            relocation = await runtime.RelocateAsync(
+                new ZLinkFrameworkRelocationOptions
+                {
+                    Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                    Deadline = TimeSpan.FromSeconds(30)
+                },
+                cancellationToken);
+            sink.Append($"relocate-attempt|attempt={attempt}|outcome={relocation.Outcome}|reason={relocation.Reason}");
+            if (relocation.Outcome == ZLinkFrameworkRelocationOutcome.Relocated || attempt >= 5) break;
+            attempt++;
+        }
         sink.Append($"relocate-result|outcome={relocation.Outcome}|reason={relocation.Reason}");
     }
 

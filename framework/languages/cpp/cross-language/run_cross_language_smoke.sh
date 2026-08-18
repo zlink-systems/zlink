@@ -39,11 +39,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The java-cross and relocation stages never spawn the C++ host (java-cross
-# is Java<->Node and Java<->.NET only; relocation is Node<->.NET only), so
-# neither requires the C++ binary to be built.
+# The java-cross and relocation* stages never spawn the C++ host (java-cross
+# is Java<->Node and Java<->.NET only; relocation is Node<->.NET only;
+# relocation-java-dotnet is Java<->.NET only), so none of them require the
+# C++ binary to be built.
 if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "relocation" ]] \
+  && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "relocation-java-dotnet" ]] \
   && [[ ! -x "${CPP_HOST}" ]]; then
   echo "cross-language host is missing: ${CPP_HOST}" >&2
   echo "build it with: cmake --build ${BUILD_DIR} --target zlink_cpp_cross_language_host" >&2
@@ -985,8 +987,97 @@ stage_node_source_dotnet_target_relocation() {
   RESULTS+=("relocation: Node source -> .NET target (JoinEntrySpot create, multi-chunk relocate, owner transition + liveness probe)")
 }
 
+# --- entry-spot relocation: Java source -> .NET target ------------------------
+# Same scenario as stage_node_source_dotnet_target_relocation, but both sides
+# now use pure automatic (Location-Store-only) discovery -- confirmed by
+# direct repro that .NET's RelocateAsync explicitly refuses a manually
+# connected topology (ZLinkFrameworkRelocationReason.ManualTopologyUnsupported)
+# -- so neither host calls PeerConnections.connect/peerConnections().connect
+# at all; both rely solely on the shared Redis Location/Relocation Store.
+# Java (unlike .NET) tolerates a fixed own routing id alongside auto-discovery
+# (its own SpotActorTransfer e2e runs the same way), so the Java side keeps a
+# known --node-rid for the owner-before/probe assertions.
+stage_java_source_dotnet_target_relocation() {
+  local redis_port source_port target_port source_endpoint target_endpoint
+  local source_events target_events
+  redis_port="$(free_port)"
+  source_port="$(free_port)"
+  target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"
+  target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/java-relocation-source.events"
+  target_events="${RUN_DIR}/dotnet-relocation-target-java.events"
+  start_redis relocation-redis-java-dotnet "${redis_port}"
+  start_dotnet dotnet-relocation-target-java entry-spot-target \
+    --mesh-name cross.relocation \
+    --peer-rid java-relocation-source \
+    --bind-endpoint "${target_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --actor-id cross-lang-relocation-actor \
+    --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/dotnet-relocation-target-java.ready" 180
+  start_java java-relocation-source entry-spot-source \
+    --mesh-name cross.relocation \
+    --node-rid java-relocation-source \
+    --bind-endpoint "${source_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --actor-id cross-lang-relocation-actor \
+    --payload-bytes 100000 \
+    --event-file "${source_events}"
+  wait_for_line "${source_events}" "entry-spot-owner-before|node=java-relocation-source" 60
+  wait_for_line "${source_events}" "relocate-result|outcome=RELOCATED" 150
+  wait_for_line "${target_events}" "entry-spot-probe|nodeRid=" 150
+  if grep -qF "entry-spot-probe|nodeRid=java-relocation-source" "${target_events}"; then
+    echo "relocation stage: target probe still answered by the source -- no owner transition" >&2
+    exit 1
+  fi
+  stop_all
+  RESULTS+=("relocation: Java source -> .NET target (JoinEntrySpot create, multi-chunk relocate, owner transition + liveness probe)")
+}
+
+# --- entry-spot relocation: .NET source -> Java target ------------------------
+# Reverse direction of the stage above, same pure-automatic-discovery config
+# on both sides.
+stage_dotnet_source_java_target_relocation() {
+  local redis_port source_port target_port source_endpoint target_endpoint
+  local source_events target_events
+  redis_port="$(free_port)"
+  source_port="$(free_port)"
+  target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"
+  target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/dotnet-relocation-source-java.events"
+  target_events="${RUN_DIR}/java-relocation-target.events"
+  start_redis relocation-redis-dotnet-java "${redis_port}"
+  start_java java-relocation-target entry-spot-target \
+    --mesh-name cross.relocation \
+    --node-rid java-relocation-target \
+    --bind-endpoint "${target_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --actor-id cross-lang-relocation-actor \
+    --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/java-relocation-target.ready" 60
+  start_dotnet dotnet-relocation-source-java entry-spot-source \
+    --mesh-name cross.relocation \
+    --bind-endpoint "${source_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --actor-id cross-lang-relocation-actor \
+    --payload-bytes 100000 \
+    --event-file "${source_events}"
+  wait_for_line "${source_events}" "entry-spot-owner-before|node=" 60
+  wait_for_line "${source_events}" "relocate-result|outcome=Relocated" 150
+  wait_for_line "${target_events}" "entry-spot-probe|nodeRid=java-relocation-target" 150
+  stop_all
+  RESULTS+=("relocation: .NET source -> Java target (JoinEntrySpot create, multi-chunk relocate, owner transition + liveness probe)")
+}
+
 run_relocation_stages() {
   stage_node_source_dotnet_target_relocation
+}
+
+run_java_dotnet_relocation_stages() {
+  stage_java_source_dotnet_target_relocation
+  stage_dotnet_source_java_target_relocation
 }
 
 run_spot_route_stages() {
@@ -1034,6 +1125,14 @@ case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
       echo "ok - ${result}"
     done
     echo "cross-language smoke stage=relocation result=passed"
+    exit 0
+    ;;
+  relocation-java-dotnet)
+    run_java_dotnet_relocation_stages
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=relocation-java-dotnet result=passed"
     exit 0
     ;;
   all)

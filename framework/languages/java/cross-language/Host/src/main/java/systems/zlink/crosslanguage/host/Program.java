@@ -144,18 +144,24 @@ public final class Program {
                 if (relocationStore != null) {
                     options.addRelocationStore(relocationStore);
                 }
+                // Pure automatic discovery, no manual PeerConnections.connect
+                // anywhere: confirmed by direct repro against a .NET peer
+                // that RelocateAsync explicitly rejects a manually-connected
+                // topology (ZLinkFrameworkRelocationReason.ManualTopologyUnsupported),
+                // and .NET's Object-role MeshNode cannot even declare a fixed
+                // own routing id. Java's own e2e (SpotActorTransfer
+                // Program.java) already runs relocation this way when
+                // config.automaticTopology() is set -- Java, unlike .NET,
+                // tolerates a fixed routing id alongside auto-discovery, so
+                // it is kept here for the owner-before/probe assertions
+                // below, but no peer connection is ever manually declared.
                 var mesh = options.addRouteMesh(meshName)
                     .listen(args.require("bind-endpoint"))
-                    .setRoutingId(RoutingId.from(nodeRid));
-                // Only the source dials out (mirrors spot-route-client/-server
-                // elsewhere in this file): once the ZMTP handshake completes
-                // the connection is bidirectional, so the target only needs
-                // to listen.
-                if ("entry-spot-source".equals(mode)) {
-                    mesh.peerConnections().connect(
-                        RoutingId.from(args.require("peer-rid")),
-                        args.require("peer-endpoint"));
-                }
+                    .setRoutingId(RoutingId.from(nodeRid))
+                    // Force deterministic placement: the source always wins
+                    // actor creation, so the pre-relocation owner assertion
+                    // is meaningful rather than an accident of placement.
+                    .setPlacementWeight("entry-spot-source".equals(mode) ? 100 : 0);
                 mesh.channelName(meshName).server();
                 mesh.objects().client();
                 var objects = mesh.objects().server();
@@ -257,12 +263,35 @@ public final class Program {
                 case ZLinkActorCreateResult.Rejected ignored -> "rejected";
             };
             sink.append("entry-spot-create|status=" + createStatus);
+            String ownerBefore = switch (created) {
+                case ZLinkActorCreateResult.Created c -> c.actor().nodeRid().toString();
+                case ZLinkActorCreateResult.Existing e -> e.actor().nodeRid().toString();
+                default -> "none";
+            };
+            sink.append("entry-spot-owner-before|node=" + ownerBefore);
 
-            ZLinkFrameworkRelocationResult relocation = lifecycle.relocate(
-                    new ZLinkFrameworkRelocationOptions(
-                        ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE, null, Duration.ofSeconds(30)))
-                .toCompletableFuture()
-                .get(35, TimeUnit.SECONDS);
+            // No manual peerConnections().connect() means no readiness
+            // signal to wait on before relocating -- give automatic
+            // discovery (Location Store polling on both ends) time to
+            // converge, retrying relocate() itself since an early attempt
+            // can observe zero eligible peers yet (matches the retry loop
+            // in node_peer_host.js's entrySpotRelocate()).
+            ZLinkFrameworkRelocationResult relocation = null;
+            for (int attempt = 0; attempt < 6; attempt++) {
+                sleepQuietly(5000);
+                relocation = lifecycle.relocate(
+                        new ZLinkFrameworkRelocationOptions(
+                            ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE, null, Duration.ofSeconds(30)))
+                    .toCompletableFuture()
+                    .get(35, TimeUnit.SECONDS);
+                sink.append("relocate-attempt|attempt=" + attempt
+                    + "|outcome=" + relocation.outcome().name()
+                    + "|reason=" + relocation.reason().name());
+                if (relocation.outcome()
+                    == systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOutcome.RELOCATED) {
+                    break;
+                }
+            }
             sink.append("relocate-result|outcome=" + relocation.outcome().name()
                 + "|reason=" + relocation.reason().name());
         } catch (ExecutionException | TimeoutException error) {
