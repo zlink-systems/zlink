@@ -18,8 +18,8 @@
 - [x] 정식 문서 제거 (spec 15·01·06, 언어 interface, 내부 51·52, guide 재생성) — `8b12fbf62f`
 - [x] node 구현 제거 — `b05791682b`
 - [x] java 구현 제거 — `14de957df8`
-- [ ] cpp 구현 제거 (에이전트 진행 중)
-- [ ] dotnet 구현 제거 (에이전트 진행 중)
+- [x] cpp 구현 제거 — `b2b1713927`
+- [x] dotnet 구현 제거 — `5d02ef66b1` (-1643줄)
 - [ ] **wire 원자 커밋**: schema에서 40 `baseChecksumCrc32c`·52 `payloadStage` 필드
       제거 + golden 재계산 + validator self-test + 4언어 codec 동시 정리
       (`TODO(schema-atomic)` 마커 추적) — 4언어 게이트를 모두 돌린 뒤 한 커밋
