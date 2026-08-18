@@ -28,6 +28,22 @@
   확장하며, 원인 변화 없이 같은 전체 gate를 반복하지 않는다.
 - lint, format, rename 같은 기계적 작업에는 사용할 수 있는 가장 가벼운 도구나 model을 사용한다.
 
+### 2.1 Sub-agent model·추론 레벨
+
+Sub-agent를 투입할 때는 작업 난이도에 맞춰 model과 reasoning effort를 지정한다. 지정하지
+않으면 세션 model을 상속하므로, 아래에 해당하면 명시적으로 낮춘다.
+
+| 작업 성격 | model | effort |
+|---|---|---|
+| 기계적 작업 — test 기대값 갱신, rename, script 작성, gate 재실행, log 수집 | `haiku` 또는 `sonnet` | `low` |
+| 일반 구현·검증 — test stage 추가, 문서 투영, 국소 debugging, 정형화된 refactoring | `sonnet` | `medium` |
+| 어려운 설계·분석 — 동시성·수명 재설계, wire 계약 변경, 교차 언어 감사, 원인 불명 회귀 | 세션 상위 model | `high` 이상 |
+
+- 큰 작업은 단계로 나눠 정찰·수집을 저비용 agent에 먼저 맡기고, 상위 model은 판단과 설계가
+  필요한 단계에만 투입한다.
+- 이미 실행 중인 agent는 model을 바꾸려고 중단·재투입하지 않는다. 재작업 비용이 더 크다.
+- 전체 test와 sample 재검증은 변경 영향 범위로 좁혀 실행한다(§4).
+
 ## 3. 구현 원칙
 
 - 기존 public API, 표준 호출 경로와 abstraction을 먼저 사용한다. 같은 의미의 helper, DTO,
