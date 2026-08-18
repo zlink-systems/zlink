@@ -120,6 +120,8 @@ export interface ActorJoinCompletionPayload {
   readonly joinResult: number;
   readonly actor: ServiceActorRef | null;
   readonly location: ActorLocation;
+  /** Target's advertised relocation state chunk cap from the accepted admission reply. 0/undefined = not advertised. */
+  readonly receiveChunkLimitBytes?: number;
 }
 
 export interface ActorLookupCompletionPayload {

@@ -940,6 +940,28 @@ test('public ActorJoin profile crosses the Host Prepare READY DATA CUTOVER owner
   }
 });
 
+test('ActorJoin threads the admission-advertised chunk cap into the state chunk plan', async () => {
+  // Spec 15 §4.2: the source uses min(configured, advertised, conservative
+  // floor) for that join's relocation state chunks. A small advertised cap
+  // (well below both the configured limit and the payload size) must split
+  // the payload into more than the usual single chunk, proving the value
+  // reached runCoordinator's chunk plan rather than being ignored.
+  const harness = createActorJoinHostHarness();
+  try {
+    const relocated = await harness.relocate(16);
+    await harness.targetIdle();
+    assert.equal(String(relocated.actorRef.nodeRid), 'target');
+    const stateChunkCount = harness.controlKinds.filter(kind => kind === 'state').length;
+    assert.ok(
+      stateChunkCount > 1,
+      `a 16-byte advertised cap must split the payload into multiple chunks, got ${stateChunkCount}`
+    );
+    assert.equal(harness.location.commits, 1);
+  } finally {
+    await harness.dispose();
+  }
+});
+
 test('ActorJoin Host owner arms the exact 1000ms target fallback after READY', async () => {
   const originalSetTimeout = globalThis.setTimeout;
   const observedFallbacks: number[] = [];
@@ -1375,7 +1397,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     }
   } as never);
 
-  const relocate = async () => {
+  const relocate = async (advertisedReceiveChunkLimitBytes?: number) => {
     sourceSignal = new AbortController();
     const result = await sourceRuntime.relocateActorJoin({
       meshName: 'mesh-a',
@@ -1391,6 +1413,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       },
       relocationId,
       completionOperationId: `${completionOperationId.high.toString(16)}:${completionOperationId.low.toString(16)}`,
+      advertisedReceiveChunkLimitBytes,
       signal: sourceSignal.signal
     });
     // The public Join owner installs the target ref before the one-way source

@@ -457,6 +457,7 @@ export class ZLinkLocalNativeActorJoin {
         target,
         relocationId,
         completionOperationId: completionOperationKey,
+        advertisedReceiveChunkLimitBytes: control.receiveChunkLimitBytes,
         signal
       });
     } catch (error) {

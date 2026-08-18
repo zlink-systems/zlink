@@ -13,6 +13,8 @@ export interface ZLinkActorJoinRelocation {
     /** Private RelocationId; never the public Join OperationId. */
     readonly relocationId: string;
     readonly completionOperationId?: string;
+    /** Target's advertised relocation state chunk cap from the accepted admission reply. */
+    readonly advertisedReceiveChunkLimitBytes?: number;
     readonly signal?: AbortSignal;
   }): Promise<{
     readonly actorRef: ZLinkBackendActorRef;

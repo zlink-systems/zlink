@@ -62,6 +62,7 @@ import {
 import {
   ZLinkRelocationInFlightBudget,
   ZLinkRelocationPayloadAssembly,
+  effectiveActorJoinChunkLimitBytes,
   effectiveRelocationBudgetBytes,
   planRelocationChunks,
   relocationChunkAt
@@ -223,8 +224,10 @@ interface RelocationTargetRequirement {
 
 interface LocalHidden extends ServiceRelocationHiddenObject {
   readonly participant: ServiceRelocationParticipant;
-  readonly actor?: ZLinkActor;
-  readonly activation?: ZLinkSpotActivation;
+  // Mutable: recreateInstance() swaps in a fresh instance in place on an
+  // applyDelta retry (spec 15 §5) while this wrapper's identity is unchanged.
+  actor?: ZLinkActor;
+  activation?: ZLinkSpotActivation;
   initialized: boolean;
   readonly restoredTimers: ServiceRelocationTimer[];
   readonly replayResults: ZLinkActorHandoffResult[];
@@ -440,7 +443,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           spotObjectGeneration: spotGeneration
         },
         input.relocationId,
-        true
+        true,
+        input.advertisedReceiveChunkLimitBytes
       );
       resolveReady();
     } catch (error) {
@@ -1670,7 +1674,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       readonly spotObjectGeneration: bigint;
     },
     aggregateIdOverride?: string,
-    retainSourceForActorJoin = false
+    retainSourceForActorJoin = false,
+    /** Target's advertised relocation state chunk cap (Actor Join only; spec 15 §4.2). */
+    advertisedReceiveChunkLimitBytes?: number
   ): Promise<void> {
     const authority = await requireAuthority(
       this.requireLocationStore(),
@@ -1750,7 +1756,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         new Map([[measuredUnit.authorityKey, authority]]),
         signal,
         sessions,
-        preSealBaseMap(undefined, undefined, [[measuredUnit.authorityKey, actorPreSealState]])
+        preSealBaseMap(undefined, undefined, [[measuredUnit.authorityKey, actorPreSealState]]),
+        advertisedReceiveChunkLimitBytes
       );
     } catch (error) {
       outcome = 'failed';
@@ -2010,7 +2017,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     signal?: AbortSignal,
     sessions: readonly SourceActorSession[] = [],
     /** Pre-seal base snapshots keyed by participant authority key, when captured. */
-    preSealBases: ReadonlyMap<string, Uint8Array> = new Map()
+    preSealBases: ReadonlyMap<string, Uint8Array> = new Map(),
+    /** Target's advertised relocation state chunk cap (Actor Join only; spec 15 §4.2). */
+    advertisedReceiveChunkLimitBytes?: number
   ): Promise<void> {
     const localStatus = this.requireMeshNode(meshName).status();
     const controlDeadlineAtMs = signal === undefined
@@ -2042,7 +2051,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     // retransmission window end (spec 28 §4.2).
     const encoded = encodeServiceRelocationEnvelope(captured.envelope);
     const limits = this.relocationLimits();
-    const plan = planRelocationChunks(encoded, limits.relocationPayloadChunkLimitBytes);
+    // Actor Join threads the target's admission-time advertised cap in;
+    // other relocation paths have no such negotiation and fall back to the
+    // configured limit unchanged (spec 15 §4.2).
+    const chunkLimitBytes = effectiveActorJoinChunkLimitBytes(
+      limits.relocationPayloadChunkLimitBytes,
+      advertisedReceiveChunkLimitBytes
+    );
+    const plan = planRelocationChunks(encoded, chunkLimitBytes);
     const convergenceDeadlineAtMs = signal === undefined
       ? Date.now() + RELOCATION_OPERATION_RETENTION_MS
       : controlDeadlineAtMs;
@@ -2060,7 +2076,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     let sourceCommitted = false;
     try {
       if (baseBlob !== undefined) {
-        const basePlan = planRelocationChunks(baseBlob, limits.relocationPayloadChunkLimitBytes);
+        const basePlan = planRelocationChunks(baseBlob, chunkLimitBytes);
         await this.sendRelocationStateChunks(
           meshName,
           target,
@@ -3950,19 +3966,38 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       : encodeRelocationBaseDeltaState(basePayload, payload);
     // Base/delta payloads restore with restoreBase then applyDelta. An
     // applyDelta failure discards the partially applied instance and retries
-    // once from restoreBase before propagating an explicit failure, which
-    // the stage abort turns into command 53 relocationFailed — a partially
-    // applied instance is never published.
+    // once from restoreBase on a fresh instance before propagating an
+    // explicit failure, which the stage abort turns into command 53
+    // relocationFailed — a partially applied instance is never published.
     await restoreRelocationAdapterState(
       adapter as ZLinkRelocationStateAdapterLike<unknown>,
       instance,
       framedPayload,
       signal ?? new AbortController().signal,
-      // The port does not expose instance replacement, so the retry reruns
-      // restoreBase/applyDelta on the same staged instance rather than a
-      // brand-new object; restoreBase is expected to fully overwrite it.
-      () => Promise.resolve(instance)
+      async () => {
+        await this.recreateInstance(hidden, signal);
+        return (hidden.actor ?? hidden.activation?.spot) as never;
+      }
     );
+  }
+
+  /**
+   * Discards the currently staged Actor or Spot instance and installs a
+   * fresh one from the same factory path createHidden used, mutating
+   * `hidden` in place. Used by an applyDelta retry so the retried
+   * restoreBase/applyDelta never runs against a partially applied instance
+   * (spec 15 §5).
+   */
+  async recreateInstance(hidden: LocalHidden, signal?: AbortSignal): Promise<void> {
+    if (hidden.actor !== undefined) {
+      await this.requireActorManager().abortRelocationActor(hidden.actor.context.actorId);
+      const fresh = await this.createHidden(hidden.participant, signal);
+      hidden.actor = fresh.actor;
+    } else if (hidden.activation !== undefined) {
+      await this.requireSpotManager().abortRelocationSpot(hidden.activation);
+      const fresh = await this.createHidden(hidden.participant, signal);
+      hidden.activation = fresh.activation;
+    }
   }
 
   async restoreMemberships(

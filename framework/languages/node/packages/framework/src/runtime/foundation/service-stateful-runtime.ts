@@ -4476,7 +4476,10 @@ export class ServiceStatefulRuntime {
           spotId: spot?.spotId ?? null,
           spotGeneration: spot?.generation ?? 0n,
           membershipEpoch: tail.membershipEpoch ?? 1n
-        }
+        },
+        ...(tail.receiveChunkLimitBytes === undefined
+          ? {}
+          : { receiveChunkLimitBytes: tail.receiveChunkLimitBytes })
       } satisfies ActorJoinCompletionPayload;
     }
     return {

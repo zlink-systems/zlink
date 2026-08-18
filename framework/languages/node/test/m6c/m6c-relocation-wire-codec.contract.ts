@@ -21,7 +21,9 @@ import {
   decodeRelocationBaseBundle,
   encodeRelocationBaseBundle,
   encodeRelocationBaseDeltaState,
-  decodeRelocationBaseDeltaState
+  decodeRelocationBaseDeltaState,
+  restoreRelocationAdapterState,
+  type ZLinkRelocationStateAdapterLike
 } from '../../packages/framework/src/runtime/host/relocation-state-adapter';
 import { effectiveActorJoinChunkLimitBytes } from '../../packages/framework/src/runtime/host/relocation-direct-transfer';
 
@@ -426,4 +428,64 @@ test('effectiveActorJoinChunkLimitBytes takes the minimum of configured, adverti
   assert.equal(effectiveActorJoinChunkLimitBytes(1024 * 1024, undefined), 32 * 1024);
   assert.equal(effectiveActorJoinChunkLimitBytes(1024 * 1024, 4096), 4096);
   assert.equal(effectiveActorJoinChunkLimitBytes(1024, 4096), 1024);
+});
+
+test('restoreRelocationAdapterState retries once from restoreBase on a recreated instance ' +
+  'after applyDelta fails, and never reuses the discarded instance', async () => {
+  const events: string[] = [];
+  let nextInstanceId = 0;
+  const makeInstance = () => ({ id: nextInstanceId++ });
+  let applyDeltaCalls = 0;
+  const adapter: ZLinkRelocationStateAdapterLike<{ readonly id: number }> = {
+    async capture() { return Buffer.alloc(0); },
+    async restore() { /* not exercised for base/delta payloads */ },
+    async captureBase() { return Buffer.alloc(0); },
+    async captureDelta() { return Buffer.alloc(0); },
+    async restoreBase(instance) {
+      events.push(`restoreBase:${instance.id}`);
+    },
+    async applyDelta(instance) {
+      applyDeltaCalls += 1;
+      events.push(`applyDelta:${instance.id}`);
+      if (applyDeltaCalls === 1) throw new Error('applyDelta transient failure');
+    }
+  };
+  const frame = encodeRelocationBaseDeltaState(Buffer.from('base'), Buffer.from('delta'));
+  const initial = makeInstance();
+  const recreated: Array<{ readonly id: number }> = [];
+  const resolved = await restoreRelocationAdapterState(
+    adapter,
+    initial,
+    frame,
+    new AbortController().signal,
+    async () => {
+      const fresh = makeInstance();
+      recreated.push(fresh);
+      return fresh;
+    }
+  );
+  assert.equal(recreated.length, 1, 'recreateInstance must be called exactly once, not per attempt');
+  assert.equal(resolved, recreated[0], 'the resolved instance must be the freshly created one, not the discarded original');
+  assert.deepEqual(events, [
+    `restoreBase:${initial.id}`,
+    `applyDelta:${initial.id}`,
+    `restoreBase:${recreated[0]!.id}`,
+    `applyDelta:${recreated[0]!.id}`
+  ]);
+});
+
+test('restoreRelocationAdapterState propagates the applyDelta failure without a recreateInstance callback', async () => {
+  const adapter: ZLinkRelocationStateAdapterLike<{ readonly id: number }> = {
+    async capture() { return Buffer.alloc(0); },
+    async restore() {},
+    async captureBase() { return Buffer.alloc(0); },
+    async captureDelta() { return Buffer.alloc(0); },
+    async restoreBase() {},
+    async applyDelta() { throw new Error('applyDelta permanent failure'); }
+  };
+  const frame = encodeRelocationBaseDeltaState(Buffer.from('base'), Buffer.from('delta'));
+  await assert.rejects(
+    () => restoreRelocationAdapterState(adapter, { id: 0 }, frame, new AbortController().signal),
+    /applyDelta permanent failure/
+  );
 });

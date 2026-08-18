@@ -209,6 +209,14 @@ export interface ServiceRelocationTargetObjectPort<
     /** Pre-seal base snapshot for this participant, when the manifest declared one. */
     basePayload?: Uint8Array
   ): Promise<void>;
+  /**
+   * Discards the instance currently staged in `hidden` and installs a fresh
+   * one in its place (mutating `hidden`; its identity/map key is unchanged).
+   * Used when an applyDelta retry must not reuse a partially applied
+   * instance (spec 15 §5). Optional — a port without this hook falls back to
+   * rerunning restoreBase/applyDelta on the same staged instance.
+   */
+  recreateInstance?(hidden: THidden, signal?: AbortSignal): Promise<void>;
   restoreMemberships(
     hidden: ReadonlyMap<string, THidden>,
     memberships: readonly ServiceRelocationMembership[],
