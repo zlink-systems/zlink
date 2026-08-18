@@ -137,8 +137,7 @@ internal sealed record ZLinkSpotRetireReservation(
 
 internal sealed record ZLinkPreparedSpotRetireStaging(
     ZLinkPreparedRelocation Root,
-    IReadOnlyList<ZLinkAggregateRelocationParticipant> Participants,
-    ReadOnlyMemory<byte> SpotBaseState = default)
+    IReadOnlyList<ZLinkAggregateRelocationParticipant> Participants)
 {
     internal ZLinkRelocationStored Relocation => Root.Relocation;
 
@@ -320,22 +319,8 @@ internal sealed class ZLinkSpotRetireScheduler(
             $"relocation_reserved spot={activation.SpotId} target={reservation.TargetDescriptor.Rid}");
 
         ZLinkSpotRelocationSeal admittedSeal;
-        byte[] spotBaseState;
         try
         {
-            //  Spec 15 §5: CaptureBase runs pre-seal, immediately before
-            //  the seal call, once the exact relocation identity
-            //  (SpotId/StableType/ObjectGeneration — already fixed by the
-            //  reservation above) is known — matching the actor path's
-            //  placement rather than capturing base ahead of an
-            //  ApplicationSignaled wait of arbitrary length, which would
-            //  needlessly widen the base-to-seal turn-boundary gap. Empty
-            //  for non-base/delta-capable adapters (legacy path
-            //  unaffected). Inside the try so a capture failure aborts the
-            //  reservation via the same catch below, instead of leaking it.
-            spotBaseState = await activation
-                .CaptureSpotInstanceBaseAsync(cancellationToken)
-                .ConfigureAwait(false);
             admittedSeal = activation.RelocationReadiness
                            == ZLinkSpotRelocationReadinessMode.ApplicationSignaled
                 ? await activation
@@ -559,8 +544,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                     .ConfigureAwait(false);
                 staging = new ZLinkPreparedSpotRetireStaging(
                     stagingRoot,
-                    participants,
-                    spotBaseState);
+                    participants);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"relocation_stage_begin spot={activation.SpotId} aggregate={aggregateId:N}");
                 published = new ZLinkAggregateRelocationPublished(

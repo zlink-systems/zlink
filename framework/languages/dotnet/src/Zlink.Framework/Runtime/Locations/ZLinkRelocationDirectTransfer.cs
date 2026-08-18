@@ -70,38 +70,6 @@ internal sealed class ZLinkRelocationTransferPayload
             checked((int)chunkBytes));
     }
 
-    /// <summary>
-    /// Base/delta overload (spec 15 §5): wraps an adapter-captured base
-    /// snapshot directly, bypassing the relocation envelope framing that
-    /// wraps the ordinary logical stream. The chunk plan uses the same wire
-    /// bounds as the primary payload.
-    /// </summary>
-    internal static ZLinkRelocationTransferPayload CreateRaw(
-        byte[] bytes,
-        long effectiveChunkLimit)
-    {
-        ArgumentNullException.ThrowIfNull(bytes);
-        if (effectiveChunkLimit <= 0)
-            throw new ArgumentOutOfRangeException(nameof(effectiveChunkLimit));
-        if (bytes.Length == 0)
-            throw new InvalidOperationException(
-                "The relocation base payload is empty.");
-        var chunkBytes = Math.Min(
-            effectiveChunkLimit,
-            ZLinkServiceWireCodec.RelocationChunkBytesBound);
-        var minimumChunkBytes =
-            ((long)bytes.Length
-             + ZLinkServiceWireCodec.RelocationChunkCountBound - 1)
-            / ZLinkServiceWireCodec.RelocationChunkCountBound;
-        chunkBytes = Math.Max(chunkBytes, minimumChunkBytes);
-        if (chunkBytes > ZLinkServiceWireCodec.RelocationChunkBytesBound)
-            throw new InvalidOperationException(
-                "The relocation base payload exceeds the wire chunk bounds.");
-        return new ZLinkRelocationTransferPayload(
-            bytes,
-            checked((int)chunkBytes));
-    }
-
     internal static ZLinkRelocationEnvelope DecodeEnvelope(
         ReadOnlyMemory<byte> encoded)
     {
@@ -261,61 +229,6 @@ internal sealed class ZLinkRelocationChunkAssembler
                 throw new ZLinkRelocationDataLostException(
                     "The relocation payload checksum does not match its manifest.");
             return ZLinkRelocationTransferPayload.DecodeEnvelope(_buffer);
-        }
-    }
-}
-
-/// <summary>
-/// Target-side buffer for relocationState (command 52) base-stage chunks
-/// received ahead of the relocationPrepare that declares their checksum
-/// (spec 15 §5, spec 28 §4.2). Unlike <see cref="ZLinkRelocationChunkAssembler"/>
-/// no manifest exists yet when chunks start arriving, so this buffer grows
-/// as ordinal-ordered chunks arrive and is only checksum-verified once the
-/// matching Prepare's baseChecksumCrc32c is known. Chunks must arrive in
-/// ordinal order on the ordered connection; an identical re-delivery of an
-/// already-buffered ordinal is idempotent, anything else invalidates the
-/// buffer.
-/// </summary>
-internal sealed class ZLinkRelocationBaseChunkBuffer
-{
-    private readonly object _gate = new();
-    private readonly List<byte[]> _chunks = [];
-    private long _length;
-
-    internal ZLinkRelocationBaseChunkBuffer(DateTimeOffset createdAt)
-    {
-        CreatedAt = createdAt;
-    }
-
-    internal DateTimeOffset CreatedAt { get; }
-
-    /// <summary>Appends one chunk. Returns false on a conflicting delivery.</summary>
-    internal bool Append(uint ordinal, ReadOnlySpan<byte> data)
-    {
-        lock (_gate)
-        {
-            if (ordinal < _chunks.Count)
-                return data.SequenceEqual(_chunks[checked((int)ordinal)]);
-            if (ordinal != _chunks.Count || data.Length == 0)
-                return false;
-            _chunks.Add(data.ToArray());
-            _length += data.Length;
-            return true;
-        }
-    }
-
-    internal byte[] Assemble()
-    {
-        lock (_gate)
-        {
-            var result = new byte[_length];
-            var offset = 0;
-            foreach (var chunk in _chunks)
-            {
-                chunk.CopyTo(result.AsSpan(offset));
-                offset += chunk.Length;
-            }
-            return result;
         }
     }
 }

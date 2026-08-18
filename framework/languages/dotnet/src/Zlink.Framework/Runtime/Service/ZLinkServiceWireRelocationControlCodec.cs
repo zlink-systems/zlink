@@ -37,10 +37,19 @@ internal static partial class ZLinkServiceWireCodec
         ulong PayloadTotalLength,
         uint PayloadChunkCount,
         uint PayloadChecksumCrc32c,
+        // TODO(schema-atomic): the base/delta capture capability that
+        // produced a non-zero BaseChecksumCrc32c is removed from the
+        // product; every prepare now encodes 0 here. The wire field itself
+        // is removed in a later atomic schema commit — encode/decode and
+        // golden vectors stay intact until then.
         uint BaseChecksumCrc32c,
         ulong ApplicationVersion);
 
     //  payloadStage wire enum for relocationState (service-wire-v1.schema.json).
+    // TODO(schema-atomic): PayloadStageBase is never produced now that the
+    // base/delta capture capability is removed — every relocationState
+    // chunk carries PayloadStageFinal. The wire enum value itself is
+    // removed in a later atomic schema commit.
     internal const byte PayloadStageBase = 0;
     internal const byte PayloadStageFinal = 1;
 

@@ -315,13 +315,11 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
             ZLinkRelocationTransferPayload payload,
             TimeSpan timeout,
-            CancellationToken cancellationToken,
-            ZLinkRelocationTransferPayload? basePayload = null)
+            CancellationToken cancellationToken)
     {
         EnsureStarted();
         return _node.PrepareCanonicalRelocationAsync(
-            targetNodeRid, prepare, payload, timeout, cancellationToken,
-            basePayload);
+            targetNodeRid, prepare, payload, timeout, cancellationToken);
     }
 
     public ValueTask SendCanonicalRelocationDataAsync(

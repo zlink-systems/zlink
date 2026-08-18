@@ -92,10 +92,7 @@ internal sealed partial class ZLinkActorSessionManager(
         ulong authorityOwnerGeneration,
         ZLinkActorClaimMode claimMode,
         bool publishActorRef,
-        CancellationToken cancellationToken = default,
-        //  Base/delta overload (spec 15 §5): the checksum-verified base
-        //  snapshot buffered ahead of Prepare, when the adapter is capable.
-        ReadOnlyMemory<byte> basePayload = default)
+        CancellationToken cancellationToken = default)
     {
         var state = _actorSessions.GetOrCreate(
             ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
@@ -109,8 +106,7 @@ internal sealed partial class ZLinkActorSessionManager(
                 authorityOwnerGeneration,
                 claimMode,
                 publishActorRef,
-                cancellationToken,
-                basePayload)
+                cancellationToken)
             .ConfigureAwait(false);
     }
 

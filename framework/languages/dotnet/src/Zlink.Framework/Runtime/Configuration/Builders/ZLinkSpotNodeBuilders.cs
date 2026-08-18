@@ -492,16 +492,8 @@ internal sealed class ZLinkActorFactoryBuilder<TActor>
     public IZLinkActorFactoryBuilder<TActor> PreserveStateWith<TAdapter>()
         where TAdapter : class, IZLinkActorRelocationAdapter<TActor>
     {
-        //  Base/delta capability (spec 15 §5) is detected once here, from the
-        //  compile-time adapter type, rather than by reflecting on every
-        //  relocation attempt.
         IZLinkRelocationAdapterInvoker invoker =
-            typeof(TAdapter).IsAssignableTo(
-                typeof(IZLinkActorBaseDeltaRelocationAdapter<TActor>))
-                ? new ZLinkActorBaseDeltaRelocationAdapterInvoker<TActor>(
-                    typeof(TAdapter))
-                : new ZLinkActorRelocationAdapterInvoker<TActor>(
-                    typeof(TAdapter));
+            new ZLinkActorRelocationAdapterInvoker<TActor>(typeof(TAdapter));
         SelectRelocation(2, typeof(TAdapter), invoker);
         return this;
     }
@@ -561,16 +553,8 @@ internal sealed class ZLinkUserSpotFactoryBuilder<TSpot>
     public IZLinkUserSpotFactoryBuilder<TSpot> PreserveStateWith<TAdapter>()
         where TAdapter : class, IZLinkSpotRelocationAdapter<TSpot>
     {
-        //  Base/delta capability (spec 15 §5) is detected once here, from the
-        //  compile-time adapter type, rather than by reflecting on every
-        //  relocation attempt.
         IZLinkRelocationAdapterInvoker invoker =
-            typeof(TAdapter).IsAssignableTo(
-                typeof(IZLinkSpotBaseDeltaRelocationAdapter<TSpot>))
-                ? new ZLinkSpotBaseDeltaRelocationAdapterInvoker<TSpot>(
-                    typeof(TAdapter))
-                : new ZLinkSpotRelocationAdapterInvoker<TSpot>(
-                    typeof(TAdapter));
+            new ZLinkSpotRelocationAdapterInvoker<TSpot>(typeof(TAdapter));
         SelectRelocation(2, typeof(TAdapter), invoker);
         return this;
     }
@@ -610,16 +594,8 @@ internal sealed class ZLinkInstanceSpotFactoryBuilder<TSpot>
     public IZLinkInstanceSpotFactoryBuilder<TSpot> PreserveStateWith<TAdapter>()
         where TAdapter : class, IZLinkSpotRelocationAdapter<TSpot>
     {
-        //  Base/delta capability (spec 15 §5) is detected once here, from the
-        //  compile-time adapter type, rather than by reflecting on every
-        //  relocation attempt.
         IZLinkRelocationAdapterInvoker invoker =
-            typeof(TAdapter).IsAssignableTo(
-                typeof(IZLinkSpotBaseDeltaRelocationAdapter<TSpot>))
-                ? new ZLinkSpotBaseDeltaRelocationAdapterInvoker<TSpot>(
-                    typeof(TAdapter))
-                : new ZLinkSpotRelocationAdapterInvoker<TSpot>(
-                    typeof(TAdapter));
+            new ZLinkSpotRelocationAdapterInvoker<TSpot>(typeof(TAdapter));
         SelectRelocation(2, typeof(TAdapter), invoker);
         return this;
     }

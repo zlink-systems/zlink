@@ -82,16 +82,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     //  ordered connection always find their assembly.
     private readonly ConcurrentDictionary<PendingRelocationPrepareKey,
         ZLinkRelocationChunkAssembler> _inboundRelocationAssemblies = new();
-    //  Base-stage relocationState chunks buffered ahead of their Prepare
-    //  (spec 15 §5, spec 28 §4.2) — keyed by the same exact identity as
-    //  _inboundRelocationAssemblies, but registered only when chunks arrive
-    //  since no manifest declares them in advance. Resolved and removed
-    //  exactly once when the matching Prepare arrives; TargetStageTtl-style
-    //  sweep evicts any that never see a Prepare.
-    private readonly ConcurrentDictionary<PendingRelocationPrepareKey,
-        ZLinkRelocationBaseChunkBuffer> _pendingRelocationBaseChunks = new();
-    private static readonly TimeSpan RelocationBaseChunkTtl =
-        TimeSpan.FromMinutes(5);
     //  Per-peer and node-wide in-flight relocation chunk budgets
     //  (spec 28 §5.3). Lazily built from the configured budget values.
     private readonly ConcurrentDictionary<RoutingId,
@@ -780,8 +770,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
             ZLinkRelocationTransferPayload payload,
             TimeSpan timeout,
-            CancellationToken cancellationToken,
-            ZLinkRelocationTransferPayload? basePayload = null)
+            CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(payload);
         if (prepare.PayloadTotalLength != (ulong)payload.TotalLength
@@ -790,11 +779,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             throw new ArgumentException(
                 "Command 40 manifest does not match the transfer payload.",
                 nameof(payload));
-        if (basePayload is not null
-            && prepare.BaseChecksumCrc32c != basePayload.ChecksumCrc32c)
-            throw new ArgumentException(
-                "Command 40 base checksum does not match the base payload.",
-                nameof(basePayload));
         Peer? peer;
         lock (_gate) _peersByRid.TryGetValue(targetNodeRid, out peer);
         if (peer is null || !peer.Admitted
@@ -837,17 +821,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             : TimeSpan.FromSeconds(30));
         try
         {
-            //  Base/delta (spec 15 §5): the base snapshot chunks are sent
-            //  ahead of command 40 so the target can buffer and verify them
-            //  against the manifest's baseChecksumCrc32c once Prepare arrives.
-            if (basePayload is not null)
-                await SendRelocationStateChunksAsync(
-                        peer,
-                        prepare,
-                        basePayload,
-                        ZLinkServiceWireCodec.PayloadStageBase,
-                        deadline.Token)
-                    .ConfigureAwait(false);
             await SendCanonicalRelocationRecordAsync(
                     peer,
                     ZLinkServiceWireCodec.EncodeRelocationPrepare(prepare),
@@ -860,7 +833,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     peer,
                     prepare,
                     payload,
-                    ZLinkServiceWireCodec.PayloadStageFinal,
                     deadline.Token)
                 .ConfigureAwait(false);
             return await pending.Ready.Task.WaitAsync(deadline.Token)
@@ -920,11 +892,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             .ConfigureAwait(false);
     }
 
+    // TODO(schema-atomic): payloadStage is always PayloadStageFinal now
+    // that the base/delta capture capability is removed — the parameter is
+    // inlined below. The wire enum's base value is removed in a later
+    // atomic schema commit.
     private async ValueTask SendRelocationStateChunksAsync(
         Peer peer,
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         ZLinkRelocationTransferPayload payload,
-        byte payloadStage,
         CancellationToken cancellationToken)
     {
         var peerBudget = _relocationPeerBudgets.GetOrAdd(
@@ -943,7 +918,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     prepare.Coordinator,
                     1,
                     prepare.Object,
-                    payloadStage,
+                    ZLinkServiceWireCodec.PayloadStageFinal,
                     checked((uint)ordinal),
                     payload.Chunk(ordinal)));
             //  Phase 1 budget accounting: the encoded frame bytes are charged
@@ -5429,18 +5404,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             await assembler.Completed.WaitAsync(assemblyDeadline.Token)
                 .ConfigureAwait(false);
             var envelope = assembler.VerifyAndDecode();
-            //  Base/delta (spec 15 §5): resolve any base chunks buffered
-            //  ahead of this Prepare and verify them against its manifest.
-            //  A missing/unexpected buffer or checksum mismatch throws here,
-            //  which the catch below turns into an explicit relocationFailed
-            //  — no partial restore.
-            var basePayload = ResolvePendingRelocationBase(
-                sourceNodeRid, prepare);
             var ready = await target.PrepareAsync(prepare, envelope,
                     sourceNodeRid,
                     lease,
-                    _stop?.Token ?? CancellationToken.None,
-                    basePayload)
+                    _stop?.Token ?? CancellationToken.None)
                 .ConfigureAwait(false);
             try
             {
@@ -5629,27 +5596,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             state.RelocationId,
             state.TargetAttemptGeneration,
             state.Coordinator);
-        if (state.PayloadStage == ZLinkServiceWireCodec.PayloadStageBase)
-        {
-            var arrivedAt = TimeProvider.System.GetUtcNow();
-            SweepExpiredRelocationBaseChunks(arrivedAt);
-            //  No manifest exists yet for a base chunk — it is buffered
-            //  under its exact identity and only checksum-verified once the
-            //  matching Prepare declares baseChecksumCrc32c (spec 15 §5).
-            var buffer = _pendingRelocationBaseChunks.GetOrAdd(
-                key,
-                static (_, now) => new ZLinkRelocationBaseChunkBuffer(now),
-                arrivedAt);
-            if (!buffer.Append(state.ChunkOrdinal, state.ChunkData.Span))
-            {
-                _pendingRelocationBaseChunks.TryRemove(
-                    new KeyValuePair<PendingRelocationPrepareKey,
-                        ZLinkRelocationBaseChunkBuffer>(key, buffer));
-                Publish(MeshMonitorEventKind.ProtocolError,
-                    peerRid: sourceNodeRid);
-            }
-            return;
-        }
         if (!_inboundRelocationAssemblies.TryGetValue(key, out var assembler))
         {
             //  Spec 28 §4.3: a chunk whose exact identity has no in-progress
@@ -5673,55 +5619,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             assembler.Fail(exception);
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
         }
-    }
-
-    /// <summary>
-    /// Resolves and removes the base chunks buffered ahead of this Prepare,
-    /// exactly once (spec 15 §5). {@code BaseChecksumCrc32c == 0} means the
-    /// manifest expects no base — an ordinary full relocation. Throws
-    /// <see cref="ZLinkRelocationDataLostException"/> on a missing,
-    /// unexpected, or checksum-mismatched buffer.
-    /// </summary>
-    private ReadOnlyMemory<byte> ResolvePendingRelocationBase(
-        RoutingId sourceNodeRid,
-        ZLinkServiceWireCodec.RelocationPrepareRecord prepare)
-    {
-        var key = new PendingRelocationPrepareKey(
-            sourceNodeRid,
-            prepare.RelocationId,
-            prepare.TargetAttemptGeneration,
-            prepare.Coordinator);
-        _pendingRelocationBaseChunks.TryRemove(key, out var buffer);
-        if (prepare.BaseChecksumCrc32c == 0)
-        {
-            if (buffer is not null)
-                throw new ZLinkRelocationDataLostException(
-                    "A relocation base payload was not expected by the manifest.");
-            return ReadOnlyMemory<byte>.Empty;
-        }
-        if (buffer is null)
-            throw new ZLinkRelocationDataLostException(
-                "A relocation base payload was not received before its manifest.");
-        var assembled = buffer.Assemble();
-        if (ZLinkCrc32C.Compute(assembled) != prepare.BaseChecksumCrc32c)
-            throw new ZLinkRelocationDataLostException(
-                "A relocation base payload checksum differs from the manifest.");
-        return assembled;
-    }
-
-    /// <summary>
-    /// Evicts base-stage relocation chunk buffers whose Prepare never
-    /// arrived (spec 15 §5). Exposed with an explicit <paramref name="now"/>
-    /// so tests can drive expiry without a wall-clock sleep.
-    /// </summary>
-    internal void SweepExpiredRelocationBaseChunks(DateTimeOffset now)
-    {
-        var cutoff = now - RelocationBaseChunkTtl;
-        foreach (var pair in _pendingRelocationBaseChunks)
-            if (pair.Value.CreatedAt <= cutoff)
-                _pendingRelocationBaseChunks.TryRemove(
-                    new KeyValuePair<PendingRelocationPrepareKey,
-                        ZLinkRelocationBaseChunkBuffer>(pair.Key, pair.Value));
     }
 
     private void ProcessRelocationCutover(
@@ -7563,16 +7460,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         DrainSocketMonitorEvents();
         DrainTransportDisconnects(now);
-        //  Bounded reclamation for a base-chunk buffer whose source
-        //  crashed after sending base chunks but before Prepare arrived:
-        //  the on-arrival sweep in the relocation-state chunk handler only
-        //  fires when a NEW base-stage chunk lands, so an orphan with no
-        //  further base traffic would otherwise sit until an unrelated
-        //  relocation happened to sweep it. This mesh node's own poll-loop
-        //  housekeeping tick (ReceiveLoop, ~PollInterval) already runs
-        //  unconditionally regardless of message traffic, so it bounds the
-        //  buffer's lifetime independently of any relocation activity.
-        SweepExpiredRelocationBaseChunks(TimeProvider.System.GetUtcNow());
         Peer[] peers;
         lock (_gate)
             peers = _peersByIntent.Values.ToArray();

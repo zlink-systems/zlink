@@ -25,8 +25,7 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
             ZLinkRelocationEnvelope envelope,
             RoutingId authenticatedSourceNodeRid,
             ZLinkCanonicalRelocationPreparationLease lease,
-            CancellationToken cancellationToken,
-            ReadOnlyMemory<byte> basePayload = default)
+            CancellationToken cancellationToken)
     {
         ValidateAttempt(prepare, authenticatedSourceNodeRid);
         await WaitForTargetReadinessAsync(cancellationToken)
@@ -44,8 +43,7 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
                         authenticatedSourceNodeRid,
                         checked(prepare.Object
                             .ExpectedAuthorityOwnerGeneration + 1),
-                        cancellationToken,
-                        basePayload)
+                        cancellationToken)
                     .ConfigureAwait(false);
                 break;
             case ZLinkPlacementObjectKind.UserSpot:
@@ -57,8 +55,7 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
                         prepare,
                         envelope,
                         authenticatedSourceNodeRid,
-                        cancellationToken,
-                        basePayload)
+                        cancellationToken)
                     .ConfigureAwait(false);
                 break;
             default:
