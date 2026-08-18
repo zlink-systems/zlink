@@ -3963,6 +3963,923 @@ void test_application_user_spot_aggregate_remote_production_path (
     target.stop ();
 }
 
+/* --------------------------------------------------------------------
+ * Base/delta relocation test matrix (spec: base sent pre-seal,
+ * restore_base -> apply_delta on the target, exactly-once retry on
+ * apply_delta failure, and byte-identical fallback for non-capable
+ * adapters). Delta objects intentionally split their captured state into
+ * a base component and a delta component that must both be applied to
+ * reconstruct the final value, so a test that only checks the final
+ * value cannot pass if either stage is silently skipped.
+ * -------------------------------------------------------------------- */
+
+class delta_actor_t final : public zlink::framework::actor_t
+{
+  public:
+    explicit delta_actor_t (zlink::framework::actor_context_t context) :
+        _context (std::move (context))
+    {
+    }
+    zlink::framework::actor_context_t &context () noexcept override
+    {
+        return _context;
+    }
+    const zlink::framework::actor_context_t &context () const noexcept override
+    {
+        return _context;
+    }
+    int value = -1;
+
+  private:
+    zlink::framework::actor_context_t _context;
+};
+
+class delta_actor_factory_t final :
+    public zlink::framework::actor_factory_t<delta_actor_t>
+{
+  public:
+    zlink::framework::task_t<std::shared_ptr<delta_actor_t>>
+    create (zlink::framework::actor_context_t context, std::stop_token) override
+    {
+        co_return std::make_shared<delta_actor_t> (std::move (context));
+    }
+};
+
+class delta_actor_adapter_t final :
+    public zlink::framework::actor_relocation_delta_adapter_t<delta_actor_t>
+{
+  public:
+    zlink::framework::task_t<std::vector<std::byte>>
+    capture (delta_actor_t &actor, std::stop_token) override
+    {
+        co_return std::vector<std::byte>{static_cast<std::byte> (actor.value)};
+    }
+    zlink::framework::task_t<void>
+    restore (delta_actor_t &actor, std::vector<std::byte> payload, std::stop_token) override
+    {
+        actor.value = payload.empty () ? -1 : std::to_integer<int> (payload.front ());
+        co_return;
+    }
+    zlink::framework::task_t<std::vector<std::byte>>
+    capture_base (delta_actor_t &, std::stop_token) override
+    {
+        capture_base_count.fetch_add (1, std::memory_order_acq_rel);
+        co_return std::vector<std::byte>{std::byte{30}};
+    }
+    zlink::framework::task_t<std::vector<std::byte>>
+    capture_delta (delta_actor_t &, std::stop_token) override
+    {
+        capture_delta_count.fetch_add (1, std::memory_order_acq_rel);
+        co_return std::vector<std::byte>{std::byte{7}};
+    }
+    zlink::framework::task_t<void>
+    restore_base (delta_actor_t &actor, std::vector<std::byte> payload,
+                  std::stop_token) override
+    {
+        restore_base_count.fetch_add (1, std::memory_order_acq_rel);
+        actor.value = payload.empty () ? -1 : std::to_integer<int> (payload.front ());
+        co_return;
+    }
+    zlink::framework::task_t<void>
+    apply_delta (delta_actor_t &actor, std::vector<std::byte> payload,
+                 std::stop_token) override
+    {
+        apply_delta_count.fetch_add (1, std::memory_order_acq_rel);
+        if (apply_delta_fail_remaining.load (std::memory_order_acquire) > 0) {
+            apply_delta_fail_remaining.fetch_sub (1, std::memory_order_acq_rel);
+            throw std::runtime_error ("injected apply_delta failure");
+        }
+        actor.value += payload.empty () ? 0 : std::to_integer<int> (payload.front ());
+        restored_value.store (actor.value, std::memory_order_release);
+        co_return;
+    }
+
+    static inline std::atomic_int capture_base_count{0};
+    static inline std::atomic_int capture_delta_count{0};
+    static inline std::atomic_int restore_base_count{0};
+    static inline std::atomic_int apply_delta_count{0};
+    static inline std::atomic_int apply_delta_fail_remaining{0};
+    static inline std::atomic_int restored_value{-1};
+};
+
+class delta_spot_t final : public zlink::framework::spot_t<delta_actor_t>
+{
+  public:
+    explicit delta_spot_t (zlink::framework::spot_context_t context) :
+        _context (std::move (context))
+    {
+    }
+    zlink::framework::spot_context_t &context () noexcept override
+    {
+        return _context;
+    }
+    const zlink::framework::spot_context_t &context () const noexcept override
+    {
+        return _context;
+    }
+    struct probe_message_t
+    {
+    };
+    zlink::framework::task_t<void> lifecycle_probe (
+      delta_actor_t &, zlink::framework::message_context_t &, const probe_message_t &)
+    {
+        co_return;
+    }
+    void configure () override
+    {
+        _context.handlers ().add_actor_send<&delta_spot_t::lifecycle_probe> (
+          "delta-lifecycle-probe");
+    }
+    zlink::framework::task_t<zlink::framework::spot_create_response_t>
+    on_create (const zlink::framework::message_t &) override
+    {
+        co_return zlink::framework::spot_create_response_t::accept ();
+    }
+    zlink::framework::task_t<void> on_initialize () override { co_return; }
+    zlink::framework::task_t<zlink::framework::spot_actor_join_result_t>
+    on_actor_join (std::string_view, const zlink::framework::message_t &) override
+    {
+        co_return zlink::framework::spot_actor_join_result_t::accept ();
+    }
+    zlink::framework::task_t<void>
+    on_actor_joined (delta_actor_t &) override
+    {
+        co_return;
+    }
+    zlink::framework::task_t<void>
+    on_leave_actor (delta_actor_t &) override
+    {
+        co_return;
+    }
+    int value = -1;
+
+  private:
+    zlink::framework::spot_context_t _context;
+};
+
+class delta_spot_adapter_t final :
+    public zlink::framework::spot_relocation_delta_adapter_t<delta_spot_t>
+{
+  public:
+    zlink::framework::task_t<std::vector<std::byte>>
+    capture (delta_spot_t &spot, std::stop_token) override
+    {
+        co_return std::vector<std::byte>{static_cast<std::byte> (spot.value)};
+    }
+    zlink::framework::task_t<void>
+    restore (delta_spot_t &spot, std::vector<std::byte> payload, std::stop_token) override
+    {
+        spot.value = payload.empty () ? -1 : std::to_integer<int> (payload.front ());
+        co_return;
+    }
+    zlink::framework::task_t<std::vector<std::byte>>
+    capture_base (delta_spot_t &, std::stop_token) override
+    {
+        capture_base_count.fetch_add (1, std::memory_order_acq_rel);
+        co_return std::vector<std::byte>{std::byte{100}};
+    }
+    zlink::framework::task_t<std::vector<std::byte>>
+    capture_delta (delta_spot_t &, std::stop_token) override
+    {
+        capture_delta_count.fetch_add (1, std::memory_order_acq_rel);
+        co_return std::vector<std::byte>{std::byte{9}};
+    }
+    zlink::framework::task_t<void>
+    restore_base (delta_spot_t &spot, std::vector<std::byte> payload, std::stop_token) override
+    {
+        restore_base_count.fetch_add (1, std::memory_order_acq_rel);
+        spot.value = payload.empty () ? -1 : std::to_integer<int> (payload.front ());
+        co_return;
+    }
+    zlink::framework::task_t<void>
+    apply_delta (delta_spot_t &spot, std::vector<std::byte> payload, std::stop_token) override
+    {
+        apply_delta_count.fetch_add (1, std::memory_order_acq_rel);
+        if (apply_delta_fail_remaining.load (std::memory_order_acquire) > 0) {
+            apply_delta_fail_remaining.fetch_sub (1, std::memory_order_acq_rel);
+            throw std::runtime_error ("injected apply_delta failure");
+        }
+        spot.value += payload.empty () ? 0 : std::to_integer<int> (payload.front ());
+        restored_value.store (spot.value, std::memory_order_release);
+        co_return;
+    }
+
+    static inline std::atomic_int apply_delta_fail_remaining{0};
+    static inline std::atomic_int capture_base_count{0};
+    static inline std::atomic_int capture_delta_count{0};
+    static inline std::atomic_int restore_base_count{0};
+    static inline std::atomic_int apply_delta_count{0};
+    static inline std::atomic_int restored_value{-1};
+};
+
+/* (a) happy path + TASK2: SpotWide aggregate relocation of a delta-capable
+ * Spot and its member Actor through the direct-transfer path. Asserts the
+ * base stage is captured pre-seal and consumed via restore_base ->
+ * apply_delta on the target (not the legacy whole-state path), the
+ * reconstructed value is correct, and the target-side aggregate CAS
+ * commits exactly once. */
+void test_delta_aggregate_direct_transfer_path (test_context_t &test)
+{
+    using namespace std::chrono_literals;
+    namespace detail = zlink::framework::detail;
+    namespace framework = zlink::framework;
+
+    delta_actor_adapter_t::capture_base_count.store (0);
+    delta_actor_adapter_t::capture_delta_count.store (0);
+    delta_actor_adapter_t::restore_base_count.store (0);
+    delta_actor_adapter_t::apply_delta_count.store (0);
+    delta_actor_adapter_t::apply_delta_fail_remaining.store (0);
+    delta_actor_adapter_t::restored_value.store (-1);
+    delta_spot_adapter_t::capture_base_count.store (0);
+    delta_spot_adapter_t::capture_delta_count.store (0);
+    delta_spot_adapter_t::restore_base_count.store (0);
+    delta_spot_adapter_t::apply_delta_count.store (0);
+    delta_spot_adapter_t::restored_value.store (-1);
+
+    const auto core_context = std::make_shared<zlink::context_t> ();
+    const auto make_state = [core_context] (const std::string &rid) {
+        auto state = std::make_shared<detail::mesh_node_builder_state_t> (
+          "delta-aggregate-mesh");
+        state->core_context = core_context;
+        state->listen_endpoint = "tcp://127.0.0.1:0";
+        state->routing_id = zlink::routing_id_t::from (rid);
+        state->spot_builder.add_spot_factory<delta_spot_t> (
+          "delta.aggregate.spot",
+          [] (framework::spot_context_t context) {
+              return std::make_shared<delta_spot_t> (std::move (context));
+          },
+          [] (auto &factory) {
+              factory.set_execution_mode (
+                framework::user_spot_execution_mode_t::spot_wide);
+              factory.set_relocation_readiness (
+                framework::spot_relocation_readiness_mode_t::any_turn_boundary);
+              factory.template preserve_state_with<delta_spot_adapter_t> ();
+          });
+        state->spot_builder.add_actor_factory<delta_actor_t> (
+          "delta.aggregate.actor",
+          std::make_shared<delta_actor_factory_t> (),
+          [] (auto &factory) {
+              factory.template preserve_state_with<delta_actor_adapter_t> ();
+          });
+        return state;
+    };
+    auto roots = std::make_shared<memory_relocation_repository_t> ();
+    auto authority = std::make_shared<memory_authority_store_t> ();
+    auto aggregates =
+      std::make_shared<memory_aggregate_authority_t> (authority);
+    const auto source_state = make_state ("delta-aggregate-source");
+    const auto target_state = make_state ("delta-aggregate-target");
+    detail::mesh_node_runtime_t source (source_state);
+    detail::mesh_node_runtime_t target (target_state);
+    source.configure_relocation_runtime (authority, roots, aggregates);
+    target.configure_relocation_runtime (authority, roots, aggregates);
+    source.configure_session_route_owner ([] {
+        return std::optional<framework::location_owner_token_t>{
+          {"delta-source-owner", 1}};
+    });
+    target.configure_session_route_owner ([] {
+        return std::optional<framework::location_owner_token_t>{
+          {"delta-target-owner", 9}};
+    });
+    source.start ();
+    target.start ();
+    const auto configure_materialization = [authority] (
+      detail::mesh_node_runtime_t &node,
+      const std::shared_ptr<detail::spot_node_builder_state_t> &spot_state) {
+        detail::spot_node_runtime_t (spot_state)
+          .bind_relocation_authority (authority);
+        auto &objects = node.native_node ().objects ();
+        objects.configure_relocation_state (
+          [spot_state] (const object_ref_t &object,
+                        const std::string &stable_type,
+                        std::stop_token cancellation) {
+              return detail::spot_node_runtime_t (spot_state)
+                .capture_spot_relocation_state (
+                  object, stable_type, cancellation);
+          },
+          [spot_state] (const frozen_object_state_t &frozen,
+                        const object_ref_t &object,
+                        std::stop_token cancellation) {
+              return detail::spot_node_runtime_t (spot_state)
+                .restore_spot_relocation_state (
+                  frozen, object, cancellation);
+          });
+        objects.configure_relocation_base_capture (
+          [spot_state] (const object_ref_t &object,
+                        const std::string &stable_type,
+                        std::stop_token cancellation) {
+              return detail::spot_node_runtime_t (spot_state)
+                .capture_spot_relocation_base (
+                  object, stable_type, cancellation);
+          });
+        objects.configure_relocation_materialization (
+          [spot_state] (const frozen_object_state_t &frozen,
+                        const object_ref_t &object,
+                        const std::optional<object_ref_t> &spot,
+                        std::stop_token cancellation) {
+              return detail::spot_node_runtime_t (spot_state)
+                .materialize_relocation_state (
+                  frozen, object, spot, cancellation);
+          },
+          [spot_state] (const std::vector<object_ref_t> &objects) {
+              return detail::spot_node_runtime_t (spot_state)
+                .commit_relocation_materialization (objects);
+          },
+          [spot_state] (const std::vector<object_ref_t> &objects) {
+              detail::spot_node_runtime_t (spot_state)
+                .abort_relocation_materialization (objects);
+          });
+    };
+    configure_materialization (source, source_state->spot_state);
+    configure_materialization (target, target_state->spot_state);
+    source.connect_peer (
+      target.status ().routing_id (), target.status ().local_endpoint ());
+    const auto admission_deadline = std::chrono::steady_clock::now () + 5s;
+    while ((!source.has_admitted_peer (
+               target.status ().routing_id (),
+               target.status ().lifecycle_generation ())
+            || !target.has_admitted_peer (
+              source.status ().routing_id (),
+              source.status ().lifecycle_generation ()))
+           && std::chrono::steady_clock::now () < admission_deadline) {
+        (void) source.dispatch_ready ([] (const auto &, const auto &, auto) {});
+        (void) target.dispatch_ready ([] (const auto &, const auto &, auto) {});
+        std::this_thread::sleep_for (1ms);
+    }
+    test.require (
+      source.has_admitted_peer (
+        target.status ().routing_id (), target.status ().lifecycle_generation ())
+        && target.has_admitted_peer (
+          source.status ().routing_id (), source.status ().lifecycle_generation ()),
+      "delta aggregate source and target must both admit the peer");
+
+    detail::spot_node_runtime_t source_spots (source_state->spot_state);
+    const auto source_native_node = source_state->spot_state->native_node.lock ();
+    source_state->spot_state->native_node.reset ();
+    const frozen_object_state_t source_application_spot{
+      .owner =
+        {.kind = object_kind_t::user_spot,
+         .key = "delta-aggregate-spot",
+         .object_generation = 1,
+         .authority_owner_generation = 1,
+         .mesh_name = "delta-aggregate-mesh",
+         .node_id = source.status ().routing_id ().to_string ()},
+      .stable_type = "delta.aggregate.spot",
+      .application_state = {0},
+      .pending_application = {},
+      .timers = {}};
+    const auto application_spot = source_spots.restore_spot_relocation_state (
+      source_application_spot, source_application_spot.owner);
+    source_state->spot_state->native_node = source_native_node;
+    test.require (
+      application_spot, "delta aggregate source Spot application must be materialized");
+    if (!application_spot) {
+        source.stop ();
+        target.stop ();
+        return;
+    }
+
+    auto &source_objects = source.native_node ().objects ();
+    source_objects.replace_placement_candidates (
+      {{.mesh_name = "delta-aggregate-mesh",
+        .node_id = source.status ().routing_id ().to_string (),
+        .stable_types = {"delta.aggregate.actor", "delta.aggregate.spot"},
+        .weight = 100,
+        .active_capacity = 100,
+        .active_count = 1,
+        .pending_capacity = 100,
+        .pending_count = 0}});
+    const auto created_actor = source.create_application_actor (
+      "delta.aggregate.actor", "delta-aggregate-actor", std::nullopt, 1s);
+    test.require (
+      static_cast<bool> (created_actor), "delta aggregate Actor must be created");
+    if (!created_actor) {
+        source.stop ();
+        target.stop ();
+        return;
+    }
+    const auto actor_handle = created_actor.value ();
+    auto created_spot = source_objects.begin_create (
+      {.kind = object_kind_t::user_spot,
+       .key = "delta-aggregate-spot",
+       .stable_type = "delta.aggregate.spot",
+       .mesh_name = std::optional<std::string>{"delta-aggregate-mesh"},
+       .creation_request = {},
+       .exclusive = true,
+       .instance_intent = false});
+    test.require (
+      created_spot.status == create_status_t::reserved
+        && source_objects.commit_create (created_spot.attempt)
+             == stateful_error_t::none,
+      "delta aggregate User Spot must be created");
+    const auto actor = source.native_node ().resolve_actor (actor_handle);
+    const auto spot = source_objects.find (
+      object_kind_t::user_spot, "delta-aggregate-spot");
+    if (!actor || !spot) {
+        test.require (false, "delta aggregate participants must resolve");
+        source.stop ();
+        target.stop ();
+        return;
+    }
+    const auto [join_error, join] =
+      source_objects.begin_membership_move (*actor, *spot);
+    const auto [commit_error, joined_actor] =
+      source_objects.commit_membership_move (join);
+    test.require (
+      join_error == stateful_error_t::none
+        && commit_error == stateful_error_t::none,
+      "delta aggregate Actor must join its User Spot");
+
+    const auto application_actor_ref =
+      ::zlink::framework::detail::actor_ref_access_t::make (
+        framework::node_rid_t::from_string (joined_actor.node_id),
+        "delta.aggregate.actor", joined_actor.key, joined_actor.object_generation);
+    detail::actor_gateway_runtime_t source_actor_gateway;
+    auto source_actor_context =
+      source_actor_gateway.actor_context (application_actor_ref);
+    std::shared_ptr<void> application_actor;
+    {
+        std::lock_guard<std::recursive_mutex> lock (source_state->spot_state->mutex);
+        const auto factory =
+          source_state->spot_state->actor_factories.find ("delta.aggregate.actor");
+        if (factory != source_state->spot_state->actor_factories.end ()) {
+            application_actor =
+              factory->second.create_context_instance (std::move (source_actor_context));
+        }
+    }
+    test.require (
+      static_cast<bool> (application_actor),
+      "delta aggregate source Actor application must be materialized");
+    if (!application_actor) {
+        source.stop ();
+        target.stop ();
+        return;
+    }
+    {
+        std::lock_guard<std::recursive_mutex> lock (source_state->spot_state->mutex);
+        const auto key = std::string ("delta.aggregate.actor:") + joined_actor.key;
+        detail::record_actor_instance_index_unlocked (
+          *source_state->spot_state, application_actor_ref, application_actor.get ());
+        source_state->spot_state->actor_instances.emplace (key, application_actor);
+    }
+    source_spots.record_actor_spot (
+      application_actor_ref, framework::spot_id_t ("delta-aggregate-spot"));
+
+    object_ref_t expected_spot = *spot;
+    expected_spot.node_id = target.status ().routing_id ().to_string ();
+    ++expected_spot.authority_owner_generation;
+    object_ref_t expected_actor = joined_actor;
+    expected_actor.node_id = target.status ().routing_id ().to_string ();
+    ++expected_actor.authority_owner_generation;
+
+    const auto make_authority = [&] (
+      const object_ref_t &object, framework::placement_object_kind_t kind,
+      std::string stable_type, std::string store_version) {
+        return framework::authority_snapshot_t{
+          .store_version = std::move (store_version),
+          .payload = {},
+          .object_generation = object.object_generation,
+          .authority_owner_generation = object.authority_owner_generation,
+          .owner = {"delta-source-owner", 1},
+          .store_now = std::chrono::system_clock::now (),
+          .allocation =
+            {framework::placement_allocation_state_t::active, kind,
+             std::move (stable_type),
+             {"delta-aggregate-mesh",
+              framework::node_rid_t::from_string (
+                source.status ().routing_id ().to_string ()),
+              source.status ().lifecycle_generation (),
+              {"delta-source-owner", 1}},
+             {1, 0, std::nullopt}}};
+    };
+    framework::mesh_node_descriptor_t target_descriptor;
+    target_descriptor.mesh_name = "delta-aggregate-mesh";
+    target_descriptor.rid = target.status ().routing_id ();
+    target_descriptor.lifecycle_generation = target.status ().lifecycle_generation ();
+    target_descriptor.application_version = 1;
+    target_descriptor.owner_id = "delta-target-owner";
+    target_descriptor.lease_generation = 9;
+
+    aggregate_relocation_result_t result;
+    std::atomic<bool> stop_dispatch{false};
+    const auto dispatch = [&] (detail::mesh_node_runtime_t &node) {
+        while (!stop_dispatch.load (std::memory_order_acquire)) {
+            (void) node.dispatch_ready ([] (const auto &, const auto &, auto) {});
+            std::this_thread::sleep_for (1ms);
+        }
+    };
+    std::thread relocation_thread ([&] {
+        result = await_task (source.relocate_application_unit (
+          {*spot, joined_actor},
+          {"delta.aggregate.spot", "delta.aggregate.actor"}, target_descriptor,
+          {make_authority (
+             *spot, framework::placement_object_kind_t::user_spot,
+             "delta.aggregate.spot", "delta-spot-v1"),
+           make_authority (
+             joined_actor, framework::placement_object_kind_t::actor,
+             "delta.aggregate.actor", "delta-actor-v1")}));
+    });
+    std::thread source_dispatch ([&] { dispatch (source); });
+    std::thread target_dispatch ([&] { dispatch (target); });
+    relocation_thread.join ();
+    const auto target_committed = wait_until_bounded (
+      [&] {
+          return aggregates->commit_count == 1
+                 && target.native_node ().objects ().find (
+                      object_kind_t::user_spot, "delta-aggregate-spot")
+                 && target.native_node ().objects ().find (
+                      object_kind_t::actor, "delta-aggregate-actor");
+      },
+      5s);
+    stop_dispatch.store (true, std::memory_order_release);
+    source_dispatch.join ();
+    target_dispatch.join ();
+
+    const auto restored_spot = target.native_node ().objects ().find (
+      object_kind_t::user_spot, expected_spot.key);
+    const auto restored_actor = target.native_node ().objects ().find (
+      object_kind_t::actor, expected_actor.key);
+    test.require (
+      result.terminal == relocation_terminal_t::completed
+        && result.target_handoff && target_committed
+        && aggregates->prepare_count == 1 && aggregates->commit_count == 1
+        && restored_spot == std::optional<object_ref_t>{expected_spot}
+        && restored_actor == std::optional<object_ref_t>{expected_actor},
+      "delta aggregate relocation must commit exactly once via the direct-transfer path and restore Spot and Actor");
+    test.require (
+      delta_spot_adapter_t::capture_base_count.load (
+        std::memory_order_acquire) == 1
+        && delta_spot_adapter_t::capture_delta_count.load (
+             std::memory_order_acquire) == 1
+        && delta_actor_adapter_t::capture_base_count.load (
+             std::memory_order_acquire) == 1
+        && delta_actor_adapter_t::capture_delta_count.load (
+             std::memory_order_acquire) == 1,
+      "delta aggregate source must capture the base stage pre-seal and the delta stage on seal");
+    test.require (
+      delta_spot_adapter_t::restore_base_count.load (
+        std::memory_order_acquire) == 1
+        && delta_spot_adapter_t::apply_delta_count.load (
+             std::memory_order_acquire) == 1
+        && delta_actor_adapter_t::restore_base_count.load (
+             std::memory_order_acquire) == 1
+        && delta_actor_adapter_t::apply_delta_count.load (
+             std::memory_order_acquire) == 1,
+      "delta aggregate target must invoke restore_base and apply_delta, not the legacy whole-state path");
+    test.require (
+      delta_spot_adapter_t::restored_value.load (std::memory_order_acquire) == 109
+        && delta_actor_adapter_t::restored_value.load (std::memory_order_acquire) == 37,
+      "delta aggregate target must reconstruct state from base plus delta, not either alone");
+    source.stop ();
+    target.stop ();
+}
+
+/* (c) apply_delta failure aborts the staged restore and the target re-enters
+ * the factory/materialization path exactly once; a second apply_delta
+ * failure fails the relocation explicitly (relocationDataLost on the wire,
+ * observed here as relocation_reason_t::restore_failed on the source). */
+void test_delta_apply_failure_retries_once_then_fails_explicitly (
+  test_context_t &test)
+{
+    using namespace std::chrono_literals;
+    namespace detail = zlink::framework::detail;
+    namespace framework = zlink::framework;
+
+    delta_spot_adapter_t::capture_base_count.store (0);
+    delta_spot_adapter_t::capture_delta_count.store (0);
+    delta_spot_adapter_t::restore_base_count.store (0);
+    delta_spot_adapter_t::apply_delta_count.store (0);
+    delta_spot_adapter_t::apply_delta_fail_remaining.store (2);
+    delta_spot_adapter_t::restored_value.store (-1);
+
+    const auto core_context = std::make_shared<zlink::context_t> ();
+    const auto make_state = [core_context] (const std::string &rid) {
+        auto state = std::make_shared<detail::mesh_node_builder_state_t> (
+          "delta-failure-mesh");
+        state->core_context = core_context;
+        state->listen_endpoint = "tcp://127.0.0.1:0";
+        state->routing_id = zlink::routing_id_t::from (rid);
+        state->spot_builder.add_spot_factory<delta_spot_t> (
+          "delta.failure.spot",
+          [] (framework::spot_context_t context) {
+              return std::make_shared<delta_spot_t> (std::move (context));
+          },
+          [] (auto &factory) {
+              factory.set_execution_mode (
+                framework::user_spot_execution_mode_t::spot_wide);
+              factory.set_relocation_readiness (
+                framework::spot_relocation_readiness_mode_t::any_turn_boundary);
+              factory.template preserve_state_with<delta_spot_adapter_t> ();
+          });
+        return state;
+    };
+    auto roots = std::make_shared<memory_relocation_repository_t> ();
+    auto authority = std::make_shared<memory_authority_store_t> ();
+    auto aggregates =
+      std::make_shared<memory_aggregate_authority_t> (authority);
+    const auto source_state = make_state ("delta-failure-source");
+    const auto target_state = make_state ("delta-failure-target");
+    detail::mesh_node_runtime_t source (source_state);
+    detail::mesh_node_runtime_t target (target_state);
+    source.configure_relocation_runtime (authority, roots, aggregates);
+    target.configure_relocation_runtime (authority, roots, aggregates);
+    source.configure_session_route_owner ([] {
+        return std::optional<framework::location_owner_token_t>{
+          {"delta-failure-source-owner", 1}};
+    });
+    target.configure_session_route_owner ([] {
+        return std::optional<framework::location_owner_token_t>{
+          {"delta-failure-target-owner", 9}};
+    });
+    source.start ();
+    target.start ();
+    const auto configure_materialization = [authority] (
+      detail::mesh_node_runtime_t &node,
+      const std::shared_ptr<detail::spot_node_builder_state_t> &spot_state) {
+        detail::spot_node_runtime_t (spot_state)
+          .bind_relocation_authority (authority);
+        auto &objects = node.native_node ().objects ();
+        objects.configure_relocation_state (
+          [spot_state] (const object_ref_t &object,
+                        const std::string &stable_type,
+                        std::stop_token cancellation) {
+              return detail::spot_node_runtime_t (spot_state)
+                .capture_spot_relocation_state (
+                  object, stable_type, cancellation);
+          },
+          [spot_state] (const frozen_object_state_t &frozen,
+                        const object_ref_t &object,
+                        std::stop_token cancellation) {
+              return detail::spot_node_runtime_t (spot_state)
+                .restore_spot_relocation_state (
+                  frozen, object, cancellation);
+          });
+        objects.configure_relocation_base_capture (
+          [spot_state] (const object_ref_t &object,
+                        const std::string &stable_type,
+                        std::stop_token cancellation) {
+              return detail::spot_node_runtime_t (spot_state)
+                .capture_spot_relocation_base (
+                  object, stable_type, cancellation);
+          });
+        objects.configure_relocation_materialization (
+          [spot_state] (const frozen_object_state_t &frozen,
+                        const object_ref_t &object,
+                        const std::optional<object_ref_t> &spot,
+                        std::stop_token cancellation) {
+              return detail::spot_node_runtime_t (spot_state)
+                .materialize_relocation_state (
+                  frozen, object, spot, cancellation);
+          },
+          [spot_state] (const std::vector<object_ref_t> &objects) {
+              return detail::spot_node_runtime_t (spot_state)
+                .commit_relocation_materialization (objects);
+          },
+          [spot_state] (const std::vector<object_ref_t> &objects) {
+              detail::spot_node_runtime_t (spot_state)
+                .abort_relocation_materialization (objects);
+          });
+    };
+    configure_materialization (source, source_state->spot_state);
+    configure_materialization (target, target_state->spot_state);
+    source.connect_peer (
+      target.status ().routing_id (), target.status ().local_endpoint ());
+    const auto admission_deadline = std::chrono::steady_clock::now () + 5s;
+    while ((!source.has_admitted_peer (
+               target.status ().routing_id (),
+               target.status ().lifecycle_generation ())
+            || !target.has_admitted_peer (
+              source.status ().routing_id (),
+              source.status ().lifecycle_generation ()))
+           && std::chrono::steady_clock::now () < admission_deadline) {
+        (void) source.dispatch_ready ([] (const auto &, const auto &, auto) {});
+        (void) target.dispatch_ready ([] (const auto &, const auto &, auto) {});
+        std::this_thread::sleep_for (1ms);
+    }
+    test.require (
+      source.has_admitted_peer (
+        target.status ().routing_id (), target.status ().lifecycle_generation ())
+        && target.has_admitted_peer (
+          source.status ().routing_id (), source.status ().lifecycle_generation ()),
+      "delta failure source and target must both admit the peer");
+
+    detail::spot_node_runtime_t source_spots (source_state->spot_state);
+    const auto source_native_node = source_state->spot_state->native_node.lock ();
+    source_state->spot_state->native_node.reset ();
+    const frozen_object_state_t source_application_spot{
+      .owner =
+        {.kind = object_kind_t::user_spot,
+         .key = "delta-failure-spot",
+         .object_generation = 1,
+         .authority_owner_generation = 1,
+         .mesh_name = "delta-failure-mesh",
+         .node_id = source.status ().routing_id ().to_string ()},
+      .stable_type = "delta.failure.spot",
+      .application_state = {0},
+      .pending_application = {},
+      .timers = {}};
+    const auto application_spot = source_spots.restore_spot_relocation_state (
+      source_application_spot, source_application_spot.owner);
+    source_state->spot_state->native_node = source_native_node;
+    test.require (
+      application_spot, "delta failure source Spot application must be materialized");
+    if (!application_spot) {
+        source.stop ();
+        target.stop ();
+        return;
+    }
+
+    auto &source_objects = source.native_node ().objects ();
+    source_objects.replace_placement_candidates (
+      {{.mesh_name = "delta-failure-mesh",
+        .node_id = source.status ().routing_id ().to_string (),
+        .stable_types = {"delta.failure.spot"},
+        .weight = 100,
+        .active_capacity = 100,
+        .active_count = 1,
+        .pending_capacity = 100,
+        .pending_count = 0}});
+    auto created_spot = source_objects.begin_create (
+      {.kind = object_kind_t::user_spot,
+       .key = "delta-failure-spot",
+       .stable_type = "delta.failure.spot",
+       .mesh_name = std::optional<std::string>{"delta-failure-mesh"},
+       .creation_request = {},
+       .exclusive = true,
+       .instance_intent = false});
+    test.require (
+      created_spot.status == create_status_t::reserved
+        && source_objects.commit_create (created_spot.attempt)
+             == stateful_error_t::none,
+      "delta failure User Spot must be created");
+    const auto spot = source_objects.find (
+      object_kind_t::user_spot, "delta-failure-spot");
+    if (!spot) {
+        test.require (false, "delta failure Spot must resolve");
+        source.stop ();
+        target.stop ();
+        return;
+    }
+
+    object_ref_t expected_spot = *spot;
+    expected_spot.node_id = target.status ().routing_id ().to_string ();
+    ++expected_spot.authority_owner_generation;
+
+    const auto make_authority = [&] (
+      const object_ref_t &object, framework::placement_object_kind_t kind,
+      std::string stable_type, std::string store_version) {
+        return framework::authority_snapshot_t{
+          .store_version = std::move (store_version),
+          .payload = {},
+          .object_generation = object.object_generation,
+          .authority_owner_generation = object.authority_owner_generation,
+          .owner = {"delta-failure-source-owner", 1},
+          .store_now = std::chrono::system_clock::now (),
+          .allocation =
+            {framework::placement_allocation_state_t::active, kind,
+             std::move (stable_type),
+             {"delta-failure-mesh",
+              framework::node_rid_t::from_string (
+                source.status ().routing_id ().to_string ()),
+              source.status ().lifecycle_generation (),
+              {"delta-failure-source-owner", 1}},
+             {1, 0, std::nullopt}}};
+    };
+    framework::mesh_node_descriptor_t target_descriptor;
+    target_descriptor.mesh_name = "delta-failure-mesh";
+    target_descriptor.rid = target.status ().routing_id ();
+    target_descriptor.lifecycle_generation = target.status ().lifecycle_generation ();
+    target_descriptor.application_version = 1;
+    target_descriptor.owner_id = "delta-failure-target-owner";
+    target_descriptor.lease_generation = 9;
+
+    aggregate_relocation_result_t result;
+    std::atomic<bool> stop_dispatch{false};
+    const auto dispatch = [&] (detail::mesh_node_runtime_t &node) {
+        while (!stop_dispatch.load (std::memory_order_acquire)) {
+            (void) node.dispatch_ready ([] (const auto &, const auto &, auto) {});
+            std::this_thread::sleep_for (1ms);
+        }
+    };
+    std::thread relocation_thread ([&] {
+        result = await_task (source.relocate_application_unit (
+          {*spot}, {"delta.failure.spot"}, target_descriptor,
+          {make_authority (
+             *spot, framework::placement_object_kind_t::user_spot,
+             "delta.failure.spot", "delta-failure-spot-v1")}));
+    });
+    std::thread source_dispatch ([&] { dispatch (source); });
+    std::thread target_dispatch ([&] { dispatch (target); });
+    relocation_thread.join ();
+    stop_dispatch.store (true, std::memory_order_release);
+    source_dispatch.join ();
+    target_dispatch.join ();
+
+    test.require (
+      result.terminal == relocation_terminal_t::blocked
+        && result.reason == relocation_reason_t::restore_failed
+        && !target.native_node ().objects ().find (
+             object_kind_t::user_spot, "delta-failure-spot"),
+      "a second apply_delta failure must fail the relocation explicitly without committing the target");
+    test.require (
+      delta_spot_adapter_t::restore_base_count.load (
+        std::memory_order_acquire) == 2
+        && delta_spot_adapter_t::apply_delta_count.load (
+             std::memory_order_acquire) == 2,
+      "the target must re-enter the factory/materialization path exactly once after the first apply_delta failure");
+    delta_spot_adapter_t::apply_delta_fail_remaining.store (0);
+    source.stop ();
+    target.stop ();
+}
+
+class legacy_only_adapter_t final :
+    public zlink::framework::spot_relocation_adapter_t<fail_first_restore_spot_t>
+{
+  public:
+    zlink::framework::task_t<std::vector<std::byte>>
+    capture (fail_first_restore_spot_t &, std::stop_token) override
+    {
+        co_return std::vector<std::byte>{};
+    }
+    zlink::framework::task_t<void>
+    restore (fail_first_restore_spot_t &, std::vector<std::byte> payload,
+             std::stop_token) override
+    {
+        ++fail_first_restore_spot_t::restore_count;
+        fail_first_restore_spot_t::restored_payload = std::move (payload);
+        co_return;
+    }
+};
+
+/* (d) a non-delta-capable adapter must take the byte-identical legacy path:
+ * capture()/restore() only, no base stage, and capture_spot_relocation_base
+ * must report no base capability so the manifest's baseChecksumCrc32c stays
+ * zero upstream. */
+void test_non_delta_adapter_uses_legacy_path (test_context_t &test)
+{
+    fail_first_restore_spot_t::factory_count = 0;
+    fail_first_restore_spot_t::restore_count = 0;
+    fail_first_restore_spot_t::create_count = 0;
+    fail_first_restore_spot_t::initialize_count = 0;
+    fail_first_restore_spot_t::restored_payload.clear ();
+
+    zlink::framework::spot_node_builder_t builder;
+    builder.add_spot_factory<fail_first_restore_spot_t> (
+      "legacy-spot",
+      [] (zlink::framework::spot_context_t context) {
+          ++fail_first_restore_spot_t::factory_count;
+          return std::make_shared<fail_first_restore_spot_t> (
+            std::move (context));
+      },
+      [] (auto &factory) {
+          factory.template preserve_state_with<legacy_only_adapter_t> ();
+      });
+    auto runtime = zlink::framework::detail::spot_node_runtime_t::from (builder);
+
+    const object_ref_t source_spot{
+      .kind = object_kind_t::user_spot,
+      .key = "legacy-spot-id",
+      .object_generation = 1,
+      .authority_owner_generation = 1,
+      .mesh_name = "mesh",
+      .node_id = "source"};
+    test.require (
+      runtime.capture_spot_relocation_base (source_spot, "legacy-spot").empty (),
+      "a non-delta-capable adapter must report no base capability, so the "
+      "manifest's baseChecksumCrc32c stays zero");
+
+    const frozen_object_state_t frozen{
+      .owner = source_spot,
+      .stable_type = "legacy-spot",
+      .application_state = {0xca, 0xfe},
+      .pending_application = {},
+      .timers = {}};
+    const object_ref_t target{
+      .kind = object_kind_t::user_spot,
+      .key = "legacy-spot-id",
+      .object_generation = 1,
+      .authority_owner_generation = 2,
+      .mesh_name = "mesh",
+      .node_id = "target"};
+    // frozen.base_application_state is left empty: complete_relocation_assembly
+    // never attaches a base stage unless the target's own base buffer
+    // checksum matched a delta-capable prepare, so a non-capable adapter's
+    // frozen state is always the plain, pre-existing shape.
+    test.require (
+      frozen.base_application_state.empty (), "legacy fixture must carry no base stage");
+    test.require (
+      runtime.restore_spot_relocation_state (frozen, target)
+        && fail_first_restore_spot_t::restore_count == 1
+        && fail_first_restore_spot_t::restored_payload
+             == std::vector<std::byte>{std::byte{0xca}, std::byte{0xfe}},
+      "a non-delta-capable adapter must restore via the legacy capture/restore "
+      "path, byte-identical to state before the base/delta pipeline existed");
+    runtime.request_stop ();
+    runtime.cancel_pending_dispatch ();
+    runtime.cancel_pending_work ();
+    runtime.release_native_handles ();
+}
+
 void test_stateful_application_reservation_includes_active_work (
   test_context_t &test)
 {
@@ -5022,6 +5939,9 @@ int main ()
     test_application_user_spot_aggregate_remote_production_path (
       test);
     test_aggregate_seal_failure_preserves_earlier_application_work (test);
+    test_delta_aggregate_direct_transfer_path (test);
+    test_delta_apply_failure_retries_once_then_fails_explicitly (test);
+    test_non_delta_adapter_uses_legacy_path (test);
     test_relocation_hold_restores_without_dedicated_limits (test);
     test_stateful_application_reservation_includes_active_work (test);
     test_advertised_receive_chunk_limit_wiring (test);
