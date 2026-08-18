@@ -204,6 +204,7 @@ benchmark_result.txt
 tmp/
 !core/builds/
 core/builds/instance-asan/
+core/builds/auto-hwm-attach/
 # 어디에 있든 스크래치 디렉터리다 — 테스트 실행 로그, NuGet lock, codex 임시 작업
 # 폴더 등. 이름이 tmp/가 아니라 .tmp/·.codex-*-tmp.*라 위 규칙에 안 걸렸다.
 .tmp/
