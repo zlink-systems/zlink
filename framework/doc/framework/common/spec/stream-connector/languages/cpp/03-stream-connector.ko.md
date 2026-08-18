@@ -274,6 +274,29 @@ metric 처리 실패는 send, request와 연결 상태를 바꾸지 않는다.
 request, wait, queue, TLS와 compression 경로가 사용하는 값이어야 하며, 동작에 반영되지 않는
 설정값을 공개하지 않는다.
 
+`connector_options_t::diagnostics_level`은 `create()`가 시작하는 level일 뿐이다. 공통 스펙
+§13에 따라 connector는 [flow correlation §4](../../../server/27-flow-correlation.ko.md#4-flow를-만드는-시점)가
+말하는 client connector이므로, 실행 중 level 변경도
+[message-flow-tracing §4.1](../../../server/26-message-flow-tracing.ko.md#41-실행-중에-기록-수준-변경)을
+그대로 따른다. Application은 connector를 다시 만들지 않고 `connector_t`의 다음 두 메서드로
+level을 읽고 바꾼다.
+
+```cpp
+class connector_t {
+public:
+    // ...
+    diagnostics_level_t diagnostics_level() const;
+    void set_diagnostics_level(diagnostics_level_t level);
+};
+```
+
+`diagnostics_level()`은 현재 유효한 level을 반환한다. `set_diagnostics_level(level)`은 그 뒤의
+처리 지점(outbound frame encode 1회, inbound frame decode 1회)부터 적용되며, 호출 이전에 이미
+encode·decode된 frame에는 소급 적용하지 않는다. 각 처리 지점은 level을 정확히 한 번만 읽어 그
+처리 전체에 그 값 하나만 쓰므로, 처리 도중 level이 바뀌어도 하나의 frame이 두 level에 걸쳐
+나뉘는 일은 없다. `options()`가 보여주는 diagnostics_level도 호출 시점에 `diagnostics_level()`이
+반환할 값과 같으며, `create()`에 전달한 값과 다를 수 있다.
+
 ## 7. Inbound observer
 
 `observe_inbound(...)`는 연결 시작 전에 등록하고 이동 전용 `inbound_observer_registration_t`를

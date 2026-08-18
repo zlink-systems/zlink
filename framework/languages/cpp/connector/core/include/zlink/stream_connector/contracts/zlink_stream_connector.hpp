@@ -60,7 +60,22 @@ class connector_t
     connection_state_t state () const;
 
     /// Returns a copy of the options used by this connector.
+    ///
+    /// diagnostics_level reflects the current effective level, not necessarily the value the
+    /// connector was created with — see diagnostics_level()/set_diagnostics_level().
     connector_options_t options () const;
+
+    /// Returns the diagnostics level currently in effect (stream-connector §13).
+    ///
+    /// A processing point (one outbound frame encode, one inbound frame decode) reads this once
+    /// and uses that single value for the whole operation.
+    diagnostics_level_t diagnostics_level () const;
+
+    /// Changes the diagnostics level in effect from the next processing point onward.
+    ///
+    /// The connector is not recreated. Frames already encoded or decoded before this call keep
+    /// their original level; nothing is applied retroactively (message-flow-tracing §4.1).
+    void set_diagnostics_level (diagnostics_level_t level);
 
     /// Returns the number of received packets waiting for manual callback dispatch.
     std::size_t pending_dispatch_count () const;

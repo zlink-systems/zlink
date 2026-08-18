@@ -74,6 +74,7 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
   public:
     explicit connector_state_t (connector_options_t options) :
         connector_id (next_connector_id.fetch_add (1, std::memory_order_relaxed)),
+        diagnostics_level_cell (options.diagnostics_level),
         options (std::move (options)),
         io_context (shared_io_context ()),
         write_strand (boost::asio::make_strand (io_context)),
@@ -83,6 +84,13 @@ class connector_state_t : public std::enable_shared_from_this<connector_state_t>
 
     inline static std::atomic_uint64_t next_connector_id{1};
     std::uint64_t connector_id = 0;
+    // Live diagnostics level cell (message-flow-tracing §4.1, stream-connector
+    // §13): seeded from options.diagnostics_level at construction, then read
+    // and written independently of options so connector_t::diagnostics_level()
+    // / set_diagnostics_level() can change it without recreating the
+    // connector. Each processing point loads this once and uses that single
+    // value for the whole operation; it never re-reads mid-operation.
+    std::atomic<diagnostics_level_t> diagnostics_level_cell;
     connector_options_t options;
     connection_state_t state = connection_state_t::created;
     std::uint64_t next_request_seq = 1;

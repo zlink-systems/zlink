@@ -319,6 +319,34 @@ getter shows must be the value the actual connect, request, wait,
 queue, TLS, and compression paths use — a configuration value not
 reflected in behavior isn't exposed.
 
+`connector_options_t::diagnostics_level` is only the level `create()`
+starts with. Common spec §13 makes the connector a client connector
+under [flow correlation §4](../../../server/27-flow-correlation.en.md#4-when-a-flow-is-created),
+so runtime level changes follow
+[message-flow-tracing §4.1](../../../server/26-message-flow-tracing.en.md#41-changing-the-record-level-at-runtime)
+as-is: the application reads and changes the level without recreating
+the connector, using two methods on `connector_t`:
+
+```cpp
+class connector_t {
+public:
+    // ...
+    diagnostics_level_t diagnostics_level() const;
+    void set_diagnostics_level(diagnostics_level_t level);
+};
+```
+
+`diagnostics_level()` returns the level currently in effect.
+`set_diagnostics_level(level)` changes it starting with the next
+processing point (one outbound frame encode, one inbound frame
+decode); frames already encoded or decoded before the call keep their
+original level — nothing is applied retroactively. Each processing
+point reads the level exactly once and uses that single value for the
+whole operation, so a level change mid-processing can never split one
+frame's encode or decode between two levels. `options()` reflects the
+level `diagnostics_level()` would return at the time of the call, not
+necessarily the value passed at `create()`.
+
 ## 7. Inbound Observer
 
 `observe_inbound(...)` is registered before connection starts and

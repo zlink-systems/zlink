@@ -881,6 +881,130 @@ int main ()
         if (header_codec_t{}.decode (truncated, /*validate_flow=*/false)) {
             return 217;
         }
+
+        /* Live diagnostics level (stream-connector §13): connector_t::diagnostics_level() /
+         * set_diagnostics_level() read and write the level without recreating the connector. */
+        {
+            zlink::stream_connector::connector_t live_level_connector;
+            if (live_level_connector.diagnostics_level () != diagnostics_level_t::errors
+                || live_level_connector.options ().diagnostics_level != diagnostics_level_t::errors) {
+                return 230;
+            }
+            live_level_connector.set_diagnostics_level (diagnostics_level_t::off);
+            if (live_level_connector.diagnostics_level () != diagnostics_level_t::off
+                || live_level_connector.options ().diagnostics_level != diagnostics_level_t::off) {
+                return 231;
+            }
+            live_level_connector.set_diagnostics_level (diagnostics_level_t::detailed);
+            if (live_level_connector.diagnostics_level () != diagnostics_level_t::detailed
+                || live_level_connector.options ().diagnostics_level
+                     != diagnostics_level_t::detailed) {
+                return 232;
+            }
+        }
+
+        /* Runtime level changes apply from the next processing point onward and never
+         * retroactively touch a frame already encoded (message-flow-tracing §4.1). One
+         * connector_state_t is reused across sends so the level cell mutation observed here is
+         * exactly what connector_t::set_diagnostics_level() performs internally. */
+        {
+            connector_options_t options;
+            auto state = std::make_shared<connector_state_t> (options);
+            state->state = zlink::stream_connector::connection_state_t::connected;
+            auto connection = std::make_shared<async_write_connection_t> ();
+            state->connection = connection;
+
+            const auto send_and_decode = [&] (const char *name) -> std::optional<stream_header_t> {
+                connection->written.clear ();
+                const auto submitted = zlink::stream_connector::detail::submit_send (
+                  state, packet_t{.name = name, .payload = zlink::message_t::from ("payload")});
+                if (!submitted || !wait_for_written_frame (connection)) {
+                    return std::nullopt;
+                }
+                auto decoded = decode_frame_header (connection->written.front ());
+                if (!decoded) {
+                    return std::nullopt;
+                }
+                return decoded.value ();
+            };
+
+            // errors (default): flow attached.
+            const auto before_toggle = send_and_decode ("diag.runtime.before");
+            if (!before_toggle || !has_header_flag (*before_toggle, header_flags_t::has_flow_id)
+                || !flow_id_codec_t::is_valid (before_toggle->flow_id)) {
+                return 233;
+            }
+
+            // on -> off applies to the next send only; the frame above is unaffected.
+            state->diagnostics_level_cell.store (diagnostics_level_t::off,
+                                                 std::memory_order_release);
+            const auto after_off = send_and_decode ("diag.runtime.after-off");
+            if (!after_off || has_header_flag (*after_off, header_flags_t::has_flow_id)
+                || !after_off->flow_id.empty () || after_off->flow_origin.has_value ()) {
+                return 234;
+            }
+
+            // off -> on: flow returns starting with the next send.
+            state->diagnostics_level_cell.store (diagnostics_level_t::errors,
+                                                 std::memory_order_release);
+            const auto after_on = send_and_decode ("diag.runtime.after-on");
+            if (!after_on || !has_header_flag (*after_on, header_flags_t::has_flow_id)
+                || !flow_id_codec_t::is_valid (after_on->flow_id)) {
+                return 235;
+            }
+        }
+
+        /* Each processing point reads the level once and uses that single value for the whole
+         * frame: concurrent toggling from another thread must never produce a torn frame (the
+         * flag set without a valid flow_id, or a flow_id present without the flag). */
+        {
+            connector_options_t options;
+            auto state = std::make_shared<connector_state_t> (options);
+            state->state = zlink::stream_connector::connection_state_t::connected;
+            auto connection = std::make_shared<async_write_connection_t> ();
+            state->connection = connection;
+
+            std::atomic_bool stop{false};
+            std::thread toggler ([&] {
+                while (!stop.load (std::memory_order_relaxed)) {
+                    state->diagnostics_level_cell.store (diagnostics_level_t::off,
+                                                         std::memory_order_release);
+                    state->diagnostics_level_cell.store (diagnostics_level_t::errors,
+                                                         std::memory_order_release);
+                }
+            });
+
+            bool consistent = true;
+            for (int i = 0; i < 200 && consistent; ++i) {
+                connection->written.clear ();
+                const auto submitted = zlink::stream_connector::detail::submit_send (
+                  state,
+                  packet_t{.name = "diag.race", .payload = zlink::message_t::from ("payload")});
+                if (!submitted || !wait_for_written_frame (connection)) {
+                    consistent = false;
+                    break;
+                }
+                auto decoded_result = decode_frame_header (connection->written.front ());
+                if (!decoded_result) {
+                    consistent = false;
+                    break;
+                }
+                const auto &decoded = decoded_result.value ();
+                const bool has_flag = has_header_flag (decoded, header_flags_t::has_flow_id);
+                const bool has_valid_flow = flow_id_codec_t::is_valid (decoded.flow_id)
+                                            && decoded.flow_origin == flow_origin_t::application;
+                const bool has_no_flow =
+                  decoded.flow_id.empty () && !decoded.flow_origin.has_value ();
+                if (has_flag ? !has_valid_flow : !has_no_flow) {
+                    consistent = false;
+                }
+            }
+            stop.store (true, std::memory_order_relaxed);
+            toggler.join ();
+            if (!consistent) {
+                return 236;
+            }
+        }
     }
 
     {

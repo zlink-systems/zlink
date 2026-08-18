@@ -613,7 +613,23 @@ connection_state_t connector_t::state () const
 
 connector_options_t connector_t::options () const
 {
-    return detail::state_from (_state)->options;
+    auto state = detail::state_from (_state);
+    auto snapshot = state->options;
+    // The struct field only carries the value the connector was created
+    // with; the effective level lives in the atomic cell so it can change
+    // at runtime (stream-connector §13). Do not expose a stale value here.
+    snapshot.diagnostics_level = state->diagnostics_level_cell.load (std::memory_order_acquire);
+    return snapshot;
+}
+
+diagnostics_level_t connector_t::diagnostics_level () const
+{
+    return detail::state_from (_state)->diagnostics_level_cell.load (std::memory_order_acquire);
+}
+
+void connector_t::set_diagnostics_level (diagnostics_level_t level)
+{
+    detail::state_from (_state)->diagnostics_level_cell.store (level, std::memory_order_release);
 }
 
 std::size_t connector_t::pending_dispatch_count () const

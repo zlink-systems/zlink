@@ -107,9 +107,9 @@ void trace_connector_write (const connector_state_t &state,
 {
     /* Debug-only stderr trace, opt-in via ZLINK_CPP_STREAM_TRACE. Level Off
      * additionally suppresses it (message-flow-tracing §4.1: no trace-only
-     * work at Off). */
-    if (!stream_trace_enabled ()
-        || state.options.diagnostics_level == diagnostics_level_t::off) {
+     * work at Off). One atomic read for this processing point. */
+    const auto diagnostics_level = state.diagnostics_level_cell.load (std::memory_order_acquire);
+    if (!stream_trace_enabled () || diagnostics_level == diagnostics_level_t::off) {
         return;
     }
     static std::mutex trace_mutex;
@@ -404,8 +404,11 @@ result_t<std::vector<std::uint8_t>> encode_packet_frame (connector_state_t &stat
          * (flow-correlation §2). */
         header_data.correlation_id = next_correlation_id ();
     }
-    if (kind != message_kind_t::control
-        && state.options.diagnostics_level != diagnostics_level_t::off) {
+    /* One atomic read for this outbound frame: stream-connector §13 requires
+     * a single level read per processing point, applied to the whole frame,
+     * with no retroactive effect on frames already encoded. */
+    const auto diagnostics_level = state.diagnostics_level_cell.load (std::memory_order_acquire);
+    if (kind != message_kind_t::control && diagnostics_level != diagnostics_level_t::off) {
         /* Client-originated flows are created without any configuration
          * (flow-correlation §2.1): the connector is the first hop, so every
          * outbound send/request without an id starts a new flow. Level Off
@@ -496,9 +499,11 @@ result_t<inbound_frame_t> read_inbound_frame (std::shared_ptr<connector_state_t>
                                                      : "stream connector payload read failed");
     }
     header_codec_t header_codec;
+    /* One atomic read for this inbound frame (stream-connector §13): the
+     * value decided here governs flow-field validation for the whole frame. */
+    const auto diagnostics_level = state->diagnostics_level_cell.load (std::memory_order_acquire);
     auto decoded =
-      header_codec.decode (header_bytes.value (),
-                           state->options.diagnostics_level != diagnostics_level_t::off);
+      header_codec.decode (header_bytes.value (), diagnostics_level != diagnostics_level_t::off);
     if (!decoded) {
         return result_t<inbound_frame_t>::failure (decoded.error_code (),
                                                    decoded.error ()->message);
@@ -599,8 +604,10 @@ std::optional<result_t<inbound_frame_t>> try_take_inbound_frame (connector_state
                                   + static_cast<std::ptrdiff_t> (frame_size));
 
     header_codec_t header_codec;
-    auto decoded = header_codec.decode (
-      header_bytes, state.options.diagnostics_level != diagnostics_level_t::off);
+    /* One atomic read for this inbound frame (stream-connector §13): see
+     * read_inbound_frame() above for the same rule on the synchronous path. */
+    const auto diagnostics_level = state.diagnostics_level_cell.load (std::memory_order_acquire);
+    auto decoded = header_codec.decode (header_bytes, diagnostics_level != diagnostics_level_t::off);
     if (!decoded) {
         return result_t<inbound_frame_t>::failure (decoded.error_code (),
                                                    decoded.error ()->message);
