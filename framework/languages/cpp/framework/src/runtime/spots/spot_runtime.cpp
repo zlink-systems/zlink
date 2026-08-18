@@ -4846,7 +4846,7 @@ result_t<actor_join_reply_t> spot_node_runtime_t::join_actor_to_spot_erased (
             release_actor_location (*_state, committed);
         }
         if (authority_committed) {
-            _state->actor_transfer_coordinator.mark_reconcile (key);
+            _state->actor_transfer_coordinator.mark_reconcile (key, _state->message_follow_duration);
             replay_actor_handoff_until_move_closed (committed, key);
         } else {
             replay_actor_handoff_until_move_closed (actor_ref, key);
@@ -5046,6 +5046,20 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
                 ++found;
                 continue;
             }
+            // Spec 15: source membership cleanup (erasing the local Actor
+            // instance) must not run ahead of the OnLeave callback actually
+            // executing. OnLeave arrives asynchronously from the target as a
+            // one-way command (submit_remote_actor_leave) that only queues
+            // the callback and returns; it needs this Actor instance to
+            // still be registered when it runs. Hold the erase until the
+            // callback has completed (leave_completed), bounded by
+            // leave_deadline in case the notification is genuinely lost
+            // (target crash, partition) or there is no OnLeave handler to
+            // await, so this cannot leak forever.
+            if (!found->leave_completed && found->leave_deadline > now) {
+                ++found;
+                continue;
+            }
             const auto key = actor_key (found->source_actor);
             const auto current_fence = _state->actor_authority_fences.find (key);
             // An in-flight transfer for the key means the retained source
@@ -5105,6 +5119,34 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
             }
             ++removed;
         }
+    }
+    // A reconcile-phase move (genuinely ambiguous FINALIZE outcome, spec 28)
+    // has no authority-truth reconciliation today; bounded by
+    // reconcile_deadline (move_state_t) so it cannot park requests in the
+    // backlog forever. Close each expired one exactly like an explicit,
+    // non-ambiguous failure would: drain any parked backlog and restore
+    // local servability.
+    const auto expired_reconciles =
+      _state->actor_transfer_coordinator.reconcile_keys_expired (now);
+    for (const auto &key : expired_reconciles) {
+        const auto separator = key.find (':');
+        if (separator == std::string::npos)
+            continue;
+        std::uint64_t generation = 0;
+        {
+            std::lock_guard<std::recursive_mutex> node_lock (_state->mutex);
+            if (const auto found = _state->actor_generations.find (key);
+                found != _state->actor_generations.end ()) {
+                generation = found->second;
+            }
+        }
+        const auto actor_ref = ::zlink::framework::detail::actor_ref_access_t::make (
+          node_rid (), key.substr (0, separator), key.substr (separator + 1), generation);
+        if (actor_transfer_marker_enabled ()) {
+            emit_actor_transfer_marker ("reconcile_deadline_expired", actor_ref, key);
+        }
+        replay_actor_handoff_until_move_closed (actor_ref, key);
+        ++removed;
     }
     return removed;
 }
@@ -6291,9 +6333,9 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
     std::shared_ptr<spot_context_state_t> source_state;
     std::shared_ptr<void> actor_instance;
     std::function<task_t<void> (void *, void *)> leave_callback;
+    const auto key = actor_key (source_actor);
     {
         std::unique_lock<std::recursive_mutex> node_lock (_state->mutex);
-        const auto key = actor_key (source_actor);
         const auto context = _state->spot_contexts_by_id.find (
           std::string (source_spot_id));
         const auto actor = _state->actor_instances.find (key);
@@ -6346,6 +6388,10 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
                 return result_t<void>::success ();
             }
             cleanup->leave_submitted = true;
+            // No OnLeave handler registered: there is nothing to await, so
+            // this transfer's source cleanup is already unblocked.
+            if (!leave_callback)
+                cleanup->leave_completed = true;
         }
         else if (!_state->actor_transfer_coordinator.try_submit_source_leave (
                    key, transfer_id)) {
@@ -6362,6 +6408,7 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
     }
 
     if (leave_callback) {
+        auto state = _state;
         source_state->run_serial_task_async (
           "spot-actor-remote-leave",
           [source_state, actor_instance,
@@ -6369,9 +6416,22 @@ result_t<void> spot_node_runtime_t::submit_remote_actor_leave (
               return leave_callback (
                 source_state->spot_instance.get (), actor_instance.get ());
           },
-          [] (result_t<void>) {
-              // Source lifecycle is notification-only. Completion and failure
-              // do not participate in the committed target's Join terminal.
+          [state = std::move (state), key, transfer_id] (result_t<void>) {
+              // Source lifecycle is notification-only. Completion and
+              // failure do not participate in the committed target's Join
+              // terminal -- but the sweep in
+              // cleanup_expired_actor_admissions_at waits for this callback
+              // to actually finish (leave_completed) before erasing the
+              // local Actor instance the callback just ran against.
+              std::lock_guard<std::recursive_mutex> lock (state->mutex);
+              const auto found = std::find_if (
+                state->pending_remote_source_cleanups.begin (),
+                state->pending_remote_source_cleanups.end (),
+                [&] (const auto &candidate) {
+                    return candidate.transfer_id == transfer_id;
+                });
+              if (found != state->pending_remote_source_cleanups.end ())
+                  found->leave_completed = true;
           });
     }
     return result_t<void>::success ();
@@ -6381,7 +6441,13 @@ void spot_node_runtime_t::fail_remote_actor_transfer (const actor_ref_t &actor_r
 {
     const auto key = actor_key (actor_ref);
     if (reconcile) {
-        _state->actor_transfer_coordinator.mark_reconcile (key);
+        // Genuinely ambiguous outcome (e.g. the cutover submission itself
+        // failed, so whether the target received it is unknown): retain the
+        // reconcile phase, but only up to message_follow_duration -- see
+        // move_state_t::reconcile_deadline. Nothing today reconciles against
+        // authority truth, so this bound is what keeps the Actor from
+        // parking requests forever.
+        _state->actor_transfer_coordinator.mark_reconcile (key, _state->message_follow_duration);
     } else {
         replay_actor_handoff_until_move_closed (actor_ref, key);
     }
@@ -6432,9 +6498,14 @@ spot_node_runtime_t::complete_remote_actor_transfer (
         key, transfer_id);
     _state->pending_remote_source_cleanups.push_back (
       spot_node_builder_state_t::pending_remote_source_cleanup_t{
-        source_actor, std::move (source_fence), std::move (transfer_id), target_spot_id,
-        std::chrono::steady_clock::now () + std::chrono::seconds (1),
-        source_leave_submitted});
+        .source_actor = source_actor,
+        .source_fence = std::move (source_fence),
+        .transfer_id = std::move (transfer_id),
+        .target_spot_id = target_spot_id,
+        .not_before = std::chrono::steady_clock::now () + std::chrono::seconds (1),
+        .leave_submitted = source_leave_submitted,
+        .leave_completed = false,
+        .leave_deadline = std::chrono::steady_clock::now () + _state->message_follow_duration});
     // Publish the Message Follow route before removing the moving state. A
     // packet that already selected the source route can still reach the
     // coordinator while this transition runs; finish_move_replay() removes the

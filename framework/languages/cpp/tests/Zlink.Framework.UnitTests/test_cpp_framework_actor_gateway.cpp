@@ -2199,6 +2199,186 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route ()
     return 0;
 }
 
+int source_cleanup_waits_for_leave_completion_before_erasing_actor ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    // Regression pin (ST-B1): cleanup_expired_actor_admissions_at must not
+    // erase the source Actor instance (spec 15 source membership cleanup)
+    // until the OnLeave callback submit_remote_actor_leave queued has
+    // actually finished (leave_completed), not merely been queued
+    // (leave_submitted). submit_remote_actor_leave only enqueues OnLeave
+    // onto the source Spot's serial executor and returns immediately, so on
+    // some environments/timings the sweep raced ahead of that queued task
+    // and erased the instance first; OnLeave's own dispatch then found it
+    // gone and silently no-op'd -- relocation still completed end to end,
+    // but the "leave" evidence never fired.
+    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+
+    const auto actor = test_actor_ref ("actor-a", "player", "leave-race-actor", 1);
+    const auto key = std::string ("player:leave-race-actor");
+    node->actor_instances.emplace (key, std::make_shared<int> (7));
+
+    const auto now = std::chrono::steady_clock::now ();
+    node->pending_remote_source_cleanups.push_back (
+      spot_node_builder_state_t::pending_remote_source_cleanup_t{
+        .source_actor = actor,
+        .source_fence = runtime::protocol::actor_route_fence_t{},
+        .transfer_id = "transfer-leave-race",
+        .target_spot_id = spot_id_t ("target-spot"),
+        .not_before = now - std::chrono::seconds (1),
+        .leave_submitted = true,
+        .leave_completed = false,
+        .leave_deadline = now + std::chrono::seconds (30)});
+
+    spot_node_runtime_t spots (node);
+    // not_before has already passed, but OnLeave is only queued
+    // (leave_submitted), not finished (leave_completed), and the last-resort
+    // deadline is far off: the sweep must hold the erase.
+    const auto swept_while_pending =
+      spots.cleanup_expired_actor_admissions_at (now);
+    if (swept_while_pending != 0)
+        return 1;
+    if (!node->actor_instances.contains (key))
+        return 2;
+    if (node->pending_remote_source_cleanups.size () != 1)
+        return 3;
+
+    // OnLeave's queued task finishes and marks completion, mirroring the
+    // completion continuation submit_remote_actor_leave installs.
+    node->pending_remote_source_cleanups.front ().leave_completed = true;
+    const auto swept_after_completion =
+      spots.cleanup_expired_actor_admissions_at (now);
+    if (swept_after_completion == 0)
+        return 4;
+    if (node->actor_instances.contains (key))
+        return 5;
+    if (!node->pending_remote_source_cleanups.empty ())
+        return 6;
+    return 0;
+}
+
+int reconcile_deadline_restores_actor_to_local_service ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+
+    // Regression pin (spec 28 explicit-failure / never-unbounded-queueing):
+    // a relocation attempt that ends ambiguously (fail_remote_actor_transfer
+    // with reconcile=true, e.g. a FINALIZE submission whose outcome on the
+    // target is unknown) has no authority-truth reconciliation today, so a
+    // request arriving while the coordinator sits in the reconcile phase
+    // must not park in the handoff backlog forever. This pins that
+    // cleanup_expired_actor_admissions_at closes the move once
+    // reconcile_deadline passes and actually replays the parked request
+    // instead of leaving it stuck.
+    serializer_registry_t serializers;
+    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (
+      1, 16, "reconcile-worker");
+    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+
+    auto spot = std::make_shared<spot_context_state_t> ();
+    spot->node = node;
+    spot->node_rid = node_rid_t::from_string ("actor-a");
+    spot->spot_id = spot_id_t ("actor-a-entry");
+    spot->spot_name = "entry";
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    spot->channel_runtime->serializers = &serializers;
+    spot->serial_executor = node->worker_executor;
+    node->spot_contexts_by_id.emplace (
+      spot->spot_id, spot_context_access_t::create (spot));
+
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.create_instance = [] (std::string) {
+        return std::make_shared<int> (7);
+    };
+    factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+    node->actor_factories.emplace ("player", std::move (factory));
+
+    const auto actor = test_actor_ref ("actor-a", "player", "reconcile-actor", 1);
+    const auto key = std::string ("player:reconcile-actor");
+    node->actor_instances.emplace (key, std::make_shared<int> (7));
+    node->actor_spot_ids.emplace (key, spot->spot_id);
+    node->actor_generations.emplace (key, 1);
+
+    std::atomic_bool handler_ran{false};
+    spot->handlers.push_back (spot_handler_descriptor_t{
+      spot_handler_kind_t::actor_send, "ReconcileProbe", "",
+      std::type_index (typeid (int)), std::type_index (typeid (void)),
+      std::type_index (typeid (int)), std::type_index (typeid (void))});
+    spot->handler_invokers.push_back (
+      [&handler_ran] (
+        void *, void *, service_provider_t &, serializer_registry_t &,
+        const zlink::message_t &, const spot_inbound_message_t &)
+        -> task_t<zlink::message_t> {
+          handler_ran.store (true, std::memory_order_release);
+          co_return zlink::message_t{};
+      });
+
+    // Mirrors fail_remote_actor_transfer(actor, true): the ambiguous-outcome
+    // path, bounded by a short deadline for this test.
+    node->actor_transfer_coordinator.mark_reconcile (
+      key, std::chrono::milliseconds (20));
+
+    service_collection_t services;
+    auto provider = services.build_provider ();
+    actor_gateway_runtime_t gateway;
+    spot_inbound_message_t metadata;
+
+    spot_node_runtime_t spots (node);
+    auto sent = spots.relay_actor_packet (
+      actor, gateway.actor_context (actor), stream_message_kind_t::send,
+      "ReconcileProbe", zlink::message_t::from (std::string ("probe")),
+      provider, serializers, std::move (metadata), nullptr);
+
+    const auto sent_result = finite_task_result (std::move (sent));
+    if (!sent_result || !*sent_result)
+        return 1;
+    // reconcile is a "moving" phase for try_append_backlog: the packet
+    // parks rather than dispatching immediately.
+    if (handler_ran.load (std::memory_order_acquire))
+        return 2;
+
+    std::this_thread::sleep_for (std::chrono::milliseconds (30));
+    (void) spots.cleanup_expired_actor_admissions ();
+    // The deadline bounds the reconcile phase itself; assert that bound
+    // directly (the move must be gone once expired), not just an
+    // observable side effect of it.
+    if (node->actor_transfer_coordinator.phase (key).has_value ())
+        return 3;
+
+    // Assert a bounded, observable outcome per spec 28, not just coordinator
+    // state: a fresh request must be served, not parked again -- the Actor
+    // is genuinely back in local service.
+    spot_inbound_message_t follow_up_metadata;
+    auto follow_up = spots.relay_actor_packet (
+      actor, gateway.actor_context (actor), stream_message_kind_t::send,
+      "ReconcileProbe", zlink::message_t::from (std::string ("probe-2")),
+      provider, serializers, std::move (follow_up_metadata), nullptr);
+    const auto follow_up_result = finite_task_result (std::move (follow_up));
+    if (!follow_up_result || !*follow_up_result)
+        return 4;
+
+    const auto handler_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (!handler_ran.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < handler_deadline) {
+        std::this_thread::yield ();
+    }
+    if (!handler_ran.load (std::memory_order_acquire))
+        return 5;
+    if (node->actor_transfer_coordinator.phase (key).has_value ())
+        return 4;
+    return 0;
+}
+
 int rebound_session_keeps_prior_ingress_exact_fence ()
 {
     using namespace zlink::framework::runtime::stateful;
@@ -3028,6 +3208,16 @@ int main ()
           old_owner_forwards_cold_probe_via_active_message_follow_route ();
         cold_forward != 0) {
         return 300 + cold_forward;
+    }
+    if (const auto leave_race =
+          source_cleanup_waits_for_leave_completion_before_erasing_actor ();
+        leave_race != 0) {
+        return 310 + leave_race;
+    }
+    if (const auto reconcile_trap =
+          reconcile_deadline_restores_actor_to_local_service ();
+        reconcile_trap != 0) {
+        return 320 + reconcile_trap;
     }
     if (const auto pending =
           disconnect_notification_survives_pending_dispatcher_completion ();

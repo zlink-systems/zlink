@@ -2374,7 +2374,14 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
     const auto reply=codec.decode_envelope_reply<spot_actor_join_route_reply_t>(
       parts,*_serializers,"remote Actor prepare reply is empty","remote Actor prepare reply decode failed","ActorTransferPrepare");
     if (!reply) {
-      spot.fail_remote_actor_transfer(s->actor,true);
+      // Spec 28 explicit failure: PREPARE has not transferred authority yet
+      // (that only happens at FINALIZE/cutover below), so a rejected or
+      // failed PREPARE reply -- including the target's restore() throwing --
+      // means the target definitely never took ownership. reconcile=false
+      // closes the move and replays any queued backlog locally instead of
+      // parking the Actor in the reconcile phase, which nothing ever
+      // resolves; the Actor must stay servable on the source.
+      spot.fail_remote_actor_transfer(s->actor,false);
       const auto failed=detail::propagate_failure<actor_join_reply_t>(reply,"remote Actor prepare failed");
       (void)co_await abort_remote_actor_join_seal(s);
       co_return fail_remote_actor_join(*s,failed,"remote Actor prepare failed");
@@ -2387,7 +2394,10 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       .target_spot_generation=s->target.object_generation,.target_node_rid=s->target.node_rid};
     host::actor_transfer_prepare_result_t result{s->actor,s->membership_epoch};
     if (!prepare_actor_transfer(core,s->timeout,s->core_token,result)) {
-      spot.fail_remote_actor_transfer(s->actor,true);
+      // Same rationale as the reply-failure branch above: this is a local,
+      // pre-commit PREPARE failure on the source's own Core state, still
+      // before FINALIZE/cutover -- explicit, not ambiguous.
+      spot.fail_remote_actor_transfer(s->actor,false);
       const auto failed=result_t<actor_join_reply_t>::failure(framework_error_kind_t::internal_failure,"source Framework Actor relocation prepare failed");
       (void)co_await abort_remote_actor_join_seal(s);
       co_return fail_remote_actor_join(*s,failed,"source Framework Actor relocation prepare failed");

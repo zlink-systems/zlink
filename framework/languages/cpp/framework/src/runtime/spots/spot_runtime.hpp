@@ -156,7 +156,23 @@ class spot_node_builder_state_t
         std::string transfer_id;
         spot_id_t target_spot_id;
         std::chrono::steady_clock::time_point not_before;
+        // True once submit_remote_actor_leave has validated and accepted the
+        // OnLeave command for this transfer (idempotency guard against a
+        // duplicate/retried command; does NOT mean the callback has run).
         bool leave_submitted = false;
+        // OnLeave is a one-way notification the target sends back to the
+        // source after commit (spec 15: source membership cleanup must not
+        // run ahead of the OnLeave callback). submit_remote_actor_leave only
+        // *queues* the callback onto the source Spot's serial executor and
+        // returns immediately, so leave_submitted flips true well before the
+        // callback actually executes. The sweep must hold the erase --
+        // which OnLeave's own dispatch needs the local Actor instance to
+        // still be registered for -- until the callback has actually
+        // finished (leave_completed), except as a last-resort bound if the
+        // notification is genuinely lost (target crash, partition) or there
+        // is no OnLeave handler to await: leave_deadline.
+        bool leave_completed = false;
+        std::chrono::steady_clock::time_point leave_deadline;
     };
     std::vector<pending_remote_source_cleanup_t> pending_remote_source_cleanups;
     struct actor_factory_registration_t

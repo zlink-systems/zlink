@@ -141,7 +141,14 @@ class actor_transfer_coordinator_t
     bool try_begin_local (const std::string &actor_key);
     bool try_begin_source_remote (const std::string &actor_key, std::string transfer_id = {});
     void cancel_move (const std::string &actor_key);
-    void mark_reconcile (const std::string &actor_key);
+    void mark_reconcile (const std::string &actor_key,
+                        std::chrono::steady_clock::duration bound);
+    // Returns the actor_key of every reconcile-phase move whose bound has
+    // passed. The caller closes each one (finish_move_replay) to drain any
+    // parked backlog and restore local servability -- see move_state_t's
+    // reconcile_deadline comment.
+    std::vector<std::string>
+    reconcile_keys_expired (std::chrono::steady_clock::time_point now) const;
     // Returns the out→commit-ack elapsed time when the completed move was a
     // source-remote transfer (runtime-metrics §4.3 duration window); local
     // moves complete with nullopt.
@@ -280,6 +287,14 @@ class actor_transfer_coordinator_t
         std::string transfer_id;
         std::optional<std::chrono::steady_clock::time_point> transfer_started_at;
         bool source_leave_submitted = false;
+        // reconcile is entered for a genuinely ambiguous outcome (e.g. the
+        // FINALIZE/cutover submission itself failed, so the source cannot
+        // tell whether the target ever received it) where nothing today
+        // reconciles against authority truth. Bound it so a stuck reconcile
+        // cannot park requests in the backlog forever (spec 28: never
+        // unbounded queueing) -- resolve_expired_reconciles closes it and
+        // returns the Actor to local service once this passes.
+        std::optional<std::chrono::steady_clock::time_point> reconcile_deadline;
     };
 
     struct message_follow_route_t
