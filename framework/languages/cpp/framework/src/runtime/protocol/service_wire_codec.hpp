@@ -772,6 +772,20 @@ struct actor_join_reply_tail_t
     std::uint32_t receive_chunk_limit_bytes = 0;
 };
 
+/* actorJoin(28): correlation, actor-route-fence, bool8 entry, then
+ * spot-route-fence.  The optional application payload is carried as a second
+ * multipart frame by raw_mesh_node_owner_t, not in this header. */
+struct actor_join_request_t
+{
+    std::uint64_t correlation = 0;
+    actor_route_fence_t actor;
+    bool entry = false;
+    spot_route_fence_t target_spot;
+
+    friend bool operator== (const actor_join_request_t &,
+                            const actor_join_request_t &) = default;
+};
+
 struct client_server_client_admission_t
 {
     std::string channel_name;
@@ -996,6 +1010,10 @@ std::vector<std::uint8_t> encode_actor_join_reply (
   std::uint64_t membership_epoch,
   std::uint32_t receive_chunk_limit_bytes);
 actor_join_reply_tail_t decode_actor_join_reply (
+  std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t> encode_actor_join_request (
+  const actor_join_request_t &request);
+actor_join_request_t decode_actor_join_request (
   std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_liveness (command kind, std::uint64_t probe_id);
 liveness_record_t decode_liveness (std::span<const std::uint8_t> bytes);

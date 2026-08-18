@@ -1782,5 +1782,30 @@ int main ()
             assert (rejected);
         }
     }
+
+    // actorJoin(28) request frames deliberately have no golden fixture yet.
+    // This layout is derived from service-wire-v1.schema.json and the Node
+    // encodeActorJoinHeader reference: correlation, actor route fence, bool8
+    // entry, then spot route fence.
+    {
+        const protocol::actor_join_request_t request{
+          73,
+          {"actor-7", 11, {'a', 'c', 't', 'o', 'r', '-', 'o', 'w', 'n', 'e', 'r'}, 12, 13, 14},
+          true,
+          {"spot-8", 21, {'s', 'p', 'o', 't', '-', 'o', 'w', 'n', 'e', 'r'}, 22, 23, 24}};
+        const auto encoded = protocol::encode_actor_join_request (request);
+        assert (encoded.at (3)
+                == static_cast<std::uint8_t> (protocol::command::actorJoin));
+        assert (protocol::decode_actor_join_request (encoded) == request);
+        auto malformed = encoded;
+        malformed.erase (malformed.begin () + 5 + 8 + 1 + 8 + 1 + 8 + 1 + 8 + 1 + 8);
+        bool rejected = false;
+        try {
+            static_cast<void> (protocol::decode_actor_join_request (malformed));
+        } catch (const protocol::service_wire_error_t &) {
+            rejected = true;
+        }
+        assert (rejected);
+    }
     return 0;
 }
