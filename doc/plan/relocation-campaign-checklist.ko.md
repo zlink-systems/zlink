@@ -155,9 +155,10 @@
 - [ ] C-5 cpp actorJoin 발신 연산 신설 — 전문 에이전트의 spots/mesh 작업 랜딩 후
       terra 투입 예정(파일 충돌 회피) (service-wire cross-node join 요청/응답,
       binary tail 탑재 — codec은 `7ed3992ccd`로 기구현, node 발신 경로 참조)
-- [ ] C-6 dotnet actorJoin 발신 연산 신설 (BeginJoin의 local-or-NotConnected 한계 해소,
-      codec은 `327b58a3d2`로 기구현) — **terra 투입(2026-08-19, 파일 소유권 분리:
-      Service/Host 계열 — dotnet C-4의 Locations와 비충돌)**
+- [ ] C-6 dotnet actorJoin 발신 연산 — **terra 구현 완료(actorJoin(28) originate +
+      tail completion, spot fence·peer 세대 일치 시 wire 선택, JSON 경로 무변경;
+      요청 frame round-trip 테스트 작성)**. sandbox가 vstest TCP bind를 막아 검증
+      미실행 — dotnet C-4 게이트 종료 후 코디네이터 로컬 검증→커밋 예정
 - [ ] C-7 harness 교차 언어 relocation stage 전 쌍 그린 (JoinEntrySpot 경로 우선,
       C-5·C-6 후 일반 join 경로 — 기존 opt-in 스테이지 `2907df293f`/`c43758fc05` 기반)
 - [ ] C-8 교차 언어 스테이지를 harness 기본 `all` 게이트에 편입 (회귀 구조 차단)
@@ -179,9 +180,9 @@
 - [ ] E-1 dotnet 성능 패스(`062c0bbd1e`에 문서화된 6건): message-follow 중복 lock
       수동 해체, ToHex 정렬 comparer, HeldRecords O(N²), 중복 participant 스캔,
       codec 삼중 복사, LINQ 재해석 캐시
-- [ ] E-2 cpp complete_relocation_assembly 구조 분해 (등가성 테스트 선행 작성 후 분해)
-      — **terra 조기 투입(2026-08-19, public_host_runtime 단독 소유 확인 — C 완료
-      대기 불필요 판단, 사용자 병렬 확대 지시 반영)**
+- [ ] E-2 cpp complete_relocation_assembly 구조 분해 — terra 시도는 정직 실패
+      (sandbox cmake configure 불가·등가성 테스트 기준 미충족, 미완성 변경 revert
+      완료). **로컬 sonnet으로 재투입 예정**(direct-call harness 우선 구현)
 - [ ] E-3 dotnet StageInboundSpotAggregateAsync participant-restore 추출
 - [ ] E-4 cpp aggregate 오케스트레이션 reason 전파 (task_t<bool> → 분류 전달)
 - [ ] E-5 E 단계 전체 sol 리뷰 + 전 게이트 재확인
