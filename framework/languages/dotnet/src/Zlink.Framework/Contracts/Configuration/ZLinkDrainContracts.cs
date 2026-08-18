@@ -133,6 +133,11 @@ public readonly record struct ZLinkHostCapacityStatus(
     ZLinkCoreHwmStatus CoreHwm,
     ZLinkApplicationJobQueueStatus ApplicationJobQueue);
 
+//  SafeToShutdown (spec 30 §11): the source-published observation that
+//  every relocation unit this source started has reached its Message
+//  Follow route removal point (S4) and its cutover retransmission window
+//  has ended. A source-local observation, never a completion ACK from a
+//  target. True when this source has not started a relocation.
 public sealed record ZLinkFrameworkRuntimeStatus(
     ZLinkFrameworkRuntimeState State,
     bool IsReady,
@@ -142,7 +147,8 @@ public sealed record ZLinkFrameworkRuntimeStatus(
     ZLinkFrameworkTerminationResult? TerminationResult,
     ulong Sequence,
     DateTimeOffset ObservedAt,
-    ZLinkHostCapacityStatus Capacity = default);
+    ZLinkHostCapacityStatus Capacity = default,
+    bool SafeToShutdown = true);
 
 public interface IZLinkFrameworkRuntime
 {

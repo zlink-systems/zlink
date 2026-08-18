@@ -26,6 +26,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
     private readonly IDisposable _capacityMetricRegistration;
     private readonly Func<bool> _acceptingWorkSnapshot;
     private readonly Func<ZLinkHostCapacityStatus?> _capacitySnapshot;
+    private readonly Func<bool> _safeToShutdownSnapshot;
     private readonly Action? _resetCapacityMetrics;
     private readonly ILogger<ZLinkFrameworkMaintenanceRuntime>? _logger;
     private readonly object _gate = new();
@@ -57,7 +58,9 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
         Func<bool>? acceptingWorkSnapshot = null,
         Func<ZLinkHostCapacityStatus?>? capacitySnapshot = null,
         Action? resetCapacityMetrics = null,
-        ILogger<ZLinkFrameworkMaintenanceRuntime>? logger = null)
+        ILogger<ZLinkFrameworkMaintenanceRuntime>? logger = null,
+        Func<bool>? safeToShutdownSnapshot = null,
+        Action<Action>? subscribeSafeToShutdownChanged = null)
     {
         _lifecycle = lifecycle;
         _hostLifecycle = hostLifecycle;
@@ -66,12 +69,31 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
         _sourceApplicationVersion = sourceApplicationVersion;
         _acceptingWorkSnapshot = acceptingWorkSnapshot ?? (() => true);
         _capacitySnapshot = capacitySnapshot ?? (() => null);
+        _safeToShutdownSnapshot = safeToShutdownSnapshot ?? (() => true);
         _resetCapacityMetrics = resetCapacityMetrics;
         _logger = logger;
         _metricRegistration = ZLinkRuntimeMetrics.RegisterHostState(
             () => HostStateMetricValue(_hostLifecycle.State));
         _capacityMetricRegistration = ZLinkRuntimeMetrics.RegisterHostCapacity(
             _capacitySnapshot);
+        //  Spec 30 §11: SafeToShutdown is confirmed by "상태 조회·변화 관찰"
+        //  (status query and change observation), not by polling alone —
+        //  ObserveAsync subscribers must see the flip even though it isn't
+        //  a host-state transition. subscribeSafeToShutdownChanged wires
+        //  this republish without this class depending on the concrete
+        //  relocation runtime type.
+        if (subscribeSafeToShutdownChanged is not null)
+        {
+            void OnSafeToShutdownChanged()
+            {
+                lock (_gate)
+                {
+                    if (Volatile.Read(ref _disposed) != 0) return;
+                    PublishUnderLock();
+                }
+            }
+            subscribeSafeToShutdownChanged(OnSafeToShutdownChanged);
+        }
     }
 
     public ZLinkFrameworkRuntimeStatus Status
@@ -636,7 +658,8 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
             _terminationResult,
             _sequence,
             observedAt,
-            _capacitySnapshot() ?? default);
+            _capacitySnapshot() ?? default,
+            _safeToShutdownSnapshot());
     }
 
     private void TransitionUnderLock(ZLinkFrameworkRuntimeState state)

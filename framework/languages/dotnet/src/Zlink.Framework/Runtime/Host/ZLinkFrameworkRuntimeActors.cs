@@ -786,6 +786,11 @@ internal sealed partial class ZLinkFrameworkRuntime
                 .ConfigureAwait(false);
             return;
         }
+        //  Spec 15 §4.2: install the real per-actor import and migrate
+        //  every arrival parked since Accepted into it, atomically with
+        //  removing the prewarm attempt — only the party that owns this
+        //  Import call performs the one-time migration.
+        CompleteActorJoinPrewarmMigration(request.HandoffId, actorState);
         var actor = actorState.Actor
                     ?? throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.NotFound,
@@ -2449,6 +2454,21 @@ internal sealed partial class ZLinkFrameworkRuntime
                                 request.DeadlineUnixTimeMilliseconds);
                         ZLinkFrameworkDebugLog.SpotDiscovery(
                             $"admit_reply_built actor={request.ActorId} accepted=true");
+                        if (target.UserSpot is not null)
+                            //  Spec 15 §4.2: register the relocation
+                            //  temporary queue before Accepted returns to
+                            //  the source, so a production ingress
+                            //  arrival for this ActorId between now and
+                            //  Restore/PREPARE parks instead of being
+                            //  dropped as NotFound. JoinEntrySpot has no
+                            //  admission round trip and is excluded (spec
+                            //  15 §4.2 "이 준비 동승이 없다").
+                            RegisterActorJoinPrewarm(
+                                request.HandoffId,
+                                request.ActorId,
+                                request.ActorGeneration,
+                                DateTimeOffset.FromUnixTimeMilliseconds(
+                                    request.DeadlineUnixTimeMilliseconds));
                         return ZLinkRemoteActorJoinPackets.CreateAdmissionReply(
                             true,
                             result.Reply,
@@ -2466,11 +2486,18 @@ internal sealed partial class ZLinkFrameworkRuntime
     internal ValueTask AbortRoutedActorJoinAdmissionAsync(
         string spotId,
         ZLinkRemoteActorAdmissionAbortRequest request,
-        CancellationToken cancellationToken) =>
-        _actorHandoffAdmissions.AbortReservationAsync(
+        CancellationToken cancellationToken)
+    {
+        //  Spec 15 §4.2: an explicit abort of the reservation also ends
+        //  the relocation temporary queue this admission registered — any
+        //  arrival still parked for it must fail exactly once rather than
+        //  wait out the full admission validity window.
+        ReleaseActorJoinPrewarm(request.HandoffId);
+        return _actorHandoffAdmissions.AbortReservationAsync(
             request,
             spotId,
             cancellationToken);
+    }
 
     private ActorHandoffTarget? ResolveActorHandoffTarget(string spotId)
     {

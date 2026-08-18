@@ -382,6 +382,18 @@ internal sealed class ZLinkActorInboundPipeline(
             + $"request_id={frame.RequestId}");
         if (actor is null)
         {
+            //  Spec 15 §4.2: this ActorId may be the target of an in-flight
+            //  cross-node Actor Join — Accepted but not yet Restored/
+            //  PREPAREd locally, so no local Actor exists yet even though
+            //  the object is not really "not found". Park the arrival
+            //  instead of treating it as NotFound; PREPARE migrates it
+            //  atomically once the real import installs. Returns false
+            //  (falls through unchanged) both when no such admission
+            //  exists and once PREPARE already migrated it, since the
+            //  real Actor then resolves normally above.
+            if (runtime.TryParkActorJoinPrewarmIngress(frame))
+                return;
+
             //  A bound request whose incarnation is gone used to get no reply at
             //  all: the helper below answers no-bind requests only, and the frame
             //  was then acknowledged and dropped, leaving the caller to time out.

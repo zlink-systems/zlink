@@ -5883,6 +5883,148 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task ActorJoinPrewarmIngress_ParksArrivalBetweenAcceptedAndPrepare_ThenMigratesOnPrepare()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, _) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            const string actorId = "prewarm-actor";
+            const string handoffId = "prewarm-handoff-1";
+            const ulong actorGeneration = 4;
+            var sourceNodeRid = RoutingId.From("prewarm-source");
+            var repliedWithError = false;
+            Func<IReadOnlyList<Message>, SendFlags, SubmitResult> directReply =
+                (messages, _) =>
+                {
+                    repliedWithError = true;
+                    foreach (var message in messages) message.Dispose();
+                    return SubmitResult.Ok;
+                };
+
+            //  Step 1 (spec 15 §4.2 step 2): OnActorJoin admits and
+            //  registers the relocation temporary queue before Accepted
+            //  returns to the source — the exact call the production
+            //  admission path makes
+            //  (ZLinkFrameworkRuntimeActors.AdmitRoutedActorJoinAsync).
+            runtime.RegisterActorJoinPrewarm(
+                handoffId,
+                actorId,
+                actorGeneration,
+                DateTimeOffset.UtcNow.AddSeconds(30));
+
+            //  Step 2: an arrival for this exact Actor lands on
+            //  production ingress before PREPARE (Restore) has installed
+            //  the real import. Without the prewarm registry this is
+            //  dropped or replied NotFound.
+            //  ZLinkActorInboundPipeline.DispatchAsync is the same
+            //  production ingress entry point real inbound traffic uses.
+            var actorRef = new ZLinkBackendActorRef(
+                RoutingId.From("prewarm-target"), actorId, actorGeneration);
+            var earlyFrame = CreateRelocationRequestFrame(
+                actorRef, sourceNodeRid, requestId: 501, directReply);
+            var pipeline = new ZLinkActorInboundPipeline(
+                runtime, new ZLinkEntrySpotActorInboundEndpoint(runtime));
+            await pipeline.DispatchAsync(
+                new ZLinkSpotActorFrameBatch([earlyFrame]),
+                CancellationToken.None);
+
+            Assert.False(
+                repliedWithError,
+                "production ingress must park an arrival between Accepted and PREPARE instead of replying NotFound");
+
+            //  Step 3 (spec 15 §4.2 step 4): PREPARE (Restore) installs
+            //  the real import and must atomically migrate the parked
+            //  arrival into it — the same calls
+            //  ZLinkFrameworkRuntimeActors.PrepareCanonicalRoutedActorJoinTargetAsync
+            //  makes.
+            var actorState = runtime.GetOrCreateActorState(actorId);
+            var request = PrewarmJoinRequest(handoffId, actorId, actorGeneration);
+            Assert.True(actorState.Handoff.Import(request, out _));
+            runtime.CompleteActorJoinPrewarmMigration(handoffId, actorState);
+
+            var replay = actorState.Handoff.PrepareImportedReplay([]);
+            Assert.Contains(
+                replay,
+                frame => Encoding.UTF8.GetString(frame.Body) == "request");
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task ActorJoinPrewarmIngress_WithoutRegistration_ArrivalIsTreatedAsNotFound()
+    {
+        //  Disable-check: the same arrival, dispatched to the same
+        //  not-yet-existing ActorId but with no RegisterActorJoinPrewarm
+        //  call first — as if the prewarm mechanism were absent —
+        //  reproduces the pre-fix behavior. This is what makes the
+        //  companion test above meaningful: removing the registration
+        //  call flips this assertion, so the mechanism is what the
+        //  passing test above actually exercises.
+        var node = new CapturingSpotNode();
+        var (runtime, _) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            const string actorId = "prewarm-actor-disabled";
+            const ulong actorGeneration = 4;
+            var sourceNodeRid = RoutingId.From("prewarm-source");
+            var repliedWithError = false;
+            Func<IReadOnlyList<Message>, SendFlags, SubmitResult> directReply =
+                (messages, _) =>
+                {
+                    repliedWithError = true;
+                    foreach (var message in messages) message.Dispose();
+                    return SubmitResult.Ok;
+                };
+            var actorRef = new ZLinkBackendActorRef(
+                RoutingId.From("prewarm-target"), actorId, actorGeneration);
+            var frame = CreateRelocationRequestFrame(
+                actorRef, sourceNodeRid, requestId: 502, directReply);
+            var pipeline = new ZLinkActorInboundPipeline(
+                runtime, new ZLinkEntrySpotActorInboundEndpoint(runtime));
+
+            await pipeline.DispatchAsync(
+                new ZLinkSpotActorFrameBatch([frame]),
+                CancellationToken.None);
+
+            Assert.True(
+                repliedWithError,
+                "without a prewarm registration the arrival must fall back to the pre-fix NotFound/stale reply");
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private static ZLinkRemoteActorJoinRequest PrewarmJoinRequest(
+        string handoffId,
+        string actorId,
+        ulong actorGeneration)
+        => new(
+            actorId,
+            "warrior",
+            handoffId,
+            null,
+            null,
+            "application/json",
+            "root-1",
+            7,
+            Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"),
+            1,
+            new byte[32],
+            "application/json",
+            [],
+            [],
+            "source-spot",
+            [2],
+            actorGeneration,
+            1);
+
+    [Fact]
     public async Task ActorRemoteJoiner_InternalDeadline_MapsToTypedDeadlineExceeded()
     {
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>

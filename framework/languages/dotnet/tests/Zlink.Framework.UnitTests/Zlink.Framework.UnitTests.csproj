@@ -63,6 +63,7 @@
         <Compile Include="Runtime/ActorRelocationProtocolTests.cs"/>
         <Compile Include="Runtime/ActorRemoteJoinRecoveryCodecBoundaryTests.cs"/>
         <Compile Include="Runtime/ActorHandoffTests.cs"/>
+        <Compile Include="Runtime/ActorJoinPrewarmRegistryTests.cs"/>
         <Compile Include="Runtime/ActorHandlerActivationTests.cs"/>
         <Compile Include="Runtime/ActorClientTests.cs"/>
         <Compile Include="Runtime/ActorBoundSessionRelayTests.cs"/>

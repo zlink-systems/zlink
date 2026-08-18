@@ -147,7 +147,12 @@ internal static class ZLinkFrameworkServiceRegistrar
                     ZLinkFrameworkRuntime>().GetHostCapacityStatus(),
                 resetCapacityMetrics: () => provider.GetRequiredService<
                     ZLinkFrameworkRuntime>().ResetCapacityMetrics(),
-                logger: provider.GetService<ILogger<ZLinkFrameworkMaintenanceRuntime>>()));
+                logger: provider.GetService<ILogger<ZLinkFrameworkMaintenanceRuntime>>(),
+                safeToShutdownSnapshot: () => provider.GetRequiredService<
+                    ZLinkFrameworkRuntime>().SafeToShutdown,
+                subscribeSafeToShutdownChanged: handler =>
+                    provider.GetRequiredService<ZLinkFrameworkRuntime>()
+                        .SafeToShutdownChanged += handler));
         services.TryAddSingleton<IZLinkFrameworkRuntime>(static provider =>
             provider.GetRequiredService<ZLinkFrameworkMaintenanceRuntime>());
         services.TryAddSingleton<IZLinkRuntimeTerminalFailureSink>(static provider =>

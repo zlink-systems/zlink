@@ -39,6 +39,31 @@ internal sealed class ZLinkActorHandoffState(
     private TaskCompletionSource? _sourceCompletion;
     private Task? _canonicalMaintenanceDrain;
 
+    private IDisposable? _pendingShutdownToken;
+
+    /// <summary>
+    /// The SafeToShutdown obligation token for the relocation unit currently
+    /// sealed on this Actor (spec 30 §11). The owning source runtime sets
+    /// this right after <see cref="SealCapture"/>; this class releases it
+    /// exactly once, in <see cref="ClearMessageFollowRouteLocked"/>, which
+    /// every source exit path — commit-then-S4, abort and reset — already
+    /// funnels through. A fresh <see cref="BeginCapture"/> can start before
+    /// a previous Message Follow route's window fully elapses (its
+    /// background removal then no-ops on the stale route it holds); the
+    /// setter disposes whatever token it replaces so that orphaned case
+    /// still releases its obligation instead of leaking it forever.
+    /// </summary>
+    internal IDisposable? PendingShutdownToken
+    {
+        get => _pendingShutdownToken;
+        set
+        {
+            var previous = Interlocked.Exchange(ref _pendingShutdownToken, value);
+            if (!ReferenceEquals(previous, value))
+                previous?.Dispose();
+        }
+    }
+
     public void BeginCapture()
     {
         lock (_gate)
@@ -995,9 +1020,23 @@ internal sealed class ZLinkActorHandoffState(
         }
     }
 
-    public void CommitMessageFollow(TimeSpan duration)
+    /// <param name="duration">
+    /// The Message Follow route lifetime — this source's clock measures S4
+    /// (route removable) as this long after this call (spec 30 §11).
+    /// </param>
+    /// <param name="retransmissionWindow">
+    /// The cutover retransmission window (spec 28 §4.4/30 §11). SafeToShutdown
+    /// requires both S4 and this window to have elapsed, so the obligation
+    /// release waits <c>max(duration, retransmissionWindow)</c> from this
+    /// call — the route_convergence metric below is unaffected and still
+    /// measures S1→S4 alone (spec 25 §5).
+    /// </param>
+    public void CommitMessageFollow(
+        TimeSpan duration,
+        TimeSpan retransmissionWindow = default)
     {
         CancellationTokenSource expiry;
+        long committedAt;
         lock (_messageFollowGate)
         {
             lock (_gate)
@@ -1015,11 +1054,16 @@ internal sealed class ZLinkActorHandoffState(
                 _sourceCaptureSealed = true;
                 expiry = new CancellationTokenSource();
                 _messageFollowExpiry = expiry;
+                //  S1 (spec 25 §5): the cutover submit terminal this class
+                //  observes. Taken from timeProvider so it is source-local
+                //  and deterministic under a fake clock in tests.
+                committedAt = timeProvider.GetTimestamp();
                 messageFollowRoute.Lease.Commit(duration);
             }
         }
 
-        _ = RemoveMessageFollowRouteAfterDelayAsync(duration, expiry);
+        _ = RemoveMessageFollowRouteAfterDelayAsync(
+            duration, retransmissionWindow, committedAt, expiry);
     }
 
     public IReadOnlyList<ZLinkActorHandoffFrame> PrepareImportedReplay(
@@ -1642,11 +1686,29 @@ internal sealed class ZLinkActorHandoffState(
 
     private async Task RemoveMessageFollowRouteAfterDelayAsync(
         TimeSpan duration,
+        TimeSpan retransmissionWindow,
+        long committedAt,
         CancellationTokenSource expiry)
     {
         try
         {
+            //  S4 (spec 25 §5/30 §11): the Message Follow route becomes
+            //  removable this long after S1. route_convergence (S1→S4) is
+            //  recorded as its own event right here — it must not wait for
+            //  the retransmission-window tail below, or a deployment that
+            //  configures a longer window than follow duration would
+            //  inflate the metric past S4.
             await Task.Delay(duration, timeProvider, expiry.Token).ConfigureAwait(false);
+            ZLinkRuntimeMetrics.RecordRelocationRouteConvergence(
+                timeProvider.GetElapsedTime(committedAt), "actor");
+            //  SafeToShutdown additionally requires the cutover
+            //  retransmission window to have ended (spec 30 §11). Both
+            //  waits share the same S1 clock, so this only adds the
+            //  remainder when the window outlives the follow duration.
+            var remainder = retransmissionWindow - duration;
+            if (remainder > TimeSpan.Zero)
+                await Task.Delay(remainder, timeProvider, expiry.Token)
+                    .ConfigureAwait(false);
             lock (_messageFollowGate)
             {
                 lock (_gate)
@@ -1660,6 +1722,10 @@ internal sealed class ZLinkActorHandoffState(
         }
         catch (OperationCanceledException) when (expiry.IsCancellationRequested)
         {
+            //  Shutdown called before S4 published (spec 30 §11 allows
+            //  this): the caller that canceled `expiry` already released
+            //  the SafeToShutdown obligation via ClearMessageFollowRouteLocked.
+            //  The measurement window never elapsed, so no metric sample.
         }
         finally
         {
@@ -1674,6 +1740,13 @@ internal sealed class ZLinkActorHandoffState(
         var expiry = _messageFollowExpiry;
         _messageFollowExpiry = null;
         expiry?.Cancel();
+        //  Spec 30 §11: this is the single point every source exit path —
+        //  normal S4+window completion, abort, and reset — funnels
+        //  through, so the SafeToShutdown obligation acquired at seal
+        //  (BeginPendingRelocationUnit) always releases exactly once, no
+        //  matter how the unit ends. The setter disposes the token it
+        //  replaces.
+        PendingShutdownToken = null;
     }
 }
 

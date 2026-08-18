@@ -468,6 +468,12 @@ internal sealed class ZLinkSpotRetireScheduler(
                 foreach (var capture in actorCaptures.Values)
                 {
                     capture.State.Handoff.SealCapture();
+                    //  Spec 30 §11: the SafeToShutdown obligation starts at
+                    //  seal, not at cutover — waiting until
+                    //  CommitMessageFollow would let a shutdown query race
+                    //  the seal-to-cutover window.
+                    capture.State.Handoff.PendingShutdownToken =
+                        runtime.BeginPendingRelocationUnit();
                     capture.CommitBoundary = capture.State.Handoff
                         .FreezeCaptureCommitBoundary();
                 }
@@ -951,7 +957,9 @@ internal sealed class ZLinkSpotRetireScheduler(
                                 trailing);
                         capture.State.Handoff.CommitMessageFollow(
                             runtime.Registration.Locations.Options
-                                .MessageFollowDuration);
+                                .MessageFollowDuration,
+                            runtime.Registration.Locations.Options
+                                .RelocationCutoverWaitTimeout);
                         return backlog;
                     });
                 foreach (var backlog in await Task.WhenAll(followTasks)

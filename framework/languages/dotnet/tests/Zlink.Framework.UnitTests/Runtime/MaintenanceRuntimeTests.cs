@@ -24,6 +24,104 @@ public sealed class MaintenanceRuntimeTests
     }
 
     [Fact]
+    public void ShutdownTracking_SafeToShutdown_FalseWhilePendingUnitsRemain()
+    {
+        var tracking = new ZLinkRelocationShutdownTracking();
+        var changes = 0;
+        tracking.Changed += () => changes++;
+
+        Assert.True(tracking.SafeToShutdown);
+
+        var first = tracking.Begin();
+        Assert.False(tracking.SafeToShutdown);
+        Assert.Equal(1, changes);
+
+        var second = tracking.Begin();
+        Assert.False(tracking.SafeToShutdown);
+        //  A second concurrent unit does not flip SafeToShutdown again —
+        //  it was already false.
+        Assert.Equal(1, changes);
+
+        first.Dispose();
+        Assert.False(tracking.SafeToShutdown);
+        Assert.Equal(1, changes);
+
+        second.Dispose();
+        Assert.True(tracking.SafeToShutdown);
+        Assert.Equal(2, changes);
+
+        //  Idempotent: disposing again must not double-release or re-fire.
+        second.Dispose();
+        Assert.True(tracking.SafeToShutdown);
+        Assert.Equal(2, changes);
+    }
+
+    [Fact]
+    public void Status_SafeToShutdown_DefaultsTrue_WhenNoSnapshotProvided()
+    {
+        using var fixture = Create();
+
+        Assert.True(fixture.Runtime.Status.SafeToShutdown);
+    }
+
+    [Fact]
+    public void Status_SafeToShutdown_ReflectsInjectedSnapshot()
+    {
+        var executor = new MaintenanceExecutor();
+        using var drain = new ZLinkDrainCoordinator(
+            new ZLinkDrainAdmissionGate(),
+            executor);
+        var safeToShutdown = false;
+        using var runtime = new ZLinkFrameworkMaintenanceRuntime(
+            drain,
+            new ZLinkFrameworkHostLifecycleState(),
+            static (_, _, _) =>
+                ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
+            static _ => ValueTask.FromResult(true),
+            safeToShutdownSnapshot: () => safeToShutdown);
+
+        Assert.False(runtime.Status.SafeToShutdown);
+
+        safeToShutdown = true;
+        Assert.True(runtime.Status.SafeToShutdown);
+    }
+
+    [Fact]
+    public async Task Status_SafeToShutdown_Change_RepublishesToObservers()
+    {
+        var executor = new MaintenanceExecutor();
+        using var drain = new ZLinkDrainCoordinator(
+            new ZLinkDrainAdmissionGate(),
+            executor);
+        var safeToShutdown = false;
+        Action? changeHandler = null;
+        using var runtime = new ZLinkFrameworkMaintenanceRuntime(
+            drain,
+            new ZLinkFrameworkHostLifecycleState(),
+            static (_, _, _) =>
+                ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
+            static _ => ValueTask.FromResult(true),
+            safeToShutdownSnapshot: () => safeToShutdown,
+            subscribeSafeToShutdownChanged: handler => changeHandler = handler);
+
+        Assert.NotNull(changeHandler);
+        using var cancellation = new CancellationTokenSource(
+            TimeSpan.FromSeconds(5));
+        var observed = runtime.ObserveAsync(cancellation.Token)
+            .GetAsyncEnumerator(cancellation.Token);
+        var initial = await observed.MoveNextAsync();
+        Assert.True(initial);
+        Assert.False(observed.Current.Status.SafeToShutdown);
+
+        safeToShutdown = true;
+        changeHandler!.Invoke();
+
+        var next = await observed.MoveNextAsync();
+        Assert.True(next);
+        Assert.True(observed.Current.Status.SafeToShutdown);
+    }
+
+    [Fact]
     public async Task CoreLifecycleRuntime_Shutdown_IsTerminalOnce_WithoutAspNetHost()
     {
         using var fixture = Create();

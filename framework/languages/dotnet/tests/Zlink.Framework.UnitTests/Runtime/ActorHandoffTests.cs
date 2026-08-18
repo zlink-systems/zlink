@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.Contracts.Actors;
@@ -1425,6 +1426,103 @@ public sealed class ActorHandoffTests
             Assert.DoesNotContain("generation=", marker);
             Assert.DoesNotContain("actor-private-42", marker);
         });
+    }
+
+    [Fact]
+    public async Task SafeToShutdown_TokenReleases_OnlyAfterFollowDurationAndRetransmissionWindow()
+    {
+        var state = new ZLinkActorRuntimeState("actor-1");
+        var source = ActorRef("node-a", 1);
+        var target = ActorRef("node-b", 2);
+        state.BindNativeActorRef(source);
+        state.Handoff.BeginCapture();
+
+        var released = false;
+        state.Handoff.PendingShutdownToken =
+            new DisposeSpy(() => released = true);
+
+        _ = Cutover(state, 0, source, target);
+        //  The retransmission window (60ms) outlives the follow duration
+        //  (15ms), so SafeToShutdown must wait for the window, not just S4.
+        state.Handoff.CommitMessageFollow(
+            TimeSpan.FromMilliseconds(15), TimeSpan.FromMilliseconds(60));
+
+        Assert.False(released);
+        await Task.Delay(30);
+        Assert.False(
+            released,
+            "the obligation must still hold once S4 elapses but the retransmission window has not");
+
+        for (var attempt = 0; attempt < 40 && !released; attempt++)
+            await Task.Delay(10);
+
+        Assert.True(released);
+    }
+
+    [Fact]
+    public async Task SafeToShutdown_TokenReleases_OnAbortBeforeMessageFollowCommits()
+    {
+        var state = new ZLinkActorRuntimeState("actor-1");
+        state.Handoff.BeginCapture();
+        state.Handoff.SealCapture();
+
+        var released = false;
+        state.Handoff.PendingShutdownToken =
+            new DisposeSpy(() => released = true);
+
+        state.Handoff.AbortCapture();
+
+        Assert.True(released);
+        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task RouteConvergenceMetric_RecordsAtFollowDuration_IndependentOfRetransmissionWindow()
+    {
+        var measurements =
+            new List<(double Value, KeyValuePair<string, object?>[] Tags)>();
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, owner) =>
+            {
+                if (instrument.Meter.Name == ZLinkMeters.Framework
+                    && instrument.Name == "zlink.relocation.route_convergence")
+                    owner.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<double>(
+            (_, value, tags, _) => measurements.Add((value, tags.ToArray())));
+        listener.Start();
+
+        var state = new ZLinkActorRuntimeState("actor-1");
+        var source = ActorRef("node-a", 1);
+        var target = ActorRef("node-b", 2);
+        state.BindNativeActorRef(source);
+        state.Handoff.BeginCapture();
+        var released = false;
+        state.Handoff.PendingShutdownToken =
+            new DisposeSpy(() => released = true);
+        _ = Cutover(state, 0, source, target);
+        //  The retransmission window (150ms) far outlives the follow
+        //  duration (15ms). The metric must not wait for the window.
+        state.Handoff.CommitMessageFollow(
+            TimeSpan.FromMilliseconds(15), TimeSpan.FromMilliseconds(150));
+
+        for (var attempt = 0; attempt < 40 && measurements.Count == 0; attempt++)
+            await Task.Delay(10);
+
+        var measurement = Assert.Single(measurements);
+        Assert.Contains(
+            measurement.Tags,
+            tag => tag.Key == "unit_kind" && Equals(tag.Value, "actor"));
+        Assert.False(
+            released,
+            "the SafeToShutdown obligation is still open while the retransmission window continues");
+    }
+
+    private sealed class DisposeSpy(Action onDispose) : IDisposable
+    {
+        public void Dispose() => onDispose();
     }
 
     [Fact]
