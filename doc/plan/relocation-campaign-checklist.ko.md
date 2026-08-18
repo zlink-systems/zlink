@@ -147,17 +147,21 @@
       reservation_id 기반으로 재설계(public_host_runtime 소비자 동반 수정) +
       mesh/authority 실제-writer 골든 conformance. F2(Lua 태그) F3(lease writer)은
       b20d2011fe로 선랜딩. (JSON 키 순서는 규약상 field-compare라 비결함)
-- [ ] C-4a java 수렴 — **재정찰로 지형 재정의(2026-08-19)**: terra 감사의 Lua-HASH
+- [x] C-4a java 수렴 — **재정찰로 지형 재정의(2026-08-19)**: terra 감사의 Lua-HASH
       스택은 실은 **죽은 코드**(프로덕션 미도달, 자기참조+테스트 1개뿐). 라이브
       경로는 core의 ZLinkProviderDescriptorRepository/ZLinkProviderLocationRepository
       — 자체 비규범 스킴(zlink:v11: 프리픽스, PascalCase JSON, 이진 generation 접두,
       recordVersion 부재). **재범위**: ① provider 저장소를 §2.4로 포팅(node 참조
       구현, 타입별 단계·게이트·커밋), ② 죽은 Lua 스택은 oracle 커버리지 확인 후
-      일괄 삭제(POSDDD), ③ 골든은 실제 writer 구동. **진행: oracle 구축+잔해 정리
-      커밋(라이브 경로 최초 redis 커버리지 3종) — mesh 포팅 착수(스키마 74a0ed04da
-      기준)**. 라이브 경로 동작 사실 3건 스펙 판정 후보로 기록: 동일 revision RENEW
-      =IGNORED_STALE, authority commit이 대상 lifecycleGeneration 미펜스,
-      removeAllByOwner가 descriptor 미회수(descriptor:mesh:*, owner-lease:* 등 →
+      일괄 삭제(POSDDD), ③ 골든은 실제 writer 구동. **완료(2026-08-19)**: oracle
+      82731d819d → mesh 708e2c3a79 → lease 0111e5e041(공유 codec) → client-server
+      8272443a47 → fanout+레거시 기계 삭제 0f04ee8db7 → authority 값 cd40ab29f3 →
+      authority 키+감사+conformance 441b60574c. **java 5타입 전부 canonical,
+      골든 conformance 6종 실제-writer 구동, 모듈 그린.** 라이브 경로 동작 사실
+      3건은 스펙 판정 후보로 유지(동일 revision RENEW=IGNORED_STALE, authority
+      commit이 대상 lifecycleGeneration 미펜스, removeAllByOwner descriptor 미회수).
+      fixture 소정정 1건: authority-spot 벡터의 active+pendingCreation 조합은 실제
+      commit 불가 — reserved로 정정 필요(descriptor:mesh:*, owner-lease:* 등 →
       canonical-JSON-over-opaque) + ZLinkRedisAuthorityClient(3029줄) counter/CAS
       감사·수렴 — **상호 운용에 필수**(전용 경로가 남는 한 java descriptor를 타
       언어가 못 읽음), 전담 세션 규모로 분리 [java 1차에서 이월]
