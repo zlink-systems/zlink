@@ -4100,10 +4100,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         || prepare->payload_chunk_count
                              > protocol::relocationChunkCount)
                         continue;
-                    // TODO(schema-atomic): prepare->base_checksum_crc32c is
-                    // decoded but no longer acted on — the base/delta staging
-                    // path is removed; the wire field itself is removed in
-                    // the atomic schema commit.
                     {
                         std::lock_guard lock (_mutex);
                         const auto found = _relocation_assemblies.find (key);
@@ -4147,11 +4143,6 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     const relocation_attempt_key_t key{
                       state->relocation.high, state->relocation.low,
                       state->target_attempt_generation};
-                    // TODO(schema-atomic): state->payload_stage is decoded
-                    // but no longer acted on — the base/delta staging path is
-                    // removed; every chunk arrives as the "final" stage until
-                    // the wire field itself is removed in the atomic schema
-                    // commit.
                     std::optional<pending_relocation_assembly_t> completed;
                     std::optional<pending_relocation_assembly_t> failed;
                     {

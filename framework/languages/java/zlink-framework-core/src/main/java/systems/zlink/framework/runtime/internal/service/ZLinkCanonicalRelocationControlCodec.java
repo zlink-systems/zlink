@@ -77,7 +77,6 @@ final class ZLinkCanonicalRelocationControlCodec {
             throw invalid("payload chunk count");
         }
         r.u32();
-        r.u32();
     }
 
     private static void ready(Reader r) {
@@ -96,8 +95,6 @@ final class ZLinkCanonicalRelocationControlCodec {
 
     private static void state(Reader r) {
         relocationBase(r); requireRole(r, 1); object(r);
-        int stage = r.u8();
-        if (stage != 0 && stage != 1) throw invalid("payload stage");
         r.u32();
         long chunkLength = Integer.toUnsignedLong(r.u32());
         if (chunkLength > CHUNK_DATA_BYTES_BOUND) {

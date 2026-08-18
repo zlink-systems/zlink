@@ -753,10 +753,9 @@
         "exact-source-and-target-owner-lease-fences"
       ],
       "sequence": [
-        "source-optional-relocationState-base-stage-chunks-before-seal-in-preparing-phase-referencing-a-pre-capture-snapshot",
         "source-captures-existing-work-and-timers-into-source-memory-payload",
-        "source-relocationPrepare-request-with-final-payload-length-chunk-count-checksum-and-optional-base-checksum",
-        "source-relocationState-final-stage-chunks-on-the-same-ordered-connection",
+        "source-relocationPrepare-request-with-payload-length-chunk-count-and-checksum",
+        "source-relocationState-chunks-on-the-same-ordered-connection",
         "target-installs-temporary-queue-assembles-verifies-and-restores-payload-and-keeps-dispatch-closed",
         "target-relocationReady-reply",
         "target-relocationFailed-reply-after-partial-chunk-and-prepared-resource-cleanup",
@@ -767,7 +766,7 @@
         "target-switches-regular-route-finishes-lifecycle-and-opens-dispatch"
       ],
       "savedPrefixOwner": "source-memory-payload-only-never-relocationData",
-      "relocationState": "saved-work-chunk-only-exact-identity-per-payloadStage-independent-ordinal-space-per-stage-conflicting-length-or-checksum-is-explicit-failure",
+      "relocationState": "saved-work-chunk-only-exact-identity-conflicting-length-or-checksum-is-explicit-failure",
       "relocationData": "post-capture-ingress-hold-record-only-same-ordered-connection-as-cutover-no-ack-no-numeric-high-water",
       "cutover": "one-way-no-reply-late-or-duplicate-only-warning-and-no-state-change",
       "capacity": "normal-host-admission-and-core-backpressure-only-no-relocation-message-byte-or-participant-reservation",
@@ -1369,7 +1368,6 @@
     "checkValue": 3808858755,
     "coverage": [
       "relocationPrepare.payloadChecksumCrc32c",
-      "relocationPrepare.baseChecksumCrc32c",
       "relocationCutover.boundaryChecksumCrc32c",
       "relocation-manifest-v1.totalChecksumCrc32c",
       "relocation-chunk-entry-v1.checksumCrc32c",
@@ -2214,21 +2212,6 @@
         {
           "name": "coordinator",
           "value": 3
-        }
-      ]
-    },
-    {
-      "name": "relocation-payload-stage",
-      "kind": "enum",
-      "encoding": "u8",
-      "values": [
-        {
-          "name": "base",
-          "value": 0
-        },
-        {
-          "name": "final",
-          "value": 1
         }
       ]
     },
@@ -7620,19 +7603,9 @@
           "$ref": "u32"
         },
         {
-          "name": "baseChecksumCrc32c",
-          "$ref": "u32"
-        },
-        {
           "name": "applicationVersion",
           "$ref": "application-version"
         }
-      ],
-      "semanticConstraints": [
-        "baseChecksumCrc32c-zero-means-no-base-stage",
-        "baseChecksumCrc32c-nonzero-means-delta-payload-references-base-snapshot-with-this-crc32c",
-        "target-must-have-assembled-base-with-matching-checksum-or-reply-relocationFailed",
-        "payloadTotalLength-payloadChunkCount-payloadChecksumCrc32c-describe-final-stage-only"
       ],
       "payload": "forbidden"
     },
@@ -8012,10 +7985,6 @@
           "$ref": "relocation-object-identity"
         },
         {
-          "name": "payloadStage",
-          "$ref": "relocation-payload-stage"
-        },
-        {
           "name": "chunkOrdinal",
           "$ref": "u32"
         },
@@ -8023,9 +7992,6 @@
           "name": "chunkData",
           "$ref": "durable-blob"
         }
-      ],
-      "semanticConstraints": [
-        "chunkOrdinal-space-is-independent-per-payloadStage"
       ],
       "payload": "forbidden"
     },
@@ -8225,23 +8191,9 @@
           "source"
         ],
         "phases": [
-          "preparing",
           "captured",
           "prepared"
         ],
-        "stageRules": {
-          "base": {
-            "phases": [
-              "preparing"
-            ]
-          },
-          "final": {
-            "phases": [
-              "captured",
-              "prepared"
-            ]
-          }
-        },
         "duplicate": "identical-chunk-reassembly-idempotent-different-length-or-checksum-conflict-failure",
         "reorder": "same-ordered-connection-after-matching-relocationPrepare-in-chunk-ordinal-order",
         "loss": "no-per-chunk-ack-restore-deadline-fails-the-relocation"

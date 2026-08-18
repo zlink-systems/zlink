@@ -949,11 +949,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         ZLinkMeshNodeDescriptor target,
         ZLinkRelocationEnvelope envelope,
         ZLinkRelocationTransferPayload payload,
-        long applicationVersion,
-        // TODO(schema-atomic): baseChecksumCrc32c is always 0 now that the
-        // base/delta capture capability is removed. The wire field itself
-        // is removed in a later atomic schema commit.
-        uint baseChecksumCrc32c = 0)
+        long applicationVersion)
     {
         var relocationId = ToWireId(envelope.AggregateId);
         return new ZLinkServiceWireCodec.RelocationPrepareRecord(
@@ -982,7 +978,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             checked((ulong)payload.TotalLength),
             checked((uint)payload.ChunkCount),
             payload.ChecksumCrc32c,
-            baseChecksumCrc32c,
             checked((ulong)applicationVersion));
     }
 

@@ -1103,10 +1103,6 @@ bool maintenance_runtime_t::relocate_encode (
         }
         state->manifest = plan_relocation_payload (
           state->payload, state->effective_chunk_limit);
-        // TODO(schema-atomic): the wire's baseChecksumCrc32c is hardcoded 0
-        // at its construction site (mesh_node_runtime.cpp
-        // relocate_application_actor/unit) until the field is removed in the
-        // atomic schema commit; this manifest carries no base counterpart.
     }
     catch (...) {
         (void) _objects.abort_relocation (state->seal_attempt.seal.token);
@@ -1408,10 +1404,6 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
           std::move (state->payload), persisted_context, {});
         state->manifest = plan_relocation_payload (
           state->payload, state->effective_chunk_limit);
-        // TODO(schema-atomic): the wire's baseChecksumCrc32c is hardcoded 0
-        // at its construction site (mesh_node_runtime.cpp
-        // relocate_application_actor/unit) until the field is removed in the
-        // atomic schema commit; this manifest carries no base counterpart.
     }
     catch (...) {
     }

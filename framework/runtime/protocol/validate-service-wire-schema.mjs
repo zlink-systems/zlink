@@ -1496,10 +1496,9 @@ function validateSemanticConstraints(constraints, contexts, fail) {
         "exact-source-and-target-owner-lease-fences",
       ],
       sequence: [
-        "source-optional-relocationState-base-stage-chunks-before-seal-in-preparing-phase-referencing-a-pre-capture-snapshot",
         "source-captures-existing-work-and-timers-into-source-memory-payload",
-        "source-relocationPrepare-request-with-final-payload-length-chunk-count-checksum-and-optional-base-checksum",
-        "source-relocationState-final-stage-chunks-on-the-same-ordered-connection",
+        "source-relocationPrepare-request-with-payload-length-chunk-count-and-checksum",
+        "source-relocationState-chunks-on-the-same-ordered-connection",
         "target-installs-temporary-queue-assembles-verifies-and-restores-payload-and-keeps-dispatch-closed",
         "target-relocationReady-reply",
         "target-relocationFailed-reply-after-partial-chunk-and-prepared-resource-cleanup",
@@ -1510,7 +1509,7 @@ function validateSemanticConstraints(constraints, contexts, fail) {
         "target-switches-regular-route-finishes-lifecycle-and-opens-dispatch",
       ],
       savedPrefixOwner: "source-memory-payload-only-never-relocationData",
-      relocationState: "saved-work-chunk-only-exact-identity-per-payloadStage-independent-ordinal-space-per-stage-conflicting-length-or-checksum-is-explicit-failure",
+      relocationState: "saved-work-chunk-only-exact-identity-conflicting-length-or-checksum-is-explicit-failure",
       relocationData: "post-capture-ingress-hold-record-only-same-ordered-connection-as-cutover-no-ack-no-numeric-high-water",
       cutover: "one-way-no-reply-late-or-duplicate-only-warning-and-no-state-change",
       capacity: "normal-host-admission-and-core-backpressure-only-no-relocation-message-byte-or-participant-reservation",
@@ -3743,11 +3742,7 @@ function validateRelocationStateMachine(machine, commands, types, fail) {
     ["relocationState", {
       command: "relocationState",
       senderRoles: ["source"],
-      phases: ["preparing", "captured", "prepared"],
-      stageRules: {
-        base: { phases: ["preparing"] },
-        final: { phases: ["captured", "prepared"] },
-      },
+      phases: ["captured", "prepared"],
       duplicate: "identical-chunk-reassembly-idempotent-different-length-or-checksum-conflict-failure",
       reorder: "same-ordered-connection-after-matching-relocationPrepare-in-chunk-ordinal-order",
       loss: "no-per-chunk-ack-restore-deadline-fails-the-relocation",
@@ -4004,10 +3999,9 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "coordinator", $ref: "relocation-coordinator-fence" },
     { name: "senderRole", $ref: "relocation-role" },
     { name: "object", $ref: "relocation-object-identity" },
-    { name: "payloadStage", $ref: "relocation-payload-stage" },
     { name: "chunkOrdinal", $ref: "u32" },
     { name: "chunkData", $ref: "durable-blob" },
-  ], "$.commands", "relocationState must carry one exact-identity saved-work chunk with its stage, zero-based ordinal and bounded bytes");
+  ], "$.commands", "relocationState must carry one exact-identity saved-work chunk with its zero-based ordinal and bounded bytes");
   const relocationStateCommand = commands.get("relocationState");
   if (relocationStateCommand?.id !== 52
       || relocationStateCommand?.domain !== "infrastructure"
@@ -4642,7 +4636,6 @@ function validateServiceInvariants(schema, types, fail) {
     { name: "payloadTotalLength", $ref: "relocation-logical-length" },
     { name: "payloadChunkCount", $ref: "relocation-chunk-count" },
     { name: "payloadChecksumCrc32c", $ref: "u32" },
-    { name: "baseChecksumCrc32c", $ref: "u32" },
     { name: "applicationVersion", $ref: "application-version" },
   ], "$.commands", "relocationPrepare must carry the exact target, object and direct-transfer payload manifest without capacity negotiation");
   requireFields(commands.get("relocationReady")?.body, [
@@ -5672,7 +5665,6 @@ function validateRelocationTransferChecksumProfile(profile, fail) {
     checkValue: 0xe3069283,
     coverage: [
       "relocationPrepare.payloadChecksumCrc32c",
-      "relocationPrepare.baseChecksumCrc32c",
       "relocationCutover.boundaryChecksumCrc32c",
       "relocation-manifest-v1.totalChecksumCrc32c",
       "relocation-chunk-entry-v1.checksumCrc32c",
@@ -6708,33 +6700,6 @@ function runSelfTests(schema) {
         (entry) => entry.command === "sessionRelocationRoute",
       );
       rule.actionRules.commit.phases = ["prepared"];
-    }],
-    ["relocationState base stage window widened past preparing", (candidate) => {
-      const rule = candidate.relocationStateMachine.commandRules.find(
-        (entry) => entry.command === "relocationState",
-      );
-      rule.stageRules.base.phases.push("captured");
-    }],
-    ["relocationState payloadStage field removed", (candidate) => {
-      const relocationState = candidate.commands.find((command) => command.name === "relocationState");
-      relocationState.body = relocationState.body.filter((field) => field.name !== "payloadStage");
-    }],
-    ["relocationState payloadStage moved after chunkOrdinal", (candidate) => {
-      const relocationState = candidate.commands.find((command) => command.name === "relocationState");
-      const stage = relocationState.body.find((field) => field.name === "payloadStage");
-      relocationState.body = relocationState.body.filter((field) => field.name !== "payloadStage");
-      const chunkOrdinalIndex = relocationState.body.findIndex((field) => field.name === "chunkOrdinal");
-      relocationState.body.splice(chunkOrdinalIndex + 1, 0, stage);
-    }],
-    ["relocationPrepare baseChecksumCrc32c field removed", (candidate) => {
-      const relocationPrepare = candidate.commands.find((command) => command.name === "relocationPrepare");
-      relocationPrepare.body = relocationPrepare.body.filter((field) => field.name !== "baseChecksumCrc32c");
-    }],
-    ["relocationPrepare baseChecksumCrc32c not covered by checksum profile", (candidate) => {
-      candidate.relocationTransferChecksumProfile.coverage =
-        candidate.relocationTransferChecksumProfile.coverage.filter(
-          (entry) => entry !== "relocationPrepare.baseChecksumCrc32c",
-        );
     }],
     ["actor-join-reply-tail receiveChunkLimitBytes field removed", (candidate) => {
       const tail = candidate.types.find((type) => type.name === "actor-join-reply-tail");

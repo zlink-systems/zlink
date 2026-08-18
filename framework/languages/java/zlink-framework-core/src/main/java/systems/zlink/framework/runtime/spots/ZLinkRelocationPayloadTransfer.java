@@ -35,13 +35,7 @@ final class ZLinkRelocationPayloadTransfer {
     private ZLinkRelocationPayloadTransfer() {
     }
 
-    /**
-     * Builds the PREPARE manifest for one captured payload. The base/delta
-     * capture capability has been removed from the product (spec 15 §5's
-     * pre-seal base is never produced), so {@code baseChecksumCrc32c} is
-     * always 0 here; the wire field itself stays intact for the codec until
-     * a later atomic schema commit removes it.
-     */
+    /** Builds the PREPARE manifest for one captured payload. */
     static ZLinkCanonicalRelocationProtocol.Manifest manifest(
         byte[] payload,
         int chunkLimitBytes) {
@@ -56,8 +50,7 @@ final class ZLinkRelocationPayloadTransfer {
         return new ZLinkCanonicalRelocationProtocol.Manifest(
             payload.length,
             chunkCount,
-            crc32c(payload),
-            0L);
+            crc32c(payload));
     }
 
     /** Splits the payload into ordinal-ordered chunks of the given size. */

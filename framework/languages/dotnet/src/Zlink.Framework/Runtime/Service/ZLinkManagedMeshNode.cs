@@ -892,10 +892,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             .ConfigureAwait(false);
     }
 
-    // TODO(schema-atomic): payloadStage is always PayloadStageFinal now
-    // that the base/delta capture capability is removed — the parameter is
-    // inlined below. The wire enum's base value is removed in a later
-    // atomic schema commit.
     private async ValueTask SendRelocationStateChunksAsync(
         Peer peer,
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
@@ -918,7 +914,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     prepare.Coordinator,
                     1,
                     prepare.Object,
-                    ZLinkServiceWireCodec.PayloadStageFinal,
                     checked((uint)ordinal),
                     payload.Chunk(ordinal)));
             //  Phase 1 budget accounting: the encoded frame bytes are charged

@@ -230,15 +230,6 @@ enum class relocation_role_t : std::uint8_t
     coordinator = 3
 };
 
-/* 52's saved-work chunk stage: base (pre-seal snapshot) or final (the
- * existing post-cutover chunk stream). Ordinal space is independent per
- * stage. */
-enum class relocation_payload_stage_t : std::uint8_t
-{
-    base = 0,
-    final = 1
-};
-
 enum class relocation_object_kind_t : std::uint8_t
 {
     actor = 1,
@@ -289,11 +280,6 @@ struct relocation_prepare_t
     std::uint64_t payload_total_length = 0;
     std::uint32_t payload_chunk_count = 0;
     std::uint32_t payload_checksum_crc32c = 0;
-    /* Zero means no base stage (whole-payload transfer). Non-zero means the
-     * final-stage payload above is a delta against a base snapshot with
-     * this CRC-32C; the target must already have assembled a base with a
-     * matching checksum or must reply relocationFailed. */
-    std::uint32_t base_checksum_crc32c = 0;
     std::uint64_t application_version = 0;
     friend bool operator== (const relocation_prepare_t &,
                             const relocation_prepare_t &) = default;
@@ -467,8 +453,6 @@ struct relocation_state_t
     relocation_coordinator_fence_t coordinator;
     relocation_role_t sender_role = relocation_role_t::source;
     relocation_object_t object;
-    relocation_payload_stage_t payload_stage =
-      relocation_payload_stage_t::final;
     std::uint32_t chunk_ordinal = 0;
     std::vector<std::uint8_t> chunk_data;
     friend bool operator== (const relocation_state_t &,

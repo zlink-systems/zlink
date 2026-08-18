@@ -17,7 +17,7 @@ final class ZLinkCanonicalRelocationControlCodecTest {
     void sharedCanonicalControlsRoundTripByteForByte() throws Exception {
         var fixture = new ObjectMapper().readTree(Files.readString(fixture()));
         var codec = new ZLinkCanonicalRelocationControlCodec();
-        assertEquals(9, fixture.path("canonical").size());
+        assertEquals(7, fixture.path("canonical").size());
         for (JsonNode entry : fixture.path("canonical")) {
             byte[] bytes = HexFormat.of().parseHex(entry.path("hex").asText());
             ZLinkCanonicalRelocationControlCodec.Control decoded;
@@ -39,7 +39,7 @@ final class ZLinkCanonicalRelocationControlCodecTest {
     void sharedMalformedVectorsAreRejected() throws Exception {
         var fixture = new ObjectMapper().readTree(Files.readString(fixture()));
         var codec = new ZLinkCanonicalRelocationControlCodec();
-        assertEquals(4, fixture.path("malformed").size());
+        assertEquals(3, fixture.path("malformed").size());
         for (JsonNode entry : fixture.path("malformed")) {
             byte[] bytes = HexFormat.of().parseHex(entry.path("hex").asText());
             IllegalArgumentException failure = assertThrows(

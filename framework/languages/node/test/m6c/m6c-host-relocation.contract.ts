@@ -417,7 +417,6 @@ test('exact duplicate Prepare shares restore while Data and Cutover stay one-way
     payloadTotalLength: 24n,
     payloadChunkCount: 1,
     payloadChecksumCrc32c: 123,
-    baseChecksumCrc32c: 0,
     applicationVersion: 4n
   };
   const ready: ServiceMaintenanceRelocationReady = {
@@ -550,7 +549,6 @@ test('an explicit Failed(53) rejects the pending Prepare ACK promptly with its c
     payloadTotalLength: 24n,
     payloadChunkCount: 1,
     payloadChecksumCrc32c: 123,
-    baseChecksumCrc32c: 0,
     applicationVersion: 4n
   });
   const deliverFailed = async (
@@ -782,7 +780,6 @@ test('target-only CAS reconciles an unknown response to the exact committed owne
     payloadTotalLength: 24n,
     payloadChunkCount: 1,
     payloadChecksumCrc32c: 1,
-    baseChecksumCrc32c: 0,
     applicationVersion: 4n
   };
   let current = expected;

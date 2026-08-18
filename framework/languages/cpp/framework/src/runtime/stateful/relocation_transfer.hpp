@@ -101,8 +101,6 @@ inline protocol::relocation_state_t make_relocation_state_chunk (
     chunk.coordinator = coordinator;
     chunk.sender_role = protocol::relocation_role_t::source;
     chunk.object = object;
-    // TODO(schema-atomic): payload_stage is encoded as its default (final)
-    // until the wire field is removed in the atomic schema commit.
     chunk.chunk_ordinal = chunk_ordinal;
     const auto offset =
       static_cast<std::uint64_t> (chunk_ordinal) * chunk_limit;

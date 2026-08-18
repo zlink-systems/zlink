@@ -37,21 +37,7 @@ internal static partial class ZLinkServiceWireCodec
         ulong PayloadTotalLength,
         uint PayloadChunkCount,
         uint PayloadChecksumCrc32c,
-        // TODO(schema-atomic): the base/delta capture capability that
-        // produced a non-zero BaseChecksumCrc32c is removed from the
-        // product; every prepare now encodes 0 here. The wire field itself
-        // is removed in a later atomic schema commit — encode/decode and
-        // golden vectors stay intact until then.
-        uint BaseChecksumCrc32c,
         ulong ApplicationVersion);
-
-    //  payloadStage wire enum for relocationState (service-wire-v1.schema.json).
-    // TODO(schema-atomic): PayloadStageBase is never produced now that the
-    // base/delta capture capability is removed — every relocationState
-    // chunk carries PayloadStageFinal. The wire enum value itself is
-    // removed in a later atomic schema commit.
-    internal const byte PayloadStageBase = 0;
-    internal const byte PayloadStageFinal = 1;
 
     internal sealed record RelocationReadyRecord(
         RelocationWireId RelocationId,
@@ -105,7 +91,6 @@ internal static partial class ZLinkServiceWireCodec
         RelocationCoordinatorFence Coordinator,
         byte SenderRole,
         RelocationObjectRecord Object,
-        byte PayloadStage,
         uint ChunkOrdinal,
         ReadOnlyMemory<byte> ChunkData);
 
@@ -133,7 +118,6 @@ internal static partial class ZLinkServiceWireCodec
         body.U64(record.PayloadTotalLength);
         body.U32(record.PayloadChunkCount);
         body.U32(record.PayloadChecksumCrc32c);
-        body.U32(record.BaseChecksumCrc32c);
         body.U64(record.ApplicationVersion);
         return Finish(ServiceWireConstants.Command.RelocationPrepare,
             ServiceWireConstants.Flag.None, body);
@@ -223,8 +207,7 @@ internal static partial class ZLinkServiceWireCodec
         ValidateRelocationCommon(record.RelocationId,
             record.TargetAttemptGeneration, record.Coordinator);
         ValidateRole(record.SenderRole);
-        if (record.ChunkData.Length > RelocationChunkBytesBound
-            || record.PayloadStage is not (PayloadStageBase or PayloadStageFinal))
+        if (record.ChunkData.Length > RelocationChunkBytesBound)
             throw new ArgumentOutOfRangeException(nameof(record));
 
         var body = new WireWriter();
@@ -233,7 +216,6 @@ internal static partial class ZLinkServiceWireCodec
         WriteCoordinator(body, record.Coordinator);
         body.U8(record.SenderRole);
         WriteRelocationObject(body, record.Object);
-        body.U8(record.PayloadStage);
         body.U32(record.ChunkOrdinal);
         body.U32((uint)record.ChunkData.Length);
         body.Bytes(record.ChunkData.Span);
@@ -261,14 +243,13 @@ internal static partial class ZLinkServiceWireCodec
             || !reader.TryU32(out var payloadChunkCount)
             || payloadChunkCount > RelocationChunkCountBound
             || !reader.TryU32(out var payloadChecksum)
-            || !reader.TryU32(out var baseChecksum)
             || !reader.TryU64(out var applicationVersion)
             || applicationVersion > long.MaxValue)
             return DecodeFailure(ref reader, out error);
         record = new RelocationPrepareRecord(id, attempt, coordinator, target,
             role, relocationObject, sourceRid, sourceGeneration,
             payloadTotalLength, payloadChunkCount, payloadChecksum,
-            baseChecksum, applicationVersion);
+            applicationVersion);
         return End(ref reader, out error);
     }
 
@@ -371,15 +352,13 @@ internal static partial class ZLinkServiceWireCodec
             || !TryCoordinator(ref reader, out var coordinator)
             || !reader.TryU8(out var role) || !IsRole(role)
             || !TryRelocationObject(ref reader, out var relocationObject)
-            || !reader.TryU8(out var payloadStage)
-            || payloadStage is not (PayloadStageBase or PayloadStageFinal)
             || !reader.TryU32(out var chunkOrdinal)
             || !reader.TryU32(out var chunkLength)
             || chunkLength > RelocationChunkBytesBound
             || !reader.TrySlice(checked((int)chunkLength), out var chunkBytes))
             return DecodeFailure(ref reader, out error);
         record = new RelocationStateRecord(id, attempt, coordinator, role,
-            relocationObject, payloadStage, chunkOrdinal, chunkBytes.ToArray());
+            relocationObject, chunkOrdinal, chunkBytes.ToArray());
         return End(ref reader, out error);
     }
 

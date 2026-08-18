@@ -1938,9 +1938,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const convergenceDeadlineAtMs = signal === undefined
       ? Date.now() + RELOCATION_OPERATION_RETENTION_MS
       : controlDeadlineAtMs;
-    // TODO(schema-atomic): baseChecksumCrc32c retained for the atomic schema commit; always 0 —
-    // base/delta capture is removed from the node product.
-    const baseChecksumCrc32c = 0;
     let readyReceived = false;
     let sourceCommitted = false;
     try {
@@ -1957,7 +1954,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         payloadTotalLength: BigInt(plan.totalLength),
         payloadChunkCount: plan.chunkCount,
         payloadChecksumCrc32c: plan.checksumCrc32c,
-        baseChecksumCrc32c,
         applicationVersion: target.applicationVersion
       } satisfies ServiceMaintenanceRelocationPrepare;
       // Start the Restore request first (it also registers the temporary
@@ -2144,8 +2140,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           coordinator: identity.coordinator,
           senderRole: 'source',
           object: identity.object,
-          // TODO(schema-atomic): payloadStage retained for the atomic schema commit; always 'final'.
-          payloadStage: 'final',
           chunkOrdinal: ordinal,
           chunkData
         });

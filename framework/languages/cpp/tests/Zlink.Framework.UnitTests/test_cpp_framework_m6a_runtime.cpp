@@ -2135,7 +2135,7 @@ protocol::relocation_prepare_t relocation_prepare_request (
         protocol::relocation_object_kind_t::actor, "player", "actor-1", 4, 6},
       source_descriptor.node_routing_id,
       source_descriptor.lifecycle_generation,
-      1024, 1, 0xdeadbeefu, 0, 1};
+      1024, 1, 0xdeadbeefu, 1};
 }
 
 // Spec 15/28 + node's own cross-language audit: an explicit, identity-

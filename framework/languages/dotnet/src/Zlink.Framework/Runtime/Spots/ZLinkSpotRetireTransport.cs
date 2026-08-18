@@ -280,11 +280,6 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 checked((ulong)transferPayload.TotalLength),
                 checked((uint)transferPayload.ChunkCount),
                 transferPayload.ChecksumCrc32c,
-                // TODO(schema-atomic): baseChecksumCrc32c is always 0 now
-                // that the base/delta capture capability is removed. The
-                // wire field itself is removed in a later atomic schema
-                // commit.
-                0,
                 checked((ulong)registration.ApplicationVersion));
             _ = await canonical.PrepareCanonicalRelocationAsync(
                     reservation.TargetDescriptor.Rid,

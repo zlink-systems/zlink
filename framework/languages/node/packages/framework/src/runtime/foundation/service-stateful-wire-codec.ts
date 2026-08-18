@@ -126,9 +126,6 @@ export interface ServiceMaintenanceRelocationPrepare extends ServiceWireRelocati
   readonly payloadChunkCount: number;
   /** CRC-32C (Castagnoli) over the fully assembled payload bytes. */
   readonly payloadChecksumCrc32c: number;
-  // TODO(schema-atomic): payloadStage/baseChecksumCrc32c retained for the atomic schema commit.
-  // Base/delta capture is removed from the node product; this field is now always sent as 0.
-  readonly baseChecksumCrc32c: number;
   readonly applicationVersion: bigint;
 }
 
@@ -202,17 +199,11 @@ export interface ServiceMaintenanceRelocationCutover extends ServiceWireRelocati
   readonly boundaryChecksumCrc32c: number;
 }
 
-// TODO(schema-atomic): payloadStage/baseChecksumCrc32c retained for the atomic schema commit.
-// Base/delta capture is removed from the node product; the source now only ever sends 'final'.
-export type ServiceWireRelocationPayloadStage = 'base' | 'final';
-
 /** One relocation payload chunk (command 52), sent one-way on the ordered connection. */
 export interface ServiceMaintenanceRelocationState extends ServiceWireRelocationBase {
   readonly kind: 'state';
   readonly senderRole: ServiceWireRelocationRole;
   readonly object: ServiceWireRelocationObject;
-  // TODO(schema-atomic): payloadStage/baseChecksumCrc32c retained for the atomic schema commit.
-  readonly payloadStage: ServiceWireRelocationPayloadStage;
   readonly chunkOrdinal: number;
   readonly chunkData: Uint8Array;
 }
@@ -1465,8 +1456,6 @@ export function encodeMaintenanceRelocationControl(
         payloadTotalLength(value.payloadTotalLength),
         payloadChunkCount(value.payloadChunkCount),
         u32(value.payloadChecksumCrc32c, 'payloadChecksumCrc32c'),
-        // TODO(schema-atomic): baseChecksumCrc32c retained for the atomic schema commit; always 0.
-        u32(value.baseChecksumCrc32c, 'baseChecksumCrc32c'),
         applicationVersion(value.applicationVersion)
       );
     case 'ready':
@@ -1513,8 +1502,6 @@ export function encodeMaintenanceRelocationControl(
         base,
         Buffer.of(relocationRole(value.senderRole)),
         relocationObject(value.object),
-        // TODO(schema-atomic): payloadStage retained for the atomic schema commit; always 'final'.
-        Buffer.of(payloadStage(value.payloadStage)),
         u32(value.chunkOrdinal, 'chunkOrdinal'),
         relocationChunkData(value.chunkData)
       );
@@ -1541,14 +1528,12 @@ export function decodeMaintenanceRelocationControl(
       const payloadTotalLength = reader.payloadTotalLength();
       const payloadChunkCount = reader.payloadChunkCount();
       const payloadChecksumCrc32c = reader.u32('payloadChecksumCrc32c');
-      // TODO(schema-atomic): baseChecksumCrc32c decoded and carried but unused; always 0 in.
-      const baseChecksumCrc32c = reader.u32('baseChecksumCrc32c');
       const applicationVersion = reader.applicationVersion();
       reader.end();
       return { kind: 'prepare', relocation, targetAttemptGeneration, coordinator,
         target, initiatorRole, object, sourceNodeRid, sourceNodeGeneration,
         payloadTotalLength, payloadChunkCount, payloadChecksumCrc32c,
-        baseChecksumCrc32c, applicationVersion };
+        applicationVersion };
     }
     case M6bServiceWireCommand.relocationReady: {
       requireFlags(prefixValue.flags, 0);
@@ -1602,12 +1587,10 @@ export function decodeMaintenanceRelocationControl(
       const base = reader.relocationBase();
       const senderRole = reader.relocationRole();
       const object = reader.relocationObject();
-      // TODO(schema-atomic): payloadStage decoded but unused; the target never receives 'base'.
-      const stage = reader.payloadStage();
       const chunkOrdinal = reader.u32('chunkOrdinal');
       const chunkData = reader.relocationChunkData();
       reader.end();
-      return { kind: 'state', ...base, senderRole, object, payloadStage: stage,
+      return { kind: 'state', ...base, senderRole, object,
         chunkOrdinal, chunkData };
     }
     default:
@@ -1944,10 +1927,6 @@ function coordinatorFence(value: ServiceWireRelocationCoordinatorFence): Buffer 
 
 function relocationRole(value: ServiceWireRelocationRole): number {
   return value === 'source' ? 1 : value === 'target' ? 2 : 3;
-}
-
-function payloadStage(value: ServiceWireRelocationPayloadStage): number {
-  return value === 'base' ? 0 : 1;
 }
 
 function applicationVersion(value: bigint): Buffer {
@@ -2424,12 +2403,6 @@ class Reader {
       fail('payloadChunkCount exceeds the relocation chunk count bound.');
     }
     return value;
-  }
-
-  payloadStage(): ServiceWireRelocationPayloadStage {
-    const value = this.u8('payloadStage');
-    if (value !== 0 && value !== 1) fail('Invalid relocation payloadStage.');
-    return value === 0 ? 'base' : 'final';
   }
 
   relocationChunkData(): Buffer {

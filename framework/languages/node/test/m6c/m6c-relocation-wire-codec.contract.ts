@@ -126,8 +126,7 @@ function assertGoldenRoundTrip<T>(
   assert.throws(() => decode(forbiddenFlag));
 }
 
-test('commands 30, 31, 34, 40, 52, and 53 match the shared golden vectors, ' +
-  'including base/delta staging', () => {
+test('commands 30, 31, 34, 40, 52, and 53 match the shared golden vectors', () => {
   const golden = relocationGolden();
   const entries = golden.canonical;
   const dataEntry = entries.find(entry => entry.name === 'relocationDataPostCaptureIngress');
@@ -167,21 +166,6 @@ test('commands 30, 31, 34, 40, 52, and 53 match the shared golden vectors, ' +
       payloadTotalLength: 24n,
       payloadChunkCount: 2,
       payloadChecksumCrc32c: 0x29bc8795,
-      baseChecksumCrc32c: 0,
-      applicationVersion: 1n
-    },
-    {
-      kind: 'prepare',
-      ...base,
-      target,
-      initiatorRole: 'source',
-      object: relocationObject,
-      sourceNodeRid: 'node-a',
-      sourceNodeGeneration: 11n,
-      payloadTotalLength: 24n,
-      payloadChunkCount: 2,
-      payloadChecksumCrc32c: 0x29bc8795,
-      baseChecksumCrc32c: 1849572196,
       applicationVersion: 1n
     },
     {
@@ -189,16 +173,6 @@ test('commands 30, 31, 34, 40, 52, and 53 match the shared golden vectors, ' +
       ...base,
       senderRole: 'source',
       object: relocationObject,
-      payloadStage: 'base',
-      chunkOrdinal: 0,
-      chunkData: Buffer.from('62617365736e617073686f74', 'hex')
-    },
-    {
-      kind: 'state',
-      ...base,
-      senderRole: 'source',
-      object: relocationObject,
-      payloadStage: 'final',
       chunkOrdinal: 0,
       chunkData: Buffer.from('000102030405060708090a0b0c0d0e0f', 'hex')
     },
@@ -207,21 +181,18 @@ test('commands 30, 31, 34, 40, 52, and 53 match the shared golden vectors, ' +
       ...base,
       senderRole: 'source',
       object: relocationObject,
-      payloadStage: 'final',
       chunkOrdinal: 1,
       chunkData: Buffer.from('1011121314151617', 'hex')
     }
   ];
 
-  assert.deepEqual(entries.map(entry => entry.command), [30, 53, 31, 34, 40, 40, 52, 52, 52]);
+  assert.deepEqual(entries.map(entry => entry.command), [30, 53, 31, 34, 40, 52, 52]);
   assert.deepEqual(entries.map(entry => entry.name), [
     'relocationReady',
     'relocationFailed',
     'relocationDataPostCaptureIngress',
     'relocationCutover',
     'relocationPrepareRestore',
-    'relocationPrepareRestoreWithBase',
-    'relocationStateBaseChunk',
     'relocationStateChunk',
     'relocationStateFinalChunk'
   ]);
