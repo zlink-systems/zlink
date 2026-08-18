@@ -64,9 +64,13 @@
 - [x] cpp preset 빌드 디렉토리 재생성 완료 (2026-08-19, /mnt/d/tools/vcpkg 완주 —
       전 타깃 컴파일 그린). 참고: 원 SIGFPE는 정상 빌드에서 미재현이나 aff9511de6의
       수명 수정은 결정적 회귀 테스트가 증명하는 실버그로 유효 유지.
-- [ ] **ST-B1 회귀: relocation 후 구 소유 노드 경유 프록시 실패**(결정적 3/3,
-      'actor spot context is not registered' 409) — 오늘 커밋(aff9511de6/46ef4b0f03/
-      b2b1713927) 회귀 여부 bisect + 근본 원인 조사 에이전트 진행 중 [발견 2026-08-19]
+- [x] ST-B1 프록시 실패 — **수정 완료 `4109e908d4`**: 기존 잠복 결함(cold probe가
+      fence 없이 구 소유 노드 도착 시 릴레이 미경유 → 오염된 로컬 테이블 조회 409;
+      Aug-12/15 커밋 기원, Entry Spot 수정으로 노출). 릴레이 합성 + current_actor_ref
+      라우트 기반 보고 + disabled-fallback 증명 테스트. ST-B1 3/3·ST-A1 그린
+      [발견·해소 2026-08-19]
+- [ ] **ST-A3 결정적 실패**(기존 — ST-B1 수정 전후 동일 재현): 별도 timing/gate
+      이슈, 원인 조사 필요 [발견 2026-08-19]
 - [ ] **sol 전 문서 spec-gap 리뷰**: 스펙·guide·e2e·언어 interface 전체 vs 구현 대조,
       gap 0 확인 (완료 조건)
 - [ ] 최종 게이트 일괄: 4언어 unittest + 6샘플×언어 + doc 게이트 + 최종 보고
