@@ -427,6 +427,78 @@ bytes, without interpreting its meaning. It includes at least the following fiel
 | `descriptorRevision` | The Revision from §3. Absent from the owner lease record and the authority record. |
 | `descriptor` | The MeshNode/ClientServer/fanout publisher descriptor content (§3). Absent from the owner lease record and the authority record. |
 
+`descriptor`'s exact field list follows this document's §2.3/§3 contract and the .NET
+notation the [glossary](01-glossary.en.md#meshnode-descriptor) already pins. Integer
+fields (generation/revision/weight/limit kinds) are written as JSON strings rather than
+JSON numbers, same as the generation fields on other records. RoutingId is a lowercase hex
+string; timestamps are strings carrying a Unix epoch millisecond value. All three records
+carry their own `ownerId`/`leaseGeneration`/`descriptorRevision` again inside `descriptor`
+— these are the same values the same publish operation writes at the record's top level, so
+they must always match (written in two places, but CAS treats the whole record as one
+opaque byte string, so there's no intermediate state where the two copies diverge). A
+provider-internal storage-row version counter that some implementations put inside the
+descriptor (sometimes named `generation`) isn't added to this canonical JSON, because the
+opaque record's own cmsgpack `version` member (§22 §7) already fills that role — keeping a
+store version in two places would require redefining which one is authoritative.
+
+**MeshNode descriptor** — derived from
+[the glossary](01-glossary.en.md#meshnode-descriptor)'s `ZLinkMeshNodeDescriptor`.
+
+| Field | Meaning |
+|---|---|
+| `meshName` | The RouteMesh group name. |
+| `routingIdHex` | The RoutingId's raw bytes as lowercase hex. |
+| `lifecycleGeneration` | Distinguishes the current MeshNode run. |
+| `descriptorRevision` | Same value as the top-level field above. |
+| `endpoint` | The actual advertised ROUTER endpoint to connect to. |
+| `entrySpotId` | The exact Entry Spot ID for an Object Server lifecycle. `null` unless the role is `Server`. |
+| `channelWeights` | Selection weight per ClientServer ChannelName. Key is the ChannelName; value is a `0..10000` integer. |
+| `applicationVersion` | The application deployment sequence number. |
+| `objectCapabilities` | The list of registered object-kind placement capabilities. Each entry has `objectKind` (`actor \| userSpot \| instanceSpot`), `stableType`, `policy` (`unspecified \| disabled \| recreate \| snapshot`), `hasSnapshotAdapter` (boolean), and `limit` (integer, `0` means unlimited). At most 1,024 entries. |
+| `objectRole` | One of `none \| client \| server`. |
+| `placementWeight` | `0..10000`, default 100 (§3). |
+| `capacity` | The "descriptor's count is a copy for operators to check status" projection from §3. `actors` and `spots` are each `{active, reserved, limit}`. `spotTypes` is an array of `{objectKind, stableType, active, reserved, limit}`. Entry Spot isn't included (§3). |
+| `activationConcurrency` | The concurrent Instance Spot factory execution limit. `{active, limit}`. |
+| `maintenanceWave` | Optional maintenance wave stable ID. `null` if absent. |
+| `state` | One of `preparing \| serving \| relocating \| relocated \| draining \| stopped \| error`. |
+| `securityIdentity` | The identity that verifies the connecting peer. |
+| `ownerId`, `leaseGeneration` | Same values as the top-level fields above. |
+| `updatedAtEpochMs` | The time recorded in the Store at update. |
+
+**ClientServer server descriptor** — derived from
+[the glossary](01-glossary.en.md#clientserver-server-descriptor)'s
+`ZLinkClientServerServerDescriptor`.
+
+| Field | Meaning |
+|---|---|
+| `channelName` | The service Channel name Clients query. |
+| `serverRoutingIdHex` | The Server's RoutingId as lowercase hex. |
+| `lifecycleGeneration` | Distinguishes the current Server run. |
+| `descriptorRevision` | Same value as the top-level field above. |
+| `endpoint` | The actual advertised endpoint to connect to. |
+| `weight` | `0..10000`, default 100. The relative selection weight for new requests and sends. |
+| `state` | The same value set as the MeshNode descriptor's `state`. |
+| `securityIdentity` | The transport admission identity. |
+| `ownerId`, `leaseGeneration` | Same values as the top-level fields above. |
+| `updatedAtEpochMs` | The time recorded in the Store at update. |
+
+**Fanout publisher descriptor** — derived from
+[the glossary](01-glossary.en.md#fanout-publisher-descriptor)'s
+`ZLinkFanoutPublisherDescriptor`. The same fields as the ClientServer server descriptor
+minus `weight`.
+
+| Field | Meaning |
+|---|---|
+| `channelName` | The Fanout Channel name. |
+| `publisherRoutingIdHex` | The Publisher's RoutingId as lowercase hex. |
+| `lifecycleGeneration` | Distinguishes the current publisher run. |
+| `descriptorRevision` | Same value as the top-level field above. |
+| `endpoint` | The advertised PUB endpoint subscribers connect to. |
+| `state` | The same value set as the MeshNode descriptor's `state`. |
+| `securityIdentity` | The connection admission identity. |
+| `ownerId`, `leaseGeneration` | Same values as the top-level fields above. |
+| `updatedAtEpochMs` | The time recorded in the Store at update. |
+
 The authority record (§2.2, §2.3) sits on the opaque record as a single logical row
 addressed by one logical key — cpp, java, and node already store the whole authority as one
 record; only dotnet still splits it into separate meta, payload, and generation-counter
@@ -452,8 +524,8 @@ precision).
 | `objectGeneration` | The object's (§2.2) current generation. Issued from the Store-wide monotonic sequence defined above. |
 | `authorityOwnerGeneration` | The value distinguishing owner changes (§2.2). |
 | `ownerId`, `ownerLeaseGeneration` | The current owner's `(OwnerId, LeaseGeneration)` (§2.1). |
-| `allocation` | Placement information (§2.3). Includes at least `state` (`reserved \| active`), `objectKind` (`actor \| spot`), `stableType`, `target` (`meshName`, `nodeRid`, `nodeGeneration`), and `capacityBundle` (the slots secured per kind, §2.3). |
-| `pendingCreation` | Creation-in-progress state (§6). `null` when absent; when present, includes at least `reservationId`, `requestContentReference`, `requestSha256` (hex), and `requestEncodedSize`. |
+| `allocation` | Placement information (§2.3), derived from dotnet's internal `ZLinkPlacementAllocation`. Includes `state` (`reserved \| active`), `objectKind` (`actor \| userSpot \| instanceSpot` — no Entry Spot; an Entry Spot's Actor is counted as `actor`, §3), `stableType`, `descriptor` (`{meshName, routingIdHex}`, the same shape as a MeshNode descriptor key), `descriptorLifecycleGeneration` (the target MeshNode's `lifecycleGeneration`, CAS-checked against it), and `capacity`. `capacity` is `{actors, spots, spotType}`: `actors`/`spots` are the integer slot counts this allocation secured, and `spotType` is `null` unless the object is a Spot, in which case it's `{objectKind, stableType, count}` (§2.3's "1 Spot slot plus 1 slot of that Spot kind/stable type" — a single flat counter can't express which `(spotKind, stableType)` pair was secured). |
+| `pendingCreation` | Creation-in-progress state (§6). `null` when absent; when present, includes `reservationId`, `requestContentReference`, `requestSha256` (hex, 64 characters), and `requestEncodedSize` (integer). |
 
 Payloads the Relocation Store holds (the cold-activation envelope, completion records)
 don't use this opaque record. A separately versioned key space and raw-bytes storage format

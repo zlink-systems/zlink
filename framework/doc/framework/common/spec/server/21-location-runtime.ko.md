@@ -412,6 +412,76 @@ JSON 값이다. 최소한 다음 field를 포함한다.
 | `descriptorRevision` | §3의 Revision이다. Owner lease record와 authority record에는 없다. |
 | `descriptor` | MeshNode·ClientServer·fanout publisher 각각의 descriptor 내용(§3)이다. Owner lease record와 authority record에는 없다. |
 
+`descriptor`의 정확한 field 목록은 이 문서 §2.3·§3의 계약과
+[glossary](01-glossary.ko.md#meshnode-descriptor)가 이미 고정한 .NET 표기를 기준으로
+정한다. 정수 field(generation·revision·weight·limit류)는 다른 record의 generation
+field와 마찬가지로 JSON number가 아닌 JSON string으로 쓴다. RoutingId는 소문자
+16진수 문자열로, timestamp는 Unix epoch millisecond를 담은 문자열로 쓴다. 세 record
+모두 `descriptor` 안에 자신의 `ownerId`·`leaseGeneration`·`descriptorRevision`을
+다시 담는다 — 이 값은 record 최상위 field와 같은 publish 작업이 쓰는 같은 값이므로
+항상 같아야 한다(최상위와 `descriptor` 안 두 곳에 각각 쓰지만 CAS는 record 전체를
+하나의 opaque bytes로 다루므로 두 값이 어긋나는 중간 상태는 없다). 언어별 provider가
+내부적으로 관리하는 storage-row 버전 counter(예: 일부 구현이 `generation`이라는
+이름으로 descriptor 안에 넣던 값)는 이 opaque record의 cmsgpack `version` member(§22
+§7)가 이미 그 역할을 하므로 canonical JSON에 다시 넣지 않는다 — 두 곳에 store 버전을
+중복해서 두면 어느 쪽이 진짜인지 다시 정의해야 하기 때문이다.
+
+**MeshNode descriptor** — [glossary](01-glossary.ko.md#meshnode-descriptor)의
+`ZLinkMeshNodeDescriptor`에서 파생한다.
+
+| Field | 의미 |
+|---|---|
+| `meshName` | RouteMesh 그룹 이름이다. |
+| `routingIdHex` | RoutingId의 raw bytes를 소문자 16진수로 표기한 값이다. |
+| `lifecycleGeneration` | 현재 MeshNode 실행을 구분하는 값이다. |
+| `descriptorRevision` | 위 최상위 field와 같은 값이다. |
+| `endpoint` | 실제로 연결할 advertised ROUTER endpoint다. |
+| `entrySpotId` | Object Server lifecycle의 exact Entry Spot ID다. `Server` role이 아니면 `null`이다. |
+| `channelWeights` | ClientServer ChannelName마다의 선택 비중이다. Key는 ChannelName, value는 `0..10000` 정수다. |
+| `applicationVersion` | Application 배포 순번이다. |
+| `objectCapabilities` | 등록한 object 종류별 배치 능력 목록이다. 각 원소는 `objectKind`(`actor \| userSpot \| instanceSpot`), `stableType`, `policy`(`unspecified \| disabled \| recreate \| snapshot`), `hasSnapshotAdapter`(boolean)와 `limit`(정수, `0`은 무제한)을 포함한다. 최대 1,024개다. |
+| `objectRole` | `none \| client \| server` 중 하나다. |
+| `placementWeight` | `0..10000`, 기본값 100이다(§3). |
+| `capacity` | §3의 "Descriptor의 count는 운영자가 상태를 확인하기 위한 복사본" 투영이다. `actors`와 `spots`는 각각 `{active, reserved, limit}`이다. `spotTypes`는 `{objectKind, stableType, active, reserved, limit}` 배열이다. Entry Spot은 포함하지 않는다(§3). |
+| `activationConcurrency` | 동시 생성 중인 Instance Spot factory 실행 수 제한이다. `{active, limit}`이다. |
+| `maintenanceWave` | Optional maintenance wave stable ID다. 없으면 `null`이다. |
+| `state` | `preparing \| serving \| relocating \| relocated \| draining \| stopped \| error` 중 하나다. |
+| `securityIdentity` | 연결 상대를 검증하는 identity다. |
+| `ownerId`, `leaseGeneration` | 위 최상위 field와 같은 값이다. |
+| `updatedAtEpochMs` | Store에 기록한 갱신 시각이다. |
+
+**ClientServer server descriptor** — [glossary](01-glossary.ko.md#clientserver-server-descriptor)의
+`ZLinkClientServerServerDescriptor`에서 파생한다.
+
+| Field | 의미 |
+|---|---|
+| `channelName` | Client가 조회할 service Channel 이름이다. |
+| `serverRoutingIdHex` | Server RoutingId를 소문자 16진수로 표기한 값이다. |
+| `lifecycleGeneration` | 현재 Server 실행을 구분하는 값이다. |
+| `descriptorRevision` | 위 최상위 field와 같은 값이다. |
+| `endpoint` | 실제로 연결할 advertised endpoint다. |
+| `weight` | `0..10000`, 기본값 100이다. 새 request와 send의 상대 선택 비중이다. |
+| `state` | MeshNode descriptor와 같은 값 집합이다. |
+| `securityIdentity` | Transport admission identity다. |
+| `ownerId`, `leaseGeneration` | 위 최상위 field와 같은 값이다. |
+| `updatedAtEpochMs` | Store에 기록한 갱신 시각이다. |
+
+**Fanout publisher descriptor** — [glossary](01-glossary.ko.md#fanout-publisher-descriptor)의
+`ZLinkFanoutPublisherDescriptor`에서 파생한다. ClientServer server descriptor와 같은
+field에서 `weight`만 뺀 형태다.
+
+| Field | 의미 |
+|---|---|
+| `channelName` | Fanout Channel 이름이다. |
+| `publisherRoutingIdHex` | Publisher RoutingId를 소문자 16진수로 표기한 값이다. |
+| `lifecycleGeneration` | 현재 publisher 실행을 구분하는 값이다. |
+| `descriptorRevision` | 위 최상위 field와 같은 값이다. |
+| `endpoint` | Subscriber가 연결할 advertised PUB endpoint다. |
+| `state` | MeshNode descriptor와 같은 값 집합이다. |
+| `securityIdentity` | 연결 admission identity다. |
+| `ownerId`, `leaseGeneration` | 위 최상위 field와 같은 값이다. |
+| `updatedAtEpochMs` | Store에 기록한 갱신 시각이다. |
+
 Authority record(§2.2, §2.3)는 하나의 logical key가 가리키는 하나의 행(single logical
 row)으로 opaque record에 올린다 — cpp·java·node는 이미 authority 전체를 record
 하나로 저장하며, dotnet만 meta·payload·generation counter를 서로 다른 key로 나눠
@@ -435,8 +505,8 @@ JSON string으로 쓴다(64-bit 값이 JSON number 정밀도를 넘을 수 있�
 | `objectGeneration` | 이 object(§2.2)의 현재 generation이다. 위에서 정한 Store 전역 단조 sequence에서 발급한다. |
 | `authorityOwnerGeneration` | Owner 변경을 구분하는 값이다(§2.2). |
 | `ownerId`, `ownerLeaseGeneration` | 현재 owner의 `(OwnerId, LeaseGeneration)`이다(§2.1). |
-| `allocation` | 배치 정보(§2.3)다. 최소한 `state`(`reserved \| active`), `objectKind`(`actor \| spot`), `stableType`, `target`(`meshName`, `nodeRid`, `nodeGeneration`)과 `capacityBundle`(종류별 확보한 slot 수, §2.3)을 포함한다. |
-| `pendingCreation` | 생성 진행 상태다(§6). 없으면 `null`이다. 있으면 최소한 `reservationId`, `requestContentReference`, `requestSha256`(hex)과 `requestEncodedSize`를 포함한다. |
+| `allocation` | 배치 정보(§2.3)다. dotnet `ZLinkPlacementAllocation`(내부 구현)에서 파생한다. `state`(`reserved \| active`), `objectKind`(`actor \| userSpot \| instanceSpot` — Entry Spot은 없다. Entry Spot의 Actor는 `actor`로 집계한다, §3), `stableType`, `descriptor`(`{meshName, routingIdHex}` — MeshNode descriptor key와 같은 모양), `descriptorLifecycleGeneration`(target MeshNode의 `lifecycleGeneration`과 CAS로 맞춰야 하는 값)과 `capacity`를 포함한다. `capacity`는 `{actors, spots, spotType}`이며 `actors`·`spots`는 이번 allocation이 확보한 정수 slot 수, `spotType`은 Spot이 아니면 `null`이고 Spot이면 `{objectKind, stableType, count}`다(§2.3의 "Spot slot 1과 해당 Spot 종류·stable type slot 1" — flat counter 하나로는 어떤 `(spotKind, stableType)` 조합을 확보했는지 표현할 수 없다). |
+| `pendingCreation` | 생성 진행 상태다(§6). 없으면 `null`이다. 있으면 `reservationId`, `requestContentReference`, `requestSha256`(hex, 64자)과 `requestEncodedSize`(정수)를 포함한다. |
 
 Relocation Store가 보관하는 payload(cold activation envelope, 완료 기록)는 이
 opaque record를 사용하지 않는다. 별도로 버전을 매긴 key 공간과 raw bytes 저장 형식을
