@@ -6765,6 +6765,20 @@ spot_node_runtime_t::prepare_remote_actor_to_spot (std::string transfer_id,
     }
 
     const auto key = actor_key (committed);
+    // The node mutex was unlocked around the joined callback above — the
+    // only window in this synchronous PREPARE where a newer exact identity
+    // for the same object can run try_add_admission's target_committing
+    // eviction (spec 15 §4.2 newest-attempt-wins) concurrently. Re-check
+    // before publishing the staged Actor: installing it for an already
+    // evicted transfer would let a dead identity's late PREPARE win the
+    // actor_key slot instead of discarding it (spec 15 §4.2 "이전 identity의
+    // 늦은 chunk와 Restore는 조립에 연결하지 않고 폐기한다").
+    if (!_state->actor_transfer_coordinator.is_current (key, transfer_id)) {
+        fail_target_commit (false);
+        return result_t<actor_join_reply_t>::failure (
+          framework_error_kind_t::rejected,
+          "remote Actor Join admission was superseded by a newer attempt");
+    }
     detail::record_actor_instance_index_unlocked (*_state, committed, actor.get ());
     _state->actor_instances[key] = std::move (actor);
     _state->destroyed_actor_keys.erase (key);

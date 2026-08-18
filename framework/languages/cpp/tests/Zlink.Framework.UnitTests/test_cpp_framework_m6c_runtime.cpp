@@ -3973,6 +3973,13 @@ void test_application_user_spot_aggregate_remote_production_path (
  * value cannot pass if either stage is silently skipped.
  * -------------------------------------------------------------------- */
 
+// Shared across the Spot and Actor delta adapters below so capture_base and
+// capture_delta calls for either object land on one monotonic timeline —
+// proving capture_base happened strictly before capture_delta (source
+// captures the base pre-seal, the delta only at/after seal), not merely
+// that each was called once (spec 15 base/delta capture ordering).
+std::atomic_int delta_capture_order_sequence{0};
+
 class delta_actor_t final : public zlink::framework::actor_t
 {
   public:
@@ -4024,12 +4031,18 @@ class delta_actor_adapter_t final :
     capture_base (delta_actor_t &, std::stop_token) override
     {
         capture_base_count.fetch_add (1, std::memory_order_acq_rel);
+        capture_base_sequence.store (
+          delta_capture_order_sequence.fetch_add (1, std::memory_order_acq_rel),
+          std::memory_order_release);
         co_return std::vector<std::byte>{std::byte{30}};
     }
     zlink::framework::task_t<std::vector<std::byte>>
     capture_delta (delta_actor_t &, std::stop_token) override
     {
         capture_delta_count.fetch_add (1, std::memory_order_acq_rel);
+        capture_delta_sequence.store (
+          delta_capture_order_sequence.fetch_add (1, std::memory_order_acq_rel),
+          std::memory_order_release);
         co_return std::vector<std::byte>{std::byte{7}};
     }
     zlink::framework::task_t<void>
@@ -4056,6 +4069,8 @@ class delta_actor_adapter_t final :
 
     static inline std::atomic_int capture_base_count{0};
     static inline std::atomic_int capture_delta_count{0};
+    static inline std::atomic_int capture_base_sequence{-1};
+    static inline std::atomic_int capture_delta_sequence{-1};
     static inline std::atomic_int restore_base_count{0};
     static inline std::atomic_int apply_delta_count{0};
     static inline std::atomic_int apply_delta_fail_remaining{0};
@@ -4066,6 +4081,7 @@ class delta_spot_t final : public zlink::framework::spot_t<delta_actor_t>
 {
   public:
     explicit delta_spot_t (zlink::framework::spot_context_t context) :
+        instance_id (constructed_count.fetch_add (1, std::memory_order_acq_rel) + 1),
         _context (std::move (context))
     {
     }
@@ -4112,6 +4128,11 @@ class delta_spot_t final : public zlink::framework::spot_t<delta_actor_t>
         co_return;
     }
     int value = -1;
+    // Distinguishes a fresh re-entry into the factory/materialization path
+    // (a new delta_spot_t instance, a new construction count) from a reused
+    // instance across a restore_base/apply_delta retry.
+    const int instance_id = 0;
+    static inline std::atomic_int constructed_count{0};
 
   private:
     zlink::framework::spot_context_t _context;
@@ -4136,18 +4157,32 @@ class delta_spot_adapter_t final :
     capture_base (delta_spot_t &, std::stop_token) override
     {
         capture_base_count.fetch_add (1, std::memory_order_acq_rel);
+        capture_base_sequence.store (
+          delta_capture_order_sequence.fetch_add (1, std::memory_order_acq_rel),
+          std::memory_order_release);
         co_return std::vector<std::byte>{std::byte{100}};
     }
     zlink::framework::task_t<std::vector<std::byte>>
     capture_delta (delta_spot_t &, std::stop_token) override
     {
         capture_delta_count.fetch_add (1, std::memory_order_acq_rel);
+        capture_delta_sequence.store (
+          delta_capture_order_sequence.fetch_add (1, std::memory_order_acq_rel),
+          std::memory_order_release);
         co_return std::vector<std::byte>{std::byte{9}};
     }
     zlink::framework::task_t<void>
     restore_base (delta_spot_t &spot, std::vector<std::byte> payload, std::stop_token) override
     {
         restore_base_count.fetch_add (1, std::memory_order_acq_rel);
+        // Injecting the mutation here (before apply_delta may throw) records
+        // which concrete instance each retry ran restore_base against, so a
+        // reused instance across a failed apply_delta retry is observable
+        // even when apply_delta itself never reaches its own mutation.
+        {
+            std::lock_guard lock (log_mutex);
+            restore_base_instance_ids.push_back (spot.instance_id);
+        }
         spot.value = payload.empty () ? -1 : std::to_integer<int> (payload.front ());
         co_return;
     }
@@ -4155,6 +4190,10 @@ class delta_spot_adapter_t final :
     apply_delta (delta_spot_t &spot, std::vector<std::byte> payload, std::stop_token) override
     {
         apply_delta_count.fetch_add (1, std::memory_order_acq_rel);
+        {
+            std::lock_guard lock (log_mutex);
+            apply_delta_instance_ids.push_back (spot.instance_id);
+        }
         if (apply_delta_fail_remaining.load (std::memory_order_acquire) > 0) {
             apply_delta_fail_remaining.fetch_sub (1, std::memory_order_acq_rel);
             throw std::runtime_error ("injected apply_delta failure");
@@ -4167,9 +4206,14 @@ class delta_spot_adapter_t final :
     static inline std::atomic_int apply_delta_fail_remaining{0};
     static inline std::atomic_int capture_base_count{0};
     static inline std::atomic_int capture_delta_count{0};
+    static inline std::atomic_int capture_base_sequence{-1};
+    static inline std::atomic_int capture_delta_sequence{-1};
     static inline std::atomic_int restore_base_count{0};
     static inline std::atomic_int apply_delta_count{0};
     static inline std::atomic_int restored_value{-1};
+    static inline std::mutex log_mutex;
+    static inline std::vector<int> restore_base_instance_ids;
+    static inline std::vector<int> apply_delta_instance_ids;
 };
 
 /* (a) happy path + TASK2: SpotWide aggregate relocation of a delta-capable
@@ -4186,15 +4230,20 @@ void test_delta_aggregate_direct_transfer_path (test_context_t &test)
 
     delta_actor_adapter_t::capture_base_count.store (0);
     delta_actor_adapter_t::capture_delta_count.store (0);
+    delta_actor_adapter_t::capture_base_sequence.store (-1);
+    delta_actor_adapter_t::capture_delta_sequence.store (-1);
     delta_actor_adapter_t::restore_base_count.store (0);
     delta_actor_adapter_t::apply_delta_count.store (0);
     delta_actor_adapter_t::apply_delta_fail_remaining.store (0);
     delta_actor_adapter_t::restored_value.store (-1);
     delta_spot_adapter_t::capture_base_count.store (0);
     delta_spot_adapter_t::capture_delta_count.store (0);
+    delta_spot_adapter_t::capture_base_sequence.store (-1);
+    delta_spot_adapter_t::capture_delta_sequence.store (-1);
     delta_spot_adapter_t::restore_base_count.store (0);
     delta_spot_adapter_t::apply_delta_count.store (0);
     delta_spot_adapter_t::restored_value.store (-1);
+    delta_capture_order_sequence.store (0);
 
     const auto core_context = std::make_shared<zlink::context_t> ();
     const auto make_state = [core_context] (const std::string &rid) {
@@ -4516,6 +4565,21 @@ void test_delta_aggregate_direct_transfer_path (test_context_t &test)
         && delta_actor_adapter_t::capture_delta_count.load (
              std::memory_order_acquire) == 1,
       "delta aggregate source must capture the base stage pre-seal and the delta stage on seal");
+    // The count-only check above cannot tell a correctly ordered
+    // base-then-delta capture from one where seal raced ahead of (or
+    // replaced) the pre-seal base capture — pin the relative order on the
+    // shared timeline for both participants explicitly.
+    test.require (
+      delta_spot_adapter_t::capture_base_sequence.load (std::memory_order_acquire) >= 0
+        && delta_spot_adapter_t::capture_delta_sequence.load (std::memory_order_acquire) >= 0
+        && delta_spot_adapter_t::capture_base_sequence.load (std::memory_order_acquire)
+             < delta_spot_adapter_t::capture_delta_sequence.load (std::memory_order_acquire)
+        && delta_actor_adapter_t::capture_base_sequence.load (std::memory_order_acquire) >= 0
+        && delta_actor_adapter_t::capture_delta_sequence.load (std::memory_order_acquire) >= 0
+        && delta_actor_adapter_t::capture_base_sequence.load (std::memory_order_acquire)
+             < delta_actor_adapter_t::capture_delta_sequence.load (std::memory_order_acquire),
+      "delta aggregate capture_base must observably precede capture_delta on the shared "
+      "capture timeline for both the Spot and its member Actor, not just be called once each");
     test.require (
       delta_spot_adapter_t::restore_base_count.load (
         std::memory_order_acquire) == 1
@@ -4551,6 +4615,12 @@ void test_delta_apply_failure_retries_once_then_fails_explicitly (
     delta_spot_adapter_t::apply_delta_count.store (0);
     delta_spot_adapter_t::apply_delta_fail_remaining.store (2);
     delta_spot_adapter_t::restored_value.store (-1);
+    delta_spot_t::constructed_count.store (0);
+    {
+        std::lock_guard lock (delta_spot_adapter_t::log_mutex);
+        delta_spot_adapter_t::restore_base_instance_ids.clear ();
+        delta_spot_adapter_t::apply_delta_instance_ids.clear ();
+    }
 
     const auto core_context = std::make_shared<zlink::context_t> ();
     const auto make_state = [core_context] (const std::string &rid) {
@@ -4761,6 +4831,11 @@ void test_delta_apply_failure_retries_once_then_fails_explicitly (
             std::this_thread::sleep_for (1ms);
         }
     };
+    // The source-side Spot (created above via restore_spot_relocation_state
+    // / begin_create) already constructed at least one delta_spot_t through
+    // the same factory. Reset here so constructed_count below measures only
+    // what the TARGET's materialization retry constructs.
+    delta_spot_t::constructed_count.store (0, std::memory_order_release);
     std::thread relocation_thread ([&] {
         result = await_task (source.relocate_application_unit (
           {*spot}, {"delta.failure.spot"}, target_descriptor,
@@ -4775,18 +4850,48 @@ void test_delta_apply_failure_retries_once_then_fails_explicitly (
     source_dispatch.join ();
     target_dispatch.join ();
 
+    // relocation_terminal_t::data_lost is reserved for recover()/
+    // recover_aggregate() — a source-already-gone path with no
+    // store-mediated payload to recover, not a live retry-exhaustion
+    // failure within one relocate_aggregate call (maintenance_runtime.cpp
+    // ~1436-1550 vs ~1218-1583). blocked/restore_failed is the exact,
+    // intentional local mapping for the wire's relocationDataLost signal
+    // observed mid-transfer, per this test's own header comment — pin both
+    // halves of that distinction explicitly rather than only the reason.
     test.require (
       result.terminal == relocation_terminal_t::blocked
+        && result.terminal != relocation_terminal_t::data_lost
         && result.reason == relocation_reason_t::restore_failed
         && !target.native_node ().objects ().find (
              object_kind_t::user_spot, "delta-failure-spot"),
-      "a second apply_delta failure must fail the relocation explicitly without committing the target");
+      "a second apply_delta failure must fail the relocation explicitly (blocked/restore_failed, "
+      "not the source-gone data_lost terminal) without committing the target");
     test.require (
       delta_spot_adapter_t::restore_base_count.load (
         std::memory_order_acquire) == 2
         && delta_spot_adapter_t::apply_delta_count.load (
              std::memory_order_acquire) == 2,
       "the target must re-enter the factory/materialization path exactly once after the first apply_delta failure");
+    // Prove the re-entry is a genuinely FRESH instance, not the same
+    // delta_spot_t reused across the retry: exactly two instances were
+    // constructed for this materialization, restore_base ran against two
+    // different instance ids (first != second), and each retry's
+    // apply_delta ran against the same instance its own restore_base did
+    // (no instance mix-up across the retry boundary).
+    std::vector<int> restore_ids;
+    std::vector<int> apply_ids;
+    {
+        std::lock_guard lock (delta_spot_adapter_t::log_mutex);
+        restore_ids = delta_spot_adapter_t::restore_base_instance_ids;
+        apply_ids = delta_spot_adapter_t::apply_delta_instance_ids;
+    }
+    test.require (
+      delta_spot_t::constructed_count.load (std::memory_order_acquire) == 2
+        && restore_ids.size () == 2 && apply_ids.size () == 2
+        && restore_ids[0] != restore_ids[1]
+        && apply_ids[0] == restore_ids[0] && apply_ids[1] == restore_ids[1],
+      "the retry after the first apply_delta failure must materialize a fresh delta_spot_t instance, "
+      "not mutate/reuse the failed attempt's instance");
     delta_spot_adapter_t::apply_delta_fail_remaining.store (0);
     source.stop ();
     target.stop ();

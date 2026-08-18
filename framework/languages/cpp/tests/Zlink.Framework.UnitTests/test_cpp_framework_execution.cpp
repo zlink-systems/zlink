@@ -2671,6 +2671,90 @@ bool verify_actor_join_prewarm_fail_commit_clears_parked_backlog ()
     return replay && replay->empty ();
 }
 
+// Spec 15 §4.2 newest-attempt-wins parity: a newer exact identity must
+// evict an older attempt even after that older attempt is past PREPARE
+// (target_committing) — not only the admission-time placeholder
+// (target_pending) verify_actor_join_prewarm_newest_attempt_evicts_placeholder
+// already covers. Attempt A parks a frame, reaches target_committing (past
+// PREPARE) and parks a second frame there; attempt B then arrives with a
+// different transfer_id for the same object and must win: A's admission and
+// both of its parked frames are gone (failed exactly once — the same single
+// erase fail_commit/cleanup_expired already use to reclaim a dead attempt),
+// and B parks and replays its own arrival cleanly.
+bool verify_actor_join_prewarm_newest_attempt_evicts_live_attempt_past_prepare ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    actor_transfer_coordinator_t coordinator;
+    const auto source = actor_ref_access_t::make (
+      node_rid_t::from_string ("source-node"), "player", "actor-evict-live", 7);
+    const std::string key = "player:actor-evict-live";
+    pending_actor_admission_t first{
+      .actor_key = key,
+      .source_actor = source,
+      .source_spot_id = "source-spot",
+      .target_spot_id = "target-spot",
+      .deadline = std::chrono::steady_clock::now () + std::chrono::seconds (30),
+      .completion_operation_id_high = 71,
+      .completion_operation_id_low = 73};
+    pending_actor_admission_t second = first;
+    second.completion_operation_id_low = 79;
+
+    const auto packet = [] (std::string sequence) {
+        handoff_packet_t value;
+        value.packet_name = "handoff";
+        value.metadata.emplace ("sequence", std::move (sequence));
+        return value;
+    };
+
+    if (!coordinator.try_add_admission ("transfer-evict-live-A", first)) {
+        return false;
+    }
+    if (coordinator.try_append_backlog (key, packet ("A_PARKED_EARLY"))
+        != handoff_append_result_t::appended) {
+        return false;
+    }
+    // Attempt A reaches PREPARE (target_committing) — the "live attempt"
+    // case, distinct from the target_pending placeholder the other eviction
+    // test covers.
+    if (!coordinator.begin_commit ("transfer-evict-live-A", source, "target-spot")
+        || coordinator.phase (key) != actor_move_phase_t::target_committing
+        || !coordinator.is_current (key, "transfer-evict-live-A")) {
+        return false;
+    }
+    if (coordinator.try_append_backlog (key, packet ("A_PARKED_AFTER_PREPARE"))
+        != handoff_append_result_t::appended) {
+        return false;
+    }
+
+    // A newer exact identity for the same object arrives — it must win even
+    // though A is already past PREPARE.
+    if (!coordinator.try_add_admission ("transfer-evict-live-B", second)) {
+        return false;
+    }
+    // A is gone: its admission record and both frames it parked (failed
+    // exactly once, by the same single erase fail_commit/cleanup_expired
+    // use) do not survive the eviction.
+    if (coordinator.admission ("transfer-evict-live-A").has_value ()
+        || coordinator.is_current (key, "transfer-evict-live-A")
+        || coordinator.phase (key) != actor_move_phase_t::target_pending) {
+        return false;
+    }
+    // B starts clean and parks its own arrival.
+    if (coordinator.try_append_backlog (key, packet ("B_PARKED"))
+        != handoff_append_result_t::appended) {
+        return false;
+    }
+    if (!coordinator.begin_commit ("transfer-evict-live-B", source, "target-spot")) {
+        return false;
+    }
+    const auto replay = coordinator.complete_commit_and_take_backlog (
+      "transfer-evict-live-B", source, "target-spot");
+    return replay && replay->size () == 1
+           && (*replay)[0].metadata.at ("sequence") == "B_PARKED";
+}
+
 class actor_cutover_authority_t final
     : public zlink::framework::runtime::stateful::authority_relocation_port_t
 {
@@ -4744,6 +4828,10 @@ int main ()
     if (!verify_actor_join_prewarm_fail_commit_clears_parked_backlog ()) {
         std::cerr << "actor Join prewarm fail_commit backlog cleanup regression failed\n";
         return 115;
+    }
+    if (!verify_actor_join_prewarm_newest_attempt_evicts_live_attempt_past_prepare ()) {
+        std::cerr << "actor Join prewarm live-attempt (past PREPARE) eviction regression failed\n";
+        return 116;
     }
     if (!verify_actor_join_finalize_replies_after_target_activation ()) {
         std::cerr << "actor cutover dispatcher regression failed\n";

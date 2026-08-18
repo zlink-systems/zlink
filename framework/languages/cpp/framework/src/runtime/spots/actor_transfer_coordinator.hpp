@@ -222,6 +222,12 @@ class actor_transfer_coordinator_t
     bool try_add_admission (std::string transfer_id, pending_actor_admission_t admission);
     std::optional<pending_actor_admission_t> admission (
       const std::string &transfer_id) const;
+    // True iff transfer_id is still the move actor_key is tracking. A
+    // caller that unlocks around external side effects (e.g. the joined
+    // callback in prepare_remote_actor_to_spot) re-checks this immediately
+    // before publishing an effect a newer, evicting attempt must not race
+    // (spec 15 §4.2 newest-attempt-wins).
+    bool is_current (const std::string &actor_key, const std::string &transfer_id) const;
     std::optional<pending_actor_admission_t> begin_commit (const std::string &transfer_id,
                                                            const actor_ref_t &source_actor,
                                                            const spot_id_t &target_spot_id);
