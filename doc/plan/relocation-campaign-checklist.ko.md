@@ -48,18 +48,21 @@
       사전 실패 주장 포함 확인)
 - [ ] cpp bind-session 재시도 소진 분류(deadline_exceeded로 갱신됨, `46ef4b0f03`)의
       교차 언어 parity 확인 — java/node/dotnet의 동일 시나리오 분류 대조
-- [ ] cpp standalone actor 직접 relocation 복원 갭 — **판정 완료(2026-08-19): cpp
+- [x] cpp standalone actor 직접 relocation 복원 갭 — **판정 완료(2026-08-19): cpp
       실결함.** 4언어·스펙 모두 "타깃의 기존 Entry Spot으로 이동"이 계약인데 cpp만
       restore에 target_spot=nullopt 하드코딩(stateful_object_runtime.cpp:1584),
       드레인 경로(app.cpp:3575)가 실패, 기존 m6c:3010 테스트는 materialization
-      미배선으로 거짓 그린. **수정 에이전트 진행 중**(Entry Spot 로컬 해석 배선 +
-      실배선 통합 테스트 + 부정 테스트) [D에서 승격 2026-08-19]
+      미배선으로 거짓 그린. **수정 완료 — `aff9511de6`**(Entry Spot 로컬 해석,
+      aggregate 경로 무변경, 무crash 명시 실패, disabled-fallback 증명, 41/41 ×2)
+      [D에서 승격 2026-08-19]
 - [ ] m6b M-c mismatched-identity rejection 테스트 (aggregate identity-fencing 조사
       포함) [D에서 승격 2026-08-19]
-- [ ] **[C] SIGFPE 크래시 수정**: actor Join relocation 시 소스 노드 크래시 —
+- [x] **[C] SIGFPE 크래시 수정**: actor Join relocation 시 소스 노드 크래시 —
       moved-from unordered_map<string,optional<message_t>> emplace(bucket_count 0),
       spot_runtime.cpp:3596 완료 경로 × task.hpp:259 continuation 경합, 간헐(2/4).
-      라이브 repro 확보(e2e 에이전트), terra 심층 조사 진행 중 [발견 2026-08-19]
+      **수정 완료 — `aff9511de6`**(진짜 원인은 dangling this: 8bae89dc0f의 임시
+      코루틴 래퍼가 suspension에서 소멸 — 프레임 소유로 수명 명시화, 회귀 테스트
+      포함; 캠페인 유발 아님) [발견 2026-08-19]
 - [ ] cpp preset 빌드 디렉토리(linux-ninja-vcpkg-debug) 재생성: 손상 →
       VCPKG_ROOT=/mnt/d/tools/vcpkg 완주 재설치 (e2e 에이전트 실행 중)
 - [ ] **sol 전 문서 spec-gap 리뷰**: 스펙·guide·e2e·언어 interface 전체 vs 구현 대조,
