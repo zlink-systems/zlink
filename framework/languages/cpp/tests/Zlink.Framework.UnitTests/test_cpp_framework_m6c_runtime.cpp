@@ -2747,80 +2747,8 @@ void test_public_authority_store_adapter (test_context_t &test)
       "Delivered release must restore authority payload before root cleanup");
 }
 
-void test_durable_join_completion_replacement_and_ordering (
-  test_context_t &test)
-{
-    auto store = std::make_shared<memory_relocation_repository_t> ();
-    durable_join_completion_store_t source (store);
-    const object_ref_t actor{
-      object_kind_t::actor, "actor-join", 7, 12,
-      "mesh", "node-b"};
-    auto root = source.prepare (
-      durable_join_completion_record_t{
-        0x1111, 0x2222, actor, {4, 5, 6},
-        join_completion_cursor_t::prepared});
-    root = source.commit (root);
-
-    std::vector<std::string> events;
-    const auto failed_root = source.deliver (
-      root, actor,
-      [&] (const durable_join_completion_record_t &record) {
-          events.push_back ("callback-failed");
-          test.require (
-            record.operation_id_high == 0x1111
-              && record.operation_id_low == 0x2222
-              && record.raw_reply
-                   == std::vector<std::uint8_t> ({4, 5, 6}),
-            "replacement callback must retain operation id and raw reply");
-          return false;
-      });
-    test.require (
-      failed_root.reference == root.reference,
-      "failed callback must retain the committed immutable root");
-
-    durable_join_completion_store_t replacement (store);
-    int delivered = 0;
-    root = replacement.deliver (
-      failed_root, actor,
-      [&] (const durable_join_completion_record_t &) {
-          ++delivered;
-          events.push_back ("callback-delivered");
-          return true;
-      });
-    events.push_back ("backlog");
-    const auto deduplicated = replacement.deliver (
-      root, actor,
-      [&] (const durable_join_completion_record_t &) {
-          ++delivered;
-          return true;
-      });
-    test.require (
-      delivered == 1
-        && events
-             == std::vector<std::string> (
-               {"callback-failed", "callback-delivered", "backlog"})
-        && deduplicated.reference == root.reference,
-      "replacement must deliver once before opening backlog");
-
-    auto stale = actor;
-    ++stale.object_generation;
-    bool fenced = false;
-    try {
-        (void) replacement.deliver (root, stale, {});
-    }
-    catch (const std::invalid_argument &) {
-        fenced = true;
-    }
-    test.require (
-      fenced,
-      "replacement must reject a mismatched Actor generation");
-    replacement.cleanup (root);
-    test.require (
-      !store->get (root.reference),
-      "delivered Join completion root must be removed after cleanup");
-}
-
 } // namespace
+
 void test_application_relocation_remote_production_path (
   test_context_t &test)
 {
@@ -6039,7 +5967,6 @@ int main ()
     test_shutdown_wins_during_retire_preflight (test);
     test_public_relocation_store_adapter (test);
     test_public_authority_store_adapter (test);
-    test_durable_join_completion_replacement_and_ordering (test);
     test_application_relocation_remote_production_path (test);
     test_application_user_spot_aggregate_remote_production_path (
       test);

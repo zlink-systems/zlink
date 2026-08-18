@@ -21,8 +21,6 @@ constexpr std::array<std::uint8_t, 4> aggregate_envelope_magic{
   'Z', 'L', 'R', 'A'};
 constexpr std::array<std::uint8_t, 4> recoverable_envelope_magic{
   'Z', 'L', 'R', 'W'};
-constexpr std::array<std::uint8_t, 4> join_completion_magic{
-  'Z', 'L', 'J', '1'};
 constexpr std::array<std::uint8_t, 4> session_journal_magic{
   'Z', 'L', 'S', 'J'};
 constexpr std::chrono::hours relocation_retention{24};
@@ -355,68 +353,6 @@ catch (...)
     return std::nullopt;
 }
 
-std::vector<std::uint8_t> encode_join_completion (
-  const durable_join_completion_record_t &record)
-{
-    if ((record.operation_id_high == 0
-         && record.operation_id_low == 0)
-        || record.actor.kind != object_kind_t::actor
-        || record.actor.key.empty ()
-        || record.actor.object_generation == 0)
-        throw std::invalid_argument (
-          "durable Join completion identity is invalid");
-    std::vector<std::uint8_t> output (
-      join_completion_magic.begin (), join_completion_magic.end ());
-    output.push_back (static_cast<std::uint8_t> (record.cursor));
-    append_u64 (output, record.operation_id_high);
-    append_u64 (output, record.operation_id_low);
-    append_u64 (output, record.actor.object_generation);
-    append_u64 (output, record.actor.authority_owner_generation);
-    if (!append_text (output, record.actor.key)
-        || !append_text (output, record.actor.mesh_name)
-        || !append_text (output, record.actor.node_id)
-        || !append_bytes (output, record.raw_reply))
-        throw std::invalid_argument (
-          "durable Join completion payload is too large");
-    return output;
-}
-
-std::optional<durable_join_completion_record_t>
-decode_join_completion (const std::vector<std::uint8_t> &payload)
-{
-    if (payload.size () < join_completion_magic.size ()
-        || !std::equal (join_completion_magic.begin (),
-                        join_completion_magic.end (),
-                        payload.begin ()))
-        return std::nullopt;
-    std::vector<std::uint8_t> body (
-      payload.begin () + 4, payload.end ());
-    reader_t reader (body);
-    const auto cursor = reader.u8 ();
-    const auto high = reader.u64 ();
-    const auto low = reader.u64 ();
-    const auto object_generation = reader.u64 ();
-    const auto owner_generation = reader.u64 ();
-    const auto key = reader.text ();
-    const auto mesh = reader.text ();
-    const auto node = reader.text ();
-    const auto reply = reader.bytes ();
-    if (!cursor || *cursor > static_cast<std::uint8_t> (
-                     join_completion_cursor_t::delivered)
-        || !high || !low || (*high == 0 && *low == 0)
-        || !object_generation || *object_generation == 0
-        || !owner_generation || !key || key->empty ()
-        || !mesh || !node || !reply || !reader.done ())
-        return std::nullopt;
-    return durable_join_completion_record_t{
-      *high, *low,
-      object_ref_t{object_kind_t::actor, *key,
-                   *object_generation, *owner_generation,
-                   *mesh, *node},
-      *reply,
-      static_cast<join_completion_cursor_t> (*cursor)};
-}
-
 std::vector<std::uint8_t> encode_session_journal (
   const durable_session_journal_record_t &record)
 {
@@ -529,100 +465,6 @@ struct maintenance_runtime_t::relocation_terminal_state_t
      * when the retransmission-window copies are released. */
     std::chrono::steady_clock::time_point cutover_terminal_at{};
 };
-
-durable_join_completion_store_t::durable_join_completion_store_t (
-  std::shared_ptr<relocation_store_port_t> store) :
-    _store (std::move (store))
-{
-    if (!_store)
-        throw std::invalid_argument (
-          "durable Join completion store is required");
-}
-
-durable_join_completion_root_t
-durable_join_completion_store_t::store (
-  const durable_join_completion_record_t &record)
-{
-    const auto payload = encode_join_completion (record);
-    const auto checksum = maintenance_runtime_t::crc32c (payload);
-    const auto stored = _store->put (payload, relocation_retention);
-    if (stored.reference.empty ()
-        || stored.checksum_crc32c != checksum)
-        throw std::runtime_error (
-          "durable Join completion store write failed");
-    return {stored.reference, checksum};
-}
-
-durable_join_completion_root_t
-durable_join_completion_store_t::prepare (
-  durable_join_completion_record_t record)
-{
-    record.cursor = join_completion_cursor_t::prepared;
-    return store (record);
-}
-
-std::optional<durable_join_completion_record_t>
-durable_join_completion_store_t::recover (
-  const durable_join_completion_root_t &root) const
-{
-    const auto payload = _store->get (root.reference);
-    if (!payload
-        || maintenance_runtime_t::crc32c (*payload)
-             != root.checksum_crc32c)
-        return std::nullopt;
-    return decode_join_completion (*payload);
-}
-
-durable_join_completion_root_t
-durable_join_completion_store_t::commit (
-  const durable_join_completion_root_t &root,
-  bool remove_previous)
-{
-    auto record = recover (root);
-    if (!record)
-        throw std::runtime_error (
-          "durable Join completion root is unavailable");
-    if (record->cursor != join_completion_cursor_t::prepared)
-        return root;
-    record->cursor = join_completion_cursor_t::committed;
-    auto next = store (*record);
-    if (remove_previous)
-        _store->remove (root.reference);
-    return next;
-}
-
-durable_join_completion_root_t
-durable_join_completion_store_t::deliver (
-  const durable_join_completion_root_t &root,
-  const object_ref_t &expected_actor,
-  const std::function<bool (
-    const durable_join_completion_record_t &)> &callback,
-  bool remove_previous)
-{
-    auto record = recover (root);
-    if (!record)
-        throw std::runtime_error (
-          "durable Join completion root is unavailable");
-    if (record->actor != expected_actor)
-        throw std::invalid_argument (
-          "durable Join completion Actor generation fence failed");
-    if (record->cursor == join_completion_cursor_t::delivered)
-        return root;
-    if (record->cursor != join_completion_cursor_t::committed
-        || !callback || !callback (*record))
-        return root;
-    record->cursor = join_completion_cursor_t::delivered;
-    auto next = store (*record);
-    if (remove_previous)
-        _store->remove (root.reference);
-    return next;
-}
-
-void durable_join_completion_store_t::cleanup (
-  const durable_join_completion_root_t &root)
-{
-    _store->remove (root.reference);
-}
 
 durable_session_journal_store_t::durable_session_journal_store_t (
   std::shared_ptr<relocation_store_port_t> store) :

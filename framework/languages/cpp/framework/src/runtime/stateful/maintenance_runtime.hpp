@@ -48,56 +48,6 @@ class relocation_store_port_t
     virtual void remove (const std::string &reference) = 0;
 };
 
-enum class join_completion_cursor_t : std::uint8_t
-{
-    prepared = 0,
-    committed = 1,
-    delivered = 2
-};
-
-struct durable_join_completion_record_t
-{
-    std::uint64_t operation_id_high = 0;
-    std::uint64_t operation_id_low = 0;
-    object_ref_t actor;
-    std::vector<std::uint8_t> raw_reply;
-    join_completion_cursor_t cursor =
-      join_completion_cursor_t::prepared;
-};
-
-struct durable_join_completion_root_t
-{
-    std::string reference;
-    std::uint32_t checksum_crc32c = 0;
-};
-
-class durable_join_completion_store_t
-{
-  public:
-    explicit durable_join_completion_store_t (
-      std::shared_ptr<relocation_store_port_t> store);
-
-    durable_join_completion_root_t prepare (
-      durable_join_completion_record_t record);
-    durable_join_completion_root_t commit (
-      const durable_join_completion_root_t &root,
-      bool remove_previous = true);
-    durable_join_completion_root_t deliver (
-      const durable_join_completion_root_t &root,
-      const object_ref_t &expected_actor,
-      const std::function<bool (
-        const durable_join_completion_record_t &)> &callback,
-      bool remove_previous = true);
-    std::optional<durable_join_completion_record_t> recover (
-      const durable_join_completion_root_t &root) const;
-    void cleanup (const durable_join_completion_root_t &root);
-
-  private:
-    durable_join_completion_root_t store (
-      const durable_join_completion_record_t &record);
-    std::shared_ptr<relocation_store_port_t> _store;
-};
-
 struct durable_session_journal_record_t
 {
     std::uint64_t relocation_id_high = 0;
