@@ -396,37 +396,46 @@ stage_cpp_node_message_follow() {
   RESULTS+=("message-follow: C++ and Node raw owners (command 50 + route fence)")
 }
 
-# --- spot-route wire: documented divergences (C++/Java <-> Node/.NET) ---------
+# --- spot-route wire: reply tail dialect (CONVERGED) --------------------------
 # The mesh service wire (spec 51, service-wire-v1.schema.json command 20
-# "reply") is implemented in two incompatible dialects today:
-#   * C++ (service_wire_codec.cpp encode/decode_reply_header) and Java
-#     (ZLinkServiceM6AWireCodec) emit/require a 21-byte reply header with NO
-#     tail-length field;
-#   * Node (service-wire-m6a-codec.ts) and .NET (ZLinkServiceWireCodec.cs)
-#     emit/require a mandatory u16 tail length (>= 23 bytes).
-# Any cross-dialect requestToNode therefore fails when the reply is decoded
-# (ProtocolError).
+# "reply") used to be implemented in two incompatible dialects. It no longer
+# is: `service-wire-v1.schema.json` declares reply(20).tail as
+# `request-specific-tail`, a conditional-union WITHOUT `bodyLengthType`, so
+# the selected case's fields are written INLINE right after failureCode and an
+# empty tail yields exactly 21 bytes. (Contrast `actor-join-reply-tail`, same
+# construct but with `bodyLengthType: u16`, which does carry an inner length
+# prefix.) C++ and Java were already schema-correct; Node
+# (service-wire-m6a-codec.ts) and .NET (ZLinkServiceWireCodec.cs) used to
+# emit/require a spurious mandatory u16 tail length (>= 23 bytes) and were
+# converged onto the inline form. All four languages now agree byte-for-byte;
+# the golden vectors pinning the layout live in each language's unit tests.
 #
 # Separately (verified same-language, C++ client -> C++ host — independent of
-# peer language and of the tail-dialect divergence above): the C++
-# route_client_t::request_to_node path never reaches the wire at all here.
-# raw_mesh_node_owner_t::request_with_header (raw_mesh_node_owner.cpp) bails
-# out on `!_topology.peer(target_routing_id)` before submitting anything,
-# even though the SAME owner's own admission trace
-# (ZLINK_CPP_MESH_TRACE=1 raw_mesh_node_owner.cpp trace_admission_phase)
-# reports "peer=present" for that exact routing id moments earlier in the
-# same process. mesh_node_runtime.cpp's classify_node_direct_target (the
-# Location-Store-gated pre-check) is NOT the cause: it returns std::nullopt
-# (falls through to the real network call) whenever no location_store_t is
-# registered, which is the case here. This looks like a genuine C++-side gap
-# in how a route-only (object_role=none) MeshNode's outbound requestToNode
-# resolves an admitted peer; it was not fixed here per the harness's
-# report-don't-fix mandate. Repro: run this stage's two processes directly
-# (spot-route-server / spot-route-client, any two C++ hosts) with
-# ZLINK_CPP_MESH_TRACE=1 and observe the client retry loop exhaust its
-# deadline on not_found despite "peer=present" in its own trace.
-# These stages PIN the current behavior: they go red the moment either side
-# converges, prompting promotion to real (a)/(b)/(c) assertions.
+# peer language and of the former tail-dialect divergence), a C++-side bug
+# used to make every outbound direct-target requestToNode/sendToNode fail
+# with not_found regardless of admission state: mesh_node_runtime.cpp's
+# classify_node_direct_target (the Location-Store pre-check that runs before
+# raw_mesh_node_owner_t ever sees the request) returned
+# submit_result_t::not_found unconditionally whenever the target routing id
+# was absent from its own Location Store page, instead of falling through
+# (std::nullopt) to let the real transport-level admission check
+# (raw_mesh_node_owner_t::request_with_header's `_topology.peer(...)` gate,
+# which does correctly reflect the SAME owner's own admission trace once the
+# handshake completes) decide. A route-only (object_role=none) MeshNode peer
+# is never published to the Location Store, so it always missed and the
+# direct-target path always short-circuited with not_found before the
+# network call was ever attempted -- confirmed by instrumenting both
+# classify_node_direct_target and request_with_header directly: classify hit
+# its "exhausted, target absent" branch on every attempt (return not_found),
+# so request_with_header's peer() gate never even ran until after the fix.
+# Fixed in mesh_node_runtime.cpp: that branch now returns std::nullopt, same
+# as the "no location_store_t registered" branch above it, so the real
+# topology-backed peer() check is the actual authority. Repro (still valid
+# for regression, now green instead of red): run this stage's two processes
+# directly (spot-route-server / spot-route-client, any two C++ hosts) with
+# ZLINK_CPP_MESH_TRACE=1 -- the client used to exhaust its retry deadline on
+# not_found despite the admission trace already reporting "peer=present";
+# now it completes fast.
 stage_cpp_spot_route_client_dotnet_host() {
   local port bind_port endpoint events
   port="$(free_port)"
@@ -445,12 +454,28 @@ stage_cpp_spot_route_client_dotnet_host() {
     --peer-rid dotnet-route \
     --event-file "${events}" \
     --value cpp-to-dotnet-spot
-  wait_for_line "${events}" "spot-route-error|not_found|MeshNode request target was not found" 90
+  wait_for_line "${events}" "spot-route-reply|cpp-to-dotnet-spot|dotnet" 90
+  # The C++ decoder reports origin=unspecified for both failures here (not
+  # "application" as the .NET/Node/Java CLIENT-side decoders report against
+  # C++'s own marker-less reply in the reverse directions): record_failure's
+  # fallback string fires because this C++-client decode path does not
+  # attach a framework_exception_t to the result, regardless of peer
+  # language -- verified identically same-language in
+  # stage_cpp_spot_route_client_cpp_host, so this is a C++-client decode
+  # property/divergence, not a .NET-specific marker gap. Asserted as
+  # observed, not a claim about what it should be.
+  wait_for_line "${events}" "spot-route-missing|kind=not_found|origin=unspecified" 30
+  wait_for_line "${events}" "spot-route-app-error|kind=rejected|origin=unspecified" 30
   stop_all
-  RESULTS+=("spot-route divergence pinned: C++ client -> .NET host (C++ requestToNode target-classification bug, peer-language-agnostic)")
+  RESULTS+=("spot-route: C++ client -> .NET host (reply + framework not_found + application rejected)")
 }
 
 # --- spot-route wire: .NET client -> C++ route host ---------------------------
+# Runs the full common scenario for real now that the reply tail dialect is
+# converged: (a) reply round trip, (b) framework not_found (C++'s route-mesh
+# handler-missing reply carries no zlink.origin marker, so the .NET decoder
+# classifies it "application" — same as the Java/Node decoders facing the same
+# C++ reply), (c) application rejected without the marker.
 stage_dotnet_spot_route_client_cpp_host() {
   local port endpoint events
   port="$(free_port)"
@@ -468,15 +493,40 @@ stage_dotnet_spot_route_client_cpp_host() {
     --peer-rid cpp-spot-route \
     --event-file "${events}" \
     --publish-value dotnet-to-cpp-spot
-  # The request reaches the C++ handler (the host records it), but the C++
-  # 21-byte reply header is rejected by the .NET decoder (mandatory u16 tail).
   wait_for_line "${RUN_DIR}/cpp-spotroute-host.events" "spot-route-server|dotnet-to-cpp-spot|" 180
-  wait_for_line "${events}" "spot-route-error|kind=protocol_error|origin=unspecified" 60
+  wait_for_line "${events}" "spot-route-reply|dotnet-to-cpp-spot|cpp" 60
+  wait_for_line "${events}" "spot-route-missing|kind=not_found|origin=application" 30
+  wait_for_line "${events}" "spot-route-app-error|kind=rejected|origin=application" 30
   stop_all
-  RESULTS+=("spot-route divergence pinned: .NET client -> C++ host (C++ tail-less reply header rejected as protocol_error)")
+  RESULTS+=("spot-route: .NET client -> C++ host (reply + framework not_found + application rejected)")
 }
 
 # --- spot-route wire: C++ client -> Node route host ---------------------------
+# The C++-side classify_node_direct_target bug (see the block comment above
+# stage_cpp_spot_route_client_dotnet_host) is fixed and independently
+# verified same-language (stage_cpp_spot_route_client_cpp_host) and against
+# .NET and Java hosts (stage_cpp_spot_route_client_dotnet_host,
+# stage_cpp_spot_route_client_java_host). This direction previously pinned a
+# DIFFERENT and unrelated failure: node_peer_host.js's spot-route-server mode
+# (`addRouteMesh(...).listen(...)` then `await new Promise(() => {})`) called
+# writeReady() and then the Node process exited on its own with code 0,
+# confirmed by running that mode standalone, which returned immediately
+# despite the never-resolving await, unlike channel-server mode
+# (`addClientServerChannel(...).enableServer(...)`), which correctly blocks
+# for the process lifetime. RouteMesh's Node listen path was not holding an
+# active libuv handle the way ClientServer's is -- the framework's native
+# completions are not libuv handles, so nothing kept the event loop alive
+# (same root cause as the keep-alive comment already in spotRouteClient()).
+# Fixed harness-side in node_peer_host.js by adding the same
+# `setInterval(() => {}, 1000)` keep-alive to spotRouteServer() that
+# spotRouteClient() already used; this direction now runs the full common
+# scenario for real: (a) reply round trip, (b) framework not_found, (c)
+# application rejected. Node's route-mesh reply carries no zlink.origin
+# marker for either failure kind; the C++ client's own decoder (unlike
+# node_peer_host.js's errorOriginWireName, which reports a missing marker
+# as "none") reports a missing marker as "unspecified" -- same as the
+# same-language C++ client -> C++ host direction below, which faces an
+# equally marker-less reply from a C++ server.
 stage_cpp_spot_route_client_node_host() {
   local port bind_port endpoint events
   port="$(free_port)"
@@ -486,6 +536,7 @@ stage_cpp_spot_route_client_node_host() {
   start_node node-spotroute-host spot-route-server \
     --channel-name cross.spotroute \
     --server-endpoint "${endpoint}" \
+    --node-rid node-spot-route \
     --event-file "${RUN_DIR}/node-spotroute-host.events"
   wait_for_ready "${RUN_DIR}/node-spotroute-host.ready" 90
   start_cpp cpp-spotroute-client-node spot-route-client \
@@ -495,12 +546,24 @@ stage_cpp_spot_route_client_node_host() {
     --peer-rid node-spot-route \
     --event-file "${events}" \
     --value cpp-to-node-spot
-  wait_for_line "${events}" "spot-route-error|not_found|MeshNode request target was not found" 90
+  wait_for_line "${RUN_DIR}/node-spotroute-host.events" "spot-route-server|cpp-to-node-spot" 90
+  wait_for_line "${events}" "spot-route-reply|cpp-to-node-spot|node" 60
+  wait_for_line "${events}" "spot-route-missing|kind=not_found|origin=unspecified" 30
+  wait_for_line "${events}" "spot-route-app-error|kind=rejected|origin=unspecified" 30
   stop_all
-  RESULTS+=("spot-route divergence pinned: C++ client -> Node host (C++ requestToNode target-classification bug, peer-language-agnostic)")
+  RESULTS+=("spot-route: C++ client -> Node host (reply + framework not_found + application rejected)")
 }
 
 # --- spot-route wire: Node client -> C++ route host ---------------------------
+# Runs the full common scenario for real now that the reply tail dialect is
+# converged: (a) reply round trip, (b) framework not_found, (c) application
+# rejected. C++'s route-mesh reply carries no zlink.origin marker; where the
+# .NET client reports origin=application for that same marker-less reply (see
+# stage_dotnet_spot_route_client_cpp_host), the Node route surface leaves
+# `error.origin` undefined (node_peer_host.js errorOriginWireName) and both
+# failures are recorded as origin=none. That origin-classification difference
+# is a separate, pre-existing divergence from the reply tail dialect and is
+# asserted as observed rather than pinned.
 stage_node_spot_route_client_cpp_host() {
   local port bind_port endpoint events
   port="$(free_port)"
@@ -520,17 +583,17 @@ stage_node_spot_route_client_cpp_host() {
     --peer-rid cpp-spot-route \
     --event-file "${events}" \
     --value node-to-cpp-spot
-  # The request reaches the C++ handler (the host records it), but the C++
-  # 21-byte reply header is rejected by the Node decoder (mandatory u16 tail).
   wait_for_line "${RUN_DIR}/cpp-spotroute-host-node.events" "spot-route-server|node-to-cpp-spot|" 90
-  wait_for_line "${events}" "spot-route-error|kind=protocol_error|origin=none" 60
+  wait_for_line "${events}" "spot-route-reply|node-to-cpp-spot|cpp" 60
+  wait_for_line "${events}" "spot-route-missing|kind=not_found|origin=none" 30
+  wait_for_line "${events}" "spot-route-app-error|kind=rejected|origin=none" 30
   stop_all
-  RESULTS+=("spot-route divergence pinned: Node client -> C++ host (C++ tail-less reply header rejected as protocol_error)")
+  RESULTS+=("spot-route: Node client -> C++ host (reply + framework not_found + application rejected)")
 }
 
 # --- spot-route wire: Java client -> C++ route host ---------------------------
-# Java and C++ share the tail-less 21-byte service-wire reply dialect
-# (ZLinkServiceM6AWireCodec vs service_wire_codec.cpp) and Java's client-side
+# All four languages now share the schema's inline 21-byte service-wire reply
+# header (no u16 tail length) and Java's client-side
 # node-target classification (ZLinkJavaRawSpotNode.classifyNodeSendTarget)
 # tracks real peer admission state, so this direction runs the full common
 # scenario for real: (a) reply round trip, (b) framework not_found (C++'s
@@ -565,13 +628,56 @@ stage_java_spot_route_client_cpp_host() {
 }
 
 # --- spot-route wire: C++ client -> Java route host ----------------------------
-# Reproduces the SAME "MeshNode request target was not found" the C++ client
-# hits against .NET and Node hosts (see stage_cpp_spot_route_client_dotnet_host
-# / stage_cpp_spot_route_client_node_host): request_with_header's
-# `!_topology.peer(target_routing_id)` check never sees the peer as present
-# from the requesting side even after the admission handshake completes
-# (verified same-language, C++ client -> C++ host, independent of peer
-# language and independent of the tail-dialect divergence — see report).
+# The C++-side classify_node_direct_target bug (see the block comment above
+# stage_cpp_spot_route_client_dotnet_host) is fixed and independently
+# verified same-language (stage_cpp_spot_route_client_cpp_host) and against
+# .NET (stage_cpp_spot_route_client_dotnet_host). This direction previously
+# pinned a DIFFERENT and unrelated failure: with ZLINK_CPP_MESH_TRACE=1, the
+# C++ client's raw ZMTP monitor showed HANDSHAKE_SUCCEEDED (event=4096)
+# immediately followed by DISCONNECTED (event=512) in a tight reconnect loop
+# against the Java host. This is the ONLY stage in this harness that
+# exercises Java as a RouteMesh *server* (`.listen(...)`, spot-route-server
+# mode) -- stage_java_spot_route_client_cpp_host only ever runs Java as
+# spot-route-client (connect-only) -- so Java's accept side had zero passing
+# coverage anywhere to contrast against.
+#
+# Root-caused with ZLINK_JAVA_STREAM_TRACE=1 on a standalone repro (Java
+# host + C++ client, no harness): every single admission attempt logged
+# "admission-stage stage=entered" immediately followed by
+# "disconnect-transport-pair" -- ZLinkJavaRawMeshNode.dispatchAdmission's
+# unconfigured-inbound fallback (no PeerIntent registered, i.e. a listen-only
+# server accepting any client) computed expectedSecurityIdentity as
+# inbound.source().toString() (the raw ZMTP transport identity), instead of
+# null ("no constraint") like the expectedEndpoint and
+# expectedLifecycleGeneration fallbacks two lines above it. That was compared
+# against the incoming descriptor's securityIdentity field, which is not a
+# routing id but the plaintext-transport placeholder "default" (confirmed by
+# tracing descriptor.securityIdentity()="default" from the C++ client, and by
+# .NET's ZLinkManagedMeshNode using the equivalent
+# ZLinkServiceSecurityIdentity.Plaintext="default" constant for its own
+# unconfigured-inbound fallback). The two values only ever coincided for
+# Java-to-Java peers (both ends set their ZMTP identity to their own routing
+# id, and Java's own descriptor encodes securityIdentity as its routing id
+# too), which is why this was invisible to every existing Java-only test.
+# Fixed in ZLinkJavaRawMeshNode.dispatchAdmission (framework/languages/java)
+# by falling back to null there too.
+#
+# Fixing admission surfaced a second, independent Java bug at the request
+# layer: ZLinkMeshApplicationDispatcher.dispatchRequest's "handler is not
+# registered" rejection used the reject(record, message, claim) overload,
+# whose reply defaults to ZLinkFrameworkErrorKind.INTERNAL_FAILURE, instead of
+# NOT_FOUND -- unlike the one-way case immediately above it in the same file
+# (submitLocalNodeSend), which already uses ZLinkOneWayCalls.TARGET_NOT_FOUND,
+# and unlike every other cross-language host's route-mesh reply for a missing
+# handler. Fixed by adding a reject/replyError overload that takes an
+# explicit ZLinkFrameworkErrorKind and passing NOT_FOUND at that call site.
+#
+# With both fixes this direction now runs the full common scenario for real:
+# (a) reply round trip, (b) framework not_found, (c) application rejected.
+# Java's route-mesh reply carries no zlink.origin marker for either failure
+# kind, so origin reads "unspecified" here -- same as the same-language C++
+# client -> C++ host direction below, which faces an equally marker-less
+# reply from a C++ server.
 stage_cpp_spot_route_client_java_host() {
   local port bind_port endpoint events
   port="$(free_port)"
@@ -591,9 +697,48 @@ stage_cpp_spot_route_client_java_host() {
     --peer-rid java-spot-route-host \
     --event-file "${events}" \
     --value cpp-to-java-spot
-  wait_for_line "${events}" "spot-route-error|not_found|MeshNode request target was not found" 30
+  wait_for_line "${RUN_DIR}/java-spotroute-host.events" "spot-route-server|cpp-to-java-spot" 90
+  wait_for_line "${events}" "spot-route-reply|cpp-to-java-spot|java" 60
+  wait_for_line "${events}" "spot-route-missing|kind=not_found|origin=unspecified" 30
+  wait_for_line "${events}" "spot-route-app-error|kind=rejected|origin=unspecified" 30
   stop_all
-  RESULTS+=("spot-route divergence pinned: C++ client -> Java host (C++ requestToNode target-classification bug, peer-language-agnostic)")
+  RESULTS+=("spot-route: C++ client -> Java host (reply + framework not_found + application rejected)")
+}
+
+# --- spot-route wire: C++ client -> C++ route host (same-language regression) -
+# The original repro for the classify_node_direct_target bug (see the block
+# comment above stage_cpp_spot_route_client_dotnet_host) used two C++
+# processes -- it is peer-language-agnostic, so this same-language direction
+# pins the fix directly with no cross-language wire dialect in play at all.
+# The C++ decoder reports origin=unspecified here (not "application" as in
+# the cross-language directions): record_failure's fallback string fires
+# because this same-process failure path does not attach a
+# framework_exception_t to the result, unlike the cross-language decode
+# paths -- asserted as observed, not a claim about what it should be.
+stage_cpp_spot_route_client_cpp_host() {
+  local port bind_port endpoint events
+  port="$(free_port)"
+  bind_port="$(free_port)"
+  endpoint="tcp://127.0.0.1:${port}"
+  events="${RUN_DIR}/cpp-spotroute-client-cpp.events"
+  start_cpp cpp-spotroute-host-cpp spot-route-server \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --event-file "${RUN_DIR}/cpp-spotroute-host-cpp.events" \
+    --ready-file "${RUN_DIR}/cpp-spotroute-host-cpp.ready"
+  wait_for_ready "${RUN_DIR}/cpp-spotroute-host-cpp.ready" 60
+  start_cpp cpp-spotroute-client-cpp spot-route-client \
+    --channel-name cross.spotroute \
+    --server-endpoint "${endpoint}" \
+    --bind-endpoint "tcp://127.0.0.1:${bind_port}" \
+    --peer-rid cpp-spot-route \
+    --event-file "${events}" \
+    --value cpp-to-cpp-spot
+  wait_for_line "${events}" "spot-route-reply|cpp-to-cpp-spot|cpp" 30
+  wait_for_line "${events}" "spot-route-missing|kind=not_found|origin=unspecified" 30
+  wait_for_line "${events}" "spot-route-app-error|kind=rejected|origin=unspecified" 30
+  stop_all
+  RESULTS+=("spot-route: C++ client -> C++ host (reply + framework not_found + application rejected)")
 }
 
 run_spot_route_stages() {
@@ -603,6 +748,7 @@ run_spot_route_stages() {
   stage_node_spot_route_client_cpp_host
   stage_java_spot_route_client_cpp_host
   stage_cpp_spot_route_client_java_host
+  stage_cpp_spot_route_client_cpp_host
 }
 
 case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in

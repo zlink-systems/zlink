@@ -210,6 +210,13 @@ class TestHostSpotRouteMissingRequest {
 /* Spot route wire host: (a) echo handler tagged "|node" and (c) an
  * application handler failing with the typed rejected kind. */
 async function spotRouteServer() {
+  /* Unlike ClientServerChannel's enableServer(), RouteMesh's listen() path
+   * does not hold an active libuv handle in the Node backend: its native
+   * completions are not libuv handles, so with nothing else referencing the
+   * event loop, the loop drains and the process exits (code 0) right after
+   * writeReady() despite the never-resolving `await new Promise(() => {})`
+   * below. Same keep-alive fix as spotRouteClient(). */
+  setInterval(() => {}, 1000);
   class SpotRouteRequestHandler {
     async handle(payload) {
       appendEvent(`spot-route-server|${readValue(payload)}`);
