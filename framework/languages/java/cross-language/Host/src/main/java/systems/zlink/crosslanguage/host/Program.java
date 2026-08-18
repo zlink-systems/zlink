@@ -21,11 +21,25 @@ import systems.zlink.crosslanguage.host.SpotRouteContracts.TestHostSpotRouteFail
 import systems.zlink.crosslanguage.host.SpotRouteContracts.TestHostSpotRouteMissingRequest;
 import systems.zlink.crosslanguage.host.SpotRouteContracts.TestHostSpotRouteReply;
 import systems.zlink.crosslanguage.host.SpotRouteContracts.TestHostSpotRouteRequest;
+import systems.zlink.crosslanguage.host.EntryRelocationContracts.CrossLangActorCreateReq;
+import systems.zlink.crosslanguage.host.EntryRelocationContracts.CrossLangProbeReq;
+import systems.zlink.crosslanguage.host.EntryRelocationContracts.CrossLangProbeRes;
+import systems.zlink.framework.actors.ZLinkActorClient;
+import systems.zlink.framework.actors.ZLinkActorCreateResult;
+import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
+import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOptions;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationResult;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
+import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 
 /**
  * Java cross-language peer host (mirrors cross_language_host.cpp,
@@ -40,6 +54,8 @@ import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 @EnableZLinkFramework
 @SpringBootApplication(proxyBeanMethods = false)
 public final class Program {
+    private static final String ENTRY_RELOCATION_ACTOR_TYPE = "cross-lang-relocation-actor-type";
+
     private Program() {
     }
 
@@ -91,9 +107,66 @@ public final class Program {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer crossLanguageFramework(HostArgs args) {
+    ZLinkRedisLocationStore relocationLocationStore(HostArgs args) {
+        String redisEndpoint = args.option("redis-endpoint", null);
+        if (redisEndpoint == null || redisEndpoint.isBlank()) {
+            return null;
+        }
+        return new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions()
+            .setConnectionString(redisEndpoint)
+            .setKeyPrefix(args.option("redis-key-prefix", "zlink-cross-relocation") + ":location"));
+    }
+
+    @Bean
+    ZLinkRedisRelocationStore relocationRelocationStore(HostArgs args) {
+        String redisEndpoint = args.option("redis-endpoint", null);
+        if (redisEndpoint == null || redisEndpoint.isBlank()) {
+            return null;
+        }
+        return new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions()
+            .setConnectionString(redisEndpoint)
+            .setKeyPrefix(args.option("redis-key-prefix", "zlink-cross-relocation") + ":relocation"));
+    }
+
+    @Bean
+    ZLinkFrameworkConfigurer crossLanguageFramework(
+        HostArgs args,
+        ZLinkRedisLocationStore locationStore,
+        ZLinkRedisRelocationStore relocationStore) {
         return options -> {
             String mode = args.mode();
+            if ("entry-spot-source".equals(mode) || "entry-spot-target".equals(mode)) {
+                String meshName = args.require("mesh-name");
+                String nodeRid = args.require("node-rid");
+                if (locationStore != null) {
+                    options.addLocationStore(locationStore);
+                }
+                if (relocationStore != null) {
+                    options.addRelocationStore(relocationStore);
+                }
+                var mesh = options.addRouteMesh(meshName)
+                    .listen(args.require("bind-endpoint"))
+                    .setRoutingId(RoutingId.from(nodeRid));
+                // Only the source dials out (mirrors spot-route-client/-server
+                // elsewhere in this file): once the ZMTP handshake completes
+                // the connection is bidirectional, so the target only needs
+                // to listen.
+                if ("entry-spot-source".equals(mode)) {
+                    mesh.peerConnections().connect(
+                        RoutingId.from(args.require("peer-rid")),
+                        args.require("peer-endpoint"));
+                }
+                mesh.channelName(meshName).server();
+                mesh.objects().client();
+                var objects = mesh.objects().server();
+                objects.addEntrySpot(RelocationEntrySpot.class);
+                objects.addActorFactory(
+                    ENTRY_RELOCATION_ACTOR_TYPE,
+                    RelocationActor.class,
+                    RelocationActorFactory.class,
+                    factory -> factory.preserveStateWith(RelocationActorAdapter.class));
+                return;
+            }
             if ("spot-route-server".equals(mode)) {
                 String channel = args.require("channel-name");
                 var mesh = options.addRouteMesh(channel)
@@ -148,6 +221,90 @@ public final class Program {
     @Bean
     SpotRouteFailRequestHandler spotRouteFailRequestHandler() {
         return new SpotRouteFailRequestHandler();
+    }
+
+    @Bean(name = "entryRelocationRunner")
+    ApplicationRunner entryRelocationRunner(
+        HostArgs args,
+        EventSink sink,
+        ZLinkActorManager actors,
+        ZLinkActorClient actorClient,
+        ZLinkFrameworkLifecycle lifecycle) {
+        return applicationArguments -> {
+            String mode = args.mode();
+            if ("entry-spot-source".equals(mode)) {
+                runEntryRelocationSource(args, sink, actors, lifecycle);
+            } else if ("entry-spot-target".equals(mode)) {
+                runEntryRelocationTarget(args, sink, actorClient);
+            }
+        };
+    }
+
+    private static void runEntryRelocationSource(
+        HostArgs args, EventSink sink, ZLinkActorManager actors, ZLinkFrameworkLifecycle lifecycle) {
+        String actorId = args.option("actor-id", "cross-lang-relocation-actor");
+        int payloadBytes = Integer.parseInt(args.option("payload-bytes", "100000"));
+        try {
+            ZLinkActorCreateResult created = actors
+                .getOrCreate(actorId, ENTRY_RELOCATION_ACTOR_TYPE)
+                .request(new CrossLangActorCreateReq(1, payloadBytes))
+                .submit()
+                .toCompletableFuture()
+                .get(15, TimeUnit.SECONDS);
+            String createStatus = switch (created) {
+                case ZLinkActorCreateResult.Created ignored -> "created";
+                case ZLinkActorCreateResult.Existing ignored -> "existing";
+                case ZLinkActorCreateResult.Rejected ignored -> "rejected";
+            };
+            sink.append("entry-spot-create|status=" + createStatus);
+
+            ZLinkFrameworkRelocationResult relocation = lifecycle.relocate(
+                    new ZLinkFrameworkRelocationOptions(
+                        ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE, null, Duration.ofSeconds(30)))
+                .toCompletableFuture()
+                .get(35, TimeUnit.SECONDS);
+            sink.append("relocate-result|outcome=" + relocation.outcome().name()
+                + "|reason=" + relocation.reason().name());
+        } catch (ExecutionException | TimeoutException error) {
+            sink.append("entry-spot-source-error|" + describe(error));
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void runEntryRelocationTarget(
+        HostArgs args, EventSink sink, ZLinkActorClient actorClient) {
+        String actorId = args.option("actor-id", "cross-lang-relocation-actor");
+        String nodeRid = args.require("node-rid");
+        long deadlineNanos = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+        CrossLangProbeRes lastReply = null;
+        while (System.nanoTime() < deadlineNanos) {
+            try {
+                lastReply = actorClient
+                    .requestToActor(actorId, new CrossLangProbeReq("post-relocate-probe"))
+                    .timeout(Duration.ofSeconds(5))
+                    .submit(CrossLangProbeRes.class)
+                    .toCompletableFuture()
+                    .get(7, TimeUnit.SECONDS);
+                if (nodeRid.equals(lastReply.nodeRid())) {
+                    break;
+                }
+            } catch (ExecutionException | TimeoutException error) {
+                // Actor may still be mid-relocation or not yet created; keep polling.
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            sleepQuietly(500);
+        }
+        if (lastReply == null || !nodeRid.equals(lastReply.nodeRid())) {
+            sink.append("entry-spot-probe-timeout|last="
+                + (lastReply == null ? "none" : lastReply.nodeRid()));
+            return;
+        }
+        sink.append("entry-spot-probe|nodeRid=" + lastReply.nodeRid()
+            + "|stateVersion=" + lastReply.stateVersion()
+            + "|applicationStateBytes=" + lastReply.applicationStateBytes());
     }
 
     @Bean(name = "spotRouteClientRunner")

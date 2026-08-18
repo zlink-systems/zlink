@@ -295,6 +295,7 @@ final class EntrySpotActivation
                 host,
                 host.primaryNode(),
                 backendSpot.spotId(),
+                backendSpot.lifecycleGeneration(),
                 entrySpot,
                 (actorId, request) -> CompletableFuture.completedFuture(
                     ZLinkSpotActorJoinResult.accept()),
@@ -389,6 +390,7 @@ final class EntrySpotActivation
             host,
             host.primaryNode(),
             backendSpot.spotId(),
+            backendSpot.lifecycleGeneration(),
             entrySpot,
             (actorId, request) -> CompletableFuture.completedFuture(
                 ZLinkSpotActorJoinResult.accept()),

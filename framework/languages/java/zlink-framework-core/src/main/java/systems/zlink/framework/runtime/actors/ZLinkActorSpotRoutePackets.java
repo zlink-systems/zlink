@@ -15,6 +15,7 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 import systems.zlink.framework.runtime.internal.relocation
     .ZLinkActorJoinAdmissionProfileCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkCanonicalActorJoinReplyCodec;
 
 public final class ZLinkActorSpotRoutePackets {
     public static final String JOIN_SPOT_PACKET_NAME = "__zlink.actor.joinSpot";
@@ -309,45 +310,70 @@ public final class ZLinkActorSpotRoutePackets {
         return List.copyOf(backlog);
     }
 
-    public static Message encodeAdmissionReply(
-        boolean accepted, long receiveChunkLimitBytes, Message reply) {
-        String encodedReply = reply == null
-            ? ""
-            : Base64.getEncoder().encodeToString(reply.toByteArray());
-        return Message.from(String.join(
-            "\n",
-            Boolean.toString(accepted),
-            Long.toUnsignedString(receiveChunkLimitBytes),
-            encodedReply).getBytes(StandardCharsets.UTF_8));
+    /**
+     * Encodes the actor join admission outcome as the schema's canonical
+     * actor-join-reply-tail (service-wire-v1.schema.json:2251-2294) instead
+     * of a delimited-text dialect. Returns two parts: the binary tail
+     * ({@code trailingBytes: forbidden} on the tail forbids appending the
+     * reply payload after it) and the admission reply payload as its own
+     * part. {@code spotId}/{@code spotGeneration}/{@code membershipEpoch}
+     * are only meaningful (and required nonzero) when {@code accepted}.
+     */
+    public static List<Message> encodeAdmissionReply(
+        boolean accepted,
+        String spotId,
+        long spotGeneration,
+        long membershipEpoch,
+        long receiveChunkLimitBytes,
+        Message reply) {
+        ZLinkCanonicalActorJoinReplyCodec.Tail tail = accepted
+            ? new ZLinkCanonicalActorJoinReplyCodec.Tail(
+                ZLinkCanonicalActorJoinReplyCodec.JOIN_RESULT_ACCEPTED,
+                new ZLinkCanonicalActorJoinReplyCodec.SpotRef(spotId, spotGeneration),
+                membershipEpoch,
+                receiveChunkLimitBytes)
+            : new ZLinkCanonicalActorJoinReplyCodec.Tail(
+                ZLinkCanonicalActorJoinReplyCodec.JOIN_RESULT_REJECTED, null, null, null);
+        byte[] tailBytes;
+        try {
+            tailBytes = new ZLinkCanonicalActorJoinReplyCodec().encodeTail(tail);
+        } catch (IllegalArgumentException failure) {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "invalid actor Spot admission reply", failure);
+        }
+        return List.of(
+            Message.from(tailBytes),
+            Message.from(reply == null ? new byte[0] : reply.toByteArray()));
     }
 
     /**
-     * {@code receiveChunkLimitBytes} is the target's advertised relocation
-     * state chunk receive limit (spec 15 §4.2), added to this reply after
-     * {@code accepted}. Decode tolerates the pre-existing two-field wire
-     * shape (no advertised limit) for a mixed-version peer — absent means
-     * not advertised (0), never a protocol error.
+     * Decodes an admission reply encoded by {@link #encodeAdmissionReply}:
+     * a two-part binary tail plus its reply payload. Strict binary decode -
+     * the earlier delimited-text dialect (including its two-field mixed-
+     * version tolerance) no longer exists on the wire.
      */
-    public static AdmissionReply decodeAdmissionReply(Message message) {
-        String[] fields = message.toUtf8String().split("\n", -1);
-        if (fields.length == 2) {
-            return new AdmissionReply(
-                Boolean.parseBoolean(fields[0]),
-                0L,
-                fields[1].isBlank()
-                    ? Message.from(new byte[0])
-                    : Message.from(Base64.getDecoder().decode(fields[1])));
-        }
-        if (fields.length != 3) {
+    public static AdmissionReply decodeAdmissionReply(List<Message> parts) {
+        if (parts == null || parts.size() != 2) {
             throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,"invalid actor Spot admission reply");
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "invalid actor Spot admission reply");
         }
+        ZLinkCanonicalActorJoinReplyCodec.Tail tail;
+        try {
+            tail = new ZLinkCanonicalActorJoinReplyCodec().decodeTail(parts.get(0).toByteArray());
+        } catch (IllegalArgumentException failure) {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "invalid actor Spot admission reply", failure);
+        }
+        byte[] replyBytes = parts.get(1).toByteArray();
         return new AdmissionReply(
-            Boolean.parseBoolean(fields[0]),
-            Long.parseUnsignedLong(fields[1]),
-            fields[2].isBlank()
-                ? Message.from(new byte[0])
-                : Message.from(Base64.getDecoder().decode(fields[2])));
+            tail.accepted(),
+            tail.spot() == null ? null : tail.spot().spotId(),
+            tail.spot() == null ? 0L : tail.spot().objectGeneration(),
+            tail.membershipEpoch() == null ? 0L : tail.membershipEpoch(),
+            tail.receiveChunkLimitBytes() == null ? 0L : tail.receiveChunkLimitBytes(),
+            replyBytes.length == 0 ? Message.from(new byte[0]) : Message.from(replyBytes));
     }
 
     public static List<Message> createBoundSessionSendParts(
@@ -644,6 +670,9 @@ public final class ZLinkActorSpotRoutePackets {
 
     public record AdmissionReply(
         boolean accepted,
+        String spotId,
+        long spotGeneration,
+        long membershipEpoch,
         long receiveChunkLimitBytes,
         Message reply) implements AutoCloseable {
         @Override

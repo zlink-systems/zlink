@@ -154,9 +154,10 @@ final class ZLinkActorSpotJoinCanonicalCallerTest {
                 ZLinkActorSpotRoutePackets.decodeTransferRequest(parts.get(1));
             requests.add(decoded);
             if (decoded.admission()) {
-                return CompletableFuture.completedFuture(List.of(
+                return CompletableFuture.completedFuture(
                     ZLinkActorSpotRoutePackets.encodeAdmissionReply(
-                        true, 0L, Message.from(new byte[0]))));
+                        true, "target-spot", 1L, decoded.coreMembershipEpoch() + 1,
+                        0L, Message.from(new byte[0])));
             }
             return CompletableFuture.failedFuture(
                 new IllegalStateException("legacy commit must not be sent"));
@@ -283,9 +284,10 @@ final class ZLinkActorSpotJoinCanonicalCallerTest {
                 return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.BACKPRESSURED));
             }
-            return CompletableFuture.completedFuture(List.of(
+            return CompletableFuture.completedFuture(
                 ZLinkActorSpotRoutePackets.encodeAdmissionReply(
-                    true, 0L, Message.from(new byte[0]))));
+                    true, "target-spot", 1L, decoded.coreMembershipEpoch() + 1,
+                    0L, Message.from(new byte[0])));
         });
 
         ProbeActor actor = (ProbeActor) runtime.getOrCreateLocalActor(

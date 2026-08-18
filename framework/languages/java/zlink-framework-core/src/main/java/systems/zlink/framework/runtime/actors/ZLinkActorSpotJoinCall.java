@@ -646,7 +646,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                             "remote actor Spot admission reply was empty: " + spotId));
                                 }
                                 ZLinkActorSpotRoutePackets.AdmissionReply admission =
-                                    ZLinkActorSpotRoutePackets.decodeAdmissionReply(replyParts.get(0));
+                                    ZLinkActorSpotRoutePackets.decodeAdmissionReply(replyParts);
                                 if (!admission.accepted()) {
                                     return CompletableFuture.completedFuture(
                                         rejectedRemoteJoin(currentActorRef, admission.reply()));

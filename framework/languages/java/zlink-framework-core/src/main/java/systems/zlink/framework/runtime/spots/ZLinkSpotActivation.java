@@ -649,7 +649,7 @@ final class SpotActivation
                         ZLinkMessage.fromEncoded(
                             ZLinkMessagePayloads.encoded(phasePayload),
                             host.serializerForSpot())))))
-                .thenApply(response -> List.of(encodeRoutedAdmissionReply(response)))
+                .thenApply(response -> encodeRoutedAdmissionReply(transferRequest, response))
             : host.actorAdmissions().commitRoutedActor(
                 transferRequest,
                 ZLinkMessage.fromEncoded(
@@ -731,13 +731,18 @@ final class SpotActivation
             });
     }
 
-    private Message encodeRoutedAdmissionReply(ZLinkSpotActorJoinResult response) {
+    private List<Message> encodeRoutedAdmissionReply(
+        ZLinkActorSpotRoutePackets.TransferRequest request,
+        ZLinkSpotActorJoinResult response) {
         Message reply = response.reply() == null
             ? Message.from(new byte[0])
             : ZLinkMessagePayloads.message(response.reply(), host.serializerForSpot());
         try {
             return ZLinkActorSpotRoutePackets.encodeAdmissionReply(
                 response.accepted(),
+                backendSpot.spotId(),
+                backendSpot.lifecycleGeneration(),
+                request.coreMembershipEpoch() + 1,
                 ZLinkActorJoinAdvertisedChunkLimit.conservativeReceiveChunkLimitBytes(),
                 reply);
         } finally {

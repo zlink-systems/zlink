@@ -25,6 +25,7 @@ final class ZLinkRoutedActorTransferHandler {
     private final ZLinkSpotRuntime host;
     private final ZLinkInternalSpotNode node;
     private final String targetSpotId;
+    private final long targetSpotGeneration;
     private final Object targetSurface;
     private final BiFunction<String, ZLinkMessage, CompletionStage<ZLinkSpotActorJoinResult>> admission;
     private final Function<ZLinkActor, CompletionStage<Void>> joined;
@@ -33,12 +34,14 @@ final class ZLinkRoutedActorTransferHandler {
         ZLinkSpotRuntime host,
         ZLinkInternalSpotNode node,
         String targetSpotId,
+        long targetSpotGeneration,
         Object targetSurface,
         BiFunction<String, ZLinkMessage, CompletionStage<ZLinkSpotActorJoinResult>> admission,
         Function<ZLinkActor, CompletionStage<Void>> joined) {
         this.host = host;
         this.node = node;
         this.targetSpotId = targetSpotId;
+        this.targetSpotGeneration = targetSpotGeneration;
         this.targetSurface = targetSurface;
         this.admission = admission;
         this.joined = joined;
@@ -78,7 +81,7 @@ final class ZLinkRoutedActorTransferHandler {
                     ZLinkMessage.fromEncoded(
                         ZLinkMessagePayloads.encoded(phasePayload),
                         host.serializerForSpot())))
-                .thenApply(response -> List.of(encodeAdmission(response)))
+                .thenApply(response -> encodeAdmission(request, response))
             : host.actorAdmissions().commitRoutedActor(
                 request,
                 ZLinkMessage.fromEncoded(
@@ -155,13 +158,18 @@ final class ZLinkRoutedActorTransferHandler {
             });
     }
 
-    private Message encodeAdmission(ZLinkSpotActorJoinResult response) {
+    private List<Message> encodeAdmission(
+        ZLinkActorSpotRoutePackets.TransferRequest request,
+        ZLinkSpotActorJoinResult response) {
         Message reply = response.reply() == null
             ? Message.from(new byte[0])
             : ZLinkMessagePayloads.message(response.reply(), host.serializerForSpot());
         try {
             return ZLinkActorSpotRoutePackets.encodeAdmissionReply(
                 response.accepted(),
+                targetSpotId,
+                targetSpotGeneration,
+                request.coreMembershipEpoch() + 1,
                 ZLinkActorJoinAdvertisedChunkLimit.conservativeReceiveChunkLimitBytes(),
                 reply);
         } finally {

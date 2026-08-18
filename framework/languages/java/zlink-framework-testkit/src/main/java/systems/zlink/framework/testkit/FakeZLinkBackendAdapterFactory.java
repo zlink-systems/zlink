@@ -817,23 +817,34 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                 Message joinedPayload = jsonStringMessage("joined");
                 Message rejectedPayload = Message.from(new byte[0]);
                 Message joinReply = null;
+                List<Message> joinReplyParts = null;
                 try {
                     boolean accepted = !request.actorId().contains("reject");
-                    joinReply = request.admission()
-                        ? ZLinkActorSpotRoutePackets.encodeAdmissionReply(
+                    if (request.admission()) {
+                        joinReplyParts = ZLinkActorSpotRoutePackets.encodeAdmissionReply(
                             accepted,
-                            accepted ? joinedPayload : rejectedPayload)
-                        : ZLinkActorSpotRoutePackets.encodeJoinReply(
+                            accepted ? "fake-spot" : null,
+                            accepted ? 1L : 0L,
+                            accepted ? request.coreMembershipEpoch() + 1 : 0L,
+                            0L,
+                            accepted ? joinedPayload : rejectedPayload);
+                        routeReply = joinReplyParts.stream().map(Message::from).toList();
+                    } else {
+                        joinReply = ZLinkActorSpotRoutePackets.encodeJoinReply(
                             true,
                             new ZLinkBackendActorRef(
                                 routingId,
                                 request.actorId(),
                                 request.actorGeneration()),
                             rejectedPayload);
-                    routeReply = List.of(Message.from(joinReply));
+                        routeReply = List.of(Message.from(joinReply));
+                    }
                 } finally {
                     if (joinReply != null) {
                         joinReply.close();
+                    }
+                    if (joinReplyParts != null) {
+                        joinReplyParts.forEach(Message::close);
                     }
                     joinedPayload.close();
                     rejectedPayload.close();
@@ -1174,24 +1185,35 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                 Message joinedPayload = jsonStringMessage("joined");
                 Message rejectedPayload = Message.from(new byte[0]);
                 Message joinReply = null;
+                List<Message> joinReplyParts = null;
                 try {
                     boolean accepted = !request.actorId().contains("reject");
-                    joinReply = request.admission()
-                        ? ZLinkActorSpotRoutePackets.encodeAdmissionReply(
+                    if (request.admission()) {
+                        joinReplyParts = ZLinkActorSpotRoutePackets.encodeAdmissionReply(
                             accepted,
-                            accepted ? joinedPayload : rejectedPayload)
-                        : ZLinkActorSpotRoutePackets.encodeJoinReply(
-                            true,
-                            new ZLinkBackendActorRef(
-                                targetNodeRid,
-                                request.actorId(),
-                                request.actorGeneration()),
-                            rejectedPayload);
+                            accepted ? targetSpotId : null,
+                            accepted ? 1L : 0L,
+                            accepted ? request.coreMembershipEpoch() + 1 : 0L,
+                            0L,
+                            accepted ? joinedPayload : rejectedPayload);
+                        return CompletableFuture.completedFuture(
+                            joinReplyParts.stream().map(Message::from).toList());
+                    }
+                    joinReply = ZLinkActorSpotRoutePackets.encodeJoinReply(
+                        true,
+                        new ZLinkBackendActorRef(
+                            targetNodeRid,
+                            request.actorId(),
+                            request.actorGeneration()),
+                        rejectedPayload);
                     return CompletableFuture.completedFuture(
                         List.of(Message.from(joinReply)));
                 } finally {
                     if (joinReply != null) {
                         joinReply.close();
+                    }
+                    if (joinReplyParts != null) {
+                        joinReplyParts.forEach(Message::close);
                     }
                     joinedPayload.close();
                     rejectedPayload.close();

@@ -64,9 +64,13 @@ public final class ZLinkActorRelocationRuntimePortFixture {
                     joined,
                     ignored -> java.util.concurrent.CompletableFuture
                         .completedFuture(ZLinkSpotActorJoinResult.accept()))
-                .thenApply(response -> List.of(
-                    ZLinkActorSpotRoutePackets.encodeAdmissionReply(
-                        response.accepted(), 0L, Message.from(new byte[0]))));
+                .thenApply(response -> ZLinkActorSpotRoutePackets.encodeAdmissionReply(
+                    response.accepted(),
+                    response.accepted() ? spotId : null,
+                    response.accepted() ? 1L : 0L,
+                    response.accepted() ? request.coreMembershipEpoch() + 1 : 0L,
+                    0L,
+                    Message.from(new byte[0])));
         }
         ZLinkMessage transferState = ZLinkMessage.fromEncoded(
             systems.zlink.framework.ZLinkEncodedPayload.from(

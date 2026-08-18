@@ -84,31 +84,35 @@ final class ZLinkActorSpotRoutePacketsTest {
     @Test
     void admissionReplyRoundTripsAcceptedAndAdvertisedChunkLimit() {
         try (Message reply = Message.from("payload")) {
-            Message encoded = ZLinkActorSpotRoutePackets.encodeAdmissionReply(
-                true, 32_768L, reply);
+            List<Message> encoded = ZLinkActorSpotRoutePackets.encodeAdmissionReply(
+                true, "spot-1", 3L, 5L, 32_768L, reply);
             try (ZLinkActorSpotRoutePackets.AdmissionReply decoded =
                 ZLinkActorSpotRoutePackets.decodeAdmissionReply(encoded)) {
                 assertTrue(decoded.accepted());
+                assertEquals("spot-1", decoded.spotId());
+                assertEquals(3L, decoded.spotGeneration());
+                assertEquals(5L, decoded.membershipEpoch());
                 assertEquals(32_768L, decoded.receiveChunkLimitBytes());
                 assertArrayEquals(
                     "payload".getBytes(java.nio.charset.StandardCharsets.UTF_8),
                     decoded.reply().toByteArray());
             } finally {
-                encoded.close();
+                encoded.forEach(Message::close);
             }
         }
     }
 
     @Test
-    void admissionReplyDecodeToleratesTheLegacyTwoFieldShape() {
-        try (Message legacy = Message.from(
-                "true\n".getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+    void admissionReplyRoundTripsRejected() {
+        try (Message reply = Message.from(new byte[0])) {
+            List<Message> encoded = ZLinkActorSpotRoutePackets.encodeAdmissionReply(
+                false, null, 0L, 0L, 0L, reply);
             try (ZLinkActorSpotRoutePackets.AdmissionReply decoded =
-                ZLinkActorSpotRoutePackets.decodeAdmissionReply(legacy)) {
-                assertTrue(decoded.accepted());
-                assertEquals(0L, decoded.receiveChunkLimitBytes(),
-                    "absent means not advertised, never a protocol error");
+                ZLinkActorSpotRoutePackets.decodeAdmissionReply(encoded)) {
+                assertTrue(!decoded.accepted());
                 assertEquals(0, decoded.reply().toByteArray().length);
+            } finally {
+                encoded.forEach(Message::close);
             }
         }
     }
