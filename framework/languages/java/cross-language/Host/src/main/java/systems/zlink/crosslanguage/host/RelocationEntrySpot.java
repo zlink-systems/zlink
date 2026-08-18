@@ -42,4 +42,14 @@ public final class RelocationEntrySpot implements ZLinkEntrySpot<RelocationActor
         }
         return CompletableFuture.completedFuture(ZLinkActorCreateResponse.accept());
     }
+
+    @Override
+    public CompletionStage<Void> onJoinedActor(RelocationActor actor) {
+        return CompletableFuture.completedFuture(null);
+    }
+
+    @Override
+    public CompletionStage<Void> onLeaveActor(RelocationActor actor) {
+        return CompletableFuture.completedFuture(null);
+    }
 }

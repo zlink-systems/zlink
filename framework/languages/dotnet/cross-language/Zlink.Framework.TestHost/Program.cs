@@ -293,8 +293,12 @@ internal sealed class EntryRelocationTargetHostedService(
     IZLinkActorClient actorClient,
     TestHostEventSink sink,
     string actorId,
-    string nodeRid) : IHostedService
+    string sourceNodeRid) : IHostedService
 {
+    // This node's own routing id is framework-assigned (Object-role MeshNodes
+    // cannot use a fixed routing id -- see ConfigureEntryRelocation), so a
+    // probe reply proves an owner transition only once it stops coming from
+    // the known SOURCE node rid, not by matching a predicted id of our own.
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(60);
@@ -307,7 +311,7 @@ internal sealed class EntryRelocationTargetHostedService(
                     .RequestToActor(actorId, new CrossLangProbeReq("post-relocate-probe"))
                     .Timeout(TimeSpan.FromSeconds(5))
                     .Async<CrossLangProbeRes>(cancellationToken);
-                if (lastReply.NodeRid == nodeRid) break;
+                if (lastReply.NodeRid != sourceNodeRid) break;
             }
             catch (ZLinkFrameworkException)
             {
@@ -316,7 +320,7 @@ internal sealed class EntryRelocationTargetHostedService(
             await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
         }
 
-        if (lastReply is null || lastReply.NodeRid != nodeRid)
+        if (lastReply is null || lastReply.NodeRid == sourceNodeRid)
         {
             sink.Append($"entry-spot-probe-timeout|last={lastReply?.NodeRid ?? "none"}");
             return;

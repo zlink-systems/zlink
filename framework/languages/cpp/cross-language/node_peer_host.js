@@ -453,14 +453,21 @@ async function entrySpotRelocate() {
         builder.addRelocationStore(relocationStore);
         const mesh = builder.addRouteMesh(meshName)
           .listen(require_('bind-endpoint'))
-          .routingId(nodeRid);
-        /* Only the source dials out (mirrors spot-route-client/-server):
-         * once the ZMTP handshake completes the connection is bidirectional,
-         * so the target only needs to listen. */
-        if (role === 'source') {
-          mesh.peerConnections().connect(peerRid, require_('peer-endpoint'));
-        }
-        mesh.channel(meshName).server();
+          .routingId(nodeRid)
+          /* Force deterministic placement: the source always wins actor
+           * creation, so the pre-relocation owner assertion is meaningful
+           * rather than an accident of the placement algorithm. */
+          .setPlacementWeight(role === 'source' ? 100 : 0);
+        /* No manual peerConnections().connect() at all: .NET's relocate()
+         * explicitly rejects manual topology with
+         * ZLinkFrameworkRelocationReason.ManualTopologyUnsupported --
+         * confirmed by direct repro (relocate() returned
+         * outcome=Blocked|reason=ManualTopologyUnsupported the moment a
+         * PeerConnections.Connect(...) call was present on the .NET side).
+         * relocate() only works under pure automatic discovery: both nodes
+         * register the same shared Location Store and NEITHER calls
+         * PeerConnections.Connect; peers are supposed to find each other
+         * through the store alone. */
         const objects = mesh.objects().server();
         objects.addEntrySpot(RelocationEntrySpot);
         objects.addActorFactory(actorType, RelocationActorFactory,
@@ -472,16 +479,11 @@ async function entrySpotRelocate() {
   })(EntrySpotRelocationModule);
 
   const app = await NestFactory.createApplicationContext(EntrySpotRelocationModule, { logger: false });
-  if (role === 'source') {
-    /* Only the dialer tracks outbound peer readiness; the target (listener)
-     * has no configured peer connection to wait on. */
-    const routeMeshRuntime = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
-    const readyDeadline = Date.now() + 30_000;
-    while (routeMeshRuntime.snapshot(meshName).readyPeerCount === 0) {
-      if (Date.now() >= readyDeadline) throw new Error('entry-spot-relocate peer readiness timed out');
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-  }
+  /* No manual peerConnections().connect() anywhere in this mode (see the
+   * comment above), so there is no outbound connection to poll readiness
+   * on -- automatic discovery converges through the shared Location Store
+   * on its own schedule; actor-create/relocate below carry their own
+   * timeouts and retries. */
   writeReady();
 
   if (role === 'source') {
@@ -493,12 +495,27 @@ async function entrySpotRelocate() {
       .timeout(15000)
       .submit();
     appendEvent(`entry-spot-create|status=${createResult.status}`);
+    appendEvent(`entry-spot-owner-before|node=${createResult.actor?.nodeRid}`);
 
     const frameworkRuntime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false });
-    const relocateResult = await frameworkRuntime.relocate({
-      mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
-      deadlineMs: 30000
-    });
+    /* No manual connect means no readiness signal to wait on before
+     * relocating -- give automatic discovery (Location Store polling on
+     * both ends) time to converge, retrying relocate() itself a few times
+     * since an early attempt can observe zero eligible peers yet. */
+    let relocateResult;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      relocateResult = await frameworkRuntime.relocate({
+        mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
+        deadlineMs: 30000
+      });
+      appendEvent(
+        `relocate-attempt|attempt=${attempt}`
+        + `|outcome=${framework.ZLinkFrameworkRelocationOutcome[relocateResult.outcome]}`
+        + `|reason=${framework.ZLinkFrameworkRelocationReason[relocateResult.reason]}`
+      );
+      if (relocateResult.outcome === framework.ZLinkFrameworkRelocationOutcome.Relocated) break;
+    }
     appendEvent(
       `relocate-result|outcome=${framework.ZLinkFrameworkRelocationOutcome[relocateResult.outcome]}`
       + `|reason=${framework.ZLinkFrameworkRelocationReason[relocateResult.reason]}`

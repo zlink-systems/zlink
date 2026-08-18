@@ -39,9 +39,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The java-cross stage exercises Java<->Node and Java<->.NET only -- it never
-# spawns the C++ host, so it does not require the C++ binary to be built.
-if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] && [[ ! -x "${CPP_HOST}" ]]; then
+# The java-cross and relocation stages never spawn the C++ host (java-cross
+# is Java<->Node and Java<->.NET only; relocation is Node<->.NET only), so
+# neither requires the C++ binary to be built.
+if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] \
+  && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "relocation" ]] \
+  && [[ ! -x "${CPP_HOST}" ]]; then
   echo "cross-language host is missing: ${CPP_HOST}" >&2
   echo "build it with: cmake --build ${BUILD_DIR} --target zlink_cpp_cross_language_host" >&2
   exit 1
@@ -55,6 +58,34 @@ sock.bind(("127.0.0.1", 0))
 print(sock.getsockname()[1])
 sock.close()
 PY
+}
+
+start_redis() {
+  local name="$1"
+  local port="$2"
+  redis-server --port "${port}" --bind 127.0.0.1 --save '' --appendonly no \
+    --daemonize no >"${RUN_DIR}/${name}.log" 2>&1 &
+  PIDS+=("$!")
+  local deadline=$((SECONDS + 20))
+  while ((SECONDS < deadline)); do
+    if python3 - "${port}" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+sock = socket.socket()
+sock.settimeout(0.5)
+sock.connect(("127.0.0.1", int(sys.argv[1])))
+sock.sendall(b"PING\r\n")
+reply = sock.recv(64)
+sock.close()
+sys.exit(0 if reply.startswith(b"+PONG") else 1)
+PY
+    then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "timed out waiting for redis on port ${port}" >&2
+  return 1
 }
 
 start_cpp() {
@@ -890,6 +921,74 @@ stage_dotnet_spot_route_client_java_host() {
   RESULTS+=("spot-route: .NET client -> Java host (reply + framework not_found + application rejected)")
 }
 
+# --- entry-spot relocation: Node source -> .NET target ------------------------
+# Spec 28-relocation-flow.ko.md:589-591: "source와 target이 서로 다른 언어
+# runtime인 relocation이 chunk 전송, checksum 검증과 owner 전환을 같은 결과로
+# 통과한다." Uses JoinEntrySpot (spec 15-spot-actor.ko.md:489, 938) -- the
+# only join shape usable cross-language today, since normal User Spot join's
+# four dialect-incompatible actorJoin admission replies make that impossible.
+# Two nodes share a locally-provisioned Redis-backed Location/Relocation
+# Store; both register the same entry spot + actor factory; the source
+# creates a >32 KiB actor (forcing multi-chunk relocationState(52) transfer)
+# and triggers a whole-node relocate() drain; with exactly one other eligible
+# peer in the mesh the destination is deterministic (asserted via
+# SetPlacementWeight + an owner-before event, not merely assumed). A
+# post-relocation probe request confirms the actor answers on the target
+# node (owner transition), completing a live message round trip.
+stage_node_source_dotnet_target_relocation() {
+  local redis_port source_port target_port source_endpoint target_endpoint
+  local source_events target_events
+  redis_port="$(free_port)"
+  source_port="$(free_port)"
+  target_port="$(free_port)"
+  source_endpoint="tcp://127.0.0.1:${source_port}"
+  target_endpoint="tcp://127.0.0.1:${target_port}"
+  source_events="${RUN_DIR}/node-relocation-source.events"
+  target_events="${RUN_DIR}/dotnet-relocation-target.events"
+  start_redis relocation-redis "${redis_port}"
+  # .NET Object-role MeshNodes (entry spot / actor factory registered)
+  # cannot use a fixed routing id -- ZLinkFrameworkRegistrationValidator
+  # rejects SetRoutingId combined with an Object role, so the target's actual
+  # id is framework-assigned via the shared Location Store instead of the
+  # --node-rid convention every other stage uses. --peer-rid here names the
+  # SOURCE's (fixed, Node-side) routing id so the target can tell a
+  # pre-relocation reply (still answered by the source) apart from a real
+  # post-relocation one (answered by itself), without needing to predict its
+  # own assigned id.
+  start_dotnet dotnet-relocation-target entry-spot-target \
+    --mesh-name cross.relocation \
+    --peer-rid node-relocation-source \
+    --bind-endpoint "${target_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --actor-id cross-lang-relocation-actor \
+    --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/dotnet-relocation-target.ready" 180
+  start_node node-relocation-source entry-spot-relocate \
+    --role source \
+    --mesh-name cross.relocation \
+    --node-rid node-relocation-source \
+    --peer-rid dotnet-relocation-target \
+    --bind-endpoint "${source_endpoint}" \
+    --peer-endpoint "${target_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --actor-id cross-lang-relocation-actor \
+    --payload-bytes 100000 \
+    --event-file "${source_events}"
+  wait_for_line "${source_events}" "entry-spot-owner-before|node=node-relocation-source" 60
+  wait_for_line "${source_events}" "relocate-result|outcome=Relocated" 60
+  wait_for_line "${target_events}" "entry-spot-probe|nodeRid=" 90
+  if grep -qF "entry-spot-probe|nodeRid=node-relocation-source" "${target_events}"; then
+    echo "relocation stage: target probe still answered by the source -- no owner transition" >&2
+    exit 1
+  fi
+  stop_all
+  RESULTS+=("relocation: Node source -> .NET target (JoinEntrySpot create, multi-chunk relocate, owner transition + liveness probe)")
+}
+
+run_relocation_stages() {
+  stage_node_source_dotnet_target_relocation
+}
+
 run_spot_route_stages() {
   stage_cpp_spot_route_client_dotnet_host
   stage_dotnet_spot_route_client_cpp_host
@@ -927,6 +1026,14 @@ case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
       echo "ok - ${result}"
     done
     echo "cross-language smoke stage=java-cross result=passed"
+    exit 0
+    ;;
+  relocation)
+    run_relocation_stages
+    for result in "${RESULTS[@]}"; do
+      echo "ok - ${result}"
+    done
+    echo "cross-language smoke stage=relocation result=passed"
     exit 0
     ;;
   all)

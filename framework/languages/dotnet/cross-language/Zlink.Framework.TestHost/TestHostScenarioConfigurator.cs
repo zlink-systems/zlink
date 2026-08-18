@@ -281,33 +281,23 @@ internal static class TestHostScenarioConfigurator
             var meshName = options.MeshName
                            ?? throw new InvalidOperationException(
                                "entry-spot-source/target mode requires --mesh-name.");
-            var nodeRid = options.NodeRid
-                          ?? throw new InvalidOperationException(
-                              "entry-spot-source/target mode requires --node-rid.");
+            // ZLinkFrameworkRegistrationValidator.ValidateSpotNode: an
+            // Object-role MeshNode cannot use a fixed own routing ID (the
+            // framework assigns one). Separately, confirmed by direct repro:
+            // relocate() explicitly rejects a manually-connected topology
+            // with ZLinkFrameworkRelocationReason.ManualTopologyUnsupported
+            // -- it only works under pure automatic discovery, so this mode
+            // must NOT call PeerConnections.Connect at all; both nodes rely
+            // solely on the shared Location Store to find each other.
             var mesh = framework.AddRouteMesh(meshName)
                 .Listen(options.BindEndpoint
                         ?? throw new InvalidOperationException(
                             "entry-spot-source/target mode requires --bind-endpoint."))
-                .SetRoutingId(RoutingId.From(nodeRid))
                 // Force deterministic placement: the source always wins
                 // actor creation, so the pre-relocation owner assertion is
                 // meaningful rather than an accident of the placement
                 // algorithm.
                 .SetPlacementWeight(isSource ? 100 : 0);
-            // Only the source dials out (mirrors ConfigureSpotRouteClient's
-            // connect pattern elsewhere in this file): once the ZMTP
-            // handshake completes the connection is bidirectional, so the
-            // target only needs to listen.
-            if (isSource)
-            {
-                mesh.PeerConnections.Connect(
-                    RoutingId.From(options.PeerRid
-                                   ?? throw new InvalidOperationException(
-                                       "entry-spot-source mode requires --peer-rid.")),
-                    options.PeerEndpoint
-                    ?? throw new InvalidOperationException(
-                        "entry-spot-source mode requires --peer-endpoint."));
-            }
             mesh.Channel(meshName).Server();
             var objects = mesh.Objects().Server();
             objects.AddEntrySpot<RelocationEntrySpot>();
@@ -333,7 +323,13 @@ internal static class TestHostScenarioConfigurator
                     provider.GetRequiredService<IZLinkActorClient>(),
                     provider.GetRequiredService<TestHostEventSink>(),
                     options.ActorId ?? "cross-lang-relocation-actor",
-                    options.NodeRid ?? "dotnet-relocation-target"));
+                    // The source's routing id is fixed and known by the
+                    // caller (this node's own id is framework-assigned, see
+                    // the comment above); a probe reply is only proof of an
+                    // owner transition once it stops coming from the source.
+                    options.PeerRid
+                    ?? throw new InvalidOperationException(
+                        "entry-spot-target mode requires --peer-rid (the source's node rid).")));
         }
     }
 
